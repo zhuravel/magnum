@@ -11,21 +11,24 @@ package factory
 //     push"), whose count is everything that waits on you when it fires;
 //   - the sidebar token of the task's workspaces in the factory's herdr
 //     session (notify.Notifier.Sidebar), silent and persistent: it always
-//     says whether the task waits on you, at once and through every hold.
+//     says whether the task waits on you, through every hold.
 //
 // The toasts hold in magnum's quiet hours, while the factory screen has
 // focus (its report in focus.json, only while its process runs), and while
-// you are in a factory pane (herdr's focus as the observe pass saw it, for
-// at most [daemon] human_cooldown after the focus moved there or herdr
-// last showed you at work there: herdr keeps a session's focus after you
-// left its terminal). A held alert fires when quiet hours end, or 2
-// minutes after you left, merged with the rest, and only if its task still
-// waits on you for the same reason; one that no longer does is dropped,
-// never delivered. Each toast, hold and drop is an event, so `!` lists
-// every alert with its time. alerts.json keeps how far the delivery went
-// and the dedupe store each alert's toast, so a restart neither repeats an
-// alert nor loses one. A toast and a sidebar report have a bounded time,
-// and one that fails is logged and tried again on a later tick.
+// you are in a factory pane: herdr's focus on one, for at most [daemon]
+// human_cooldown after herdr last showed you at work in a factory pane.
+// herdr's focus alone proves nothing of you (it rests where it was when
+// nobody is attached, a daemon start included, and herdr moves it by
+// itself). A held alert fires when quiet hours end, or 2 minutes after you
+// left, merged with the rest, and only if its task still waits on you for
+// the same kind of wait (its line: "3 questions" and "2 questions" are
+// both "questions"); one that no longer does is dropped, never delivered.
+// Each toast, hold and drop is an event, so `!` lists every alert with its
+// time. alerts.json keeps how far the delivery went and the dedupe store
+// each alert's toast, so a restart neither repeats an alert nor loses one.
+// A toast and the sidebar pass have a bounded time; a toast that fails is
+// logged and tried again after a backoff, a sidebar report on the next
+// tick.
 
 import (
 	"cmp"
@@ -51,7 +54,8 @@ import (
 )
 
 // The events of the alerts' delivery, which `!` lists with the alerts: a
-// toast (the daemon's own), and an alert held or dropped (its task's).
+// toast (the daemon's own; an alert's whose toast the dedupe store holds
+// as sent), and an alert held or dropped (its task's).
 const (
 	alertToast   = "alert_toast"
 	alertHeld    = "alert_held"
@@ -68,24 +72,31 @@ const (
 	// alertOnce is how long the dedupe store keeps an alert's toast from
 	// going out again (a restart that lost the record of it).
 	alertOnce = 30 * 24 * time.Hour
-	// alertHistory: with no alerts.json yet (the first start of a build
-	// that delivers), the alerts older than this are history, never
-	// toasted.
+	// alertHistory: with no readable alerts.json (the first start of a
+	// build that delivers), the alerts older than this that no longer
+	// stand are settled in silence, with no drop event.
 	alertHistory = 24 * time.Hour
 	// alertsRead bounds one read of the alerts, alertReads the reads of a
-	// tick (a backlog of history is caught up in a few); alertLines the
-	// lines of a toast (the rest are "+N more"); alertWhatRunes a line's
-	// reason.
+	// tick (a backlog is caught up in a few); alertLines the lines of a
+	// toast (the rest are "+N more"); alertWhatRunes a line's reason.
 	alertsRead     = 64
 	alertReads     = 16
 	alertLines     = 5
 	alertWhatRunes = 40
-	// alertToastTimeout and sidebarTimeout bound a toast and a sidebar
-	// report on the loop; sidebarRefresh reports a token that holds again
-	// before herdr's TTL drops it.
-	alertToastTimeout = 10 * time.Second
-	sidebarTimeout    = 5 * time.Second
-	sidebarRefresh    = notify.SidebarTTL / 2
+	// alertToastTimeout bounds a toast on the loop. alertRetryBudget is how
+	// much of herdr's rate limit it waits out (notify's UrgentBudget), so
+	// osascript (10s at most) still shows it within the bound. A toast that
+	// failed is tried again after alertRetryFirst, doubling up to
+	// alertRetryMax.
+	alertToastTimeout = 15 * time.Second
+	alertRetryBudget  = 3 * time.Second
+	alertRetryFirst   = time.Minute
+	alertRetryMax     = 15 * time.Minute
+	// sidebarPassTimeout bounds a tick's sidebar reports, all of them;
+	// sidebarRefresh reports a token that holds again before herdr's TTL
+	// drops it.
+	sidebarPassTimeout = 10 * time.Second
+	sidebarRefresh     = notify.SidebarTTL / 2
 	// sidebarKey is the factory's sidebar token.
 	sidebarKey = "factory"
 )
@@ -102,22 +113,27 @@ type alertDelivery struct {
 	batch *notify.Batcher // nil: no notifier, no toast
 	// loaded: through was read from alerts.json; through is the newest alert
 	// settled with every older one, read the newest read; before history
-	// (with no alerts.json yet) the alerts are settled as read.
-	loaded        bool
-	through, read int64
-	history       time.Time
-	pending       []*pendingAlert // read, not yet behind through, oldest first
-	// count is what the toast being composed counts, composed what the last
-	// composed toast said ("" when none was).
-	count    int
-	composed string
+	// (no readable alerts.json) the alerts that no longer stand are settled
+	// in silence. seeded: the holds of the alerts read at the start were
+	// taken from their hold events.
+	loaded, seeded bool
+	through, read  int64
+	history        time.Time
+	pending        []*pendingAlert // read, not yet behind through, oldest first
+	// fails counts the toasts in a row that failed; retryAt is when the
+	// next may be tried.
+	fails   int
+	retryAt time.Time
 	// screenLive: the screen's focus was live at the last check;
 	// screenGone is when a check first found a focused screen's process
 	// gone.
 	screenLive bool
 	screenGone time.Time
-	// tokens are the sidebar tokens as last reported, by task.
-	tokens map[int64]sidebarToken
+	// tokens are the sidebar tokens as last reported, by task and
+	// workspace; herdrDown: a pass found herdr held down (its tokens may be
+	// gone when it is back).
+	tokens    map[int64]map[string]sidebarToken
+	herdrDown bool
 }
 
 // pendingAlert is an alert the delivery read: its event, its dedupe key,
@@ -130,40 +146,42 @@ type pendingAlert struct {
 	settled   bool
 }
 
-// sidebarToken is a task's sidebar token as last reported, and when.
+// sidebarToken is a sidebar token as last reported, and when.
 type sidebarToken struct {
 	value string
 	at    time.Time
 }
 
-// newAlertDelivery is the delivery over notifier (nil: no toast).
+// newAlertDelivery is the delivery over notifier n (nil: no toast). The
+// delivery toasts through a copy of n whose urgent toasts wait out at most
+// alertRetryBudget of herdr's rate limit.
 func (e *Engine) newAlertDelivery(n *notify.Notifier) alertDelivery {
-	a := alertDelivery{tokens: map[int64]sidebarToken{}}
+	a := alertDelivery{tokens: map[int64]map[string]sidebarToken{}}
 	if n != nil {
-		a.batch = &notify.Batcher{Notifier: n, Key: "factory-alerts", Window: alertMerge, Urgent: true, Now: e.now,
-			Compose: e.composeAlerts}
+		own := *n
+		if own.UrgentBudget <= 0 || own.UrgentBudget > alertRetryBudget {
+			own.UrgentBudget = alertRetryBudget
+		}
+		a.batch = &notify.Batcher{Notifier: &own, Key: "factory-alerts", Window: alertMerge, Urgent: true, Now: e.now}
 	}
 	return a
 }
 
-// deliverAlerts is the tick's delivery: the sidebar tokens, then the alerts
-// written since, each held, dropped or merged into a toast once due.
-func (e *Engine) deliverAlerts(ctx context.Context) {
+// deliverAlerts is the tick's delivery over the tasks the tick read last:
+// the sidebar tokens, then the alerts written since, each held, dropped or
+// merged into a toast once due. A due toast reads the tasks again: what it
+// counts and what still stands is what is true when it fires.
+func (e *Engine) deliverAlerts(ctx context.Context, tasks []registry.Task) {
 	if ctx.Err() != nil {
 		return
 	}
 	now := e.now()
-	tasks, err := e.reg.Tasks(ctx)
-	if err != nil {
-		e.log.Warn("the alerts' delivery: read the tasks", "err", err)
-		return
-	}
 	e.sidebarTokens(ctx, now, tasks)
 	a := &e.alerts
 	if a.batch == nil {
 		return
 	}
-	e.readAlerts(ctx, now)
+	e.readAlerts(ctx, now, tasks)
 	if !slices.ContainsFunc(a.pending, func(p *pendingAlert) bool { return !p.settled }) {
 		return
 	}
@@ -171,33 +189,41 @@ func (e *Engine) deliverAlerts(ctx context.Context) {
 		e.holdAlerts(ctx, cause, why)
 		return
 	}
-	if !a.batch.Due() {
+	if !a.batch.Due() || now.Before(a.retryAt) {
 		return
 	}
-	e.dropStale(ctx, tasks)
+	fresh, err := e.reg.Tasks(ctx)
+	if err != nil {
+		e.log.Warn("the alerts' delivery: read the tasks", "err", err)
+		return
+	}
+	e.dropStale(ctx, fresh)
 	if a.batch.Due() { // the oldest left may be younger than the window
-		e.flushAlerts(ctx, tasks)
+		e.flushAlerts(ctx, now, fresh)
 	}
 	e.settleAlerts()
 }
 
 // readAlerts reads the alerts written since the last read (alerts.json
-// says how far the delivery went, on the first) into the batch; with no
-// alerts.json yet, those older than alertHistory are history, settled as
-// read.
-func (e *Engine) readAlerts(ctx context.Context, now time.Time) {
+// says how far the delivery went, on the first) into the batch. With no
+// readable alerts.json, an alert older than alertHistory that no longer
+// stands is settled in silence; one that stands is delivered as any. The
+// first read after a start takes the holds the alerts' events named.
+func (e *Engine) readAlerts(ctx context.Context, now time.Time, tasks []registry.Task) {
 	a := &e.alerts
 	if !a.loaded {
 		a.loaded = true
 		through, ok, err := readAlertsDone(e.d.Layout)
 		if err != nil {
-			e.log.Warn("the alerts' delivery: alerts.json cannot be read; the alerts of the last day are delivered again", "err", err)
+			e.log.Warn("the alerts' delivery: alerts.json cannot be read; the alerts that still stand are delivered again "+
+				"(the dedupe store keeps the ones shown from showing twice)", "err", err)
 		}
 		if !ok {
 			a.history = now.Add(-alertHistory)
 		}
 		a.through, a.read = through, through
 	}
+	byID := tasksByID(tasks)
 	for range alertReads {
 		evs, err := e.reg.EventsAfter(ctx, a.read, alertsRead, "alert")
 		if err != nil {
@@ -207,14 +233,42 @@ func (e *Engine) readAlerts(ctx context.Context, now time.Time) {
 		for _, ev := range evs {
 			a.read = ev.ID
 			p := &pendingAlert{ev: ev, key: fmt.Sprintf("factory-alert:%d:%d", ev.ID, ev.At.Unix()), line: alertLine(ev.Text)}
-			if p.settled = !a.history.IsZero() && ev.At.Before(a.history); !p.settled {
+			old := !a.history.IsZero() && ev.At.Before(a.history)
+			if p.settled = old && !e.alertStands(byID, ev); !p.settled {
 				a.batch.Add(notify.Item{Key: p.key, Title: p.line, Line: p.line, Window: alertOnce})
 			}
 			a.pending = append(a.pending, p)
 		}
 		e.settleAlerts()
 		if len(evs) < alertsRead {
-			return
+			break
+		}
+	}
+	e.seedHolds(ctx)
+}
+
+// seedHolds takes, once after a start, the hold each pending alert's
+// newest hold event named, so a restart writes no second hold event.
+func (e *Engine) seedHolds(ctx context.Context) {
+	a := &e.alerts
+	if a.seeded {
+		return
+	}
+	a.seeded = true
+	i := slices.IndexFunc(a.pending, func(p *pendingAlert) bool { return !p.settled })
+	if i < 0 {
+		return
+	}
+	held, err := e.reg.EventsAfter(ctx, a.pending[i].ev.ID, 0, alertHeld)
+	if err != nil {
+		e.log.Warn("the alerts' delivery: read the hold events", "err", err)
+		return
+	}
+	for _, p := range a.pending[i:] {
+		for _, h := range held {
+			if why, ok := strings.CutPrefix(h.Text, p.line+": held, "); ok && h.TaskID == p.ev.TaskID && h.ID > p.ev.ID {
+				p.held = holdCause(why)
+			}
 		}
 	}
 }
@@ -231,12 +285,9 @@ func (e *Engine) holdAlerts(ctx context.Context, cause, why string) {
 }
 
 // dropStale drops each pending alert whose task no longer waits on you for
-// its reason: it never fires.
+// its kind of wait: it never fires.
 func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
-	byID := make(map[int64]registry.Task, len(tasks))
-	for _, t := range tasks {
-		byID[t.ID] = t
-	}
+	byID := tasksByID(tasks)
 	var gone []string
 	for _, p := range e.alerts.pending {
 		if p.settled || e.alertStands(byID, p.ev) {
@@ -250,16 +301,18 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 }
 
 // alertStands reports whether the alert ev still holds: the factory's own
-// while its blocker of that line stands; a task's while it waits on you for
-// what the alert said, or, for an ended task's leftovers (its copy's
-// release refused, what a base run left in its copy), while they last. An
-// alert's text is kept redacted (Engine.event), so what it is compared
-// with is too.
+// while a blocker of its kind stands; a task's while it waits on you for
+// the same kind of wait the alert named (its line: what a wait's count or
+// card revision changed is the same), or, for an ended task's leftovers
+// (its copy's release refused, what a base run left in its copy), while
+// they last. An alert's text is kept redacted (Engine.event), so what it is
+// compared with is too.
 func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bool {
-	said := func(text string) bool { return ev.Text == execx.Redact(text) }
+	line := alertLine(ev.Text)
+	same := func(text string) bool { return line == alertLine(execx.Redact(text)) }
 	if ev.TaskID == 0 {
-		return slices.ContainsFunc(slices.Collect(maps.Values(e.blockers)), func(line string) bool {
-			return said("factory: " + waitsYou + ": " + line)
+		return slices.ContainsFunc(slices.Collect(maps.Values(e.blockers)), func(b string) bool {
+			return same("factory: " + waitsYou + ": " + b)
 		})
 	}
 	t, ok := byID[ev.TaskID]
@@ -267,7 +320,7 @@ func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bo
 		return false
 	}
 	key := TaskKey(t)
-	if waitsOnYou(t) && said(key+": "+waitsYou+": "+t.WaitsWhat) {
+	if waitsOnYou(t) && same(key+": "+waitsYou+": "+t.WaitsWhat) {
 		return true
 	}
 	e.claimMu.Lock()
@@ -277,13 +330,14 @@ func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bo
 		return true
 	}
 	k, kept := e.keptCopies[t.ID]
-	return kept && said(key+": "+k.what)
+	return kept && same(key+": "+k.what)
 }
 
-// flushAlerts sends the due toast of the alerts that stand, counting
-// everything that waits on you now, and records it; a toast that fails
-// keeps them for a later tick.
-func (e *Engine) flushAlerts(ctx context.Context, tasks []registry.Task) {
+// flushAlerts sends the due toast of the alerts that stand, counting what
+// waits on you now, and records what became of each: toasted, held as
+// sent by the dedupe store, or not shown (toasts off, herdr declining). A
+// toast that fails keeps them for a later try, after a backoff.
+func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registry.Task) {
 	a := &e.alerts
 	var standing []*pendingAlert
 	for _, p := range a.pending {
@@ -291,37 +345,47 @@ func (e *Engine) flushAlerts(ctx context.Context, tasks []registry.Task) {
 			standing = append(standing, p)
 		}
 	}
-	a.count, a.composed = e.needYou(tasks, standing), ""
+	count := e.needYou(tasks, standing)
+	a.batch.Compose = func(items []notify.Item) (string, string) { return alertToastText(count, items) }
 	tctx, cancel := context.WithTimeout(ctx, alertToastTimeout)
 	defer cancel()
-	sent, err := a.batch.FlushDue(tctx)
+	res, err := a.batch.FlushDueResult(tctx)
 	if err != nil {
-		e.log.Log(ctx, execx.FailLevel(ctx, err), "an alert's toast failed; it is tried again on a later tick",
-			"alerts", len(standing), "err", err)
+		a.fails++
+		a.retryAt = now.Add(min(alertRetryFirst<<(a.fails-1), alertRetryMax))
+		e.log.Log(ctx, execx.FailLevel(ctx, err), "an alert's toast failed; it is tried again later",
+			"alerts", len(standing), "at", clock(a.retryAt), "err", err)
 		return
 	}
-	switch {
-	case a.composed == "" && !a.batch.Notifier.Enabled:
-		items := make([]notify.Item, len(standing))
-		for i, p := range standing {
-			items[i] = notify.Item{Line: p.line}
-		}
-		title, body := e.composeAlerts(items)
-		e.event(ctx, 0, alertToast, registry.PhaseInfo, "no toast, [herdr] notify is off: "+title+" · "+body)
-	case a.composed == "": // each was toasted before: a restart lost the record of it (the dedupe store)
-	case sent:
-		e.event(ctx, 0, alertToast, registry.PhaseOK, "toast: "+a.composed)
-	default:
-		e.event(ctx, 0, alertToast, registry.PhaseInfo, "no toast, herdr declined it: "+a.composed)
+	a.fails, a.retryAt = 0, time.Time{}
+	shown := map[string]bool{}
+	for _, it := range res.Suppressed {
+		shown[it.Key] = true
 	}
+	var lines []notify.Item
 	for _, p := range standing {
+		if shown[p.key] {
+			e.event(ctx, p.ev.TaskID, alertToast, registry.PhaseInfo, "toast of "+p.line+" taken as sent before the restart")
+		} else {
+			lines = append(lines, notify.Item{Line: p.line})
+		}
 		p.settled = true
+	}
+	switch {
+	case res.Off:
+		title, body := alertToastText(count, lines)
+		e.event(ctx, 0, alertToast, registry.PhaseInfo, "no toast, [herdr] notify is off: "+title+" · "+body)
+	case res.Title == "": // each was taken as sent, above
+	case res.Sent:
+		e.event(ctx, 0, alertToast, registry.PhaseOK, "toast: "+res.Title+" · "+res.Body)
+	default:
+		e.event(ctx, 0, alertToast, registry.PhaseInfo, "no toast, herdr declined it: "+res.Title+" · "+res.Body)
 	}
 }
 
-// composeAlerts is the toast of items (the Batcher's Compose): the count
-// flushAlerts took, and the alerts' lines.
-func (e *Engine) composeAlerts(items []notify.Item) (title, body string) {
+// alertToastText is the toast of items, counting count: "factory: N need
+// you" and the alerts' lines, each once.
+func alertToastText(count int, items []notify.Item) (title, body string) {
 	var lines []string
 	for _, it := range items {
 		if !slices.Contains(lines, it.Line) { // two alerts of one reason say it once
@@ -331,13 +395,11 @@ func (e *Engine) composeAlerts(items []notify.Item) (title, body string) {
 	if len(lines) > alertLines {
 		lines = append(lines[:alertLines], fmt.Sprintf("+%d more", len(lines)-alertLines))
 	}
-	title = fmt.Sprintf("factory: %d need you", e.alerts.count)
-	if e.alerts.count == 1 {
+	title = fmt.Sprintf("factory: %d need you", count)
+	if count == 1 {
 		title = "factory: 1 needs you"
 	}
-	body = strings.Join(lines, " · ")
-	e.alerts.composed = title + " · " + body
-	return title, body
+	return title, strings.Join(lines, " · ")
 }
 
 // needYou counts what waits on you: every task that does, the tasks of
@@ -380,11 +442,22 @@ func (e *Engine) settleAlerts() {
 	a.pending, a.through = a.pending[n:], through
 }
 
+// The holds' words in an event (toastHold), and the hold each names
+// (holdCause, which reads them back after a restart).
+const (
+	quietWhy        = "quiet hours"
+	screenWhy       = "factory screen"
+	screenFocusWhy  = "the " + screenWhy + " has your focus"
+	paneWhy         = "factory pane"
+	paneInWhy       = "you're in a " + paneWhy
+	leftWhyTemplate = "you left %s at %s, it fires 2 minutes after"
+)
+
 // toastHold is what holds the toasts at now, and why in an event's words
 // ("" for nothing): quiet hours, the screen's focus, you in a factory pane.
 func (e *Engine) toastHold(now time.Time) (cause, why string) {
 	if spec := e.cfg.Daemon.QuietHours; spec != "" && eligibility.QuietHours(spec, now.Local()) {
-		return alertHoldQuiet, "quiet hours (" + spec + ")"
+		return alertHoldQuiet, quietWhy + " (" + spec + ")"
 	}
 	if why := e.screenHold(now); why != "" {
 		return alertHoldScreen, why
@@ -393,6 +466,19 @@ func (e *Engine) toastHold(now time.Time) (cause, why string) {
 		return alertHoldPane, why
 	}
 	return "", ""
+}
+
+// holdCause is the hold an event's words name ("" for none known).
+func holdCause(why string) string {
+	switch {
+	case strings.HasPrefix(why, quietWhy):
+		return alertHoldQuiet
+	case strings.Contains(why, screenWhy):
+		return alertHoldScreen
+	case strings.Contains(why, paneWhy):
+		return alertHoldPane
+	}
+	return ""
 }
 
 // screenHold is why the screen's focus holds the toasts ("" for nothing):
@@ -414,7 +500,7 @@ func (e *Engine) screenHold(now time.Time) string {
 	switch {
 	case live(f):
 		a.screenLive = true
-		return "the factory screen has your focus"
+		return screenFocusWhy
 	case f.Focused: // its process ended while it had focus
 		if a.screenLive {
 			a.screenLive, a.screenGone = false, now
@@ -425,87 +511,109 @@ func (e *Engine) screenHold(now time.Time) string {
 		left = f.At
 	}
 	if !left.IsZero() && now.Before(left.Add(alertMerge)) {
-		return "you left the factory screen at " + clock(left) + ", it fires 2 minutes after"
+		return fmt.Sprintf(leftWhyTemplate, "the "+screenWhy, clock(left))
 	}
 	return ""
 }
 
-// paneHold is why you in a factory pane hold the toasts ("" for nothing):
-// herdr's focus is on one (for [daemon] human_cooldown after it moved
-// there or herdr last showed you at work there, taken as left at that
-// end), or left one less than alertMerge ago. While herdr is held down no
+// paneHold is why you in a factory pane hold the toasts ("" for nothing).
+// Only herdr showing you at work in a factory pane (PaneFocus.Since)
+// proves you; then you are in one while herdr's focus is on one, for
+// [daemon] human_cooldown after that proof (taken as left at its end),
+// and a hold lasts alertMerge after you left. While herdr is held down no
 // pass reads it, and you are in none of its panes.
 func (e *Engine) paneHold(now time.Time) string {
 	if e.d.Runtime == nil {
 		return ""
 	}
 	f := e.d.Runtime.PaneFocus()
+	if f.Since.IsZero() {
+		return ""
+	}
+	end := e.cfg.Daemon.CooldownUntil(&f.Since)
 	left := f.Left
 	if _, down := e.holds[HoldHerdr]; f.Pane != "" && !down {
-		end := e.cfg.Daemon.CooldownUntil(&f.Since)
 		if now.Before(end) {
-			return "you're in a factory pane"
+			return paneInWhy
 		}
-		left = cmp.Or(end, left)
+		left = end
+	}
+	if !left.IsZero() && !end.IsZero() && end.Before(left) {
+		left = end
 	}
 	if !left.IsZero() && now.Before(left.Add(alertMerge)) {
-		return "you left a factory pane at " + clock(left) + ", it fires 2 minutes after"
+		return fmt.Sprintf(leftWhyTemplate, "a "+paneWhy, clock(left))
 	}
 	return ""
 }
 
-// sidebarTokens reports each task's sidebar token on its workspaces when
-// it changed, after a start, and before herdr's TTL would drop it: "needs
-// you: <what>" while the task waits on you, empty otherwise. No hold
-// applies to it. A report that fails is tried again on a later tick.
+// sidebarTokens reports each task's sidebar token on each workspace of its
+// live sessions when it changed there, when the workspace is new, after a
+// start or after a herdr hold, and before herdr's TTL would drop it:
+// "needs you: <what>" while the task waits on you, empty otherwise. No
+// toast hold applies to it, and one deadline bounds the whole pass. A
+// report that fails is tried again on the next tick.
 func (e *Engine) sidebarTokens(ctx context.Context, now time.Time, tasks []registry.Task) {
 	if e.d.Sidebar == nil || e.d.Runtime == nil {
 		return
 	}
+	a := &e.alerts
 	if _, down := e.holds[HoldHerdr]; down {
+		a.herdrDown = true
 		return
 	}
+	if a.herdrDown { // herdr is back: what it showed may be gone
+		a.herdrDown = false
+		clear(a.tokens)
+	}
+	pctx, cancel := context.WithTimeout(ctx, sidebarPassTimeout)
+	defer cancel()
 	for _, t := range tasks {
+		if pctx.Err() != nil {
+			e.log.Debug("the sidebar tokens' pass ran out of time; the rest go on the next tick")
+			return
+		}
 		if t.State == registry.TaskDone || t.State == registry.TaskStopped { // its workspaces closed with it
-			delete(e.alerts.tokens, t.ID)
+			delete(a.tokens, t.ID)
+			continue
+		}
+		ws, err := e.d.Runtime.Workspaces(pctx, t)
+		if err != nil {
+			e.log.Warn("a task's sidebar token: read its workspaces", "task", t.ID, "err", err)
 			continue
 		}
 		want := ""
 		if waitsOnYou(t) {
 			want = "needs you: " + alertShort(t.WaitsWhat)
 		}
-		if s, ok := e.alerts.tokens[t.ID]; ok && s.value == want && now.Sub(s.at) < sidebarRefresh {
-			continue
+		was, is := a.tokens[t.ID], map[string]sidebarToken{} // a workspace it no longer has is forgotten
+		for _, w := range ws {
+			if s, ok := was[w]; ok && s.value == want && now.Sub(s.at) < sidebarRefresh {
+				is[w] = s
+				continue
+			}
+			if err := e.d.Sidebar(pctx, w, map[string]string{sidebarKey: want}); err != nil {
+				e.log.Debug("a task's sidebar token; tried again on the next tick", "task", t.ID, "workspace", w, "err", err)
+				continue
+			}
+			is[w] = sidebarToken{value: want, at: now}
 		}
-		if e.reportToken(ctx, t, want) {
-			e.alerts.tokens[t.ID] = sidebarToken{value: want, at: now}
-		}
+		a.tokens[t.ID] = is
 	}
 }
 
-// reportToken reports want as task t's sidebar token on each workspace of
-// its live sessions; false when one report failed.
-func (e *Engine) reportToken(ctx context.Context, t registry.Task, want string) bool {
-	ws, err := e.d.Runtime.Workspaces(ctx, t)
-	if err != nil {
-		e.log.Warn("a task's sidebar token: read its workspaces", "task", t.ID, "err", err)
-		return false
+// tasksByID indexes tasks by id.
+func tasksByID(tasks []registry.Task) map[int64]registry.Task {
+	byID := make(map[int64]registry.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
 	}
-	ok := true
-	for _, w := range ws {
-		sctx, cancel := context.WithTimeout(ctx, sidebarTimeout)
-		err := e.d.Sidebar(sctx, w, map[string]string{sidebarKey: want})
-		cancel()
-		if err != nil {
-			e.log.Debug("a task's sidebar token; tried again on a later tick", "task", t.ID, "workspace", w, "err", err)
-			ok = false
-		}
-	}
-	return ok
+	return byID
 }
 
-// alertLine is an alert's line in a toast: its key and its reason, short
-// ("PR-12345 questions", "factory disk").
+// alertLine is an alert's line in a toast, which also names its kind of
+// wait (alertStands): its key and its reason, short ("PR-12345 questions",
+// "factory disk").
 func alertLine(text string) string {
 	who, what, ok := strings.Cut(text, ": ")
 	if !ok {
@@ -515,12 +623,12 @@ func alertLine(text string) string {
 }
 
 // alertShort is a wait's reason as a toast's line and the sidebar token
-// say it: "questions", "ready to push", else the screen's short form of it
-// or its first words.
+// say it: "questions" (however many), "ready to push", else the screen's
+// short form of it or its first words.
 func alertShort(what string) string {
 	switch {
 	case questionsWaitRe.MatchString(what):
-		return strings.Fields(what)[1]
+		return "questions"
 	case strings.HasPrefix(what, readyWait):
 		return readyWait
 	}

@@ -765,11 +765,12 @@ func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
 }
 
 // The observe pass says, from the snapshot it reads anyway, whether herdr's
-// focus is on a pane of a task's workspace and since when: the focus moving
-// there, or herdr showing you at work in a factory pane, starts it again; a
-// pane of a workspace of yours is no factory pane, and a herdr that does
-// not answer shows you in none (the alerts' toasts hold while you are in
-// one, spec 9.F).
+// focus is on a pane of a task's workspace, when herdr last showed you at
+// work in a factory pane (the proof of you: the focus alone, resting where
+// it was at a start or moved by herdr itself, is none), and when the focus
+// left the factory's panes; a pane of a workspace of yours is no factory
+// pane, and a herdr that does not answer shows you in none (the alerts'
+// toasts hold while you are in one, spec 9.F).
 func TestObserveSaysWhetherYouAreInAFactoryPane(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro")
@@ -780,16 +781,24 @@ func TestObserveSaysWhetherYouAreInAFactoryPane(t *testing.T) {
 	pane := store.Deref(g.session("fx-repro").HerdrPaneID)
 	g.h.focus(g.agent("fx-repro"))
 	g.observe()
-	in := g.clock.Now()
 	g.observe()
-	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.Equal(in) || !f.Left.IsZero() {
-		t.Fatalf("PaneFocus in fx-repro's pane = %+v, want %s since %v", f, pane, in)
+	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.IsZero() || !f.Left.IsZero() {
+		t.Fatalf("PaneFocus with herdr's focus moved onto fx-repro's pane = %+v, want %s with no proof of you", f, pane)
 	}
 	g.clock.Add(2 * time.Minute)
 	g.youAtWork("fx-repro")
-	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.Equal(g.clock.Now()) {
-		t.Fatalf("PaneFocus after herdr showed you at work = %+v, want since %v", f, g.clock.Now())
+	atWork := g.clock.Now()
+	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.Equal(atWork) {
+		t.Fatalf("PaneFocus after herdr showed you at work = %+v, want since %v", f, atWork)
 	}
+	g.restart() // a daemon start: herdr's focus rests where it was
+	g.observe()
+	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.IsZero() {
+		t.Fatalf("PaneFocus after a start = %+v, want %s with no proof of you", f, pane)
+	}
+	g.clock.Add(2 * time.Minute)
+	g.youAtWork("fx-repro")
+	atWork = g.clock.Now()
 
 	mine, err := g.h.WorkspaceCreate(g.ctx, herdr.WorkspaceCreateOptions{Label: "notes", Cwd: t.TempDir()})
 	if err != nil {
@@ -801,8 +810,8 @@ func TestObserveSaysWhetherYouAreInAFactoryPane(t *testing.T) {
 	g.observe()
 	left := g.clock.Now()
 	g.observe()
-	if f := g.r.PaneFocus(); f.Pane != "" || !f.Left.Equal(left) {
-		t.Fatalf("PaneFocus in a workspace of yours = %+v, want none, left at %v", f, left)
+	if f := g.r.PaneFocus(); f.Pane != "" || !f.Left.Equal(left) || !f.Since.Equal(atWork) {
+		t.Fatalf("PaneFocus in a workspace of yours = %+v, want none, left at %v, you at work at %v", f, left, atWork)
 	}
 
 	g.h.focus(g.agent("fx-repro"))

@@ -199,8 +199,10 @@ type Deps struct {
 	Reveal  func(ctx context.Context) error
 	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
 	// your herdr session (osascript after), deduplicated in a store of
-	// magnum's schema (the factory's agents store); nil shows none, and the
-	// alerts wait for a build that has one. Sidebar reports a task's sidebar
+	// magnum's schema (the factory's agents store); the delivery toasts
+	// through a copy of it that waits out less of herdr's rate limit, so a
+	// toast fits its bound on the loop. nil shows none, and the alerts wait
+	// for a build that has one. Sidebar reports a task's sidebar
 	// token on a workspace of the factory's herdr session
 	// (notify.Notifier.Sidebar); nil reports none.
 	Notifier *notify.Notifier
@@ -646,7 +648,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	e.hold(ctx, failures)
 	e.escalate(ctx, now)
-	e.deliverAlerts(ctx) // after every step that may have alerted
+	e.deliverAlerts(ctx, tasks) // after every step that may have alerted
 	return errors.Join(errs...)
 }
 

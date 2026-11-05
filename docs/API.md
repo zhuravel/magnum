@@ -11800,8 +11800,10 @@ type Deps struct {
 	Reveal  func(ctx context.Context) error
 	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
 	// your herdr session (osascript after), deduplicated in a store of
-	// magnum's schema (the factory's agents store); nil shows none, and the
-	// alerts wait for a build that has one. Sidebar reports a task's sidebar
+	// magnum's schema (the factory's agents store); the delivery toasts
+	// through a copy of it that waits out less of herdr's rate limit, so a
+	// toast fits its bound on the loop. nil shows none, and the alerts wait
+	// for a build that has one. Sidebar reports a task's sidebar
 	// token on a workspace of the factory's herdr session
 	// (notify.Notifier.Sidebar); nil reports none.
 	Notifier *notify.Notifier
@@ -13582,14 +13584,18 @@ type PaneFocus struct {
 	// label is the factory's, WorkspaceLabel), "" when the focus is
 	// elsewhere or herdr did not answer the last pass.
 	Pane string
-	// Since is when the focus moved onto Pane, or herdr last showed you at
-	// work in a factory pane after that (agents.ObsHumanActive); Left is
-	// when a pass first saw the focus off the factory's panes after it was
-	// on one (zero when none did).
+	// Since is when herdr last showed you at work in a factory pane
+	// (agents.ObsHumanActive: an agent at work on no prompt of the
+	// factory's, the human_active_at of its owner row), zero when no pass
+	// of this process did; Left is when a pass first saw the focus off the
+	// factory's panes after it was on one (zero when none did).
 	Since, Left time.Time
 }
     PaneFocus is what the observe passes saw of herdr's focus in the factory's
-    session.
+    session, and of you in its panes. herdr's focus alone proves nothing of you:
+    it rests where it was when nobody is attached, at a daemon start too,
+    and herdr moves it by itself when a workspace opens or closes; herdr showing
+    you at work in a factory pane does.
 
 type Runtime struct {
 	// Has unexported fields.
@@ -18980,6 +18986,10 @@ func (b *Batcher) Flush(ctx context.Context) (bool, error)
 func (b *Batcher) FlushDue(ctx context.Context) (bool, error)
     FlushDue flushes when Due; otherwise it does nothing.
 
+func (b *Batcher) FlushDueResult(ctx context.Context) (FlushResult, error)
+    FlushDueResult is FlushDue that says what it did: the zero FlushResult when
+    no item is due.
+
 func (b *Batcher) Forget(keys ...string)
     Forget drops the pending items with the given keys: what they announce no
     longer needs announcing. An unknown key is ignored.
@@ -18994,6 +19004,18 @@ type DedupeStore interface {
     DedupeStore is the part of *store.Store this package uses. ShouldSend
     reserves key for the window; ForgetSend releases a reservation whose toast
     was never delivered.
+
+type FlushResult struct {
+	Sent        bool
+	Title, Body string
+	Suppressed  []Item
+	Off         bool
+}
+    FlushResult is what a flush did. Title and Body are the toast it composed
+    ("" when it composed none: nothing was pending, every item was suppressed,
+    or notifications are off), Sent whether it was shown, Suppressed the items
+    the dedupe store dropped as announced within their Window, and Off that
+    notifications are disabled and the batch was dropped.
 
 type HerdrClient interface {
 	NotificationShow(ctx context.Context, title, body string) (herdr.NotificationResult, error)
@@ -19046,6 +19068,10 @@ type Notifier struct {
 	// Sleep waits between urgent retries; nil means a timer that stops early
 	// when ctx is done (returning ctx.Err()). Tests replace it.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// UrgentBudget is how much of herdr's rate limit an urgent toast waits
+	// out before osascript; zero means UrgentRetryBudget. A caller that bounds
+	// a toast's time keeps it below the bound, so osascript runs within it.
+	UrgentBudget time.Duration
 }
     Notifier delivers toasts and status tokens. Its methods are safe for
     concurrent use as long as the injected clients are.
@@ -19081,14 +19107,15 @@ func (n *Notifier) ToastUrgent(ctx context.Context, key, title, body string, win
     Dedupe works as in Toast (the key is reserved once for all attempts,
     released when nothing was delivered, consumed when something was). Delivery
     differs: when herdr answers rate_limited or busy, the toast is retried after
-    1s, 2s, 4s… until UrgentRetryBudget of waiting is spent and then shown with
-    osascript; when herdr is unreachable, has no client or fails the request,
-    osascript is used at once. Only herdr's "disabled" (the user turned toasts
-    off in herdr) is respected as final.
+    1s, 2s, 4s… until UrgentRetryBudget (or the notifier's UrgentBudget) of
+    waiting is spent and then shown with osascript; when herdr is unreachable,
+    has no client or fails the request, osascript is used at once. Only herdr's
+    "disabled" (the user turned toasts off in herdr) is respected as final.
 
-    ToastUrgent can block for up to UrgentRetryBudget plus the osascript
-    timeout; a caller on a latency-sensitive loop runs it in a goroutine.
-    A cancelled ctx stops the waiting, releases the key and returns ctx's error.
+    ToastUrgent can block for up to that budget plus the osascript timeout;
+    a caller on a latency-sensitive loop runs it in a goroutine, or bounds it
+    with a budget below its own deadline. A cancelled ctx stops the waiting,
+    releases the key and returns ctx's error.
 
 ```
 

@@ -613,3 +613,43 @@ func TestBatcherForgetDropsPendingItems(t *testing.T) {
 		t.Errorf("pending = %d after forgetting what was flushed", b.Pending())
 	}
 }
+
+// FlushDueResult says what the flush did: nothing before the window, the
+// toast it composed and whether it was shown, the items the dedupe store
+// suppressed as announced before, and a batch dropped because
+// notifications are off.
+func TestBatcherFlushDueResultSaysWhatTheFlushDid(t *testing.T) {
+	c := newClock()
+	h := newFakeHerdr()
+	b, n := newBatcher(h, c)
+	n.Store = realStore(t, c)
+	ctx := context.Background()
+	shown := newRepoItem("talkable/repo-a")
+	if sent, _ := n.Toast(ctx, shown.Key, "t", "b", 24*time.Hour); !sent {
+		t.Fatal("direct toast not sent")
+	}
+	b.Add(shown)
+	b.Add(newRepoItem("talkable/repo-b"))
+	if res, err := b.FlushDueResult(ctx); err != nil || res.Sent || res.Title != "" || b.Pending() != 2 {
+		t.Fatalf("FlushDueResult before the window = %+v, %v (pending %d); want nothing done", res, err, b.Pending())
+	}
+	c.Add(time.Minute)
+	res, err := b.FlushDueResult(ctx)
+	if err != nil || !res.Sent || res.Title != "magnum: new repo talkable/repo-b" || res.Off ||
+		len(res.Suppressed) != 1 || res.Suppressed[0].Key != shown.Key {
+		t.Fatalf("FlushDueResult = %+v, %v; want repo-b shown and repo-a suppressed", res, err)
+	}
+
+	b.Add(newRepoItem("talkable/repo-a")) // shown before: all suppressed, nothing composed
+	c.Add(time.Minute)
+	if res, err := b.FlushDueResult(ctx); err != nil || res.Sent || res.Title != "" || len(res.Suppressed) != 1 {
+		t.Fatalf("FlushDueResult of what was shown before = %+v, %v", res, err)
+	}
+
+	n.Enabled = false
+	b.Add(newRepoItem("talkable/repo-c"))
+	c.Add(time.Minute)
+	if res, err := b.FlushDueResult(ctx); err != nil || res.Sent || !res.Off || b.Pending() != 0 {
+		t.Fatalf("FlushDueResult with notifications off = %+v, %v (pending %d)", res, err, b.Pending())
+	}
+}

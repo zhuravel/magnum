@@ -90,6 +90,25 @@ func TestToastUrgentFallsBackToOsascriptAfterTheBudget(t *testing.T) {
 	}
 }
 
+// A notifier's own UrgentBudget replaces UrgentRetryBudget: a caller that
+// bounds the toast's time waits out less of herdr's rate limit, so osascript
+// still runs within its bound.
+func TestToastUrgentWaitsOutItsOwnBudget(t *testing.T) {
+	h := newFakeHerdr()
+	h.showRes = rateLimited
+	r := osascriptFake()
+	sl := &sleeper{}
+	n := &Notifier{Herdr: h, Runner: r, Enabled: true, Sleep: sl.sleep, UrgentBudget: 3 * time.Second}
+
+	if sent, err := n.ToastUrgent(context.Background(), "", "factory: 1 needs you", "PR-12345 questions", 0); err != nil || !sent {
+		t.Fatalf("ToastUrgent = %v, %v; want delivered through osascript", sent, err)
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second}; !reflect.DeepEqual(sl.waits, want) {
+		t.Errorf("waits = %v, want %v", sl.waits, want)
+	}
+	assertOsascript(t, r, `display notification "PR-12345 questions" with title "factory: 1 needs you"`)
+}
+
 // The identity-leak alert was lost exactly like this: herdr rate limited and
 // no surface left. The reservation must be released so the next report of
 // the same leak toasts again.

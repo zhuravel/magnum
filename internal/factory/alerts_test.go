@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,25 +14,30 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/notify"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // toastHerdr is a herdr magnum's notify reaches, on fakes: the toasts it
 // was asked to show, and the sidebar tokens reported to it by workspace.
-// err fails every call, as a herdr that does not answer; the rig's
-// notifier has no runner, so no osascript runs after and no real toast can
-// fire.
+// err fails every call, as a herdr that does not answer, and declined is
+// the reason it gives for showing no toast ("" shows it); calls counts the
+// toasts asked for. The rig's notifier has no runner unless a test gives it
+// a fake one, so no osascript runs and no real toast can fire.
 type toastHerdr struct {
-	mu      sync.Mutex
-	toasts  []shownToast
-	tokens  map[string]map[string]string // workspace -> its tokens, as last reported
-	reports int
-	err     error
+	mu       sync.Mutex
+	toasts   []shownToast
+	tokens   map[string]map[string]string // workspace -> its tokens, as last reported
+	reports  int
+	calls    int
+	err      error
+	declined string
 }
 
 type shownToast struct{ Title, Body string }
@@ -39,11 +45,21 @@ type shownToast struct{ Title, Body string }
 func (f *toastHerdr) NotificationShow(_ context.Context, title, body string) (herdr.NotificationResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	if f.err != nil {
 		return herdr.NotificationResult{}, f.err
 	}
+	if f.declined != "" {
+		return herdr.NotificationResult{Reason: f.declined}, nil
+	}
 	f.toasts = append(f.toasts, shownToast{title, body})
 	return herdr.NotificationResult{Shown: true, Reason: "shown"}, nil
+}
+
+func (f *toastHerdr) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func (f *toastHerdr) WorkspaceReportMetadata(_ context.Context, ws, source string, tokens map[string]string, _ time.Duration) error {
@@ -91,16 +107,21 @@ func (f *toastHerdr) setErr(err error) {
 type alertRig struct {
 	*harness
 	toasts, side *toastHerdr
+	dedupe       *store.Store
 	live         atomic.Int64
 }
 
-func newAlertRig(t *testing.T) *alertRig {
+// newAlertRig builds the rig; edit changes the toasts' notifier first.
+func newAlertRig(t *testing.T, edit ...func(n *notify.Notifier)) *alertRig {
 	t.Helper()
 	r := &alertRig{toasts: &toastHerdr{}, side: &toastHerdr{}}
 	r.harness = newHarness(t, func(d *Deps) {
-		st := storetest.Open(t, filepath.Join(t.TempDir(), "agents.db"))
-		st.Clock = d.Clock
-		d.Notifier = &notify.Notifier{Herdr: r.toasts, Store: st, Enabled: true}
+		r.dedupe = storetest.Open(t, filepath.Join(t.TempDir(), "agents.db"))
+		r.dedupe.Clock = d.Clock
+		d.Notifier = &notify.Notifier{Herdr: r.toasts, Store: r.dedupe, Enabled: true}
+		for _, f := range edit {
+			f(d.Notifier)
+		}
 		d.Sidebar = (&notify.Notifier{Herdr: r.side}).Sidebar
 	})
 	r.seams()
@@ -251,9 +272,9 @@ func TestAlertsWithinTwoMinutesMergeIntoOneToast(t *testing.T) {
 	r.wantToasts("a second before the 2 minutes", first)
 	r.after(time.Second)
 	r.wantToasts("the merged toast", first,
-		shownToast{"factory: 4 need you", "PR-12345 questions · PR-12346 question · PR-12360 ready to push"})
+		shownToast{"factory: 4 need you", "PR-12345 questions · PR-12346 questions · PR-12360 ready to push"})
 	if got := r.texts(0, alertToast); len(got) != 2 ||
-		got[1] != "toast: factory: 4 need you · PR-12345 questions · PR-12346 question · PR-12360 ready to push" {
+		got[1] != "toast: factory: 4 need you · PR-12345 questions · PR-12346 questions · PR-12360 ready to push" {
 		t.Fatalf("toast events %q", got)
 	}
 }
@@ -295,8 +316,9 @@ func TestAFocusOfAScreenThatEndedHoldsNothing(t *testing.T) {
 	}
 }
 
-// No toast while herdr's focus is on a factory pane (the observe pass's
-// reading): the alert is held, with one event.
+// No toast while you are in a factory pane (the observe pass's reading:
+// herdr's focus on one, where herdr showed you at work): the alert is held,
+// with one event.
 func TestNoToastWhileTheOperatorIsInAFactoryPane(t *testing.T) {
 	r := newAlertRig(t)
 	r.rt.setPaneFocus(runtime.PaneFocus{Pane: "w1:p1", Since: r.clock.Now()})
@@ -312,8 +334,8 @@ func TestNoToastWhileTheOperatorIsInAFactoryPane(t *testing.T) {
 
 // herdr keeps a session's focused pane after you left its terminal, so a
 // focus that rests on a factory pane counts as you in it for
-// [daemon] human_cooldown after it moved there (or herdr last showed you
-// at work there), not for ever: a held alert then fires 2 minutes after.
+// [daemon] human_cooldown after herdr last showed you at work there, not
+// for ever: a held alert then fires 2 minutes after.
 func TestAFocusThatRestsOnAFactoryPaneHoldsForTheHumanCooldownOnly(t *testing.T) {
 	r := newAlertRig(t)
 	since := r.clock.Now()
@@ -345,11 +367,12 @@ func TestAHeldAlertFiresTwoMinutesAfterYouLeave(t *testing.T) {
 	one := shownToast{"factory: 1 needs you", "PR-12345 questions"}
 	r.wantToasts("2 minutes after the blur", one)
 
-	r.rt.setPaneFocus(runtime.PaneFocus{Pane: "w1:p1", Since: r.clock.Now()})
+	atWork := r.clock.Now()
+	r.rt.setPaneFocus(runtime.PaneFocus{Pane: "w1:p1", Since: atWork})
 	r.needsYou("PR-12346", "2 questions before coding")
 	r.tick()
 	r.after(5 * time.Minute)
-	r.rt.setPaneFocus(runtime.PaneFocus{Left: r.clock.Now()})
+	r.rt.setPaneFocus(runtime.PaneFocus{Since: atWork, Left: r.clock.Now()})
 	r.after(time.Minute + 59*time.Second)
 	r.wantToasts("a second before 2 minutes after you left the pane", one)
 	r.after(time.Second)
@@ -472,23 +495,105 @@ func TestADaemonRestartDeliversEachAlertOnce(t *testing.T) {
 	}
 }
 
+// An alert whose toast the dedupe store holds as sent, with no record of
+// the delivery (the daemon stopped between the reservation and the show,
+// or after the show), is not toasted again, and `!` says what became of
+// it.
+func TestAToastTheDedupeStoreHoldsAsSentIsRecordedSo(t *testing.T) {
+	r := newAlertRig(t)
+	task := r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	ev := r.events(task.ID, "alert")[0]
+	if ok, err := r.dedupe.ShouldSend(r.ctx, fmt.Sprintf("factory-alert:%d:%d", ev.ID, ev.At.Unix()), alertOnce); err != nil || !ok {
+		t.Fatalf("reserve the alert's toast: %v, %v", ok, err)
+	}
+	r.after(2 * time.Minute)
+	r.wantToasts("a toast the dedupe store holds")
+	if got := r.texts(task.ID, alertToast); !slices.Equal(got, []string{"toast of PR-12345 questions taken as sent before the restart"}) {
+		t.Fatalf("its events %q", got)
+	}
+	r.after(5 * time.Minute)
+	if got := r.texts(task.ID, alertToast); len(got) != 1 {
+		t.Errorf("its events %q, want the one", got)
+	}
+}
+
+// With [herdr] notify off no toast is shown, and `!` says so: the alert is
+// settled, never left pending.
+func TestWithToastsOffAnAlertIsRecordedNotShown(t *testing.T) {
+	r := newAlertRig(t, func(n *notify.Notifier) { n.Enabled = false })
+	r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.after(2 * time.Minute)
+	r.after(5 * time.Minute)
+	r.wantToasts("with toasts off")
+	if got := r.texts(0, alertToast); !slices.Equal(got, []string{"no toast, [herdr] notify is off: factory: 1 needs you · PR-12345 questions"}) {
+		t.Fatalf("toast events %q", got)
+	}
+}
+
 // A toast that fails (herdr does not answer, and no osascript shows it) is
-// logged and tried again on a later tick, never lost and never doubled.
+// logged and tried again on a later tick after a backoff, so a toast that
+// keeps failing does not cost every tick its bound; never lost and never
+// doubled.
 func TestAToastThatFailsIsTriedAgainOnALaterTick(t *testing.T) {
 	r := newAlertRig(t)
 	r.toasts.setErr(fmt.Errorf("herdr: dial: %w", herdr.ErrUnavailable))
 	r.needsYou("PR-12345", "3 questions before coding")
 	r.tick()
 	r.after(2 * time.Minute)
+	if n := r.toasts.callCount(); n != 1 {
+		t.Fatalf("toasts asked for %d, want 1", n)
+	}
 	r.after(45 * time.Second)
 	r.wantToasts("while herdr does not answer")
+	if n := r.toasts.callCount(); n != 1 {
+		t.Fatalf("toasts asked for %d within the backoff, want 1", n)
+	}
 	if got := r.texts(0, alertToast); len(got) != 0 {
 		t.Fatalf("toast events %q while none went out", got)
 	}
+	r.after(30 * time.Second) // past the first backoff: tried again, fails again
+	if n := r.toasts.callCount(); n != 2 {
+		t.Fatalf("toasts asked for %d after the backoff, want 2", n)
+	}
 	r.toasts.setErr(nil)
-	r.after(45 * time.Second)
+	r.after(time.Minute) // the second backoff is longer
+	if n := r.toasts.callCount(); n != 2 {
+		t.Fatalf("toasts asked for %d within the second backoff, want 2", n)
+	}
+	r.after(time.Minute + 30*time.Second)
 	r.after(45 * time.Second)
 	r.wantToasts("once herdr answers", shownToast{"factory: 1 needs you", "PR-12345 questions"})
+}
+
+// herdr's rate limit is waited out only within the toast's bound: the
+// factory's notifier gives up on herdr in time for osascript to show the
+// toast before the bound ends.
+func TestARateLimitedToastReachesOsascriptWithinItsBound(t *testing.T) {
+	var waits []time.Duration
+	run := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/usr/bin/osascript"}}}}
+	r := newAlertRig(t, func(n *notify.Notifier) {
+		n.Runner = run
+		n.Sleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
+	})
+	r.toasts.declined = "rate_limited"
+	r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.after(2 * time.Minute)
+	if len(run.Calls) != 1 {
+		t.Fatalf("osascript ran %d times, want once", len(run.Calls))
+	}
+	var waited time.Duration
+	for _, d := range waits {
+		waited += d
+	}
+	if waited == 0 || waited+10*time.Second > alertToastTimeout { // osascript's own timeout is 10s
+		t.Fatalf("waited %s for herdr (%v); want it, and osascript after it, within %s", waited, waits, alertToastTimeout)
+	}
+	if got := r.texts(0, alertToast); !slices.Equal(got, []string{"toast: factory: 1 needs you · PR-12345 questions"}) {
+		t.Errorf("toast events %q", got)
+	}
 }
 
 // The factory's own alert (a blocker of its own, taskID 0) toasts while its
@@ -513,19 +618,159 @@ func TestTheFactorysOwnAlertFiresWhileItsBlockerStands(t *testing.T) {
 	}
 }
 
-// The first start of a daemon that delivers (no alerts.json yet) takes the
-// alerts older than a day as history: never toasted, never dropped; the
-// day's alerts are delivered, and two of one reason say it once.
-func TestTheFirstStartTakesTheAlertsOlderThanADayAsHistory(t *testing.T) {
+// The first start of a daemon that delivers (no alerts.json yet) delivers
+// the alerts older than a day that still stand, merged with the day's (two
+// of one reason say it once), and settles the old ones that no longer
+// stand in silence: no flood of drop events.
+func TestTheFirstStartDeliversTheOldAlertsThatStillStand(t *testing.T) {
 	r := newAlertRig(t)
-	old := r.needsYou("PR-12345", "3 questions before coding")
+	r.needsYou("PR-12340", "the factory failed twice on this task")
+	gone := r.needsYou("PR-12341", "3 questions before coding")
+	r.backToWork(gone)
 	r.clock.Add(25 * time.Hour)
 	recent := r.needsYou("PR-12346", "2 questions before coding")
 	r.e.alert(r.ctx, recent.ID, "PR-12346: you: 2 questions before coding") // the same reason again
 	r.tick()
 	r.after(2 * time.Minute)
-	r.wantToasts("the first start", shownToast{"factory: 2 need you", "PR-12346 questions"})
-	if got := append(r.texts(old.ID, alertDropped), r.texts(old.ID, alertHeld)...); len(got) != 0 {
-		t.Errorf("events of the history's alert %q, want none", got)
+	r.wantToasts("the first start", shownToast{"factory: 2 need you", "PR-12340 the factory failed twice on this task · PR-12346 questions"})
+	if got := append(r.texts(gone.ID, alertDropped), r.texts(gone.ID, alertHeld)...); len(got) != 0 {
+		t.Errorf("events of an old alert that no longer stands %q, want none", got)
+	}
+}
+
+// An alerts.json that cannot be read loses no pending alert: one held for
+// more than a day still fires once its hold ends, and one delivered before
+// is not shown again.
+func TestAnUnreadableAlertsFileLosesNoPendingAlert(t *testing.T) {
+	r := newAlertRig(t)
+	pid := os.Getpid()
+	r.needsYou("PR-12340", "the factory failed twice on this task")
+	r.tick()
+	r.after(2 * time.Minute)
+	first := shownToast{"factory: 1 needs you", "PR-12340 the factory failed twice on this task"}
+	r.wantToasts("the first alert", first)
+	r.live.Store(int64(pid))
+	r.focus(true, pid)
+	r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.after(25 * time.Hour)
+	if err := os.WriteFile(r.layout.FactoryAlerts(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.restart()
+	r.focus(false, pid)
+	r.after(2 * time.Minute)
+	r.wantToasts("after a restart on an unreadable alerts.json", first, shownToast{"factory: 2 need you", "PR-12345 questions"})
+}
+
+// A held alert of a task that still waits on you for the same kind of
+// wait fires when the hold ends, though the wait's words changed: you
+// answered one question of three, or two, and left the others.
+func TestAHeldAlertFiresWhileItsTaskStillWaitsOnYouForFewerQuestions(t *testing.T) {
+	r := newAlertRig(t)
+	pid := os.Getpid()
+	r.live.Store(int64(pid))
+	r.focus(true, pid)
+	task := r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	for _, left := range []string{"2 questions before coding", "1 question before coding"} {
+		if err := r.reg.TransitionTask(r.ctx, task.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
+			u.Set("waits_what", left)
+			u.Because("your answers")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.tick()
+	}
+	r.focus(false, pid)
+	r.after(2 * time.Minute)
+	r.wantToasts("after you left", shownToast{"factory: 1 needs you", "PR-12345 questions"})
+	if got := r.texts(task.ID, alertDropped); len(got) != 0 {
+		t.Errorf("drop events %q of an alert whose task still waits on you", got)
+	}
+}
+
+// herdr's focus alone is no proof of you: at a daemon start (or after a
+// move herdr made by itself) a focus that rests on a factory pane, with
+// herdr showing you at work in none, holds no toast.
+func TestADaemonStartWithHerdrRestingOnAFactoryPaneDelaysNoToast(t *testing.T) {
+	r := newAlertRig(t)
+	r.rt.setPaneFocus(runtime.PaneFocus{Pane: "w1:p1"})
+	task := r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.after(2 * time.Minute)
+	r.wantToasts("herdr resting on a factory pane", shownToast{"factory: 1 needs you", "PR-12345 questions"})
+	if got := r.texts(task.ID, alertHeld); len(got) != 0 {
+		t.Errorf("hold events %q, want none", got)
+	}
+}
+
+// A restart writes no second hold event for an alert it finds held: `!`
+// keeps one per alert and hold.
+func TestARestartWritesNoSecondHoldEventForAHeldAlert(t *testing.T) {
+	r := newAlertRig(t)
+	pid := os.Getpid()
+	r.live.Store(int64(pid))
+	r.focus(true, pid)
+	task := r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.restart()
+	r.after(time.Minute)
+	r.restart()
+	r.after(time.Minute)
+	if got := r.texts(task.ID, alertHeld); len(got) != 1 {
+		t.Errorf("hold events %q after two restarts, want one", got)
+	}
+}
+
+// The sidebar token reaches a workspace its task gains after the token was
+// first reported, and every workspace again once herdr is back after a
+// herdr hold; one deadline bounds the whole pass.
+func TestTheSidebarTokenFollowsTheTasksWorkspacesAndHerdrComingBack(t *testing.T) {
+	r := newAlertRig(t)
+	task := r.task("PR-12345", registry.TaskActive, "investigate")
+	r.rt.setWorkspaces(task.ID, "w1")
+	r.e.toOperator(r.ctx, task, "3 questions before coding", "a test")
+	r.tick()
+	r.rt.setWorkspaces(task.ID, "w1", "w2")
+	r.tick()
+	if tok, _ := r.side.token("w2"); tok != "needs you: questions" {
+		t.Fatalf("token on the workspace the task gained %q", tok)
+	}
+	reports := r.side.reports
+
+	down := atomic.Bool{}
+	r.e.d.HerdrUp = func(context.Context) error {
+		if down.Load() {
+			return herdr.ErrUnavailable
+		}
+		return nil
+	}
+	down.Store(true)
+	r.after(time.Minute)
+	down.Store(false)
+	r.after(time.Minute)
+	if r.side.reports != reports+2 {
+		t.Errorf("reports %d once herdr is back, want %d: each workspace's token again", r.side.reports, reports+2)
+	}
+
+	var deadlines []time.Time
+	start := time.Now()
+	r.e.d.Sidebar = func(ctx context.Context, _ string, _ map[string]string) error {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Error("a sidebar report with no deadline")
+		}
+		deadlines = append(deadlines, dl)
+		return errors.New("herdr: report_metadata: timeout")
+	}
+	r.after(time.Minute) // nothing changed: no report
+	r.backToWork(task)
+	r.after(time.Minute)
+	if len(deadlines) != 2 {
+		t.Fatalf("reports %d, want one per workspace", len(deadlines))
+	}
+	if !deadlines[0].Equal(deadlines[1]) || deadlines[0].After(start.Add(sidebarPassTimeout+time.Second)) {
+		t.Errorf("the pass's reports have deadlines %v; want the pass's one, within %s", deadlines, sidebarPassTimeout)
 	}
 }

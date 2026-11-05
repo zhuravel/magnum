@@ -17,16 +17,20 @@ import (
 )
 
 // PaneFocus is what the observe passes saw of herdr's focus in the
-// factory's session.
+// factory's session, and of you in its panes. herdr's focus alone proves
+// nothing of you: it rests where it was when nobody is attached, at a
+// daemon start too, and herdr moves it by itself when a workspace opens or
+// closes; herdr showing you at work in a factory pane does.
 type PaneFocus struct {
 	// Pane is herdr's focused pane when it is in a task's workspace (its
 	// label is the factory's, WorkspaceLabel), "" when the focus is
 	// elsewhere or herdr did not answer the last pass.
 	Pane string
-	// Since is when the focus moved onto Pane, or herdr last showed you at
-	// work in a factory pane after that (agents.ObsHumanActive); Left is
-	// when a pass first saw the focus off the factory's panes after it was
-	// on one (zero when none did).
+	// Since is when herdr last showed you at work in a factory pane
+	// (agents.ObsHumanActive: an agent at work on no prompt of the
+	// factory's, the human_active_at of its owner row), zero when no pass
+	// of this process did; Left is when a pass first saw the focus off the
+	// factory's panes after it was on one (zero when none did).
 	Since, Left time.Time
 }
 
@@ -39,7 +43,8 @@ func (r *Runtime) PaneFocus() PaneFocus {
 
 // noteFocus takes herdr's focus from the snapshot an observe pass read at
 // at (the zero snapshot when herdr did not answer: you are in none of its
-// panes).
+// panes). A move onto a factory pane, herdr's or yours, proves nothing of
+// you: Since stays as it was.
 func (r *Runtime) noteFocus(snap herdr.Snapshot, at time.Time) {
 	pane := factoryPane(snap)
 	r.mu.Lock()
@@ -47,20 +52,17 @@ func (r *Runtime) noteFocus(snap herdr.Snapshot, at time.Time) {
 	switch pane {
 	case r.focus.Pane:
 	case "":
-		r.focus = PaneFocus{Left: at}
+		r.focus.Pane, r.focus.Left = "", at
 	default:
-		r.focus = PaneFocus{Pane: pane, Since: at, Left: r.focus.Left}
+		r.focus.Pane = pane
 	}
 }
 
-// renewFocus notes herdr showing you at work in a factory pane at at: you
-// are in the pane you focus.
+// renewFocus notes herdr showing you at work in a factory pane at at.
 func (r *Runtime) renewFocus(at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.focus.Pane != "" {
-		r.focus.Since = at
-	}
+	r.focus.Since = at
 }
 
 // factoryPane is snap's focused pane when it is in one of the factory's

@@ -19,6 +19,7 @@
 package notify
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -96,6 +97,10 @@ type Notifier struct {
 	// Sleep waits between urgent retries; nil means a timer that stops early
 	// when ctx is done (returning ctx.Err()). Tests replace it.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// UrgentBudget is how much of herdr's rate limit an urgent toast waits
+	// out before osascript; zero means UrgentRetryBudget. A caller that bounds
+	// a toast's time keeps it below the bound, so osascript runs within it.
+	UrgentBudget time.Duration
 }
 
 // priority selects how hard a toast tries to reach the user.
@@ -131,14 +136,16 @@ func (n *Notifier) Toast(ctx context.Context, key, title, body string, window ti
 // Dedupe works as in Toast (the key is reserved once for all attempts,
 // released when nothing was delivered, consumed when something was). Delivery
 // differs: when herdr answers rate_limited or busy, the toast is retried after
-// 1s, 2s, 4s… until UrgentRetryBudget of waiting is spent and then shown with
-// osascript; when herdr is unreachable, has no client or fails the request,
-// osascript is used at once. Only herdr's "disabled" (the user turned toasts
-// off in herdr) is respected as final.
+// 1s, 2s, 4s… until UrgentRetryBudget (or the notifier's UrgentBudget) of
+// waiting is spent and then shown with osascript; when herdr is unreachable,
+// has no client or fails the request, osascript is used at once. Only
+// herdr's "disabled" (the user turned toasts off in herdr) is respected as
+// final.
 //
-// ToastUrgent can block for up to UrgentRetryBudget plus the osascript
-// timeout; a caller on a latency-sensitive loop runs it in a goroutine. A
-// cancelled ctx stops the waiting, releases the key and returns ctx's error.
+// ToastUrgent can block for up to that budget plus the osascript timeout; a
+// caller on a latency-sensitive loop runs it in a goroutine, or bounds it
+// with a budget below its own deadline. A cancelled ctx stops the waiting,
+// releases the key and returns ctx's error.
 func (n *Notifier) ToastUrgent(ctx context.Context, key, title, body string, window time.Duration) (bool, error) {
 	return n.toast(ctx, urgent, key, title, body, window)
 }
@@ -239,6 +246,7 @@ func (n *Notifier) deliver(ctx context.Context, title, body string) (bool, error
 func (n *Notifier) deliverUrgent(ctx context.Context, title, body string) (bool, error) {
 	var herdrErr error
 	if n.Herdr != nil {
+		budget := cmp.Or(n.UrgentBudget, UrgentRetryBudget)
 		wait, waited := UrgentRetryFirst, time.Duration(0)
 		for {
 			res, err := n.Herdr.NotificationShow(ctx, title, body)
@@ -249,8 +257,8 @@ func (n *Notifier) deliverUrgent(ctx context.Context, title, body string) (bool,
 				n.logf("notify: herdr did not show urgent %q: toasts are disabled in herdr", title)
 				return false, nil
 			}
-			if err == nil && (res.Reason == reasonRateLimit || res.Reason == reasonBusy) && waited < UrgentRetryBudget {
-				d := min(wait, UrgentRetryBudget-waited)
+			if err == nil && (res.Reason == reasonRateLimit || res.Reason == reasonBusy) && waited < budget {
+				d := min(wait, budget-waited)
 				n.logf("notify: herdr answered %s for urgent %q; retrying in %s", res.Reason, title, d)
 				if err := n.sleep(ctx, d); err != nil {
 					return false, fmt.Errorf("urgent toast not delivered: %w", err)
@@ -263,7 +271,7 @@ func (n *Notifier) deliverUrgent(ctx context.Context, title, body string) (bool,
 			case err != nil:
 				herdrErr = fmt.Errorf("herdr notification: %w", err)
 			case res.Reason == reasonRateLimit || res.Reason == reasonBusy:
-				herdrErr = fmt.Errorf("herdr answered %s for %s", res.Reason, UrgentRetryBudget)
+				herdrErr = fmt.Errorf("herdr answered %s for %s", res.Reason, budget)
 			default:
 				herdrErr = fmt.Errorf("herdr did not show it: %s", res.Reason)
 			}

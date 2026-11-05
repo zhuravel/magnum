@@ -144,6 +144,28 @@ func (b *Batcher) Due() bool {
 	return len(b.items) > 0 && !b.now().Before(b.items[0].at.Add(b.window()))
 }
 
+// FlushResult is what a flush did. Title and Body are the toast it
+// composed ("" when it composed none: nothing was pending, every item was
+// suppressed, or notifications are off), Sent whether it was shown,
+// Suppressed the items the dedupe store dropped as announced within their
+// Window, and Off that notifications are disabled and the batch was
+// dropped.
+type FlushResult struct {
+	Sent        bool
+	Title, Body string
+	Suppressed  []Item
+	Off         bool
+}
+
+// FlushDueResult is FlushDue that says what it did: the zero FlushResult
+// when no item is due.
+func (b *Batcher) FlushDueResult(ctx context.Context) (FlushResult, error) {
+	if !b.Due() {
+		return FlushResult{}, nil
+	}
+	return b.flush(ctx)
+}
+
 // FlushDue flushes when Due; otherwise it does nothing.
 func (b *Batcher) FlushDue(ctx context.Context) (bool, error) {
 	if !b.Due() {
@@ -160,42 +182,53 @@ func (b *Batcher) FlushDue(ctx context.Context) (bool, error) {
 // (still due), their item reservations are released and the error is
 // returned, so the next tick retries.
 func (b *Batcher) Flush(ctx context.Context) (bool, error) {
+	res, err := b.flush(ctx)
+	return res.Sent, err
+}
+
+// flush is Flush, saying what it did.
+func (b *Batcher) flush(ctx context.Context) (FlushResult, error) {
 	if b.Notifier == nil {
-		return false, errors.New("notify: batcher has no notifier")
+		return FlushResult{}, errors.New("notify: batcher has no notifier")
 	}
 	b.mu.Lock()
 	batch := b.items
 	b.items = nil
 	b.mu.Unlock()
-	if len(batch) == 0 || !b.Notifier.Enabled {
-		return false, nil
+	if len(batch) == 0 {
+		return FlushResult{}, nil
 	}
-	fresh, reserved, err := b.reserveItems(ctx, batch)
+	if !b.Notifier.Enabled {
+		return FlushResult{Off: true}, nil
+	}
+	fresh, reserved, suppressed, err := b.reserveItems(ctx, batch)
 	if err != nil {
 		b.restore(batch)
-		return false, err
+		return FlushResult{}, err
 	}
+	res := FlushResult{Suppressed: suppressed}
 	if len(fresh) == 0 {
-		return false, nil
+		return res, nil
 	}
-	title, body := b.compose(fresh)
+	res.Title, res.Body = b.compose(fresh)
 	toast := b.Notifier.Toast
 	if b.Urgent {
 		toast = b.Notifier.ToastUrgent
 	}
-	sent, err := toast(ctx, b.dedupeKey(fresh), title, body, b.dedupe())
+	sent, err := toast(ctx, b.dedupeKey(fresh), res.Title, res.Body, b.dedupe())
 	if err != nil {
 		b.releaseItems(ctx, reserved)
 		b.restore(fresh)
-		return false, err
+		return FlushResult{}, err
 	}
-	return sent, nil
+	res.Sent = sent
+	return res, nil
 }
 
 // reserveItems applies the per-item Window gate: it returns the items to
-// announce and the keys it reserved for them. On a store error it releases
-// what it reserved and returns the error.
-func (b *Batcher) reserveItems(ctx context.Context, batch []pendingItem) (fresh []pendingItem, reserved []string, err error) {
+// announce, the keys it reserved for them and the items it suppressed. On
+// a store error it releases what it reserved and returns the error.
+func (b *Batcher) reserveItems(ctx context.Context, batch []pendingItem) (fresh []pendingItem, reserved []string, suppressed []Item, err error) {
 	st := b.Notifier.Store
 	for _, p := range batch {
 		if p.Key == "" || p.Window <= 0 || st == nil {
@@ -205,16 +238,17 @@ func (b *Batcher) reserveItems(ctx context.Context, batch []pendingItem) (fresh 
 		ok, err := st.ShouldSend(ctx, p.Key, p.Window)
 		if err != nil {
 			b.releaseItems(ctx, reserved)
-			return nil, nil, fmt.Errorf("toast %q: %w", p.Key, err)
+			return nil, nil, nil, fmt.Errorf("toast %q: %w", p.Key, err)
 		}
 		if !ok {
 			b.Notifier.logf("notify: toast %q suppressed (sent within %s)", p.Key, p.Window)
+			suppressed = append(suppressed, p.Item)
 			continue
 		}
 		reserved = append(reserved, p.Key)
 		fresh = append(fresh, p)
 	}
-	return fresh, reserved, nil
+	return fresh, reserved, suppressed, nil
 }
 
 func (b *Batcher) releaseItems(ctx context.Context, keys []string) {
