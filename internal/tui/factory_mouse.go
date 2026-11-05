@@ -25,7 +25,11 @@ func (m *factoryModel) updateMouse(msg tea.MouseMsg) tea.Cmd {
 			m.wheel(ev.Button)
 		}
 	case tea.MouseClickMsg:
-		return tea.Batch(m.seeHome(), m.click(ev)) // a click is your input, as a key is
+		// A click is your input, as a key is; it hits what the frame drew (the
+		// digest too), and only then is the digest seen.
+		home := m.view == fvHome
+		cmd := m.click(ev)
+		return tea.Batch(m.seeHomeOf(home), cmd)
 	}
 	return nil
 }

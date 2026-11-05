@@ -20,7 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
-const factoryStartUsage = "start <key, link or prompt> [--kind bug|feature|chore] [--repo owner/name]"
+const factoryStartUsage = "start <key, link or prompt> [--kind bug|feature|chore] [--repo owner/name] [--words-only]"
 
 // The wait for the factory daemon's answer to a start: it answers in its
 // next tick, which a kick starts at once; reading Jira takes a few seconds.
@@ -31,6 +31,7 @@ const (
 
 func newFactoryStartCmd(c *Context) *cobra.Command {
 	var kind, repo string
+	var wordsOnly bool
 	cmd := newCommand("", factoryStartUsage, "start a factory task from a Jira key, a link or your words",
 		"Hand the factory daemon a task. A Jira key (PR-12345) or a Jira link at the start makes a task of that "+
 			"ticket, which the daemon reads itself, and the words after it are your guidance for every agent: "+
@@ -41,19 +42,24 @@ func newFactoryStartCmd(c *Context) *cobra.Command {
 			"bare key of another project is never read from Jira), and several known keys make the first question ask which of "+
 			"them it is. The daemon picks the kind of task from the Jira type or your words (--kind "+
 			"picks it), names the branch <login>-<KEY>-<words>, and starts the task at once, or queues it while "+
-			"memory is full or max_active tasks are at work. A key that has a task gets that task back, and no "+
-			"second one. A GitHub PR link (adoption) and an Actions run link (a CI task) come in later milestones. "+
-			"While Jira does not answer, the task waits for it and tries again after 1, 2, 4, 8, 16 and then every "+
-			"30 minutes, and needs you after 6 hours; an unknown key or a missing token file makes no task (not for a key found in the middle of your "+
-			"words: whatever Jira refuses it for, it stays a word and the task starts from your words). "+
-			"--repo names the [[factory.repo]] when the config has more than one.",
-		func(pos []string) int { return runFactoryStartCmd(c, kind, repo, pos) })
+			"memory is full or max_active tasks are at work. A key at the start that has a task gets that task back, "+
+			"and no second one; a key in the middle of your words that a task holds stays a word, and the answer "+
+			"names its task. A GitHub PR link (adoption) and an Actions run link (a CI task) come in later milestones. "+
+			"While Jira does not answer (a timeout, no connection, a 5xx or a 429), the task waits for it and tries "+
+			"again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours; an unknown key or a "+
+			"missing token file makes no task (not for a key found in the middle of your words: whatever Jira refuses "+
+			"it for, it stays a word and the task starts from your words). --words-only starts the task from your "+
+			"words only, as the screen's \"Start from your words only?\": a key at the start (one Jira does not know) "+
+			"is words, and no key of them is read from Jira. --repo names the [[factory.repo]] when the config has "+
+			"more than one.",
+		func(pos []string) int { return runFactoryStartCmd(c, kind, repo, wordsOnly, pos) })
 	cmd.Flags().StringVar(&kind, "kind", "", "the kind of task (a [factory.kinds] name: bug, feature, chore); default: picked")
 	cmd.Flags().StringVar(&repo, "repo", "", "the repository (owner/name of a [[factory.repo]]); default: the only one")
+	cmd.Flags().BoolVar(&wordsOnly, "words-only", false, "start from your words only: no key of them is read from Jira")
 	return cmd
 }
 
-func runFactoryStartCmd(c *Context, kind, repo string, pos []string) int {
+func runFactoryStartCmd(c *Context, kind, repo string, wordsOnly bool, pos []string) int {
 	text := strings.TrimSpace(strings.Join(pos, " "))
 	if text == "" {
 		return inspUsage(c, "factory start", "what to start? a Jira key, a link or the task in your words", factoryStartUsage)
@@ -84,7 +90,7 @@ func runFactoryStartCmd(c *Context, kind, repo string, pos []string) int {
 		return 1
 	}
 	defer reg.Close()
-	return sendFactoryRequest(ctx, c, reg, "factory start", factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, Repo: repo},
+	return sendFactoryRequest(ctx, c, reg, "factory start", factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, Repo: repo, WordsOnly: wordsOnly},
 		"it starts the task")
 }
 

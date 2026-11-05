@@ -584,6 +584,40 @@ func TestTheDigestClearsAfterTheNextKey(t *testing.T) {
 	mustNotContain(t, h.view(), "DONE SINCE") // the same digest read again stays hidden
 }
 
+// A click hits what the frame drew under it, the digest included, and only
+// then dismisses the digest: the first click after a night away never
+// selects the row the frame without the digest would have there.
+func TestTheFirstClickAfterTheDigestHitsWhatTheFrameDrew(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.src.change(func(d *FactoryData) {
+		dg := fixtureDigest()
+		d.Rows, d.Digest = dg.Rows, dg.Digest
+	})
+	h.feed(factoryTickMsg{})
+	mustContain(t, h.view(), "DONE SINCE")
+	_, lines := renderFactory(h.m.homeFrame(), 100, 40, h.m.st, h.m.g, factoryNow)
+	gone := h.m // the frame once the digest is dismissed
+	gone.digestSeen, gone.digestGone = h.m.data.Digest.Since, true
+	_, after := renderFactory(gone.homeFrame(), 100, 40, h.m.st, h.m.g, factoryNow)
+	var hidden FactoryRow // a row the digest's lines cover, drawn once it goes
+	y := -1
+	for _, r := range h.m.data.Rows {
+		if ay, ok := after[r.ID]; ok && !slices.Contains(slices.Collect(maps.Values(lines)), ay) {
+			hidden, y = r, ay
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatalf("no line the digest covers holds a row once it goes: %v, then %v", lines, after)
+	}
+	before, _ := h.m.selectedRow()
+	h.feed(tea.MouseClickMsg{X: 10, Y: y, Button: tea.MouseLeft}) // on the digest, as drawn
+	if r, ok := h.m.selectedRow(); ok && r.ID == hidden.ID && hidden.ID != before.ID {
+		t.Fatalf("the click on the digest selected %s, the row the frame without it has there", hidden.Key)
+	}
+	mustNotContain(t, h.view(), "DONE SINCE")
+}
+
 func TestTheBoardsLettersKeepTheirMeaning(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	still := func(where string) {
@@ -918,6 +952,60 @@ func TestARedrawnReadyCardIsUnreadAgain(t *testing.T) {
 	}
 }
 
+// A question a redraw drops (a ready card drawn again, a new revision of the
+// questions) leaves "cancelled, nothing was run" on the rule for its time
+// only: the redraw hands back the note's expiry, as a cancel by key does,
+// so the note never stays until something replaces it. (The harness drops
+// timers unrun, so the test runs the expiry itself.)
+func TestAQuestionARedrawDropsLeavesANoteThatExpires(t *testing.T) {
+	expires := func(t *testing.T, h *factoryHarness, cmd tea.Cmd) {
+		t.Helper()
+		if !strings.Contains(h.view(), "cancelled, nothing was run") {
+			t.Fatalf("no note of the dropped question:\n%s", h.view())
+		}
+		if cmd == nil {
+			t.Fatal("the redraw dropped the note's expiry")
+		}
+		msgs := []tea.Msg{cmd()}
+		if b, ok := msgs[0].(tea.BatchMsg); ok {
+			msgs = nil
+			for _, c := range b {
+				if c != nil {
+					msgs = append(msgs, c())
+				}
+			}
+		}
+		h.feed(msgs...)
+		mustNotContain(t, h.view(), "cancelled, nothing was run")
+	}
+
+	h := testFactory(t, 100, 40)
+	h.open("PR-12360")
+	h.press("1")
+	mustContain(t, h.view(), "Push without reading the diff?")
+	d := h.m.data
+	d.Cards = maps.Clone(d.Cards)
+	c := d.Cards[3]
+	c.Bind = ReadyBinding{HeadSHA: "ffff000011112222", ReportHash: "report-2", DiffHash: "diff-2"}
+	d.Cards[3] = c
+	h.m.data = d
+	expires(t, h, h.m.rebindReady())
+
+	q := testFactory(t, 100, 40)
+	q.open("PR-12345")
+	q.press("1", "1")
+	mustContain(t, q.view(), "your answers", "y/N")
+	d = q.m.data
+	d.Cards = maps.Clone(d.Cards)
+	qc := *d.Cards[2].Question
+	qc.Revision = 4
+	c = d.Cards[2]
+	c.Question = &qc
+	d.Cards[2] = c
+	q.m.data = d
+	expires(t, q, q.m.rebind())
+}
+
 // A question that waits is on screen at every size: the task card's head
 // gives way before its footer.
 func TestTheTaskCardKeepsItsQuestionOnAShortPane(t *testing.T) {
@@ -1019,6 +1107,27 @@ func TestEveryViewDrawsTheBarsQuestion(t *testing.T) {
 		b.press(key)
 		b.m.ask(&factoryFollow{}, "Probe the box?", noop)
 		mustContain(t, b.view(), "Probe the box?", "y/N")
+	}
+}
+
+// A batch that went through drops only the answers it sent: an answer
+// changed while the send ran (the recap's digits open a question
+// meanwhile) is still yours, never lost with the batch.
+func TestASentBatchDropsOnlyTheAnswersItSent(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.press("1", "1")
+	mustContain(t, h.view(), "Send 2 answers?")
+	next, send := h.m.Update(keyMsg("y")) // the send runs; its answer comes later
+	h.m = next.(factoryModel)
+	h.press("2", "2") // question 2 again, its second option
+	h.run(send)
+	if len(h.act.answers) != 1 {
+		t.Fatalf("answers sent %+v, want the one batch", h.act.answers)
+	}
+	b := h.m.batches[2]
+	if b == nil || len(b.answers) != 1 || b.answers["When does the reminder go out?"].text != "One day before it expires" {
+		t.Fatalf("the batch after the send is %+v, want the answer changed while it ran", b)
 	}
 }
 

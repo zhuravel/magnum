@@ -100,6 +100,26 @@ func TestFactoryStartQueuesARequestAndPrintsTheDaemonsAnswer(t *testing.T) {
 	}
 }
 
+// --words-only starts a task from your words only, as the screen's "Start
+// from your words only?" does: a key at the start that Jira does not know
+// is words, and no key of them is read from Jira.
+func TestFactoryStartFromYourWordsOnly(t *testing.T) {
+	storetest.Serial(t)
+	var payload factory.StartPayload
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		if err := json.Unmarshal(q.Payload, &payload); err != nil {
+			t.Error(err)
+		}
+		return registry.RequestDone, `started "PR-12399 the reminder" as task 2: chore in talkable/talkable on zhuravel-pr-12399-reminder`
+	})
+	if code := dt.run("factory", "start", "--words-only", "PR-12399", "the", "reminder"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if payload.Text != "PR-12399 the reminder" || !payload.WordsOnly {
+		t.Fatalf("payload %+v, want your words only", payload)
+	}
+}
+
 // Without a factory daemon the request stays queued, and the command says
 // how to start one and how long the request waits.
 func TestFactoryStartWithoutADaemonSaysItIsQueued(t *testing.T) {

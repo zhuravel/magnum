@@ -98,10 +98,14 @@ const seenEvery = time.Minute
 // one after the digest showed on home makes it go away; the factory learns
 // the operator saw home then, and at any input at most once a minute
 // after, with the input's time.
-func (m *factoryModel) seeHome() tea.Cmd {
+func (m *factoryModel) seeHome() tea.Cmd { return m.seeHomeOf(m.view == fvHome) }
+
+// seeHomeOf is seeHome for an input on home or not (a click that opened a
+// card was on home, the digest drawn).
+func (m *factoryModel) seeHomeOf(home bool) tea.Cmd {
 	at := m.now()
 	digest := false
-	if d := m.digest(); d != nil && m.view == fvHome {
+	if d := m.digest(); d != nil && home {
 		m.digestSeen, m.digestGone, digest = d.Since, true, true
 	}
 	if m.act == nil || (!digest && !m.seenSent.IsZero() && at.Sub(m.seenSent) < seenEvery) {
@@ -342,6 +346,28 @@ func (m *factoryModel) leaveDecision(task int64) tea.Cmd {
 	return nil
 }
 
+// dropSent takes out of task f.task's batch what answer f sent: an answer
+// or a needless flag changed while it ran is still yours, and stays.
+func (m *factoryModel) dropSent(f *factoryFollow) {
+	b := m.batches[f.task]
+	if b == nil {
+		return
+	}
+	for q, text := range f.sent {
+		if a, ok := b.answers[q]; ok && a.text == text {
+			delete(b.answers, q)
+		}
+	}
+	for q, why := range f.sentNeedless {
+		if b.needless[q] == why {
+			delete(b.needless, q)
+		}
+	}
+	if len(b.answers) == 0 && len(b.needless) == 0 {
+		delete(m.batches, f.task)
+	}
+}
+
 // followed is the end of an action the screen asked: an answered batch or a
 // decision leaves its card, answers to questions that changed show the
 // recap's variant, a start goes home onto its new row. The factory is read
@@ -355,7 +381,7 @@ func (m *factoryModel) followed(f *factoryFollow, err error) tea.Cmd {
 	case followAnswer:
 		switch {
 		case err == nil:
-			delete(m.batches, f.task)
+			m.dropSent(f)
 			cmds = append(cmds, m.leaveDecision(f.task))
 		case errors.Is(err, ErrQuestionsChanged) && m.task == f.task && (m.view == fvRecap || m.view == fvQuestion):
 			ch := &recapChange{}

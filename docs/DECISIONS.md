@@ -15103,6 +15103,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAProofWhoseSpecRunChangesATrackedFileRestoresItAndPasses, TestAnAnsweredChangeItThatWasNotChangedStaysLive,
   TestTheWritersPromptFollowsTheKindsProof, TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt and
   TestThreeMergesOfTheBaseInARowNeedYou.
+- **The screen's small fixes of the final review** (2026-11-05). A question that a redraw drops (a ready
+  card drawn again, a new revision of the questions) hands back its note's expiry, as a cancel by key
+  does. Before, "cancelled, nothing was run" stayed on the rule until something replaced it. A click hits
+  what the frame drew, the digest included, and only then dismisses the digest. Before, the first click
+  after a night away was hit-tested on the frame without the digest and selected the wrong row. A batch
+  of answers that went through drops only what it sent, so an answer changed while it ran is still
+  yours. `magnum factory start --words-only` starts a task from your words only, as the screen's "Start
+  from your words only?" does. The README now says that the pager's exit marks the diff as read. A
+  `core.pager` that exits at once marks it as read at once. Tests:
+  TestAQuestionARedrawDropsLeavesANoteThatExpires, TestTheFirstClickAfterTheDigestHitsWhatTheFrameDrew,
+  TestASentBatchDropsOnlyTheAnswersItSent and TestFactoryStartFromYourWordsOnly.
 
 ## Learned rules
 

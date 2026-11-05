@@ -334,6 +334,9 @@ type factoryFollow struct {
 	task int64
 	key  string // a start: the key or title of the new task's row
 	rev  int    // an answer: the revision of the questions the batch was for
+	// sent and sentNeedless are what an answer's batch sent, by question
+	// text: once it went through, only they leave the batch.
+	sent, sentNeedless map[string]string
 }
 
 type factoryModel struct {
@@ -551,8 +554,7 @@ func (m *factoryModel) loaded(msg factoryDataMsg) tea.Cmd {
 		return cmd
 	}
 	m.data, m.haveData, m.loadErr = msg.data, true, nil
-	m.rebind()
-	m.rebindReady()
+	cmd = tea.Batch(cmd, m.rebind(), m.rebindReady()) // a question they drop leaves its note, which expires
 	m.fixCursor()
 	if m.selectKey != "" {
 		if i := slices.IndexFunc(m.data.Rows, func(r FactoryRow) bool { return r.Key == m.selectKey || r.Title == m.selectKey }); i >= 0 {
@@ -566,8 +568,10 @@ func (m *factoryModel) loaded(msg factoryDataMsg) tea.Cmd {
 // rebind keeps the answers not sent yet of a task whose questions changed
 // to a new revision: those to a question it asks again, with the same
 // option, stay; the rest are dropped. The open card's question and mark
-// start over when its revision changed.
-func (m *factoryModel) rebind() {
+// start over when its revision changed; the command expires the note of a
+// question it drops.
+func (m *factoryModel) rebind() tea.Cmd {
+	var cmds []tea.Cmd
 	for id, b := range m.batches {
 		c := m.data.Cards[id].Question
 		if c == nil || c.Revision == b.rev {
@@ -594,17 +598,21 @@ func (m *factoryModel) rebind() {
 		}
 		// The old revision's batch is no longer asked: the next key answers
 		// the question that is open again.
-		m.bar.cancel()
+		cancel, _ := m.bar.cancel()
+		cmds = append(cmds, cancel)
 		m.asked = nil
 		m.startQuestions(id)
 	}
+	return tea.Batch(cmds...)
 }
 
 // rebindReady keeps the state of each ready card the factory still draws as
 // it was: a card gone, or drawn again for a new head or new hashes, takes its
 // state with it, and the card on screen starts over unread (no mark, no
-// diff read, shown now), its question dropped.
-func (m *factoryModel) rebindReady() {
+// diff read, shown now), its question dropped (the command expires the
+// note it leaves).
+func (m *factoryModel) rebindReady() tea.Cmd {
+	var cmds []tea.Cmd
 	for id, rs := range m.readies {
 		cards := m.data.Cards[id]
 		if cards.Ready != nil && sameCard(rs.bind, cards.Bind) {
@@ -612,11 +620,13 @@ func (m *factoryModel) rebindReady() {
 		}
 		delete(m.readies, id)
 		if cards.Ready != nil && m.view == fvReady && m.task == id {
-			m.bar.cancel()
+			cancel, _ := m.bar.cancel()
+			cmds = append(cmds, cancel)
 			m.asked = nil
 			m.readies[id] = newReady(cards.Bind, m.now())
 		}
 	}
+	return tea.Batch(cmds...)
 }
 
 // cardGone leaves a decision card the factory no longer shows (the task
@@ -660,8 +670,15 @@ func (m *factoryModel) keepRecapAsking() {
 	}
 	task, rev := m.task, c.Revision
 	answers, needless := m.batchOf(c)
+	f := &factoryFollow{kind: followAnswer, task: task, rev: rev, sent: map[string]string{}, sentNeedless: map[string]string{}}
+	for i, text := range answers {
+		f.sent[c.Questions[i].Text] = text
+	}
+	for i, why := range needless {
+		f.sentNeedless[c.Questions[i].Text] = why
+	}
 	act := m.act
-	_ = m.ask(&factoryFollow{kind: followAnswer, task: task, rev: rev}, sentence, func(ctx context.Context) (ActionResult, error) {
+	_ = m.ask(f, sentence, func(ctx context.Context) (ActionResult, error) {
 		return act.Answer(ctx, task, rev, answers, needless)
 	}) // a question asks for no timer
 }
