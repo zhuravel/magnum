@@ -63,10 +63,9 @@ type Link struct {
 // the repository ("" = the one the text tells: a GitHub link of a
 // [[factory.repo]], a key of the tracker of one, or the only one), and
 // where you asked (Surface, for the record of your input; "" = the CLI).
-// WordsOnly starts a
-// task from your words only: the whole text is the prompt, a key at its
-// start (one Jira does not know) is words, and no key of it is read from
-// Jira as the task's ticket or as a key found in the text.
+// WordsOnly starts a task from your words only: the whole text is the
+// prompt, a key at its start (one Jira does not know) is words, and no key
+// of it is read from Jira as the task's ticket or as a key found in the text.
 type StartPayload struct {
 	Text, Kind, Repo string
 	Surface          string `json:",omitempty"`
@@ -195,8 +194,9 @@ const (
 // guidance.md for a key, prompt.md for a prompt, each an artifact. A prompt
 // that names keys elsewhere (in.Found) is read from Jira (startFound),
 // unless [jira] is off, when they are words. The repository is the one p
-// names, else the one the text tells (startRepo); a key of its trackers
-// that are not Jira's is never read from Jira (readStart, startOther).
+// names, else the one the text tells (startRepo); a key whose tracker is
+// not Jira's for that repository is never read from Jira (otherTrackers,
+// readStart, startOther).
 func (e *Engine) start(ctx context.Context, p StartPayload) (registry.Task, error) {
 	t, _, err := e.startNoted(ctx, p)
 	return t, err
@@ -214,7 +214,7 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 	if err != nil {
 		return registry.Task{}, "", err
 	}
-	in, other := e.readStart(text, repo.Repo)
+	in, tracker, other := e.readStart(text, repo.Repo)
 	if p.WordsOnly { // your words, whole: no key of them is read as the ticket or found
 		in, other = StartInput{Prompt: text}, false
 	}
@@ -224,7 +224,7 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 	case in.Run != nil:
 		return registry.Task{}, "", laterError{"an Actions run link: CI tasks come in milestone 3"}
 	case other && in.Guidance == "":
-		return registry.Task{}, "", otherAlone(in.Key)
+		return registry.Task{}, "", otherAlone(in.Key, tracker)
 	}
 	if p.Kind != "" && !hasKind(e.cfg.Factory, p.Kind) {
 		return registry.Task{}, "", fmt.Errorf("no kind of task %q: one of %s", p.Kind, strings.Join(slices.Sorted(maps.Keys(e.cfg.Factory.Kinds)), ", "))
@@ -877,9 +877,10 @@ func (e *Engine) noteOverlap(_ context.Context, t registry.Task) {
 // The search runs off the loop, within searchBound: the start answers
 // first, and the question is stored whatever a drain does once the search
 // returned (it is the prompt's first question: nothing asks it again).
-// Without Jira, nothing is asked.
+// Without Jira, or in a repository whose trackers are all not Jira's
+// (jiraRepo), nothing is asked: the task starts from your words.
 func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string) {
-	if e.d.Jira == nil {
+	if e.d.Jira == nil || !e.jiraRepo(t.Repo) {
 		return
 	}
 	e.goBackground("the question which Jira issue a prompt is", func(ctx context.Context) {

@@ -196,6 +196,28 @@ func TestEveryFactoryPromptRenders(t *testing.T) {
 	}
 }
 
+// A task's prompts call a Jira key "the Jira issue"; a key of a tracker that
+// is not Jira is the issue of that tracker, never a Jira issue; a task of a
+// free prompt is the task by its id.
+func TestEveryFactoryPromptNamesTheIssueByItsTracker(t *testing.T) {
+	cfg := config.Defaults()
+	other := fullPromptData()
+	other.Key, other.Tracker, other.Ticket = "EX-12", "linear.app", "" // no ticket: the factory reads no other tracker
+	prompt := fullPromptData()
+	prompt.Key = ""
+	for _, name := range factoryPrompts() {
+		if text := renderFactory(t, cfg, name, fullPromptData()); !strings.Contains(text, "on the Jira issue PR-12345,") {
+			t.Errorf("%s does not name the Jira issue:\n%s", name, text)
+		}
+		if text := renderFactory(t, cfg, name, other); !strings.Contains(text, "on the linear.app issue EX-12,") || strings.Contains(text, "Jira issue") {
+			t.Errorf("%s calls a key of another tracker a Jira issue:\n%s", name, text)
+		}
+		if text := renderFactory(t, cfg, name, prompt); !strings.Contains(text, "on task 7,") {
+			t.Errorf("%s does not name the task of a prompt:\n%s", name, text)
+		}
+	}
+}
+
 func TestEveryFactoryPromptCarriesTheFactoryModeRules(t *testing.T) {
 	cfg := config.Defaults()
 	d := fullPromptData()

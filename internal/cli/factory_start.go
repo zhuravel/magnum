@@ -52,10 +52,11 @@ func newFactoryStartCmd(c *Context) *cobra.Command {
 			"words only, as the screen's \"Start from your words only?\": a key at the start (one Jira does not know) "+
 			"is words, and no key of them is read from Jira. --repo names the [[factory.repo]] when the config has "+
 			"more than one; without it the daemon takes the one your text tells: a GitHub link of one, else the first "+
-			"key whose prefix is a tracker of one of them only (its [[repo]]'s or its [[watch]]'s), and asks for "+
-			"--repo when it tells none. A key of a tracker that is not Jira (one whose link is no atlassian.net /browse/ "+
-			"link and not on the [jira] site, such as a Linear issue) is never read from Jira: at the start, bare or "+
-			"as its tracker's link, it is the task's key and the task starts from the words after it.",
+			"key whose prefix is a tracker of one of them only (its [[repo]]'s or its [[watch]]'s, and no other's sends "+
+			"the prefix to another tracker), and asks for --repo when it tells none. A key of a tracker that is not "+
+			"Jira (one whose link is no atlassian.net /browse/ link and not on the [jira] site, such as a Linear issue) "+
+			"is never read from Jira: at the start, bare or as its tracker's link, it is the task's key and the task "+
+			"starts from the words after it; alone, it is refused with what to do.",
 		func(pos []string) int { return runFactoryStartCmd(c, kind, repo, wordsOnly, pos) })
 	cmd.Flags().StringVar(&kind, "kind", "", "the kind of task (a [factory.kinds] name: bug, feature, chore); default: picked")
 	cmd.Flags().StringVar(&repo, "repo", "", "the repository (owner/name of a [[factory.repo]]); default: the one your text tells, or the only one")

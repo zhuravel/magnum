@@ -314,6 +314,7 @@ type factoryDraft struct {
 	seq        int    // the text's changes, for the pause before a preview
 	kind       string // the kind the operator picked with tab; "" = the preview's
 	repo       string // the repository the operator picked with shift+tab; "" = the preview's
+	cycles     int    // shift+tab presses before the text's first preview, applied when it lands
 	askOnce    bool   // enter waits for the preview of the text to ask y/N
 }
 

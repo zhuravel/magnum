@@ -1356,6 +1356,61 @@ func TestNewTaskStartsNoTaskWithoutARepository(t *testing.T) {
 	h.feed(shiftTab, shiftTab, shiftTab)
 	mustContain(t, h.view(), "REPO      example/app   your pick") // the cycle wraps, and a start forgets the pick
 	mustContain(t, ansi.Strip(strings.Join(h.m.helpContent(100), "\n")), "shift+tab", "the repository, when the factory has several")
+
+	// shift+tab before the first preview is kept: the preview is read at
+	// once, and the press applies when it lands.
+	h.press("esc")
+	h.m.form = factoryDraft{area: h.m.form.area}
+	h.m.form.area.SetValue("")
+	h.press("n")
+	h.feed(typed("the banner is grey")...)
+	h.feed(shiftTab)
+	mustContain(t, h.view(), "REPO      example/app   your pick")
+	if h.m.bar.asking != nil || h.act.calls() != 1 {
+		t.Errorf("shift+tab before the first preview asked %q or ran something", h.m.bar.question())
+	}
+}
+
+// A key of a tracker that is not Jira, alone, is refused with the daemon's
+// reason, which the form draws before anything is asked; enter then refuses
+// with it, and no y starts a task.
+func TestNewTaskSaysWhyAKeyOfAnotherTrackerAloneStartsNothing(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	const why = "the factory reads no linear.app issue: add what to do after EX-15"
+	h.act.preview = func(text, _ string) (NewTaskForm, error) {
+		return NewTaskForm{Text: text, Repos: fixtureRepos, Repo: "example/site", RepoWhy: "from the EX tracker", Err: why}, nil
+	}
+	h.press("n")
+	h.feed(typed("EX-15")...)
+	h.press("enter")
+	v := cardSquash(h.view())
+	mustContain(t, v, "JIRA "+why, "cannot start: "+why)
+	mustNotContain(t, v, "y/N")
+	h.press("y")
+	if h.act.calls() != 0 {
+		t.Errorf("a y started a task of a key alone: %+v", h.act.starts)
+	}
+}
+
+// While a preview of a text that starts with a key of a tracker that is not
+// Jira is read again (more words typed), the form does not say the daemon
+// reads Jira: the last preview said it never does.
+func TestNewTaskDoesNotSpinForJiraOnAKeyOfAnotherTracker(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.press("n")
+	h.m.form.area.SetValue("EX-12 the export fails on Safari")
+	h.m.form.inFlight, h.m.form.previewFor = true, "EX-12 the export"
+	if !h.m.reading() {
+		t.Fatal("a key's preview in flight does not spin")
+	}
+	h.m.form.preview = NewTaskForm{Text: "EX-12 the export", NotJira: "EX-12"}
+	if h.m.reading() {
+		t.Error("the form spins for Jira on a key the last preview said is not Jira's")
+	}
+	h.m.form.area.SetValue("PR-12345 the export fails on Safari")
+	if !h.m.reading() {
+		t.Error("another key's preview does not spin")
+	}
 }
 
 // The pager shows the whole diff: once it returns, no file is unread.

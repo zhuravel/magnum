@@ -1029,9 +1029,16 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 }
 
 // reading reports whether the factory reads Jira for the text: a preview
-// runs for a text that starts with a key or a Jira link.
+// runs for a text that starts with a key or a Jira link, and not with the
+// key the last preview said is not Jira's (NotJira), bare or in a link.
 func (m factoryModel) reading() bool {
-	return m.form.inFlight && !m.form.fresh() && jiraWords.MatchString(m.form.area.Value())
+	text := m.form.area.Value()
+	if k := m.form.preview.NotJira; k != "" {
+		if first, _, _ := strings.Cut(strings.TrimSpace(text)+" ", " "); strings.TrimRight(first, ":,;") == k || strings.Contains(first, "/"+k) {
+			return false
+		}
+	}
+	return m.form.inFlight && !m.form.fresh() && jiraWords.MatchString(text)
 }
 
 func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -1047,12 +1054,15 @@ func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case repoKey: // the next repository: the form only, whose preview is read again for it
-		repos := m.form.preview.Repos
-		if len(repos) < 2 {
-			return nil
-		}
-		m.form.repo = repos[(slices.Index(repos, cmp.Or(m.form.repo, m.form.preview.Repo))+1)%len(repos)]
 		m.form.askOnce = false // enter's question is asked only for the repository it was pressed on
+		if len(m.form.preview.Repos) < 2 {
+			if strings.TrimSpace(m.form.area.Value()) == "" || m.form.fresh() {
+				return nil // one repository, or no text to preview
+			}
+			m.form.cycles++ // before the text's first preview: kept, and applied when it lands
+			return m.previewCmd()
+		}
+		m.nextRepo()
 		return m.previewCmd()
 	case "ctrl+g":
 		return m.editDraft()
@@ -1062,6 +1072,13 @@ func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.textChanged()
 	}
 	return nil
+}
+
+// nextRepo picks the repository after the one the form shows, in the
+// preview's order.
+func (m *factoryModel) nextRepo() {
+	repos := m.form.preview.Repos
+	m.form.repo = repos[(slices.Index(repos, cmp.Or(m.form.repo, m.form.preview.Repo))+1)%len(repos)]
 }
 
 // textChanged reads the text's preview after a pause in typing.
@@ -1113,6 +1130,15 @@ func (m *factoryModel) previewed(msg factoryPreviewMsg) tea.Cmd {
 	m.form.preview, m.form.previewFor, m.form.pickFor = msg.form, msg.text, msg.repo
 	if msg.err != nil {
 		m.form.preview = NewTaskForm{Text: msg.text, Err: "the factory could not read your text: " + errLine(msg.err)}
+	}
+	if n := m.form.cycles; n > 0 { // shift+tab pressed before this preview: the pick, read next
+		m.form.cycles = 0
+		if severalRepos(m.form.preview) {
+			for range n {
+				m.nextRepo()
+			}
+			return m.previewCmd()
+		}
 	}
 	if m.form.askOnce {
 		m.form.askOnce = false

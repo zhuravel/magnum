@@ -526,7 +526,7 @@ answers reach the agents as files of the task's directory (`~/.local/share/magnu
 
 | Variable | Meaning |
 |---|---|
-| `.TaskID`, `.Key` | the task's id, and its Jira key (empty for a task of a free prompt) |
+| `.TaskID`, `.Key`, `.Tracker` | the task's id, its key (empty for a task of a free prompt), and the tracker of a key that is not Jira's, by its link's host (`linear.app`; empty for a Jira key): `task` calls the key "the Jira issue PR-12345", or "the linear.app issue EX-12" |
 | `.Kind`, `.Repo`, `.Branch`, `.Base` | the kind of task (`bug`, `feature`, `chore`), the repository (`owner/name`), the task's local branch and the repository's base branch (the branch starts at `origin/<base>`) |
 | `.Copy`, `.TaskDir` | the checkout of the task's copy (the agent's working directory) and the task's directory |
 | `.Ticket`, `.Guidance`, `.Prompt`, `.Answers`, `.Rules` | `ticket.md`, `guidance.md` (your words after a key), `prompt.md` (a free prompt), `answers.md` and `rules.md` in the task's directory, each empty while its file is not there |

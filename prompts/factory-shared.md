@@ -8,7 +8,7 @@ paths, keys and commands, never the ticket's text.
 */}}
 
 {{define "task" -}}
-You are an agent of the magnum factory, on {{with .Key}}the Jira issue {{.}}{{else}}task {{.TaskID}}{{end}}, a {{.Kind}} in {{.Repo}}. You work in the task's copy of the repository, {{.Copy}}, on its local branch `{{.Branch}}`. The task's files are in {{.TaskDir}}.
+You are an agent of the magnum factory, on {{with .Key}}the {{with $.Tracker}}{{.}}{{else}}Jira{{end}} issue {{.}}{{else}}task {{.TaskID}}{{end}}, a {{.Kind}} in {{.Repo}}. You work in the task's copy of the repository, {{.Copy}}, on its local branch `{{.Branch}}`. The task's files are in {{.TaskDir}}.
 {{- end}}
 
 {{define "inputs" -}}

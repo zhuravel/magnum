@@ -15198,12 +15198,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   from your words (prompt.md, the key first in its title and its branch, no question which Jira issue it is,
   no "not in Jira" question), its first stage reads no linked ticket for it, and such a key in the middle of
   the words is never found. A key alone is refused: the factory reads no other tracker, so there would be
-  nothing to start from. Rejected: reading the trackers of `[board]` for the inference (a key every repository
+  nothing to start from; the refusal says why and what to do ("the factory reads no linear.app issue: add what
+  to do after EX-15"). A prefix tells a repository only when no other factory repository sends it to another
+  tracker (`TrackersFor` lets one repository's PR- lead to Linear while `[board]`'s leads to Jira): such a
+  prefix tells none, you pick, and a key is read from Jira only when the chosen repository's tracker for its
+  prefix is Jira's, or when no factory repository names the prefix (a key of another repository's Linear
+  tracker stays Linear's in the repository you pick). The keys that tell a repository are read as the found
+  keys are: a key inside a word or another link (a branch name) is none. The agents' prompts call such a key
+  "the linear.app issue EX-12" (`PromptData.Tracker`), never a Jira issue, and a free prompt in a repository
+  whose trackers are all not Jira's asks no question which Jira issue it is (one with no tracker still asks,
+  as before). Rejected: reading the trackers of `[board]` for the inference (a key every repository
   shares tells none), and inferring the repository in the screen (the daemon's preview and start must agree).
   Tests: TestAStartTellsItsRepositoryByALinkOrATrackersKey, TestARepositoryYouNameAlwaysWins,
-  TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira, TestNewTaskNamesItsRepository,
-  TestNewTaskStartsNoTaskWithoutARepository, TestTheFactoryScreensActionsAreFactoryRequests and
-  TestTheScreensPreviewIsTheDaemonsForm.
+  TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira, TestAPrefixOfTwoTrackersTellsNoRepository,
+  TestAPromptInARepositoryWithoutAJiraTrackerAsksNoJiraIssue, TestEveryFactoryPromptNamesTheIssueByItsTracker,
+  TestNewTaskNamesItsRepository, TestNewTaskStartsNoTaskWithoutARepository,
+  TestNewTaskSaysWhyAKeyOfAnotherTrackerAloneStartsNothing, TestNewTaskDoesNotSpinForJiraOnAKeyOfAnotherTracker,
+  TestTheFactoryScreensActionsAreFactoryRequests and TestTheScreensPreviewIsTheDaemonsForm.
 
 ## Learned rules
 

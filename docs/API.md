@@ -12133,6 +12133,10 @@ type PromptData struct {
 	RedRun                                                 bool
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
+	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
+	// the prompts call the key the issue of that tracker, never a Jira
+	// issue. Empty for a Jira key, and for a task of a free prompt.
+	Tracker string
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the

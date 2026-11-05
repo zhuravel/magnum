@@ -187,22 +187,26 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 }
 
 // repoRows are the REPO row: the repository of the task and why, the why
-// column kept in place as the key cycles the repositories (it names them);
-// with none chosen, that no link or key of the text names one.
+// column kept in place as the key cycles the repositories (it names them,
+// when they fit: the footer names the key either way); with none chosen,
+// that no link or key of the text names one.
 func (p *cardPainter) repoRows(f NewTaskForm) []string {
-	keys := seg{repoKey + ": " + strings.Join(f.Repos, ", "), p.st.Dim}
-	if f.Repo == "" {
-		return p.labelRows("REPO", cardFormX, []cell{{{"none", p.st.Err}, {": no link or key of your text names one", noStyle}, p.sepSeg(), keys}})
+	c := cell{{"none", p.st.Err}, {": no link or key of your text names one", noStyle}}
+	if f.Repo != "" {
+		w := ansi.StringWidth(f.Repo)
+		for _, r := range f.Repos {
+			w = max(w, ansi.StringWidth(r))
+		}
+		c = cell{{f.Repo + spaces(w+2-ansi.StringWidth(f.Repo)), noStyle}}
+		if f.RepoWhy != "" {
+			c = append(c, seg{f.RepoWhy, p.st.Dim})
+		}
 	}
-	w := ansi.StringWidth(f.Repo)
-	for _, r := range f.Repos {
-		w = max(w, ansi.StringWidth(r))
+	keys := cell{p.sepSeg(), {repoKey + ": " + strings.Join(f.Repos, ", "), p.st.Dim}}
+	if c.width()+keys.width() <= p.width-cardFormX {
+		c = append(c, keys...)
 	}
-	c := cell{{f.Repo + spaces(w+2-ansi.StringWidth(f.Repo)), noStyle}}
-	if f.RepoWhy != "" {
-		c = append(c, seg{f.RepoWhy, p.st.Dim}, p.sepSeg())
-	}
-	return p.labelRows("REPO", cardFormX, []cell{append(c, keys)})
+	return p.labelRows("REPO", cardFormX, []cell{c})
 }
 
 // keysCell names the several keys of a text: the prompt task they are asks

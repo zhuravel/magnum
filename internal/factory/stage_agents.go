@@ -103,6 +103,10 @@ type PromptData struct {
 	RedRun                                                 bool
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
+	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
+	// the prompts call the key the issue of that tracker, never a Jira
+	// issue. Empty for a Jira key, and for a task of a free prompt.
+	Tracker string
 }
 
 // agentsRun is what the loop knows of a task's agents stage attempt.
@@ -1178,6 +1182,9 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port}
 	d.Base, d.RedRun = config.DefaultFactoryBase, e.cfg.Factory.Kinds[t.Kind].RedRun()
+	if tr, ok := e.otherTracker(t.Repo, t.JiraKey); ok && t.JiraKey != "" {
+		d.Tracker = trackerName(tr)
+	}
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok {
 		d.ErrorSkill = repo.ErrorSkill
 		d.Base = cmp.Or(repo.Base, d.Base)

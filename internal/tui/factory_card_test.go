@@ -857,6 +857,19 @@ func TestNewTaskNamesItsRepository(t *testing.T) {
 			}
 		}
 	}
+	// Names too long for the row leave out its list of repositories, never
+	// cut it: the footer names the key.
+	long := fixtureNewTaskRepoPick()
+	long.Repos, long.Repo = []string{"example-company/storefront-app", "example-company/marketing-site"}, "example-company/marketing-site"
+	for _, f := range []NewTaskForm{long, {Text: long.Text, Repos: long.Repos}} {
+		frame := plainCard(drawNewTask(f), 100)
+		if l := cardLineWith(t, frame, " REPO "); strings.Contains(l, "…") || strings.Contains(l, "shift+tab") {
+			t.Errorf("a REPO row of long names reads %q", l)
+		}
+		if !strings.Contains(frame, "shift+tab repo") {
+			t.Errorf("the footer of long names does not name the key:\n%s", frame)
+		}
+	}
 	none := plainCard(drawNewTask(fixtureNewTaskRepoNone()), 100)
 	for _, not := range []string{"JIRA", "KIND", "tab kind"} {
 		if strings.Contains(none, not) {

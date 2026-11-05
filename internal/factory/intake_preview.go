@@ -19,8 +19,9 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// preview is the new-task screen's preview of text in the repository the
-// text tells (previewIn with no pick).
+// preview is previewIn with no pick: the preview of text in the repository
+// the text tells, as a screen that has picked none asks for it (the
+// daemon's requests carry the pick, previewRequest).
 func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, error) {
 	return e.previewIn(ctx, text, "")
 }
@@ -51,7 +52,7 @@ func (e *Engine) previewIn(ctx context.Context, text, pick string) (tui.NewTaskF
 		return f, nil
 	}
 	f.Repo, f.RepoWhy = repo.Repo, why
-	in, other := e.readStart(text, repo.Repo)
+	in, tracker, other := e.readStart(text, repo.Repo)
 	f.Links = previewLinks(text, e.trackers(repo.Repo))
 	switch {
 	case in.PR != nil:
@@ -61,7 +62,7 @@ func (e *Engine) previewIn(ctx context.Context, text, pick string) (tui.NewTaskF
 		f.Err = "an Actions run link: CI tasks come in milestone 3"
 		return f, nil
 	case other && in.Guidance == "":
-		f.Err = otherAlone(in.Key).Error()
+		f.Err = otherAlone(in.Key, tracker).Error()
 		return f, nil
 	}
 	var tk *jira.Ticket

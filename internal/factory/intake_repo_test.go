@@ -51,6 +51,9 @@ func TestAStartTellsItsRepositoryByALinkOrATrackersKey(t *testing.T) {
 		{"the export fails as in EX-12, see https://github.com/example/app/issues/88", "example/app", "from the link"},
 		{"the export of https://github.com/other/thing/pull/3 fails as in EX-12", "example/site", "from the EX tracker"},
 		{"the export fails on Safari", "", ""},
+		// A key inside a link or a word (a branch's name) is no key, as for the keys found in a text.
+		{"the export of https://github.com/other/thing/tree/zhuravel-EX-12-fix fails", "", ""},
+		{"the export fails on zhuravel-EX-12-fix", "", ""},
 	} {
 		f, err := r.e.preview(r.ctx, c.text)
 		if err != nil {
@@ -105,8 +108,80 @@ func TestARepositoryYouNameAlwaysWins(t *testing.T) {
 	}
 
 	one := newIntakeRig(t)
-	if f, _ := one.e.preview(one.ctx, "The weekly digest is off"); f.Repo != "talkable/talkable" || f.RepoWhy != "" || len(f.Repos) > 1 {
-		t.Errorf("the preview of the only repository: %q (%q) of %q", f.Repo, f.RepoWhy, f.Repos)
+	for _, text := range []string{"The weekly digest is off", "The weekly digest is off, see https://github.com/talkable/talkable/issues/1"} {
+		if f, _ := one.e.preview(one.ctx, text); f.Repo != "talkable/talkable" || f.RepoWhy != "" || len(f.Repos) > 1 {
+			t.Errorf("%q: the preview of the only repository: %q (%q) of %q", text, f.Repo, f.RepoWhy, f.Repos)
+		}
+	}
+}
+
+// A prefix that two factory repositories send to different trackers tells
+// neither (config.TrackersFor lets one repository's PR- lead to Linear while
+// [board]'s PR- leads to Jira for the others): there is no inference, you
+// pick, and the key is read from Jira only when your pick's tracker for it
+// is Jira's. A [[repo]] that repeats [board]'s tracker still tells its
+// repository (TestAStartTellsItsRepositoryByALinkOrATrackersKey).
+func TestAPrefixOfTwoTrackersTellsNoRepository(t *testing.T) {
+	r := newIntakeRig(t)
+	r.twoRepos()
+	r.cfg.Repos = []config.Repo{{Repo: "example/site", Trackers: []string{"https://linear.app/example/issue/PR-{num}"}}}
+	const text = "PR-12345 the advocates only"
+	if f, _ := r.e.preview(r.ctx, text); f.Repo != "" || f.Kind != "" || f.NotJira != "" {
+		t.Errorf("a prefix of two trackers told a repository: %+v", f)
+	}
+	if _, err := r.start(text); err == nil || !strings.Contains(err.Error(), "which repository?") {
+		t.Errorf("a start of a prefix of two trackers = %v, want the question which repository", err)
+	}
+	asked := func() int {
+		r.site.mu.Lock()
+		defer r.site.mu.Unlock()
+		return len(slices.DeleteFunc(slices.Clone(r.site.asked), func(k string) bool { return k != "PR-12345" }))
+	}
+	if n := asked(); n != 0 {
+		t.Fatalf("Jira was asked for PR-12345 %d times before a repository was chosen", n)
+	}
+	if f, _ := r.e.previewIn(r.ctx, text, "example/app"); f.Jira == nil || f.Jira.Key != "PR-12345" || f.NotJira != "" {
+		t.Errorf("example/app's PR- is Jira's, but the preview: %+v", f)
+	}
+	if f, _ := r.e.previewIn(r.ctx, text, "example/site"); f.Jira != nil || f.NotJira != "PR-12345" {
+		t.Errorf("example/site's PR- is Linear's, but the preview: %+v", f)
+	}
+	task, err := r.e.start(r.ctx, StartPayload{Text: text, Repo: "example/site"})
+	if err != nil || task.Repo != "example/site" || task.JiraKey != "PR-12345" || task.Prompt != text {
+		t.Fatalf("the start in example/site: %+v, %v", task, err)
+	}
+	if n := asked(); n != 1 {
+		t.Errorf("Jira was asked for PR-12345 %d times, want once: the preview of example/app's", n)
+	}
+}
+
+// A free prompt in a repository whose trackers are all not Jira starts from
+// your words: no question asks which Jira issue it is, and no Jira search is
+// made. A repository with a Jira tracker, or with no tracker at all, keeps
+// the question.
+func TestAPromptInARepositoryWithoutAJiraTrackerAsksNoJiraIssue(t *testing.T) {
+	r := newIntakeRig(t)
+	r.twoRepos()
+	r.cfg.Board.Trackers = nil // example/site's only tracker is Linear's
+	site := r.mustStart("the export fails on Safari, see https://github.com/example/site/issues/88")
+	if qs, _ := r.reg.Questions(r.ctx, site.ID); site.Repo != "example/site" || len(qs) != 0 {
+		t.Errorf("a prompt in example/site (%s) asks %+v", site.Repo, qs)
+	}
+	r.site.mu.Lock()
+	searched := len(r.site.searched)
+	r.site.mu.Unlock()
+	if searched != 0 {
+		t.Errorf("Jira was searched %d times for a prompt of example/site", searched)
+	}
+	app := r.mustStart("the reminder email comes late, see https://github.com/example/app/issues/9")
+	if qs, _ := r.reg.Questions(r.ctx, app.ID); app.Repo != "example/app" || len(qs) != 1 || qs[0].Text != whichIssue {
+		t.Errorf("a prompt in example/app (%s), whose tracker is Jira's, asks %+v", app.Repo, qs)
+	}
+	bare := newIntakeRig(t)
+	bare.cfg.Board.Trackers = nil
+	task := bare.mustStart("The weekly digest is off")
+	if qs, _ := bare.reg.Questions(bare.ctx, task.ID); len(qs) != 1 || qs[0].Text != whichIssue {
+		t.Errorf("a prompt in a repository with no tracker asks %+v", qs)
 	}
 }
 
@@ -150,11 +225,31 @@ func TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira(t *testing.T) {
 	if link.JiraKey != "EX-14" || link.Title != "EX-14 the export fails for long names" {
 		t.Errorf("the task of a link of another tracker: %+v", link)
 	}
-	if _, err := r.start("EX-15"); err == nil || !strings.Contains(err.Error(), "EX-15 is not a Jira issue") {
+	// A key alone says why it is no task and what to do, in the preview, in
+	// the start and in the start request's answer (what the CLI prints).
+	const alone = "the factory reads no linear.app issue: add what to do after EX-15"
+	if _, err := r.start("EX-15"); err == nil || err.Error() != alone {
 		t.Errorf("a key of another tracker alone = %v", err)
 	}
-	if f, _ := r.e.preview(r.ctx, "EX-15"); !strings.Contains(f.Err, "EX-15 is not a Jira issue") || f.WordsOnly {
+	if f, _ := r.e.preview(r.ctx, "EX-15"); f.Err != alone || f.WordsOnly || f.Kind != "" {
 		t.Errorf("the preview of a key of another tracker alone: %+v", f)
+	}
+	id, err := r.reg.EnqueueRequest(r.ctx, ReqStart, StartPayload{Text: "EX-15"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if q, _ := r.reg.RequestByID(r.ctx, id); q.State != registry.RequestFailed || q.Result != alone {
+		t.Errorf("the start request of a key alone: %s %q", q.State, q.Result)
+	}
+	// Your pick of a repository without a tracker of EX- keeps the key
+	// another factory repository's tracker that is not Jira names: never read.
+	if f, _ := r.e.previewIn(r.ctx, "EX-17 the export fails", "example/app"); f.NotJira != "EX-17" || f.Err != "" || f.WordsOnly {
+		t.Errorf("the preview of EX-17 in example/app: %+v", f)
+	}
+	if picked, err := r.e.start(r.ctx, StartPayload{Text: "EX-17 the export fails", Repo: "example/app"}); err != nil ||
+		picked.JiraKey != "EX-17" || picked.Repo != "example/app" {
+		t.Errorf("the start of EX-17 in example/app: %+v, %v", picked, err)
 	}
 	r.tick() // the first stage begins: no linked ticket is read for the key
 	r.e.waitBackground()
@@ -175,8 +270,17 @@ func TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira(t *testing.T) {
 	if i := slices.IndexFunc(asked, func(k string) bool { return strings.HasPrefix(k, "EX-") }); i >= 0 {
 		t.Errorf("Jira was asked for %s: %q", asked[i], asked)
 	}
-	if n := len(r.tasks()); n != 3 {
-		t.Errorf("%d tasks, want 3", n)
+	if n := len(r.tasks()); n != 4 {
+		t.Errorf("%d tasks, want 4", n)
+	}
+	// The task's prompts call its key the issue of its tracker, never a
+	// Jira issue; a Jira key's prompts keep "the Jira issue".
+	if d := r.e.promptData(task, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "EX-12" || d.Tracker != "linear.app" {
+		t.Errorf("the prompt data of EX-12: key %q, tracker %q", d.Key, d.Tracker)
+	}
+	jira := r.mustStart("PR-12345 the advocates only")
+	if d := r.e.promptData(jira, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "PR-12345" || d.Tracker != "" {
+		t.Errorf("the prompt data of PR-12345: key %q, tracker %q", d.Key, d.Tracker)
 	}
 	if ins, _ := r.reg.Inputs(r.ctx, task.ID); len(ins) != 1 || ins[0].Kind != registry.InputTaskText || ins[0].Text != text {
 		t.Errorf("the start's input: %+v", ins)
