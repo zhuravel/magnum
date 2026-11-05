@@ -39,6 +39,19 @@ func PRWorktreePath(mainClone string, number int) string {
 	return filepath.Join(filepath.Clean(mainClone)+gitx.WorktreesSuffix, "pr-"+strconv.Itoa(number))
 }
 
+// IsPRWorktree reports whether dir is a per-PR worktree as PRWorktreePath
+// names one: a pr-<N> directory in the <clone>__worktrees directory of a
+// clone (a directory below one is not).
+func IsPRWorktree(dir string) bool {
+	dir = filepath.Clean(dir)
+	n, ok := strings.CutPrefix(filepath.Base(dir), "pr-")
+	if !ok || n == "" || strings.Trim(n, "0123456789") != "" {
+		return false
+	}
+	clone, ok := strings.CutSuffix(filepath.Base(filepath.Dir(dir)), gitx.WorktreesSuffix)
+	return ok && clone != ""
+}
+
 // PRWorktreePaths returns the default layout for repo "owner/name" when no
 // clone exists yet: the main clone <clone_root>/<name> and its per-PR
 // worktree. CreatePRWorktree finds an existing clone first (FindClone).

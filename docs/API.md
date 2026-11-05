@@ -344,6 +344,11 @@ const CodexHookMaxTimeout = 10
     that runs before herdr's may have for herdr's hook's place to pass: herdr's
     own hook has 10 s, and Codex gives a hook without a timeout up to 600 s.
 
+const CodexSourceSubagent = "subagent"
+    CodexSourceSubagent is the Source of a Codex subagent's rollout,
+    whose session_meta source is an object naming the subagent ({"subagent":
+    "review"}, {"subagent": {"thread_spawn": ...}}).
+
 const CompactCommand = "/compact"
     CompactCommand is what Compact types into the agent's pane: Claude Code's
     /compact, which replaces the conversation so far with its summary.
@@ -2768,6 +2773,37 @@ type RoleData struct {
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
     prompts may use. Fields a template does not use may stay zero.
+
+type SessionFacts struct {
+	// Entrypoint is how Claude Code was started, as its entries record it:
+	// "cli" for its terminal UI, "sdk-cli" for `claude -p`, "sdk-ts" for
+	// the TypeScript SDK; "" when no entry names one, and in a rollout.
+	Entrypoint string
+	// Originator is the client a Codex rollout's session_meta names
+	// ("codex-tui", "codex_exec", "Claude Code"), and Source its source
+	// ("cli", "exec", "vscode", or CodexSourceSubagent); both "" in a Claude
+	// transcript.
+	Originator, Source string
+	// Cwd is the directory the session started in: the first entry's cwd,
+	// the session_meta's.
+	Cwd string
+	// Branches are the git branches the session ran on, each once, in the
+	// order the file first names them: the entries' gitBranch, the
+	// session_meta's git.branch.
+	Branches []string
+}
+    SessionFacts is what a transcript or a rollout says of its session.
+
+func ClaudeSessionFacts(path string) (SessionFacts, error)
+    ClaudeSessionFacts reads the facts of the Claude Code transcript at path:
+    the first entrypoint and the first cwd its entries name, and every
+    gitBranch. The whole file is read, a line at a time; a line that is no JSON
+    is skipped.
+
+func CodexSessionFacts(path string) (SessionFacts, error)
+    CodexSessionFacts reads the facts of the Codex rollout at path from its
+    first session_meta: none for a rollout without one (an older Codex wrote
+    none).
 
 type SessionIDGap struct {
 	// Streak is how many of the newest sessions in a row have no id.
@@ -13927,6 +13963,30 @@ func IsTyped(kind string) bool
     it records them, and Compute counts them as typed. An answer, a decision,
     a rating, a stop, a drop and a retry are the operator's acts, not messages.
 
+func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool, magnumDir func(string) bool) (sessions []Session, skipped Skipped, err error)
+    ReadSessions reads the operator's old transcripts under dir (every
+    .jsonl file: a Claude Code transcript, or a Codex rollout when the file
+    is named rollout-*) into sessions: the messages the operator typed,
+    from the user turns agents.ClaudeUserTurns and agents.CodexUserTurns read,
+    less turns a tool or a task notification began and the records of the slash
+    commands magnum types (magnum: agents.MagnumCommands, the list the factory
+    drops from what it records of its panes, so both sides count the same; nil
+    drops none). Only the operator's interactive sessions are read: a transcript
+    of a headless run, a subagent's, a Codex session Claude Code started,
+    or one whose session started in a directory magnumDir reports as one where
+    magnum or the factory starts its own (nil: none) is left out before its
+    messages are read (agents.ClaudeSessionFacts, agents.CodexSessionFacts;
+    Skipped says which is which). A session's ticket is the key keyOf finds
+    in the file's path below dir, else in its first message that holds one,
+    else in the first of its git branches that holds one. A transcript with no
+    message or no key is not guessed at either. Every transcript left out is
+    counted in skipped, by its reason. The sessions come oldest first, by the
+    time of their first message, so that the first session of a ticket is the
+    first one (BuildBaseline); a transcript whose turns carry no timestamp comes
+    after the rest, and is never a ticket's first session. Prompts queued while
+    an agent worked are not read, so a count is never above what was typed.
+    Symbolic links are not followed.
+
 
 TYPES
 
@@ -14024,22 +14084,31 @@ type Session struct {
     Session is one agent session of the operator's: the ticket it worked on and
     the messages the operator typed to it.
 
-func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool) (sessions []Session, skipped int, err error)
-    ReadSessions reads the operator's old transcripts under dir (every .jsonl
-    file: a Claude Code transcript, or a Codex rollout when the file is named
-    rollout-*) into sessions: the messages the operator typed, from the user
-    turns agents.ClaudeUserTurns and agents.CodexUserTurns read, less turns a
-    tool or a task notification began and the records of the slash commands
-    magnum types (magnum: agents.MagnumCommands, the list the factory drops from
-    what it records of its panes, so both sides count the same; nil drops none).
-    A session's ticket is the key keyOf finds in the file's path below dir,
-    else in its first message that holds one. A transcript with no message or no
-    key is not guessed at: it is counted in skipped. The sessions come oldest
-    first, by the time of their first message, so that the first session of a
-    ticket is the first one (BuildBaseline); a transcript whose turns carry
-    no timestamp comes after the rest, and is never a ticket's first session.
-    Prompts queued while an agent worked are not read, so a count is never above
-    what was typed. Symbolic links are not followed.
+type Skipped struct {
+	// Headless: nobody typed in it: Claude Code run without its terminal UI
+	// (claude -p, the SDK: an entrypoint other than cli) or `codex exec`
+	// (originator codex_exec, or source exec).
+	Headless int
+	// Subagent: another agent's thread: a Claude Code subagent's transcript
+	// (a file under a subagents directory) or a Codex subagent's rollout (a
+	// source that names a subagent).
+	Subagent int
+	// ByAgent: a Codex session Claude Code started (originator "Claude
+	// Code").
+	ByAgent int
+	// Magnum: it started in a directory where magnum or the factory starts
+	// sessions of its own, which hold magnum's prompts.
+	Magnum int
+	// NoMessage: no message of the operator's.
+	NoMessage int
+	// NoKey: no ticket key in its path, its messages or its git branches.
+	NoKey int
+}
+    Skipped counts the transcripts ReadSessions leaves out, by why: each is
+    counted once, under the first reason that holds, in this order.
+
+func (s Skipped) Total() int
+    Total is how many transcripts were left out.
 
 type TaskStats struct {
 	TaskID int64
@@ -21853,6 +21922,11 @@ func DropGuard(pool config.Pool) mysqlx.Guard
     so only magnum's own slot slugs are ever droppable. A pool without database
     templates, with no common prefix or with a slot_name lacking {n} gets the
     zero Guard, which refuses everything.
+
+func IsPRWorktree(dir string) bool
+    IsPRWorktree reports whether dir is a per-PR worktree as PRWorktreePath
+    names one: a pr-<N> directory in the <clone>__worktrees directory of a clone
+    (a directory below one is not).
 
 func LazySchema(pool config.Pool) bool
     LazySchema reports whether pool's slots reload their databases only when a

@@ -557,6 +557,31 @@ func TestMainClonePathAndPRWorktreePath(t *testing.T) {
 	}
 }
 
+// IsPRWorktree reads back what PRWorktreePath names: a pr-<N> directory in a
+// clone's __worktrees directory, never a directory below one, a pool slot or
+// a clone.
+func TestIsPRWorktreeKnowsWhatPRWorktreePathNames(t *testing.T) {
+	t.Parallel()
+	for dir, want := range map[string]bool{
+		PRWorktreePath("/p/zhuravel-widgets", 7): true,
+		PRWorktreePath("/p/widgets", 12345):      true,
+		"/p/widgets__worktrees/pr-3/":            true,
+		"/p/widgets__worktrees/pr-3/app":         false,
+		"/p/widgets__worktrees/pr-":              false,
+		"/p/widgets__worktrees/pr-3a":            false,
+		"/p/widgets__worktrees/review-3":         false,
+		"/p/__worktrees/pr-3":                    false,
+		"/p/widgets/pr-3":                        false,
+		"/p/widgets":                             false,
+		"/p/talkable.review3":                    false,
+		"pr-3":                                   false,
+	} {
+		if got := IsPRWorktree(dir); got != want {
+			t.Errorf("IsPRWorktree(%q) = %v, want %v", dir, got, want)
+		}
+	}
+}
+
 func TestCreatePRWorktreeMovesAStaleRowToTheFoundClone(t *testing.T) {
 	f := newPerPR(t, true)
 	h := f.h

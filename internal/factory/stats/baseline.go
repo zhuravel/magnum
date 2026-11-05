@@ -268,6 +268,34 @@ func ReadLabelled(path string) ([]Labelled, error) {
 	return out, nil
 }
 
+// Skipped counts the transcripts ReadSessions leaves out, by why: each is
+// counted once, under the first reason that holds, in this order.
+type Skipped struct {
+	// Headless: nobody typed in it: Claude Code run without its terminal UI
+	// (claude -p, the SDK: an entrypoint other than cli) or `codex exec`
+	// (originator codex_exec, or source exec).
+	Headless int
+	// Subagent: another agent's thread: a Claude Code subagent's transcript
+	// (a file under a subagents directory) or a Codex subagent's rollout (a
+	// source that names a subagent).
+	Subagent int
+	// ByAgent: a Codex session Claude Code started (originator "Claude
+	// Code").
+	ByAgent int
+	// Magnum: it started in a directory where magnum or the factory starts
+	// sessions of its own, which hold magnum's prompts.
+	Magnum int
+	// NoMessage: no message of the operator's.
+	NoMessage int
+	// NoKey: no ticket key in its path, its messages or its git branches.
+	NoKey int
+}
+
+// Total is how many transcripts were left out.
+func (s Skipped) Total() int {
+	return s.Headless + s.Subagent + s.ByAgent + s.Magnum + s.NoMessage + s.NoKey
+}
+
 // ReadSessions reads the operator's old transcripts under dir (every .jsonl
 // file: a Claude Code transcript, or a Codex rollout when the file is named
 // rollout-*) into sessions: the messages the operator typed, from the user
@@ -275,21 +303,28 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // tool or a task notification began and the records of the slash commands
 // magnum types (magnum: agents.MagnumCommands, the list the factory drops
 // from what it records of its panes, so both sides count the same; nil drops
-// none). A session's ticket is the key keyOf finds
-// in the file's path below dir, else in its first message that holds one. A
-// transcript with no message or no key is not guessed at: it is counted in
-// skipped. The sessions come oldest first, by the time of their first
-// message, so that the first session of a ticket is the first one
-// (BuildBaseline); a transcript whose turns carry no timestamp comes after
-// the rest, and is never a ticket's first session. Prompts queued while an agent worked are not read, so a
-// count is never above what was typed. Symbolic links are not followed.
-func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool) (sessions []Session, skipped int, err error) {
+// none). Only the operator's interactive sessions are read: a transcript of
+// a headless run, a subagent's, a Codex session Claude Code started, or one
+// whose session started in a directory magnumDir reports as one where magnum
+// or the factory starts its own (nil: none) is left out before its messages
+// are read (agents.ClaudeSessionFacts, agents.CodexSessionFacts; Skipped
+// says which is which). A session's ticket is the key keyOf finds in the
+// file's path below dir, else in its first message that holds one, else in
+// the first of its git branches that holds one. A transcript with no message
+// or no key is not guessed at either. Every transcript left out is counted
+// in skipped, by its reason. The sessions come oldest first, by the time of
+// their first message, so that the first session of a ticket is the first
+// one (BuildBaseline); a transcript whose turns carry no timestamp comes
+// after the rest, and is never a ticket's first session. Prompts queued
+// while an agent worked are not read, so a count is never above what was
+// typed. Symbolic links are not followed.
+func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool, magnumDir func(string) bool) (sessions []Session, skipped Skipped, err error) {
 	st, err := os.Stat(dir)
 	if err != nil {
-		return nil, 0, err
+		return nil, Skipped{}, err
 	}
 	if !st.IsDir() {
-		return nil, 0, fmt.Errorf("%s is not a directory", dir)
+		return nil, Skipped{}, fmt.Errorf("%s is not a directory", dir)
 	}
 	type dated struct {
 		session Session
@@ -307,9 +342,36 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool)
 		if err != nil {
 			return err
 		}
-		turns, err := operatorTurns(path, magnum)
+		if slices.Contains(strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/"), "subagents") {
+			skipped.Subagent++
+			return nil
+		}
+		codex := strings.HasPrefix(filepath.Base(path), "rollout-")
+		facts, err := sessionFacts(path, codex)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", rel, err)
+		}
+		switch {
+		case facts.Originator == "Claude Code":
+			skipped.ByAgent++
+			return nil
+		case facts.Entrypoint != "" && facts.Entrypoint != "cli", facts.Originator == "codex_exec", facts.Source == "exec":
+			skipped.Headless++
+			return nil
+		case facts.Source == agents.CodexSourceSubagent:
+			skipped.Subagent++
+			return nil
+		case magnumDir != nil && facts.Cwd != "" && magnumDir(facts.Cwd):
+			skipped.Magnum++
+			return nil
+		}
+		turns, err := operatorTurns(path, codex, magnum)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", rel, err)
+		}
+		if len(turns) == 0 {
+			skipped.NoMessage++
+			return nil
 		}
 		messages := make([]string, len(turns))
 		for i, t := range turns {
@@ -319,15 +381,18 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool)
 		for i := 0; key == "" && i < len(messages); i++ {
 			key = keyOf(messages[i])
 		}
-		if len(messages) == 0 || key == "" {
-			skipped++
+		for i := 0; key == "" && i < len(facts.Branches); i++ {
+			key = keyOf(facts.Branches[i])
+		}
+		if key == "" {
+			skipped.NoKey++
 			return nil
 		}
 		found = append(found, dated{Session{Key: key, Messages: messages}, turns[0].At})
 		return nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, Skipped{}, err
 	}
 	slices.SortStableFunc(found, func(a, b dated) int {
 		switch {
@@ -346,13 +411,22 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool)
 	return sessions, skipped, nil
 }
 
-// operatorTurns are the turns the operator typed in the transcript or
-// rollout at path: none a tool or a notification began, and no record of a
-// slash command of magnum's (agents.MagnumCommand).
-func operatorTurns(path string, magnum map[string]bool) ([]agents.UserTurn, error) {
+// sessionFacts reads what the transcript (a Codex rollout when codex) at
+// path says of its session.
+func sessionFacts(path string, codex bool) (agents.SessionFacts, error) {
+	if codex {
+		return agents.CodexSessionFacts(path)
+	}
+	return agents.ClaudeSessionFacts(path)
+}
+
+// operatorTurns are the turns the operator typed in the transcript (a Codex
+// rollout when codex) at path: none a tool or a notification began, and no
+// record of a slash command of magnum's (agents.MagnumCommand).
+func operatorTurns(path string, codex bool, magnum map[string]bool) ([]agents.UserTurn, error) {
 	var turns []agents.UserTurn
 	var err error
-	if strings.HasPrefix(filepath.Base(path), "rollout-") {
+	if codex {
 		turns, err = agents.CodexUserTurns(path, time.Time{})
 	} else {
 		turns, err = agents.ClaudeUserTurns(path, time.Time{})

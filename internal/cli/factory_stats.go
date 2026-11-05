@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/slots"
 )
 
 const (
@@ -118,12 +122,16 @@ func newFactoryBaselineCmd(c *Context) *cobra.Command {
 			"factory's data directory: once, before the first task. --transcripts is a directory of your old Claude "+
 			"Code transcripts and Codex rollouts (every .jsonl file below it; a Codex file is named rollout-*): a "+
 			"session belongs to the ticket whose key (a tracker of your config's [board] or [[repo]] trackers) its "+
-			"file path or its first messages name, and the sessions of one ticket are one ticket, never counted "+
-			"apart. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
+			"file path or its first messages name, else the one its git branch names (a Claude entry's gitBranch, a "+
+			"Codex rollout's session_meta), and the sessions of one ticket are one ticket, never counted "+
+			"apart. Only your interactive sessions count: a headless run (claude -p or the SDK, codex exec), a "+
+			"subagent's, a Codex session Claude Code started and a session started where magnum or the factory starts "+
+			"its own (magnum's data and state directories, a [[pool]] slot, a per-PR worktree, a [[factory.repo]] copy) "+
+			"are left out. The first message of a ticket (the oldest session's first) counts as typed and never as a step "+
 			"start, as the message that starts a task does in `magnum factory stats`, while the first message of a later session keeps "+
 			"its class. The record of a slash command magnum types (/compact, /model, /rename, /exit) is no message of "+
 			"yours here, as it is none in the factory's panes. A transcript with no message or no ticket key is left "+
-			"out and counted. --labelled is a JSON-lines "+
+			"out too, and the summary counts the transcripts left out by reason. --labelled is a JSON-lines "+
 			"file of your messages with the class you gave each by hand ({\"text\": \"open PR\", \"class\": "+
 			"\"step_start\"}; the classes are step_start, approval, correction, access and info): the classifier that "+
 			"counts your step-starting messages, here and in `magnum factory stats`, is scored on it, and its "+
@@ -164,7 +172,8 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	sessions, skipped, err := stats.ReadSessions(f.transcripts, func(text string) string {
 		key, _ := config.Issue(text, trackers)
 		return key
-	}, agents.MagnumCommands(c.Config)) // the commands the factory drops too: both sides count the same
+	}, agents.MagnumCommands(c.Config), // the commands the factory drops too: both sides count the same
+		baselineMagnumDir(c.Layout, c.Config))
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -179,8 +188,15 @@ func runFactoryBaselineCmd(c *Context, f factoryBaselineFlags, pos []string) int
 	}
 	w := c.Stdout
 	fmt.Fprintf(w, "froze %s\n", path)
-	fmt.Fprintf(w, "%d tickets, from %d sessions; %s skipped (no ticket key, or no message of yours)\n", b.Tickets, len(sessions),
-		plural(skipped, "transcript"))
+	fmt.Fprintf(w, "%d tickets, from %d sessions; %s skipped", b.Tickets, len(sessions), plural(skipped.Total(), "transcript"))
+	if skipped.Total() > 0 {
+		fmt.Fprintf(w, ":\n  %d with no ticket key (in its path, its messages or its git branches)\n  %d with no message of yours\n"+
+			"  %d headless (claude -p or the SDK, codex exec)\n  %d of subagents\n  %s Claude Code started\n"+
+			"  %d started where magnum or the factory starts its own (its data and state directories, a pool slot, a per-PR worktree, "+
+			"a factory copy)", skipped.NoKey, skipped.NoMessage, skipped.Headless, skipped.Subagent, plural(skipped.ByAgent, "Codex session"),
+			skipped.Magnum)
+	}
+	fmt.Fprintln(w)
 	fmt.Fprintf(w, "typed per ticket: %s\n", b.TypedPerTicket)
 	fmt.Fprintf(w, "step starts per ticket: %s\n", b.StepStartsPerTicket)
 	fmt.Fprintf(w, "classifier accuracy: %.0f%% of your %d labelled messages\n", b.Accuracy*100, len(labelled))
@@ -209,6 +225,49 @@ func baselineTrackers(cfg *config.Config) []config.Tracker {
 	}
 	add(cfg.TrackersFor(""))
 	return out
+}
+
+// baselineMagnumDir reports whether a session's working directory lies
+// where magnum or the factory starts sessions of its own, which hold
+// magnum's prompts and not your words: magnum's data and state directories
+// (the notes' curations, the retro, the eval and learn worktrees, the
+// factory's tasks), a slot of any [[pool]] whatever its number, a per-PR
+// worktree (slots.IsPRWorktree) and a copy of any [[factory.repo]], or a
+// directory below one. A relative directory is none of them.
+func baselineMagnumDir(l paths.Layout, cfg *config.Config) func(dir string) bool {
+	var roots []string
+	for _, d := range []string{l.Data(), l.State(), l.DataDir, l.StateDir} {
+		if filepath.IsAbs(d) {
+			roots = append(roots, filepath.Clean(d))
+		}
+	}
+	var templates []string // the pools' slot_path and the factory's copies
+	for _, p := range cfg.Pools {
+		templates = append(templates, p.SlotPath)
+	}
+	for _, r := range cfg.Factory.Repos {
+		templates = append(templates, r.Copies)
+	}
+	var copies []*regexp.Regexp // each {n} any number
+	for _, tmpl := range templates {
+		if tmpl = paths.Expand(tmpl); filepath.IsAbs(tmpl) {
+			copies = append(copies, slots.TemplateRegexp(filepath.Clean(tmpl)))
+		}
+	}
+	return func(dir string) bool {
+		if !filepath.IsAbs(dir) {
+			return false
+		}
+		for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+			if slices.Contains(roots, d) || slots.IsPRWorktree(d) ||
+				slices.ContainsFunc(copies, func(re *regexp.Regexp) bool { return re.MatchString(d) }) {
+				return true
+			}
+			if filepath.Dir(d) == d {
+				return false
+			}
+		}
+	}
 }
 
 // plural spells n of noun: "1 transcript", "3 transcripts".

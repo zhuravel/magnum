@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -333,6 +334,30 @@ func codexLine(at time.Time, text string) string {
 	return string(b)
 }
 
+// claudeEntry is a typed prompt of a Claude Code transcript with the fields
+// it records of its session (entrypoint, cwd, gitBranch).
+func claudeEntry(at time.Time, text string, fields map[string]any) string {
+	e := map[string]any{"type": "user", "timestamp": at.UTC().Format(time.RFC3339), "turnOrigin": "human",
+		"message": map[string]any{"role": "user", "content": text}}
+	maps.Copy(e, fields)
+	b, _ := json.Marshal(e)
+	return string(b)
+}
+
+// codexMeta is the session_meta line a Codex rollout begins with.
+func codexMeta(at time.Time, originator string, source any, cwd, branch string) string {
+	p := map[string]any{"id": "019e0000-0000-7000-8000-000000000001", "timestamp": at.UTC().Format(time.RFC3339),
+		"originator": originator, "cwd": cwd}
+	if source != nil {
+		p["source"] = source
+	}
+	if branch != "" {
+		p["git"] = map[string]any{"branch": branch}
+	}
+	b, _ := json.Marshal(map[string]any{"type": "session_meta", "timestamp": at.UTC().Format(time.RFC3339), "payload": p})
+	return string(b)
+}
+
 func writeTranscript(t *testing.T, path string, lines ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -372,12 +397,12 @@ func TestReadSessionsGroupsTranscriptsByTicketKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands)
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if skipped != 2 {
-		t.Errorf("skipped = %d, want 2 (the transcript with no key and the one with no message)", skipped)
+	if want := (stats.Skipped{NoKey: 1, NoMessage: 1}); skipped != want || skipped.Total() != 2 {
+		t.Errorf("skipped = %+v, want %+v (the transcript with no key and the one with no message)", skipped, want)
 	}
 	byKey := map[string][]int{}
 	for _, s := range sessions {
@@ -402,6 +427,133 @@ func TestReadSessionsGroupsTranscriptsByTicketKey(t *testing.T) {
 	}
 }
 
+// A session whose path and messages name no ticket is tied to the one its
+// git branch names (a Claude entry's gitBranch, any of them; a rollout's
+// session_meta git.branch), read with the same key function. A key in the
+// path or the messages still wins over the branch.
+func TestReadSessionsTiesASessionToTheTicketItsBranchNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	on := func(branch string) map[string]any {
+		return map[string]any{"entrypoint": "cli", "cwd": "/work/shop", "gitBranch": branch}
+	}
+	writeTranscript(t, filepath.Join(dir, "proj", "a.jsonl"),
+		claudeEntry(at, "look at the points sync", on("alice-PR-12370")), claudeEntry(at.Add(time.Minute), "open PR", on("alice-PR-12370")))
+	writeTranscript(t, filepath.Join(dir, "proj", "b.jsonl"),
+		claudeEntry(at.Add(time.Hour), "what is on master?", on("master")),
+		claudeEntry(at.Add(2*time.Hour), "now the mailer", on("zhuravel-PR-12371-mailer")))
+	writeTranscript(t, filepath.Join(dir, "codex", "rollout-2026-10-02T09-00-00-a.jsonl"),
+		codexMeta(at, "codex-tui", "cli", "/work/shop", "zhuravel-PR-12372-refunds"), codexLine(at, "the refunds count twice"))
+	writeTranscript(t, filepath.Join(dir, "worktree-PR-12373", "c.jsonl"),
+		claudeEntry(at.Add(3*time.Hour), "the path names the ticket", on("alice-PR-12374")))
+	writeTranscript(t, filepath.Join(dir, "proj", "d.jsonl"),
+		claudeEntry(at.Add(4*time.Hour), "PR-12375: the first message names it", on("alice-PR-12376")))
+	writeTranscript(t, filepath.Join(dir, "proj", "e.jsonl"), claudeEntry(at.Add(5*time.Hour), "what is in this repo?", on("master")))
+
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range sessions {
+		got[s.Messages[0]] = s.Key
+	}
+	want := map[string]string{
+		"look at the points sync":              "PR-12370",
+		"what is on master?":                   "PR-12371", // a later entry's branch
+		"the refunds count twice":              "PR-12372",
+		"the path names the ticket":            "PR-12373",
+		"PR-12375: the first message names it": "PR-12375",
+	}
+	if len(got) != len(want) {
+		t.Errorf("sessions by first message = %v, want %v", got, want)
+	}
+	for first, key := range want {
+		if got[first] != key {
+			t.Errorf("the session of %q has the key %q, want %q", first, got[first], key)
+		}
+	}
+	if want := (stats.Skipped{NoKey: 1}); skipped != want {
+		t.Errorf("skipped = %+v, want %+v (the session on master alone)", skipped, want)
+	}
+}
+
+// The baseline counts what the operator typed, so it reads only the
+// operator's interactive sessions: a headless Claude Code run (claude -p, the
+// SDK: an entrypoint other than cli), a subagent's transcript, a Codex
+// session Claude Code started, `codex exec`, a Codex subagent and a session
+// in a directory where magnum or the factory starts its own (the predicate
+// the caller hands over) are left out, each counted by its reason, before
+// their messages are read.
+func TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	n := 0
+	claude := func(fields map[string]any, path ...string) {
+		t.Helper()
+		n++
+		writeTranscript(t, filepath.Join(append([]string{dir}, path...)...),
+			claudeEntry(at.Add(time.Duration(n)*time.Minute), fmt.Sprintf("work on PR-%d", 12380+n), fields))
+	}
+	codex := func(originator string, source any, cwd string) {
+		t.Helper()
+		n++
+		writeTranscript(t, filepath.Join(dir, "codex", fmt.Sprintf("rollout-2026-10-02T09-00-%02d-a.jsonl", n)),
+			codexMeta(at, originator, source, cwd, ""), codexLine(at.Add(time.Duration(n)*time.Minute), fmt.Sprintf("work on PR-%d", 12380+n)))
+	}
+	interactive := map[string]any{"entrypoint": "cli", "cwd": "/work/shop"}
+	claude(interactive, "proj", "kept.jsonl")
+	claude(map[string]any{"cwd": "/work/shop"}, "proj", "older-claude-code.jsonl") // no entrypoint: kept
+	codex("codex-tui", "cli", "/work/shop")                                        // kept
+	codex("Codex Desktop", "vscode", "/work/shop")                                 // kept
+
+	claude(map[string]any{"entrypoint": "sdk-cli", "cwd": "/work/shop"}, "proj", "claude-p.jsonl")
+	claude(map[string]any{"entrypoint": "sdk-ts", "cwd": "/work/shop"}, "proj", "sdk.jsonl")
+	writeTranscript(t, filepath.Join(dir, "proj", "headless-silent.jsonl"),
+		`{"type":"system","entrypoint":"sdk-cli","cwd":"/work/shop"}`) // headless before it is silent
+	codex("codex_exec", "exec", "/work/shop")
+	codex("codex-tui", "exec", "/work/shop")
+
+	claude(interactive, "proj", "0b8a", "subagents", "agent-a1.jsonl")
+	codex("codex-tui", map[string]any{"subagent": "review"}, "/work/shop")
+	codex("codex-tui", map[string]any{"subagent": map[string]any{"other": "guardian"}}, "/work/shop")
+	codex("codex-tui", map[string]any{"subagent": map[string]any{"thread_spawn": map[string]any{"depth": 1}}}, "/work/shop")
+
+	codex("Claude Code", "exec", "/work/shop")
+
+	claude(map[string]any{"entrypoint": "cli", "cwd": "/magnum/slots/shop.review3"}, "slot", "a.jsonl")
+	codex("codex-tui", "cli", "/magnum/copies/factory2/app")
+
+	writeTranscript(t, filepath.Join(dir, "proj", "silent.jsonl"), `{"type":"system","entrypoint":"cli","cwd":"/work/shop"}`)
+	writeTranscript(t, filepath.Join(dir, "proj", "nokey.jsonl"), claudeEntry(at, "what is in this repo?", interactive))
+
+	magnums := func(cwd string) bool { return strings.HasPrefix(cwd, "/magnum/") }
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands, magnums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, s := range sessions {
+		keys = append(keys, s.Key)
+	}
+	slices.Sort(keys)
+	if want := []string{"PR-12381", "PR-12382", "PR-12383", "PR-12384"}; !slices.Equal(keys, want) {
+		t.Errorf("sessions of %v, want %v (the interactive ones)", keys, want)
+	}
+	want := stats.Skipped{Headless: 5, Subagent: 4, ByAgent: 1, Magnum: 2, NoMessage: 1, NoKey: 1}
+	if skipped != want || skipped.Total() != 14 {
+		t.Errorf("skipped = %+v (total %d), want %+v (14)", skipped, skipped.Total(), want)
+	}
+
+	// Without a predicate no directory is magnum's.
+	sessions, skipped, err = stats.ReadSessions(dir, firstKey, magnumCommands, nil)
+	if err != nil || len(sessions) != 6 || skipped.Magnum != 0 {
+		t.Errorf("without a predicate: %d sessions, skipped %+v, %v; want the two in magnum's directories kept", len(sessions), skipped, err)
+	}
+}
+
 // The sessions come oldest first, whatever their files are called: the first
 // of a ticket is the one its baseline counts as having started the work.
 func TestReadSessionsComesOldestFirst(t *testing.T) {
@@ -413,7 +565,7 @@ func TestReadSessionsComesOldestFirst(t *testing.T) {
 	writeTranscript(t, filepath.Join(dir, "z-first.jsonl"),
 		claudeLine(at, "human", "open PR for PR-12301"), claudeLine(at.Add(time.Minute), "human", "ok"))
 
-	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands)
+	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,9 +596,9 @@ func TestReadSessionsPutsASessionWithoutTimestampsLast(t *testing.T) {
 	writeTranscript(t, filepath.Join(dir, "a-untimed.jsonl"), string(untimed))
 	writeTranscript(t, filepath.Join(dir, "b-timed.jsonl"), claudeLine(at, "human", "work on PR-12301"))
 
-	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands)
-	if err != nil || skipped != 0 {
-		t.Fatalf("ReadSessions = %v, skipped %d, %v", sessions, skipped, err)
+	sessions, skipped, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
+	if err != nil || skipped.Total() != 0 {
+		t.Fatalf("ReadSessions = %v, skipped %+v, %v", sessions, skipped, err)
 	}
 	if len(sessions) != 2 || sessions[0].Messages[0] != "work on PR-12301" || sessions[1].Messages[0] != "open PR for PR-12301" {
 		t.Fatalf("sessions %+v, want the timed one first and the untimed one last, though its name sorts first", sessions)
@@ -475,7 +627,7 @@ func TestReadSessionsDropsTheCommandsMagnumTypes(t *testing.T) {
 		claudeLine(at.Add(time.Hour), "human", "look at PR-12317"),
 		claudeLine(at.Add(time.Hour+time.Minute), "", "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>"))
 
-	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands)
+	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +646,7 @@ func TestReadSessionsDropsTheCommandsMagnumTypes(t *testing.T) {
 
 func TestReadSessionsOfAMissingDirectory(t *testing.T) {
 	t.Parallel()
-	if _, _, err := stats.ReadSessions(filepath.Join(t.TempDir(), "nope"), firstKey, magnumCommands); err == nil {
+	if _, _, err := stats.ReadSessions(filepath.Join(t.TempDir(), "nope"), firstKey, magnumCommands, nil); err == nil {
 		t.Error("a missing directory read as no sessions")
 	}
 }

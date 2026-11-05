@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/factory/stats"
@@ -338,6 +339,109 @@ func TestFactoryBaselineFreezesOnceFromTranscriptsPerTicket(t *testing.T) {
 	}
 	if dt.stdout.Len() != 0 {
 		t.Errorf("stdout of the refusal: %s", dt.stdout)
+	}
+}
+
+// The sessions magnum and the factory start hold magnum's prompts, not your
+// words: a session that started in magnum's data or state directory, in a
+// [[pool]] slot (any number, not only up to max), in a per-PR worktree or in
+// a factory copy, or below one, is magnum's; your own clones and worktrees
+// beside them are not.
+func TestBaselineKnowsWhereMagnumStartsSessions(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Pools:   []config.Pool{{Repo: "example/shop", SlotName: "review{n}", SlotPath: "/p/shop.review{n}", Max: 2}},
+		Factory: config.Factory{Repos: []config.FactoryRepo{{Repo: "example/shop", Copies: "/p/copies/shop{n}", MaxCopies: 2}}},
+	}
+	magnums := baselineMagnumDir(paths.Layout{DataDir: "/x/share/magnum", StateDir: "/x/state/magnum"}, cfg)
+	for dir, want := range map[string]bool{
+		"/x/share/magnum":                     true,
+		"/x/share/magnum/notes/.curate-shop":  true,
+		"/x/share/magnum/learn/retro":         true,
+		"/x/state/magnum/eval/wt/case-1":      true,
+		"/p/shop.review3":                     true,
+		"/p/shop.review12/app":                true,
+		"/p/copies/shop2/lib/":                true,
+		"/p/shop__worktrees/pr-12":            true,
+		"/p/shop__worktrees/pr-12/app/models": true,
+		"/p/shop":                             false,
+		"/p/shop.review":                      false,
+		"/p/shop.review3x":                    false,
+		"/p/shop.repo1":                       false,
+		"/p/shop__worktrees/feature-points":   false,
+		"/p/copies":                           false,
+		"/x/share/magnum-notes":               false,
+		"/x/share":                            false,
+		"notes":                               false,
+		"":                                    false,
+	} {
+		if got := magnums(dir); got != want {
+			t.Errorf("magnum's (%q) = %v, want %v", dir, got, want)
+		}
+	}
+}
+
+// The command reads only your interactive sessions, and says how many it
+// left out for each reason, beside those with no ticket key or no message
+// of yours.
+func TestFactoryBaselineNamesWhyItSkippedEachTranscript(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	transcripts, labelled := baselineFixture(t, dt)
+	cfg := *dt.ctx.Config
+	slots := t.TempDir()
+	cfg.Pools = []config.Pool{{Repo: "example/shop", SlotName: "review{n}", SlotPath: filepath.Join(slots, "shop.review{n}"), Max: 2}}
+	dt.ctx.Config = &cfg
+	at := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	write := func(name string, lines ...string) {
+		t.Helper()
+		p := filepath.Join(transcripts, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := func(v map[string]any) string {
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+	prompt := func(entrypoint, cwd, text string) string {
+		return line(map[string]any{"type": "user", "timestamp": at.Format(time.RFC3339), "turnOrigin": "human", "entrypoint": entrypoint,
+			"cwd": cwd, "message": map[string]any{"role": "user", "content": text}})
+	}
+	rollout := func(originator string, source any, text string) []string {
+		return []string{
+			line(map[string]any{"type": "session_meta", "payload": map[string]any{"originator": originator, "source": source, "cwd": "/work/shop"}}),
+			line(map[string]any{"type": "event_msg", "timestamp": at.Format(time.RFC3339), "payload": map[string]any{"type": "user_message", "message": text}}),
+		}
+	}
+	write("proj/p.jsonl", prompt("sdk-cli", "/work/shop", "PR-12331: summarize the diff"))
+	write("proj/0b8a/subagents/agent-a1.jsonl", prompt("cli", "/work/shop", "PR-12332: find the callers"))
+	write("codex/rollout-2026-10-02T10-00-00-a.jsonl", rollout("Claude Code", "exec", "PR-12333: review the change")...)
+	write("codex/rollout-2026-10-02T10-00-01-b.jsonl", rollout("codex-tui", map[string]any{"subagent": "review"}, "PR-12334: review")...)
+	write("slot/a.jsonl", prompt("cli", filepath.Join(slots, "shop.review7"), "PR-12335: the round's prompt"))
+	write("notes/a.jsonl", prompt("cli", filepath.Join(dt.ctx.Layout.Data(), "notes", ".curate-shop"), "PR-12336: curate"))
+	write("proj/kept.jsonl", prompt("cli", "/work/shop", "PR-12337: the points vanish"))
+
+	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	got, err := stats.LoadBaseline(dt.ctx.Layout.FactoryBaseline())
+	if err != nil || got == nil || got.Tickets != 3 {
+		t.Fatalf("baseline %+v, %v; want 3 tickets (the fixture's two and PR-12337)", got, err)
+	}
+	out := dt.stdout.String()
+	for _, want := range []string{
+		"3 tickets, from 5 sessions; 7 transcripts skipped",
+		"1 with no ticket key", "0 with no message of yours",
+		"1 headless", "2 of subagents", "1 Codex session Claude Code started",
+		"2 started where magnum or the factory starts its own",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the summary lacks %q:\n%s", want, out)
+		}
 	}
 }
 
