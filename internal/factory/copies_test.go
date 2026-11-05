@@ -66,6 +66,7 @@ type copiesRig struct {
 	blocks  map[string]chan struct{}
 	entered chan string
 	flushed []string // the Redis databases flushed, "<db>"
+	redisAt []string // where each flush went, "<host>:<port>"
 	table   []execx.Process
 	kills   []string // "<pid> <signal>"
 	// ignoreTerm are the processes a SIGTERM does not end.
@@ -170,9 +171,10 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		Repo: "talkable/talkable", Base: "master", MainClone: r.main,
 		Copies: filepath.Join(root, "talkable.factory{n}"), CopyName: "factory{n}", MaxCopies: maxCopies,
 		Setup: []string{"bin/worktree-setup"}, ResetDB: []string{"bin/rails db:schema:load"},
-		Installs:  []config.FactoryInstall{{Lock: "Gemfile.lock", Run: "bundle install"}},
-		Server:    "bin/worktree-run",
-		Env:       map[string]string{"WT_BRANCH": "{copy}", "REDIS_DB_OFFSET": "{n*16}", "PORT": "30{n}0"},
+		Installs: []config.FactoryInstall{{Lock: "Gemfile.lock", Run: "bundle install"}},
+		Server:   "bin/worktree-run",
+		Env: map[string]string{"WT_BRANCH": "{copy}", "REDIS_DB_OFFSET": "{n*16}", "PORT": "30{n}0",
+			"REDIS_URL": "redis://127.0.0.1:6380/0"},
 		Databases: []string{"talkable_development__{slug}", "talkable_test__{slug}"},
 	}}
 	fake := &execx.Fake{Rules: []execx.Rule{
@@ -432,9 +434,10 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	return execx.Result{}, nil
 }
 
-// redis records `redis-cli -n <db> FLUSHDB`.
+// redis records `redis-cli -h <host> -p <port> -n <db> FLUSHDB`.
 func (r *copiesRig) redis(c execx.Cmd) (execx.Result, error) {
-	if len(c.Args) != 3 || c.Args[0] != "-n" || c.Args[2] != "FLUSHDB" {
+	a := c.Args
+	if len(a) != 7 || a[0] != "-h" || a[2] != "-p" || a[4] != "-n" || a[6] != "FLUSHDB" {
 		return execx.Result{}, fmt.Errorf("unexpected redis-cli call %v", c.Args)
 	}
 	r.mu.Lock()
@@ -444,7 +447,8 @@ func (r *copiesRig) redis(c execx.Cmd) (execx.Result, error) {
 		return execx.Result{Code: 1, Stderr: []byte("Could not connect to Redis")},
 			&execx.ExitError{Cmd: c, Code: 1, Stderr: "Could not connect to Redis"}
 	}
-	r.flushed = append(r.flushed, c.Args[1])
+	r.flushed = append(r.flushed, a[5])
+	r.redisAt = append(r.redisAt, a[1]+":"+a[3])
 	return execx.Result{Stdout: []byte("OK\n")}, nil
 }
 
@@ -642,7 +646,7 @@ func TestCopiesSetARedisOffsetPerCopy(t *testing.T) {
 
 	// The env names the variable: the copy's offset it is, whatever its value.
 	fixed := newCopiesRig(t, 2)
-	fixed.cfg.Factory.Repos[0].Env = map[string]string{"WT_BRANCH": "{copy}", "REDIS_DB_OFFSET": "0"}
+	fixed.cfg.Factory.Repos[0].Env = map[string]string{"WT_BRANCH": "{copy}", "REDIS_DB_OFFSET": "0", "REDIS_PORT": "6380"}
 	fixed.claim(fixed.task("PR-8"))
 	if c := fixed.claim(fixed.task("PR-9")); c.Env["REDIS_DB_OFFSET"] != "32" {
 		t.Fatalf("copy %s: REDIS_DB_OFFSET = %q with the env's 0, want its own 32", c.Name, c.Env["REDIS_DB_OFFSET"])
@@ -889,6 +893,12 @@ func TestClaimFlushesTheCopysRedisDatabases(t *testing.T) {
 	if got := r.flushes(); !slices.Equal(got, want) {
 		t.Fatalf("flushed %v, want 16-31 for factory1 and 32-47 for factory2", got)
 	}
+	r.mu.Lock()
+	at := slices.Compact(slices.Clone(r.redisAt))
+	r.mu.Unlock()
+	if !slices.Equal(at, []string{"127.0.0.1:6380"}) {
+		t.Fatalf("flushed on %v, want the Redis the copy's REDIS_URL names", at)
+	}
 	r.claim(b)
 	if got := r.flushes(); len(got) != 32 {
 		t.Fatalf("flushed %d databases, want no flush for a claim of the copy the task holds", len(got))
@@ -897,6 +907,45 @@ func TestClaimFlushesTheCopysRedisDatabases(t *testing.T) {
 	r.claim(r.task("PR-3"))
 	if got := r.flushes(); len(got) != 48 || got[32] != "32" || got[47] != "47" {
 		t.Fatalf("flushed %v, want factory2's 32-47 again for its next task", got)
+	}
+}
+
+// The flush empties the databases of the Redis the copy's env names (its
+// REDIS_URL, else REDIS_HOST and REDIS_PORT), never the daemon's default
+// one: a copy pointed at another Redis would have had localhost's
+// databases flushed and its own left dirty. A Redis the env does not name,
+// or names in a way that does not parse, is flushed nowhere: the step
+// fails, naming what to set.
+func TestTheFlushEmptiesOnlyARedisTheCopysEnvNames(t *testing.T) {
+	for _, c := range []struct {
+		env  map[string]string
+		want redisEndpoint
+	}{
+		{map[string]string{"REDIS_URL": "redis://redis.local:6390/3"}, redisEndpoint{host: "redis.local", port: "6390"}},
+		{map[string]string{"REDIS_URL": "rediss://alice:s3cret@redis.local"}, redisEndpoint{host: "redis.local", port: "6379", user: "alice",
+			pass: "s3cret", tls: true}},
+		{map[string]string{"REDIS_URL": "redis://:s3cret@127.0.0.1:6381"}, redisEndpoint{host: "127.0.0.1", port: "6381", pass: "s3cret"}},
+		{map[string]string{"REDIS_HOST": "redis.local"}, redisEndpoint{host: "redis.local", port: "6379"}},
+		{map[string]string{"REDIS_PORT": "6382"}, redisEndpoint{host: "127.0.0.1", port: "6382"}},
+	} {
+		if got, err := redisOf(c.env); err != nil || got != c.want {
+			t.Errorf("redisOf(%v) = %+v, %v; want %+v", c.env, got, err, c.want)
+		}
+	}
+	for _, env := range []map[string]string{{}, {"REDIS_URL": "http://redis.local"}, {"REDIS_URL": "redis://"}, {"REDIS_PORT": "six"},
+		{"REDIS_URL": "redis://redis.local:65536"}} {
+		if got, err := redisOf(env); err == nil {
+			t.Errorf("redisOf(%v) = %+v, want it refused", env, got)
+		}
+	}
+
+	r := newCopiesRig(t, 1)
+	r.cfg.Factory.Repos[0].Env = map[string]string{"WT_BRANCH": "{copy}", "REDIS_DB_OFFSET": "{n*16}"}
+	if _, err := r.c.Claim(r.ctx, r.task("PR-12396")); err == nil || !strings.Contains(err.Error(), "REDIS_URL") {
+		t.Fatalf("a claim whose env names no Redis = %v, want the flush refused, naming REDIS_URL", err)
+	}
+	if f := r.flushes(); len(f) != 0 {
+		t.Fatalf("flushed %v of a Redis the copy's env does not name", f)
 	}
 }
 

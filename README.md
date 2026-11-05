@@ -3488,7 +3488,12 @@ stages = [
   Each claim then creates the task's branch at `origin/<base>` (tracking nothing) on its first claim, or
   checks it out when it has one, runs `reset_db` when the development
   database's newest migration is none the task's code has, runs each `installs` entry whose lockfile changed
-  since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -n <db> FLUSHDB`). Each
+  since the copy's last install, and flushes the copy's 16 Redis databases (`redis-cli -h <host> -p <port> -n <db>
+  FLUSHDB`) on the Redis the copy's `env` names: its `REDIS_URL` (`redis://` or `rediss://`), else `REDIS_HOST` and
+  `REDIS_PORT`. An `env` that names `REDIS_DB_OFFSET` and no Redis flushes nothing: the claim's step fails and asks you
+  to set one, since a flush of the daemon's default Redis could empty another tenant's databases. The copies' offsets
+  (`n*16` to `n*16+15`) must not overlap any `REDIS_DB_OFFSET` that a `[[pool]] env` gives magnum's review slots on the
+  same Redis (the defaults set none). Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
   sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD), and no

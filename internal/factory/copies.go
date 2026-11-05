@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -626,8 +627,12 @@ func (c *copySet) install(ctx context.Context, cp Copy, in config.FactoryInstall
 const redisFlushTimeout = time.Minute
 
 // flushRedis empties the copy's RedisDBsPerCopy Redis databases from its
-// offset (`redis-cli -n <db> FLUSHDB`), when its env names one; a database
-// flushed twice (a failed flush's next run) is as empty.
+// offset (`redis-cli -h <host> -p <port> -n <db> FLUSHDB`), when its env
+// names one, on the Redis the copy's env names (redisOf): never on the
+// daemon's own default, which a copy pointed at another Redis does not use.
+// A Redis the env does not name is flushed nowhere: the step fails, naming
+// what to set. A database flushed twice (a failed flush's next run) is as
+// empty.
 func (c *copySet) flushRedis(ctx context.Context, cp Copy) error {
 	v, ok := cp.Env[RedisOffsetEnv]
 	if !ok {
@@ -637,14 +642,83 @@ func (c *copySet) flushRedis(ctx context.Context, cp Copy) error {
 	if err != nil || offset < 0 {
 		return fmt.Errorf("%s of %s is %q, no database number", RedisOffsetEnv, cp.Name, v)
 	}
+	ep, err := redisOf(cp.Env)
+	if err != nil {
+		return fmt.Errorf("flush the Redis databases of %s: %w", cp.Name, err)
+	}
+	var env map[string]string
+	if ep.pass != "" {
+		env = map[string]string{"REDISCLI_AUTH": ep.pass} // never on the command line
+	}
 	for db := offset; db < offset+RedisDBsPerCopy; db++ {
 		n := strconv.Itoa(db)
-		if _, err := c.run.Run(ctx, execx.Cmd{Name: "redis-cli", Args: []string{"-n", n, "FLUSHDB"}, Unset: c.unset(),
-			Timeout: redisFlushTimeout, Mutates: true, Label: "redis-cli flushdb " + n + " of " + cp.Name}); err != nil {
-			return fmt.Errorf("flush Redis database %d of %s: %w", db, cp.Name, err)
+		args := []string{"-h", ep.host, "-p", ep.port}
+		if ep.tls {
+			args = append(args, "--tls")
+		}
+		if ep.user != "" {
+			args = append(args, "--user", ep.user)
+		}
+		args = append(args, "-n", n, "FLUSHDB")
+		if _, err := c.run.Run(ctx, execx.Cmd{Name: "redis-cli", Args: args, Env: env, Unset: c.unset(), Timeout: redisFlushTimeout,
+			Mutates: true, Label: "redis-cli flushdb " + n + " of " + cp.Name + " on " + ep.host + ":" + ep.port}); err != nil {
+			return fmt.Errorf("flush Redis database %d of %s on %s:%s: %w", db, cp.Name, ep.host, ep.port, err)
 		}
 	}
 	return nil
+}
+
+// redisEndpoint is a Redis server: its host and port, the user and the
+// password a URL gives, and whether it takes TLS (rediss://).
+type redisEndpoint struct {
+	host, port, user, pass string
+	tls                    bool
+}
+
+// redisOf is the Redis the copy's env names: REDIS_URL (redis:// or
+// rediss://, its host and port, 6379 by default, and its user and
+// password), else REDIS_HOST and REDIS_PORT (one of them at least; the
+// other is 127.0.0.1 or 6379). An env that names none, or a value that does
+// not parse, is an error: a flush of a Redis the factory cannot name could
+// empty the databases of another Redis's tenants, magnum's review slots
+// among them.
+func redisOf(env map[string]string) (redisEndpoint, error) {
+	port := func(p string) (string, error) {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("%q is no port", p)
+		}
+		return p, nil
+	}
+	if raw := strings.TrimSpace(env["REDIS_URL"]); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Hostname() == "" {
+			return redisEndpoint{}, errors.New("REDIS_URL in the copy's env is not a redis:// or rediss:// URL with a host")
+		}
+		ep := redisEndpoint{host: u.Hostname(), port: "6379", tls: u.Scheme == "rediss"}
+		if p := u.Port(); p != "" {
+			if ep.port, err = port(p); err != nil {
+				return redisEndpoint{}, fmt.Errorf("REDIS_URL in the copy's env: %w", err)
+			}
+		}
+		if u.User != nil {
+			ep.user = u.User.Username()
+			ep.pass, _ = u.User.Password()
+		}
+		return ep, nil
+	}
+	host, p := strings.TrimSpace(env["REDIS_HOST"]), strings.TrimSpace(env["REDIS_PORT"])
+	if host == "" && p == "" {
+		return redisEndpoint{}, errors.New("the copy's env names no Redis: set REDIS_URL (or REDIS_HOST and REDIS_PORT) in its " +
+			"[[factory.repo]] env, the Redis its databases are on")
+	}
+	ep := redisEndpoint{host: cmp.Or(host, "127.0.0.1"), port: "6379"}
+	if p != "" {
+		var err error
+		if ep.port, err = port(p); err != nil {
+			return redisEndpoint{}, fmt.Errorf("REDIS_PORT in the copy's env: %w", err)
+		}
+	}
+	return ep, nil
 }
 
 // script runs one of the repository's commands in the copy as magnum's

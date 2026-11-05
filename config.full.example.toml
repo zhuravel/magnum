@@ -200,8 +200,11 @@ databases = [
 #   { lock = "pnpm-lock.yaml", run = "pnpm install --frozen-lockfile" },
 # ]
 # server = "bin/worktree-run"              # starts the copy's local server
-# env = { WT_BRANCH = "{copy}", REDIS_DB_OFFSET = "{n*16}" }   # {copy} (or {slot}): the copy's name, {n}: its number;
-#                                          # REDIS_DB_OFFSET named here is copy n's n*16, its 16 Redis databases
+# env = { WT_BRANCH = "{copy}", REDIS_DB_OFFSET = "{n*16}", REDIS_URL = "redis://127.0.0.1:6379" }
+#                                          # {copy} (or {slot}): the copy's name, {n}: its number;
+#                                          # REDIS_DB_OFFSET named here is copy n's n*16, its 16 Redis databases, which
+#                                          # a claim flushes on the Redis REDIS_URL (or REDIS_HOST, REDIS_PORT) names;
+#                                          # keep them clear of the REDIS_DB_OFFSET of magnum's [[pool]] env
 # reviewer = "your-reviewer-login"         # requested as the PR's reviewer once CI is green (a later milestone)
 # error_skill = "error-tracker"            # the read-only skill an investigator reads the ticket's error through
 # ghost_marker = "<what a migration names the gh-ost environments with>"   # section 8.4 of the design: the migration-safety lint

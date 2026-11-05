@@ -15029,6 +15029,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   card they bind to. The help and the README say exactly that. The decision's `Shown` is now the time the
   command read the card. It was `card.Drawn`, and the stats counted the hours the card waited as your
   time on it. Test: TestFactoryDecideSendsTheCardYouRead.
+- **A claim flushes Redis only on the Redis the copy's env names** (2026-11-05, the final review). The
+  claim's `flush_redis` step ran `redis-cli -n <db> FLUSHDB` with the daemon's environment. So a copy that
+  its `env` points at another Redis had the databases of localhost:6379 flushed, and its own stayed dirty.
+  Now the step resolves the Redis from the copy's env, the one its scripts get: `REDIS_URL` (`redis://` or
+  `rediss://`, with its host, port, user and password), else `REDIS_HOST` and `REDIS_PORT`. It flushes
+  there (`-h`, `-p`, `--tls`, `--user`, the password in `REDISCLI_AUTH`, never on the command line). This
+  is a destructive step, so it refuses first: an env that names `REDIS_DB_OFFSET` and no Redis, or a value
+  that does not parse, fails the step, which names what to set. Rejected: the daemon's default Redis for an
+  env that names none. A copy whose Redis is set in a file then has another tenant's databases flushed.
+  Rejected too: a read of the copy's `mise.toml` env (one more command per claim, for the same answer the
+  `env` gives). The README says the copies' offsets must not overlap any `REDIS_DB_OFFSET` of magnum's
+  `[[pool]] env` on the same Redis. Tests: TestTheFlushEmptiesOnlyARedisTheCopysEnvNames and
+  TestClaimFlushesTheCopysRedisDatabases.
 
 ## Learned rules
 
