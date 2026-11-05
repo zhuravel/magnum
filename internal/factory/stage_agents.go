@@ -80,12 +80,16 @@ import (
 // writes (pr-body.md) and PRTemplate the repository's PR template in the
 // copy ("" when it has none). A coding turn back from the ready card
 // carries what it is back for (rework.json): SendBack your note's file and
-// SendBackReason the key of your reason (a send back), or MergeBase the
-// base to merge (origin/<base>) and Conflicts the paths merging it
-// conflicts in (a conflict at the card); each "" (nil) in any other turn.
-// ErrorSkill is the repository's error_skill ("" = none: no prompt names
-// one), DBLockCommand the `magnum db-lock` line of the copy for the role as
-// it runs, and Port the copy's server's (0 when its env names none).
+// SendBackReason the key of your reason (a send back), MergeBase the base
+// to merge (origin/<base>) and Conflicts the paths merging it conflicts in
+// (a conflict at the card), or HeadMoved the commit the branch moved to
+// after the checks passed at HeadWas (a commit the factory did not make);
+// each "" (nil) in any other turn. RedRun is the kind's proof: its specs
+// must fail on the base (config.FactoryKind.RedRun; a kind whose proof is
+// "green" keeps them green). ErrorSkill is the repository's error_skill
+// ("" = none: no prompt names one), DBLockCommand the `magnum db-lock` line
+// of the copy for the role as it runs, and Port the copy's server's (0 when
+// its env names none).
 type PromptData struct {
 	TaskID                                                 int64
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
@@ -95,6 +99,8 @@ type PromptData struct {
 	PRBody, PRTemplate                                     string
 	SendBack, SendBackReason, MergeBase                    string
 	Conflicts                                              []string
+	HeadMoved, HeadWas                                     string
+	RedRun                                                 bool
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -1165,7 +1171,7 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		Acceptance: in(acceptanceFile), Proof: in("proof.json"), FactoryProof: in(factoryProofFile), ReviewSummary: in(reviewSummaryFile),
 		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port}
-	d.Base = config.DefaultFactoryBase
+	d.Base, d.RedRun = config.DefaultFactoryBase, e.cfg.Factory.Kinds[t.Kind].RedRun()
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok {
 		d.ErrorSkill = repo.ErrorSkill
 		d.Base = cmp.Or(repo.Base, d.Base)
@@ -1180,6 +1186,8 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 				d.SendBack, d.SendBackReason = in(rw.Note), rw.Reason
 			case reworkMergeBase:
 				d.MergeBase, d.Conflicts = rw.Base, rw.Conflicts
+			case reworkHeadMoved:
+				d.HeadMoved, d.HeadWas = short(rw.Moved), short(rw.Head)
 			}
 		}
 	}

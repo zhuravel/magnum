@@ -231,17 +231,21 @@ func sameCard(a, b ReadyCardFile) bool {
 }
 
 // The kinds of a coding turn back from the card (reworkRecord.Kind): your
-// send back, or a merge of the base after a conflict.
+// send back, a merge of the base after a conflict, or a branch that moved
+// after the coding stage's checks passed (a commit the factory did not
+// make: yours, in the copy).
 const (
 	reworkSendBack  = "send_back"
 	reworkMergeBase = "merge_base"
+	reworkHeadMoved = "head_moved"
 )
 
 // reworkRecord is rework.json: why the task is back at coding from its
 // card revision Card at Head: your send back (the key of its Reason and
-// the file of your Note, in the task's directory), or a merge of Base
-// (origin/<base>) that conflicts in Conflicts. The coding stage's first
-// prompt names it (PromptData), and its pass sets it aside.
+// the file of your Note, in the task's directory), a merge of Base
+// (origin/<base>) that conflicts in Conflicts, or a branch that moved from
+// Head, where the checks passed, to Moved. The coding stage's first prompt
+// names it (PromptData), and its pass sets it aside.
 type reworkRecord struct {
 	Kind      string    `json:"kind"`
 	Reason    string    `json:"reason,omitempty"`
@@ -249,6 +253,7 @@ type reworkRecord struct {
 	Base      string    `json:"base,omitempty"`
 	BaseSHA   string    `json:"base_sha,omitempty"`
 	Conflicts []string  `json:"conflicts,omitempty"`
+	Moved     string    `json:"moved,omitempty"`
 	Card      int       `json:"card"`
 	Head      string    `json:"head"`
 	At        time.Time `json:"at"`
@@ -431,8 +436,7 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	case bh.Problem != "":
 		return false, e.stageFailed(ctx, t, needsYou{"no ready card: " + bh.Problem})
 	case bh.Head != t.HeadSHA:
-		return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("the branch moved to %s since the factory's checks passed at %s: "+
-			"no ready card for a head they did not check", short(bh.Head), short(t.HeadSHA))})
+		return false, e.headMoved(ctx, t, bh.Head)
 	}
 	now, err := e.cardNow(ctx, t, c, bh)
 	if err != nil {
@@ -665,12 +669,30 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 func (e *Engine) mergeTheBase(ctx context.Context, t registry.Task, card ReadyCardFile, base, baseSHA string, conflicts []string) error {
 	if prev, ok := sameConflict(e.d.Layout.FactoryTaskDir(t.ID), baseSHA, conflicts); ok {
 		return needsYou{fmt.Sprintf("the same conflict with %s at %s in %s, which card %d sent the writer back to merge: "+
-			"merge it in the copy, then let the task go on", base, short(baseSHA), textx.Clip(strings.Join(conflicts, ", "), 200), prev.Card)}
+			"merge it on %s in the copy and commit it, then `magnum factory retry %d`: the factory's checks run again at the new head "+
+			"before a new card; or drop the task", base, short(baseSHA), textx.Clip(strings.Join(conflicts, ", "), 200), prev.Card, t.Branch, t.ID)}
 	}
 	rw := reworkRecord{Kind: reworkMergeBase, Base: base, BaseSHA: baseSHA, Conflicts: conflicts, Card: card.Revision, Head: t.HeadSHA,
 		At: e.now()}
 	return e.backToCoding(ctx, t, rw, liveStates, fmt.Sprintf("%s conflicts with %s in %s: the writer merges it", base, short(t.HeadSHA),
 		textx.Clip(strings.Join(conflicts, ", "), 200)))
+}
+
+// headMoved sends task t, whose branch moved to head after the coding
+// stage's checks passed at t.HeadSHA (a commit the factory did not make:
+// yours, in the copy), back through those checks at the new head, as a
+// send back without a note does: the writer's turn names the move and asks
+// for the proof again, then the proof and the precheck run at the new
+// head, a fresh local loop reviews it, the judge drafts the body again and
+// a new card is drawn. No ready card and no review is ever of a head the
+// checks did not pass.
+func (e *Engine) headMoved(ctx context.Context, t registry.Task, head string) error {
+	rw := reworkRecord{Kind: reworkHeadMoved, Head: t.HeadSHA, Moved: head, At: e.now()}
+	if card, err := ReadReadyCard(e.d.Layout, t.ID); err == nil {
+		rw.Card = card.Revision
+	}
+	return e.backToCoding(ctx, t, rw, liveStates, fmt.Sprintf("the branch moved to %s since the factory's checks passed at %s: "+
+		"they run again at the new head", short(head), short(t.HeadSHA)))
 }
 
 // writerStage is the first agents stage of task t's kind that ends on the

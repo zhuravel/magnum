@@ -3777,7 +3777,7 @@ you tells you at its next start, and your "go on" starts a fresh loop. The loop'
 lists what is left for the ready card: the P3s and simplifications, the declined findings with their risks, the
 doubts, and the reviewers a round went without. A drain or a restart in the middle of a round leaves its cycle
 open, and the round runs again in it. The stage passes only on a loop that reviewed the task's head: a new head
-(a send back's commits, the base merged after a conflict at the card) starts a fresh loop of up to `cycles` rounds.
+(a send back's commits, the base merged after a conflict at the card, a commit of yours) starts a fresh loop of up to `cycles` rounds.
 
 Before the card, the judge drafts the PR's body (`pr_body`, `factory-pr-body.md`): its prompt names
 `report.md`, `acceptance.json`, `proof.json`, the factory's proof, `review-summary.json` and the repository's PR
@@ -3794,7 +3794,12 @@ proof and the precheck run again, a fresh local loop reviews the merge, the judg
 the next card is a new revision. The coding stage passes such a turn only on a head that holds the base's
 commit the card saw: a writer that ends its turn without the merge gets one fix turn naming the base (within the
 stage's 6 prompts), then the task needs you (`the fx-writer agent did not merge origin/<base>`), and the same
-conflict at the same base a second time needs you instead of another round. The card (`ready-card.json`) holds the head, the hash of `report.md` and
+conflict at the same base a second time needs you instead of another round: merge the base on the branch in the copy
+and commit it, then `magnum factory retry <task>`, or drop the task. A branch that moved after the coding stage's
+checks passed (your commit in the copy, then a push the moved branch refuses, or a retry) goes back to the coding
+stage as a send back without a note does: the writer's turn names the move and writes `proof.json` again, the proof
+and the precheck run at the new head, a fresh local loop reviews it, and a new card is drawn there; the event log
+names the move (`back to coding: the branch moved to <new> since the factory's checks passed at <old>`). The card (`ready-card.json`) holds the head, the hash of `report.md` and
 `pr-body.md` as shown, the hash of the diff, the PR's title (`<KEY> <title>`, the title alone for a task of a
 prompt), the branch the push goes to, the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
 files the plan did not name, a guard the change rewrites that is older than 6 months with the reason the history

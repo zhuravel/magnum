@@ -418,9 +418,8 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 		return err
 	case bh.Problem != "":
 		return e.stageFailed(ctx, t, needsYou{"the local review cannot start: " + bh.Problem})
-	case t.HeadSHA != "" && bh.Head != t.HeadSHA:
-		return e.stageFailed(ctx, t, needsYou{fmt.Sprintf("the branch moved to %s since the factory's checks passed at %s: "+
-			"the local review reviews a checked head only", short(bh.Head), short(t.HeadSHA))})
+	case t.HeadSHA != "" && bh.Head != t.HeadSHA: // the local review reviews a checked head only
+		return e.headMoved(ctx, t, bh.Head)
 	}
 	lc := e.localCase(t, *w, c, bh, repo, roles, round)
 	release, ok := e.heavy(ctx, t, heavyReview)

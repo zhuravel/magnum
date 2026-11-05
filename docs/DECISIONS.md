@@ -14975,6 +14975,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   negative, and each tick then spent up to 15 seconds on a toast. That is about 6.5 hours of herdr and
   osascript both failing. `alertBackoff` caps the shift at 4, as `infraBackoff` does: 1, 2, 4, 8, then 15
   minutes. Test: TestTheToastBackoffNeverOverflows.
+- **A head that moved after coding goes back through the checks** (2026-11-05, the final review, ledger
+  334). You can commit in the copy after the coding stage's checks passed. That commit sent the task to
+  NEEDS YOU at the ready card or the local review. A retry met the same check, and a send back was refused,
+  so only a drop, a stop or a reset by hand went on. The same-conflict text also told you to merge in the
+  copy, which moves the head into that dead end. Now `headMoved` writes `rework.json` of kind
+  `head_moved`, with the old head and the new one. It moves the task back to its coding stage, as a send
+  back without a note does. An event names the move. The writer's turn names both heads and asks for
+  `proof.json` again (it keeps your commit). Then the proof and the precheck run at the new head. A fresh
+  local loop reviews it, the judge drafts the body again, and a new card is drawn. The same-conflict text
+  now names that way: merge the base on the branch in the copy and commit it, then `magnum factory retry
+  <task>`, or drop the task. Rejected: a NEEDS YOU that names a reset by hand (it throws your commit
+  away). Tests: TestAMovedHeadGoesThroughTheChecksToANewCard, TestPushIsRefusedWhenTheBranchMovedAfterTheCard,
+  TestTheSameConflictAtTheSameBaseTwiceNeedsYou and TestDropWorksAfterTheCardChanged (now stranded by a
+  missing PR body, since a moved branch no longer strands a card).
 
 ## Learned rules
 

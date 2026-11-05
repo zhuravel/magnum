@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -264,16 +265,22 @@ func TestAKeyLinkedAfterTheCardChangesNothingThePushPublishes(t *testing.T) {
 	}
 }
 
-// A drop is never bound to the card: after the branch moved and the card
+// A drop is never bound to the card: after the PR body went and the card
 // could not be drawn again, your drop still frees the copy and keeps the
-// branch.
+// branch. (A branch that moved no longer strands the card: it goes back
+// through the coding stage's checks, TestAMovedHeadGoesThroughTheChecksToANewCard.)
 func TestDropWorksAfterTheCardChanged(t *testing.T) {
 	r := newReadyRig(t)
-	task, _ := r.toCard("PR-12370")
+	task, moved := r.toCard("PR-12370")
 	c := r.card(task.ID)
-	moved := r.commit("a commit after the card", map[string]string{"app/notes.rb": "class Note; end\n"})
+	if err := os.Remove(filepath.Join(r.layout.FactoryTaskDir(task.ID), prBodyFile)); err != nil {
+		t.Fatal(err)
+	}
 	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestFailed {
 		t.Fatalf("push request %s: %q, want it refused", q.State, q.Result)
+	}
+	if q := r.retry(task.ID); q.State != registry.RequestDone { // the card is drawn again, and cannot be
+		t.Fatalf("retry %s: %q", q.State, q.Result)
 	}
 	r.run(3, nil)
 	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || strings.HasPrefix(got.WaitsWhat, readyWait) {

@@ -469,11 +469,30 @@ func TestTheSameConflictAtTheSameBaseTwiceNeedsYou(t *testing.T) {
 	if len(r.rt.promptsTo("fx-writer")) != 1 {
 		t.Fatalf("the writer got %d prompts, want no merge turn", len(r.rt.promptsTo("fx-writer")))
 	}
+	// The wait names the way that goes on: your merge, committed in the
+	// copy, then a retry, which takes the new head through the checks.
+	if !strings.Contains(got.WaitsWhat, "commit it") || !strings.Contains(got.WaitsWhat, "magnum factory retry") ||
+		!strings.Contains(got.WaitsWhat, "the factory's checks run again at the new head") || strings.Contains(got.WaitsWhat, "let the task go on") {
+		t.Fatalf("the same conflict's wait %q, want your merge, a retry and the checks at the new head named", got.WaitsWhat)
+	}
+	r.commit("Merge origin/master by hand", map[string]string{"app/credit.rb": creditRB + "# merged by hand\n"})
+	if q := r.retry(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("retry %s: %q", q.State, q.Result)
+	}
+	r.run(2, nil)
+	if got := r.reload(task.ID); got.Stage != "coding" || got.State != registry.TaskActive {
+		t.Fatalf("after your merge and your retry the task is %s at %s waiting %q, want active at coding", got.State, got.Stage, got.WaitsWhat)
+	}
+	if rw, ok := readRework(r.layout.FactoryTaskDir(task.ID)); !ok || rw.Kind != reworkHeadMoved {
+		t.Fatalf("rework.json %+v (%v), want the moved head", rw, ok)
+	}
 }
 
 // Review Focus 3: the branch moved after the card (a commit in the copy),
 // and your push is refused, "the branch changed after you read it": nothing
-// is pushed, no PR opened, and the task needs you naming the move.
+// is pushed, no PR opened, and the task goes back through the coding
+// stage's checks at the new head, an event naming the move, where it waited
+// on you for a hand reset before.
 func TestPushIsRefusedWhenTheBranchMovedAfterTheCard(t *testing.T) {
 	r := newReadyRig(t)
 	task, head := r.toCard("PR-12385")
@@ -484,16 +503,57 @@ func TestPushIsRefusedWhenTheBranchMovedAfterTheCard(t *testing.T) {
 	if q.State != registry.RequestFailed || !strings.Contains(q.Result, "the branch changed after you read it") {
 		t.Fatalf("push request %s: %q, want it refused", q.State, q.Result)
 	}
-	r.run(3, nil)
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
 	got := r.reload(task.ID)
 	if r.remoteHead(task.Branch) != "" || len(r.gh.createCalls()) != 0 {
 		t.Fatal("the moved branch was pushed or its PR opened")
 	}
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, short(moved)) || !strings.Contains(got.WaitsWhat, short(head)) {
-		t.Fatalf("task %s waits %q, want you naming the move from %s to %s", got.State, got.WaitsWhat, short(head), short(moved))
+	if got.State != registry.TaskActive || got.Stage != "coding" {
+		t.Fatalf("task %s at %s waits %q, want active at coding, its checks to run at %s", got.State, got.Stage, got.WaitsWhat, short(moved))
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "ready"), func(s string) bool {
+		return strings.Contains(s, "moved to "+short(moved)) && strings.Contains(s, short(head))
+	}) {
+		t.Fatalf("ready events %q, want one naming the move from %s to %s", r.eventTexts(task.ID, "ready"), short(head), short(moved))
 	}
 	if ds, err := r.reg.Decisions(r.ctx, task.ID); err != nil || len(ds) != 0 {
 		t.Fatalf("decisions %+v (%v): a refused push records none", ds, err)
+	}
+}
+
+// A head that moved after the coding stage's checks (your commit in the
+// copy, then your push, which the moved branch refuses) goes back through
+// them, as a send back without a note does: the writer's turn names the
+// new head and asks for the proof again, the proof and the precheck run at
+// it, a fresh local loop reviews it, the judge drafts the body again and a
+// new card is drawn at the new head.
+func TestAMovedHeadGoesThroughTheChecksToANewCard(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCard("PR-12386")
+	moved := r.commit("PR-12386 a typo the operator fixed", map[string]string{
+		"app/credit.rb": strings.Replace(creditRB, "    0\n", "    10\n", 1) + "# a typo fixed by hand\n"})
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestFailed {
+		t.Fatalf("push request %s: %q, want it refused on the moved branch", q.State, q.Result)
+	}
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.Contains(ps[1].Text, short(moved)) || !strings.Contains(ps[1].Text, short(head)) {
+		t.Fatalf("the writer's prompts %+v, want a turn naming the move from %s to %s", ps, short(head), short(moved))
+	}
+	if rw, ok := readRework(r.layout.FactoryTaskDir(task.ID)); !ok || rw.Kind != reworkHeadMoved || rw.Head != head || rw.Moved != moved {
+		t.Fatalf("rework.json %+v (%v), want the move from %s to %s", rw, ok, short(head), short(moved))
+	}
+	r.clock.Add(time.Minute)
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.toBody(task)
+
+	if calls := r.rv.calls(); len(calls) != 2 || calls[1].HeadSHA != moved || calls[1].Round != 1 {
+		t.Fatalf("local rounds %+v, want a fresh round 1 at %s", calls, short(moved))
+	}
+	got := r.reload(task.ID)
+	if c := r.card(task.ID); c.Revision != 2 || c.Head != moved || got.HeadSHA != moved || got.State != registry.TaskNeedsYou {
+		t.Fatalf("card %+v, task %s at %s waits %q; want card 2 at %s", c, got.State, short(got.HeadSHA), got.WaitsWhat, short(moved))
 	}
 }
 
