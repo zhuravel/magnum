@@ -359,9 +359,10 @@ func cmpText(s, fallback string) string {
 }
 
 // blocked is a session herdr shows blocked on a dialog the manager left
-// alone: Codex's hooks review holds the task (EventHooksTrust), a limit on
-// screen pauses as on an end, anything else is EventBlocked with the
-// dialog's line. Once per blocked spell; no key is ever sent.
+// alone: Codex's hooks review holds the task (EventHooksTrust), a usage
+// limit, a login or an overload on screen pauses as on an end (Review Focus
+// 5), anything else is EventBlocked with the dialog's line. Once per
+// blocked spell; no key is ever sent.
 func (r *Runtime) blocked(ctx context.Context, o agents.Observation) []Event {
 	if !r.first(fmt.Sprintf("blocked:%d", o.Session.ID)) {
 		return nil
@@ -381,11 +382,9 @@ func (r *Runtime) blocked(ctx context.Context, o agents.Observation) []Event {
 		return []Event{ev}
 	}
 	switch h := r.classify(kind, screen); h.Kind {
-	case agents.HealthUsageLimit, agents.HealthLoginRequired:
-		who := pauseUsage
-		if h.Kind == agents.HealthLoginRequired {
-			who = pauseLogin
-		}
+	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded: // a pause, as on a completed run
+		who := map[agents.HealthKind]string{agents.HealthUsageLimit: pauseUsage, agents.HealthLoginRequired: pauseLogin,
+			agents.HealthOverloaded: pauseOverload}[h.Kind]
 		var until time.Time
 		if h.ResetAt != nil {
 			until = *h.ResetAt

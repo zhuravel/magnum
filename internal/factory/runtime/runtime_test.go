@@ -229,6 +229,29 @@ func TestObserveReportsAnUnknownDialogAsBlocked(t *testing.T) {
 	}
 }
 
+// Review Focus 5: an overload screen on a pane herdr shows as blocked
+// pauses the kind as a usage limit does (the stage waits with the reason,
+// at no cost), never "a dialog the factory does not answer", which would
+// send the task to you as an unknown prompt.
+func TestAnOverloadOnABlockedScreenPauses(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.send("fx-repro", "reproduce the bug")
+	g.observe()
+
+	g.h.screen(g.agent("fx-repro"), `  ⎿  API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`+"\n")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusBlocked)
+	evs := g.observeN(3)
+
+	if b := only(evs, EventBlocked); len(b) != 0 {
+		t.Fatalf("the overload came as a dialog: %+v", b)
+	}
+	paused := only(evs, EventPaused)
+	if len(paused) != 1 || !strings.Contains(paused[0].Reason, "overload") {
+		t.Fatalf("events %+v, want one pause naming the overload", evs)
+	}
+}
+
 func TestACodexHooksReviewHoldsTheTaskWithItsReason(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-cause")

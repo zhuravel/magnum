@@ -15048,6 +15048,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   operator's account-risk rule. Now `RunsAs` asks only for a Codex role, and a failed read keeps Codex off
   the task for that call. The role runs on its fallback, or does not run. The next call reads again, so
   the fallback is not kept for good. Test: TestCodexNeverFailsClosedWhenTheRegistryCannotBeRead.
+- **An overload on a blocked screen pauses** (2026-11-05, the final review, Review Focus 5). A run that
+  ended on an overload screen paused its kind, but the same screen on a pane herdr showed as blocked fell
+  to `EventBlocked`. The task then went to NEEDS YOU with "a dialog the factory does not answer". Now
+  `blocked` pauses on `HealthOverloaded` as it does on a usage limit and a login, so the stage waits with
+  the reason at no cost. Test: TestAnOverloadOnABlockedScreenPauses.
 
 ## Learned rules
 
