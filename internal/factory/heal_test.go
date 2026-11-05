@@ -487,12 +487,16 @@ func TestHerdrDownOpensTheSessionAtMostTwiceAnHour(t *testing.T) {
 	}
 }
 
+// SIGTERM drains within launchd's ExitTimeOut: the task in progress ends
+// its pass, but it starts no launch and no effect, the runtime's launches
+// that wait for the stagger are cut (BeginDrain), and the tasks after it
+// are not advanced on the drain's tick (the next daemon does them).
 func TestSIGTERMDrainsWithoutNewLaunches(t *testing.T) {
 	h := newHarness(t)
 	first := h.task("PR-12319", registry.TaskActive, "investigate")
 	second := h.task("PR-12320", registry.TaskActive, "investigate")
 	sigs := h.captureSignals()
-	var ticks atomic.Int32
+	var ticks, later atomic.Int32
 	var launchErr, effectErr error
 	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
 		switch t.ID {
@@ -503,9 +507,10 @@ func TestSIGTERMDrainsWithoutNewLaunches(t *testing.T) {
 			for !h.e.draining.Load() && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-		case second.ID:
 			launchErr = h.e.launch(ctx, t, registry.Attempt{}, Copy{}, nil)
 			_, _, effectErr = h.e.beginEffect(ctx, "publish:2:abc", "publish", t.ID)
+		case second.ID:
+			later.Add(1)
 		}
 		return false, nil
 	})
@@ -532,6 +537,34 @@ func TestSIGTERMDrainsWithoutNewLaunches(t *testing.T) {
 	}
 	if _, err := h.reg.EffectByKey(h.ctx, "publish:2:abc"); !errors.Is(err, registry.ErrNotFound) {
 		t.Fatalf("the drain began an effect: %v", err)
+	}
+	if n := later.Load(); n != 0 {
+		t.Fatalf("the drain's tick advanced the task after the one in progress %d times, want none", n)
+	}
+	if !h.rt.isDrained() {
+		t.Fatal("the drain did not cut the runtime's staggered launches")
+	}
+}
+
+// The drain's wait for the work off the loop ends within launchd's
+// ExitTimeOut, counted from the signal, with room for the releases after
+// it; a drain with no signal (a test's context) waits drainWait.
+func TestTheDrainsWaitEndsBeforeLaunchdKills(t *testing.T) {
+	if drainWait >= drainBudget {
+		t.Fatalf("drainWait %s is not under the drain's budget %s", drainWait, drainBudget)
+	}
+	for _, c := range []struct {
+		since time.Duration
+		want  time.Duration
+	}{
+		{0, drainWait},
+		{drainBudget - drainWait, drainWait},
+		{drainBudget - 5*time.Second, 5 * time.Second},
+		{drainBudget + time.Minute, 0},
+	} {
+		if got := drainLeft(c.since); got != c.want {
+			t.Errorf("drainLeft(%s) = %s, want %s", c.since, got, c.want)
+		}
 	}
 }
 

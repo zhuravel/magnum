@@ -186,7 +186,7 @@ func (e *Engine) startFoundWaiting(ctx context.Context, p StartPayload, repo con
 	if err != nil {
 		return registry.Task{}, err
 	}
-	t, err := e.reg.CreateTask(ctx, registry.Task{Prompt: in.Prompt, Kind: kind, Repo: repo.Repo, Title: promptTitle(in.Prompt),
+	t, err := e.reg.CreateTask(ctx, registry.Task{RequestID: p.request, Prompt: in.Prompt, Kind: kind, Repo: repo.Repo, Title: promptTitle(in.Prompt),
 		State: registry.TaskWaiting, Branch: branch, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
 	if err != nil {
 		return registry.Task{}, err

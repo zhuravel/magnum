@@ -41,8 +41,10 @@ type fakeRuntime struct {
 	launchErr    error
 	observePanic any
 	watched      int
-	// letGo records the LetGo calls, "<task key>/<role>".
-	letGo []string
+	// letGo records the LetGo calls, "<task key>/<role>"; drained is
+	// whether BeginDrain was called.
+	letGo   []string
+	drained bool
 
 	// The agents stage's side: cfg and reg are the harness's (RunsAs reads
 	// the Codex fallbacks, Send writes the ledger as the runtime does);
@@ -577,6 +579,18 @@ func (f *fakeRuntime) Shift(gap time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shifts = append(f.shifts, gap)
+}
+
+func (f *fakeRuntime) BeginDrain() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.drained = true
+}
+
+func (f *fakeRuntime) isDrained() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.drained
 }
 
 func (f *fakeRuntime) launched() []int64 {

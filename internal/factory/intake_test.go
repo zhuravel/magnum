@@ -902,6 +902,41 @@ func TestAStartRequestAnswersWithTheTask(t *testing.T) {
 	}
 }
 
+// A start the daemon handled and was killed before it completed the
+// request (launchd's SIGKILL after a drain overran) is handled again after
+// the restart, and makes no second task: the task records the request that
+// made it, and the replay answers with that task. A keyless start, which no
+// key's index guards, is the case; a key's start is answered the same way.
+func TestAStartReplayedAfterAKillMakesNoSecondTask(t *testing.T) {
+	r := newIntakeRig(t)
+	for _, text := range []string{"The weekly digest is off for the advocates", "PR-12346 the refund path"} {
+		p := StartPayload{Text: text, Repo: "talkable/talkable"}
+		id, err := r.reg.EnqueueRequest(r.ctx, ReqStart, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := len(r.tasks())
+		if _, err := r.e.startRequest(r.ctx, id, p); err != nil { // handled; the kill came before the request completed
+			t.Fatal(err)
+		}
+		r.e.waitBackground()
+		made := r.tasks()[before]
+		r.crash()
+		r.tick()
+		r.e.waitBackground()
+		if n := len(r.tasks()) - before; n != 1 {
+			t.Fatalf("%q: the start replayed after the kill made %d tasks, want 1", text, n)
+		}
+		q, err := r.reg.RequestByID(r.ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q.State != registry.RequestDone || !strings.Contains(q.Result, fmt.Sprintf("as task %d", made.ID)) {
+			t.Fatalf("%q: the replayed request is %s: %q, want done with task %d", text, q.State, q.Result, made.ID)
+		}
+	}
+}
+
 // The new-task screen's preview: the ticket the daemon read, the kind and
 // why, the branch and when the task would start; an unknown key says so.
 func TestThePreviewReadsTheTicketAndNamesKindBranchAndStart(t *testing.T) {

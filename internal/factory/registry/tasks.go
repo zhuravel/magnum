@@ -77,7 +77,11 @@ type Task struct {
 	// ready card names it: Branch's own name, or <login>-<KEY>-<slug> for a
 	// task whose key was linked after its branch was made (Branch keeps its
 	// name).
-	RemoteBranch     string
+	RemoteBranch string
+	// RequestID is the start request that made the task (requests.id), 0
+	// for one no request made: a replay of that request finds the task
+	// (TaskByRequest) and makes no second one.
+	RequestID        int64
 	Created, Updated time.Time
 }
 
@@ -117,13 +121,13 @@ var taskSettable = map[string]bool{
 	"codex_never": true, "remote_branch": true,
 }
 
-const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, question_rev, codex_never, remote_branch, created_at, updated_at"
+const taskColumns = "id, jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, question_rev, codex_never, remote_branch, request_id, created_at, updated_at"
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	err := sc.Scan(&t.ID, &t.JiraKey, &t.Prompt, &t.Guidance, &t.Kind, &t.Repo, &t.Title, &t.State, &t.Stage,
 		&t.Branch, &t.Copy, &t.HeadSHA, &t.WaitsWho, &t.WaitsWhat, &t.Attempt, &t.PRNumber, &t.QuestionRev, &t.CodexNever,
-		&t.RemoteBranch, timeCol{&t.Created}, timeCol{&t.Updated})
+		&t.RemoteBranch, &t.RequestID, timeCol{&t.Created}, timeCol{&t.Updated})
 	return t, err
 }
 
@@ -157,10 +161,10 @@ func (r *Registry) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		now := r.now()
 		stamp := store.FormatTime(now)
-		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, codex_never, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (jira_key, prompt, guidance, kind, repo, title, state, stage, branch, copy, head_sha, waits_who, waits_what, attempt, pr_number, codex_never, request_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.JiraKey, t.Prompt, t.Guidance, t.Kind, t.Repo, t.Title, t.State, t.Stage, t.Branch, t.Copy, t.HeadSHA,
-			t.WaitsWho, t.WaitsWhat, t.Attempt, t.PRNumber, boolInt(t.CodexNever), stamp, stamp)
+			t.WaitsWho, t.WaitsWhat, t.Attempt, t.PRNumber, boolInt(t.CodexNever), max(t.RequestID, 0), stamp, stamp)
 		if err != nil {
 			return fmt.Errorf("create task: %w", mapErr(err))
 		}
@@ -288,6 +292,19 @@ func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error) {
 	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))
 	if err != nil {
 		return Task{}, notFound(err, "task", id)
+	}
+	return t, nil
+}
+
+// TaskByRequest returns the task start request id made (Task.RequestID);
+// none, and an id under 1, are ErrNotFound.
+func (r *Registry) TaskByRequest(ctx context.Context, id int64) (Task, error) {
+	if id < 1 {
+		return Task{}, notFound(sql.ErrNoRows, "task of request", id)
+	}
+	t, err := scanTask(r.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE request_id = ?", id))
+	if err != nil {
+		return Task{}, notFound(err, "task of request", id)
 	}
 	return t, nil
 }

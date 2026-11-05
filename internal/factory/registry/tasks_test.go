@@ -28,6 +28,34 @@ func createTask(t *testing.T, r *registry.Registry, key string) registry.Task {
 	return got
 }
 
+// A start request makes at most one task: the task records it, a second
+// task of the same request is a conflict, and TaskByRequest finds the one
+// it made; a task no request made records none, and many of them coexist.
+func TestAStartRequestMakesAtMostOneTask(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	made, err := r.CreateTask(t.Context(), registry.Task{Prompt: "The weekly digest is off", Kind: "bug", RequestID: 41})
+	if err != nil || made.RequestID != 41 {
+		t.Fatalf("CreateTask = %+v, %v; want the request recorded", made, err)
+	}
+	if _, err := r.CreateTask(t.Context(), registry.Task{Prompt: "The weekly digest is off", Kind: "bug", RequestID: 41}); !errors.Is(err, registry.ErrConflict) {
+		t.Fatalf("a second task of request 41 = %v, want ErrConflict", err)
+	}
+	if got, err := r.TaskByRequest(t.Context(), 41); err != nil || got.ID != made.ID {
+		t.Fatalf("TaskByRequest(41) = %+v, %v; want task %d", got, err, made.ID)
+	}
+	for range 2 {
+		if _, err := r.CreateTask(t.Context(), registry.Task{Prompt: "a prompt", Kind: "bug"}); err != nil {
+			t.Fatalf("a task of no request: %v", err)
+		}
+	}
+	for _, id := range []int64{0, 42} {
+		if _, err := r.TaskByRequest(t.Context(), id); !errors.Is(err, registry.ErrNotFound) {
+			t.Errorf("TaskByRequest(%d) = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
 func TestCreateTaskRefusesASecondActiveTaskForOneKey(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)

@@ -68,6 +68,9 @@ type StartPayload struct {
 	Text, Kind, Repo string
 	Surface          string `json:",omitempty"`
 	WordsOnly        bool   `json:",omitempty"`
+	// request is the id of the start request the daemon answers (never in
+	// the payload: startRequest sets it), which the task it makes records.
+	request int64
 }
 
 // PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
@@ -447,7 +450,7 @@ func (e *Engine) startTicketed(ctx context.Context, p StartPayload, repo config.
 	if err != nil {
 		return registry.Task{}, err
 	}
-	t, err := e.reg.CreateTask(ctx, registry.Task{JiraKey: tk.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
+	t, err := e.reg.CreateTask(ctx, registry.Task{RequestID: p.request, JiraKey: tk.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
 		Title: cmp.Or(tk.Summary, tk.Key), State: state, Branch: branch, WaitsWho: who, WaitsWhat: what})
 	if err != nil {
 		return e.heldBy(ctx, tk.Key, err)
@@ -491,7 +494,7 @@ func (e *Engine) startWaiting(ctx context.Context, p StartPayload, repo config.F
 	if err != nil {
 		return registry.Task{}, err
 	}
-	t, err := e.reg.CreateTask(ctx, registry.Task{JiraKey: in.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
+	t, err := e.reg.CreateTask(ctx, registry.Task{RequestID: p.request, JiraKey: in.Key, Guidance: in.Guidance, Kind: kind, Repo: repo.Repo,
 		Title: in.Key, State: registry.TaskWaiting, Branch: branch, WaitsWho: waitJira, WaitsWhat: jiraWaitWhat})
 	if err != nil {
 		return e.heldBy(ctx, in.Key, err)
@@ -656,7 +659,7 @@ func (e *Engine) startPrompt(ctx context.Context, p StartPayload, repo config.Fa
 	if err != nil {
 		return registry.Task{}, err
 	}
-	t, err := e.reg.CreateTask(ctx, registry.Task{Prompt: in.Prompt, Kind: kind, Repo: repo.Repo, Title: promptTitle(in.Prompt),
+	t, err := e.reg.CreateTask(ctx, registry.Task{RequestID: p.request, Prompt: in.Prompt, Kind: kind, Repo: repo.Repo, Title: promptTitle(in.Prompt),
 		State: state, Branch: branch, WaitsWho: who, WaitsWhat: what})
 	if err != nil {
 		return registry.Task{}, err

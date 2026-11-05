@@ -14939,6 +14939,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   gitx client (and the copies' slot code it serves) runs on `cLocale`, which sets `LC_ALL=C` on each
   command beside its own environment. Only `internal/cli/factory_daemon.go` changes: magnum's own git keeps
   its environment, and `gitEnv` is untouched. Test: TestTheFactorysGitRunsInTheCLocale.
+- **A start request makes one task, and the drain ends before launchd kills** (2026-11-05, the final
+  review). A start ran its handler in one transaction and completed its request in a second one. A kill
+  between the two left the request pending, and the restart made a second task of a prompt. If a drain
+  runs past launchd's 45-second `ExitTimeOut`, launchd sends that kill. A key's start was safe only by its
+  index. Migration 0005 adds `tasks.request_id`. When it is set, it is unique. The task's own insert writes
+  it. The daemon can handle a request again after a restart. Then it answers with the task it made ("made
+  <task> as task N before the factory daemon restarted") and makes no task. Rejected: one transaction for
+  the task and the request's completion, because the answer is known only after the data files are
+  written. The drain now fits the timeout. The tick in progress advances no task after the one it is on,
+  and the next daemon does them. It delivers no alert, because `alerts.json` lets the next daemon deliver
+  it. A launch that waits for the 20-second stagger ends at once (`BeginDrain`, `ErrDraining`), as a held
+  launch at no cost. The wait for the work off the loop is `drainWait` (30 s), cut to what is left of
+  `drainBudget` since the signal. `drainBudget` is `ExitTimeOut` less 10 s for the releases after the
+  wait. Kept: `ExitTimeOut`, because magnum's plist uses it too. Kept: the 5 seconds of retries of the
+  Codex-never mark, because failing closed matters more than the time. An effect or a fetch already under
+  way still runs to its own timeout. Tests: TestAStartReplayedAfterAKillMakesNoSecondTask,
+  TestAStartRequestMakesAtMostOneTask, TestSIGTERMDrainsWithoutNewLaunches,
+  TestTheDrainsWaitEndsBeforeLaunchdKills and TestADrainCutsTheStaggerAndLaunchesNothing.
 
 ## Learned rules
 

@@ -28,6 +28,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -81,8 +82,19 @@ func claimBackoff(tries int) time.Duration {
 }
 
 // drainWait bounds how long a drain waits for the work off the loop to end
-// once it is cancelled (execx kills a process group within its grace).
-const drainWait = 30 * time.Second
+// once it is cancelled (execx kills a process group within its grace), and
+// drainBudget is the drain's whole time from the signal: launchd's
+// ExitTimeOut, less the margin the releases after the wait take.
+const (
+	drainWait   = 30 * time.Second
+	drainBudget = time.Duration(launchd.ExitTimeOut)*time.Second - 10*time.Second
+)
+
+// drainLeft is how long the drain may still wait for the work off the loop,
+// since after its signal: drainWait, cut to what is left of drainBudget.
+func drainLeft(since time.Duration) time.Duration {
+	return min(drainWait, max(drainBudget-since, 0))
+}
 
 // claimCopy is how a stage gets its task's copy. The copy the task holds
 // comes at once. Otherwise the first call starts a claim off the loop
@@ -348,11 +360,13 @@ func (e *Engine) goBackground(what string, fn func(ctx context.Context)) {
 
 // stopBackground ends the work off the loop: it cancels the engine's
 // context (a claim's commands end with it), waits up to drainWait for the
-// work to end, releases the copies the claims of ended tasks reserved (as
-// the sweep does: a stop in the drain's last tick cancelled its claim and
-// left the release to a tick that never comes), and ends the begin of each
-// claim of a task at work no stage took the answer of. Run calls it as it
-// returns; a second call does nothing new.
+// work to end (after a stop signal, only what is left of drainBudget since
+// it: launchd kills the daemon ExitTimeOut after SIGTERM), releases the
+// copies the claims of ended tasks reserved (as the sweep does: a stop in
+// the drain's last tick cancelled its claim and left the release to a tick
+// that never comes), and ends the begin of each claim of a task at work no
+// stage took the answer of. Run calls it as it returns; a second call does
+// nothing new.
 func (e *Engine) stopBackground() {
 	e.bgCancel()
 	done := make(chan struct{})
@@ -360,10 +374,14 @@ func (e *Engine) stopBackground() {
 		e.bg.Wait()
 		close(done)
 	}()
+	wait := drainWait
+	if at := e.drainAt.Load(); at != 0 {
+		wait = drainLeft(time.Since(time.Unix(0, at)))
+	}
 	select {
 	case <-done:
-	case <-time.After(drainWait):
-		e.log.Warn("work off the loop did not end within the drain's wait; the daemon stops anyway", "wait", drainWait)
+	case <-time.After(wait):
+		e.log.Warn("work off the loop did not end within the drain's wait; the daemon stops anyway", "wait", wait)
 	}
 	ctx := context.Background() // the engine's is cancelled
 	if tasks, err := e.reg.Tasks(ctx); err == nil {

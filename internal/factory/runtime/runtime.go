@@ -150,6 +150,10 @@ type Runtime struct {
 
 	// launchMu makes the staggered launches take turns.
 	launchMu sync.Mutex
+	// drained closes when the daemon drains (BeginDrain): a launch that
+	// waits for the stagger then starts nothing.
+	drained   chan struct{}
+	drainOnce sync.Once
 
 	mu         sync.Mutex
 	lastStart  time.Time
@@ -278,11 +282,48 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
-		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, commands: agents.MagnumCommands(&cfg)}
+		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, commands: agents.MagnumCommands(&cfg),
+		drained: make(chan struct{})}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})
 	return r, nil
+}
+
+// ErrDraining is a launch the daemon's drain stopped while it waited for the
+// stagger (BeginDrain): no agent started.
+var ErrDraining = errors.New("factory runtime: the daemon drains: no new launch")
+
+// BeginDrain stops the launches that wait for the stagger, and any that
+// would: the daemon drains on SIGTERM, and launchd kills it ExitTimeOut
+// after, so a tick must not sleep Stagger per role meanwhile. A second call
+// does nothing.
+func (r *Runtime) BeginDrain() { r.drainOnce.Do(func() { close(r.drained) }) }
+
+// staggerSleep sleeps d between two launches, cut by the drain
+// (ErrDraining).
+func (r *Runtime) staggerSleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-r.drained:
+		return ErrDraining
+	default:
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-r.drained:
+			cancel()
+		case <-sctx.Done():
+		}
+	}()
+	err := r.s.sleep(sctx, d)
+	select {
+	case <-r.drained:
+		return ErrDraining
+	default:
+		return err
+	}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -604,7 +645,7 @@ func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, ro
 		last := r.lastStart
 		r.mu.Unlock()
 		if wait := Stagger - r.now().Sub(last); !last.IsZero() && wait > 0 {
-			if err := r.s.sleep(ctx, wait); err != nil {
+			if err := r.staggerSleep(ctx, wait); err != nil {
 				return err
 			}
 		}

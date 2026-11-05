@@ -524,6 +524,27 @@ func TestLaunchesAreStaggeredAtWarn(t *testing.T) {
 	}
 }
 
+// A drain cuts the stagger: a launch that would wait for it returns
+// ErrDraining at once and starts no agent, so a SIGTERM drain never sleeps
+// 20 seconds a role past launchd's ExitTimeOut. The launches before the
+// drain stand.
+func TestADrainCutsTheStaggerAndLaunchesNothing(t *testing.T) {
+	g := newRig(t)
+	g.setMemory(engine.MemoryWarn)
+	g.launch("fx-repro")
+	g.r.BeginDrain()
+	err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles("fx-history"))
+	if !errors.Is(err, ErrDraining) {
+		t.Fatalf("a launch during the drain = %v, want ErrDraining", err)
+	}
+	if slices.Contains(g.sleeps(), Stagger) {
+		t.Fatalf("the drained launch slept for the stagger: %v", g.sleeps())
+	}
+	if n := len(g.h.startCalls()); n != 1 {
+		t.Fatalf("%d agents started, want fx-repro's only", n)
+	}
+}
+
 func TestLaunchWaitsWhenCodexIsOverItsSoftCap(t *testing.T) {
 	g := newRig(t)
 	g.setUsage(usage.Snapshot{Window: usage.Window{UsedPercent: 96, WindowMinutes: 300, ResetsAt: t0.Add(7 * time.Hour)}})

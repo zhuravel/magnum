@@ -148,7 +148,7 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 	case ReqLetGo:
 		respond(e, ctx, q, e.letGo)
 	case ReqStart:
-		respond(e, ctx, q, e.startRequest)
+		respond(e, ctx, q, func(ctx context.Context, p StartPayload) (string, error) { return e.startRequest(ctx, q.ID, p) })
 	case ReqPreview:
 		respond(e, ctx, q, e.previewRequest)
 	case ReqAnswer:
@@ -310,8 +310,17 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 // startRequest answers a ReqStart (start): the task it made, or the task
 // that holds the key (no failure: the work runs), or why it made none. A
 // found key Jira refused for a cause of its own is named after the answer
-// (the CLI has no preview to say so).
-func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, error) {
+// (the CLI has no preview to say so). The task records request id, so a
+// request handled again after a kill that came before it completed (a
+// drain past launchd's ExitTimeOut) answers with the task it made then and
+// makes none.
+func (e *Engine) startRequest(ctx context.Context, id int64, p StartPayload) (string, error) {
+	if t, err := e.reg.TaskByRequest(ctx, id); err == nil {
+		return fmt.Sprintf("made %s as task %d before the factory daemon restarted: it is %s", startName(t), t.ID, t.State), nil
+	} else if !errors.Is(err, registry.ErrNotFound) {
+		return "", err
+	}
+	p.request = id
 	t, note, err := e.startNoted(ctx, p)
 	switch {
 	case errors.Is(err, ErrKeyRuns):
@@ -321,10 +330,7 @@ func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, erro
 	case err != nil:
 		return "", err
 	}
-	name := t.JiraKey
-	if name == "" {
-		name = strconv.Quote(t.Title)
-	}
+	name := startName(t)
 	var answer string
 	switch {
 	case t.State == registry.TaskWaiting && t.WaitsWho == waitJira:
@@ -338,6 +344,15 @@ func (e *Engine) startRequest(ctx context.Context, p StartPayload) (string, erro
 		answer += ". " + note
 	}
 	return answer, nil
+}
+
+// startName is how the answer to a start names task t: its key, or its
+// title quoted.
+func startName(t registry.Task) string {
+	if t.JiraKey != "" {
+		return t.JiraKey
+	}
+	return strconv.Quote(t.Title)
 }
 
 // previewRequest answers a ReqPreview with the JSON of the new-task form

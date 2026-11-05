@@ -82,6 +82,7 @@ type Runtime interface {
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
 	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
+	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
@@ -230,6 +231,9 @@ type Engine struct {
 
 	kick     chan struct{}
 	draining atomic.Bool
+	// drainAt is when the stop signal came (Unix nanoseconds, 0 before):
+	// the drain's budget counts from it (drainLeft).
+	drainAt atomic.Int64
 
 	// Seams: the signal subscription, and the process table that names the
 	// daemon that holds the lock.
@@ -494,9 +498,11 @@ func (e *Engine) Run(ctx context.Context) error {
 // SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
 // then a tick at once, every [factory] poll and on SIGUSR1, and an observe
 // pass every [factory] observe. A stop signal drains: no new launch or
-// effect starts, the tick in progress ends, and it returns nil, so launchd
-// (KeepAlive on a failed exit only) starts the daemon again only after a
-// crash.
+// effect starts (a launch that waits for the stagger is cut), the tick in
+// progress ends with the task it advances (the others, and the alerts,
+// wait for the next daemon), the wait for the work off the loop ends within
+// drainBudget of the signal, and it returns nil, so launchd (KeepAlive on a
+// failed exit only) starts the daemon again only after a crash.
 func (e *Engine) RunLocked(ctx context.Context) error {
 	pidFile := e.d.Layout.FactoryPid()
 	if err := fsx.WriteFileAtomic(pidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
@@ -564,7 +570,11 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 				continue
 			}
 			e.log.Info("draining: no new launch or effect; the tick in progress ends", "signal", s.String())
+			e.drainAt.Store(time.Now().UnixNano())
 			e.draining.Store(true)
+			if e.d.Runtime != nil {
+				e.d.Runtime.BeginDrain() // a launch waiting for the stagger starts nothing
+			}
 			close(stop)
 			return
 		}
@@ -627,6 +637,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 			return fmt.Errorf("factory tick: %w", err)
 		}
 		for _, t := range live(tasks) {
+			if e.draining.Load() { // the task in progress ended its pass; the next daemon advances the others
+				break
+			}
 			err := e.safely(ctx, t, func(ctx context.Context) error { return e.advance(ctx, t) })
 			switch {
 			case err == nil:
@@ -656,7 +669,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	e.hold(ctx, failures)
 	e.escalate(ctx, now)
-	e.deliverAlerts(ctx, tasks) // after every step that may have alerted
+	if !e.draining.Load() { // a toast and the sidebar may take 25 s: alerts.json lets the next daemon deliver them
+		e.deliverAlerts(ctx, tasks) // after every step that may have alerted
+	}
 	return errors.Join(errs...)
 }
 
@@ -940,6 +955,9 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 		return heldError{who: "agent", what: "this build runs no agents yet"}
 	}
 	if err := e.d.Runtime.Launch(ctx, t, a, c, roles); err != nil {
+		if errors.Is(err, runtime.ErrDraining) { // the drain cut the stagger: the next daemon launches
+			return heldError{who: holdRestart, what: drainWhat}
+		}
 		// A launch that waits on Codex's budget, the memory or a CLI's pause
 		// costs the task nothing either: it waits with the reason.
 		if w, ok := errors.AsType[*runtime.WaitError](err); ok {
