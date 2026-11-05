@@ -399,10 +399,14 @@ type NewTaskForm struct {
 	Kind, KindWhy, Branch string
 	Starts                string // "now, in talkable.factory2 (free)" or why it is queued
 	Agents, Rules         []string
-	Err                   string // a problem with the text, drawn in the JIRA row
-	Repo                  string // the repository, named in "3 talkable rules go into its prompts"
-	Title                 string // the title of a task started from words
-	Ask                   string // the y/N question being asked; empty: the key hints
+	// AgentsByKind are the agents each kind's start launches, by the kind's
+	// name: the AGENTS row and the y/N of a kind picked with tab draw that
+	// kind's (Agents are the guessed kind's). None for a kind: Agents stay.
+	AgentsByKind map[string][]string
+	Err          string // a problem with the text, drawn in the JIRA row
+	Repo         string // the repository, named in "3 talkable rules go into its prompts"
+	Title        string // the title of a task started from words
+	Ask          string // the y/N question being asked; empty: the key hints
 	// ShowRules lists the rules under their count; false: the count alone.
 	ShowRules bool
 

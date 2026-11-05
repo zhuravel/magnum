@@ -1018,6 +1018,9 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 	}
 	if m.form.kind != "" && f.Kind != "" {
 		f.Kind, f.KindWhy = m.form.kind, "your pick"
+		if agents, ok := f.AgentsByKind[f.Kind]; ok { // the agents the start launches for the pick, not the guess's
+			f.Agents = agents
+		}
 	}
 	f.Reading, f.Spinner = m.reading(), m.anim
 	f.Ask = m.bar.question()
@@ -1173,6 +1176,9 @@ func (m *factoryModel) askStart() tea.Cmd {
 	text, act := m.form.area.Value(), m.act
 	kind := cmp.Or(m.form.kind, f.Kind)
 	repo := cmp.Or(m.form.repo, f.Repo)
+	if agents, ok := f.AgentsByKind[kind]; ok { // the y/N counts the agents the start launches for the kind it names
+		f.Agents = agents
+	}
 	switch {
 	case severalRepos(f) && repo == "":
 		return m.note("cannot start: which repository? " + repoKey + " picks one")

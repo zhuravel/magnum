@@ -120,6 +120,10 @@ func (e *Engine) previewIn(ctx context.Context, text, pick string) (tui.NewTaskF
 	}
 	f.Starts = e.startsWhen(ctx)
 	f.Agents = e.firstAgents(f.Kind)
+	f.AgentsByKind = make(map[string][]string, len(e.cfg.Factory.Kinds)) // the screen's tab picks another kind
+	for kind := range e.cfg.Factory.Kinds {
+		f.AgentsByKind[kind] = e.firstAgents(kind)
+	}
 	key := in.Key
 	if tk != nil {
 		key = tk.Key

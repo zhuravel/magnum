@@ -195,3 +195,25 @@ func TestTheDraftedCommentAsksTheQuestionWordForWord(t *testing.T) {
 		t.Errorf("draft\n%q\nwant\n%q", got, want)
 	}
 }
+
+// The preview carries the agents of every kind, each the whys of its first
+// agents stage's roles, so a kind picked on the new-task screen draws the
+// agents its start launches; the guessed kind's are its Agents as before.
+func TestThePreviewNamesTheAgentsOfEveryKind(t *testing.T) {
+	r := newIntakeRig(t)
+	f, err := r.e.preview(r.ctx, "The weekly digest is off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.AgentsByKind) != len(r.e.cfg.Factory.Kinds) {
+		t.Fatalf("agents by kind = %v, want one entry per kind (%d)", f.AgentsByKind, len(r.e.cfg.Factory.Kinds))
+	}
+	for kind := range r.e.cfg.Factory.Kinds {
+		if !slices.Equal(f.AgentsByKind[kind], r.e.firstAgents(kind)) {
+			t.Errorf("agents of %s = %v, want %v", kind, f.AgentsByKind[kind], r.e.firstAgents(kind))
+		}
+	}
+	if f.Kind != "" && !slices.Equal(f.Agents, f.AgentsByKind[f.Kind]) {
+		t.Errorf("the guessed kind %s draws %v, but its entry is %v", f.Kind, f.Agents, f.AgentsByKind[f.Kind])
+	}
+}

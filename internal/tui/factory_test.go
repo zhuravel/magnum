@@ -544,6 +544,33 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 	mustContain(t, h.view(), "WAITS ON OTHERS")
 }
 
+// The kind you pick with tab draws that kind's agents, the ones the start
+// launches for it: the AGENTS row and the y/N follow the pick, never the
+// kind the daemon guessed.
+func TestThePickedKindDrawsItsOwnAgents(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.preview = func(text, repo string) (NewTaskForm, error) {
+		f, err := previewJira(text, repo)
+		f.AgentsByKind = map[string][]string{
+			"bug":     {"reproduce it", "find the cause on its own", "read the history of the code"},
+			"feature": f.Agents,
+			"chore":   {"read the changelog of what it upgrades"},
+		}
+		return f, err
+	}
+	h.press("n")
+	h.feed(typed("PR-12350 the reminder is for advocates only")...)
+	h.press("enter", "n") // enter reads the preview and asks; n is back on the form, the preview drawn
+	mustContain(t, h.view(), "AGENTS    2:")
+	h.press("tab") // feature, then chore
+	mustContain(t, h.view(), "chore", "your pick", "AGENTS    1: read the changelog of what it upgrades")
+	mustNotContain(t, h.view(), "AGENTS    2:")
+	h.press("enter")
+	mustContain(t, h.view(), "Start chore PR-12350 with 1 agent? y/N")
+	h.press("n", "tab") // chore, then bug
+	mustContain(t, h.view(), "AGENTS    3: reproduce it")
+}
+
 func TestAPRLinkInNewTaskOffersAdoptionLater(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	const link = "https://github.com/example/talkable/pull/4512"
