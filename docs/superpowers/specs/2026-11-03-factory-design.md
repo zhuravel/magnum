@@ -183,7 +183,7 @@ stages = ["start", "investigate", "questions", "coding", "tests", "local_review"
   - If Jira does not answer, a key found in the text waits like a key at the start. If Jira then does not know it, the task goes on from the operator's words. A text whose found keys never got an answer goes on from the words after the 6 hours, instead of going to NEEDS YOU.
   - The new-task preview shows the key with "found in your text". The branch, the PR title and the PR body use it, as for a key at the start.
 - The new-task box reads links too. A Jira link is its key. A GitHub PR link offers adoption (section 6.9, milestone 2). A GitHub Actions run link offers a CI task (milestone 3).
-- One key has one task, and one task has one PR. A repeated `start` for a key that has a task returns that task, or its PR, and makes no new task.
+- One key has one task, and one task has one PR. From milestone 2, a task can open a stack of two PRs, for one reason only: a migration or backfill that must run in production before dependent code deploys (docs/superpowers/specs/2026-11-06-factory-stacks-design.md). A repeated `start` for a key that has a task returns that task, or its PR, and makes no new task.
 - An overlap line shows what else touches the work: commits that name the key (`git log --all --grep=<key>`), PRs that name it (`gh pr list --search <key>`), and open PRs that change the same files. The line is advisory. It does not stop the task.
 - If Jira does not answer, the task waits as "start when Jira answers". The factory tries again after 1 minute, and waits longer after each failure, up to 30 minutes between tries. After 6 hours the task goes to NEEDS YOU. An unknown key or a missing token file makes no task, and the error names the cause.
 - A free prompt's question batch asks which Jira issue the work belongs to. A title search gives the recommended match. When nothing matches, the recommendation is "no issue".
@@ -1512,6 +1512,7 @@ The operator's improvement loop (`/magnum-improve`) covers both halves, from mil
    - one serial work queue per task, so the newest head wins and stale events drop
    - one answer per PR on the board and on the factory screen: a factory mark on the board, mocked through the real painter first
    - the hand-off key and the review-settle barrier (section 6.7)
+   - stacks: two PRs for a migration that must run first, split only on the operator's answer (docs/superpowers/specs/2026-11-06-factory-stacks-design.md)
 3. CI and the parent branch: CI watched, fixed or rerun, with the "not ours" cause, the CI-miss ledger and the watchdog (section 8.1). The parent is merged on a conflict or for a required check, and at no other time.
 4. Stagings and QA:
    - void comes first: the merge, conflicts, the deploy test and QA with a JSON verdict
