@@ -15131,6 +15131,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   minutes then sent each task to NEEDS YOU with an alert. Two tasks that met it also started an infrastructure
   hold through the same-failure-on-two-tasks rule. The herdr hold covers herdr, as before. The next tick's
   herdr check finds the outage and holds every stage. Test: TestAHerdrErrorInsideAStageCountsNoFailure.
+- **The baseline reads only your interactive sessions and ties a session to its ticket by its branch**
+  (2026-11-05). A dry run of `magnum factory baseline` on the operator's transcripts found 20 tickets from 26
+  sessions, though 130 of the 505 transcripts ran on a branch that names a ticket. It counted sessions nobody
+  typed in, and `Classify` got 66% of the labelled messages right. A session whose path and messages name no
+  key now takes the first key its git branches name (a Claude entry's `gitBranch`, a Codex rollout's
+  `session_meta` `git.branch`), read with the same key function; a key in the path or the messages still
+  wins. `ReadSessions` leaves out, before it reads their messages, a headless Claude Code run (an
+  `entrypoint` other than `cli`: `claude -p`, the SDK), a subagent's transcript (under `subagents/`), a Codex
+  session Claude Code started (originator `Claude Code`), `codex exec` (originator `codex_exec` or source
+  `exec`), a Codex subagent (a source object naming one), and a session that started in magnum's data or state
+  directory, a `[[pool]]` slot of any number, a per-PR worktree (`slots.IsPRWorktree`) or a `[[factory.repo]]`
+  copy, or below one: the CLI builds that predicate from the layout and the config. The summary counts every
+  skipped transcript by its reason (`stats.Skipped`). Ruling: a go-ahead starts a step ("go ahead", "go
+  implement", "implement", "proceed", "continue", "next step", "apply", "fix it", "do it", "build it", "build
+  now", a bare "go", "test the api", "rerun the tests", "resolve conflicts", "submit the review"),
+  and "yes", "ok", "sounds good" and "confirm" alone stay approvals. A correction says the agent was wrong or
+  must do it otherwise: "make sure ...", "you do that", "no need to/for ...", "the summary was not posted" (but
+  not in a clause of purpose, "so that it is not visible"), "I don't see you ...", "I'm not forcing you",
+  "instead", "I said", "still shows", "I still have", "your fix breaks", "looks too big", "shorter". "should
+  be" is no correction any more: it is how a request says what a thing should be. Access gains "you have the
+  ... api key", a secret named by its variable (`POINTS_API_KEY`), secrets and env vars set, permissions
+  added, and connecting or ssh-ing to a server. On the operator's 100 labelled messages the classifier now
+  gets 94% (66% before), and 89% on a second 100 drawn for tuning (72% before). Rejected: a directory filtered
+  by hand (the code must filter it), and phrases that match one message. Tests:
+  TestReadSessionsTiesASessionToTheTicketItsBranchNames, TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn,
+  TestClaudeSessionFactsSayHowWhereAndOnWhichBranches, TestCodexSessionFactsReadTheSessionMeta,
+  TestIsPRWorktreeKnowsWhatPRWorktreePathNames, TestBaselineKnowsWhereMagnumStartsSessions,
+  TestFactoryBaselineNamesWhyItSkippedEachTranscript and TestClassifyKnowsTheEverydayStepStartsAndCorrections.
 
 ## Learned rules
 
