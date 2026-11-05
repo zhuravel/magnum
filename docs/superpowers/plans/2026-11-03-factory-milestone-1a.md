@@ -885,6 +885,30 @@ The operator's decision (spec 9 and 13.1): the refinements of revision 1 go into
 - [ ] **Step 4: Run** and see them pass.
 - [ ] **Step 5: Commit.** `git commit -m "The factory screen reads the factory's registries: groups, blockers, the FLAGS line, the leftovers, what each task frees, and a digest after you were away"`
 
+### Task 19b: Alerts, delivered by the daemon
+
+Spec 9.F asks for a magnum toast and the herdr sidebar token when a task moves into NEEDS YOU. Task 7 writes the alert events, but no earlier task delivers them, and the screen cannot, because it may be closed. The daemon does.
+
+**Files:**
+- Create: `internal/factory/alerts.go`
+- Modify: `internal/factory/engine.go` (the loop runs the delivery), `internal/factory/requests.go` (the focus request)
+- Test: `internal/factory/alerts_test.go`
+
+**Interfaces:**
+- Produces:
+  - An alert event of Task 7 becomes one toast through magnum's `notify` and the same short text through `notify.Sidebar`. Alerts within 2 minutes merge into one toast, in spec 9.F's words: `factory: 3 need you · PR-12345 questions · #4512 reply · PR-12360 ready to push`.
+  - No toast while the factory screen reports focus (Task 19's focus request, held only while the screen's process lives) or while herdr shows the operator in a factory pane. A held alert fires 2 minutes after the operator leaves, and only if its task still needs the operator.
+  - magnum's quiet hours hold toasts too. A held alert is never lost: it fires when the hold ends, merged with the rest.
+  - Access needed alerts at once, once more after 5 minutes, and at "2m left" (spec 9.F).
+  - Each delivery and each hold writes an event, so `!` shows every alert with its time.
+- Consumes: Task 7 (the alert events), Task 19 (the focus request and its state), magnum's `notify` and quiet hours.
+
+- [ ] **Step 1: Write the failing tests:** `TestAnAlertBecomesAToastAndASidebarToken`, `TestAlertsWithinTwoMinutesMergeIntoOneToast`, `TestNoToastWhileTheScreenHasFocus`, `TestAFocusOfAScreenThatEndedHoldsNothing`, `TestNoToastWhileTheOperatorIsInAFactoryPane`, `TestAHeldAlertFiresTwoMinutesAfterYouLeave`, `TestAHeldAlertOfATaskThatNoLongerNeedsYouNeverFires`, `TestQuietHoursHoldToastsAndLoseNone`, `TestAccessNeededAlertsThreeTimes`, `TestADaemonRestartDeliversEachAlertOnce`.
+- [ ] **Step 2: Run and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/`.
+- [ ] **Step 5: Commit.** `git commit -m "The factory daemon delivers its alerts: one toast and the sidebar token per move into NEEDS YOU, merged within 2 minutes, held while you look at the factory and in quiet hours"`
+
 ## Phase E: landing
 
 ### Task 20: Docs, decisions and the gate
