@@ -828,7 +828,7 @@ func TestAnUnknownDeliveryGoesToYouWithOneAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.clock.Add(runtime.UnknownAfter)
-	why := "a prompt to fx-repro may or may not have arrived: look at its pane"
+	why := runtime.UnknownReason(task.ID, "fx-repro")
 	h.rt.events = []runtime.Event{{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: why}}
 
 	h.e.observe(h.ctx)

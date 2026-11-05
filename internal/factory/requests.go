@@ -373,6 +373,9 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if n == 0 { // a role mistyped, or a read settled the prompt since you looked
+		return "", fmt.Errorf("%s has no prompt of unknown delivery to %s: there is nothing to let go", TaskKey(t), p.Role)
+	}
 	delete(e.agentRuns, t.ID)
 	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
 		Stage: t.Stage, Role: p.Role}); err != nil {

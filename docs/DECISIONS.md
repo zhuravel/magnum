@@ -14909,6 +14909,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADaemonStartWithHerdrRestingOnAFactoryPaneDelaysNoToast,
   TestAHeldAlertFiresWhileItsTaskStillWaitsOnYouForFewerQuestions, TestQuietHoursHoldToastsAndLoseNone,
   TestADaemonRestartDeliversEachAlertOnce and TestARateLimitedToastReachesOsascriptWithinItsBound.
+- **`magnum factory let-go` sends the let-go the daemon's wait asks for** (2026-11-05, the final review). A
+  prompt whose delivery stays unknown sends its task to NEEDS YOU after 15 minutes, and a retry keeps the
+  role held by design, so without a sender the only way on was a stop. `magnum factory let-go <task> --role
+  <role>` posts `let_go` as `retry` posts its request (Surface `cli`, the daemon's answer printed); the wait
+  names the command with the task's id (`a prompt to <role> may or may not have arrived: look at its pane,
+  then let it go with magnum factory let-go <task> --role <role>`), and an older build's wait without it is
+  still read as that wait. A let-go that finds no prompt of unknown delivery for the role (a typo, or a read
+  settled it since you looked) is refused, "there is nothing to let go", where it answered "let 0 prompt(s)
+  go". The screen's key for it still waits for an approved frame (ruling 472). Tests:
+  TestFactoryLetGoSendsYourLetGo, TestALetGoFromTheCLIGoesOnAndResendsNothing and
+  TestUnknownReasonNamesEveryRole.
 
 ## Learned rules
 

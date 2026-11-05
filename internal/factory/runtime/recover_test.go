@@ -344,15 +344,18 @@ func TestAPromptOfUnknownDeliveryStaysUnsentAcrossRestarts(t *testing.T) {
 	}
 }
 
-// The wait on you names every prompt of unknown delivery, and tells one
-// from several.
+// The wait on you names every prompt of unknown delivery, tells one from
+// several and names the command that lets one go; the wait an older build
+// wrote, with no command, is still read as one.
 func TestUnknownReasonNamesEveryRole(t *testing.T) {
-	one, two := UnknownReason("fx-repro"), UnknownReason("fx-repro", "fx-cause")
-	if one != "a prompt to fx-repro may or may not have arrived: look at its pane" ||
-		two != "prompts to fx-repro and fx-cause may or may not have arrived: look at their panes" {
+	one, two := UnknownReason(7, "fx-repro"), UnknownReason(7, "fx-repro", "fx-cause")
+	if one != "a prompt to fx-repro may or may not have arrived: look at its pane, then let it go with `magnum factory let-go 7 --role fx-repro`" ||
+		two != "prompts to fx-repro and fx-cause may or may not have arrived: look at their panes, then let each go with "+
+			"`magnum factory let-go 7 --role <role>`" {
 		t.Fatalf("UnknownReason = %q / %q", one, two)
 	}
-	for _, s := range []string{one, two, UnknownReason("a", "b", "c")} {
+	for _, s := range []string{one, two, UnknownReason(7, "a", "b", "c"), "a prompt to fx-repro may or may not have arrived: look at its pane",
+		"prompts to fx-repro and fx-cause may or may not have arrived: look at their panes"} {
 		if !IsUnknownReason(s) {
 			t.Errorf("IsUnknownReason(%q) = false", s)
 		}

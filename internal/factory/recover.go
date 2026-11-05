@@ -310,7 +310,8 @@ func (e *Engine) reconcileDeliveries(ctx context.Context) {
 		if roles := unknown[id]; len(roles) > 0 {
 			who := strings.Join(roles, ", ")
 			e.event(ctx, id, "prompt", registry.PhaseInfo, "the delivery of a prompt to "+who+" is unknown: nothing is sent to "+who+
-				" until a read of its transcript proves it never arrived, or you let it go")
+				" until a read of its transcript proves it never arrived, or you let it go "+
+				fmt.Sprintf("(`magnum factory let-go %d --role <role>`)", id))
 			if isLive(t) {
 				e.waitOn(ctx, t, waitAgent, unknownWait(roles))
 				if t, err = e.reg.TaskByID(ctx, id); err != nil {
@@ -402,7 +403,7 @@ func (e *Engine) settleUnknown(ctx context.Context, t registry.Task, because str
 	left := e.unknownToYou(es)
 	switch {
 	case live && len(left) > 0:
-		e.toOperator(ctx, t, runtime.UnknownReason(left...), because)
+		e.toOperator(ctx, t, runtime.UnknownReason(t.ID, left...), because)
 	case live:
 	case len(left) == 0:
 		return e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
@@ -410,8 +411,8 @@ func (e *Engine) settleUnknown(ctx context.Context, t registry.Task, because str
 			u.Set("waits_what", "")
 			u.Because(because)
 		})
-	case t.WaitsWhat != runtime.UnknownReason(left...):
-		what := runtime.UnknownReason(left...)
+	case t.WaitsWhat != runtime.UnknownReason(t.ID, left...):
+		what := runtime.UnknownReason(t.ID, left...)
 		if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, "", func(u *registry.TaskUpdate) {
 			u.Set("waits_what", what)
 			u.Because(because)

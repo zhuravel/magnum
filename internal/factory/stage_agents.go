@@ -1031,7 +1031,7 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 // something else is not lost. Else the wait is a held error.
 func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry.LedgerEntry) error {
 	if you := e.unknownToYou(es); len(you) > 0 {
-		return needsYou{runtime.UnknownReason(you...)}
+		return needsYou{runtime.UnknownReason(t.ID, you...)}
 	}
 	what := unknownWait(unknownRoles(es))
 	e.waitOn(ctx, t, waitAgent, what)

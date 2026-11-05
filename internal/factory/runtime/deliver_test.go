@@ -292,7 +292,7 @@ func TestAnUnknownDeliveryNeverStallsSilently(t *testing.T) {
 	evs := g.observeN(2)
 	unknown := only(evs, EventDeliveryUnknown)
 	if len(unknown) != 1 || unknown[0].Role != "fx-repro" ||
-		unknown[0].Reason != "a prompt to fx-repro may or may not have arrived: look at its pane" {
+		unknown[0].Reason != UnknownReason(unknown[0].TaskID, "fx-repro") || !strings.Contains(unknown[0].Reason, "magnum factory let-go") {
 		t.Fatalf("events %+v, want one EventDeliveryUnknown for fx-repro", evs)
 	}
 	g.clock.Add(time.Hour)

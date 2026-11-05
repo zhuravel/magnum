@@ -273,7 +273,7 @@ func TestAPromptOfUnknownDeliveryIsNeverSentTwice(t *testing.T) {
 	}
 	h.clock.Add(time.Minute) // past runtime.UnknownAfter
 	h.tick()
-	why := "a prompt to fx-repro may or may not have arrived: look at its pane"
+	why := runtime.UnknownReason(task.ID, "fx-repro")
 	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, why)
 	if q := h.retry(task.ID); q.State != registry.RequestDone {
 		t.Fatalf("retry %s: %q", q.State, q.Result)
@@ -281,6 +281,58 @@ func TestAPromptOfUnknownDeliveryIsNeverSentTwice(t *testing.T) {
 	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, why)
 	if n := len(h.rt.promptsTo("fx-repro")); n != 1 {
 		t.Fatalf("fx-repro got %d prompts after your retry, want 1", n)
+	}
+}
+
+// The wait on you for a prompt of unknown delivery names the command that
+// lets it go, and that let-go (magnum factory let-go, from the CLI) takes
+// the task off the wait, records your input from the CLI and sends the role
+// nothing again: its turn is not watched, so the task waits on its file. A
+// second let-go finds nothing left and is refused.
+func TestALetGoFromTheCLIGoesOnAndResendsNothing(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12391", "bug", "investigate")
+	h.rt.sendUnknown("fx-repro")
+	h.startStage(task)
+	h.clock.Add(runtime.UnknownAfter)
+	h.tick()
+	why := fmt.Sprintf("a prompt to fx-repro may or may not have arrived: look at its pane, then let it go with "+
+		"`magnum factory let-go %d --role fx-repro`", task.ID)
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, why)
+
+	letGo := func() registry.Request {
+		t.Helper()
+		qid, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-repro", Surface: "cli"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.tick()
+		q, err := h.reg.RequestByID(h.ctx, qid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return q
+	}
+	if q := letGo(); q.State != registry.RequestDone {
+		t.Fatalf("the let-go is %s: %q", q.State, q.Result)
+	}
+	got := h.reload(task.ID)
+	if runtime.IsUnknownReason(got.WaitsWhat) || !strings.Contains(got.WaitsWhat, "the prompt to fx-repro was let go") {
+		t.Fatalf("after the let-go the task is %s waiting %q, want the let-go's wait on the role's file", got.State, got.WaitsWhat)
+	}
+	ins, err := h.reg.Inputs(h.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(ins, func(in registry.Input) bool { return in.Surface == "cli" && in.Role == "fx-repro" }) {
+		t.Fatalf("inputs %+v, want your let-go from the CLI", ins)
+	}
+	if q := letGo(); q.State != registry.RequestFailed || !strings.Contains(q.Result, "nothing to let go") {
+		t.Fatalf("a second let-go is %s: %q, want refused: nothing is left", q.State, q.Result)
+	}
+	h.tick()
+	if n := len(h.rt.promptsTo("fx-repro")); n != 1 {
+		t.Fatalf("fx-repro got %d prompts, want the one you let go and no other", n)
 	}
 }
 
@@ -303,13 +355,13 @@ func TestEveryUnknownDeliveryIsNamedWhileTheTaskNeedsYou(t *testing.T) {
 	}
 	h.clock.Add(5 * time.Minute)
 	unknown := func(role string) runtime.Event {
-		return runtime.Event{TaskID: task.ID, Role: role, Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(role)}
+		return runtime.Event{TaskID: task.ID, Role: role, Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, role)}
 	}
 	h.observeEvents(unknown("fx-repro"))
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro"))
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-repro"))
 	h.clock.Add(10 * time.Minute)
 	h.observeEvents(unknown("fx-cause"))
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro", "fx-cause"))
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-repro", "fx-cause"))
 
 	letGo := func(role string) {
 		t.Helper()
@@ -319,7 +371,7 @@ func TestEveryUnknownDeliveryIsNamedWhileTheTaskNeedsYou(t *testing.T) {
 		h.tick()
 	}
 	letGo("fx-repro")
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-cause"))
 
 	other := h.kindTask("PR-12410", "bug", "investigate")
 	h.rt.sendUnknown("fx-cause")
@@ -331,13 +383,13 @@ func TestEveryUnknownDeliveryIsNamedWhileTheTaskNeedsYou(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: other.ID, Role: "fx-cause", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-cause")})
+	h.observeEvents(runtime.Event{TaskID: other.ID, Role: "fx-cause", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(other.ID, "fx-cause")})
 	h.waitsOn(other.ID, registry.TaskNeedsYou, waitsYou, "the fx-history agent wrote no valid findings-fx-history.md")
 	h.taskFile(other.ID, findingsFile("fx-history"), "a guard from 2024\n")
 	if q := h.retry(other.ID); q.State != registry.RequestDone {
 		t.Fatalf("retry %s: %q", q.State, q.Result)
 	}
-	h.waitsOn(other.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.waitsOn(other.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(other.ID, "fx-cause"))
 	_ = cause
 }
 
@@ -699,7 +751,7 @@ func TestALetGoPromptWaitsOnYouInsteadOfStalling(t *testing.T) {
 	h.rt.sendUnknown("fx-repro")
 	h.startStage(task)
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-repro")})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-repro")})
 	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-repro", Surface: "screen"}); err != nil {
 		t.Fatal(err)
 	}
@@ -852,11 +904,11 @@ func TestAProofThatAPromptNeverArrivedBringsTheTaskBackFromYou(t *testing.T) {
 	h.startStage(task)
 	repro, cause := h.entryOf(task.ID, "fx-repro"), h.entryOf(task.ID, "fx-cause")
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-repro")})
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro", "fx-cause"))
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-repro")})
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-repro", "fx-cause"))
 
 	h.undeliveredEvent(repro)
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-cause"))
 	h.undeliveredEvent(cause)
 	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitsYou {
 		t.Fatalf("task %s waits %q: %q after both proofs, want at work", got.State, got.WaitsWho, got.WaitsWhat)
@@ -899,11 +951,11 @@ func TestALaterReadThatFindsThePromptBringsTheTaskBackFromYou(t *testing.T) {
 	h.startStage(task)
 	repro, cause := h.entryOf(task.ID, "fx-repro"), h.entryOf(task.ID, "fx-cause")
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-repro")})
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-repro", "fx-cause"))
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-repro")})
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-repro", "fx-cause"))
 
 	h.deliveredEvent(repro)
-	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason("fx-cause"))
+	h.waitsOn(task.ID, registry.TaskNeedsYou, waitsYou, runtime.UnknownReason(task.ID, "fx-cause"))
 	h.deliveredEvent(cause)
 	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == waitsYou {
 		t.Fatalf("task %s waits %q: %q after both reads, want at work", got.State, got.WaitsWho, got.WaitsWhat)
@@ -1007,7 +1059,7 @@ func TestALetGoAnswersPromptNeedsTheRolesNewFile(t *testing.T) {
 		t.Fatalf("the writer's prompts %+v, want its answers", ps)
 	}
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-writer")})
 	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1101,7 +1153,7 @@ func TestALetGoAnswersTurnAtTheCodingEndNeedsAHeadAfterIt(t *testing.T) {
 	h.rt.sendUnknown("fx-writer")
 	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "yes"}})
 	h.clock.Add(runtime.UnknownAfter)
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-writer")})
 	if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1137,7 +1189,7 @@ func TestALetGoReviewFixPromptNeedsTheWritersTurnAfterIt(t *testing.T) {
 	r.rt.sendUnknown("fx-writer")
 	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
 	r.clock.Add(runtime.UnknownAfter)
-	r.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason("fx-writer")})
+	r.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-writer", Kind: runtime.EventDeliveryUnknown, Reason: runtime.UnknownReason(task.ID, "fx-writer")})
 	if _, err := r.reg.EnqueueRequest(r.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-writer", Surface: "screen"}); err != nil {
 		t.Fatal(err)
 	}

@@ -685,7 +685,7 @@ func (r *Runtime) reconcileUnknown(ctx context.Context, reads turnReads) {
 			// No transcript tells, and the role gets no prompt meanwhile:
 			// the operator looks at the pane and lets it go (LetGo).
 			r.emit(unknownKey(e.ID), Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventDeliveryUnknown,
-				Reason: UnknownReason(e.Role)})
+				Reason: UnknownReason(e.TaskID, e.Role)})
 		}
 	}
 }

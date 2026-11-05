@@ -270,26 +270,33 @@ func (r *Runtime) heldOnly(ctx context.Context, e registry.LedgerEntry, entries 
 	return err == nil && run.SubmittedAt == nil
 }
 
-// UnknownReason is the wait of a task whose prompts to roles may or may not
-// have arrived (EventDeliveryUnknown): it names every one.
-func UnknownReason(roles ...string) string {
+// UnknownReason is the wait of task whose prompts to roles may or may not
+// have arrived (EventDeliveryUnknown): it names every one, and the command
+// that lets one go once you looked at its pane (`magnum factory let-go`).
+func UnknownReason(task int64, roles ...string) string {
+	letGo := fmt.Sprintf("`magnum factory let-go %d --role ", task)
 	switch len(roles) {
 	case 0:
-		return "a prompt to an agent may or may not have arrived: look at its pane"
+		return "a prompt to an agent" + unknownOne + ", then let it go with " + letGo + "<role>`"
 	case 1:
-		return "a prompt to " + roles[0] + " may or may not have arrived: look at its pane"
+		return "a prompt to " + roles[0] + unknownOne + ", then let it go with " + letGo + roles[0] + "`"
 	}
 	names := strings.Join(roles[:len(roles)-1], ", ") + " and " + roles[len(roles)-1]
-	return "prompts to " + names + unknownTail
+	return "prompts to " + names + unknownSome + ", then let each go with " + letGo + "<role>`"
 }
 
-// unknownTail ends the wait of several unknown deliveries.
-const unknownTail = " may or may not have arrived: look at their panes"
+// unknownOne and unknownSome are the middles of the wait of one unknown
+// delivery and of several.
+const (
+	unknownOne  = " may or may not have arrived: look at its pane"
+	unknownSome = " may or may not have arrived: look at their panes"
+)
 
-// IsUnknownReason reports whether a task's wait is UnknownReason's.
+// IsUnknownReason reports whether a task's wait is UnknownReason's, as this
+// build or an older one (whose wait named no command) wrote it.
 func IsUnknownReason(what string) bool {
-	return strings.HasPrefix(what, "a prompt to ") && strings.HasSuffix(what, " may or may not have arrived: look at its pane") ||
-		strings.HasPrefix(what, "prompts to ") && strings.HasSuffix(what, unknownTail)
+	return strings.HasPrefix(what, "a prompt to ") && strings.Contains(what, unknownOne) ||
+		strings.HasPrefix(what, "prompts to ") && strings.Contains(what, unknownSome)
 }
 
 // LetGoWhy is why a run that held only prompts you let go (LetGo) was
