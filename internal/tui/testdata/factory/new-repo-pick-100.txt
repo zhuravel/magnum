@@ -1,0 +1,14 @@
+ magnum factory · new task                                                              esc cancels 
+
+ Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ the order confirmation page shows the wrong currency▏
+
+ REPO      example/site  your pick · shift+tab: example/app, example/site
+ JIRA      none: the agents work from your words
+ KIND      bug         no hint; tab changes it · tab: bug, feature, chore
+ TITLE     the order confirmation page shows the wrong currency
+ BRANCH    zhuravel-order-confirmation-page-shows-wrong
+ STARTS    now, 2 copies free
+ AGENTS    3: reproduce it · find the cause on its own · read the history of the code
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ tab kind · shift+tab repo · esc cancels

@@ -138,8 +138,8 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 // what they did (its last line goes to the footer, all of it to the log).
 //
 //   - Start starts a task from the new task's text, of kind ("" = the
-//     factory picks it); Preview is what the factory makes of a text,
-//     making nothing.
+//     factory picks it), in repository repo ("" = the one the text tells);
+//     Preview is what the factory makes of a text in repo, making nothing.
 //   - Answer sends a batch for the questions of revision rev, by question
 //     index from 0: an option's label, the operator's words, or
 //     "ask:<login>"; needless flags questions with the key of the reason.
@@ -157,8 +157,8 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     there is no diff to show. It is called on the screen's own turn, so
 //     it only builds the command: it reads and waits for nothing.
 type FactoryActions interface {
-	Start(ctx context.Context, text, kind string, wordsOnly bool) (ActionResult, error)
-	Preview(ctx context.Context, text string) (NewTaskForm, error)
+	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
+	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
 	Answer(ctx context.Context, taskID int64, rev int, answers map[int]string, needless map[int]string) (ActionResult, error)
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
@@ -213,9 +213,9 @@ type (
 	factoryAnimMsg       struct{}
 	factoryPreviewDueMsg struct{ seq int }
 	factoryPreviewMsg    struct {
-		text string
-		form NewTaskForm
-		err  error
+		text, repo string
+		form       NewTaskForm
+		err        error
 	}
 	// factoryPagerMsg ends the pager on a task's diff.
 	factoryPagerMsg struct {
@@ -308,12 +308,18 @@ type factoryDraft struct {
 	area       textarea.Model
 	preview    NewTaskForm
 	previewFor string // the text preview is for
+	pickFor    string // the repository preview is for ("" = the one the text tells)
 	inFlight   bool   // a preview is being read
 	again      bool   // the text changed while it was: read it again after
 	seq        int    // the text's changes, for the pause before a preview
 	kind       string // the kind the operator picked with tab; "" = the preview's
+	repo       string // the repository the operator picked with shift+tab; "" = the preview's
 	askOnce    bool   // enter waits for the preview of the text to ask y/N
 }
+
+// fresh reports whether the preview is the one of the text and the pick on
+// the form.
+func (d factoryDraft) fresh() bool { return d.previewFor == d.area.Value() && d.pickFor == d.repo }
 
 // factoryFollowKind is what happens when an action ends.
 type factoryFollowKind int

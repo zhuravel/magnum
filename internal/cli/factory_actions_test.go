@@ -79,7 +79,7 @@ func payloadOf[T any](t *testing.T, q registry.Request) T {
 // Every action key of the screen is a factory request with the screen as
 // its surface: the adapter queues it, wakes the factory daemon and returns
 // its answer; the indexes of an answer go as the screen sends them, from 0,
-// and a start carries "from your words only".
+// and a start carries "from your words only" and the repository.
 func TestTheFactoryScreensActionsAreFactoryRequests(t *testing.T) {
 	storetest.Serial(t)
 	at := newScreenActionsTest(t, 250, nil)
@@ -93,8 +93,10 @@ func TestTheFactoryScreensActionsAreFactoryRequests(t *testing.T) {
 		want any
 		got  func(registry.Request) any
 	}{
-		{"start", func() (tui.ActionResult, error) { return at.act.Start(ctx, "PR-12399 the reminder", "bug", true) }, factory.ReqStart,
-			factory.StartPayload{Text: "PR-12399 the reminder", Kind: "bug", WordsOnly: true, Surface: "screen"},
+		{"start", func() (tui.ActionResult, error) {
+			return at.act.Start(ctx, "PR-12399 the reminder", "bug", "example/app", true)
+		},
+			factory.ReqStart, factory.StartPayload{Text: "PR-12399 the reminder", Kind: "bug", Repo: "example/app", WordsOnly: true, Surface: "screen"},
 			func(q registry.Request) any { return payloadOf[factory.StartPayload](t, q) }},
 		{"answer", func() (tui.ActionResult, error) {
 			return at.act.Answer(ctx, 7, 3, map[int]string{0: "Seven days", 2: "ask:rev-ann"}, map[int]string{1: "code-answers"})
@@ -163,7 +165,8 @@ func fmtMap(m map[int]string) string {
 	return "map[" + strings.Join(parts, " ") + "]"
 }
 
-// The preview is the daemon's new-task form, decoded.
+// The preview is the daemon's new-task form of the text in the repository
+// the screen names, decoded.
 func TestTheScreensPreviewIsTheDaemonsForm(t *testing.T) {
 	storetest.Serial(t)
 	form := tui.NewTaskForm{Text: "PR-12399 words", Kind: "bug", Err: "PR-12399 is not in Jira", WordsOnly: true}
@@ -172,11 +175,12 @@ func TestTheScreensPreviewIsTheDaemonsForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := newScreenActionsTest(t, 250, func(registry.Request) (string, string) { return registry.RequestDone, string(b) })
-	got, err := at.act.Preview(t.Context(), "PR-12399 words")
+	got, err := at.act.Preview(t.Context(), "PR-12399 words", "example/site")
 	if err != nil || got.Text != form.Text || got.Err != form.Err || !got.WordsOnly || got.Kind != "bug" {
 		t.Fatalf("preview %+v, %v", got, err)
 	}
-	if p := payloadOf[factory.PreviewPayload](t, at.seen[0]); at.seen[0].Kind != factory.ReqPreview || p.Text != "PR-12399 words" {
+	if p := payloadOf[factory.PreviewPayload](t, at.seen[0]); at.seen[0].Kind != factory.ReqPreview || p.Text != "PR-12399 words" ||
+		p.Repo != "example/site" {
 		t.Errorf("request %s %+v", at.seen[0].Kind, p)
 	}
 }

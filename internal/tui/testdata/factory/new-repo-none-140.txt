@@ -1,0 +1,8 @@
+ magnum factory · new task                                                                                                      esc cancels 
+
+ Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ the order confirmation page shows the wrong currency▏
+
+ REPO      none: no link or key of your text names one · shift+tab: example/app, example/site
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ shift+tab repo · esc cancels

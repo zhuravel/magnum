@@ -15179,6 +15179,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFactoryBaselineCountsOnlyYourOwnTickets, TestFactoryBaselineNeedsYourBranchPrefix,
   TestOwnTicketsNeverTakeAnotherTicketsBranch, TestClassifyKnowsTheEverydayStepStartsAndCorrections and
   TestClassifyKnowsTheReviewsAndTheHeldOutChecksGaps.
+- **A start names its repository, on the screen as in the CLI, and a key of a tracker that is not Jira is never
+  read from Jira** (2026-11-05). With two `[[factory.repo]]` every start from the screen failed with "which
+  repository?": the screen sent none. One function (`inferRepo`) now tells a start's repository from its text,
+  for the daemon's preview and for the start alike: the first GitHub link of a factory repository, else the
+  first key whose prefix is a tracker of exactly one of them, else the only one; a repository you name (the
+  CLI's `--repo`, the screen's pick) always wins, and a text that tells none of several makes the CLI ask for
+  `--repo`. A repository's trackers here are its `[[repo]]`'s and its covering `[[watch]]`'s: `[board]`'s are
+  every repository's and tell none. The form draws a REPO row, first, only with two or more repositories (so
+  the approved frames do not change): the repository and why (`from the EX tracker`, `from the link`, `your
+  pick`). `shift+tab` cycles the repositories: spec 9.D's new task keys leave it free, a letter is text, and it
+  sits beside `tab`, the kind's key; it changes only the form, asks nothing, and reads the preview again for
+  the pick, since every other row (the trackers, the branch, the rules, the overlap) is that repository's.
+  While none is chosen the form draws the REPO row alone and `enter` refuses; the start, and its y/N, name the
+  repository. A tracker is Jira when its link is an `atlassian.net` `/browse/` link or it is on the `[jira]`
+  site; a key of any other tracker (a Linear issue) at the start of the text, bare or as its tracker's link
+  (a Linear link has the title's slug after the key), is the task's key, never read from Jira: the task starts
+  from your words (prompt.md, the key first in its title and its branch, no question which Jira issue it is,
+  no "not in Jira" question), its first stage reads no linked ticket for it, and such a key in the middle of
+  the words is never found. A key alone is refused: the factory reads no other tracker, so there would be
+  nothing to start from. Rejected: reading the trackers of `[board]` for the inference (a key every repository
+  shares tells none), and inferring the repository in the screen (the daemon's preview and start must agree).
+  Tests: TestAStartTellsItsRepositoryByALinkOrATrackersKey, TestARepositoryYouNameAlwaysWins,
+  TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira, TestNewTaskNamesItsRepository,
+  TestNewTaskStartsNoTaskWithoutARepository, TestTheFactoryScreensActionsAreFactoryRequests and
+  TestTheScreensPreviewIsTheDaemonsForm.
 
 ## Learned rules
 

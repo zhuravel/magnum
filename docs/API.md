@@ -26278,8 +26278,8 @@ type DiskInfo struct {
     DiskInfo is the free space where slots live; FreeGB <= 0 means unknown.
 
 type FactoryActions interface {
-	Start(ctx context.Context, text, kind string, wordsOnly bool) (ActionResult, error)
-	Preview(ctx context.Context, text string) (NewTaskForm, error)
+	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
+	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
 	Answer(ctx context.Context, taskID int64, rev int, answers map[int]string, needless map[int]string) (ActionResult, error)
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
@@ -26294,7 +26294,8 @@ type FactoryActions interface {
     they did (its last line goes to the footer, all of it to the log).
 
       - Start starts a task from the new task's text, of kind ("" = the factory
-        picks it); Preview is what the factory makes of a text, making nothing.
+        picks it), in repository repo ("" = the one the text tells); Preview is
+        what the factory makes of a text in repo, making nothing.
       - Answer sends a batch for the questions of revision rev, by question
         index from 0: an option's label, the operator's words, or "ask:<login>";
         needless flags questions with the key of the reason.

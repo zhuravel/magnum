@@ -72,15 +72,15 @@ func newFactoryActions(c *Context, src *factoryScreenSource) *factoryActions {
 	return a
 }
 
-// Start starts a task from the new task's text (StartPayload).
-func (a *factoryActions) Start(ctx context.Context, text, kind string, wordsOnly bool) (tui.ActionResult, error) {
-	return a.send(ctx, factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, WordsOnly: wordsOnly, Surface: screenSurface})
+// Start starts a task from the new task's text in repo (StartPayload).
+func (a *factoryActions) Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (tui.ActionResult, error) {
+	return a.send(ctx, factory.ReqStart, factory.StartPayload{Text: text, Kind: kind, Repo: repo, WordsOnly: wordsOnly, Surface: screenSurface})
 }
 
-// Preview is the daemon's new-task form of text (PreviewPayload).
-func (a *factoryActions) Preview(ctx context.Context, text string) (tui.NewTaskForm, error) {
+// Preview is the daemon's new-task form of text in repo (PreviewPayload).
+func (a *factoryActions) Preview(ctx context.Context, text, repo string) (tui.NewTaskForm, error) {
 	var f tui.NewTaskForm
-	q, _, err := a.request(ctx, factory.ReqPreview, factory.PreviewPayload{Text: text}, factoryStartWait)
+	q, _, err := a.request(ctx, factory.ReqPreview, factory.PreviewPayload{Text: text, Repo: repo}, factoryStartWait)
 	if err != nil {
 		return f, err
 	}

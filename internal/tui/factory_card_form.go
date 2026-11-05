@@ -41,11 +41,14 @@ func (p *cardPainter) newTask(f NewTaskForm, height int) string {
 }
 
 // newTaskHints are the form's own key hints: tab once there is a kind to
-// change.
+// change, shift+tab when there are repositories to choose from.
 func (p *cardPainter) newTaskHints(f NewTaskForm) []hint {
 	var hs []hint
 	if f.Kind != "" {
 		hs = append(hs, hint{"tab", "kind"})
+	}
+	if severalRepos(f) {
+		hs = append(hs, hint{repoKey, "repo"})
 	}
 	if f.Jira != nil && f.Jira.More && !severalKeys(f) {
 		hs = append(hs, hint{"pgdn", "reads more"})
@@ -56,6 +59,19 @@ func (p *cardPainter) newTaskHints(f NewTaskForm) []hint {
 // severalKeys is true when the text names several keys Jira knows: the task
 // is the prompt task it is, and asks which issue it belongs to.
 func severalKeys(f NewTaskForm) bool { return len(f.Keys) > 1 }
+
+// repoKey cycles the new task's repository: the form's key beside tab, which
+// cycles its kind (spec 9.D's new task keys use neither shift+tab nor a
+// letter, which is text).
+const repoKey = "shift+tab"
+
+// severalRepos is true when the factory works in several repositories: the
+// form draws the REPO row.
+func severalRepos(f NewTaskForm) bool { return len(f.Repos) > 1 }
+
+// noRepo is true when no repository of several is chosen: the form draws the
+// REPO row only, since every other row is the preview of a repository.
+func noRepo(f NewTaskForm) bool { return severalRepos(f) && f.Repo == "" }
 
 // inputLabel is the label of the text with the keys of the input on its
 // right, as many as leave the label whole.
@@ -106,6 +122,12 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 	const x = cardFormX
 	wrapW := p.wrapW(x)
 	var out []string
+	if severalRepos(f) && strings.TrimSpace(f.Text) != "" {
+		out = append(out, p.repoRows(f)...)
+		if noRepo(f) && f.Err == "" {
+			return out
+		}
+	}
 	switch {
 	case f.Reading:
 		out = append(out, p.labelRows("JIRA", x, []cell{{{p.spinnerFrame(), p.st.Accent}, {" the daemon reads Jira", p.st.Dim}}})...)
@@ -121,6 +143,9 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 		out = append(out, p.jiraRows(f.Jira)...)
 	case f.Err != "":
 		out = append(out, p.labelRows("JIRA", x, plainCells(wrapText(f.Err, wrapW, 2), p.st.Err))...)
+	case f.NotJira != "":
+		text := "none: " + f.NotJira + "'s tracker is not Jira, so the agents work from your words"
+		out = append(out, p.labelRows("JIRA", x, plainCells(wrapText(text, wrapW, 2), noStyle))...)
 	case strings.TrimSpace(f.Text) != "":
 		out = append(out, p.labelRows("JIRA", x, []cell{{{"none: the agents work from your words", noStyle}}})...)
 	}
@@ -159,6 +184,25 @@ func (p *cardPainter) previewRows(f NewTaskForm) []string {
 		out = append(out, p.ruleRows(f, wrapW)...)
 	}
 	return out
+}
+
+// repoRows are the REPO row: the repository of the task and why, the why
+// column kept in place as the key cycles the repositories (it names them);
+// with none chosen, that no link or key of the text names one.
+func (p *cardPainter) repoRows(f NewTaskForm) []string {
+	keys := seg{repoKey + ": " + strings.Join(f.Repos, ", "), p.st.Dim}
+	if f.Repo == "" {
+		return p.labelRows("REPO", cardFormX, []cell{{{"none", p.st.Err}, {": no link or key of your text names one", noStyle}, p.sepSeg(), keys}})
+	}
+	w := ansi.StringWidth(f.Repo)
+	for _, r := range f.Repos {
+		w = max(w, ansi.StringWidth(r))
+	}
+	c := cell{{f.Repo + spaces(w+2-ansi.StringWidth(f.Repo)), noStyle}}
+	if f.RepoWhy != "" {
+		c = append(c, seg{f.RepoWhy, p.st.Dim}, p.sepSeg())
+	}
+	return p.labelRows("REPO", cardFormX, []cell{append(c, keys)})
 }
 
 // keysCell names the several keys of a text: the prompt task they are asks

@@ -114,7 +114,8 @@ var factoryKeyHelp = []struct {
 	{"Task card", []hint{{"j k", "move"}, {"r", "retry: it goes on at its stage (y/N, when it can)"}, {"d", "the diff"},
 		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane"}, {"esc", "back"}}},
 	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line"}, {"ctrl+g", "your editor"},
-		{"tab", "the kind: bug, feature, chore"}, {"esc", "back, the draft kept"}}},
+		{"tab", "the kind: bug, feature, chore"}, {repoKey, "the repository, when the factory has several"},
+		{"esc", "back, the draft kept"}}},
 }
 
 // helpContent is the help's lines at screen width w: the keys, the mouse,

@@ -1,0 +1,14 @@
+ magnum factory · new task                                                                                                      esc cancels 
+
+ Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ EX-12 the export fails on Safari for merchants with a long name▏
+
+ REPO      example/site  from the EX tracker · shift+tab: example/app, example/site
+ JIRA      none: EX-12's tracker is not Jira, so the agents work from your words
+ KIND      bug         guessed from "fails" · tab: bug, feature, chore
+ TITLE     EX-12 the export fails on Safari for merchants with a long name
+ BRANCH    zhuravel-EX-12-export-fails-safari-merchants-long-name
+ STARTS    now, 2 copies free
+ AGENTS    3: reproduce it · find the cause on its own · read the history of the code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Start bug EX-12 in example/site with 3 agents? y/N  y confirms, any other key cancels

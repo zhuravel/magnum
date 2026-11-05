@@ -1007,7 +1007,15 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 		j.More = false
 		f.Jira = &j
 	}
+	if m.form.pickFor != m.form.repo && severalRepos(f) {
+		// Every row but REPO is the preview of another repository than your
+		// pick's: none is drawn until the pick's preview is read.
+		f = NewTaskForm{Repos: f.Repos}
+	}
 	f.Text = text
+	if m.form.repo != "" && severalRepos(f) {
+		f.Repo, f.RepoWhy = m.form.repo, "your pick"
+	}
 	if m.form.kind != "" && f.Kind != "" {
 		f.Kind, f.KindWhy = m.form.kind, "your pick"
 	}
@@ -1023,8 +1031,7 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 // reading reports whether the factory reads Jira for the text: a preview
 // runs for a text that starts with a key or a Jira link.
 func (m factoryModel) reading() bool {
-	text := m.form.area.Value()
-	return m.form.inFlight && m.form.previewFor != text && jiraWords.MatchString(text)
+	return m.form.inFlight && !m.form.fresh() && jiraWords.MatchString(m.form.area.Value())
 }
 
 func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -1039,6 +1046,14 @@ func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.form.kind = factoryKinds[(slices.Index(factoryKinds, kind)+1)%len(factoryKinds)]
 		}
 		return nil
+	case repoKey: // the next repository: the form only, whose preview is read again for it
+		repos := m.form.preview.Repos
+		if len(repos) < 2 {
+			return nil
+		}
+		m.form.repo = repos[(slices.Index(repos, cmp.Or(m.form.repo, m.form.preview.Repo))+1)%len(repos)]
+		m.form.askOnce = false // enter's question is asked only for the repository it was pressed on
+		return m.previewCmd()
 	case "ctrl+g":
 		return m.editDraft()
 	}
@@ -1074,28 +1089,28 @@ func (m *factoryModel) previewCmd() tea.Cmd {
 		return nil
 	}
 	m.form.inFlight, m.form.again = true, false
-	ctx, act := m.ctx, m.act
+	ctx, act, repo := m.ctx, m.act, m.form.repo
 	return func() tea.Msg {
 		ctx, cancel := loadContext(ctx)
 		defer cancel()
-		f, err := act.Preview(ctx, text)
-		return factoryPreviewMsg{text: text, form: f, err: err}
+		f, err := act.Preview(ctx, text, repo)
+		return factoryPreviewMsg{text: text, repo: repo, form: f, err: err}
 	}
 }
 
-// previewed takes a preview: the current text's is kept (and enter's
-// question asked, when it waited for it and the form is still open: a
+// previewed takes a preview: the current text's and pick's is kept (and
+// enter's question asked, when it waited for it and the form is still open: a
 // question asked off the form would be answered by what you type there);
-// an older text's is read again.
+// an older one's is read again.
 func (m *factoryModel) previewed(msg factoryPreviewMsg) tea.Cmd {
 	m.form.inFlight = false
-	if msg.text != m.form.area.Value() {
+	if msg.text != m.form.area.Value() || msg.repo != m.form.repo {
 		if m.form.again || m.form.askOnce {
 			return m.previewCmd()
 		}
 		return nil
 	}
-	m.form.preview, m.form.previewFor = msg.form, msg.text
+	m.form.preview, m.form.previewFor, m.form.pickFor = msg.form, msg.text, msg.repo
 	if msg.err != nil {
 		m.form.preview = NewTaskForm{Text: msg.text, Err: "the factory could not read your text: " + errLine(msg.err)}
 	}
@@ -1117,7 +1132,7 @@ func (m *factoryModel) submit() tea.Cmd {
 		return nil
 	case m.act == nil:
 		return m.note(noActions)
-	case m.form.previewFor == text && !m.form.inFlight:
+	case m.form.fresh() && !m.form.inFlight:
 		return m.askStart()
 	}
 	m.form.askOnce = true
@@ -1125,26 +1140,42 @@ func (m *factoryModel) submit() tea.Cmd {
 }
 
 // askStart asks y/N before the task starts agents (spec 9.D); a text the
-// factory makes no task of is refused with its reason.
+// factory makes no task of, or one with no repository of several chosen, is
+// refused with its reason. The start carries the repository the form shows.
 func (m *factoryModel) askStart() tea.Cmd {
 	f := m.form.preview
 	text, act := m.form.area.Value(), m.act
 	kind := cmp.Or(m.form.kind, f.Kind)
+	repo := cmp.Or(m.form.repo, f.Repo)
 	switch {
+	case severalRepos(f) && repo == "":
+		return m.note("cannot start: which repository? " + repoKey + " picks one")
 	case kind == "" && f.WordsOnly: // a key Jira does not know: your words, the key kept as words (spec 9.C)
-		return m.ask(&factoryFollow{kind: followStart}, "Start from your words only?", func(ctx context.Context) (ActionResult, error) {
-			return act.Start(ctx, text, "", true)
+		return m.ask(&factoryFollow{kind: followStart}, "Start from your words only"+repoIn(f)+"?", func(ctx context.Context) (ActionResult, error) {
+			return act.Start(ctx, text, "", repo, true)
 		})
 	case kind == "":
 		return m.note("cannot start: " + cmp.Or(cleanText(f.Err), "the factory makes no task of this text"))
 	}
 	key := f.Title
-	if f.Jira != nil && !severalKeys(f) && f.Jira.Key != "" {
+	switch {
+	case f.Jira != nil && !severalKeys(f) && f.Jira.Key != "":
 		key = f.Jira.Key
+	case f.NotJira != "":
+		key = f.NotJira
 	}
 	return m.ask(&factoryFollow{kind: followStart, key: key}, startSentence(f, kind), func(ctx context.Context) (ActionResult, error) {
-		return act.Start(ctx, text, kind, false)
+		return act.Start(ctx, text, kind, repo, false)
 	})
+}
+
+// repoIn names the repository in a start's y/N when there are several: " in
+// example/site".
+func repoIn(f NewTaskForm) string {
+	if !severalRepos(f) || f.Repo == "" {
+		return ""
+	}
+	return " in " + cleanText(f.Repo)
 }
 
 // startSentence is the y/N of a start: the kind, the task (its key, or the
@@ -1155,9 +1186,12 @@ func startSentence(f NewTaskForm, kind string) string {
 	switch {
 	case f.Jira != nil && !severalKeys(f) && f.Jira.Key != "":
 		name = cleanText(f.Jira.Key)
+	case f.NotJira != "":
+		name = cleanText(f.NotJira)
 	case strings.TrimSpace(f.Title) != "":
 		name = `"` + textx.Clip(cleanText(f.Title), factoryTitleMax) + `"`
 	}
+	name += repoIn(f)
 	if strings.HasPrefix(f.Starts, "queued") {
 		when := "a copy or memory frees"
 		if _, after, ok := strings.Cut(f.Starts, "starts when "); ok && strings.TrimSpace(after) != "" {

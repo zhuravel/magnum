@@ -823,6 +823,59 @@ func TestNewTaskFromAPrompt(t *testing.T) {
 	}
 }
 
+// With two factory repositories the form has a REPO row: the repository and
+// why (a tracker's key, a link, your pick), and the key that cycles them;
+// with none chosen it says why, and nothing else is drawn, since every other
+// row is the preview of a repository. With one repository there is no row.
+func TestNewTaskNamesItsRepository(t *testing.T) {
+	const keys = " · shift+tab: example/app, example/site"
+	for _, c := range []struct {
+		name string
+		f    NewTaskForm
+		want []string
+	}{
+		{"new-repo-tracker", fixtureNewTaskRepoTracker(), []string{"REPO      example/site  from the EX tracker" + keys,
+			"JIRA      none: EX-12's tracker is not Jira, so the agents work from your words",
+			"TITLE     EX-12 the export fails on Safari", "Start bug EX-12 in example/site with 3 agents? y/N"}},
+		{"new-repo-link", fixtureNewTaskRepoLink(), []string{"REPO      example/app   from the link" + keys,
+			"2 example/app rules go into its prompts", "tab kind · shift+tab repo · esc cancels"}},
+		{"new-repo-pick", fixtureNewTaskRepoPick(), []string{"REPO      example/site  your pick" + keys, "BRANCH    zhuravel-order-confirmation"}},
+		{"new-repo-none", fixtureNewTaskRepoNone(), []string{"REPO      none: no link or key of your text names one" + keys,
+			"shift+tab repo · esc cancels"}},
+	} {
+		d := drawNewTask(c.f)
+		checkCardGolden(t, c.name, d)
+		for _, w := range []int{100, 140} {
+			frame := plainCard(d, w)
+			for _, want := range c.want {
+				if !strings.Contains(frame, want) {
+					t.Errorf("%s %d: no %q in\n%s", c.name, w, want, frame)
+				}
+			}
+			if lines := cardLines(d(w, 0, true, IconsUnicode)); labelAt(lines, "REPO") != labelAt(lines, "JIRA")-1 && labelAt(lines, "JIRA") >= 0 {
+				t.Errorf("%s %d: REPO is not the first row of the preview:\n%s", c.name, w, frame)
+			}
+		}
+	}
+	none := plainCard(drawNewTask(fixtureNewTaskRepoNone()), 100)
+	for _, not := range []string{"JIRA", "KIND", "tab kind"} {
+		if strings.Contains(none, not) {
+			t.Errorf("with no repository chosen the form draws %q:\n%s", not, none)
+		}
+	}
+	errOpen, _, _ := strings.Cut(newStyles(true).Err.Render("x"), "x")
+	if !strings.Contains(drawNewTask(fixtureNewTaskRepoNone())(100, 0, true, IconsUnicode), errOpen+"none") {
+		t.Error("no repository chosen is not in the error colour")
+	}
+	for name, d := range cardCases() {
+		if strings.HasPrefix(name, "new-") && !strings.HasPrefix(name, "new-repo") {
+			if frame := plainCard(d, 100); strings.Contains(frame, "REPO") || strings.Contains(frame, "shift+tab") {
+				t.Errorf("%s: one repository draws a REPO row or its key:\n%s", name, frame)
+			}
+		}
+	}
+}
+
 // reversed is ss from its end.
 func reversed(ss []string) []string {
 	out := slices.Clone(ss)
@@ -848,7 +901,9 @@ func cardCases() map[string]cardDraw {
 			Ask: "Start from your words only?"}),
 		"new-links": drawNewTask(fixtureNewTaskLinks(factoryNow)), "new-found": drawNewTask(fixtureNewTaskFound(factoryNow)),
 		"new-refused": drawNewTask(fixtureNewTaskRefused()), "new-several": drawNewTask(fixtureNewTaskSeveral()),
-		"new-reading": drawNewTask(fixtureNewTaskReading()),
+		"new-reading":      drawNewTask(fixtureNewTaskReading()),
+		"new-repo-tracker": drawNewTask(fixtureNewTaskRepoTracker()), "new-repo-link": drawNewTask(fixtureNewTaskRepoLink()),
+		"new-repo-pick": drawNewTask(fixtureNewTaskRepoPick()), "new-repo-none": drawNewTask(fixtureNewTaskRepoNone()),
 	}
 }
 
@@ -929,6 +984,7 @@ func TestFactoryCardsDarkAndLightColors(t *testing.T) {
 		{"ready-after", drawReady(fixtureReadyCardAfter()), 100},
 		{"new-refused", drawNewTask(fixtureNewTaskRefused()), 100},
 		{"new-jira", drawNewTask(fixtureNewTaskJira(factoryNow)), 100},
+		{"new-repo-none", drawNewTask(fixtureNewTaskRepoNone()), 100},
 		{"task", drawTask(fixtureTaskCard(), 0), 140},
 	} {
 		checkFactoryFrame(t, fmt.Sprintf("%s-%d-dark.ansi", c.name, c.w), c.d(c.w, 0, true, IconsUnicode), c.w)

@@ -188,6 +188,7 @@ func cleanNewTaskForm(f NewTaskForm) NewTaskForm {
 	f.Text = cleanInput(f.Text)
 	f.Kind, f.KindWhy, f.Branch, f.Starts = cleanText(f.Kind), cleanText(f.KindWhy), cleanText(f.Branch), cleanText(f.Starts)
 	f.Err, f.Repo, f.Title, f.Ask = cleanText(f.Err), cleanText(f.Repo), cleanText(f.Title), cleanText(f.Ask)
+	f.RepoWhy, f.NotJira, f.Repos = cleanText(f.RepoWhy), cleanText(f.NotJira), cleanAll(f.Repos)
 	f.Agents, f.Rules, f.Keys = cleanAll(f.Agents), cleanAll(f.Rules), cleanAll(f.Keys)
 	f.Overlap, f.Guidance, f.Hints = cleanText(f.Overlap), cleanText(f.Guidance), cleanHints(f.Hints)
 	f.Links = slices.Clone(f.Links)

@@ -348,3 +348,58 @@ func fixtureNewTaskPrompt() NewTaskForm {
 		Ask: `Queue bug "Weekly digest uses the wrong week…"? It starts when memory allows.`,
 	}
 }
+
+// fixtureRepos are the repositories of a config with two [[factory.repo]]:
+// the new task form draws its REPO row.
+var fixtureRepos = []string{"example/app", "example/site"}
+
+// fixtureNewTaskRepoTracker starts with a key of example/site's tracker,
+// which is not Jira: the REPO row names the tracker, and the task starts
+// from your words with the key as its own.
+func fixtureNewTaskRepoTracker() NewTaskForm {
+	return NewTaskForm{
+		Text:  "EX-12 the export fails on Safari for merchants with a long name",
+		Repos: fixtureRepos, Repo: "example/site", RepoWhy: "from the EX tracker", NotJira: "EX-12",
+		Kind: "bug", KindWhy: `guessed from "fails"`,
+		Title:  "EX-12 the export fails on Safari for merchants with a long name",
+		Branch: "zhuravel-EX-12-export-fails-safari-merchants-long-name",
+		Starts: "now, 2 copies free",
+		Agents: []string{"reproduce it", "find the cause on its own", "read the history of the code"},
+		Ask:    "Start bug EX-12 in example/site with 3 agents?",
+	}
+}
+
+// fixtureNewTaskRepoLink holds a GitHub link of example/app: the REPO row
+// names the link, and the rules are that repository's.
+func fixtureNewTaskRepoLink() NewTaskForm {
+	return NewTaskForm{
+		Text:  "fix the CSV export: it drops the last row\nsee https://github.com/example/app/issues/88",
+		Repos: fixtureRepos, Repo: "example/app", RepoWhy: "from the link",
+		Kind: "bug", KindWhy: `guessed from "fix"`,
+		Title:  "fix the CSV export: it drops the last row",
+		Branch: "zhuravel-fix-csv-export-drops-last-row",
+		Starts: "now, 2 copies free",
+		Agents: []string{"reproduce it", "find the cause on its own", "read the history of the code"},
+		Rules:  []string{"seed data into the copy's own databases", "screenshots come from the copy's own server"},
+	}
+}
+
+// fixtureNewTaskRepoPick is a text that names no repository, after you
+// picked example/site with shift+tab.
+func fixtureNewTaskRepoPick() NewTaskForm {
+	return NewTaskForm{
+		Text:  "the order confirmation page shows the wrong currency",
+		Repos: fixtureRepos, Repo: "example/site", RepoWhy: "your pick",
+		Kind: "bug", KindWhy: "no hint; tab changes it",
+		Title:  "the order confirmation page shows the wrong currency",
+		Branch: "zhuravel-order-confirmation-page-shows-wrong",
+		Starts: "now, 2 copies free",
+		Agents: []string{"reproduce it", "find the cause on its own", "read the history of the code"},
+	}
+}
+
+// fixtureNewTaskRepoNone is a text that names no repository, none picked:
+// the form draws the REPO row only.
+func fixtureNewTaskRepoNone() NewTaskForm {
+	return NewTaskForm{Text: "the order confirmation page shows the wrong currency", Repos: fixtureRepos}
+}

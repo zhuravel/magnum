@@ -83,8 +83,8 @@ type (
 		bound                ReadyBinding
 	}
 	factoryStartCall struct {
-		text, kind string
-		wordsOnly  bool
+		text, kind, repo string
+		wordsOnly        bool
 	}
 )
 
@@ -93,6 +93,7 @@ type fakeFactoryActions struct {
 	mu       sync.Mutex
 	starts   []factoryStartCall
 	previews []string
+	repos    []string // the repository of each preview
 	answers  []factoryAnswerCall
 	decides  []factoryDecideCall
 	stops    []int64
@@ -104,15 +105,15 @@ type fakeFactoryActions struct {
 	diffs    []int64
 	diffCmd  *exec.Cmd
 
-	preview   func(text string) (NewTaskForm, error)
+	preview   func(text, repo string) (NewTaskForm, error)
 	answerErr error
 	decideErr error
 	started   func(text, kind string) // the source learns of the new task
 }
 
-func (a *fakeFactoryActions) Start(_ context.Context, text, kind string, wordsOnly bool) (ActionResult, error) {
+func (a *fakeFactoryActions) Start(_ context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error) {
 	a.mu.Lock()
-	a.starts = append(a.starts, factoryStartCall{text, kind, wordsOnly})
+	a.starts = append(a.starts, factoryStartCall{text, kind, repo, wordsOnly})
 	started := a.started
 	a.mu.Unlock()
 	if started != nil {
@@ -121,15 +122,15 @@ func (a *fakeFactoryActions) Start(_ context.Context, text, kind string, wordsOn
 	return ActionResult{Text: "PR-12350: started"}, nil
 }
 
-func (a *fakeFactoryActions) Preview(_ context.Context, text string) (NewTaskForm, error) {
+func (a *fakeFactoryActions) Preview(_ context.Context, text, repo string) (NewTaskForm, error) {
 	a.mu.Lock()
-	a.previews = append(a.previews, text)
+	a.previews, a.repos = append(a.previews, text), append(a.repos, repo)
 	fn := a.preview
 	a.mu.Unlock()
 	if fn == nil {
 		return NewTaskForm{Text: text}, nil
 	}
-	return fn(text)
+	return fn(text, repo)
 }
 
 func (a *fakeFactoryActions) Answer(_ context.Context, task int64, rev int, answers, needless map[int]string) (ActionResult, error) {
@@ -503,7 +504,7 @@ func TestDOpensTheDiffInThePager(t *testing.T) {
 }
 
 // previewJira is the daemon's preview of a text that starts with PR-12350.
-func previewJira(text string) (NewTaskForm, error) {
+func previewJira(text, _ string) (NewTaskForm, error) {
 	f := fixtureNewTaskJira(factoryNow)
 	f.Text, f.Ask, f.Overlap = text, "", ""
 	f.Jira.Key, f.Branch = "PR-12350", "zhuravel-PR-12350-credit-expiry-reminder"
@@ -534,7 +535,7 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 		t.Fatal("n started the task")
 	}
 	h.press("enter", "y")
-	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12350 the reminder is for advocates only", "feature", false}) {
+	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12350 the reminder is for advocates only", "feature", "talkable", false}) {
 		t.Fatalf("starts = %+v", h.act.starts)
 	}
 	if r, ok := h.m.selectedRow(); !ok || r.Key != "PR-12350" {
@@ -546,7 +547,7 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 func TestAPRLinkInNewTaskOffersAdoptionLater(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	const link = "https://github.com/example/talkable/pull/4512"
-	h.act.preview = func(text string) (NewTaskForm, error) {
+	h.act.preview = func(text, _ string) (NewTaskForm, error) {
 		return NewTaskForm{Text: text, Repo: "talkable", Err: "a PR link: adoption comes in milestone 2",
 			Links: []FormLink{{Kind: "pr", URL: link, Offer: "adoption comes in milestone 2"}}}, nil
 	}
@@ -1288,7 +1289,7 @@ func TestHomeShowsTheAnswersNotSentYet(t *testing.T) {
 // asks to start from the words only, and only that y sends the start so.
 func TestAKeyJiraDoesNotKnowStartsFromYourWordsOnly(t *testing.T) {
 	h := testFactory(t, 100, 40)
-	h.act.preview = func(text string) (NewTaskForm, error) {
+	h.act.preview = func(text, _ string) (NewTaskForm, error) {
 		return NewTaskForm{Text: text, Repo: "talkable", Err: "PR-12399 is not in Jira", WordsOnly: true}, nil
 	}
 	h.press("n")
@@ -1300,9 +1301,61 @@ func TestAKeyJiraDoesNotKnowStartsFromYourWordsOnly(t *testing.T) {
 		t.Fatal("n started a task")
 	}
 	h.press("enter", "y")
-	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12399 the reminder for advocates", "", true}) {
+	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{"PR-12399 the reminder for advocates", "", "talkable", true}) {
 		t.Errorf("starts = %+v, want the words only", h.act.starts)
 	}
+}
+
+// With two repositories the form names the one the task goes to. Until one
+// is chosen enter refuses with the reason, and no y starts a task; shift+tab
+// cycles through them, asks nothing and starts nothing (it changes only the
+// form, whose preview is read again for the pick), and the start carries the
+// repository chosen.
+func TestNewTaskStartsNoTaskWithoutARepository(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.preview = func(text, repo string) (NewTaskForm, error) {
+		if repo == "" {
+			return NewTaskForm{Text: text, Repos: fixtureRepos}, nil
+		}
+		f := fixtureNewTaskRepoPick()
+		f.Text, f.Repo = text, repo
+		return f, nil
+	}
+	const text = "the order confirmation page shows the wrong currency"
+	h.press("n")
+	h.feed(typed(text)...)
+	h.press("enter")
+	mustContain(t, h.view(), "REPO      none: no link or key of your text names one", "shift+tab repo · esc cancels",
+		"cannot start: which repository? shift+tab picks one")
+	mustNotContain(t, h.view(), "y/N", "JIRA")
+	h.press("y")
+	if h.act.calls() != 0 {
+		t.Fatalf("a y started a task with no repository: %+v", h.act.starts)
+	}
+	h.press("backspace") // the y was text
+	shiftTab := tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	h.feed(shiftTab)
+	if h.m.bar.asking != nil || h.act.calls() != 0 {
+		t.Fatalf("shift+tab asked %q or ran %+v", h.m.bar.question(), h.act.starts)
+	}
+	mustContain(t, h.view(), "REPO      example/app   your pick", "BRANCH")
+	if last := h.act.repos[len(h.act.repos)-1]; last != "example/app" {
+		t.Errorf("the preview after shift+tab is for %q, want your pick", last)
+	}
+	h.feed(shiftTab)
+	mustContain(t, h.view(), "REPO      example/site  your pick")
+	h.press("enter")
+	mustContain(t, cardSquash(h.view()), `Start bug "the order confirmation page shows the wrong`, `…" in example/site with 3 agents? y/N`)
+	h.press("y")
+	if len(h.act.starts) != 1 || h.act.starts[0] != (factoryStartCall{text, "bug", "example/site", false}) {
+		t.Errorf("starts = %+v, want the task in example/site", h.act.starts)
+	}
+	h.press("n")
+	h.feed(typed(text)...)
+	h.press("enter") // the preview: no repository told
+	h.feed(shiftTab, shiftTab, shiftTab)
+	mustContain(t, h.view(), "REPO      example/app   your pick") // the cycle wraps, and a start forgets the pick
+	mustContain(t, ansi.Strip(strings.Join(h.m.helpContent(100), "\n")), "shift+tab", "the repository, when the factory has several")
 }
 
 // The pager shows the whole diff: once it returns, no file is unread.
@@ -1394,7 +1447,7 @@ func TestAConflictCardNeverPushes(t *testing.T) {
 // is, never a key.
 func TestTheSeveralKeysQuestionNamesThePromptTask(t *testing.T) {
 	h := testFactory(t, 100, 40)
-	h.act.preview = func(text string) (NewTaskForm, error) {
+	h.act.preview = func(text, _ string) (NewTaskForm, error) {
 		f := fixtureNewTaskSeveral()
 		f.Text, f.Ask = text, ""
 		f.Jira = &JiraPreview{Key: "PR-12345", Summary: "Credit expiry reminder email"} // a source that sets both

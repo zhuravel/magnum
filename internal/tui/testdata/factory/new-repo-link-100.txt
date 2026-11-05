@@ -1,0 +1,16 @@
+ magnum factory · new task                                                              esc cancels 
+
+ Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
+ ┃ fix the CSV export: it drops the last row
+ ┃ see https://github.com/example/app/issues/88▏
+
+ REPO      example/app   from the link · shift+tab: example/app, example/site
+ JIRA      none: the agents work from your words
+ KIND      bug         guessed from "fix" · tab: bug, feature, chore
+ TITLE     fix the CSV export: it drops the last row
+ BRANCH    zhuravel-fix-csv-export-drops-last-row
+ STARTS    now, 2 copies free
+ AGENTS    3: reproduce it · find the cause on its own · read the history of the code
+ RULES     2 example/app rules go into its prompts                                 L shows them
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ tab kind · shift+tab repo · esc cancels
