@@ -269,6 +269,20 @@ func (l Layout) FactoryAgentsDB() string { return filepath.Join(l.factoryDir(), 
 // baseline`), beside FactoryDB.
 func (l Layout) FactoryBaseline() string { return filepath.Join(l.factoryDir(), "baseline.json") }
 
+// FactorySeen is seen.json, when you last saw the factory screen's home
+// (the digest of what finished while you were away counts from it), beside
+// FactoryDB.
+func (l Layout) FactorySeen() string { return filepath.Join(l.factoryDir(), "seen.json") }
+
+// FactoryFocus is focus.json, the factory screen's latest focus report as
+// the factory daemon keeps it (its toasts hold while a screen that runs
+// has focus), beside FactoryDB.
+func (l Layout) FactoryFocus() string { return filepath.Join(l.factoryDir(), "focus.json") }
+
+// FactoryHolds is holds.json, the holds of the machine in force as the
+// factory daemon last saw them (the screen draws them), beside FactoryDB.
+func (l Layout) FactoryHolds() string { return filepath.Join(l.factoryDir(), "holds.json") }
+
 // FactoryTasks is the root of the factory's task directories.
 func (l Layout) FactoryTasks() string { return filepath.Join(l.factoryDir(), "tasks") }
 

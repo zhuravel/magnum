@@ -3568,9 +3568,16 @@ whose end the cursor stays. Nothing is sent before the recap's `y`, which sends 
 | New task | your Jira key, link or words; `enter` start (y/N, naming the kind, the task and its agents, or when a queued task starts); `ctrl+j` a new line; `ctrl+g` your editor (`$VISUAL`, else `$EDITOR`); `tab` the kind; `esc` back, the draft kept. A key Jira does not know is said first (`PR-12399 is not in Jira`), and `enter` then asks "Start from your words only?": the whole text becomes the task, the key kept as words. A question is asked only for the text `enter` was pressed on. Above the question, what the factory read: the ticket, your guidance, the links (a Jira link is its key; a PR link's adoption and a run link's CI task come in milestones 2 and 3) and what else touches the work (OVERLAP) |
 
 The mouse: the wheel moves, a click selects a row and a double click opens it, and a right click opens a menu
-of the view's own keys, each running its key's path, y/N included. After you were away, home shows what
-finished meanwhile until your next key. In this build the screen reads the factory's tasks from its registry
-and sends the factory no request yet: its action keys say so.
+of the view's own keys, each running its key's path, y/N included. After more than an hour away (since you last
+saw home: your first key after a digest, a blur of the screen's terminal or quitting it, kept in
+`factory/seen.json` of the data directory), home shows what finished meanwhile until your next key. The screen
+reads the factory's registry, its agents store and the tasks' directories: the agents by what they do (each
+`[[factory.role]]`'s `doing` and `why`), the holds of the machine as the daemon last saved them
+(`memory full: new tasks wait`), what frees a queued task, and every alert with its time. Each action is a
+request to the factory daemon, as the factory's commands send them (the daemon records your input once); `o`
+focuses the task's pane in the factory's herdr session (`[factory] herdr_session`) and brings that terminal to
+the front, and `d` pages the ready card's diff in the task's copy, the flagged files first. Without a factory
+daemon a request waits queued, and the footer says so. `,` opens the settings screen, as on the board.
 
 A start writes the task's data files to its directory (`factory/tasks/<id>/` in the data directory), which
 its agents read as data: `ticket.md` (the ticket as a round's judge gets it) and `guidance.md` (your words
@@ -3746,7 +3753,8 @@ conflict at the same base a second time needs you instead of another round. The 
 prompt), the branch the push goes to, the copy a push frees and the FLAGS line: the migrations the branch adds, the `sensitive` files, the
 files the plan did not name, a guard the change rewrites that is older than 6 months with the reason the history
 agent found (only its findings name guards), the CI jobs of the workflows that run on a pull request whose commands the precheck did not run,
-and the conflicts. The task waits on you (`ready to push (card <n>): <title>`); decide with `magnum factory
+and the conflicts; and the changed files with their lines, the ones a FLAGS line names or the plan did not name first,
+in that order in `diff-order.txt` beside it, which the screen's pager reads (`git diff -O`). The task waits on you (`ready to push (card <n>): <title>`); decide with `magnum factory
 decide`. A drop is bound to no card: it stops a task at its ready stage even after its card changed.
 
 On your push the factory, never an agent, publishes the approved head once (the effect

@@ -91,7 +91,12 @@ func runFactoryStartCmd(c *Context, kind, repo string, pos []string) int {
 // waitFactoryRequest re-reads request id until the factory daemon answers
 // it, ctx ends or factoryStartWait passes, and returns its last read.
 func waitFactoryRequest(ctx context.Context, reg *registry.Registry, id int64) (registry.Request, error) {
-	deadline := time.Now().Add(factoryStartWait)
+	return waitFactoryRequestFor(ctx, reg, id, factoryStartWait)
+}
+
+// waitFactoryRequestFor is waitFactoryRequest, giving up after wait.
+func waitFactoryRequestFor(ctx context.Context, reg *registry.Registry, id int64, wait time.Duration) (registry.Request, error) {
+	deadline := time.Now().Add(wait)
 	for {
 		q, err := reg.RequestByID(ctx, id)
 		done := err != nil || q.State != registry.RequestPending || !time.Now().Before(deadline)

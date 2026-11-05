@@ -22,13 +22,15 @@ const (
 	GroupDone
 )
 
-// waitsOnYou is the Who of a blocker that is the operator: the one word the
-// painter draws in yellow ("you:"), and the word the data writes for it.
-const waitsOnYou = "you"
+// WaitsOnYou is the Who of a blocker that is the operator: the one word the
+// painter draws in yellow ("you:"), and the word the data writes for it
+// (the factory's own wait on you is this constant).
+const WaitsOnYou = "you"
 
-// agentWaitsOnYou is the state of an agent that waits on the operator, the
-// only agent state drawn in yellow.
-const agentWaitsOnYou = "waits on " + waitsOnYou
+// AgentWaitsOnYou is the state of an agent that waits on the operator, the
+// only agent state drawn in yellow, as the painter and the factory's
+// screen data both spell it.
+const AgentWaitsOnYou = "waits on " + WaitsOnYou
 
 // FactoryMark is the one-cell mark before a row: what the task is doing now.
 type FactoryMark int
@@ -89,7 +91,7 @@ type Digest struct {
 	Chip  string
 }
 
-// WaitsOn is one thing a task waits on. Who is "you" (waitsOnYou), "agent", "CI", a
+// WaitsOn is one thing a task waits on. Who is "you" (WaitsOnYou), "agent", "CI", a
 // login, "magnum", "memory", "usage", "copy" or "nothing"; What says why.
 type WaitsOn struct {
 	Who, What string

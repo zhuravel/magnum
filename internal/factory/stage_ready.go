@@ -41,6 +41,7 @@ import (
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -91,7 +92,8 @@ type DecidePayload struct {
 // base...head), the hash of report.md and pr-body.md as shown and the hash
 // of the diff (the patch id of base...head), the branch, the PR's title,
 // the copy a push frees (its directory's name) and its path, the FLAGS
-// lines (Flags.Lines) and the local review's end.
+// lines (Flags.Lines), the local review's end and the changed files, the
+// flagged ones first (cardFilesOf).
 type ReadyCardFile struct {
 	Revision   int           `json:"revision"`
 	Drawn      time.Time     `json:"drawn"`
@@ -106,6 +108,90 @@ type ReadyCardFile struct {
 	CopyPath   string        `json:"copy_path"`
 	Flags      []string      `json:"flags"`
 	Review     ReviewSummary `json:"review"`
+	Files      []CardFile    `json:"files"`
+}
+
+// CardFile is one file the change of a ready card changes: its path, the
+// lines its diff adds and removes (both 0 for a binary file), whether the
+// plan named it, and whether a FLAGS line names it (a migration the branch
+// adds, a sensitive file, an old guard, a conflict with the base).
+type CardFile struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added,omitempty"`
+	Removed int    `json:"removed,omitempty"`
+	InPlan  bool   `json:"in_plan"`
+	Flagged bool   `json:"flagged,omitempty"`
+}
+
+// cardFiles are the files of the change now in copy dir as the card lists
+// them (cardFilesOf), with their lines (git diff --numstat).
+func (e *Engine) cardFiles(ctx context.Context, dir string, now cardState, f Flags) ([]CardFile, error) {
+	stats, err := e.d.Git.DiffStat(ctx, dir, now.base, now.head)
+	if err != nil {
+		return nil, err
+	}
+	return cardFilesOf(stats, f), nil
+}
+
+// cardFilesOf are the changed files stats as the card lists them: the
+// files a FLAGS line of f names or the plan did not name first, then the
+// rest, each part in git's order.
+func cardFilesOf(stats []gitx.FileStat, f Flags) []CardFile {
+	flagged := map[string]bool{}
+	for _, p := range slices.Concat(f.Sensitive, f.Conflicts) {
+		flagged[p] = true
+	}
+	for _, m := range f.Migrations {
+		flagged[m.Path] = true
+	}
+	for _, g := range f.OldGuards {
+		flagged[g.Path] = true
+	}
+	files := make([]CardFile, 0, len(stats))
+	for _, s := range stats {
+		files = append(files, CardFile{Path: s.Path, Added: s.Added, Removed: s.Removed, InPlan: !slices.Contains(f.NotInPlan, s.Path),
+			Flagged: flagged[s.Path]})
+	}
+	slices.SortStableFunc(files, func(a, b CardFile) int {
+		return cmp.Compare(boolRank(!a.Flagged && a.InPlan), boolRank(!b.Flagged && b.InPlan))
+	})
+	return files
+}
+
+// boolRank orders false before true.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// DiffOrderFile is the order file (git diff -O) of a ready card's diff in
+// the task's directory: its files as the card lists them, flagged first, so
+// the pager shows them in that order.
+const DiffOrderFile = "diff-order.txt"
+
+// diffOrder is the text of DiffOrderFile for files: one path a line, its
+// glob characters escaped (git reads each line as a pattern).
+func diffOrder(files []CardFile) string {
+	var b strings.Builder
+	for _, f := range files {
+		p := f.Path
+		for _, c := range []string{`\`, "*", "?", "["} {
+			p = strings.ReplaceAll(p, c, `\`+c)
+		}
+		b.WriteString(p + "\n")
+	}
+	return b.String()
+}
+
+// DiffArgs are the arguments of git that page the diff of task id's ready
+// card c in its copy, its files in the card's order (DiffOrderFile in the
+// task's directory of layout l): `git --paginate -C <copy> diff
+// -O<order> <base>...<head> --`. It reads nothing.
+func DiffArgs(l paths.Layout, id int64, c ReadyCardFile) []string {
+	return []string{"--paginate", "-C", c.CopyPath, "diff", "-O" + filepath.Join(l.FactoryTaskDir(id), DiffOrderFile),
+		c.Base + "..." + c.Head, "--"}
 }
 
 // ReadReadyCard reads the ready card of task id in layout l.
@@ -534,13 +620,21 @@ func (e *Engine) pushApproved(ctx context.Context, t registry.Task, now cardStat
 // changed, else a new revision, with an event.
 func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now cardState, f Flags, sum ReviewSummary) (ReadyCardFile, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	files, err := e.cardFiles(ctx, c.Path, now, f)
+	if err != nil {
+		return ReadyCardFile{}, err
+	}
 	card := ReadyCardFile{Head: now.head, Base: now.base, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
-		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum}
+		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum,
+		Files: files}
 	old, err := readCard(dir)
 	if err == nil && sameCard(old, card) {
 		return old, nil
 	}
 	card.Revision, card.Drawn = old.Revision+1, e.now()
+	if err := fsx.WriteFileAtomic(filepath.Join(dir, DiffOrderFile), []byte(diffOrder(files)), 0o600); err != nil {
+		return card, err
+	}
 	if err := writeJSON(filepath.Join(dir, readyCardFile), card); err != nil {
 		return card, err
 	}
@@ -813,23 +907,37 @@ func knownList(sum ReviewSummary) string {
 		return b.String()
 	}
 	b.WriteString("What magnum's review of this change before the PR left open; none of it blocks.\n\n")
-	for _, i := range sum.Leftovers {
-		fmt.Fprintf(&b, "- %s\n", knownItem(i))
-	}
-	for _, i := range sum.Declined {
-		fmt.Fprintf(&b, "- declined: %s. The risk of the suggested change: %s\n", knownItem(i), oneLine(i.Risk))
-	}
-	for _, i := range sum.Doubts {
-		fmt.Fprintf(&b, "- a doubt: %s (it came back twice after its fix)\n", knownItem(i))
-	}
-	for _, role := range sum.Missing {
-		fmt.Fprintf(&b, "- a round of the review went without %s's report\n", role)
+	for _, l := range knownLines(sum, true) {
+		fmt.Fprintf(&b, "- %s\n", l)
 	}
 	return b.String()
 }
 
-// knownItem is a finding in a line: its priority, its place and its title.
-func knownItem(i ReviewItem) string {
+// knownLines are the items of the "Known" list of sum, one line each: the
+// leftovers, the findings the writer declined with the risk of the
+// suggested change, the doubts, and the reviewers a round went without.
+// code puts a finding's place in backticks (the PR body's Markdown); the
+// ready card's KNOWN row has it plain.
+func knownLines(sum ReviewSummary, code bool) []string {
+	var out []string
+	for _, i := range sum.Leftovers {
+		out = append(out, knownItem(i, code))
+	}
+	for _, i := range sum.Declined {
+		out = append(out, fmt.Sprintf("declined: %s. The risk of the suggested change: %s", knownItem(i, code), oneLine(i.Risk)))
+	}
+	for _, i := range sum.Doubts {
+		out = append(out, fmt.Sprintf("a doubt: %s (it came back twice after its fix)", knownItem(i, code)))
+	}
+	for _, role := range sum.Missing {
+		out = append(out, fmt.Sprintf("a round of the review went without %s's report", role))
+	}
+	return out
+}
+
+// knownItem is a finding in a line: its priority, its place (in backticks
+// when code) and its title.
+func knownItem(i ReviewItem, code bool) string {
 	var parts []string
 	if i.Severity != "" {
 		parts = append(parts, i.Severity)
@@ -838,7 +946,10 @@ func knownItem(i ReviewItem) string {
 		if i.Line > 0 {
 			place += ":" + strconv.Itoa(i.Line)
 		}
-		parts = append(parts, "`"+place+"`:")
+		if code {
+			place = "`" + place + "`"
+		}
+		parts = append(parts, place+":")
 	}
 	return strings.Join(append(parts, oneLine(i.Title)), " ")
 }

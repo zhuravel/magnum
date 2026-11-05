@@ -11418,6 +11418,7 @@ const (
 	ReqPreview = "preview"
 	ReqLetGo   = "let_go"
 	ReqRetry   = "retry"
+	ReqFocus   = "focus"
 )
     Request kinds.
 
@@ -11432,6 +11433,11 @@ const AmendPrompt = "factory-amend.md"
     AmendPrompt is the prompt of the judge's turn that amends report.md when
     your answers change the plan: the report stage's roles get it in place of
     their own prompt.
+
+const DiffOrderFile = "diff-order.txt"
+    DiffOrderFile is the order file (git diff -O) of a ready card's diff in
+    the task's directory: its files as the card lists them, flagged first,
+    so the pager shows them in that order.
 
 const HandoffFile = "handoff.md"
     HandoffFile is the file of a task's directory a release writes: how the task
@@ -11571,6 +11577,12 @@ func Denied(argv []string, repo config.FactoryRepo) (why string, denied bool)
     console's own file as an argument (lint of bin/remote-console) is no console
     run.
 
+func DiffArgs(l paths.Layout, id int64, c ReadyCardFile) []string
+    DiffArgs are the arguments of git that page the diff of task id's ready
+    card c in its copy, its files in the card's order (DiffOrderFile in the
+    task's directory of layout l): `git --paginate -C <copy> diff -O<order>
+    <base>...<head> --`. It reads nothing.
+
 func Fingerprint(f evalrun.LocalFinding) string
     Fingerprint is how the factory follows a finding across rounds: its path,
     its line rounded down to a window of 10, and a hash of its title without its
@@ -11624,9 +11636,25 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
+func ReadSeen(l paths.Layout) (time.Time, error)
+    ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
+    in layout l; the zero time before the first.
+
 func ReviewCandidateDir(l paths.Layout) string
     ReviewCandidateDir is where the factory writes its review candidate:
     <data>/factory/review-candidate/.
+
+func SaveSeen(l paths.Layout, at time.Time) error
+    SaveSeen keeps that you saw home at at in seen.json of layout l, so it
+    survives a restart of the screen and of the daemon. The time only moves
+    forward: an earlier time than the one kept changes nothing, and two screens
+    saving at once take turns on a lock of the file's own, so the later time
+    stays.
+
+func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store, now, lastSeen time.Time, o ScreenOptions) (tui.FactoryData, error)
+    ScreenData is the factory screen's data at now for an operator last seen on
+    home at lastSeen (zero: never): see the file's comment. agents may be nil
+    (no agent ran yet): the tasks then have no agents.
 
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
@@ -11673,6 +11701,18 @@ type AnswerPayload struct {
     person in your words) to ask someone else; Needless are the questions you
     call needless, by index, with the key of your reason. Surface is where you
     answered (the screen, the CLI), for the record of your input.
+
+type CardFile struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added,omitempty"`
+	Removed int    `json:"removed,omitempty"`
+	InPlan  bool   `json:"in_plan"`
+	Flagged bool   `json:"flagged,omitempty"`
+}
+    CardFile is one file the change of a ready card changes: its path, the lines
+    its diff adds and removes (both 0 for a binary file), whether the plan
+    named it, and whether a FLAGS line names it (a migration the branch adds,
+    a sensitive file, an old guard, a conflict with the base).
 
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
@@ -11834,6 +11874,24 @@ func (f Flags) Lines() []string
     Lines are the flags as the card's FLAGS line says them, one each; none when
     nothing needs a second look.
 
+type FocusPayload struct {
+	Focused bool
+	PID     int
+	At      time.Time
+}
+    FocusPayload is a ReqFocus: the factory screen of process PID gained
+    (Focused) or lost its terminal's focus at At. It carries no words and is no
+    input of yours.
+
+func ReadScreenFocus(l paths.Layout) (FocusPayload, error)
+    ReadScreenFocus is the screen's latest focus as the daemon keeps it
+    (Layout.FactoryFocus); none yet is the zero FocusPayload, which is not Live.
+
+func (f FocusPayload) Live() bool
+    Live reports whether f is the focus of a screen that still runs: it is
+    focused, and its process lives as a magnum process (a pid reused by another
+    program does not count). A screen that ended while focused holds nothing.
+
 type GitHub interface {
 	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
@@ -11879,6 +11937,10 @@ type Hold struct {
     HoldMemory), its reason without the kind ("SSH key refused"), since when
     it holds, when it tries again (an infrastructure hold's next try, a herdr
     hold's next reveal) and how many tries ran.
+
+func ReadHolds(l paths.Layout) ([]Hold, error)
+    ReadHolds are the holds of the machine in force as the factory daemon last
+    saved them (holds.json in layout l); none before its first tick.
 
 type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
@@ -12104,14 +12166,15 @@ type ReadyCardFile struct {
 	CopyPath   string        `json:"copy_path"`
 	Flags      []string      `json:"flags"`
 	Review     ReviewSummary `json:"review"`
+	Files      []CardFile    `json:"files"`
 }
-    ReadyCardFile is ready-card.json, the ready card as the factory drew it:
-    its revision (a new one each time what it shows changed) and when it was
-    drawn, the head and the base of the change (the PR's diff is base...head),
-    the hash of report.md and pr-body.md as shown and the hash of the diff (the
-    patch id of base...head), the branch, the PR's title, the copy a push frees
-    (its directory's name) and its path, the FLAGS lines (Flags.Lines) and the
-    local review's end.
+    ReadyCardFile is ready-card.json, the ready card as the factory drew it: its
+    revision (a new one each time what it shows changed) and when it was drawn,
+    the head and the base of the change (the PR's diff is base...head), the hash
+    of report.md and pr-body.md as shown and the hash of the diff (the patch
+    id of base...head), the branch, the PR's title, the copy a push frees (its
+    directory's name) and its path, the FLAGS lines (Flags.Lines), the local
+    review's end and the changed files, the flagged ones first (cardFilesOf).
 
 func ReadReadyCard(l paths.Layout, id int64) (ReadyCardFile, error)
     ReadReadyCard reads the ready card of task id in layout l.
@@ -12226,6 +12289,14 @@ type Runtime interface {
     launch to adopt, or closed). Proving says whether the proof that a prompt of
     unknown delivery never arrived is under way (its read after RedeliverAfter
     settles it).
+
+type ScreenOptions struct {
+	Config *config.Config
+	Layout paths.Layout
+}
+    ScreenOptions are what ScreenData reads besides the registries: the config
+    (the roles' words, the kinds' stages, the repositories) and the layout (the
+    tasks' directories, the holds the daemon saved).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -12933,6 +13004,11 @@ func (r *Registry) Questions(ctx context.Context, taskID int64) ([]Question, err
 func (r *Registry) Ratings(ctx context.Context, taskID int64) ([]Rating, error)
     Ratings returns a task's ratings in the order they were given.
 
+func (r *Registry) RecentEvents(ctx context.Context, limit int, kinds ...string) ([]Event, error)
+    RecentEvents returns the newest limit events of the given kinds, of every
+    task and of the daemon itself, newest first (limit <= 0: all). No kind is no
+    event.
+
 func (r *Registry) RecordArtifact(ctx context.Context, a Artifact) error
     RecordArtifact stores a as a new revision of its kind and path, unless the
     latest revision of that kind and path already has the same sha256 (a no-op:
@@ -13338,6 +13414,11 @@ func Scrub(text string) (clean string, kept bool)
     pasted block (more than 40 lines or 4000 bytes), which a capture of what the
     operator typed drops (the ledger keeps the factory's own prompts, scrubbed,
     whatever their length).
+
+func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Session, error)
+    TaskSessions are the sessions of task id in the factory's agents store st,
+    oldest first: every generation of every role the runtime launched for it.
+    A task never launched has none.
 
 func UnknownReason(roles ...string) string
     UnknownReason is the wait of a task whose prompts to roles may or may not
@@ -19034,6 +19115,15 @@ func (l Layout) FactoryDB() string
     FactoryDB is the factory's own registry (factory.db in the factory directory
     of the data directory), separate from the review registry.
 
+func (l Layout) FactoryFocus() string
+    FactoryFocus is focus.json, the factory screen's latest focus report as
+    the factory daemon keeps it (its toasts hold while a screen that runs has
+    focus), beside FactoryDB.
+
+func (l Layout) FactoryHolds() string
+    FactoryHolds is holds.json, the holds of the machine in force as the factory
+    daemon last saw them (the screen draws them), beside FactoryDB.
+
 func (l Layout) FactoryLock() string
     FactoryLock is the factory daemon's lock file under State, held for the
     daemon's whole life.
@@ -19044,6 +19134,11 @@ func (l Layout) FactoryLog() string
 func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
     daemon's: the two daemons can run at once.
+
+func (l Layout) FactorySeen() string
+    FactorySeen is seen.json, when you last saw the factory screen's home
+    (the digest of what finished while you were away counts from it), beside
+    FactoryDB.
 
 func (l Layout) FactorySpecsLock() string
     FactorySpecsLock is the lock file under State that a factory precheck or
@@ -25369,6 +25464,16 @@ const (
 )
     PRBoardRow.NeedsMe values (store.NeedsMe's).
 
+const AgentWaitsOnYou = "waits on " + WaitsOnYou
+    AgentWaitsOnYou is the state of an agent that waits on the operator, the
+    only agent state drawn in yellow, as the painter and the factory's screen
+    data both spell it.
+
+const WaitsOnYou = "you"
+    WaitsOnYou is the Who of a blocker that is the operator: the one word the
+    painter draws in yellow ("you:"), and the word the data writes for it (the
+    factory's own wait on you is this constant).
+
 
 VARIABLES
 
@@ -27282,7 +27387,7 @@ type WaitsOn struct {
 	// Short and Long are What on a narrow and on a wide screen.
 	Short, Long string
 }
-    WaitsOn is one thing a task waits on. Who is "you" (waitsOnYou), "agent",
+    WaitsOn is one thing a task waits on. Who is "you" (WaitsOnYou), "agent",
     "CI", a login, "magnum", "memory", "usage", "copy" or "nothing"; What says
     why.
 

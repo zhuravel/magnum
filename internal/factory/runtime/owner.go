@@ -109,7 +109,26 @@ func (r *Runtime) owner(ctx context.Context, t registry.Task, head string) (stor
 // ownerRow is task id's owner row as it is (store.ErrNotFound before the
 // task's first launch).
 func (r *Runtime) ownerRow(ctx context.Context, id int64) (store.PR, error) {
-	repos, err := r.st.ListRepos(ctx)
+	return ownerRowIn(ctx, r.st, id)
+}
+
+// TaskSessions are the sessions of task id in the factory's agents store
+// st, oldest first: every generation of every role the runtime launched
+// for it. A task never launched has none.
+func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Session, error) {
+	pr, err := ownerRowIn(ctx, st, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return st.SessionsByPR(ctx, pr.ID)
+}
+
+// ownerRowIn is task id's owner row in st (ownerRow).
+func ownerRowIn(ctx context.Context, st *store.Store, id int64) (store.PR, error) {
+	repos, err := st.ListRepos(ctx)
 	if err != nil {
 		return store.PR{}, err
 	}
@@ -117,7 +136,7 @@ func (r *Runtime) ownerRow(ctx context.Context, id int64) (store.PR, error) {
 		if repo.Owner != ownerRepo {
 			continue
 		}
-		pr, err := r.st.PRByRepoNumber(ctx, repo.ID, int(id))
+		pr, err := st.PRByRepoNumber(ctx, repo.ID, int(id))
 		if err == nil && pr.NodeID == ownerNode(id) {
 			return pr, nil
 		}

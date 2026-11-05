@@ -14,13 +14,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -33,7 +39,70 @@ const (
 	ReqPreview = "preview"
 	ReqLetGo   = "let_go"
 	ReqRetry   = "retry"
+	ReqFocus   = "focus"
 )
+
+// FocusPayload is a ReqFocus: the factory screen of process PID gained
+// (Focused) or lost its terminal's focus at At. It carries no words and is
+// no input of yours.
+type FocusPayload struct {
+	Focused bool
+	PID     int
+	At      time.Time
+}
+
+// Live reports whether f is the focus of a screen that still runs: it is
+// focused, and its process lives as a magnum process (a pid reused by
+// another program does not count). A screen that ended while focused
+// holds nothing.
+func (f FocusPayload) Live() bool {
+	return f.Focused && f.PID > 0 && engine.DrainerAlive(f.PID)
+}
+
+// ReadScreenFocus is the screen's latest focus as the daemon keeps it
+// (Layout.FactoryFocus); none yet is the zero FocusPayload, which is not
+// Live.
+func ReadScreenFocus(l paths.Layout) (FocusPayload, error) {
+	var f FocusPayload
+	b, err := os.ReadFile(l.FactoryFocus())
+	if errors.Is(err, fs.ErrNotExist) {
+		return f, nil
+	}
+	if err != nil {
+		return f, err
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		return FocusPayload{}, fmt.Errorf("%s: %w", filepath.Base(l.FactoryFocus()), err)
+	}
+	return f, nil
+}
+
+// focusRequest keeps the screen's focus report p in focus.json, where the
+// delivery of the alerts reads it (ReadScreenFocus), so a daemon restart
+// keeps it: the latest report wins, and an older one that arrives late
+// changes nothing.
+func (e *Engine) focusRequest(_ context.Context, p FocusPayload) (string, error) {
+	if p.PID <= 0 || p.At.IsZero() {
+		return "", errors.New("a focus report names the screen's pid and its time")
+	}
+	if cur, err := ReadScreenFocus(e.d.Layout); err == nil && cur.At.After(p.At) {
+		return "kept the newer focus report", nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(e.d.Layout.FactoryFocus()), 0o700); err != nil {
+		return "", err
+	}
+	if err := fsx.WriteFileAtomic(e.d.Layout.FactoryFocus(), append(b, '\n'), 0o600); err != nil {
+		return "", err
+	}
+	if p.Focused {
+		return "the screen has focus", nil
+	}
+	return "the screen lost focus", nil
+}
 
 // RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at
 // its stage. Surface is where you asked, for the record of your input.
@@ -107,6 +176,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.decideRequest)
 	case ReqRetry:
 		respond(e, ctx, q, e.retryTask)
+	case ReqFocus:
+		respond(e, ctx, q, e.focusRequest)
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}
@@ -317,22 +388,8 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if t.State != registry.TaskNeedsYou {
-		return "", fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
-	}
-	open, err := e.openQuestions(ctx, t.ID)
-	if err != nil {
+	if err := retryRefusal(ctx, e.reg, e.d.Layout, t); err != nil {
 		return "", err
-	}
-	if len(open) > 0 { // asks.json only says whom the open questions wait on
-		asks, err := e.readAsks(t.ID)
-		if err != nil {
-			return "", err
-		}
-		if state, _, _ := e.questionsWait(t, open, asks); state == registry.TaskNeedsYou {
-			return "", fmt.Errorf("%s waits for your answers to %s: answer them with `magnum factory answer %d` (it prints them); "+
-				"a retry would only ask them again", TaskKey(t), plural(len(open), "question"), t.ID)
-		}
 	}
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")
@@ -350,4 +407,29 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	delete(e.checkFails, t.ID)
 	e.checksMu.Unlock()
 	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")), nil
+}
+
+// retryRefusal is the guard of a retry of task t, as retryTask and the
+// screen's task card (its r) both ask it: nil when a retry goes on, else
+// why not: t does not wait on you, or its questions wait for your answers
+// (a retry would only ask them again; asks.json in t's directory of
+// layout l says which open questions wait on someone you asked instead). A
+// registry or a file that cannot be read is its error.
+func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) error {
+	if t.State != registry.TaskNeedsYou {
+		return fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
+	}
+	open, err := openQuestionsOf(ctx, reg, t)
+	if err != nil || len(open) == 0 {
+		return err
+	}
+	asks, err := readAsksIn(l.FactoryTaskDir(t.ID)) // asks.json only says whom the open questions wait on
+	if err != nil {
+		return err
+	}
+	if questionsOnYou(open, asks) {
+		return fmt.Errorf("%s waits for your answers to %s: answer them with `magnum factory answer %d` (it prints them); "+
+			"a retry would only ask them again", TaskKey(t), plural(len(open), "question"), t.ID)
+	}
+	return nil
 }

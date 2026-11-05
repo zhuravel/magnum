@@ -328,7 +328,7 @@ var noStyle = lipgloss.Style{}
 
 func (p *factoryPainter) whoStyle(w WaitsOn) lipgloss.Style {
 	switch who := strings.ToLower(w.Who); {
-	case w.OnYou || who == waitsOnYou:
+	case w.OnYou || who == WaitsOnYou:
 		return p.st.Warn
 	case who == "memory" || who == "usage" || who == "copy": // the Mac's own resources
 		return noStyle

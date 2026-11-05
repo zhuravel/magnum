@@ -233,6 +233,10 @@ type Engine struct {
 	holds     map[string]*Hold
 	blockers  map[string]string
 	recent    map[string]recentFailure
+	// holdsWritten is the holds as this daemon last saved them for the
+	// screen (saveHolds), holdsSaved whether it saved them yet.
+	holdsWritten []byte
+	holdsSaved   bool
 	// lastReveal is when a herdr hold last opened herdr's session.
 	lastReveal time.Time
 	// recovery is what the agents' recovery has left to do after a failure
@@ -548,6 +552,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.tickAt = now
 	e.wake(now)
 	defer e.alive()
+	defer e.saveHolds() // the screen draws the holds in force
 	var errs []error
 
 	tasks, err := e.reg.Tasks(ctx)
@@ -947,9 +952,6 @@ func (e *Engine) toOperator(ctx context.Context, t registry.Task, what, because 
 	e.freeHeavy(ctx, t, "its task waits on you")
 	e.alert(ctx, t.ID, TaskKey(t)+": you: "+what)
 }
-
-// waitsYou is the WaitsWho of a task that waits on the operator.
-const waitsYou = "you"
 
 // alert records an alert: a task, or the factory (taskID 0), moved into
 // NEEDS YOU. The notifier of the screen's build turns alerts into toasts.

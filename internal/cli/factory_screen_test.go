@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -45,9 +46,10 @@ func TestFactoryWithoutASubcommandOpensTheScreen(t *testing.T) {
 	onScreen(t)
 	var opts tui.FactoryOptions
 	var data tui.FactoryData
+	var actions tui.FactoryActions
 	old := tuiFactory
 	tuiFactory = func(ctx context.Context, src tui.FactorySource, act tui.FactoryActions, o tui.FactoryOptions) error {
-		opts = o
+		opts, actions = o, act
 		var err error
 		data, err = src.Frame(ctx)
 		return err
@@ -59,6 +61,15 @@ func TestFactoryWithoutASubcommandOpensTheScreen(t *testing.T) {
 	}
 	if !opts.NoMouse || opts.Icons != tui.IconsASCII || opts.Now == nil {
 		t.Errorf("options %+v: want the config's mouse off and ascii icons", opts)
+	}
+	if _, ok := actions.(*factoryActions); !ok {
+		t.Errorf("actions %T, want the factory's requests", actions)
+	}
+	if opts.Settings == nil || opts.Settings.Source == nil || opts.Settings.Runtime == nil {
+		t.Errorf("settings %+v, want `,` to open the settings screen", opts.Settings)
+	}
+	if seen, err := factory.ReadSeen(dt.ctx.Layout); err != nil || seen.IsZero() {
+		t.Errorf("seen %v (%v) after the screen closed, want its time", seen, err)
 	}
 	if len(data.Rows) != 2 {
 		t.Fatalf("rows %+v, want the 2 tasks", data.Rows)

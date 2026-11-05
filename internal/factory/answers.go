@@ -593,7 +593,12 @@ func draftComment(t registry.Task, q registry.Question, login string) string {
 
 // readAsks reads asks.json of task id, by questionKey; none is no ask.
 func (e *Engine) readAsks(id int64) (map[string]ask, error) {
-	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(id), asksFile))
+	return readAsksIn(e.d.Layout.FactoryTaskDir(id))
+}
+
+// readAsksIn reads asks.json in the task directory dir (readAsks).
+func readAsksIn(dir string) (map[string]ask, error) {
+	b, err := os.ReadFile(filepath.Join(dir, asksFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]ask{}, nil
 	}

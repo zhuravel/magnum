@@ -124,10 +124,14 @@ func (f Flags) Lines() []string {
 		out = append(out, "CI jobs not run here: "+strings.Join(f.CIJobsNotRun, ", "))
 	}
 	if len(f.Conflicts) > 0 {
-		out = append(out, "conflicts with the base: "+strings.Join(f.Conflicts, ", "))
+		out = append(out, conflictsFlag+strings.Join(f.Conflicts, ", "))
 	}
 	return out
 }
+
+// conflictsFlag starts the FLAGS line of the conflicts with the base: the
+// screen offers no push on a card that has it.
+const conflictsFlag = "conflicts with the base: "
 
 // ageWords is a guard's age in months or years ("8 months", "2 years").
 func ageWords(d time.Duration) string {

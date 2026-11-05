@@ -10,9 +10,12 @@ package factory
 // most [factory] heavy_stages at once across tasks.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -197,6 +200,55 @@ func (e *Engine) clearBlocker(ctx context.Context, key string) {
 	}
 	delete(e.blockers, key)
 	e.event(ctx, 0, "blocker", registry.PhaseOK, "cleared: "+line)
+}
+
+// holdsOrder is the order the screen names the holds in: the ones that stop
+// every stage first.
+var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDisk, HoldMemory}
+
+// saveHolds writes the holds in force to holds.json (Layout.FactoryHolds),
+// in holdsOrder, when they changed since the last write of this daemon (and
+// on its first tick, so a restart clears what the last run left): the
+// screen, another process, draws them. A failed write is logged and tried
+// again on the next tick.
+func (e *Engine) saveHolds() {
+	var hs []Hold
+	for _, kind := range holdsOrder {
+		if h := e.holds[kind]; h != nil {
+			hs = append(hs, *h)
+		}
+	}
+	b, err := json.Marshal(append([]Hold{}, hs...))
+	if err != nil || (e.holdsSaved && bytes.Equal(b, e.holdsWritten)) {
+		return
+	}
+	path := e.d.Layout.FactoryHolds()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		e.log.Warn("save the holds for the screen", "err", err)
+		return
+	}
+	if err := fsx.WriteFileAtomic(path, append(b, '\n'), 0o600); err != nil {
+		e.log.Warn("save the holds for the screen", "err", err)
+		return
+	}
+	e.holdsSaved, e.holdsWritten = true, b
+}
+
+// ReadHolds are the holds of the machine in force as the factory daemon
+// last saved them (holds.json in layout l); none before its first tick.
+func ReadHolds(l paths.Layout) ([]Hold, error) {
+	b, err := os.ReadFile(l.FactoryHolds())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var hs []Hold
+	if err := json.Unmarshal(b, &hs); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(l.FactoryHolds()), err)
+	}
+	return hs, nil
 }
 
 // Blocking is the factory's NEEDS YOU blockers of the home screen, one line

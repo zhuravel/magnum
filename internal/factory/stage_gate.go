@@ -426,7 +426,13 @@ func (e *Engine) openQuestions(ctx context.Context, taskID int64) ([]registry.Qu
 	if err != nil {
 		return nil, err
 	}
-	qs, err := e.reg.Questions(ctx, taskID)
+	return openQuestionsOf(ctx, e.reg, t)
+}
+
+// openQuestionsOf are the open questions of task t's newest revision, as t
+// names it (QuestionRev).
+func openQuestionsOf(ctx context.Context, reg *registry.Registry, t registry.Task) ([]registry.Question, error) {
+	qs, err := reg.Questions(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -462,9 +468,21 @@ func (e *Engine) waitForAnswers(ctx context.Context, t registry.Task, open []reg
 // before coding goes on"), else on the first one you asked ("rev-ann: a
 // question in Jira").
 func (e *Engine) questionsWait(t registry.Task, open []registry.Question, asks map[string]ask) (state, who, what string) {
-	onYou := 0
-	var first string
-	byLogin := map[string]int{}
+	onYou, first, byLogin := questionsAsked(open, asks)
+	if onYou > 0 || first == "" {
+		return registry.TaskNeedsYou, waitsYou, e.questionsBefore(t, max(onYou, 1))
+	}
+	if n := byLogin[first]; n > 1 {
+		return registry.TaskWaiting, first, fmt.Sprintf("%d questions in Jira", n)
+	}
+	return registry.TaskWaiting, first, "a question in Jira"
+}
+
+// questionsAsked splits the open questions open by whom they wait on: onYou
+// on you (asked of no one in asks), the rest by the login asked, first the
+// login of the first of them ("" when none is asked).
+func questionsAsked(open []registry.Question, asks map[string]ask) (onYou int, first string, byLogin map[string]int) {
+	byLogin = map[string]int{}
 	for _, q := range open {
 		a, ok := asks[questionKey(q.RaisedBy, q.Text)]
 		if !ok {
@@ -476,13 +494,15 @@ func (e *Engine) questionsWait(t registry.Task, open []registry.Question, asks m
 		}
 		byLogin[a.Login]++
 	}
-	if onYou > 0 || first == "" {
-		return registry.TaskNeedsYou, waitsYou, e.questionsBefore(t, max(onYou, 1))
-	}
-	if n := byLogin[first]; n > 1 {
-		return registry.TaskWaiting, first, fmt.Sprintf("%d questions in Jira", n)
-	}
-	return registry.TaskWaiting, first, "a question in Jira"
+	return onYou, first, byLogin
+}
+
+// questionsOnYou reports whether the open questions open wait on you, as
+// questionsWait has them (NEEDS YOU): one of them is asked of no one in
+// asks, or none is asked at all.
+func questionsOnYou(open []registry.Question, asks map[string]ask) bool {
+	onYou, first, _ := questionsAsked(open, asks)
+	return onYou > 0 || first == ""
 }
 
 // questionsBefore says what n questions of task t hold up: at a gate, the

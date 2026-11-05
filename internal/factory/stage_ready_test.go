@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/gitx"
 )
 
 // fakeGitHub is GitHub as the publish meets it: a PR it opens is at the
@@ -723,5 +724,49 @@ func TestASendBacksNoteIsClassifiedWhenRecorded(t *testing.T) {
 	}
 	if class, ok := classes[registry.InputDecision]; !ok || class != "" {
 		t.Errorf("the decision input has class %q (recorded: %v), want none", class, ok)
+	}
+}
+
+// The card lists the change's files with their lines, the ones a FLAGS line
+// names or the plan did not name first (the screen's unread list and the
+// pager's order), and the pager's order file says the same, its glob
+// characters escaped.
+func TestTheReadyCardListsTheFlaggedFilesFirst(t *testing.T) {
+	stats := []gitx.FileStat{{Path: "app/credit.rb", Added: 1, Removed: 1}, {Path: "Gemfile.lock", Added: 2, Removed: 2},
+		{Path: "spec/models/credit_points_spec.rb", Added: 1}, {Path: "spec/factories/[rules].rb", Added: 2},
+		{Path: "db/migrate/20261104090000_add_points.rb", Added: 9}}
+	f := Flags{Sensitive: []string{"Gemfile.lock"}, NotInPlan: []string{"spec/factories/[rules].rb"},
+		Migrations: []MigrationFlag{{Path: "db/migrate/20261104090000_add_points.rb"}}}
+	want := []CardFile{
+		{Path: "Gemfile.lock", Added: 2, Removed: 2, InPlan: true, Flagged: true},
+		{Path: "spec/factories/[rules].rb", Added: 2},
+		{Path: "db/migrate/20261104090000_add_points.rb", Added: 9, InPlan: true, Flagged: true},
+		{Path: "app/credit.rb", Added: 1, Removed: 1, InPlan: true},
+		{Path: "spec/models/credit_points_spec.rb", Added: 1, InPlan: true},
+	}
+	got := cardFilesOf(stats, f)
+	if !slices.Equal(got, want) {
+		t.Fatalf("files %+v\nwant %+v", got, want)
+	}
+	if order := diffOrder(got); order != "Gemfile.lock\nspec/factories/\\[rules].rb\ndb/migrate/20261104090000_add_points.rb\n"+
+		"app/credit.rb\nspec/models/credit_points_spec.rb\n" {
+		t.Errorf("order file %q", order)
+	}
+
+	// A card drawn from a real change records its files and writes the order.
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12381")
+	c := r.card(task.ID)
+	if !slices.Equal(c.Files, []CardFile{{Path: "app/credit.rb", Added: 1, Removed: 1, InPlan: true},
+		{Path: "spec/models/credit_points_spec.rb", Added: 1, InPlan: true}}) {
+		t.Errorf("the card's files %+v", c.Files)
+	}
+	if got := r.readTask(task.ID, DiffOrderFile); got != "app/credit.rb\nspec/models/credit_points_spec.rb\n" {
+		t.Errorf("%s: %q", DiffOrderFile, got)
+	}
+	args := DiffArgs(r.layout, task.ID, c)
+	if !slices.Equal(args, []string{"--paginate", "-C", c.CopyPath, "diff", "-O" + filepath.Join(r.layout.FactoryTaskDir(task.ID), DiffOrderFile),
+		c.Base + "..." + c.Head, "--"}) {
+		t.Errorf("diff args %q", args)
 	}
 }

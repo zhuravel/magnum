@@ -69,18 +69,46 @@ func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event
 	if err != nil {
 		return nil, fmt.Errorf("events of task %d: %w", taskID, err)
 	}
-	evs, err := collect(rows, func(sc scanner) (Event, error) {
-		var e Event
-		var tid *int64
-		err := sc.Scan(&e.ID, timeCol{&e.At}, &tid, &e.Kind, &e.Phase, &e.Text)
-		if tid != nil {
-			e.TaskID = *tid
-		}
-		return e, err
-	})
+	evs, err := collect(rows, scanEvent)
 	if err != nil {
 		return nil, fmt.Errorf("events of task %d: %w", taskID, err)
 	}
 	slices.Reverse(evs)
 	return evs, nil
+}
+
+// RecentEvents returns the newest limit events of the given kinds, of
+// every task and of the daemon itself, newest first (limit <= 0: all).
+// No kind is no event.
+func (r *Registry) RecentEvents(ctx context.Context, limit int, kinds ...string) ([]Event, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(kinds))
+	for i, k := range kinds {
+		args[i] = k
+	}
+	q := "SELECT id, at, task_id, kind, phase, text FROM events WHERE kind IN (" + placeholders(len(kinds)) + ") ORDER BY id DESC"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("recent events: %w", err)
+	}
+	evs, err := collect(rows, scanEvent)
+	if err != nil {
+		return nil, fmt.Errorf("recent events: %w", err)
+	}
+	return evs, nil
+}
+
+func scanEvent(sc scanner) (Event, error) {
+	var e Event
+	var tid *int64
+	err := sc.Scan(&e.ID, timeCol{&e.At}, &tid, &e.Kind, &e.Phase, &e.Text)
+	if tid != nil {
+		e.TaskID = *tid
+	}
+	return e, err
 }

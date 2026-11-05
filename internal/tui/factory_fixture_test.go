@@ -29,7 +29,7 @@ func fixtureHome() factoryFrame {
 				ID: 1, Key: "#4512", GitHub: "#4512", Jira: "PR-12310", Title: "Deploy list on campaigns",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
 				WaitsOn: []WaitsOn{
-					{Who: waitsOnYou, What: "reply to alice", Short: "reply", OnYou: true},
+					{Who: WaitsOnYou, What: "reply to alice", Short: "reply", OnYou: true},
 					{Who: "agent", What: "fixing bart", Short: "bart", Long: "fixing 2 conflicts in bart"},
 				},
 				Move: "post the drafted reply", MoveShort: "post reply",
@@ -46,7 +46,7 @@ func fixtureHome() factoryFrame {
 			{
 				ID: 2, Key: "PR-12345", Title: "Credit expiry reminder email",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "3 questions before coding", Short: "3 questions",
+				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "3 questions before coding", Short: "3 questions",
 					Long: "3 questions before coding · first: when is it sent?", OnYou: true}},
 				Move: "answer 3 questions", MoveShort: "answer them",
 				Since: factoryAgo(now, 41*time.Minute),
@@ -55,7 +55,7 @@ func fixtureHome() factoryFrame {
 			{
 				ID: 3, Key: "PR-12360", Title: "Custom activities lose points on copy",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push",
+				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push",
 					Long: "ready to push · 3 files +48 −6, 1 not in the plan", OnYou: true}},
 				Move: "read the diff, then push", MoveShort: "diff, then push",
 				Since: factoryAgo(now, 12*time.Minute),
@@ -207,7 +207,7 @@ func fixtureTen() factoryFrame {
 	retry := FactoryRow{
 		ID: 8, Key: "PR-12393", Title: "Referral export misses friends' emails",
 		Group: GroupNeedsYou, Mark: MarkNeedsYou,
-		WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "review unavailable (timeout)", Short: "review unavailable", OnYou: true}},
+		WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "review unavailable (timeout)", Short: "review unavailable", OnYou: true}},
 		Move:    "retry", MoveShort: "retry",
 		Since: factoryAgo(now, 25*time.Minute),
 		Help:  "review unavailable (timeout): round 2 of the local review ran out of time · enter, then r runs it again",
@@ -269,7 +269,7 @@ func fixtureDigest() factoryFrame {
 			{
 				ID: 1, Key: "PR-12345", Title: "Credit expiry reminder email",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "3 questions before coding", Short: "3 questions", OnYou: true}},
+				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "3 questions before coding", Short: "3 questions", OnYou: true}},
 				Move:    "answer 3 questions", MoveShort: "answer them",
 				Since: factoryAgo(now, 10*time.Hour+35*time.Minute),
 				Help:  `3 questions before coding · first: "When does the reminder go out?"`,
@@ -277,7 +277,7 @@ func fixtureDigest() factoryFrame {
 			{
 				ID: 2, Key: "PR-12360", Title: "Custom activities lose points on copy",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
-				WaitsOn: []WaitsOn{{Who: waitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push", OnYou: true}},
+				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "ready to push · 3 files +48 −6", Short: "ready to push", OnYou: true}},
 				Move:    "read the diff, then push", MoveShort: "diff, then push",
 				Since: factoryAgo(now, 9*time.Hour+55*time.Minute),
 				Help:  "ready to push: 1 commit, not on GitHub yet · 1 file is not in the plan",

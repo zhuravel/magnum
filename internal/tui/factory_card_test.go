@@ -524,7 +524,7 @@ func TestTaskCardOffersRetryWhenItWaitsOnYou(t *testing.T) {
 		t.Errorf("a task that waits on rev-ann offers r: %q", hints)
 	}
 	questions := fixtureTaskCard()
-	questions.WaitingFor = waitsOnYou + ": 3 questions before coding"
+	questions.WaitingFor = WaitsOnYou + ": 3 questions before coding"
 	if hints := cardLineWith(t, plainCard(drawTask(questions, 0), 140), "j k move"); strings.Contains(hints, "retry") {
 		t.Errorf("a task that waits on its questions offers r: %q", hints)
 	}
@@ -1188,7 +1188,7 @@ func TestTaskCardAnAgentIsYellowOnlyWhenItWaitsOnYou(t *testing.T) {
 			}
 		}
 	}
-	tc.Agents = append(tc.Agents, CardAgent{Name: "asks you", Why: "needs a login", State: agentWaitsOnYou})
+	tc.Agents = append(tc.Agents, CardAgent{Name: "asks you", Why: "needs a login", State: AgentWaitsOnYou})
 	frame = drawTask(tc, 0)(140, 0, true, IconsUnicode)
 	if got := warnRuns(t, frame); !slices.Equal(got, []string{"●"}) {
 		t.Errorf("only the agent that waits on the operator is yellow, got %q", got)

@@ -220,7 +220,7 @@ func fixtureRetryCard() TaskCard {
 		Key: "PR-12393", Kind: "bug", Title: "Referral export misses friends' emails",
 		Branch: "zhuravel-PR-12393-export-friend-emails", Copy: "copy 1 of 3, server off",
 		Started: cardAt(10, 2), YourTime: 2 * time.Minute,
-		WaitingFor: waitsOnYou + ": review unavailable (timeout) · round 2 of the local review ran out of time; r runs it again",
+		WaitingFor: WaitsOnYou + ": review unavailable (timeout) · round 2 of the local review ran out of time; r runs it again",
 		Stages: []CardStage{
 			st("start", "done", "Jira PR-12393 read · bug, from the Jira type", 0, 10, 2),
 			st("investigate", "done", "reproduced with a failing spec · 2 agents found the same cause", 19*time.Minute, 10, 21),

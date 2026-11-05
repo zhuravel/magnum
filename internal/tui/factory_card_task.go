@@ -302,7 +302,7 @@ func (p *cardPainter) agentRows(c TaskCard, stop, add func(string)) {
 			mark = seg{p.tick(), p.st.OK}
 		case "failed":
 			mark = seg{p.g.fail, p.st.Err}
-		case agentWaitsOnYou:
+		case AgentWaitsOnYou:
 			mark = seg{p.markGlyph(MarkNeedsYou), p.st.Warn}
 		}
 		ps := []placed{at(2, 1, mark), at(4, nameW, seg{a.Name, noStyle}), at(whyX, whyW, seg{whys[i], noStyle})}
