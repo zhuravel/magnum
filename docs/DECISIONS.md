@@ -14932,6 +14932,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   preview's and the linked task's reads off the loop is milestone 1b's. Rejected: a jitter on the backoff (the
   per-tick bound spreads the tries by itself, and the tests' clock steps by whole backoffs). Tests:
   TestThePreviewsOfAKeyReadJiraOnceFailuresIncluded and TestARestartReadsTheWaitingKeysAFewATick.
+- **The factory's git runs in the C locale** (2026-11-05, the final review; ledger 278). The factory reads
+  git's refusals from its English messages (`refusal`: a switch refused over your untracked file; gitx's
+  "already exists" on a branch race), and a daemon started by hand in a terminal of another language with a
+  git that ships translations read them as plain failures, which the stage retried. The factory daemon's
+  gitx client (and the copies' slot code it serves) runs on `cLocale`, which sets `LC_ALL=C` on each
+  command beside its own environment. Only `internal/cli/factory_daemon.go` changes: magnum's own git keeps
+  its environment, and `gitEnv` is untouched. Test: TestTheFactorysGitRunsInTheCLocale.
 
 ## Learned rules
 

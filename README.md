@@ -3835,6 +3835,8 @@ GitHub, the base branch's protection, its required reviews and no force push.
 No factory agent and no factory command connects to a shared database or console of any environment. A copy uses
 only its own local databases (its `databases`, in turn through `magnum db-lock`), the prompts forbid the rest, and
 the deny list refuses `kubectl exec`, gh-ost and the repository's `consoles` in every command the factory runs.
+The factory's git runs with `LC_ALL=C`, since it reads git's refusals from their English words (magnum's own git keeps
+its environment).
 Migrations are named, never run on a shared database: the precheck and the ready card's FLAGS line list every
 migration the branch adds, whether it uses the `ghost_marker` and on which environments, its tables and their
 sizes (`table_stats`), and flag a large table (`large_table_rows`) changed without gh-ost and without an online

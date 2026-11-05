@@ -377,6 +377,36 @@ func TestTheFactoryDaemonBuildsWithItsRuntime(t *testing.T) {
 	}
 }
 
+// The factory's git runs in the C locale: its refusals are read from git's
+// English messages (a switch refused over your untracked file), and a
+// daemon started in a terminal of another language with a git that ships
+// translations would read none. A command's own environment stays; magnum's
+// git is not the factory's and keeps its environment.
+func TestTheFactorysGitRunsInTheCLocale(t *testing.T) {
+	cfg := config.Defaults()
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer d.Close()
+	if _, ok := d.GitRun.(cLocale); !ok {
+		t.Fatalf("the factory's git runs on %T, want the C locale's runner", d.GitRun)
+	}
+
+	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"git"}}}}
+	if _, err := (cLocale{fake}).Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"status"},
+		Env: map[string]string{"GIT_TERMINAL_PROMPT": "0"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := fake.CallsWithPrefix("git")
+	if len(calls) != 1 || calls[0].Env["LC_ALL"] != "C" || calls[0].Env["GIT_TERMINAL_PROMPT"] != "0" {
+		t.Fatalf("git ran with %+v, want LC_ALL=C beside its own environment", calls)
+	}
+}
+
 // The daemon builds with its GitHub, the publish's: gh as your gh identity.
 func TestTheFactoryDaemonBuildsWithItsGitHub(t *testing.T) {
 	cfg := config.Defaults()

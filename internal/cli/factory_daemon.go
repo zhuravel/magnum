@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -121,8 +122,27 @@ type factoryDaemon struct {
 	// tokens on the factory's session.
 	Notifier, Sidebar *notify.Notifier
 	Log               *slog.Logger
+	// GitRun runs the factory's git (its gitx client, the copies' slot
+	// code): the guarded runner in the C locale (cLocale).
+	GitRun execx.Runner
 
 	closers []func() error
+}
+
+// cLocale runs every command of its runner with LC_ALL=C. The factory reads
+// git's refusals from its English messages (a switch refused over your
+// untracked file, a branch that already exists), and a daemon started in a
+// terminal of another language with a git that ships translations would
+// read them as plain failures. Only the factory's git runs in it; magnum's
+// own git keeps the environment it has.
+type cLocale struct{ execx.Runner }
+
+func (r cLocale) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	env := make(map[string]string, len(c.Env)+1)
+	maps.Copy(env, c.Env)
+	env["LC_ALL"] = "C"
+	c.Env = env
+	return r.Runner.Run(ctx, c)
 }
 
 // Close closes what the daemon opened, the newest first.
@@ -212,7 +232,8 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	// console, kubectl exec or gh-ost, whatever wraps it (factory.Guard).
 	run := factory.Guard(&execx.Real{Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "exec"}}, cfg)
 	quiet := &execx.Real{} // the reads of every tick (sysctl) stay out of the log
-	git := gitx.New(run)
+	d.GitRun = cLocale{run}
+	git := gitx.New(d.GitRun)
 	git.HTTPSFetch = true
 	memory := func(ctx context.Context) engine.MemorySample { return engine.ReadMemory(ctx, quiet, time.Now()) }
 	h := &herdr.Client{Socket: factoryHerdrSocket(cfg), Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
