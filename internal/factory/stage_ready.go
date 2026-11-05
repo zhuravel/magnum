@@ -185,13 +185,23 @@ func diffOrder(files []CardFile) string {
 	return b.String()
 }
 
-// DiffArgs are the arguments of git that page the diff of task id's ready
-// card c in its copy, its files in the card's order (DiffOrderFile in the
-// task's directory of layout l): `git --paginate -C <copy> diff
-// -O<order> <base>...<head> --`. It reads nothing.
-func DiffArgs(l paths.Layout, id int64, c ReadyCardFile) []string {
-	return []string{"--paginate", "-C", c.CopyPath, "diff", "-O" + filepath.Join(l.FactoryTaskDir(id), DiffOrderFile),
-		c.Base + "..." + c.Head, "--"}
+// DiffOrderPath is task id's DiffOrderFile in layout l.
+func DiffOrderPath(l paths.Layout, id int64) string {
+	return filepath.Join(l.FactoryTaskDir(id), DiffOrderFile)
+}
+
+// DiffArgs are the arguments of git that page the diff of ready card c in
+// its copy, as every diff of the factory reads one (no external diff, no
+// textconv: the copy's attributes are the change's), its files in the
+// order of orderFile ("" for git's own order: git refuses an order file it
+// cannot read): `git --paginate -C <copy> diff --no-ext-diff --no-textconv
+// [-O<order>] <base>...<head> --`. It reads nothing.
+func DiffArgs(c ReadyCardFile, orderFile string) []string {
+	args := []string{"--paginate", "-C", c.CopyPath, "diff", "--no-ext-diff", "--no-textconv"}
+	if orderFile != "" {
+		args = append(args, "-O"+orderFile)
+	}
+	return append(args, c.Base+"..."+c.Head, "--")
 }
 
 // ReadReadyCard reads the ready card of task id in layout l.

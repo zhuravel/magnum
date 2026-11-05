@@ -186,8 +186,11 @@ func (a *factoryActions) Retry(ctx context.Context, taskID int64) (tui.ActionRes
 // the newest live one), and the terminal on that session comes to the
 // front.
 func (a *factoryActions) Open(ctx context.Context, taskID int64) (tui.ActionResult, error) {
-	st := a.src.agentsStore()
-	if st == nil {
+	st, err := a.src.agentsStore()
+	switch {
+	case err != nil:
+		return tui.ActionResult{}, fmt.Errorf("the factory's agents cannot be read: %w", err)
+	case st == nil:
 		return tui.ActionResult{}, errors.New("the task has no pane open: no agent of the factory ran yet")
 	}
 	ss, err := runtime.TaskSessions(ctx, st, taskID)
@@ -245,43 +248,49 @@ func (a *factoryActions) Seen(_ context.Context, at time.Time) error {
 	return factory.SaveSeen(a.c.Layout, at)
 }
 
-// Focus reports that the screen's terminal gained or lost focus: a focus
-// request with the screen's pid (the daemon holds its toasts while that
-// screen runs focused). A blur also keeps the time you last saw home. It is
-// best effort: it waits factoryFocusWait at most, and with no factory
-// registry yet it sends and keeps nothing.
-func (a *factoryActions) Focus(ctx context.Context, focused bool) error {
-	now := a.src.now()
-	a.src.focus(focused, now)
+// Focus reports that the screen's terminal gained or lost focus at at, the
+// event's time: a focus request with the screen's pid (the daemon holds its
+// toasts while that screen runs focused, and keeps the newer report by
+// at). A blur also keeps at as the time you last saw home. It is best
+// effort: it waits factoryFocusWait at most, and with no factory registry
+// yet it sends and keeps nothing.
+func (a *factoryActions) Focus(ctx context.Context, focused bool, at time.Time) error {
 	reg, err := a.src.registryFor(false)
 	if err != nil || reg == nil {
 		return err
 	}
 	if !focused {
-		err = factory.SaveSeen(a.c.Layout, now)
+		err = factory.SaveSeen(a.c.Layout, at)
 	}
-	_, _, ferr := a.request(ctx, factory.ReqFocus, factory.FocusPayload{Focused: focused, PID: a.pid, At: now}, factoryFocusWait)
+	_, _, ferr := a.request(ctx, factory.ReqFocus, factory.FocusPayload{Focused: focused, PID: a.pid, At: at}, factoryFocusWait)
 	return errors.Join(err, ferr)
 }
 
 // Diff is the pager on the diff of the task's ready card in its copy, the
-// card's files in its order (factory.DiffArgs), as the screen's last frame
-// read the card; nil for a task with no ready card. It builds the command
-// only.
+// card's files in its order when its order file is there (factory.DiffArgs;
+// one stat, no read), as the screen's last frame drew the card; nil for a
+// task with no ready card. It builds the command only.
 func (a *factoryActions) Diff(taskID int64) *exec.Cmd {
 	card, ok := a.src.readyCard(taskID)
 	if !ok || card.CopyPath == "" || card.Head == "" || card.Base == "" {
 		return nil
 	}
+	order := factory.DiffOrderPath(a.c.Layout, taskID)
+	if _, err := os.Stat(order); err != nil {
+		order = "" // a card drawn before its order file: git's order
+	}
 	// The factory's own copy and revisions from its card; the screen runs it
 	// with tea.ExecProcess, which owns its life.
-	cmd := exec.Command("git", factory.DiffArgs(a.c.Layout, taskID, card)...) //nolint:gosec,noctx // see above
-	if os.Getenv("LESS") == "" {
-		// git's own LESS=FRX quits at once on a diff that fits the screen,
-		// which would end the pager before you read it.
-		cmd.Env = append(os.Environ(), "LESS=RX")
-	}
+	cmd := exec.Command("git", factory.DiffArgs(card, order)...) //nolint:gosec,noctx // see above
+	cmd.Env = append(os.Environ(), "LESS="+pagerLess(os.Getenv("LESS")))
 	return cmd
+}
+
+// pagerLess is LESS for the diff's pager: yours (git's own RX without one)
+// with -+F, so less never quits at once on a diff that fits the screen,
+// which would end the pager before you read it and count the diff as read.
+func pagerLess(yours string) string {
+	return cmp.Or(strings.TrimSpace(yours), "RX") + " -+F"
 }
 
 // send queues a request and answers with its outcome.

@@ -22,19 +22,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
-	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -51,6 +50,9 @@ const waitsYou = tui.WaitsOnYou
 type ScreenOptions struct {
 	Config *config.Config
 	Layout paths.Layout
+	// ReadyCards, when set, gets each ready card the data draws, as read
+	// once for it (the pager pages the card drawn).
+	ReadyCards func(id int64, c ReadyCardFile)
 }
 
 const (
@@ -91,10 +93,15 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks}
 	for _, t := range tasks {
 		v, err := s.read(t)
-		if err != nil {
-			return d, fmt.Errorf("the screen's data of %s: %w", TaskKey(t), err)
-		}
-		if v != nil {
+		switch {
+		case ctx.Err() != nil:
+			return d, ctx.Err()
+		case err != nil: // that task's row says so; the rest of home is drawn
+			row, cards := unreadable(t, err)
+			d.Rows = append(d.Rows, row)
+			d.Cards[t.ID] = cards
+			d.Decisions++
+		case v != nil:
 			s.views = append(s.views, v)
 		}
 	}
@@ -103,6 +110,9 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		d.Rows = append(d.Rows, row)
 		d.Cards[v.t.ID] = cards
 		d.Decisions += decisions
+		if v.card != nil && o.ReadyCards != nil {
+			o.ReadyCards(v.t.ID, *v.card)
+		}
 	}
 	slices.SortStableFunc(d.Rows, func(a, b tui.FactoryRow) int {
 		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou {
@@ -156,13 +166,19 @@ type taskView struct {
 	asks   map[string]ask
 	onYou  int            // open questions that wait on you
 	card   *ReadyCardFile // its ready card, while it waits on you there
-	retry  bool
+	// reporter is its ticket's reporter, whom its questions offer to ask
+	// ("" for none, and for a task of your words).
+	reporter string
+	retry    bool
 }
 
 // read is what the screen shows of task t, nil for a task home leaves out
 // (stopped, or done before today; a published task stays, waiting on
 // magnum's review after its PR's day).
 func (s *screen) read(t registry.Task) (*taskView, error) {
+	if t.State == registry.TaskStopped || (t.State == registry.TaskDone && !sameDay(t.Updated, s.now)) {
+		return nil, nil
+	}
 	v := &taskView{t: t, tried: map[string]bool{}, done: map[string]bool{}, letGo: map[string]string{}}
 	if t.PRNumber > 0 || t.State == registry.TaskPublished {
 		l, err := s.reg.LinkedPR(s.ctx, t.ID)
@@ -172,12 +188,7 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 		v.link = l
 	}
 	switch {
-	case t.State == registry.TaskStopped:
-		return nil, nil
 	case t.State == registry.TaskDone:
-		if !sameDay(t.Updated, s.now) {
-			return nil, nil
-		}
 		v.group = tui.GroupDone
 	case t.State == registry.TaskPublished && sameDay(cmp.Or(v.link.Opened, t.Updated), s.now):
 		v.group = tui.GroupDone
@@ -205,8 +216,23 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 			v.card = &c
 		}
 	}
-	v.retry = retryRefusal(s.ctx, s.reg, s.l, t) == nil
+	v.retry = retryRefusalOf(t, v.open, v.asks) == nil // the retry's own guard, on what this view read
+	if t.JiraKey != "" {
+		v.reporter = readReporter(s.l.FactoryTaskDir(t.ID))
+	}
 	return v, nil
+}
+
+// unreadable is the row and the card of task t the screen could not read:
+// its wait is on you, and says why.
+func unreadable(t registry.Task, err error) (tui.FactoryRow, tui.FactoryCards) {
+	what := "the screen cannot read it: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
+	w := tui.WaitsOn{Who: waitsYou, What: what, Short: "the screen cannot read it", OnYou: true}
+	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Group: tui.GroupNeedsYou, Mark: tui.MarkNeedsYou,
+		WaitsOn: []tui.WaitsOn{w}, Since: t.Updated, Move: "see the task card", MoveShort: "task card", Help: waitsYou + ": " + what}
+	card := tui.TaskCard{Key: row.Key, Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
+		Started: t.Created, WaitingFor: waitsYou + ": " + what}
+	return row, tui.FactoryCards{Task: card}
 }
 
 // readAgents reads task v's attempts, its current stage's verified roles,
@@ -257,28 +283,19 @@ func (s *screen) readAgents(v *taskView) error {
 // (its ledger entry abandoned, and your let-go recorded since it was sent):
 // the prompt's first line, which the agent may not have received.
 func (s *screen) readLetGo(v *taskView) error {
-	entries, err := s.reg.LedgerOf(s.ctx, v.t.ID)
+	gone, err := s.reg.LetGone(s.ctx, v.t.ID)
+	if err != nil || len(gone) == 0 {
+		return err
+	}
+	ins, err := s.reg.Inputs(s.ctx, v.t.ID)
 	if err != nil {
 		return err
 	}
-	newest := map[string]registry.LedgerEntry{}
-	for _, e := range entries {
-		newest[e.Role] = e
-	}
-	var ins []registry.Input
-	for role, e := range newest {
-		if e.Delivered != registry.DeliveredAbandoned {
-			continue
-		}
-		if ins == nil {
-			if ins, err = s.reg.Inputs(s.ctx, v.t.ID); err != nil {
-				return err
-			}
-		}
+	for _, e := range gone {
 		if slices.ContainsFunc(ins, func(in registry.Input) bool {
-			return in.Kind == registry.InputRetry && in.Role == role && !in.At.Before(e.Sent)
+			return in.Kind == registry.InputRetry && in.Role == e.Role && !in.At.Before(e.Sent)
 		}) {
-			v.letGo[role] = textx.FirstLine(strings.TrimSpace(e.Text))
+			v.letGo[e.Role] = textx.FirstLine(strings.TrimSpace(e.Text))
 		}
 	}
 	return nil
@@ -574,24 +591,29 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	t := v.t
 	c := tui.TaskCard{Key: TaskKey(t), Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
 		Started: t.Created, PR: row.GitHub, Retry: v.retry}
-	parts := make([]string, len(row.WaitsOn))
-	for i, w := range row.WaitsOn {
-		parts[i] = w.Who + ": " + w.What
+	parts := make([]string, 0, len(row.WaitsOn)+len(v.letGo))
+	for _, w := range row.WaitsOn {
+		parts = append(parts, w.Who+": "+w.What)
+	}
+	// A prompt you let go of may not have reached its agent: its first line
+	// is on the WAITING FOR line, which the card always draws.
+	for _, role := range slices.Sorted(maps.Keys(v.letGo)) {
+		parts = append(parts, "let go: "+v.letGo[role])
 	}
 	c.WaitingFor = strings.Join(parts, " · ")
 	c.Stages = s.stages(v, row)
 	for _, x := range v.agents {
-		c.Agents = append(c.Agents, s.cardAgent(v, x))
+		c.Agents = append(c.Agents, s.cardAgent(x))
 	}
 	c.Report = s.report(t)
 	return c
 }
 
-// cardAgent is session x of task v on its card: named by its role's
-// doing, with the role's why, its state, how long it ran and when its pane
-// last showed a sign of life; a role whose prompt you let go of says that
-// prompt's first line as what it does.
-func (s *screen) cardAgent(v *taskView, x store.Session) tui.CardAgent {
+// cardAgent is session x on its task's card: named by its role's doing,
+// with the role's why, its state, how long it ran and when its pane last
+// showed a sign of life. Nothing in 1a records what an agent does at the
+// moment, so its Now stays empty.
+func (s *screen) cardAgent(x store.Session) tui.CardAgent {
 	role, _ := s.role(x.Role)
 	a := tui.CardAgent{Name: s.doing(x.Role), Why: role.Why, State: agentState(x), Output: lastSign(x)}
 	end := s.now
@@ -602,9 +624,6 @@ func (s *screen) cardAgent(v *taskView, x store.Session) tui.CardAgent {
 		}
 	}
 	a.For = max(end.Sub(x.StartedAt), 0)
-	if line, ok := v.letGo[x.Role]; ok {
-		a.Now = "let go: " + line
-	}
 	return a
 }
 
@@ -730,10 +749,15 @@ func (s *screen) questionCard(v *taskView) *tui.QuestionCard {
 		for _, o := range q.Options {
 			cq.Options = append(cq.Options, tui.CardOption{Label: o.Label, Means: o.Means})
 		}
+		// The ask: of whom it was asked already, else of the ticket's
+		// reporter (a task of your words, or a ticket with none, has none).
 		a, asked := v.asks[questionKey(q.RaisedBy, q.Text)]
-		if asked && q.State == registry.QuestionOpen {
-			cq.Options = append(cq.Options, tui.CardOption{Label: "Ask " + a.Login + " in Jira (the task waits)", Send: askPrefix + a.Login})
-			cq.Answer, cq.Asks, cq.Comment = "ask "+a.Login+" in Jira", a.Login, s.comment(t, q, a)
+		switch who := cleanReporter(a.Login); {
+		case asked && q.State == registry.QuestionOpen && who != "":
+			cq.Options = append(cq.Options, askOption(who))
+			cq.Answer, cq.Asks, cq.Comment = "ask "+who+" in Jira", who, s.comment(t, q, a)
+		case v.reporter != "":
+			cq.Options = append(cq.Options, askOption(v.reporter))
 		}
 		cq.Options = append(cq.Options, tui.CardOption{Label: ownAnswer, Own: true})
 		if q.State == registry.QuestionAnswered {
@@ -743,6 +767,12 @@ func (s *screen) questionCard(v *taskView) *tui.QuestionCard {
 	}
 	c.AsOf = c.Asked
 	return c
+}
+
+// askOption is the question card's option that asks who in Jira instead
+// of answering (the daemon drafts the comment).
+func askOption(who string) tui.CardOption {
+	return tui.CardOption{Label: "Ask " + who + " in Jira (the task waits)", Send: askPrefix + who}
 }
 
 // comment is the comment drafted for whom question q of task t was asked
@@ -907,28 +937,15 @@ func (s *screen) next(rows []tui.FactoryRow) string {
 	return ""
 }
 
-// flash is the news of the status rule: the daemon's answer to your newest
-// request, while it is fresh ("14:02 started PR-12345 as task 3: ...").
+// flash is the news of the status rule: the daemon's answer to the newest
+// request of yours (flashKinds) it carried out within flashFor, read typed
+// from the requests ("14:02 started PR-12345 as task 3: ...").
 func (s *screen) flash() (string, error) {
-	evs, err := s.reg.RecentEvents(s.ctx, 20, "request")
-	if err != nil {
+	q, ok, err := s.reg.LastDone(s.ctx, s.now.Add(-flashFor), flashKinds...)
+	if err != nil || !ok {
 		return "", err
 	}
-	for _, ev := range evs {
-		if s.now.Sub(ev.At) > flashFor {
-			return "", nil
-		}
-		_, rest, ok := strings.Cut(ev.Text, " (")
-		kind, result, ok2 := strings.Cut(rest, "): ")
-		if !ok || !ok2 || !slices.Contains(flashKinds, kind) {
-			continue
-		}
-		if ev.Phase != registry.PhaseOK {
-			return "", nil
-		}
-		return clock(ev.At) + " " + textx.FirstLine(result), nil
-	}
-	return "", nil
+	return clock(q.Handled) + " " + textx.FirstLine(q.Result), nil
 }
 
 // alerts are the alert events, newest first.
@@ -1150,55 +1167,4 @@ func awayWords(d time.Duration) string {
 		return strconv.Itoa(int(d/time.Hour)) + "h"
 	}
 	return shortAge(d)
-}
-
-// seenRecord is seen.json (Layout.FactorySeen).
-type seenRecord struct {
-	At time.Time `json:"at"`
-}
-
-// ReadSeen is when you last saw the factory screen's home, as SaveSeen
-// kept it in layout l; the zero time before the first.
-func ReadSeen(l paths.Layout) (time.Time, error) {
-	b, err := os.ReadFile(l.FactorySeen())
-	if errors.Is(err, fs.ErrNotExist) {
-		return time.Time{}, nil
-	}
-	if err != nil {
-		return time.Time{}, err
-	}
-	var r seenRecord
-	if err := json.Unmarshal(b, &r); err != nil {
-		return time.Time{}, fmt.Errorf("%s: %w", filepath.Base(l.FactorySeen()), err)
-	}
-	return r.At, nil
-}
-
-// SaveSeen keeps that you saw home at at in seen.json of layout l, so it
-// survives a restart of the screen and of the daemon. The time only moves
-// forward: an earlier time than the one kept changes nothing, and two
-// screens saving at once take turns on a lock of the file's own, so the
-// later time stays.
-func SaveSeen(l paths.Layout, at time.Time) error {
-	path := l.FactorySeen()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("lock %s: %w", filepath.Base(path), err)
-	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
-	if cur, err := ReadSeen(l); err == nil && !at.After(cur) {
-		return nil
-	}
-	b, err := json.Marshal(seenRecord{At: at.Round(0)})
-	if err != nil {
-		return err
-	}
-	return fsx.WriteFileAtomic(path, append(b, '\n'), 0o600)
 }

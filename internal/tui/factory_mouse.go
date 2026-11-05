@@ -25,7 +25,7 @@ func (m *factoryModel) updateMouse(msg tea.MouseMsg) tea.Cmd {
 			m.wheel(ev.Button)
 		}
 	case tea.MouseClickMsg:
-		return m.click(ev)
+		return tea.Batch(m.seeHome(), m.click(ev)) // a click is your input, as a key is
 	}
 	return nil
 }

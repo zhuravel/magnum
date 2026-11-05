@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -137,6 +138,7 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 	take := map[int]string{}
 	var asks []pendingAsk
 	link := "" // the Jira key your answer to which issue the task is names
+	reporter := readReporter(e.d.Layout.FactoryTaskDir(t.ID))
 	for _, idx := range slices.Sorted(maps.Keys(p.Answers)) {
 		q, err := question(idx)
 		if err != nil {
@@ -146,8 +148,8 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 		if strings.TrimSpace(a) == "" {
 			return fmt.Errorf("the answer to question %d is blank", idx+1)
 		}
-		if login, comment, ok := parseAsk(a); ok {
-			if !github.ValidLogin(login) || strings.EqualFold(login, waitsYou) {
+		if login, comment, ok := parseAskOf(a, reporter); ok {
+			if !(github.ValidLogin(login) || (reporter != "" && login == reporter)) || strings.EqualFold(login, waitsYou) {
 				return fmt.Errorf("question %d: ask whom? %s<login> takes the GitHub login of someone else, without the @ (got %q)",
 					idx+1, askPrefix, login)
 			}
@@ -228,6 +230,25 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 		e.recordAnswer(ctx, t, a.q, askPrefix+a.login, surface)
 	}
 	return e.afterAnswers(ctx, t)
+}
+
+// parseAskOf is parseAsk for a task whose ticket's reporter is reporter
+// (readReporter; "" for none): "ask:<reporter>", as the question card
+// offers it, takes their whole display name, spaces included, then the
+// comment, if any.
+func parseAskOf(answer, reporter string) (login, comment string, ok bool) {
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(answer), askPrefix); ok && reporter != "" {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(rest), reporter); ok && (after == "" || startsWithSpace(after)) {
+			return reporter, strings.TrimSpace(after), true
+		}
+	}
+	return parseAsk(answer)
+}
+
+// startsWithSpace reports whether s starts with a space character.
+func startsWithSpace(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsSpace(r)
 }
 
 // parseAsk reads an answer that asks someone else: "ask:<login>", then the

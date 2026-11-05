@@ -83,6 +83,22 @@ func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry
 	return e, nil
 }
 
+// LetGone are task taskID's prompts that are each role's newest and
+// abandoned (the operator let it go, or the factory gave up on it), oldest
+// first: the screen's let-go line, read without the delivered prompts.
+func (r *Registry) LetGone(ctx context.Context, taskID int64) ([]LedgerEntry, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT "+ledgerColumns+" FROM ledger l WHERE task_id = ? AND delivered = ? AND id = "+
+		"(SELECT MAX(id) FROM ledger WHERE task_id = l.task_id AND role = l.role) ORDER BY id", taskID, DeliveredAbandoned)
+	if err != nil {
+		return nil, fmt.Errorf("prompts let go of task %d: %w", taskID, err)
+	}
+	es, err := collect(rows, scanLedger)
+	if err != nil {
+		return nil, fmt.Errorf("prompts let go of task %d: %w", taskID, err)
+	}
+	return es, nil
+}
+
 // MarkDelivered settles an unknown entry as yes (the agent got the prompt),
 // no (it did not) or abandoned (nobody knows, and nobody sends it again).
 // Settling an entry with the verdict it already has is not an error; a

@@ -11577,11 +11577,16 @@ func Denied(argv []string, repo config.FactoryRepo) (why string, denied bool)
     console's own file as an argument (lint of bin/remote-console) is no console
     run.
 
-func DiffArgs(l paths.Layout, id int64, c ReadyCardFile) []string
-    DiffArgs are the arguments of git that page the diff of task id's ready
-    card c in its copy, its files in the card's order (DiffOrderFile in the
-    task's directory of layout l): `git --paginate -C <copy> diff -O<order>
+func DiffArgs(c ReadyCardFile, orderFile string) []string
+    DiffArgs are the arguments of git that page the diff of ready card c in its
+    copy, as every diff of the factory reads one (no external diff, no textconv:
+    the copy's attributes are the change's), its files in the order of orderFile
+    ("" for git's own order: git refuses an order file it cannot read):
+    `git --paginate -C <copy> diff --no-ext-diff --no-textconv [-O<order>]
     <base>...<head> --`. It reads nothing.
+
+func DiffOrderPath(l paths.Layout, id int64) string
+    DiffOrderPath is task id's DiffOrderFile in layout l.
 
 func Fingerprint(f evalrun.LocalFinding) string
     Fingerprint is how the factory follows a finding across rounds: its path,
@@ -12293,6 +12298,9 @@ type Runtime interface {
 type ScreenOptions struct {
 	Config *config.Config
 	Layout paths.Layout
+	// ReadyCards, when set, gets each ready card the data draws, as read
+	// once for it (the pager pages the card drawn).
+	ReadyCards func(id int64, c ReadyCardFile)
 }
     ScreenOptions are what ScreenData reads besides the registries: the config
     (the roles' words, the kinds' stages, the repositories) and the layout (the
@@ -12950,12 +12958,26 @@ func (r *Registry) FlagQuestion(ctx context.Context, id int64, flag, why string)
     or unclear, with the reason in words. A later flag replaces an earlier one.
     A missing question is ErrNotFound.
 
+func (r *Registry) ForgetPayload(ctx context.Context, id int64) error
+    ForgetPayload empties the payload of request id once it is done or failed
+    (a pending one is ErrConflict: the daemon still reads it), so a request that
+    carried your draft (a preview) keeps none of it.
+
 func (r *Registry) Inputs(ctx context.Context, taskID int64) ([]Input, error)
     Inputs returns a task's inputs in the order they were recorded.
+
+func (r *Registry) LastDone(ctx context.Context, since time.Time, kinds ...string) (Request, bool, error)
+    LastDone is the newest request of kinds the daemon answered done at or after
+    since (false for none): the status rule's news, read typed.
 
 func (r *Registry) LedgerOf(ctx context.Context, taskID int64) ([]LedgerEntry, error)
     LedgerOf returns the task's entries in the order they were written:
     the prompts its agents were sent, or were about to be.
+
+func (r *Registry) LetGone(ctx context.Context, taskID int64) ([]LedgerEntry, error)
+    LetGone are task taskID's prompts that are each role's newest and abandoned
+    (the operator let it go, or the factory gave up on it), oldest first:
+    the screen's let-go line, read without the delivered prompts.
 
 func (r *Registry) LinkKey(ctx context.Context, id int64, key string) error
     LinkKey gives task id the Jira key key (a task of a free prompt, once you
@@ -12996,6 +13018,11 @@ func (r *Registry) PendingRequests(ctx context.Context, limit int) ([]Request, e
     PendingRequests returns up to limit pending requests, oldest first (limit <=
     0 = all), so a consumer can skip a request it already handed to a background
     worker.
+
+func (r *Registry) PruneRequests(ctx context.Context, before time.Time, kinds ...string) (int, error)
+    PruneRequests deletes the requests of kinds the daemon answered before
+    before, and the `request` events of their answers ("request <id> (<kind>):
+    ..."), and returns how many requests went. A pending request stays.
 
 func (r *Registry) Questions(ctx context.Context, taskID int64) ([]Question, error)
     Questions returns every question of a task, voided and answered ones
@@ -16773,10 +16800,12 @@ Search finds issues by the words of their title (the factory asks which issue a
 free prompt is): GET <url>/rest/api/3/search/jql, the same way.
 
 A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
-parent, its description (cut at MaxDescription) and the custom fields whose name
-speaks of requirements (cut at MaxField): never a comment, a person (assignee,
-reporter, watchers) or an attachment. A failure is an *Error of a class,
-whose message names the class and the status code, never the answer's body.
+parent, its description (cut at MaxDescription), the custom fields whose name
+speaks of requirements (cut at MaxField) and the reporter's display name
+(the factory offers to ask them; ticket.md never has it): never a comment,
+another person (assignee, watchers), an email or an attachment. A failure is an
+*Error of a class, whose message names the class and the status code, never the
+answer's body.
 
 CONSTANTS
 
@@ -16805,6 +16834,9 @@ const (
 )
     The bounds of a search: the most words it asks for (the first of the text)
     and the most issues it reads (the API's own page limit).
+
+const MaxReporter = 64
+    MaxReporter is the cut of a reporter's display name, in bytes.
 
 const MaxTime = 20 * time.Second
     MaxTime is curl's bound on one request (its --max-time); the command itself
@@ -16910,6 +16942,10 @@ type Ticket struct {
 	// Fields are the custom fields whose name holds one of requirementWords
 	// and whose value is text, by name.
 	Fields []Field
+	// Reporter is the reporter's display name, on one line and cut at
+	// MaxReporter bytes ("" for none): the factory's question card offers
+	// to ask them. Markdown never writes it.
+	Reporter string
 }
     Ticket is what a round hands the judge of an issue.
 
@@ -25995,7 +26031,7 @@ type FactoryActions interface {
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
 	Seen(ctx context.Context, at time.Time) error
-	Focus(ctx context.Context, focused bool) error
+	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
@@ -26012,8 +26048,10 @@ type FactoryActions interface {
       - Stop drops a task (frees its copy, keeps its branch); Retry lets a task
         that waits on the operator go on at its stage.
       - Open steps into the task's pane (asks nothing).
-      - Seen says the operator read the digest at at; Focus that the screen's
-        terminal gained or lost focus (the factory holds its toasts then).
+      - Seen says the operator saw home at at: the first key after a digest,
+        and any key or click at most once a minute (the digest counts the
+        absence from the last input); Focus that the screen's terminal gained or
+        lost focus at at, the event's time (the factory holds its toasts then).
       - Diff is the pager on the task's diff, run with tea.ExecProcess; nil:
         there is no diff to show. It is called on the screen's own turn,
         so it only builds the command: it reads and waits for nothing.

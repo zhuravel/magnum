@@ -1248,3 +1248,19 @@ func TestNewTaskEchoShowsWhatWasTyped(t *testing.T) {
 		}
 	}
 }
+
+// A prompt you let go of is named on the task card's WAITING FOR line,
+// after what the task waits on, whatever its agent is doing (the factory's
+// data puts it there: the AGENTS line draws a "now" only while an agent
+// works).
+func TestTheTaskCardNamesALetGoPromptOnItsWaitingLine(t *testing.T) {
+	c := fixtureRetryCard()
+	c.WaitingFor = "agent: finding the cause · let go: Find the cause of PR-12371 on your own."
+	c.Agents = []CardAgent{{Name: "finding the cause", Why: "find the cause on its own, apart from the others", State: "done"}}
+	for _, w := range []int{100, 140} {
+		line := cardLineWith(t, plainCard(drawTask(c, 0), w), "WAITING FOR")
+		if !strings.Contains(line, "let go: Find the cause") {
+			t.Errorf("%d columns: waiting line %q lacks the let-go prompt", w, line)
+		}
+	}
+}

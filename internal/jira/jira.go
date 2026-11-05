@@ -14,9 +14,11 @@
 // issue a free prompt is): GET <url>/rest/api/3/search/jql, the same way.
 //
 // A Ticket keeps the issue's key, URL, summary, status, type, priority,
-// labels, parent, its description (cut at MaxDescription) and the custom
-// fields whose name speaks of requirements (cut at MaxField): never a
-// comment, a person (assignee, reporter, watchers) or an attachment. A
+// labels, parent, its description (cut at MaxDescription), the custom
+// fields whose name speaks of requirements (cut at MaxField) and the
+// reporter's display name (the factory offers to ask them; ticket.md never
+// has it): never a comment, another person (assignee, watchers), an email
+// or an attachment. A
 // failure is an *Error of a class, whose message names the class and the
 // status code, never the answer's body.
 package jira
@@ -138,7 +140,14 @@ type Ticket struct {
 	// Fields are the custom fields whose name holds one of requirementWords
 	// and whose value is text, by name.
 	Fields []Field
+	// Reporter is the reporter's display name, on one line and cut at
+	// MaxReporter bytes ("" for none): the factory's question card offers
+	// to ask them. Markdown never writes it.
+	Reporter string
 }
+
+// MaxReporter is the cut of a reporter's display name, in bytes.
+const MaxReporter = 64
 
 // keyPattern is an issue key: a project key, a dash and a number.
 var keyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*-[0-9]+$`)
@@ -347,6 +356,12 @@ func (c *Client) parse(asked string, body []byte) (Ticket, error) {
 	}
 	if decode(f["parent"], &parent) && keyPattern.MatchString(parent.Key) {
 		t.ParentKey, t.ParentSummary = parent.Key, line(parent.Fields.Summary)
+	}
+	var reporter struct {
+		DisplayName string `json:"displayName"`
+	}
+	if decode(f["reporter"], &reporter) {
+		t.Reporter = strings.TrimSpace(cut(line(reporter.DisplayName), MaxReporter))
 	}
 	var desc string
 	if decode(f["description"], &desc) {

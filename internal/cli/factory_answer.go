@@ -42,6 +42,7 @@ func newFactoryAnswerCmd(c *Context) *cobra.Command {
 			"numbered from 1, with their options and the recommended one. --json <file> sends a batch: "+
 			`{"revision": 3, "answers": {"1": "Seven days before it expires", "2": "ask:rev-ann"}, "needless": {"3": "obvious"}}`+
 			", the questions by their numbers; an answer is an option's label or your own words, \"ask:<login>\" "+
+			"(a GitHub login, or the ticket's reporter's display name as the screen offers it) "+
 			"asks someone else (the question stays open, the task waits on them, and the comment drafted for them "+
 			"is in the task's directory), and needless flags a question with the key of your reason. --question <n> "+
 			"--text <file> answers question n with the file's text (- for stdin), such as the answer of someone you "+

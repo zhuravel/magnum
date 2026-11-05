@@ -68,7 +68,7 @@ func (m *factoryModel) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 	if k == "ctrl+c" {
 		return m.quit()
 	}
-	seen := m.seeDigest()
+	seen := m.seeHome()
 	var cmd tea.Cmd
 	switch {
 	case m.menu.open:
@@ -90,18 +90,25 @@ func (m *factoryModel) quit() tea.Cmd {
 	return tea.Quit
 }
 
-// seeDigest is the first key after the digest showed: it goes away, and the
-// factory learns the operator saw it.
-func (m *factoryModel) seeDigest() tea.Cmd {
-	d := m.digest()
-	if d == nil || m.view != fvHome {
+// seenEvery is how often your input tells the factory you saw home: the
+// digest counts your absence from your last input, to the minute.
+const seenEvery = time.Minute
+
+// seeHome is a key or a click: the operator is at the screen. The first
+// one after the digest showed on home makes it go away; the factory learns
+// the operator saw home then, and at any input at most once a minute
+// after, with the input's time.
+func (m *factoryModel) seeHome() tea.Cmd {
+	at := m.now()
+	digest := false
+	if d := m.digest(); d != nil && m.view == fvHome {
+		m.digestSeen, m.digestGone, digest = d.Since, true, true
+	}
+	if m.act == nil || (!digest && !m.seenSent.IsZero() && at.Sub(m.seenSent) < seenEvery) {
 		return nil
 	}
-	m.digestSeen, m.digestGone = d.Since, true
-	if m.act == nil {
-		return nil
-	}
-	ctx, act, at := m.ctx, m.act, m.now()
+	m.seenSent = at
+	ctx, act := m.ctx, m.act
 	return func() tea.Msg {
 		_ = act.Seen(ctx, at) // best effort: an unsaved read shows the digest again later
 		return nil

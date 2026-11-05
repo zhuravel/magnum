@@ -38,6 +38,8 @@ type screenRig struct {
 	cfg    *config.Config
 	layout paths.Layout
 	repo   int64 // the owner repository of the agents store, once made
+	// cards are the ready cards the last data drew (ScreenOptions.ReadyCards).
+	cards map[int64]ReadyCardFile
 }
 
 func newScreenRig(t *testing.T) *screenRig {
@@ -196,7 +198,9 @@ func (r *screenRig) verified(t registry.Task, stage string, roles ...string) {
 // data is ScreenData at screenNow for an operator last seen at lastSeen.
 func (r *screenRig) data(lastSeen time.Time) tui.FactoryData {
 	r.t.Helper()
-	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, lastSeen, ScreenOptions{Config: r.cfg, Layout: r.layout})
+	r.cards = map[int64]ReadyCardFile{}
+	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, lastSeen, ScreenOptions{Config: r.cfg, Layout: r.layout,
+		ReadyCards: func(id int64, c ReadyCardFile) { r.cards[id] = c }})
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -419,8 +423,9 @@ func TestScreenDataNamesAgentsByWhatTheyDo(t *testing.T) {
 }
 
 // A role whose prompt you let go of (you looked at its pane, and the
-// prompt is never sent again) shows that prompt's first line as what it
-// does, so you see what it may not have received.
+// prompt is never sent again) has that prompt's first line on its task
+// card's WAITING FOR line, so you see what it may not have received; the
+// agent's own line is left as it is (the card draws it only while it works).
 func TestScreenDataShowsWhatALetGoPromptAsked(t *testing.T) {
 	r := newScreenRig(t)
 	task := r.task("PR-12371", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
@@ -441,9 +446,12 @@ func TestScreenDataShowsWhatALetGoPromptAsked(t *testing.T) {
 		Role: "fx-cause"}); err != nil {
 		t.Fatal(err)
 	}
-	agents := r.data(screenNow).Cards[task.ID].Task.Agents
-	if len(agents) != 1 || agents[0].Now != "let go: Find the cause of PR-12371 on your own." {
-		t.Fatalf("agents %+v, want the let-go prompt's first line as what the cause finder does", agents)
+	card := r.data(screenNow).Cards[task.ID].Task
+	if want := "agent: finding the cause · let go: Find the cause of PR-12371 on your own."; card.WaitingFor != want {
+		t.Errorf("waiting for %q, want %q", card.WaitingFor, want)
+	}
+	if len(card.Agents) != 1 || card.Agents[0].Now != "" {
+		t.Errorf("agents %+v, want the cause finder's line left empty", card.Agents)
 	}
 }
 
@@ -513,6 +521,10 @@ func TestScreenDataFillsTheFlagsAndTheLeftovers(t *testing.T) {
 	}
 	if cards.Bind != (tui.ReadyBinding{HeadSHA: "ffff1111", ReportHash: "rh", DiffHash: "dh"}) {
 		t.Errorf("binding %+v", cards.Bind)
+	}
+	// The card handed back for the pager is the one drawn, read once.
+	if got, ok := r.cards[ready.ID]; !ok || got.Head != "ffff1111" || got.CopyPath != "/copies/talkable.factory3" || len(r.cards) != 1 {
+		t.Errorf("the ready cards handed back %+v, want the drawn card alone", r.cards)
 	}
 	row := rowOf(t, d, "PR-12360")
 	if w := row.WaitsOn[0]; w.What != "ready to push · 3 files +35 −8" || w.Short != "ready to push" || row.Move != "read the diff, then push" {
@@ -809,5 +821,218 @@ func TestTheDaemonKeepsTheScreensLatestFocus(t *testing.T) {
 	}
 	if ins, err := h.reg.Inputs(h.ctx, 0); err != nil || len(ins) != 0 {
 		t.Errorf("a focus report recorded inputs %+v (%v)", ins, err)
+	}
+}
+
+// The status rule's news is the daemon's answer to your newest request, read
+// typed from the requests: the screen's own focus reports and previews
+// after it never push it out, and it goes once it is older than flashFor.
+func TestScreenDataFlashesYourNewestAnswer(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(3 * time.Minute)
+	id, err := r.reg.EnqueueRequest(r.ctx, ReqStart, StartPayload{Text: "PR-12345"})
+	if err == nil {
+		err = r.reg.CompleteRequest(r.ctx, id, registry.RequestDone, "started PR-12345 as task 1: feature in example/talkable on b\nmore")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 40 {
+		r.at(2*time.Minute - time.Duration(i)*time.Second)
+		for _, kind := range []string{ReqFocus, ReqPreview} {
+			id, err := r.reg.EnqueueRequest(r.ctx, kind, nil)
+			if err == nil {
+				err = r.reg.CompleteRequest(r.ctx, id, registry.RequestDone, "ok")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got, want := r.data(screenNow).Flash, clock(screenNow.Add(-3*time.Minute))+" started PR-12345 as task 1: feature in example/talkable on b"; got != want {
+		t.Errorf("flash %q, want %q", got, want)
+	}
+	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow.Add(flashFor), time.Time{}, ScreenOptions{Config: r.cfg, Layout: r.layout})
+	if err != nil || d.Flash != "" {
+		t.Errorf("flash %q (%v) after %s, want none", d.Flash, err, flashFor)
+	}
+}
+
+// One task the screen cannot read (its asks.json is not JSON) is a row
+// that says so, as a wait on you, and the rest of home is drawn.
+func TestOneUnreadableTaskLeavesTheRestOfHome(t *testing.T) {
+	r := newScreenRig(t)
+	broken := r.task("PR-12345", "feature", "Credit expiry reminder email", registry.TaskActive, "questions", "", "")
+	broken = r.questions(broken, question("When?", "Seven days"))
+	r.move(broken, registry.TaskNeedsYou, waitsYou, "1 question before coding")
+	r.file(broken.ID, asksFile, "{not json")
+	r.task("PR-12371", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
+
+	d := r.data(screenNow)
+	row := rowOf(t, d, "PR-12345")
+	if row.Group != tui.GroupNeedsYou || len(row.WaitsOn) != 1 || row.WaitsOn[0].Who != tui.WaitsOnYou || !row.WaitsOn[0].OnYou ||
+		!strings.HasPrefix(row.WaitsOn[0].What, "the screen cannot read it: ") || !strings.Contains(row.WaitsOn[0].What, asksFile) {
+		t.Errorf("the unreadable task's row %+v", row)
+	}
+	if card := d.Cards[broken.ID].Task; card.Key != "PR-12345" || !strings.Contains(card.WaitingFor, "the screen cannot read it") {
+		t.Errorf("its card %+v", card)
+	}
+	if !hasRow(d, "PR-12371") {
+		t.Errorf("the other task is not on home: %+v", d.Rows)
+	}
+}
+
+// The screen's own requests do not grow the registry: a preview forgets
+// your draft once answered, and the daemon prunes the focus reports and the
+// previews answered more than a day ago, with their events; your other
+// requests stay.
+func TestTheDaemonForgetsTheScreensOwnRequests(t *testing.T) {
+	h := newHarness(t)
+	enqueue := func(kind string, payload any) int64 {
+		t.Helper()
+		id, err := h.reg.EnqueueRequest(h.ctx, kind, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	preview := enqueue(ReqPreview, PreviewPayload{Text: "PR-12345 my pasted draft"})
+	focus := enqueue(ReqFocus, FocusPayload{Focused: true, PID: os.Getpid(), At: t0})
+	stop := enqueue(ReqStop, StopPayload{TaskID: 999, Surface: "screen"})
+	h.tick()
+	q, err := h.reg.RequestByID(h.ctx, preview)
+	if err != nil || q.State != registry.RequestDone || string(q.Payload) != "{}" {
+		t.Fatalf("the answered preview %+v (%v), want its payload forgotten", q, err)
+	}
+	for _, ev := range h.events(0, "request") {
+		if strings.Contains(ev.Text, "my pasted draft") {
+			t.Errorf("a preview's event carries the draft: %q", ev.Text)
+		}
+	}
+	h.clock.Add(25 * time.Hour)
+	h.tick()
+	for id, kept := range map[int64]bool{preview: false, focus: false, stop: true} {
+		if _, err := h.reg.RequestByID(h.ctx, id); (err == nil) != kept {
+			t.Errorf("request %d kept %v, want %v", id, err == nil, kept)
+		}
+	}
+	for _, ev := range h.events(0, "request") {
+		if strings.Contains(ev.Text, "(preview)") || strings.Contains(ev.Text, "(focus)") {
+			t.Errorf("a pruned request's event stays: %q", ev.Text)
+		}
+	}
+}
+
+// Every question of a ticket task offers to ask the ticket's reporter in
+// Jira (kept beside its ticket, on one line and bounded); a question asked
+// of someone already keeps that name, and a task of your words or a ticket
+// with no reporter offers no ask.
+func TestTheQuestionCardOffersToAskTheTicketsReporter(t *testing.T) {
+	r := newScreenRig(t)
+	ticket := r.task("PR-12345", "feature", "Credit expiry reminder email", registry.TaskActive, "questions", "", "")
+	ticket = r.questions(ticket, question("When does the reminder go out?", "Seven days"), question("Can a merchant turn it off?"))
+	r.file(ticket.ID, reporterFile, "rev-\x1b[31mann\n")
+	r.file(ticket.ID, asksFile, `[{"raised_by": "fx-judge", "text": "Can a merchant turn it off?", "login": "alice", "comment": "c.md"}]`)
+	r.move(ticket, registry.TaskNeedsYou, waitsYou, "1 question before coding")
+	words, err := r.reg.CreateTask(r.ctx, registry.Task{Prompt: "rename the helper", Kind: "chore", Repo: "example/talkable", Title: "Rename",
+		State: registry.TaskActive, Stage: "questions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	words = r.questions(words, question("Which helper?"))
+	r.move(words, registry.TaskNeedsYou, waitsYou, "1 question before coding")
+	none := r.task("PR-12346", "bug", "No reporter", registry.TaskActive, "questions", "", "")
+	none = r.questions(none, question("Which page?"))
+	r.move(none, registry.TaskNeedsYou, waitsYou, "1 question before coding")
+
+	d := r.data(screenNow)
+	qs := d.Cards[ticket.ID].Question.Questions
+	ask := tui.CardOption{Label: "Ask rev- [31mann in Jira (the task waits)", Send: "ask:rev- [31mann"}
+	if got := qs[0].Options; len(got) != 3 || got[1] != ask || !got[2].Own {
+		t.Errorf("the open question's options %+v, want its own, then the reporter's ask, then your words", got)
+	}
+	if got := qs[1].Options; !slices.ContainsFunc(got, func(o tui.CardOption) bool { return o.Send == "ask:alice" }) ||
+		slices.ContainsFunc(got, func(o tui.CardOption) bool { return o.Send == ask.Send }) {
+		t.Errorf("the asked question's options %+v, want alice's ask only", got)
+	}
+	for _, id := range []int64{words.ID, none.ID} {
+		if got := d.Cards[id].Question.Questions[0].Options; slices.ContainsFunc(got, func(o tui.CardOption) bool { return o.Send != "" }) {
+			t.Errorf("task %d offers an ask: %+v", id, got)
+		}
+	}
+	long := strings.Repeat("ü", 100)
+	r.file(ticket.ID, reporterFile, long)
+	if got := r.data(screenNow).Cards[ticket.ID].Question.Questions[0].Options[1].Send; len(got) > len(askPrefix)+maxReporter {
+		t.Errorf("a long reporter's ask %q, want it bounded", got)
+	}
+}
+
+// An ask of the ticket's reporter takes their whole display name, spaces
+// included, as the card offers it; the task then waits on them, and the
+// comment drafted for them greets them by it.
+func TestAnAskOfTheTicketsReporterTakesTheirWholeName(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12345", registry.TaskActive, "questions")
+	if err := h.reg.ReplaceQuestions(h.ctx, task.ID, 1, []registry.Question{question("Can a merchant turn it off?")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reg.TransitionTask(h.ctx, task.ID, []string{registry.TaskActive}, registry.TaskNeedsYou, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", waitsYou)
+		u.Set("waits_what", "1 question before coding")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := h.layout.FactoryTaskDir(task.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, reporterFile), []byte("Rev Ann\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.answer(h.ctx, AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "ask:Rev Ann"}, Surface: "screen"}); err != nil {
+		t.Fatal(err)
+	}
+	asks, err := readAsksIn(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := asks[questionKey("fx-judge", "Can a merchant turn it off?")]
+	if !ok || a.Login != "Rev Ann" {
+		t.Fatalf("asks %+v, want the reporter asked by their whole name", asks)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, a.Comment))
+	if err != nil || !strings.HasPrefix(string(b), "Rev Ann, a question on PR-12345") {
+		t.Errorf("the drafted comment %q (%v)", b, err)
+	}
+	if got := h.reload(task.ID); got.WaitsWho != "Rev Ann" || got.WaitsWhat != "a question in Jira" {
+		t.Errorf("task waits on %q: %q, want the reporter", got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+// A ticket's reporter is kept beside its ticket when the ticket is read,
+// and ticket.md, which the agents and a round's judge read, stays as it was.
+func TestAStartKeepsTheTicketsReporterBesideItsTicket(t *testing.T) {
+	r := newIntakeRig(t)
+	b, err := json.Marshal(map[string]any{"key": "PR-12347", "fields": map[string]any{
+		"summary": "Coupon CSV header names", "issuetype": map[string]string{"name": "Bug"}, "status": map[string]string{"name": "To Do"},
+		"description": "The header names are wrong.", "reporter": map[string]string{"displayName": "rev-ann", "emailAddress": "rev-ann@example.com"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.site.issues["PR-12347"] = string(b)
+	task, err := r.start("PR-12347")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if got, err := os.ReadFile(filepath.Join(dir, reporterFile)); err != nil || string(got) != "rev-ann\n" {
+		t.Errorf("%s: %q (%v)", reporterFile, got, err)
+	}
+	if md, err := os.ReadFile(filepath.Join(dir, ticketFile)); err != nil || strings.Contains(string(md), "rev-ann") {
+		t.Errorf("ticket.md carries the reporter (%v):\n%s", err, md)
+	}
+	if got := readReporter(dir); got != "rev-ann" {
+		t.Errorf("readReporter = %q", got)
 	}
 }

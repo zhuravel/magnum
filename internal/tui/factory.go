@@ -148,8 +148,11 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //   - Stop drops a task (frees its copy, keeps its branch); Retry lets a
 //     task that waits on the operator go on at its stage.
 //   - Open steps into the task's pane (asks nothing).
-//   - Seen says the operator read the digest at at; Focus that the screen's
-//     terminal gained or lost focus (the factory holds its toasts then).
+//   - Seen says the operator saw home at at: the first key after a digest,
+//     and any key or click at most once a minute (the digest counts the
+//     absence from the last input); Focus that the screen's terminal
+//     gained or lost focus at at, the event's time (the factory holds its
+//     toasts then).
 //   - Diff is the pager on the task's diff, run with tea.ExecProcess; nil:
 //     there is no diff to show. It is called on the screen's own turn, so
 //     it only builds the command: it reads and waits for nothing.
@@ -162,7 +165,7 @@ type FactoryActions interface {
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
 	Seen(ctx context.Context, at time.Time) error
-	Focus(ctx context.Context, focused bool) error
+	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
 }
 
@@ -372,6 +375,7 @@ type factoryModel struct {
 
 	digestSeen time.Time // the digest the operator dismissed (its Since)
 	digestGone bool      // a digest was dismissed
+	seenSent   time.Time // when the screen last told the factory you saw home (seeHome)
 	anim       int
 	animating  bool
 
@@ -520,14 +524,16 @@ func (m *factoryModel) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// focusCmd tells the factory the screen's terminal gained or lost focus.
+// focusCmd tells the factory the screen's terminal gained or lost focus,
+// with the event's time, taken here on the screen's turn: two reports run
+// on their own goroutines in any order, and the factory keeps the newer.
 func (m factoryModel) focusCmd(focused bool) tea.Cmd {
 	if m.act == nil {
 		return nil
 	}
-	ctx, act := m.ctx, m.act
+	ctx, act, at := m.ctx, m.act, m.now()
 	return func() tea.Msg {
-		_ = act.Focus(ctx, focused) // best effort: a toast held or not is the factory's call
+		_ = act.Focus(ctx, focused, at) // best effort: a toast held or not is the factory's call
 		return nil
 	}
 }

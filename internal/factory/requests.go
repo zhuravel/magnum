@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -57,24 +56,6 @@ type FocusPayload struct {
 // holds nothing.
 func (f FocusPayload) Live() bool {
 	return f.Focused && f.PID > 0 && engine.DrainerAlive(f.PID)
-}
-
-// ReadScreenFocus is the screen's latest focus as the daemon keeps it
-// (Layout.FactoryFocus); none yet is the zero FocusPayload, which is not
-// Live.
-func ReadScreenFocus(l paths.Layout) (FocusPayload, error) {
-	var f FocusPayload
-	b, err := os.ReadFile(l.FactoryFocus())
-	if errors.Is(err, fs.ErrNotExist) {
-		return f, nil
-	}
-	if err != nil {
-		return f, err
-	}
-	if err := json.Unmarshal(b, &f); err != nil {
-		return FocusPayload{}, fmt.Errorf("%s: %w", filepath.Base(l.FactoryFocus()), err)
-	}
-	return f, nil
 }
 
 // focusRequest keeps the screen's focus report p in focus.json, where the
@@ -221,8 +202,42 @@ func (e *Engine) complete(ctx context.Context, q registry.Request, err error, re
 	}
 	if cerr := e.reg.CompleteRequest(ctx, q.ID, state, result); cerr != nil {
 		e.log.Warn("complete a factory request", "request", q.ID, "err", cerr)
+	} else if q.Kind == ReqPreview { // your draft as typed, unscrubbed: the answer is all the screen reads
+		if ferr := e.reg.ForgetPayload(ctx, q.ID); ferr != nil {
+			e.log.Warn("forget a preview's text", "request", q.ID, "err", ferr)
+		}
 	}
-	e.event(ctx, 0, "request", phase, fmt.Sprintf("request %d (%s): %s", q.ID, q.Kind, result))
+	text := result
+	if q.Kind == ReqPreview && err == nil { // the form carries your draft: the event says only that it was answered
+		text = "the new task's form, answered"
+	}
+	e.event(ctx, 0, "request", phase, fmt.Sprintf("request %d (%s): %s", q.ID, q.Kind, text))
+}
+
+// The screen's own requests (its focus reports, the previews of what you
+// type) are kept screenRequestsKept after their answer, with their events,
+// and pruned at most every pruneEvery: they are no input of yours, and
+// they would grow the registry with every focus change and every pause in
+// typing.
+const (
+	screenRequestsKept = 24 * time.Hour
+	pruneEvery         = time.Hour
+)
+
+// pruneScreenRequests prunes the screen's own requests answered more than
+// screenRequestsKept before now, and their events, once per pruneEvery.
+func (e *Engine) pruneScreenRequests(ctx context.Context, now time.Time) {
+	if !e.pruned.IsZero() && now.Sub(e.pruned) < pruneEvery {
+		return
+	}
+	e.pruned = now
+	n, err := e.reg.PruneRequests(ctx, now.Add(-screenRequestsKept), ReqFocus, ReqPreview)
+	switch {
+	case err != nil:
+		e.log.Warn("prune the screen's requests", "err", err)
+	case n > 0:
+		e.log.Info("pruned the screen's requests", "requests", n)
+	}
 }
 
 // shortAge is d as a wait says it: "31m", "2h5m", "45s".
@@ -417,7 +432,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 // registry or a file that cannot be read is its error.
 func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) error {
 	if t.State != registry.TaskNeedsYou {
-		return fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
+		return retryRefusalOf(t, nil, nil)
 	}
 	open, err := openQuestionsOf(ctx, reg, t)
 	if err != nil || len(open) == 0 {
@@ -427,7 +442,17 @@ func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t
 	if err != nil {
 		return err
 	}
-	if questionsOnYou(open, asks) {
+	return retryRefusalOf(t, open, asks)
+}
+
+// retryRefusalOf is retryRefusal's verdict on what it reads: task t, the
+// open questions of its newest revision and asks.json's asks (the screen
+// passes its own reads of them).
+func retryRefusalOf(t registry.Task, open []registry.Question, asks map[string]ask) error {
+	switch {
+	case t.State != registry.TaskNeedsYou:
+		return fmt.Errorf("%s is %s, not waiting on you: there is nothing to retry", TaskKey(t), t.State)
+	case len(open) > 0 && questionsOnYou(open, asks):
 		return fmt.Errorf("%s waits for your answers to %s: answer them with `magnum factory answer %d` (it prints them); "+
 			"a retry would only ask them again", TaskKey(t), plural(len(open), "question"), t.ID)
 	}

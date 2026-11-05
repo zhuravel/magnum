@@ -237,6 +237,9 @@ type Engine struct {
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte
 	holdsSaved   bool
+	// pruned is when the screen's own requests were last pruned
+	// (pruneScreenRequests).
+	pruned time.Time
 	// lastReveal is when a herdr hold last opened herdr's session.
 	lastReveal time.Time
 	// recovery is what the agents' recovery has left to do after a failure
@@ -582,6 +585,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 
 	e.handleRequests(ctx)
+	e.pruneScreenRequests(ctx, now)
 	e.admit(ctx)
 
 	if advance {

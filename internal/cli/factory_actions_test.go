@@ -227,36 +227,38 @@ func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 	}
 }
 
-// Focus is a focus request with the screen's own pid and the time, which
-// records no input of yours; a blur keeps the time you last saw home; with
-// no factory registry yet nothing is queued.
+// Focus is a focus request with the screen's own pid and the event's time
+// (the screen's, not the report's goroutine's), which records no input of
+// yours; a blur keeps its time as the time you last saw home; with no
+// factory registry yet nothing is queued.
 func TestTheScreensFocusIsARequestWithItsPid(t *testing.T) {
 	storetest.Serial(t)
 	at := newScreenActionsTest(t, 250, nil)
 	ctx := t.Context()
-	if err := at.act.Focus(ctx, true); err != nil {
+	focusAt, blurAt := screenActionsNow.Add(-2*time.Minute), screenActionsNow.Add(-time.Minute)
+	if err := at.act.Focus(ctx, true, focusAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := at.act.Focus(ctx, false); err != nil {
+	if err := at.act.Focus(ctx, false, blurAt); err != nil {
 		t.Fatal(err)
 	}
 	if len(at.seen) != 2 {
 		t.Fatalf("requests %+v, want two focus reports", at.seen)
 	}
-	for i, focused := range []bool{true, false} {
+	for i, want := range []factory.FocusPayload{{Focused: true, PID: os.Getpid(), At: focusAt}, {PID: os.Getpid(), At: blurAt}} {
 		p := payloadOf[factory.FocusPayload](t, at.seen[i])
-		if at.seen[i].Kind != factory.ReqFocus || p.Focused != focused || p.PID != os.Getpid() || !p.At.Equal(screenActionsNow) {
-			t.Errorf("report %d: %s %+v", i, at.seen[i].Kind, p)
+		if at.seen[i].Kind != factory.ReqFocus || p.Focused != want.Focused || p.PID != want.PID || !p.At.Equal(want.At) {
+			t.Errorf("report %d: %s %+v, want %+v", i, at.seen[i].Kind, p, want)
 		}
 	}
-	if seen, err := factory.ReadSeen(at.ctx.Layout); err != nil || !seen.Equal(screenActionsNow) {
-		t.Errorf("seen %v (%v) after a blur, want its time", seen, err)
+	if seen, err := factory.ReadSeen(at.ctx.Layout); err != nil || !seen.Equal(blurAt) {
+		t.Errorf("seen %v (%v) after a blur, want its time %v", seen, err, blurAt)
 	}
 
 	bare := newDaemonGroupTest(t)
 	src := &factoryScreenSource{c: bare.ctx, now: func() time.Time { return screenActionsNow }}
 	defer src.close()
-	if err := newFactoryActions(bare.ctx, src).Focus(ctx, true); err != nil {
+	if err := newFactoryActions(bare.ctx, src).Focus(ctx, true, screenActionsNow); err != nil {
 		t.Fatal(err)
 	}
 	if fileExists(bare.ctx.Layout.FactoryDB()) {
@@ -283,44 +285,56 @@ func TestSeenOnlyMovesForwardAcrossScreens(t *testing.T) {
 	}
 }
 
-// The digest counts the time you were away: from the time kept until the
-// screen's terminal regains focus, and none while you are at the focused
-// screen after you saw home there; a blur keeps its time.
+// The digest counts your absence from your last input: a screen left
+// focused overnight, with no key since, digests in the morning; focus
+// reports change nothing but a blur, which keeps its time.
 func TestTheDigestCountsOnlyTheTimeYouWereAway(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
 	registrytest.Seed(t, dt.ctx.Layout.FactoryDB())
 	daemonSys.FactoryKick = func(paths.Layout) (int, error) { return 0, nil } // no factory daemon: the reports wait queued
-	now := screenActionsNow
+	night := screenActionsNow.Add(-14 * time.Hour)
+	now := night
 	src := &factoryScreenSource{c: dt.ctx, now: func() time.Time { return now }}
 	defer src.close()
 	act := newFactoryActions(dt.ctx, src)
 	ctx := t.Context()
-	night := now.Add(-14 * time.Hour)
-	if err := act.Seen(ctx, night); err != nil {
+	if err := act.Focus(ctx, true, night); err != nil { // at the screen, focused
 		t.Fatal(err)
 	}
-	if got := src.lastSeen(now); !got.Equal(night) {
-		t.Fatalf("last seen %v with no focus report, want the kept %v", got, night)
-	}
-	if err := act.Focus(ctx, true); err != nil { // you come back: the night still counts
+	if err := act.Seen(ctx, night); err != nil { // your last key of the evening
 		t.Fatal(err)
 	}
-	if got := src.lastSeen(now); !got.Equal(night) {
-		t.Fatalf("last seen %v right after focus, want the night's %v", got, night)
-	}
-	if err := act.Seen(ctx, now); err != nil { // the first key: you saw the digest
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{Clock: func() time.Time { return night.Add(3 * time.Hour) }})
+	if err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(3 * time.Hour)
-	if got := src.lastSeen(now); !got.Equal(now) {
-		t.Fatalf("last seen %v while you work at the focused screen, want now", got)
+	task, err := reg.CreateTask(ctx, registry.Task{JiraKey: "PR-12302", Kind: "chore", Repo: "talkable/talkable", Title: "Remove old sync job",
+		State: registry.TaskActive, Stage: "publish"})
+	if err == nil {
+		err = reg.TransitionTask(ctx, task.ID, []string{registry.TaskActive}, registry.TaskDone, nil)
 	}
-	if err := act.Focus(ctx, false); err != nil {
+	reg.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := src.lastSeen(now.Add(2 * time.Hour)); !got.Equal(now) {
-		t.Fatalf("last seen %v after a blur, want the blur's %v", got, now)
+	now = screenActionsNow // 14 hours on, the screen still focused, no key since
+	d, err := src.Frame(ctx)
+	if err != nil || d.Digest == nil || len(d.Digest.Done) != 1 || !d.Digest.Since.Equal(night) {
+		t.Fatalf("frame %+v, %v: want the night's digest from the last key", d.Digest, err)
+	}
+	if err := act.Seen(ctx, now); err != nil { // the morning's first key
+		t.Fatal(err)
+	}
+	if got := src.lastSeen(); !got.Equal(now) {
+		t.Fatalf("last seen %v after a key, want its time", got)
+	}
+	blur := now.Add(time.Hour)
+	if err := act.Focus(ctx, false, blur); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.lastSeen(); !got.Equal(blur) {
+		t.Fatalf("last seen %v after a blur, want the blur's %v", got, blur)
 	}
 }
 
@@ -430,15 +444,56 @@ func TestDiffPagesTheReadyCardsDiffInTheTasksCopy(t *testing.T) {
 	if err != nil || d.Cards[ready.ID].Ready == nil {
 		t.Fatalf("frame %+v, %v: want the ready card", d.Cards[ready.ID], err)
 	}
+	// A card with no order file (drawn by an older build, or its file gone)
+	// pages in git's order: git refuses an order file it cannot read.
+	t.Setenv("LESS", "FRX")
 	cmd := at.act.Diff(ready.ID)
 	if cmd == nil {
 		t.Fatal("no diff for the ready card")
 	}
-	want := append([]string{"git"}, factory.DiffArgs(at.ctx.Layout, ready.ID, card)...)
-	if !slices.Equal(cmd.Args, want) || filepath.Base(cmd.Path) != "git" {
+	if want := append([]string{"git"}, factory.DiffArgs(card, "")...); !slices.Equal(cmd.Args, want) || filepath.Base(cmd.Path) != "git" {
 		t.Errorf("diff %q, want %q", cmd.Args, want)
+	}
+	// Whatever your LESS says, the pager does not quit at once on a short
+	// diff (which the card would count as read).
+	if !slices.Contains(cmd.Env, "LESS=FRX -+F") {
+		t.Errorf("the pager's LESS %q, want yours with -+F", slices.DeleteFunc(slices.Clone(cmd.Env), func(e string) bool { return !strings.HasPrefix(e, "LESS=") }))
+	}
+	order := factory.DiffOrderPath(at.ctx.Layout, ready.ID)
+	if err := os.WriteFile(order, []byte("Gemfile.lock\napp/a.rb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := at.act.Diff(ready.ID); cmd == nil || !slices.Equal(cmd.Args, append([]string{"git"}, factory.DiffArgs(card, order)...)) {
+		t.Errorf("diff with the order file %v", cmd)
 	}
 	if at.act.Diff(other.ID) != nil {
 		t.Error("a diff for a task with no ready card")
+	}
+}
+
+// An agents store the screen cannot read is said on home, with why, and the
+// rest of home is drawn: never an empty AGENTS with no word.
+func TestTheScreenSaysWhyItShowsNoAgents(t *testing.T) {
+	storetest.Serial(t)
+	at := newScreenActionsTest(t, 250, nil)
+	reg := at.registry(t)
+	if _, err := reg.CreateTask(t.Context(), registry.Task{JiraKey: "PR-12371", Kind: "bug", Repo: "talkable/talkable", Title: "Coupon CSV",
+		State: registry.TaskActive, Stage: "investigate"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(at.ctx.Layout.FactoryAgentsDB()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at.ctx.Layout.FactoryAgentsDB(), []byte("not a database, not at all, not even close"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := at.src.Frame(t.Context())
+	if err != nil || len(d.Rows) != 1 {
+		t.Fatalf("frame %+v, %v: want the task's row", d.Rows, err)
+	}
+	if !slices.Contains(d.Blocking, "agents not read") || !slices.ContainsFunc(d.BlockingLong, func(l string) bool {
+		return strings.HasPrefix(l, "agents not read (") && len(l) > len("agents not read ()")
+	}) {
+		t.Errorf("blocking %q / %q, want the agents store's failure named", d.Blocking, d.BlockingLong)
 	}
 }

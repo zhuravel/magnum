@@ -27,6 +27,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -679,9 +681,61 @@ func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayloa
 	}
 }
 
-// writeTicket writes ticket.md, the ticket as the agents read it.
+// writeTicket writes ticket.md, the ticket as the agents read it, and
+// beside it the ticket's reporter (reporterFile), whom the question card
+// offers to ask; a ticket without one removes it. ticket.md never has it.
 func (e *Engine) writeTicket(ctx context.Context, t registry.Task, tk jira.Ticket) error {
-	return e.writeData(ctx, t, "ticket", ticketFile, tk.Markdown())
+	if err := e.writeData(ctx, t, "ticket", ticketFile, tk.Markdown()); err != nil {
+		return err
+	}
+	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reporterFile)
+	var err error
+	if name := cleanReporter(tk.Reporter); name != "" {
+		err = fsx.WriteFileAtomic(path, []byte(name+"\n"), 0o600)
+	} else if err = os.Remove(path); errors.Is(err, fs.ErrNotExist) {
+		err = nil
+	}
+	if err != nil { // the card then offers no ask of the reporter; the ticket stands
+		e.log.Warn("keep the ticket's reporter", "task", t.ID, "err", err)
+	}
+	return nil
+}
+
+// reporterFile keeps the display name of the reporter of a task's ticket,
+// one line, in the task's directory.
+const reporterFile = "ticket-reporter.txt"
+
+// maxReporter bounds a reporter's name, in bytes, as Jira's client cuts it.
+const maxReporter = jira.MaxReporter
+
+// readReporter is the reporter of the ticket of the task directory dir, on
+// one line and bounded ("" for none).
+func readReporter(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, reporterFile))
+	if err != nil {
+		return ""
+	}
+	return cleanReporter(string(b))
+}
+
+// cleanReporter is a reporter's name as the screen and a drafted comment
+// take it: Jira's data, so its control characters are spaces, it is
+// trimmed, and it is cut at maxReporter bytes on a character.
+func cleanReporter(s string) string {
+	s = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s))
+	if len(s) > maxReporter {
+		n := maxReporter
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = strings.TrimSpace(s[:n])
+	}
+	return s
 }
 
 // writeData writes a data file of the task's directory (0600, the directory

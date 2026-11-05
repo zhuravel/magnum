@@ -100,6 +100,7 @@ type fakeFactoryActions struct {
 	opens    []int64
 	seen     []time.Time
 	focus    []bool
+	focusAt  []time.Time
 	diffs    []int64
 	diffCmd  *exec.Cmd
 
@@ -173,10 +174,11 @@ func (a *fakeFactoryActions) Seen(_ context.Context, at time.Time) error {
 	return nil
 }
 
-func (a *fakeFactoryActions) Focus(_ context.Context, focused bool) error {
+func (a *fakeFactoryActions) Focus(_ context.Context, focused bool, at time.Time) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.focus = append(a.focus, focused)
+	a.focusAt = append(a.focusAt, at)
 	return nil
 }
 
@@ -566,17 +568,18 @@ func TestTheDigestClearsAfterTheNextKey(t *testing.T) {
 		dg := fixtureDigest()
 		d.Rows, d.Digest = dg.Rows, dg.Digest
 	})
-	h.press("ctrl+r")
+	h.press("ctrl+r") // your input: seen at its time
 	mustContain(t, h.view(), "DONE SINCE", "away 14h")
-	h.clock.add(time.Minute)
-	h.press("j")
-	if len(h.act.seen) != 1 || !h.act.seen[0].Equal(factoryNow.Add(time.Minute)) {
-		t.Fatalf("seen = %v, want once at the key's time", h.act.seen)
+	h.clock.add(30 * time.Second)
+	h.press("j") // the digest's key: seen at once, whatever the minute's throttle says
+	want := []time.Time{factoryNow, factoryNow.Add(30 * time.Second)}
+	if !slices.EqualFunc(h.act.seen, want, time.Time.Equal) {
+		t.Fatalf("seen = %v, want %v: the digest's key at its time", h.act.seen, want)
 	}
 	mustNotContain(t, h.view(), "DONE SINCE", "away 14h")
 	h.press("k", "ctrl+r", "j")
-	if len(h.act.seen) != 1 {
-		t.Errorf("seen %d times, want once", len(h.act.seen))
+	if len(h.act.seen) != 2 {
+		t.Errorf("seen %d times, want no more within the minute", len(h.act.seen))
 	}
 	mustNotContain(t, h.view(), "DONE SINCE") // the same digest read again stays hidden
 }
@@ -1231,12 +1234,40 @@ func TestTheSeveralKeysQuestionNamesThePromptTask(t *testing.T) {
 	mustNotContain(t, v, "Start bug PR-12345")
 }
 
-// Ruling 16: the screen asks for focus reports and passes them on.
+// Ruling 16: the screen asks for focus reports and passes them on, each
+// with the time of its event (taken on the screen's turn, never on the
+// report's goroutine, so a late report never passes for a newer one).
 func TestTheScreenReportsFocusAndBlur(t *testing.T) {
 	h := testFactory(t, 100, 40)
-	h.feed(tea.BlurMsg{}, tea.FocusMsg{})
+	h.feed(tea.BlurMsg{})
+	h.clock.add(time.Second)
+	h.feed(tea.FocusMsg{})
 	if !slices.Equal(h.act.focus, []bool{false, true}) {
 		t.Errorf("focus = %v", h.act.focus)
+	}
+	if !slices.EqualFunc(h.act.focusAt, []time.Time{factoryNow, factoryNow.Add(time.Second)}, time.Time.Equal) {
+		t.Errorf("focus times = %v, want each event's own", h.act.focusAt)
+	}
+}
+
+// Any key or click tells the factory you saw home, at most once a minute,
+// with the input's time: the digest counts your absence from your last
+// input, whatever the terminal reports of its focus.
+func TestAnyKeyOrClickSaysYouSawHomeOnceAMinute(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.press("j")
+	h.clock.add(20 * time.Second)
+	h.press("k")
+	if !slices.EqualFunc(h.act.seen, []time.Time{factoryNow}, time.Time.Equal) {
+		t.Fatalf("seen = %v, want once, at the first key", h.act.seen)
+	}
+	h.clock.add(time.Minute)
+	h.open("PR-12330") // a key on another view counts too
+	h.clock.add(time.Minute)
+	h.feed(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	want := []time.Time{factoryNow, factoryNow.Add(80 * time.Second), factoryNow.Add(140 * time.Second)}
+	if !slices.EqualFunc(h.act.seen, want, time.Time.Equal) {
+		t.Errorf("seen = %v, want %v", h.act.seen, want)
 	}
 }
 

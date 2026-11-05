@@ -764,9 +764,17 @@ func TestTheReadyCardListsTheFlaggedFilesFirst(t *testing.T) {
 	if got := r.readTask(task.ID, DiffOrderFile); got != "app/credit.rb\nspec/models/credit_points_spec.rb\n" {
 		t.Errorf("%s: %q", DiffOrderFile, got)
 	}
-	args := DiffArgs(r.layout, task.ID, c)
-	if !slices.Equal(args, []string{"--paginate", "-C", c.CopyPath, "diff", "-O" + filepath.Join(r.layout.FactoryTaskDir(task.ID), DiffOrderFile),
-		c.Base + "..." + c.Head, "--"}) {
+	// The pager's git: no external diff and no textconv (the copy's own
+	// attributes, the change's, run nothing), the order file when there is one.
+	order := DiffOrderPath(r.layout, task.ID)
+	if order != filepath.Join(r.layout.FactoryTaskDir(task.ID), DiffOrderFile) {
+		t.Errorf("order file %q", order)
+	}
+	if args := DiffArgs(c, order); !slices.Equal(args, []string{"--paginate", "-C", c.CopyPath, "diff", "--no-ext-diff", "--no-textconv",
+		"-O" + order, c.Base + "..." + c.Head, "--"}) {
 		t.Errorf("diff args %q", args)
+	}
+	if args := DiffArgs(c, ""); slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "-O") }) {
+		t.Errorf("diff args without an order file %q", args)
 	}
 }

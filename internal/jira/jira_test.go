@@ -210,6 +210,39 @@ func TestTheTicketCutsLongText(t *testing.T) {
 	}
 }
 
+// The ticket keeps its reporter's display name, on one line (control
+// characters as spaces) and cut at MaxReporter bytes, for the factory's
+// question card to offer asking them: never their email, and never in
+// ticket.md, which stays as a round's judge reads it.
+func TestTheTicketKeepsItsReportersDisplayNameOnly(t *testing.T) {
+	body := strings.Replace(issueJSON, `"reporter": {"displayName": "Bob Example"}`,
+		`"reporter": {"displayName": "Rev\nAnn\u0007", "emailAddress": "rev-ann@example.com"}`, 1)
+	c, _ := answering(t, "200", body)
+	tk, err := c.Ticket(t.Context(), "PS-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Reporter != "Rev Ann" {
+		t.Errorf("reporter %q, want the display name on one line", tk.Reporter)
+	}
+	if md := string(tk.Markdown()); strings.Contains(md, "Rev") || strings.Contains(md, "rev-ann") {
+		t.Errorf("ticket.md carries the reporter:\n%s", md)
+	}
+	long := strings.Replace(issueJSON, `"Bob Example"`, `"`+strings.Repeat("ü", MaxReporter)+`"`, 1)
+	c, _ = answering(t, "200", long)
+	if tk, err = c.Ticket(t.Context(), "PS-123"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(tk.Reporter); n > MaxReporter || n < MaxReporter-1 || !utf8.ValidString(tk.Reporter) {
+		t.Errorf("a long name kept %d bytes (valid %v), want at most %d", n, utf8.ValidString(tk.Reporter), MaxReporter)
+	}
+	none := strings.Replace(issueJSON, `"reporter": {"displayName": "Bob Example"},`, ``, 1)
+	c, _ = answering(t, "200", none)
+	if tk, err = c.Ticket(t.Context(), "PS-123"); err != nil || tk.Reporter != "" {
+		t.Errorf("an issue with no reporter: %q, %v", tk.Reporter, err)
+	}
+}
+
 // A refusal (401, 403, 404, another code), a timeout, an unreachable site
 // and an answer that is not an issue are errors of a class, whose message
 // names the class and the status code, never the answer's body, the user
