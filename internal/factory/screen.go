@@ -53,7 +53,18 @@ type ScreenOptions struct {
 	// ReadyCards, when set, gets each ready card the data draws, as read
 	// once for it (the pager pages the card drawn).
 	ReadyCards func(id int64, c ReadyCardFile)
+	// DaemonDown says no factory daemon runs (its pidfile names no live
+	// process): nothing moves, so home's one blocker says so and how to
+	// start it, the last daemon's holds.json is not read, and no working
+	// mark turns.
+	DaemonDown bool
 }
+
+// The blocker lines of a factory daemon that is down, short and long.
+const (
+	daemonDownShort = "factory daemon down: nothing moves"
+	daemonDownLong  = "factory daemon down: nothing moves (`magnum factory install` starts it)"
+)
 
 const (
 	// awayAfter is the absence after which home digests what finished
@@ -121,8 +132,18 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		return a.Since.Compare(b.Since) // NEEDS YOU: the oldest wait first, as `a` walks it
 	})
 	d.Repo = s.repo()
-	if d.Blocking, d.BlockingLong, err = blockingLines(o.Layout); err != nil {
-		return d, err
+	switch {
+	case o.DaemonDown: // nothing moves: no hold of the last daemon's is in force, and no agent works for it
+		d.Blocking, d.BlockingLong = []string{daemonDownShort}, []string{daemonDownLong}
+		for i := range d.Rows {
+			if d.Rows[i].Mark == tui.MarkWorking {
+				d.Rows[i].Mark = tui.MarkWaits
+			}
+		}
+	default:
+		if d.Blocking, d.BlockingLong, err = blockingLines(o.Layout); err != nil {
+			return d, err
+		}
 	}
 	if d.Digest, err = s.digest(lastSeen, d.Rows); err != nil {
 		return d, err

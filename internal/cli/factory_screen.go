@@ -10,15 +10,18 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -147,6 +150,19 @@ func (s *factoryScreenSource) lastSeen() time.Time {
 	return seen
 }
 
+// daemonDown reports whether no factory daemon runs: its pidfile names none
+// (or cannot be read), or kill -0 finds its process gone. It runs on every
+// frame, so it reads no process table: a pid reused by another process
+// reads as up, as status's ps would tell, and the daemon's own requests
+// then say it does not answer.
+func daemonDown(l paths.Layout) bool {
+	pid, err := daemonSys.factoryPID(l)
+	if err != nil || pid <= 0 {
+		return true
+	}
+	return errors.Is(daemonSys.Kill(pid, 0), syscall.ESRCH)
+}
+
 // readyCard is task id's ready card as the last frame drew it.
 func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) {
 	cards := s.cards.Load()
@@ -159,7 +175,8 @@ func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) 
 
 // Frame reads the factory (factory.ScreenData) and keeps the ready cards
 // it drew. An agents store it cannot open is a blocker line of home, with
-// why, and the rest is drawn.
+// why, and the rest is drawn. A factory daemon that is down (daemonDown)
+// is home's blocker line.
 func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error) {
 	reg, err := s.registryFor(false)
 	if err != nil || reg == nil {
@@ -168,7 +185,7 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 	agents, aerr := s.agentsStore()
 	cards := map[int64]factory.ReadyCardFile{}
 	d, err := factory.ScreenData(ctx, reg, agents, s.now(), s.lastSeen(), factory.ScreenOptions{Config: s.c.Config, Layout: s.c.Layout,
-		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }})
+		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout)})
 	if err != nil {
 		return d, err
 	}

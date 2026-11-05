@@ -3598,6 +3598,9 @@ commands send them (the daemon records your input once); `o` focuses the task's 
 session (`[factory] herdr_session`) and brings that terminal to the front, and `d` pages the ready card's diff
 in the task's copy (no external diff, no textconv), the flagged files first, and the pager never quits at once on
 a short diff (`-+F` after your `LESS`). Without a factory daemon a request waits queued, and the footer says so.
+Each frame reads the factory daemon's pidfile and probes its process (`kill -0`, no ps): while no daemon runs,
+home's blocker line says so (`factory daemon down: nothing moves`, and `magnum factory install` starts it on a wide
+screen), the holds the last daemon saved are not shown, and no working mark turns.
 The screen's own requests (its focus reports, the previews of what you type) are pruned a day after their answer,
 and a preview keeps none of your text once answered. `,` opens the settings screen, as on the board.
 

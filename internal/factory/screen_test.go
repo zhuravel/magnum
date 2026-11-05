@@ -643,6 +643,43 @@ func TestScreenDataShowsAHoldAsABlocker(t *testing.T) {
 	}
 }
 
+// With the factory daemon down nothing moves, and home says so: one blocker
+// line names it and how to start it, holds.json (the last daemon's) is not
+// read, and no working mark turns, since no agent's state is read live.
+func TestScreenDataWithTheDaemonDownSaysSoAndMovesNothing(t *testing.T) {
+	r := newScreenRig(t)
+	b, err := json.Marshal([]Hold{{Kind: HoldInfra, Reason: "SSH key refused", Since: screenNow.Add(-5 * time.Minute)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(r.layout.FactoryHolds()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.layout.FactoryHolds(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.at(9 * time.Minute)
+	task := r.task("PR-12371", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
+	r.session(task, "fx-cause", "working", screenNow.Add(-8*time.Minute), screenNow.Add(-20*time.Second))
+
+	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, screenNow, ScreenOptions{Config: r.cfg, Layout: r.layout, DaemonDown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{daemonDownShort}; !slices.Equal(d.Blocking, want) {
+		t.Errorf("blocking %q, want %q", d.Blocking, want)
+	}
+	if len(d.BlockingLong) != 1 || !strings.Contains(d.BlockingLong[0], "magnum factory install") || strings.Contains(d.BlockingLong[0], "SSH") {
+		t.Errorf("blocking long %q, want the daemon's line naming how to start it, and no hold", d.BlockingLong)
+	}
+	if row := rowOf(t, d, "PR-12371"); row.Mark != tui.MarkWaits {
+		t.Errorf("row %+v, want it waiting, not working", row)
+	}
+	if up := r.data(screenNow); rowOf(t, up, "PR-12371").Mark != tui.MarkWorking || len(up.Blocking) != 1 || !strings.HasPrefix(up.Blocking[0], "infra") {
+		t.Errorf("with the daemon up: blocking %q, row %+v", up.Blocking, rowOf(t, up, "PR-12371"))
+	}
+}
+
 // The task card offers r exactly when a retry goes on: the check is the
 // retry's own (retryRefusal), so a task that waits for your answers, or
 // does not wait on you, offers none, and one whose questions wait on the

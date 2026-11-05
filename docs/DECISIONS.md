@@ -15011,6 +15011,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   key answers the question first. The help and log boxes draw the bar's question on their rule. No golden
   changed, and no painter was added. Tests: TestALateNewTaskQuestionIsNeverAskedOffItsView and
   TestEveryViewDrawsTheBarsQuestion.
+- **The factory screen shows a daemon that is down** (2026-11-05, the final review, ledger 498). With the
+  factory daemon stopped, home kept every row. The working marks kept turning, because the agents store's
+  last state was `working`. The blocker line was whatever `holds.json` last said. Only an action's footer
+  said "no factory daemon runs". Now each frame reads the pidfile and probes its process with `kill -0`.
+  It runs no ps, because a frame comes every 3 seconds. No pidfile, an unreadable one, or a process that is
+  gone (ESRCH) is a daemon that is down. Then `ScreenOptions.DaemonDown` gives home one blocker line,
+  "factory daemon down: nothing moves", with "`magnum factory install` starts it" on a wide screen. It
+  reads no `holds.json`, and a working mark falls to waits. Rejected: ps on every frame (a pid reused by
+  another process reads as up, and the daemon's requests then say it does not answer). It uses the
+  existing blocker line, and no painter was added. Tests: TestScreenDataWithTheDaemonDownSaysSoAndMovesNothing
+  and TestTheFactoryScreenSaysWhenTheDaemonIsDown.
 
 ## Learned rules
 

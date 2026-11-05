@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/tui"
 )
@@ -84,6 +88,50 @@ func TestFactoryWithoutASubcommandOpensTheScreen(t *testing.T) {
 	}
 	if card := data.Cards[first.ID].Task; card.Key != "PR-12340" || card.Kind != "bug" || card.Title != "Points vanish" {
 		t.Errorf("the first task's card %+v", card)
+	}
+}
+
+// Each frame checks the factory daemon's pidfile with kill -0 (no ps): with
+// no pidfile, or one whose process is gone, home's blocker line says the
+// daemon is down and how to start it; a live one draws the holds it saved.
+func TestTheFactoryScreenSaysWhenTheDaemonIsDown(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	registrytest.Seed(t, dt.ctx.Layout.FactoryDB())
+	pid := 0
+	alive := true
+	daemonSys.FactoryPID = func(paths.Layout) (int, error) { return pid, nil }
+	var probes []string
+	daemonSys.Kill = func(p int, sig syscall.Signal) error {
+		probes = append(probes, fmt.Sprintf("%d %d", p, sig))
+		if !alive {
+			return syscall.ESRCH
+		}
+		return nil
+	}
+	src := &factoryScreenSource{c: dt.ctx, now: time.Now}
+	frame := func() tui.FactoryData {
+		t.Helper()
+		d, err := src.Frame(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	down := func(d tui.FactoryData) bool {
+		return len(d.Blocking) == 1 && strings.Contains(d.Blocking[0], "factory daemon down") &&
+			len(d.BlockingLong) == 1 && strings.Contains(d.BlockingLong[0], "magnum factory install")
+	}
+	if d := frame(); !down(d) {
+		t.Fatalf("no pidfile: blocking %q %q, want the daemon down", d.Blocking, d.BlockingLong)
+	}
+	pid = 4242
+	if d := frame(); down(d) || len(probes) != 1 || probes[0] != "4242 0" {
+		t.Fatalf("a live daemon: blocking %q, probes %q, want no line and one kill -0", d.Blocking, probes)
+	}
+	alive = false
+	if d := frame(); !down(d) {
+		t.Fatalf("a pidfile of a process that is gone: blocking %q, want the daemon down", d.Blocking)
 	}
 }
 
