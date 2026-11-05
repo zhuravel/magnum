@@ -14963,6 +14963,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   two blockers and two alerts for one cause. `infraCause` now names no cause for an error that wraps
   `herdr.ErrUnavailable` or `herdr.ErrTimeout`. The herdr hold (`checkHerdr`) covers them. Test:
   TestAHerdrOutageStartsNoInfraHold.
+- **The watchdog reads Codex's wait on a background terminal as still** (2026-11-05, the final review,
+  ledger 159). Codex shows "Waiting for background terminal (3m 2s)" while a command it started in the
+  background runs, and its timer ticks every second. That line changed the screen's hash on every pass, so
+  a hung command never read as still and the watchdog took no step. `statusLine` now drops a line that
+  names "waiting for background terminal", as it drops the spinners. A tool line that only carries its
+  duration stays. The wording comes from the reviewer's notes, not from a live Codex screen, and Task 21
+  checks it. Test: TestAStillScreenDropsOnlyTheCLIsTimerLines.
 
 ## Learned rules
 

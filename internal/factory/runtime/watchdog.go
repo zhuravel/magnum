@@ -177,10 +177,12 @@ func (r *Runtime) signature(ctx context.Context, st *roleState, run store.Run) s
 
 // statusLine is a line a CLI redraws while its turn runs, a timer in it:
 // Claude Code's spinner ("✻ Cogitating… (3m 12s · ↓ 2.1k tokens · esc to
-// interrupt)"), Codex's ("• Working (12m 03s • esc to interrupt)"). A tool
-// line that only carries its duration ("• Ran bin/rspec (12s)") stays: a
-// new one is progress.
-var statusLine = regexp.MustCompile(`(?i)esc to interrupt|\bworking\s*\(\s*\d|^\s*\S\s+\S[^(]*…\s*\(\s*\d+\s*[hms]\b`)
+// interrupt)"), Codex's ("• Working (12m 03s • esc to interrupt)", and its
+// wait on a command it runs in the background, "Waiting for background
+// terminal (3m 2s)", whose wording Task 21 checks against a live Codex). A
+// tool line that only carries its duration ("• Ran bin/rspec (12s)") stays:
+// a new one is progress.
+var statusLine = regexp.MustCompile(`(?i)esc to interrupt|\bworking\s*\(\s*\d|\bwaiting for background terminal\b|^\s*\S\s+\S[^(]*…\s*\(\s*\d+\s*[hms]\b`)
 
 // stillScreen is a screen as the watchdog compares it: without the status
 // lines whose timer ticks while a turn runs, so a turn that only waits still

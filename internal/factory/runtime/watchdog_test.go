@@ -487,4 +487,15 @@ func TestAStillScreenDropsOnlyTheCLIsTimerLines(t *testing.T) {
 	if got := stillScreen(screen); got != "• Ran bin/rspec (12s)\n› " {
 		t.Fatalf("stillScreen = %q, want the tool line and the composer only", got)
 	}
+	// Codex's wait on a command it runs in the background ticks every
+	// second: a hung command must read as still, so the watchdog steps in.
+	for _, line := range []string{"Waiting for background terminal (3m 2s)", "◦ Waiting for background terminal (12m 40s • esc to interrupt)",
+		"  waiting for background terminal (45s)"} {
+		if got := stillScreen("• Ran bin/rspec (12s)\n" + line + "\n› "); got != "• Ran bin/rspec (12s)\n› " {
+			t.Errorf("stillScreen kept %q: %q", line, got)
+		}
+	}
+	if got := stillScreen("• Waited for background terminal output (2s)\n› "); got == "› " {
+		t.Errorf("stillScreen dropped a tool line that only carries its duration: %q", got)
+	}
 }
