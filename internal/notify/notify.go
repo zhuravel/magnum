@@ -8,7 +8,8 @@
 //     login required, usage paused, needs attention): it retries through
 //     herdr's rate limit with backoff and falls back to osascript after.
 //   - Batcher coalesces informational toasts (reviews posted, new
-//     repositories) into one summary per minute.
+//     repositories) into one summary per minute; an urgent one (the
+//     factory's alerts) flushes through ToastUrgent.
 //   - Sidebar publishes display-only tokens for a workspace under the source
 //     "magnum" with a 24 h TTL, so stale tokens disappear on their own.
 //

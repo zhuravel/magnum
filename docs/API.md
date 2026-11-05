@@ -11798,6 +11798,14 @@ type Deps struct {
 	MySQL   func(ctx context.Context) error
 	HerdrUp func(ctx context.Context) error
 	Reveal  func(ctx context.Context) error
+	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
+	// your herdr session (osascript after), deduplicated in a store of
+	// magnum's schema (the factory's agents store); nil shows none, and the
+	// alerts wait for a build that has one. Sidebar reports a task's sidebar
+	// token on a workspace of the factory's herdr session
+	// (notify.Notifier.Sidebar); nil reports none.
+	Notifier *notify.Notifier
+	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -11848,10 +11856,11 @@ func (e *Engine) Tick(ctx context.Context) error
     then the infrastructure hold and a MySQL ping before a pass that advances),
     the requests, then each live task's advance under its own panic guard
     (safely). During an infrastructure or a herdr hold no task advances except
-    on the hold's tries, and while herdr does not answer no copy a base run left
-    detached is swept (sweepDetached, each under safely too); a failure that a
-    hold covers costs its task nothing. The returned error joins what failed,
-    for the log; each step records its own.
+    on the hold's tries, and while herdr does not answer no copy a base run
+    left detached is swept (sweepDetached, each under safely too); a failure
+    that a hold covers costs its task nothing. Last, the alerts are delivered
+    (deliverAlerts). The returned error joins what failed, for the log; each
+    step records its own.
 
 type ErrRunning struct {
 	PID  int
@@ -12275,25 +12284,31 @@ type Runtime interface {
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
 	Proving(entry int64) bool
+	PaneFocus() runtime.PaneFocus
+	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
-    the owner row of a task in the factory's agents store, the launch of a
-    stage's roles (recorded before any workspace exists), the prompts it sends
-    through its ledger, the panes it observes and the watchdog over them,
-    the verification of a run's end, parking a task's sessions, the reconcile
-    of a prompt of unknown delivery, the recovery of a lost pane, the shift of
-    every turn deadline after the Mac slept, the role that runs for a role (its
-    Claude fallback on a task Codex never works on), the quit of such a task's
-    Codex sessions, a run's state as the agents store keeps it across a restart,
-    who is at work in a task's copy now (a run in flight, you in a pane:
-    the factory's own commands that change the copy wait for them), and who
-    could have changed it since a time (the factory puts back what its checks
-    changed only when nobody else could have). After a restart it binds a task's
-    sessions to the panes herdr shows again (Recover) and settles the workspaces
-    a crash left that no row names (SettleWorkspaces: kept for their attempt's
-    launch to adopt, or closed). Proving says whether the proof that a prompt of
-    unknown delivery never arrived is under way (its read after RedeliverAfter
-    settles it).
+    the owner row of a task in the factory's agents store, the launch of
+    a stage's roles (recorded before any workspace exists), the prompts
+    it sends through its ledger, the panes it observes and the watchdog
+    over them, the verification of a run's end, parking a task's sessions,
+    the reconcile of a prompt of unknown delivery, the recovery of a lost pane,
+    the shift of every turn deadline after the Mac slept, the role that runs
+    for a role (its Claude fallback on a task Codex never works on), the quit
+    of such a task's Codex sessions, a run's state as the agents store keeps
+    it across a restart, who is at work in a task's copy now (a run in flight,
+    you in a pane: the factory's own commands that change the copy wait for
+    them), and who could have changed it since a time (the factory puts back
+    what its checks changed only when nobody else could have). After a restart
+    it binds a task's sessions to the panes herdr shows again (Recover) and
+    settles the workspaces a crash left that no row names (SettleWorkspaces:
+    kept for their attempt's launch to adopt, or closed). Proving says whether
+    the proof that a prompt of unknown delivery never arrived is under way (its
+    read after RedeliverAfter settles it). PaneFocus is what the observe passes
+    saw of you in the factory's panes, from the snapshot they read anyway,
+    and Workspaces the herdr workspaces of a task's live sessions: the alerts'
+    toasts hold while you are in a factory pane, and a task's sidebar token goes
+    on its workspaces (alerts.go).
 
 type ScreenOptions struct {
 	Config *config.Config
@@ -12950,6 +12965,11 @@ func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event
     Events returns a task's events oldest first (taskID 0: the daemon's own);
     limit > 0 keeps only the newest limit rows.
 
+func (r *Registry) EventsAfter(ctx context.Context, after int64, limit int, kinds ...string) ([]Event, error)
+    EventsAfter returns the events of the given kinds written after event
+    after (an id; 0: from the first), of every task and of the daemon itself,
+    oldest first, at most limit of them (limit <= 0: all). No kind is no event.
+
 func (r *Registry) Findings(ctx context.Context, taskID int64) ([]Finding, error)
     Findings returns a task's findings in the order they were first seen.
 
@@ -13557,6 +13577,20 @@ type Orphan struct {
     is kept for the attempt's next launch to adopt (Adopted) or was closed,
     and why.
 
+type PaneFocus struct {
+	// Pane is herdr's focused pane when it is in a task's workspace (its
+	// label is the factory's, WorkspaceLabel), "" when the focus is
+	// elsewhere or herdr did not answer the last pass.
+	Pane string
+	// Since is when the focus moved onto Pane, or herdr last showed you at
+	// work in a factory pane after that (agents.ObsHumanActive); Left is
+	// when a pass first saw the focus off the factory's panes after it was
+	// on one (zero when none did).
+	Since, Left time.Time
+}
+    PaneFocus is what the observe passes saw of herdr's focus in the factory's
+    session.
+
 type Runtime struct {
 	// Has unexported fields.
 }
@@ -13620,6 +13654,9 @@ func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
     Owner upserts task t's owner row: repository factory/<repo name>, number the
     task's id, URL file://<task dir>, head the task's newest attempt (the task's
     id while it has none).
+
+func (r *Runtime) PaneFocus() PaneFocus
+    PaneFocus is what the observe passes saw of you in the factory's panes.
 
 func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     Park parks the agents of task t (agents.Manager.Park): their conversations
@@ -13737,6 +13774,10 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
     the hung-turn steps, and the recoveries that show no progress. It returns
     EventStuck and EventLost when their steps ran out. A panic is contained:
     it comes back as the error.
+
+func (r *Runtime) Workspaces(ctx context.Context, t registry.Task) ([]string, error)
+    Workspaces are the herdr workspaces of task t's live sessions, each once:
+    where its sidebar token goes. None for a task that never launched.
 
 type Turn struct {
 	At         time.Time
@@ -18834,7 +18875,8 @@ tokens. The tab-bar file is the engine's (engine.WriteTabBarFile).
     login required, usage paused, needs attention): it retries through herdr's
     rate limit with backoff and falls back to osascript after.
   - Batcher coalesces informational toasts (reviews posted, new repositories)
-    into one summary per minute.
+    into one summary per minute; an urgent one (the factory's alerts) flushes
+    through ToastUrgent.
   - Sidebar publishes display-only tokens for a workspace under the source
     "magnum" with a 24 h TTL, so stale tokens disappear on their own.
 
@@ -18901,6 +18943,16 @@ type Batcher struct {
 	MaxLines int
 	// Now returns the current time; nil means time.Now. Tests replace it.
 	Now func() time.Time
+	// Compose, when set, makes the toast of every flush, of one item as of
+	// several, in place of the item's own toast and the summary: it runs at
+	// the flush, so what it says is what is true then. It gets the items to
+	// announce in the order they were added.
+	Compose func(items []Item) (title, body string)
+	// Urgent flushes through ToastUrgent rather than Toast, for alerts that
+	// must not be lost: herdr's rate limit is waited out, osascript shows
+	// what herdr cannot, and a toast not shown before the flush's context
+	// ends fails the flush, so its items stay queued for the next one.
+	Urgent bool
 
 	// Has unexported fields.
 }
@@ -18927,6 +18979,10 @@ func (b *Batcher) Flush(ctx context.Context) (bool, error)
 
 func (b *Batcher) FlushDue(ctx context.Context) (bool, error)
     FlushDue flushes when Due; otherwise it does nothing.
+
+func (b *Batcher) Forget(keys ...string)
+    Forget drops the pending items with the given keys: what they announce no
+    longer needs announcing. An unknown key is ignored.
 
 func (b *Batcher) Pending() int
     Pending reports how many items wait for a flush.
@@ -19140,6 +19196,12 @@ func (l Layout) Eval() string
 
 func (l Layout) FactoryAgentsDB() string
     FactoryAgentsDB is the registry of the factory's agent sessions (agents.db),
+    beside FactoryDB.
+
+func (l Layout) FactoryAlerts() string
+    FactoryAlerts is alerts.json, how far the factory daemon delivered
+    its alerts (the newest alert whose toast went out or was dropped,
+    with every older one), so a restart neither repeats one nor loses one,
     beside FactoryDB.
 
 func (l Layout) FactoryBaseline() string

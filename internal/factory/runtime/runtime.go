@@ -171,6 +171,7 @@ type Runtime struct {
 	seen       map[string]fileMark   // conversation -> its transcript as the last read that took it whole saw it
 	youAt      map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
 	commands   map[string]bool       // the slash commands magnum types (agents.MagnumCommands)
+	focus      PaneFocus             // you in the factory's panes, as the observe passes saw you (noteFocus)
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).

@@ -112,8 +112,10 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 	at := r.now()
 	snap, err := r.d.Herdr.Snapshot(ctx)
 	if err != nil {
+		r.noteFocus(herdr.Snapshot{}, at) // a herdr that does not answer shows you in none of its panes
 		return r.drain(), fmt.Errorf("observe: %w", err)
 	}
+	r.noteFocus(snap, at)
 	obs, oerr := r.mgr.ObserveSnapshotAt(ctx, snap, at)
 	for _, o := range obs {
 		evs = append(evs, r.onObservation(ctx, o)...)
@@ -187,6 +189,7 @@ func (r *Runtime) onObservation(ctx context.Context, o agents.Observation) []Eve
 	r.noteSession(ctx, o)
 	if o.Kind == agents.ObsHumanActive {
 		r.sawYou(o.Session.ID)
+		r.renewFocus(r.now())
 	}
 	if o.Status != herdr.StatusBlocked {
 		r.forget(fmt.Sprintf("blocked:%d", o.Session.ID))

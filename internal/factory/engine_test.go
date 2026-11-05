@@ -94,6 +94,10 @@ type fakeRuntime struct {
 	failRecover map[int64]error
 	provable    map[int64]bool
 	proving     map[int64]bool
+	// paneFocus is what PaneFocus answers, workspaces the herdr workspaces
+	// of each task's live sessions (Workspaces).
+	paneFocus  runtime.PaneFocus
+	workspaces map[int64][]string
 }
 
 // canProve makes entry id provable: its transcript is written past its
@@ -457,6 +461,36 @@ func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {
 	defer f.mu.Unlock()
 	f.parks = append(f.parks, t.ID)
 	return nil
+}
+
+// setPaneFocus is what the observe passes saw of you in the factory's
+// panes (PaneFocus).
+func (f *fakeRuntime) setPaneFocus(p runtime.PaneFocus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneFocus = p
+}
+
+func (f *fakeRuntime) PaneFocus() runtime.PaneFocus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paneFocus
+}
+
+// setWorkspaces gives task id's live sessions the herdr workspaces ws.
+func (f *fakeRuntime) setWorkspaces(id int64, ws ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workspaces == nil {
+		f.workspaces = map[int64][]string{}
+	}
+	f.workspaces[id] = ws
+}
+
+func (f *fakeRuntime) Workspaces(_ context.Context, t registry.Task) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.workspaces[t.ID]), nil
 }
 
 // Reconcile records the call and answers verdict's verdict (unknown without

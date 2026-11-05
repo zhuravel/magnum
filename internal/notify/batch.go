@@ -93,6 +93,16 @@ type Batcher struct {
 	MaxLines int
 	// Now returns the current time; nil means time.Now. Tests replace it.
 	Now func() time.Time
+	// Compose, when set, makes the toast of every flush, of one item as of
+	// several, in place of the item's own toast and the summary: it runs at
+	// the flush, so what it says is what is true then. It gets the items to
+	// announce in the order they were added.
+	Compose func(items []Item) (title, body string)
+	// Urgent flushes through ToastUrgent rather than Toast, for alerts that
+	// must not be lost: herdr's rate limit is waited out, osascript shows
+	// what herdr cannot, and a toast not shown before the flush's context
+	// ends fails the flush, so its items stay queued for the next one.
+	Urgent bool
 
 	mu    sync.Mutex
 	items []pendingItem
@@ -110,6 +120,14 @@ func (b *Batcher) Add(it Item) {
 		}
 	}
 	b.items = append(b.items, pendingItem{Item: it, at: b.now()})
+}
+
+// Forget drops the pending items with the given keys: what they announce
+// no longer needs announcing. An unknown key is ignored.
+func (b *Batcher) Forget(keys ...string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.items = slices.DeleteFunc(b.items, func(p pendingItem) bool { return p.Key != "" && slices.Contains(keys, p.Key) })
 }
 
 // Pending reports how many items wait for a flush.
@@ -161,7 +179,11 @@ func (b *Batcher) Flush(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	title, body := b.compose(fresh)
-	sent, err := b.Notifier.Toast(ctx, b.dedupeKey(fresh), title, body, b.dedupe())
+	toast := b.Notifier.Toast
+	if b.Urgent {
+		toast = b.Notifier.ToastUrgent
+	}
+	sent, err := toast(ctx, b.dedupeKey(fresh), title, body, b.dedupe())
 	if err != nil {
 		b.releaseItems(ctx, reserved)
 		b.restore(fresh)
@@ -221,6 +243,13 @@ func (b *Batcher) restore(batch []pendingItem) {
 }
 
 func (b *Batcher) compose(batch []pendingItem) (title, body string) {
+	if b.Compose != nil {
+		items := make([]Item, len(batch))
+		for i, p := range batch {
+			items[i] = p.Item
+		}
+		return b.Compose(items)
+	}
 	if len(batch) == 1 {
 		it := batch[0]
 		title = it.Title

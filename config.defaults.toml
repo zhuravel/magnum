@@ -88,7 +88,8 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # and continues of a paused turn wait for its end; a round of the judge alone (a
                                   # delta check, a reply round, a re-review of the reviewed head) still starts, so
                                   # do `magnum review` and the board's review keys, a round in flight finishes,
-                                  # and the poll, auto-approval, the retro and curation go on
+                                  # and the poll, auto-approval, the retro and curation go on; the factory's
+                                  # toasts wait for its end
 restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
                                   # on it at the first tick with no round claiming, reviewing or verifying and no
                                   # notes curation or retro running (it exits for launchd to start the new build;
@@ -108,7 +109,8 @@ open_hold = "30m"                 # `magnum open` (the board's o) that restores 
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"
-notify = true                     # toasts (false = none); a review you ask for toasts how it went
+notify = true                     # toasts (false = none, the factory's alerts too); a review you ask for toasts
+                                  # how it went
 toast_every_review = false        # also toast every automatic review posted
 
 [terminal]

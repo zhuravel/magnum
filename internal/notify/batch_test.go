@@ -527,3 +527,89 @@ func TestBatcherDisabledDoesNotReserveItemKeys(t *testing.T) {
 		t.Errorf("disabled notifier reserved %v", st.calls)
 	}
 }
+
+// Compose, when set, makes the toast of every flush, of one item as of
+// several, at the flush: what it says is what is true then.
+func TestBatcherComposeMakesEveryFlushsToast(t *testing.T) {
+	c := newClock()
+	h := newFakeHerdr()
+	b, _ := newBatcher(h, c)
+	open := 1
+	b.Compose = func(items []Item) (string, string) {
+		lines := make([]string, len(items))
+		for i, it := range items {
+			lines[i] = it.Line
+		}
+		return fmt.Sprintf("factory: %d open", open), strings.Join(lines, " · ")
+	}
+	b.Add(item(1))
+	if sent, err := b.Flush(context.Background()); !sent || err != nil {
+		t.Fatalf("Flush = %v, %v", sent, err)
+	}
+	open = 3
+	b.Add(item(2))
+	b.Add(item(3))
+	if sent, err := b.Flush(context.Background()); !sent || err != nil {
+		t.Fatalf("Flush = %v, %v", sent, err)
+	}
+	want := []shown{{"factory: 1 open", "#1 approve"}, {"factory: 3 open", "#2 approve · #3 approve"}}
+	if len(h.shows) != 2 || h.shows[0] != want[0] || h.shows[1] != want[1] {
+		t.Errorf("shows = %v, want %v", h.shows, want)
+	}
+}
+
+// An urgent batcher flushes through ToastUrgent: a rate limit herdr answers
+// is waited out, not taken as the end of the batch, and a toast herdr would
+// not show before the flush's deadline fails the flush and keeps its items
+// for the next one.
+func TestBatcherUrgentWaitsOutTheRateLimitAndKeepsWhatItCouldNotShow(t *testing.T) {
+	c := newClock()
+	h := newFakeHerdr()
+	h.queue = []herdr.NotificationResult{rateLimited}
+	b, n := newBatcher(h, c)
+	sl := &sleeper{}
+	n.Sleep = sl.sleep
+	b.Urgent = true
+	b.Add(item(1))
+	if sent, err := b.Flush(context.Background()); !sent || err != nil {
+		t.Fatalf("Flush = %v, %v; want the toast shown on the second try", sent, err)
+	}
+	if len(h.shows) != 2 || len(sl.waits) != 1 {
+		t.Errorf("shows %v, waits %v; want one wait and a second try", h.shows, sl.waits)
+	}
+
+	h.showRes = rateLimited
+	sl.err = context.DeadlineExceeded // the flush's deadline ends the wait
+	b.Add(item(2))
+	if sent, err := b.Flush(context.Background()); sent || err == nil {
+		t.Fatalf("Flush = %v, %v; want the deadline's error", sent, err)
+	}
+	if b.Pending() != 1 {
+		t.Errorf("pending = %d, want the item kept for the next flush", b.Pending())
+	}
+}
+
+// Forget drops pending items by key: what they announce no longer needs
+// announcing, and the rest flush as before.
+func TestBatcherForgetDropsPendingItems(t *testing.T) {
+	c := newClock()
+	h := newFakeHerdr()
+	b, _ := newBatcher(h, c)
+	for i := 1; i <= 3; i++ {
+		b.Add(item(i))
+	}
+	b.Forget(item(1).Key, item(3).Key, "no such key")
+	if b.Pending() != 1 {
+		t.Fatalf("pending = %d, want 1", b.Pending())
+	}
+	if sent, err := b.Flush(context.Background()); !sent || err != nil {
+		t.Fatalf("Flush = %v, %v", sent, err)
+	}
+	if want := (shown{"Review posted: talkable#2", "round 1, approve (2 findings)"}); len(h.shows) != 1 || h.shows[0] != want {
+		t.Errorf("shows = %v, want [%v]", h.shows, want)
+	}
+	b.Forget(item(2).Key)
+	if b.Pending() != 0 {
+		t.Errorf("pending = %d after forgetting what was flushed", b.Pending())
+	}
+}

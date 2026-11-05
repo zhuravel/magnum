@@ -103,6 +103,33 @@ func (r *Registry) RecentEvents(ctx context.Context, limit int, kinds ...string)
 	return evs, nil
 }
 
+// EventsAfter returns the events of the given kinds written after event
+// after (an id; 0: from the first), of every task and of the daemon
+// itself, oldest first, at most limit of them (limit <= 0: all). No kind is
+// no event.
+func (r *Registry) EventsAfter(ctx context.Context, after int64, limit int, kinds ...string) ([]Event, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(kinds)+1)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	q := "SELECT id, at, task_id, kind, phase, text FROM events WHERE kind IN (" + placeholders(len(kinds)) + ") AND id > ? ORDER BY id"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := r.db.QueryContext(ctx, q, append(args, after)...)
+	if err != nil {
+		return nil, fmt.Errorf("events after %d: %w", after, err)
+	}
+	evs, err := collect(rows, scanEvent)
+	if err != nil {
+		return nil, fmt.Errorf("events after %d: %w", after, err)
+	}
+	return evs, nil
+}
+
 func scanEvent(sc scanner) (Event, error) {
 	var e Event
 	var tid *int64

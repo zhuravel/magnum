@@ -450,6 +450,54 @@ func TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours(t *testing.T) {
 	}
 }
 
+// The daemon delivers its alerts through magnum's notify: the toasts on
+// your herdr session (osascript after, as [herdr] notify allows),
+// deduplicated in the factory's agents store, never the review registry;
+// the sidebar tokens on the factory's session. In your own session it is
+// one herdr.
+func TestTheFactoryDaemonBuildsWithItsAlerts(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Herdr.Socket = "/run/herdr/yours.sock"
+	cfg.Factory.HerdrSocket = "/run/herdr/factory.sock"
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() }) // a second Close does nothing
+	n, side := d.Notifier, d.Sidebar
+	if n == nil || side == nil {
+		t.Fatalf("notifier %+v, sidebar %+v: no alert would be delivered", n, side)
+	}
+	toasts, ok1 := n.Herdr.(*herdr.Client)
+	tokens, ok2 := side.Herdr.(*herdr.Client)
+	if !ok1 || !ok2 || toasts.Socket != "/run/herdr/yours.sock" || tokens.Socket != "/run/herdr/factory.sock" {
+		t.Fatalf("toasts on %+v and sidebar tokens on %+v, want your session and the factory's", n.Herdr, side.Herdr)
+	}
+	if n.Store != d.Agents || n.Runner == nil || !n.Enabled {
+		t.Errorf("notifier store %v (want the agents store), runner %v, enabled %v", n.Store, n.Runner, n.Enabled)
+	}
+	if _, err := os.Stat(c.Layout.DB()); !os.IsNotExist(err) {
+		t.Fatalf("the factory daemon opened the review registry: %v", err)
+	}
+	d.Close()
+
+	cfg.Factory.HerdrSocket = cfg.Herdr.Socket
+	cfg.Herdr.Notify = false
+	one, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	defer one.Close()
+	if toasts, ok := one.Notifier.Herdr.(*herdr.Client); !ok || toasts.Socket != cfg.Herdr.Socket || one.Notifier.Enabled {
+		t.Fatalf("in your own session: toasts on %+v, enabled %v; want that session, off as [herdr] notify says", one.Notifier.Herdr,
+			one.Notifier.Enabled)
+	}
+}
+
 // The factory's panes live in its own herdr session: the socket [factory]
 // herdr_socket names, else the named session's own, never the review panes'
 // default one.

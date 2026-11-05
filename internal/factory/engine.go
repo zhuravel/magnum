@@ -35,6 +35,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -64,6 +65,11 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // (SettleWorkspaces: kept for their attempt's launch to adopt, or closed).
 // Proving says whether the proof that a prompt of unknown delivery never
 // arrived is under way (its read after RedeliverAfter settles it).
+// PaneFocus is what the observe passes saw of you in the factory's panes,
+// from the snapshot they read anyway, and Workspaces the herdr workspaces
+// of a task's live sessions: the alerts' toasts hold while you are in a
+// factory pane, and a task's sidebar token goes on its workspaces
+// (alerts.go).
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -84,6 +90,8 @@ type Runtime interface {
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
 	Proving(entry int64) bool
+	PaneFocus() runtime.PaneFocus
+	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -189,6 +197,14 @@ type Deps struct {
 	MySQL   func(ctx context.Context) error
 	HerdrUp func(ctx context.Context) error
 	Reveal  func(ctx context.Context) error
+	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
+	// your herdr session (osascript after), deduplicated in a store of
+	// magnum's schema (the factory's agents store); nil shows none, and the
+	// alerts wait for a build that has one. Sidebar reports a task's sidebar
+	// token on a workspace of the factory's herdr session
+	// (notify.Notifier.Sidebar); nil reports none.
+	Notifier *notify.Notifier
+	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -319,6 +335,12 @@ type Engine struct {
 	// daemon.
 	beforeStop func() error
 
+	// alerts is the delivery of the alerts (alerts.go): the loop's own.
+	// screenLive says whether a focus report is of a screen that still runs
+	// (nil: FocusPayload.Live; a test's seam).
+	alerts     alertDelivery
+	screenLive func(FocusPayload) bool
+
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
 	// (stopBackground), so none of it outlives the daemon.
@@ -373,6 +395,7 @@ func New(d Deps) *Engine {
 	e.runners[config.FactoryStageReview] = e.runReview
 	e.runners[config.FactoryStageDecision] = e.runDecision
 	e.runners[config.FactoryStageEffect] = e.runEffect
+	e.alerts = e.newAlertDelivery(d.Notifier)
 	return e
 }
 
@@ -548,8 +571,9 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 // (safely). During an infrastructure or a herdr hold no task advances
 // except on the hold's tries, and while herdr does not answer no copy a
 // base run left detached is swept (sweepDetached, each under safely too); a
-// failure that a hold covers costs its task nothing. The returned error
-// joins what failed, for the log; each step records its own.
+// failure that a hold covers costs its task nothing. Last, the alerts are
+// delivered (deliverAlerts). The returned error joins what failed, for the
+// log; each step records its own.
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -622,6 +646,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	e.hold(ctx, failures)
 	e.escalate(ctx, now)
+	e.deliverAlerts(ctx) // after every step that may have alerted
 	return errors.Join(errs...)
 }
 
@@ -958,7 +983,8 @@ func (e *Engine) toOperator(ctx context.Context, t registry.Task, what, because 
 }
 
 // alert records an alert: a task, or the factory (taskID 0), moved into
-// NEEDS YOU. The notifier of the screen's build turns alerts into toasts.
+// NEEDS YOU. The daemon's loop delivers it (deliverAlerts): a toast and
+// the task's sidebar token.
 func (e *Engine) alert(ctx context.Context, taskID int64, text string) {
 	e.event(ctx, taskID, "alert", registry.PhaseInfo, text)
 }

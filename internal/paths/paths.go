@@ -279,6 +279,12 @@ func (l Layout) FactorySeen() string { return filepath.Join(l.factoryDir(), "see
 // has focus), beside FactoryDB.
 func (l Layout) FactoryFocus() string { return filepath.Join(l.factoryDir(), "focus.json") }
 
+// FactoryAlerts is alerts.json, how far the factory daemon delivered its
+// alerts (the newest alert whose toast went out or was dropped, with every
+// older one), so a restart neither repeats one nor loses one, beside
+// FactoryDB.
+func (l Layout) FactoryAlerts() string { return filepath.Join(l.factoryDir(), "alerts.json") }
+
 // FactoryHolds is holds.json, the holds of the machine in force as the
 // factory daemon last saw them (the screen draws them), beside FactoryDB.
 func (l Layout) FactoryHolds() string { return filepath.Join(l.factoryDir(), "holds.json") }

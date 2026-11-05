@@ -948,9 +948,10 @@ func (s *screen) flash() (string, error) {
 	return clock(q.Handled) + " " + textx.FirstLine(q.Result), nil
 }
 
-// alerts are the alert events, newest first.
+// alerts are the alert events and their delivery's (each toast, hold and
+// drop, alertKinds), newest first.
 func (s *screen) alerts() ([]tui.FactoryAlert, error) {
-	evs, err := s.reg.RecentEvents(s.ctx, alertsShown, "alert")
+	evs, err := s.reg.RecentEvents(s.ctx, alertsShown, alertKinds...)
 	if err != nil {
 		return nil, err
 	}

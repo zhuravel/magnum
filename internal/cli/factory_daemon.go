@@ -30,6 +30,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/mysqlx"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -115,7 +116,11 @@ type factoryDaemon struct {
 	// GitHub opens the PRs the factory publishes and reads them back: gh as
 	// your gh identity (factory.NewGitHub).
 	GitHub factory.GitHub
-	Log    *slog.Logger
+	// Notifier shows the alerts' toasts on your herdr session (osascript
+	// after), deduplicated in Agents; Sidebar reports the tasks' sidebar
+	// tokens on the factory's session.
+	Notifier, Sidebar *notify.Notifier
+	Log               *slog.Logger
 
 	closers []func() error
 }
@@ -148,8 +153,10 @@ func (d *factoryDaemon) Close() error {
 // registry read for its real rounds (factory.NewMagnum, never migrated) and
 // the local rounds (factory.NewLocalReviewer: evalrun.RunLocal with the
 // review candidate this build writes at startup, factory.WriteReviewCandidate,
-// as its config's candidate), and the publish's GitHub (factory.NewGitHub:
-// gh as your gh identity). Every command of the daemon's runner, git's and
+// as its config's candidate), the publish's GitHub (factory.NewGitHub:
+// gh as your gh identity), and the alerts' notify (toasts on your herdr
+// session, deduplicated in the agents store; sidebar tokens on the
+// factory's). Every command of the daemon's runner, git's and
 // gh's included, goes through the deny list (factory.Guard).
 // The caller holds the factory lock (factory.Lock); the registry's migration
 // is still refused
@@ -236,9 +243,20 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	// agents store knows only the factory's.
 	// A factory in your own session (the same socket) is one session.
 	d.Guard = factory.GuardPanes{Factory: h}
+	yours := h
 	if ys := cmp.Or(cfg.Herdr.Socket, herdr.DefaultSocket()); ys != h.Socket {
-		d.Guard.Yours = &herdr.Client{Socket: ys, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+		yours = &herdr.Client{Socket: ys, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+		d.Guard.Yours = yours
 	}
+	// The alerts (spec 9.F): magnum's toasts on your session, where your
+	// terminal shows them (osascript when herdr cannot), as [herdr] notify
+	// allows, each deduplicated in the agents store so a restart repeats
+	// none; the tasks' sidebar tokens on the factory's session, where their
+	// workspaces are.
+	d.Notifier = &notify.Notifier{Herdr: yours, Store: d.Agents, Runner: run, Enabled: cfg.Herdr.Notify,
+		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "notify"}}
+	d.Sidebar = &notify.Notifier{Herdr: h, Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "notify"}}
+	deps.Notifier, deps.Sidebar = d.Notifier, d.Sidebar.Sidebar
 	copySlots := slots.New(slots.Deps{Store: d.Agents, Run: run, Git: git, MySQL: copyDBs,
 		Snapshot: d.Guard.Snapshot, ProcessInfo: d.Guard.ProcessInfo, Layout: l,
 		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})

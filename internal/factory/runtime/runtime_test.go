@@ -763,3 +763,75 @@ func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
 		t.Fatalf("QuitCodex of a task that never launched = %v, want nothing to do", err)
 	}
 }
+
+// The observe pass says, from the snapshot it reads anyway, whether herdr's
+// focus is on a pane of a task's workspace and since when: the focus moving
+// there, or herdr showing you at work in a factory pane, starts it again; a
+// pane of a workspace of yours is no factory pane, and a herdr that does
+// not answer shows you in none (the alerts' toasts hold while you are in
+// one, spec 9.F).
+func TestObserveSaysWhetherYouAreInAFactoryPane(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.observe()
+	if f := g.r.PaneFocus(); f != (PaneFocus{}) {
+		t.Fatalf("PaneFocus with herdr's focus nowhere = %+v, want none", f)
+	}
+	pane := store.Deref(g.session("fx-repro").HerdrPaneID)
+	g.h.focus(g.agent("fx-repro"))
+	g.observe()
+	in := g.clock.Now()
+	g.observe()
+	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.Equal(in) || !f.Left.IsZero() {
+		t.Fatalf("PaneFocus in fx-repro's pane = %+v, want %s since %v", f, pane, in)
+	}
+	g.clock.Add(2 * time.Minute)
+	g.youAtWork("fx-repro")
+	if f := g.r.PaneFocus(); f.Pane != pane || !f.Since.Equal(g.clock.Now()) {
+		t.Fatalf("PaneFocus after herdr showed you at work = %+v, want since %v", f, g.clock.Now())
+	}
+
+	mine, err := g.h.WorkspaceCreate(g.ctx, herdr.WorkspaceCreateOptions{Label: "notes", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.h.mu.Lock()
+	g.h.focused = mine.RootPane.ID
+	g.h.mu.Unlock()
+	g.observe()
+	left := g.clock.Now()
+	g.observe()
+	if f := g.r.PaneFocus(); f.Pane != "" || !f.Left.Equal(left) {
+		t.Fatalf("PaneFocus in a workspace of yours = %+v, want none, left at %v", f, left)
+	}
+
+	g.h.focus(g.agent("fx-repro"))
+	g.observe()
+	g.h.mu.Lock()
+	g.h.snapErr = errors.New("herdr: dial: connection refused")
+	g.h.mu.Unlock()
+	g.clock.Add(10 * time.Second)
+	if _, err := g.r.Observe(g.ctx); err == nil {
+		t.Fatal("Observe with herdr down = nil error")
+	}
+	if f := g.r.PaneFocus(); f.Pane != "" || !f.Left.Equal(g.clock.Now()) {
+		t.Fatalf("PaneFocus with herdr down = %+v, want none, left at %v", f, g.clock.Now())
+	}
+}
+
+// Workspaces are the herdr workspaces of a task's live sessions, each once
+// (where its sidebar token goes); none for a task that never launched.
+func TestWorkspacesAreThoseOfTheTasksLiveSessions(t *testing.T) {
+	g := newRig(t)
+	if ws, err := g.r.Workspaces(g.ctx, g.task); err != nil || len(ws) != 0 {
+		t.Fatalf("Workspaces before a launch = %v, %v; want none", ws, err)
+	}
+	g.launch("fx-repro", "fx-cause")
+	want := store.Deref(g.session("fx-repro").HerdrWorkspaceID)
+	if ws, err := g.r.Workspaces(g.ctx, g.task); err != nil || !slices.Equal(ws, []string{want}) {
+		t.Fatalf("Workspaces = %v, %v; want [%s]", ws, err, want)
+	}
+	if ws, err := g.r.Workspaces(g.ctx, g.newTask("PR-12399")); err != nil || len(ws) != 0 {
+		t.Fatalf("Workspaces of a task that never launched = %v, %v; want none", ws, err)
+	}
+}
