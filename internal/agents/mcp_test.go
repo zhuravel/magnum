@@ -132,9 +132,9 @@ func TestJudgeReadsTheMCPServersOfItsPaneEnvsCodexHome(t *testing.T) {
 // Server names reach argv only as TOML bare keys (letters, digits, _ and
 // -), which Codex's -c key path carries as written; a table with a url is a
 // url server and one with a command a command server, and one with neither
-// or both has no transport to give, so it is told apart from the rest.
+// or both has no transport (projectServers sorts those out).
 func TestMCPServerNamesAreBareKeys(t *testing.T) {
-	servers, skipped, noTransport, err := declaredMCPServers(`
+	servers, skipped, err := declaredMCPServers(`
 [mcp_servers.docs]
 url = "https://docs.example.com/mcp"
 [mcp_servers.browser-2]
@@ -160,18 +160,15 @@ url = 5
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []config.ProjectServer{{Name: "browser-2", Transport: config.MCPTransportCommand}, {Name: "docs", Transport: config.MCPTransportURL},
-		{Name: "x_Y9", Transport: config.MCPTransportURL}}; !slices.Equal(servers, want) {
+	if want := []config.ProjectServer{{Name: "bare"}, {Name: "both"}, {Name: "browser-2", Transport: config.MCPTransportCommand},
+		{Name: "docs", Transport: config.MCPTransportURL}, {Name: "number"}, {Name: "x_Y9", Transport: config.MCPTransportURL}}; !slices.Equal(servers, want) {
 		t.Fatalf("servers = %q, want %q", servers, want)
 	}
 	if !slices.Equal(skipped, []string{"$(touch x)", "a b", "my.server", "ü"}) {
 		t.Fatalf("skipped = %q", skipped)
 	}
-	if !slices.Equal(noTransport, []string{"bare", "both", "number"}) {
-		t.Fatalf("noTransport = %q", noTransport)
-	}
-	if servers, skipped, noTransport, err := declaredMCPServers("model = \"x\"\n"); servers != nil || skipped != nil || noTransport != nil || err != nil {
-		t.Fatalf("no servers: %q %q %q %v", servers, skipped, noTransport, err)
+	if servers, skipped, err := declaredMCPServers("model = \"x\"\n"); servers != nil || skipped != nil || err != nil {
+		t.Fatalf("no servers: %q %q %v", servers, skipped, err)
 	}
 }
 

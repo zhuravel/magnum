@@ -557,10 +557,11 @@ func DefaultKinds() map[string]Kind {
 			// trusted checkout's .codex/config.toml): enabled=false alone
 			// makes a table with no transport for a server only the project
 			// declares, and Codex stops at its start ("failed to load
-			// workspace requirements: invalid data"). With a url or a command
-			// of the table's kind, 0.162.1 and 0.166.0 both start and list the
-			// server as disabled. The values are fixed: nothing of the PR's
-			// file reaches the line.
+			// workspace requirements: invalid data"). With a url of the
+			// table's kind, 0.162.1 and 0.166.0 both start and list the
+			// server as disabled (the command form is the same shape, but
+			// no run has shown it yet). The values are fixed: nothing of
+			// the PR's file reaches the line.
 			MCPDisableURL:     []string{"-c", "mcp_servers." + PlaceholderServer + `.url="https://mcp.invalid"`},
 			MCPDisableCommand: []string{"-c", "mcp_servers." + PlaceholderServer + `.command="true"`},
 			// Codex 0.162 reads a plugin's enabled flag from its

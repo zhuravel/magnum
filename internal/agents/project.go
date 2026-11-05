@@ -611,21 +611,23 @@ func (pc projectConfig) logFile(path string) bool {
 }
 
 // projectServers are the MCP servers the checkout's config.toml at path
-// declares (declaredMCPServers), each with the transport of its table unless
-// the user's Codex config declares a server of that name too
-// (userMCPServers): that table carries the transport, and the override of
-// the server needs none (config.ProjectServer). A file that cannot be read,
-// a name that is no bare key and a table with no single transport are logged
-// without the path or any value of the file, and leave those servers on.
+// declares (declaredMCPServers) that the session turns off. A server the
+// user's Codex config declares too (userMCPServers) is always one, whatever
+// its table in the checkout holds, with no transport of its own: the user's
+// table carries it, and a file the PR controls must never switch a server
+// on. Any other server needs the transport of its table (config.ProjectServer):
+// one with neither a url nor a command, or with both, has none to be given
+// and stays on, as do a name that is no bare key and a file that cannot be
+// read; each is logged without the path or any value of the file.
 func (m *Manager) projectServers(role config.Role, path string) []config.ProjectServer {
 	data, err := fsx.ReadRegular(path, codexConfigMax) // the PR's file: never a symlink, a FIFO or more than the cap
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	var servers []config.ProjectServer
-	var skipped, noTransport []string
+	var skipped []string
 	if err == nil {
-		servers, skipped, noTransport, err = declaredMCPServers(string(data))
+		servers, skipped, err = declaredMCPServers(string(data))
 	}
 	if err != nil {
 		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
@@ -637,18 +639,22 @@ func (m *Manager) projectServers(role config.Role, path string) []config.Project
 	for _, n := range skipped {
 		m.logf("agents: %s: MCP server %q of the checkout's Codex config is no TOML bare key, so it stays on", role.Name, n)
 	}
-	for _, n := range noTransport {
-		m.logf("agents: %s: MCP server %q of the checkout's Codex config has no single url or command, so it stays on", role.Name, n)
-	}
+	var own map[string]bool
 	if len(servers) > 0 {
-		own := m.userMCPServers(role)
-		for i := range servers {
-			if own[servers[i].Name] {
-				servers[i].Transport = ""
-			}
-		}
+		own = m.userMCPServers(role)
 	}
-	return servers
+	var out []config.ProjectServer
+	for _, s := range servers {
+		switch {
+		case own[s.Name]:
+			s.Transport = ""
+		case s.Transport == "":
+			m.logf("agents: %s: MCP server %q of the checkout's Codex config has no single url or command, so it stays on", role.Name, s.Name)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // ProjectNote is the PR's record of a session of one kind launched without

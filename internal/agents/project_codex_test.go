@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -482,5 +483,89 @@ func TestProjectMCPOffReadsTheUsersServersEvenWithMCPOffFalse(t *testing.T) {
 		"-c", "mcp_servers.tracker.url=\"https://mcp.invalid\"", "-c", "mcp_servers.tracker.enabled=false"}
 	if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 		t.Fatalf("args = %q\nwant %q", got, want)
+	}
+}
+
+// A file the PR controls must never switch a server on. A server the user's
+// Codex config declares keeps enabled=false whatever the checkout's table of
+// that name holds: only enabled = true (which would switch the user's parked
+// server on, since Codex merges the checkout's table over the user's), only
+// args, or both a url and a command. Only a server the user does not declare
+// goes through the transport rule: with no single transport it has none to
+// be given and stays on, with a log line that names it. Run with mcp_off on
+// (the user's pass names the enabled ones) and off.
+func TestAUserDeclaredServerIsTurnedOffWhateverTheCheckoutsTableHolds(t *testing.T) {
+	const checkout = `
+[mcp_servers.parked]
+enabled = true
+
+[mcp_servers.docs]
+args = ["--x"]
+
+[mcp_servers.twin]
+url = "https://twin.example.com/mcp"
+command = "twin-mcp"
+
+[mcp_servers.bare]
+enabled_tools = ["search"]
+
+[mcp_servers.dual]
+url = "https://dual.example.com/mcp"
+command = "dual-mcp"
+`
+	const user = `
+[mcp_servers.parked]
+command = "parked-mcp"
+enabled = false
+
+[mcp_servers.docs]
+command = "docs-mcp"
+
+[mcp_servers.twin]
+command = "twin-mcp"
+`
+	for _, off := range []bool{true, false} {
+		e, _, ws := projectEnv(t, map[string]string{".codex/config.toml": checkout}, nil, nil)
+		writeFile(t, e.codexConfig, user, 0o600)
+		e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = off })
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536"}
+		if off {
+			// The user's pass names the enabled ones (docs, twin); the project's parked is its own.
+			want = slices.Concat(judgeLaunchArgs, []string{"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.twin.enabled=false",
+				"-c", "mcp_servers.parked.enabled=false"})
+		} else {
+			want = slices.Concat(want, []string{"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.parked.enabled=false",
+				"-c", "mcp_servers.twin.enabled=false"})
+		}
+		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+			t.Fatalf("mcp_off %v: args = %q\nwant %q", off, got, want)
+		}
+		logs := mcpLogs(e)
+		if len(logs) != 2 || !strings.Contains(logs[0], `"bare"`) || !strings.Contains(logs[1], `"dual"`) {
+			t.Fatalf("mcp_off %v: logs = %q, want one line each for bare and dual (not user-declared, no single transport) and none for the user's", off, logs)
+		}
+	}
+}
+
+// A user's Codex config that magnum cannot decode (Codex may still read it)
+// leaves every server of the checkout counting as one the user does not
+// declare, so each gets a transport; that is logged, at debug and without the
+// path, for a kind with mcp_off = false too, where nothing else logs it.
+func TestAnUnreadableUserConfigIsLoggedWhenProjectServersNeedIt(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".codex/config.toml": "[mcp_servers.tracker]\nurl = \"https://mcp.example.com\"\n"}, nil, nil)
+	writeFile(t, e.codexConfig, "[mcp_servers.docs\n", 0o600)
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := e.h.starts[0].Args[6:], []string{"-c", `mcp_servers.tracker.url="https://mcp.invalid"`, "-c", "mcp_servers.tracker.enabled=false"}; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want the tracker's transport and off after %q", got, e.h.starts[0].Args[:6])
+	}
+	recs := e.logs.records("cannot read the Codex config, so no server of the checkout")
+	if len(recs) != 1 || recs[0].level != slog.LevelDebug || strings.Contains(recs[0].line, e.codexConfig) {
+		t.Fatalf("records = %+v, want one debug line without the path", recs)
 	}
 }

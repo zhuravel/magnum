@@ -151,49 +151,51 @@ func mcpTransport(table any) string {
 }
 
 // declaredMCPServers reads a checkout's Codex config: its mcp_servers tables
-// that do not set enabled = false, those named with a TOML bare key
-// (mcpServerName) and having a url or a command (mcpTransport) as servers
-// with that transport, sorted; apart and sorted, the names of those that are
-// no bare key (skipped) and of those with neither a url nor a command or
-// with both (noTransport). Only the mcp_servers table is decoded.
-func declaredMCPServers(data string) (servers []config.ProjectServer, skipped, noTransport []string, err error) {
+// that do not set enabled = false and are named with a TOML bare key
+// (mcpServerName), sorted, each with the transport of its table
+// (mcpTransport; "" for a table with none, which projectServers sorts out),
+// and apart and sorted, the names of those that are no bare key. Only the
+// mcp_servers table is decoded.
+func declaredMCPServers(data string) (servers []config.ProjectServer, skipped []string, err error) {
 	var doc struct {
 		MCPServers map[string]any `toml:"mcp_servers"`
 	}
 	if _, err := toml.Decode(data, &doc); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	var names []string
 	names, skipped = mcpServerNames(doc.MCPServers)
 	for _, n := range names {
-		if t := mcpTransport(doc.MCPServers[n]); t != "" {
-			servers = append(servers, config.ProjectServer{Name: n, Transport: t})
-		} else {
-			noTransport = append(noTransport, n)
-		}
+		servers = append(servers, config.ProjectServer{Name: n, Transport: mcpTransport(doc.MCPServers[n])})
 	}
-	return servers, skipped, noTransport, nil
+	return servers, skipped, nil
 }
 
 // userMCPServers are the names of every mcp_servers table of the Codex
 // config a session of role reads (codexHomeFor), whether or not it sets
 // enabled = false: a server of the checkout's with such a name merges into
 // that table, which carries its transport, so its override needs none of its
-// own. Nothing for a config that is missing or cannot be read (codexOff
-// logs that, for a kind with mcp_off).
+// own. Nothing for a config that is missing, or that cannot be read or
+// decoded: codexOff logs that once, for a kind with mcp_off, and this logs it
+// at debug (the error without the path) for any kind, since every server of
+// the checkout then counts as one the user does not declare.
 func (m *Manager) userMCPServers(role config.Role) map[string]bool {
 	_, path := m.codexHomeFor(m.d.Config.RoleEnv(role))
 	if path == "" {
 		return nil
 	}
+	var doc codexConfig
 	data, err := os.ReadFile(path)
+	if err == nil {
+		_, err = toml.Decode(string(data), &doc)
+	}
 	if err != nil {
-		return nil
-	}
-	var doc struct {
-		MCPServers map[string]any `toml:"mcp_servers"`
-	}
-	if _, err := toml.Decode(string(data), &doc); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
+				err = pe.Err
+			}
+			m.logAt(slog.LevelDebug, "agents: %s: cannot read the Codex config, so no server of the checkout counts as one it declares: %v", role.Name, err)
+		}
 		return nil
 	}
 	out := make(map[string]bool, len(doc.MCPServers))

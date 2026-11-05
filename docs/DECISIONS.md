@@ -2586,47 +2586,64 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a change in parkReloading alone (the other callers of `Quit` have the same flaw).
 
 - **A Codex project server that the user's config does not declare gets a transport before it is turned off**
-  (2026-11-05, amends the `.codex/` entry that added `project_mcp` and "Four built-in defaults follow what the
-  operator chose by hand"). Since Codex 0.163 every Codex pane magnum started in a checkout whose
-  `.codex/config.toml` declares an MCP server that the operator's own Codex config does not died at the TUI's
-  bootstrap with "account/read failed during TUI bootstrap: account/read failed: failed to load workspace
-  requirements: invalid data (code -32603)", and the operator pinned codex-cli 0.162.1 in mise. The cause is `project_mcp = "off"`: for a server only the
-  checkout declares, `-c mcp_servers.<name>.enabled=false` alone makes a table with no transport, and 0.166
-  reads that table before it merges the project's, which has the `url`. Reproduced on 2026-11-05 in a trusted
-  scratch project whose `.codex/config.toml` declared `[mcp_servers.tracker] url = "https://mcp.example.com/v2/mcp"`.
-  0.162.1 with `enabled=false` alone started. 0.166.0 with it failed with the error above. 0.166.0 with no
-  override started and `/mcp` showed the server "failed (0 tools)": it tried the server, outside code in a
-  session that reads the PR. 0.166.0 with `-c mcp_servers.tracker.url="https://mcp.example.com/v2/mcp"`
-  before `enabled=false` started and `/mcp` showed it "disabled (0 tools)"; so did the inline table
+  (2026-11-05, amends the `.codex/` entry that added `project_mcp` and "Four built-in defaults follow what
+  the operator chose by hand"). Since Codex 0.163 every Codex pane magnum started in a checkout whose
+  `.codex/config.toml` declares an MCP server that the operator's own Codex config does not died at the
+  TUI's bootstrap with "account/read failed during TUI bootstrap: account/read failed: failed to load
+  workspace requirements: invalid data (code -32603)", and the operator pinned codex-cli 0.162.1 in mise.
+  The cause is `project_mcp = "off"`: for a server only the checkout declares, `-c
+  mcp_servers.<name>.enabled=false` alone makes a table with no transport, and 0.166 reads that table before
+  it merges the project's, which has the `url`. Reproduced on 2026-11-05 in a trusted scratch project whose
+  `.codex/config.toml` declared `[mcp_servers.tracker] url = "https://mcp.example.com/v2/mcp"`. 0.162.1 with
+  `enabled=false` alone started. 0.166.0 with it failed with the error above. 0.166.0 with no override
+  started and `/mcp` showed the server "failed (0 tools)": it tried the server, outside code in a session
+  that reads the PR. 0.166.0 with `-c mcp_servers.tracker.url="https://mcp.example.com/v2/mcp"` before
+  `enabled=false` started and `/mcp` showed it "disabled (0 tools)"; so did the inline table
   `mcp_servers.tracker={url="...", enabled=false}`; 0.162.1 started with both. A server the user's config
   declares (with its `command`) is turned off fine by `enabled=false` alone, and in an empty folder with no
   project table `enabled=false` alone fails on both versions ("invalid transport in `mcp_servers.tracker`"):
-  the table needs a transport from somewhere. Now the codex kind has two templates beside `mcp_disable`,
-  `mcp_disable_url` (`["-c", "mcp_servers.{server}.url=\"https://mcp.invalid\""]`) and `mcp_disable_command`
-  (`["-c", "mcp_servers.{server}.command=\"true\""]`), and `Kind.ConfigOffArgs` passes the one of the
-  table's kind once before `mcp_disable` for each project server that the user's config does not declare.
+  the table needs a transport from somewhere.
+  Now the codex kind has two templates beside `mcp_disable`, `mcp_disable_url` (`["-c",
+  "mcp_servers.{server}.url=\"https://mcp.invalid\""]`) and `mcp_disable_command` (`["-c",
+  "mcp_servers.{server}.command=\"true\""]`), and `Kind.ConfigOffArgs` passes the one of the table's kind
+  once before `mcp_disable` for each project server that the user's config does not declare.
   `declaredMCPServers` tells the kind of a project table: a table with a `url` is a url server, one with a
   `command` a command server (`config.ProjectServer`). The values are fixed: `mcp.invalid` never resolves
-  (RFC 6761) and `true` exits at once, the server is disabled either way, and nothing of the PR's file but the
-  server's name (a bare key, as before) reaches the line. A table with neither key, or with both (Codex
-  refuses it), has no kind to give and stays on, with a log line that names the server and no value, as a
-  name that is no bare key does. A server the user's Codex config declares too, on or off (`userMCPServers`,
-  read whatever `mcp_off` says), keeps `enabled=false` alone: its own table carries the transport, and a
-  second one of another kind would give it a `url` and a `command` at once. The claude kind and a custom
-  kind have no templates and turn a server off by name alone, as before; `[]` does the same for codex.
-  `magnum roles --kinds` prints both under the project row. The operator's Codex pin can go once a daemon runs
+  (RFC 6761) and `true` exits at once, the server is disabled either way, and nothing of the PR's file but
+  the server's name (a bare key, as before) reaches the line. A server whose table has neither key, or both
+  (Codex refuses it), and that the user's config does not declare has no kind to give and stays on, with a
+  log line that names the server and no value, as a name that is no bare key does.
+  A server the user's Codex config declares too, on or off, always gets `enabled=false` alone, whatever the
+  checkout's table of that name holds (`projectServers` asks `userMCPServers`, which reads the user's config
+  whatever `mcp_off` says, before it looks at the transport): its own table carries the transport, a second
+  one of another kind would give it a `url` and a `command` at once, and a file the PR controls must never
+  switch a server on. The first version of this entry's change dropped a user-declared server whose checkout
+  table had only `enabled = true`, only `args`, or both transports, so a PR's file could switch the user's
+  parked server on (Codex merges the checkout's table over the user's; master turned it off); the review
+  found it, and TestAUserDeclaredServerIsTurnedOffWhateverTheCheckoutsTableHolds, with mcp_off on and off,
+  now holds it. The claude kind and a custom kind have no templates and turn a server off by name alone, as
+  before; `[]` does the same for codex. `magnum roles --kinds` prints both under the project row.
+  If the user's config cannot be decoded by magnum (a construct its TOML decoder rejects that Codex still
+  reads), every server of the checkout counts as one the user does not declare, so one the user does declare
+  gets a transport on top of its own and Codex may refuse the merged table; `userMCPServers` logs it at
+  debug, without the path, for any kind. The command form has the shape of the url form that was run, but no
+  run has shown it yet: run it once before the pin goes. The operator's Codex pin can go once a daemon runs
   this build (`make build && bin/magnum daemon-restart`, and `bin/magnum factory install` for the factory's
-  own: both read the kinds at their start). Tests, failing first:
-  TestProjectMCPOffGivesAServerOfTheCheckoutATransportOfItsKind (a url server, a command server, a server the
-  user declares on and off, a table with neither key and one with both, and no value of the project's file in
-  the arguments or the log), TestCodexReviewLineGivesAProjectServerATransportToo,
+  own: both read the kinds at their start).
+  Tests, failing first: TestProjectMCPOffGivesAServerOfTheCheckoutATransportOfItsKind (a url server, a
+  command server, a server the user declares on and off, a table with neither key and one with both, and no
+  value of the project's file in the arguments or the log),
+  TestCodexReviewLineGivesAProjectServerATransportToo,
   TestProjectMCPOffReadsTheUsersServersEvenWithMCPOffFalse,
-  TestProjectMCPOffGivesAServerOnlyTheCheckoutDeclaresATransportOfItsKind, TestTransportTemplatesNeedTheirServerPlaceholder
-  and TestMCPServerNamesAreBareKeys. Rejected: leaving the project servers on (0.166 starts them, the
-  outside code this setting exists to keep out); the url or command of the PR's table in the override (a value
-  the PR controls in a shell word of the launch line; only the name is ever taken from the file); the inline
-  table form (it works too, but the two-flag form keeps the templates in the shape of `mcp_disable`); keeping the
-  pin (a version the operator has to keep and every new machine to learn).
+  TestAUserDeclaredServerIsTurnedOffWhateverTheCheckoutsTableHolds,
+  TestAnUnreadableUserConfigIsLoggedWhenProjectServersNeedIt,
+  TestProjectMCPOffGivesAServerOnlyTheCheckoutDeclaresATransportOfItsKind,
+  TestTransportTemplatesNeedTheirServerPlaceholder and TestMCPServerNamesAreBareKeys. Rejected: leaving the
+  project servers on (0.166 starts them, the outside code this setting exists to keep out); the url or
+  command of the PR's table in the override (a value the PR controls in a shell word of the launch line;
+  only the name is ever taken from the file); the inline table form (it works too, but the two-flag form
+  keeps the templates in the shape of `mcp_disable`); keeping the pin (a version the operator has to keep
+  and every new machine to learn).
 
 ## Screens and commands
 
