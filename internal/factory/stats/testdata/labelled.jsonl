@@ -6,7 +6,7 @@
 {"text": "yes", "class": "approval"}
 {"text": "looks good, thanks", "class": "approval"}
 {"text": "lgtm", "class": "approval"}
-{"text": "go ahead", "class": "approval"}
+{"text": "go ahead", "class": "step_start"}
 {"text": "no, that is the wrong table: the points live in the ledger table", "class": "correction"}
 {"text": "wrong file. the helper belongs in lib/rewards, not in app/models", "class": "correction"}
 {"text": "you forgot the down method of the migration", "class": "correction"}

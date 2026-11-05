@@ -13931,17 +13931,23 @@ FUNCTIONS
 func Classify(text string) string
     Classify returns the class of a message: step_start (it only starts a step:
     open the PR, push, merge the parent in, merge into a staging branch,
-    take the recommendation), approval (a yes), correction (the agent was wrong
-    or must do it otherwise), access (credentials, a login, permission) or info
-    (anything else, which is also the class of an empty message). It reads
-    the words alone, in this order: a message that hands over a credential or
-    grants access is access whatever else it says, and one that refuses a step
-    ("don't push yet") is a correction, not a step start. Only the acts count:
-    "log in to the sandbox" is access, "fix the login page" is information,
-    "push it" starts a step and "the push failed" does not. Stagings live in the
-    operator's config, not here: any staging-<name> branch counts. The classes
-    are the registry's; the factory's engine stores the class of your words with
-    the input when it records them.
+    take the recommendation, run or test things, resolve the conflicts,
+    submit the review, or let the agent go on: "go ahead", "implement", "apply",
+    "next step", "fix it", "do it", a bare "go"), approval (a yes: "yes",
+    "ok", "sounds good", "confirm" alone), correction (the agent was wrong or
+    must do it otherwise: "make sure ...", "you do that", "no need to ...",
+    "the summary was not posted", "I don't see you ...", "instead", "I said",
+    "still broken"), access (credentials, a login, permission, a server to
+    connect to) or info (anything else, which is also the class of an empty
+    message). It reads the words alone, in this order: a message that hands
+    over a credential or grants access is access whatever else it says, and one
+    that refuses a step ("don't push yet") is a correction, not a step start.
+    Only the acts count: "log in to the sandbox" is access, "fix the login page"
+    is information, "push it" starts a step and "the push failed" does not,
+    and what a thing should be ("the export should be configurable") is
+    no correction. Stagings live in the operator's config, not here: any
+    staging-<name> branch counts. The classes are the registry's; the factory's
+    engine stores the class of your words with the input when it records them.
 
 func FreezeBaseline(path string, b Baseline) error
     FreezeBaseline writes b to path, once. A path that exists, whatever it is (a
