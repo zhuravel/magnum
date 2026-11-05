@@ -4448,10 +4448,12 @@ func ParseDuration(s string) (time.Duration, error)
 func ParseTemplate(name, text, shared string) (*template.Template, error)
     ParseTemplate parses a prompt or command template the way magnum renders
     it (internal/agents.RenderPrompt), without executing it: no funcs,
-    missingkey=error, and shared (a judge prompt's Prompt.Shared; "" for none)
-    parsed first as its own template, SharedPrompt, so that text's {{template}}
-    calls find its blocks and a block text defines itself replaces the shared
-    one.
+    missingkey=error, and shared (a prompt's Prompt.Shared; "" for none)
+    parsed first as its own template, named for its partials file (PartialsOf:
+    SharedPrompt for a judge prompt, FactorySharedPrompt for a factory one),
+    so that text's {{template}} calls find its blocks, a block text defines
+    itself replaces the shared one, and an error in the shared text names the
+    file it is in.
 
 func PartialsOf(name string) string
     PartialsOf is the partials file the prompt named name is parsed with:
@@ -11050,6 +11052,8 @@ func ParseLocalResult(data []byte) LocalResult
     a planned comment no entry names, by its own severity and first line; and,
     when the counts hold a P0 to P2 that no finding carries, the review's body
     as one finding of that priority, so what blocks always reaches the writer.
+    A planned review this code does not read leaves the provenance's findings
+    without their bodies.
 
 func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     RunLocal runs local round c and reads its judge's result (ParseLocalResult).
@@ -11854,9 +11858,12 @@ func (e *Engine) RunLocked(ctx context.Context) error
     RunLocked runs the daemon, whose lock the caller holds (Lock), until
     SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
     then a tick at once, every factory poll and on SIGUSR1, and an observe pass
-    every factory observe. A stop signal drains: no new launch or effect starts,
-    the tick in progress ends, and it returns nil, so launchd (KeepAlive on a
-    failed exit only) starts the daemon again only after a crash.
+    every factory observe. A stop signal drains: no new launch or effect starts
+    (a launch that waits for the stagger is cut), the tick in progress ends with
+    the task it advances (the others, and the alerts, wait for the next daemon),
+    the wait for the work off the loop ends within drainBudget of the signal,
+    and it returns nil, so launchd (KeepAlive on a failed exit only) starts the
+    daemon again only after a crash.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
@@ -12085,6 +12092,8 @@ type PromptData struct {
 	PRBody, PRTemplate                                     string
 	SendBack, SendBackReason, MergeBase                    string
 	Conflicts                                              []string
+	HeadMoved, HeadWas                                     string
+	RedRun                                                 bool
 	ErrorSkill, DBLockCommand                              string
 	Port                                                   int
 }
@@ -12108,14 +12117,18 @@ type PromptData struct {
     (ReviewFixPrompt). FactoryProof is the factory's proof (factory-proof.json),
     ReviewSummary the local review's end (review-summary.json), PRBody the PR
     body the pr_body stage writes (pr-body.md) and PRTemplate the repository's
-    PR template in the copy ("" when it has none). A coding turn back from
-    the ready card carries what it is back for (rework.json): SendBack your
-    note's file and SendBackReason the key of your reason (a send back), or
-    MergeBase the base to merge (origin/<base>) and Conflicts the paths merging
-    it conflicts in (a conflict at the card); each "" (nil) in any other turn.
-    ErrorSkill is the repository's error_skill ("" = none: no prompt names one),
-    DBLockCommand the `magnum db-lock` line of the copy for the role as it runs,
-    and Port the copy's server's (0 when its env names none).
+    PR template in the copy ("" when it has none). A coding turn back from the
+    ready card carries what it is back for (rework.json): SendBack your note's
+    file and SendBackReason the key of your reason (a send back), MergeBase the
+    base to merge (origin/<base>) and Conflicts the paths merging it conflicts
+    in (a conflict at the card), or HeadMoved the commit the branch moved to
+    after the checks passed at HeadWas (a commit the factory did not make);
+    each "" (nil) in any other turn. RedRun is the kind's proof: its specs must
+    fail on the base (config.FactoryKind.RedRun; a kind whose proof is "green"
+    keeps them green). ErrorSkill is the repository's error_skill ("" = none:
+    no prompt names one), DBLockCommand the `magnum db-lock` line of the copy
+    for the role as it runs, and Port the copy's server's (0 when its env names
+    none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`
@@ -12283,6 +12296,7 @@ type Runtime interface {
 	RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
 	LetGo(ctx context.Context, t registry.Task, role string) (int, error)
 	Shift(gap time.Duration)
+	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
@@ -12323,6 +12337,11 @@ type ScreenOptions struct {
 	// ReadyCards, when set, gets each ready card the data draws, as read
 	// once for it (the pager pages the card drawn).
 	ReadyCards func(id int64, c ReadyCardFile)
+	// DaemonDown says no factory daemon runs (its pidfile names no live
+	// process): nothing moves, so home's one blocker says so and how to
+	// start it, the last daemon's holds.json is not read, and no working
+	// mark turns.
+	DaemonDown bool
 }
     ScreenOptions are what ScreenData reads besides the registries: the config
     (the roles' words, the kinds' stages, the repositories) and the layout (the
@@ -12361,6 +12380,8 @@ type StartPayload struct {
 	Text, Kind, Repo string
 	Surface          string `json:",omitempty"`
 	WordsOnly        bool   `json:",omitempty"`
+
+	// Has unexported fields.
 }
     StartPayload is a ReqStart (and the start of the new-task screen): your
     text, the kind of task you chose ("" = the daemon picks it, PickKind), the
@@ -12556,6 +12577,11 @@ const (
     the intent to start a stage's agents (before any workspace exists), running
     while they work, ended when they stopped, then verified or failed by the
     stage's end fact; abandoned is an attempt a restart found and gave up.
+
+const ReadyWait = "ready to push"
+    ReadyWait starts what a task at its ready card waits on you for ("ready to
+    push (card 2): PR-12345 a title"): the stats find the card's wait by these
+    words, whatever the kind names the stage that draws it.
 
 const RoleIntake = "intake"
     RoleIntake is the Role of the input that starts a task: the words it was
@@ -13176,6 +13202,10 @@ func (r *Registry) TaskByKey(ctx context.Context, key string) (Task, error)
     or stopped (a published or failed task holds it). No such task, and the
     empty key, are ErrNotFound.
 
+func (r *Registry) TaskByRequest(ctx context.Context, id int64) (Task, error)
+    TaskByRequest returns the task start request id made (Task.RequestID); none,
+    and an id under 1, are ErrNotFound.
+
 func (r *Registry) Tasks(ctx context.Context) ([]Task, error)
     Tasks returns every task, oldest first.
 
@@ -13312,7 +13342,11 @@ type Task struct {
 	// ready card names it: Branch's own name, or <login>-<KEY>-<slug> for a
 	// task whose key was linked after its branch was made (Branch keeps its
 	// name).
-	RemoteBranch     string
+	RemoteBranch string
+	// RequestID is the start request that made the task (requests.id), 0
+	// for one no request made: a replay of that request finds the task
+	// (TaskByRequest) and makes no second one.
+	RequestID        int64
 	Created, Updated time.Time
 }
     Task is one piece of work: a Jira key or a free prompt, taken to a PR.
@@ -13331,6 +13365,11 @@ func (u *TaskUpdate) Because(reason string)
 
 func (u *TaskUpdate) Inc(col string, n int)
     Inc adds n to the integer column col.
+
+func (u *TaskUpdate) Quiet()
+    Quiet marks an update of the wait's words alone (a number in them moved:
+    a percentage, the gigabytes free): it writes no span while the state,
+    the stage and who the task waits on stay as they were.
 
 func (u *TaskUpdate) Set(col string, v any)
     Set assigns v to column col. v is nil (NULL), a string, an int, an int64,
@@ -13436,6 +13475,10 @@ var ErrDeliveryUnknown = errors.New("the last prompt's delivery is unknown")
     delivery nobody can prove either way (Reconcile): a prompt is never sent
     twice.
 
+var ErrDraining = errors.New("factory runtime: the daemon drains: no new launch")
+    ErrDraining is a launch the daemon's drain stopped while it waited for the
+    stagger (BeginDrain): no agent started.
+
 var ErrNoProgress = errors.New("the agent makes no progress")
     ErrNoProgress is Send's answer once a loop without progress outlived
     its compaction and its fresh session: the task needs the operator
@@ -13449,7 +13492,8 @@ var ErrOperatorInPane = errors.New("you're in that pane")
 FUNCTIONS
 
 func IsUnknownReason(what string) bool
-    IsUnknownReason reports whether a task's wait is UnknownReason's.
+    IsUnknownReason reports whether a task's wait is UnknownReason's, as this
+    build or an older one (whose wait named no command) wrote it.
 
 func OwnerTask(nodeID string) (int64, bool)
     OwnerTask is the task an owner row's node id names (Owner), false for a row
@@ -13474,9 +13518,10 @@ func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Sessi
     oldest first: every generation of every role the runtime launched for it.
     A task never launched has none.
 
-func UnknownReason(roles ...string) string
-    UnknownReason is the wait of a task whose prompts to roles may or may not
-    have arrived (EventDeliveryUnknown): it names every one.
+func UnknownReason(task int64, roles ...string) string
+    UnknownReason is the wait of task whose prompts to roles may or may not have
+    arrived (EventDeliveryUnknown): it names every one, and the command that
+    lets one go once you looked at its pane (`magnum factory let-go`).
 
 func WorkspaceLabel(t registry.Task, a registry.Attempt) string
     WorkspaceLabel is the herdr workspace label of a task's attempt, unique per
@@ -13619,6 +13664,11 @@ func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (role string, you
     focused; a herdr that cannot say counts as in it), where your edits are. The
     factory's own commands that change the task's copy (its proof's base run,
     its restore) wait for both. A task that never launched has nobody at work.
+
+func (r *Runtime) BeginDrain()
+    BeginDrain stops the launches that wait for the stagger, and any that would:
+    the daemon drains on SIGTERM, and launchd kills it ExitTimeOut after, so a
+    tick must not sleep Stagger per role meanwhile. A second call does nothing.
 
 func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string
     DBLockCommand is the command prefix a role runs every command that touches
@@ -26878,6 +26928,9 @@ type QuestionCard struct {
 	// answers binds to it, and the factory refuses a batch for another
 	// (ErrQuestionsChanged).
 	Revision int
+	// Ask is the y/N question being asked; empty: the key hints (or the
+	// line you type).
+	Ask string
 
 	// Has unexported fields.
 }

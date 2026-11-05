@@ -740,12 +740,16 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	if now != head {
 		return fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head)), nil
 	}
-	var before []string
 	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(n)))
-	if errors.Is(err, fs.ErrNotExist) || (err == nil && json.Unmarshal(b, &before) != nil) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return "", nil // no listing (a round an older build began): nothing to tell new files by
-	} else if err != nil {
+	case err != nil:
 		return "", err
+	}
+	var before []string
+	if parsed := json.Unmarshal(b, &before) == nil; !parsed {
+		return "", nil // a listing that does not parse tells no new file either
 	}
 	untracked, err := untrackedPaths(ctx, git, c.Path)
 	if err != nil {

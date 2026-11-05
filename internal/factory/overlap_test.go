@@ -100,12 +100,12 @@ func TestOverlapNamesCommitsPRsAndFilesButNeverStops(t *testing.T) {
 // PR-123501 nor XPR-12350, which git's plain substring search took for it.
 func TestTheOverlapCountsTheCommitsOfTheWholeKeyOnly(t *testing.T) {
 	dir := t.TempDir()
-	real := &execx.Real{BaseEnv: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "GIT_CONFIG_GLOBAL=/dev/null",
+	runner := &execx.Real{BaseEnv: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t",
 		"GIT_COMMITTER_EMAIL=t@example.com", "LC_ALL=C"}}
 	git := func(args ...string) {
 		t.Helper()
-		if _, err := real.Run(context.Background(), execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)}); err != nil {
+		if _, err := runner.Run(context.Background(), execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)}); err != nil {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
@@ -114,7 +114,7 @@ func TestTheOverlapCountsTheCommitsOfTheWholeKeyOnly(t *testing.T) {
 		"Fix the export (PR-12350)", "Speed up the digest\n\nRefs PR-12350."} {
 		git("commit", "-q", "--allow-empty", "-m", msg)
 	}
-	h := newHarness(t, func(d *Deps) { d.Run = real })
+	h := newHarness(t, func(d *Deps) { d.Run = runner })
 	got, err := h.e.keyCommits(h.ctx, registry.Task{JiraKey: "PR-12350"}, dir)
 	if err != nil || !strings.HasPrefix(got, "3 commits name PR-12350") {
 		t.Fatalf("keyCommits = %q, %v; want the 3 commits that name PR-12350 whole", got, err)
