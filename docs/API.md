@@ -13929,25 +13929,34 @@ var ErrBaselineFrozen = errors.New("the baseline is frozen once and never rewrit
 FUNCTIONS
 
 func Classify(text string) string
-    Classify returns the class of a message: step_start (it only starts a step:
-    open the PR, push, merge the parent in, merge into a staging branch,
-    take the recommendation, run or test things, resolve the conflicts,
-    submit the review, or let the agent go on: "go ahead", "implement", "apply",
-    "next step", "fix it", "do it", a bare "go"), approval (a yes: "yes",
-    "ok", "sounds good", "confirm" alone), correction (the agent was wrong or
-    must do it otherwise: "make sure ...", "you do that", "no need to ...",
+    Classify returns the class of a message: step_start (it only starts a
+    step: open the PR, push, merge the parent in, merge or release into a
+    staging branch, take the recommendation, run or test things, resolve
+    the conflicts or the review, submit the review, run a skill of such a
+    step (/resolve-review, /create-pr), or let the agent go on: "go ahead",
+    "implement it", "apply", "next step", "fix it", "do it", a bare "go", after
+    any yes or none), approval (a yes: "yes", "ok", "sounds good", "confirm"
+    alone or with "both", or a choice among the options the agent offered:
+    "go with B", "option 2"), correction (the agent was wrong or must do it
+    otherwise: "make sure ...", "you do that", "no need to ...", "don't push",
     "the summary was not posted", "I don't see you ...", "instead", "I said",
     "still broken"), access (credentials, a login, permission, a server to
     connect to) or info (anything else, which is also the class of an empty
-    message). It reads the words alone, in this order: a message that hands
+    message, of a slash command of no step and of pasted output). It reads the
+    words alone, the operator's own (ownWords: not the wrapper a tool puts
+    around them, not the output they paste), in this order: a message that hands
     over a credential or grants access is access whatever else it says, and one
-    that refuses a step ("don't push yet") is a correction, not a step start.
+    that refuses a step ("don't push yet") is a correction, not a step start; a
+    guard ("... and make sure they pass") or a report of what is not done ("the
+    branch isn't pushed, push it") yields to the step the message asks for.
     Only the acts count: "log in to the sandbox" is access, "fix the login page"
     is information, "push it" starts a step and "the push failed" does not,
-    and what a thing should be ("the export should be configurable") is
-    no correction. Stagings live in the operator's config, not here: any
-    staging-<name> branch counts. The classes are the registry's; the factory's
-    engine stores the class of your words with the input when it records them.
+    what a thing should (not) be ("the export should be configurable") is no
+    correction, and neither is a wish or a fact ("I don't want to expose it",
+    "don't need this alert"). Stagings live in the operator's config, not here:
+    any staging-<name> branch counts. The classes are the registry's;
+    the factory's engine stores the class of your words with the input when it
+    records them.
 
 func FreezeBaseline(path string, b Baseline) error
     FreezeBaseline writes b to path, once. A path that exists, whatever it is (a

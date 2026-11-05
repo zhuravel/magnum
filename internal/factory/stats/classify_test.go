@@ -233,6 +233,137 @@ func TestClassifyKnowsTheEverydayStepStartsAndCorrections(t *testing.T) {
 	}
 }
 
+// The review's and the held-out check's gaps, each rule beside a near miss
+// that keeps its old class: a go-ahead after any approval word, a guard
+// ("make sure ...") or a report of what is not done that yields to the step
+// the message asks for, a go-on verb that leads a new request, the words of
+// a wrapped message, the slash commands of a step, the steps of a PR's
+// life, choosing an option, handing over a login, a wish or a fact that is
+// no refusal, and pasted output.
+func TestClassifyKnowsTheReviewsAndTheHeldOutChecksGaps(t *testing.T) {
+	t.Parallel()
+	step, approval, correction, access, info := registry.ClassStepStart, registry.ClassApproval, registry.ClassCorrection,
+		registry.ClassAccess, registry.ClassInfo
+	for _, c := range []struct{ text, want string }{
+		// a go-ahead after any approval word starts the step; the word alone approves
+		{"sure, go ahead", step},
+		{"sounds good, implement it", step},
+		{"looks good, go ahead", step},
+		{"lgtm, proceed", step},
+		{"thanks, continue", step},
+		{"yeah, fix it", step},
+		{"sure", approval},
+		{"sounds good", approval},
+		{"lgtm, thanks", approval},
+		// a guard yields to the step the message asks for
+		{"run the specs and make sure they pass", step},
+		{"push it and make sure the build is green", step},
+		{"open PR, make sure the description lists the steps", step},
+		{"use the ledger, and make sure the totals match", correction},
+		// what is not done yields to the step asked for, and a remark is no correction
+		{"the branch isn't pushed yet, push it", step},
+		{"the email wasn't sent, retry", step},
+		{"1. not now 2. fix both in this PR", info},
+		{"the summary was not posted as a comment", correction},
+		{"it has not been deployed yet, so we can't check it", info},
+		// a go-on verb leads a new request only with a short tail
+		{"implement a retry for the webhook with exponential backoff", info},
+		{"apply the same rounding to the mailer totals", info},
+		{"next step is to find why the job hangs", info},
+		{"implement it", step},
+		{"implement the plan", step},
+		{"apply the suggestions", step},
+		{"apply changes", step},
+		// you do the rest is a go-on, a question is no correction
+		{"you do the rest", step},
+		{"u do the migration", correction},
+		{"I still have a question about the refund path", info},
+		{"I still have the old badge", correction},
+		{"why do I still have the old ruby?", correction},
+		// code words are no secrets; an upper-case variable is
+		{"use the cache_key of the record", info},
+		{"the csrf_token is set by the layout", info},
+		{"use the foreign_key option and run the migrations", step},
+		{"use SHOP_TOKEN from the vault", access},
+		{"there's POINTS_API_KEY in the env file", access},
+		// "there's" hands over a secret only when it ends there or gives its value or place
+		{"there's a password reset bug on the shop page", info},
+		{"there's an api key in the vault", access},
+		{"there's the password: abc123", access},
+		// connecting is access only to a server
+		{"connect to the queue and drain it", info},
+		{"you connect to the sandbox db and count the rows", access},
+		// wrapped messages: only the words after the request header
+		{"# In app browser:\n- Current page: the open PR list\n\n## My request for Codex:\nwhy is this list slow?", info},
+		{"# Files mentioned by the user:\n\n## shot.png: /tmp/shot.png\n\n## My request for Codex:\nopen PR", step},
+		{"<ide-context>open PR page</ide-context>what does this file do?", info},
+		{"[Image #2] the logo looks too big on mobile", correction},
+		{"# Notes\nopen PR", step},
+		// a slash command of a step of the work starts it; others are info
+		{"<command-name>/resolve-review</command-name>\n<command-message>resolve-review</command-message>\n<command-args>1234</command-args>", step},
+		{"<command-message>t:resolve-review-2</command-message>\n<command-name>/t:resolve-review-2</command-name>\n<command-args></command-args>", step},
+		{"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args></command-args>", step},
+		{"<command-name>/create-pr</command-name>\n<command-message>create-pr</command-message>\n<command-args></command-args>", step},
+		{"<command-name>/t:deploy</command-name>\n<command-message>t:deploy</command-message>\n<command-args>zeta</command-args>", step},
+		{"<command-name>/merge-parent</command-name>\n<command-message>merge-parent</command-message>\n<command-args></command-args>", step},
+		{"<command-name>/fix-ci</command-name>\n<command-message>fix-ci</command-message>\n<command-args></command-args>", step},
+		{"<command-name>/reload-skills</command-name>\n<command-message>reload-skills</command-message>\n<command-args></command-args>", info},
+		{"<command-name>/review-notes</command-name>\n<command-message>review-notes</command-message>\n<command-args></command-args>", info},
+		{"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>push it</command-args>", info},
+		{"<bash-input>git push</bash-input>", info},
+		// the steps of a PR's life
+		{"resolve review", step},
+		{"resolve the review on 1234", step},
+		{"resolve conflict", step},
+		{"rereview", step},
+		{"re-review 1234", step},
+		{"the rereview found nothing new", info},
+		{"release to staging-zeta", step},
+		{"release it to the stagings", step},
+		{"deploy to stagings", step},
+		{"the release notes mention the stagings", info},
+		{"merge 1234 and release", step},
+		{"create PR in the docs repo", step},
+		{"open a separate PR for the docs", step},
+		{"the PR description is long", info},
+		{"open first if the PR title has two keys", info},
+		// choosing an option approves; choosing the recommendation starts the step
+		{"confirm both", approval},
+		{"yes all", approval},
+		{"yes, it", approval},
+		{"go with B", approval},
+		{"take option 2", approval},
+		{"option 2", approval},
+		{"go with the second one", approval},
+		{"go with your recommendation", step},
+		{"take a look at the logs", info},
+		// handing over a login
+		{"I'll log in", access},
+		{"so I log in first", access},
+		{"key copied", access},
+		{"the token is in 1password", access},
+		{"how do I log in?", info},
+		{"the cache key copied from the old record is stale", info},
+		{"the key is in the wrong column", info},
+		// a wish or a fact is no refusal; an order is
+		{"I don't want to expose the admin api", info},
+		{"don't need this alert", info},
+		{"archived points should not count", info},
+		{"don't push yet", correction},
+		{"do not touch the schema", correction},
+		{"you shouldn't have pushed", correction},
+		// pasted output is information; your words beside it keep their class
+		{"Failures:\n\n  1) Points sync drops archived rows\n     Failure/Error: expect(rows).to eq(3)\n     # ./spec/points_spec.rb:12:in `block'", info},
+		{"DEPRECATION WARNING: the points helper is deprecated and will be removed", info},
+		{"(irb):27:in 'block in <main>': undefined method 'slug' for an instance of Shop (NoMethodError)", info},
+		{"the specs still fail, see:\n# ./spec/points_spec.rb:12:in `block'", correction},
+	} {
+		if got := stats.Classify(c.text); got != c.want {
+			t.Errorf("Classify(%q) = %q, want %q", c.text, got, c.want)
+		}
+	}
+}
+
 // Ruling: Classify names no environment. The stagings are the operator's
 // config, and the defaults list none.
 func TestClassifyHardcodesNoEnvironmentName(t *testing.T) {
