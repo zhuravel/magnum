@@ -20,6 +20,7 @@ import (
 	"os"
 	ossignal "os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -988,7 +989,17 @@ func (e *Engine) beginEffect(ctx context.Context, key, kind string, taskID int64
 	return e.reg.BeginEffect(ctx, key, kind, taskID)
 }
 
-// waitOn records who the task waits on and for what, when that changed.
+// sameWords reports whether two waits differ in their numbers only ("codex
+// at 96%" and "codex at 97.5%", "9.5 GB free" and "9.4 GB free").
+func sameWords(a, b string) bool {
+	return numbers.ReplaceAllString(a, "#") == numbers.ReplaceAllString(b, "#")
+}
+
+// numbers are the numbers of a wait's words, a decimal point included.
+var numbers = regexp.MustCompile(`[0-9]+(?:[.,][0-9]+)*`)
+
+// waitOn records who the task waits on and for what, when that changed: a
+// change of a number alone in the same wait writes no span (sameWords).
 func (e *Engine) waitOn(ctx context.Context, t registry.Task, who, what string) {
 	if t.WaitsWho == who && t.WaitsWhat == what {
 		return
@@ -996,6 +1007,9 @@ func (e *Engine) waitOn(ctx context.Context, t registry.Task, who, what string) 
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
 		u.Set("waits_who", who)
 		u.Set("waits_what", what)
+		if t.WaitsWho == who && sameWords(t.WaitsWhat, what) { // only a number moved: no span each tick
+			u.Quiet()
+		}
 	}); err != nil {
 		e.log.Warn("record what a task waits on", "task", t.ID, "waits", who+": "+what, "err", err)
 	}

@@ -334,7 +334,7 @@ func TestNoToastWhileTheOperatorIsInAFactoryPane(t *testing.T) {
 
 // herdr keeps a session's focused pane after you left its terminal, so a
 // focus that rests on a factory pane counts as you in it for
-// [daemon] human_cooldown after herdr last showed you at work there, not
+// [factory] human_cooldown after herdr last showed you at work there, not
 // for ever: a held alert then fires 2 minutes after.
 func TestAFocusThatRestsOnAFactoryPaneHoldsForTheHumanCooldownOnly(t *testing.T) {
 	r := newAlertRig(t)
@@ -347,6 +347,22 @@ func TestAFocusThatRestsOnAFactoryPaneHoldsForTheHumanCooldownOnly(t *testing.T)
 	r.wantToasts("within 2 minutes of the cooldown's end")
 	r.after(time.Second)
 	r.wantToasts("2 minutes after the cooldown's end", shownToast{"factory: 1 needs you", "PR-12345 questions"})
+}
+
+// The pane hold follows the factory's own [factory] human_cooldown, as the
+// runtime's hold of your pane does, never [daemon] human_cooldown, magnum's.
+func TestThePaneHoldFollowsTheFactorysHumanCooldown(t *testing.T) {
+	r := newAlertRig(t)
+	r.cfg.Factory.HumanCooldown = config.Duration{Duration: 5 * time.Minute}
+	r.cfg.Daemon.HumanCooldown = config.Duration{Duration: 30 * time.Minute}
+	r.rt.setPaneFocus(runtime.PaneFocus{Pane: "w1:p1", Since: r.clock.Now()})
+	r.needsYou("PR-12345", "3 questions before coding")
+	r.tick()
+	r.after(4 * time.Minute)
+	r.after(2*time.Minute + 59*time.Second) // 6:59 after: within 2 minutes of the factory's cooldown
+	r.wantToasts("within 2 minutes of the factory's cooldown's end")
+	r.after(time.Second)
+	r.wantToasts("2 minutes after the factory's cooldown", shownToast{"factory: 1 needs you", "PR-12345 questions"})
 }
 
 // A held alert fires 2 minutes after you leave: from the screen's blur,

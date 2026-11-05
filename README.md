@@ -3607,7 +3607,7 @@ Each frame reads the factory daemon's pidfile and probes its process (`kill -0`,
 home's blocker line says so (`factory daemon down: nothing moves`, and `magnum factory install` starts it on a wide
 screen), the holds the last daemon saved are not shown, and no working mark turns.
 The screen's own requests (its focus reports, the previews of what you type) are pruned a day after their answer,
-and a preview keeps none of your text once answered. `,` opens the settings screen, as on the board.
+and a preview, a start, an answer or a decision keeps none of your words once answered (the inputs keep them, scrubbed). `,` opens the settings screen, as on the board.
 
 The daemon, not the screen, tells you when a task moves into NEEDS YOU, so the screen may be closed, and so it
 does when the factory itself needs you (an infrastructure or herdr hold that lasts 30 minutes, a disk below half of
@@ -3617,7 +3617,7 @@ one, `factory: 3 need you · PR-12345 questions · PR-12360 ready to push`, whos
 you when it fires, the factory's own blockers included. A task's workspaces in the factory's herdr session also
 carry its sidebar token, `needs you: <what>` while it waits on you and empty once it does not, sent again every
 12 hours while it stands. The toasts hold in `[daemon] quiet_hours`, while the factory screen has your focus, and
-while you are in a factory pane: herdr's focus on one, for at most `[daemon] human_cooldown` after herdr last showed
+while you are in a factory pane: herdr's focus on one, for at most `[factory] human_cooldown` after herdr last showed
 you at work in a factory pane (herdr's focus alone proves nothing of you, so a pane you only read holds no toast).
 A held alert fires when the quiet hours end, or 2 minutes after you left, merged with the rest, and only while its
 task still waits on you for the same kind of wait (`3 questions` and `1 question` are both questions); one that no

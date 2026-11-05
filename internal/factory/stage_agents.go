@@ -803,7 +803,11 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		}
 		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
 		if p == nil && r.letGo {
-			p = e.beforeLetGo(ctx, t, st, r, run)
+			var err error
+			if p, err = e.beforeLetGo(ctx, t, st, r, run); err != nil { // the next pass reads again
+				e.log.Warn("read the head's commit time after a prompt you let go", "task", t.ID, "err", err)
+				continue
+			}
 		}
 		if p == nil && run.turn.review != nil {
 			p = run.turn.review.replyProblem(dir, run.since(a))
@@ -849,11 +853,13 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 // ran), the turn must have committed on the task's branch since, or written
 // proof.json or, in a review's fix turn, its reply (a turn that declines
 // every finding commits nothing) since. A head the checks then refuse is
-// theirs to judge, as for any turn.
-func (e *Engine) beforeLetGo(ctx context.Context, t *registry.Task, st config.FactoryStage, r *stageRole, run *agentsRun) *endProblem {
+// theirs to judge, as for any turn. A read of the head that fails is its
+// error: the role is checked again on the next pass, where it is, never
+// told a commit is missing that git could not read.
+func (e *Engine) beforeLetGo(ctx context.Context, t *registry.Task, st config.FactoryStage, r *stageRole, run *agentsRun) (*endProblem, error) {
 	outs := e.outputs(*t, st, r.role)
 	if len(outs) == 0 || r.letGoSince.IsZero() {
-		return nil
+		return nil, nil
 	}
 	since := r.letGoSince.Truncate(time.Second) // git keeps a commit's time to the second
 	after := func(path string) bool {
@@ -862,24 +868,24 @@ func (e *Engine) beforeLetGo(ctx context.Context, t *registry.Task, st config.Fa
 	}
 	if st.End != config.FactoryEndProof {
 		if after(outs[0]) {
-			return nil
+			return nil, nil
 		}
-		return &endProblem{file: filepath.Base(outs[0]), why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}
+		return &endProblem{file: filepath.Base(outs[0]), why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}, nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if after(filepath.Join(dir, proofFile)) || (run.turn.review != nil && after(filepath.Join(dir, reviewReplyFile(run.turn.review.n)))) {
-		return nil
+		return nil, nil
 	}
 	if e.d.Git != nil && run.copy.Path != "" && t.Branch != "" {
 		at, err := e.d.Git.CommitTime(ctx, run.copy.Path, "refs/heads/"+t.Branch)
-		if err == nil && !at.Before(since) {
-			return nil
-		}
-		if err != nil {
-			e.log.Warn("read the head's commit time after a prompt you let go", "task", t.ID, "err", err)
+		switch {
+		case err != nil:
+			return nil, err
+		case !at.Before(since):
+			return nil, nil
 		}
 	}
-	return &endProblem{file: proofFile, why: "no commit on " + t.Branch + " and no " + proofFile + " since the prompt you let go"}
+	return &endProblem{file: proofFile, why: "no commit on " + t.Branch + " and no " + proofFile + " since the prompt you let go"}, nil
 }
 
 // letGoWait is the wait of a task whose role's turn was a prompt you let go

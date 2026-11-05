@@ -65,8 +65,8 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 		return 2
 	}
 	if err := checkConfigAndPrompts(c); err != nil {
-		fmt.Fprintf(c.Stderr, "magnum factory daemon: refusing to start: %v\nfix: correct the config file or the prompt files, "+
-			"check with `magnum config`, then `magnum factory install`\n", err)
+		fmt.Fprintf(c.Stderr, "magnum factory daemon: refusing to start: %v\nfix: correct the file the error names (`magnum config` "+
+			"checks the config file, `magnum factory daemon` in a terminal the factory's prompts), then `magnum factory install`\n", err)
 		return 1
 	}
 	// The lock comes first: a second daemon (one run by hand, or a newer
@@ -214,8 +214,8 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		return nil, fmt.Errorf("factory: %w", err)
 	}
 	if err := factory.CheckPrompts(cfg); err != nil {
-		return nil, fmt.Errorf("factory: the factory roles' prompts do not render with this build "+
-			"(fix them, check with `magnum config`, then restart the factory daemon):\n%w", err)
+		return nil, fmt.Errorf("factory: the factory roles' prompts do not render with this build (fix the file the error "+
+			"below names, check it with `magnum factory daemon` in a terminal, then restart the daemon with `magnum factory install`):\n%w", err)
 	}
 	d.Log.Info("prompts loaded", "files", snap.Files())
 

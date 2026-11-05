@@ -27,6 +27,11 @@ const (
 	TaskFailed    = "failed"
 )
 
+// ReadyWait starts what a task at its ready card waits on you for ("ready to
+// push (card 2): PR-12345 a title"): the stats find the card's wait by these
+// words, whatever the kind names the stage that draws it.
+const ReadyWait = "ready to push"
+
 var taskStates = map[string]bool{
 	TaskQueued: true, TaskActive: true, TaskNeedsYou: true, TaskWaiting: true, TaskPublished: true,
 	TaskDone: true, TaskStopped: true, TaskFailed: true,
@@ -110,10 +115,16 @@ func (e ErrActiveKey) Unwrap() error { return ErrConflict }
 type TaskUpdate struct {
 	update
 	reason string
+	quiet  bool
 }
 
 // Because sets the reason of the span that the move writes (Span.Reason).
 func (u *TaskUpdate) Because(reason string) { u.reason = reason }
+
+// Quiet marks an update of the wait's words alone (a number in them moved:
+// a percentage, the gigabytes free): it writes no span while the state,
+// the stage and who the task waits on stay as they were.
+func (u *TaskUpdate) Quiet() { u.quiet = true }
 
 var taskSettable = map[string]bool{
 	"kind": true, "repo": true, "title": true, "guidance": true, "stage": true, "branch": true,
@@ -221,7 +232,8 @@ func (r *Registry) TransitionTask(ctx context.Context, id int64, from []string, 
 			if err != nil {
 				return err
 			}
-			if after == before && u.reason == "" {
+			if u.reason == "" && (after == before || u.quiet && after.state == before.state && after.stage == before.stage &&
+				after.waitsWho == before.waitsWho) {
 				return nil
 			}
 			return insertSpan(ctx, tx, id, before.state, after, u.reason, now)

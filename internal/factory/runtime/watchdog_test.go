@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -514,5 +516,20 @@ func TestAStillScreenDropsOnlyTheCLIsTimerLines(t *testing.T) {
 	}
 	if got := stillScreen("• Waited for background terminal output (2s)\n› "); got == "› " {
 		t.Errorf("stillScreen dropped a tool line that only carries its duration: %q", got)
+	}
+}
+
+// A pass the runtime contains logs its panic and its stack redacted, as the
+// engine's own containment does: a panic's value can carry a pane's text.
+func TestAContainedPanicIsRedacted(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"
+	err := func() (err error) {
+		defer contain("observe", log, &err)
+		panic("the pane shows " + token)
+	}()
+	if err == nil || strings.Contains(err.Error(), token) || strings.Contains(logs.String(), token) {
+		t.Fatalf("err %v, log %q: want the panic contained and the token redacted", err, logs.String())
 	}
 }

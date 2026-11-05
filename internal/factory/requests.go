@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -193,8 +194,13 @@ func decode(q registry.Request, v any) error {
 	return nil
 }
 
+// wordsKinds are the requests that carry your words (a preview's draft, a
+// start's text, an answer, a decision's note): their payload is emptied
+// once answered, since only the inputs table keeps your words, scrubbed.
+var wordsKinds = []string{ReqPreview, ReqStart, ReqAnswer, ReqDecide}
+
 // complete marks q done with result, or failed with err's text (redacted),
-// and records it.
+// and records it; the payload of a request of your words goes (wordsKinds).
 func (e *Engine) complete(ctx context.Context, q registry.Request, err error, result string) {
 	state, phase := registry.RequestDone, registry.PhaseOK
 	if err != nil {
@@ -202,9 +208,9 @@ func (e *Engine) complete(ctx context.Context, q registry.Request, err error, re
 	}
 	if cerr := e.reg.CompleteRequest(ctx, q.ID, state, result); cerr != nil {
 		e.log.Warn("complete a factory request", "request", q.ID, "err", cerr)
-	} else if q.Kind == ReqPreview { // your draft as typed, unscrubbed: the answer is all the screen reads
+	} else if slices.Contains(wordsKinds, q.Kind) { // your words as typed, unscrubbed: the inputs keep the scrubbed copy
 		if ferr := e.reg.ForgetPayload(ctx, q.ID); ferr != nil {
-			e.log.Warn("forget a preview's text", "request", q.ID, "err", ferr)
+			e.log.Warn("forget a request's words", "request", q.ID, "kind", q.Kind, "err", ferr)
 		}
 	}
 	text := result

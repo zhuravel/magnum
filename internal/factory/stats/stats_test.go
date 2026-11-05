@@ -384,6 +384,37 @@ func TestStatsMeasuresTheWaitOnYouAndStartToReadyFromSpans(t *testing.T) {
 	}
 }
 
+// The kinds' stages are data: a ready stage of another name ends start to
+// ready the same way, found by its wait on you ("ready to push"), and a
+// stage named "ready" that waits on you for something else does not.
+func TestStartToReadyFindsTheReadyWaitWhateverTheStagesName(t *testing.T) {
+	t.Parallel()
+	r, clk := openClocked(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12305")
+	move := func(offset time.Duration, to, stage, who, what string) {
+		t.Helper()
+		clk.Set(t0.Add(offset))
+		if err := r.TransitionTask(ctx, task.ID, nil, to, func(u *registry.TaskUpdate) {
+			u.Set("stage", stage)
+			u.Set("waits_who", who)
+			u.Set("waits_what", what)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move(10*time.Minute, registry.TaskNeedsYou, "ready", "you", "the precheck did not pass")
+	move(20*time.Minute, registry.TaskActive, "code", "", "")
+	move(time.Hour, registry.TaskNeedsYou, "card", "you", registry.ReadyWait+" (card 1): PR-12305 a title")
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, rep, "PR-12305"); got.StartToReady != time.Hour {
+		t.Errorf("StartToReady = %s, want 1h0m0s: the card's wait, at a stage named card", got.StartToReady)
+	}
+}
+
 // The operator's seconds are their time on cards: for each decision, from the
 // card shown to the decision; for each answered revision of questions, from
 // the questions shown to the answers. An item counts at most 30 minutes, so a

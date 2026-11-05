@@ -44,6 +44,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -530,7 +531,7 @@ func (e *Engine) screenHold(now time.Time) string {
 // paneHold is why you in a factory pane hold the toasts ("" for nothing).
 // Only herdr showing you at work in a factory pane (PaneFocus.Since)
 // proves you; then you are in one while herdr's focus is on one, for
-// [daemon] human_cooldown after that proof (taken as left at its end),
+// [factory] human_cooldown after that proof (taken as left at its end),
 // and a hold lasts alertMerge after you left. While herdr is held down no
 // pass reads it, and you are in none of its panes.
 func (e *Engine) paneHold(now time.Time) string {
@@ -541,7 +542,7 @@ func (e *Engine) paneHold(now time.Time) string {
 	if f.Since.IsZero() {
 		return ""
 	}
-	end := e.cfg.Daemon.CooldownUntil(&f.Since)
+	end := config.Daemon{HumanCooldown: e.cfg.Factory.HumanCooldown}.CooldownUntil(&f.Since) // the factory's, as the runtime's hold
 	left := f.Left
 	if _, down := e.holds[HoldHerdr]; f.Pane != "" && !down {
 		if now.Before(end) {

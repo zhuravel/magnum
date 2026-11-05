@@ -58,8 +58,9 @@ const (
 // sendBackFile is the file of your note on card revision rev.
 func sendBackFile(rev int) string { return fmt.Sprintf("send-back-%d.md", rev) }
 
-// readyWait starts what a task at its ready card waits on you for.
-const readyWait = "ready to push"
+// readyWait starts what a task at its ready card waits on you for (the
+// stats find the card's wait by it).
+const readyWait = registry.ReadyWait
 
 // The choices of the ready card.
 const (

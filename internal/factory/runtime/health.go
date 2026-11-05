@@ -132,13 +132,15 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 }
 
 // contain turns a panic of a pass the engine runs outside a task's step
-// into its error, with the stack in the log.
+// into its error, with the stack in the log, both redacted as the engine's
+// containment redacts them: a panic's value can carry a pane's text.
 func contain(what string, log interface {
 	Error(msg string, args ...any)
 }, err *error) {
 	if p := recover(); p != nil {
-		log.Error("factory runtime: a pass panicked", "pass", what, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
-		*err = fmt.Errorf("%s: panic: %v", what, p)
+		msg := execx.Redact(fmt.Sprint(p))
+		log.Error("factory runtime: a pass panicked", "pass", what, "panic", msg, "stack", execx.Redact(string(debug.Stack())))
+		*err = fmt.Errorf("%s: panic: %s", what, msg)
 	}
 }
 

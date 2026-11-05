@@ -15070,6 +15070,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheOverlapCountsTheCommitsOfTheWholeKeyOnly, TestADrainKeepsTheQuestionASearchReturnedFor,
   TestAMissingPromptOrGuidanceIsWrittenAgainBeforeTheFirstStage and
   TestAnAskOfTheTicketsReporterTakesTheirWholeName.
+- **The core's small fixes of the final review** (2026-11-05). A wait whose only change is a number (the
+  Codex percentage, the gigabytes free) updates the task's words with `TaskUpdate.Quiet` and writes no
+  span. Before, a task that waited on either for hours wrote a span on each tick. A completed start, answer
+  or decision empties its payload, as a preview did. Only the inputs table keeps your words, scrubbed. The
+  stats find the ready card's wait by its words, `registry.ReadyWait` ("ready to push"). They no longer
+  look for a stage named "ready", since the kinds' stages are data. The runtime's `contain` redacts the
+  panic and its stack, as the engine's containment does. The alerts' pane hold follows
+  `[factory] human_cooldown`, as the runtime's hold of your pane does. Before, it followed
+  `[daemon] human_cooldown`. A let-go check whose read of the head's commit time fails keeps the role where
+  it is for the next pass. Before, it gave the untrue reason "no commit since the prompt you let go". The
+  factory daemon's prompt errors send you to `magnum factory daemon` and `magnum factory install`, never
+  to `magnum config`, which does not render the factory's prompts. Tests:
+  TestAWaitWhoseOnlyChangeIsANumberWritesNoSpan, TestADoneRequestKeepsNoneOfYourWords,
+  TestStartToReadyFindsTheReadyWaitWhateverTheStagesName, TestAContainedPanicIsRedacted,
+  TestThePaneHoldFollowsTheFactorysHumanCooldown, TestALetGoCheckWhoseGitFailsKeepsTheTaskWhereItIs and
+  TestAFactoryPromptThatDoesNotRenderNamesTheWayToCheckIt.
 
 ## Learned rules
 

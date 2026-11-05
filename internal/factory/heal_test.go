@@ -558,6 +558,73 @@ func TestAStageErrorThatPersistsNeedsYou(t *testing.T) {
 	}
 }
 
+// A wait whose only change is a number (Codex's percentage, the gigabytes
+// free) updates the task's wait but writes no new span: a task that waits
+// on either for hours wrote a span on every tick. A wait of another kind,
+// or on someone else, is a span as before.
+func TestAWaitWhoseOnlyChangeIsANumberWritesNoSpan(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12397", registry.TaskActive, "investigate")
+	spans := func() int {
+		t.Helper()
+		ss, err := h.reg.Spans(h.ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(ss)
+	}
+	h.e.waitOn(h.ctx, h.reload(task.ID), "usage", "codex at 96%, waits till 16:00")
+	before := spans()
+	for _, pct := range []string{"97", "97.5", "98"} {
+		h.e.waitOn(h.ctx, h.reload(task.ID), "usage", "codex at "+pct+"%, waits till 16:00")
+	}
+	if got := h.reload(task.ID); got.WaitsWhat != "codex at 98%, waits till 16:00" || spans() != before {
+		t.Fatalf("after the percentage moved the task waits %q with %d spans, want the new number and %d spans", got.WaitsWhat, spans(), before)
+	}
+	h.e.waitOn(h.ctx, h.reload(task.ID), "usage", "claude limit until 16:00")
+	h.e.waitOn(h.ctx, h.reload(task.ID), "disk", "codex at 98%, waits till 16:00")
+	if n := spans(); n != before+2 {
+		t.Fatalf("%d spans after two waits of another kind, want %d", n, before+2)
+	}
+}
+
+// A start, an answer or a decision keeps none of your raw words once the
+// daemon answered it: the inputs table keeps the scrubbed copy, and the
+// request's payload is emptied (a token pasted into a start lives on
+// nowhere unscrubbed). A stop's payload, which carries no words, is kept.
+func TestADoneRequestKeepsNoneOfYourWords(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12398", registry.TaskNeedsYou, "questions")
+	const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"
+	ids := map[string]int64{}
+	for kind, p := range map[string]any{
+		ReqStart:  StartPayload{Text: "Rename the helper, my token is " + token},
+		ReqAnswer: AnswerPayload{TaskID: task.ID, Revision: 9, Answers: map[int]string{0: "use " + token}},
+		ReqDecide: DecidePayload{TaskID: task.ID, Choice: ChoiceSendBack, Reason: "scope", Note: "see " + token},
+		ReqStop:   StopPayload{TaskID: 999},
+	} {
+		id, err := h.reg.EnqueueRequest(h.ctx, kind, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[kind] = id
+	}
+	h.tick()
+	for kind, id := range ids {
+		q, err := h.reg.RequestByID(h.ctx, id)
+		if err != nil || q.State == registry.RequestPending {
+			t.Fatalf("%s request %+v (%v), want it answered", kind, q, err)
+		}
+		forgotten := string(q.Payload) == "{}"
+		if kind != ReqStop && (!forgotten || strings.Contains(string(q.Payload), token)) {
+			t.Errorf("%s request keeps %s, want its payload emptied", kind, q.Payload)
+		}
+		if kind == ReqStop && forgotten {
+			t.Errorf("the stop request's payload went: it carries no words")
+		}
+	}
+}
+
 // A herdr outage is the herdr hold's alone: the observe pass's failed
 // snapshot ("herdr unavailable: ... connection refused", a herdr timeout)
 // starts no infrastructure hold, so herdr coming back lifts the only hold

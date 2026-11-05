@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -1223,5 +1224,26 @@ func TestARetryGoesOnWhateverAMalformedAsksFileSays(t *testing.T) {
 	}
 	if got := h.reload(task.ID); got.State != registry.TaskActive {
 		t.Fatalf("task %s after the retry, want active", got.State)
+	}
+}
+
+// A read of the head's commit time that fails keeps a let-go role where it
+// is (checked again on the next pass), never the untrue reason "no commit
+// since the prompt you let go".
+func TestALetGoCheckWhoseGitFailsKeepsTheTaskWhereItIs(t *testing.T) {
+	h := newHarness(t, func(d *Deps) {
+		d.Git = gitx.New(&execx.Fake{Rules: []execx.Rule{{Prefix: []string{"git"}, Result: execx.Result{Code: 128},
+			Err: &execx.ExitError{Code: 128, Stderr: "fatal: unable to read the object"}}}})
+	})
+	task := h.kindTask("PR-12399", "feature", "coding")
+	st, ok := h.e.writerStage(task)
+	if !ok {
+		t.Fatal("the feature kind has no coding stage")
+	}
+	role, _ := h.cfg.FactoryRole("fx-writer")
+	r := &stageRole{role: role, runAs: role, letGo: true, letGoSince: h.clock.Now().Add(-time.Minute)}
+	p, err := h.e.beforeLetGo(h.ctx, &task, st, r, &agentsRun{copy: Copy{Path: t.TempDir()}})
+	if err == nil || p != nil {
+		t.Fatalf("beforeLetGo = %+v, %v; want the read's error and no problem", p, err)
 	}
 }

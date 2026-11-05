@@ -18,11 +18,6 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
-// readyStage is the stage whose card waits for the operator's push: the
-// built-in ready stage (config's FactoryDecisionReadyPush). A task is ready
-// when that stage first waits on the operator.
-const readyStage = "ready"
-
 // cardCap is the most one card counts in OperatorSecs: a card left open and
 // idle is not the operator's time.
 const cardCap = 30 * time.Minute
@@ -319,14 +314,16 @@ func waitedOnYou(spans []registry.Span, t registry.Task, now time.Time) time.Dur
 	return total
 }
 
-// startToReady is the time from the task's first span to the first one at the
-// ready stage that waits on the operator: the card is drawn. Zero before.
+// startToReady is the time from the task's first span to the first one that
+// waits on the operator at a ready card (registry.ReadyWait): the card is
+// drawn. The card's wait is found by its words, whatever the kind names the
+// stage that draws it. Zero before.
 func startToReady(spans []registry.Span) time.Duration {
 	if len(spans) == 0 {
 		return 0
 	}
 	for _, s := range spans {
-		if s.Stage == readyStage && s.OnYou {
+		if s.OnYou && strings.HasPrefix(s.WaitsWhat, registry.ReadyWait) {
 			return s.At.Sub(spans[0].At)
 		}
 	}

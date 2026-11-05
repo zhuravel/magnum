@@ -331,6 +331,31 @@ func TestFactoryDaemonReadsPromptsOnceAtStart(t *testing.T) {
 	}
 }
 
+// A factory prompt that does not render stops the daemon's build with the
+// render error, which names the file, and sends you to the factory daemon,
+// never to `magnum config`, which does not render the factory's prompts.
+func TestAFactoryPromptThatDoesNotRenderNamesTheWayToCheckIt(t *testing.T) {
+	storetest.Serial(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "factory-writer.md"), []byte("writer {{.NoSuchField}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Pipeline.PromptsDir = dir
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+	d, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err == nil {
+		d.Close()
+		t.Fatal("the factory daemon built with a prompt that does not render")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "factory-writer.md") || strings.Contains(msg, "magnum config") || !strings.Contains(msg, "magnum factory install") {
+		t.Fatalf("the build's error %q, want the file named and the factory's own way to check it", msg)
+	}
+}
+
 func TestTheFactoryOpensItsOwnHerdrSession(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Terminal.App, cfg.Terminal.Launcher, cfg.Terminal.Session = "custom", "myterm -e {herdr} {args}", "default"
