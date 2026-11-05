@@ -477,18 +477,63 @@ func TestReadSessionsTiesASessionToTheTicketItsBranchNames(t *testing.T) {
 	if want := (stats.Skipped{NoKey: 1}); skipped != want {
 		t.Errorf("skipped = %+v, want %+v (the session on master alone)", skipped, want)
 	}
-	// Each session keeps its branches and whether its first message names its
-	// key, which tell the operator's own tickets (OwnTickets).
-	for _, s := range sessions {
-		wantFirst := s.Messages[0] == "PR-12375: the first message names it"
-		if s.KeyInFirst != wantFirst || len(s.Branches) == 0 {
-			t.Errorf("the session of %q: KeyInFirst %v, branches %q; want %v and its branches", s.Messages[0], s.KeyInFirst, s.Branches, wantFirst)
-		}
+	// Each session keeps the branches that name its own key and whether its
+	// first message names that key, which tell the operator's own tickets
+	// (OwnTickets); a branch of another ticket is not kept.
+	wantBranches := map[string][]string{
+		"look at the points sync":              {"alice-PR-12370"},
+		"what is on master?":                   {"zhuravel-PR-12371-mailer"},
+		"the refunds count twice":              {"zhuravel-PR-12372-refunds"},
+		"the path names the ticket":            nil, // its branch names PR-12374
+		"PR-12375: the first message names it": nil, // its branch names PR-12376
 	}
 	for _, s := range sessions {
-		if s.Messages[0] == "what is on master?" && !slices.Equal(s.Branches, []string{"master", "zhuravel-PR-12371-mailer"}) {
-			t.Errorf("branches %q, want master then zhuravel-PR-12371-mailer", s.Branches)
+		wantFirst := s.Messages[0] == "PR-12375: the first message names it"
+		if s.KeyInFirst != wantFirst || !slices.Equal(s.Branches, wantBranches[s.Messages[0]]) {
+			t.Errorf("the session of %q: KeyInFirst %v, branches %q; want %v and %q", s.Messages[0], s.KeyInFirst, s.Branches, wantFirst,
+				wantBranches[s.Messages[0]])
 		}
+	}
+}
+
+// A session whose branches name two tickets counts for the first one only,
+// and a branch of the other ticket never makes it yours: a session begun on
+// a colleague's branch left checked out, then moved to your own branch of a
+// new ticket, stays on the colleague's ticket, which is someone else's, and
+// your review of that ticket stays someone else's work too.
+func TestOwnTicketsNeverTakeAnotherTicketsBranch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	on := func(branch string) map[string]any {
+		return map[string]any{"entrypoint": "cli", "cwd": "/work/shop", "gitBranch": branch}
+	}
+	writeTranscript(t, filepath.Join(dir, "proj", "review.jsonl"),
+		claudeEntry(at, "look at the points sync", on("alice-PR-12376")),
+		claudeEntry(at.Add(time.Minute), "check the mailer too", on("alice-PR-12376")))
+	writeTranscript(t, filepath.Join(dir, "proj", "moved.jsonl"),
+		claudeEntry(at.Add(time.Hour), "the refunds count twice, find why", on("alice-PR-12376")),
+		claudeEntry(at.Add(time.Hour+time.Minute), "make a branch for it and fix it", on("zhuravel-PR-12377-refunds")),
+		claudeEntry(at.Add(time.Hour+2*time.Minute), "open PR", on("zhuravel-PR-12377-refunds")))
+	// From your stale branch of one ticket to your branch of the next: the first.
+	writeTranscript(t, filepath.Join(dir, "proj", "stale.jsonl"),
+		claudeEntry(at.Add(2*time.Hour), "start on the export", on("zhuravel-PR-12378-old")),
+		claudeEntry(at.Add(2*time.Hour+time.Minute), "push", on("zhuravel-PR-12379-new")))
+
+	sessions, _, err := stats.ReadSessions(dir, firstKey, magnumCommands, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, s := range sessions {
+		keys = append(keys, s.Key)
+	}
+	if want := []string{"PR-12376", "PR-12376", "PR-12378"}; !slices.Equal(keys, want) {
+		t.Fatalf("sessions of %v, want %v (each session on its first ticket)", keys, want)
+	}
+	own, others := stats.OwnTickets(sessions, "zhuravel-")
+	if len(own) != 1 || own[0].Key != "PR-12378" || others != 1 {
+		t.Errorf("own %+v, others %d; want only PR-12378 yours and alice's PR-12376 someone else's", own, others)
 	}
 }
 
@@ -503,15 +548,15 @@ func TestOwnTicketsKeepOnlyTheOperatorsOwnWork(t *testing.T) {
 	t.Parallel()
 	msgs := []string{"look at it", "open PR"}
 	sessions := []stats.Session{
-		{Key: "PR-12340", Messages: msgs, Branches: []string{"master", "zhuravel-PR-12340-points"}}, // own branch
-		{Key: "PR-12341", Messages: msgs, Branches: []string{"alice-PR-12341"}},                     // a colleague's
-		{Key: "PR-12342", Messages: msgs, Branches: []string{"alice-PR-12342"}, KeyInFirst: true},   // begun with the key
-		{Key: "PR-12343", Messages: msgs, Branches: []string{"alice-PR-12343"}},                     // a colleague's, then
-		{Key: "PR-12343", Messages: msgs, Branches: []string{"Zhuravel-PR-12343"}},                  // own, in any case
-		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}},                   // a colleague's, then
-		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}, KeyInFirst: true}, // begun with the key
-		{Key: "PR-12345", Messages: msgs},                                                           // no branch, no key first
-		{Key: "PR-12346", Messages: msgs, Branches: []string{"zhuravelx-PR-12346", "zhuravel"}},     // neither is zhuravel-
+		{Key: "PR-12340", Messages: msgs, Branches: []string{"zhuravel-PR-12340-points"}},               // own branch
+		{Key: "PR-12341", Messages: msgs, Branches: []string{"alice-PR-12341"}},                         // a colleague's
+		{Key: "PR-12342", Messages: msgs, Branches: []string{"alice-PR-12342"}, KeyInFirst: true},       // begun with the key
+		{Key: "PR-12343", Messages: msgs, Branches: []string{"alice-PR-12343"}},                         // a colleague's, then
+		{Key: "PR-12343", Messages: msgs, Branches: []string{"Zhuravel-PR-12343"}},                      // own, in any case
+		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}},                       // a colleague's, then
+		{Key: "PR-12344", Messages: msgs, Branches: []string{"rev-ann-PR-12344"}, KeyInFirst: true},     // begun with the key
+		{Key: "PR-12345", Messages: msgs},                                                               // no branch, no key first
+		{Key: "PR-12346", Messages: msgs, Branches: []string{"zhuravel_PR-12346", "zhuravel.PR-12346"}}, // neither is zhuravel-
 	}
 	own, others := stats.OwnTickets(sessions, "zhuravel-")
 	var keys []string
@@ -534,7 +579,7 @@ func TestOwnTicketsKeepOnlyTheOperatorsOwnWork(t *testing.T) {
 
 // The baseline counts what the operator typed, so it reads only the
 // operator's interactive sessions: a headless Claude Code run (claude -p, the
-// SDK: an entrypoint other than cli), a subagent's transcript, a Codex
+// SDK: an sdk-* entrypoint; an IDE's is typed in), a subagent's transcript, a Codex
 // session Claude Code started, `codex exec`, a Codex subagent and a session
 // in a directory where magnum or the factory starts its own (the predicate
 // the caller hands over) are left out, each counted by its reason, before
@@ -558,9 +603,10 @@ func TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn(t *testing.T) {
 	}
 	interactive := map[string]any{"entrypoint": "cli", "cwd": "/work/shop"}
 	claude(interactive, "proj", "kept.jsonl")
-	claude(map[string]any{"cwd": "/work/shop"}, "proj", "older-claude-code.jsonl") // no entrypoint: kept
-	codex("codex-tui", "cli", "/work/shop")                                        // kept
-	codex("Codex Desktop", "vscode", "/work/shop")                                 // kept
+	claude(map[string]any{"cwd": "/work/shop"}, "proj", "older-claude-code.jsonl")                  // no entrypoint: kept
+	codex("codex-tui", "cli", "/work/shop")                                                         // kept
+	codex("Codex Desktop", "vscode", "/work/shop")                                                  // kept
+	claude(map[string]any{"entrypoint": "claude-vscode", "cwd": "/work/shop"}, "proj", "ide.jsonl") // an IDE's, typed in: kept
 
 	claude(map[string]any{"entrypoint": "sdk-cli", "cwd": "/work/shop"}, "proj", "claude-p.jsonl")
 	claude(map[string]any{"entrypoint": "sdk-ts", "cwd": "/work/shop"}, "proj", "sdk.jsonl")
@@ -592,7 +638,7 @@ func TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn(t *testing.T) {
 		keys = append(keys, s.Key)
 	}
 	slices.Sort(keys)
-	if want := []string{"PR-12381", "PR-12382", "PR-12383", "PR-12384"}; !slices.Equal(keys, want) {
+	if want := []string{"PR-12381", "PR-12382", "PR-12383", "PR-12384", "PR-12385"}; !slices.Equal(keys, want) {
 		t.Errorf("sessions of %v, want %v (the interactive ones)", keys, want)
 	}
 	want := stats.Skipped{Headless: 5, Subagent: 4, ByAgent: 1, Magnum: 2, NoMessage: 1, NoKey: 1}
@@ -602,7 +648,7 @@ func TestReadSessionsSkipsTheSessionsTheOperatorNeverTypedIn(t *testing.T) {
 
 	// Without a predicate no directory is magnum's.
 	sessions, skipped, err = stats.ReadSessions(dir, firstKey, magnumCommands, nil)
-	if err != nil || len(sessions) != 6 || skipped.Magnum != 0 {
+	if err != nil || len(sessions) != 7 || skipped.Magnum != 0 {
 		t.Errorf("without a predicate: %d sessions, skipped %+v, %v; want the two in magnum's directories kept", len(sessions), skipped, err)
 	}
 }

@@ -13978,21 +13978,22 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool,
     commands magnum types (magnum: agents.MagnumCommands, the list the factory
     drops from what it records of its panes, so both sides count the same; nil
     drops none). Only the operator's interactive sessions are read: a transcript
-    of a headless run, a subagent's, a Codex session Claude Code started,
-    or one whose session started in a directory magnumDir reports as one where
-    magnum or the factory starts its own (nil: none) is left out before its
-    messages are read (agents.ClaudeSessionFacts, agents.CodexSessionFacts;
-    Skipped says which is which). A session's ticket is the key keyOf finds
-    in the file's path below dir, else in its first message that holds one,
-    else in the first of its git branches that holds one; the session keeps
-    its branches and whether its first message names its key (OwnTickets).
-    A transcript with no message or no key is not guessed at either. Every
-    transcript left out is counted in skipped, by its reason. The sessions come
-    oldest first, by the time of their first message, so that the first session
-    of a ticket is the first one (BuildBaseline); a transcript whose turns carry
-    no timestamp comes after the rest, and is never a ticket's first session.
-    Prompts queued while an agent worked are not read, so a count is never above
-    what was typed. Symbolic links are not followed.
+    of a headless run, a subagent's, a Codex session Claude Code started, or one
+    whose session started in a directory magnumDir reports as one where magnum
+    or the factory starts its own (nil: none) is left out before its messages
+    are read (agents.ClaudeSessionFacts, agents.CodexSessionFacts; Skipped says
+    which is which). A session's ticket is the key keyOf finds in the file's
+    path below dir, else in its first message that holds one, else in the
+    first of its git branches that holds one: a session that moved between the
+    branches of two tickets counts for the first one only, all its messages with
+    it. The session keeps the branches that name its key and whether its first
+    message names it (OwnTickets). A transcript with no message or no key is not
+    guessed at either. Every transcript left out is counted in skipped, by its
+    reason. The sessions come oldest first, by the time of their first message,
+    so that the first session of a ticket is the first one (BuildBaseline); a
+    transcript whose turns carry no timestamp comes after the rest, and is never
+    a ticket's first session. Prompts queued while an agent worked are not read,
+    so a count is never above what was typed. Symbolic links are not followed.
 
 
 TYPES
@@ -14087,9 +14088,10 @@ func (r Report) MarshalJSON() ([]byte, error)
 type Session struct {
 	Key      string
 	Messages []string
-	// Branches are the git branches the session ran on, and KeyInFirst
-	// whether its first message names its key, the way the operator starts
-	// a task: they tell the operator's own tickets (OwnTickets).
+	// Branches are the git branches the session ran on that name its key
+	// (a branch of another ticket is not one), and KeyInFirst whether its
+	// first message names its key, the way the operator starts a task: they
+	// tell the operator's own tickets (OwnTickets).
 	Branches   []string
 	KeyInFirst bool
 }
@@ -14099,16 +14101,18 @@ type Session struct {
 func OwnTickets(sessions []Session, prefix string) (own []Session, others int)
     OwnTickets keeps, in order, the sessions of the tickets that were the
     operator's own work: a ticket counts when one of its sessions ran on a
-    branch that starts with prefix (the operator's GitHub login and a dash, as
-    the factory names its branches; letter case aside) or began with a message
-    that names its key. A ticket whose sessions all ran on other people's
-    branches, or on none, without such a first message is someone else's (a
-    review, a deploy of a colleague's work): its sessions are dropped, and
-    others counts those tickets. An empty prefix makes no branch the operator's.
+    branch of that ticket (Session.Branches) that starts with prefix (the
+    operator's GitHub login and a dash, as the factory names its branches;
+    letter case aside) or began with a message that names its key. A ticket
+    whose sessions all ran on other people's branches, or on none, without such
+    a first message is someone else's (a review, a deploy of a colleague's
+    work): its sessions are dropped, and others counts those tickets. An empty
+    prefix makes no branch the operator's.
 
 type Skipped struct {
-	// Headless: nobody typed in it: Claude Code run without its terminal UI
-	// (claude -p, the SDK: an entrypoint other than cli) or `codex exec`
+	// Headless: nobody typed in it: Claude Code run by its SDK (claude -p,
+	// the TypeScript or Python SDK: an sdk-* entrypoint; the terminal's cli
+	// and an IDE's or the desktop app's are typed in) or `codex exec`
 	// (originator codex_exec, or source exec).
 	Headless int
 	// Subagent: another agent's thread: a Claude Code subagent's transcript

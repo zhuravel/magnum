@@ -51,18 +51,19 @@ type Baseline struct {
 type Session struct {
 	Key      string
 	Messages []string
-	// Branches are the git branches the session ran on, and KeyInFirst
-	// whether its first message names its key, the way the operator starts
-	// a task: they tell the operator's own tickets (OwnTickets).
+	// Branches are the git branches the session ran on that name its key
+	// (a branch of another ticket is not one), and KeyInFirst whether its
+	// first message names its key, the way the operator starts a task: they
+	// tell the operator's own tickets (OwnTickets).
 	Branches   []string
 	KeyInFirst bool
 }
 
 // OwnTickets keeps, in order, the sessions of the tickets that were the
 // operator's own work: a ticket counts when one of its sessions ran on a
-// branch that starts with prefix (the operator's GitHub login and a dash,
-// as the factory names its branches; letter case aside) or began with a
-// message that names its key. A ticket whose sessions all ran on other
+// branch of that ticket (Session.Branches) that starts with prefix (the
+// operator's GitHub login and a dash, as the factory names its branches;
+// letter case aside) or began with a message that names its key. A ticket whose sessions all ran on other
 // people's branches, or on none, without such a first message is someone
 // else's (a review, a deploy of a colleague's work): its sessions are
 // dropped, and others counts those tickets. An empty prefix makes no branch
@@ -311,8 +312,9 @@ func ReadLabelled(path string) ([]Labelled, error) {
 // Skipped counts the transcripts ReadSessions leaves out, by why: each is
 // counted once, under the first reason that holds, in this order.
 type Skipped struct {
-	// Headless: nobody typed in it: Claude Code run without its terminal UI
-	// (claude -p, the SDK: an entrypoint other than cli) or `codex exec`
+	// Headless: nobody typed in it: Claude Code run by its SDK (claude -p,
+	// the TypeScript or Python SDK: an sdk-* entrypoint; the terminal's cli
+	// and an IDE's or the desktop app's are typed in) or `codex exec`
 	// (originator codex_exec, or source exec).
 	Headless int
 	// Subagent: another agent's thread: a Claude Code subagent's transcript
@@ -350,8 +352,10 @@ func (s Skipped) Total() int {
 // are read (agents.ClaudeSessionFacts, agents.CodexSessionFacts; Skipped
 // says which is which). A session's ticket is the key keyOf finds in the
 // file's path below dir, else in its first message that holds one, else in
-// the first of its git branches that holds one; the session keeps its
-// branches and whether its first message names its key (OwnTickets). A transcript with no message
+// the first of its git branches that holds one: a session that moved
+// between the branches of two tickets counts for the first one only, all
+// its messages with it. The session keeps the branches that name its key
+// and whether its first message names it (OwnTickets). A transcript with no message
 // or no key is not guessed at either. Every transcript left out is counted
 // in skipped, by its reason. The sessions come oldest first, by the time of
 // their first message, so that the first session of a ticket is the first
@@ -396,7 +400,7 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool,
 		case facts.Originator == "Claude Code":
 			skipped.ByAgent++
 			return nil
-		case facts.Entrypoint != "" && facts.Entrypoint != "cli", facts.Originator == "codex_exec", facts.Source == "exec":
+		case strings.HasPrefix(facts.Entrypoint, "sdk-"), facts.Originator == "codex_exec", facts.Source == "exec":
 			skipped.Headless++
 			return nil
 		case facts.Source == agents.CodexSourceSubagent:
@@ -429,8 +433,13 @@ func ReadSessions(dir string, keyOf func(string) string, magnum map[string]bool,
 			skipped.NoKey++
 			return nil
 		}
-		found = append(found, dated{Session{Key: key, Messages: messages, Branches: facts.Branches, KeyInFirst: keyOf(messages[0]) == key},
-			turns[0].At})
+		var branches []string // those that name its ticket (OwnTickets)
+		for _, b := range facts.Branches {
+			if keyOf(b) == key {
+				branches = append(branches, b)
+			}
+		}
+		found = append(found, dated{Session{Key: key, Messages: messages, Branches: branches, KeyInFirst: keyOf(messages[0]) == key}, turns[0].At})
 		return nil
 	})
 	if err != nil {
