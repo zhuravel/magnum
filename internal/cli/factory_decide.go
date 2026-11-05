@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,7 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
-const factoryDecideUsage = "decide <task> [push|send_back|drop --card <revision> [--reason <key> --note <text>]]"
+const factoryDecideUsage = "decide <task> [push|send_back --card <revision> [--reason <key> --note <text>]|drop]"
 
 // factoryDecideFlags are the flags of `magnum factory decide`.
 type factoryDecideFlags struct {
@@ -37,10 +38,12 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 			"task that then starts). push has the daemon push the head the card shows and open its PR, ready for "+
 			"review, under your login; send_back returns the task to its writer with --reason, the key of your "+
 			"reason, and --note, your note (the writer reads it from a file, never in its prompt); drop stops the "+
-			"task, freeing its copy and keeping its branch. A choice names --card, the revision you read: a card "+
-			"drawn since is refused. The daemon refuses a push or a send_back whose branch, report, PR body or diff "+
-			"changed after the card was drawn (\"the branch changed after you read it\") and draws the card again; "+
-			"a drop it takes whatever the card shows now.",
+			"task, freeing its copy and keeping its branch. A push or a send_back names --card, the revision you "+
+			"read: a card drawn since is refused, and the daemon refuses one whose branch, report, PR body or diff "+
+			"changed after the card was drawn (\"the branch changed after you read it\") and draws the card again. "+
+			"A drop is bound to no card: it needs no --card, a stale one is not refused, and the daemon drops the "+
+			"task at its ready stage whatever its card shows, or when none could be drawn. The decision records the "+
+			"time this command read the card as when it was shown.",
 		func(pos []string) int { return runFactoryDecideCmd(c, f, pos) })
 	cmd.Flags().IntVar(&f.card, "card", 0, "the revision of the card you read (the printed card names it)")
 	cmd.Flags().StringVar(&f.reason, "reason", "", "send_back: the key of your reason (a word: lowercase letters, digits, - and _)")
@@ -61,8 +64,8 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return inspUsage(c, "factory decide", "which task, and which choice? its id or its Jira key, then push, send_back or drop", factoryDecideUsage)
 	case choice != "" && !slices.Contains(factoryChoices, choice):
 		return inspUsage(c, "factory decide", fmt.Sprintf("unknown choice %q: push, send_back or drop", choice), factoryDecideUsage)
-	case choice != "" && f.card < 1:
-		return inspUsage(c, "factory decide", "a choice names --card, the revision of the card you read", factoryDecideUsage)
+	case (choice == factory.ChoicePush || choice == factory.ChoiceSendBack) && f.card < 1:
+		return inspUsage(c, "factory decide", "a push or a send_back names --card, the revision of the card you read", factoryDecideUsage)
 	case choice == factory.ChoiceSendBack && (f.reason == "" || strings.TrimSpace(f.note) == ""):
 		return inspUsage(c, "factory decide", "send_back takes --reason (the key of your reason) and --note (your note to the writer)", factoryDecideUsage)
 	case choice != factory.ChoiceSendBack && (f.reason != "" || f.note != ""):
@@ -86,6 +89,13 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return 1
 	}
 	card, err := factory.ReadReadyCard(c.Layout, t.ID)
+	// When you were shown the card: the stats time your decision from it. A
+	// drop is bound to no card, as the daemon takes it.
+	read := time.Now()
+	if choice == factory.ChoiceDrop {
+		return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, factory.DecidePayload{TaskID: t.ID, Choice: choice,
+			HeadSHA: card.Head, ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, Surface: "cli"}, "it takes your decision")
+	}
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory decide: %s has no ready card: %v\n", factory.TaskKey(t), err)
 		return 1
@@ -99,7 +109,7 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return 1
 	}
 	p := factory.DecidePayload{TaskID: t.ID, Choice: choice, Reason: f.reason, Note: strings.TrimSpace(f.note), HeadSHA: card.Head,
-		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: card.Drawn, Surface: "cli"}
+		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, Surface: "cli"}
 	return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, p, "it takes your decision")
 }
 
@@ -131,7 +141,7 @@ func printReadyCard(ctx context.Context, c *Context, reg *registry.Registry, t r
 	fmt.Fprintf(w, "body     %s\n", filepath.Join(c.Layout.FactoryTaskDir(t.ID), "pr-body.md"))
 	fmt.Fprintf(w, "\n%s\n", factory.ConfirmSentence(t, card.Copy, factory.NextQueued(tasks)))
 	fmt.Fprintf(w, "decide with `magnum factory decide %d push --card %d`, `send_back --card %d --reason <key> --note <text>` or "+
-		"`drop --card %d`\n", t.ID, card.Revision, card.Revision, card.Revision)
+		"`drop`\n", t.ID, card.Revision, card.Revision)
 	return 0
 }
 

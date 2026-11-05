@@ -15022,6 +15022,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   another process reads as up, and the daemon's requests then say it does not answer). It uses the
   existing blocker line, and no painter was added. Tests: TestScreenDataWithTheDaemonDownSaysSoAndMovesNothing
   and TestTheFactoryScreenSaysWhenTheDaemonIsDown.
+- **`magnum factory decide` takes a drop as the daemon does** (2026-11-05, the final review, ledger 335).
+  The CLI checked `--card` for every choice, so it refused a drop of a card drawn since, which the daemon
+  takes. Its help also said the opposite of the code. Now a drop needs no `--card`, and a stale one is not
+  refused. A drop goes to the daemon also for a task with no card. A push and a send back still name the
+  card they bind to. The help and the README say exactly that. The decision's `Shown` is now the time the
+  command read the card. It was `card.Drawn`, and the stats counted the hours the card waited as your
+  time on it. Test: TestFactoryDecideSendsTheCardYouRead.
 
 ## Learned rules
 

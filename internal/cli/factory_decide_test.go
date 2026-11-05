@@ -79,12 +79,26 @@ func TestFactoryDecideSendsTheCardYouRead(t *testing.T) {
 	}
 
 	dt.stdout.Reset()
+	read := time.Now()
 	if code := dt.run("factory", "decide", "PR-12360", "push", "--card", "2"); code != 0 {
 		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
 	}
 	if got.TaskID != task.ID || got.Choice != factory.ChoicePush || got.HeadSHA != card.Head || got.ReportHash != card.ReportHash ||
-		got.DiffHash != card.DiffHash || !got.Shown.Equal(card.Drawn) || got.Surface != "cli" {
+		got.DiffHash != card.DiffHash || got.Surface != "cli" {
 		t.Fatalf("payload %+v, want what card 2 showed", got)
+	}
+	if got.Shown.Before(read) || got.Shown.After(time.Now()) { // the command's read of the card, never its drawing
+		t.Fatalf("shown %v, want the time the command read the card (after %v), not its drawing %v", got.Shown, read, card.Drawn)
+	}
+
+	// A drop is bound to no card, as the daemon takes it: a stale --card, or
+	// none, still drops.
+	for _, args := range [][]string{{"drop", "--card", "1"}, {"drop"}} {
+		got = factory.DecidePayload{}
+		if code := dt.run("factory", append([]string{"decide", "PR-12360"}, args...)...); code != 0 || got.Choice != factory.ChoiceDrop ||
+			got.TaskID != task.ID {
+			t.Fatalf("decide %q: exit %d, stderr %s, payload %+v, want the drop sent", args, code, dt.stderr, got)
+		}
 	}
 
 	got = factory.DecidePayload{}
