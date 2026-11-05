@@ -312,9 +312,11 @@ func (e *Engine) mayLink(ctx context.Context, t registry.Task, key string, idx i
 //
 // ticket.md takes the clock's time (the amend of a report written before it
 // is due, amendDue); then the link ends (endLink). A restart reads no ticket
-// twice: ticket.md is the record, and a link it holds ends from it.
+// twice: ticket.md is the record, and a link it holds ends from it. A task of
+// a key of a tracker that is not Jira (startOther) has your words and no
+// ticket: nothing is read.
 func (e *Engine) linkedTicket(ctx context.Context, t *registry.Task) (ready bool, err error) {
-	if t.JiraKey == "" || t.Prompt == "" {
+	if t.JiraKey == "" || t.Prompt == "" || trackerOf(t.JiraKey, e.otherTrackers(t.Repo)) {
 		return true, nil
 	}
 	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), ticketFile)

@@ -53,12 +53,7 @@ var (
 //     of them count.
 func ParseStart(text string, trackers string) StartInput {
 	text = strings.TrimSpace(text)
-	first, rest := text, ""
-	if i := strings.IndexFunc(text, unicode.IsSpace); i >= 0 {
-		first, rest = text[:i], text[i:]
-	}
-	guidance := strings.TrimSpace(strings.TrimLeft(rest, " \t\r\n:,;-–—"))
-	word := strings.TrimRight(first, ":,;")
+	word, guidance := splitStart(text)
 	if startKey.MatchString(word) {
 		return StartInput{Key: word, Guidance: guidance}
 	}
@@ -83,6 +78,17 @@ func ParseStart(text string, trackers string) StartInput {
 		return StartInput{Key: key, Guidance: guidance}
 	}
 	return prompt
+}
+
+// splitStart is the first word of a trimmed start's text (a colon or a comma
+// after it dropped) and the words after it (a colon or a dash between the
+// two dropped).
+func splitStart(text string) (word, rest string) {
+	first := text
+	if i := strings.IndexFunc(text, unicode.IsSpace); i >= 0 {
+		first, rest = text[:i], text[i:]
+	}
+	return strings.TrimRight(first, ":,;"), strings.TrimSpace(strings.TrimLeft(rest, " \t\r\n:,;-–—"))
 }
 
 // isGitHub reports whether host is GitHub's: its links are PRs and runs,

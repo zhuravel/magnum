@@ -213,7 +213,8 @@ func (e *Engine) startFoundWaiting(ctx context.Context, p StartPayload, repo con
 // refuses for a cause of its own stays a word, as at a start, with an info
 // event naming the cause.
 func (e *Engine) retryFound(ctx context.Context, t registry.Task, w *jiraTry) error {
-	known, refused, err := e.readFound(ctx, ParseStart(t.Prompt, e.trackers(t.Repo)).Found, e.d.Jira.Ticket)
+	in, _ := e.readStart(t.Prompt, t.Repo)
+	known, refused, err := e.readFound(ctx, in.Found, e.d.Jira.Ticket)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ctx.Err()

@@ -60,8 +60,10 @@ type Link struct {
 
 // StartPayload is a ReqStart (and the start of the new-task screen): your
 // text, the kind of task you chose ("" = the daemon picks it, PickKind),
-// the repository ("" = the only [[factory.repo]]), and where you asked
-// (Surface, for the record of your input; "" = the CLI). WordsOnly starts a
+// the repository ("" = the one the text tells: a GitHub link of a
+// [[factory.repo]], a key of the tracker of one, or the only one), and
+// where you asked (Surface, for the record of your input; "" = the CLI).
+// WordsOnly starts a
 // task from your words only: the whole text is the prompt, a key at its
 // start (one Jira does not know) is words, and no key of it is read from
 // Jira as the task's ticket or as a key found in the text.
@@ -74,10 +76,11 @@ type StartPayload struct {
 	request int64
 }
 
-// PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
-// the daemon answers as the JSON of a tui.NewTaskForm.
+// PreviewPayload is a ReqPreview: the new-task screen's text and the
+// repository you picked ("" = the one the text tells, as a start's), whose
+// preview the daemon answers as the JSON of a tui.NewTaskForm.
 type PreviewPayload struct {
-	Text string
+	Text, Repo string
 }
 
 var (
@@ -191,7 +194,9 @@ const (
 // and writes the task's data files: ticket.md (Ticket.Markdown) and
 // guidance.md for a key, prompt.md for a prompt, each an artifact. A prompt
 // that names keys elsewhere (in.Found) is read from Jira (startFound),
-// unless [jira] is off, when they are words.
+// unless [jira] is off, when they are words. The repository is the one p
+// names, else the one the text tells (startRepo); a key of its trackers
+// that are not Jira's is never read from Jira (readStart, startOther).
 func (e *Engine) start(ctx context.Context, p StartPayload) (registry.Task, error) {
 	t, _, err := e.startNoted(ctx, p)
 	return t, err
@@ -205,19 +210,21 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 	if text == "" {
 		return registry.Task{}, "", errors.New("nothing to start: give a Jira key, a link or the task in your words")
 	}
-	repo, err := e.startRepo(p.Repo)
+	repo, _, err := e.startRepo(p.Repo, text)
 	if err != nil {
 		return registry.Task{}, "", err
 	}
-	in := ParseStart(text, e.trackers(repo.Repo))
+	in, other := e.readStart(text, repo.Repo)
 	if p.WordsOnly { // your words, whole: no key of them is read as the ticket or found
-		in = StartInput{Prompt: text}
+		in, other = StartInput{Prompt: text}, false
 	}
 	switch {
 	case in.PR != nil:
 		return registry.Task{}, "", laterError{"a PR link: adoption comes in milestone 2"}
 	case in.Run != nil:
 		return registry.Task{}, "", laterError{"an Actions run link: CI tasks come in milestone 3"}
+	case other && in.Guidance == "":
+		return registry.Task{}, "", otherAlone(in.Key)
 	}
 	if p.Kind != "" && !hasKind(e.cfg.Factory, p.Kind) {
 		return registry.Task{}, "", fmt.Errorf("no kind of task %q: one of %s", p.Kind, strings.Join(slices.Sorted(maps.Keys(e.cfg.Factory.Kinds)), ", "))
@@ -242,6 +249,8 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 	var t registry.Task
 	var note string
 	switch {
+	case other:
+		t, err = e.startOther(ctx, p, repo, login, in, text)
 	case in.Key != "":
 		t, err = e.startKey(ctx, p, repo, login, in)
 	case len(in.Found) > 0:
@@ -278,9 +287,11 @@ func (e *Engine) freeFound(ctx context.Context, found []string) (free, held []st
 	return free, held, nil
 }
 
-// startRepo is the repository of a start: the [[factory.repo]] named, or
-// the only one.
-func (e *Engine) startRepo(name string) (config.FactoryRepo, error) {
+// startRepo is the repository of a start of text, and why (the new task
+// form's words): the [[factory.repo]] named (your pick, which always wins),
+// else the one the text tells (inferRepo), the only one included. A text that
+// tells none of several is whichRepo.
+func (e *Engine) startRepo(name, text string) (config.FactoryRepo, string, error) {
 	var names []string
 	for _, r := range e.cfg.Factory.Repos {
 		names = append(names, r.Repo)
@@ -288,18 +299,19 @@ func (e *Engine) startRepo(name string) (config.FactoryRepo, error) {
 	switch {
 	case name != "":
 		if r, ok := e.cfg.FactoryRepo(name); ok {
-			return r, nil
+			return r, repoYourPick, nil
 		}
 		if len(names) == 0 {
-			return config.FactoryRepo{}, fmt.Errorf("no [[factory.repo]] is %s: the config declares none", name)
+			return config.FactoryRepo{}, "", fmt.Errorf("no [[factory.repo]] is %s: the config declares none", name)
 		}
-		return config.FactoryRepo{}, fmt.Errorf("no [[factory.repo]] is %s: one of %s", name, strings.Join(names, ", "))
-	case len(names) == 1:
-		return e.cfg.Factory.Repos[0], nil
+		return config.FactoryRepo{}, "", fmt.Errorf("no [[factory.repo]] is %s: one of %s", name, strings.Join(names, ", "))
 	case len(names) == 0:
-		return config.FactoryRepo{}, errors.New("no [[factory.repo]] is configured: the factory has no repository to work in")
+		return config.FactoryRepo{}, "", errors.New("no [[factory.repo]] is configured: the factory has no repository to work in")
 	}
-	return config.FactoryRepo{}, fmt.Errorf("which repository? name one of %s (--repo)", strings.Join(names, ", "))
+	if r, why, ok := inferRepo(e.cfg, text); ok {
+		return r, why, nil
+	}
+	return config.FactoryRepo{}, "", whichRepo{names}
 }
 
 // trackers are what tells a Jira link of repo (ParseStart): the [jira]

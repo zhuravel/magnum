@@ -19,26 +19,39 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// preview is the new-task screen's preview of text: the ticket the daemon
-// read for a key (or the reason it cannot: Err), the guidance the start
-// would send every agent with it, the kind and why, the title of a prompt,
-// the branch, when the task would start, and its first agents. It makes
-// nothing.
+// preview is the new-task screen's preview of text in the repository the
+// text tells (previewIn with no pick).
 func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, error) {
+	return e.previewIn(ctx, text, "")
+}
+
+// previewIn is the new-task screen's preview of text in repository pick ("" =
+// the one the text tells, as a start's, startRepo): the repositories, the one
+// of the task and why, the ticket the daemon read for a key (or the reason it
+// cannot: Err), the guidance the start would send every agent with it, the
+// kind and why, the title of a prompt, the branch, when the task would start,
+// and its first agents. A text that tells none of several repositories
+// previews nothing else: the screen asks you to pick one. A key of a tracker
+// that is not Jira is the task's (NotJira), never read. It makes nothing.
+func (e *Engine) previewIn(ctx context.Context, text, pick string) (tui.NewTaskForm, error) {
 	f := tui.NewTaskForm{Text: text}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return f, nil
 	}
-	repo, err := e.startRepo("")
-	if err != nil {
-		f.Err = err.Error()
+	for _, r := range e.cfg.Factory.Repos {
+		f.Repos = append(f.Repos, r.Repo)
 	}
-	if f.Err != "" {
+	repo, why, err := e.startRepo(pick, text)
+	if _, none := errors.AsType[whichRepo](err); none {
 		return f, nil
 	}
-	f.Repo = repo.Repo
-	in := ParseStart(text, e.trackers(repo.Repo))
+	if err != nil {
+		f.Err = err.Error()
+		return f, nil
+	}
+	f.Repo, f.RepoWhy = repo.Repo, why
+	in, other := e.readStart(text, repo.Repo)
 	f.Links = previewLinks(text, e.trackers(repo.Repo))
 	switch {
 	case in.PR != nil:
@@ -47,10 +60,19 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	case in.Run != nil:
 		f.Err = "an Actions run link: CI tasks come in milestone 3"
 		return f, nil
+	case other && in.Guidance == "":
+		f.Err = otherAlone(in.Key).Error()
+		return f, nil
 	}
 	var tk *jira.Ticket
 	words := in.Prompt
 	switch {
+	case other:
+		if t, err := e.reg.TaskByKey(ctx, in.Key); err == nil {
+			f.Err = keyRuns{t}.Error()
+			return f, nil
+		}
+		f.NotJira, f.Title, words = in.Key, otherTitle(in), in.Guidance
 	case in.Key != "":
 		words = in.Guidance
 		if t, err := e.reg.TaskByKey(ctx, in.Key); err == nil {
@@ -85,10 +107,13 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	f.Kind, f.KindWhy = PickKind(e.cfg.Factory, tk, words)
 	if login, err := e.operatorLogin(repo.Repo); err == nil {
 		key, summary := in.Key, in.Prompt
-		if tk != nil {
+		switch {
+		case tk != nil:
 			key, summary = tk.Key, tk.Summary
+		case other:
+			summary = in.Guidance
 		}
-		if key == "" || tk != nil {
+		if key == "" || tk != nil || other {
 			f.Branch, _ = e.branchFor(ctx, 0, repo.Repo, login, key, summary)
 		}
 	}

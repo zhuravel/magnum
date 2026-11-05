@@ -12114,10 +12114,11 @@ type PrecheckResult struct {
     the machine's, named by its key); such a failure is the one Why says.
 
 type PreviewPayload struct {
-	Text string
+	Text, Repo string
 }
-    PreviewPayload is a ReqPreview: the new-task screen's text, whose preview
-    the daemon answers as the JSON of a tui.NewTaskForm.
+    PreviewPayload is a ReqPreview: the new-task screen's text and the
+    repository you picked ("" = the one the text tells, as a start's), whose
+    preview the daemon answers as the JSON of a tui.NewTaskForm.
 
 type PromptData struct {
 	TaskID                                                 int64
@@ -12419,13 +12420,14 @@ type StartPayload struct {
 
 	// Has unexported fields.
 }
-    StartPayload is a ReqStart (and the start of the new-task screen): your
-    text, the kind of task you chose ("" = the daemon picks it, PickKind), the
-    repository ("" = the only [[factory.repo]]), and where you asked (Surface,
-    for the record of your input; "" = the CLI). WordsOnly starts a task from
-    your words only: the whole text is the prompt, a key at its start (one Jira
-    does not know) is words, and no key of it is read from Jira as the task's
-    ticket or as a key found in the text.
+    StartPayload is a ReqStart (and the start of the new-task screen):
+    your text, the kind of task you chose ("" = the daemon picks it,
+    PickKind), the repository ("" = the one the text tells: a GitHub link
+    of a [[factory.repo]], a key of the tracker of one, or the only one),
+    and where you asked (Surface, for the record of your input; "" = the CLI).
+    WordsOnly starts a task from your words only: the whole text is the prompt,
+    a key at its start (one Jira does not know) is words, and no key of it is
+    read from Jira as the task's ticket or as a key found in the text.
 
 type StopPayload struct {
 	TaskID  int64
@@ -26546,6 +26548,18 @@ type NewTaskForm struct {
 	// does not know (Err says so): enter then asks to start from your words
 	// only, the key kept as words and never read as the task's ticket.
 	WordsOnly bool
+	// RepoWhy says how the factory chose Repo: "from the EX tracker" (a key
+	// of the tracker of that repository alone), "from the link" (a GitHub
+	// link of it) or "your pick".
+	RepoWhy string
+	// Repos are the factory's repositories, in the config's order: with two
+	// or more the form draws a REPO row, whose key cycles through them, and
+	// with none chosen (Repo empty) it draws that row only, and enter starts
+	// nothing.
+	Repos []string
+	// NotJira is the key the text starts with when its tracker is not Jira:
+	// the task's key, never read from Jira; the task starts from your words.
+	NotJira string
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
 

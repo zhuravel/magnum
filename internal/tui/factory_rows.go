@@ -428,6 +428,18 @@ type NewTaskForm struct {
 	// does not know (Err says so): enter then asks to start from your words
 	// only, the key kept as words and never read as the task's ticket.
 	WordsOnly bool
+	// RepoWhy says how the factory chose Repo: "from the EX tracker" (a key
+	// of the tracker of that repository alone), "from the link" (a GitHub
+	// link of it) or "your pick".
+	RepoWhy string
+	// Repos are the factory's repositories, in the config's order: with two
+	// or more the form draws a REPO row, whose key cycles through them, and
+	// with none chosen (Repo empty) it draws that row only, and enter starts
+	// nothing.
+	Repos []string
+	// NotJira is the key the text starts with when its tracker is not Jira:
+	// the task's key, never read from Jira; the task starts from your words.
+	NotJira string
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
 

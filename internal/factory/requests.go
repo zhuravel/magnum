@@ -364,9 +364,9 @@ func startName(t registry.Task) string {
 }
 
 // previewRequest answers a ReqPreview with the JSON of the new-task form
-// (preview).
+// (previewIn).
 func (e *Engine) previewRequest(ctx context.Context, p PreviewPayload) (string, error) {
-	f, err := e.preview(ctx, p.Text)
+	f, err := e.previewIn(ctx, p.Text, p.Repo)
 	if err != nil {
 		return "", err
 	}
