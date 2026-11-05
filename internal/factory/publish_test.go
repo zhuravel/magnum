@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -309,6 +311,84 @@ func TestADifferentActiveGhAccountStopsThePublishBeforeAnyPush(t *testing.T) {
 	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "alice") || !strings.Contains(got.WaitsWhat, "zhuravel") ||
 		r.remoteHead(task.Branch) != "" || len(r.gh.createCalls()) != 0 {
 		t.Fatalf("task %s waits %q; remote %q; %d PRs", got.State, got.WaitsWhat, r.remoteHead(task.Branch), len(r.gh.createCalls()))
+	}
+}
+
+// A publish that keeps failing for a cause of its own (gh logged out: `gh
+// api user` exits 4 asking for `gh auth login`) is tried again a few times,
+// then the task needs you, naming the cause, with an alert: it is never
+// retried every tick in silence, each try costing GitHub calls. Nothing is
+// pushed or opened meanwhile.
+func TestAPublishWithGhLoggedOutNeedsYouAfterAFewTries(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12368")
+	r.gh.mu.Lock()
+	r.gh.activeErr = errors.New("gh api user: exit status 4: To get started with GitHub CLI, please run:  gh auth login")
+	r.gh.mu.Unlock()
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	for range 12 {
+		r.clock.Add(45 * time.Second)
+		r.tick()
+		if r.reload(task.ID).State == registry.TaskNeedsYou {
+			break
+		}
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "gh auth login") || !strings.Contains(got.WaitsWhat, "5 times") {
+		t.Fatalf("task %s at %s waits %q, want you, the publish's cause named", got.State, got.Stage, got.WaitsWhat)
+	}
+	r.gh.mu.Lock()
+	calls := r.gh.activeCalls
+	r.gh.mu.Unlock()
+	if calls > stageFailLimit {
+		t.Fatalf("gh api user ran %d times, want at most %d", calls, stageFailLimit)
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "alert"), func(s string) bool { return strings.Contains(s, "gh auth login") }) {
+		t.Fatalf("alerts %q, want one naming the cause", r.eventTexts(task.ID, "alert"))
+	}
+	if r.remoteHead(task.Branch) != "" || len(r.gh.createCalls()) != 0 {
+		t.Fatal("the publish pushed or opened a PR while gh was logged out")
+	}
+	r.clock.Add(10 * time.Minute)
+	r.tick()
+	r.gh.mu.Lock()
+	after := r.gh.activeCalls
+	r.gh.mu.Unlock()
+	if after != calls {
+		t.Fatalf("gh api user ran %d more times while the task waited on you", after-calls)
+	}
+}
+
+// The publish's own bound: a publish whose tries keep failing on the
+// network (the infrastructure hold's cause, which the stage's count leaves
+// to the hold) is tried at most stageFailLimit times, at the hold's
+// backoff, then the task needs you naming the effect's last result.
+func TestAPublishThatKeepsFailingOnTheNetworkStopsAfterAFewTries(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12367")
+	r.gh.mu.Lock()
+	r.gh.activeErr = errors.New("gh api user: error connecting to api.github.com: dial tcp: lookup api.github.com: no such host")
+	r.gh.mu.Unlock()
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	for range 40 {
+		if r.reload(task.ID).State == registry.TaskNeedsYou {
+			break
+		}
+		r.clock.Add(2 * time.Minute)
+		r.tick()
+	}
+	got := r.reload(task.ID)
+	r.gh.mu.Lock()
+	calls := r.gh.activeCalls
+	r.gh.mu.Unlock()
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "no such host") || !strings.Contains(got.WaitsWhat, "the publish of") ||
+		calls != stageFailLimit {
+		t.Fatalf("task %s waits %q after %d tries of gh api user, want you after %d, the publish's result named", got.State, got.WaitsWhat,
+			calls, stageFailLimit)
 	}
 }
 

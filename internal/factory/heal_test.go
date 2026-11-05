@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -484,6 +485,76 @@ func TestHerdrDownOpensTheSessionAtMostTwiceAnHour(t *testing.T) {
 	}
 	if got := c.list(); !slices.Equal(got, []int64{task.ID}) {
 		t.Fatalf("after herdr came back the stage ran for %v", got)
+	}
+}
+
+// A stage error that is no infrastructure's (a token without scope, a
+// refusal of the remote's hooks, a diff past execx's cap) is not retried
+// every tick in silence: after stageFailLimit failures in a row of one
+// task's stage, or stageFailSpan of them, the task needs you with the cause
+// and an alert. A pass that goes through starts the count again.
+func TestAStageErrorThatPersistsNeedsYou(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12393", registry.TaskActive, "investigate")
+	flaky := h.task("PR-12395", registry.TaskActive, "investigate")
+	var mu sync.Mutex
+	pass := map[int64]bool{}
+	h.stage(config.FactoryStageAgents, func(_ context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if pass[t.ID] {
+			pass[t.ID] = false
+			return false, nil
+		}
+		// One cause per task: the same failure on two tasks is the
+		// infrastructure hold's (TestTheSameFailureOnTwoTasksHoldsEverything).
+		return false, fmt.Errorf("gh pr create: HTTP 403: Resource not accessible by token %d", t.ID*1000)
+	})
+	for i := 1; i < stageFailLimit; i++ {
+		h.clock.Add(45 * time.Second)
+		if i == 2 {
+			mu.Lock()
+			pass[flaky.ID] = true // its third pass goes through
+			mu.Unlock()
+		}
+		h.tick()
+		if got := h.reload(task.ID); got.State != registry.TaskActive {
+			t.Fatalf("after %d failures the task is %s waiting %q, want still at work", i, got.State, got.WaitsWhat)
+		}
+	}
+	h.clock.Add(45 * time.Second)
+	h.tick()
+	got := h.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "the investigate stage failed 5 times in a row") ||
+		!strings.Contains(got.WaitsWhat, "HTTP 403") {
+		t.Fatalf("after %d failures the task is %s waiting %q, want you, the cause named", stageFailLimit, got.State, got.WaitsWhat)
+	}
+	if !slices.ContainsFunc(h.eventTexts(task.ID, "alert"), func(s string) bool { return strings.Contains(s, "HTTP 403") }) {
+		t.Fatalf("alerts %q, want one naming the cause", h.eventTexts(task.ID, "alert"))
+	}
+	if got := h.reload(flaky.ID); got.State != registry.TaskActive {
+		t.Fatalf("a task whose pass went through between its failures is %s waiting %q, want at work", got.State, got.WaitsWhat)
+	}
+
+	// Failures far apart (a slow poll) need you once they lasted
+	// stageFailSpan, however few.
+	s := newHarness(t)
+	slow := s.task("PR-12394", registry.TaskActive, "investigate")
+	s.stage(config.FactoryStageAgents, func(context.Context, registry.Task, config.FactoryStage) (bool, error) {
+		return false, errors.New("git push: remote rejected: pre-receive hook declined")
+	})
+	for _, step := range []time.Duration{0, 2 * time.Minute, 2 * time.Minute} { // a poll of 2 minutes: no wake
+		s.clock.Add(step)
+		s.tick()
+	}
+	if got := s.reload(slow.ID); got.State != registry.TaskActive {
+		t.Fatalf("after 3 failures in 4 minutes the task is %s waiting %q, want still at work", got.State, got.WaitsWhat)
+	}
+	s.clock.Add(time.Minute)
+	s.tick()
+	if got := s.reload(slow.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "pre-receive hook declined") ||
+		!strings.Contains(got.WaitsWhat, "4 times") {
+		t.Fatalf("after failures for %s the task is %s waiting %q, want you", stageFailSpan, got.State, got.WaitsWhat)
 	}
 }
 

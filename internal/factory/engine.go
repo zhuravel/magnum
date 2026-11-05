@@ -12,6 +12,7 @@ package factory
 // the steps that need it wait.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -249,12 +250,14 @@ type Engine struct {
 	lastAlive time.Time // when the last tick or observe pass ended (wall clock)
 	uncounted bool      // a wake: this tick's failures count none (wake)
 	panics    map[int64]int
-	lastFail  map[int64]string
-	readFails []error
-	inbox     map[int64][]runtime.Event
-	holds     map[string]*Hold
-	blockers  map[string]string
-	recent    map[string]recentFailure
+	lastFail  map[int64]*stageFails
+	// publishFails counts the failed tries of each task's publish effect.
+	publishFails map[int64]publishFail
+	readFails    []error
+	inbox        map[int64][]runtime.Event
+	holds        map[string]*Hold
+	blockers     map[string]string
+	recent       map[string]recentFailure
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte
@@ -372,36 +375,37 @@ func New(d Deps) *Engine {
 	e := &Engine{
 		d: d, cfg: d.Config, reg: d.Registry, log: log,
 		bgCtx: bgCtx, bgCancel: bgCancel,
-		runners:     map[string]stageRunner{},
-		kick:        make(chan struct{}, 1),
-		notify:      ossignal.Notify,
-		stopNotify:  ossignal.Stop,
-		procs:       engine.SystemProcesses(),
-		panics:      map[int64]int{},
-		lastFail:    map[int64]string{},
-		inbox:       map[int64][]runtime.Event{},
-		holds:       map[string]*Hold{},
-		blockers:    map[string]string{},
-		recent:      map[string]recentFailure{},
-		parked:      map[int64]bool{},
-		servers:     map[int64]server{},
-		heavyHeld:   map[int64]*heavySlot{},
-		jiraTries:   map[int64]*jiraTry{},
-		claims:      map[int64]*claimRun{},
-		claimWaits:  map[int64]*claimWait{},
-		held:        map[int64]Copy{},
-		debts:       map[int64]*releaseDebt{},
-		agentRuns:   map[int64]*agentsRun{},
-		run:         Guard(d.Run, d.Config),
-		checks:      map[int64]*headCheck{},
-		checkNotes:  map[int64]string{},
-		checkFails:  map[int64]int{},
-		keptCopies:  map[int64]keptCopy{},
-		keptMem:     map[int64]keptUnwritten{},
-		lockPoll:    specsLockPoll,
-		reviews:     map[int64]*localRound{},
-		magnumNotes: map[int64]string{},
-		roundCap:    localRoundCap,
+		runners:      map[string]stageRunner{},
+		kick:         make(chan struct{}, 1),
+		notify:       ossignal.Notify,
+		stopNotify:   ossignal.Stop,
+		procs:        engine.SystemProcesses(),
+		panics:       map[int64]int{},
+		lastFail:     map[int64]*stageFails{},
+		publishFails: map[int64]publishFail{},
+		inbox:        map[int64][]runtime.Event{},
+		holds:        map[string]*Hold{},
+		blockers:     map[string]string{},
+		recent:       map[string]recentFailure{},
+		parked:       map[int64]bool{},
+		servers:      map[int64]server{},
+		heavyHeld:    map[int64]*heavySlot{},
+		jiraTries:    map[int64]*jiraTry{},
+		claims:       map[int64]*claimRun{},
+		claimWaits:   map[int64]*claimWait{},
+		held:         map[int64]Copy{},
+		debts:        map[int64]*releaseDebt{},
+		agentRuns:    map[int64]*agentsRun{},
+		run:          Guard(d.Run, d.Config),
+		checks:       map[int64]*headCheck{},
+		checkNotes:   map[int64]string{},
+		checkFails:   map[int64]int{},
+		keptCopies:   map[int64]keptCopy{},
+		keptMem:      map[int64]keptUnwritten{},
+		lockPoll:     specsLockPoll,
+		reviews:      map[int64]*localRound{},
+		magnumNotes:  map[int64]string{},
+		roundCap:     localRoundCap,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate
@@ -1036,16 +1040,48 @@ func TaskKey(t registry.Task) string {
 	return "task " + strconv.FormatInt(t.ID, 10)
 }
 
+// A stage that keeps failing for a cause of its own (no infrastructure's)
+// is tried again on each tick, and after stageFailLimit failures in a row,
+// or failures for stageFailSpan, the task needs you with the cause.
+const (
+	stageFailLimit = 5
+	stageFailSpan  = 5 * time.Minute
+)
+
+// stageFails are a task's failures in a row at one stage: how many, since
+// when, and the text of the last one.
+type stageFails struct {
+	stage, text string
+	n           int
+	first       time.Time
+}
+
 // taskFailed records a task's own failure as an `advance` fail event, once
-// per distinct failure in a row.
+// per distinct failure in a row, and counts the failures in a row of its
+// stage: the stageFailLimit-th, or one stageFailSpan after the first, sends
+// the task to you with the cause and an alert (a pass that goes through, or
+// your retry, starts the count again). An error the infrastructure hold
+// covers never comes here (Tick).
 func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 	text := textx.Clip(textx.FirstLine(execx.Redact(f.err.Error())), 300)
-	if e.lastFail[f.task.ID] == text {
+	now := e.now()
+	sf := e.lastFail[f.task.ID]
+	if sf == nil || sf.stage != f.task.Stage {
+		sf = &stageFails{stage: f.task.Stage, first: now}
+		e.lastFail[f.task.ID] = sf
+	}
+	sf.n++
+	if sf.text != text {
+		sf.text = text
+		e.log.Warn("a task's step failed", "task", f.task.ID, "err", f.err)
+		e.event(ctx, f.task.ID, "advance", registry.PhaseFail, text)
+	}
+	if sf.n < stageFailLimit && now.Sub(sf.first) < stageFailSpan {
 		return
 	}
-	e.lastFail[f.task.ID] = text
-	e.log.Warn("a task's step failed", "task", f.task.ID, "err", f.err)
-	e.event(ctx, f.task.ID, "advance", registry.PhaseFail, text)
+	delete(e.lastFail, f.task.ID)
+	e.toOperator(ctx, f.task, fmt.Sprintf("the %s stage failed %d times in a row: %s", stageWhat(cmp.Or(f.task.Stage, "first")), sf.n, text),
+		"a stage that keeps failing")
 }
 
 // stageWhat is a stage's name as a wait says it ("local_review": "local

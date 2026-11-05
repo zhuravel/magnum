@@ -32,11 +32,19 @@ type fakeGitHub struct {
 	edit      func(*PRView)
 	createErr error
 	active    string
+	// activeErr is what ActiveLogin fails with (gh logged out), and
+	// activeCalls counts its calls.
+	activeErr   error
+	activeCalls int
 }
 
 func (f *fakeGitHub) ActiveLogin(context.Context, string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.activeCalls++
+	if f.activeErr != nil {
+		return "", f.activeErr
+	}
 	return cmp.Or(f.active, "zhuravel"), nil
 }
 

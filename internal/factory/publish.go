@@ -140,11 +140,20 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		if eerr := e.reg.EndEffect(ctx, key, registry.EffectFail, why); eerr != nil {
 			e.log.Warn("end the publish effect", "task", t.ID, "err", eerr)
 		}
-		if err != nil {
-			return false, err
+		if err == nil {
+			delete(e.publishFails, t.ID)
+			return false, e.stageFailed(ctx, t, needsYou{problem})
 		}
-		return false, e.stageFailed(ctx, t, needsYou{problem})
+		// The effect's own bound, whatever the cause (the network's too, which
+		// the stage's count leaves to the infrastructure hold): each try of a
+		// publish costs GitHub calls.
+		if n := e.publishFailed(t.ID, key); n >= stageFailLimit {
+			delete(e.publishFails, t.ID)
+			return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("the publish of %s failed %d times in a row: %s", short(sha), n, why)})
+		}
+		return false, err
 	}
+	delete(e.publishFails, t.ID)
 	if err := e.reg.LinkPR(ctx, registry.PRLink{TaskID: t.ID, Repo: t.Repo, Number: view.Number, Branch: pub.branch, OpenedHead: view.HeadSHA,
 		ApprovedHead: sha}); err != nil {
 		return false, err
@@ -153,6 +162,24 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return false, err
 	}
 	return e.finishPublish(ctx, t, sha)
+}
+
+// publishFail is how many tries in a row of the publish effect key failed.
+type publishFail struct {
+	key string
+	n   int
+}
+
+// publishFailed counts a failed try of task id's publish effect key and
+// returns the tries in a row that failed (a new key starts again).
+func (e *Engine) publishFailed(id int64, key string) int {
+	pf := e.publishFails[id]
+	if pf.key != key {
+		pf = publishFail{key: key}
+	}
+	pf.n++
+	e.publishFails[id] = pf
+	return pf.n
 }
 
 // publishing is what a publish pushes and opens, as your push decided it:

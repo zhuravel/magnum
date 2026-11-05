@@ -14989,6 +14989,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   away). Tests: TestAMovedHeadGoesThroughTheChecksToANewCard, TestPushIsRefusedWhenTheBranchMovedAfterTheCard,
   TestTheSameConflictAtTheSameBaseTwiceNeedsYou and TestDropWorksAfterTheCardChanged (now stranded by a
   missing PR body, since a moved branch no longer strands a card).
+- **A stage that keeps failing needs you after 5 tries** (2026-11-05, the final review). A stage error
+  that `infraCause` does not name was written once as an `advance` fail event, and the task stayed at
+  work. The next tick ran the stage again, every 45 seconds, with no wait and no alert. A publish with gh
+  logged out ran `gh api user`, `git ls-remote` and `gh pr list` on each try. Now `taskFailed` counts the
+  failures in a row of a task's stage. The limit is `stageFailLimit` (5) failures or `stageFailSpan` (5
+  minutes) of them. Then the task needs you with the cause ("the <stage> stage failed 5 times in a row:
+  <cause>") and an alert. A pass that goes through, your retry or a stop starts the count again. A held
+  pass does not. The publish has its own bound in `runPublish`: 5 failed tries of its effect in a row need
+  you with the effect's result, whatever the cause. A network failure is the infrastructure hold's for the
+  stage count, but each try of a publish costs GitHub calls. The counts live in memory, so a restart
+  starts them again. Tests: TestAStageErrorThatPersistsNeedsYou,
+  TestAPublishWithGhLoggedOutNeedsYouAfterAFewTries and
+  TestAPublishThatKeepsFailingOnTheNetworkStopsAfterAFewTries.
 
 ## Learned rules
 

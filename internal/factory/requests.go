@@ -302,6 +302,8 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 	e.releaseCopy(ctx, t, "stopped")
 	delete(e.jiraTries, t.ID)
 	delete(e.panics, t.ID)
+	delete(e.lastFail, t.ID)
+	delete(e.publishFails, t.ID)
 	delete(e.inbox, t.ID)
 	delete(e.agentRuns, t.ID)
 	return nil
@@ -436,6 +438,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	}
 	delete(e.panics, t.ID)
 	delete(e.lastFail, t.ID)
+	delete(e.publishFails, t.ID)
 	e.checksMu.Lock()
 	delete(e.checkFails, t.ID)
 	e.checksMu.Unlock()

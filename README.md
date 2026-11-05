@@ -3854,7 +3854,11 @@ The daemon heals the usual faults by itself. A panic stops only its task's step;
 sends it to you. After the Mac slept, every agent turn's deadline moves by the gap, and the failures of the
 first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MySQL ping, or the same failure
 on two tasks within 10 minutes holds every stage at no cost to the tasks, with tries after 2, 4, 8, 16 and
-then every 30 minutes; a hold that lasts 30 minutes needs you. While its herdr session does not answer, the
+then every 30 minutes; a hold that lasts 30 minutes needs you. A stage that keeps failing for a cause of its own (gh
+logged out, a token without scope, a push the remote's hooks refuse) is tried again on each tick, and after 5 failures
+in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
+row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
+own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the
 factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
 hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops
 idle servers; a disk below half of `min_free_disk_gb` needs you. At most `heavy_stages` heavy stages (local
