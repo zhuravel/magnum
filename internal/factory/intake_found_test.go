@@ -118,25 +118,41 @@ func TestTheTextOfAKeyFoundInTheTextIsNeverAStepStart(t *testing.T) {
 	}
 }
 
-// A found key follows the one-key-one-task rule as a key at the start does: a
-// start whose text names a key that a task holds returns that task, reads
-// nothing from Jira and makes no task.
-func TestAKeyFoundInTheTextThatHasATaskReturnsThatTask(t *testing.T) {
+// A key found in the text that a task holds is a word of the text ("same
+// bug as PR-12345 but in the refund path" while PR-12345 is at work): the
+// start goes on from the words, never read from Jira for that key, with a
+// note naming the holder in the answer, the task's events and the preview.
+// Only a key at the start that a task holds is refused (it returns that
+// task, TestStartForAKeyThatRunsReturnsTheExistingTask).
+func TestAKeyFoundInTheTextThatHasATaskStaysAWord(t *testing.T) {
 	r := newIntakeRig(t)
 	first := r.mustStart("PR-12345")
-	reads := r.site.reads()
+	note := fmt.Sprintf("PR-12345 already runs as task %d; it stays a word of your text", first.ID)
 
 	for _, text := range []string{foundText, "the refund of PR-12399 and the reminder of PR-12345"} {
-		got, err := r.start(text)
-		if !errors.Is(err, ErrKeyRuns) || err.Error() != fmt.Sprintf("PR-12345 already runs as task %d", first.ID) || got.ID != first.ID {
-			t.Fatalf("a start of %q = task %d, %v; want task %d with ErrKeyRuns", text, got.ID, err, first.ID)
+		r.site.mu.Lock()
+		r.site.asked = nil
+		r.site.mu.Unlock()
+		got, gotNote, err := r.e.startNoted(r.ctx, StartPayload{Text: text})
+		r.e.waitBackground()
+		if err != nil || got.ID == first.ID || got.JiraKey != "" || got.Prompt != text || !strings.Contains(gotNote, note) {
+			t.Fatalf("a start of %q = %+v, note %q, %v; want a prompt task of the words, the holder noted", text, got, gotNote, err)
+		}
+		r.site.mu.Lock()
+		asked := slices.Clone(r.site.asked)
+		r.site.mu.Unlock()
+		if slices.Contains(asked, "PR-12345") {
+			t.Fatalf("a start of %q read the held key from Jira: %v", text, asked)
+		}
+		if !slices.ContainsFunc(r.eventTexts(got.ID, "intake"), func(s string) bool { return strings.Contains(s, note) }) {
+			t.Fatalf("events %q of %q, want the holder noted", r.eventTexts(got.ID, "intake"), text)
 		}
 	}
-	if n := len(r.tasks()); n != 1 {
-		t.Fatalf("%d tasks, want 1: no new row", n)
+	if _, err := r.start("PR-12345 the refund path"); !errors.Is(err, ErrKeyRuns) {
+		t.Fatalf("a start with the held key first = %v, want ErrKeyRuns", err)
 	}
-	if n := r.site.reads(); n != reads {
-		t.Fatalf("a start for a key that runs read Jira %d times more", n-reads)
+	if f, _ := r.e.preview(r.ctx, "fix the expiry date in PR-12345, the refund path only"); f.Kind == "" || !strings.Contains(f.Err, note) {
+		t.Fatalf("the preview of a text naming a held key %+v, want a start from the words, the holder noted", f)
 	}
 }
 
@@ -325,9 +341,13 @@ func TestAKeyFoundInTheTextWaitsForJiraLikeAKeyAtTheStart(t *testing.T) {
 	if ins, _ := r.reg.Inputs(r.ctx, second.ID); len(ins) != 1 {
 		t.Fatalf("inputs %+v, want the one start", ins)
 	}
-	if _, err := r.start(foundText); !errors.Is(err, ErrKeyRuns) {
-		t.Fatalf("a second start of the text Jira answered for = %v, want ErrKeyRuns", err)
+	// Its key runs now: a second start of the text goes on from the words,
+	// the holder noted (TestAKeyFoundInTheTextThatHasATaskStaysAWord).
+	if again, note, err := r.e.startNoted(r.ctx, StartPayload{Text: foundText}); err != nil || again.JiraKey != "" ||
+		!strings.Contains(note, fmt.Sprintf("PR-12345 already runs as task %d", second.ID)) {
+		t.Fatalf("a second start of the text Jira answered for = %+v, %q, %v; want a prompt task, the holder noted", again, note, err)
 	}
+	r.e.waitBackground()
 }
 
 // The kind you chose stays for a key found in the text, at once and after a
@@ -657,9 +677,10 @@ func TestAFoundKeyThatJiraAnswersTooOftenOrCannotBeReachedWaits(t *testing.T) {
 			t.Fatalf("curl exit %d: task %+v, want waiting on Jira", exit, got)
 		}
 	}
-	// A key at the start keeps today's meaning: only exits 6, 7 and 28 and a 5xx are silence.
-	if _, err := newIntakeRigDown(t, 35).start("PR-12345"); err == nil {
-		t.Fatal("a key at the start with curl exit 35 made a task, want today's error")
+	// A key at the start waits them out the same way (the final review's
+	// IN M10: it was refused before).
+	if got, err := newIntakeRigDown(t, 35).start("PR-12345"); err != nil || got.State != registry.TaskWaiting || got.WaitsWho != "Jira" {
+		t.Fatalf("a key at the start with curl exit 35 = %+v, %v; want a task waiting on Jira", got, err)
 	}
 }
 
@@ -913,7 +934,7 @@ func TestThePreviewSaysTheKeyWasFoundInTheText(t *testing.T) {
 	}
 
 	first := r.mustStart("PR-12345")
-	if f, _ = r.e.preview(r.ctx, foundText); f.Err != fmt.Sprintf("PR-12345 already runs as task %d", first.ID) {
+	if f, _ = r.e.preview(r.ctx, foundText); f.Err != fmt.Sprintf("PR-12345 already runs as task %d; it stays a word of your text", first.ID) || f.Kind == "" {
 		t.Fatalf("preview of a key that runs %+v", f)
 	}
 	r.clock.Add(previewOverlapTTL + time.Second) // the preview keeps an answer of Jira that long

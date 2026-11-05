@@ -79,7 +79,7 @@ func (e *Engine) keyCommits(ctx context.Context, t registry.Task, clone string) 
 	if t.Branch != "" {
 		args = append(args, "--exclude=refs/heads/"+t.Branch, "--exclude=refs/remotes/origin/"+t.Branch)
 	}
-	args = append(args, "--all", "--fixed-strings", "--grep="+t.JiraKey, "--format=%h%x09%s", "-n", strconv.Itoa(overlapCommits))
+	args = append(args, "--all", "--extended-regexp", "--grep="+wholeKeyRE(t.JiraKey), "--format=%h%x09%s", "-n", strconv.Itoa(overlapCommits))
 	res, err := e.d.Run.Run(ctx, execx.Cmd{Name: "git", Args: args, Dir: clone, Timeout: overlapTimeout,
 		Label: "git log --grep " + t.JiraKey + " (overlap)"})
 	if err != nil {
@@ -99,6 +99,22 @@ func (e *Engine) keyCommits(ctx context.Context, t registry.Task, clone string) 
 		verb = "names"
 	}
 	return fmt.Sprintf("%s %s %s (newest %s)", textx.Count(len(shas), "commit", "commits"), verb, t.JiraKey, shas[0]), nil
+}
+
+// wholeKeyRE is the POSIX extended regexp of a line of a commit message
+// that names key whole: no letter or digit before it, no digit after it, so
+// PR-123 is not found in PR-1234 nor in XPR-123. git matches it line by
+// line, and the bracket expressions are POSIX's, which every git's regex
+// library reads (no \b). A metacharacter of the key is escaped.
+func wholeKeyRE(key string) string {
+	var b strings.Builder
+	for _, r := range key {
+		if strings.ContainsRune(`.[]()*+?{}|^$\`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return "(^|[^[:alnum:]])" + b.String() + "([^[:digit:]]|$)"
 }
 
 // ghPR is a PR as gh pr list --json prints it.

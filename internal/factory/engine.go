@@ -725,6 +725,9 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 			return fmt.Errorf("task %d: the %s kind has no stage %q", t.ID, t.Kind, t.Stage)
 		}
 	} else {
+		if wrote := e.restoreData(ctx, t); !wrote {
+			return nil // writeData sent the task to you with the cause
+		}
 		first := kind.Stages[0].Name
 		if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
 			u.Set("stage", first)

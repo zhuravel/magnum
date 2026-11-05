@@ -1026,8 +1026,12 @@ func TestAnAskOfTheTicketsReporterTakesTheirWholeName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, reporterFile), []byte("Rev Ann\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.e.answer(h.ctx, AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "ask:Rev Ann"}, Surface: "screen"}); err != nil {
+	reply, err := h.e.answerRequest(h.ctx, AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "ask:Rev Ann"}, Surface: "screen"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(reply, "question 1 asked of Rev Ann:") { // the reply reads the ask as the files do
+		t.Errorf("the reply %q, want it to name the reporter whole", reply)
 	}
 	asks, err := readAsksIn(dir)
 	if err != nil {

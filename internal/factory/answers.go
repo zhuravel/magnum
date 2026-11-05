@@ -533,8 +533,9 @@ func (e *Engine) answerRequest(ctx context.Context, p AnswerPayload) (string, er
 	var parts []string
 	n := 0
 	var asked []string
+	reporter := readReporter(e.d.Layout.FactoryTaskDir(t.ID))
 	for _, idx := range slices.Sorted(maps.Keys(p.Answers)) {
-		login, _, ok := parseAsk(p.Answers[idx])
+		login, _, ok := parseAskOf(p.Answers[idx], reporter) // as answer read it: a reporter by their whole name
 		if !ok {
 			n++
 			continue

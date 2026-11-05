@@ -187,11 +187,22 @@ func previewLinks(text, trackers string) []tui.FormLink {
 // words", as f.Err on the JIRA line, in the note of the one key Jira knows
 // beside it, or as f.Err under the several keys.
 func (e *Engine) previewFound(ctx context.Context, f *tui.NewTaskForm, in StartInput) (tk *jira.Ticket, stop bool) {
-	if t, err := e.holderOf(ctx, in.Found); err == nil {
-		f.Err = keyRuns{t}.Error()
+	free, held, err := e.freeFound(ctx, in.Found)
+	if err != nil {
+		f.Err = err.Error()
 		return nil, true
 	}
-	known, refused, err := e.readFound(ctx, in.Found, e.previewJira(ctx))
+	if len(held) > 0 { // a key a task holds is a word of the text: the preview says whose
+		defer func() {
+			switch {
+			case f.Jira != nil:
+				f.Jira.Found += "; " + held[0]
+			case f.Err == "":
+				f.Err = held[0]
+			}
+		}()
+	}
+	known, refused, err := e.readFound(ctx, free, e.previewJira(ctx))
 	switch {
 	case err != nil && ctx.Err() != nil: // the request was cancelled
 		f.Err = err.Error()

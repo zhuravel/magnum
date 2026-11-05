@@ -15053,6 +15053,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   to `EventBlocked`. The task then went to NEEDS YOU with "a dialog the factory does not answer". Now
   `blocked` pauses on `HealthOverloaded` as it does on a usage limit and a login, so the stage waits with
   the reason at no cost. Test: TestAnOverloadOnABlockedScreenPauses.
+- **Intake's small fixes of the final review** (2026-11-05). A key found in a text that a task holds is a
+  word of the text. The start goes on from the words and reads that key from no Jira. Its answer, the
+  task's events and the preview note the holder. The note is
+  `PR-12345 already runs as task 7; it stays a word of your text`.
+  Only a key at the start that a task holds still refuses a start. A task that waited for Jira and whose
+  key got a task since still needs you (the ruling of 16c). For a key at the start, a 429 is now silence,
+  as for a found key. So is any curl that ran and did not reach Jira. The task waits for Jira, where the
+  start was refused. A curl that did not run is no silence. The overlap's commits name the key whole
+  (`--extended-regexp` with POSIX bracket expressions, no `\b`), so PR-123 never counts PR-1234. The work
+  off the loop writes what its read returned on a context that the drain does not cancel. So the question
+  which Jira issue a prompt is, and the overlap event, are not lost to a drain. A `prompt.md` or a
+  `guidance.md` whose write failed is written again from the task's row before its first stage. The reply
+  to an answer names a reporter asked by their whole name, as the files do (`parseAskOf`). Tests:
+  TestAKeyFoundInTheTextThatHasATaskStaysAWord, TestAKeyAtTheStartWaitsOutARateLimitAndAnUnreachableJira,
+  TestTheOverlapCountsTheCommitsOfTheWholeKeyOnly, TestADrainKeepsTheQuestionASearchReturnedFor,
+  TestAMissingPromptOrGuidanceIsWrittenAgainBeforeTheFirstStage and
+  TestAnAskOfTheTicketsReporterTakesTheirWholeName.
 
 ## Learned rules
 

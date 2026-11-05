@@ -3642,7 +3642,8 @@ creates the branch. A task starts at once, or waits queued while memory is full
 (`copy: all 3 busy`), and starts on the first tick with room, oldest first. A task from your words asks, as
 its first question, which Jira issue it is: the 3 best title matches of a Jira search on its first words,
 and "no issue"; the best match is recommended, and "no issue" when no title shares a word. While Jira does
-not answer (curl exit 6, 7 or 28, HTTP 5xx) the task waits, `Jira: start when Jira answers`, at no cost,
+not answer (curl's timeout or any other failure of curl to reach Jira, HTTP 5xx, a 429) the task waits, `Jira: start
+when Jira answers`, at no cost,
 tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours (a tick makes at most 3 such
 tries, oldest task first, and none after one Jira did not answer, so a restart in an outage holds a tick for one read
 and the tries stay a tick apart); an unknown key
@@ -3651,7 +3652,8 @@ refusal makes no task (a key found in the middle of your text is never one: what
 pick), which follows the ticket's type when Jira answers unless you chose it, and a branch named by the key
 (`zhuravel-PR-12345`), which the summary's words join when Jira answers unless the branch exists already. After a key's start has
 answered, the daemon reads an overlap line, off its loop, into the task's events: the commits that name
-the key on any branch but the task's own (`git log --all --grep` in the main clone), the PRs that name it
+the key whole on any branch but the task's own (`git log --all --extended-regexp --grep` in the main clone: PR-123
+never counts PR-1234), the PRs that name it
 and, once its report names the files, the open PRs that change them (`gh pr list`, as your gh login). The
 line is advisory: it never stops a task.
 
@@ -3664,8 +3666,11 @@ Any other refusal of a found key (a 403, a 401, a missing token file, any answer
 task goes on from your words, its events carry `Jira refused PR-12345: <cause>; starts from your words` (`; it stays a
 word of your text` beside a key Jira knows), the answer to `magnum factory start` repeats it, and the preview says so
 on the JIRA line before you confirm; a broken Jira setup never blocks a prompt that holds a word such as `UTF-8`. Only a
-key at the start of the text keeps the error. For a found key, silence is more than for a key at the start: curl
-exits 6, 7 and 28, a 5xx, a 429, any other failure to reach Jira, and the 20 seconds running out. While Jira does not
+key at the start of the text keeps the error. For a found key, silence is as for a key at the start (curl's timeout
+or any other failure to reach Jira, a 5xx, a 429) and the 20 seconds running out. A found key that a task holds is a
+word of your text: the start goes on from your words, never reads it from Jira, and says whose it is (`PR-12345
+already runs as task 7; it stays a word of your text`, in its answer, the task's events and the preview); only a key at
+the start that a task holds refuses the start. While Jira does not
 answer, the task waits, `Jira: start when Jira answers`, as a task from your words that holds no key (none is known yet)
 with a kind and a branch from your words; when Jira answers, the one key it knows links to the task, which starts as a
 key task with the whole text as its guidance and the branch named by the key and the summary, none sends it on from your

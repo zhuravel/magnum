@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -221,43 +222,60 @@ func (e *Engine) startNoted(ctx context.Context, p StartPayload) (registry.Task,
 	if p.Kind != "" && !hasKind(e.cfg.Factory, p.Kind) {
 		return registry.Task{}, "", fmt.Errorf("no kind of task %q: one of %s", p.Kind, strings.Join(slices.Sorted(maps.Keys(e.cfg.Factory.Kinds)), ", "))
 	}
-	keys := in.Found
 	if e.d.Jira == nil { // nothing reads a key of the words: they are words
-		keys = nil
+		in.Found = nil
 	}
+	var held []string // the notes of the found keys a task holds: words of the text
 	if in.Key != "" {
-		keys = []string{in.Key}
-	}
-	if t, err := e.holderOf(ctx, keys); err == nil {
-		return t, "", keyRuns{t}
-	} else if !errors.Is(err, registry.ErrNotFound) {
+		if t, err := e.reg.TaskByKey(ctx, in.Key); err == nil {
+			return t, "", keyRuns{t}
+		} else if !errors.Is(err, registry.ErrNotFound) {
+			return registry.Task{}, "", err
+		}
+	} else if in.Found, held, err = e.freeFound(ctx, in.Found); err != nil {
 		return registry.Task{}, "", err
 	}
 	login, err := e.operatorLogin(repo.Repo)
 	if err != nil {
 		return registry.Task{}, "", err
 	}
+	var t registry.Task
+	var note string
 	switch {
 	case in.Key != "":
-		t, err := e.startKey(ctx, p, repo, login, in)
-		return t, "", err
-	case len(keys) > 0:
-		return e.startFound(ctx, p, repo, login, in)
+		t, err = e.startKey(ctx, p, repo, login, in)
+	case len(in.Found) > 0:
+		t, note, err = e.startFound(ctx, p, repo, login, in)
+	default:
+		t, err = e.startPrompt(ctx, p, repo, login, in, nil)
 	}
-	t, err := e.startPrompt(ctx, p, repo, login, in, nil)
-	return t, "", err
-}
-
-// holderOf is the task that holds the first of keys that a task holds (at
-// most foundReads of them), registry.ErrNotFound when none does.
-func (e *Engine) holderOf(ctx context.Context, keys []string) (registry.Task, error) {
-	for _, k := range keys[:min(len(keys), foundReads)] {
-		t, err := e.reg.TaskByKey(ctx, k)
-		if !errors.Is(err, registry.ErrNotFound) {
-			return t, err
+	if t.ID > 0 {
+		for _, h := range held {
+			e.event(ctx, t.ID, "intake", registry.PhaseInfo, h)
 		}
 	}
-	return registry.Task{}, registry.ErrNotFound
+	return t, strings.Join(slices.DeleteFunc(append(held, note), func(s string) bool { return s == "" }), ". "), err
+}
+
+// freeFound splits the keys found in a text (StartInput.Found) into those
+// no task holds, which a start reads from Jira, and the notes of those a
+// task holds ("PR-12345 already runs as task 7; it stays a word of your
+// text"): a word of the text naming work that runs is no reason to refuse
+// the start, which goes on from the words. Only a key at the start that a
+// task holds refuses a start (keyRuns).
+func (e *Engine) freeFound(ctx context.Context, found []string) (free, held []string, err error) {
+	for _, k := range found {
+		t, err := e.reg.TaskByKey(ctx, k)
+		switch {
+		case errors.Is(err, registry.ErrNotFound):
+			free = append(free, k)
+		case err != nil:
+			return nil, nil, err
+		default:
+			held = append(held, keyRuns{t}.Error()+"; "+refusedBeside)
+		}
+	}
+	return free, held, nil
 }
 
 // startRepo is the repository of a start: the [[factory.repo]] named, or
@@ -365,8 +383,11 @@ func (e *Engine) branchExists(ctx context.Context, repo, b string) bool {
 	return false
 }
 
-// jiraDown reports whether err is Jira not answering (curl exit 6, 7 or
-// 28, HTTP 5xx), which a task waits out, not a refusal.
+// jiraDown reports whether err is Jira not answering, which a task waits
+// out, not a refusal: no answer in time (curl exit 28), curl that ran and
+// did not reach Jira (DNS, the connection, TLS: exit 6, 7, 35 and the
+// others), an HTTP 5xx, or a 429 (Jira asks to wait), as a key found in a
+// text waits them out (foundSilent). A curl that did not run is no silence.
 func jiraDown(err error) bool {
 	je, ok := errors.AsType[*jira.Error](err)
 	if !ok {
@@ -376,9 +397,9 @@ func jiraDown(err error) bool {
 	case jira.ClassTimeout:
 		return true
 	case jira.ClassUnreachable:
-		return je.Code == 6 || je.Code == 7
+		return je.Code > 0
 	case jira.ClassStatus:
-		return je.Code >= 500
+		return je.Code >= 500 || je.Code == http.StatusTooManyRequests
 	}
 	return false
 }
@@ -698,6 +719,26 @@ func (e *Engine) recordStart(ctx context.Context, t registry.Task, p StartPayloa
 	}
 }
 
+// restoreData writes again, from task t's row, a data file of its start
+// that is missing (one whose write failed sent the task to you, and your
+// retry let it go on): prompt.md from its text, guidance.md from its
+// guidance, so its first stage's agents never start without them. It
+// reports whether every file is there; a write that fails again sends the
+// task to you (writeData).
+func (e *Engine) restoreData(ctx context.Context, t registry.Task) bool {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	for _, f := range []struct{ kind, name, text string }{{"ticket", "prompt.md", t.Prompt}, {"guidance", "guidance.md", t.Guidance}} {
+		if strings.TrimSpace(f.text) == "" || fsx.Exists(filepath.Join(dir, f.name)) {
+			continue
+		}
+		if err := e.writeData(ctx, t, f.kind, f.name, []byte(f.text+"\n")); err != nil {
+			return false
+		}
+		e.event(ctx, t.ID, "intake", registry.PhaseInfo, "wrote "+f.name+" again from the task before its first stage")
+	}
+	return true
+}
+
 // writeTicket writes ticket.md, the ticket as the agents read it, and
 // beside it the ticket's reporter (reporterFile), whom the question card
 // offers to ask; a ticket without one removes it. ticket.md never has it.
@@ -797,12 +838,14 @@ func scrubbed(text string) string {
 // files: the report names them later) off the loop, after the task exists,
 // within overlapBound, and records it as an advisory event: it never delays
 // the start's answer. A read that failed is logged and recorded, and stops
-// nothing.
+// nothing. What the read returned is written whatever the drain does
+// meanwhile (context.WithoutCancel), and the drain waits for it.
 func (e *Engine) noteOverlap(_ context.Context, t registry.Task) {
 	e.goBackground("the overlap line", func(ctx context.Context) {
 		rctx, cancel := context.WithTimeout(ctx, overlapBound)
 		defer cancel()
 		line, err := e.Overlap(rctx, t, nil)
+		ctx = context.WithoutCancel(ctx) // the read returned: its result is written, a drain or not
 		if line != "" {
 			e.event(ctx, t.ID, "overlap", registry.PhaseInfo, line)
 		}
@@ -820,7 +863,9 @@ func (e *Engine) noteOverlap(_ context.Context, t registry.Task) {
 // with no match, or a search that failed, "no issue" is. The question is
 // revision 1 of the task's questions; the gate's first batch keeps it.
 // The search runs off the loop, within searchBound: the start answers
-// first. Without Jira, nothing is asked.
+// first, and the question is stored whatever a drain does once the search
+// returned (it is the prompt's first question: nothing asks it again).
+// Without Jira, nothing is asked.
 func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string) {
 	if e.d.Jira == nil {
 		return
@@ -829,7 +874,7 @@ func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string
 		sctx, cancel := context.WithTimeout(ctx, searchBound)
 		defer cancel()
 		hits, err := e.d.Jira.Search(sctx, prompt, issueSearch)
-		e.storeWhichIssue(ctx, t, prompt, hits, err)
+		e.storeWhichIssue(context.WithoutCancel(ctx), t, prompt, hits, err)
 	})
 }
 

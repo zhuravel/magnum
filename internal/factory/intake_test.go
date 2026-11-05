@@ -37,6 +37,10 @@ type jiraSite struct {
 	asked    []string       // the keys of the issue reads
 	searched []string       // the JQL of the searches
 	refused  map[string]int // an HTTP status per key, which its read answers with
+	// searchGate, set before any search, holds each search until it closes;
+	// searching gets a value as one starts to wait.
+	searchGate chan struct{}
+	searching  chan struct{}
 }
 
 const jiraTestSite = "https://example.atlassian.net"
@@ -62,6 +66,10 @@ func searchAnswer(issues ...[2]string) string {
 }
 
 func (s *jiraSite) curl(c execx.Cmd) (execx.Result, error) {
+	if s.searchGate != nil && strings.Contains(string(c.Stdin), "/rest/api/3/search/jql") {
+		s.searching <- struct{}{}
+		<-s.searchGate
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -417,6 +425,35 @@ func TestARestartReadsTheWaitingKeysAFewATick(t *testing.T) {
 	}
 }
 
+// A key at the start waits out a 429 (Jira asks to wait) and any other
+// failure of curl to reach Jira, as a key found in the text does: the task
+// waits for Jira and starts when it answers, where the start was refused.
+func TestAKeyAtTheStartWaitsOutARateLimitAndAnUnreachableJira(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.refuse("PR-12345", 429)
+	limited, err := r.start("PR-12345 the advocates only")
+	if err != nil || limited.State != registry.TaskWaiting || limited.WaitsWho != "Jira" {
+		t.Fatalf("a start under Jira's rate limit = %+v, %v; want a task waiting for Jira", limited, err)
+	}
+	r.site.setDown(35) // curl: a TLS handshake that failed
+	unreachable, err := r.start("PR-12346")
+	if err != nil || unreachable.State != registry.TaskWaiting || unreachable.WaitsWho != "Jira" {
+		t.Fatalf("a start with Jira unreachable = %+v, %v; want a task waiting for Jira", unreachable, err)
+	}
+	r.site.setDown(0)
+	r.site.mu.Lock()
+	delete(r.site.refused, "PR-12345")
+	r.site.mu.Unlock()
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.e.waitBackground()
+	for _, w := range []registry.Task{limited, unreachable} {
+		if got := r.reload(w.ID); got.State != registry.TaskActive {
+			t.Fatalf("%s is %s waiting %q once Jira answered, want started", w.JiraKey, got.State, got.WaitsWhat)
+		}
+	}
+}
+
 // A task that waits for Jira has a kind from its start: the one you chose,
 // or the one your words after the key pick (else the default), so a task
 // that went to you and back starts its kind's first stage. When Jira
@@ -701,6 +738,31 @@ func TestABranchYourCloneHasGetsANameOfItsOwn(t *testing.T) {
 // A prompt's start writes your words to prompt.md, the task's data file in
 // place of a ticket, records them as the task's text, and names the branch
 // after your login and the prompt's first words.
+// A data file that failed to write (the task needed you, and your retry
+// let it go on) is written again from the task's row before its first
+// stage: prompt.md from its text, guidance.md from its guidance, so the
+// first stage's agents never start without them.
+func TestAMissingPromptOrGuidanceIsWrittenAgainBeforeTheFirstStage(t *testing.T) {
+	r := newIntakeRig(t)
+	words := r.mustStart("Rename the referral helper in the checkout, and its specs.")
+	keyed := r.mustStart("PR-12345 the advocates only")
+	for _, f := range []struct {
+		task registry.Task
+		name string
+	}{{words, "prompt.md"}, {keyed, "guidance.md"}} {
+		if err := os.Remove(filepath.Join(r.layout.FactoryTaskDir(f.task.ID), f.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.tick()
+	if got := r.taskFile(words.ID, "prompt.md"); got != words.Prompt+"\n" {
+		t.Errorf("prompt.md %q, want the task's text again", got)
+	}
+	if got := r.taskFile(keyed.ID, "guidance.md"); got != "the advocates only\n" {
+		t.Errorf("guidance.md %q, want the task's guidance again", got)
+	}
+}
+
 func TestStartFromAPromptWritesPromptMD(t *testing.T) {
 	r := newIntakeRig(t)
 	text := "Rename the referral helper in the checkout, and its specs.\nKeep the old name as an alias."
@@ -739,6 +801,35 @@ func TestStartFromAPromptWritesPromptMD(t *testing.T) {
 // options are the 3 best title matches of a search on its first words and
 // "no issue", and the best match is recommended; with no match, "no
 // issue" is.
+// The work off the loop writes what it read even when a drain cancels the
+// engine's context as the read returns: the question which Jira issue a
+// prompt is is stored, never lost to the drain (it is the prompt's first
+// question, which nothing would ask again).
+func TestADrainKeepsTheQuestionASearchReturnedFor(t *testing.T) {
+	r := newIntakeRig(t)
+	r.site.search = searchAnswer([2]string{"PR-12351", "Weekly digest uses the wrong week"})
+	r.site.searchGate, r.site.searching = make(chan struct{}), make(chan struct{}, 1)
+	task, err := r.start("The weekly digest shows last week's numbers.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-r.site.searching
+	drained := make(chan struct{})
+	go func() {
+		r.e.stopBackground() // the drain: the engine's context is cancelled, its work waited for
+		close(drained)
+	}()
+	for r.e.bgCtx.Err() == nil {
+		time.Sleep(time.Millisecond)
+	}
+	close(r.site.searchGate) // Jira answers just as the drain begins
+	<-drained
+	qs, err := r.reg.Questions(r.ctx, task.ID)
+	if err != nil || len(qs) != 1 || qs[0].Text != whichIssue {
+		t.Fatalf("questions %+v (%v) after the drain, want the question which issue it is", qs, err)
+	}
+}
+
 func TestAFreePromptAsksWhichJiraIssueWithARecommendedMatch(t *testing.T) {
 	r := newIntakeRig(t)
 	r.site.search = searchAnswer(
