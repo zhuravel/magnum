@@ -108,7 +108,7 @@ func (h *harness) attempts(id int64) []registry.Attempt {
 // fullPromptData is prompt data with every field set.
 func fullPromptData() PromptData {
 	dir := "/state/factory/tasks/7"
-	return PromptData{TaskID: 7, Key: "PR-12345", Kind: "bug", Repo: "example/shop",
+	return PromptData{TaskID: 7, Key: "PR-12345", Kind: "bug", RedRun: true, Repo: "example/shop",
 		Branch: "zhuravel-PR-12345-copy", Base: "master", Copy: "/copies/shop1", TaskDir: dir, Ticket: dir + "/ticket.md",
 		Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md", Answers: dir + "/answers.md", Rules: dir + "/rules.md",
 		Findings: dir + "/findings-fx-repro.md", Report: dir + "/report.md", Questions: dir + "/questions.json",

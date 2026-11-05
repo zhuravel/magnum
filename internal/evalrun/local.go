@@ -320,7 +320,8 @@ var titleLead = regexp.MustCompile(`^\[?P[0-3]\]?:?\s*`)
 // the planned review; a planned comment no entry names, by its own
 // severity and first line; and, when the counts hold a P0 to P2 that no
 // finding carries, the review's body as one finding of that priority, so
-// what blocks always reaches the writer.
+// what blocks always reaches the writer. A planned review this code does
+// not read leaves the provenance's findings without their bodies.
 func ParseLocalResult(data []byte) LocalResult {
 	var out LocalResult
 	sum := store.ReviewSummary{}
@@ -333,8 +334,8 @@ func ParseLocalResult(data []byte) LocalResult {
 	}
 	_ = json.Unmarshal(data, &f) // a provenance this code does not know is none
 	parsed, err := eval.ParseResult(data)
-	if err != nil {
-		return out
+	if err != nil { // a planned review this code does not read: the provenance still names the findings, without bodies
+		parsed = eval.Result{}
 	}
 	var body string
 	used := map[int]bool{}

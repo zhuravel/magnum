@@ -1301,13 +1301,13 @@ func PromptNames(cfg *config.Config) []string {
 func checkData(role config.Role) PromptData {
 	dir := "/factory/tasks/1"
 	copyPath := "/factory/copies/copy1"
-	return PromptData{TaskID: 1, Key: "PR-1", Kind: "bug", Repo: "example/app", Branch: "factory-check", Base: "master", Copy: copyPath,
+	return PromptData{TaskID: 1, Key: "PR-1", Kind: "bug", RedRun: true, Repo: "example/app", Branch: "factory-check", Base: "master", Copy: copyPath,
 		TaskDir: dir, Ticket: dir + "/ticket.md", Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md",
 		Answers: dir + "/" + answersFile, Rules: dir + "/rules.md", Findings: dir + "/" + findingsFile(role.Name),
 		Report: dir + "/" + reportFile, Questions: dir + "/" + questionsFile, Acceptance: dir + "/" + acceptanceFile,
 		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ReviewReply: dir + "/review-reply-1.json",
 		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
-		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, ErrorSkill: "error-tracker",
+		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
 }

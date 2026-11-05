@@ -46,6 +46,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -434,8 +435,40 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 		}
 		cy = &begun
 	}
+	// The untracked files the copy has before the round: what the round
+	// leaves beyond them is named (roundLeft), never committed by the
+	// writer's `git add -A` nor removed.
+	if untracked, err := untrackedPaths(ctx, e.d.Git, c.Path); err != nil {
+		release()
+		return err
+	} else if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(cy.N)), untracked); err != nil {
+		release()
+		return err
+	}
 	e.launchRound(ctx, t, *cy, lc, release)
 	return nil
+}
+
+// untrackedBeforeFile is the listing of the copy's untracked files taken
+// before round n of a cycle ran.
+func untrackedBeforeFile(n int) string { return fmt.Sprintf("untracked-before-%d.json", n) }
+
+// untrackedPaths are the paths of the work tree at dir that git does not
+// track and does not ignore (a directory of them once, as git status names
+// it), sorted.
+func untrackedPaths(ctx context.Context, git *gitx.Client, dir string) ([]string, error) {
+	entries, err := git.StatusPaths(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, en := range entries {
+		if en.Untracked() {
+			out = append(out, en.Path)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
 // reviewWait is what a local round waits for before it starts, "" for
@@ -666,22 +699,25 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	} else if p != nil {
 		return false, e.stageFailed(ctx, t, needsYou{p.why})
 	}
-	left, err := e.roundLeft(ctx, t, c, cy.HeadBefore)
+	left, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
 	if err != nil {
 		return false, err
 	}
 	if left != "" {
 		return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; "+
-			"put the copy back as the round found it (%s at %s, no tracked change), then let the task go on", round, left, t.Branch, short(cy.HeadBefore))})
+			"put the copy back as the round found it (%s at %s, no tracked change, no new untracked file), then let the task go on",
+			round, left, t.Branch, short(cy.HeadBefore))})
 	}
 	return e.decideRound(ctx, t, st, cy, loop, res)
 }
 
 // roundLeft is what a round left in task t's copy c that keeps its result
-// from being read: tracked changes, the copy off the task's branch, or the
-// branch at another head than head, the one the round reviewed ("" for
-// nothing).
-func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string) (string, error) {
+// from being read: tracked changes, the copy off the task's branch, the
+// branch at another head than head, the one the round reviewed, or
+// untracked files the listing taken before round n (untrackedBeforeFile)
+// does not have, which the writer's `git add -A` would commit ("" for
+// nothing). Nothing of it is removed.
+func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (string, error) {
 	git := e.d.Git
 	dirty, err := trackedChanges(ctx, git, c.Path)
 	if err != nil {
@@ -703,6 +739,20 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	}
 	if now != head {
 		return fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head)), nil
+	}
+	var before []string
+	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(n)))
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && json.Unmarshal(b, &before) != nil) {
+		return "", nil // no listing (a round an older build began): nothing to tell new files by
+	} else if err != nil {
+		return "", err
+	}
+	untracked, err := untrackedPaths(ctx, git, c.Path)
+	if err != nil {
+		return "", err
+	}
+	if added := slices.DeleteFunc(untracked, func(p string) bool { return slices.Contains(before, p) }); len(added) > 0 {
+		return fmt.Sprintf("%s in the copy (%s)", plural(len(added), "new untracked file"), clipList(added)), nil
 	}
 	return "", nil
 }
@@ -839,8 +889,10 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 			leftovers = append(leftovers, item)
 		case s.reg.Outcome == registry.FindingRebutted || s.reg.Outcome == registry.FindingWaived:
 			rebutted = append(rebutted, item)
-		case s.f.Question && answered[questionKey(st.Name, item.Title)]:
-			leftovers = append(leftovers, item) // you decided it
+		case s.f.Question && strings.EqualFold(strings.TrimSpace(answered[questionKey(st.Name, item.Title)]), changeIt):
+			live = append(live, item) // you said change it, and the round finds it still: the writer did not
+		case s.f.Question && answered[questionKey(st.Name, item.Title)] != "":
+			leftovers = append(leftovers, item) // you decided it: keep it
 		case s.f.Question:
 			questions = append(questions, item)
 		case s.reg.Reopened >= 2:
@@ -956,21 +1008,25 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 	return out, nil
 }
 
-// answeredQuestions are the keys (questionKey) of task t's questions you
-// answered.
-func (e *Engine) answeredQuestions(ctx context.Context, t registry.Task) (map[string]bool, error) {
+// answeredQuestions are your answers to task t's questions, by their key
+// (questionKey); an answer the registry keeps no text of is "answered".
+func (e *Engine) answeredQuestions(ctx context.Context, t registry.Task) (map[string]string, error) {
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]bool{}
+	out := map[string]string{}
 	for _, q := range qs {
 		if q.State == registry.QuestionAnswered {
-			out[questionKey(q.RaisedBy, q.Text)] = true
+			out[questionKey(q.RaisedBy, q.Text)] = cmp.Or(q.Answer, "answered")
 		}
 	}
 	return out, nil
 }
+
+// changeIt is the answer to a product question of the local review that
+// has the writer change the code as the finding asks (its option's label).
+const changeIt = "change it"
 
 // writeReviewQuestions writes the product questions of round `round` as
 // the review stage's questions file (questions-<stage>.json, raised by the
@@ -985,7 +1041,7 @@ func (e *Engine) writeReviewQuestions(dir string, st config.FactoryStage, qs []R
 			where += ":" + strconv.Itoa(q.Line)
 		}
 		out = append(out, QuestionFile{Text: q.Title, Context: textx.Clip(strings.TrimSpace(strings.Join([]string{where, q.Body}, ": ")), 600),
-			Options: []registry.Option{{Label: "change it", Means: "the writer changes the code as the finding asks"},
+			Options: []registry.Option{{Label: changeIt, Means: "the writer changes the code as the finding asks"},
 				{Label: "keep it", Means: "the code stays as it is, and the finding is no defect"}},
 			Why:      "no recommendation: it is the product's call, which the ticket leaves open",
 			Evidence: fmt.Sprintf("round %d of the local review", round)})

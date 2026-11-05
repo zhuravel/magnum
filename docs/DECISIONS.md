@@ -15086,6 +15086,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStartToReadyFindsTheReadyWaitWhateverTheStagesName, TestAContainedPanicIsRedacted,
   TestThePaneHoldFollowsTheFactorysHumanCooldown, TestALetGoCheckWhoseGitFailsKeepsTheTaskWhereItIs and
   TestAFactoryPromptThatDoesNotRenderNamesTheWayToCheckIt.
+- **The publish area's small fixes of the final review** (2026-11-05). A judge's result whose planned
+  review `eval.ParseResult` refuses still hands the writer the findings its provenance names, with their
+  severity, title, path and line but no body. Before, the writer got one synthetic finding that it had no
+  way to act on, and the loop spent its rounds to the cap. A proof whose spec run changes a tracked file is
+  treated as the precheck treats it: the file goes back, an event names it, and the run is judged on its
+  exit. A product question you answered "change it" that a later round still finds is a live finding the
+  writer gets to fix. One answered "keep it" stays a leftover. Before, every answered question was a
+  leftover, and an unchanged "change it" let the loop end clean. The writer's prompt follows the kind's
+  proof (`PromptData.RedRun`), not the name `chore`. As a round starts, the factory lists the copy's
+  untracked files (`untracked-before-<n>.json`). A round that leaves an untracked file beyond that list
+  needs you, naming the file. So the writer's `git add -A` never commits a reviewer's probe, and the
+  factory removes nothing. The card sends the writer back to merge the base at most `maxBaseMerges` (3)
+  times in a row. The next conflict needs you with the cause. Tests:
+  TestALocalResultWhosePlannedReviewDoesNotParseKeepsItsFindings,
+  TestAProofWhoseSpecRunChangesATrackedFileRestoresItAndPasses, TestAnAnsweredChangeItThatWasNotChangedStaysLive,
+  TestTheWritersPromptFollowsTheKindsProof, TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt and
+  TestThreeMergesOfTheBaseInARowNeedYou.
 
 ## Learned rules
 

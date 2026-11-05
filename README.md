@@ -3520,7 +3520,7 @@ stages = [
   (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch
   adds, in order (`bin/rails db:migrate:up VERSION={version}`, then `…:down…`, then `…:up…` again, so the copy's
   database keeps the change). What the precheck's commands change in tracked files (Rails dumps `db/schema.rb`)
-  is put back as the branch has it at its end, and `precheck.md` says so, but only when nobody else could have
+  is put back as the branch has it at its end, and `precheck.md` says so (the proof's spec run likewise: its events say so, and the run is judged on its exit), but only when nobody else could have
   changed the copy since it began (an agent of the task at work, a prompt to one, you in or typing into one of
   its panes): then it cannot tell its changes from yours, leaves them, and the task needs you, naming them. A lint offense counts only
   on a changed line, read as `path:line[:column]: message` (rubocop's `--format emacs`, eslint's `--format
@@ -3770,8 +3770,9 @@ factory cannot read, holds the local review no longer, and an event says so), wh
 `[usage] codex_soft` and the round runs a Codex role, while an agent or you work in the copy, and for a heavy
 slot; the factory reads magnum's registry and never migrates it (a registry of another schema waits, saying to
 restart magnum's daemon first). A round's roles work in the copy itself: before its result is read, the copy
-must be as the round found it (the task's branch, at the head it reviewed, no tracked change), or the task
-needs you, naming what the round left; the factory changes none of it. The factory reads the result itself: a
+must be as the round found it (the task's branch, at the head it reviewed, no tracked change, no untracked file
+the copy did not have before the round: a reviewer's probe file the writer's `git add -A` would commit), or the
+task needs you, naming what the round left; the factory changes none of it. The factory reads the result itself: a
 P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A round that
 ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose result does not parse, is "review
 unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>): <the round's error>`),
@@ -3782,7 +3783,9 @@ again with `judge_fallback` in place of the Codex judge and without Codex's revi
 the writer `review-<n>.json` for one fix turn (`factory-review-fix.md`): it fixes or declines each finding
 (a decline counts only with the risk of the suggested change), commits, writes `review-reply-<n>.json`, and
 the factory's proof and precheck run at the new head before the next round. A product question among the
-findings joins the task's question batch first. Every round is a review cycle with its findings, followed by
+findings joins the task's question batch first; one you answered `change it` that a later round still finds is a
+finding the writer gets to fix, and one you answered `keep it` is left for the card. A judge's result whose planned
+review does not parse still hands the writer the findings its provenance names, without their bodies. Every round is a review cycle with its findings, followed by
 their fingerprints: one that comes back twice after its fix is a doubt, and when only doubts block the loop
 ends on the oscillation; after the last round with something that still blocks the task needs you (`you: <n>
 blocking findings after 3 review rounds`); a daemon that stops between ending that round's cycle and telling
@@ -3807,7 +3810,8 @@ proof and the precheck run again, a fresh local loop reviews the merge, the judg
 the next card is a new revision. The coding stage passes such a turn only on a head that holds the base's
 commit the card saw: a writer that ends its turn without the merge gets one fix turn naming the base (within the
 stage's 6 prompts), then the task needs you (`the fx-writer agent did not merge origin/<base>`), and the same
-conflict at the same base a second time needs you instead of another round: merge the base on the branch in the copy
+conflict at the same base a second time needs you instead of another round, as does a conflict after three merges of the base in a row
+(`origin/<base> conflicted with <branch> 3 times in a row`): merge the base on the branch in the copy
 and commit it, then `magnum factory retry <task>`, or drop the task. A branch that moved after the coding stage's
 checks passed (your commit in the copy, then a push the moved branch refuses, or a retry) goes back to the coding
 stage as a send back without a note does: the writer's turn names the move and writes `proof.json` again, the proof

@@ -553,6 +553,25 @@ func TestTheWritersPromptNamesItsInputsAndTheProofFile(t *testing.T) {
 	}
 }
 
+// The writer's prompt follows the kind's proof, as the proof does
+// (PromptData.RedRun), never the kind's name: a kind of another name whose
+// proof is green keeps its specs green and is not told they must fail on
+// the base; a kind whose proof is red is told so whatever its name.
+func TestTheWritersPromptFollowsTheKindsProof(t *testing.T) {
+	cfg := config.Defaults()
+	d := fullPromptData()
+	d.Kind, d.RedRun = "docs", false
+	green := renderFactory(t, cfg, "factory-writer.md", d)
+	if !strings.Contains(green, "The existing specs stay green") || !strings.Contains(green, "need not: its specs pass at the head") {
+		t.Errorf("a green proof's prompt:\n%s\nwant the specs kept green and no red run asked", green)
+	}
+	d.Kind, d.RedRun = "chore", true
+	red := renderFactory(t, cfg, "factory-writer.md", d)
+	if strings.Contains(red, "need not: its specs pass at the head") || !strings.Contains(red, "where they must fail") {
+		t.Errorf("a red proof's prompt:\n%s\nwant the red run on the base asked", red)
+	}
+}
+
 // readTask is the text of name in the task's directory.
 func (h *harness) readTask(id int64, name string) string {
 	h.t.Helper()

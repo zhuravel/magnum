@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -372,6 +373,41 @@ func (r *readyRig) toConflict(key string, setup func(task registry.Task)) (regis
 	r.ended(task, "fx-judge")
 	r.run(4, func() bool { return r.reload(task.ID).Stage == "coding" || !isLive(r.reload(task.ID)) })
 	return task, head
+}
+
+// Merges of the base stop after maxBaseMerges in a row: a base that moves in
+// the task's files again and again (each merge, then proof, precheck, a
+// fresh local loop and a new card) needs you with the cause, never a
+// merge turn more. A merge between other turns back counts afresh.
+func TestThreeMergesOfTheBaseInARowNeedYou(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toConflict("PR-12387", func(task registry.Task) {
+		for k := 1; k <= maxBaseMerges; k++ {
+			b, _ := json.Marshal(reworkRecord{Kind: reworkMergeBase, Base: "origin/master", BaseSHA: strings.Repeat(strconv.Itoa(k), 40),
+				Conflicts: []string{"app/credit.rb"}, Card: k})
+			r.taskFile(task.ID, fmt.Sprintf("rework-%d.json", k), string(b))
+		}
+	})
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || got.Stage != "ready" || !strings.Contains(got.WaitsWhat, fmt.Sprintf("%d times in a row", maxBaseMerges)) ||
+		!strings.Contains(got.WaitsWhat, "app/credit.rb") {
+		t.Fatalf("task %s at %s waits %q, want you after %d merges of the base in a row", got.State, got.Stage, got.WaitsWhat, maxBaseMerges)
+	}
+	if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
+		t.Fatalf("the writer got %d prompts, want no merge turn more", n)
+	}
+
+	other := newReadyRig(t)
+	again, _ := other.toConflict("PR-12388", func(task registry.Task) {
+		for k, kind := range []string{reworkMergeBase, reworkMergeBase, reworkSendBack} {
+			b, _ := json.Marshal(reworkRecord{Kind: kind, Base: "origin/master", BaseSHA: strings.Repeat(strconv.Itoa(k+1), 40),
+				Conflicts: []string{"app/credit.rb"}, Card: k + 1})
+			other.taskFile(task.ID, fmt.Sprintf("rework-%d.json", k+1), string(b))
+		}
+	})
+	if got := other.reload(again.ID); got.Stage != "coding" {
+		t.Fatalf("a merge after a send back: task %s at %s waits %q, want the merge turn", got.State, got.Stage, got.WaitsWhat)
+	}
 }
 
 func TestAMasterConflictAtTheCardSendsTheWriterToMergeTheBase(t *testing.T) {

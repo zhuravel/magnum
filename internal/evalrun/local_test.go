@@ -74,6 +74,25 @@ const cleanResult = `{"status":"dry_run","verdict":"clean","findings":{"P0":0,"P
 // a new agent tag, and the synthetic PR number 900000 + task id × 10 +
 // round, so two rounds never share a registry, an agent, a herdr
 // workspace label or an eval case lock.
+// A judge's result whose planned review this code does not read (a shape
+// eval.ParseResult refuses) still hands the writer the findings the
+// provenance names, with their severity, title, path and line (no body):
+// one synthetic "review's body" finding the writer cannot act on would
+// spend the loop's rounds to its cap.
+func TestALocalResultWhosePlannedReviewDoesNotParseKeepsItsFindings(t *testing.T) {
+	data := []byte(`{"status":"dry_run","verdict":"blocking","event":"REQUEST_CHANGES",
+ "findings":{"P0":0,"P1":1,"P2":0,"P3":0},
+ "provenance":[{"id":"F1","title":"Points skip the refunded activities","severity":"P1","path":"app/credit.rb","line":42,"verdict":"posted"}],
+ "planned_review":{"event":"REQUEST_CHANGES","body":"Blocking: 1 problem.","comments":{"path":"app/credit.rb"}}}`)
+	r := ParseLocalResult(data)
+	if r.Verdict != "blocking" || len(r.Findings) != 1 {
+		t.Fatalf("result %+v, want the blocking verdict and the provenance's one finding", r)
+	}
+	if f := r.Findings[0]; f.Severity != "P1" || f.Title != "Points skip the refunded activities" || f.Path != "app/credit.rb" || f.Line != 42 {
+		t.Fatalf("finding %+v, want the provenance's P1 on app/credit.rb:42", f)
+	}
+}
+
 func TestRunLocalSeedsAFreshScratchPerRound(t *testing.T) {
 	d, runs := localFixture(t, cleanResult)
 	for _, n := range []int{1, 2} {

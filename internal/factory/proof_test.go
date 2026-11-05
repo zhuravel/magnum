@@ -83,6 +83,35 @@ func TestProofFailsOnTheBaseAndPassesAtTheHead(t *testing.T) {
 	r.onBranch(task.Branch, head)
 }
 
+// A spec run at the head that changes a tracked file (a repository whose
+// spec command dumps a schema or a snapshot) is treated as the precheck
+// treats it: the factory restores the file and says so, and the run is
+// judged on its exit. It failed the proof before, with a reason the writer
+// cannot act on.
+func TestAProofWhoseSpecRunChangesATrackedFileRestoresItAndPasses(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12354", "bug")
+	head := r.fix(task)
+	r.setDuring(func(dir string, run scriptRun) {
+		if run.Branch == task.Branch && strings.HasPrefix(run.Script, "bin/specs") {
+			r.write(dir, "app/credit.rb", strings.Replace(creditRB, "    0\n", "    10\n", 1)+"# dumped by the spec run\n")
+		}
+	})
+	p, err := r.e.runProof(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("runProof: %v", err)
+	}
+	if !p.Passed || !p.Holds(head) {
+		t.Fatalf("proof %+v, want it passed at %s with the change restored", p, short(head))
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "proof"), func(s string) bool { return strings.Contains(s, "app/credit.rb") }) {
+		t.Fatalf("proof events %q, want the restored file named", r.eventTexts(task.ID, "proof"))
+	}
+	if got := r.read("app/credit.rb"); strings.Contains(got, "dumped") {
+		t.Fatalf("app/credit.rb %q, want it restored", got)
+	}
+}
+
 // A spec that already passes on the base proves nothing about the change.
 func TestASpecThatPassesOnTheBaseProvesNothing(t *testing.T) {
 	r := newCodingRig(t)

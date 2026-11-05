@@ -666,17 +666,46 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 // in conflicts; the coding stage passes only once baseSHA is in the head
 // (mergeProblem). The same conflict at the same base a second time (a merge
 // turn the card sent the task back for already, whose merge did not take)
-// is a needsYou, never another round.
+// is a needsYou, never another round, and so is a base that conflicted
+// maxBaseMerges times in a row (each merge costs a fresh local loop).
 func (e *Engine) mergeTheBase(ctx context.Context, t registry.Task, card ReadyCardFile, base, baseSHA string, conflicts []string) error {
-	if prev, ok := sameConflict(e.d.Layout.FactoryTaskDir(t.ID), baseSHA, conflicts); ok {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	if prev, ok := sameConflict(dir, baseSHA, conflicts); ok {
 		return needsYou{fmt.Sprintf("the same conflict with %s at %s in %s, which card %d sent the writer back to merge: "+
 			"merge it on %s in the copy and commit it, then `magnum factory retry %d`: the factory's checks run again at the new head "+
 			"before a new card; or drop the task", base, short(baseSHA), textx.Clip(strings.Join(conflicts, ", "), 200), prev.Card, t.Branch, t.ID)}
+	}
+	if n := mergesInARow(dir); n >= maxBaseMerges {
+		return needsYou{fmt.Sprintf("%s conflicted with %s %d times in a row, now in %s, each merge a fresh local review: merge it on %s "+
+			"in the copy and commit it, then `magnum factory retry %d`; or drop the task", base, t.Branch, n, textx.Clip(strings.Join(conflicts, ", "),
+			200), t.Branch, t.ID)}
 	}
 	rw := reworkRecord{Kind: reworkMergeBase, Base: base, BaseSHA: baseSHA, Conflicts: conflicts, Card: card.Revision, Head: t.HeadSHA,
 		At: e.now()}
 	return e.backToCoding(ctx, t, rw, liveStates, fmt.Sprintf("%s conflicts with %s in %s: the writer merges it", base, short(t.HeadSHA),
 		textx.Clip(strings.Join(conflicts, ", "), 200)))
+}
+
+// maxBaseMerges is how many merges of the base in a row the card sends the
+// writer back for: the next conflict needs you.
+const maxBaseMerges = 3
+
+// mergesInARow counts the newest turns back from the card in dir (the ones
+// set aside, rework-<k>.json, newest first) that merged the base, up to the
+// first of another kind.
+func mergesInARow(dir string) int {
+	n := 0
+	for k := 1; fsx.Exists(filepath.Join(dir, fmt.Sprintf("rework-%d.json", k))); k++ {
+		var rw reworkRecord
+		b, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("rework-%d.json", k)))
+		switch {
+		case err != nil, json.Unmarshal(b, &rw) != nil, rw.Kind != reworkMergeBase:
+			n = 0
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 // headMoved sends task t, whose branch moved to head after the coding

@@ -452,6 +452,30 @@ func TestAQuestionFindingJoinsTheQuestionBatch(t *testing.T) {
 	}
 }
 
+// A product question you answered "change it" that the next round raises
+// again was not changed: it is a live finding the writer gets to fix, never
+// a leftover that lets the loop end clean. One answered "keep it" is a
+// leftover: you decided it.
+func TestAnAnsweredChangeItThatWasNotChangedStaysLive(t *testing.T) {
+	q := evalrun.LocalFinding{Severity: "P2", Title: "Should a refund take back the points it gave?", Path: "app/credit.rb", Line: 12, Question: true,
+		Body: "The ticket says nothing of refunds."}
+	r := newReviewRig(t, result(q), result(q, refundFinding), result()) // round 2: another finding blocks beside it
+	task, _ := r.reviewTask("PR-12369")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "change it"}})
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), nil) // a commit that changes something else: the question's code stays
+	r.run(10, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 || r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	if got.Stage != "local_review" || len(r.rt.promptsTo("fx-writer")) != 2 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, want the writer's fix turn for the question it did not change", got.State,
+			got.Stage, got.WaitsWhat, len(r.rv.calls()))
+	}
+	if review := r.readTask(task.ID, reviewFile(2)); !strings.Contains(review, q.Title) {
+		t.Fatalf("%s:\n%s\nwant the question you answered change it among the findings to fix", reviewFile(2), review)
+	}
+}
+
 // A decline counts only with the risk of the suggested change: a finding
 // the writer declined without one stays open and blocks the next round
 // again; one declined with a risk is rebutted, blocks no more, and ends
@@ -762,6 +786,21 @@ func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
 				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
 			},
 			func(r *reviewRig, _, head string) { r.git(r.copyDir, "reset", "--quiet", "--keep", head) }},
+		// A reviewer's probe file the writer's `git add -A` would commit.
+		{"a new untracked file", "1 new untracked file in the copy (spec/probe_spec.rb)",
+			func(r *reviewRig, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "spec", "probe_spec.rb"), []byte("a reviewer's probe\n"), 0o644); err != nil {
+					r.t.Error(err)
+				}
+			},
+			func(r *reviewRig, _, _ string) {
+				if got := r.read("spec/probe_spec.rb"); got != "a reviewer's probe\n" {
+					r.t.Fatalf("spec/probe_spec.rb is %q: the factory changed what the round left", got)
+				}
+				if err := os.Remove(filepath.Join(r.copyDir, "spec", "probe_spec.rb")); err != nil {
+					r.t.Fatal(err)
+				}
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var rig *reviewRig

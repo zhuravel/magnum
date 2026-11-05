@@ -355,10 +355,9 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 		return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
 	}
 	e.recordRun(ctx, t, "spec", bh.Head, run)
-	if len(restored) > 0 {
-		proof.Why = "the spec run changed tracked files in the copy (" + clipList(restored) + "; the factory restored them): " +
-			"git status must be clean before and after"
-		return done()
+	if len(restored) > 0 { // as the precheck does: the files go back, the run is judged on its exit
+		e.event(ctx, t.ID, "proof", registry.PhaseInfo, "the spec run at "+short(bh.Head)+" changed tracked files in the copy ("+
+			clipList(restored)+"): the factory restored them")
 	}
 	switch {
 	case run.Hung:
