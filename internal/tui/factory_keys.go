@@ -510,6 +510,9 @@ func (m factoryModel) questionCard() (QuestionCard, bool) {
 	c.changed = m.q.changed
 	c.sending = m.bar.busy != "" && m.inflight != nil && m.inflight.kind == followAnswer
 	c.rule = m.rule()
+	if m.view == fvQuestion { // the recap draws its own question
+		c.Ask = m.bar.question()
+	}
 	if len(c.Questions) > 0 && m.view == fvQuestion {
 		p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
 		c.Hints = dropHints(p.questionHints(c, c.Questions[c.Current], c.Current), "z")
@@ -1000,8 +1003,8 @@ func (m factoryModel) reading() bool {
 
 func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
-	case "esc": // the draft stays for the next n
-		m.view = fvHome
+	case "esc": // the draft stays for the next n; enter's question is not asked off the form
+		m.view, m.form.askOnce = fvHome, false
 		return nil
 	case "enter":
 		return m.submit()
@@ -1055,7 +1058,9 @@ func (m *factoryModel) previewCmd() tea.Cmd {
 }
 
 // previewed takes a preview: the current text's is kept (and enter's
-// question asked, when it waited for it); an older text's is read again.
+// question asked, when it waited for it and the form is still open: a
+// question asked off the form would be answered by what you type there);
+// an older text's is read again.
 func (m *factoryModel) previewed(msg factoryPreviewMsg) tea.Cmd {
 	m.form.inFlight = false
 	if msg.text != m.form.area.Value() {
@@ -1070,7 +1075,9 @@ func (m *factoryModel) previewed(msg factoryPreviewMsg) tea.Cmd {
 	}
 	if m.form.askOnce {
 		m.form.askOnce = false
-		return m.askStart()
+		if m.view == fvNew {
+			return m.askStart()
+		}
 	}
 	return nil
 }

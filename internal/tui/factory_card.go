@@ -551,6 +551,8 @@ func (p *cardPainter) questionCard(c QuestionCard, height int) string {
 	}
 	foot := []string{p.hintsLine(orHints(c.Hints, p.questionHints(c, q, cur)))}
 	switch {
+	case c.Ask != "": // a key answers it first: it is drawn over the line you type
+		foot = p.askLines(c.Ask)
 	case c.input != nil:
 		foot = p.inputFoot(c.input)
 	case len(c.NeedlessReasons) > 0:

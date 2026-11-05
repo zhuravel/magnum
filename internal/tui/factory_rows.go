@@ -150,6 +150,9 @@ type QuestionCard struct {
 	// answers binds to it, and the factory refuses a batch for another
 	// (ErrQuestionsChanged).
 	Revision int
+	// Ask is the y/N question being asked; empty: the key hints (or the
+	// line you type).
+	Ask string
 
 	// The screen's own state, which the factory never fills: the note on the
 	// rule (styled), the line typed in the footer, and the recap's "the

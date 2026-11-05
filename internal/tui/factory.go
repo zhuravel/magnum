@@ -1078,8 +1078,8 @@ func fingerprint(v any) uint64 {
 	return h.Sum64()
 }
 
-// boxScreen is the help or the action log: a title, the box, the rule and
-// the keys.
+// boxScreen is the help or the action log: a title, the box, the rule (the
+// bar's question when one is asked, else its note) and the keys.
 func (m factoryModel) boxScreen(w, h int) string {
 	p := &prbPainter{st: m.st, pal: newPRBPalette(m.st), g: m.g}
 	title, content, closer := "help", m.helpContent(w), hint{"?", "close"}
@@ -1092,7 +1092,7 @@ func (m factoryModel) boxScreen(w, h int) string {
 		body = append(body, "")
 	}
 	lines := append([]string{" " + m.st.Title.Render("magnum factory") + m.st.Dim.Render(m.g.sep+title)}, body[:bodyH]...)
-	lines = append(lines, p.footerRule(w, m.rule(), below), " "+m.st.fitHints(w-1, []hint{{"j k", "scroll"}, closer, {"q", "quit"}}, []hint{closer}))
+	lines = append(lines, p.footerRule(w, m.bar.view(max(w-4, 1)), below), " "+m.st.fitHints(w-1, []hint{{"j k", "scroll"}, closer, {"q", "quit"}}, []hint{closer}))
 	if len(lines) > h {
 		lines = lines[len(lines)-h:]
 	}

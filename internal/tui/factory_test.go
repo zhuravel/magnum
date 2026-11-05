@@ -957,6 +957,71 @@ func TestATypedYNeverAnswersALateNewTaskQuestion(t *testing.T) {
 	mustContain(t, h.view(), "PR-12350 the reminder yesy▏")
 }
 
+// A new task's question is asked only on the new-task view: enter waits for
+// the text's preview, and a preview that lands after esc (on the question
+// card while you type your own answer, or on home) asks nothing, so a typed
+// "yes" stays text and no y starts agents. (The final review's probe.)
+func TestALateNewTaskQuestionIsNeverAskedOffItsView(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.act.preview = previewJira
+	h.press("n")
+	h.feed(typed("PR-12350 the reminder")...)
+	next, cmd := h.m.Update(keyMsg("enter")) // the preview is read meanwhile
+	h.m = next.(factoryModel)
+	h.press("esc")
+	h.open("PR-12345")
+	h.press("5") // type your own answer
+	h.feed(typed("we ")...)
+	h.run(cmd) // the late preview lands
+	if q := h.m.bar.question(); q != "" {
+		t.Fatalf("a late preview asked %q on the question card", q)
+	}
+	h.feed(typed("yes")...)
+	if len(h.act.starts) != 0 {
+		t.Fatalf("a typed y started a task: %+v", h.act.starts)
+	}
+	mustContain(t, h.view(), "we yes▏")
+
+	home := testFactory(t, 100, 40)
+	home.act.preview = previewJira
+	home.press("n")
+	home.feed(typed("PR-12350 the reminder")...)
+	next, cmd = home.m.Update(keyMsg("enter"))
+	home.m = next.(factoryModel)
+	home.press("esc")
+	home.run(cmd)
+	if q := home.m.bar.question(); q != "" {
+		t.Fatalf("a late preview asked %q on home", q)
+	}
+	home.press("y")
+	if len(home.act.starts) != 0 {
+		t.Fatalf("a y on home started a task: %+v", home.act.starts)
+	}
+	// Back on the form, enter asks at once: the preview is the text's.
+	home.press("n", "enter")
+	if q := home.m.bar.question(); !strings.Contains(q, "Start") {
+		t.Fatalf("enter on the form with its preview read asks %q, want the start's question", q)
+	}
+}
+
+// Every view that can hold the bar's question draws it: the question card
+// and the help and action log boxes, as home and the other cards do, so no
+// question is ever up where you cannot read it.
+func TestEveryViewDrawsTheBarsQuestion(t *testing.T) {
+	noop := func(context.Context) (ActionResult, error) { return ActionResult{}, nil }
+	h := testFactory(t, 100, 40)
+	h.open("PR-12345")
+	h.m.ask(&factoryFollow{}, "Probe the question card?", noop)
+	mustContain(t, h.view(), "Probe the question card?", "y/N")
+	h.press("n")
+	for _, key := range []string{"?", logKey} {
+		b := testFactory(t, 100, 40)
+		b.press(key)
+		b.m.ask(&factoryFollow{}, "Probe the box?", noop)
+		mustContain(t, b.view(), "Probe the box?", "y/N")
+	}
+}
+
 // The recap's question goes when the questions change under it: the next
 // digit answers the question that is open again.
 func TestANewRevisionDropsTheRecapsQuestion(t *testing.T) {

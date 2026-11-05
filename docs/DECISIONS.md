@@ -15002,6 +15002,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   starts them again. Tests: TestAStageErrorThatPersistsNeedsYou,
   TestAPublishWithGhLoggedOutNeedsYouAfterAFewTries and
   TestAPublishThatKeepsFailingOnTheNetworkStopsAfterAFewTries.
+- **A new task's question is asked on its form only, and every view draws its question** (2026-11-05, the
+  final review, reproduced by its probe). `enter` on the form waits for the text's preview, which can take
+  a Jira read. A preview that came after `esc` still asked "Start feature PR-12350 with 2 agents?". On the
+  question card, where you typed your own answer, that question was not drawn, and the "y" of "yes"
+  started agents. Now `previewed` asks only while the new-task view is open, and `esc` drops the wait for
+  the question. `QuestionCard` has an `Ask` like the other cards, drawn over the line you type, because a
+  key answers the question first. The help and log boxes draw the bar's question on their rule. No golden
+  changed, and no painter was added. Tests: TestALateNewTaskQuestionIsNeverAskedOffItsView and
+  TestEveryViewDrawsTheBarsQuestion.
 
 ## Learned rules
 
