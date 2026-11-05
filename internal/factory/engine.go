@@ -649,8 +649,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 			switch {
 			case err == nil:
 				delete(e.lastFail, t.ID)
-			case errors.Is(err, ErrHeld), errors.Is(err, errPanicked), ctx.Err() != nil:
-				errs = append(errs, err)
+			case errors.Is(err, ErrHeld), errors.Is(err, errPanicked), herdrDown(err), ctx.Err() != nil:
+				errs = append(errs, err) // herdr down inside the pass: herdr's hold covers it, no failure of the task
 			default:
 				failures = append(failures, taskFailure{task: t, err: err})
 			}

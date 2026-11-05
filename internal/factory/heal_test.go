@@ -673,6 +673,36 @@ func TestAHerdrOutageStartsNoInfraHold(t *testing.T) {
 	}
 }
 
+// A herdr error inside a stage's pass (a launch that met herdr down while
+// the tick's own herdr check passed) is a held pass, like the herdr hold
+// itself: it counts toward no stage failure, so a herdr outage never sends a
+// task to NEEDS YOU, and two tasks meeting it start no infrastructure hold.
+func TestAHerdrErrorInsideAStageCountsNoFailure(t *testing.T) {
+	h := newHarness(t)
+	one := h.task("PR-12390", registry.TaskActive, "investigate")
+	two := h.task("PR-12391", registry.TaskActive, "investigate")
+	n := 0
+	h.stage(config.FactoryStageAgents, func(context.Context, registry.Task, config.FactoryStage) (bool, error) {
+		n++
+		if n%2 == 0 {
+			return false, fmt.Errorf("launch fx-repro: %w after 10s", herdr.ErrTimeout)
+		}
+		return false, fmt.Errorf("launch fx-repro: %w: dial unix /tmp/herdr-factory.sock: connect: connection refused", herdr.ErrUnavailable)
+	})
+	for range stageFailLimit + 2 {
+		h.clock.Add(45 * time.Second)
+		h.tick()
+	}
+	for _, task := range []registry.Task{one, two} {
+		if got := h.reload(task.ID); got.State != registry.TaskActive {
+			t.Errorf("%s after %d herdr errors in its stage: state %s, waits %q; want active", task.JiraKey, stageFailLimit+2, got.State, got.WaitsWhat)
+		}
+	}
+	if hold, held := h.e.holds[HoldInfra]; held {
+		t.Errorf("herdr errors in two tasks' stages started an infrastructure hold: %+v", hold)
+	}
+}
+
 // SIGTERM drains within launchd's ExitTimeOut: the task in progress ends
 // its pass, but it starts no launch and no effect, the runtime's launches
 // that wait for the stagger are cut (BeginDrain), and the tasks after it

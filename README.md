@@ -3549,7 +3549,7 @@ herdr session of their own, `herdr_session` (`factory`): a separate herdr server
 session, `default`, keeps herdr's own socket), so its panes open in a terminal window of their own, apart
 from yours and from magnum's review panes, which stay in your session. It talks to your session too: the
 copies' guard reads its panes, and the alerts' toasts show there. Like the review daemon, it loads its
-prompts once, at its start, and a build with a new factory migration (`0004_screen_reads.sql` is the newest)
+prompts once, at its start, and a build with a new factory migration (`0005_task_request.sql` is the newest)
 runs no factory command until the factory daemon restarts on it: the factory CLI and the screen refuse to
 migrate the factory registry under an older factory daemon, so run `magnum factory install` first. The
 factory never migrates magnum's registry, which it only reads for the local review. The commands:
@@ -3876,7 +3876,7 @@ logged out, a token without scope, a push the remote's hooks refuse) is tried ag
 in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
 row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
 own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the
-factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
+factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold, and a stage that meets herdr down inside its pass counts no failure) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
 hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops
 idle servers; a disk below half of `min_free_disk_gb` needs you. At most `heavy_stages` heavy stages (local
 review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request

@@ -15124,6 +15124,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   placeholder range (PR-12390). Tests: TestAPartialsFilesErrorNamesThatFile,
   TestBatcherFlushThatFailsStillNamesTheSuppressedItems and
   TestAStoreHeldAlertBesideAFailedToastWritesItsEvent.
+- **A herdr error inside a stage counts no failure** (2026-11-05). A stage can meet herdr down inside its pass,
+  for example when a launch gets `herdr.ErrUnavailable` or `herdr.ErrTimeout` although the tick's own herdr
+  check passed. Tick now treats such a pass as held, like `ErrHeld`. Before, the final fix wave had made
+  `infraCause` ignore herdr's errors, so these errors fell to the stage-failure count. A herdr outage of about 4
+  minutes then sent each task to NEEDS YOU with an alert. Two tasks that met it also started an infrastructure
+  hold through the same-failure-on-two-tasks rule. The herdr hold covers herdr, as before. The next tick's
+  herdr check finds the outage and holds every stage. Test: TestAHerdrErrorInsideAStageCountsNoFailure.
 
 ## Learned rules
 

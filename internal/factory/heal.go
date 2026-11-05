@@ -153,7 +153,7 @@ var infraPatterns = []struct{ match, cause string }{
 // infrastructure hold beside it would hold every task two minutes past
 // herdr's return and raise a second blocker for one cause.
 func infraCause(err error) string {
-	if err == nil || errors.Is(err, herdr.ErrUnavailable) || errors.Is(err, herdr.ErrTimeout) {
+	if err == nil || herdrDown(err) {
 		return ""
 	}
 	if _, ok := errors.AsType[mysqlFailure](err); ok {
@@ -169,6 +169,14 @@ func infraCause(err error) string {
 		}
 	}
 	return ""
+}
+
+// herdrDown reports a herdr failure (herdr.ErrUnavailable, herdr.ErrTimeout).
+// It is herdr's hold that covers one, never a failure of the task: a stage
+// that meets herdr down inside its pass is a held pass (Tick), which counts
+// toward no stage failure and no infrastructure hold.
+func herdrDown(err error) bool {
+	return errors.Is(err, herdr.ErrUnavailable) || errors.Is(err, herdr.ErrTimeout)
 }
 
 // recentFailure is the last task a failure signature was seen on, and when.
