@@ -37,12 +37,16 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 		head = append(head, "")
 	}
 	body, cursor := p.taskBody(c)
+	foot := []string{p.hintsLine(orHints(c.Hints, p.taskHints(c)))}
+	if c.Ask != "" {
+		foot = p.askLines(c.Ask)
+	}
 	start := scroll
 	if height > 0 && cursor >= 0 {
-		room := max(height-len(head)-1-1, 1)
+		room := max(height-len(head)-1-len(foot), 1)
 		start = min(max(start, cursor-room+1), cursor)
 	}
-	return p.assemble(head, body, start, "", []string{p.hintsLine(orHints(c.Hints, p.taskHints(c)))}, height)
+	return p.assemble(head, body, start, c.rule, foot, height)
 }
 
 // taskHints are the task card's own key hints. A task a retry can go on

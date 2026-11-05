@@ -24,9 +24,9 @@ import (
 // readyOptions are the ready card's options, picked by 1 to 3: push + PR
 // opens the PR ready for review, never a draft.
 var readyOptions = []CardOption{
-	{"push + PR", "push the branch, open a PR ready for review"},
-	{"send back", "the writer tries again with your reason and note"},
-	{"drop", "free the copy, keep the branch"},
+	{Label: "push + PR", Means: "push the branch, open a PR ready for review"},
+	{Label: "send back", Means: "the writer tries again with your reason and note"},
+	{Label: "drop", Means: "free the copy, keep the branch"},
 }
 
 // The ready card's options, by index.
@@ -48,17 +48,30 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 	head = append(head, truncate(line3, p.width), "")
 
 	read := !c.DiffOpened.IsZero()
-	rec := -1
+	rec, cursor := -1, c.Cursor
 	if read && c.Recommended >= 0 && c.Recommended < len(readyOptions) {
 		rec = c.Recommended
 	}
-	choice := append(p.optionList(readyOptions, c.Cursor, rec, c.Why), p.unreadRows(c.Unread, read)...)
-	msg := ""
-	if read {
+	opts := readyOptions
+	if c.NoPush != "" { // the card does not offer push: it says why, and push is never marked
+		opts = slices.Clone(readyOptions)
+		opts[readyPush].Means = "not offered: " + c.NoPush
+		if rec == readyPush {
+			rec = -1
+		}
+		if cursor == readyPush {
+			cursor = -1
+		}
+	}
+	choice := append(p.optionList(opts, cursor, rec, c.Why), p.unreadRows(c.Unread, read)...)
+	msg := c.rule
+	if read && msg == "" {
 		msg = p.st.Dim.Render("you read the diff " + p.clock(c.DiffOpened))
 	}
 	foot := []string{p.hintsLine(orHints(c.Hints, p.readyHints(c)))}
 	switch {
+	case c.input != nil:
+		foot = p.inputFoot(c.input)
 	case c.Ask != "":
 		var frees string
 		// The push's y/N says what it frees; a drop's is the spec's own
@@ -71,13 +84,18 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 	case len(c.Reasons) > 0:
 		foot = p.reasonLines("Why send back?", c.Reasons)
 	}
-	room := -1 // no height: everything is drawn
-	if height > 0 {
-		room = max(height-len(head)-1-len(foot), 0) - len(choice)
+	// Without a height everything is drawn; with one the lists get what the
+	// options leave, never less than nothing, so on a very short pane the
+	// lists give way first and the options stay.
+	fit := height > 0
+	avail, room := -1, -1
+	if fit {
+		avail = max(height-len(head)-1-len(foot), 0)
+		room = max(avail-len(choice), 0)
 	}
 	// A blank line parts the lists from the options, when there is room for
 	// it and a list line.
-	blank := room < 0 || room > 1
+	blank := !fit || room > 1
 	if blank && room > 0 {
 		room--
 	}
@@ -85,7 +103,8 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 	if blank && len(body) > 0 {
 		body = append(body, "")
 	}
-	frame, _ := p.assemble(head, append(body, choice...), 0, msg, foot, height)
+	body = append(body, choice...)
+	frame, _ := p.assemble(head, body, p.markInView(body, avail), msg, foot, height)
 	return frame
 }
 
@@ -183,6 +202,26 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 	field("CAUSE", c.Cause, false)
 	field("FIX", c.Fix, false)
 	field("PROOF", c.Proof, f.proofOne)
+	if len(c.Failed) > 0 { // a failed check turns its line red, and says so in words
+		label, mark := "", "✗"
+		if c.Proof == "" {
+			label = "PROOF"
+		}
+		if p.ascii() {
+			mark = "x"
+		}
+		var cells []cell
+		for _, it := range c.Failed {
+			for i, l := range wrapText("failed: "+it, wrapW-2, 0) {
+				lead := seg{mark, p.st.Err}
+				if i > 0 {
+					lead = seg{" ", noStyle}
+				}
+				cells = append(cells, cell{lead, {" " + l, p.st.Err}})
+			}
+		}
+		body = append(body, p.labelRows(label, cardReadyX, cells)...)
+	}
 	body = append(body, p.fileRows(c.Files, f.files)...)
 	list("DOUBTS", c.Doubts, len(c.Doubts), f.doubtsOne, "none", noStyle, nil)
 	list("KNOWN", c.Leftovers, f.known, f.knownOne, "none: the local review left nothing open", noStyle, func(n, shown int) string {

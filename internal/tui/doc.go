@@ -1,9 +1,14 @@
 // Package tui holds magnum's interactive terminal screens, built on Bubble
 // Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the
 // PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the
-// read-only pane mirror (RunWatch) and the settings screen (RunSettings),
+// read-only pane mirror (RunWatch), the settings screen (RunSettings),
 // which `,` also opens over the dashboard and the board and whose field
-// popups are huh forms (charm.land/huh/v2).
+// popups are huh forms (charm.land/huh/v2), and the factory's screen
+// (RunFactory: one line per task, grouped by who it waits on, with the
+// decision cards behind them; its data comes through FactorySource, its
+// requests through FactoryActions, and every one that leaves the Mac,
+// starts or stops agents or frees a copy asks y/N on the factory's own
+// action bar, factory_actions.go).
 //
 // Every screen takes plain data structs and small interfaces defined here,
 // so the cli adapts its own types into them; the plain-text renderings stay

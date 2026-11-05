@@ -15,7 +15,7 @@ var cardTaskNow = factoryNow
 func cardAt(h, m int) time.Time { return time.Date(2026, 11, 3, h, m, 0, 0, time.Local) }
 
 func askRevAnn() CardOption {
-	return CardOption{"Ask rev-ann in Jira (the task waits)", "drafts a comment for you to check"}
+	return CardOption{Label: "Ask rev-ann in Jira (the task waits)", Means: "drafts a comment for you to check", Send: "ask:rev-ann"}
 }
 
 // fixtureQuestionCard is "Question card, question 2 of 3": the first question
@@ -28,7 +28,7 @@ func fixtureQuestionCard() QuestionCard {
 		Questions: []CardQuestion{
 			{
 				Text: "Who gets the reminder?", Recommended: 0,
-				Options: []CardOption{{"Advocates only", "friends get nothing"}, {"Advocates and their friends", "both get the email"}, {"Type your own answer", ""}},
+				Options: []CardOption{{Label: "Advocates only", Means: "friends get nothing"}, {Label: "Advocates and their friends", Means: "both get the email"}, {Label: "Type your own answer", Own: true}},
 				Why:     "the ticket names advocates", Answer: "advocates only", AnsweredAt: cardAt(13, 31),
 			},
 			{
@@ -36,11 +36,11 @@ func fixtureQuestionCard() QuestionCard {
 				Context: `The ticket says "before the credit expires" and names no day.`,
 				Example: "a credit that expires on Fri 14 Nov.",
 				Options: []CardOption{
-					{"Seven days before it expires", "the email goes out Fri 7 Nov"},
-					{"One day before it expires", "Thu 13 Nov"},
-					{"On the day it expires", "Fri 14 Nov, 09:00 merchant time"},
+					{Label: "Seven days before it expires", Means: "the email goes out Fri 7 Nov"},
+					{Label: "One day before it expires", Means: "Thu 13 Nov"},
+					{Label: "On the day it expires", Means: "Fri 14 Nov, 09:00 merchant time"},
 					askRevAnn(),
-					{"Type your own answer", ""},
+					{Label: "Type your own answer", Own: true},
 				},
 				Recommended: 0, Why: "the coupon reminder already uses 7 days, so the two emails match",
 			},
@@ -56,10 +56,10 @@ func fixtureNoRecommendation() CardQuestion {
 		Context: "The ticket does not say, and no other campaign email has an off switch.",
 		Example: "a merchant opens Settings, then Emails, and looks for the reminder.",
 		Options: []CardOption{
-			{"Yes: a switch in the email settings, on by default", "the merchant sees a switch"},
-			{"No: always on", "no switch anywhere"},
+			{Label: "Yes: a switch in the email settings, on by default", Means: "the merchant sees a switch"},
+			{Label: "No: always on", Means: "no switch anywhere"},
 			askRevAnn(),
-			{"Type your own answer", ""},
+			{Label: "Type your own answer", Own: true},
 		},
 		Recommended: -1, Why: "the ticket and the code give no hint",
 	}

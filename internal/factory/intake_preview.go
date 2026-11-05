@@ -6,9 +6,12 @@ package factory
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -34,6 +37,7 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	}
 	f.Repo = repo.Repo
 	in := ParseStart(text, e.trackers(repo.Repo))
+	f.Links = previewLinks(text, e.trackers(repo.Repo))
 	switch {
 	case in.PR != nil:
 		f.Err = "a PR link: adoption comes in milestone 2"
@@ -87,7 +91,55 @@ func (e *Engine) preview(ctx context.Context, text string) (tui.NewTaskForm, err
 	}
 	f.Starts = e.startsWhen(ctx)
 	f.Agents = e.firstAgents(f.Kind)
+	key := in.Key
+	if tk != nil {
+		key = tk.Key
+	}
+	f.Overlap = e.previewOverlap(ctx, repo.Repo, key)
 	return f, nil
+}
+
+// previewOverlapBound bounds the overlap's reads of a preview, which the
+// daemon answers on its loop: what does not come in that time is left out.
+const previewOverlapBound = 10 * time.Second
+
+// previewOverlap is the overlap line of a task of key ("" for no key, or
+// nothing found), as the screen's OVERLAP row draws it: what else touches
+// the work, read now and left out where a read fails (it is advisory).
+func (e *Engine) previewOverlap(ctx context.Context, repo, key string) string {
+	if key == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, previewOverlapBound)
+	defer cancel()
+	line, _ := e.Overlap(ctx, registry.Task{Repo: repo, JiraKey: key}, nil) // the parts that were read
+	return strings.TrimPrefix(line, "overlap: ")
+}
+
+// previewLinks are the links of the text, in its order, with what the
+// factory makes of each: a Jira link is its key, a GitHub PR link offers
+// adoption (milestone 2), an Actions run link a CI task (milestone 3). A
+// link of any other kind is left out.
+func previewLinks(text, trackers string) []tui.FormLink {
+	var out []tui.FormLink
+	for _, raw := range textLink.FindAllString(text, -1) {
+		link := strings.TrimRight(raw, ".,;:!?)]}")
+		u, err := url.Parse(link)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		switch github := isGitHub(u.Hostname()); {
+		case github && prPath.MatchString(u.Path):
+			out = append(out, tui.FormLink{Kind: "pr", URL: link, Offer: "adoption comes in milestone 2"})
+		case github && runPath.MatchString(u.Path):
+			out = append(out, tui.FormLink{Kind: "run", URL: link, Offer: "a CI task comes in milestone 3"})
+		case !github:
+			if key := jiraLinkKey(u, link, trackers); key != "" {
+				out = append(out, tui.FormLink{Kind: "jira", URL: link, Offer: "its key, " + key})
+			}
+		}
+	}
+	return out
 }
 
 // previewFound previews a prompt whose words name keys elsewhere than at

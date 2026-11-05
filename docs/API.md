@@ -72,7 +72,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
 | [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
 | [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals, thousands separators, durations in words and login folding. |
-| [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch) and the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2). |
+| [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch), the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2), and the factory's screen (RunFactory: one line per task, grouped by who it waits on, with the decision cards behind them; its data comes through FactorySource, its requests through FactoryActions, and every one that leaves the Mac, starts or stops agents or frees a copy asks y/N on the factory's own action bar, factory_actions.go). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 | [webhooks](#webhooks) | Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx. |
 
@@ -25315,11 +25315,15 @@ func Thousands(n int) string
 package tui // import "github.com/zhuravel/magnum/internal/tui"
 
 Package tui holds magnum's interactive terminal screens, built on Bubble Tea:
-the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker
-(RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane
-mirror (RunWatch) and the settings screen (RunSettings), which `,` also
+the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR
+picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only
+pane mirror (RunWatch), the settings screen (RunSettings), which `,` also
 opens over the dashboard and the board and whose field popups are huh forms
-(charm.land/huh/v2).
+(charm.land/huh/v2), and the factory's screen (RunFactory: one line per task,
+grouped by who it waits on, with the decision cards behind them; its data comes
+through FactorySource, its requests through FactoryActions, and every one that
+leaves the Mac, starts or stops agents or frees a copy asks y/N on the factory's
+own action bar, factory_actions.go).
 
 Every screen takes plain data structs and small interfaces defined here,
 so the cli adapts its own types into them; the plain-text renderings stay
@@ -25349,6 +25353,13 @@ const (
     The states of a Request.
 
 const (
+	FactoryPush     = "push"
+	FactorySendBack = "send_back"
+	FactoryDrop     = "drop"
+)
+    The ready card's choices, as Decide sends them.
+
+const (
 	NeedsMeApprove = "approve"
 	NeedsMeLift    = "lift"
 )
@@ -25365,6 +25376,11 @@ var (
     switch to the other screen: the caller runs that screen next (with the same
     source and actions it already holds). A caller that does not switch treats
     them as any other error, so it sees them only if it asked for both screens.
+
+var ErrQuestionsChanged = errors.New("the questions changed, nothing was sent")
+    ErrQuestionsChanged is the refusal of a batch of answers to questions that
+    newer evidence replaced: nothing of it was kept. Answer returns it (or a
+    *QuestionsChangedError, which is it) and the recap says so (spec 9.C).
 
 var ErrSettingsChanged = errors.New("the config file changed on disk since it was read")
     ErrSettingsChanged is a save over a file that changed on disk since the
@@ -25430,6 +25446,10 @@ func RunDashboard(ctx context.Context, src DashboardSource, act DashboardActions
     RunDashboard shows the live status dashboard until the user quits or
     ctx ends. act may be nil (the action keys then say so). It returns
     ErrSwitchToBoard when the user pressed tab (or t) for the PR board.
+
+func RunFactory(ctx context.Context, src FactorySource, act FactoryActions, opts FactoryOptions) error
+    RunFactory shows the factory screen until the operator quits or ctx ends.
+    act may be nil: the screen then only shows, and its action keys say so.
 
 func RunPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, opts PRBoardOptions) error
     RunPRBoard shows the live PR board until the user quits or ctx ends. act may
@@ -25573,7 +25593,15 @@ type CardFile struct {
 }
     CardFile is one changed file of a ready card.
 
-type CardOption struct{ Label, Means string }
+type CardOption struct {
+	Label, Means string
+	// Send is what the option answers: "" for its Label; "ask:<login>" asks
+	// that person instead (the factory drafts the comment).
+	Send string
+	// Own marks the option that takes your own words ("Type your own
+	// answer"): picking it asks for them.
+	Own bool
+}
     CardOption is one choice and what it means for the question's example.
 
 type CardQuestion struct {
@@ -25599,6 +25627,8 @@ type CardQuestion struct {
 	Comment string
 	// Asks is who the Comment asks ("rev-ann").
 	Asks string
+
+	// Has unexported fields.
 }
     CardQuestion is one question with its options and, once answered, its
     answer.
@@ -25840,6 +25870,81 @@ type DiskInfo struct {
 }
     DiskInfo is the free space where slots live; FreeGB <= 0 means unknown.
 
+type FactoryActions interface {
+	Start(ctx context.Context, text, kind string) (ActionResult, error)
+	Preview(ctx context.Context, text string) (NewTaskForm, error)
+	Answer(ctx context.Context, taskID int64, rev int, answers map[int]string, needless map[int]string) (ActionResult, error)
+	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
+	Stop(ctx context.Context, taskID int64) (ActionResult, error)
+	Retry(ctx context.Context, taskID int64) (ActionResult, error)
+	Open(ctx context.Context, taskID int64) (ActionResult, error)
+	Seen(ctx context.Context, at time.Time) error
+	Focus(ctx context.Context, focused bool) error
+	Diff(taskID int64) *exec.Cmd
+}
+    FactoryActions are the screen's requests to the factory. Each runs from a
+    command on the screen's context; the ones that change something return what
+    they did (its last line goes to the footer, all of it to the log).
+
+      - Start starts a task from the new task's text, of kind ("" = the factory
+        picks it); Preview is what the factory makes of a text, making nothing.
+      - Answer sends a batch for the questions of revision rev, by question
+        index from 0: an option's label, the operator's words, or "ask:<login>";
+        needless flags questions with the key of the reason.
+      - Decide decides on the ready card: FactoryPush, FactorySendBack (with the
+        reason's key and the note) or FactoryDrop.
+      - Stop drops a task (frees its copy, keeps its branch); Retry lets a task
+        that waits on the operator go on at its stage.
+      - Open steps into the task's pane (asks nothing).
+      - Seen says the operator read the digest at at; Focus that the screen's
+        terminal gained or lost focus (the factory holds its toasts then).
+      - Diff is the pager on the task's diff, run with tea.ExecProcess; nil:
+        there is no diff to show. It is called on the screen's own turn,
+        so it only builds the command: it reads and waits for nothing.
+
+type FactoryAlert struct {
+	At   time.Time
+	Text string
+}
+    FactoryAlert is one alert the factory raised: when, and what it said.
+
+type FactoryCards struct {
+	Task     TaskCard
+	Question *QuestionCard
+	Ready    *ReadyCard
+	// Bind is the ready card's head and hashes as the factory drew it; the
+	// screen fills in its own times and sends it with the decision.
+	Bind ReadyBinding
+}
+    FactoryCards are a task's cards: its task card always, and the decision card
+    it waits on, if any: its questions or its ready card.
+
+type FactoryData struct {
+	Repo     string
+	Rows     []FactoryRow
+	Blocking []string // the machine facts that stop work ("memory full: new tasks wait")
+	RuleChip string   // "1 rule to approve (L)"
+	Digest   *Digest  // what finished while the operator was away; nil: none
+	Cards    map[int64]FactoryCards
+
+	// BlockingLong are Blocking with their detail, for a wide screen.
+	BlockingLong []string
+	// Decisions counts the single answers owed across all tasks ("5
+	// decisions"), apart from the tasks.
+	Decisions int
+	// Next is what the operator does next when nothing waits on them.
+	Next string
+	// Flash is the last news for the status rule ("14:02 you said MFA done →
+	// bart deploy resumed"), drawn green when the screen has none of its own.
+	Flash string
+	// Alerts are the alert events, newest first: ! lists every one with its
+	// time (spec 9.F: nothing vanishes).
+	Alerts []FactoryAlert
+}
+    FactoryData is one read of the factory: home's rows and chips and every
+    task's cards. Rows are drawn grouped by Group (factory_rows.go); Cards are
+    by task id (FactoryRow.ID).
+
 type FactoryGroup int
     FactoryGroup is the band of the home list a task sits in, by who it waits
     on.
@@ -25865,6 +25970,18 @@ const (
 	// MarkDone marks a task that finished.
 	MarkDone
 )
+type FactoryOptions struct {
+	Icons   IconMode // the symbols: unicode (default), nerd or ascii
+	NoMouse bool     // start with mouse support off ([terminal] mouse = false); m turns it on and off
+	Now     func() time.Time
+	// Tick schedules the screen's timers (the refresh, the spinner's frames,
+	// the end of a footer note, the wait before a preview); default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+	// Settings, when set, lets `,` open the settings screen over the factory.
+	Settings *SettingsScreen
+}
+    FactoryOptions tune the factory screen.
+
 type FactoryRow struct {
 	ID int64
 	// Key is what the task is called in the list: its Jira key, or its GitHub
@@ -25897,6 +26014,13 @@ type FactoryRow struct {
     The fields after Help are optional extra forms of the text before them:
     the painter draws the form that fits the screen and falls back to the plain
     one when a form is empty.
+
+type FactorySource interface {
+	Frame(ctx context.Context) (FactoryData, error)
+}
+    FactorySource reads what the factory screen shows. The screen calls Frame
+    from a command, on its refresh and after each action, with a context that
+    ends when the screen closes.
 
 type FindingsInfo struct {
 	Counts          [4]int // P0..P3 findings posted
@@ -26013,6 +26137,8 @@ type NewTaskForm struct {
 	Keys []string
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
+
+	// Has unexported fields.
 }
     NewTaskForm is the new task screen: the operator's text and what the factory
     understood of it. A row is drawn only when its field is filled.
@@ -26495,10 +26621,39 @@ type QuestionCard struct {
 	NeedlessReasons []string
 	// Hints are the footer's key hints; none: the card's own (questionHints).
 	Hints []hint `json:"-"`
+
+	// Revision is the revision of the questions on the card: the batch of
+	// answers binds to it, and the factory refuses a batch for another
+	// (ErrQuestionsChanged).
+	Revision int
+
+	// Has unexported fields.
 }
     QuestionCard is the agents' questions before coding, one at a time,
     and their recap. Questions are drawn in the order given; Current is the one
     on the card.
+
+type QuestionsChangedError struct {
+	At  time.Time
+	Why string
+}
+    QuestionsChangedError is ErrQuestionsChanged with when the questions changed
+    and, when the factory knows, why ("Question 2 is open again.").
+
+func (e *QuestionsChangedError) Error() string
+
+func (e *QuestionsChangedError) Is(target error) bool
+    Is makes every QuestionsChangedError match ErrQuestionsChanged.
+
+type ReadyBinding struct {
+	HeadSHA, ReportHash, DiffHash string
+	DiffOpened, Shown             time.Time
+	DiffDwell                     time.Duration
+}
+    ReadyBinding binds a decision on the ready card to what the card showed:
+    the head and the hashes of the report and the diff (from the source),
+    and the screen's own times: when the card was first shown, when the diff was
+    first opened and how long the pager was open in all (zero: never).
 
 type ReadyCard struct {
 	// TaskKey is the task's Jira key or its GitHub number.
@@ -26550,6 +26705,19 @@ type ReadyCard struct {
 	Cursor int
 	// Hints are the footer's key hints; none: the card's own (readyHints).
 	Hints []hint `json:"-"`
+
+	// Copy is the copy the task holds ("talkable.factory3"), which a drop
+	// frees: its y/N names it.
+	Copy string
+	// NoPush says why push is not offered on this card ("the base conflicts:
+	// the writer merges it"); empty: it is. The screen refuses a push then,
+	// and the card says so on the option.
+	NoPush string
+	// Failed are the checks that failed ("rubocop: 2 offenses"), drawn under
+	// PROOF behind a red ✗; the recommendation is then send back.
+	Failed []string
+
+	// Has unexported fields.
 }
     ReadyCard is a finished task waiting for the operator's decision: read the
     diff, then push, send back or drop. The recommendation is hidden until the
@@ -27083,6 +27251,11 @@ type TaskCard struct {
 	Retry bool
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
+	// Ask is the y/N question being asked (a retry, a drop); empty: the key
+	// hints.
+	Ask string
+
+	// Has unexported fields.
 }
     TaskCard is a task's card, cut to what milestone 1a draws: the header,
     what the task waits for, its stages, agents, report and lessons.

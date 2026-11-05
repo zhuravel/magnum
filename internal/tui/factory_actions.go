@@ -13,6 +13,8 @@ package tui
 //	cmd := bar.ask("Push PR-12301's branch and open the PR?", func(ctx context.Context) (ActionResult, error) { ... })
 //	cmd, taken := bar.key(msg)    // in Update, for a key press, before the screen's own keys
 //	cmd, taken := bar.update(msg) // in Update, for the messages the bar sent itself
+//	cmd := bar.start(label, run)  // an action that asks nothing (o: step into the pane)
+//	bar.drop()                    // the screen quits: a question up is dropped, and nothing runs after
 //
 // An action returns its text only: the bar logs the ActionResult as it is but
 // does not follow a Request it names (the board's follow does that), so a
@@ -69,21 +71,27 @@ type factoryQuestion struct {
 // at a time, in the background: the screen's navigation keys keep working
 // while it runs, and only a new question is refused.
 type factoryBar struct {
-	ctx  context.Context // the screen's: it ends when the screen closes
-	log  *ActionLog
-	now  func() time.Time
-	tick func(time.Duration) tea.Cmd // answers with a message after the delay; the bar wraps it in its own
+	ctx context.Context // the screen's: it ends when the screen closes
+	log *ActionLog
+	now func() time.Time // read on the screen's turn only (key, start), never on an action's goroutine
+	// tick schedules the end of a note, as the screens' Tick does (tea.Tick):
+	// its command answers with the bar's own message.
+	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	st   styles
 
-	asking *factoryQuestion // the question awaiting y/N
-	busy   string           // the label of the action in flight
+	asking  *factoryQuestion // the question awaiting y/N
+	busy    string           // the label of the action in flight
+	dropped bool             // the screen quits: no question is asked or answered any more
 
 	flash     string
 	flashKind factoryFlashKind
 	flashSeq  int
 }
 
-func newFactoryBar(ctx context.Context, log *ActionLog, now func() time.Time, tick func(time.Duration) tea.Cmd) factoryBar {
+func newFactoryBar(ctx context.Context, log *ActionLog, now func() time.Time, tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd) factoryBar {
+	if ctx == nil { // an action never runs on a nil context
+		ctx = context.Background()
+	}
 	if log == nil {
 		log = NewActionLog()
 	}
@@ -91,9 +99,17 @@ func newFactoryBar(ctx context.Context, log *ActionLog, now func() time.Time, ti
 		now = time.Now
 	}
 	if tick == nil {
-		tick = func(d time.Duration) tea.Cmd { return tea.Tick(d, func(time.Time) tea.Msg { return nil }) }
+		tick = tea.Tick
 	}
 	return factoryBar{ctx: ctx, log: log, now: now, tick: tick, st: newStyles(true)}
+}
+
+// drop is the screen quitting: a question up is dropped unanswered, and the
+// bar asks, answers and starts nothing after, so a y queued behind ctrl+c
+// never starts a push. An action already running ends with the screen's
+// context, and the log keeps its outcome.
+func (b *factoryBar) drop() {
+	b.asking, b.dropped = nil, true
 }
 
 // applyStyles switches the bar to st, once the terminal reports its background.
@@ -103,20 +119,22 @@ func (b *factoryBar) applyStyles(st styles) { b.st = st }
 // answer. It runs nothing itself: only y or Y answered through key does. While
 // an action runs, or another question waits, the new one is refused with a
 // note and run is dropped.
+//
+// A question asked while another waits is dropped without a note: the
+// question on the bar is what waits, and it stays drawn.
 func (b *factoryBar) ask(sentence string, run factoryAction) tea.Cmd {
-	if run == nil {
-		return nil
-	}
 	switch {
+	case run == nil || b.dropped || b.asking != nil:
+		return nil
 	case b.busy != "":
 		return b.show("wait: "+b.busy+" runs", factoryFlashWait)
-	case b.asking != nil:
-		return b.show("wait: "+b.asking.label+" waits for y/N", factoryFlashWait)
 	}
 	sentence = cleanText(sentence)
 	label := cmp.Or(strings.TrimSpace(strings.TrimSuffix(sentence, "?")), "action")
 	b.asking = &factoryQuestion{sentence: sentence, label: label, run: run}
-	b.flash = ""
+	if b.flashKind != factoryFlashFailed { // a failure stays until a key, beside the question on a card
+		b.flash = ""
+	}
 	return nil
 }
 
@@ -136,19 +154,49 @@ func (b *factoryBar) key(msg tea.KeyPressMsg) (cmd tea.Cmd, taken bool) {
 	if !confirms(msg.String()) {
 		return b.show(q.label+": cancelled, nothing was run", factoryFlashNote), true
 	}
-	b.busy, b.flash = q.label, ""
+	return b.run(q.label, q.run), true
+}
+
+// cancel answers a question up with no, as any key but y does (a click
+// while it waits); it reports whether there was one.
+func (b *factoryBar) cancel() (tea.Cmd, bool) {
+	if b.asking == nil {
+		return nil, false
+	}
+	q := b.asking
+	b.asking = nil
+	return b.show(q.label+": cancelled, nothing was run", factoryFlashNote), true
+}
+
+// start runs an action that asks nothing (stepping into a pane): at once,
+// unless another runs or a question waits; its outcome goes to the footer
+// and the log as any other's.
+func (b *factoryBar) start(label string, run factoryAction) tea.Cmd {
+	switch {
+	case run == nil || b.dropped || b.asking != nil:
+		return nil
+	case b.busy != "":
+		return b.show("wait: "+b.busy+" runs", factoryFlashWait)
+	}
+	return b.run(cmp.Or(strings.TrimSpace(cleanText(label)), "action"), run)
+}
+
+// run starts run in the background. Its time is taken here, on the
+// screen's turn: the clock is never read on the action's goroutine.
+func (b *factoryBar) run(label string, run factoryAction) tea.Cmd {
+	b.busy, b.flash = label, ""
 	// The command holds copies, not b: the screen's model is copied on every
 	// update, and the action ends on its own goroutine.
-	ctx, log, now, label, run := b.ctx, b.log, b.now, q.label, q.run
+	ctx, log, at := b.ctx, b.log, b.now()
 	return func() tea.Msg {
 		res, err := run(ctx)
-		e := logEntry{at: now(), what: label, text: res.Text, reqs: res.Requests}
+		e := logEntry{at: at, what: label, text: res.Text, reqs: res.Requests}
 		if err != nil {
 			e.err = err.Error()
 		}
 		log.add(e)
 		return factoryDoneMsg{label: label, text: res.Text, err: err}
-	}, true
+	}
 }
 
 // update takes the messages the bar sent itself; taken is false for any other.
@@ -178,23 +226,32 @@ func (b *factoryBar) show(text string, kind factoryFlashKind) tea.Cmd {
 	if kind == factoryFlashFailed {
 		return nil
 	}
-	seq, wait := b.flashSeq, b.tick(flashFor)
-	if wait == nil {
-		return nil
-	}
-	// Whatever message the tick answers with, the bar learns which note ended.
-	return func() tea.Msg {
-		wait()
-		return factoryExpireMsg{seq: seq}
-	}
+	seq := b.flashSeq
+	return b.tick(flashFor, func(time.Time) tea.Msg { return factoryExpireMsg{seq: seq} })
 }
 
 // view is the footer line in width cells: the question, else the note, else
 // the action in flight; "" when there is none.
 func (b *factoryBar) view(width int) string {
-	switch {
-	case b.asking != nil:
+	if b.asking != nil {
 		return b.st.confirmLine(b.asking.sentence, width)
+	}
+	return b.note(width)
+}
+
+// question is the sentence waiting for y/N; "" when none waits.
+func (b *factoryBar) question() string {
+	if b.asking == nil {
+		return ""
+	}
+	return b.asking.sentence
+}
+
+// note is the footer's note in width cells, else the action in flight,
+// without the question: a card draws its question in its own footer and
+// this on its rule.
+func (b *factoryBar) note(width int) string {
+	switch {
 	case b.flash != "":
 		return b.flashStyle().Render(b.flashFit(width))
 	case b.busy != "":

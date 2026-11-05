@@ -36,7 +36,7 @@ func (p *cardPainter) newTask(f NewTaskForm, height int) string {
 	default:
 		foot = []string{p.hintsLine(p.newTaskHints(f))}
 	}
-	frame, _ := p.assemble(head, body, 0, "", foot, height)
+	frame, _ := p.assemble(head, body, 0, f.rule, foot, height)
 	return frame
 }
 

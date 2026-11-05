@@ -138,6 +138,32 @@ type QuestionCard struct {
 	NeedlessReasons []string
 	// Hints are the footer's key hints; none: the card's own (questionHints).
 	Hints []hint `json:"-"`
+
+	// Revision is the revision of the questions on the card: the batch of
+	// answers binds to it, and the factory refuses a batch for another
+	// (ErrQuestionsChanged).
+	Revision int
+
+	// The screen's own state, which the factory never fills: the note on the
+	// rule (styled), the line typed in the footer, and the recap's "the
+	// questions changed" variant.
+	rule    string
+	input   *cardInput
+	changed *recapChange
+	sending bool // the batch is on its way: the recap draws its keys, not its y/N
+}
+
+// cardInput is a line typed in a card's footer (your own answer, the note
+// of a send back): what it is for, and the text so far.
+type cardInput struct{ label, text string }
+
+// recapChange is the recap after the factory refused the batch because the
+// questions changed: when, why (may be empty) and the question to see again
+// (from 1; 0: the questions).
+type recapChange struct {
+	at    time.Time
+	why   string
+	again int
 }
 
 // CardQuestion is one question with its options and, once answered, its answer.
@@ -164,10 +190,22 @@ type CardQuestion struct {
 	Comment string
 	// Asks is who the Comment asks ("rev-ann").
 	Asks string
+
+	// sent marks an answer the factory already has: the recap shows it, and
+	// the batch of the screen neither sends nor counts it.
+	sent bool
 }
 
 // CardOption is one choice and what it means for the question's example.
-type CardOption struct{ Label, Means string }
+type CardOption struct {
+	Label, Means string
+	// Send is what the option answers: "" for its Label; "ask:<login>" asks
+	// that person instead (the factory drafts the comment).
+	Send string
+	// Own marks the option that takes your own words ("Type your own
+	// answer"): picking it asks for them.
+	Own bool
+}
 
 // ReadyCard is a finished task waiting for the operator's decision: read the
 // diff, then push, send back or drop. The recommendation is hidden until the
@@ -222,6 +260,22 @@ type ReadyCard struct {
 	Cursor int
 	// Hints are the footer's key hints; none: the card's own (readyHints).
 	Hints []hint `json:"-"`
+
+	// Copy is the copy the task holds ("talkable.factory3"), which a drop
+	// frees: its y/N names it.
+	Copy string
+	// NoPush says why push is not offered on this card ("the base conflicts:
+	// the writer merges it"); empty: it is. The screen refuses a push then,
+	// and the card says so on the option.
+	NoPush string
+	// Failed are the checks that failed ("rubocop: 2 offenses"), drawn under
+	// PROOF behind a red ✗; the recommendation is then send back.
+	Failed []string
+
+	// The screen's own state: the note on the rule (styled) and the line
+	// typed in the footer.
+	rule  string
+	input *cardInput
 }
 
 // CardFile is one changed file of a ready card.
@@ -269,6 +323,11 @@ type TaskCard struct {
 	Retry bool
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
+	// Ask is the y/N question being asked (a retry, a drop); empty: the key
+	// hints.
+	Ask string
+
+	rule string // the screen's note on the rule (styled)
 }
 
 // CardStage is one stage of a task. State is one of "done", "skipped",
@@ -327,6 +386,8 @@ type NewTaskForm struct {
 	Keys []string
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
+
+	rule string // the screen's note on the rule (styled)
 }
 
 // FormLink is a link in the new task text. Kind is "jira" (a Jira link is

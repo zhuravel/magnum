@@ -36,9 +36,14 @@ func newFactoryCmd(c *Context) *cobra.Command {
 			"daemon on this build), `uninstall` removes it, `status` lists the tasks, `start` hands it a task, "+
 			"`answer` answers a task's questions, `decide` decides on a task's ready card, `retry` lets a task that "+
 			"waits on you go on, `stats` counts what the factory still asks of you against the baseline that "+
-			"`baseline` froze, and `daemon` is what the job runs.",
+			"`baseline` froze, and `daemon` is what the job runs. With no command, in a terminal, `magnum factory` opens "+
+			"the factory's screen: one line per task, grouped by who it waits on, and the cards behind them (? lists "+
+			"its keys).",
 		func(pos []string) int {
 			if len(pos) == 0 {
+				if inspScreen(c) {
+					return runFactoryScreen(c)
+				}
 				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide|retry|stats|baseline>")
 			}
 			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start|answer|decide|retry|stats|baseline>")

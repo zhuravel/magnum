@@ -48,6 +48,13 @@ type factoryFrame struct {
 	Next string
 	// Digest is what happened while the operator was away; nil: no digest.
 	Digest *Digest
+
+	// rule is the screen's own note on the status rule (styled): a question,
+	// a refusal or an action's outcome; it takes the place of Flash.
+	rule string
+	// status takes the place of the empty home's one line (styled): the
+	// screen is loading, or could not read the factory.
+	status string
 }
 
 const (
@@ -965,6 +972,9 @@ func collapse(bands []factoryBand, room int) []factoryBand {
 // emptyLine is the one line of a home with no task.
 func (p *factoryPainter) emptyLine() string {
 	text := p.st.Dim.Render("No tasks yet. ") + p.st.Key.Render("n") + p.st.Dim.Render(" starts one from a Jira key or your words.")
+	if p.f.status != "" { // the screen is loading, or could not read the factory
+		text = truncate(p.f.status, p.width)
+	}
 	return spaces((p.width-ansi.StringWidth(text))/2) + text
 }
 
@@ -1034,8 +1044,8 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	for height > 0 && len(lines) < factoryTop+bodyH {
 		lines = append(lines, "")
 	}
-	msg := ""
-	if p.f.Flash != "" {
+	msg := p.f.rule
+	if msg == "" && p.f.Flash != "" {
 		msg = p.st.OK.Render(p.tick() + " " + p.f.Flash)
 	}
 	help := ""

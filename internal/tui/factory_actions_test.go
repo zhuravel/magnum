@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,13 +15,12 @@ import (
 
 var factoryBarClock = time.Date(2026, 11, 5, 14, 12, 0, 0, time.UTC)
 
-// factoryBarTick is the bar's timer in tests: its command answers at once,
-// so a test that runs it sees the bar's expiry message.
-func factoryBarTick(time.Duration) tea.Cmd { return func() tea.Msg { return nil } }
-
+// testFactoryBar builds the bar as the screen does, with the screens' test
+// timer (instantTick): execCmd drops its notes' timers unrun, as the
+// board's tests see theirs, and a test that runs one sees the expiry.
 func testFactoryBar(ctx context.Context) (factoryBar, *ActionLog) {
 	log := NewActionLog()
-	return newFactoryBar(ctx, log, func() time.Time { return factoryBarClock }, factoryBarTick), log
+	return newFactoryBar(ctx, log, func() time.Time { return factoryBarClock }, instantTick), log
 }
 
 // barView is the bar's line without styling.
@@ -177,7 +177,7 @@ func TestFactoryBarRefusesASecondActionWhileOneRuns(t *testing.T) {
 		t.Error("a y started something while an action ran")
 	}
 	// The refusal's note ends; the running action stays on the bar.
-	deliver(t, &b, execCmd(t, waitCmd)...)
+	deliver(t, &b, waitCmd())
 	mustContain(t, barView(&b, 140), "busy: Push PR-12301's branch")
 
 	close(release)
@@ -195,12 +195,18 @@ func TestFactoryBarRefusesASecondActionWhileOneRuns(t *testing.T) {
 	mustContain(t, barView(&b, 140), "Start PR-12302? y/N")
 }
 
+// A second question while one waits is dropped: the question on the bar is
+// what waits, and it stays drawn (no note hides behind it).
 func TestFactoryBarKeepsTheFirstQuestion(t *testing.T) {
 	b, _ := testFactoryBar(t.Context())
 	var first, second atomic.Int32
 	b.ask("Push PR-12301?", func(context.Context) (ActionResult, error) { first.Add(1); return ActionResult{}, nil })
-	waitCmd := b.ask("Drop PR-12302?", func(context.Context) (ActionResult, error) { second.Add(1); return ActionResult{}, nil })
-	deliver(t, &b, execCmd(t, waitCmd)...)
+	if cmd := b.ask("Drop PR-12302?", func(context.Context) (ActionResult, error) { second.Add(1); return ActionResult{}, nil }); cmd != nil {
+		t.Error("a second question while one waits asked for a timer: its note would never be drawn")
+	}
+	if b.flash != "" {
+		t.Errorf("a second question left a note that the question hides: %q", b.flash)
+	}
 	mustContain(t, barView(&b, 140), "Push PR-12301? y/N")
 	cmd, _ := b.key(keyMsg("y"))
 	deliver(t, &b, execCmd(t, cmd)...)
@@ -286,7 +292,7 @@ func TestFactoryBarShowsAResultThenClearsIt(t *testing.T) {
 		t.Errorf("the bar shows %q after the action, want its last line", v)
 	}
 	// A timer of an older note does not clear a newer one.
-	oldExpire := execCmd(t, expire)
+	oldExpire := []tea.Msg{expire()}
 	deliver(t, &b, confirmed(t, &b, "Start PR-12302?", func(context.Context) (ActionResult, error) {
 		return ActionResult{Text: "started"}, nil
 	})...)
@@ -323,6 +329,95 @@ func TestFactoryBarKeepsAFailureUntilAKey(t *testing.T) {
 	}
 	if v := b.view(200); v != "" {
 		t.Errorf("the failure stays after a key: %q", v)
+	}
+}
+
+// The screen quits with a question up: the question is dropped, and a y
+// that comes after (queued behind ctrl+c) answers nothing and starts
+// nothing; a later ask is refused.
+func TestFactoryBarDropsItsQuestionWhenTheScreenQuits(t *testing.T) {
+	b, log := testFactoryBar(t.Context())
+	var ran atomic.Int32
+	run := func(context.Context) (ActionResult, error) { ran.Add(1); return ActionResult{}, nil }
+	b.ask("Push PR-12301's branch and open the PR?", run)
+	b.drop()
+	if cmd, taken := b.key(keyMsg("y")); taken || cmd != nil {
+		t.Error("a y after the drop was taken as an answer")
+	}
+	if cmd := b.ask("Drop PR-12302?", run); cmd != nil || b.asking != nil {
+		t.Error("a question was asked after the drop")
+	}
+	if cmd, taken := b.key(keyMsg("y")); taken || cmd != nil {
+		t.Error("a y after a refused ask was taken")
+	}
+	if v := b.view(100); v != "" {
+		t.Errorf("a dropped bar draws %q", v)
+	}
+	if cmd := b.start("Open PR-12301's pane", run); cmd != nil {
+		t.Error("an action started after the drop")
+	}
+	if ran.Load() != 0 {
+		t.Errorf("a dropped question ran %d times", ran.Load())
+	}
+	if entries, _ := log.snapshot(); len(entries) != 0 {
+		t.Errorf("a dropped question left log entries: %+v", entries)
+	}
+}
+
+// The action's time is the y's, taken on the screen's turn, not when the
+// command's goroutine ends.
+func TestFactoryBarTakesTheActionsTimeOnTheKey(t *testing.T) {
+	var mu sync.Mutex
+	clock := factoryBarClock
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	log := NewActionLog()
+	b := newFactoryBar(t.Context(), log, now, instantTick)
+	b.ask("Push PR-12301?", func(context.Context) (ActionResult, error) { return ActionResult{Text: "pushed"}, nil })
+	cmd, _ := b.key(keyMsg("y"))
+	mu.Lock()
+	clock = clock.Add(time.Hour) // the action ends an hour later
+	mu.Unlock()
+	deliver(t, &b, execCmd(t, cmd)...)
+	entries, _ := log.snapshot()
+	if len(entries) != 1 || !entries[0].at.Equal(factoryBarClock) {
+		t.Errorf("the log has %+v, want one entry at the y's time %v", entries, factoryBarClock)
+	}
+}
+
+// A bar built without a context runs its actions on one that is not nil.
+func TestFactoryBarNeverRunsAnActionOnANilContext(t *testing.T) {
+	var none context.Context
+	b := newFactoryBar(none, nil, nil, nil)
+	got := make(chan context.Context, 1)
+	b.ask("Push PR-12301?", func(ctx context.Context) (ActionResult, error) { got <- ctx; return ActionResult{}, nil })
+	cmd, _ := b.key(keyMsg("y"))
+	execCmd(t, cmd)
+	if ctx := receive(t, got); ctx == nil {
+		t.Error("the action ran on a nil context")
+	}
+}
+
+// An action that asks nothing (o: step into the pane) runs at once, is
+// logged as any other, and is refused while another runs.
+func TestFactoryBarStartsAnActionThatAsksNothing(t *testing.T) {
+	b, log := testFactoryBar(t.Context())
+	cmd := b.start("Open PR-12301's pane", func(context.Context) (ActionResult, error) {
+		return ActionResult{Text: "focused the writer's pane"}, nil
+	})
+	if cmd == nil || b.busy == "" {
+		t.Fatal("start did not run the action")
+	}
+	if refused := b.start("Open PR-12302's pane", func(context.Context) (ActionResult, error) {
+		t.Error("a second action ran while one ran")
+		return ActionResult{}, nil
+	}); refused == nil {
+		t.Error("a refused start asked for no note's timer")
+	}
+	mustContain(t, barView(&b, 140), "wait: Open PR-12301's pane runs")
+	deliver(t, &b, execCmd(t, cmd)...)
+	mustContain(t, barView(&b, 140), "focused the writer's pane")
+	if entries, _ := log.snapshot(); len(entries) != 1 || entries[0].what != "Open PR-12301's pane" {
+		t.Errorf("log = %+v, want the one action", entries)
 	}
 }
 

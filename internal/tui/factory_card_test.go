@@ -893,11 +893,15 @@ func TestFactoryCardsFillTheirHeightSoTheFooterSitsAtTheBottom(t *testing.T) {
 }
 
 func TestFactoryCardsCountWhatTheirHeightCutsOff(t *testing.T) {
+	// The question card gives way above its options first (12 rows hold the
+	// question and its options): at 9 even those are cut, and counted.
+	heights := map[string]int{"question": 9, "ready-before": 12, "new-jira": 12}
 	for _, name := range []string{"question", "ready-before", "new-jira"} {
-		frame := ansi.Strip(cardCases()[name](100, 12, true, IconsUnicode))
+		h := heights[name]
+		frame := ansi.Strip(cardCases()[name](100, h, true, IconsUnicode))
 		lines := strings.Split(frame, "\n")
-		if len(lines) != 12 {
-			t.Fatalf("%s: %d lines, want 12:\n%s", name, len(lines), frame)
+		if len(lines) != h {
+			t.Fatalf("%s: %d lines, want %d:\n%s", name, len(lines), h, frame)
 		}
 		// The ready card keeps its options above the rule: its lists count
 		// what they do not show.

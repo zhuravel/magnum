@@ -145,7 +145,7 @@ func cleanQuestionCard(c QuestionCard) QuestionCard {
 		q.Comment = strings.Join(cleanLines(q.Comment), "\n")
 		q.Options = slices.Clone(q.Options)
 		for j, o := range q.Options {
-			q.Options[j] = CardOption{cleanText(o.Label), cleanText(o.Means)}
+			q.Options[j] = CardOption{Label: cleanText(o.Label), Means: cleanText(o.Means), Send: cleanText(o.Send), Own: o.Own}
 		}
 		qs[i] = q
 	}
@@ -159,6 +159,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 	c.ScreenshotsNote, c.Ask, c.Frees = cleanText(c.ScreenshotsNote), cleanText(c.Ask), cleanText(c.Frees)
 	c.Doubts, c.Flags, c.Leftovers = cleanAll(c.Doubts), cleanAll(c.Flags), cleanAll(c.Leftovers)
 	c.Unread, c.Reasons, c.Hints = cleanAll(c.Unread), cleanAll(c.Reasons), cleanHints(c.Hints)
+	c.Copy, c.NoPush, c.Failed = cleanText(c.Copy), cleanText(c.NoPush), cleanAll(c.Failed)
 	c.Files = slices.Clone(c.Files)
 	for i := range c.Files {
 		c.Files[i].Path = cleanText(c.Files[i].Path)
@@ -169,6 +170,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 func cleanTaskCard(c TaskCard) TaskCard {
 	c.Key, c.Kind, c.Title, c.Branch = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch)
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
+	c.Ask = cleanText(c.Ask)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
 	c.Stages = slices.Clone(c.Stages)
 	for i, s := range c.Stages {
@@ -516,19 +518,19 @@ func (p *cardPainter) questionCard(c QuestionCard, height int) string {
 		return frame
 	}
 	q := c.Questions[cur]
-	body := p.questionList(c, cur)
-	body = append(body, "")
-	body = append(body, p.textRows(1, p.st.Label, wrapText(q.Text, p.wrapW(1), 3))...)
-	body = append(body, p.textRows(1, p.st.Dim, wrapText(q.Context, p.wrapW(1), 2))...)
-	if q.Example != "" {
-		body = append(body, p.textRows(1, p.st.Dim, wrapText("Example: "+q.Example, p.wrapW(1), 2))...)
+	parts := questionParts{
+		list: p.questionList(c, cur), cur: cur,
+		text:    p.textRows(1, p.st.Label, wrapText(q.Text, p.wrapW(1), 3)),
+		context: p.textRows(1, p.st.Dim, wrapText(q.Context, p.wrapW(1), 2)),
 	}
-	body = append(body, "")
+	if q.Example != "" {
+		parts.example = p.textRows(1, p.st.Dim, wrapText("Example: "+q.Example, p.wrapW(1), 2))
+	}
 	rec := -1
 	if q.Recommended >= 0 && q.Recommended < len(q.Options) {
 		rec = q.Recommended
 	}
-	body = append(body, p.optionList(q.Options, c.Cursor, rec, q.Why)...)
+	parts.choice = p.optionList(q.Options, c.Cursor, rec, q.Why)
 	if rec < 0 && len(q.Options) > 0 {
 		text := "no recommendation"
 		if q.Why != "" {
@@ -537,14 +539,96 @@ func (p *cardPainter) questionCard(c QuestionCard, height int) string {
 		if c.Cursor < 0 || c.Cursor >= len(q.Options) {
 			text += p.g.sep + "nothing is marked: pick one (j k)"
 		}
-		body = append(body, p.textRows(1, p.st.Dim, wrapText(text, p.wrapW(1), 2))...)
+		parts.choice = append(parts.choice, p.textRows(1, p.st.Dim, wrapText(text, p.wrapW(1), 2))...)
 	}
 	foot := []string{p.hintsLine(orHints(c.Hints, p.questionHints(c, q, cur)))}
-	if len(c.NeedlessReasons) > 0 {
+	switch {
+	case c.input != nil:
+		foot = p.inputFoot(c.input)
+	case len(c.NeedlessReasons) > 0:
 		foot = p.reasonLines("Why needless?", c.NeedlessReasons)
 	}
-	frame, _ := p.assemble(head, body, 0, "", foot, height)
+	room := -1 // no height: everything is drawn
+	if height > 0 {
+		room = max(height-len(head)-1-len(foot), 0)
+	}
+	body := parts.fit(room)
+	frame, _ := p.assemble(head, body, p.markInView(body, room), c.rule, foot, height)
 	return frame
+}
+
+// questionParts are the pieces of the question card's body: the batch's
+// questions, the question on the card (cur) with its context and example,
+// and its options (choice), which stay in view.
+type questionParts struct {
+	list                   []string
+	cur                    int
+	text, context, example []string
+	choice                 []string
+}
+
+// fit lays the parts out in room lines (room < 0: all of them). On a short
+// pane they give way in this order, the least needed first: the blanks, the
+// example, the context, the other questions of the batch, the line of the
+// question on the card; the question and its options stay.
+func (q questionParts) fit(room int) []string {
+	cat := func(blanks bool, list []string, ex, ctx bool) []string {
+		var out []string
+		out = append(out, list...)
+		if blanks {
+			out = append(out, "")
+		}
+		out = append(out, q.text...)
+		if ctx {
+			out = append(out, q.context...)
+		}
+		if ex {
+			out = append(out, q.example...)
+		}
+		if blanks {
+			out = append(out, "")
+		}
+		return append(out, q.choice...)
+	}
+	var mine []string
+	if q.cur >= 0 && q.cur < len(q.list) {
+		mine = q.list[q.cur : q.cur+1]
+	}
+	steps := [][]string{
+		cat(true, q.list, true, true),
+		cat(false, q.list, true, true),
+		cat(false, q.list, false, true),
+		cat(false, q.list, false, false),
+		cat(false, mine, false, false),
+	}
+	for _, s := range steps {
+		if room < 0 || len(s) <= room {
+			return s
+		}
+	}
+	return cat(false, nil, false, false)
+}
+
+// markInView is the first body line to draw so that the line under the mark
+// is in view in room lines: 0 unless the mark would fall below.
+func (p *cardPainter) markInView(body []string, room int) int {
+	if room <= 0 || len(body) <= room {
+		return 0
+	}
+	mark := strings.TrimSpace(p.cursorMark())
+	for i, l := range body {
+		if strings.HasPrefix(ansi.Strip(l), " "+mark+" ") && i >= room {
+			return i - room + 1
+		}
+	}
+	return 0
+}
+
+// inputFoot is a footer that takes a typed line: what it is for, then the
+// text behind the bar, with the caret.
+func (p *cardPainter) inputFoot(in *cardInput) []string {
+	rows := p.inputRows(cleanInput(strings.ReplaceAll(in.text, "\n", " ")))
+	return []string{" " + p.st.Label.Render(cleanText(in.label)), rows[len(rows)-1]}
 }
 
 // answerTag is where an answer came from, in the recap's words.
@@ -709,11 +793,12 @@ func (p *cardPainter) questionHints(c QuestionCard, q CardQuestion, cur int) []h
 // the recap
 
 // splitAnswers numbers the answers and the asks (an answer that asks someone
-// through a drafted Jira comment) of a batch, from 1.
+// through a drafted Jira comment) of a batch, from 1. An answer the factory
+// has already (sent) is no part of the batch.
 func splitAnswers(qs []CardQuestion) (answers, asks []int) {
 	for i, q := range qs {
 		switch {
-		case q.Answer == "":
+		case q.Answer == "" || q.sent:
 		case q.Comment != "":
 			asks = append(asks, i+1)
 		default:
@@ -851,9 +936,35 @@ func (p *cardPainter) recap(c QuestionCard, height int) string {
 		}
 	}
 	foot := []string{p.hintsLine(orHints(c.Hints, []hint{{"esc", "back"}}))}
-	if q := recapQuestion(answers, asks); q != "" {
-		foot = p.askLines(q)
+	msg := c.rule
+	switch {
+	case c.changed != nil:
+		msg, foot = p.changedFoot(*c.changed)
+	case c.sending:
+	default:
+		if q := recapQuestion(answers, asks); q != "" {
+			foot = p.askLines(q)
+		}
 	}
-	frame, _ := p.assemble(head, body, 0, "", foot, height)
+	frame, _ := p.assemble(head, body, 0, msg, foot, height)
 	return frame
+}
+
+// changedFoot is the recap after the factory refused the batch because the
+// questions changed (spec 9.C): the rule says so and that nothing was sent,
+// the footer why, then the keys.
+func (p *cardPainter) changedFoot(ch recapChange) (msg string, foot []string) {
+	text := "the questions changed"
+	if !ch.at.IsZero() {
+		text += " at " + p.clock(ch.at)
+	}
+	msg = p.st.Warn.Render(text + p.g.sep + "nothing was sent")
+	for _, l := range wrapText(cleanText(ch.why), p.width-2, 2) {
+		foot = append(foot, " "+l)
+	}
+	again := hint{"enter", "see the questions again"}
+	if ch.again > 0 {
+		again = hint{"enter", fmt.Sprintf("see question %d again", ch.again)}
+	}
+	return msg, append(foot, p.hintsLine([]hint{again, {"esc", "back"}}))
 }
