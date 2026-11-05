@@ -4004,6 +4004,13 @@ const (
     Kind.OnHooksReview values.
 
 const (
+	MCPTransportURL     = "url"
+	MCPTransportCommand = "command"
+)
+    ProjectServer.Transport values: the key of the server's table that tells how
+    Codex reaches it.
+
+const (
 	// ProjectMCPAllow: the MCP servers of an unchanged .codex/config.toml
 	// in the checkout (the base branch's, so the team's) load.
 	ProjectMCPAllow = "allow"
@@ -5637,13 +5644,27 @@ type Kind struct {
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
 	MCPDisable []string `toml:"mcp_disable"`
+	// MCPDisableURL, MCPDisableCommand: args that give MCP server {server} a
+	// transport of the stated kind with a fixed value, passed once before its
+	// MCPDisable for a server only the checkout's config declares (project_mcp
+	// "off"; ProjectServer.Transport), e.g. codex's
+	// ["-c", "mcp_servers.{server}.url=\"https://mcp.invalid\""] for a table with
+	// a url and ["-c", "mcp_servers.{server}.command=\"true\""] for one with a
+	// command. Codex 0.166 reads the tables of the session's -c flags before it
+	// merges the checkout's, so enabled=false alone makes a table with no
+	// transport and Codex stops at its start. The value is never the file's:
+	// the PR controls it. Empty = no transport is passed for that kind of
+	// table (claude and a custom kind have none).
+	MCPDisableURL     []string `toml:"mcp_disable_url"`
+	MCPDisableCommand []string `toml:"mcp_disable_command"`
 	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
 	// declares when the PR leaves .codex/ as its merge base has it (the
 	// team's servers): "off" (the codex kind's default) turns each off
-	// through MCPDisable like the user's, except those in MCPAllow (see
-	// ConfigOffArgs); "allow" (the other kinds' default, "" counting as it)
-	// keeps them. A PR that changes .codex/ loads none of them
-	// (ProjectUntrust).
+	// through MCPDisable like the user's, except those in MCPAllow, a server
+	// the user's config does not declare first getting a transport
+	// (MCPDisableURL, MCPDisableCommand; see ConfigOffArgs); "allow" (the
+	// other kinds' default, "" counting as it) keeps them. A PR that changes
+	// .codex/ loads none of them (ProjectUntrust).
 	ProjectMCP string `toml:"project_mcp"`
 	// ProjectUntrust: args that keep the checkout's own project
 	// configuration out of one session, passed when the PR changes it
@@ -5795,13 +5816,14 @@ func (k Kind) Argv(a LaunchArgs) []string
     then a.Extra. A group whose value is empty is skipped; placeholders are
     replaced in every element.
 
-func (k Kind) ConfigOffArgs(servers, plugins, project, untrusted []string, docsOff bool) []string
+func (k Kind) ConfigOffArgs(servers, plugins []string, project []ProjectServer, untrusted []string, docsOff bool) []string
     ConfigOffArgs are the args that keep configuration out of a session:
     MCPStrict under MCPOff, MCPDisable once per server to turn off (servers
     under MCPOff, then under ProjectMCP "off" each project server not among
-    them; none in MCPAllow, nothing without MCPDisable), PluginDisable
-    once per plugin (PluginOffArgs), then ProjectDocsOff when docsOff and
-    UntrustArgs(untrusted).
+    them; none in MCPAllow, nothing without MCPDisable), a project server with
+    a Transport first getting that kind's MCPDisableURL or MCPDisableCommand,
+    PluginDisable once per plugin (PluginOffArgs), then ProjectDocsOff when
+    docsOff and UntrustArgs(untrusted).
 
 func (k Kind) ContextRegexp() (*regexp.Regexp, error)
     ContextRegexp compiles ContextPattern: nil without one, an error naming
@@ -5872,7 +5894,8 @@ type LaunchArgs struct {
 	// .codex/config.toml declares, turned off under project_mcp "off";
 	// Untrusted are the checkout's paths whose project config the session
 	// must not load (the PR changes .codex/). See ConfigOffArgs.
-	ProjectServers, Untrusted []string
+	ProjectServers []ProjectServer
+	Untrusted      []string
 	// DocsOff: the session gets ProjectDocsOff (the PR changes only the
 	// checkout's instruction files).
 	DocsOff bool
@@ -6257,6 +6280,20 @@ func (p Pool) Slot(n int) string
 
 func (p Pool) SlotEnv(slot string) map[string]string
     SlotEnv renders [pool.env] for a slot (blank values stay blank on purpose).
+
+type ProjectServer struct {
+	// Name is the server's name, a TOML bare key.
+	Name string
+	// Transport is the kind of table the server has, MCPTransportURL or
+	// MCPTransportCommand, when the user's config does not declare a server
+	// of that name: its override then carries a transport of that kind
+	// (MCPDisableURL, MCPDisableCommand), since no table of the user's holds
+	// one. Empty = the override is MCPDisable alone: the user's config
+	// declares the server too, and its table carries the transport.
+	Transport string
+}
+    ProjectServer is an MCP server the checkout's Codex config declares
+    (LaunchArgs.ProjectServers), turned off under project_mcp "off".
 
 type Prompt struct {
 	Name     string // as configured, e.g. "judge-initial.md"

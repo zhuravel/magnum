@@ -944,7 +944,8 @@ func validateKind(name string, k Kind) []error {
 		args    []string
 	}{{"resume", PlaceholderSession, k.Resume}, {"model", PlaceholderModel, k.Model},
 		{"effort", PlaceholderEffort, k.Effort}, {"name", PlaceholderTitle, k.Name}, {"subagents", PlaceholderSubagents, k.Subagents},
-		{"mcp_disable", PlaceholderServer, k.MCPDisable}, {"plugin_disable", PlaceholderPlugin, k.PluginDisable},
+		{"mcp_disable", PlaceholderServer, k.MCPDisable}, {"mcp_disable_url", PlaceholderServer, k.MCPDisableURL},
+		{"mcp_disable_command", PlaceholderServer, k.MCPDisableCommand}, {"plugin_disable", PlaceholderPlugin, k.PluginDisable},
 		{"tool_output", PlaceholderLimit, k.ToolOutput}} {
 		if len(g.args) > 0 && !slices.ContainsFunc(g.args, func(s string) bool { return strings.Contains(s, g.ph) }) {
 			bad("%s %q must contain %s", g.key, g.args, g.ph)

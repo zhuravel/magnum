@@ -130,30 +130,48 @@ func TestJudgeReadsTheMCPServersOfItsPaneEnvsCodexHome(t *testing.T) {
 }
 
 // Server names reach argv only as TOML bare keys (letters, digits, _ and
-// -), which Codex's -c key path carries as written.
+// -), which Codex's -c key path carries as written; a table with a url is a
+// url server and one with a command a command server, and one with neither
+// or both has no transport to give, so it is told apart from the rest.
 func TestMCPServerNamesAreBareKeys(t *testing.T) {
-	names, skipped, err := declaredMCPServers(`
+	servers, skipped, noTransport, err := declaredMCPServers(`
 [mcp_servers.docs]
+url = "https://docs.example.com/mcp"
 [mcp_servers.browser-2]
+command = "browser-mcp"
 [mcp_servers.x_Y9]
+url = "https://x.example.com/mcp"
 [mcp_servers."my.server"]
+url = "https://dotted.example.com/mcp"
 [mcp_servers."a b"]
 [mcp_servers."ü"]
 [mcp_servers."$(touch x)"]
 [mcp_servers.off]
 enabled = false
+url = "https://off.example.com/mcp"
+[mcp_servers.bare]
+enabled_tools = ["search"]
+[mcp_servers.both]
+url = "https://both.example.com/mcp"
+command = "both-mcp"
+[mcp_servers.number]
+url = 5
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(names, []string{"browser-2", "docs", "x_Y9"}) {
-		t.Fatalf("names = %q", names)
+	if want := []config.ProjectServer{{Name: "browser-2", Transport: config.MCPTransportCommand}, {Name: "docs", Transport: config.MCPTransportURL},
+		{Name: "x_Y9", Transport: config.MCPTransportURL}}; !slices.Equal(servers, want) {
+		t.Fatalf("servers = %q, want %q", servers, want)
 	}
 	if !slices.Equal(skipped, []string{"$(touch x)", "a b", "my.server", "ü"}) {
 		t.Fatalf("skipped = %q", skipped)
 	}
-	if names, skipped, err := declaredMCPServers("model = \"x\"\n"); names != nil || skipped != nil || err != nil {
-		t.Fatalf("no servers: %q %q %v", names, skipped, err)
+	if !slices.Equal(noTransport, []string{"bare", "both", "number"}) {
+		t.Fatalf("noTransport = %q", noTransport)
+	}
+	if servers, skipped, noTransport, err := declaredMCPServers("model = \"x\"\n"); servers != nil || skipped != nil || noTransport != nil || err != nil {
+		t.Fatalf("no servers: %q %q %q %v", servers, skipped, noTransport, err)
 	}
 }
 

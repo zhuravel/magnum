@@ -498,6 +498,13 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # mcp_allow does not apply ([] keeps both on)
 # mcp_allow = []                      # MCP servers mcp_off leaves on, e.g. ["docs"]
 # mcp_disable = ["-c", "mcp_servers.{server}.enabled=false"]   # turns off server {server}
+# mcp_disable_url = ["-c", "mcp_servers.{server}.url=\"https://mcp.invalid\""]   # project_mcp = "off" for a
+#                                     # server only the checkout's .codex/config.toml declares: Codex 0.166
+#                                     # reads the -c table before the project's, so enabled=false alone makes a
+#                                     # table with no transport and Codex stops at its start. Passed once
+#                                     # before mcp_disable for a server whose checkout table has a url; the
+#                                     # value is fixed, never the file's. [] = enabled=false alone
+# mcp_disable_command = ["-c", "mcp_servers.{server}.command=\"true\""]   # the same for a table with a command
 # plugin_allow = []                   # Codex plugins mcp_off leaves on, e.g. ["context7@claude-plugins-official"]
 # plugin_disable = ["-c", "plugins.{plugin}.enabled=false"]   # turns off plugin {plugin} (name@marketplace): a
 #                                     # plugin's MCP servers (the playwright plugin's browser, a docs or GitHub
@@ -519,7 +526,9 @@ status_comment_note = ""          # a line of yours under the status comment whi
 #                                     # [] = project_untrust then too
 # project_mcp = "off"                 # the MCP servers of an unchanged .codex/config.toml (the team's): off
 #                                     # turns them off like mcp_off, but for mcp_allow (each one a server you
-#                                     # keep); allow keeps them all, outside code in every session
+#                                     # keep), a server your Codex config does not declare first getting a
+#                                     # transport (mcp_disable_url, mcp_disable_command); allow keeps them
+#                                     # all, outside code in every session
 # tool_output_limit = 65536           # the most tokens of one tool call's output Codex keeps for the model,
 #                                     # passed through tool_output to every launch, resume and codex-review
 #                                     # line; 0 = Codex's own (10,000). A ceiling, not the size of a read:

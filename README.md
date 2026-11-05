@@ -2330,9 +2330,15 @@ reads a `.Codex/config.toml` a PR added, and Claude `.claude/` and `.mcp.json` l
 servers off like yours, except those `mcp_allow` names: each one is outside code in a session that reads
 the PR, and the team's servers got no call in 307 review sessions. `project_mcp = "allow"` keeps them all.
 (Claude has no such key: by default its `mcp_off` with `--strict-mcp-config` keeps every MCP server out, the
-project's included.) Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
-some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a
-session herdr restores by itself starts without Magnum's flags.
+project's included.) A server only the checkout declares gets a transport of its table's kind before its
+`enabled=false` (`mcp_disable_url`, `mcp_disable_command`: `-c mcp_servers.<name>.url="https://mcp.invalid"`
+for a table with a `url`, `-c mcp_servers.<name>.command="true"` for one with a `command`): Codex 0.166
+reads the `-c` tables before the project's and stops at its start for one with no transport. The values are
+fixed, never the file's. A server your own Codex config declares too keeps `enabled=false` alone, its table
+carrying the transport; a table with neither key, or with both, stays on, with a log line. Not covered: a
+Codex TUI that attaches to a running Codex app-server daemon hands it only some of its `-c` flags (Codex
+0.160), so the MCP servers and the trust may then not be Magnum's to set; a session herdr restores by itself
+starts without Magnum's flags.
 
 Claude Code does the same with the checkout's `.claude/` and `.mcp.json`, which a PR controls too: the
 project settings (hooks, which run outside any sandbox, `env`, plugins, permissions), `settings.local.json`,

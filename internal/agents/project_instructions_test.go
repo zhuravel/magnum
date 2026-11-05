@@ -42,7 +42,7 @@ func TestAPRChangingAgentsMDDeclinesCodexAndClaude(t *testing.T) {
 	}, []string{"AGENTS.md"}, nil)
 	e.setKind(KindCodex, func(k *config.Kind) { k.ProjectMCP = config.ProjectMCPOff })
 	codex, claude := startBoth(t, e, ws)
-	if want := slices.Concat(judgeLaunchArgs, []string{"-c", "mcp_servers.sentry.enabled=false"}, docsOff); !slices.Equal(codex, want) {
+	if want := slices.Concat(judgeLaunchArgs, []string{"-c", `mcp_servers.sentry.url="https://mcp.invalid"`, "-c", "mcp_servers.sentry.enabled=false"}, docsOff); !slices.Equal(codex, want) {
 		t.Fatalf("codex args = %q\nwant %q", codex, want)
 	}
 	if want := slices.Concat(claudeLaunchArgs, userSettingsOnly); !slices.Equal(claude, want) {

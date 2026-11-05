@@ -432,6 +432,11 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 				}
 				if servers {
 					project += "; else its MCP servers: " + k.ProjectMCP
+					if k.ProjectMCP == config.ProjectMCPOff && (len(k.MCPDisableURL) > 0 || len(k.MCPDisableCommand) > 0) {
+						// The transport a server only the checkout declares gets before mcp_disable.
+						project += " (first " + args(k.MCPDisableURL) + " for a url server and " + args(k.MCPDisableCommand) +
+							" for a command server that your config does not declare)"
+					}
 				}
 			}
 		}

@@ -92,13 +92,27 @@ type Kind struct {
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
 	MCPDisable []string `toml:"mcp_disable"`
+	// MCPDisableURL, MCPDisableCommand: args that give MCP server {server} a
+	// transport of the stated kind with a fixed value, passed once before its
+	// MCPDisable for a server only the checkout's config declares (project_mcp
+	// "off"; ProjectServer.Transport), e.g. codex's
+	// ["-c", "mcp_servers.{server}.url=\"https://mcp.invalid\""] for a table with
+	// a url and ["-c", "mcp_servers.{server}.command=\"true\""] for one with a
+	// command. Codex 0.166 reads the tables of the session's -c flags before it
+	// merges the checkout's, so enabled=false alone makes a table with no
+	// transport and Codex stops at its start. The value is never the file's:
+	// the PR controls it. Empty = no transport is passed for that kind of
+	// table (claude and a custom kind have none).
+	MCPDisableURL     []string `toml:"mcp_disable_url"`
+	MCPDisableCommand []string `toml:"mcp_disable_command"`
 	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
 	// declares when the PR leaves .codex/ as its merge base has it (the
 	// team's servers): "off" (the codex kind's default) turns each off
-	// through MCPDisable like the user's, except those in MCPAllow (see
-	// ConfigOffArgs); "allow" (the other kinds' default, "" counting as it)
-	// keeps them. A PR that changes .codex/ loads none of them
-	// (ProjectUntrust).
+	// through MCPDisable like the user's, except those in MCPAllow, a server
+	// the user's config does not declare first getting a transport
+	// (MCPDisableURL, MCPDisableCommand; see ConfigOffArgs); "allow" (the
+	// other kinds' default, "" counting as it) keeps them. A PR that changes
+	// .codex/ loads none of them (ProjectUntrust).
 	ProjectMCP string `toml:"project_mcp"`
 	// ProjectUntrust: args that keep the checkout's own project
 	// configuration out of one session, passed when the PR changes it
@@ -302,6 +316,27 @@ const (
 	// without the untrusted hooks until the user trusts them in their own
 	// Codex.
 	HooksDecline = "decline"
+)
+
+// ProjectServer is an MCP server the checkout's Codex config declares
+// (LaunchArgs.ProjectServers), turned off under project_mcp "off".
+type ProjectServer struct {
+	// Name is the server's name, a TOML bare key.
+	Name string
+	// Transport is the kind of table the server has, MCPTransportURL or
+	// MCPTransportCommand, when the user's config does not declare a server
+	// of that name: its override then carries a transport of that kind
+	// (MCPDisableURL, MCPDisableCommand), since no table of the user's holds
+	// one. Empty = the override is MCPDisable alone: the user's config
+	// declares the server too, and its table carries the transport.
+	Transport string
+}
+
+// ProjectServer.Transport values: the key of the server's table that tells
+// how Codex reaches it.
+const (
+	MCPTransportURL     = "url"
+	MCPTransportCommand = "command"
 )
 
 // Kind.ProjectMCP values.
@@ -518,6 +553,16 @@ func DefaultKinds() map[string]Kind {
 			// tokens in every judge request, out of the session.
 			MCPOff: true, MCPStrict: []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"},
 			MCPDisable: []string{"-c", "mcp_servers." + PlaceholderServer + ".enabled=false"},
+			// Codex 0.166 reads a -c table before it merges the project's (a
+			// trusted checkout's .codex/config.toml): enabled=false alone
+			// makes a table with no transport for a server only the project
+			// declares, and Codex stops at its start ("failed to load
+			// workspace requirements: invalid data"). With a url or a command
+			// of the table's kind, 0.162.1 and 0.166.0 both start and list the
+			// server as disabled. The values are fixed: nothing of the PR's
+			// file reaches the line.
+			MCPDisableURL:     []string{"-c", "mcp_servers." + PlaceholderServer + `.url="https://mcp.invalid"`},
+			MCPDisableCommand: []string{"-c", "mcp_servers." + PlaceholderServer + `.command="true"`},
 			// Codex 0.162 reads a plugin's enabled flag from its
 			// [plugins."name@marketplace"] table, which a dotted -c path
 			// reaches (a quoted key in the path does not); a plugin's MCP
@@ -603,7 +648,8 @@ type LaunchArgs struct {
 	// .codex/config.toml declares, turned off under project_mcp "off";
 	// Untrusted are the checkout's paths whose project config the session
 	// must not load (the PR changes .codex/). See ConfigOffArgs.
-	ProjectServers, Untrusted []string
+	ProjectServers []ProjectServer
+	Untrusted      []string
 	// DocsOff: the session gets ProjectDocsOff (the PR changes only the
 	// checkout's instruction files).
 	DocsOff bool
@@ -710,19 +756,29 @@ func (k Kind) PluginOffArgs(plugins []string) []string {
 // ConfigOffArgs are the args that keep configuration out of a session:
 // MCPStrict under MCPOff, MCPDisable once per server to turn off (servers
 // under MCPOff, then under ProjectMCP "off" each project server not among
-// them; none in MCPAllow, nothing without MCPDisable), PluginDisable once
-// per plugin (PluginOffArgs), then ProjectDocsOff when docsOff and
-// UntrustArgs(untrusted).
-func (k Kind) ConfigOffArgs(servers, plugins, project, untrusted []string, docsOff bool) []string {
+// them; none in MCPAllow, nothing without MCPDisable), a project server with
+// a Transport first getting that kind's MCPDisableURL or MCPDisableCommand,
+// PluginDisable once per plugin (PluginOffArgs), then ProjectDocsOff when
+// docsOff and UntrustArgs(untrusted).
+func (k Kind) ConfigOffArgs(servers, plugins []string, project []ProjectServer, untrusted []string, docsOff bool) []string {
 	out := k.MCPOffArgs(servers)
 	out = append(out, k.PluginOffArgs(plugins)...)
 	if k.ProjectMCP == ProjectMCPOff && len(k.MCPDisable) > 0 {
 		for _, s := range project {
-			if slices.Contains(k.MCPAllow, s) || k.MCPOff && slices.Contains(servers, s) {
+			if slices.Contains(k.MCPAllow, s.Name) || k.MCPOff && slices.Contains(servers, s.Name) {
 				continue
 			}
-			for _, a := range k.MCPDisable {
-				out = append(out, strings.ReplaceAll(a, PlaceholderServer, s))
+			var transport []string
+			switch s.Transport {
+			case MCPTransportURL:
+				transport = k.MCPDisableURL
+			case MCPTransportCommand:
+				transport = k.MCPDisableCommand
+			}
+			for _, group := range [][]string{transport, k.MCPDisable} {
+				for _, a := range group {
+					out = append(out, strings.ReplaceAll(a, PlaceholderServer, s.Name))
+				}
 			}
 		}
 	}
@@ -880,6 +936,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
 		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
 		k.MCPAllow, k.MCPDisable, k.ProjectUntrust = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable), cloneOrNil(k.ProjectUntrust)
+		k.MCPDisableURL, k.MCPDisableCommand = cloneOrNil(k.MCPDisableURL), cloneOrNil(k.MCPDisableCommand)
 		k.ProjectDocsOff, k.ToolOutput = cloneOrNil(k.ProjectDocsOff), cloneOrNil(k.ToolOutput)
 		k.MCPStrict = cloneOrNil(k.MCPStrict)
 		k.PluginDisable, k.PluginAllow = cloneOrNil(k.PluginDisable), cloneOrNil(k.PluginAllow)

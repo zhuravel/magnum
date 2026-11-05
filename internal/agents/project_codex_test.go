@@ -205,7 +205,7 @@ func TestUnchangedCodexKeepsTheTeamsServersUnlessProjectMCPIsOff(t *testing.T) {
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
 		t.Fatal(err)
 	}
-	want := slices.Concat(judgeLaunchArgs, []string{"-c", "mcp_servers.sentry.enabled=false"})
+	want := slices.Concat(judgeLaunchArgs, []string{"-c", `mcp_servers.sentry.url="https://mcp.invalid"`, "-c", "mcp_servers.sentry.enabled=false"})
 	if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: args = %q\nwant %q", got, want)
 	}
@@ -353,5 +353,134 @@ func TestCodexKeepsTheTeamsProjectWhenOnlyLogFilesAreUntracked(t *testing.T) {
 		if evs := projectEvents(t, e); len(evs) != map[bool]int{true: 1}[declined] {
 			t.Fatalf("untracked %s: events = %+v", untracked, evs)
 		}
+	}
+}
+
+// projectMCPConfig is a checkout's .codex/config.toml with a server of each
+// table a launch tells apart: a url server and a command server that the
+// user's Codex config does not declare, a url server it declares (enabled)
+// and one it declares parked (enabled = false, as a command server), a table
+// with neither a url nor a command and one with both. Every value is data
+// the PR controls: the tests check that none of it reaches the launch line.
+const projectMCPConfig = `
+[mcp_servers.tracker]
+url = "https://mcp.example.com/v2/secret-path?token=hunter2"
+bearer_token_env_var = "TRACKER_SECRET"
+
+[mcp_servers.build]
+command = "evil-mcp"
+args = ["--token", "hunter2"]
+
+[mcp_servers.docs]
+url = "https://docs.example.com/mcp"
+
+[mcp_servers.parked]
+url = "https://parked.example.com/mcp"
+
+[mcp_servers.bare]
+enabled_tools = ["search"]
+
+[mcp_servers.both]
+url = "https://both.example.com/mcp"
+command = "both-mcp"
+`
+
+// projectMCPUserConfig is the user's Codex config.toml beside it: it declares
+// docs (enabled) and parked (off), each with a command.
+const projectMCPUserConfig = `
+[mcp_servers.docs]
+command = "docs-mcp"
+
+[mcp_servers.parked]
+command = "parked-mcp"
+enabled = false
+`
+
+// Codex 0.166 reads the tables of the session's -c flags before it merges the
+// checkout's: -c mcp_servers.<name>.enabled=false alone makes a table with no
+// transport when the user's config does not declare the server, and Codex
+// stops at its start ("failed to load workspace requirements: invalid data").
+// project_mcp = "off" therefore gives a server of the checkout that the
+// user's config does not declare a transport of the same kind as its table,
+// with a fixed value, before enabled=false; a server the user's config
+// declares (on or off) keeps enabled=false alone, as its own table carries
+// the transport; a table with neither a url nor a command, or with both, has
+// no kind to give and stays on, with a log line. Nothing the PR's file says
+// but the name reaches the line.
+func TestProjectMCPOffGivesAServerOfTheCheckoutATransportOfItsKind(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{".codex/config.toml": projectMCPConfig}, nil, nil)
+	writeFile(t, e.codexConfig, projectMCPUserConfig, 0o600)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	got := e.h.starts[0].Args
+	want := slices.Concat(judgeLaunchArgs, []string{
+		"-c", "mcp_servers.docs.enabled=false", // the user's pass: a table that carries its command
+		"-c", `mcp_servers.build.command="true"`, "-c", "mcp_servers.build.enabled=false", // a command server
+		"-c", "mcp_servers.parked.enabled=false", // declared by the user, off: its table carries the command
+		"-c", `mcp_servers.tracker.url="https://mcp.invalid"`, "-c", "mcp_servers.tracker.enabled=false", // a url server
+	})
+	if !slices.Equal(got, want) {
+		t.Fatalf("args = %q\nwant %q", got, want)
+	}
+	joined := strings.Join(got, " ")
+	for _, leak := range []string{"example.com", "secret", "hunter2", "TRACKER", "evil", "search", "both-mcp", "--token", dir} {
+		if strings.Contains(joined, leak) {
+			t.Errorf("a value of the checkout's file (%q) reached the launch line: %q", leak, got)
+		}
+	}
+	var logs []string
+	for _, l := range mcpLogs(e) {
+		if strings.Contains(l, `"bare"`) || strings.Contains(l, `"both"`) {
+			logs = append(logs, l)
+		}
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0], `"bare"`) || !strings.Contains(logs[1], `"both"`) {
+		t.Fatalf("logs = %q, want one line for each table with no single transport", logs)
+	}
+	if all := strings.Join(logs, "\n"); strings.Contains(all, "example.com") || strings.Contains(all, "hunter2") || strings.Contains(all, dir) {
+		t.Fatalf("a log line carries a value of the checkout's file: %q", logs)
+	}
+}
+
+// codex-review's line is built from the same arguments (a shell role of the
+// codex kind), so a server of the checkout gets its transport there too.
+func TestCodexReviewLineGivesAProjectServerATransportToo(t *testing.T) {
+	e, dir, _ := projectEnv(t, map[string]string{".codex/config.toml": projectMCPConfig}, nil, nil)
+	writeFile(t, e.codexConfig, projectMCPUserConfig, 0o600)
+	d := ShellData{BaseRef: "origin/master", BaseSHA: projectMergeBase, HeadSHA: projectHead,
+		ReportPath: "/r/codex.md", Marker: DoneMarker("r-1"), Checkout: dir}
+	got, err := e.m.ShellLine(e.ctx, e.pr.ID, e.spec(RoleCodexReview), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range []string{`mcp_servers.build.command="true"`, "mcp_servers.build.enabled=false", "mcp_servers.parked.enabled=false",
+		`mcp_servers.tracker.url="https://mcp.invalid"`, "mcp_servers.tracker.enabled=false"} {
+		if !strings.Contains(got, "-c "+shellQuote(arg)) {
+			t.Errorf("line = %q\nwant it to contain -c %s", got, shellQuote(arg))
+		}
+	}
+	if strings.Contains(got, "mcp_servers.parked.url") || strings.Contains(got, "mcp_servers.docs.url") || strings.Contains(got, "example.com") {
+		t.Errorf("line = %q, want no transport for a server the user declares and no value of the checkout's file", got)
+	}
+}
+
+// Which servers the user's config declares is read whatever mcp_off says: with
+// mcp_off = false the user's own servers load, and a server of the checkout
+// that the user's config declares too still gets enabled=false alone, since
+// giving its table a second transport would make Codex refuse it.
+func TestProjectMCPOffReadsTheUsersServersEvenWithMCPOffFalse(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".codex/config.toml": projectMCPConfig}, nil, nil)
+	writeFile(t, e.codexConfig, projectMCPUserConfig, 0o600)
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "tool_output_token_limit=65536",
+		"-c", "mcp_servers.build.command=\"true\"", "-c", "mcp_servers.build.enabled=false",
+		"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.parked.enabled=false",
+		"-c", "mcp_servers.tracker.url=\"https://mcp.invalid\"", "-c", "mcp_servers.tracker.enabled=false"}
+	if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+		t.Fatalf("args = %q\nwant %q", got, want)
 	}
 }

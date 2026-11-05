@@ -132,19 +132,75 @@ func mcpServerNames(tables map[string]any) (names, skipped []string) {
 	return names, skipped
 }
 
-// declaredMCPServers reads a Codex config (the operator's or a checkout's):
-// the names of its mcp_servers tables that do not set enabled = false,
-// sorted, and those of them that are no TOML bare key (mcpServerName),
-// apart and sorted. Only the mcp_servers table is decoded.
-func declaredMCPServers(data string) (names, skipped []string, err error) {
+// mcpTransport tells how Codex reaches the server of an mcp_servers table:
+// config.MCPTransportURL for a table with a url, config.MCPTransportCommand
+// for one with a command, "" for a table with neither, with both (Codex
+// refuses it) or that is no table. Only the keys' presence and type count;
+// the values are the PR's and go nowhere.
+func mcpTransport(table any) string {
+	t, _ := table.(map[string]any)
+	_, url := t["url"].(string)
+	_, command := t["command"].(string)
+	switch {
+	case url && !command:
+		return config.MCPTransportURL
+	case command && !url:
+		return config.MCPTransportCommand
+	}
+	return ""
+}
+
+// declaredMCPServers reads a checkout's Codex config: its mcp_servers tables
+// that do not set enabled = false, those named with a TOML bare key
+// (mcpServerName) and having a url or a command (mcpTransport) as servers
+// with that transport, sorted; apart and sorted, the names of those that are
+// no bare key (skipped) and of those with neither a url nor a command or
+// with both (noTransport). Only the mcp_servers table is decoded.
+func declaredMCPServers(data string) (servers []config.ProjectServer, skipped, noTransport []string, err error) {
 	var doc struct {
 		MCPServers map[string]any `toml:"mcp_servers"`
 	}
 	if _, err := toml.Decode(data, &doc); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	var names []string
 	names, skipped = mcpServerNames(doc.MCPServers)
-	return names, skipped, nil
+	for _, n := range names {
+		if t := mcpTransport(doc.MCPServers[n]); t != "" {
+			servers = append(servers, config.ProjectServer{Name: n, Transport: t})
+		} else {
+			noTransport = append(noTransport, n)
+		}
+	}
+	return servers, skipped, noTransport, nil
+}
+
+// userMCPServers are the names of every mcp_servers table of the Codex
+// config a session of role reads (codexHomeFor), whether or not it sets
+// enabled = false: a server of the checkout's with such a name merges into
+// that table, which carries its transport, so its override needs none of its
+// own. Nothing for a config that is missing or cannot be read (codexOff
+// logs that, for a kind with mcp_off).
+func (m *Manager) userMCPServers(role config.Role) map[string]bool {
+	_, path := m.codexHomeFor(m.d.Config.RoleEnv(role))
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		MCPServers map[string]any `toml:"mcp_servers"`
+	}
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(doc.MCPServers))
+	for name := range doc.MCPServers {
+		out[name] = true
+	}
+	return out
 }
 
 // enabledPlugins lists the Codex plugins a session of role would load, for
