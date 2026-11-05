@@ -15114,6 +15114,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `core.pager` that exits at once marks it as read at once. Tests:
   TestAQuestionARedrawDropsLeavesANoteThatExpires, TestTheFirstClickAfterTheDigestHitsWhatTheFrameDrew,
   TestASentBatchDropsOnlyTheAnswersItSent and TestFactoryStartFromYourWordsOnly.
+- **The shared packages' small fixes of the final review** (2026-11-05). `config.ParseTemplate` names the
+  partials text after its file (`PartialsOf`). So a syntax error in `factory-shared.md` reports
+  `factory-shared.md`, not `judge-shared.md`. A judge prompt's error is as before. `notify.Batcher`'s flush
+  whose toast fails still returns the items the dedupe store suppressed. Magnum's own `Flush` reads only
+  `Sent`, so its behaviour stays. The factory's alerts settle such a store-held alert with its event, even
+  when a fresh alert beside it failed its toast. The sidebar test bounds the pass's deadline by the wall
+  clock around the pass, so a loaded machine does not fail it. A gitx test's key moved into the
+  placeholder range (PR-12390). Tests: TestAPartialsFilesErrorNamesThatFile,
+  TestBatcherFlushThatFailsStillNamesTheSuppressedItems and
+  TestAStoreHeldAlertBesideAFailedToastWritesItsEvent.
 
 ## Learned rules
 

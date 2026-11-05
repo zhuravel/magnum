@@ -614,6 +614,35 @@ func TestBatcherForgetDropsPendingItems(t *testing.T) {
 	}
 }
 
+// A flush whose toast fails still says which items the dedupe store
+// suppressed (announced within their window: they are not queued again),
+// so a caller that settles its items (the factory's alerts) can settle
+// those; the fresh items stay queued for the next try.
+func TestBatcherFlushThatFailsStillNamesTheSuppressedItems(t *testing.T) {
+	c := newClock()
+	h := newFakeHerdr()
+	b, n := newBatcher(h, c)
+	n.Store = realStore(t, c)
+	ctx := context.Background()
+	shown := newRepoItem("talkable/repo-a")
+	if sent, _ := n.Toast(ctx, shown.Key, "t", "b", 24*time.Hour); !sent {
+		t.Fatal("direct toast not sent")
+	}
+	h.mu.Lock()
+	h.showErr = errors.New("herdr: dial unix: connection refused")
+	h.mu.Unlock()
+	b.Add(shown)
+	b.Add(newRepoItem("talkable/repo-b"))
+	c.Add(time.Minute)
+	res, err := b.FlushDueResult(ctx)
+	if err == nil || res.Sent || len(res.Suppressed) != 1 || res.Suppressed[0].Key != shown.Key {
+		t.Fatalf("FlushDueResult with the toast failing = %+v, %v; want the error and repo-a suppressed", res, err)
+	}
+	if b.Pending() != 1 {
+		t.Fatalf("pending %d after the failed toast, want repo-b queued again", b.Pending())
+	}
+}
+
 // FlushDueResult says what the flush did: nothing before the window, the
 // toast it composed and whether it was shown, the items the dedupe store
 // suppressed as announced before, and a batch dropped because

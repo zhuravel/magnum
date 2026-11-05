@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -116,14 +117,16 @@ func (c *Config) resolve(name string) (Prompt, error) {
 
 // ParseTemplate parses a prompt or command template the way magnum renders
 // it (internal/agents.RenderPrompt), without executing it: no funcs,
-// missingkey=error, and shared (a judge prompt's Prompt.Shared; "" for none)
-// parsed first as its own template, SharedPrompt, so that text's {{template}}
-// calls find its blocks and a block text defines itself replaces the shared
-// one.
+// missingkey=error, and shared (a prompt's Prompt.Shared; "" for none)
+// parsed first as its own template, named for its partials file
+// (PartialsOf: SharedPrompt for a judge prompt, FactorySharedPrompt for a
+// factory one), so that text's {{template}} calls find its blocks, a block
+// text defines itself replaces the shared one, and an error in the shared
+// text names the file it is in.
 func ParseTemplate(name, text, shared string) (*template.Template, error) {
 	t := template.New(name).Option("missingkey=error")
 	if shared != "" {
-		if _, err := t.New(SharedPrompt).Parse(shared); err != nil {
+		if _, err := t.New(cmp.Or(PartialsOf(name), SharedPrompt)).Parse(shared); err != nil {
 			return nil, err
 		}
 	}

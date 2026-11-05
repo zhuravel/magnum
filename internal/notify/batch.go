@@ -219,7 +219,9 @@ func (b *Batcher) flush(ctx context.Context) (FlushResult, error) {
 	if err != nil {
 		b.releaseItems(ctx, reserved)
 		b.restore(fresh)
-		return FlushResult{}, err
+		// The suppressed items were announced within their window and are
+		// not queued again: the caller learns which, as on a success.
+		return FlushResult{Suppressed: suppressed}, err
 	}
 	res.Sent = sent
 	return res, nil

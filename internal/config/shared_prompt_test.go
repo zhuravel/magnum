@@ -12,6 +12,19 @@ import (
 	"github.com/zhuravel/magnum/prompts"
 )
 
+// A syntax error in a partials file is reported under its own name: the
+// factory's (factory-shared.md) for a factory prompt, the judges'
+// (judge-shared.md) for a judge prompt, so you look in the file at fault.
+func TestAPartialsFilesErrorNamesThatFile(t *testing.T) {
+	broken := `{{define "task"}}{{.TaskID}{{end}}`
+	for name, want := range map[string]string{"factory-writer.md": FactorySharedPrompt, "judge-initial.md": SharedPrompt} {
+		_, err := ParseTemplate(name, `{{template "task" .}}`, broken)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s with broken partials: %v, want the error to name %s", name, err, want)
+		}
+	}
+}
+
 // The partials file goes with every judge prompt (judge-*.md, the learn
 // editor's glob) and with nothing else; it does not go with itself.
 func TestUsesSharedIsEveryJudgePromptButThePartialsFile(t *testing.T) {

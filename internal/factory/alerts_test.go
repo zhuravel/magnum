@@ -534,6 +534,32 @@ func TestAToastTheDedupeStoreHoldsAsSentIsRecordedSo(t *testing.T) {
 	}
 }
 
+// A store-held alert flushed beside a fresh one whose toast fails is
+// settled with its event all the same: the dedupe store took it as sent,
+// and only the fresh one waits for the next try.
+func TestAStoreHeldAlertBesideAFailedToastWritesItsEvent(t *testing.T) {
+	r := newAlertRig(t)
+	held := r.needsYou("PR-12345", "3 questions before coding")
+	fresh := r.needsYou("PR-12346", "the precheck did not pass")
+	r.tick()
+	ev := r.events(held.ID, "alert")[0]
+	if ok, err := r.dedupe.ShouldSend(r.ctx, fmt.Sprintf("factory-alert:%d:%d", ev.ID, ev.At.Unix()), alertOnce); err != nil || !ok {
+		t.Fatalf("reserve the alert's toast: %v, %v", ok, err)
+	}
+	r.toasts.setErr(fmt.Errorf("herdr: dial: %w", herdr.ErrUnavailable))
+	r.after(2 * time.Minute)
+	if got := r.texts(held.ID, alertToast); !slices.Equal(got, []string{"toast of PR-12345 questions taken as sent before the restart"}) {
+		t.Fatalf("the store-held alert's events %q, want it settled though the toast failed", got)
+	}
+	r.toasts.setErr(nil)
+	r.after(2 * time.Minute)
+	r.after(time.Minute)
+	if got := r.texts(held.ID, alertToast); len(got) != 1 {
+		t.Errorf("the store-held alert's events %q, want the one", got)
+	}
+	_ = fresh
+}
+
 // With [herdr] notify off no toast is shown, and `!` says so: the alert is
 // settled, never left pending.
 func TestWithToastsOffAnAlertIsRecordedNotShown(t *testing.T) {
@@ -800,7 +826,6 @@ func TestTheSidebarTokenFollowsTheTasksWorkspacesAndHerdrComingBack(t *testing.T
 	}
 
 	var deadlines []time.Time
-	start := time.Now()
 	r.e.d.Sidebar = func(ctx context.Context, _ string, _ map[string]string) error {
 		dl, ok := ctx.Deadline()
 		if !ok {
@@ -811,11 +836,15 @@ func TestTheSidebarTokenFollowsTheTasksWorkspacesAndHerdrComingBack(t *testing.T
 	}
 	r.after(time.Minute) // nothing changed: no report
 	r.backToWork(task)
+	// The pass starts between before and after, on the wall clock, however
+	// loaded the machine is: its one deadline is sidebarPassTimeout past it.
+	before := time.Now()
 	r.after(time.Minute)
+	after := time.Now()
 	if len(deadlines) != 2 {
 		t.Fatalf("reports %d, want one per workspace", len(deadlines))
 	}
-	if !deadlines[0].Equal(deadlines[1]) || deadlines[0].After(start.Add(sidebarPassTimeout+time.Second)) {
-		t.Errorf("the pass's reports have deadlines %v; want the pass's one, within %s", deadlines, sidebarPassTimeout)
+	if !deadlines[0].Equal(deadlines[1]) || deadlines[0].Before(before.Add(sidebarPassTimeout)) || deadlines[0].After(after.Add(sidebarPassTimeout)) {
+		t.Errorf("the pass's reports have deadlines %v; want the pass's one, %s after it began", deadlines, sidebarPassTimeout)
 	}
 }

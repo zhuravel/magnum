@@ -362,7 +362,19 @@ func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registr
 	tctx, cancel := context.WithTimeout(ctx, alertToastTimeout)
 	defer cancel()
 	res, err := a.batch.FlushDueResult(tctx)
+	shown := map[string]bool{}
+	for _, it := range res.Suppressed {
+		shown[it.Key] = true
+	}
 	if err != nil {
+		// What the dedupe store took as sent is settled, with its event,
+		// whatever became of the fresh ones' toast: they wait for a try.
+		for _, p := range standing {
+			if shown[p.key] {
+				e.event(ctx, p.ev.TaskID, alertToast, registry.PhaseInfo, "toast of "+p.line+" taken as sent before the restart")
+				p.settled = true
+			}
+		}
 		a.fails++
 		a.retryAt = now.Add(alertBackoff(a.fails))
 		e.log.Log(ctx, execx.FailLevel(ctx, err), "an alert's toast failed; it is tried again later",
@@ -370,10 +382,6 @@ func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registr
 		return
 	}
 	a.fails, a.retryAt = 0, time.Time{}
-	shown := map[string]bool{}
-	for _, it := range res.Suppressed {
-		shown[it.Key] = true
-	}
 	var lines []notify.Item
 	for _, p := range standing {
 		if shown[p.key] {
