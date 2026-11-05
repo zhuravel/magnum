@@ -3850,7 +3850,7 @@ sends it to you. After the Mac slept, every agent turn's deadline moves by the g
 first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MySQL ping, or the same failure
 on two tasks within 10 minutes holds every stage at no cost to the tasks, with tries after 2, 4, 8, 16 and
 then every 30 minutes; a hold that lasts 30 minutes needs you. While its herdr session does not answer, the
-factory holds its stages and opens `herdr --session <herdr_session>` in your terminal, at most twice an
+factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
 hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops
 idle servers; a disk below half of `min_free_disk_gb` needs you. At most `heavy_stages` heavy stages (local
 review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request

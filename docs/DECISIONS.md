@@ -14957,6 +14957,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   way still runs to its own timeout. Tests: TestAStartReplayedAfterAKillMakesNoSecondTask,
   TestAStartRequestMakesAtMostOneTask, TestSIGTERMDrainsWithoutNewLaunches,
   TestTheDrainsWaitEndsBeforeLaunchdKills and TestADrainCutsTheStaggerAndLaunchesNothing.
+- **A herdr outage holds the factory with the herdr hold only** (2026-11-05, the final review). The observe
+  pass's failed snapshot names "connection refused", and `infraCause` took it as an infrastructure
+  failure. So a herdr restart of 20 seconds held every task 2 minutes more. An outage of 35 minutes raised
+  two blockers and two alerts for one cause. `infraCause` now names no cause for an error that wraps
+  `herdr.ErrUnavailable` or `herdr.ErrTimeout`. The herdr hold (`checkHerdr`) covers them. Test:
+  TestAHerdrOutageStartsNoInfraHold.
 
 ## Learned rules
 

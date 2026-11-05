@@ -487,6 +487,54 @@ func TestHerdrDownOpensTheSessionAtMostTwiceAnHour(t *testing.T) {
 	}
 }
 
+// A herdr outage is the herdr hold's alone: the observe pass's failed
+// snapshot ("herdr unavailable: ... connection refused", a herdr timeout)
+// starts no infrastructure hold, so herdr coming back lifts the only hold
+// at once, and a long outage raises one blocker, not two.
+func TestAHerdrOutageStartsNoInfraHold(t *testing.T) {
+	var up atomic.Bool
+	h := newHarness(t, func(d *Deps) {
+		d.HerdrUp = func(context.Context) error {
+			if up.Load() {
+				return nil
+			}
+			return fmt.Errorf("%w: dial unix /tmp/herdr-factory.sock: connect: connection refused", herdr.ErrUnavailable)
+		}
+	})
+	task := h.task("PR-12392", registry.TaskActive, "investigate")
+	var c calls
+	h.stage(config.FactoryStageAgents, func(_ context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		c.add(t.ID, h.clock.Now())
+		return false, nil
+	})
+	for _, err := range []error{
+		fmt.Errorf("%w: dial unix /tmp/herdr-factory.sock: connect: connection refused", herdr.ErrUnavailable),
+		fmt.Errorf("%w: snapshot after 10s", herdr.ErrTimeout),
+	} {
+		if cause := infraCause(fmt.Errorf("observe: %w", err)); cause != "" {
+			t.Errorf("infraCause(%v) = %q, want none: herdr's hold is its own", err, cause)
+		}
+	}
+	h.rt.mu.Lock()
+	h.rt.observeErr = fmt.Errorf("%w: dial unix /tmp/herdr-factory.sock: connect: connection refused", herdr.ErrUnavailable)
+	h.rt.mu.Unlock()
+	h.e.observe(h.ctx)
+	h.tick()
+	if _, held := h.e.holds[HoldInfra]; held {
+		t.Fatalf("a herdr outage started an infrastructure hold: %+v", h.e.holds[HoldInfra])
+	}
+
+	up.Store(true)
+	h.rt.mu.Lock()
+	h.rt.observeErr = nil
+	h.rt.mu.Unlock()
+	h.clock.Add(time.Minute)
+	h.tick()
+	if got := c.list(); !slices.Equal(got, []int64{task.ID}) {
+		t.Fatalf("a minute after herdr came back the stage ran for %v, want the task's", got)
+	}
+}
+
 // SIGTERM drains within launchd's ExitTimeOut: the task in progress ends
 // its pass, but it starts no launch and no effect, the runtime's launches
 // that wait for the stagger are cut (BeginDrain), and the tasks after it

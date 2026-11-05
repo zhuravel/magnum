@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -146,9 +147,13 @@ var infraPatterns = []struct{ match, cause string }{
 }
 
 // infraCause names the infrastructure failure err reports, "" for none: a
-// failed MySQL ping, engine.InfraCause, then infraPatterns.
+// failed MySQL ping, engine.InfraCause, then infraPatterns. herdr's own
+// failures (herdr.ErrUnavailable, herdr.ErrTimeout: "connection refused" on
+// its socket) are none: the herdr hold is theirs (checkHerdr), and an
+// infrastructure hold beside it would hold every task two minutes past
+// herdr's return and raise a second blocker for one cause.
 func infraCause(err error) string {
-	if err == nil {
+	if err == nil || errors.Is(err, herdr.ErrUnavailable) || errors.Is(err, herdr.ErrTimeout) {
 		return ""
 	}
 	if _, ok := errors.AsType[mysqlFailure](err); ok {
