@@ -203,7 +203,7 @@ func TestClassifyKnowsTheEverydayStepStartsAndCorrections(t *testing.T) {
 		{"still waiting for the import?", info},
 		{"is the import still running?", info},
 		{"your fix probably breaks the export", correction},
-		{"the old ruby came back, it might be your changes", correction},
+		{"the old banner came back, it might be your changes", correction},
 		{"your fix is in the release notes", info},
 		{"the logo looks too big on mobile", correction},
 		{"looks like the job runs every night", info},
@@ -279,7 +279,7 @@ func TestClassifyKnowsTheReviewsAndTheHeldOutChecksGaps(t *testing.T) {
 		{"u do the migration", correction},
 		{"I still have a question about the refund path", info},
 		{"I still have the old badge", correction},
-		{"why do I still have the old ruby?", correction},
+		{"why do I still have the old banner?", correction},
 		// code words are no secrets; an upper-case variable is
 		{"use the cache_key of the record", info},
 		{"the csrf_token is set by the layout", info},
