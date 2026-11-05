@@ -899,11 +899,11 @@ Spec 9.F asks for a magnum toast and the herdr sidebar token when a task moves i
   - An alert event of Task 7 becomes one toast through magnum's `notify` and the same short text through `notify.Sidebar`. Alerts within 2 minutes merge into one toast, in spec 9.F's words: `factory: 3 need you · PR-12345 questions · #4512 reply · PR-12360 ready to push`.
   - No toast while the factory screen reports focus (Task 19's focus request, held only while the screen's process lives) or while herdr shows the operator in a factory pane. A held alert fires 2 minutes after the operator leaves, and only if its task still needs the operator.
   - magnum's quiet hours hold toasts too. A held alert is never lost: it fires when the hold ends, merged with the rest.
-  - Access needed alerts at once, once more after 5 minutes, and at "2m left" (spec 9.F).
+  - Access needed (at once, once more after 5 minutes, and at "2m left") waits for milestone 1b, whose access card first writes that alert.
   - Each delivery and each hold writes an event, so `!` shows every alert with its time.
 - Consumes: Task 7 (the alert events), Task 19 (the focus request and its state), magnum's `notify` and quiet hours.
 
-- [ ] **Step 1: Write the failing tests:** `TestAnAlertBecomesAToastAndASidebarToken`, `TestAlertsWithinTwoMinutesMergeIntoOneToast`, `TestNoToastWhileTheScreenHasFocus`, `TestAFocusOfAScreenThatEndedHoldsNothing`, `TestNoToastWhileTheOperatorIsInAFactoryPane`, `TestAHeldAlertFiresTwoMinutesAfterYouLeave`, `TestAHeldAlertOfATaskThatNoLongerNeedsYouNeverFires`, `TestQuietHoursHoldToastsAndLoseNone`, `TestAccessNeededAlertsThreeTimes`, `TestADaemonRestartDeliversEachAlertOnce`.
+- [ ] **Step 1: Write the failing tests:** `TestAnAlertBecomesAToastAndASidebarToken`, `TestAlertsWithinTwoMinutesMergeIntoOneToast`, `TestNoToastWhileTheScreenHasFocus`, `TestAFocusOfAScreenThatEndedHoldsNothing`, `TestNoToastWhileTheOperatorIsInAFactoryPane`, `TestAHeldAlertFiresTwoMinutesAfterYouLeave`, `TestAHeldAlertOfATaskThatNoLongerNeedsYouNeverFires`, `TestQuietHoursHoldToastsAndLoseNone`, `TestADaemonRestartDeliversEachAlertOnce`.
 - [ ] **Step 2: Run and see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test -count=1 -race ./internal/factory/`.
