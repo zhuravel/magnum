@@ -110,10 +110,7 @@ func (s *factoryScreenSource) agentsStore() (*store.Store, error) {
 	if st != nil || !fsx.Exists(s.c.Layout.FactoryAgentsDB()) {
 		return st, nil
 	}
-	st, err := store.OpenWith(s.c.Layout.FactoryAgentsDB(), store.Options{BeforeMigrate: func(from, to int) error {
-		return fmt.Errorf("the factory's agents store is at schema %d and this build needs %d: the factory daemon migrates it "+
-			"when it starts on this build (`magnum factory install`)", from, to)
-	}})
+	st, err := openFactoryAgentsStore(s.c.Layout)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +122,16 @@ func (s *factoryScreenSource) agentsStore() (*store.Store, error) {
 	}
 	s.agents = st
 	return st, nil
+}
+
+// openFactoryAgentsStore opens the factory's agents store, which the CLI
+// never migrates: a store that needs it is the factory daemon's to migrate
+// when it starts on this build.
+func openFactoryAgentsStore(l paths.Layout) (*store.Store, error) {
+	return store.OpenWith(l.FactoryAgentsDB(), store.Options{BeforeMigrate: func(from, to int) error {
+		return fmt.Errorf("the factory's agents store is at schema %d and this build needs %d: the factory daemon migrates it "+
+			"when it starts on this build (`magnum factory install`)", from, to)
+	}})
 }
 
 func (s *factoryScreenSource) close() {

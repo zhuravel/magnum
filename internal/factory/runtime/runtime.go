@@ -151,7 +151,8 @@ type Runtime struct {
 	s   seams
 
 	// launchMu makes the staggered launches take turns, talkMu the liaisons'
-	// starts (Talk).
+	// starts (Talk). A Talk also holds its task's lock (talkLock) for its
+	// whole run, which parkLiaison only tries.
 	launchMu sync.Mutex
 	talkMu   sync.Mutex
 	// drained closes when the daemon drains (BeginDrain): a launch that
@@ -161,7 +162,8 @@ type Runtime struct {
 
 	mu         sync.Mutex
 	lastStart  time.Time
-	keys       map[int64]string // task id -> its key, the owner name in titles
+	keys       map[int64]string      // task id -> its key, the owner name in titles
+	talkTasks  map[int64]*sync.Mutex // task id -> its Talk's lock (talkLock)
 	roles      map[roleKey]*roleState
 	loops      map[loopKey]*loopState
 	pauses     map[string]*pause        // agent kind -> its pause
@@ -617,10 +619,15 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 // fails, the liaison is live in its pane all the same: Talk returns the
 // pane with the error (you may step in; agents.ErrHumanActive while you
 // typed into it), and the next Talk sends the prompt. Talks take turns, so
-// two never start two liaisons.
+// two never start two liaisons, and a park of the task that comes meanwhile
+// leaves its liaison alone (parkLiaison; the engine parks it itself when the
+// task ended while Talk ran).
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error) {
 	r.talkMu.Lock()
 	defer r.talkMu.Unlock()
+	tl := r.talkLock(t.ID)
+	tl.Lock()
+	defer tl.Unlock()
 	spec, ok := r.d.Config.FactoryRole(LiaisonRole)
 	if !ok {
 		return "", fmt.Errorf("the liaison of %s: no factory role %s", taskKey(t), LiaisonRole)
@@ -660,6 +667,24 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
 	return pane, nil
 }
 
+// talkLock is task id's lock: a Talk of it holds it for its whole run, a
+// park of its liaison only tries it. Park runs on the engine's loop, which a
+// Talk of minutes must not hold up, and parking a liaison between its start
+// and its first prompt would quit the agent the Talk is about to prompt.
+func (r *Runtime) talkLock(id int64) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.talkTasks[id]
+	if !ok {
+		if r.talkTasks == nil {
+			r.talkTasks = map[int64]*sync.Mutex{}
+		}
+		m = &sync.Mutex{}
+		r.talkTasks[id] = m
+	}
+	return m
+}
+
 // startLiaison starts role, task t's liaison, on its row pr: its workspace
 // in the task's folder, its agent resumed from the role's newest parked or
 // lost conversation when it has one. It returns the live session, in the
@@ -690,6 +715,11 @@ func (r *Runtime) startLiaison(ctx context.Context, t registry.Task, pr store.PR
 // the LaunchAgent's env names it), so the liaison's `magnum factory`
 // commands read the daemon's registry. Under the XDG layout the daemon's
 // binary finds the same directories by itself, and the pane gets none.
+// Nor does it get MAGNUM_CONFIG, which the LaunchAgent's env carries under a
+// non-default config file: the commands the liaison runs (`factory answer`,
+// `decide`, `retry`) load no configuration, only the registry and the
+// task's folder (internal/cli's TestTheLiaisonsCommandsLoadNoConfig holds
+// that); one of them that did would need it here.
 func (r *Runtime) liaisonEnv(t registry.Task) map[string]string {
 	env := paneEnv(t, Copy{})
 	if l := r.d.Layout; l.CheckoutLayout() && l.Home != "" {
@@ -1146,10 +1176,18 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 // parkLiaison parks task t's liaison unless you are with it: you in its
 // pane (operatorOn: the factory leaves the panes you are in alone), or its
 // turn in flight or its agent at work (agents.ErrBusy: it may be running
-// the decide that parks the task). Such a liaison stays live, which the
-// log says; the next park, or you, ends it. A task you never talked about
-// has no liaison to park.
+// the decide that parks the task), and one a Talk of the task works on
+// right now (talkLock: Park does not wait for a Talk, which can take
+// minutes; the engine parks the liaison again when the task has ended by
+// then). Such a liaison stays live, which the log says; the next park, or
+// you, ends it. A task you never talked about has no liaison to park.
 func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) error {
+	tl := r.talkLock(t.ID)
+	if !tl.TryLock() {
+		r.log.Info("left a task's liaison live: a talk is starting it", "task", t.ID)
+		return nil
+	}
+	defer tl.Unlock()
 	pr, err := liaisonRowIn(ctx, r.st, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil

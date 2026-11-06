@@ -95,6 +95,7 @@ type Runtime interface {
 	Proving(entry int64) bool
 	PaneFocus() runtime.PaneFocus
 	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
+	Talk(ctx context.Context, t registry.Task, prompt string) (pane string, err error)
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -326,6 +327,11 @@ type Engine struct {
 	// the loop's own.
 	debts map[int64]*releaseDebt
 
+	// talking are the tasks whose talk request runs off the loop
+	// (talkRequest); talkMu guards the set.
+	talkMu  sync.Mutex
+	talking map[int64]bool
+
 	// agentRuns are the agents stages' attempts in progress, by task
 	// (runAgents): the loop's own, rebuilt from the registry after a
 	// restart.
@@ -411,6 +417,7 @@ func New(d Deps) *Engine {
 		servers:      map[int64]server{},
 		heavyHeld:    map[int64]*heavySlot{},
 		jiraTries:    map[int64]*jiraTry{},
+		talking:      map[int64]bool{},
 		claims:       map[int64]*claimRun{},
 		claimWaits:   map[int64]*claimWait{},
 		held:         map[int64]Copy{},

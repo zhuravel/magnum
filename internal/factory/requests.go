@@ -40,6 +40,7 @@ const (
 	ReqLetGo   = "let_go"
 	ReqRetry   = "retry"
 	ReqFocus   = "focus"
+	ReqTalk    = "talk"
 )
 
 // FocusPayload is a ReqFocus: the factory screen of process PID gained
@@ -89,6 +90,13 @@ func (e *Engine) focusRequest(_ context.Context, p FocusPayload) (string, error)
 // RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at
 // its stage. Surface is where you asked, for the record of your input.
 type RetryPayload struct {
+	TaskID  int64
+	Surface string
+}
+
+// TalkPayload is a ReqTalk: you want to talk with the liaison of task
+// TaskID. Surface is where you asked, for the record.
+type TalkPayload struct {
 	TaskID  int64
 	Surface string
 }
@@ -160,6 +168,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.retryTask)
 	case ReqFocus:
 		respond(e, ctx, q, e.focusRequest)
+	case ReqTalk:
+		e.talkRequest(ctx, q)
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}

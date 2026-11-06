@@ -179,6 +179,17 @@ func liaisonRowIn(ctx context.Context, st *store.Store, id int64) (store.PR, err
 	return pr, nil
 }
 
+// LiaisonSession is the live session of task id's liaison in st, the agent
+// you step into after a talk: store.ErrNotFound before the task's first talk
+// and once its liaison is parked.
+func LiaisonSession(ctx context.Context, st *store.Store, id int64) (store.Session, error) {
+	pr, err := liaisonRowIn(ctx, st, id)
+	if err != nil {
+		return store.Session{}, err
+	}
+	return st.LiveSessionByPRRole(ctx, pr.ID, LiaisonRole)
+}
+
 // ownerRow is task id's owner row as it is (store.ErrNotFound before the
 // task's first launch).
 func (r *Runtime) ownerRow(ctx context.Context, id int64) (store.PR, error) {

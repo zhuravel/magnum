@@ -15922,6 +15922,70 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the stats never read a surface: TestADecisionFromTheLiaisonRecordsItsSurfaceTheShownTimeAndTheReadDiff
   and TestStatsCountALiaisonsAnswerAsACards.
 
+- `magnum factory talk <task>` starts the task's liaison (2026-11-07, the factory liaison's first slice). The
+  command queues a `talk` request (`TalkPayload{TaskID, Surface: "cli"}`) and the daemon renders
+  `factory-liaison.md` with the task's `PromptData`, the way a stage renders its roles' (`renderRole` with an
+  empty stage: the liaison runs outside every stage, so no stage and no attempt come in, and the copy only
+  when the task holds one), then hands it to `Runtime.Talk`. The answer is `the liaison of <key> talks in
+  pane <pane> of the factory's herdr session`. A task that is done, stopped or failed is refused, naming its
+  state; any other state is talked about, a published task included, since the liaison works in the task's
+  folder. A talk is no decision of yours and no words the factory acts on, so it records no input; the surface
+  goes to the log. `Talk` joins the engine's `Runtime` interface.
+  A `Talk` that returns a pane with an error completes the request instead of failing it: the liaison is live
+  in that pane, only its first prompt waits, and the next talk sends it. While you typed into the pane within
+  `human_cooldown` the answer says `you typed into its pane within human_cooldown; the next talk sends it`;
+  for any other error it carries the error's first line. An error with no pane fails the request.
+  Talk runs off the loop. Starting an agent waits up to two minutes for it and the first prompt up to
+  another, where every other request is a registry write, so the tick would stand still for every task's
+  answers and stage passes. It runs in a goroutine on the engine's context, as a claim does (`goBackground`'s
+  kind), and the request completes when `Talk` ends. A task has one talk at a time (`e.talking`): a second
+  request about it stays pending until the first ended and then finds the liaison the first started. The
+  request is read again before a goroutine starts, since a talk of an earlier tick may have answered it since
+  the tick read the pending ones. A drain cancels a running Talk and leaves its request pending, and a
+  draining daemon starts none: the next daemon talks again, and `Talk` is idempotent (a live liaison is kept,
+  a conversation that had its first prompt gets none). A panic in a talk fails its request, never the daemon.
+  Talk and the engine's `Park` of the same task do not race. `Talk` holds its task's lock for its whole run
+  (`talkLock`, beside the `talkMu` that makes talks take turns), and `parkLiaison` only tries it: a liaison a
+  Talk works on is left live, which the log says, and `Park` returns at once. Waiting for the Talk would hold
+  up the loop for minutes, and parking a liaison between its start and its first prompt would quit the agent
+  the Talk is about to prompt. A task that ended while its Talk ran has its liaison parked again by the
+  engine once the Talk returned (`talkTask`), and the request fails with `<key> is stopped now: its liaison is
+  parked again`: the park that came with the task's end found the Talk at work, and nothing else would park a
+  liaison of an ended task. The lock is the task's own, so one task's Talk never makes another task's park
+  skip.
+  The liaison's pane gets the daemon's `MAGNUM_HOME` and no `MAGNUM_CONFIG`. The commands it runs (`factory
+  answer`, `decide`, `retry`) load no configuration: they open the factory registry through the layout and
+  read the task's folder, and they never call `LoadConfig` (`start`, `stats` and `talk` do). A daemon
+  installed under a non-default config file, whose LaunchAgent carries `MAGNUM_CONFIG`, therefore acts the same
+  for them. TestTheLiaisonsCommandsLoadNoConfig holds it: with no config loaded and a `--config` that does not
+  parse, all three go through, in the forms the prompt names. A command of the liaison's that needs the config
+  later needs `MAGNUM_CONFIG` in `liaisonEnv` by the rule the LaunchAgent uses (`daemonConfigOverride`).
+  After the daemon's answer the command steps into the liaison as the screen's `o` steps into a task's
+  agent: herdr focuses the liaison's agent on the factory's session (the new `daemonSys.FocusAgent` seam,
+  `Runtime.LiaisonSession` for the agent, read from the factory's agents store), and `reveal.Reveal` brings the
+  terminal on that session to the front. A step that fails is said on stderr, the next still runs, and the
+  command exits 0: the liaison talks all the same. It waits for the daemon up to three minutes (`start`
+  waits thirty seconds), and a talk not answered by then goes on in the daemon while the command steps into
+  nothing. Rejected: Talk on the loop (it blocks every other request and stage for the minutes an agent takes
+  to start); a `TryLock` of the one `talkMu` in `parkLiaison` (the park of a task would skip whenever any task
+  talks); a new `running` request state in the registry (the marks of the running talks are the daemon's
+  memory, and a killed daemon's request, still pending, is simply talked again); reading the pane out of the
+  answer's words (the command reads the agents store, as nothing parses the daemon's prose).
+  The trial, before the liaison becomes the front door: three tasks go through `magnum factory talk`, and
+  `magnum factory stats` is compared with the first live task, which used the cards. Two numbers decide: the
+  step starts (the target is none) and your time per task; your questions in the chat are reported, not
+  judged. If they hold or improve, the next plan makes the liaison start with each task, points the alerts to
+  it and prompts it on each new decision.
+  Tests, failing first: TestTalkRequestStartsTheLiaison, TestTalkRefusesAnEndedTask,
+  TestTalkNamesThePaneWhenTheFirstPromptWaits, TestTalkRunsOffTheLoop, TestTwoTalksOfATaskTakeTurns,
+  TestAStopDuringATalkParksTheLiaisonAfterIt, TestADrainLeavesARunningTalkPending and
+  TestADrainingDaemonStartsNoTalk (the request kind did not exist), TestParkLeavesTheLiaisonAloneWhileATalkWorks
+  (Park waited for the Talk), and TestFactoryTalkQueuesATalkRequest, TestFactoryTalkStepsIntoTheLiaisonsPane
+  and TestFactoryTalkStepsIntoNothingWithoutAnAnswerAndSaysWhatFailed (no such command).
+  Guards that passed at once: TestTheLiaisonsCommandsLoadNoConfig (the commands never loaded a config; a
+  `LoadConfig` put in `retry` makes it fail), TestParkOfATaskGoesThroughWhileAnotherTasksLiaisonStarts (it
+  keeps the lock per task) and TestTalkOfAnUnknownTaskFails.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

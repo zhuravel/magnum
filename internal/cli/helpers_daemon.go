@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
 )
@@ -58,10 +59,22 @@ type daemonGroupSys struct {
 	// RunEngine runs the daemon in the foreground (app.New + engine.Run);
 	// nil means runDaemonEngine, which reads daemonSys itself.
 	RunEngine func(ctx context.Context, c *Context, o daemonOptions) (daemonDryRunReport, error)
+	// FocusAgent focuses an agent's pane inside the herdr session on socket
+	// (herdr.Client.AgentFocus); nil means the real herdr.
+	FocusAgent func(ctx context.Context, socket, target string) error
 	// RestartEvent records an event of daemon-restart's reload, best effort;
 	// nil means Context.writeRestartEvent, the registry's write (which may
 	// wait for a busy registry).
 	RestartEvent func(ctx context.Context, c *Context, level, kind, msg string)
+}
+
+// focusAgent focuses the pane of agent target in the herdr session on socket
+// (FocusAgent, else herdr's agent focus).
+func (s daemonGroupSys) focusAgent(ctx context.Context, socket, target string) error {
+	if s.FocusAgent != nil {
+		return s.FocusAgent(ctx, socket, target)
+	}
+	return (&herdr.Client{Socket: socket}).AgentFocus(ctx, target)
 }
 
 // restartEvent records an event of daemon-restart's reload (RestartEvent,

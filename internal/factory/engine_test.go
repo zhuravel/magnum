@@ -100,6 +100,34 @@ type fakeRuntime struct {
 	// of each task's live sessions (Workspaces).
 	paneFocus  runtime.PaneFocus
 	workspaces map[int64][]string
+	// talks are the Talk calls in order; talk, when set, is what Talk does
+	// (nil: the pane "p_1"), run without the lock.
+	talks []talkCall
+	talk  func(ctx context.Context, t registry.Task, prompt string) (string, error)
+}
+
+// talkCall is a Talk the engine made: the task and the prompt it rendered.
+type talkCall struct {
+	task   int64
+	prompt string
+}
+
+func (f *fakeRuntime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error) {
+	f.mu.Lock()
+	f.talks = append(f.talks, talkCall{task: t.ID, prompt: prompt})
+	fn := f.talk
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, t, prompt)
+	}
+	return "p_1", nil
+}
+
+// talkCalls are the Talk calls so far.
+func (f *fakeRuntime) talkCalls() []talkCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.talks)
 }
 
 // canProve makes entry id provable: its transcript is written past its

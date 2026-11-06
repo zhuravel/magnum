@@ -320,10 +320,19 @@ func means(s string) string {
 // daemon, wakes it and prints its answer, as name; does says what the
 // daemon does with it once one runs, for the message when none runs.
 func sendFactoryRequest(ctx context.Context, c *Context, reg *registry.Registry, name, kind string, payload any, does string) int {
+	code, _ := sendFactoryRequestFor(ctx, c, reg, name, kind, payload, does, factoryStartWait)
+	return code
+}
+
+// sendFactoryRequestFor is sendFactoryRequest waiting up to wait for the
+// daemon's answer; it also returns the request as last read: done or failed
+// once the daemon answered, else pending (the zero request when none was
+// queued).
+func sendFactoryRequestFor(ctx context.Context, c *Context, reg *registry.Registry, name, kind string, payload any, does string, wait time.Duration) (int, registry.Request) {
 	id, err := reg.EnqueueRequest(ctx, kind, payload)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum %s: %v\n", name, err)
-		return 1
+		return 1, registry.Request{}
 	}
 	pid, kerr := daemonSys.factoryKick(c.Layout)
 	if kerr != nil {
@@ -332,21 +341,21 @@ func sendFactoryRequest(ctx context.Context, c *Context, reg *registry.Registry,
 	if pid == 0 {
 		fmt.Fprintf(c.Stderr, "magnum %s: queued as request %d, but no factory daemon runs: `magnum factory install` "+
 			"loads it, and %s if it runs within 30 minutes (a request expires then)\n", name, id, does)
-		return 0
+		return 0, registry.Request{}
 	}
-	q, err := waitFactoryRequest(ctx, reg, id)
+	q, err := waitFactoryRequestFor(ctx, reg, id, wait)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum %s: %v\n", name, err)
-		return 1
+		return 1, q
 	}
 	switch q.State {
 	case registry.RequestDone:
 		fmt.Fprintln(c.Stdout, q.Result)
-		return 0
+		return 0, q
 	case registry.RequestFailed:
 		fmt.Fprintf(c.Stderr, "magnum %s: %s\n", name, q.Result)
-		return 1
+		return 1, q
 	}
 	fmt.Fprintf(c.Stdout, "the factory daemon (pid %d) has not answered request %d yet: `magnum factory status` shows the task\n", pid, id)
-	return 0
+	return 0, q
 }

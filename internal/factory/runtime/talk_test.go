@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -537,5 +538,133 @@ func TestSettleWorkspacesClosesALiaisonsLeftover(t *testing.T) {
 	}
 	if ids := g.workspaceIDs(); !slices.Equal(ids, []string{live}) {
 		t.Fatalf("workspaces %v, want the live liaison's %s alone", ids, live)
+	}
+}
+
+// A park that comes while a Talk starts or prompts the task's liaison (the
+// engine runs Talk off its loop) leaves the liaison alone and returns at
+// once: parking it between its start and its first prompt would quit an
+// agent the Talk is about to prompt. Park never waits for the Talk, which
+// can take minutes; the engine parks the liaison itself when the task has
+// ended meanwhile.
+func TestParkLeavesTheLiaisonAloneWhileATalkWorks(t *testing.T) {
+	g := newRig(t)
+	inPrompt, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	g.h.mu.Lock()
+	g.h.onPrompt = func(*fakeHerdr, string, string) { // called with the fake's lock held
+		close(inPrompt)
+		<-release
+	}
+	g.h.mu.Unlock()
+	talkDone := make(chan error, 1)
+	go func() {
+		_, err := g.r.Talk(g.ctx, g.task, talkPrompt)
+		talkDone <- err
+	}()
+	select {
+	case <-inPrompt:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Talk never prompted the liaison")
+	}
+
+	parkDone := make(chan error, 1)
+	go func() { parkDone <- g.r.Park(g.ctx, g.task) }()
+	select {
+	case err := <-parkDone:
+		if err != nil {
+			t.Fatalf("Park while Talk works: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Park waited for the Talk")
+	}
+
+	once.Do(func() { close(release) })
+	if err := <-talkDone; err != nil {
+		t.Fatalf("Talk: %v", err)
+	}
+	if !g.liaisonLive() {
+		t.Fatal("Park parked the liaison a Talk was prompting")
+	}
+	if got := g.h.promptTexts(); !slices.Equal(got, []string{talkPrompt}) {
+		t.Fatalf("prompts %q, want the Talk's alone", got)
+	}
+}
+
+// The guard is the task's own: a Talk that starts one task's liaison keeps
+// no other task's park waiting or skipped.
+func TestParkOfATaskGoesThroughWhileAnotherTasksLiaisonStarts(t *testing.T) {
+	g := newRig(t)
+	first := g.task
+	g.talk()
+	g.endLiaisonTurn() // idle: a park may park it
+	second := g.newTask("PR-12346")
+	inCreate, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	g.h.onCreate = func(o herdr.WorkspaceCreateOptions) { // without the fake's lock
+		if o.Label == liaisonLabel(second) {
+			close(inCreate)
+			<-release
+		}
+	}
+	talkDone := make(chan error, 1)
+	go func() {
+		_, err := g.r.Talk(g.ctx, second, talkPrompt)
+		talkDone <- err
+	}()
+	select {
+	case <-inCreate:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Talk never made the second liaison's workspace")
+	}
+
+	parkDone := make(chan error, 1)
+	go func() { parkDone <- g.r.Park(g.ctx, first) }()
+	select {
+	case err := <-parkDone:
+		if err != nil {
+			t.Fatalf("Park of the first task while Talk starts the second's liaison: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Park of the first task waited for the second's Talk")
+	}
+	if g.liaisonLive() { // g.task is the first
+		t.Fatal("Park of the first task left its idle liaison live")
+	}
+
+	once.Do(func() { close(release) })
+	if err := <-talkDone; err != nil {
+		t.Fatalf("Talk: %v", err)
+	}
+	g.task = second
+	if !g.liaisonLive() {
+		t.Fatal("the second task's liaison is not live after its Talk")
+	}
+}
+
+// LiaisonSession is the session the CLI steps into after a talk: the task's
+// live liaison, in the pane Talk named; none before the first talk and none
+// once the liaison is parked.
+func TestLiaisonSessionIsTheLiveLiaisonInTheTalksPane(t *testing.T) {
+	g := newRig(t)
+	if _, err := LiaisonSession(g.ctx, g.st, g.task.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LiaisonSession before the first talk: %v, want ErrNotFound", err)
+	}
+
+	pane := g.talk()
+
+	s, err := LiaisonSession(g.ctx, g.st, g.task.ID)
+	if err != nil || store.Deref(s.HerdrPaneID) != pane || store.Deref(s.AgentName) != g.liaisonAgent() || s.Role != LiaisonRole {
+		t.Fatalf("LiaisonSession: %+v, %v; want fx-liaison %s in pane %s", s, err, g.liaisonAgent(), pane)
+	}
+
+	g.endLiaisonTurn()
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LiaisonSession(g.ctx, g.st, g.task.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LiaisonSession of a parked liaison: %v, want ErrNotFound", err)
 	}
 }

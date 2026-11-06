@@ -11626,6 +11626,7 @@ const (
 	ReqLetGo   = "let_go"
 	ReqRetry   = "retry"
 	ReqFocus   = "focus"
+	ReqTalk    = "talk"
 )
     Request kinds.
 
@@ -12504,6 +12505,7 @@ type Runtime interface {
 	Proving(entry int64) bool
 	PaneFocus() runtime.PaneFocus
 	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
+	Talk(ctx context.Context, t registry.Task, prompt string) (pane string, err error)
 }
     Runtime is the factory's agent runtime (internal/factory/runtime):
     the owner row of a task in the factory's agents store, the launch of
@@ -12595,6 +12597,13 @@ type StopPayload struct {
 }
     StopPayload is a ReqStop: stop task TaskID for good. Surface is where you
     asked (the screen, the CLI), for the record of your input.
+
+type TalkPayload struct {
+	TaskID  int64
+	Surface string
+}
+    TalkPayload is a ReqTalk: you want to talk with the liaison of task TaskID.
+    Surface is where you asked, for the record.
 
 ```
 
@@ -13708,6 +13717,11 @@ func IsUnknownReason(what string) bool
     IsUnknownReason reports whether a task's wait is UnknownReason's, as this
     build or an older one (whose wait named no command) wrote it.
 
+func LiaisonSession(ctx context.Context, st *store.Store, id int64) (store.Session, error)
+    LiaisonSession is the live session of task id's liaison in st, the agent you
+    step into after a talk: store.ErrNotFound before the task's first talk and
+    once its liaison is parked.
+
 func LiaisonTask(nodeID string) (int64, bool)
     LiaisonTask is the task a liaison row's node id names, false for a row that
     is no liaison's.
@@ -14061,7 +14075,9 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
     When that prompt fails, the liaison is live in its pane all the same:
     Talk returns the pane with the error (you may step in; agents.ErrHumanActive
     while you typed into it), and the next Talk sends the prompt. Talks take
-    turns, so two never start two liaisons.
+    turns, so two never start two liaisons, and a park of the task that comes
+    meanwhile leaves its liaison alone (parkLiaison; the engine parks it itself
+    when the task ended while Talk ran).
 
 func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
     TouchedSince names who could have changed task t's copy since the time
