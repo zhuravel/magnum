@@ -25,6 +25,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -148,7 +149,8 @@ func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 // liaisonPrompt is the liaison prompt for task t, rendered as a stage renders
 // its roles' with the data of the task alone: the liaison runs outside any
 // stage, in the task's folder, so no stage and no attempt come in, and the
-// copy only when the task holds one (the prompt describes it then).
+// copy only when the task holds one (copyOfTask; the prompt describes it
+// then).
 func (e *Engine) liaisonPrompt(t registry.Task) (string, error) {
 	spec, ok := e.cfg.FactoryRole(runtime.LiaisonRole)
 	if !ok {
@@ -158,6 +160,30 @@ func (e *Engine) liaisonPrompt(t registry.Task) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the liaison of %s: %w", TaskKey(t), err)
 	}
-	c, _ := e.heldCopy(t.ID)
-	return e.renderRole(t, config.FactoryStage{}, spec, runAs, c)
+	return e.renderRole(t, config.FactoryStage{}, spec, runAs, e.copyOfTask(t))
+}
+
+// copyOfTask is the copy task t holds: the one the engine holds for it (a
+// claim handed it over), else, since that memory starts empty after a daemon
+// restart and only a claim fills it, the copy the task's row names, resolved
+// by its repository's copies pattern as the claims resolve a copy
+// (copyNumber, the Pool's path): the read of a path, no claim and no
+// provisioning. The zero Copy when the task holds none, or its repository
+// renders no copy of that name.
+func (e *Engine) copyOfTask(t registry.Task) Copy {
+	if c, ok := e.heldCopy(t.ID); ok {
+		return c
+	}
+	if t.Copy == "" {
+		return Copy{}
+	}
+	repo, ok := e.cfg.FactoryRepo(t.Repo)
+	if !ok {
+		return Copy{}
+	}
+	n, ok := copyNumber(repo, t.Copy)
+	if !ok {
+		return Copy{}
+	}
+	return copyOf(repo, store.Slot{Name: t.Copy, Path: repo.Pool().Path(n)}, n)
 }

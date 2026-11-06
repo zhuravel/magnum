@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -355,5 +356,66 @@ func TestTalkOfAnUnknownTaskFails(t *testing.T) {
 
 	if q := h.request(id); q.State != registry.RequestFailed {
 		t.Fatalf("the talk request is %s (%s), want failed", q.State, q.Result)
+	}
+}
+
+// A task keeps its copy across a daemon restart (its row names it) while the
+// engine's own memory of the copies it holds starts empty and only a claim
+// fills it: the liaison's first prompt still tells it where the copy is, by
+// the repository's copies pattern, read only. A copy the engine holds comes
+// from the claim, and a task that holds none, or one the repository's
+// pattern does not render, gets no copy line.
+func TestTalkPromptCarriesTheTasksCopyAfterARestart(t *testing.T) {
+	h := newHarness(t)
+	root := t.TempDir()
+	h.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Copies: filepath.Join(root, "shop.factory{n}"),
+		CopyName: "factory{n}", MaxCopies: 3}}
+	taskWith := func(key, copyName, branch string) registry.Task {
+		t.Helper()
+		task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: key, Kind: "bug", Repo: "example/shop", Title: key + " title",
+			State: registry.TaskNeedsYou, Stage: "report", Copy: copyName, Branch: branch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+	promptOf := func(task registry.Task) string {
+		t.Helper()
+		id := h.askTalk(task.ID)
+		h.tickAndWait()
+		if q := h.request(id); q.State != registry.RequestDone {
+			t.Fatalf("the talk request is %s (%s), want done", q.State, q.Result)
+		}
+		for _, call := range slices.Backward(h.rt.talkCalls()) {
+			if call.task == task.ID {
+				return call.prompt
+			}
+		}
+		t.Fatalf("Talk was not called for task %d", task.ID)
+		return ""
+	}
+
+	// After a restart: the task's row names factory2, the engine holds nothing.
+	restarted := taskWith("PR-12311", "factory2", "zhuravel-PR-12311-credit")
+	prompt := promptOf(restarted)
+	line := "The task's copy of the repository is " + filepath.Join(root, "shop.factory2") + ", on `zhuravel-PR-12311-credit`."
+	if !strings.Contains(prompt, line) {
+		t.Fatalf("the liaison's prompt lacks %q:\n%s", line, prompt)
+	}
+
+	// A copy the engine holds is the claim's own.
+	held := taskWith("PR-12312", "factory3", "zhuravel-PR-12312-credit")
+	h.e.claimMu.Lock()
+	h.e.held[held.ID] = Copy{Name: "factory3", Path: filepath.Join(root, "claimed.factory3"), Number: 3}
+	h.e.claimMu.Unlock()
+	if prompt := promptOf(held); !strings.Contains(prompt, "The task's copy of the repository is "+filepath.Join(root, "claimed.factory3")+",") {
+		t.Fatalf("the prompt of a task whose claim the engine holds lacks the claim's copy:\n%s", prompt)
+	}
+
+	// No copy, or a name the repository's pattern does not render: no copy line.
+	for _, task := range []registry.Task{taskWith("PR-12313", "", ""), taskWith("PR-12314", "elsewhere7", "zhuravel-PR-12314-credit")} {
+		if prompt := promptOf(task); strings.Contains(prompt, "copy of the repository") {
+			t.Errorf("the prompt of %s (copy %q) names a copy:\n%s", task.JiraKey, task.Copy, prompt)
+		}
 	}
 }

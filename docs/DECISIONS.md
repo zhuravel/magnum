@@ -15926,8 +15926,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   command queues a `talk` request (`TalkPayload{TaskID, Surface: "cli"}`) and the daemon renders
   `factory-liaison.md` with the task's `PromptData`, the way a stage renders its roles' (`renderRole` with an
   empty stage: the liaison runs outside every stage, so no stage and no attempt come in, and the copy only
-  when the task holds one), then hands it to `Runtime.Talk`. The answer is `the liaison of <key> talks in
-  pane <pane> of the factory's herdr session`. A task that is done, stopped or failed is refused, naming its
+  when the task holds one: the one the engine holds from a claim, else, since that memory starts empty
+  after a daemon restart and only a claim fills it, the copy the task's row names, resolved by its
+  repository's copies pattern as the claims resolve a copy and read only, with no claim), then hands it to
+  `Runtime.Talk`. The first prompt goes out once per conversation, so a copy missing from it would stay
+  unknown to that liaison for good. The answer is `the liaison of <key> talks in pane <pane> of the factory's
+  herdr session`. A task that is done, stopped or failed is refused, naming its
   state; any other state is talked about, a published task included, since the liaison works in the task's
   folder. A talk is no decision of yours and no words the factory acts on, so it records no input; the surface
   goes to the log. `Talk` joins the engine's `Runtime` interface.
@@ -15980,8 +15984,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTalkNamesThePaneWhenTheFirstPromptWaits, TestTalkRunsOffTheLoop, TestTwoTalksOfATaskTakeTurns,
   TestAStopDuringATalkParksTheLiaisonAfterIt, TestADrainLeavesARunningTalkPending and
   TestADrainingDaemonStartsNoTalk (the request kind did not exist), TestParkLeavesTheLiaisonAloneWhileATalkWorks
-  (Park waited for the Talk), and TestFactoryTalkQueuesATalkRequest, TestFactoryTalkStepsIntoTheLiaisonsPane
-  and TestFactoryTalkStepsIntoNothingWithoutAnAnswerAndSaysWhatFailed (no such command).
+  (Park waited for the Talk), TestTalkPromptCarriesTheTasksCopyAfterARestart (the prompt of a task whose copy
+  the engine held no claim for lacked the copy line), and TestFactoryTalkQueuesATalkRequest,
+  TestFactoryTalkStepsIntoTheLiaisonsPane and TestFactoryTalkStepsIntoNothingWithoutAnAnswerAndSaysWhatFailed
+  (no such command).
   Guards that passed at once: TestTheLiaisonsCommandsLoadNoConfig (the commands never loaded a config; a
   `LoadConfig` put in `retry` makes it fail), TestParkOfATaskGoesThroughWhileAnotherTasksLiaisonStarts (it
   keeps the lock per task) and TestTalkOfAnUnknownTaskFails.
