@@ -56,6 +56,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `factory-points.md` | `fx-points`, which tests each point of a feature's ticket against the code | factory |
 | `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
 | `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions | factory |
+| `factory-liaison.md` | `fx-liaison`, the liaison that talks with you about one task: it works in the task's folder (`.TaskDir`), never in the copy; asks you with AskUserQuestion, its recommendation first and one decision at a time; records your answers and decisions with `magnum factory answer`, `decide` and `retry` (`--surface liaison`, `--shown`); keeps `notes.md`; and never merges, runs a migration or touches production or a shared database. No stage names it, so none launches it, and it carries no factory-mode rules (the other factory prompts forbid AskUserQuestion) | factory |
 | `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
 | `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
 | `factory-writer.md` | `fx-writer`, which writes the change test first; back from the ready card, it names your send back's note file and reason key (`.SendBack`, `.SendBackReason`) or the base to merge and the paths it conflicts in (`.MergeBase`, `.Conflicts`) | factory |
@@ -523,12 +524,15 @@ every role's prompt once with this build (`factory.CheckPrompts`), so an edit re
 after `magnum factory install`, which restarts that daemon, and `magnum config` refuses a role whose
 prompt names it. The data holds paths, keys and commands only: the ticket, the operator's words and the
 answers reach the agents as files of the task's directory (`~/.local/share/magnum/factory/tasks/<id>/`).
+`factory-liaison.md` is the one factory prompt that does not include `task` and `rules`: the liaison is your
+chat, so it asks with AskUserQuestion, which `rules` forbids, and it works in the task's directory, never
+in the copy (it names the copy, to read, only while there is one). It states its own hard lines instead.
 
 | Variable | Meaning |
 |---|---|
 | `.TaskID`, `.Key`, `.Tracker` | the task's id, its key (empty for a task of a free prompt), and the tracker of a key that is not Jira's, by its link's host (`linear.app`; empty for a Jira key): `task` calls the key "the Jira issue PR-12345", or "the linear.app issue EX-12" |
 | `.Kind`, `.Repo`, `.Branch`, `.Base` | the kind of task (`bug`, `feature`, `chore`), the repository (`owner/name`), the task's local branch and the repository's base branch (the branch starts at `origin/<base>`) |
-| `.Copy`, `.TaskDir` | the checkout of the task's copy (the agent's working directory) and the task's directory |
+| `.Copy`, `.TaskDir` | the checkout of the task's copy (the agent's working directory; the liaison's prompt names it only when set) and the task's directory (the liaison's working directory) |
 | `.Ticket`, `.Guidance`, `.Prompt`, `.Answers`, `.Rules` | `ticket.md`, `guidance.md` (your words after a key), `prompt.md` (a free prompt), `answers.md` and `rules.md` in the task's directory, each empty while its file is not there |
 | `.Findings` | the role's `findings-<role>.md` in a findings stage (named for the role the stage names, so a Codex role's Claude fallback writes the same file), else the pattern of every investigator's file, `findings-*.md` |
 | `.Questions` | the file the role writes its questions to: `questions.json` in the judge's report stage, `questions-<role>.json` for any other role (the critic's join the judge's in one batch) |

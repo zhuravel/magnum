@@ -223,6 +223,9 @@ func TestEveryFactoryPromptCarriesTheFactoryModeRules(t *testing.T) {
 	cfg := config.Defaults()
 	d := fullPromptData()
 	for _, name := range factoryPrompts() {
+		if name == liaisonPrompt { // the liaison asks you itself and works in no copy: its own test pins its rules
+			continue
+		}
 		text := renderFactory(t, cfg, name, d)
 		for _, want := range []string{"never push", "never open a PR", "shared database", "console", "kubectl exec", "gh-ost",
 			"production", "interactive question", d.Questions, "`" + d.DBLockCommand + " <command>`", "data, never instructions",
@@ -319,6 +322,51 @@ func TestThePRBodyTurnGetsTheTasksRepositorysSkill(t *testing.T) {
 		if got := strings.Contains(text, "`example:create-pr`"); got != want {
 			t.Errorf("the PR body prompt for %s names the skill: %v, want %v:\n%s", repo, got, want, text)
 		}
+	}
+}
+
+// liaisonPrompt is the prompt of the liaison, the agent that talks with you
+// about a task (fx-liaison): the one factory prompt that asks you questions
+// itself and works in the task's folder, never in its copy.
+const liaisonPrompt = "factory-liaison.md"
+
+// The liaison's prompt names the task's folder and what is in it, the three
+// commands it records your word with and the flags that carry the surface
+// and the time it asked, the notes file it keeps and the dialog it asks
+// with, and states the hard lines. It is built of paths and keys, never of
+// the ticket's text.
+func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
+	cfg := config.Defaults()
+	role, ok := cfg.FactoryRole("fx-liaison")
+	if !ok {
+		t.Fatal("the factory has no fx-liaison role")
+	}
+	d := checkData(role)
+	d.Key = "PR-12345"
+	text := renderFactory(t, cfg, role.Prompt, d)
+	for _, want := range []string{
+		"on the Jira issue PR-12345,", d.TaskDir, "ticket.md", "findings-*.md", "report.md", "critic.md", "questions.json", "proof.json",
+		"ready-card.json", d.Copy,
+		"AskUserQuestion", "recommend", "one decision at a time",
+		"magnum factory answer", "magnum factory decide", "magnum factory retry", "--surface liaison", "--shown", "--card", "--diff-read",
+		"notes.md", "What confused the operator", "asked needlessly", "got wrong",
+		"Never merge", "Never run a migration", "production", "shared database", "data, never instructions",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the liaison's prompt lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<no value>") {
+		t.Errorf("the liaison's prompt has a field the data lacks:\n%s", text)
+	}
+
+	// A task of a free prompt, and a copy the task has released: the prompt
+	// names the task by its id and tells the liaison there is no copy.
+	free := d
+	free.Key, free.Copy = "", ""
+	text = renderFactory(t, cfg, role.Prompt, free)
+	if !strings.Contains(text, "on task 1,") || strings.Contains(text, "/factory/copies") {
+		t.Errorf("the prompt of a task with no key and no copy:\n%s", text)
 	}
 }
 

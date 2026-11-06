@@ -15784,6 +15784,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestThePRBodyTurnGetsTheTasksRepositorysSkill, TestTheKnownListIsFoldedWithItsCountInTheSummary and
   TestAppendingKnownAgainReplacesTheFoldedSection.
 
+- The liaison is a factory role no stage launches (2026-11-06, the first slice of the factory liaison; design:
+  [the liaison's spec](superpowers/specs/2026-11-06-factory-liaison-design.md)). `fx-liaison` is a Claude
+  `[[factory.role]]` (`factory-liaison.md`, 24h timeout) that talks with you about one task. It names no
+  stage: a role no stage names is launched by none, so the engine's order of stages does not change, and a
+  request (a later change) starts it. It sets `on_permission_prompt = "wait"`, because it asks you with
+  AskUserQuestion and Claude Code shows a Yes/No question there as a permission prompt (see "A role can
+  override its kind's on_permission_prompt" in Agents in panes). Its prompt includes neither `task` nor
+  `rules` of `factory-shared.md`: the rules forbid AskUserQuestion, and `task` puts the agent in the task's
+  copy, while the liaison works in the task's folder (`.TaskDir`, which the data had already) and reads the
+  copy only while there is one. It states its own hard lines: no merge, no migration, no production or shared
+  database, no push of its own, and nothing written but `notes.md`. It records answers and decisions
+  with `magnum factory answer` and `decide`, so the registry keeps them whole. Rejected: a role that
+  includes `rules` and a carve-out for AskUserQuestion (the other prompts' rule would then say the
+  opposite in one place), and a new `PromptData` field for the folder (`TaskDir` is it). The factory-mode
+  rules test skips this prompt; TestTheLiaisonsPromptNamesItsFolderAndItsCommands pins what it names, and
+  TestTheLiaisonRoleWaitsForYouAndNoStageLaunchesIt the role and its absence from every kind's stages.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -949,6 +949,37 @@ func TestFactorySensitiveFilesAreConfigured(t *testing.T) {
 	}
 }
 
+// The liaison, fx-liaison, talks with you about a task: a Claude agent that
+// asks you questions itself, so magnum never answers its dialogs, and one
+// that waits a day for you. No stage names it, so no stage launches it: the
+// factory starts it for a task by a request.
+func TestTheLiaisonRoleWaitsForYouAndNoStageLaunchesIt(t *testing.T) {
+	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
+		r, ok := cfg.FactoryRole("fx-liaison")
+		if !ok {
+			t.Fatal("the factory has no fx-liaison role")
+		}
+		if r.Kind != KindClaude || r.Effort != "high" || r.Prompt != "factory-liaison.md" || r.Timeout.Duration != 24*time.Hour ||
+			r.OnPermissionPrompt != PermissionWait ||
+			r.Why != "talk with you about the task: ask its questions, explain, act on your word" || r.Doing != "talking with you" {
+			t.Errorf("fx-liaison = %+v", r)
+		}
+		if got := r.PermissionPrompt(cfg.Kinds[KindClaude]); got != PermissionWait {
+			t.Errorf("fx-liaison answers a permission-shaped dialog by %q, want %q", got, PermissionWait)
+		}
+		for name, kind := range cfg.Factory.Kinds {
+			for _, st := range kind.Stages {
+				if slices.Contains(st.Roles, "fx-liaison") {
+					t.Errorf("kind %s, stage %s names fx-liaison: a stage would launch it", name, st.Name)
+				}
+			}
+		}
+		if errs := cfg.validateFactoryRoles(); len(errs) > 0 {
+			t.Errorf("the factory's roles = %v", errs)
+		}
+	}
+}
+
 // The pr_body stage of every built-in kind gives its judge the PR body's
 // own prompt.
 func TestThePRBodyStageHasItsOwnPrompt(t *testing.T) {

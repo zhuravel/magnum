@@ -923,6 +923,16 @@ timeout = "90m"
 why = "write the change, test first"
 doing = "writing the change"
 
+[[factory.role]]
+name = "fx-liaison"               # talks with you about one task; no stage names it, so no stage launches it
+kind = "claude"
+effort = "high"
+prompt = "factory-liaison.md"
+timeout = "24h"
+on_permission_prompt = "wait"     # it asks you its questions itself (AskUserQuestion): magnum never answers them
+why = "talk with you about the task: ask its questions, explain, act on your word"
+doing = "talking with you"
+
 # The kinds of task and their stages, in order. A stage has a name and a type:
 #   agents    launches `roles` in parallel in the task's copy; ends when its `end` fact holds
 #             (findings, report, critic, proof or pr_body: a file or a result the factory checks, never a "done" message)

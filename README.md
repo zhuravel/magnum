@@ -3500,7 +3500,15 @@ stages = [
   on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal;
   `magnum config` warns about one without it. To run a role on Claude instead, set `kind = "claude"` in a
   `[[factory.role]]` of its name (the entry is then unused and `magnum config` says so), and to drop an
-  entry write it with an empty value: `codex_fallback = { fx-cause = "" }`.
+  entry write it with an empty value: `codex_fallback = { fx-cause = "" }`. `fx-liaison` is the one role
+  that works for no stage: the liaison, a Claude agent (`factory-liaison.md`) that talks with you about one
+  task. No stage names it, so no stage launches it, and it sets `on_permission_prompt = "wait"` because it
+  asks you its questions itself (Claude Code's AskUserQuestion), which magnum never answers for you. It
+  works in the task's folder, never in its copy: it reads the folder's files and the copy, changes nothing
+  there, records your answers and decisions with `magnum factory answer`, `decide` and `retry`, and keeps
+  `notes.md` in the folder (what confused you, what the factory asked needlessly, what it got wrong). Its
+  hard lines are the factory's: it never merges, never runs a migration and never touches production or a
+  shared database.
 - **Kinds of task and stages.** A kind lists its stages in order; each has a `name` and a `type`.
   An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
   `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message);
@@ -3914,10 +3922,12 @@ task when its card names it (the local branch keeps its name). Then the PR is
 linked, the task is published, its agents are parked, its copy is released and the queued task behind it
 starts. The factory sends magnum no review request: the PR is not a draft, and magnum reviews it by itself.
 
-Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt
-carries the rules of `factory-shared.md`: no interactive question dialog (an agent writes its questions to its file
-and ends its turn), no push and no PR, not even a draft (an agent that follows a skill stops before the skill's push
-or PR step), no shared database or console, and no production. Only the publish effect pushes, after your `y`. The
+Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt but
+the liaison's carries the rules of `factory-shared.md`: no interactive question dialog (an agent writes its questions
+to its file and ends its turn), no push and no PR, not even a draft (an agent that follows a skill stops before the
+skill's push or PR step), no shared database or console, and no production. The liaison's prompt is your chat, so it
+asks you with AskUserQuestion, and it states the lines that still hold for it: no merge, no migration, no production
+or shared database, no push of its own. Only the publish effect pushes, after your `y`. The
 agents act as you on this Mac, so these rules stop mistakes, not a determined agent: what stops damage is on
 GitHub, the base branch's protection, its required reviews and no force push.
 

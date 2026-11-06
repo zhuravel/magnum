@@ -342,6 +342,11 @@ func DefaultFactoryRoles() []Role {
 			Why: "merge the findings into one report and the questions", Doing: "weighing the findings"},
 		{Name: "fx-writer", Kind: KindClaude, Model: "opus", Effort: "high", Prompt: "factory-writer.md", Timeout: Duration{90 * time.Minute},
 			Why: "write the change, test first", Doing: "writing the change"},
+		// The liaison talks with you about a task; no stage names it. It asks you itself (AskUserQuestion), so
+		// magnum leaves its dialogs to you.
+		{Name: "fx-liaison", Kind: KindClaude, Effort: "high", Prompt: "factory-liaison.md", Timeout: Duration{24 * time.Hour},
+			OnPermissionPrompt: PermissionWait,
+			Why:                "talk with you about the task: ask its questions, explain, act on your word", Doing: "talking with you"},
 	}
 }
 
