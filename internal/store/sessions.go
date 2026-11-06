@@ -149,6 +149,49 @@ func (s *Store) PRsWithPanes(ctx context.Context, panes []string) ([]int64, erro
 	})
 }
 
+// herdrIDsRecorded is the condition of a session row that records an id
+// of a herdr server: a workspace, a tab or a pane.
+const herdrIDsRecorded = "(herdr_workspace_id IS NOT NULL OR herdr_tab_id IS NOT NULL OR herdr_pane_id IS NOT NULL)"
+
+// PRsWithHerdrIDs returns the ids of the PRs a session of which, in any
+// state, records a herdr workspace, tab or pane, ascending and once each:
+// the PRs whose sessions a move of magnum's panes to another herdr session
+// parks, and whose panes it closes in the old one, before ForgetHerdrIDs.
+func (s *Store) PRsWithHerdrIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT pr_id FROM sessions WHERE "+herdrIDsRecorded+" ORDER BY pr_id")
+	if err != nil {
+		return nil, fmt.Errorf("prs with herdr ids: %w", err)
+	}
+	return collect(rows, func(r scanner) (int64, error) {
+		var id int64
+		err := r.Scan(&id)
+		return id, err
+	})
+}
+
+// ForgetHerdrIDs clears the herdr workspace, tab and pane of every session
+// row and moves the starting and live ones to lost, in one write, and
+// returns how many rows it changed. It is the last step of a move of
+// magnum's panes to another herdr session: each server numbers its ids from
+// w1, so an id of the old one would name someone else's pane in the new
+// one. A lost row keeps its conversation (session_id) and resumes by it;
+// parked, closed and lost rows keep their state. A second call changes
+// nothing.
+func (s *Store) ForgetHerdrIDs(ctx context.Context) (int64, error) {
+	live := sqlStrings(liveSessionStates)
+	res, err := s.db.ExecContext(ctx, "UPDATE sessions SET herdr_workspace_id = NULL, herdr_tab_id = NULL, herdr_pane_id = NULL,"+
+		" state = CASE WHEN state IN ("+live+") THEN ? ELSE state END"+
+		" WHERE "+herdrIDsRecorded+" OR state IN ("+live+")", SessionLost)
+	if err != nil {
+		return 0, fmt.Errorf("forget herdr ids: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("forget herdr ids: %w", err)
+	}
+	return n, nil
+}
+
 // CreateRun inserts a run and returns it. Role is any non-empty name. An
 // empty ID is generated as "r-<UTC yyyymmddThhmmss>-<n>"; CreatedAt defaults
 // to now.

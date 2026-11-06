@@ -31,6 +31,13 @@ const (
 	KVGHReset           = "gh.reset"
 	KVGHPollPausedUntil = "gh.poll_paused_until"
 	KVHerdrUp           = "herdr.up" // "1" or "0"
+	// KVHerdrPanes is the herdr session the registry's herdr ids (the
+	// sessions' workspaces, tabs and panes) belong to, a herdr.Session as
+	// JSON ({"name": ..., "socket": ...}): each herdr server numbers its own
+	// ids, so they are good only on the socket that gave them. The daemon
+	// writes it; the App opens its panes there. Absent: they are in your
+	// session ([herdr] socket), where every build before the key opened them.
+	KVHerdrPanes = "herdr.panes"
 )
 
 // KVToolPausedUntil holds when a tool's pause ends ("codex", "claude";

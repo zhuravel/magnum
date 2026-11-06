@@ -22768,6 +22768,13 @@ const (
 	KVGHReset           = "gh.reset"
 	KVGHPollPausedUntil = "gh.poll_paused_until"
 	KVHerdrUp           = "herdr.up" // "1" or "0"
+	// KVHerdrPanes is the herdr session the registry's herdr ids (the
+	// sessions' workspaces, tabs and panes) belong to, a herdr.Session as
+	// JSON ({"name": ..., "socket": ...}): each herdr server numbers its own
+	// ids, so they are good only on the socket that gave them. The daemon
+	// writes it; the App opens its panes there. Absent: they are in your
+	// session ([herdr] socket), where every build before the key opened them.
+	KVHerdrPanes = "herdr.panes"
 )
     kv keys shared by the daemon (which writes them) and the CLI (`magnum
     status`, `doctor`, `pause`, `resume`, `identities`), so neither side spells
@@ -25078,6 +25085,15 @@ func (s *Store) FindingsSince(ctx context.Context, since time.Time) ([]Finding, 
     FindingsSince returns the findings recorded at or after since, oldest first,
     each with its PR's repository.
 
+func (s *Store) ForgetHerdrIDs(ctx context.Context) (int64, error)
+    ForgetHerdrIDs clears the herdr workspace, tab and pane of every session
+    row and moves the starting and live ones to lost, in one write, and returns
+    how many rows it changed. It is the last step of a move of magnum's
+    panes to another herdr session: each server numbers its ids from w1,
+    so an id of the old one would name someone else's pane in the new one.
+    A lost row keeps its conversation (session_id) and resumes by it; parked,
+    closed and lost rows keep their state. A second call changes nothing.
+
 func (s *Store) ForgetSend(ctx context.Context, key string) error
     ForgetSend drops key's dedup record so the next ShouldSend for it sends at
     once (the condition the notification was about has cleared). Forgetting an
@@ -25300,6 +25316,12 @@ func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSi
     are open (drafts included) with activity at or after activeSince (or none
     known), or were merged at or after mergedSince, except the PR except,
     by number.
+
+func (s *Store) PRsWithHerdrIDs(ctx context.Context) ([]int64, error)
+    PRsWithHerdrIDs returns the ids of the PRs a session of which, in any state,
+    records a herdr workspace, tab or pane, ascending and once each: the PRs
+    whose sessions a move of magnum's panes to another herdr session parks,
+    and whose panes it closes in the old one, before ForgetHerdrIDs.
 
 func (s *Store) PRsWithPanes(ctx context.Context, panes []string) ([]int64, error)
     PRsWithPanes returns the ids of the PRs a session of which, in any state,

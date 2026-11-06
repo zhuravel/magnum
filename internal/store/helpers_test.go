@@ -206,6 +206,7 @@ func TestKVKeys(t *testing.T) {
 		KVPRNoApprovalReview(3):                "pr.3.no_approval_review",
 		KVPRDryRun(3):                          "pr.3.dry_run",
 		KVPRStar(3):                            "pr.3.star",
+		KVHerdrPanes:                           "herdr.panes",
 		KVDaemonPaused + KVHerdrUp + KVGHReset: "daemon.pausedherdr.upgh.reset",
 	}
 	for got, want := range cases {
