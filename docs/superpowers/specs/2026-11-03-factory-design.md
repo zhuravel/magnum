@@ -1513,6 +1513,7 @@ The operator's improvement loop (`/magnum-improve`) covers both halves, from mil
    - one answer per PR on the board and on the factory screen: a factory mark on the board, mocked through the real painter first
    - the hand-off key and the review-settle barrier (section 6.7)
    - stacks: two PRs for a migration that must run first, split only on the operator's answer (docs/superpowers/specs/2026-11-06-factory-stacks-design.md)
+   - the liaison: one Claude agent per task as the operator's front door for its questions and decisions, while the engine keeps the stages (docs/superpowers/specs/2026-11-06-factory-liaison-design.md)
 3. CI and the parent branch: CI watched, fixed or rerun, with the "not ours" cause, the CI-miss ledger and the watchdog (section 8.1). The parent is merged on a conflict or for a required check, and at no other time.
 4. Stagings and QA:
    - void comes first: the merge, conflicts, the deploy test and QA with a JSON verdict
