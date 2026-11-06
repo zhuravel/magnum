@@ -45,8 +45,8 @@ type uiOpts struct {
 func newUICmd(c *Context) *cobra.Command {
 	var o uiOpts
 	cmd := newCommand(groupAct, uiUsage, "open a magnum popup pane in herdr (ui open picker|status|cleanup|doctor)",
-		"Open a magnum popup pane of the herdr plugin (picker, status, cleanup or doctor) over the herdr "+
-			"socket. The sizes come from the [[panes]] of herdr-plugin.toml unless --width or --height is given; "+
+		"Open a magnum popup pane of the herdr plugin (picker, status, cleanup or doctor) in the herdr "+
+			"session the plugin runs in ($HERDR_SOCKET_PATH, else [herdr] socket). The sizes come from the [[panes]] of herdr-plugin.toml unless --width or --height is given; "+
 			"the workspace defaults to the plugin context's.",
 		func(pos []string) int { return runUI(c, o, pos) })
 	fs := cmd.Flags()

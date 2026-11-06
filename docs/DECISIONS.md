@@ -3451,6 +3451,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `herdr` for your default session, as before). `ui open` (light mode, no registry) keeps your session.
   Tests, failing first: TestOpenRevealsTheClientOfThePaneSession, TestHerdrErrNamesThePaneSession.
 
+- **A plugin's workspace names a PR only in the session of magnum's panes, and its popups open where it
+  ran** (2026-11-06). The plugin's actions pass the herdr workspace they ran in (`--workspace`), and each
+  herdr server numbers its workspaces from w1: with the review panes in `[herdr] review_session`, "pin
+  this workspace's PR" pressed in your session looked up your `w3` among the registry's ids, which are the
+  panes' server's, and could pin, mute or release another PR. The id now names a PR only when the plugin ran
+  in the panes' session (`$HERDR_SOCKET_PATH`, which herdr sets in its actions, is theirs; unset, as for the
+  flag typed outside herdr, it is taken as theirs), else the focused pane's directory decides, and with no
+  directory the command says the workspace is another session's. `magnum ui open` opened every popup on
+  `[herdr] socket`, so an action in the factory's or the review session put its popup in yours; it now opens
+  it in the session the plugin ran in (`$HERDR_SOCKET_PATH`, yours outside herdr), and names that session
+  in its error. Rejected: mapping a workspace of your session to the panes' by its label (the plugin's
+  context gives the id, and the directory already names the slot). Tests, failing first:
+  TestAWorkspaceIDFromAnotherHerdrSessionIsNotTrusted, TestUIOpenOpensThePopupInTheSessionThePluginRanIn.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

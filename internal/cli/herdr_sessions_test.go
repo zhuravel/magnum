@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -87,5 +88,91 @@ func TestHerdrErrNamesThePaneSession(t *testing.T) {
 	actContains(t, h.errb.String(), "herdr is not running (socket "+h.d.Cfg.Herdr.Socket+"): start herdr, then retry")
 	if strings.Contains(h.errb.String(), "--session") {
 		t.Fatalf("your default session's fix names a session: %s", h.errb.String())
+	}
+}
+
+// A plugin action passes the herdr workspace it ran in, whose id is a
+// number of that session's server: each server numbers its own from w1. It
+// names a PR only when the plugin ran in the session of magnum's panes
+// ($HERDR_SOCKET_PATH is theirs, or unset: the flag typed by hand), else
+// the directory decides, and with none the command says why.
+func TestAWorkspaceIDFromAnotherHerdrSessionIsNotTrusted(t *testing.T) {
+	h := newActHarness(t)
+	reviews := reviewsSession(h)
+	h.d.PaneSession = reviews
+	inReviews := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(inReviews.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
+	inSlot := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	slotDir := filepath.Join(h.home, "talkable.review3")
+	sl, err := h.st.CreateSlot(h.ctx, store.Slot{Name: "review3", RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
+		Path: slotDir, MainClone: h.home, State: store.SlotFree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionSlot(h.ctx, sl.ID, nil, store.SlotHeld, func(u *store.SlotUpdate) { u.Set("pr_id", inSlot.ID) }); err != nil {
+		t.Fatal(err)
+	}
+	muted := func(env string, args ...string) int {
+		t.Helper()
+		h.env["HERDR_SOCKET_PATH"] = env
+		before := len(h.requests())
+		h.errb.Reset()
+		if code := h.cmd("mute", args...); code != 0 {
+			t.Fatalf("mute %v with HERDR_SOCKET_PATH %q: exit %d: %s", args, env, code, h.errb.String())
+		}
+		reqs := h.requests()
+		if len(reqs) != before+1 {
+			t.Fatalf("requests %+v", reqs)
+		}
+		return actDecode[engine.TargetPayload](t, reqs[len(reqs)-1].Payload).Number
+	}
+
+	if n := muted(h.d.Cfg.Herdr.Socket, "--workspace", "w_1", "--cwd", slotDir); n != 6 {
+		t.Fatalf("a workspace of your session named #%d, want the directory's #6", n)
+	}
+	if n := muted(reviews.Socket, "--workspace", "w_1", "--cwd", slotDir); n != 5 {
+		t.Fatalf("a workspace of the panes' session named #%d, want its #5", n)
+	}
+	if n := muted("", "--workspace", "w_1", "--cwd", slotDir); n != 5 {
+		t.Fatalf("a workspace given by hand named #%d, want the panes' #5", n)
+	}
+
+	h.env["HERDR_SOCKET_PATH"] = h.d.Cfg.Herdr.Socket
+	before := len(h.requests())
+	h.errb.Reset()
+	if code := h.cmd("mute", "--workspace", "w_1"); code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, h.errb.String())
+	}
+	actContains(t, h.errb.String(), "herdr workspace w_1 is in another herdr session than magnum's panes (reviews)")
+	if len(h.requests()) != before {
+		t.Fatalf("muted a PR by another session's workspace: %+v", h.requests())
+	}
+}
+
+// `magnum ui open` (the plugin's popups) opens the popup in the herdr
+// session the plugin ran in ($HERDR_SOCKET_PATH, which herdr sets), your
+// session ([herdr] socket) when it runs outside herdr.
+func TestUIOpenOpensThePopupInTheSessionThePluginRanIn(t *testing.T) {
+	storetest.Serial(t)
+	cfg := config.Defaults()
+	home := t.TempDir()
+	cfg.Herdr.Socket = filepath.Join(home, "yours.sock")
+	cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "reviews", filepath.Join(home, "reviews.sock")
+	c := &Context{Version: "test", Layout: paths.Layout{Home: home}, Config: cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	for _, tc := range []struct {
+		env  string
+		want herdr.Session
+	}{
+		{cfg.Herdr.ReviewSocket, herdr.Session{Name: "reviews", Socket: cfg.Herdr.ReviewSocket}},
+		{"", cfg.YourHerdr()},
+	} {
+		t.Setenv("HERDR_SOCKET_PATH", tc.env)
+		d, err := actNewDeps(c, actLight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hc, ok := d.Herdr.(*herdr.Client); !ok || hc.Socket != tc.want.Socket || d.PaneSession != tc.want {
+			t.Fatalf("with HERDR_SOCKET_PATH %q the popup opens through %+v in %+v, want %+v", tc.env, d.Herdr, d.PaneSession, tc.want)
+		}
 	}
 }

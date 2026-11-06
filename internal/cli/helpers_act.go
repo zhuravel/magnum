@@ -66,7 +66,9 @@ type actDeps struct {
 
 	// Herdr is the client of PaneSession, the herdr session magnum's panes
 	// are in (app.App.PaneSession: where the registry's herdr ids came
-	// from): a focus reveals a client of it, and herdrErr names it.
+	// from): a focus reveals a client of it, herdrErr names it, and a
+	// plugin's workspace id names a PR only when the plugin ran there. In
+	// light mode (ui open) it is the session the plugin ran in.
 	Herdr       actHerdr
 	PaneSession herdr.Session
 	// GitHub is the read client of an identity; GHEnv its env overlay for
@@ -142,7 +144,10 @@ var actNewDeps = func(c *Context, mode actMode) (*actDeps, error) {
 	}
 	herdrBin := os.Getenv("HERDR_BIN_PATH")
 	if mode == actLight {
-		d.Herdr, d.PaneSession = &herdr.Client{Socket: cfg.Herdr.Socket}, cfg.YourHerdr()
+		// A popup opens in the session the plugin ran in (herdr sets
+		// $HERDR_SOCKET_PATH in its actions), yours outside herdr.
+		d.PaneSession = actHerdrSession(cfg, os.Getenv("HERDR_SOCKET_PATH"))
+		d.Herdr = &herdr.Client{Socket: d.PaneSession.Socket}
 		d.Run = &execx.Real{}
 		d.Reveal = func(ctx context.Context, opts reveal.Options) (reveal.Outcome, error) {
 			return reveal.Reveal(ctx, d.Run, cfg.Terminal, herdrBin, opts)
@@ -184,6 +189,21 @@ var actNewDeps = func(c *Context, mode actMode) (*actDeps, error) {
 		return reveal.Reveal(ctx, a.Runner, cfg.Terminal, herdrBin, opts)
 	}
 	return d, nil
+}
+
+// actHerdrSession is the herdr session of socket: your session for ""
+// (outside herdr), else the one of the config's sessions (yours, the review
+// panes', the factory's) on that socket, else an unnamed one.
+func actHerdrSession(cfg *config.Config, socket string) herdr.Session {
+	if socket == "" {
+		return cfg.YourHerdr()
+	}
+	for _, s := range []herdr.Session{cfg.YourHerdr(), cfg.ReviewHerdr(), cfg.FactoryHerdr()} {
+		if filepath.Clean(s.Socket) == filepath.Clean(socket) {
+			return s
+		}
+	}
+	return herdr.Session{Socket: socket}
 }
 
 // actKickDaemon sends SIGUSR1 to the daemon (tests replace it).
@@ -388,10 +408,15 @@ func (t actTarget) prTarget() engine.PRTarget {
 }
 
 // resolve finds the PR a command names: a reference, else the herdr
-// workspace it runs in (plugin context), else the directory.
+// workspace it runs in (plugin context) when that is in the session of
+// magnum's panes (paneWorkspace), else the directory.
 func (d *actDeps) resolve(ctx context.Context, ref, workspace, cwd string) (actTarget, error) {
 	if ref != "" {
 		return d.resolveRef(ctx, ref)
+	}
+	var other string // a workspace of another herdr session: its id names none of magnum's
+	if workspace != "" && !d.paneWorkspace() {
+		other, workspace = workspace, ""
 	}
 	if workspace != "" {
 		t, ok, err := d.resolveWorkspace(ctx, workspace)
@@ -406,6 +431,9 @@ func (d *actDeps) resolve(ctx context.Context, ref, workspace, cwd string) (actT
 		}
 	}
 	switch {
+	case other != "" && cwd == "":
+		return actTarget{}, fmt.Errorf("herdr workspace %s is in another herdr session than magnum's panes (%s): pass a PR (URL, owner/repo#N, repo#N or N)",
+			other, d.PaneSession.Name)
 	case workspace != "" && cwd != "":
 		return actTarget{}, fmt.Errorf("no magnum PR in herdr workspace %s or %s: pass a PR (URL, owner/repo#N, repo#N or N)", workspace, cwd)
 	case workspace != "":
@@ -481,6 +509,17 @@ func verbFix(verb string, err error) error {
 		fix = "wait for the daemon's next poll to record it (`magnum kick` polls now)"
 	}
 	return fmt.Errorf("%w\nfix: %s", err, fix)
+}
+
+// paneWorkspace reports whether a plugin's workspace id is one of the
+// session of magnum's panes: each herdr server numbers its own workspaces
+// from w1, so one of your session's ids can be a magnum workspace's. herdr
+// names the session a plugin runs in ($HERDR_SOCKET_PATH); unset (the flag
+// typed outside herdr), or with no session known, the id is taken as the
+// panes'.
+func (d *actDeps) paneWorkspace() bool {
+	env := d.getenv("HERDR_SOCKET_PATH")
+	return env == "" || d.PaneSession.Socket == "" || filepath.Clean(env) == filepath.Clean(d.PaneSession.Socket)
 }
 
 // resolveWorkspace maps a herdr workspace to the PR whose session lives in it.
