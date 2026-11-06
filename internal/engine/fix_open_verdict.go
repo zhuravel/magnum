@@ -18,8 +18,9 @@ package engine
 //  5. magnum's review of the head waits, without a cap, until
 //     magnum_late_after past the time its round was due, when it needs you;
 //  6. replies magnum has not re-decided wait;
-//  7. without a whole read of GitHub since the PR changed it is unknown, or
-//     waits for the GitHub budget; a read GitHub cut short needs you;
+//  7. without a whole read of GitHub since the PR changed, or while the
+//     poll of its watch is behind (the PR's row may be old), it is unknown,
+//     or waits for the GitHub budget; a read GitHub cut short needs you;
 //  8. a handed item still open needs you: a person's, magnum's, a conflict,
 //     a bot's thread, a finding the fixer skipped without a word, a thread
 //     with two fixer replies that the reviewer answered again (a bot's
@@ -145,7 +146,9 @@ func (v OpenVerdict) sameAs(w OpenVerdict) bool {
 // (ReadFails), the head whose late review it toasted, the commits after a
 // person's approval (Approval), and the fingerprint at which prepareFix
 // refused the look's start as nothing to fix, with its sentence (Refused,
-// RefusedWhy: not tried again until the PR changes).
+// RefusedWhy: not tried again until the PR changes), and when the fix job
+// last refused it otherwise, with its sentence (WaitAt, WaitWhy: tried
+// again openReadRetry later).
 type openLedger struct {
 	Handed      map[string]time.Time `json:"handed,omitempty"`
 	Reviews     []string             `json:"reviews,omitempty"`
@@ -161,6 +164,8 @@ type openLedger struct {
 	Approval    openApprovalCount    `json:"approval,omitzero"`
 	Refused     string               `json:"refused,omitempty"`
 	RefusedWhy  string               `json:"refused_why,omitempty"`
+	WaitAt      time.Time            `json:"wait_at,omitzero"`
+	WaitWhy     string               `json:"wait_why,omitempty"`
 }
 
 // openApprovalCount is the count of the commits on Head after the approved
@@ -260,6 +265,7 @@ func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 // stalemate, magnum's last review that stands at the head (nil: none), its
 // pending replies, the read of GitHub (whole: one since the PR changed;
 // failed: the last read failed; low: the GitHub budget is below the floor;
+// pollStale: the watch's last good poll is over two poll intervals old;
 // cut: what the read lacked), the items, the ledger, the settle's keys,
 // CI, the approval and the commits after it.
 type openFacts struct {
@@ -276,6 +282,7 @@ type openFacts struct {
 	whole      bool
 	failed     bool
 	low        bool
+	pollStale  bool
 	cut        []string
 	items      []openItem
 	ledger     openLedger
@@ -376,8 +383,10 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	switch {
 	case len(f.cut) > 0:
 		return say(OpenNeedsYou, "GitHub cut the read short ("+strings.Join(f.cut, ", ")+"): answer the open items by hand"), nil, needs
-	case f.low && (!f.whole || f.failed):
+	case f.low && (!f.whole || f.failed || f.pollStale):
 		return say(OpenWaits, "GitHub budget: reading the PR waits for it"), nil, needs
+	case f.pollStale:
+		return say(OpenUnknown, "the poll of GitHub is behind: the PR's row may be old"), nil, needs
 	case f.failed:
 		return say(OpenUnknown, "reading GitHub failed; trying again shortly"), nil, needs
 	case !f.whole:

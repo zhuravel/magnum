@@ -581,3 +581,65 @@ func TestANothingToFixRefusalNeedsYou(t *testing.T) {
 	}
 	h.wantOpen(OpenNeedsYou, "nothing to fix")
 }
+
+// A poll of GitHub that failed leaves the PR's row as it was: the look
+// never starts a loop on it, and the verdict is unknown until a poll
+// answers again. Below the GitHub floor it waits for the budget instead.
+func TestAutofixOpenStartsNothingWhileThePollIsBehind(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", "0 threads", "none") })
+	h.tick() // reviewed
+	h.pastSettle()
+	h.gh.mu.Lock()
+	h.gh.radarErr = errors.New("HTTP 502")
+	h.gh.mu.Unlock()
+	h.advance(2 * time.Minute)
+	if err := h.e.Tick(h.ctx); err == nil {
+		t.Fatal("the tick's poll did not fail")
+	}
+	h.settle()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Errorf("fix runs = %d while the poll fails", n)
+	}
+	h.wantOpen(OpenUnknown, "the poll of GitHub is behind")
+	h.gh.mu.Lock()
+	h.gh.radarErr = nil
+	h.gh.mu.Unlock()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Errorf("fix runs = %d once the poll answered, want the loop", n)
+	}
+}
+
+// A start the fix job refuses after its own read of GitHub (here the read
+// fails) is not tried at every tick: the verdict waits with the refusal, and
+// the look asks again 5 minutes later.
+func TestARefusedStartIsTriedAgainAfterFiveMinutes(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", "0 threads", "none") })
+	h.tick() // reviewed
+	h.tick() // the look reads the thread; hands off still
+	h.advance(26 * time.Minute)
+	h.gh.mu.Lock()
+	h.gh.threadsErr = errors.New("HTTP 502")
+	h.gh.mu.Unlock()
+	h.tick() // prepareFix reads again, and fails
+	h.wantOpen(OpenWaits, "could not be read")
+	reads := h.gh.count("threads:talkable/talkable#2")
+	h.advance(time.Minute)
+	h.tick()
+	if n := h.gh.count("threads:talkable/talkable#2") - reads; n != 0 {
+		t.Errorf("the refused start was tried again a minute later (%d reads)", n)
+	}
+	h.wantOpen(OpenWaits, "could not be read")
+	h.gh.mu.Lock()
+	h.gh.threadsErr = nil
+	h.gh.mu.Unlock()
+	h.advance(5 * time.Minute)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Errorf("fix runs = %d five minutes later, want the loop", n)
+	}
+}

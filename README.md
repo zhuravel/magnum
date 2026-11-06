@@ -3209,8 +3209,11 @@ reviewers) only when the PR changed (its head, its updatedAt, its activity or Ma
 minutes after its last read as a safety net, and 5 minutes after a failed read; never below `[github]
 budget_floor`, and for at most 4 PRs a tick. It checks each head against the base the PR merges into (a
 stacked PR's own base) every 30 minutes, with one fetch of that base per clone in a tick. A start hands its
-read to the fix job, which reads GitHub no second time. A dry-run daemon reads and decides, but writes
-nothing and starts nothing.
+read to the fix job, which reads GitHub no second time. While the poll of the watch is behind (its last good
+poll is over two poll intervals old) the PR's row may be old: the verdict is `unknown` and nothing starts. A
+start the fix job refuses waits with the refusal's words and is tried again 5 minutes later; "nothing to
+fix" (the look and the job disagree) needs you, and is not tried again until the PR changes. A dry-run
+daemon reads and decides, but writes nothing and starts nothing.
 
 What a loop was handed is remembered by key: the items of the `external-threads.json` its fixer got (never
 the look's own read), Magnum's review it worked on, Magnum's rebuttals and the conflict. A thread's key

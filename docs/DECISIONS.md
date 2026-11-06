@@ -2835,7 +2835,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`settle_quiet`) and the `settle_checks` at the head at most `settle_max` (20m). The look reads GitHub
   only when the PR's fingerprint changed (head, updatedAt, activity, the last review), 30 minutes after its
   last read and 5 after a failed one, never below the floor, for 4 PRs a tick at most, and fetches a base
-  once per clone in a tick; a start hands its read to prepareFix. Bounds: `fix_cycles` per loop,
+  once per clone in a tick; a start hands its read to prepareFix. Nothing starts while the watch's poll is
+  behind (the PR row may be old: unknown), and a start prepareFix refuses is tried again 5 minutes later, not
+  every tick, since some refusals come after its own read of GitHub. Bounds: `fix_cycles` per loop,
   `autofix_max_loops` (3) starts a day, `hands_off_after_push` (30m) after a push the fixer did not make,
   drafts, forks and `F` left out, two fixer replies in one thread then needs you. Unknown is never idle; a
   read GitHub cut short needs you. Red required CI needs you for now. With it, rule A1 changed `f` for every

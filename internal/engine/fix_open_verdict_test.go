@@ -399,3 +399,19 @@ func TestOpenVerdictStaleness(t *testing.T) {
 		t.Error("a value that is no verdict parses")
 	}
 }
+
+// A poll that is behind makes the verdict unknown, never idle, and starts
+// nothing; below the GitHub floor it waits for the budget.
+func TestAPollThatIsBehindIsUnknown(t *testing.T) {
+	f := idleFacts()
+	f.items = []openItem{personThread(4100)}
+	f.pollStale = true
+	v, work, _ := decideOpen(f)
+	wantVerdict(t, v, OpenUnknown, "the poll of GitHub is behind")
+	if len(work) != 0 {
+		t.Errorf("work = %v on a stale poll", work)
+	}
+	f.low = true
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "GitHub budget")
+}

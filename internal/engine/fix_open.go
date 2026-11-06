@@ -184,6 +184,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	f.sum = c.sum
 	fp := openPrint(pr)
 	_, f.low = e.githubLow(c.w.PollIdentity)
+	f.pollStale = e.pollBehind(ctx, *c.w, now)
 	if readWanted(f) {
 		if openReadDue(l.Read, fp, pr.HeadSHA, now) && !f.low && *reads < openReadsPerTick {
 			*reads++
@@ -236,6 +237,18 @@ func openPrune(l *openLedger, items []openItem) {
 	}
 	maps.DeleteFunc(l.Handed, func(k string, at time.Time) bool { return !open[k] && l.Read.At.After(at) })
 	l.Raised = slices.DeleteFunc(l.Raised, func(k string) bool { return !open[k] })
+}
+
+// pollBehind reports whether w's last good poll of GitHub (WatchPoll) is
+// over two poll intervals old, or unknown: the PR rows of its PRs may not
+// show what happened on GitHub since, so the look starts nothing on them.
+func (e *Engine) pollBehind(ctx context.Context, w config.Watch, now time.Time) bool {
+	raw, ok := e.getKV(ctx, store.KVWatchPoll(strings.ToLower(w.Owner)))
+	if !ok {
+		return true
+	}
+	p, ok := ParseWatchPoll(raw)
+	return !ok || p.LastOK.IsZero() || now.Sub(p.LastOK) > 2*e.cfg.Daemon.PollInterval.Duration
 }
 
 // openOff is why the look leaves pr alone ("" = it covers it): a draft, a
@@ -600,7 +613,9 @@ func addFixerHead(heads []string, head string) []string {
 // (startFix, with this tick's read carried to prepareFix). A start records
 // itself in the ledger and an autofix.open event; a refusal makes the
 // verdict wait with its sentence (a budget below the floor, a paused kind,
-// a busy or pinned PR, no free slot, the human cooldown), except "nothing
+// a busy or pinned PR, no free slot, the human cooldown, a read of GitHub
+// that failed) and is tried again openReadRetry later, not at every tick,
+// since some refusals come after prepareFix read GitHub; except "nothing
 // to fix", where the look and prepareFix disagree: that needs you, with the
 // refusal, and is not tried again until the PR changes (Refused). A dry run
 // starts nothing.
@@ -614,6 +629,10 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	if e.d.DryRun {
 		return v
 	}
+	if now := e.now(); !l.WaitAt.IsZero() && now.Sub(l.WaitAt) < openReadRetry {
+		v.Verdict, v.Why, v.Until = OpenWaits, l.WaitWhy, l.WaitAt.Add(openReadRetry)
+		return v
+	}
 	var carried *externalRead
 	if r, ok := e.openReads[pr.ID]; ok {
 		carried = &r
@@ -624,7 +643,7 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	case err == nil:
 		now := e.now()
 		l.Starts = append(l.Starts, now)
-		l.Refused, l.RefusedWhy = "", ""
+		l.Refused, l.RefusedWhy, l.WaitAt, l.WaitWhy = "", "", time.Time{}, ""
 		counts := map[string]int{}
 		for _, it := range work {
 			counts[it.Class+":"+it.Kind]++
@@ -634,6 +653,7 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		return v
 	case errors.As(err, &budget):
 		v.Verdict, v.Why = OpenWaits, "GitHub budget: the loop waits for it"
+		l.WaitAt, l.WaitWhy = e.now(), v.Why
 	case strings.HasPrefix(err.Error(), "nothing to fix"):
 		why := oneLine(err.Error(), 300)
 		e.log.Warn("autofix open: the look found work that the fix job refuses", "subject", subject, "why", why)
@@ -642,6 +662,7 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: pr.URL})
 	default:
 		v.Verdict, v.Why = OpenWaits, oneLine(err.Error(), 300)
+		l.WaitAt, l.WaitWhy = e.now(), v.Why
 		e.log.Info("autofix open: no fix loop started", "subject", subject, "why", v.Why)
 	}
 	return v
