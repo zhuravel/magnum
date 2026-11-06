@@ -16163,9 +16163,23 @@ func IsTimeout(err error) bool
     IsTimeout reports whether err is a client-side deadline or herdr's own
     "timeout" error.
 
+func NoServer(err error) bool
+    NoServer reports whether err says that no herdr server runs on the socket:
+    the socket file is missing (ENOENT) or stale, refusing the connection
+    (ECONNREFUSED). A session without a server has no panes, so nothing of it
+    can be busy. A timeout, a permission error or a server's own error is not
+    this: the server may be up with panes that are.
+
 func RequiredMethods() []string
     RequiredMethods returns the socket methods magnum needs the herdr server to
     offer (`magnum doctor` checks them against `herdr api schema`).
+
+func SessionSocket(name string) string
+    SessionSocket is the API socket of the herdr session name in herdr's layout:
+    ~/.config/herdr/herdr.sock for its default session ("" or "default"),
+    ~/.config/herdr/sessions/<name>/herdr.sock for a named one. Unlike
+    DefaultSocket it never reads $HERDR_SOCKET_PATH, which names the session a
+    pane runs in, not the one name means.
 
 
 TYPES
@@ -16443,6 +16457,14 @@ type ServerInfo struct {
 	Protocol int    `json:"protocol"`
 }
     ServerInfo is the ping reply.
+
+type Session struct {
+	Name   string `json:"name"`
+	Socket string `json:"socket"`
+}
+    Session is one herdr session: Name is what `herdr --session <name>` takes (a
+    client of it, which the reveal opens), Socket the path of its server's API
+    socket, which a Client dials.
 
 type Snapshot struct {
 	Version            string      `json:"version"`
