@@ -16144,7 +16144,8 @@ VARIABLES
 
 var (
 	// ErrUnavailable wraps failures to reach the socket (no server running,
-	// stale socket file, permission denied).
+	// stale socket file, permission denied, a server that accepts no
+	// connections).
 	ErrUnavailable = errors.New("herdr unavailable")
 	// ErrTimeout wraps client-side deadlines (Client.Timeout, ctx deadline,
 	// WaitIdleShell). IsTimeout also matches herdr's own "timeout" code.
@@ -16172,9 +16173,13 @@ func IsTimeout(err error) bool
 func NoServer(err error) bool
     NoServer reports whether err says that no herdr server runs on the socket:
     the socket file is missing (ENOENT) or stale, refusing the connection
-    (ECONNREFUSED). A session without a server has no panes, so nothing of it
-    can be busy. A timeout, a permission error or a server's own error is not
-    this: the server may be up with panes that are.
+    (ECONNREFUSED) with no socket bound to it. A session without a server has
+    no panes, so nothing of it can be busy. A timeout, a permission error or a
+    server's own error is not this: the server may be up with panes that are.
+    Nor is a server that runs but accepts no connections (a stalled accept loop,
+    a stopped process): once its queue is full it refuses them as a stale socket
+    does, so a Client's dial asks which it is (socketBound), and its error for
+    such a server keeps no ECONNREFUSED.
 
 func RequiredMethods() []string
     RequiredMethods returns the socket methods magnum needs the herdr server to

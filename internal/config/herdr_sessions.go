@@ -39,10 +39,11 @@ func (c *Config) ReviewHerdr() herdr.Session {
 
 // validateReviewHerdr checks [herdr] review_session and review_socket: a
 // session name, an absolute socket that comes with a name (the reveal opens
-// the session by its name), and never the factory's session, by name or by
-// socket: the factory's copies take a pane of its session in a copy that no
-// session of the factory's is in for someone's, so magnum's review panes
-// there would hold them.
+// the session by its name), and a named session that is never the
+// factory's, by name or by socket: the factory's copies take a pane of its
+// session in a copy that no session of the factory's is in for someone's, so
+// magnum's review panes there would hold them. With review_session "" the
+// panes stay in your session, where a factory may run too, as before the key.
 func (c *Config) validateReviewHerdr() []error {
 	h := c.Herdr
 	var errs []error

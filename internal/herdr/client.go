@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -81,7 +82,8 @@ const (
 
 var (
 	// ErrUnavailable wraps failures to reach the socket (no server running,
-	// stale socket file, permission denied).
+	// stale socket file, permission denied, a server that accepts no
+	// connections).
 	ErrUnavailable = errors.New("herdr unavailable")
 	// ErrTimeout wraps client-side deadlines (Client.Timeout, ctx deadline,
 	// WaitIdleShell). IsTimeout also matches herdr's own "timeout" code.
@@ -213,6 +215,11 @@ func (c *Client) dial(ctx context.Context, method string) (net.Conn, error) {
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ioErr(ctx, method, err)
+		}
+		if errors.Is(err, syscall.ECONNREFUSED) && socketBound(ctx, c.socket()) {
+			// A server that runs, with its queue full: its refusal is no stale
+			// socket's (NoServer), so it keeps the message, not the errno.
+			return nil, fmt.Errorf("herdr %s: %w: %w (%s)", method, ErrUnavailable, errNotAccepting, err.Error())
 		}
 		return nil, fmt.Errorf("herdr %s: %w: %w", method, ErrUnavailable, err)
 	}

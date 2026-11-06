@@ -312,8 +312,9 @@ that is not running has none), and the herdr plugin and the LaunchAgent use it. 
 and `reveal_on_attention` reveal a client of the panes' session, and the daemon opens one in a new window when
 a named session does not answer (at most twice an hour; never your own). A change moves the panes at the
 daemon's next idle moment: it parks every PR's sessions (the conversations are kept), closes its workspaces in
-the old session, toasts once in yours and restarts. The review session is never the factory's
-(`[factory] herdr_session`), by name or by socket.
+the old session, toasts once in yours and restarts. A named review session is never the factory's
+(`[factory] herdr_session`), by name or by socket; with `review_session = ""` the panes stay in your session,
+as before, even when the factory runs there too (`[factory] herdr_session = "default"`).
 
 A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
 GitHub poll and between the poll's GitHub calls, so one waits for a single call); a request still pending says how to follow it (`magnum logs request:<id> -f`). A request

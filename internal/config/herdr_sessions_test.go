@@ -137,6 +137,21 @@ func TestTheReviewSessionCannotBeTheFactorys(t *testing.T) {
 	}
 }
 
+// Only a named review session is checked against the factory's: with
+// review_session "" the panes stay in your session, and a factory that runs
+// there too loads as it did before the key.
+func TestTheReviewPanesStayInYourSessionWithAFactoryThereToo(t *testing.T) {
+	cfg := validPipelineConfig()
+	cfg.Factory.HerdrSession = "default"
+	cfg.Herdr.Socket = herdr.SessionSocket("default")
+	if cfg.ReviewHerdr().Socket != cfg.FactoryHerdr().Socket {
+		t.Fatalf("the review panes' session %+v, want the factory's %+v (yours)", cfg.ReviewHerdr(), cfg.FactoryHerdr())
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a factory in your session with the review panes there: %v", err)
+	}
+}
+
 // Your config names the review session the way the operator's does: the
 // key alone, which leaves [herdr]'s other keys and your session as they were.
 func TestAUserConfigSetsTheReviewSession(t *testing.T) {

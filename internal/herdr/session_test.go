@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"net"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -63,6 +65,45 @@ func TestNoServerIsAMissingSocketOrARefusedConnection(t *testing.T) {
 	}
 	if notHerdr := fmt.Errorf("read config: %w", fs.ErrNotExist); NoServer(notHerdr) {
 		t.Errorf("a missing file that is not herdr's socket (%v) counts as no server", notHerdr)
+	}
+
+	// A dial that fails for another reason says nothing about the server: a
+	// socket path too long for the address (EINVAL), a socket of another user
+	// (EACCES).
+	long := filepath.Join(dir, strings.Repeat("s", 120)+".sock")
+	if _, tooLong := (&Client{Socket: long}).Ping(context.Background()); !errors.Is(tooLong, ErrUnavailable) || NoServer(tooLong) {
+		t.Errorf("a dial of a path too long for a socket (%v) counts as no server", tooLong)
+	}
+	if denied := fmt.Errorf("herdr ping: %w: %w", ErrUnavailable, syscall.EACCES); NoServer(denied) {
+		t.Errorf("a dial the socket's permissions refuse (%v) counts as no server", denied)
+	}
+}
+
+// A server that is running but no longer accepts (a stalled accept loop, a
+// stopped process) refuses a dial once its queue of connections is full, as
+// a stale socket does (macOS answers ECONNREFUSED); its panes are alive, so
+// it is never "no server".
+func TestARunningServerThatAcceptsNoConnectionsIsNotNoServer(t *testing.T) {
+	path := filepath.Join(shortTempDir(t), "wedged.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close() // never accepts
+	for range 4096 {
+		c, err := net.DialTimeout("unix", path, time.Second)
+		if err != nil {
+			break // the queue is full
+		}
+		c.Close() // an unaccepted connection stays queued after the client closes it
+	}
+	c := &Client{Socket: path, Timeout: 100 * time.Millisecond}
+	_, err = c.Ping(context.Background())
+	if err == nil {
+		t.Fatal("a server that never accepts answered a ping")
+	}
+	if NoServer(err) {
+		t.Fatalf("a running server that accepts no connections (%v) counts as no server", err)
 	}
 }
 

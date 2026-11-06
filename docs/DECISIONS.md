@@ -2666,12 +2666,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   no panes. A server that is not running has no pane processes, so nothing of yours can be at work in a
   checkout; a timeout or any other error is still an error, and the guard holds as before, since a server
   that is slow may have busy panes. Its own session down stays an error: the panes its store records cannot
-  be checked. The operator chose the rule for both daemons' guards. Rejected: keeping the view in
-  `internal/factory` (`internal/app` cannot import it: the factory imports the engine and evalrun, which
-  import app). Tests: TestTheGuardViewPrefixesYourSessionsIds, TestTheGuardViewAsksTheSessionAPaneIsOf,
-  TestYourSessionWithNoServerHasNoPanes, TestYourSessionThatTimesOutHoldsTheGuard,
-  TestSessionSocketFollowsHerdrsLayout, TestNoServerIsAMissingSocketOrARefusedConnection and
-  TestATimeoutIsNotNoServer.
+  be checked. The operator chose the rule for both daemons' guards. A server that runs but accepts no
+  connections (a stalled accept loop, a stopped process) is not "no server" either, though macOS refuses a
+  dial to it once its queue (128) is full, as it refuses one of a stale socket, and the daemons' polls fill
+  that queue within minutes: the dial tells the two apart with a datagram connect to the path, which fails
+  on the socket's type while one is bound, is refused only when none is, and never joins the queue, and a
+  bound socket's refusal keeps no ECONNREFUSED. Rejected: keeping the view in `internal/factory`
+  (`internal/app` cannot import it: the factory imports the engine and evalrun, which import app); only a
+  missing socket file as no server (a stale one, after a crash or a reboot, would hold every copy, as
+  before); asking `ps` or `lsof` whether a server runs (a named session's server can run as a plain `herdr
+  server`, and either is a process per refused dial). Tests: TestTheGuardViewPrefixesYourSessionsIds,
+  TestTheGuardViewAsksTheSessionAPaneIsOf, TestYourSessionWithNoServerHasNoPanes,
+  TestYourSessionThatTimesOutHoldsTheGuard, TestSessionSocketFollowsHerdrsLayout,
+  TestNoServerIsAMissingSocketOrARefusedConnection, TestARunningServerThatAcceptsNoConnectionsIsNotNoServer
+  and TestATimeoutIsNotNoServer.
 
 - **magnum's review panes can run in a herdr session of their own, `[herdr] review_session`** (2026-11-06).
   Rounds opened their workspaces in your herdr session, among your own agents and consoles; the factory
@@ -2683,15 +2691,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   LaunchAgent's `HERDR_SOCKET_PATH` use it, so the factory, which reads your session through them, does not
   change. `Config.ReviewHerdr` is the panes' session, yours while the key is "". The config is refused for a
   name that is no session name, a socket that is not absolute, a socket without a name (`magnum open` opens
-  the session by its name) and the factory's session, by name or by socket: the factory's copies take a pane
-  of their session in a copy that no session of theirs is in for someone's, so review panes there would hold
-  them. The built-in default stays "" (one session, as before); the operator's own config names `reviews`.
+  the session by its name) and a named session that is the factory's, by name or by socket: the factory's
+  copies take a pane of their session in a copy that no session of theirs is in for someone's, so review
+  panes there would hold them. With the key "" the panes stay in your session even when the factory runs
+  there too (`[factory] herdr_session = "default"`), a config that loaded before the key and still does. The
+  built-in default stays "" (one session, as before); the operator's own config names `reviews`.
   This entry is the configuration; the panes follow it as later entries say. Rejected: a new meaning for
   `[herdr] socket` (the LaunchAgent, the plugin and the factory rely on it as yours); `reviews` as the
   built-in default. Tests: TestTheReviewPanesStayInYourSessionByDefault,
   TestANamedReviewSessionHasItsOwnSocket, TestAReviewSocketWinsOverTheSessionsOwn,
   TestAReviewSessionMustBeASessionName, TestAReviewSocketMustBeAbsolute, TestAReviewSocketNeedsAReviewSession,
-  TestTheReviewSessionCannotBeTheFactorys and TestAUserConfigSetsTheReviewSession.
+  TestTheReviewSessionCannotBeTheFactorys, TestTheReviewPanesStayInYourSessionWithAFactoryThereToo and
+  TestAUserConfigSetsTheReviewSession.
 
 ## Screens and commands
 
