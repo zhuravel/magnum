@@ -181,3 +181,38 @@ func TestASavedSessionThatCannotBeReadHoldsTheGuard(t *testing.T) {
 		})
 	}
 }
+
+// The factory's local review opens its rounds in magnum's review session,
+// with their directories in the factory's copies: a pane you open there
+// holds a copy only if the copies' guard reads that session too. Its ids are
+// prefixed apart from yours (each server numbers from w1), and a guard asks
+// a pane's processes of the session it is of.
+func TestTheGuardViewReadsMagnumsReviewSessionAsAThirdSession(t *testing.T) {
+	own, yours, review := &fakeView{snap: oneWorkspace("mg-1-judge")}, &fakeView{snap: oneWorkspace("claude")},
+		&fakeView{snap: oneWorkspace("codex")}
+	g := GuardView{Own: own, Yours: yours, Review: review}
+	got, err := g.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var panes []string
+	for _, p := range got.Panes {
+		panes = append(panes, p.ID+"="+p.Agent)
+	}
+	if want := []string{"w1:p1=mg-1-judge", "yours:w1:p1=claude", "review:w1:p1=codex"}; !slices.Equal(panes, want) {
+		t.Fatalf("the view's panes are %q, want %q", panes, want)
+	}
+	if pi, err := g.ProcessInfo(t.Context(), ReviewPrefix+"w1:p1"); err != nil || pi.PaneID != ReviewPrefix+"w1:p1" {
+		t.Fatalf("the review pane's processes %+v (%v)", pi, err)
+	}
+	if !slices.Equal(review.asked, []string{"w1:p1"}) || len(yours.asked) != 0 || len(own.asked) != 0 {
+		t.Fatalf("asked: review %q, yours %q, own %q; want the review session for w1:p1", review.asked, yours.asked, own.asked)
+	}
+
+	// With no server running it shows what herdr saved, as yours does.
+	saved := GuardView{Own: own, Review: &Client{Socket: savedSession(t, "/copies/talkable.1")}}
+	got, err = saved.Snapshot(t.Context())
+	if err != nil || len(got.Agents) != 2 || got.Agents[1].PaneID != ReviewPrefix+SavedPrefix+"wAB:p6" {
+		t.Fatalf("the review session with no server reads %+v (%v), want its saved agent", got.Agents, err)
+	}
+}

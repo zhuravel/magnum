@@ -3535,8 +3535,9 @@ stages = [
   (`n*16` to `n*16+15`) must not overlap any `REDIS_DB_OFFSET` that a `[[pool]] env` gives magnum's review slots on the
   same Redis (the defaults set none). Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
-  the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
-  sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD; a session
+  the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over the herdr
+  sessions, the factory's and yours, and `[herdr] review_session` when it is a third, where the local review's
+  rounds work in the copies (your agent or console in the copy, your changes, a moved HEAD; a session
   that does not answer holds the copy; yours with no herdr server running shows only the agents herdr saved
   there, idle in their directories, since it restores them and resumes their conversations when it starts, and a
   saved state it cannot read holds the copy), and no

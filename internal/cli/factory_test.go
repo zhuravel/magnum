@@ -508,7 +508,8 @@ func TestTheFactoryDaemonBuildsWithItsCopies(t *testing.T) {
 
 // The copies' guard reads both herdr sessions: the factory's, whose panes
 // the agents store records, and yours (the [herdr] socket), where your
-// agents and consoles run.
+// agents and consoles run; and magnum's review session when it is a third,
+// where the local review's rounds work in the copies.
 func TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Herdr.Socket = "/run/herdr/yours.sock"
@@ -528,6 +529,26 @@ func TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours(t *testing.T) {
 		t.Fatalf("the copies' guard reads %+v and %+v, want the factory's session and yours", d.Guard.Own, d.Guard.Yours)
 	}
 	d.Close()
+
+	if d.Guard.Review != nil {
+		t.Fatalf("the copies' guard reads magnum's review session %+v apart from yours, where its panes are", d.Guard.Review)
+	}
+	d.Close()
+
+	// magnum's review panes in a session of their own: the local review's
+	// rounds open there, in the copies, so the guard reads it as a third.
+	cfg.Herdr.ReviewSession = "reviews"
+	cfg.Herdr.ReviewSocket = "/run/herdr/reviews.sock"
+	three, err := buildFactoryDaemon(c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not build: %v", err)
+	}
+	t.Cleanup(func() { _ = three.Close() })
+	if rs, ok := three.Guard.Review.(*herdr.Client); !ok || rs.Socket != "/run/herdr/reviews.sock" {
+		t.Fatalf("the copies' guard reads %+v as magnum's review session, want reviews.sock", three.Guard.Review)
+	}
+	three.Close()
+	cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "", ""
 
 	// A factory that runs in your session reads it once.
 	cfg.Factory.HerdrSocket = cfg.Herdr.Socket

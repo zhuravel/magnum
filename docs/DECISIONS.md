@@ -15683,6 +15683,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   agents herdr saved" in Agents in panes): a copy one of them is in is held, the others are not, and a saved
   state that cannot be read holds every copy. TestYourSessionWithNoServerShowsTheAgentsHerdrSavedAsIdle.
 
+- The copies' guard reads magnum's review session too (2026-11-06, a review of the local review's move to
+  `[herdr] review_session`). The local review's rounds open their workspaces in magnum's review session, each
+  pane's directory in the task's copy. Before, those workspaces were in your session, where the copies' guard
+  saw a pane you split there (`bin/rails c`, an agent) as yours, and held the copy; with the rounds in a
+  session of their own no guard read it, so a later claim could reset the copy (switch, clean, `reset_db`)
+  under your pane. `herdr.GuardView` gains `Review`, its ids prefixed `review:`, read under the rule for yours
+  (a server that does not answer holds; one that does not run shows what herdr saved), and the factory sets it
+  to `Config.ReviewHerdr` when that is neither the factory's session nor yours. The local review's own agents
+  there are named `mg-…` and pass, as they did in your session. Rejected: leaving the gap to the design's
+  optional polish (it is a regression from one session). Tests, failing first:
+  TestTheGuardViewReadsMagnumsReviewSessionAsAThirdSession; TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours
+  now pins the third view.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

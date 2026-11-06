@@ -16178,6 +16178,14 @@ const (
     Herdr error codes magnum reacts to.
 
 const (
+	YourPrefix   = "yours:"
+	ReviewPrefix = "review:"
+)
+    YourPrefix starts the ids of your herdr session's workspaces, tabs and
+    panes as a GuardView shows them, and ReviewPrefix those of magnum's review
+    session.
+
+const (
 	SplitRight = "right"
 	SplitDown  = "down"
 )
@@ -16223,10 +16231,6 @@ const SavedFile = "session.json"
 const SavedPrefix = "saved:"
     SavedPrefix starts the ids Saved gives the workspaces and panes herdr saved:
     they are no server's, and a restore numbers them anew.
-
-const YourPrefix = "yours:"
-    YourPrefix starts the ids of your herdr session's workspaces, tabs and panes
-    as a GuardView shows them.
 
 
 VARIABLES
@@ -16455,26 +16459,28 @@ type Error struct {
 
 func (e *Error) Error() string
 
-type GuardView struct{ Own, Yours View }
+type GuardView struct{ Own, Yours, Review View }
     GuardView is the herdr a slot guard sees (slots.Deps Snapshot and
     ProcessInfo): Own, the session whose ids are the ones the guard's store
-    records, and Yours, its ids prefixed with YourPrefix. Either may be nil (no
-    such session: yours is Own's socket).
+    records; Yours, its ids prefixed with YourPrefix; and Review, magnum's
+    review session where it is neither (the factory's copies, in which the local
+    review's rounds work), its ids prefixed with ReviewPrefix. Any may be nil
+    (no such session apart from Own's).
 
 func (g GuardView) ProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error)
-    ProcessInfo asks the session a pane id of Snapshot's is of: Yours for a
-    prefixed id (without the prefix), else Own.
+    ProcessInfo asks the session a pane id of Snapshot's is of: Yours or Review
+    for a prefixed id (without the prefix), else Own.
 
 func (g GuardView) Snapshot(ctx context.Context) (Snapshot, error)
-    Snapshot is Own's snapshot with Yours added, your workspaces', tabs'
-    and panes' ids prefixed. A session that does not answer is an error:
-    the guard then holds off, as on its own herdr. Your session with no server
-    running (NoServer) has no pane processes, but herdr restores its panes when
-    the server starts and resumes their agents in their conversations: it adds
-    the agents herdr saved, idle in their directories (Saver: a client's Saved),
-    so one of yours in a checkout still holds it, and a saved state that cannot
-    be read is an error. Own's never counts as empty: the panes its store
-    records could not be checked.
+    Snapshot is Own's snapshot with Yours and Review added, their workspaces',
+    tabs' and panes' ids prefixed. A session that does not answer is an error:
+    the guard then holds off, as on its own herdr. Yours or Review with no
+    server running (NoServer) has no pane processes, but herdr restores
+    its panes when the server starts and resumes their agents in their
+    conversations: it adds the agents herdr saved, idle in their directories
+    (Saver: a client's Saved), so one in a checkout still holds it, and a
+    saved state that cannot be read is an error. Own's never counts as empty:
+    the panes its store records could not be checked.
 
 type NotificationResult struct {
 	Shown  bool   `json:"shown"`

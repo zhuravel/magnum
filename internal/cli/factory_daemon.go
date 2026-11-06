@@ -281,16 +281,24 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		deps.MySQL, copyDBs = my.Ping, my
 		d.closers = append(d.closers, my.Close)
 	}
-	// The guard of a copy sees the panes of both herdr sessions, yours with
-	// their ids prefixed: each session numbers its own from w1, and the
+	// The guard of a copy sees the panes of the herdr sessions, the others'
+	// with their ids prefixed: each session numbers its own from w1, and the
 	// agents store knows only the factory's. Your server not running shows
 	// the agents herdr saved, which it restores when it starts.
-	// A factory in your own session (the same socket) is one session.
+	// A factory in your own session (the same socket) is one session. The
+	// local review's rounds open in magnum's review session, in the copies:
+	// a pane you open there holds a copy too, so a review session that is
+	// neither is a third view.
+	herdrLog := app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}
 	d.Guard = herdr.GuardView{Own: h}
 	yours := h
 	if ys := cmp.Or(cfg.Herdr.Socket, herdr.DefaultSocket()); ys != h.Socket {
-		yours = &herdr.Client{Socket: ys, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+		yours = &herdr.Client{Socket: ys, Logger: herdrLog}
 		d.Guard.Yours = yours
+	}
+	if rs := cfg.ReviewHerdr().Socket; rs != "" && filepath.Clean(rs) != filepath.Clean(h.Socket) &&
+		filepath.Clean(rs) != filepath.Clean(yours.Socket) {
+		d.Guard.Review = &herdr.Client{Socket: rs, Logger: herdrLog}
 	}
 	// The alerts (spec 9.F): magnum's toasts on your session, where your
 	// terminal shows them (osascript when herdr cannot), as [herdr] notify
