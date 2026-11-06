@@ -742,6 +742,78 @@ func TestFactoryRolesAreCheckedLikeReviewRoles(t *testing.T) {
 	wantError(t, cfg.Validate(), "factory.role fx-repro", "already")
 }
 
+// A role overrides its kind's on_permission_prompt, in a [[factory.role]] as in
+// a [[role]]: "deny" or "wait", merged by name key by key like the other keys,
+// and a role that sets none answers as its kind does.
+func TestAFactoryRoleTakesOnPermissionPrompt(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[[factory.role]]
+name = "fx-cause"
+on_permission_prompt = "wait"
+
+[[role]]
+name = "claude-simplify"
+on_permission_prompt = " Wait "
+`)
+	if err != nil {
+		t.Fatalf("a factory role that waits: %v", err)
+	}
+	r, ok := cfg.FactoryRole("fx-cause")
+	if !ok || r.OnPermissionPrompt != PermissionWait || r.Doing != "finding the cause" {
+		t.Fatalf("fx-cause = %+v, want on_permission_prompt wait and its other keys kept", r)
+	}
+	kind, _ := cfg.KindSpec(r.Kind)
+	if got := r.PermissionPrompt(kind); got != PermissionWait {
+		t.Errorf("fx-cause PermissionPrompt = %q, want wait", got)
+	}
+	if other, _ := cfg.FactoryRole("fx-critic"); other.OnPermissionPrompt != "" {
+		t.Errorf("fx-critic on_permission_prompt = %q, want none: the override is the one role's", other.OnPermissionPrompt)
+	}
+	if rev, ok := cfg.RoleByNameOrAlias(nil, "claude-simplify"); !ok || rev.OnPermissionPrompt != PermissionWait {
+		t.Errorf("claude-simplify = %+v, %v, want on_permission_prompt wait (case and space ignored)", rev, ok)
+	}
+
+	for _, section := range []string{"[[factory.role]]\nname = \"fx-cause\"", "[[role]]\nname = \"claude-simplify\""} {
+		_, err = loadCommittedWithLocal(t, testLocalConfig+"\n"+section+"\non_permission_prompt = \"maybe\"\n")
+		wantError(t, err, "on_permission_prompt", `deny or wait, got "maybe"`)
+	}
+	c := validFactoryConfig()
+	c.Factory.Roles[0].OnPermissionPrompt = "approve"
+	wantError(t, c.Validate(), "factory.role "+c.Factory.Roles[0].Name, "on_permission_prompt must be deny or wait")
+	c = validFactoryConfig()
+	c.Roles[0].OnPermissionPrompt = PermissionDeny
+	if err := c.Validate(); err != nil {
+		t.Errorf("a review role that denies: %v", err)
+	}
+}
+
+// PermissionPrompt is the role's value, else its kind's.
+func TestARolePermissionPromptFallsBackToItsKind(t *testing.T) {
+	for _, tc := range []struct{ role, kind, want string }{
+		{"", PermissionDeny, PermissionDeny},
+		{"", PermissionWait, PermissionWait},
+		{PermissionWait, PermissionDeny, PermissionWait},
+		{PermissionDeny, PermissionWait, PermissionDeny},
+	} {
+		got := Role{OnPermissionPrompt: tc.role}.PermissionPrompt(Kind{OnPermissionPrompt: tc.kind})
+		if got != tc.want {
+			t.Errorf("role %q on kind %q = %q, want %q", tc.role, tc.kind, got, tc.want)
+		}
+	}
+}
+
+// A shell role runs a command, not an agent that stops at a prompt, so the
+// key would be dropped without a word.
+func TestAShellRoleTakesNoOnPermissionPrompt(t *testing.T) {
+	c := validFactoryConfig()
+	i := slices.IndexFunc(c.Roles, func(r Role) bool { return r.IsShell() })
+	if i < 0 {
+		t.Fatal("no shell role among the defaults")
+	}
+	c.Roles[i].OnPermissionPrompt = PermissionWait
+	wantError(t, c.Validate(), "role "+c.Roles[i].Name, "on_permission_prompt is for session roles only")
+}
+
 // The repository's checks: the owner/name form once, the copy paths and
 // names with {n}, positive limits, databases the way a pool names them, and
 // the commands that are lists of words.

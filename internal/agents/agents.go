@@ -94,8 +94,8 @@ var (
 	// agent_blocked, or the prompt ack came back blocked). The CLIs'
 	// first-launch folder-trust dialogs are answered Yes (EnsureTrust
 	// prevents them; AnswerTrustDialog is the fallback); a permission prompt
-	// during a run is answered No by the observer when the kind's
-	// on_permission_prompt is "deny"; nothing is ever approved otherwise.
+	// during a run is answered No by the observer when the role's, else the
+	// kind's, on_permission_prompt is "deny"; nothing is ever approved otherwise.
 	ErrBlocked = errors.New("agent blocked")
 	// ErrStalled: herdr accepted the text but the agent never started working
 	// (agent_prompt_stalled). The run is left submitted, never re-sent.

@@ -3492,7 +3492,7 @@ stages = [
   look; the built-in list is `Gemfile.lock`, the workflows (`.github/workflows/**`) and the config files
   (`config/**`), and your list replaces it.
 - **Roles.** A `[[factory.role]]` is a session role like a review role (`kind`, `model`, `effort`, `prompt`,
-  `timeout`, `args`, `env`, `fallback_models`; it is checked the same way) with two more keys the factory's
+  `timeout`, `args`, `env`, `fallback_models`, `on_permission_prompt`; it is checked the same way) with two more keys the factory's
   screen names its agent by, each one line: `doing` is what the agent does now (`finding the cause`) and
   `why` the reason it exists (`find the cause on its own, apart from the others`). A review `[[role]]` takes
   neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
@@ -5147,7 +5147,8 @@ during a review (Claude Code asks before some commands even with `--dangerously-
 answered No, never Yes, at most 10 times per run and recorded as an `agent.prompt_denied` event, and an
 agent that stops after the No is told once to finish without the command (`after_deny_prompt`), a Claude
 agent as soon as its transcript shows the turn ended, even while a forked `/code-review` keeps it busy; set
-`on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you. Codex's "Hooks need
+`on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you, or on one `[[role]]` or
+`[[factory.role]]` (it overrides its kind's, either way) for a role whose agent asks you questions itself. Codex's "Hooks need
 review" (your hooks changed since Codex last trusted them) is answered "Trust all" only when the checkout
 declares no hooks of its own, so every hook it lists is yours; hooks a repository brings are declined
 for the session (`on_hooks_review = "decline"` declines them all). A prompt typed into that dialog, or into

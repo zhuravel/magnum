@@ -1164,6 +1164,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	if len(r.FallbackModels) > 0 && r.IsShell() {
 		bad("fallback_models needs a session role (a shell role's command picks its own model)")
 	}
+	switch {
+	case r.OnPermissionPrompt != "" && r.OnPermissionPrompt != PermissionDeny && r.OnPermissionPrompt != PermissionWait:
+		bad("on_permission_prompt must be deny or wait, got %q", r.OnPermissionPrompt)
+	case r.OnPermissionPrompt != "" && r.IsShell():
+		bad("on_permission_prompt is for session roles only (a shell role's command answers its own prompts)")
+	}
 	for _, p := range fallbackModelProblems("fallback_models", r.FallbackModels) {
 		bad("%s", p)
 	}

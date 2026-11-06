@@ -23,7 +23,7 @@ const (
 	// was set to now, so Submit refuses for daemon.human_cooldown.
 	ObsHumanActive ObservationKind = "human_active"
 	// ObsBlocked: the agent waits on a dialog magnum leaves to the human (a
-	// kind with on_permission_prompt "wait", a dialog that is not a
+	// role or kind with on_permission_prompt "wait", a dialog that is not a
 	// recognised permission prompt, a run past MaxPromptDenies): tell the
 	// human.
 	ObsBlocked ObservationKind = "blocked"
@@ -110,7 +110,7 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     turnTail), or a session compacting on magnum's /compact (see
 //     Compact). blocked -> ObsBlocked,
 //     or ObsPromptDenied when a pending/submitted/working run is in flight,
-//     the kind's on_permission_prompt is "deny" and the screen shows a
+//     the role's, else the kind's, on_permission_prompt is "deny" and the screen shows a
 //     permission prompt, which is answered No (see answerPermission; never
 //     without a run in flight, where the human may be driving the agent, so
 //     an agent that resumes working after a deny is never human_active).

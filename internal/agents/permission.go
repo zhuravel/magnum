@@ -232,22 +232,31 @@ type denyState struct {
 	cont    bool      // that deny still awaits its continuation (continueAfterDeny)
 }
 
-// answerPermission applies the kind's on_permission_prompt policy to an
-// agent that herdr reports blocked during run, and returns the observation
-// kind: ObsPromptDenied when the visible screen shows a permission prompt
-// (detectPermissionPrompt; never the first-launch trust dialog, which
-// AnswerTrustDialog handles) that magnum denied this tick or denied on the
-// previous tick and still sees (the screen may lag; one tick is waited
-// before the same prompt is denied again), else ObsBlocked (policy "wait",
-// an unknown kind, no prompt recognised, MaxPromptDenies reached for run,
-// or the keys could not be sent). At most one deny per session per tick.
-// Each deny records EventPromptDenied; reaching the cap records
-// EventPromptDeniedLimit once per run. The answer is never Yes: see
-// sendDeny.
+// permissionPolicy is the on_permission_prompt that applies to a session
+// whose kind is spec: its role's own, else the kind's (Role.PermissionPrompt).
+func (m *Manager) permissionPolicy(s store.Session, spec config.Kind) string {
+	if role, ok := m.roleSpec(Role(s.Role)); ok {
+		return role.PermissionPrompt(spec)
+	}
+	return spec.OnPermissionPrompt
+}
+
+// answerPermission applies the on_permission_prompt policy (permissionPolicy:
+// the role's, else the kind's) to an agent that herdr reports blocked during
+// run, and returns the observation kind: ObsPromptDenied when the visible
+// screen shows a permission prompt (detectPermissionPrompt; never the
+// first-launch trust dialog, which AnswerTrustDialog handles) that magnum
+// denied this tick or denied on the previous tick and still sees (the screen
+// may lag; one tick is waited before the same prompt is denied again), else
+// ObsBlocked (policy "wait", an unknown kind, no prompt recognised,
+// MaxPromptDenies reached for run, or the keys could not be sent). At most
+// one deny per session per tick. Each deny records EventPromptDenied;
+// reaching the cap records EventPromptDeniedLimit once per run. The answer
+// is never Yes: see sendDeny.
 func (m *Manager) answerPermission(ctx context.Context, s store.Session, run store.Run, ref paneRef) ObservationKind {
 	kind := m.sessionKind(s)
 	spec, ok := m.kindSpec(kind)
-	if !ok || spec.OnPermissionPrompt != config.PermissionDeny {
+	if !ok || m.permissionPolicy(s, spec) != config.PermissionDeny {
 		return ObsBlocked
 	}
 	text, err := m.readVisible(ctx, ref)
@@ -355,8 +364,8 @@ func (m *Manager) denyResumed(sessionID int64) {
 // (a round lost its claude-review report so). It is sent through herdr
 // agent.prompt without creating a run, at most once per denied prompt, only
 // when the visible screen shows no trust or permission dialog and an empty
-// composer (composerEmpty), and only while the kind's on_permission_prompt
-// is "deny" and its after_deny_prompt is not "". It counts against
+// composer (composerEmpty), and only while the role's, else the kind's,
+// on_permission_prompt is "deny" and its after_deny_prompt is not "". It counts against
 // MaxPromptDenies (none is sent past it), resets the session's idle_ticks
 // (so the run does not end before the agent picks the text up), sets
 // last_prompt_at and records EventDenyContinued. It reports whether the
@@ -372,7 +381,7 @@ func (m *Manager) continueAfterDeny(ctx context.Context, s store.Session, run st
 	}
 	kind := m.sessionKind(s)
 	spec, ok := m.kindSpec(kind)
-	if !ok || spec.OnPermissionPrompt != config.PermissionDeny || spec.AfterDenyPrompt == "" {
+	if !ok || m.permissionPolicy(s, spec) != config.PermissionDeny || spec.AfterDenyPrompt == "" {
 		m.denyResumed(s.ID)
 		return false
 	}

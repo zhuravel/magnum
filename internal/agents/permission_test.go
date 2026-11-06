@@ -568,6 +568,96 @@ func TestObserveNoContinuationAfterRunEnded(t *testing.T) {
 	}
 }
 
+// askYesNoDialog is a Yes/No question an agent asks its operator (Claude
+// Code's AskUserQuestion) worded like a permission prompt: to
+// detectPermissionPrompt it is one, whatever asked it.
+const askYesNoDialog = ` Would you like to allow pushing PR-12345?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel
+`
+
+// setRolePermission sets the on_permission_prompt of the env's role r.
+func (e *env) setRolePermission(r Role, policy string) {
+	e.t.Helper()
+	for i := range e.cfg.Roles {
+		if e.cfg.Roles[i].Name == string(r) {
+			e.cfg.Roles[i].OnPermissionPrompt = policy
+			return
+		}
+	}
+	e.t.Fatalf("no role %s", r)
+}
+
+// A role's own on_permission_prompt wins over its kind's, both ways: a role
+// that waits never gets the automatic No for a question its agent asks you
+// (the factory liaison's), a role that denies does where its kind waits, and
+// a role that sets none answers as its kind does.
+func TestARoleThatWaitsLeavesAPermissionShapedDialogToYou(t *testing.T) {
+	cases := []struct {
+		name   string
+		role   string // the role's on_permission_prompt
+		kind   string // the kind's, "" = the default (deny)
+		denied bool
+	}{
+		{"the role waits", config.PermissionWait, "", false},
+		{"the role says nothing and its kind denies", "", "", true},
+		{"the role says nothing and its kind waits", "", config.PermissionWait, false},
+		{"the role denies where its kind waits", config.PermissionDeny, config.PermissionWait, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.started()
+			e.setRolePermission(RoleClaude, tc.role)
+			if tc.kind != "" {
+				e.setKind(KindClaude, func(k *config.Kind) { k.OnPermissionPrompt = tc.kind })
+			}
+			run := e.blockedOn(RoleClaude, askYesNoDialog)
+			e.h.onKeys = resolveOn("2")
+
+			o := e.observe()[RoleClaude]
+			if !tc.denied {
+				if o.Kind != ObsBlocked || o.Run == nil || o.Run.ID != run {
+					t.Fatalf("observation = %+v, want blocked, the run still in flight", o)
+				}
+				if got := e.keysSent(); len(got) != 0 {
+					t.Fatalf("keys = %q, want none", got)
+				}
+				if evs := e.promptEvents(EventPromptDenied); len(evs) != 0 {
+					t.Fatalf("events = %+v, want none", evs)
+				}
+				return
+			}
+			if o.Kind != ObsPromptDenied {
+				t.Fatalf("observation = %+v, want prompt_denied", o)
+			}
+			if got := e.keysSent(); !slices.Equal(got, []string{claudeAgent + ":2"}) {
+				t.Fatalf("keys = %q, want the No key", got)
+			}
+		})
+	}
+}
+
+// The continuation after a deny follows the policy that denied: a role that
+// denies where its kind waits gets its after_deny_prompt too.
+func TestARoleThatDeniesIsContinuedAfterItsDenyWhereItsKindWaits(t *testing.T) {
+	e := newEnv(t)
+	e.started()
+	e.setRolePermission(RoleClaude, config.PermissionDeny)
+	e.setKind(KindClaude, func(k *config.Kind) { k.OnPermissionPrompt = config.PermissionWait })
+	e.denyThenIdle()
+
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleClaude]; o.Kind != ObsDenyContinued {
+		t.Fatalf("idle tick = %+v, want deny_continued", o)
+	}
+	if c := e.continuations(); len(c) != 1 {
+		t.Fatalf("continuations = %+v, want one", c)
+	}
+}
+
 func TestObserveNoContinuationInWaitMode(t *testing.T) {
 	e := newEnv(t)
 	e.started()

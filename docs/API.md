@@ -532,8 +532,8 @@ var (
 	// agent_blocked, or the prompt ack came back blocked). The CLIs'
 	// first-launch folder-trust dialogs are answered Yes (EnsureTrust
 	// prevents them; AnswerTrustDialog is the fallback); a permission prompt
-	// during a run is answered No by the observer when the kind's
-	// on_permission_prompt is "deny"; nothing is ever approved otherwise.
+	// during a run is answered No by the observer when the role's, else the
+	// kind's, on_permission_prompt is "deny"; nothing is ever approved otherwise.
 	ErrBlocked = errors.New("agent blocked")
 	// ErrStalled: herdr accepted the text but the agent never started working
 	// (agent_prompt_stalled). The run is left submitted, never re-sent.
@@ -1931,39 +1931,39 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         last prompt to it (magnum's turn going on after esc cut it short, a
         turn a task notification began; see humanTurn), a judge still finishing
         the turn of a run the round settled on its result file (see turnTail),
-        or a session compacting on magnum's /compact (see Compact). blocked ->
-        ObsBlocked, or ObsPromptDenied when a pending/submitted/working run is
-        in flight, the kind's on_permission_prompt is "deny" and the screen
-        shows a permission prompt, which is answered No (see answerPermission;
-        never without a run in flight, where the human may be driving the agent,
-        so an agent that resumes working after a deny is never human_active).
-        idle after such a deny, with that run still in flight and the agent
-        not seen working since -> the kind's after_deny_prompt is sent (see
-        continueAfterDeny), ObsDenyContinued, and the run does not end. A claude
-        agent working after a deny has not resumed: Claude Code ends its turn
-        on a No, and only its background work (a forked /code-review) or the
-        turn that work's notification begins keeps it working, so its deny stays
-        pending, and the message is sent as soon as its transcript shows the
-        turn cut by the rejection and the composer is free (see denyPending);
-        any other kind, and a claude agent without a transcript to read,
-        carried on by itself. A claude agent idle with a submitted/working run
-        whose transcript shows background work started during the run still
-        running, or a task notification not answered yet, counts as working for
-        completion (idle_ticks 0, Background set; see backgroundWait), until the
-        pipeline tells it (Tell) to stop waiting for that work. A codex agent
-        idle with a submitted/working run whose rollout has no task_complete
-        (or turn_aborted) since the run and grew within RolloutGrowth counts as
-        working too (see codexTurnGoing). An agent of a kind named by a rename
-        command (codex), working on a submitted/working run, whose terminal
-        title lacks Title gets that command (`/rename <Title>`) typed into
-        its pane (at most once per call, TitleAttempts per session row; see
-        nameAgent). A codex agent that herdr still reports without a session id,
-        and whose row has none, RecoverIDAfter after its start, gets the id of
-        its Codex rollout, when exactly one matches (see recoverSessionID);
-        herdr's id, when it comes, wins. An agent that ends a turn magnum
-        prompted (working, then idle) while neither herdr nor its rollout gave a
-        session id records EventSessionIDMissing, once per kind and Manager (see
-        sessionIDMissing).
+        or a session compacting on magnum's /compact (see Compact). blocked
+        -> ObsBlocked, or ObsPromptDenied when a pending/submitted/working
+        run is in flight, the role's, else the kind's, on_permission_prompt
+        is "deny" and the screen shows a permission prompt, which is answered
+        No (see answerPermission; never without a run in flight, where the
+        human may be driving the agent, so an agent that resumes working after
+        a deny is never human_active). idle after such a deny, with that run
+        still in flight and the agent not seen working since -> the kind's
+        after_deny_prompt is sent (see continueAfterDeny), ObsDenyContinued,
+        and the run does not end. A claude agent working after a deny has not
+        resumed: Claude Code ends its turn on a No, and only its background
+        work (a forked /code-review) or the turn that work's notification begins
+        keeps it working, so its deny stays pending, and the message is sent
+        as soon as its transcript shows the turn cut by the rejection and the
+        composer is free (see denyPending); any other kind, and a claude agent
+        without a transcript to read, carried on by itself. A claude agent
+        idle with a submitted/working run whose transcript shows background
+        work started during the run still running, or a task notification not
+        answered yet, counts as working for completion (idle_ticks 0, Background
+        set; see backgroundWait), until the pipeline tells it (Tell) to stop
+        waiting for that work. A codex agent idle with a submitted/working run
+        whose rollout has no task_complete (or turn_aborted) since the run and
+        grew within RolloutGrowth counts as working too (see codexTurnGoing).
+        An agent of a kind named by a rename command (codex), working on a
+        submitted/working run, whose terminal title lacks Title gets that
+        command (`/rename <Title>`) typed into its pane (at most once per call,
+        TitleAttempts per session row; see nameAgent). A codex agent that
+        herdr still reports without a session id, and whose row has none,
+        RecoverIDAfter after its start, gets the id of its Codex rollout,
+        when exactly one matches (see recoverSessionID); herdr's id, when
+        it comes, wins. An agent that ends a turn magnum prompted (working,
+        then idle) while neither herdr nor its rollout gave a session id records
+        EventSessionIDMissing, once per kind and Manager (see sessionIDMissing).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
@@ -2489,7 +2489,7 @@ const (
 	// was set to now, so Submit refuses for daemon.human_cooldown.
 	ObsHumanActive ObservationKind = "human_active"
 	// ObsBlocked: the agent waits on a dialog magnum leaves to the human (a
-	// kind with on_permission_prompt "wait", a dialog that is not a
+	// role or kind with on_permission_prompt "wait", a dialog that is not a
 	// recognised permission prompt, a run past MaxPromptDenies): tell the
 	// human.
 	ObsBlocked ObservationKind = "blocked"
@@ -6616,6 +6616,13 @@ type Role struct {
 	// rotateSessions). 0 = no limit. Session roles only; the judge defaults
 	// to DefaultJudgeSessionRounds (DefaultRoles).
 	MaxSessionRounds int `toml:"max_session_rounds"`
+	// OnPermissionPrompt overrides the kind's on_permission_prompt for this
+	// role: "deny" or "wait" (PermissionDeny, PermissionWait), "" = the
+	// kind's (PermissionPrompt). A role whose agent asks you questions
+	// (Claude Code's AskUserQuestion shows a Yes/No question as a permission
+	// prompt) sets "wait", so magnum never answers No for you. Session roles
+	// only.
+	OnPermissionPrompt string `toml:"on_permission_prompt"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -6781,6 +6788,11 @@ func (r Role) IsWhiteboard() bool
 func (r Role) Matches(s string) bool
     Matches reports whether s (case and surrounding space ignored) is the role's
     name or one of its aliases.
+
+func (r Role) PermissionPrompt(k Kind) string
+    PermissionPrompt is what magnum does when the role's agent stops at a
+    permission prompt during one of its runs (PermissionDeny or PermissionWait):
+    the role's own on_permission_prompt, else that of k, the role's kind.
 
 func (r Role) PromptFile(kind string) string
     PromptFile returns the prompt file name for a prompt kind (PromptInitial,

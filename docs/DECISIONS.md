@@ -2791,6 +2791,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `magnum daemon-restart` restarts only the review daemon. Rejected: inferring your session from a pane's
   `$HERDR_SOCKET_PATH` (the daemon runs outside herdr). Tests, failing first:
   TestAReviewSessionNamedAsYoursOnAnotherSocketIsRefused, TestDoctorWarnsOfAReviewSessionThatIsYourOwn.
+- **A role can override its kind's `on_permission_prompt`** (2026-11-06, the factory liaison's first slice).
+  The key was the kind's alone, so every Claude role denied or none did. The liaison is a Claude agent that
+  asks you questions with Claude Code's AskUserQuestion, and a Yes/No question there looks like a permission
+  prompt to `detectPermissionPrompt` ("Would you like to allow ...?", "Do you want to proceed ...?", with a
+  Yes and a No option): while a magnum run was in flight, the observe pass answered it No for you. `[[role]]`
+  and `[[factory.role]]` now take `on_permission_prompt` (`deny` or `wait`, case and space ignored, anything
+  else refused naming the key and the two values; refused on a shell role too, which has no prompt to
+  answer); `Role.PermissionPrompt(kind)` is the role's value, else the kind's, and the deny (`answerPermission`)
+  and the continuation after it (`continueAfterDeny`) both read it, so a role that denies where its kind waits
+  is continued like any other. A role that sets none behaves as before. The role knows what its agent does,
+  so the override is the role's, and magnum recognises no CLI dialog of its own by its look. Only wording
+  `detectPermissionPrompt` matches ever reached the deny; the override keeps the liaison out of it for any
+  wording. Tests, failing first: TestARoleThatWaitsLeavesAPermissionShapedDialogToYou,
+  TestARoleThatDeniesIsContinuedAfterItsDenyWhereItsKindWaits, TestAFactoryRoleTakesOnPermissionPrompt,
+  TestARolePermissionPromptFallsBackToItsKind, TestAShellRoleTakesNoOnPermissionPrompt.
 
 ## Screens and commands
 

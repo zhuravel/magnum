@@ -115,6 +115,13 @@ type Role struct {
 	// rotateSessions). 0 = no limit. Session roles only; the judge defaults
 	// to DefaultJudgeSessionRounds (DefaultRoles).
 	MaxSessionRounds int `toml:"max_session_rounds"`
+	// OnPermissionPrompt overrides the kind's on_permission_prompt for this
+	// role: "deny" or "wait" (PermissionDeny, PermissionWait), "" = the
+	// kind's (PermissionPrompt). A role whose agent asks you questions
+	// (Claude Code's AskUserQuestion shows a Yes/No question as a permission
+	// prompt) sets "wait", so magnum never answers No for you. Session roles
+	// only.
+	OnPermissionPrompt string `toml:"on_permission_prompt"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -191,6 +198,16 @@ type Role struct {
 	// Aliases: other names accepted for the role (old names such as judge,
 	// claude, codex, simplify and the store ids such as codex_review).
 	Aliases []string `toml:"aliases"`
+}
+
+// PermissionPrompt is what magnum does when the role's agent stops at a
+// permission prompt during one of its runs (PermissionDeny or PermissionWait):
+// the role's own on_permission_prompt, else that of k, the role's kind.
+func (r Role) PermissionPrompt(k Kind) string {
+	if r.OnPermissionPrompt != "" {
+		return r.OnPermissionPrompt
+	}
+	return k.OnPermissionPrompt
 }
 
 // IsFix reports whether the role is a fix role (Fix): the fixer of the fix
@@ -618,6 +635,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 		for j, a := range r.Aliases {
 			r.Aliases[j] = strings.ToLower(strings.TrimSpace(a))
 		}
+		r.OnPermissionPrompt = strings.ToLower(strings.TrimSpace(r.OnPermissionPrompt))
 		if r.Mode == "" {
 			r.Mode = ModeSession
 			if r.Kind == KindShell {
