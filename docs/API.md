@@ -7588,6 +7588,16 @@ const (
 	MachineToastRounds = 3
 )
 const (
+	OpenFixing   = "fixing"    // a fix loop runs, or the look starts one
+	OpenWaits    = "waits"     // something will move on its own: magnum's review, the settle, CI, the budget
+	OpenNeedsYou = "needs_you" // only the operator can move it
+	OpenIdle     = "idle"      // nothing open at the head
+	OpenUnknown  = "unknown"   // the look has not read GitHub since the PR changed: never idle
+	OpenOff      = "off"       // the look does not cover the PR (OpenVerdict.Off says why)
+)
+    Verdicts of autofix = "open" (OpenVerdict.Verdict).
+
+const (
 	// FixPhaseFixing: the fixer works on the head the cycle fixes.
 	FixPhaseFixing = "fixing"
 	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
@@ -8367,6 +8377,11 @@ func KVPRManualVerdict(prID int64) string
     KVPRManualVerdict holds the id of the review a manual verdict posted: rounds
     never dismiss it as their own stale review (it is the reviewer's decision),
     while an approval still follows the head (approval.go).
+
+func KVPROpen(prID int64) string
+    KVPROpen holds autofix = "open"'s verdict on an own PR (OpenVerdict as
+    JSON), written by the engine's look; no row for a PR the look does not
+    cover.
 
 func KVPROpenHold(prID int64) string
     KVPROpenHold holds the hold `magnum open` set on a PR it restored (OpenHold
@@ -10021,6 +10036,13 @@ func (h OpenHold) End(d config.Daemon, humanAt *time.Time) time.Time
     End is when the hold ends: Until, or human_cooldown after humanAt (the PR's
     human_active_at, the last input in its panes) when that is later.
 
+type OpenNeed struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+}
+    OpenNeed is one thing that needs the operator: its kind (thread, review,
+    comment, magnum, finding, conflict, ci, loop or magnum_late) and link.
+
 type OpenPayload struct {
 	PRTarget
 	Role string `json:"role,omitempty"` // a role of the PR's watch, by name or alias; "" = its judge
@@ -10031,6 +10053,39 @@ type OpenPayload struct {
     starts or resumes the judge and Role's agent (an on-demand role gets its
     pane), pins the PR and its slot, and completes with the pane id of Role.
     A PR whose session is live, or whose round is running, completes at once.
+
+type OpenVerdict struct {
+	Verdict       string     `json:"verdict"`
+	Why           string     `json:"why"`
+	Head          string     `json:"head"`
+	At            time.Time  `json:"at"`
+	ReadAt        time.Time  `json:"read_at,omitzero"`
+	Until         time.Time  `json:"until,omitzero"`
+	Open          int        `json:"open"`
+	Needs         []OpenNeed `json:"needs,omitempty"`
+	Approved      string     `json:"approved,omitempty"`
+	AfterApproval int        `json:"after_approval,omitempty"`
+	Off           string     `json:"off,omitempty"`
+}
+    OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
+    fixing, waits, needs_you, idle, unknown or off, why in plain words (counts,
+    kinds, short SHAs and clock times, never PR text), when the look decided
+    it (At) and last read GitHub whole (ReadAt), when a wait ends where that is
+    known (Until), the open items (work and what needs the operator) and what
+    needs the operator (kind and link only), the short SHA a person approved (""
+    = none) and the commits on Head after it (-1 = not counted), and why an off
+    verdict is off.
+
+func ParseOpenVerdict(s string) (OpenVerdict, bool)
+    ParseOpenVerdict reads a KVPROpen value; ok is false for one that is not a
+    verdict.
+
+func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool
+    Stale reports whether v no longer tells the PR's state, for a reader
+    (the factory's screen) that then shows the PR as looked at: the daemon's
+    last tick (lastTick, zero for none) is older than two poll intervals,
+    the PR's head moved past v's, or the PR's row changed after v was decided
+    (prUpdated).
 
 type Options struct {
 	// Once runs startup and a single tick, then keeps observing herdr only
