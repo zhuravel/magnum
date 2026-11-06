@@ -1876,8 +1876,10 @@ the fix job, which fixes Magnum's findings on your own PRs (see [Fixing your own
 PRs](#fixing-your-own-prs)). Four `[pipeline]` keys configure the job, and a `[[watch]]` may set its own of
 the first three. `fix_role` (default `"claude-fix"`) names the role the job runs, and `fix_role = ""` on a watch
 switches the job off for that watch. `fix_cycles` (default 3, at least 1) caps the fix runs of one loop.
-`autofix` (`"never"` by default, or `"own"`) says whether a loop also starts by itself after a review with
-findings on your own PRs. `fix_compact_at` (default 70) is the context percent at which a resumed fixer is
+`autofix` (`"never"` by default, `"own"` or `"open"`) says whether a loop also starts by itself after a review
+with findings on your own PRs (`"own"`), or whenever something is open on them once the reviewers settle
+(`"open"`, with the `settle_*`, `magnum_late_after`, `autofix_max_loops`, `hands_off_after_push`,
+`quiet_logins` and `quiet_markers` keys). `fix_compact_at` (default 70) is the context percent at which a resumed fixer is
 compacted; a watch cannot override it. A watch's `roles` list may not name a fix role, and `magnum roles` leaves it out.
 Validation refuses a `fix_role` that names no role, a judge, a shell role or a role without `fix = true`, and
 a fix role whose declared identity is not a `gh` one. A fix role that names none acts as the watch's poll identity.
@@ -2895,7 +2897,7 @@ it acts as the watch's poll identity, which is your own gh login in the config `
 freshly initialised config therefore runs `magnum fix` without renaming anything. That identity must be a
 `gh` one, your own account, since an App cannot push to your branch as you. A watch that polls as an App
 makes `magnum fix` refuse ("the fix role's identity ... is an App; name a gh identity"), and under `autofix =
-"own"` the configuration warns about it. So `gh` and `git` in the fixer's pane act as your gh login, with your
+"own"` or `"open"` the configuration warns about it. So `gh` and `git` in the fixer's pane act as your gh login, with your
 git config and your SSH agent (the daemon's `SSH_AUTH_SOCK`), and the pushes and replies show in the PR's
 history as yours. To act as another account, set `identity` in a `[[role]]` block named `claude-fix` to a
 `gh` identity; the configuration refuses an App there. An identity it names but nobody declared makes
@@ -2903,10 +2905,10 @@ history as yours. To act as another account, set `identity` in a `[[role]]` bloc
 
 A watch that posts as your own login cannot tell the fixer's replies from its own. The re-review then does
 not read them as the author's answers, and `magnum fix` says so in a note. Post the reviews as an App
-identity when autofix is on. The configuration warns about this only under `autofix = "own"`, comparing
-logins, so two identities of the same account count as one. It also warns when a watch's `fix_role` names
-no declared fix role under `autofix = "own"`, since the loop would never start, and `magnum doctor` fails
-that watch.
+identity when autofix is on. The configuration warns about this only under `autofix = "own"` or `"open"`,
+comparing logins, so two identities of the same account count as one. It also warns when a watch's
+`fix_role` names no declared fix role under either, since the loop would never start, and `magnum doctor`
+fails that watch.
 
 **The fix skill.** `skills/magnum-fix/SKILL.md` is the fixer's method. It is a document with no scripts, so it
 works wherever `gh` works. The binary embeds it and the daemon copies it at startup under the state
@@ -3196,7 +3198,37 @@ at the head is done, these last two waited for at most `settle_max`. A review bo
 `quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
 lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
 most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you pushed until
-`hands_off_after_push` passed, and none on a draft, a fork or a PR you took out of autofix.
+`hands_off_after_push` passed, and none on a draft, a fork or a PR you took out of autofix (`F`).
+
+Each tick, before dispatch, Magnum looks at every own open PR of such a watch and keeps a verdict for it in
+the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your
+own push), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", with "· 2 commits after
+the approval" when the head moved past a person's approval), `unknown` (it has not read GitHub since the PR
+changed: never idle) or `off`. The look reads GitHub (the three reads the fix job makes of the other
+reviewers) only when the PR changed (its head, its updatedAt, its activity or Magnum's last review), 30
+minutes after its last read as a safety net, and 5 minutes after a failed read; never below `[github]
+budget_floor`, and for at most 4 PRs a tick. It checks each head against the base the PR merges into (a
+stacked PR's own base) every 30 minutes, with one fetch of that base per clone in a tick. A start hands its
+read to the fix job, which reads GitHub no second time. A dry-run daemon reads and decides, but writes
+nothing and starts nothing.
+
+What a loop was handed is remembered by key: the items of the `external-threads.json` its fixer got (never
+the look's own read), Magnum's review it worked on, Magnum's rebuttals and the conflict. A thread's key
+carries its latest comment, so a reviewer's new reply opens it again. A handed item that is still open after
+the loop needs you: a person's item never closes on the fixer's word alone (only a fix-marked reply, your
+reply, a resolution that is not the fixer's, or your later word on the conversation close it), and neither
+does a bot's inline thread, which is a finding. A bot's handed review body or comment (a receipt, a
+summary, a status note) drops out as seen. A finding of Magnum's handed review that the fixer neither
+resolved nor answered (an optional one too) needs you, and so does a thread the fixer answered twice whose
+reviewer answered again. Magnum's own thread waits for your answer only after a rebuttal of Magnum's that
+came after its latest review: alone, with nothing else to fix, it needs you and starts no loop. A reviewed PR
+with such leftovers goes to needs attention (kind fix, "fix: 1 item the fixer left needs you: <link>",
+`fix.open_needs_you`), and your answer to every one of them puts it back (`fix.open_answered`), after which a
+new reply can start a new loop. A loop's own Needs you (a failed push, a declined P1) is never rewritten or
+lifted by the look: you act on it as before (`f`, a push, `r`). Magnum's review of a head later than
+`magnum_late_after` past its due time is toasted once per head (`fix.open_magnum_late`). Red required CI
+needs you; pending required CI waits (the required checks are `[[repo]] required_checks`, else GitHub's for
+the default branch; a branch that requires none leaves CI out).
 
 **What you see.**
 
@@ -3209,7 +3241,8 @@ most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you p
   /compact)`), and `--json` has it as the loop's `context`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
 - `magnum logs <ref>` shows `fix.start`, `fix.conflict_unchecked`, `fix.compacted`, `fix.fresh_session`, `fix.context_unknown`,
   `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`, `fix.needs_you`, `fix.time_up`,
-  `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`. A fixer that runs out of the
+  `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`, and under `autofix = "open"`
+  `autofix.open`, `fix.open_needs_you`, `fix.open_answered` and `fix.open_magnum_late`. A fixer that runs out of the
   role's `timeout` is asked once to stop its background tasks and write its report now (the `fix.time_up`
   warning); the job fails if no report comes within 5 more minutes.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.

@@ -2807,6 +2807,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARoleThatDeniesIsContinuedAfterItsDenyWhereItsKindWaits, TestAFactoryRoleTakesOnPermissionPrompt,
   TestARolePermissionPromptFallsBackToItsKind, TestAShellRoleTakesNoOnPermissionPrompt.
 
+- **`autofix = "open"`: a fix loop starts on anything open on your own PR once the reviewers settle**
+  (2026-11-07, the factory bridge's first slice: the operator wants the PRs of the factory's account, and his
+  own, fixed without pressing `f`, "not at cost of quality"). Before, autofix started a loop only at the end
+  of a round of magnum's that posted new findings (`autofix = "own"`): nothing started for a colleague's
+  thread alone, for a conflict with the base, after a clean review, or for a reviewer who answered after
+  magnum. The third value starts on any of these. Each tick, before dispatch, a look (engine `fix_open.go`)
+  decides a verdict per own open PR (`pr.<id>.open`: fixing, waits, needs_you, idle, unknown, off, in plain
+  words, never PR text) by twelve ordered rules (`decideOpen`), and starts a loop with `by = autofix` on
+  work. The items have keys: another reviewer's unanswered thread (`thread:<root>@<latest>`, a new reply a
+  new key) or one a fixer login resolved, their unanswered review bodies and comments (`remark:<id>`, unless
+  `quiet_logins` or a `quiet_markers` text in the whole body: threads never go quiet), magnum's rebuttal after
+  its latest review (`mthread`), a finding of a handed review the fixer skipped without a word (`rthread`),
+  magnum's review with work (`review:<run>`) and a conflict of the head with the PR's own base
+  (`conflict:<head>`). A ledger per PR (`pr.<id>.fix_seen`), written by the look alone, keeps what loops were
+  handed: the items of the external file each cycle's fixer got (never the look's own read, which the fixer
+  did not always get), the review it worked on, read from the loop's `fix.start` and `fix.pushed` events
+  once it ended. A person's item never closes on the fixer's word alone, and neither does a bot's thread
+  (a finding): a handed one still open needs you, and the look raises a reviewed PR to needs attention
+  (kind fix, links only) and lifts it when you answered every one; it never rewrites or lifts a loop's own
+  Needs you. A bot's handed receipt or note drops out as seen. A magnum thread waits for an answer only after
+  a rebuttal of magnum's made after its latest review: magnum resolves none of its threads, so "magnum spoke
+  last" would hold almost every PR, and an ack asks for nothing; a rebuttal alone, with no review work,
+  needs you, since prepareFix refuses it as nothing to fix. The settle waits for magnum's own review of the
+  head without a cap (a 20-minute cap fired every time: the first factory PR's review came 46 minutes after
+  it opened), toasting it once per head `magnum_late_after` (2h) past its due time, and for quiet
+  (`settle_quiet`) and the `settle_checks` at the head at most `settle_max` (20m). The look reads GitHub
+  only when the PR's fingerprint changed (head, updatedAt, activity, the last review), 30 minutes after its
+  last read and 5 after a failed one, never below the floor, for 4 PRs a tick at most, and fetches a base
+  once per clone in a tick; a start hands its read to prepareFix. Bounds: `fix_cycles` per loop,
+  `autofix_max_loops` (3) starts a day, `hands_off_after_push` (30m) after a push the fixer did not make,
+  drafts, forks and `F` left out, two fixer replies in one thread then needs you. Unknown is never idle; a
+  read GitHub cut short needs you. Red required CI needs you for now. With it, rule A1 changed `f` for every
+  autofix value: a review with only simplifications, or one that keeps an optional P3 open, is work for the
+  fixer (`reviewWork`, which the look and prepareFix share, so the look never starts what prepareFix
+  refuses). Rejected: starting at the round's end (it misses later reviewers); writing the ledger in
+  `settleFix` (no fresh read there, and two writers); a cap on magnum's wait; blanket notice logins (a lint
+  poster's threads would vanish); filtering the fixer's external file (`f` must still see everything);
+  "magnum spoke last" as an open magnum thread; handing the keys of the look's own read. Tests, failing
+  first: TestAutofixOpenStartsForAColleaguesThreadAfterACleanReview, TestAPersonsItemTheRunLeftUnansweredNeedsYou,
+  TestAutofixOpenNeverCapsTheWaitForMagnum, TestAFixOnASimplificationOnlyReviewFixesItsFindings, and the
+  others of S1 in the commits.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
