@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -148,8 +150,10 @@ type Runtime struct {
 	log *slog.Logger
 	s   seams
 
-	// launchMu makes the staggered launches take turns.
+	// launchMu makes the staggered launches take turns, talkMu the liaisons'
+	// starts (Talk).
 	launchMu sync.Mutex
+	talkMu   sync.Mutex
 	// drained closes when the daemon drains (BeginDrain): a launch that
 	// waits for the stagger then starts nothing.
 	drained   chan struct{}
@@ -358,6 +362,22 @@ func WorkspaceLabel(t registry.Task, a registry.Attempt) string {
 	return Tag + " " + taskKey(t) + " " + a.ID
 }
 
+// LiaisonRole is the factory role of a task's liaison, the agent that talks
+// with you about the task (Talk); no stage names it.
+const LiaisonRole = "fx-liaison"
+
+// liaisonLabel is the herdr workspace label of task t's liaison: "factory
+// liaison <key>", one per task, and no attempt's label (labelAttempt), so a
+// restart tells a liaison's leftover from an attempt's (SettleWorkspaces).
+func liaisonLabel(t registry.Task) string { return Tag + " liaison " + taskKey(t) }
+
+// labelLiaison is the task key a liaison's workspace label names
+// (liaisonLabel); false for any other label.
+func labelLiaison(label string) (string, bool) {
+	key, ok := strings.CutPrefix(label, Tag+" liaison ")
+	return key, ok && key != ""
+}
+
 // DBLockCommand is the command prefix a role runs every command that
 // touches its copy's databases with (`magnum db-lock --checkout <copy>
 // --role <role> --`, the prompts' .DBLockCommand): the roles of a task take
@@ -447,10 +467,16 @@ func (r *Runtime) operatorIn(ctx context.Context, st *roleState) bool {
 	if err != nil {
 		return false
 	}
+	return r.operatorOn(ctx, pr, st.role.Name)
+}
+
+// operatorOn is operatorIn for role's pane of owner row pr (a task's, or
+// its liaison's).
+func (r *Runtime) operatorOn(ctx context.Context, pr store.PR, role string) bool {
 	if r.now().Before(r.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
 		return true
 	}
-	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, st.role.Name)
+	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role)
 	if err != nil {
 		return false // no pane to be in
 	}
@@ -568,6 +594,91 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 		return fmt.Errorf("launch %s: %w", a.ID, err)
 	}
 	return nil
+}
+
+// Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:
+// liaisonRow) and returns its pane. A live liaison whose agent herdr shows
+// in its pane is returned as it is, and nothing is sent. Otherwise the
+// liaison gets a workspace of its own in the factory's herdr session
+// (liaisonLabel; the one its row's sessions hold is reused) whose working
+// directory is the task's folder (Layout.FactoryTaskDir), never the copy,
+// so it starts as well once a push or a drop freed the copy. Its agent
+// resumes the role's newest parked or lost conversation (ResumeID), and only
+// a fresh conversation gets prompt, once, as its first (store.RunInitial).
+// Talks take turns, so two never start two liaisons.
+func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error) {
+	r.talkMu.Lock()
+	defer r.talkMu.Unlock()
+	spec, ok := r.d.Config.FactoryRole(LiaisonRole)
+	if !ok {
+		return "", fmt.Errorf("the liaison of %s: no factory role %s", taskKey(t), LiaisonRole)
+	}
+	role, err := r.RunsAs(t, spec)
+	if err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	pr, err := r.liaisonRow(ctx, t)
+	if err != nil {
+		return "", err
+	}
+	pane, err := r.liveLiaison(ctx, pr, role.Name)
+	if err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	if pane != "" {
+		return pane, nil
+	}
+	dir := r.d.Layout.FactoryTaskDir(t.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	ws, err := r.mgr.EnsureWorkspace(ctx, pr, dir, paneEnv(t, Copy{}), liaisonLabel(t), []config.Role{role})
+	if err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(role.Name))
+	if err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	if err := r.mgr.StartAgent(ctx, pr, role, ws.Panes[agents.Role(role.Name)], resume); err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name) // its pane, wherever StartAgent found the conversation
+	if err != nil {
+		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	if resume == "" {
+		if _, err := r.mgr.Prompt(ctx, pr, agents.Role(role.Name), store.RunInitial, prompt); err != nil {
+			return "", fmt.Errorf("the liaison of %s: its first prompt: %w", taskKey(t), err)
+		}
+	}
+	r.log.Info("started a task's liaison", "task", t.ID, "resumed", resume != "")
+	return store.Deref(s.HerdrPaneID), nil
+}
+
+// liveLiaison is the pane of row pr's live session of role when herdr shows
+// its agent there ("" for none: no live session, or one whose agent is
+// gone or never started).
+func (r *Runtime) liveLiaison(ctx context.Context, pr store.PR, role string) (string, error) {
+	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	pane, name := store.Deref(s.HerdrPaneID), store.Deref(s.AgentName)
+	if s.State != store.SessionLive || pane == "" {
+		return "", nil
+	}
+	snap, err := r.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return "", err
+	}
+	if slices.ContainsFunc(snap.Agents, func(a herdr.AgentInfo) bool { return a.PaneID == pane && (name == "" || a.Name == name) }) {
+		return pane, nil
+	}
+	return "", nil
 }
 
 // gate reads what a launch of role waits on: a pause of its kind, the
@@ -941,18 +1052,52 @@ func (r *Runtime) endFacts(ctx context.Context, rr *registry.RoleRun, run store.
 	}
 }
 
-// Park parks the agents of task t (agents.Manager.Park): their
-// conversations stay resumable, their panes are released. A run in flight
-// or an agent at work refuses with agents.ErrBusy.
+// Park parks the agents of task t (agents.Manager.Park), then its liaison
+// (parkLiaison): their conversations stay resumable, their panes are
+// released. A run in flight or an agent at work on the task's row refuses
+// with agents.ErrBusy; the liaison never stops the task's own park.
 func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
+	var errs []error
 	pr, err := r.ownerRow(ctx, t.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound): // the task never launched an agent
+	case err != nil:
+		errs = append(errs, err)
+	default:
+		if err := r.mgr.Park(ctx, pr); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := r.parkLiaison(ctx, t); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// parkLiaison parks task t's liaison unless you are with it: you in its
+// pane (operatorOn: the factory leaves the panes you are in alone), or its
+// turn in flight or its agent at work (agents.ErrBusy: it may be running
+// the decide that parks the task). Such a liaison stays live, which the
+// log says; the next park, or you, ends it. A task you never talked about
+// has no liaison to park.
+func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) error {
+	pr, err := liaisonRowIn(ctx, r.st, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil // the task never launched an agent
+		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return r.mgr.Park(ctx, pr)
+	if r.operatorOn(ctx, pr, LiaisonRole) {
+		r.log.Info("left a task's liaison live: you are in its pane", "task", t.ID)
+		return nil
+	}
+	err = r.mgr.Park(ctx, pr)
+	if errors.Is(err, agents.ErrBusy) {
+		r.log.Info("left a task's liaison live: it is at work", "task", t.ID, "err", err)
+		return nil
+	}
+	return err
 }
 
 // RunState is run id as the agents store keeps it: its state (store.Run*:

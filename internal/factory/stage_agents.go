@@ -104,6 +104,11 @@ type PromptData struct {
 	RedRun                                                 bool
 	ErrorSkill, PRBodySkill, DBLockCommand                 string
 	Port                                                   int
+	// Magnum is the factory daemon's own build (Layout.Binary, as
+	// DBLockCommand names it), shell-quoted: the liaison runs its
+	// `magnum factory` commands with it, so they reach the daemon's build,
+	// never whatever magnum the PATH finds first.
+	Magnum string
 	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
@@ -1181,7 +1186,8 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile), Questions: in(questionsFileOf(st, role.Name)),
 		Acceptance: in(acceptanceFile), Proof: in("proof.json"), FactoryProof: in(factoryProofFile), ReviewSummary: in(reviewSummaryFile),
 		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
-		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port}
+		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port,
+		Magnum: execx.ShellQuote(cmp.Or(e.d.Layout.Binary(), "magnum"))}
 	d.Base, d.RedRun = config.DefaultFactoryBase, e.cfg.Factory.Kinds[t.Kind].RedRun()
 	if tr, ok := e.otherTracker(t.Repo, t.JiraKey); ok && t.JiraKey != "" {
 		d.Tracker = trackerName(tr)
@@ -1317,5 +1323,5 @@ func checkData(role config.Role) PromptData {
 		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
-		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
+		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum"}
 }

@@ -242,11 +242,30 @@ func (r *Runtime) record(ctx context.Context, rr registry.RoleRun) {
 	}
 }
 
+// settleLiaisonRun settles run, a turn of a task's liaison that ended:
+// verified at once, as no stage checks a liaison's turn for an end fact
+// (its end is no event of the task's: ownerOf), so it never stays among the
+// agents store's active runs.
+func (r *Runtime) settleLiaisonRun(ctx context.Context, run store.Run) {
+	now := r.now()
+	err := r.st.TransitionRun(ctx, run.ID, []string{store.RunEnded}, store.RunVerified, func(u *store.RunUpdate) {
+		u.Set("verified_at", now)
+		u.Set("outcome", "ended")
+	})
+	if err != nil && !errors.Is(err, store.ErrConflict) {
+		r.log.Warn("settle a turn of a task's liaison", "run", run.ID, "err", err)
+	}
+}
+
 // completed is a run that ended (two idle ticks): its screen after its
 // prompt tells an end from a limit, a logout, an overload, a model's own
-// limit and a refusal.
+// limit and a refusal. A liaison's turn is settled at once (settleLiaisonRun).
 func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run) []Event {
 	t, pr, err := r.ownerOf(ctx, run.PRID)
+	if errors.Is(err, errLiaisonRow) {
+		r.settleLiaisonRun(ctx, run)
+		return nil
+	}
 	if err != nil {
 		return nil
 	}

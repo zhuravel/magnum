@@ -30,6 +30,9 @@ package runtime
 // task that ended shortly before a daemon stop that lasts past typedSettle
 // after its end is not read again when the daemon is back, and a last read
 // that keeps failing past typedSettle after the task's end is dropped.
+// The task's liaison's panes (Talk, its own row) are read the same way: its
+// turns are the task's, with the surface SurfaceLiaison, and the prompts
+// its runs recorded (Talk's) are the factory's own.
 
 import (
 	"context"
@@ -40,6 +43,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -221,23 +225,25 @@ func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 				continue
 			}
 		}
-		pr, err := r.ownerRow(ctx, t.ID)
-		if errors.Is(err, store.ErrNotFound) {
-			continue // a task that never launched an agent
-		}
-		var ss []store.Session
-		if err == nil {
-			ss, err = r.st.SessionsByPR(ctx, pr.ID)
-		}
-		if err != nil {
-			r.log.Warn("read the turns typed into the panes", "task", t.ID, "err", err)
-			whole = false // what was read of its panes is kept for the next pass
-			continue
-		}
-		for _, c := range conversations(ss) {
-			listed[c.key] = true
-			if ev, ok := r.typedIn(ctx, t, pr, c, reads); ok {
-				evs = append(evs, ev)
+		for _, row := range []typedRow{{ownerRowIn, ""}, {liaisonRowIn, SurfaceLiaison}} {
+			pr, err := row.find(ctx, r.st, t.ID)
+			if errors.Is(err, store.ErrNotFound) {
+				continue // a task that never launched an agent, or that you never talked about
+			}
+			var ss []store.Session
+			if err == nil {
+				ss, err = r.st.SessionsByPR(ctx, pr.ID)
+			}
+			if err != nil {
+				r.log.Warn("read the turns typed into the panes", "task", t.ID, "err", err)
+				whole = false // what was read of its panes is kept for the next pass
+				continue
+			}
+			for _, c := range conversations(ss) {
+				listed[c.key] = true
+				if ev, ok := r.typedIn(ctx, t, pr, c, reads, row.surface); ok {
+					evs = append(evs, ev)
+				}
 			}
 		}
 	}
@@ -256,12 +262,23 @@ func (r *Runtime) typed(ctx context.Context, reads turnReads) []Event {
 	return evs
 }
 
-// typedIn reads the transcript of conversation c of task t (owner row pr)
-// for the turns typed into its panes: an EventTyped of its role with them,
-// false for none (no transcript, nothing changed since a read took it whole,
-// none typed, a read that failed). A conversation whose pane ended gets a
-// last read: no turn of it waits for its proof.
-func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, c conversation, reads turnReads) (Event, bool) {
+// typedRow is an owner row of a task whose panes typed reads, found as it
+// is (find), with the Surface of their turns: the task's own row (its
+// roles' panes, ""), or its liaison's (SurfaceLiaison).
+type typedRow struct {
+	find    func(ctx context.Context, st *store.Store, id int64) (store.PR, error)
+	surface string
+}
+
+// typedIn reads the transcript of conversation c of task t (owner row pr,
+// a task's or its liaison's: surface) for the turns typed into its panes:
+// an EventTyped of its role with them, false for none (no transcript,
+// nothing changed since a read took it whole, none typed, a read that
+// failed). A conversation whose pane ended gets a last read: no turn of it
+// waits for its proof. The prompts of a liaison's runs are the factory's
+// own (Talk sends them through the agents manager, not the ledger).
+func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, c conversation, reads turnReads,
+	surface string) (Event, bool) {
 	s := c.newest()
 	kind := store.Deref(s.AgentKind)
 	r.mu.Lock()
@@ -286,10 +303,13 @@ func (r *Runtime) typedIn(ctx context.Context, t registry.Task, pr store.PR, c c
 		r.log.Warn("read the turns typed into a pane", "task", t.ID, "role", s.Role, "err", err)
 		return Event{}, false
 	}
+	if surface == SurfaceLiaison {
+		own.sent = sentPrompts(runs)
+	}
 	ended := s.State != store.SessionStarting && s.State != store.SessionLive
 	you := map[int64][]time.Time{} // by row: when herdr showed you in its pane
 	now := r.now()
-	ev := Event{TaskID: t.ID, Role: s.Role, Kind: EventTyped}
+	ev := Event{TaskID: t.ID, Role: s.Role, Kind: EventTyped, Surface: surface}
 	waits := false
 	stages := map[string]string{}
 	for _, u := range turns {
@@ -342,17 +362,32 @@ func (r *Runtime) transcriptMark(ctx context.Context, s store.Session, known str
 }
 
 // ownTexts are what the factory, or the agents layer for it, types into a
-// pane: the hashes of its prompts, and the slash commands magnum types
-// (agents.MagnumCommands, the list the baseline drops as well).
+// pane: the hashes of its prompts, the slash commands magnum types
+// (agents.MagnumCommands, the list the baseline drops as well), and the
+// hashes of the prompts a liaison's runs recorded (sent: redacted, as the
+// agents store keeps them).
 type ownTexts struct {
 	hashes   map[string]bool
 	commands map[string]bool
+	sent     map[string]bool
 }
 
 // holds reports whether text, a user turn's, is the factory's own: one of
 // its prompts, or the record of one of magnum's slash commands.
 func (o ownTexts) holds(text string) bool {
-	return o.hashes[PromptHash(text)] || agents.MagnumCommand(text, o.commands)
+	return o.hashes[PromptHash(text)] || agents.MagnumCommand(text, o.commands) ||
+		(len(o.sent) > 0 && o.sent[PromptHash(execx.Redact(text))])
+}
+
+// sentPrompts are the hashes of the prompts runs recorded (redacted).
+func sentPrompts(runs []store.Run) map[string]bool {
+	sent := map[string]bool{}
+	for _, run := range runs {
+		if strings.TrimSpace(run.PromptText) != "" {
+			sent[PromptHash(run.PromptText)] = true
+		}
+	}
+	return sent
 }
 
 // ownPrompts are the texts the factory, or the agents layer for it, types

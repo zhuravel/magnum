@@ -161,6 +161,24 @@ func (r *Runtime) liaisonRow(ctx context.Context, t registry.Task) (store.PR, er
 	return up.PR, nil
 }
 
+// liaisonRowIn is task id's liaison row in st as it is (store.ErrNotFound
+// before the task's first Talk): the reads that must not make one (Park,
+// the typed turns, Recover).
+func liaisonRowIn(ctx context.Context, st *store.Store, id int64) (store.PR, error) {
+	repo, err := st.RepoByFullName(ctx, liaisonRepoNode+"/"+liaisonRepo)
+	if err != nil {
+		return store.PR{}, fmt.Errorf("the liaison of task %d: %w", id, err)
+	}
+	pr, err := st.PRByRepoNumber(ctx, repo.ID, int(id))
+	if err != nil {
+		return store.PR{}, fmt.Errorf("the liaison of task %d: %w", id, err)
+	}
+	if pr.NodeID != liaisonNode(id) {
+		return store.PR{}, fmt.Errorf("the liaison of task %d: %w", id, store.ErrNotFound)
+	}
+	return pr, nil
+}
+
 // ownerRow is task id's owner row as it is (store.ErrNotFound before the
 // task's first launch).
 func (r *Runtime) ownerRow(ctx context.Context, id int64) (store.PR, error) {

@@ -5,8 +5,9 @@ package runtime
 // workspaces a crash left between their creation and their first row,
 // which no row names (magnum creates a workspace before it records its
 // pane): one whose attempt still launches is adopted by that attempt's
-// next launch (adopt), any other is closed (SettleWorkspaces). Labels are
-// unique per task and attempt (WorkspaceLabel), so the label says whose a
+// next launch (adopt), any other is closed (SettleWorkspaces), and so is a
+// task's liaison's (liaisonLabel). Labels are unique per task and attempt
+// (WorkspaceLabel), or per task for a liaison, so the label says whose a
 // workspace is.
 
 import (
@@ -31,37 +32,43 @@ import (
 // live row whose agent herdr shows elsewhere is bound to that pane again, a
 // conversation herdr restored is live again, and a row whose agent is gone
 // is lost (the watchdog recovers it). Runs are not touched: a submitted
-// prompt is observed, never sent again. It returns what changed ("fx-repro
-// rebound"); a task without an owner row has nothing to recover.
+// prompt is observed, never sent again. The task's liaison's row (Talk) is
+// reconciled the same way, so a liaison herdr shows elsewhere is bound
+// there again and its next Talk finds it live. It returns what changed
+// ("fx-repro rebound"); a task without an owner row or a liaison has
+// nothing to recover.
 func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error) {
-	pr, err := r.ownerRow(ctx, t.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("recover %s: %w", taskKey(t), err)
-	}
 	r.mu.Lock()
 	r.keys[t.ID] = taskKey(t)
 	r.mu.Unlock()
-	rec, err := r.mgr.Recover(ctx, pr)
 	var changed []string
-	for _, x := range rec {
-		if x.Action != agents.RecoverOK {
-			changed = append(changed, string(x.Role)+" "+string(x.Action))
+	for _, row := range []func(context.Context, *store.Store, int64) (store.PR, error){ownerRowIn, liaisonRowIn} {
+		pr, err := row(ctx, r.st, t.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
 		}
-	}
-	if err != nil {
-		return changed, fmt.Errorf("recover %s: %w", taskKey(t), err)
+		if err != nil {
+			return changed, fmt.Errorf("recover %s: %w", taskKey(t), err)
+		}
+		rec, err := r.mgr.Recover(ctx, pr)
+		for _, x := range rec {
+			if x.Action != agents.RecoverOK {
+				changed = append(changed, string(x.Role)+" "+string(x.Action))
+			}
+		}
+		if err != nil {
+			return changed, fmt.Errorf("recover %s: %w", taskKey(t), err)
+		}
 	}
 	return changed, nil
 }
 
 // Orphan is a workspace of the factory's herdr session that no session row
-// names: its id and label, the attempt the label names (its last word) and
-// that attempt's task (0 when the registry has no such attempt), whether it
-// is kept for the attempt's next launch to adopt (Adopted) or was closed,
-// and why.
+// names: its id and label, the attempt the label names (its last word; ""
+// for a liaison's workspace, liaisonLabel) and that attempt's task, or the
+// task the liaison's label names by its key (0 when the registry has no
+// such attempt or task), whether it is kept for the attempt's next launch
+// to adopt (Adopted) or was closed, and why.
 type Orphan struct {
 	Workspace, Label, Attempt string
 	TaskID                    int64
@@ -70,13 +77,16 @@ type Orphan struct {
 }
 
 // SettleWorkspaces settles, after a restart, the factory's workspaces (a
-// label of WorkspaceLabel's shape, labelAttempt) that no session row names
-// and that hold no agent (a workspace with an agent is Recover's to bind),
-// a crash's leftovers between a workspace's creation and its first row: one whose attempt
-// still launches or runs is kept, and the attempt's next launch adopts it
+// label of WorkspaceLabel's shape, labelAttempt, or a liaison's,
+// labelLiaison) that no session row names and that hold no agent (a
+// workspace with an agent is Recover's to bind), a crash's leftovers
+// between a workspace's creation and its first row: one whose attempt still
+// launches or runs is kept, and the attempt's next launch adopts it
 // (Launch); any other is closed, its attempt ended or unknown to the
-// registry. What it settled comes back in herdr's order; a workspace it
-// could not settle is in the error, and is settled at the next restart.
+// registry, and so is every liaison's (the next Talk makes the liaison a
+// workspace of its own). What it settled comes back in herdr's order; a
+// workspace it could not settle is in the error, and is settled at the
+// next restart.
 func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error) {
 	snap, err := r.d.Herdr.Snapshot(ctx)
 	if err != nil {
@@ -84,9 +94,11 @@ func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error) {
 	}
 	var out []Orphan
 	var errs []error
+	var keys map[string]int64 // task key -> id, read for the first liaison's leftover
 	for _, w := range snap.Workspaces {
 		attempt, ok := labelAttempt(w.Label)
-		if !ok {
+		key, liaison := labelLiaison(w.Label)
+		if !ok && !liaison {
 			continue
 		}
 		if ok, err := r.unnamed(ctx, snap, w.ID); err != nil {
@@ -96,19 +108,30 @@ func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error) {
 			continue
 		}
 		o := Orphan{Workspace: w.ID, Label: w.Label, Attempt: attempt}
-		a, err := r.reg.AttemptByID(ctx, o.Attempt)
-		switch {
-		case errors.Is(err, registry.ErrNotFound):
-			o.Why = "the registry has no attempt " + o.Attempt
-		case err != nil:
-			errs = append(errs, fmt.Errorf("workspace %s (%q): %w", w.ID, w.Label, err))
-			continue
-		case a.State == registry.AttemptLaunching || a.State == registry.AttemptRunning:
-			o.TaskID, o.Adopted, o.Why = a.TaskID, true, "its attempt's launch takes it over"
-			out = append(out, o)
-			continue
-		default:
-			o.TaskID, o.Why = a.TaskID, "its attempt "+a.ID+" is "+a.State
+		if liaison {
+			if keys == nil {
+				var kerr error
+				if keys, kerr = r.taskKeys(ctx); kerr != nil {
+					errs = append(errs, fmt.Errorf("workspace %s (%q): %w", w.ID, w.Label, kerr))
+					continue
+				}
+			}
+			o.TaskID, o.Why = keys[key], "a liaison's workspace that holds no liaison"
+		} else {
+			a, err := r.reg.AttemptByID(ctx, o.Attempt)
+			switch {
+			case errors.Is(err, registry.ErrNotFound):
+				o.Why = "the registry has no attempt " + o.Attempt
+			case err != nil:
+				errs = append(errs, fmt.Errorf("workspace %s (%q): %w", w.ID, w.Label, err))
+				continue
+			case a.State == registry.AttemptLaunching || a.State == registry.AttemptRunning:
+				o.TaskID, o.Adopted, o.Why = a.TaskID, true, "its attempt's launch takes it over"
+				out = append(out, o)
+				continue
+			default:
+				o.TaskID, o.Why = a.TaskID, "its attempt "+a.ID+" is "+a.State
+			}
 		}
 		if err := r.d.Herdr.WorkspaceClose(ctx, w.ID); err != nil && !gone(err) {
 			errs = append(errs, fmt.Errorf("close workspace %s (%q): %w", w.ID, w.Label, err))
@@ -118,6 +141,20 @@ func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error) {
 		out = append(out, o)
 	}
 	return out, errors.Join(errs...)
+}
+
+// taskKeys are the registry's tasks by their key (taskKey): the task a
+// liaison's workspace label names.
+func (r *Runtime) taskKeys(ctx context.Context) (map[string]int64, error) {
+	tasks, err := r.reg.Tasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]int64, len(tasks))
+	for _, t := range tasks {
+		keys[taskKey(t)] = t.ID
+	}
+	return keys, nil
 }
 
 // attemptID is the shape of an attempt's id (registry.BeginAttempt:

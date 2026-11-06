@@ -334,7 +334,8 @@ const liaisonPrompt = "factory-liaison.md"
 // commands it records your word with and the flags that carry the surface
 // and the time it asked, the notes file it keeps and the dialog it asks
 // with, and states the hard lines. It is built of paths and keys, never of
-// the ticket's text.
+// the ticket's text. Its commands run the factory daemon's own build
+// (.Magnum), never whatever magnum the PATH finds first.
 func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
 	cfg := config.Defaults()
 	role, ok := cfg.FactoryRole("fx-liaison")
@@ -343,12 +344,14 @@ func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
 	}
 	d := checkData(role)
 	d.Key = "PR-12345"
+	d.Magnum = "/opt/factory/bin/magnum"
 	text := renderFactory(t, cfg, role.Prompt, d)
 	for _, want := range []string{
 		"on the Jira issue PR-12345,", d.TaskDir, "ticket.md", "findings-*.md", "report.md", "critic.md", "questions.json", "proof.json",
 		"ready-card.json", d.Copy,
 		"AskUserQuestion", "recommend", "one decision at a time",
-		"magnum factory answer", "magnum factory decide", "magnum factory retry", "--surface liaison", "--shown", "--card", "--diff-read",
+		"/opt/factory/bin/magnum factory answer 1", "/opt/factory/bin/magnum factory decide 1", "/opt/factory/bin/magnum factory retry 1",
+		"--surface liaison", "--shown", "--card", "--diff-read",
 		// An option is recorded by its label as questions.json has it: the "(Recommended)" shown to the operator is no
 		// part of it, or the factory would count a pick of the recommendation as the operator's own words.
 		"exactly as `questions.json` has it", `without the "(Recommended)"`, "counts as the operator's own words",
@@ -361,6 +364,16 @@ func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
 	}
 	if strings.Contains(text, "<no value>") {
 		t.Errorf("the liaison's prompt has a field the data lacks:\n%s", text)
+	}
+	if strings.Contains(text, "`magnum factory") {
+		t.Errorf("the liaison's prompt runs a bare magnum, whichever the PATH finds:\n%s", text)
+	}
+	// The engine's data names the daemon's own build, as .DBLockCommand does.
+	h := newHarness(t)
+	task := h.task("PR-12394", registry.TaskActive, "investigate")
+	if got := h.e.promptData(task, config.FactoryStage{}, role, role, Copy{}).Magnum; got != h.e.d.Layout.Binary() ||
+		!strings.HasSuffix(got, "/magnum") {
+		t.Errorf("the prompt data's Magnum = %q, want the daemon's build %q", got, h.e.d.Layout.Binary())
 	}
 
 	// A task of a free prompt, and a copy the task has released: the prompt

@@ -544,6 +544,7 @@ in the copy (it names the copy, to read, only while there is one). It states its
 | `.PRBodySkill` | the repository's `pr_body_skill` (`[[factory.repo]]`): `factory-pr-body.md` has the judge load that skill and write the body in its layout, keeping the points table and the proof and precheck sentences; empty, the prompt writes the factory's own outline and no prompt names a skill for it |
 | `.DBLockCommand` | the copy's `magnum db-lock --checkout <copy> --role <role> --` line for the role as it runs, shell-quoted: every command that touches the copy's databases runs through it |
 | `.Port` | the port of the copy's local server (0 when the copy's env names none) |
+| `.Magnum` | the factory daemon's own `magnum` binary, shell-quoted: the liaison runs its `factory answer`, `decide` and `retry` with it, so they reach the daemon's build, never whatever `magnum` the PATH finds first |
 
 A stage passes on its end fact, never on an agent's "done": `findings` (each role's `findings-<role>.md`,
 newer than the stage's start and not empty), `report` (`report.md` whose first section is `## Architecture

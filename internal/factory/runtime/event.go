@@ -65,13 +65,20 @@ const (
 // once the pause is over.
 const PausedPrefix = "paused: "
 
+// SurfaceLiaison is the Surface of an EventTyped of the turns typed into a
+// task's liaison's pane (Runtime.Talk), and the surface the liaison records
+// your answers and decisions with.
+const SurfaceLiaison = "liaison"
+
 // Event is one thing the runtime saw on a run of a task's role. Turns are
-// an EventTyped's.
+// an EventTyped's, and Surface where they were typed: SurfaceLiaison for
+// the task's liaison's pane, "" for a pane of the task's roles.
 type Event struct {
-	TaskID int64
-	Role   string
-	RunID  string
-	Kind   EventKind
-	Reason string
-	Turns  []Turn
+	TaskID  int64
+	Role    string
+	RunID   string
+	Kind    EventKind
+	Reason  string
+	Turns   []Turn
+	Surface string
 }

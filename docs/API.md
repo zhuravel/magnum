@@ -12278,6 +12278,11 @@ type PromptData struct {
 	RedRun                                                 bool
 	ErrorSkill, PRBodySkill, DBLockCommand                 string
 	Port                                                   int
+	// Magnum is the factory daemon's own build (Layout.Binary, as
+	// DBLockCommand names it), shell-quoted: the liaison runs its
+	// `magnum factory` commands with it, so they reach the daemon's build,
+	// never whatever magnum the PATH finds first.
+	Magnum string
 	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
@@ -13645,11 +13650,20 @@ const LetGoWhy = "its prompt was let go"
     LetGoWhy is why a run that held only prompts you let go (LetGo) was
     abandoned: its turn was never watched (RunState says it).
 
+const LiaisonRole = "fx-liaison"
+    LiaisonRole is the factory role of a task's liaison, the agent that talks
+    with you about the task (Talk); no stage names it.
+
 const PausedPrefix = "paused: "
     PausedPrefix leads the error of a run its CLI's pause ended (a usage limit,
     a login, an overload): the run is abandoned with "paused: " and the pause's
     wait ("usage: claude limit until 16:00"), which RunState returns, so a stage
     rebuilt after a restart knows the role is to go on once the pause is over.
+
+const SurfaceLiaison = "liaison"
+    SurfaceLiaison is the Surface of an EventTyped of the turns typed into a
+    task's liaison's pane (Runtime.Talk), and the surface the liaison records
+    your answers and decisions with.
 
 const Tag = "factory"
     Tag marks the factory's agents (agents.Deps.Tag): it leads their titles and
@@ -13752,15 +13766,17 @@ type Deps struct {
     Clock nil is time.Now; Log nil discards.
 
 type Event struct {
-	TaskID int64
-	Role   string
-	RunID  string
-	Kind   EventKind
-	Reason string
-	Turns  []Turn
+	TaskID  int64
+	Role    string
+	RunID   string
+	Kind    EventKind
+	Reason  string
+	Turns   []Turn
+	Surface string
 }
-    Event is one thing the runtime saw on a run of a task's role. Turns are an
-    EventTyped's.
+    Event is one thing the runtime saw on a run of a task's role. Turns are
+    an EventTyped's, and Surface where they were typed: SurfaceLiaison for the
+    task's liaison's pane, "" for a pane of the task's roles.
 
 type EventKind string
     EventKind is what happened to a run of a factory agent.
@@ -13817,10 +13833,11 @@ type Orphan struct {
 	Why                       string
 }
     Orphan is a workspace of the factory's herdr session that no session row
-    names: its id and label, the attempt the label names (its last word) and
-    that attempt's task (0 when the registry has no such attempt), whether it
-    is kept for the attempt's next launch to adopt (Adopted) or was closed,
-    and why.
+    names: its id and label, the attempt the label names (its last word;
+    "" for a liaison's workspace, liaisonLabel) and that attempt's task,
+    or the task the liaison's label names by its key (0 when the registry has no
+    such attempt or task), whether it is kept for the attempt's next launch to
+    adopt (Adopted) or was closed, and why.
 
 type PaneFocus struct {
 	// Pane is herdr's focused pane when it is in a task's workspace (its
@@ -13913,9 +13930,10 @@ func (r *Runtime) PaneFocus() PaneFocus
     PaneFocus is what the observe passes saw of you in the factory's panes.
 
 func (r *Runtime) Park(ctx context.Context, t registry.Task) error
-    Park parks the agents of task t (agents.Manager.Park): their conversations
-    stay resumable, their panes are released. A run in flight or an agent at
-    work refuses with agents.ErrBusy.
+    Park parks the agents of task t (agents.Manager.Park), then its liaison
+    (parkLiaison): their conversations stay resumable, their panes are released.
+    A run in flight or an agent at work on the task's row refuses with
+    agents.ErrBusy; the liaison never stops the task's own park.
 
 func (r *Runtime) Proving(id int64) bool
     Proving reports whether the proof that ledger entry id never arrived
@@ -13956,8 +13974,10 @@ func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error
     a live row whose agent herdr shows elsewhere is bound to that pane again,
     a conversation herdr restored is live again, and a row whose agent is gone
     is lost (the watchdog recovers it). Runs are not touched: a submitted prompt
-    is observed, never sent again. It returns what changed ("fx-repro rebound");
-    a task without an owner row has nothing to recover.
+    is observed, never sent again. The task's liaison's row (Talk) is reconciled
+    the same way, so a liaison herdr shows elsewhere is bound there again and
+    its next Talk finds it live. It returns what changed ("fx-repro rebound");
+    a task without an owner row or a liaison has nothing to recover.
 
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
     RecoverLost recovers role (as it runs) of attempt a of task t whose pane
@@ -13995,18 +14015,32 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
     pane the operator is in waits, ErrOperatorInPane.
 
 func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
-    SettleWorkspaces settles, after a restart, the factory's workspaces (a
-    label of WorkspaceLabel's shape, labelAttempt) that no session row names
-    and that hold no agent (a workspace with an agent is Recover's to bind),
-    a crash's leftovers between a workspace's creation and its first row:
-    one whose attempt still launches or runs is kept, and the attempt's next
-    launch adopts it (Launch); any other is closed, its attempt ended or unknown
-    to the registry. What it settled comes back in herdr's order; a workspace it
-    could not settle is in the error, and is settled at the next restart.
+    SettleWorkspaces settles, after a restart, the factory's workspaces (a label
+    of WorkspaceLabel's shape, labelAttempt, or a liaison's, labelLiaison) that
+    no session row names and that hold no agent (a workspace with an agent is
+    Recover's to bind), a crash's leftovers between a workspace's creation
+    and its first row: one whose attempt still launches or runs is kept,
+    and the attempt's next launch adopts it (Launch); any other is closed,
+    its attempt ended or unknown to the registry, and so is every liaison's (the
+    next Talk makes the liaison a workspace of its own). What it settled comes
+    back in herdr's order; a workspace it could not settle is in the error,
+    and is settled at the next restart.
 
 func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac
     slept (the engine's wake): no run counts as hung for a sleep.
+
+func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error)
+    Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:
+    liaisonRow) and returns its pane. A live liaison whose agent herdr shows in
+    its pane is returned as it is, and nothing is sent. Otherwise the liaison
+    gets a workspace of its own in the factory's herdr session (liaisonLabel;
+    the one its row's sessions hold is reused) whose working directory is the
+    task's folder (Layout.FactoryTaskDir), never the copy, so it starts as well
+    once a push or a drop freed the copy. Its agent resumes the role's newest
+    parked or lost conversation (ResumeID), and only a fresh conversation gets
+    prompt, once, as its first (store.RunInitial). Talks take turns, so two
+    never start two liaisons.
 
 func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
     TouchedSince names who could have changed task t's copy since the time

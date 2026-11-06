@@ -66,6 +66,26 @@ func TestATurnTheOperatorTypedIsRecordedOnce(t *testing.T) {
 	}
 }
 
+// A turn you typed into the task's liaison's pane is a typed input of the
+// task like one in its roles' panes, with the surface "liaison" the
+// observe pass handed it with, and the liaison's role.
+func TestATurnTypedToTheLiaisonIsRecordedWithItsSurface(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12393", registry.TaskNeedsYou, "judge")
+	at := h.clock.Now().Add(-time.Minute)
+	ev := typedEvent(task, runtime.LiaisonRole, runtime.Turn{At: at, Text: "why does the critic object?", Stage: "judge",
+		AgentState: string(herdr.StatusIdle), Origin: registry.OriginHerdr})
+	ev.Surface = runtime.SurfaceLiaison
+
+	h.observeEvents(ev)
+
+	ins := h.paneInputs(task.ID)
+	if len(ins) != 1 || ins[0].Surface != "liaison" || ins[0].Role != "fx-liaison" || ins[0].Text != "why does the critic object?" ||
+		ins[0].Origin != registry.OriginHerdr {
+		t.Fatalf("pane inputs %+v, want the turn typed to the liaison, surface liaison", ins)
+	}
+}
+
 // A turn nothing proves you typed is kept with the origin unknown, for
 // evaluation only: the stats count it apart, never as a typed message or a
 // step start.

@@ -15,8 +15,8 @@ import (
 )
 
 // launchLiaison starts the rig's task's liaison on its own owner row, in a
-// workspace of its own in the task's folder, as Talk does, and returns the
-// row.
+// workspace of its own in the task's folder, as Talk does but with no first
+// prompt, and returns the row.
 func (g *rig) launchLiaison() store.PR {
 	g.t.Helper()
 	pr, err := g.r.liaisonRow(g.ctx, g.task)
@@ -28,7 +28,7 @@ func (g *rig) launchLiaison() store.PR {
 		g.t.Fatal(err)
 	}
 	role := g.role("fx-liaison")
-	ws, err := g.r.mgr.EnsureWorkspace(g.ctx, pr, dir, nil, Tag+" liaison "+taskKey(g.task), []config.Role{role})
+	ws, err := g.r.mgr.EnsureWorkspace(g.ctx, pr, dir, nil, liaisonLabel(g.task), []config.Role{role})
 	if err != nil {
 		g.t.Fatalf("EnsureWorkspace: %v", err)
 	}
@@ -167,8 +167,8 @@ func TestALiaisonsEventsNeverReachTheTasksRoles(t *testing.T) {
 	if evs := g.observeN(2); len(evs) != 0 {
 		t.Fatalf("the liaison's ended turn gave %+v, want nothing for the task", evs)
 	}
-	if run := g.storeRun(id); run.State != store.RunEnded {
-		t.Fatalf("the liaison's run is %s, want ended", run.State)
+	if run := g.storeRun(id); run.EndedAt == nil { // and settled: TestALiaisonsTurnThatEndedLeavesNoActiveRun
+		t.Fatalf("the liaison's run is %s and never ended", run.State)
 	}
 	rrs, err := g.reg.RoleRuns(g.ctx, g.attempt.ID)
 	if err != nil {

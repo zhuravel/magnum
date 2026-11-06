@@ -15828,6 +15828,50 @@ skill versions); people add theirs to the sections before it, at the end of the 
   that a task of `example/liaison` gets both rows: with the owner `factory` that failed on
   `UNIQUE(owner, name)`).
 
+- `Runtime.Talk` starts or finds a task's liaison (2026-11-06, the factory liaison's first slice). Talk
+  takes the task and the rendered prompt and returns the liaison's pane. A live liaison whose agent herdr
+  shows in its pane is returned as it is, and nothing is sent, so a second talk opens the same chat.
+  Otherwise the liaison gets a workspace of its own in the factory's herdr session, labeled
+  `factory liaison <key>`, with the task's folder as its working directory. It never uses the copy, so it
+  starts as well after a push or a drop freed the copy. Its agent resumes the newest parked or lost
+  conversation of `fx-liaison` (`ResumeID`). Only a fresh conversation gets the prompt, once, through the
+  agents manager (`store.RunInitial`). The ledger is the stage prompts' delivery proof, and nothing waits on
+  this prompt's delivery. Talks take turns (a mutex), so two never start two liaisons. Around it:
+  - `Park` of a task parks its liaison after the task's own agents. Its refusal never stops the task's
+    park. A liaison stays live while you are in its pane (its row's `human_active_at` within the human
+    cooldown, or its pane focused while herdr showed you in a factory pane, as for the task's panes), or
+    while its turn is in flight or its agent at work (`agents.ErrBusy`: it may be the liaison that runs the
+    decide that parks the task). The log says so, and the next park, or you, ends it.
+  - The liaison's turn that ends is settled at once (`verified`, outcome `ended`) where the observe pass
+    sees it end. Its end is no event of the task's (`errLiaisonRow`), so no stage would verify it, and an
+    `ended` run would stay among the agents store's active runs for good.
+  - `typed` reads the liaison's conversations as well as the task's. Their turns are `EventTyped` of the
+    task with `Event.Surface` `liaison` (`runtime.SurfaceLiaison`), and the engine records them as
+    `pane_typed` inputs with that surface, the pane's otherwise. The prompts the liaison's runs recorded
+    (redacted, as the agents store keeps them) are the factory's own, so Talk's prompt is no turn of yours.
+  - `Recover` reconciles the liaison's row with herdr after a restart as it does the task's.
+    `SettleWorkspaces` closes a liaison's workspace that no row names and that holds no agent (a crash
+    between its creation and its first row), naming the task its key belongs to. A live liaison's workspace
+    is left alone.
+  - The liaison's prompt runs `{{.Magnum}} factory ...`: `PromptData.Magnum` is the daemon's own build
+    (`Layout.Binary()`, shell-quoted, as `.DBLockCommand` names it), so its answers and decisions reach
+    the daemon's registry through the daemon's build, never through whatever `magnum` the PATH finds.
+  Rejected: the liaison's prompt through the ledger (a stage's delivery proof and its re-sends, which the
+  liaison does not need), a prompt to a live liaison on every talk (the second talk would repeat the first
+  prompt), parking a liaison you are in (its pane would close under you right after a push you asked it
+  for), and settling its turns on Talk's path only (a turn that ends between two talks would stay
+  active). Out of this change: a limit or a refusal on the liaison's screen (ruling 11), and an idle liaison
+  that parks by itself. Tests, failing first: TestTalkStartsOneLiaisonInTheTasksFolder and
+  TestTalkWorksAfterTheCopyIsFreed (they failed to build while Talk was missing). Then, with Talk in:
+  TestTalkResumesAParkedLiaison, TestDroppingATaskParksItsLiaison and
+  TestParkingATaskLeavesTheLiaisonYouAreIn (the liaison stayed live after Park), TestARestartKeepsTheLiaison
+  (the recovery left the moved liaison unbound), TestTypedChatWithTheLiaisonCountsForItsTask (no typed
+  event; without the runs' prompts it hands Talk's prompt as a turn of unknown origin),
+  TestALiaisonsTurnThatEndedLeavesNoActiveRun (the run stayed `ended`),
+  TestSettleWorkspacesClosesALiaisonsLeftover (no orphan),
+  TestATurnTypedToTheLiaisonIsRecordedWithItsSurface (the input's surface was `pane`), and
+  TestTheLiaisonsPromptNamesItsFolderAndItsCommands (the data had no `Magnum`).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

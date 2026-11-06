@@ -12,6 +12,7 @@ package factory
 // apart, and no lesson reads it.
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 )
 
-// paneSurface is the Surface of a turn typed into a pane.
+// paneSurface is the Surface of a turn typed into a pane of a task's roles.
 const paneSurface = "pane"
 
 // accessWait leads the WaitsWhat of a task that waits on you for an access
@@ -38,7 +39,8 @@ const nearAccess = "within minutes of an access card: it may hold a code or a pa
 
 // typed records the turns of ev (runtime.EventTyped) that the task's
 // inputs do not hold yet, each as a pane_typed input of ev's role, through
-// recordInput (its class with it).
+// recordInput (its class with it): its surface the pane's, or the one the
+// event names (runtime.SurfaceLiaison for the task's liaison's pane).
 func (e *Engine) typed(ctx context.Context, ev runtime.Event) {
 	if len(ev.Turns) == 0 {
 		return
@@ -58,8 +60,8 @@ func (e *Engine) typed(ctx context.Context, ev runtime.Event) {
 		if typedBefore(ins, ev.Role, tu.At) {
 			continue
 		}
-		in := registry.Input{TaskID: ev.TaskID, Kind: registry.InputPaneTyped, Surface: paneSurface, Stage: tu.Stage, Role: ev.Role,
-			Origin: tu.Origin, AgentState: tu.AgentState, At: tu.At}
+		in := registry.Input{TaskID: ev.TaskID, Kind: registry.InputPaneTyped, Surface: cmp.Or(ev.Surface, paneSurface), Stage: tu.Stage,
+			Role: ev.Role, Origin: tu.Origin, AgentState: tu.AgentState, At: tu.At}
 		if nearAccessCard(spans, tu.At, now) {
 			in.DroppedReason = nearAccess // and the agent's turns, which may repeat the code
 		} else {
