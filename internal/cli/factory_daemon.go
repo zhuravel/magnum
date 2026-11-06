@@ -83,7 +83,7 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 		return 1
 	}
 	defer unlock()
-	d, err := buildFactoryDaemon(c, lvl)
+	d, err := startFactoryDaemon(context.Background(), c, lvl)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory daemon: %v\n", err)
 		return 1
@@ -95,6 +95,28 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 		return 1
 	}
 	return 0
+}
+
+// startFactoryDaemon takes the login shell's PATH ([daemon] shell_path, as
+// the review daemon does) before the factory daemon is built, because the
+// copies' setup, reset and precheck commands run in the daemon's own
+// environment and need what only the shell's exports name (DBngin's
+// redis-server). The factory log then says what the shell added.
+func startFactoryDaemon(ctx context.Context, c *Context, lvl slog.Level) (*factoryDaemon, error) {
+	s := daemonShellPATH(ctx, c.Config)
+	d, err := buildFactoryDaemon(c, lvl)
+	if err != nil || s == nil {
+		return d, err
+	}
+	if s.Failed != "" {
+		d.Log.Warn(s.Message())
+	} else {
+		d.Log.Info(s.Message())
+	}
+	if len(s.Added) > 0 {
+		d.Log.Debug("PATH from the login shell", "shell", s.Shell, "added", execx.Redact(strings.Join(s.Added, ":")))
+	}
+	return d, nil
 }
 
 // factoryDaemon is the factory daemon's process: its engine and what it

@@ -15276,6 +15276,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestNewTaskSaysWhyAKeyOfAnotherTrackerAloneStartsNothing, TestNewTaskDoesNotSpinForJiraOnAKeyOfAnotherTracker,
   TestTheFactoryScreensActionsAreFactoryRequests and TestTheScreensPreviewIsTheDaemonsForm.
 
+- The factory daemon takes the login shell's PATH at its start (2026-11-06). `[daemon] shell_path` gave only
+  the review daemon the shell's PATH, but the factory daemon runs its copies' setup, reset and precheck
+  commands itself, under launchd's PATH. The first live task failed at its copy's setup: talkable's
+  test environment starts its own `redis-server`, which only the shell's exports name (DBngin), and the
+  setup failed on every copy. `startFactoryDaemon` now calls `daemonShellPATH` before it builds the daemon,
+  after the lock, so a second daemon runs no shell. It logs the result to `logs/factory.log` ("PATH from
+  zsh: 4 directories added", or a warning when the shell gave none), and the debug log names the
+  directories. The factory keeps no kv row and `magnum status` shows nothing new.
+
+- Each start of the factory daemon repairs each broken copy once (2026-11-06). A copy whose setup failed
+  twice was broken for good: the event said "no claim takes it until it is repaired", but nothing repaired a
+  factory copy (`magnum slots repair` works on the review daemon's slots). In the first live task all three
+  copies broke over the missing PATH, and the task would have waited on them after the fix. A restart is
+  when a fix of a setup's cause takes effect (the configuration, the daemon's PATH), so a claim that finds
+  no copy now repairs one broken copy this start has neither broken nor repaired (`slots.Repair`, event
+  `factory.copy_repair`). A failed repair marks it broken again until the next start, so a cause that
+  stays never loops. The wait says what repairs them: "copy: 0 busy, 3 broken (a restart repairs them:
+  magnum factory install)". TestEachStartRepairsABrokenCopyOnce.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

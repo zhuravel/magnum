@@ -231,7 +231,8 @@ type Daemon struct {
 	// first, so every command it starts finds the tools only the shell's
 	// exports name (DBngin's MySQL, PostgreSQL and Redis). A change of the
 	// shell's PATH takes effect at the next start. The CLI keeps its own
-	// environment.
+	// environment. The factory daemon takes the same PATH at its start, for
+	// its copies' setup, reset and precheck commands.
 	ShellPath bool `toml:"shell_path"`
 	// OpenHold is how long a restore by `magnum open` (the board's o) holds
 	// the PR and its slot for the operator, as a pin does: until the later

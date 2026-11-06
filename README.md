@@ -296,7 +296,9 @@ never does. A shell that fails, prints no `PATH` or answers nothing in 20 s leav
 alone, with a warning event ("the login shell (zsh) answered nothing in 20s. The launchd PATH stays"). A
 change of your shell's `PATH` (a DBngin upgrade) takes effect at the next `magnum daemon-restart`, as a
 config change does. The CLI keeps the environment of the terminal it runs in. `false` keeps launchd's
-`PATH` alone and runs no shell.
+`PATH` alone and runs no shell. The factory daemon (`magnum factory daemon`) takes the same `PATH` at its start, because it runs its copies'
+setup, reset and precheck commands itself. `logs/factory.log` says what the shell added, and a change takes
+effect at the next `magnum factory install`.
 
 Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included. `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
 
@@ -3490,7 +3492,9 @@ stages = [
   free one, else adds copy `{n}` (its worktree, `setup`, the checks of its slug marker and databases) up to
   `max_copies`; with none left the task waits, `copy: all 3 busy`, at no cost. A setup that fails runs once
   more; a second failure marks the copy broken (`factory.copy_broken` in its events) and the task takes
-  another, and no claim takes a broken copy until it is repaired. In `env`, `{copy}` (or `{slot}`) is the
+  another, and no claim takes a broken copy until it is repaired: each start of the factory daemon (`magnum
+  factory install`) repairs each broken copy once, when a claim finds no copy (`factory.copy_repair`), and a
+  failed repair marks it broken again until the next start. In `env`, `{copy}` (or `{slot}`) is the
   copy's name, `{n}` its number and `{n*16}` its Redis offset; when `env` names `REDIS_DB_OFFSET`, copy `{n}`
   gets `n*16` there whatever the value, its 16 Redis databases. `PORT` in `env` is the copy's server port.
   Each claim then creates the task's branch at `origin/<base>` (tracking nothing) on its first claim, or

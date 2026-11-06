@@ -986,8 +986,8 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 		t.Fatalf("the next task claimed %s, want factory3: a broken copy is never claimed", c.Name)
 	}
 	c3 := r.task("PR-3")
-	if _, err := r.c.Claim(r.ctx, c3); !errors.Is(err, ErrNoCopy) || err.Error() != "copy: 2 busy, 1 broken" {
-		t.Fatalf("Claim with two busy and one broken = %v, want copy: 2 busy, 1 broken", err)
+	if _, err := r.c.Claim(r.ctx, c3); !errors.Is(err, ErrNoCopy) || err.Error() != "copy: 2 busy, 1 broken (a restart repairs it: magnum factory install)" {
+		t.Fatalf("Claim with two busy and one broken = %v, want copy: 2 busy, 1 broken, and what repairs it", err)
 	}
 	if err := r.sm.Repair(r.ctx, r.slot("factory1"), r.c.pool(r.cfg.Factory.Repos[0], 1)); err != nil {
 		t.Fatalf("Repair: %v", err)
@@ -995,6 +995,56 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 	if c := r.claim(c3); c.Name != "factory1" {
 		t.Fatalf("claimed %s after the repair, want factory1", c.Name)
 	}
+}
+
+// A copy that broke under an earlier daemon gets one repair at the first
+// claim of a new start that finds no copy: a restart is when a fix of the
+// cause (the configuration, the daemon's PATH) takes effect. A copy that
+// broke under this daemon waits for the next start, and a failed repair
+// marks it broken again until then.
+func TestEachStartRepairsABrokenCopyOnce(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	r.failSetup["factory1"] = 3
+	one := filepath.Join(r.root, "talkable.factory1")
+	task := r.task("PR-1")
+	waits := func(want string) {
+		t.Helper()
+		if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrNoCopy) || err.Error() != want {
+			t.Fatalf("Claim = %v, want %s", err, want)
+		}
+	}
+	setups := func(want int) {
+		t.Helper()
+		if got := len(r.calls("bin/worktree-setup", one)); got != want {
+			t.Fatalf("factory1's setup ran %d times, want %d", got, want)
+		}
+	}
+	broken := "copy: 0 busy, 1 broken (a restart repairs it: magnum factory install)"
+	waits(broken)
+	waits(broken)
+	setups(2) // the copy broke under this daemon: no repair before a restart
+
+	r.c = r.newCopies() // a restart; the repair fails
+	waits(broken)
+	setups(3)
+	if sl := r.slot("factory1"); sl.State != store.SlotBroken {
+		t.Fatalf("factory1 = %s after a failed repair, want broken", sl.State)
+	}
+	waits(broken)
+	setups(3) // one repair per start
+	evs, err := r.st.EventsBySubject(r.ctx, "slot:factory1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(evs, func(e store.Event) bool { return e.Kind == "factory.copy_repair" }) {
+		t.Fatalf("events of factory1 %+v, want factory.copy_repair", evs)
+	}
+
+	r.c = r.newCopies() // another restart; the repair works
+	if c := r.claim(task); c.Name != "factory1" {
+		t.Fatalf("claimed %s after the repair, want factory1", c.Name)
+	}
+	setups(4)
 }
 
 // Reserved names the copies the tasks' owner rows hold and for which task,

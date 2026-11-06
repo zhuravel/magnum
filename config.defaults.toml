@@ -99,7 +99,8 @@ shell_path = true                 # at its start the daemon asks your login shel
                                   # mise's shims still win), so its hooks and commands find what only your shell's
                                   # exports name (DBngin's mysql, psql, redis-server); false keeps launchd's PATH;
                                   # a change of your shell's PATH takes effect at the next daemon-restart; event
-                                  # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH
+                                  # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH;
+                                  # the factory daemon does the same at its start and says it in logs/factory.log
 open_hold = "30m"                 # `magnum open` (the board's o) that restores a parked PR in a slot holds the PR and
                                   # its slot for you as a pin does (no round, park, release or cleanup touches them)
                                   # until the later of the open plus this and human_cooldown after your last input in
