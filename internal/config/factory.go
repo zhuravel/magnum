@@ -158,6 +158,10 @@ type FactoryRepo struct {
 	TableStats     string   `toml:"table_stats"`
 	LargeTableRows int64    `toml:"large_table_rows"`
 	Consoles       []string `toml:"consoles"`
+	// PRBodySkill is the skill the judge writes a published PR's description
+	// with, the team's own layout ("" = none: the factory's outline). It is
+	// a skill's name, trimmed, one word; no default.
+	PRBodySkill string `toml:"pr_body_skill"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
 }
@@ -490,6 +494,7 @@ func (c *Config) expandFactory() {
 	for i := range f.Repos {
 		r := &f.Repos[i]
 		r.MainClone = paths.Expand(r.MainClone)
+		r.PRBodySkill = strings.TrimSpace(r.PRBodySkill)
 		if r.Base == "" {
 			r.Base = DefaultFactoryBase
 		}
@@ -897,6 +902,9 @@ func (c *Config) validateFactoryRepos() []error {
 		}
 		if strings.ContainsFunc(r.ErrorSkill, unicode.IsSpace) {
 			bad("error_skill %q must be the skill's name, one word", r.ErrorSkill)
+		}
+		if skill := strings.TrimSpace(r.PRBodySkill); strings.ContainsFunc(skill, unicode.IsSpace) {
+			bad("pr_body_skill %q must be the skill's name, one word", skill)
 		}
 		if r.LargeTableRows < 0 {
 			bad("large_table_rows must not be negative, got %d", r.LargeTableRows)

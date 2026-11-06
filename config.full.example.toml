@@ -211,6 +211,9 @@ databases = [
 #                                          # keep them clear of the REDIS_DB_OFFSET of magnum's [[pool]] env
 # reviewer = "your-reviewer-login"         # requested as the PR's reviewer once CI is green (a later milestone)
 # error_skill = "error-tracker"            # the read-only skill an investigator reads the ticket's error through
+# pr_body_skill = "example:create-pr"     # the skill the judge writes the PR's description with (your team's layout), a
+#                                          # one-word name; none: the factory's own outline. The table from the ticket's
+#                                          # points to their specs and the proof stay in it; the Known list is folded
 # ghost_marker = "<what a migration names the gh-ost environments with>"   # section 8.4 of the design: the migration-safety lint
 # table_stats = "db/table_stats.json"      # the file (in the checkout) that lists each table's row count
 # large_table_rows = 10000000              # a table this large needs gh-ost or an online algorithm

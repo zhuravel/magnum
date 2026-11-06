@@ -222,6 +222,71 @@ func (r *readyRig) published(id int64) registry.Task {
 	return r.reload(id)
 }
 
+// The "Known" list is folded the way the team's PR description layout folds
+// every section but Key changes, Demo and Related Stories: the heading
+// outside, then <details> with a one-line summary that counts the notes,
+// a blank line, the list, a blank line and </details>.
+func TestTheKnownListIsFoldedWithItsCountInTheSummary(t *testing.T) {
+	two := ReviewSummary{
+		Leftovers: []ReviewItem{{Severity: "P3", Path: "app/credit.rb", Line: 1, Title: "Name the helper"}},
+		Declined:  []ReviewItem{{Severity: "P2", Path: "app/user.rb", Title: "Split the model", Risk: "it touches every\ncaller"}},
+	}
+	const wantTwo = "## Known\n\n<details>\n<summary>2 notes the local review left open</summary>\n\n" +
+		"What magnum's review of this change before the PR left open; none of it blocks.\n\n" +
+		"- P3 `app/credit.rb:1`: Name the helper\n" +
+		"- declined: P2 `app/user.rb`: Split the model. The risk of the suggested change: it touches every caller\n\n" +
+		"</details>\n"
+	if got := knownList(two); got != wantTwo {
+		t.Errorf("knownList of two notes:\n%s\nwant:\n%s", got, wantTwo)
+	}
+	one := ReviewSummary{Missing: []string{"claude-review"}}
+	if got := knownList(one); !strings.Contains(got, "<summary>1 note the local review left open</summary>") ||
+		!strings.HasSuffix(got, "\n\n</details>\n") {
+		t.Errorf("knownList of one note:\n%s", got)
+	}
+	const wantNone = "## Known\n\n<details>\n<summary>nothing the local review left open</summary>\n\n" +
+		"magnum's review of this change before the PR left nothing open.\n\n</details>\n"
+	if got := knownList(ReviewSummary{}); got != wantNone {
+		t.Errorf("knownList of none:\n%s\nwant:\n%s", got, wantNone)
+	}
+}
+
+// A body that already holds a Known section, folded as it is now, is found
+// and replaced by the marker when the factory appends again (the judge
+// drafts the body again after a send back, or edits it in place): the draft
+// before the marker stays, and exactly one folded section follows it.
+func TestAppendingKnownAgainReplacesTheFoldedSection(t *testing.T) {
+	r := newReadyRig(t, result(nitFinding))
+	task, _ := r.toCard("PR-12391")
+	first := r.readTask(task.ID, prBodyFile)
+	if !strings.Contains(first, knownMarker+"\n## Known\n\n<details>\n<summary>1 note the local review left open</summary>\n\n") ||
+		!strings.HasSuffix(first, "\n\n</details>\n") {
+		t.Fatalf("pr-body.md after the first append:\n%s", first)
+	}
+	edited := strings.Replace(first, "\n\n"+knownMarker, "\nA line the judge added in place.\n\n"+knownMarker, 1)
+	r.taskFile(task.ID, prBodyFile, edited)
+	r.taskFile(task.ID, reviewSummaryFile, `{"exit": "clean", "leftovers": [`+
+		`{"severity": "P3", "path": "app/credit.rb", "line": 2, "title": "First other note"},`+
+		`{"severity": "P3", "path": "app/credit.rb", "line": 3, "title": "Second other note"}]}`)
+	if err := r.e.appendKnown(r.ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	body := r.readTask(task.ID, prBodyFile)
+	for _, one := range []string{knownMarker, "## Known", "<details>", "</details>"} {
+		if n := strings.Count(body, one); n != 1 {
+			t.Errorf("pr-body.md holds %q %d times, want once:\n%s", one, n, body)
+		}
+	}
+	if !strings.HasPrefix(body, prBodyDraft+"A line the judge added in place.\n") || strings.Contains(body, nitFinding.Title) ||
+		!strings.Contains(body, "<summary>2 notes the local review left open</summary>") ||
+		!strings.Contains(body, "- P3 `app/credit.rb:3`: Second other note\n\n</details>\n") {
+		t.Errorf("pr-body.md after the second append:\n%s", body)
+	}
+	if as := r.artifacts(task.ID, "pr_body"); len(as) == 0 || as[len(as)-1].SHA256 != sha256Hex([]byte(body)) {
+		t.Errorf("pr_body artifacts %+v, want the newest to hold the rewritten body", as)
+	}
+}
+
 // Before the card the judge drafts the PR body in its own turn: its prompt
 // names the report, the proofs, the acceptance checks, the local review's
 // end and the repository's PR template by their paths (never their text);

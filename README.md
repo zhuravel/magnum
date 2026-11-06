@@ -3520,7 +3520,8 @@ stages = [
   must not render a name or path a `[[pool]]` renders. `setup`, `teardown`, `post_checkout`, `reset_db`,
   `copy_files`, `strip_env`, `env` and `databases` are a pool's keys; `installs` runs its `run` when its
   `lock` file differs from the copy's last install; `server` starts the copy's local server. `reviewer` is a
-  GitHub login. `error_skill` (the read-only error-tracker skill), `ghost_marker`, `table_stats` and
+  GitHub login. `error_skill` (the read-only error-tracker skill), `pr_body_skill` (the skill that lays out
+  the PR's description, one word; see the PR body below), `ghost_marker`, `table_stats` and
   `large_table_rows` (the gh-ost rule for migrations) and `consoles` (remote consoles that no factory command
   runs) have no default: they are yours.
 - **Copies.** The copies are magnum's slots, kept in the factory's own store (`factory/agents.db`), so the
@@ -3859,9 +3860,14 @@ open, and the round runs again in it. The stage passes only on a loop that revie
 Before the card, the judge drafts the PR's body (`pr_body`, `factory-pr-body.md`): its prompt names
 `report.md`, `acceptance.json`, `proof.json`, the factory's proof, `review-summary.json` and the repository's PR
 template in the copy by their paths, and the body follows the template, explains the change and has a table
-from the ticket's points to the specs that prove them. The stage passes on a fresh, non-empty `pr-body.md`; the
-factory then appends the "Known" list itself (the leftovers, the declined findings with their risks, the doubts
-and the reviewers a round went without) and records the body as the `pr_body` artifact. The ready stage
+from the ticket's points to the specs that prove them. When the task's `[[factory.repo]]` sets `pr_body_skill`
+(the name of your team's PR description skill), the judge loads that skill and writes the body in its layout
+instead; the table and the proof and precheck sentences stay in it, in the skill's testing section. The stage
+passes on a fresh, non-empty `pr-body.md`; the factory then appends the "Known" list itself (the leftovers, the
+declined findings with their risks, the doubts and the reviewers a round went without) and records the body as the
+`pr_body` artifact. The list is folded under its `## Known` heading (`<details>` with a summary such as `2 notes
+the local review left open`), as a layout that folds every section but a few folds it, and appended again, in
+place of the earlier one, after the marker `<!-- magnum factory: the Known list -->`. The ready stage
 (`ready_push`) draws the card only when the local review ended clean or on an oscillation at the task's head,
 the factory's proof and precheck passed there (`precheck.json`) and your gh identity is configured; otherwise
 the task needs you (`no ready card: …`). It reads a fresh `origin/<base>` and merges it into the head in memory

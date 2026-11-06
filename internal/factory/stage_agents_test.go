@@ -115,7 +115,8 @@ func fullPromptData() PromptData {
 		Acceptance: dir + "/acceptance.json", Proof: dir + "/proof.json", Review: dir + "/review-1.json",
 		ReviewReply: dir + "/review-reply-1.json", FactoryProof: dir + "/factory-proof.json", ReviewSummary: dir + "/review-summary.json",
 		PRBody: dir + "/pr-body.md", PRTemplate: "/copies/shop1/.github/pull_request_template.md",
-		ErrorSkill: "acme-errors", DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001}
+		ErrorSkill: "acme-errors", PRBodySkill: "example:create-pr",
+		DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001}
 }
 
 // The writer's turn back from the ready card names what it is back for: a
@@ -246,6 +247,77 @@ func TestTheReproducerUsesTheErrorSkillOnlyWhenConfigured(t *testing.T) {
 	for _, name := range factoryPrompts() {
 		if text := renderFactory(t, cfg, name, d); strings.Contains(text, "error tracker") || strings.Contains(text, "acme-errors") {
 			t.Errorf("%s names an error tracker without error_skill:\n%s", name, text)
+		}
+	}
+}
+
+// The team's PR description skill comes from the configuration: the judge
+// loads it and writes the body in its layout when the repository names one,
+// and keeps every fact the factory requires (the table from the ticket's
+// points to the specs, the proof and the precheck) in the folded testing
+// section; the factory still appends the "Known" list itself. With no skill
+// the prompt is the factory's own outline.
+func TestThePRBodyPromptFollowsTheRepositorysSkillOnlyWhenConfigured(t *testing.T) {
+	cfg := config.Defaults()
+	d := fullPromptData()
+	with := renderFactory(t, cfg, "factory-pr-body.md", d)
+	for _, want := range []string{"`example:create-pr`", "load that skill", "folded", "table from the ticket's points", d.Acceptance, d.Proof,
+		d.FactoryProof, "factory's proof", "precheck", "stop before its push or PR step", d.PRBody, `Do not write a "Known" section`,
+		"the factory appends the list of what the local review left open itself", d.PRTemplate} {
+		if !strings.Contains(with, want) {
+			t.Errorf("factory-pr-body.md with pr_body_skill = example:create-pr lacks %q:\n%s", want, with)
+		}
+	}
+	d.PRBodySkill = ""
+	without := renderFactory(t, cfg, "factory-pr-body.md", d)
+	for _, want := range []string{"What the change does and why, for a reviewer who has not read the ticket",
+		"A table from the ticket's points to the specs that prove them", "How it was tested: the factory's proof and its precheck, in a sentence each",
+		`Do not write a "Known" section`, d.PRTemplate} {
+		if !strings.Contains(without, want) {
+			t.Errorf("factory-pr-body.md without a skill lacks %q:\n%s", want, without)
+		}
+	}
+	for _, not := range []string{"load that skill", "example:create-pr", "folded", "layout"} { // the shared rules mention skills in general
+		if strings.Contains(without, not) {
+			t.Errorf("factory-pr-body.md without a skill mentions %q:\n%s", not, without)
+		}
+	}
+	d.PRBodySkill = "example:create-pr"
+	for _, name := range factoryPrompts() {
+		if name == "factory-pr-body.md" {
+			continue
+		}
+		if text := renderFactory(t, cfg, name, d); strings.Contains(text, "example:create-pr") {
+			t.Errorf("%s names the PR description skill:\n%s", name, text)
+		}
+	}
+}
+
+// The data of the PR body's turn carries the skill of the task's repository.
+func TestThePRBodyTurnGetsTheTasksRepositorysSkill(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", PRBodySkill: "example:create-pr"}, {Repo: "example/other"}}
+	judge, ok := h.cfg.FactoryRole("fx-judge")
+	if !ok {
+		t.Fatal("no fx-judge role")
+	}
+	st := config.FactoryStage{Name: "pr_body", Type: config.FactoryStageAgents, Roles: []string{"fx-judge"}, End: config.FactoryEndPRBody, Prompt: "factory-pr-body.md"}
+	for key, tc := range map[string]struct {
+		repo string
+		want bool
+	}{"PR-12322": {"example/shop", true}, "PR-12323": {"example/other", false}} {
+		repo, want := tc.repo, tc.want
+		task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: key, Kind: "feature", Repo: repo,
+			Title: "t", State: registry.TaskActive, Stage: "pr_body", Branch: "zhuravel-PR-12322-copy"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := h.e.renderRole(task, st, judge, judge, h.stageCopy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(text, "`example:create-pr`"); got != want {
+			t.Errorf("the PR body prompt for %s names the skill: %v, want %v:\n%s", repo, got, want, text)
 		}
 	}
 }

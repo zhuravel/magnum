@@ -152,16 +152,41 @@ func TestFactoryDefaultsDefineBugFeatureAndChore(t *testing.T) {
 // default.
 func TestFactoryDefaultsNameNoRepositorySpecifics(t *testing.T) {
 	for _, line := range uncommentedLines(t) {
-		for _, key := range []string{"ghost_marker", "table_stats", "consoles", "error_skill", "large_table_rows", "reviewer"} {
+		for _, key := range []string{"ghost_marker", "table_stats", "consoles", "error_skill", "pr_body_skill", "large_table_rows", "reviewer"} {
 			if strings.HasPrefix(line, key) {
 				t.Errorf("config.defaults.toml sets %q", line)
 			}
 		}
 	}
 	r := FactoryRepo{}
-	if r.ErrorSkill != "" || r.GhostMarker != "" || r.TableStats != "" || len(r.Consoles) != 0 || r.LargeTableRows != 0 {
+	if r.ErrorSkill != "" || r.PRBodySkill != "" || r.GhostMarker != "" || r.TableStats != "" || len(r.Consoles) != 0 || r.LargeTableRows != 0 {
 		t.Fatalf("the zero repository names specifics: %+v", r)
 	}
+}
+
+// pr_body_skill is the skill that writes the PRs' descriptions: a key of a
+// [[factory.repo]] with no default, trimmed when it loads, and a name of one
+// word (a value with whitespace inside it is refused, naming the key).
+func TestFactoryRepoPRBodySkill(t *testing.T) {
+	load := func(skill string) (*Config, error) {
+		return loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"pr_body_skill = "+skill+"\n")
+	}
+	cfg, err := load(`"  example:create-pr  "`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := cfg.FactoryRepo("talkable/talkable"); !ok || r.PRBodySkill != "example:create-pr" {
+		t.Errorf("pr_body_skill = %q, %v, want example:create-pr (trimmed)", r.PRBodySkill, ok)
+	}
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.FactoryRepo("talkable/talkable"); r.PRBodySkill != "" {
+		t.Errorf("pr_body_skill = %q without the key, want none", r.PRBodySkill)
+	}
+	_, err = load(`"example create-pr"`)
+	wantError(t, err, "pr_body_skill", "example create-pr")
 }
 
 // An overlay that defines one kind of task or one role changes that one:
@@ -738,6 +763,7 @@ func TestFactoryChecksTheRepositoryBlock(t *testing.T) {
 		"negative rows":    {func(r *FactoryRepo) { r.LargeTableRows = -5 }, []string{"large_table_rows"}},
 		"blank console":    {func(r *FactoryRepo) { r.Consoles = []string{""} }, []string{"consoles"}},
 		"error skill":      {func(r *FactoryRepo) { r.ErrorSkill = "two words" }, []string{"error_skill"}},
+		"pr body skill":    {func(r *FactoryRepo) { r.PRBodySkill = "two words" }, []string{"pr_body_skill", "two words"}},
 		"copy file escape": {func(r *FactoryRepo) { r.CopyFiles = []string{"../secret"} }, []string{"copy_files"}},
 	} {
 		t.Run(name, func(t *testing.T) {

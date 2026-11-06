@@ -87,9 +87,10 @@ import (
 // each "" (nil) in any other turn. RedRun is the kind's proof: its specs
 // must fail on the base (config.FactoryKind.RedRun; a kind whose proof is
 // "green" keeps them green). ErrorSkill is the repository's error_skill
-// ("" = none: no prompt names one), DBLockCommand the `magnum db-lock` line
-// of the copy for the role as it runs, and Port the copy's server's (0 when
-// its env names none).
+// ("" = none: no prompt names one) and PRBodySkill its pr_body_skill ("" =
+// none: the PR body prompt writes the factory's own outline),
+// DBLockCommand the `magnum db-lock` line of the copy for the role as it
+// runs, and Port the copy's server's (0 when its env names none).
 type PromptData struct {
 	TaskID                                                 int64
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
@@ -101,7 +102,7 @@ type PromptData struct {
 	Conflicts                                              []string
 	HeadMoved, HeadWas                                     string
 	RedRun                                                 bool
-	ErrorSkill, DBLockCommand                              string
+	ErrorSkill, PRBodySkill, DBLockCommand                 string
 	Port                                                   int
 	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
 	// the prompts call the key the issue of that tracker, never a Jira
@@ -1186,7 +1187,7 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		d.Tracker = trackerName(tr)
 	}
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok {
-		d.ErrorSkill = repo.ErrorSkill
+		d.ErrorSkill, d.PRBodySkill = repo.ErrorSkill, repo.PRBodySkill
 		d.Base = cmp.Or(repo.Base, d.Base)
 	}
 	if st.End == config.FactoryEndFindings {
@@ -1316,5 +1317,5 @@ func checkData(role config.Role) PromptData {
 		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
-		DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
+		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000}
 }

@@ -5442,6 +5442,10 @@ type FactoryRepo struct {
 	TableStats     string   `toml:"table_stats"`
 	LargeTableRows int64    `toml:"large_table_rows"`
 	Consoles       []string `toml:"consoles"`
+	// PRBodySkill is the skill the judge writes a published PR's description
+	// with, the team's own layout ("" = none: the factory's outline). It is
+	// a skill's name, trimmed, one word; no default.
+	PRBodySkill string `toml:"pr_body_skill"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
 }
@@ -12260,7 +12264,7 @@ type PromptData struct {
 	Conflicts                                              []string
 	HeadMoved, HeadWas                                     string
 	RedRun                                                 bool
-	ErrorSkill, DBLockCommand                              string
+	ErrorSkill, PRBodySkill, DBLockCommand                 string
 	Port                                                   int
 	// Tracker names the tracker of Key when it is not Jira's ("linear.app"):
 	// the prompts call the key the issue of that tracker, never a Jira
@@ -12296,9 +12300,10 @@ type PromptData struct {
     each "" (nil) in any other turn. RedRun is the kind's proof: its specs must
     fail on the base (config.FactoryKind.RedRun; a kind whose proof is "green"
     keeps them green). ErrorSkill is the repository's error_skill ("" = none:
-    no prompt names one), DBLockCommand the `magnum db-lock` line of the copy
-    for the role as it runs, and Port the copy's server's (0 when its env names
-    none).
+    no prompt names one) and PRBodySkill its pr_body_skill ("" = none: the PR
+    body prompt writes the factory's own outline), DBLockCommand the `magnum
+    db-lock` line of the copy for the role as it runs, and Port the copy's
+    server's (0 when its env names none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`

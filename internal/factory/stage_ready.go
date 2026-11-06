@@ -960,18 +960,29 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 // change before the PR left open, none of it blocking: the leftovers, the
 // findings the writer declined with the risk of the suggested change, the
 // doubts (findings that came back twice after their fix), and the
-// reviewers a round went without.
+// reviewers a round went without. The heading stands outside and the rest
+// is folded in <details> with a one-line count, as the team's PR
+// description layout folds every section but Key changes, Demo and Related
+// Stories.
 func knownList(sum ReviewSummary) string {
 	var b strings.Builder
-	b.WriteString("## Known\n\n")
-	if len(sum.Leftovers)+len(sum.Declined)+len(sum.Doubts)+len(sum.Missing) == 0 {
-		b.WriteString("magnum's review of this change before the PR left nothing open.\n")
+	b.WriteString("## Known\n\n<details>\n")
+	lines := knownLines(sum, true)
+	if len(lines) == 0 {
+		b.WriteString("<summary>nothing the local review left open</summary>\n\n")
+		b.WriteString("magnum's review of this change before the PR left nothing open.\n\n</details>\n")
 		return b.String()
 	}
+	note := "notes"
+	if len(lines) == 1 {
+		note = "note"
+	}
+	fmt.Fprintf(&b, "<summary>%d %s the local review left open</summary>\n\n", len(lines), note)
 	b.WriteString("What magnum's review of this change before the PR left open; none of it blocks.\n\n")
-	for _, l := range knownLines(sum, true) {
+	for _, l := range lines {
 		fmt.Fprintf(&b, "- %s\n", l)
 	}
+	b.WriteString("\n</details>\n")
 	return b.String()
 }
 

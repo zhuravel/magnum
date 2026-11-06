@@ -15746,6 +15746,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheGuardViewReadsMagnumsReviewSessionAsAThirdSession; TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours
   now pins the third view.
 
+- A published PR's description follows the team's layout when the repository names a skill, and the Known
+  list is folded (2026-11-07, `[[factory.repo]] pr_body_skill`). The factory's PRs ignored the layout the
+  team writes its descriptions in: the judge's turn used the factory's own outline (what and why, a table
+  from the ticket's points to the specs, how it was tested) and the factory appended `## Known` flat. A
+  repository now names the skill (`pr_body_skill`, one word, trimmed, no default; it is `error_skill`'s
+  sibling, carried to the prompts the same way, as `PromptData.PRBodySkill`). With one set,
+  `factory-pr-body.md` has the judge load it and write the body as it says, stopping before its push or PR
+  step as the factory's rules always say; the table from the ticket's points to the specs and the proof and
+  precheck sentences stay, in the skill's testing section or wherever its layout puts tests. With none the
+  prompt renders byte for byte as before. The factory still appends the Known list itself, after the
+  same marker, and the judge is still told not to write one. The list is folded the way that layout folds
+  every section but Key changes, Demo and Related Stories: `## Known` outside, then `<details>`, a
+  `<summary>` with the count (`2 notes the local review left open`; `nothing the local review left open`
+  for none), a blank line, the list, a blank line and `</details>`. Appending again still cuts the body at
+  the marker, so a rewritten body gets one folded section in place of the old one; nothing else reads the
+  section (the card's KNOWN row is built from `review-summary.json`). Rejected: leaving the Known list flat
+  (it would be the one section of a published PR that breaks the layout), a hardcoded skill name (the
+  repository is public and names no team's skill), and folding only a non-empty list (the layout folds
+  every such section). Tests, failing first: TestFactoryRepoPRBodySkill,
+  TestFactoryChecksTheRepositoryBlock, TestThePRBodyPromptFollowsTheRepositorysSkillOnlyWhenConfigured,
+  TestThePRBodyTurnGetsTheTasksRepositorysSkill, TestTheKnownListIsFoldedWithItsCountInTheSummary and
+  TestAppendingKnownAgainReplacesTheFoldedSection.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
