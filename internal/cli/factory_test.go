@@ -486,10 +486,10 @@ func TestTheCopiesGuardReadsTheFactorysHerdrSessionAndYours(t *testing.T) {
 		t.Fatalf("the factory daemon does not build: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() }) // a second Close does nothing
-	factorySide, ok1 := d.Guard.Factory.(*herdr.Client)
+	factorySide, ok1 := d.Guard.Own.(*herdr.Client)
 	yoursSide, ok2 := d.Guard.Yours.(*herdr.Client)
 	if !ok1 || !ok2 || factorySide.Socket != "/run/herdr/factory.sock" || yoursSide.Socket != "/run/herdr/yours.sock" {
-		t.Fatalf("the copies' guard reads %+v and %+v, want the factory's session and yours", d.Guard.Factory, d.Guard.Yours)
+		t.Fatalf("the copies' guard reads %+v and %+v, want the factory's session and yours", d.Guard.Own, d.Guard.Yours)
 	}
 	d.Close()
 

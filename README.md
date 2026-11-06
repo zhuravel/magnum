@@ -3511,7 +3511,8 @@ stages = [
   same Redis (the defaults set none). Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
-  sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD), and no
+  sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD; a session
+  that does not answer holds the copy, but yours with no herdr server running has no panes), and no
   pane of the factory's session in the copy that no session of the factory's is in. Claims of different
   copies run side by side, and a release never waits for another copy's claim. Every claim runs these
   steps, so a stage claims its task's copy once and keeps it until the release: the claim runs off the

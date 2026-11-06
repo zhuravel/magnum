@@ -109,7 +109,7 @@ var _ Copies = (*copySet)(nil)
 
 // NewCopies returns the factory's copies: sm is magnum's slot manager over
 // st, the factory's agents store (Layout.FactoryAgentsDB, magnum's schema),
-// whose guard sees GuardPanes; git and run run the claim protocol's
+// whose guard sees herdr.GuardView; git and run run the claim protocol's
 // commands, my reads a copy's development database (nil: no reset_db at a
 // claim), panes is the factory's herdr session's snapshot (a pane in a copy
 // that no session row names holds it; nil: no such check), and owner is the

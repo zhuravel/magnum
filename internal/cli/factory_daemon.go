@@ -133,7 +133,7 @@ type factoryDaemon struct {
 	Copies factory.Copies
 	// Guard is the herdr the copies' guard sees: the factory's session and
 	// yours.
-	Guard factory.GuardPanes
+	Guard herdr.GuardView
 	Jira  *jira.Client
 	// GitHub opens the PRs the factory publishes and reads them back: gh as
 	// your gh identity (factory.NewGitHub).
@@ -187,7 +187,7 @@ func (d *factoryDaemon) Close() error {
 // store in the factory's herdr session (Config.FactoryHerdr), whose snapshot
 // is the herdr ping, the reveal of that session, and the copies (a second
 // slot manager over the agents store, whose guard sees the panes of the
-// factory's herdr session and of yours, factory.GuardPanes, with the
+// factory's herdr session and of yours, herdr.GuardView, with the
 // runtime's owner rows), the [jira] site's client when [jira] is on (intake's
 // tickets), and the runner of the overlap line's git and gh reads and of the
 // coding stage's proof and precheck, and the local review: magnum's
@@ -282,9 +282,10 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	// The guard of a copy sees the panes of both herdr sessions, yours with
 	// their ids prefixed: each session numbers its own from w1, and the
-	// agents store knows only the factory's.
+	// agents store knows only the factory's. Your server not running has no
+	// panes, so it holds no copy.
 	// A factory in your own session (the same socket) is one session.
-	d.Guard = factory.GuardPanes{Factory: h}
+	d.Guard = herdr.GuardView{Own: h}
 	yours := h
 	if ys := cmp.Or(cfg.Herdr.Socket, herdr.DefaultSocket()); ys != h.Socket {
 		yours = &herdr.Client{Socket: ys, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}

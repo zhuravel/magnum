@@ -2656,6 +2656,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   daemons; test fixtures that record made-up directories leave it off. Test:
   TestResumeIDSkipsAConversationWhoseDirectoryIsGone.
 
+- **Every slot guard reads one view of two herdr sessions, and your session with no server has no panes**
+  (2026-11-06). The factory's copies' guard read the factory's herdr session and yours, your workspace, tab
+  and pane ids prefixed `yours:` (herdr numbers its ids per server, so they collide). magnum's review panes
+  are moving to a session of their own (`[herdr] review_session`), and the review daemon's slot guard and
+  inventory then need the same view, so it moved to `herdr.GuardView` (`Own`, the session whose ids the
+  guard's store records, and `Yours`; `herdr.YourPrefix`), its logic unchanged but for one rule: your session
+  with no server running (`herdr.NoServer`: no socket file, or a stale one that refuses the connection) adds
+  no panes. A server that is not running has no pane processes, so nothing of yours can be at work in a
+  checkout; a timeout or any other error is still an error, and the guard holds as before, since a server
+  that is slow may have busy panes. Its own session down stays an error: the panes its store records cannot
+  be checked. The operator chose the rule for both daemons' guards. Rejected: keeping the view in
+  `internal/factory` (`internal/app` cannot import it: the factory imports the engine and evalrun, which
+  import app). Tests: TestTheGuardViewPrefixesYourSessionsIds, TestTheGuardViewAsksTheSessionAPaneIsOf,
+  TestYourSessionWithNoServerHasNoPanes, TestYourSessionThatTimesOutHoldsTheGuard,
+  TestSessionSocketFollowsHerdrsLayout, TestNoServerIsAMissingSocketOrARefusedConnection and
+  TestATimeoutIsNotNoServer.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
@@ -15388,6 +15405,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   stays, and the diff counts as read when the viewer exits, as before. The default stays git's own pager,
   so the built-in defaults name no tool a machine may lack. Rejected: `hunk diff <base> <head>` as its own
   command (it loses the order file). Test: TestDiffPagesTheReadyCardsDiffInTheTasksCopy.
+
+- Your herdr server not running holds no factory copy (2026-11-06). The copies' guard held every copy while
+  your herdr session did not answer, even when no herdr server of yours ran at all (herdr quit): a missing
+  or stale socket of yours now counts as no panes of yours (`herdr.GuardView`, see "Every slot guard reads
+  one view of two herdr sessions" in Agents in panes), the operator's choice for both daemons' guards. A
+  session of yours that does not answer still holds the copy. TestYourSessionWithNoServerHasNoPanes.
 
 ## Learned rules
 

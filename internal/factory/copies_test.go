@@ -183,7 +183,7 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 	}}
 	run := routeRunner{real: r.real, fake: fake}
 	r.git = gitx.New(run)
-	view := GuardPanes{Factory: r.factoryHerdr, Yours: r.yourHerdr}
+	view := herdr.GuardView{Own: r.factoryHerdr, Yours: r.yourHerdr}
 	r.sm = slots.New(slots.Deps{Store: r.st, Run: run, Git: r.git, MySQL: r.dbs, Layout: r.cfg.Layout,
 		Snapshot: view.Snapshot, ProcessInfo: view.ProcessInfo,
 		FreeDiskBytes: func(string) (uint64, error) { return 100 << 30, nil }, Now: r.clock.Now,

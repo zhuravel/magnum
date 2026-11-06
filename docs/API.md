@@ -11559,10 +11559,6 @@ const ReviewFixPrompt = "factory-review-fix.md"
     ReviewFixPrompt is the prompt of the writer's fix turn in the local review:
     the coding stage's roles get it in place of their own prompt.
 
-const YourPanePrefix = "yours:"
-    YourPanePrefix starts the ids of your herdr session's workspaces, tabs and
-    panes as the copies' guard sees them (GuardPanes).
-
 
 VARIABLES
 
@@ -11834,8 +11830,8 @@ type Copies interface {
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies
     NewCopies returns the factory's copies: sm is magnum's slot manager over st,
-    the factory's agents store (Layout.FactoryAgentsDB, magnum's schema),
-    whose guard sees GuardPanes; git and run run the claim protocol's commands,
+    the factory's agents store (Layout.FactoryAgentsDB, magnum's schema), whose
+    guard sees herdr.GuardView; git and run run the claim protocol's commands,
     my reads a copy's development database (nil: no reset_db at a claim),
     panes is the factory's herdr session's snapshot (a pane in a copy that no
     session row names holds it; nil: no such check), and owner is the runtime's
@@ -12022,28 +12018,6 @@ type GitHub interface {
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
     repository, the one its local review runs as.
-
-type GuardPanes struct{ Factory, Yours HerdrView }
-    GuardPanes is the herdr the copies' guard sees (slots.Deps Snapshot and
-    ProcessInfo): the factory's session, whose ids are the ones the agents store
-    records, and yours, its ids prefixed with YourPanePrefix. Either may be nil
-    (no such session).
-
-func (g GuardPanes) ProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
-    ProcessInfo asks the session a pane id of Snapshot's is of: yours for a
-    prefixed id (without the prefix), else the factory's.
-
-func (g GuardPanes) Snapshot(ctx context.Context) (herdr.Snapshot, error)
-    Snapshot is the factory's session's snapshot with yours added, your
-    workspaces', tabs' and panes' ids prefixed. A session that does not answer
-    is an error: the guard then holds off, as on its own herdr.
-
-type HerdrView interface {
-	Snapshot(ctx context.Context) (herdr.Snapshot, error)
-	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
-}
-    HerdrView is what the copies' guard reads of a herdr session
-    (*herdr.Client).
 
 type Hold struct {
 	Kind, Reason string
@@ -16139,6 +16113,10 @@ const Protocol = 22
     Protocol is the herdr socket protocol version this client was verified
     against (ServerInfo.Protocol); `magnum doctor` warns on any other.
 
+const YourPrefix = "yours:"
+    YourPrefix starts the ids of your herdr session's workspaces, tabs and panes
+    as a GuardView shows them.
+
 
 VARIABLES
 
@@ -16352,6 +16330,24 @@ type Error struct {
 
 func (e *Error) Error() string
 
+type GuardView struct{ Own, Yours View }
+    GuardView is the herdr a slot guard sees (slots.Deps Snapshot and
+    ProcessInfo): Own, the session whose ids are the ones the guard's store
+    records, and Yours, its ids prefixed with YourPrefix. Either may be nil (no
+    such session: yours is Own's socket).
+
+func (g GuardView) ProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error)
+    ProcessInfo asks the session a pane id of Snapshot's is of: Yours for a
+    prefixed id (without the prefix), else Own.
+
+func (g GuardView) Snapshot(ctx context.Context) (Snapshot, error)
+    Snapshot is Own's snapshot with Yours added, your workspaces', tabs' and
+    panes' ids prefixed. A session that does not answer is an error: the guard
+    then holds off, as on its own herdr. Your session with no server running
+    (NoServer) adds nothing: it has no pane processes, so nothing of yours can
+    be at work in a checkout. Own's never counts as empty: the panes its store
+    records could not be checked.
+
 type NotificationResult struct {
 	Shown  bool   `json:"shown"`
 	Reason string `json:"reason"`
@@ -16522,6 +16518,12 @@ type Tab struct {
 	AgentStatus Status `json:"agent_status"`
 }
     Tab is a herdr tab (TabInfo).
+
+type View interface {
+	Snapshot(ctx context.Context) (Snapshot, error)
+	PaneProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error)
+}
+    View is what a guard reads of a herdr session (*Client).
 
 type WaitOutputOptions struct {
 	Match   string // literal substring, or a Rust regex when Regex is set
