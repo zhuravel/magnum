@@ -14032,15 +14032,18 @@ func (r *Runtime) Shift(gap time.Duration)
 
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error)
     Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:
-    liaisonRow) and returns its pane. A live liaison whose agent herdr shows in
-    its pane is returned as it is, and nothing is sent. Otherwise the liaison
-    gets a workspace of its own in the factory's herdr session (liaisonLabel;
-    the one its row's sessions hold is reused) whose working directory is the
-    task's folder (Layout.FactoryTaskDir), never the copy, so it starts as well
-    once a push or a drop freed the copy. Its agent resumes the role's newest
-    parked or lost conversation (ResumeID), and only a fresh conversation gets
-    prompt, once, as its first (store.RunInitial). Talks take turns, so two
-    never start two liaisons.
+    liaisonRow) and returns its pane. A live liaison whose agent herdr shows
+    in its pane is kept as it is. Otherwise the liaison gets a workspace
+    of its own in the factory's herdr session (liaisonLabel; the one its
+    row's sessions hold is reused) whose working directory is the task's
+    folder (Layout.FactoryTaskDir), never the copy, so it starts as well
+    once a push or a drop freed the copy, and whose env names the daemon's
+    MAGNUM_HOME (liaisonEnv). Its agent resumes the role's newest parked or
+    lost conversation (ResumeID). Either way the conversation gets prompt,
+    once, as its first (store.RunInitial), while no prompt of it ever went
+    out (firstPromptDue): a fresh one, or one whose first prompt was refused
+    or rejected before it was sent; a conversation that had one gets nothing.
+    Talks take turns, so two never start two liaisons.
 
 func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
     TouchedSince names who could have changed task t's copy since the time

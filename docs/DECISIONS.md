@@ -15830,13 +15830,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
 
 - `Runtime.Talk` starts or finds a task's liaison (2026-11-06, the factory liaison's first slice). Talk
   takes the task and the rendered prompt and returns the liaison's pane. A live liaison whose agent herdr
-  shows in its pane is returned as it is, and nothing is sent, so a second talk opens the same chat.
-  Otherwise the liaison gets a workspace of its own in the factory's herdr session, labeled
-  `factory liaison <key>`, with the task's folder as its working directory. It never uses the copy, so it
-  starts as well after a push or a drop freed the copy. Its agent resumes the newest parked or lost
-  conversation of `fx-liaison` (`ResumeID`). Only a fresh conversation gets the prompt, once, through the
-  agents manager (`store.RunInitial`). The ledger is the stage prompts' delivery proof, and nothing waits on
-  this prompt's delivery. Talks take turns (a mutex), so two never start two liaisons. Around it:
+  shows in its pane is kept as it is, so a second talk opens the same chat. Otherwise the liaison gets a
+  workspace of its own in the factory's herdr session, labeled `factory liaison <key>`, with the task's
+  folder as its working directory. It never uses the copy, so it starts as well after a push or a drop freed
+  the copy. Its agent resumes the newest parked or lost conversation of `fx-liaison` (`ResumeID`). Either
+  way the conversation gets the prompt, once, through the agents manager (`store.RunInitial`), while no
+  prompt of it ever went out: no run of the rows that carried it (its conversation id) was submitted. A
+  fresh conversation gets it, and so does a live one whose first prompt was refused or rejected before it
+  was sent. A conversation that had one, resumed or live, gets nothing, and a prompt that may have arrived
+  (stalled, timed out) is never sent again. A live liaison alone is no proof of a first prompt: the talk
+  that started it may have failed at its prompt. The ledger is the stage prompts' delivery proof, and
+  nothing waits on this prompt's delivery. Talks take turns (a mutex), so two never start two liaisons.
+  Around it:
   - `Park` of a task parks its liaison after the task's own agents. Its refusal never stops the task's
     park. A liaison stays live while you are in its pane (its row's `human_active_at` within the human
     cooldown, or its pane focused while herdr showed you in a factory pane, as for the task's panes), or
@@ -15854,14 +15859,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     between its creation and its first row), naming the task its key belongs to. A live liaison's workspace
     is left alone.
   - The liaison's prompt runs `{{.Magnum}} factory ...`: `PromptData.Magnum` is the daemon's own build
-    (`Layout.Binary()`, shell-quoted, as `.DBLockCommand` names it), so its answers and decisions reach
-    the daemon's registry through the daemon's build, never through whatever `magnum` the PATH finds.
+    (`Layout.Binary()`, shell-quoted, as `.DBLockCommand` names it). A daemon run under `MAGNUM_HOME` (the
+    checkout layout, which it selects) gives the liaison's pane the same `MAGNUM_HOME`, the value of its
+    Layout's Home, as its LaunchAgent's env names it; under the XDG layout the pane gets none, as the
+    daemon's binary finds the same directories by itself. So its answers and decisions reach the daemon's
+    registry through the daemon's build, never through whatever `magnum` the PATH finds.
   Rejected: the liaison's prompt through the ledger (a stage's delivery proof and its re-sends, which the
   liaison does not need), a prompt to a live liaison on every talk (the second talk would repeat the first
   prompt), parking a liaison you are in (its pane would close under you right after a push you asked it
-  for), and settling its turns on Talk's path only (a turn that ends between two talks would stay
-  active). Out of this change: a limit or a refusal on the liaison's screen (ruling 11), and an idle liaison
-  that parks by itself. Tests, failing first: TestTalkStartsOneLiaisonInTheTasksFolder and
+  for), and settling its turns on Talk's path only (a turn that ends between two talks would stay active).
+  Out of this change: a limit or a refusal on the liaison's screen (ruling 11), and an idle liaison that
+  parks by itself. Tests, failing first: TestTalkStartsOneLiaisonInTheTasksFolder and
   TestTalkWorksAfterTheCopyIsFreed (they failed to build while Talk was missing). Then, with Talk in:
   TestTalkResumesAParkedLiaison, TestDroppingATaskParksItsLiaison and
   TestParkingATaskLeavesTheLiaisonYouAreIn (the liaison stayed live after Park), TestARestartKeepsTheLiaison
@@ -15869,8 +15877,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   event; without the runs' prompts it hands Talk's prompt as a turn of unknown origin),
   TestALiaisonsTurnThatEndedLeavesNoActiveRun (the run stayed `ended`),
   TestSettleWorkspacesClosesALiaisonsLeftover (no orphan),
-  TestATurnTypedToTheLiaisonIsRecordedWithItsSurface (the input's surface was `pane`), and
-  TestTheLiaisonsPromptNamesItsFolderAndItsCommands (the data had no `Magnum`).
+  TestATurnTypedToTheLiaisonIsRecordedWithItsSurface (the input's surface was `pane`),
+  TestTheLiaisonsPromptNamesItsFolderAndItsCommands (the data had no `Magnum`),
+  TestTalkSendsTheFirstPromptAfterAFailedOne (a second talk sent nothing to the liaison whose first prompt
+  herdr rejected), and TestTheLiaisonsPaneCarriesTheDaemonsMagnumHome (the pane had no `MAGNUM_HOME`).
 
 ## Learned rules
 

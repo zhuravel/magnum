@@ -598,13 +598,16 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 
 // Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:
 // liaisonRow) and returns its pane. A live liaison whose agent herdr shows
-// in its pane is returned as it is, and nothing is sent. Otherwise the
-// liaison gets a workspace of its own in the factory's herdr session
-// (liaisonLabel; the one its row's sessions hold is reused) whose working
-// directory is the task's folder (Layout.FactoryTaskDir), never the copy,
-// so it starts as well once a push or a drop freed the copy. Its agent
-// resumes the role's newest parked or lost conversation (ResumeID), and only
-// a fresh conversation gets prompt, once, as its first (store.RunInitial).
+// in its pane is kept as it is. Otherwise the liaison gets a workspace of
+// its own in the factory's herdr session (liaisonLabel; the one its row's
+// sessions hold is reused) whose working directory is the task's folder
+// (Layout.FactoryTaskDir), never the copy, so it starts as well once a push
+// or a drop freed the copy, and whose env names the daemon's MAGNUM_HOME
+// (liaisonEnv). Its agent resumes the role's newest parked or lost
+// conversation (ResumeID). Either way the conversation gets prompt, once,
+// as its first (store.RunInitial), while no prompt of it ever went out
+// (firstPromptDue): a fresh one, or one whose first prompt was refused or
+// rejected before it was sent; a conversation that had one gets nothing.
 // Talks take turns, so two never start two liaisons.
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error) {
 	r.talkMu.Lock()
@@ -621,64 +624,114 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
 	if err != nil {
 		return "", err
 	}
-	pane, err := r.liveLiaison(ctx, pr, role.Name)
+	s, live, err := r.liveLiaison(ctx, pr, role.Name)
 	if err != nil {
 		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
 	}
-	if pane != "" {
-		return pane, nil
+	if !live {
+		if s, err = r.startLiaison(ctx, t, pr, role); err != nil {
+			return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+		}
 	}
-	dir := r.d.Layout.FactoryTaskDir(t.ID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
-	}
-	ws, err := r.mgr.EnsureWorkspace(ctx, pr, dir, paneEnv(t, Copy{}), liaisonLabel(t), []config.Role{role})
+	due, err := r.firstPromptDue(ctx, pr, s)
 	if err != nil {
 		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
 	}
-	resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(role.Name))
-	if err != nil {
-		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
-	}
-	if err := r.mgr.StartAgent(ctx, pr, role, ws.Panes[agents.Role(role.Name)], resume); err != nil {
-		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
-	}
-	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name) // its pane, wherever StartAgent found the conversation
-	if err != nil {
-		return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
-	}
-	if resume == "" {
+	if due {
 		if _, err := r.mgr.Prompt(ctx, pr, agents.Role(role.Name), store.RunInitial, prompt); err != nil {
 			return "", fmt.Errorf("the liaison of %s: its first prompt: %w", taskKey(t), err)
 		}
 	}
-	r.log.Info("started a task's liaison", "task", t.ID, "resumed", resume != "")
 	return store.Deref(s.HerdrPaneID), nil
 }
 
-// liveLiaison is the pane of row pr's live session of role when herdr shows
-// its agent there ("" for none: no live session, or one whose agent is
-// gone or never started).
-func (r *Runtime) liveLiaison(ctx context.Context, pr store.PR, role string) (string, error) {
+// startLiaison starts role, task t's liaison, on its row pr: its workspace
+// in the task's folder, its agent resumed from the role's newest parked or
+// lost conversation when it has one. It returns the live session, in the
+// pane StartAgent found the conversation in.
+func (r *Runtime) startLiaison(ctx context.Context, t registry.Task, pr store.PR, role config.Role) (store.Session, error) {
+	dir := r.d.Layout.FactoryTaskDir(t.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return store.Session{}, err
+	}
+	ws, err := r.mgr.EnsureWorkspace(ctx, pr, dir, r.liaisonEnv(t), liaisonLabel(t), []config.Role{role})
+	if err != nil {
+		return store.Session{}, err
+	}
+	resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(role.Name))
+	if err != nil {
+		return store.Session{}, err
+	}
+	if err := r.mgr.StartAgent(ctx, pr, role, ws.Panes[agents.Role(role.Name)], resume); err != nil {
+		return store.Session{}, err
+	}
+	r.log.Info("started a task's liaison", "task", t.ID, "resumed", resume != "")
+	return r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name)
+}
+
+// liaisonEnv is the env of task t's liaison's pane: the task's
+// (MAGNUM_FACTORY_TASK, paneEnv), and the daemon's MAGNUM_HOME when the
+// daemon runs under one (the checkout layout, which MAGNUM_HOME selects, as
+// the LaunchAgent's env names it), so the liaison's `magnum factory`
+// commands read the daemon's registry. Under the XDG layout the daemon's
+// binary finds the same directories by itself, and the pane gets none.
+func (r *Runtime) liaisonEnv(t registry.Task) map[string]string {
+	env := paneEnv(t, Copy{})
+	if l := r.d.Layout; l.CheckoutLayout() && l.Home != "" {
+		env["MAGNUM_HOME"] = l.Home
+	}
+	return env
+}
+
+// firstPromptDue reports whether no prompt of the conversation of s, the
+// liaison's live session, ever went out: no run of the rows that carried it
+// (s, and the rows of the conversation it resumed: its conversation id) was
+// submitted. A prompt refused or rejected before it was sent leaves it
+// due; one that may have arrived (submitted, stalled, timed out) does not,
+// so no prompt goes twice.
+func (r *Runtime) firstPromptDue(ctx context.Context, pr store.PR, s store.Session) (bool, error) {
+	rows := map[int64]bool{s.ID: true}
+	if sid := store.Deref(s.SessionID); sid != "" {
+		sessions, err := r.st.SessionsByPR(ctx, pr.ID)
+		if err != nil {
+			return false, err
+		}
+		for _, x := range sessions {
+			if store.Deref(x.SessionID) == sid {
+				rows[x.ID] = true
+			}
+		}
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return false, err
+	}
+	return !slices.ContainsFunc(runs, func(run store.Run) bool {
+		return run.SubmittedAt != nil && run.SessionID != nil && rows[*run.SessionID]
+	}), nil
+}
+
+// liveLiaison is row pr's live session of role when herdr shows its agent
+// in its pane (false for none: no live session, or one whose agent is gone
+// or never started).
+func (r *Runtime) liveLiaison(ctx context.Context, pr store.PR, role string) (store.Session, bool, error) {
 	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", nil
+		return store.Session{}, false, nil
 	}
 	if err != nil {
-		return "", err
+		return store.Session{}, false, err
 	}
 	pane, name := store.Deref(s.HerdrPaneID), store.Deref(s.AgentName)
 	if s.State != store.SessionLive || pane == "" {
-		return "", nil
+		return store.Session{}, false, nil
 	}
 	snap, err := r.d.Herdr.Snapshot(ctx)
 	if err != nil {
-		return "", err
+		return store.Session{}, false, err
 	}
-	if slices.ContainsFunc(snap.Agents, func(a herdr.AgentInfo) bool { return a.PaneID == pane && (name == "" || a.Name == name) }) {
-		return pane, nil
-	}
-	return "", nil
+	live := slices.ContainsFunc(snap.Agents, func(a herdr.AgentInfo) bool { return a.PaneID == pane && (name == "" || a.Name == name) })
+	return s, live, nil
 }
 
 // gate reads what a launch of role waits on: a pause of its kind, the

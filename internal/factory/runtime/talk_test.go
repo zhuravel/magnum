@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -130,6 +131,77 @@ func TestTalkStartsOneLiaisonInTheTasksFolder(t *testing.T) {
 	if len(g.h.creates) != 1 || len(g.h.startCalls()) != 1 || len(g.h.promptTexts()) != 1 {
 		t.Fatalf("a second Talk made %d workspaces, %d starts, %d prompts in all; want 1 each", len(g.h.creates),
 			len(g.h.startCalls()), len(g.h.promptTexts()))
+	}
+}
+
+// A liaison whose first prompt never went out (herdr rejected it before
+// sending) gets it at the next Talk, once: a live liaison is no proof that
+// its conversation ever got a prompt. A prompt that went out is never sent
+// again, so a third Talk sends nothing.
+func TestTalkSendsTheFirstPromptAfterAFailedOne(t *testing.T) {
+	g := newRig(t)
+	rejected := false
+	g.h.mu.Lock()
+	g.h.promptErr = func(string) error { // called with the fake's lock held
+		if rejected {
+			return nil
+		}
+		rejected = true
+		return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentBlocked, Message: "the agent is not ready"}
+	}
+	g.h.mu.Unlock()
+
+	if _, err := g.r.Talk(g.ctx, g.task, talkPrompt); err == nil {
+		t.Fatal("Talk whose first prompt herdr rejected went through")
+	}
+	pane := store.Deref(g.liaisonSession().HerdrPaneID)
+	runs, err := g.st.RunsByPR(g.ctx, g.liaisonRowOf().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].SubmittedAt != nil || runs[0].State != store.RunFailed {
+		t.Fatalf("the liaison's runs after the rejected prompt %+v, want one that failed before it went out", runs)
+	}
+
+	if again := g.talk(); again != pane {
+		t.Fatalf("the second Talk named pane %s, want the live liaison's %s", again, pane)
+	}
+	if got := g.h.promptTexts(); !slices.Equal(got, []string{talkPrompt, talkPrompt}) {
+		t.Fatalf("herdr got prompts %q, want the rejected one and the one the second Talk sent", got)
+	}
+	g.talk()
+	if got := g.h.promptTexts(); len(got) != 2 {
+		t.Fatalf("herdr got %d prompts after the third Talk, want 2: a prompt that went out is never sent again", len(got))
+	}
+	if starts := g.h.startCalls(); len(starts) != 1 {
+		t.Fatalf("agents started %+v, want the one liaison", starts)
+	}
+}
+
+// The liaison runs the daemon's `magnum factory` commands in its pane. A
+// daemon run under MAGNUM_HOME (the checkout layout) gives the pane the same
+// MAGNUM_HOME, so they reach the daemon's registry; a daemon of the XDG
+// layout gives none, as its binary finds the same directories by itself.
+func TestTheLiaisonsPaneCarriesTheDaemonsMagnumHome(t *testing.T) {
+	g := newRig(t) // the checkout layout: a Home, no data or state directory
+	g.talk()
+	if home := g.liaisonSession().Env["MAGNUM_HOME"]; home != g.layout.Home || home == "" {
+		t.Fatalf("the liaison's pane env MAGNUM_HOME = %q, want the daemon's %q", home, g.layout.Home)
+	}
+	if home := g.h.creates[0].Env["MAGNUM_HOME"]; home != g.layout.Home {
+		t.Fatalf("herdr made the liaison's pane with MAGNUM_HOME = %q, want %q", home, g.layout.Home)
+	}
+
+	g.layout = paths.Layout{Home: t.TempDir(), DataDir: t.TempDir(), StateDir: t.TempDir()} // XDG, the binary in a checkout
+	g.cfg.Layout = g.layout
+	g.restart()
+	g.task = g.newTask("PR-12346")
+	g.talk()
+	if home, ok := g.liaisonSession().Env["MAGNUM_HOME"]; ok {
+		t.Fatalf("the liaison's pane env MAGNUM_HOME = %q under the XDG layout, want none", home)
+	}
+	if home, ok := g.h.creates[1].Env["MAGNUM_HOME"]; ok {
+		t.Fatalf("herdr made the liaison's pane with MAGNUM_HOME = %q under the XDG layout, want none", home)
 	}
 }
 
