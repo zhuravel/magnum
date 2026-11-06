@@ -117,7 +117,8 @@ type doctorHelpEntry struct{ name, words string }
 // an entry whose words the help lost.
 var doctorHelpEntries = []doctorHelpEntry{
 	{"config", "config"}, {"binary", "config"}, // doctorConfig's checks
-	{"herdr", "herdr (version and socket methods)"},
+	{"herdr", "herdr (the session of magnum's review panes"}, {"your herdr", "[herdr] review_session, yours"},
+	{"herdr move", "a move of the panes that waits or is due"}, {"herdr version", "version and socket methods)"},
 	{"codex session hook", "Codex session hook"}, {"codex session ids", "Codex session ids"},
 	{"skill", "judge skill"}, {"fix role", "the fix role"}, {"learn editor", "skill editor"},
 	{"whiteboard", "Whiteboard CLI and server"},

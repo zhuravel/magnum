@@ -223,6 +223,39 @@ func statusGatherConfig(ctx context.Context, d statusDeps, r *statusReport) {
 	dm.Config = c
 }
 
+// statusGatherPanesMove shows a move of magnum's panes to another herdr
+// session, which holds every new round: one that waits (engine.PanesMove)
+// is a pause saying on what and why, as is one the config asks for while the
+// daemon runs that config; a daemon that does not run it yet holds nothing,
+// and a warning says how the move starts.
+func statusGatherPanesMove(d statusDeps, kv statusKV, r *statusReport) {
+	if raw, ok := kv.get(engine.KVHerdrPanesMove); ok {
+		var mv engine.PanesMove
+		if json.Unmarshal([]byte(raw), &mv) == nil && !mv.Since.IsZero() {
+			r.Pauses = append(r.Pauses, statusPause{Scope: "herdr", Since: &mv.Since,
+				Reason: fmt.Sprintf("moving magnum's panes from herdr session %s to %s", mv.From.Name, mv.To.Name),
+				Detail: panesMoveWait(mv) + "; no new round starts until they move",
+				Fix:    "the daemon tries again at each moment with nothing in flight: lift what holds it (`magnum logs` shows herdr.panes_move_waits)"})
+			return
+		}
+	}
+	if d.Config == nil {
+		return
+	}
+	to := d.Config.ReviewHerdr()
+	due := panesMoveDue(d.PaneSession, to)
+	switch {
+	case due == "":
+	case r.Daemon.Running && r.Daemon.Config == nil:
+		r.Pauses = append(r.Pauses, statusPause{Scope: "herdr",
+			Reason: fmt.Sprintf("moving magnum's panes from herdr session %s to %s", d.PaneSession.Name, to.Name),
+			Detail: "no new round starts; once none is in flight the daemon parks every PR's sessions and restarts in " + to.Name,
+			Fix:    "wait for the rounds in flight to end"})
+	default:
+		r.Warnings = append(r.Warnings, "herdr: "+due+": the daemon moves them once it runs this config (`magnum daemon-restart --drain`)")
+	}
+}
+
 // statusPollsFailing are the configured watch owners (once each, in any
 // case) whose radar calls have failed for engine.PollFailingShown or longer
 // at now, the oldest failure first; nil when none.
@@ -518,6 +551,7 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 	if since := r.Daemon.DrainingSince; since != nil {
 		r.Pauses = append(r.Pauses, statusDrainPause(d, r.Daemon, r.GeneratedAt, *since))
 	}
+	statusGatherPanesMove(d, kv, r)
 	if until := kv.getTime(engine.KVInfraPausedUntil); until != nil {
 		reason, _ := kv.get(engine.KVInfraPausedReason)
 		detail, _ := kv.get(engine.KVInfraPausedDetail)
@@ -746,28 +780,41 @@ func statusMergedUnreviewed(prs []store.PR, repoByID map[int64]store.Repo, windo
 	return rows
 }
 
-// statusGatherAgents counts the working agent panes herdr reports; a herdr
-// that does not answer is recorded as an error, not a failure.
+// statusGatherAgents counts the working agent panes herdr reports: those of
+// the session of magnum's panes and, while they are in another, yours, as
+// max_total_working_codex counts them. The panes' session that does not
+// answer is recorded as an error, not a failure, naming it; yours that does
+// not is noted and counts none, and yours with no server running has none.
 func statusGatherAgents(ctx context.Context, d statusDeps, r *statusReport) {
 	if d.Herdr == nil {
 		return
 	}
-	ag := &statusAgents{}
+	ag := &statusAgents{Session: d.PaneSession.Name}
 	if d.Config != nil {
 		ag.MaxCodex = d.Config.Daemon.MaxTotalWorkingCodex
 	}
 	snap, err := d.Herdr.Snapshot(ctx)
 	if err != nil {
 		ag.Error = err.Error()
-	} else {
-		ag.HerdrUp = true
-		ag.WorkingCodex = agents.CountWorking(snap.Agents, agents.KindCodex)
-		ag.WorkingClaude = agents.CountWorking(snap.Agents, agents.KindClaude)
-		if d.Config != nil {
-			for _, k := range rolesKindNames(d.Config) {
-				if k != agents.KindCodex && k != agents.KindClaude {
-					ag.WorkingOther = append(ag.WorkingOther, statusKindCount{Kind: k, Working: agents.CountWorking(snap.Agents, k)})
-				}
+		r.Agents = ag
+		return
+	}
+	ag.HerdrUp = true
+	working := snap.Agents
+	if d.Yours != nil {
+		switch ys, err := d.Yours.Snapshot(ctx); {
+		case err == nil:
+			working = append(slices.Clone(working), ys.Agents...)
+		case !herdr.NoServer(err):
+			ag.YoursError = err.Error()
+		}
+	}
+	ag.WorkingCodex = agents.CountWorking(working, agents.KindCodex)
+	ag.WorkingClaude = agents.CountWorking(working, agents.KindClaude)
+	if d.Config != nil {
+		for _, k := range rolesKindNames(d.Config) {
+			if k != agents.KindCodex && k != agents.KindClaude {
+				ag.WorkingOther = append(ag.WorkingOther, statusKindCount{Kind: k, Working: agents.CountWorking(working, k)})
 			}
 		}
 	}

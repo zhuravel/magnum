@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -26,9 +27,13 @@ type fakeDoctorHerdr struct {
 	info    herdr.ServerInfo
 	pingErr error
 	plugins []string
+	pings   atomic.Int32
 }
 
-func (f *fakeDoctorHerdr) Ping(context.Context) (herdr.ServerInfo, error) { return f.info, f.pingErr }
+func (f *fakeDoctorHerdr) Ping(context.Context) (herdr.ServerInfo, error) {
+	f.pings.Add(1)
+	return f.info, f.pingErr
+}
 
 func (f *fakeDoctorHerdr) Call(_ context.Context, method string, _, out any) error {
 	if f.pingErr != nil {

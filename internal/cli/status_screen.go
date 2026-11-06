@@ -168,7 +168,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 	case ag == nil:
 		out.Agents.Error = "not checked"
 	case !ag.HerdrUp:
-		out.Agents.Error = "herdr unreachable"
+		out.Agents.Error = statusHerdrDown(ag)
 	default:
 		out.Agents = tui.AgentsInfo{CodexWorking: ag.WorkingCodex, CodexMax: ag.MaxCodex, ClaudeWorking: ag.WorkingClaude}
 		for _, k := range ag.WorkingOther {

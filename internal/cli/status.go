@@ -119,8 +119,8 @@ func runStatus(c *Context, f statusFlags, pos []string) int {
 
 // newStatusDeps reads everything status shows from a.
 func newStatusDeps(a *app.App, version string) statusDeps {
-	return statusDeps{
-		Store: a.Store, Config: a.Config, Layout: a.Layout, Inventory: a.Inventory, Herdr: a.Herdr,
+	d := statusDeps{
+		Store: a.Store, Config: a.Config, Layout: a.Layout, Inventory: a.Inventory, Herdr: a.Herdr, PaneSession: a.PaneSession,
 		Launchd: func(ctx context.Context) (launchd.Info, error) {
 			return launchd.Status(ctx, a.Runner, os.Getuid(), launchd.DefaultLabel)
 		},
@@ -128,6 +128,10 @@ func newStatusDeps(a *app.App, version string) statusDeps {
 		DiskFree:  inspDiskFree, DiskPath: inspHome(), Now: inspNow,
 		Version: version,
 	}
+	if a.Yours != nil {
+		d.Yours = a.Yours
+	}
+	return d
 }
 
 // statusScanner is the part of *inventory.Scanner status reads.
@@ -146,12 +150,18 @@ type statusDeps struct {
 	Config    *config.Config
 	Layout    paths.Layout
 	Inventory statusScanner
-	Herdr     statusHerdr
-	Launchd   func(ctx context.Context) (launchd.Info, error)
-	DaemonPID func() (int, error)
-	DiskFree  func(path string) (uint64, error)
-	DiskPath  string
-	Now       func() time.Time
+	// Herdr is the client of PaneSession, the herdr session magnum's panes
+	// are in (app.App.PaneSession); Yours is your session's while they are
+	// in another (nil = the same): the working agents of both count, as
+	// they do toward max_total_working_codex.
+	Herdr       statusHerdr
+	Yours       statusHerdr
+	PaneSession herdr.Session
+	Launchd     func(ctx context.Context) (launchd.Info, error)
+	DaemonPID   func() (int, error)
+	DiskFree    func(path string) (uint64, error)
+	DiskPath    string
+	Now         func() time.Time
 	// Version is this binary's build and ModTime reads a binary's mtime
 	// (nil = engine.FileModTime): the daemon's build skew.
 	Version string
@@ -430,8 +440,14 @@ type statusRounds struct {
 }
 
 type statusAgents struct {
-	HerdrUp       bool   `json:"herdr_up"`
-	Error         string `json:"error,omitempty"`
+	HerdrUp bool   `json:"herdr_up"`
+	Error   string `json:"error,omitempty"`
+	// Session is the herdr session of magnum's panes, the one HerdrUp and
+	// Error are of; YoursError says why your session, whose working agents
+	// count too while the panes are in another, could not be read ("" =
+	// read, the same session, or no server of yours running: none works).
+	Session       string `json:"session,omitempty"`
+	YoursError    string `json:"yours_error,omitempty"`
 	WorkingCodex  int    `json:"working_codex"`
 	WorkingClaude int    `json:"working_claude"`
 	MaxCodex      int    `json:"max_codex"`
@@ -455,13 +471,13 @@ type statusKindCount struct {
 
 // statusPause is one reason automation (or part of it) is held back.
 type statusPause struct {
-	Scope  string     `json:"scope"` // daemon, infra, codex, claude, watch:<owner>, identity:<name>, github, github:<identity>
+	Scope  string     `json:"scope"` // daemon, herdr, infra, codex, claude, watch:<owner>, identity:<name>, github, github:<identity>
 	Reason string     `json:"reason"`
 	Detail string     `json:"detail,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`
 	// Since is when `magnum pause` began and Held how many review requests
-	// it holds (engine.KVDaemonPausedAt, KVDaemonPausedHeld); daemon scope
-	// only.
+	// it holds (engine.KVDaemonPausedAt, KVDaemonPausedHeld; daemon scope),
+	// or since when a move of magnum's panes waits (herdr scope).
 	Since *time.Time `json:"since,omitempty"`
 	Held  int        `json:"held,omitempty"`
 	// Using is the model the kind's sessions run while a model is limited

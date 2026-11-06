@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
@@ -175,4 +177,102 @@ func TestUIOpenOpensThePopupInTheSessionThePluginRanIn(t *testing.T) {
 			t.Fatalf("with HERDR_SOCKET_PATH %q the popup opens through %+v in %+v, want %+v", tc.env, d.Herdr, d.PaneSession, tc.want)
 		}
 	}
+}
+
+// With magnum's panes in a session of their own, status counts the working
+// agents of both, as max_total_working_codex does: yours with no server
+// running has none, and yours that does not answer is said, its agents not
+// counted.
+func TestStatusCountsWorkingAgentsInBothSessions(t *testing.T) {
+	_, _, d, _ := statusFixture(t)
+	d.PaneSession = herdr.Session{Name: "reviews", Socket: "/run/herdr/reviews.sock"}
+	d.Yours = fakeSnap{snap: herdr.Snapshot{Agents: []herdr.AgentInfo{{Agent: "codex", AgentStatus: herdr.StatusWorking},
+		{Agent: "claude", AgentStatus: herdr.StatusWorking}, {Agent: "codex", AgentStatus: herdr.StatusIdle}}}}
+	text := func() (statusReport, string) {
+		t.Helper()
+		r, err := statusGather(context.Background(), d, statusOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		statusRender(&b, r)
+		return r, b.String()
+	}
+	r, out := text()
+	if ag := r.Agents; ag == nil || ag.WorkingCodex != 2 || ag.WorkingClaude != 2 {
+		t.Fatalf("agents %+v, want the working codex and claude of both sessions", r.Agents)
+	}
+	actContains(t, out, "working agents: codex 2/5, claude 2")
+
+	d.Yours = fakeSnap{err: fmt.Errorf("herdr session.snapshot: %w: %w", herdr.ErrUnavailable, syscall.ECONNREFUSED)}
+	r, out = text()
+	if ag := r.Agents; !ag.HerdrUp || ag.WorkingCodex != 1 || ag.YoursError != "" || strings.Contains(out, "unreachable") {
+		t.Fatalf("agents %+v with no server of yours:\n%s", r.Agents, out)
+	}
+
+	d.Yours = fakeSnap{err: fmt.Errorf("herdr session.snapshot: %w", herdr.ErrTimeout)}
+	r, out = text()
+	if ag := r.Agents; !ag.HerdrUp || ag.WorkingCodex != 1 || ag.YoursError == "" {
+		t.Fatalf("agents %+v with your session not answering", r.Agents)
+	}
+	actContains(t, out, "working agents: codex 1/5, claude 1", "your herdr session unreachable")
+}
+
+// "herdr unreachable" names the session that is down, the one of magnum's
+// panes, in the text and on the dashboard.
+func TestStatusNamesTheHerdrSessionThatIsDown(t *testing.T) {
+	_, _, d, _ := statusFixture(t)
+	d.PaneSession = herdr.Session{Name: "reviews", Socket: "/run/herdr/reviews.sock"}
+	d.Herdr = fakeSnap{err: fmt.Errorf("herdr session.snapshot: %w: %w", herdr.ErrUnavailable, syscall.ENOENT)}
+	r, err := statusGather(context.Background(), d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	statusRender(&b, r)
+	actContains(t, b.String(), "herdr session reviews unreachable")
+	if got := statusDashData(r, "").Agents.Error; got != "herdr session reviews unreachable" {
+		t.Fatalf("the dashboard says %q", got)
+	}
+}
+
+// A move of magnum's panes holds new rounds: status shows it among the
+// pauses, with what it waits on; one the config asks for that the daemon
+// does not run yet is a warning that says how it starts.
+func TestStatusShowsAMoveOfThePanes(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	from := d.Config.YourHerdr()
+	d.PaneSession = from
+	d.Config.Herdr.ReviewSession = "reviews"
+	pauses := func() (statusReport, string) {
+		t.Helper()
+		r, err := statusGather(context.Background(), d, statusOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		statusRender(&b, r)
+		return r, b.String()
+	}
+	_, out := pauses()
+	actContains(t, out, "moving magnum's panes from herdr session default to reviews", "no new round starts")
+
+	mv := engine.PanesMove{From: from, To: d.Config.ReviewHerdr(), Since: now.Add(-40 * time.Minute),
+		Subject: "pr:talkable/talkable#5", Reason: "an agent works in its pane"}
+	raw, _ := json.Marshal(mv)
+	if err := st.SetKV(context.Background(), engine.KVHerdrPanesMove, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	_, out = pauses()
+	actContains(t, out, "moving magnum's panes from herdr session default to reviews since", "waits on talkable/talkable#5: an agent works in its pane")
+
+	if err := st.DeleteKV(context.Background(), engine.KVHerdrPanesMove); err != nil {
+		t.Fatal(err)
+	}
+	d.DaemonPID = func() (int, error) { return 0, nil }
+	r, out := pauses()
+	if slices.ContainsFunc(r.Pauses, func(p statusPause) bool { return p.Scope == "herdr" }) {
+		t.Fatalf("a move no daemon runs holds rounds: %+v", r.Pauses)
+	}
+	actContains(t, out, "warning: herdr: magnum's panes are in herdr session default and [herdr] review_session names reviews")
 }

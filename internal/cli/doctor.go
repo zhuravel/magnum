@@ -29,7 +29,8 @@ const doctorUsage = "[--json]"
 func newDoctorCmd(c *Context) *cobra.Command {
 	var asJSON bool
 	cmd := newCommand(groupInspect, "doctor "+doctorUsage, "check herdr, the agent CLIs, prompts, gh, MySQL, clones, SSH, disk, launchd and the registry",
-		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
+		"Check everything magnum depends on: config, herdr (the session of magnum's review panes and, while those run in "+
+			"[herdr] review_session, yours; a move of the panes that waits or is due; version and socket methods), every agent CLI the "+
 			"configured roles use (on PATH in zsh, logged in, shell wrapper), herdr's Codex session hook (the SessionStart hook in "+
 			"$CODEX_HOME/hooks.json herdr learns session ids from: missing, disabled in config.toml's [hooks.state], behind a hook "+
 			"without a timeout of 10 s or less, or with no trust entry for its place) and the Codex session ids of the registry (a WARN "+
@@ -92,14 +93,19 @@ type doctorDeps struct {
 	ConfigFile string // the config file that was loaded; "" means Layout.Config()
 	Store      *store.Store
 	Run        execx.Runner
-	Herdr      doctorHerdr
-	Agents     doctorAgents
-	MySQL      doctorMySQL // nil: the DSN is invalid
-	Inventory  statusScanner
-	Launchd    func(ctx context.Context) (launchd.Info, error)
-	DiskFree   func(path string) (uint64, error)
-	Getenv     func(string) string
-	UserHome   string
+	// Herdr is the client of PaneSession, the herdr session magnum's panes
+	// are in (app.App.PaneSession); Yours is your session's while they are
+	// in another (nil = the same).
+	Herdr       doctorHerdr
+	Yours       doctorHerdr
+	PaneSession herdr.Session
+	Agents      doctorAgents
+	MySQL       doctorMySQL // nil: the DSN is invalid
+	Inventory   statusScanner
+	Launchd     func(ctx context.Context) (launchd.Info, error)
+	DiskFree    func(path string) (uint64, error)
+	Getenv      func(string) string
+	UserHome    string
 }
 
 // doctorDiskFree reads the free bytes of a path (a seam for tests).
@@ -118,7 +124,7 @@ func runDoctor(c *Context, asJSON bool, pos []string) int {
 	defer cancel()
 	d := doctorDeps{
 		Config: a.Config, Layout: a.Layout, ConfigFile: configFileInUse(c), Store: a.Store, Run: a.Runner, Herdr: a.Herdr, Agents: a.Agents,
-		Inventory: a.Inventory,
+		PaneSession: a.PaneSession, Inventory: a.Inventory,
 		Launchd: func(ctx context.Context) (launchd.Info, error) {
 			return launchd.Status(ctx, a.Runner, os.Getuid(), launchd.DefaultLabel)
 		},
@@ -126,6 +132,9 @@ func runDoctor(c *Context, asJSON bool, pos []string) int {
 	}
 	if a.MySQL != nil {
 		d.MySQL = a.MySQL
+	}
+	if a.Yours != nil {
+		d.Yours = a.Yours
 	}
 	return doctorPrint(c, doctorRun(ctx, d), asJSON)
 }

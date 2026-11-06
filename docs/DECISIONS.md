@@ -14704,6 +14704,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   queued PR a free slot, checks that it would start without the move, and that no retro runs during it: it
   fails when `stopping` does not count the move, which it did not before.
 
+- **Doctor and status read both herdr sessions and show a move of magnum's panes** (2026-11-06). With the
+  review panes in `[herdr] review_session`, doctor pinged only the App's herdr (the panes' session) and named
+  `[herdr] socket` as its socket and `herdr` as its fix, listed the plugin there (it is linked in yours), and
+  said nothing of your session, which the toasts and the slot guards read; status counted the working agents
+  of the panes' session only, while `max_total_working_codex` counts yours too, and "herdr unreachable" did
+  not say which session; neither showed a move of the panes, which holds every round. Now doctor's `herdr`
+  check is the panes' session (a FAIL naming it and `herdr --session <name>`), a `your herdr` check is yours
+  while the panes are in another (a WARN: toasts show with osascript, and the guards see no agent of yours
+  with no server running, or hold every slot while it does not answer), one session is pinged once, the
+  plugin is listed in yours, and a `herdr move` WARN names a move that waits (kv `herdr.panes_move`: the PR or
+  the reason) or one the config asks for. Status counts the working agents of both sessions (yours with no
+  server has none; yours that does not answer is said and counts none), names the panes' session when it
+  does not answer, and shows a move as a `herdr` pause while the daemon holds rounds for it (a waiting one
+  with its PR and reason), or as a warning while the config asks for one the daemon does not run yet (it
+  names `magnum daemon-restart --drain`). Tests, failing first: TestDoctorChecksThePaneSessionAndYours,
+  TestDoctorWarnsOfAMoveThatWaits, TestStatusCountsWorkingAgentsInBothSessions,
+  TestStatusNamesTheHerdrSessionThatIsDown, TestStatusShowsAMoveOfThePanes; TestDoctorPingsOneSessionOnce pins
+  the single session and fails on a second ping of it.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

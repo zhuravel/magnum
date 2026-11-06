@@ -491,11 +491,23 @@ func statusRoundsText(r statusReport) string {
 			for _, k := range ag.WorkingOther {
 				rounds += fmt.Sprintf(", %s %d", statusSafe(k.Kind, 0), k.Working)
 			}
+			if ag.YoursError != "" {
+				rounds += "; your herdr session unreachable, its agents not counted"
+			}
 		} else {
-			rounds += "; herdr unreachable"
+			rounds += "; " + statusHerdrDown(ag)
 		}
 	}
 	return rounds
+}
+
+// statusHerdrDown says that the herdr session of magnum's panes does not
+// answer, naming it when known.
+func statusHerdrDown(ag *statusAgents) string {
+	if ag.Session == "" {
+		return "herdr unreachable"
+	}
+	return "herdr session " + statusSafe(ag.Session, 0) + " unreachable"
 }
 
 // statusCLIsText is the clis line's value: each agent kind's CLI version,
