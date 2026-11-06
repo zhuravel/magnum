@@ -14761,6 +14761,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   are wired to them at `app.New`; the warning is enough for a once-only move). Tests, failing first:
   TestStatusOpenAcrossAMoveOfThePanesReadsWhereTheyAreNow, TestTheScreensKeysFollowAMoveOfThePanes.
 
+- **A move of magnum's panes rebinds each PR's sessions by their conversations before it parks them**
+  (2026-11-06, a review of "A move of magnum's panes waits for an old server that is not running"). That
+  entry waits for the old session's server so that the move parks what herdr restores there. But herdr
+  numbers the restored workspaces and panes anew, and resumes agents without the names magnum gave them; the
+  daemon's start, the only place that rebinds a row by its conversation (`agents.Manager.Recover`), had found
+  no server, and observe finds an agent only by its name, so such a row was lost. `Park` reaches a session's
+  agent only by its name, its pane or its recorded workspace: it retired the live rows without a quit, left
+  the lost rows' agents alone, and the move forgot the ids and restarted in the new session, while the
+  restored agent went on in the old one, and the PR's next round resumed the same conversation there: the
+  double run the wait is for. Now the move runs `Recover` on each PR, under its reservation, before `Park`:
+  a live row moves to the pane that holds its conversation, a role's newest lost or parked row whose
+  conversation herdr shows becomes live there when the role has no live row, and `Park` then quits the agent
+  and closes its workspace. A recovery that fails
+  holds the move as a park that fails does, and one that finds no server waits for it. Rejected: quitting
+  any agent of the old snapshot whose conversation a row records, in a new park of its own (`Recover`
+  already rebinds by conversation, and `Park` keeps its checks of busy and foreign panes). Test, failing
+  first: TestAMoveParksAnAgentTheOldServerRestoredByItsConversation.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

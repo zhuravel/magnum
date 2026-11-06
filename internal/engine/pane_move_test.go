@@ -18,6 +18,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -530,6 +531,57 @@ func TestAMoveFromASessionWithNoServerWaitsForItsServer(t *testing.T) {
 			t.Fatalf("record %+v", got)
 		}
 	})
+}
+
+// When the old session's server starts again, herdr restores its
+// workspaces under new ids and resumes their agents in their conversations,
+// an agent without the name magnum gave it among them; the daemon's start
+// found no server and so rebound nothing, and observe finds no agent by that
+// name, so the row is lost. The move rebinds each PR's sessions to the
+// panes that hold their conversations (agents.Manager.Recover) before it
+// parks them: the restored agent is parked and its workspace closed in the
+// old session, never left to resume its conversation beside the new
+// session's round.
+func TestAMoveParksAnAgentTheOldServerRestoredByItsConversation(t *testing.T) {
+	eh := newEvalHerdr()
+	h := newHarness(t, withPanesInYours, func(hs *harness) {
+		hs.d.Herdr = eh
+		run := &execx.Fake{Rules: []execx.Rule{
+			{Prefix: []string{"codex", "login", "status"}, Result: execx.Result{Stdout: []byte("Logged in using ChatGPT\n")}},
+			{Prefix: []string{"claude", "auth", "status"}, Result: execx.Result{Stdout: []byte(`{"loggedIn": true}`)}},
+		}}
+		cli := t.TempDir()
+		hs.d.Agents = agents.New(agents.Deps{Herdr: eh, Store: hs.st, Runner: run, Config: hs.cfg, Layout: hs.layout,
+			Clock: hs.clock.Now, CodexConfig: cli + "/codex.toml", ClaudeConfig: cli + "/claude.json",
+			ClaudeSettings: cli + "/settings.json", ClaudeDir: cli, CodexHome: cli,
+			Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }})
+	})
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.closedPRWithPanes(7) // its session conv-w7 recorded in workspace w7, pane w7:p1
+	ws := eh.addWorkspace("talkable#7", "/slots/talkable.7")
+	conv := &herdr.AgentSession{Agent: "claude", Kind: "id", Source: "herdr:claude", Value: "conv-w7"}
+	eh.mu.Lock()
+	for i := range eh.panes {
+		if eh.panes[i].WorkspaceID == ws {
+			eh.panes[i].Agent, eh.panes[i].AgentSession = "claude", conv
+		}
+	}
+	eh.agents = append(eh.agents, herdr.AgentInfo{PaneID: ws + ":p1", WorkspaceID: ws, TabID: ws + ":t1", Agent: "claude",
+		AgentStatus: herdr.StatusIdle, AgentSession: conv})
+	eh.mu.Unlock()
+	h.moveToReviews()
+
+	if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
+		t.Fatalf("tick = %v, want ErrRestartForPanes", err)
+	}
+	if eh.has(ws) {
+		t.Fatalf("workspace %s, where herdr restored conversation conv-w7, stays in the old session (closed %v)", ws, eh.closedIDs())
+	}
+	if got, _ := h.panesRecord(); got != reviewsPanes {
+		t.Fatalf("record %+v, want session reviews", got)
+	}
 }
 
 // A move whose restart is refused (what launchd would start fails its

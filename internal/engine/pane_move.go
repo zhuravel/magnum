@@ -8,9 +8,10 @@ package engine
 // (config.Config.ReviewHerdr), the daemon moves them. Until then it holds
 // whatever would open panes in the old session, as a drain does
 // (panesMoving: rounds, retros, curations, the gate, fixes, whiteboards,
-// opens). At the first tick with nothing in flight (restartForBuild) it parks
-// every PR whose sessions record a herdr id and closes their retired panes,
-// in the old session; forgets every id (store.ForgetHerdrIDs: the live rows
+// opens). At the first tick with nothing in flight (restartForBuild) it
+// rebinds the sessions of every PR that records a herdr id to the panes that
+// hold their conversations (Agents.Recover), parks them and closes their
+// retired panes, in the old session; forgets every id (store.ForgetHerdrIDs: the live rows
 // become lost and resume by their conversations); records the new session;
 // toasts once in your session; and exits (ErrRestartForPanes) for launchd to
 // start the daemon there. A park that is refused, an old server that does
@@ -215,8 +216,14 @@ func (e *Engine) movePanes(ctx context.Context, from, to herdr.Session) bool {
 // parkForMove parks PR id's sessions and closes its retired panes in the
 // old session, under the PR's reservation, and returns the PR's audit
 // subject and why it could not ("" = parked): its round in flight, a
-// reservation another job holds, or a park refused or failed, whose error
-// it returns too. A PR the registry no longer has is nothing to park.
+// reservation another job holds, or a recovery or park refused or failed,
+// whose error it returns too. A PR the registry no longer has is nothing to
+// park. Its sessions are first rebound to the panes that hold their
+// conversations (Agents.Recover): a server that started again since the
+// daemon's start restored its workspaces under new ids and resumed their
+// agents, some without the names magnum gave them, and Park finds a
+// session's agent only by its name, its pane or its workspace, so such an
+// agent would go on in the old session.
 func (e *Engine) parkForMove(ctx context.Context, id int64, to herdr.Session) (subject, reason string, err error) {
 	pr, err := e.st.PRByID(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -233,7 +240,10 @@ func (e *Engine) parkForMove(ctx context.Context, id int64, to herdr.Session) (s
 		return subject, e.heldReason(pr.ID), nil
 	}
 	defer e.endEviction(pr.ID)
-	err = e.d.Agents.Park(ctx, pr)
+	_, err = e.d.Agents.Recover(ctx, pr)
+	if err == nil {
+		err = e.d.Agents.Park(ctx, pr)
+	}
 	if err == nil {
 		err = e.d.Agents.CloseRetiredPanes(ctx, pr)
 	}
