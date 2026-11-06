@@ -22,7 +22,7 @@
 - The surface values are exactly `cli`, `screen`, `pane` and the new `liaison`. `answer` and `decide` accept only `cli` and `liaison`.
 - The role name is exactly `fx-liaison` and its prompt file is exactly `prompts/factory-liaison.md`.
 - The liaison's working directory is exactly `Layout.FactoryTaskDir(task id)`. It never works in the copy.
-- The liaison's owner row: repo node id `factory:liaison`, PR node id `factory:liaison:<task id>`.
+- The liaison's owner row: repository node id `factory-liaison` with owner `factory-liaison` and name `liaison` (ruling 10: `repos` is unique on node id and on owner and name, and task repositories are `factory/<name>`), PR node id `factory:liaison:<task id>`.
 - Every behavior change gets a DECISIONS entry at the end of the section it belongs to (AGENTS.md): a factory change under `## The factory (2026-11-03)`, a change to the agents' handling of any role under `## Agents in panes`. Never inside `## Learned rules`. The README describes every new command, flag and key.
 - Gate per task: `go test -count=1 -race` on the touched packages, `make test`, and `golangci-lint run --new-from-rev=<base>` on them. When exports change, also `make api-doc` and `make api-doc-check`.
 
