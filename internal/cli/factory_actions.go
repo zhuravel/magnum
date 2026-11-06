@@ -291,6 +291,9 @@ func (a *factoryActions) Diff(taskID int64) *exec.Cmd {
 	// with tea.ExecProcess, which owns its life.
 	cmd := exec.Command("git", factory.DiffArgs(card, order)...) //nolint:gosec,noctx // see above
 	cmd.Env = append(os.Environ(), "LESS="+pagerLess(os.Getenv("LESS")))
+	if p := strings.TrimSpace(a.c.Config.Factory.DiffPager); p != "" {
+		cmd.Env = append(cmd.Env, "GIT_PAGER="+p) // [factory] diff_pager: your viewer, over git's diff in the card's order
+	}
 	return cmd
 }
 

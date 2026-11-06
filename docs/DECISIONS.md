@@ -15382,6 +15382,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `enter ready card`) only then; with no decision waiting, enter stays. Test:
   TestEnterOnATaskCardOpensTheDecisionItsTaskWaitsOn.
 
+- `[factory] diff_pager` sets the pager of the screen's `d` (2026-11-06). Reading a ready card's diff through
+  less in a small herdr pane was hard, and the operator reads diffs with hunk. The key sets `GIT_PAGER` on
+  the same `git diff` (git prefers it over `core.pager`), so the card's file order, the flagged files first,
+  stays, and the diff counts as read when the viewer exits, as before. The default stays git's own pager,
+  so the built-in defaults name no tool a machine may lack. Rejected: `hunk diff <base> <head>` as its own
+  command (it loses the order file). Test: TestDiffPagesTheReadyCardsDiffInTheTasksCopy.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

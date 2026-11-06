@@ -3399,6 +3399,7 @@ max_active = 3                       # tasks with live agents or a held copy at 
 memory_gate_swap = 80                # new tasks wait while the swap is this many percent used (0 = no gate)
 heavy_stages = 1                     # heavy stages at once across tasks (a local review round, local QA, a server)
 herdr_session = "factory"            # the herdr session of the factory's panes: its own windows, apart from reviews
+# diff_pager = "hunk pager"          # the pager of the screen's d (GIT_PAGER); "" = git's own
 observe = "10s"                      # how often it reads its panes
 poll = "45s"                         # how often it reads CI and the staging branches' tips
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
@@ -3616,7 +3617,7 @@ is a row that says why, and the rest is drawn. Each action is a request to the f
 commands send them (the daemon records your input once); `o` focuses the task's pane in the factory's herdr
 session (`[factory] herdr_session`) and brings that terminal to the front, and `d` pages the ready card's diff
 in the task's copy (no external diff, no textconv), the flagged files first, and the pager never quits at once on
-a short diff (`-+F` after your `LESS`); the diff counts as read when the pager exits, so a `core.pager` that exits at once (not less) counts it as read at once. Without a factory daemon a request waits queued, and the footer says so.
+a short diff (`-+F` after your `LESS`); the diff counts as read when the pager exits, so a `core.pager` that exits at once (not less) counts it as read at once. `[factory] diff_pager` sets the pager (`GIT_PAGER`) for it alone: `diff_pager = "hunk pager"` opens [hunk](https://hunk.dev/) on the same diff, in the card's file order. Without a factory daemon a request waits queued, and the footer says so.
 Each frame reads the factory daemon's pidfile and probes its process (`kill -0`, no ps): while no daemon runs,
 home's blocker line says so (`factory daemon down: nothing moves`, and `magnum factory install` starts it on a wide
 screen), the holds the last daemon saved are not shown, and no working mark turns.

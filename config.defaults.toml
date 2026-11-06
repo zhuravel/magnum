@@ -789,6 +789,8 @@ heavy_stages = 1                  # heavy stages at once across tasks (a local r
 # herdr_socket = ""               # "" = the named session's own socket; else an absolute path (~ expands)
 herdr_session = "factory"         # the herdr session of the factory's panes (`herdr --session factory`): its own server
                                   # and windows, apart from the panes of magnum's reviews
+# diff_pager = ""                 # the pager of the screen's d (GIT_PAGER): "" = git's own; "hunk pager" opens hunk on
+                                  # the same diff, in the card's file order
 observe = "10s"                   # how often the factory reads its panes; must be positive
 poll = "45s"                      # how often it reads CI and the staging branches' tips from GitHub; must be positive
 human_cooldown = "15m"            # after you type into a factory pane the factory leaves it alone this long

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -472,6 +473,27 @@ func TestDiffPagesTheReadyCardsDiffInTheTasksCopy(t *testing.T) {
 	}
 	if at.act.Diff(other.ID) != nil {
 		t.Error("a diff for a task with no ready card")
+	}
+
+	// [factory] diff_pager pages it with your viewer (GIT_PAGER, which git
+	// prefers over core.pager), keeping the card's order; with none, git's
+	// own pager.
+	pager := func(cmd *exec.Cmd) string {
+		got := ""
+		for _, e := range cmd.Env {
+			if v, ok := strings.CutPrefix(e, "GIT_PAGER="); ok {
+				got = v // the last one wins
+			}
+		}
+		return got
+	}
+	if got := pager(at.act.Diff(ready.ID)); got == "hunk pager" {
+		t.Errorf("GIT_PAGER %q with no diff_pager", got)
+	}
+	at.ctx.Config.Factory.DiffPager = "hunk pager"
+	cmd = at.act.Diff(ready.ID)
+	if got := pager(cmd); got != "hunk pager" || !slices.Equal(cmd.Args, append([]string{"git"}, factory.DiffArgs(card, order)...)) {
+		t.Errorf("diff with diff_pager: GIT_PAGER %q, args %q; want hunk pager over the same git diff", got, cmd.Args)
 	}
 }
 
