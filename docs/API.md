@@ -4059,6 +4059,7 @@ const (
 const (
 	AutofixNever = "never" // a fix loop starts only on request
 	AutofixOwn   = "own"   // and after a review with findings on the operator's own PRs
+	AutofixOpen  = "open"  // and on the operator's own PRs whenever something is open, once the reviewers settled
 )
     Values of [pipeline] autofix.
 
@@ -4189,6 +4190,9 @@ const (
 const AutoApproveBodyMax = 500
     AutoApproveBodyMax bounds auto_approve_body, in characters.
 
+const AutofixMaxLoopsMax = 20
+    AutofixMaxLoopsMax bounds autofix_max_loops.
+
 const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
     BuiltinDefaults names the embedded base in messages and Sources.
 
@@ -4221,6 +4225,10 @@ const DefaultAuditEvery = 5
 const DefaultAutoApproveBody = "Auto-approved: Magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
+
+const DefaultAutofixMaxLoops = 3
+    DefaultAutofixMaxLoops is [pipeline] autofix_max_loops' default: three loops
+    a day on one PR that autofix = "open" starts, then the PR needs you.
 
 const DefaultBudgetFloor = 500
     DefaultBudgetFloor is github budget_floor's default: about a tenth of a
@@ -4434,6 +4442,10 @@ var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base", "em
 
 
 FUNCTIONS
+
+func AutofixStarts(v string) bool
+    AutofixStarts reports whether autofix value v starts fix loops by itself
+    (AutofixOwn or AutofixOpen).
 
 func DefaultCriticModel(kind string) string
     DefaultCriticModel is the critic's model of a kind the config names without
@@ -5057,9 +5069,9 @@ func (c *Config) Warnings() []string
     have neither; they live in the user's ~/.config/magnum/config.toml),
     but magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout
     or judge_timeout set while every role it would be the fallback of sets its
-    own timeout changes nothing; a watch with autofix = "own" whose fix job
-    cannot run as it should (fixRoleWarnings). Print them from `magnum doctor`
-    and `magnum config`.
+    own timeout changes nothing; a watch with autofix = "own" or "open" whose
+    fix job cannot run as it should (fixRoleWarnings). Print them from `magnum
+    doctor` and `magnum config`.
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
@@ -6232,8 +6244,41 @@ type Pipeline struct {
 	// Autofix: AutofixNever (default) starts a fix loop only when asked
 	// (`magnum fix`, the board); AutofixOwn starts it by itself after a
 	// review with findings on a PR whose author is one of the operator's
-	// logins. A [[watch]] may override it; see Config.AutofixFor.
+	// logins; AutofixOpen starts it on such a PR whenever something is open
+	// on it (magnum's findings, another reviewer's item, a conflict with
+	// its base) once the reviewers settled (the engine's fix_open.go). A
+	// [[watch]] may override it; see Config.AutofixFor.
 	Autofix string `toml:"autofix"`
+	// SettleQuiet, SettleMax and SettleChecks say when the reviewers of a
+	// head settled, for autofix = "open": the PR saw no activity for
+	// SettleQuiet (default 3m) and every check SettleChecks names (by check
+	// run or workflow name, any case) that exists at the head is done
+	// (default none); both are waited for at most SettleMax (default 20m)
+	// after the head moved. magnum's own review of the head is waited for
+	// without a cap (MagnumLateAfter says when it is late).
+	SettleQuiet  Duration `toml:"settle_quiet"`
+	SettleMax    Duration `toml:"settle_max"`
+	SettleChecks []string `toml:"settle_checks"`
+	// MagnumLateAfter: under autofix = "open", a head magnum has not
+	// reviewed this long after its round was due needs the operator, once
+	// per head (default 2h; 0 = never; else at least 30m).
+	MagnumLateAfter Duration `toml:"magnum_late_after"`
+	// AutofixMaxLoops caps the fix loops autofix = "open" starts on one PR
+	// in 24 hours, after which the PR needs the operator (default
+	// DefaultAutofixMaxLoops; 1 to 20); a loop asked for by hand is not
+	// counted.
+	AutofixMaxLoops int `toml:"autofix_max_loops"`
+	// HandsOffAfterPush: under autofix = "open", no loop starts on a head
+	// the fixer did not push (the operator's own push) until this long
+	// after the head moved (default 30m; 0 to 24h).
+	HandsOffAfterPush Duration `toml:"hands_off_after_push"`
+	// QuietLogins and QuietMarkers: under autofix = "open", a review body
+	// or conversation comment by one of QuietLogins, or whose body holds
+	// one of QuietMarkers, asks nothing and starts no loop (a bot's
+	// receipt, a status note). Review threads never go quiet: a lint bot
+	// that posts notices on the conversation may post findings as threads.
+	QuietLogins  []string `toml:"quiet_logins"`
+	QuietMarkers []string `toml:"quiet_markers"`
 	// FixCompactAt: before a fix cycle resumes the fixer's conversation (a
 	// live session, or a parked one ResumeID resumes; a fixer that starts
 	// fresh never), the fix job reads how full its context is from the

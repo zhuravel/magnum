@@ -573,3 +573,15 @@ func TestEveryFieldWritesAKeyMagnumLoads(t *testing.T) {
 		}
 	}
 }
+
+// The settings screen offers every autofix value the configuration
+// accepts, "open" included, and its description names it.
+func TestTheSettingsOfferAutofixOpen(t *testing.T) {
+	s := newSnapshot(t, "")
+	if got := s.Options(g("pipeline.autofix")); !slices.Equal(got, []string{"never", "own", "open"}) {
+		t.Errorf("autofix options = %v, want never, own and open", got)
+	}
+	if f, ok := s.byID["pipeline.autofix"]; !ok || !strings.Contains(f.Description, "open:") {
+		t.Errorf("autofix field = %+v, want its description to say what open does", f)
+	}
+}

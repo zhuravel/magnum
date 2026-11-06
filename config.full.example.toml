@@ -93,6 +93,9 @@ skip_authors = ["dependabot"]
 # related_ignore = ["**/*.lock", "db/schema.rb"]   # [pipeline]'s lockfiles: paths that never relate two PRs nor reach history.json
 # status_comment = true                 # [pipeline]'s false: one comment per PR, edited in place, that says whether its review is
 #                                       # scheduled (and why it waits), in progress or posted (README, Review status comment)
+# autofix = "open"                      # [pipeline]'s "never": "own" starts a fix loop on your own PR after a review with
+#                                       # findings; "open" on anything open on it once reviewers settle ([pipeline] settle_*,
+#                                       # quiet_logins, quiet_markers; README, Fixing your own PRs)
 
 [[pool]]
 repo = "talkable/talkable"

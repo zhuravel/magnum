@@ -174,8 +174,8 @@ func TestValidateFixRole(t *testing.T) {
 			r.Kind, r.Mode, r.Model, r.Command, r.Prompt = KindShell, ModeShell, "", "true", ""
 		}, "role claude-fix: a fix role must be an agent session"},
 		"after names a fix role": {func(c *Config) { role(c, "claude-simplify").After = []string{"claude-fix"} }, "after names fix role claude-fix"},
-		"autofix unknown":        {func(c *Config) { c.Pipeline.Autofix = "sometimes" }, `pipeline: autofix must be never or own, got "sometimes"`},
-		"watch autofix unknown":  {func(c *Config) { c.Watches[0].Autofix = "sometimes" }, `watch acme: autofix must be never or own, got "sometimes"`},
+		"autofix unknown":        {func(c *Config) { c.Pipeline.Autofix = "sometimes" }, `pipeline: autofix must be never, own or open, got "sometimes"`},
+		"watch autofix unknown":  {func(c *Config) { c.Watches[0].Autofix = "sometimes" }, `watch acme: autofix must be never, own or open, got "sometimes"`},
 		"fix_cycles zero":        {func(c *Config) { c.Pipeline.FixCycles = 0 }, "pipeline: fix_cycles must be at least 1, got 0"},
 		"watch fix_cycles zero":  {func(c *Config) { c.Watches[0].FixCycles = new(0) }, "watch acme: fix_cycles must be at least 1, got 0"},
 	}

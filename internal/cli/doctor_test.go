@@ -867,6 +867,44 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 	}
 }
 
+// autofix = "open" starts the fix job by itself as "own" does, so the
+// doctor checks its fix job the same way: a fix_role that names no declared
+// fix role, or an App the fix role would act as, fails.
+func TestDoctorChecksTheFixJobUnderAutofixOpen(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fixCheck := func(d doctorDeps) doctorCheck {
+		t.Helper()
+		var found []doctorCheck
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "fix role" {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%d fix role checks: %+v", len(found), found)
+		}
+		return found[0]
+	}
+	open := func(d doctorDeps) doctorDeps {
+		cfg := *d.Config
+		cfg.Watches = slices.Clone(cfg.Watches[:1])
+		cfg.Watches[0].Autofix = config.AutofixOpen
+		d.Config = &cfg
+		return d
+	}
+	gone := doctorWithFixSkill(t, d, "pass")
+	gone.Config.Roles = slices.DeleteFunc(gone.Config.AllRoles(), func(r config.Role) bool { return r.Fix })
+	if c := fixCheck(open(gone)); c.Status != doctorFail || !strings.Contains(c.Detail, `watch talkable: autofix = "open" but fix_role "claude-fix" names no declared fix role`) {
+		t.Fatalf("a fix role left out under autofix open = %+v", c)
+	}
+	app := doctorWithFixSkill(t, d, "pass")
+	app.Config.Watches = app.Config.Watches[:1]
+	app.Config.Watches[0].PollIdentity = "talkable-app"
+	if c := fixCheck(open(app)); c.Status != doctorFail || !strings.Contains(c.Detail, "identity talkable-app is an app identity") {
+		t.Fatalf("app identity under autofix open = %+v", c)
+	}
+}
+
 // The whiteboard line says whether the whiteboard job can run: skipped, with
 // nothing run, while no watch has whiteboards on; with them on, the
 // `whiteboard` CLI must be on PATH (a failure: the job cannot run at all)

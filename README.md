@@ -3143,13 +3143,23 @@ cycle that re-review called for. A loop that ended before this rule as "the re-r
 reply round for its re-review, whose review stands.
 
 **Configuration.** Four `[pipeline]` keys set the job, and a `[[watch]]` may set its own of the first three.
+The keys after them shape `autofix = "open"` (see Autofix on anything open, below) and are `[pipeline]` only.
 
 ```toml
 [pipeline]
 fix_role = "claude-fix"    # the role the fix job runs, "" = no fix job (on a watch: off for that watch)
 fix_cycles = 3             # fix runs one loop may take before the PR needs you (at least 1)
-autofix = "never"          # never | own: start a loop by itself after a review with findings on your own PR
+autofix = "never"          # never | own | open: own starts a loop by itself after a review with findings on
+                           # your own PR; open also after anything else open on it, once reviewers settle
 fix_compact_at = 70        # compact a resumed fixer whose context is this full (percent; 0 = off, at most 99)
+settle_quiet = "3m"        # open: no activity on the PR for this long ...
+settle_max = "20m"         # ... and the settle_checks done, waited for at most this long after the head moved
+settle_checks = []         # check names the settle waits for at the head, e.g. ["pronto"]
+magnum_late_after = "2h"   # open: magnum's review of a head this late past due needs you ("0" = never)
+autofix_max_loops = 3      # open: loops it starts on one PR in 24 hours (1 to 20); f does not count
+hands_off_after_push = "30m"   # open: no loop on a head you pushed until this long after it (0 to 24h)
+quiet_logins = []          # open: review bodies and comments by these logins ask nothing, e.g. ["example-bot"]
+quiet_markers = []         # open: nor do review bodies and comments that hold one of these texts
 ```
 
 The figure `fix_compact_at` compares comes from `[kinds.claude] context_pattern` (see A conversation that
@@ -3175,6 +3185,17 @@ for this PR: this requested loop runs anyway", as a forced review runs on a mute
 (the board's `F` again) puts the PR back. Muting a PR stops every automatic round, and `fix off` stops only
 autofix. The status dashboard has the same `f` and `F` keys, and its `F` reads `fix on` on a PR you took
 out, as the board's does.
+
+**Autofix on anything open.** `autofix = "open"` starts a loop on your own PR whenever something on it is
+open: Magnum's findings (simplifications and optional findings included), another reviewer's unanswered
+thread, review body or comment, or a conflict with the PR's own base. It starts only once the reviewers
+settled on the head: Magnum reviewed it (waited for without a cap; `magnum_late_after` past the time its
+round was due, the PR needs you), nobody touched the PR for `settle_quiet`, and every `settle_checks` check
+at the head is done, these last two waited for at most `settle_max`. A review body or comment by one of
+`quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
+lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
+most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you pushed until
+`hands_off_after_push` passed, and none on a draft, a fork or a PR you took out of autofix.
 
 **What you see.**
 

@@ -472,31 +472,31 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 // skill resolves (the checkout's files, else the binary's own copy), and its
 // identity is a gh identity whose login check passes, since the fixer pushes
 // and replies as the operator's own account. A watch whose autofix = "own"
-// cannot start the job by itself fails: its fix_role names no declared fix
-// role (a [[role]] list of the operator's own replaces the built-in
-// claude-fix), or the poll identity its fix role takes is an App. A
-// configuration that uses no fix job gets a SKIP: no fix role (fix_role = ""
-// switches it off on purpose), a fix_role that names no declared fix role, an
-// identity it never declared, or a watch that polls as an App, where no
-// watch's autofix = "own" would start the job.
+// or "open" (config.AutofixStarts) cannot start the job by itself fails: its
+// fix_role names no declared fix role (a [[role]] list of the operator's own
+// replaces the built-in claude-fix), or the poll identity its fix role takes
+// is an App. A configuration that uses no fix job gets a SKIP: no fix role
+// (fix_role = "" switches it off on purpose), a fix_role that names no
+// declared fix role, an identity it never declared, or a watch that polls as
+// an App, where no watch's autofix would start the job.
 func doctorFixRole(ctx context.Context, d doctorDeps) []doctorCheck {
 	const name = "fix role"
 	cfg := d.Config
 	var roles []config.Role
 	var out []doctorCheck
 	same := func(a, b config.Role) bool { return a.Name == b.Name && a.Identity == b.Identity }
-	autofix := map[[2]string]bool{}       // by role and identity: a watch with autofix = "own" starts that job by itself
+	autofix := map[[2]string]bool{}       // by role and identity: a watch with autofix "own" or "open" starts that job by itself
 	owners := map[[2]string][]string{}    // by role and identity: the watches whose fix job it is
 	var undeclared []string               // fix_role names that resolve to no declared fix role, where no autofix starts the job
 	undeclaredBy := map[string][]string{} // by such a name: the watches (or [pipeline]) that name it
 	add := func(w *config.Watch) {
-		own := w != nil && cfg.AutofixFor(w) == config.AutofixOwn
+		own := w != nil && config.AutofixStarts(cfg.AutofixFor(w))
 		r, ok := cfg.FixRoleFor(w)
 		if !ok {
 			switch n := strings.TrimSpace(cfg.FixRoleName(w)); {
 			case n == "":
 			case own:
-				out = append(out, doctorFailed(name, fmt.Sprintf(`watch %s: autofix = "own" but fix_role %q names no declared fix role, so the fix job never starts by itself`, w.Owner, n),
+				out = append(out, doctorFailed(name, fmt.Sprintf(`watch %s: autofix = %q but fix_role %q names no declared fix role, so the fix job never starts by itself`, w.Owner, cfg.AutofixFor(w), n),
 					fmt.Sprintf("declare a [[role]] named %s with fix = true (a [[role]] list of your own replaces the built-in claude-fix), or set fix_role", n)))
 			default:
 				if !slices.Contains(undeclared, n) {
@@ -552,7 +552,7 @@ func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofi
 	if id == nil {
 		why := fmt.Sprintf("%s: identity %q is not declared, so the fix job cannot run", head, r.Identity)
 		if autofix {
-			return []doctorCheck{doctorFailed(name, why+`, and autofix = "own" would start it`,
+			return []doctorCheck{doctorFailed(name, why+`, and autofix (own or open) would start it`,
 				fmt.Sprintf("declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s", r.Identity, r.Name))}
 		}
 		return []doctorCheck{doctorSkipped(name, why+"; `magnum fix` is refused until it is declared")}
@@ -592,7 +592,7 @@ func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofi
 	}
 	switch {
 	case id.Kind != "gh":
-		out = append(out, doctorFailed(name, fmt.Sprintf(`%s: identity %s is an %s identity: the fixer pushes and replies as your own account, and autofix = "own" would start it`, head, id.Name, id.Kind),
+		out = append(out, doctorFailed(name, fmt.Sprintf(`%s: identity %s is an %s identity: the fixer pushes and replies as your own account, and autofix (own or open) would start it`, head, id.Name, id.Kind),
 			"poll as a gh [[identity]] for your account (the watch's poll_identity, which the fix role takes), or set identity in the [[role]] named "+r.Name))
 	case kv(store.KVIdentityCheck(id.Name)) == "pass":
 		ok = append(ok, who+": last check passed")

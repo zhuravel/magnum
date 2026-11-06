@@ -22,8 +22,8 @@ import (
 // built-in defaults have neither; they live in the user's ~/.config/magnum/config.toml), but
 // magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout or
 // judge_timeout set while every role it would be the fallback of sets its
-// own timeout changes nothing; a watch with autofix = "own" whose fix job
-// cannot run as it should (fixRoleWarnings). Print them from `magnum
+// own timeout changes nothing; a watch with autofix = "own" or "open" whose
+// fix job cannot run as it should (fixRoleWarnings). Print them from `magnum
 // doctor` and `magnum config`.
 func (c *Config) Warnings() []string {
 	var out []string
@@ -44,8 +44,8 @@ func (c *Config) Warnings() []string {
 }
 
 // fixRoleWarnings lists the problems of the fix job of each watch whose
-// autofix is "own" (AutofixFor), the only watches where it starts by
-// itself: a configuration that never switches autofix on gets none, and
+// autofix is "own" or "open" (AutofixFor, AutofixStarts), the only
+// watches where it starts by itself: a configuration that never switches autofix on gets none, and
 // `magnum fix` answers for a job asked by hand. The problems do not make
 // the configuration invalid: the watch's fix_role names no declared fix
 // role (a [[role]] list of the operator's own replaces the built-in
@@ -64,15 +64,16 @@ func (c *Config) fixRoleWarnings() []string {
 	seen := map[string]bool{}
 	for i := range c.Watches {
 		w := &c.Watches[i]
-		if c.AutofixFor(w) != AutofixOwn {
+		auto := c.AutofixFor(w)
+		if !AutofixStarts(auto) {
 			continue
 		}
 		r, ok := c.FixRoleFor(w)
 		switch name := strings.TrimSpace(c.FixRoleName(w)); {
 		case !ok && name != "":
-			out = append(out, fmt.Sprintf("watch %s: autofix = \"own\" but no fix role resolves for it (fix_role %q names no "+
+			out = append(out, fmt.Sprintf("watch %s: autofix = %q but no fix role resolves for it (fix_role %q names no "+
 				"declared role with fix = true; a [[role]] list of your own replaces the built-in claude-fix), so the fix job "+
-				"never starts by itself", w.Owner, name))
+				"never starts by itself", w.Owner, auto, name))
 			continue
 		case !ok: // fix_role = "": the fix job is off for the watch on purpose
 			continue
@@ -82,9 +83,9 @@ func (c *Config) fixRoleWarnings() []string {
 		switch {
 		case raw.Identity != "" && fixer == nil:
 			if !seen[r.Name] {
-				out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so autofix = \"own\" cannot start the fix job "+
+				out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so autofix = %q cannot start the fix job "+
 					"(declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s)",
-					r.Name, r.Identity, r.Identity, r.Name))
+					r.Name, r.Identity, auto, r.Identity, r.Name))
 			}
 			seen[r.Name] = true
 			continue
@@ -95,9 +96,9 @@ func (c *Config) fixRoleWarnings() []string {
 			continue
 		}
 		if post := c.IdentityByName(w.Identity); post != nil && fixer != nil && github.SameAccount(post.Login, fixer.Login) {
-			out = append(out, fmt.Sprintf("watch %s posts as login %q (identity %q), the login fix role %s fixes as, and autofix = \"own\" "+
+			out = append(out, fmt.Sprintf("watch %s posts as login %q (identity %q), the login fix role %s fixes as, and autofix = %q "+
 				"starts the fix job on its reviews: the fixer could not tell magnum's review threads from its own replies; "+
-				"post the reviews as an App identity, or give the fixer another identity", w.Owner, post.Login, w.Identity, r.Name))
+				"post the reviews as an App identity, or give the fixer another identity", w.Owner, post.Login, w.Identity, r.Name, auto))
 		}
 	}
 	return out
@@ -743,9 +744,9 @@ func (c *Config) validatePipeline() []error {
 	}
 	autofix := func(where, v string) {
 		switch v {
-		case "", AutofixNever, AutofixOwn:
+		case "", AutofixNever, AutofixOwn, AutofixOpen:
 		default:
-			errs = append(errs, fmt.Errorf("%s: autofix must be %s or %s, got %q", where, AutofixNever, AutofixOwn, v))
+			errs = append(errs, fmt.Errorf("%s: autofix must be %s, %s or %s, got %q", where, AutofixNever, AutofixOwn, AutofixOpen, v))
 		}
 	}
 	fixRole("pipeline", c.Pipeline.FixRole)
@@ -757,6 +758,7 @@ func (c *Config) validatePipeline() []error {
 		errs = append(errs, fmt.Errorf("pipeline: max_simplifications must be from 1 to %d, got %d", MaxSimplificationsMax, n))
 	}
 	autofix("pipeline", c.Pipeline.Autofix)
+	errs = append(errs, c.Pipeline.validateSettle()...)
 	whiteboardRole("pipeline", c.Pipeline.WhiteboardRole)
 	errs = append(errs, c.validateSpend()...)
 	for i := range c.Watches {
@@ -1383,4 +1385,67 @@ func validateKeep(key string, d Duration) []error {
 		return nil
 	}
 	return []error{fmt.Errorf("%s must be 0 (keep forever) or at least 1d, got %s", key, d.Duration)}
+}
+
+// Bounds of the autofix = "open" keys (Pipeline.validateSettle).
+const (
+	settleChecksMax    = 20
+	settleCheckLen     = 100
+	quietMarkersMax    = 20
+	quietMarkerLen     = 200
+	magnumLateAfterMin = 30 * time.Minute
+	handsOffMax        = 24 * time.Hour
+)
+
+// quietLoginRe is a GitHub login, a bot's with its "[bot]": [pipeline]
+// quiet_logins.
+var quietLoginRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\[bot\])?$`)
+
+// validateSettle checks the keys of autofix = "open": the settle's
+// durations, the checks it waits for, the loop cap, the hands-off time and
+// the quiet logins and markers. A quiet marker never starts with magnum's
+// own marker: magnum's own items are never a reviewer's.
+func (p Pipeline) validateSettle() []error {
+	var errs []error
+	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf("pipeline: "+format, args...)) }
+	if p.SettleQuiet.Duration < 0 {
+		bad("settle_quiet must not be negative, got %s", p.SettleQuiet.Duration)
+	}
+	if p.SettleMax.Duration < p.SettleQuiet.Duration || p.SettleMax.Duration < 0 {
+		bad("settle_max must be at least settle_quiet (%s), got %s", p.SettleQuiet.Duration, p.SettleMax.Duration)
+	}
+	if len(p.SettleChecks) > settleChecksMax {
+		bad("settle_checks holds at most %d names, got %d", settleChecksMax, len(p.SettleChecks))
+	}
+	for _, name := range p.SettleChecks {
+		if n := utf8.RuneCountInString(name); n < 1 || n > settleCheckLen || strings.ContainsFunc(name, unicode.IsControl) {
+			bad("settle_checks: a name must be 1 to %d characters without control characters, got %q", settleCheckLen, name)
+		}
+	}
+	if d := p.MagnumLateAfter.Duration; d != 0 && d < magnumLateAfterMin {
+		bad("magnum_late_after must be 0 (off) or at least 30m, got %s", shortDuration(d))
+	}
+	if n := p.AutofixMaxLoops; n < 1 || n > AutofixMaxLoopsMax {
+		bad("autofix_max_loops must be from 1 to %d, got %d", AutofixMaxLoopsMax, n)
+	}
+	if d := p.HandsOffAfterPush.Duration; d < 0 || d > handsOffMax {
+		bad("hands_off_after_push must be from 0 to 24h, got %s", shortDuration(d))
+	}
+	for _, login := range p.QuietLogins {
+		if !quietLoginRe.MatchString(login) {
+			bad("quiet_logins: %q is not a GitHub login (a bot's ends in [bot])", login)
+		}
+	}
+	if len(p.QuietMarkers) > quietMarkersMax {
+		bad("quiet_markers holds at most %d markers, got %d", quietMarkersMax, len(p.QuietMarkers))
+	}
+	for _, m := range p.QuietMarkers {
+		switch n := utf8.RuneCountInString(m); {
+		case n < 1 || n > quietMarkerLen:
+			bad("quiet_markers: a marker must be 1 to %d characters, got %q", quietMarkerLen, m)
+		case strings.HasPrefix(strings.TrimSpace(m), "<!-- magnum:"):
+			bad("quiet_markers: %q is magnum's own marker; magnum's own items are never a reviewer's", m)
+		}
+	}
+	return errs
 }

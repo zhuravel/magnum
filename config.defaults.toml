@@ -410,7 +410,31 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
                                   # your logins authored, unless `magnum fix --off` took the PR out. Start by
                                   # hand for a first week, then switch. Post the reviews as an App identity
                                   # with own: the fixer's replies must not look like the reviewer's.
-                                  # [[watch]] may override
+                                  # open: own, and also after another reviewer's thread or comment, a review
+                                  # with only simplifications or optional findings, or a conflict with the PR's
+                                  # own base, once the reviewers settle (settle_* below): each look reads
+                                  # GitHub only after the PR changed, and leaves a verdict per PR (fixing,
+                                  # waits, needs you, idle). A draft, a fork and a PR `magnum fix --off` took
+                                  # out are left alone. [[watch]] may override
+settle_quiet = "3m"               # autofix = "open": the reviewers of a head settled once the PR saw no activity
+                                  # for this long ...
+settle_max = "20m"                # ... and every settle_checks check at the head is done, both waited for at most
+                                  # this long after the head moved (at least settle_quiet). magnum's own review
+                                  # of the head is waited for without a cap
+# settle_checks = []              # check names (a check run's or its workflow's, any case) the settle waits for
+                                  # at the head, e.g. ["pronto"]; one the head does not have is not waited for
+magnum_late_after = "2h"          # autofix = "open": a head magnum has not reviewed this long after its round was
+                                  # due needs you, once per head with a toast ("0" = never; else at least 30m)
+autofix_max_loops = 3             # autofix = "open": loops it starts on one PR in 24 hours, then the PR needs you
+                                  # (1 to 20); a loop you start with f does not count
+hands_off_after_push = "30m"      # autofix = "open": no loop starts on a head you pushed (one the fixer did not)
+                                  # until this long after it moved (0 to 24h)
+# quiet_logins = []               # autofix = "open": review bodies and conversation comments by these logins ask
+                                  # nothing, e.g. ["example-bot"] (a bot's with its [bot]); their review threads
+                                  # still count, so a lint bot's inline findings still start a loop
+# quiet_markers = []              # autofix = "open": a review body or conversation comment whose text holds one of
+                                  # these asks nothing (a review tool's receipt or summary marker, e.g.
+                                  # ["<!-- review-receipt -->"]); never one of magnum's own <!-- magnum: markers
 fix_compact_at = 70               # before a fix cycle resumes the fixer's conversation, magnum reads how full its
                                   # context is from the pane's status line (the kind's context_pattern) and, at
                                   # or above this percent, sends /compact and waits for it to end, rather than
