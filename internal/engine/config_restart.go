@@ -336,8 +336,9 @@ func (e *Engine) configStillLoads(data []byte) error {
 	return nil
 }
 
-// restartReasons names the idle restarts that wait, for the refusal.
-func restartReasons(build, learn, cfg bool) string {
+// restartReasons names the idle restarts that wait, for the refusal: panes
+// is the herdr session magnum's panes are to move to ("" = no move).
+func restartReasons(build, learn, cfg bool, panes string) string {
 	var out []string
 	if build {
 		out = append(out, "a new build")
@@ -347,6 +348,9 @@ func restartReasons(build, learn, cfg bool) string {
 	}
 	if cfg {
 		out = append(out, "a saved config")
+	}
+	if panes != "" {
+		out = append(out, "the move of magnum's panes to herdr session "+panes)
 	}
 	return strings.Join(out, ", ")
 }

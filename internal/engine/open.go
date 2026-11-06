@@ -48,6 +48,10 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 		e.complete(ctx, id, nil, fmt.Sprintf("%s has a round running (%s); its sessions start with it", label, pr.State))
 		return
 	}
+	if why := e.panesMoving(); why != "" { // pane_move.go: a restore would open panes in the old session
+		e.complete(ctx, id, fmt.Errorf("%s: the daemon is %s, then restarts; run `magnum open %s` again in a minute", label, why, label), "")
+		return
+	}
 	switch {
 	case e.d.DryRun:
 		e.rec.Record(ctx, subject, "open", fmt.Sprintf("restore the %s session in a slot and pin it", role))

@@ -14597,6 +14597,43 @@ skill versions); people add theirs to the sections before it, at the end of the 
   that restarts on a new binary never starts the unsigned one; without the identity, or when codesign fails,
   the ad-hoc build stays and the build says so in the second case.
 
+- **The daemon moves magnum's panes to the herdr session the config names at an idle tick, then restarts**
+  (2026-11-06). The registry's herdr ids are good only on the server that numbered them, and the App opens
+  its panes in the session kv `herdr.panes` records, so a daemon that comes up on a config naming another
+  session (`[herdr] review_session`) has to take them there itself: `restart_on_new_build` is off by default,
+  and a learn landing, a settings-screen save or a crash restart it on a changed config with sessions open in
+  the old session. Its start records the session when nothing does (`Deps.PaneSession`, the App's: yours,
+  where every earlier build opened them), and renames the record when the config names the same server under
+  another name (a renamed `[terminal] session`; the reveals use the name). While the record and
+  `Config.ReviewHerdr` are two servers, the move holds what would open panes in the old session as a drain
+  does (`stopping` and `draining` count it: rounds, retros, curations, the gate, landings, fixes and
+  whiteboards wait for the restart, a PR's wait is `draining` and names the move, and `magnum open` of a PR
+  with nothing live asks to try again in a minute). At the first tick with nothing in flight
+  (`restartBusy`), and once what launchd would start passes its check (`restartSafe`), it parks every PR
+  whose sessions record a herdr id (`store.PRsWithHerdrIDs`), pinned ones too (the operator's choice: pins
+  and slots stay, the conversations resume at the next open), each under its reservation and never one whose
+  round is in flight; closes their retired panes; forgets every id (`store.ForgetHerdrIDs`: the live rows
+  become lost and resume by their conversations); records the new session; toasts once in your session; and
+  returns `ErrRestartForPanes`, a non-zero exit launchd restarts, so the next App opens its panes in the new
+  session. An old session with no server running (`herdr.NoServer`) has no panes and is not parked; one that
+  times out, or holds its socket but accepts nothing, may have panes at work, and a park that is refused (an
+  agent at work, a busy pane of yours in a magnum workspace) may leave one: both hold the move to the next
+  idle tick, kv `herdr.panes_move` records the PR and why for `magnum status` and doctor, an event
+  (`herdr.panes_move_waits`) says so once per reason, and a toast after 30 minutes (again every 6 hours).
+  The record changes last, so a move cut short goes on at the next start, whose App reads the old session
+  again; a park of parked sessions and a second forget change nothing. Events: `herdr.panes_move_begin`,
+  `herdr.panes_move_waits`, `herdr.panes_moved`. A tagged engine (a replay, the factory's local review, on a
+  scratch registry in the configured session), a dry run and `magnum daemon --once` (no launchd to start it
+  again) never move. Rejected: a move at the start, before the recovery (`Park` refuses while a run is in
+  flight, so a crash's recovery would have to abandon work, and the move would need a second agents manager
+  on the new socket); a column for the session (a migration locks the CLI out until a drain); rounds that
+  go on while the move waits (each opens panes in the old session and pushes the move back). Tests, failing
+  first: TestTheStartRecordsWhereTheRegistrysPanesAre, TestAMoveHoldsNewRoundsAndRetros,
+  TestAMoveWaitsForTheRoundsInFlight, TestAMoveParksEveryPRsSessionsThenRestarts,
+  TestAMoveFromAServerThatIsGoneForgetsTheIdsWithoutParking, TestAMoveFromAServerThatTimesOutWaits,
+  TestAMoveThatCannotParkAPRWaitsAndSaysWhy, TestAMoveCutShortGoesOnAtTheNextStart and
+  TestTheRunLoopExitsForAMoveOfThePanes; TestNoMoveWhenThePanesAreWhereTheConfigSays pins the default.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

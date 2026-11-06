@@ -487,7 +487,9 @@ func (e *Engine) userPause(ctx context.Context) string {
 // stopping says why the daemon starts nothing new now ("" = it may): a
 // shutdown cancelled ctx, the daemon's (a registry read then fails, so a
 // pause, a drain or the day's retro already done would all read as absent,
-// and a retro started on that stopped at once), or it drains for a restart.
+// and a retro started on that stopped at once), it drains for a restart, or
+// it is to move magnum's panes to another herdr session, which ends with a
+// restart too (panesMoving).
 func (e *Engine) stopping(ctx context.Context) string {
 	if ctx.Err() != nil {
 		return "the daemon is stopping"
@@ -495,7 +497,7 @@ func (e *Engine) stopping(ctx context.Context) string {
 	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
 		return "draining for a restart (magnum daemon-restart --drain)"
 	}
-	return ""
+	return e.panesMoving()
 }
 
 // holdReason holds every new round, forced or not, and every retro and notes

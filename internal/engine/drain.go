@@ -83,8 +83,13 @@ func DrainerAlive(pid int) bool {
 }
 
 // draining reports whether the daemon drains for a restart
-// (KVDaemonDraining, which `magnum daemon-restart --drain` sets).
+// (KVDaemonDraining, which `magnum daemon-restart --drain` sets), or for the
+// one that ends a move of magnum's panes to another herdr session
+// (panesMoving): what a drain holds for the restart waits for it alike.
 func (e *Engine) draining(ctx context.Context) bool {
+	if e.panesMoving() != "" {
+		return true
+	}
 	v, ok := e.getKV(ctx, KVDaemonDraining)
 	return ok && v != ""
 }

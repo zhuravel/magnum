@@ -112,8 +112,8 @@ open_hold = "30m"                 # `magnum open` (the board's o) that restores 
 socket = "~/.config/herdr/herdr.sock"  # your herdr session: toasts show there; the slot guards read your agents there
 review_session = ""               # the herdr session of magnum's review panes (`herdr --session <name>`, its own
                                   # server and windows; `magnum open` reveals a client of it): "" = your session above.
-                                  # A change moves the panes at the daemon's next idle moment (it parks every session,
-                                  # then restarts)
+                                  # A change moves the panes at the next idle moment of a daemon that runs on it (it
+                                  # holds new rounds, parks every PR's sessions, then restarts)
 # review_socket = ""              # "" = the named session's own socket; else an absolute path (~ expands)
 notify = true                     # toasts (false = none, the factory's alerts too); a review you ask for toasts
                                   # how it went

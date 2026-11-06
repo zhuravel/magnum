@@ -381,6 +381,14 @@ type Deps struct {
 	// tagged and never dispatches. Its working Codex agents count toward
 	// max_total_working_codex beside the panes'.
 	Yours Herdr
+	// PaneSession is the herdr session Herdr and Agents drive, whose server
+	// numbered the registry's herdr ids (app.App.PaneSession, which FromApp
+	// sets for an untagged App only: a tagged one runs on a scratch registry
+	// in the configured session). The start records it (store.KVHerdrPanes)
+	// when nothing does, and while [herdr] review_session names another
+	// session the daemon moves magnum's panes there (pane_move.go); zero =
+	// nothing is recorded or moved.
+	PaneSession herdr.Session
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
@@ -606,6 +614,9 @@ type Engine struct {
 	checkBuild func(ctx context.Context, path string) (string, error)
 	supervised bool
 	builds     buildWatch
+	// movingBegun: this daemon announced the move of magnum's panes
+	// (pane_move.go; the tick's goroutine only).
+	movingBegun bool
 	// restartRefused is the user config on disk and binary an idle restart
 	// was last refused on (restartSafe's key; zero for none) and when, so
 	// later ticks check them again only after restartRefuseRetry and never
@@ -772,10 +783,14 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	if a.Herdr != nil {
 		d.Focus = a.Herdr.AgentFocus
 	}
-	if a.Yours != nil && a.AgentTag == "" {
+	if a.AgentTag == "" {
 		// A tagged engine (a replay, the factory's local review) never
-		// dispatches: nothing reads its Codex count.
-		d.Yours = a.Yours
+		// dispatches: nothing reads its Codex count. Its registry is a
+		// scratch one, in the configured session: nothing to record or move.
+		if a.Yours != nil {
+			d.Yours = a.Yours
+		}
+		d.PaneSession = a.PaneSession
 	}
 	if a.Sidebar != nil {
 		d.Sidebar = a.Sidebar.Sidebar
@@ -967,7 +982,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 			timer.Stop()
 		}
 		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) || errors.Is(err, ErrRestartForLearn) ||
-			errors.Is(err, ErrRestartForConfig) {
+			errors.Is(err, ErrRestartForConfig) || errors.Is(err, ErrRestartForPanes) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
 			e.warnTick(err)
@@ -1063,7 +1078,8 @@ func (e *Engine) observeUntilIdle(ctx context.Context) {
 // migrated by another binary stops the tick before any step
 // (ErrSchemaChanged), and so does an idle restart (restartForBuild): on a
 // new build (ErrRestartForBuild, restart_on_new_build), a landed skill
-// version (ErrRestartForLearn) or a saved config (ErrRestartForConfig).
+// version (ErrRestartForLearn), a saved config (ErrRestartForConfig) or a
+// move of magnum's panes to another herdr session (ErrRestartForPanes).
 func (e *Engine) Tick(ctx context.Context) error {
 	if changed, err := e.st.SchemaChanged(ctx); err != nil {
 		e.warnUnlessStopped(ctx, err, "read schema version")
@@ -1139,6 +1155,7 @@ func (e *Engine) startup(ctx context.Context) {
 	}
 	e.recordBuild(ctx)
 	e.recordConfig(ctx)       // config_restart.go: the user config this start runs; a saved config's restart is done
+	e.recordPanes(ctx)        // pane_move.go: the herdr session the registry's ids belong to
 	e.recordShellPATH(ctx)    // shell_path.go
 	e.checkCLIVersions(ctx)   // cli_version.go: on the PATH just recorded
 	e.loadBudgetOverrule(ctx) // budget.go: a resume the CLI recorded while no daemon ran

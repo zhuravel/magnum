@@ -7650,6 +7650,13 @@ const (
     pause.
 
 const (
+	// KVHerdrPanesMove is the move of magnum's panes that waits (PanesMove
+	// as JSON): written by each idle tick whose try stopped short, read by
+	// `magnum status` and doctor, deleted once the move is done or no longer
+	// asked for.
+	KVHerdrPanesMove = "herdr.panes_move"
+)
+const (
 	// PollFailingShown is how long a watch's radar calls must have failed
 	// before the screens and `magnum status` show it: a 502 or two between
 	// good polls is GitHub's weather, not news.
@@ -8045,6 +8052,11 @@ var ErrRestartForLearn = errors.New("a skill version landed and nothing is in fl
     to restart on a landed skill version (learn restart idle): the exit is
     non-zero, so launchd starts it again, and the new daemon reads the landed
     prompts and skill.
+
+var ErrRestartForPanes = errors.New("magnum's panes moved to another herdr session and nothing is in flight; exiting for launchd to start the daemon there")
+    ErrRestartForPanes is what Tick and Run return once the daemon moved
+    magnum's panes to the herdr session the config names: the exit is non-zero,
+    so launchd starts it again, and the new daemon's App opens its panes there.
 
 var ErrSchemaChanged = errors.New("schema migrated under the daemon; exiting for launchd to restart")
     ErrSchemaChanged is what Tick and Run return once another magnum binary
@@ -9064,6 +9076,14 @@ type Deps struct {
 	// tagged and never dispatches. Its working Codex agents count toward
 	// max_total_working_codex beside the panes'.
 	Yours Herdr
+	// PaneSession is the herdr session Herdr and Agents drive, whose server
+	// numbered the registry's herdr ids (app.App.PaneSession, which FromApp
+	// sets for an untagged App only: a tagged one runs on a scratch registry
+	// in the configured session). The start records it (store.KVHerdrPanes)
+	// when nothing does, and while [herdr] review_session names another
+	// session the daemon moves magnum's panes there (pane_move.go); zero =
+	// nothing is recorded or moved.
+	PaneSession herdr.Session
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
@@ -9203,7 +9223,8 @@ func (e *Engine) Tick(ctx context.Context) error
     A registry migrated by another binary stops the tick before any step
     (ErrSchemaChanged), and so does an idle restart (restartForBuild): on a new
     build (ErrRestartForBuild, restart_on_new_build), a landed skill version
-    (ErrRestartForLearn) or a saved config (ErrRestartForConfig).
+    (ErrRestartForLearn), a saved config (ErrRestartForConfig) or a move of
+    magnum's panes to another herdr session (ErrRestartForPanes).
 
 type EvalCase struct {
 	Owner, Repo string
@@ -9979,6 +10000,23 @@ type PRTarget struct {
     PRTarget names a PR in a request: Repo ("owner/name") and Number win;
     otherwise Ref is any form github.ParseRef accepts, resolved against
     daemon.default_repo.
+
+type PanesMove struct {
+	From    herdr.Session `json:"from"`
+	To      herdr.Session `json:"to"`
+	Since   time.Time     `json:"since"`
+	Subject string        `json:"subject,omitempty"`
+	Reason  string        `json:"reason"`
+}
+    PanesMove is a move of magnum's panes that waits (KVHerdrPanesMove):
+    the session the registry's ids belong to and the one the config names,
+    since when it waits, and why the last try stopped short: Subject is the
+    PR whose park was refused ("" when the old server did not answer, or the
+    registry could not be read).
+
+func ReadPanesMove(ctx context.Context, st *store.Store) (PanesMove, bool)
+    ReadPanesMove reads KVHerdrPanesMove (false when no move waits, or the
+    record cannot be read).
 
 type PausePayload struct {
 	Reason string     `json:"reason,omitempty"`

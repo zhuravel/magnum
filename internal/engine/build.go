@@ -187,9 +187,12 @@ func (e *Engine) noteBuild(ctx context.Context) {
 
 // restartForBuild reports ErrRestartForBuild when a checked new build waits
 // (noteBuild), ErrRestartForLearn when a landed skill version waits for an
-// idle restart (learnRestartDue, KVLearnRestart), or ErrRestartForConfig
-// when a saved config waits for one (configRestartDue, KVConfigRestart),
-// and nothing is in flight: no round is claiming, reviewing or verifying, in
+// idle restart (learnRestartDue, KVLearnRestart), ErrRestartForConfig when
+// a saved config waits for one (configRestartDue, KVConfigRestart), or
+// ErrRestartForPanes once it moved magnum's panes to the herdr session the
+// config names (panesMoveDue, movePanes: a move that stops short waits for
+// the next idle tick, and a restart due for another reason with it), and
+// nothing is in flight: no round is claiming, reviewing or verifying, in
 // the registry or in this process, no notes curation, retro, skill edit or
 // gate runs (backgroundBusy), and no heavy job or GitHub write as the
 // operator is under way (workInFlight). The binary must still be the one checked: a
@@ -203,7 +206,8 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 	build := e.buildPending()
 	version, learn := e.learnRestartDue(ctx)
 	saved, raw, cfgDue := e.configRestartDue(ctx)
-	if !build && !learn && !cfgDue {
+	from, to, move := e.panesMoveDue()
+	if !build && !learn && !cfgDue && !move {
 		return nil
 	}
 	if e.restartBusy(ctx) {
@@ -216,7 +220,11 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 	if err != nil {
 		announce := chk.key != e.restartRefused.key
 		e.restartRefused = restartRefusal{key: chk.key, checked: e.now()}
-		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue), build || learn, raw, err, announce)
+		panes := ""
+		if move {
+			panes = to.Name
+		}
+		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue, panes), build || learn || move, raw, err, announce)
 		return nil
 	}
 	e.restartRefused = restartRefusal{}
@@ -227,6 +235,16 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 		return nil
 	}
 	e.noteRetroRunning(ctx) // a retro that ran has ended: no CLI waits for it
+	if move {
+		if !e.movePanes(ctx, from, to) {
+			return nil // pane_move.go: the next idle tick tries again
+		}
+		if build {
+			e.setKV(ctx, kvRestartForBuild, e.build.Label())
+		}
+		e.log.Info(ErrRestartForPanes.Error(), "from", from.Name, "to", to.Name)
+		return ErrRestartForPanes
+	}
 	if build {
 		e.setKV(ctx, kvRestartForBuild, e.build.Label())
 		e.log.Info(ErrRestartForBuild.Error(), "from", e.build.Label(), "to", e.builds.version, "path", e.build.Path)
