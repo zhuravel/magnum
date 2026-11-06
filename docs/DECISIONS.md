@@ -14779,6 +14779,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   already rebinds by conversation, and `Park` keeps its checks of busy and foreign panes). Test, failing
   first: TestAMoveParksAnAgentTheOldServerRestoredByItsConversation.
 
+- **A daemon launchd does not run says to start it again by hand once it moved magnum's panes** (2026-11-06,
+  a review of "The daemon moves magnum's panes to the herdr session the config names"). The move ignored
+  whether launchd runs the daemon: `magnum daemon` in a terminal, the fallback `daemon-restart` names, parked
+  everything, forgot the ids, toasted "New rounds open there" and exited for launchd to start it, and nothing
+  did. Every other idle restart (a new build, a saved config, a learn landing) treats such a daemon as one to
+  restart by hand and says so. The move still runs and the daemon still exits (its App drives the old
+  session, so it cannot go on), but the `herdr.panes_moved` event, the toast and the exit (an error that is
+  `ErrRestartForPanes`) say that launchd does not run it and to start it again by hand (`magnum daemon`).
+  Rejected: holding the move until the operator restarts it (every round waits for the move, so the daemon
+  would do nothing until then anyway). Test, failing first:
+  TestAMoveByADaemonLaunchdDoesNotRunSaysToStartItAgainByHand.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

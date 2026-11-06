@@ -308,16 +308,18 @@ reviews`: its own herdr server and terminal windows), on `~/.config/herdr/sessio
 `[herdr] review_socket` names another socket (absolute after `~` expands, and only with `review_session`;
 `"default"` is herdr's own default session). `[herdr] socket` stays your session whatever the panes' is: the
 toasts show there, the slot guards and the inventory read your agents and consoles there (a herdr of yours
-that is not running has none), and the herdr plugin and the LaunchAgent use it. `magnum open`, the board's `o`
+that is not running shows the agents it saved, as idle ones: it restores them when it starts), and the herdr plugin and the LaunchAgent use it. `magnum open`, the board's `o`
 and `reveal_on_attention` reveal a client of the panes' session, and the daemon opens one in a new window when
 no herdr server runs in a named session, which starts it after a reboot (at once, then at most twice an hour
 while it stays down, each a `herdr.opened` event; never your own, nor a session whose server runs but does not
 answer: a client of it may be open, and the open would bring it to the front). A change moves the panes once
 the daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing in flight: until then
 no round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and `magnum open` of a PR
-with nothing live asks to try again in a minute. Then it parks every PR's sessions, pinned PRs too (the
+with nothing live asks to try again in a minute. Then it rebinds every PR's sessions to the panes that hold
+their conversations (a server that started again restored them under new ids), parks them, pinned PRs too (the
 conversations are kept; pins and slots stay), closes their workspaces in the old session, toasts once in yours
-and restarts, and launchd starts it in the new session. The move holds to the next idle moment while a park is
+and restarts, and launchd starts it in the new session (a daemon launchd does not run, `magnum daemon` in a
+terminal, exits too, and its toast and exit say to start it again by hand). The move holds to the next idle moment while a park is
 refused (an agent at work, a busy pane of yours in a magnum workspace), while the old session does not answer,
 while no herdr server runs there and magnum recorded panes in it (herdr restores them and resumes their agents
 when its server starts, so the move waits to park them: it opens a named old session itself, and names the

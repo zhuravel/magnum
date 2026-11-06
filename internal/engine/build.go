@@ -251,8 +251,9 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 		if build {
 			e.setKV(ctx, kvRestartForBuild, e.build.Label())
 		}
-		e.log.Info(ErrRestartForPanes.Error(), "from", from.Name, "to", to.Name)
-		return ErrRestartForPanes
+		err := e.panesMoved()
+		e.log.Info(err.Error(), "from", from.Name, "to", to.Name)
+		return err
 	}
 	if build {
 		e.setKV(ctx, kvRestartForBuild, e.build.Label())

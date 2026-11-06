@@ -584,6 +584,47 @@ func TestAMoveParksAnAgentTheOldServerRestoredByItsConversation(t *testing.T) {
 	}
 }
 
+// A daemon launchd does not run (`magnum daemon` in a terminal) still moves
+// the panes: its App cannot drive the new session, so it exits as one under
+// launchd does. Nothing starts it again, so its exit, the event and the toast
+// say to start it by hand instead of that new rounds open there; under
+// launchd they say the new rounds open there.
+func TestAMoveByADaemonLaunchdDoesNotRunSaysToStartItAgainByHand(t *testing.T) {
+	for _, supervised := range []bool{false, true} {
+		t.Run(map[bool]string{false: "by hand", true: "under launchd"}[supervised], func(t *testing.T) {
+			h := newHarness(t, withPanesInYours)
+			h.reviewedPR(2, "b1")
+			h.e.supervised = supervised
+			h.moveToReviews()
+
+			err := h.moveTick()
+			if !errors.Is(err, ErrRestartForPanes) {
+				t.Fatalf("tick = %v, want ErrRestartForPanes", err)
+			}
+			moved := h.events("herdr.panes_moved")
+			toast := toastsWith(h, "herdr session reviews")
+			if len(moved) != 1 || len(toast) != 1 {
+				t.Fatalf("events %+v, toasts %q", moved, toast)
+			}
+			byHand := "start it again by hand (`magnum daemon`)"
+			if supervised {
+				if strings.Contains(err.Error(), byHand) || strings.Contains(toast[0], byHand) || !strings.Contains(toast[0], "New rounds open there") {
+					t.Fatalf("under launchd: exit %q, toast %q", err, toast[0])
+				}
+				return
+			}
+			for what, text := range map[string]string{"exit": err.Error(), "event": moved[0].Message, "toast": toast[0]} {
+				if !strings.Contains(text, byHand) || strings.Contains(text, "launchd to start") {
+					t.Errorf("the %s says %q, want it to say %q", what, text, byHand)
+				}
+			}
+			if strings.Contains(toast[0], "New rounds open there") {
+				t.Errorf("the toast says new rounds open there while no daemon runs: %q", toast[0])
+			}
+		})
+	}
+}
+
 // A move whose restart is refused (what launchd would start fails its
 // check: a binary gone, or rebuilt so that it refuses the config, or a
 // config on disk that no longer loads) holds new rounds as any wait of the

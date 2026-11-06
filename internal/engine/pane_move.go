@@ -14,7 +14,8 @@ package engine
 // retired panes, in the old session; forgets every id (store.ForgetHerdrIDs: the live rows
 // become lost and resume by their conversations); records the new session;
 // toasts once in your session; and exits (ErrRestartForPanes) for launchd to
-// start the daemon there. A park that is refused, an old server that does
+// start the daemon there (a daemon launchd does not run exits too, and says
+// to start it again by hand: panesMovedByHand). A park that is refused, an old server that does
 // not answer, or one that is not running (herdr.NoServer) while herdr ids
 // are recorded holds the move to the next idle tick, recorded for `magnum
 // status` (KVHerdrPanesMove) and toasted once it has waited
@@ -59,6 +60,31 @@ const (
 // non-zero, so launchd starts it again, and the new daemon's App opens its
 // panes there.
 var ErrRestartForPanes = errors.New("magnum's panes moved to another herdr session and nothing is in flight; exiting for launchd to start the daemon there")
+
+// startByHand is what a daemon launchd does not run says once it moved
+// magnum's panes: nothing starts it again in the new session.
+const startByHand = "start it again by hand (`magnum daemon`)"
+
+// panesMovedByHand is ErrRestartForPanes for a daemon launchd does not run
+// (`magnum daemon` in a terminal): it exits as well, since its App drives
+// the old session, and says to start it again by hand.
+type panesMovedByHand struct{}
+
+func (panesMovedByHand) Error() string {
+	return "magnum's panes moved to another herdr session and nothing is in flight; launchd does not run this daemon, so " +
+		"nothing starts it in the new session: " + startByHand
+}
+
+func (panesMovedByHand) Is(target error) bool { return target == ErrRestartForPanes }
+
+// panesMoved is the error a daemon exits with once it moved magnum's
+// panes: ErrRestartForPanes under launchd, else panesMovedByHand.
+func (e *Engine) panesMoved() error {
+	if e.supervised {
+		return ErrRestartForPanes
+	}
+	return panesMovedByHand{}
+}
 
 // PanesMove is a move of magnum's panes that waits (KVHerdrPanesMove): the
 // session the registry's ids belong to and the one the config names, since
@@ -203,13 +229,18 @@ func (e *Engine) movePanes(ctx context.Context, from, to herdr.Session) bool {
 	}
 	e.delKV(ctx, KVHerdrPanesMove)
 	how := textx.Count(len(prs), "PR's sessions", "PRs' sessions") + " parked in " + from.Name
+	next, body := "the daemon restarts there",
+		"New rounds open there; `magnum open` reveals it. The conversations resume when the PRs' rounds or opens need them."
+	if !e.supervised {
+		next = "launchd does not run the daemon: " + startByHand
+		body = "launchd does not run the daemon, so nothing starts it in the new session: " + startByHand +
+			". The conversations resume when the PRs' rounds or opens need them."
+	}
 	e.event(ctx, "info", "", "herdr.panes_moved",
-		fmt.Sprintf("magnum's panes moved from herdr session %s to herdr session %s (%s; %d sessions forgot their herdr ids and resume by their conversations); the daemon restarts there",
-			from.Name, to.Name, how, n),
+		fmt.Sprintf("magnum's panes moved from herdr session %s to herdr session %s (%s; %d sessions forgot their herdr ids and resume by their conversations); %s",
+			from.Name, to.Name, how, n, next),
 		map[string]any{"from": from.Name, "to": to.Name, "prs": len(prs), "sessions": n})
-	e.urgent("panes-moved:"+to.Name, "magnum: its review panes moved to herdr session "+to.Name,
-		"New rounds open there; `magnum open` reveals it. The conversations resume when the PRs' rounds or opens need them.",
-		time.Hour)
+	e.urgent("panes-moved:"+to.Name, "magnum: its review panes moved to herdr session "+to.Name, body, time.Hour)
 	return true
 }
 
