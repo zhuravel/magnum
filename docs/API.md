@@ -10066,6 +10066,8 @@ type OpenVerdict struct {
 	Approved      string     `json:"approved,omitempty"`
 	AfterApproval int        `json:"after_approval,omitempty"`
 	Off           string     `json:"off,omitempty"`
+
+	// Has unexported fields.
 }
     OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
     fixing, waits, needs_you, idle, unknown or off, why in plain words (counts,

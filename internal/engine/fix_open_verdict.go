@@ -94,6 +94,10 @@ type OpenVerdict struct {
 	Approved      string     `json:"approved,omitempty"`
 	AfterApproval int        `json:"after_approval,omitempty"`
 	Off           string     `json:"off,omitempty"`
+	// leftovers: the verdict needs you for what loops left (rule 8), which
+	// the look raises to needs_attention; late: for magnum's late review
+	// (rule 5), which it toasts once per head. Neither is stored.
+	leftovers, late bool
 }
 
 // OpenNeed is one thing that needs the operator: its kind (thread, review,
@@ -356,6 +360,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	if why, late, until := magnumDue(f); why != "" {
 		if late {
 			v.Needs = append(v.Needs, OpenNeed{Kind: "magnum_late", URL: f.pr.URL})
+			v.late = true
 			return say(OpenNeedsYou, why), nil, needs
 		}
 		v.Until = until
@@ -379,6 +384,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenUnknown, "reading GitHub"), nil, needs
 	}
 	if len(needs) > 0 {
+		v.leftovers = true
 		return say(OpenNeedsYou, needsWords(needs)), nil, needs
 	}
 	settled, until := settleDone(f)

@@ -24,11 +24,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -198,12 +200,42 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	f.ci = e.openCI(ctx, repo, pr)
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
+	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised
+		pr.State, pr.LastError = store.PRReviewed, nil
+		f.pr, f.attention = pr, ""
+	}
+	if f.whole && !f.failed && len(f.cut) == 0 {
+		openPrune(&l, f.items)
+	}
 	f.ledger = l
-	v, work, _ := decideOpen(f)
+	v, work, needs := decideOpen(f)
+	switch {
+	case e.d.DryRun:
+	case v.leftovers && e.openRaise(ctx, repo, pr, &l, needs): // fix_open_needs.go
+		pr.State = store.PRNeedsAttention
+		f.pr, f.attention, f.ledger = pr, attention.KindFix, l
+		v, work, _ = decideOpen(f)
+	case v.late:
+		e.openLate(ctx, repo, pr, &l, v.Why)
+	}
 	if v.Verdict == OpenFixing && len(work) > 0 {
 		v = e.openStart(ctx, repo, pr, &l, v, work, fp)
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
+}
+
+// openPrune drops from the ledger's handed and raised keys those that a
+// whole read no longer shows open (items): resolved, answered, deleted, or
+// a thread with a newer latest comment, whose new key is new work. A key
+// handed after the read was made stays: the read may predate the item
+// (one that arrived during the loop, in the fixer's file).
+func openPrune(l *openLedger, items []openItem) {
+	open := map[string]bool{}
+	for _, it := range items {
+		open[it.Key] = true
+	}
+	maps.DeleteFunc(l.Handed, func(k string, at time.Time) bool { return !open[k] && l.Read.At.After(at) })
+	l.Raised = slices.DeleteFunc(l.Raised, func(k string) bool { return !open[k] })
 }
 
 // openOff is why the look leaves pr alone ("" = it covers it): a draft, a
@@ -293,12 +325,16 @@ func openWhole(r openRead, fp, head string) (whole, failed bool) {
 
 // readWanted reports whether the look's read of GitHub can change f's
 // verdict: the look covers the PR, no loop runs or is held, no stalemate
-// waits, magnum is done at the head and has no replies to re-decide.
+// waits, magnum is done at the head (one that needs attention after a
+// review of the head is) and has no replies to re-decide.
 // Otherwise the read waits, and spends no GitHub budget on a PR whose
 // verdict it cannot move.
 func readWanted(f openFacts) bool {
 	if f.off != "" || f.fix != nil || f.fixBad || f.held != "" || len(f.stalemate) > 0 || f.pending > 0 {
 		return false
+	}
+	if f.pr.State == store.PRNeedsAttention { // its leftovers, and the lift (fix_open_needs.go), need the read
+		return deref(f.pr.ReviewedSHA) == f.pr.HeadSHA
 	}
 	why, _, _ := magnumDue(f)
 	return why == ""
