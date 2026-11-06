@@ -3511,13 +3511,13 @@ stages = [
   shared database. Its commands run the factory daemon's own `magnum` binary, never the one your PATH finds,
   and a daemon run under `MAGNUM_HOME` gives its pane the same `MAGNUM_HOME`. The factory daemon starts a
   task's liaison on a row of its own, so your chat with it never holds the task's agents, in a workspace
-  `factory liaison <key>` of the factory's herdr session. A live liaison is reused, and a parked one resumes
-  its conversation. A conversation gets its first prompt once: a fresh one, or one whose first prompt never
-  went out; one that had it gets nothing new. It works with no copy at all, after a push or a drop freed it.
-  Parking a task (a drop, a push, a Mac short on memory) parks its liaison too, unless it is at work or you
-  typed into it within `human_cooldown`. A restart binds it again where herdr shows it and closes a
-  liaison's workspace a crash left empty. What you type into its pane counts as your typed input to the
-  task, with the surface `liaison`.
+  `factory liaison <key>` of the factory's herdr session. A live liaison is reused, and a parked one, or one
+  whose agent exited, resumes its conversation. A conversation gets its first prompt once: a fresh one, or
+  one whose first prompt never went out; one that had it gets nothing new. It works with no copy at all,
+  after a push or a drop freed it. Parking a task (a drop, a push, a Mac short on memory) parks its liaison
+  too, unless it is at work or you typed into it within `human_cooldown`. A restart binds it again where
+  herdr shows it and closes a liaison's workspace a crash left empty. What you type into its pane counts as
+  your typed input to the task, with the surface `liaison`.
 - **Kinds of task and stages.** A kind lists its stages in order; each has a `name` and a `type`.
   An `agents` stage launches its `roles` in parallel and ends when its `end` fact holds (`findings`,
   `report`, `critic`, `proof` or `pr_body`: files and results the factory checks, never a "done" message);

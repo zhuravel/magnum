@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -151,10 +152,14 @@ func TestTalkSendsTheFirstPromptAfterAFailedOne(t *testing.T) {
 	}
 	g.h.mu.Unlock()
 
-	if _, err := g.r.Talk(g.ctx, g.task, talkPrompt); err == nil {
+	first, err := g.r.Talk(g.ctx, g.task, talkPrompt)
+	if err == nil {
 		t.Fatal("Talk whose first prompt herdr rejected went through")
 	}
 	pane := store.Deref(g.liaisonSession().HerdrPaneID)
+	if first != pane || pane == "" {
+		t.Fatalf("Talk whose first prompt failed named pane %q, want the live liaison's %q with its error", first, pane)
+	}
 	runs, err := g.st.RunsByPR(g.ctx, g.liaisonRowOf().ID)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +180,87 @@ func TestTalkSendsTheFirstPromptAfterAFailedOne(t *testing.T) {
 	}
 	if starts := g.h.startCalls(); len(starts) != 1 {
 		t.Fatalf("agents started %+v, want the one liaison", starts)
+	}
+}
+
+// A liaison whose first prompt waits for you (you typed into its pane
+// within the human cooldown: agents.ErrHumanActive) is live in a pane you
+// may step into: Talk names that pane with the error, and once the cooldown
+// is over the next Talk sends the prompt.
+func TestTalkNamesTheLiaisonsPaneWhenItsFirstPromptWaitsForYou(t *testing.T) {
+	g := newRig(t)
+	rejected := false
+	g.h.mu.Lock()
+	g.h.promptErr = func(string) error { // called with the fake's lock held
+		if rejected {
+			return nil
+		}
+		rejected = true
+		return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentBlocked, Message: "the agent is not ready"}
+	}
+	g.h.mu.Unlock()
+	if _, err := g.r.Talk(g.ctx, g.task, talkPrompt); err == nil {
+		t.Fatal("Talk whose first prompt herdr rejected went through")
+	}
+	g.clock.Add(2 * time.Minute) // past a start's grace: herdr showing the agent at work is you
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusWorking)
+	g.observe()
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusIdle)
+	if at := g.liaisonRowOf().HumanActiveAt; at == nil {
+		t.Fatal("herdr did not show you in the liaison's pane")
+	}
+
+	pane, err := g.r.Talk(g.ctx, g.task, talkPrompt)
+
+	if !errors.Is(err, agents.ErrHumanActive) {
+		t.Fatalf("Talk while you are in the liaison's pane: %v, want ErrHumanActive", err)
+	}
+	if want := store.Deref(g.liaisonSession().HerdrPaneID); pane != want || pane == "" {
+		t.Fatalf("Talk named pane %q with its error, want the live liaison's %q", pane, want)
+	}
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration + time.Minute)
+	g.talk()
+	if got := g.h.promptTexts(); !slices.Equal(got, []string{talkPrompt, talkPrompt}) {
+		t.Fatalf("herdr got prompts %q, want the rejected one and the one sent after the cooldown", got)
+	}
+}
+
+// The liaison's agent exits (your /exit, a crash of its CLI) and leaves a
+// shell in its pane, and a Talk comes before an observe pass marked its row
+// lost: Talk reconciles the row with herdr first, so the conversation is
+// resumed in that pane on a row of its own, and a resumed conversation that
+// had its first prompt gets none. Without it, a fresh agent took the live
+// row, kept the old conversation's id, and got no first prompt.
+func TestTalkAfterTheLiaisonExitedResumesItsConversation(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.h.setSession(g.liaisonAgent(), "sid-liaison")
+	g.endLiaisonTurn()
+	old := g.liaisonSession()
+	pane := store.Deref(old.HerdrPaneID)
+	g.h.mu.Lock()
+	g.h.agents = slices.DeleteFunc(g.h.agents, func(a herdr.AgentInfo) bool { return a.PaneID == pane }) // the shell stays
+	g.h.mu.Unlock()
+
+	again := g.talk()
+
+	starts := g.h.startCalls()
+	if len(starts) != 2 || !slices.Contains(starts[1].Args, "sid-liaison") || starts[1].PaneID != pane || again != pane {
+		t.Fatalf("agents started %+v (Talk named pane %s), want the conversation sid-liaison resumed in pane %s", starts, again, pane)
+	}
+	if s := g.liaisonSession(); s.ID == old.ID || store.Deref(s.SessionID) != "sid-liaison" {
+		t.Fatalf("the liaison's live session %d carries %q, want a new row resuming sid-liaison (the old row %d)", s.ID,
+			store.Deref(s.SessionID), old.ID)
+	}
+	gone, err := g.st.SessionByID(g.ctx, old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gone.State != store.SessionLost {
+		t.Fatalf("the exited agent's row is %s, want lost", gone.State)
+	}
+	if got := g.h.promptTexts(); len(got) != 1 {
+		t.Fatalf("herdr got prompts %q, want the first Talk's alone: the resumed conversation had its first prompt", got)
 	}
 }
 
