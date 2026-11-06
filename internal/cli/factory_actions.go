@@ -219,6 +219,14 @@ func (a *factoryActions) Open(ctx context.Context, taskID int64) (tui.ActionResu
 	return tui.ActionResult{Text: text}, nil
 }
 
+// OpenBrowser opens url in the browser, the screen's b (the task's PR) and
+// t (its Jira issue), with the board's opener on the factory commands'
+// runner: no registry of the board's is opened for it, and nothing is
+// recorded (it carries no words and no decision).
+func (a *factoryActions) OpenBrowser(ctx context.Context, url string) error {
+	return actOpenURL(ctx, daemonSys.runner(false, nil), url)
+}
+
 // paneToOpen is the session of a task Open steps into: of its live ones,
 // the one that waits on you, else the one at work, else the newest.
 func paneToOpen(ss []store.Session) (store.Session, bool) {

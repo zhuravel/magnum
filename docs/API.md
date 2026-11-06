@@ -26331,6 +26331,7 @@ type FactoryActions interface {
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
+	OpenBrowser(ctx context.Context, url string) error
 	Seen(ctx context.Context, at time.Time) error
 	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
@@ -26350,6 +26351,8 @@ type FactoryActions interface {
       - Stop drops a task (frees its copy, keeps its branch); Retry lets a task
         that waits on the operator go on at its stage.
       - Open steps into the task's pane (asks nothing).
+      - OpenBrowser opens url in the browser: b a task's PR, t its Jira issue
+        (asks nothing, as the board's b and t).
       - Seen says the operator saw home at at: the first key after a digest,
         and any key or click at most once a minute (the digest counts the
         absence from the last input); Focus that the screen's terminal gained or
@@ -27713,8 +27716,14 @@ type TaskCard struct {
 	// Learned is what the task taught the factory, one lesson per entry.
 	Learned []string
 
-	// PR is the task's GitHub number once pushed ("#4527").
-	PR string
+	// PR is the task's GitHub number once pushed ("#4527"); PRURL its page,
+	// which b opens: "" until the factory published the PR or adopted one.
+	PR, PRURL string
+	// Issue is the task's Jira key ("PR-12330"), "" for a task of your
+	// words; IssueURL its page, which t opens: the key's link by the [board]
+	// trackers, as the board links a PR's issue, "" when no template names
+	// the key.
+	Issue, IssueURL string
 	// YourTime is how long the operator spent on the task.
 	YourTime time.Duration
 	// Cursor is the line the mark is on: the stages, then the agents, then

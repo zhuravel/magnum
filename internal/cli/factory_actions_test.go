@@ -501,3 +501,22 @@ func TestTheScreenSaysWhyItShowsNoAgents(t *testing.T) {
 		t.Errorf("blocking %q / %q, want the agents store's failure named", d.Blocking, d.BlockingLong)
 	}
 }
+
+// OpenBrowser, the screen's b and t, opens the page in the browser with
+// the board's opener (`open <url>`), sends the factory no request and
+// records no input.
+func TestOpenBrowserOpensThePageAsTheBoardDoes(t *testing.T) {
+	storetest.Serial(t)
+	at := newScreenActionsTest(t, 250, nil)
+	const page = "https://github.com/talkable/talkable/pull/4527"
+	at.fake.Rules = append(at.fake.Rules, daemonRuleOK([]string{"open", page}, ""))
+	if err := at.act.OpenBrowser(t.Context(), page); err != nil {
+		t.Fatal(err)
+	}
+	if opened := at.fake.CallsWithPrefix("open"); len(opened) != 1 || !slices.Equal(opened[0].Args, []string{page}) || !opened[0].Mutates {
+		t.Errorf("browser calls %+v, want one open of %s", opened, page)
+	}
+	if len(at.seen) != 0 || at.kicks != 0 {
+		t.Errorf("OpenBrowser sent requests %+v and %d kicks", at.seen, at.kicks)
+	}
+}

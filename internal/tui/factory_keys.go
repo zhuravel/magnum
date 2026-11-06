@@ -261,10 +261,42 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		}
 		m.view = fvNew
 		return m.textChanged(), true
+	case "b", "t":
+		if r, ok := m.selectedRow(); ok {
+			return m.openPage(k, r.ID), true
+		}
 	default:
 		return nil, false
 	}
 	return nil, true
+}
+
+// openPage opens task's PR (b) or its Jira issue (t) in the browser, asking
+// nothing, as the board's b and t (spec 9.D); a task with nothing to open
+// says why in the footer.
+func (m *factoryModel) openPage(k string, task int64) tea.Cmd {
+	if m.act == nil {
+		return m.note(noActions)
+	}
+	c, key := m.data.Cards[task].Task, m.taskKey(task)
+	name, url := cmp.Or(cleanText(c.PR), key), c.PRURL
+	switch {
+	case k == "t" && c.Issue == "":
+		return m.note(key + " has no Jira issue: it started from your words")
+	case k == "t" && c.IssueURL == "":
+		return m.note("no link for " + cleanText(c.Issue) + ": no [board] trackers template names its key")
+	case k == "t":
+		name, url = cleanText(c.Issue), c.IssueURL
+	case url == "":
+		return m.note("no PR yet for " + key)
+	}
+	act := m.act
+	return m.bar.start("Open "+name+" in the browser", func(ctx context.Context) (ActionResult, error) {
+		if err := act.OpenBrowser(ctx, url); err != nil {
+			return ActionResult{}, err
+		}
+		return ActionResult{Text: "opened " + name + ": " + url}, nil
+	})
 }
 
 // openCard opens a task's card: the decision card a task that needs the
@@ -932,8 +964,23 @@ func (m factoryModel) taskCard() TaskCard {
 	c.Ask = m.bar.question()
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
-	c.Hints = dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -")
+	c.Hints = pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c)
 	return c
+}
+
+// pageHints are the task card's hints hs with b and t after d, each when
+// the card has its page to open: the painter's own hints are the approved
+// frames', which leave them to the help.
+func pageHints(hs []hint, c TaskCard) []hint {
+	var pages []hint
+	if c.PRURL != "" {
+		pages = append(pages, hint{"b", "PR"})
+	}
+	if c.IssueURL != "" {
+		pages = append(pages, hint{"t", "Jira"})
+	}
+	i := slices.IndexFunc(hs, func(h hint) bool { return h.key == "d" })
+	return slices.Insert(slices.Clone(hs), i+1, pages...)
 }
 
 // taskStops counts the lines the task card's mark stands on.
@@ -974,6 +1021,8 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 		m.cursors[task] = max(n-1, 0)
 	case "d":
 		return m.openDiff(task), true
+	case "b", "t":
+		return m.openPage(k, task), true
 	case "r":
 		if !c.Retry {
 			return nil, true // the board's r means nothing here

@@ -283,5 +283,5 @@ func (s *screenActions) OpenBrowser(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
-	return actOpenURL(ctx, d, url)
+	return actOpenURL(ctx, d.Run, url)
 }

@@ -15326,6 +15326,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestHerdrsFocusCountsAsYouOnlyWhileYouWereAtWorkLately, and the focus cases of
   TestAtWorkNamesTheRoleWhoseRunIsInFlight, TestQuitCodexQuitsOnlyTheTasksCodexSessions and
   TestTheLoopLadderNeverQuitsAPaneTheOperatorIsIn now rest the focus or type.
+- `b` and `t` on the factory's screen open the task's PR and its Jira issue in the browser (2026-11-06).
+  Spec 9.D has them on home and on the task card, with the board's meaning and no y/N, and milestone 1a's
+  Task 18 named those keys, but the screen never handled them: both did nothing, while the board's open
+  the PR and its tracker's issue. The task card now carries both pages (`TaskCard.PRURL`, `Issue`,
+  `IssueURL`), which home's row reads too: the PR's page from the PR the factory published or adopted
+  (else the number the task keeps), the issue's from its key by the repository's trackers
+  (`Config.TrackersFor`, then `config.Issue`, the board's own lookup), so `[board] trackers` and a
+  `[[repo]]`'s or `[[watch]]`'s link the factory's issues as they link the board's. A task with nothing to
+  open says why in the footer and opens nothing (`no PR yet for PR-12345`, `task 4 has no Jira issue: it
+  started from your words`, `no link for EX-12: no [board] trackers template names its key`). The opener is
+  the board's (`actOpenURL`, `open <url>`) on the factory commands' runner, not the board's screen actions,
+  which open the review daemon's registry for any action. The help lists the keys, the mouse menus offer
+  them (dimmed when there is nothing to open), and the task card's live hints add `b PR` and `t Jira` after
+  `d` when it has the page; the approved frames (`testdata/factory`) leave them to `?` and do not change.
+  Tests: TestBAndTOnHomeOpenTheSelectedTasksPRAndJiraIssue,
+  TestBAndTOnTheTaskCardOpenThatTasksPRAndJiraIssue, TestBAndTSayWhyATaskHasNothingToOpen,
+  TestTheHelpAndTheMenusOfferBAndT, TestTheTaskCardLinksItsPRAndItsJiraIssue,
+  TestTheTaskCardLinksItsIssueByItsRepositorysTrackers and TestOpenBrowserOpensThePageAsTheBoardDoes.
 
 ## Learned rules
 

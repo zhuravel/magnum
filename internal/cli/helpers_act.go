@@ -318,9 +318,10 @@ func actShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// actOpenURL opens url in the default browser.
-func actOpenURL(ctx context.Context, d *actDeps, url string) error {
-	if _, err := d.Run.Run(ctx, execx.Cmd{Name: "open", Args: []string{url}, Mutates: true, Timeout: 30 * time.Second}); err != nil {
+// actOpenURL opens url in the default browser with run: the board's and the
+// picker's b, and the factory screen's b and t.
+func actOpenURL(ctx context.Context, run execx.Runner, url string) error {
+	if _, err := run.Run(ctx, execx.Cmd{Name: "open", Args: []string{url}, Mutates: true, Timeout: 30 * time.Second}); err != nil {
 		return fmt.Errorf("open %s in the browser: %w", url, err)
 	}
 	return nil

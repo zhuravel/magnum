@@ -109,6 +109,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			return d, ctx.Err()
 		case err != nil: // that task's row says so; the rest of home is drawn
 			row, cards := unreadable(t, err)
+			cards.Task.PRURL, cards.Task.Issue, cards.Task.IssueURL = prURL(t, registry.PRLink{}), t.JiraKey, s.issueURL(t)
 			d.Rows = append(d.Rows, row)
 			d.Cards[t.ID] = cards
 			d.Decisions++
@@ -611,7 +612,7 @@ func (s *screen) firstQueued() *registry.Task {
 func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	t := v.t
 	c := tui.TaskCard{Key: TaskKey(t), Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
-		Started: t.Created, PR: row.GitHub, Retry: v.retry}
+		Started: t.Created, PR: row.GitHub, PRURL: prURL(t, v.link), Issue: t.JiraKey, IssueURL: s.issueURL(t), Retry: v.retry}
 	parts := make([]string, 0, len(row.WaitsOn)+len(v.letGo))
 	for _, w := range row.WaitsOn {
 		parts = append(parts, w.Who+": "+w.What)
@@ -628,6 +629,35 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	}
 	c.Report = s.report(t)
 	return c
+}
+
+// prURL is the GitHub page of task t's PR, which the screen's b opens: its
+// link's (the PR the factory published, or one it adopted), else the
+// number the task keeps; "" before it has one.
+func prURL(t registry.Task, link registry.PRLink) string {
+	n, repo := t.PRNumber, t.Repo
+	if link.Number > 0 {
+		n, repo = link.Number, cmp.Or(link.Repo, t.Repo)
+	}
+	if n <= 0 || repo == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
+}
+
+// issueURL is the page of task t's Jira issue, which the screen's t opens:
+// its key's link by the repository's trackers ([board] trackers, a
+// [[repo]]'s or [[watch]]'s first: Config.TrackersFor), as the board links
+// a PR's issue (config.Issue); "" for a task of your words, or a key no
+// template names.
+func (s *screen) issueURL(t registry.Task) string {
+	if t.JiraKey == "" {
+		return ""
+	}
+	if key, url := config.Issue(t.JiraKey, s.cfg.TrackersFor(t.Repo)); key == t.JiraKey {
+		return url
+	}
+	return ""
 }
 
 // cardAgent is session x on its task's card: named by its role's doing,

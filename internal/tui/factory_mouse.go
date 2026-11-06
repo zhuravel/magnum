@@ -127,9 +127,12 @@ func (m factoryModel) menuItems() []menuItem {
 	case fvHome:
 		sel, row := m.selectedRow()
 		_, decision := m.nextDecision()
+		c := m.data.Cards[sel.ID].Task
 		return []menuItem{
 			{"open its card", "enter", "enter", row}, {"oldest decision", "a", "a", decision},
-			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""}, {"new task", "n", "n", acts},
+			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""},
+			{"open its PR", "b", "b", row && acts && c.PRURL != ""}, {"open its Jira issue", "t", "t", row && acts && c.IssueURL != ""},
+			{"new task", "n", "n", acts},
 			{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
 		}
 	case fvQuestion:
@@ -154,7 +157,8 @@ func (m factoryModel) menuItems() []menuItem {
 		c := m.taskCard()
 		return []menuItem{
 			{"retry", "r", "r", acts && c.Retry}, {"diff", "d", "d", acts}, {"drop", "x", "x", acts},
-			{"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
+			{"step into its pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
+			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, {"back", "esc", "esc", true},
 		}
 	}
 	return nil

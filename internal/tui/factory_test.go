@@ -99,6 +99,7 @@ type fakeFactoryActions struct {
 	stops    []int64
 	retries  []int64
 	opens    []int64
+	browsed  []string // the URLs OpenBrowser opened
 	seen     []time.Time
 	focus    []bool
 	focusAt  []time.Time
@@ -166,6 +167,20 @@ func (a *fakeFactoryActions) Open(_ context.Context, task int64) (ActionResult, 
 	defer a.mu.Unlock()
 	a.opens = append(a.opens, task)
 	return ActionResult{Text: "focused its pane"}, nil
+}
+
+func (a *fakeFactoryActions) OpenBrowser(_ context.Context, url string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.browsed = append(a.browsed, url)
+	return nil
+}
+
+// opened is the URLs OpenBrowser opened, in order.
+func (a *fakeFactoryActions) opened() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.browsed)
 }
 
 func (a *fakeFactoryActions) Seen(_ context.Context, at time.Time) error {

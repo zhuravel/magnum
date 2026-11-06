@@ -346,8 +346,14 @@ type TaskCard struct {
 	// Learned is what the task taught the factory, one lesson per entry.
 	Learned []string
 
-	// PR is the task's GitHub number once pushed ("#4527").
-	PR string
+	// PR is the task's GitHub number once pushed ("#4527"); PRURL its page,
+	// which b opens: "" until the factory published the PR or adopted one.
+	PR, PRURL string
+	// Issue is the task's Jira key ("PR-12330"), "" for a task of your
+	// words; IssueURL its page, which t opens: the key's link by the [board]
+	// trackers, as the board links a PR's issue, "" when no template names
+	// the key.
+	Issue, IssueURL string
 	// YourTime is how long the operator spent on the task.
 	YourTime time.Duration
 	// Cursor is the line the mark is on: the stages, then the agents, then

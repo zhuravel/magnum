@@ -394,7 +394,7 @@ func pickRun(ctx context.Context, c *Context, d *actDeps, e pickEntry, a tui.Pic
 	case tui.PickActionOpen:
 		return openMain(ctx, c, d, ref, openOpts{timeout: 5 * time.Minute})
 	case tui.PickActionBrowser:
-		if err := actOpenURL(ctx, d, e.URL); err != nil {
+		if err := actOpenURL(ctx, d.Run, e.URL); err != nil {
 			return cmdFail(c, "pick", err)
 		}
 		fmt.Fprintf(c.Stdout, "opened %s\n", e.URL)

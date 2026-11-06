@@ -13,15 +13,18 @@ package tui
 // registries and requests into them). Every action that leaves the Mac,
 // starts or stops agents or frees a copy asks y/N on the factory's own bar
 // (factory_actions.go); only y confirms. An answer to a question asks
-// nothing (the batch's y sends it), and stepping into a pane asks nothing.
+// nothing (the batch's y sends it), and stepping into a pane or opening a
+// page in the browser asks nothing.
 //
 // The keys of spec 9.D for milestone 1a: on home j k g G move, enter opens
 // the row's card, a walks the decisions oldest first, o steps into the
-// row's pane, n starts a new task, ! is the action log with the alerts, ?
-// the help and its words, `,` settings, m the mouse, ctrl+r a refresh and
-// q quits; the cards' keys are in factory_keys.go. The board's letters keep
-// their meaning: r, p and x do nothing here, except x on the task card
-// (drop, y/N) and r there for a task that can go on (retry, y/N).
+// row's pane, b and t open its PR and its Jira issue in the browser, n
+// starts a new task, ! is the action log with the alerts, ? the help and
+// its words, `,` settings, m the mouse, ctrl+r a refresh and q quits; the
+// cards' keys are in factory_keys.go. The board's letters keep their
+// meaning: b and t open the PR and the issue (on home and the task card),
+// and r, p and x do nothing here, except x on the task card (drop, y/N) and
+// r there for a task that can go on (retry, y/N).
 
 import (
 	"cmp"
@@ -148,6 +151,8 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //   - Stop drops a task (frees its copy, keeps its branch); Retry lets a
 //     task that waits on the operator go on at its stage.
 //   - Open steps into the task's pane (asks nothing).
+//   - OpenBrowser opens url in the browser: b a task's PR, t its Jira issue
+//     (asks nothing, as the board's b and t).
 //   - Seen says the operator saw home at at: the first key after a digest,
 //     and any key or click at most once a minute (the digest counts the
 //     absence from the last input); Focus that the screen's terminal
@@ -164,6 +169,7 @@ type FactoryActions interface {
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
+	OpenBrowser(ctx context.Context, url string) error
 	Seen(ctx context.Context, at time.Time) error
 	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
