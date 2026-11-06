@@ -66,11 +66,50 @@ func TestMagnumIsNeverMigratedByTheFactory(t *testing.T) {
 	}
 }
 
-// magnum is busy while a review round of its runs (a PR claimed, reviewed
-// or verified) or is due (a queued PR whose next try has come); a queued PR
-// whose next try is later, magnum's daemon not running, or no registry at
-// all is not busy, and nothing creates the registry. Why says it plainly,
-// never a PR's text.
+// The local review is one more round under magnum's limit
+// (max_concurrent_reviews): it yields only while magnum's rounds in flight
+// and due fill that limit, so a busy day with free rounds does not hold it.
+func TestTheLocalReviewTakesAFreeRoundUnderMagnumsLimit(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := func(n int, state string) store.PR {
+		up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PR_" + strconv.Itoa(n), Number: n,
+			URL: "https://github.com/example/shop/pull/" + strconv.Itoa(n), HeadSHA: strings.Repeat("ab", 20),
+			GHState: store.GHOpen, InitialState: state, Identity: "zhuravel"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return up.PR
+	}
+	cfg := config.Defaults()
+	cfg.Daemon.MaxConcurrentReviews = 3
+	m := NewMagnum(l, cfg)
+	pr(1, store.PRReviewing)
+	pr(2, store.PRReviewing)
+	if busy, why, err := m.Busy(ctx); busy || err != nil {
+		t.Fatalf("2 rounds in flight under a limit of 3: Busy = %v, %q, %v; want not busy", busy, why, err)
+	}
+	due := pr(3, store.PRQueued)
+	if busy, why, err := m.Busy(ctx); !busy || err != nil || !strings.Contains(why, "limit of 3") {
+		t.Fatalf("2 in flight and 1 due under a limit of 3: Busy = %v, %q, %v; want busy at the limit", busy, why, err)
+	}
+	if err := st.TransitionPR(ctx, due.ID, []string{store.PRQueued}, store.PRReviewing, nil); err != nil {
+		t.Fatal(err)
+	}
+	if busy, why, err := m.Busy(ctx); !busy || err != nil || !strings.Contains(why, "3 review rounds") {
+		t.Fatalf("3 rounds in flight under a limit of 3: Busy = %v, %q, %v; want busy, naming them", busy, why, err)
+	}
+}
+
+// At a limit of one round, magnum is busy while a review round of its runs
+// (a PR claimed, reviewed or verified) or is due (a queued PR whose next try
+// has come); a queued PR whose next try is later, magnum's daemon not
+// running, or no registry at all is not busy, and nothing creates the
+// registry. Why says it plainly, never a PR's text.
 func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 	l, st := magnumLayout(t)
 	ctx := t.Context()
@@ -88,6 +127,7 @@ func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 		return up.PR
 	}
 	cfg := config.Defaults()
+	cfg.Daemon.MaxConcurrentReviews = 1
 	m := NewMagnum(l, cfg)
 	if busy, why, err := m.Busy(ctx); busy || err != nil {
 		t.Fatalf("no PR: Busy = %v, %q, %v", busy, why, err)

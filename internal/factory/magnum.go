@@ -54,9 +54,11 @@ func refuseMagnumMigration(from, to int) error {
 		"restart magnum's daemon first (`magnum daemon-restart --drain`), then the factory goes on", from, to)
 }
 
-// Busy reports whether magnum has a review round in flight (a PR claimed,
-// reviewing or verifying) or due: a queued PR whose next try has come and
-// that magnum's gates would dispatch now. Inside [daemon] quiet_hours they
+// Busy reports whether magnum's review rounds fill its limit
+// ([daemon] max_concurrent_reviews, at least 1): the rounds in flight (a PR
+// claimed, reviewing or verifying) and the rounds due (a queued PR whose
+// next try has come and that magnum's gates would dispatch now). Below the
+// limit the local review takes a free round, as one more of magnum's. Inside [daemon] quiet_hours they
 // hold every queued round nobody forced (eligibility.QuietHoursHold, the
 // dispatcher's own rule; a re-review of the judge alone that they let start
 // shows as in flight once it does), and a due PR that has not started
@@ -91,17 +93,18 @@ func (m *magnumRegistry) Busy(ctx context.Context) (bool, string, error) {
 		return false, "", fmt.Errorf("magnum's registry: %w", err)
 	}
 	now := m.now()
-	quiet := ""
+	quiet, limit := "", 1
 	if m.cfg != nil {
-		quiet = m.cfg.Daemon.QuietHours
+		quiet, limit = m.cfg.Daemon.QuietHours, max(1, m.cfg.Daemon.MaxConcurrentReviews)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[int64]bool{}
-	due, stale := false, false
+	inFlight, due, stale := 0, 0, false
 	for _, p := range prs {
 		if slices.Contains(store.InFlightStates, p.State) {
-			return true, "a review round of magnum's runs", nil
+			inFlight++
+			continue
 		}
 		switch {
 		case p.NextAttemptAt != nil && p.NextAttemptAt.After(now), p.NextEligibleAt != nil && p.NextEligibleAt.After(now):
@@ -116,7 +119,7 @@ func (m *magnumRegistry) Busy(ctx context.Context) (bool, string, error) {
 			m.dueSince[p.ID] = now
 		}
 		if now.Sub(since) < dueHold {
-			due = true
+			due++
 		} else {
 			stale = true
 		}
@@ -127,8 +130,14 @@ func (m *magnumRegistry) Busy(ctx context.Context) (bool, string, error) {
 		}
 	}
 	switch {
-	case due:
+	case inFlight >= limit && limit == 1:
+		return true, "a review round of magnum's runs", nil
+	case inFlight >= limit:
+		return true, fmt.Sprintf("magnum runs %d review rounds, its limit of %d", inFlight, limit), nil
+	case inFlight+due >= limit && limit == 1:
 		return true, "a review round of magnum's is due", nil
+	case inFlight+due >= limit:
+		return true, fmt.Sprintf("magnum's review rounds fill its limit of %d (%d running, %d due)", limit, inFlight, due), nil
 	case stale:
 		return false, fmt.Sprintf("a review round of magnum's is due but has not started for %s (magnum's own gates hold it): "+
 			"the local review goes on", dueHold), nil

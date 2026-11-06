@@ -151,7 +151,8 @@ type GitHub interface {
 }
 
 // Magnum is the review daemon as the factory's local review sees it: busy
-// while a real round is in flight or due, so a local round yields to it.
+// while its real rounds in flight and due fill its limit
+// (max_concurrent_reviews), so a local round takes a free round or waits.
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 }

@@ -15366,6 +15366,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheHelpAndTheMenusOfferBAndT, TestTheTaskCardLinksItsPRAndItsJiraIssue,
   TestTheTaskCardLinksItsIssueByItsRepositorysTrackers and TestOpenBrowserOpensThePageAsTheBoardDoes.
 
+- The local review takes a free round under magnum's limit instead of yielding to every real round
+  (2026-11-06). It waited while any round of magnum's was in flight or due, so on a busy day the first live
+  task's ready card waited behind every other PR in the queue. The operator chose to count it as one more
+  of magnum's rounds: `Magnum.Busy` is busy only while the rounds in flight and the rounds due fill
+  `[daemon] max_concurrent_reviews` (at least 1). The machine's holds, the Codex budget, the heavy slot and
+  the copy's own waits still apply, and a limit of 1 keeps the old rule. Rejected: a maximum wait (it loses
+  that wait every busy day) and a "review now" key (one more thing to remember). Tests:
+  TestTheLocalReviewTakesAFreeRoundUnderMagnumsLimit, TestMagnumIsBusyWhileARoundRunsOrIsDue (at a limit of 1).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

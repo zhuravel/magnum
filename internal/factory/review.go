@@ -474,7 +474,7 @@ func untrackedPaths(ctx context.Context, git *gitx.Client, dir string) ([]string
 // reviewWait is what a local round waits for before it starts, "" for
 // nothing: a hold of the machine (mayLaunch), an agent or you at work in
 // the task's copy, the factory's checks of the head, magnum's real rounds
-// (Magnum.Busy: in flight or due; its registry that cannot be read is a
+// (Magnum.Busy: in flight and due, at its limit; its registry that cannot be read is a
 // wait too, with why), and, when the round runs a Codex role, Codex at or
 // past [usage] codex_soft. who and what are the task's wait.
 func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string) (who, what string, err error) {

@@ -3779,8 +3779,9 @@ judge reads the change's title and body (`description.md`) and the ticket (`tick
 anchors against that diff (`--local-base`). The rounds run with this build's prompts and judge skill, written
 at the factory daemon's start as a candidate (`<data>/factory/review-candidate/`) that magnum's live rounds
 never read. Its panes get the copy's own environment (its `WT_BRANCH` and env, as the factory's agents there),
-so the reviewers use the copy's databases, in turn with the factory's checks. A round runs at the lowest
-priority: it waits while magnum has a real round in flight or due (`magnum: …`; a queued PR that magnum's quiet
+so the reviewers use the copy's databases, in turn with the factory's checks. A round counts as one more of
+magnum's rounds: it waits while magnum's real rounds in flight and due fill `[daemon] max_concurrent_reviews`
+(`magnum: …`, "magnum runs 5 review rounds, its limit of 5"; with a limit of 1, any round; a queued PR that magnum's quiet
 hours hold is not due, and one that is due but has not started within 30 minutes, held by a gate of magnum's the
 factory cannot read, holds the local review no longer, and an event says so), while Codex is at or past
 `[usage] codex_soft` and the round runs a Codex role, while an agent or you work in the copy, and for a heavy
