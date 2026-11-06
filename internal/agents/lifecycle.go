@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
 	"slices"
 	"time"
 
@@ -487,7 +489,8 @@ func (m *Manager) ResumeID(ctx context.Context, prID int64, role Role) (string, 
 
 // resumeCandidate selects the parked or lost resumable sessions of role
 // that ran its configured agent kind (any kind when role is not
-// configured).
+// configured), in a working directory that still exists (dirGone) when
+// Deps.SkipGoneDirs is on.
 func (m *Manager) resumeCandidate(role Role) func(store.Session) bool {
 	kind := ""
 	if spec, ok := m.roleSpec(role); ok && !spec.IsShell() {
@@ -495,8 +498,21 @@ func (m *Manager) resumeCandidate(role Role) func(store.Session) bool {
 	}
 	return func(s store.Session) bool {
 		return (s.State == store.SessionParked || s.State == store.SessionLost) && m.resumable(s) &&
-			(kind == "" || m.sessionKind(s) == kind)
+			(kind == "" || m.sessionKind(s) == kind) && !(m.d.SkipGoneDirs && dirGone(store.Deref(s.Cwd)))
 	}
+}
+
+// dirGone reports whether dir, a session's recorded working directory, no
+// longer exists: its conversation names files under it, and an agent resumed
+// in another checkout looks for them there (the review slots moved to another
+// disk). A session that recorded no directory, or one that cannot be checked
+// (a permission error), is not gone.
+func dirGone(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(dir)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // RecoverAction says what Recover did with a session.

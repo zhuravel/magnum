@@ -94,6 +94,33 @@ func TestResumeIDMatchesTheRolesKind(t *testing.T) {
 	}
 }
 
+// A conversation whose working directory is gone is never resumed: it names
+// files under that directory, and the resumed agent looks for them there (the
+// review slots moved to another disk and the PRs' next rounds resumed their
+// reviewers in the new checkouts, still reading the old paths). The role
+// starts fresh instead; a conversation whose directory exists, or that
+// recorded none, still resumes.
+func TestResumeIDSkipsAConversationWhoseDirectoryIsGone(t *testing.T) {
+	e := newEnv(t)
+	e.m.d.SkipGoneDirs = true // the daemons' setting
+	add := func(id string, cwd *string) {
+		if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleClaude), AgentName: new("x"),
+			AgentKind: new(KindClaude), SessionID: new(id), State: store.SessionParked, Cwd: cwd}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	here := t.TempDir()
+	add("in-place", new(here))
+	add("moved-away", new(filepath.Join(t.TempDir(), "gone", "talkable.review1")))
+	if id, err := e.m.ResumeID(e.ctx, e.pr.ID, RoleClaude); err != nil || id != "in-place" {
+		t.Fatalf("ResumeID = %q, %v; want the conversation whose directory exists, not the newer one in a gone directory", id, err)
+	}
+	add("no-cwd", nil)
+	if id, err := e.m.ResumeID(e.ctx, e.pr.ID, RoleClaude); err != nil || id != "no-cwd" {
+		t.Fatalf("ResumeID = %q, %v; want the newest conversation that recorded no directory", id, err)
+	}
+}
+
 func TestPreflightUsesTheEnvironment(t *testing.T) {
 	e := newEnv(t)
 	e.run.Rules = append(e.run.Rules, execx.Rule{Prefix: []string{"codex", "login", "status"}, Result: execx.Result{Stdout: []byte("Logged in\n")}})

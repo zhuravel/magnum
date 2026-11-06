@@ -1128,6 +1128,11 @@ type Deps struct {
 	// A session whose pane env sets CODEX_HOME uses that. A test binary
 	// never falls back to the defaults.
 	CodexHome string
+	// SkipGoneDirs has ResumeID pass over a conversation whose recorded
+	// working directory no longer exists (dirGone), so the role starts fresh
+	// instead of reading the old paths its conversation names. The daemons
+	// set it; tests that record made-up directories leave it off.
+	SkipGoneDirs bool
 	// Log receives one line per trust entry added and per trust dialog
 	// answered (optional).
 	Log execx.Logger

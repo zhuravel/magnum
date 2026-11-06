@@ -300,8 +300,9 @@ func (a *App) wire() {
 	a.Agents = agents.New(agents.Deps{
 		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Config: cfg, Layout: a.Layout, Tag: a.AgentTag,
 		IdentityEnv: a.identityEnv, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
-		Toast:  a.toastAsync,
-		Signal: syscall.Kill, // StopShell's, for a command it proved its own
+		Toast:        a.toastAsync,
+		Signal:       syscall.Kill, // StopShell's, for a command it proved its own
+		SkipGoneDirs: true,
 	})
 	// One Jira client for every identity's rounds: a token file problem
 	// warns once per daemon start (jira.Client.WarnTokenFile).

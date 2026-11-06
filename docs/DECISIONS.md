@@ -2645,6 +2645,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   keeps the templates in the shape of `mcp_disable`); keeping the pin (a version the operator has to keep
   and every new machine to learn).
 
+- A conversation whose working directory is gone is never resumed (2026-11-06). The review slots moved to
+  another disk (`slot_path` on an external volume) and were provisioned again there, and every PR's next
+  round resumed its parked reviewers in the new checkout: their conversations named files under the old
+  `~/Projects/talkable.reviewN`, so they looked for them where nothing was left (four resumes on two PRs
+  within a day, 1,936 parked sessions waiting to do the same). `MovedFrom` tells only the judge, and only
+  when the PR's old workspace is still open. `ResumeID` now passes over a parked or lost session whose
+  recorded directory no longer exists, and the role starts fresh with the usual prompt; a slot move whose
+  old directory still exists resumes as before. `agents.Deps.SkipGoneDirs` turns it on, set by both
+  daemons; test fixtures that record made-up directories leave it off. Test:
+  TestResumeIDSkipsAConversationWhoseDirectoryIsGone.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

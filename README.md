@@ -1095,7 +1095,9 @@ recorded, stays, and a workspace left with no pane at all is closed. A
 `pr.panes_closed` event says how many and of which roles, and, of a lost session's pane, the error line the
 CLI printed before it died (`last_lines`, by role; a line that starts at column 0 with error, fatal or panic,
 redacted), read before the pane closes; a reconcile with nothing to close records nothing.
-A parked or lost conversation is kept: the role's next start resumes it in a new pane.
+A parked or lost conversation is kept: the role's next start resumes it in a new pane, unless the directory it
+worked in no longer exists (the slots moved to another `slot_path`): its conversation names files there, so
+the role starts fresh.
 herdr numbers its workspaces and panes from the start again after it restarts, so old sessions' ids can
 name the new panes of another PR. Magnum never closes, reuses or parks away a pane or a workspace that a
 starting or live session of another PR records (of two live sessions with one pane, the newer owns it): an

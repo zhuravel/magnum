@@ -286,7 +286,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		drained: make(chan struct{})}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
-		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal})
+		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true})
 	return r, nil
 }
 
