@@ -15801,6 +15801,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rules test skips this prompt; TestTheLiaisonsPromptNamesItsFolderAndItsCommands pins what it names, and
   TestTheLiaisonRoleWaitsForYouAndNoStageLaunchesIt the role and its absence from every kind's stages.
 
+- The liaison has its own owner row (2026-11-06, the factory liaison's first slice). The runtime hangs a
+  task's liaison on a row of its own in the factory's agents store (`liaisonRow`, made on first use): the
+  repository `factory/liaison` (node id `factory:liaison`), the node id `factory:liaison:<task id>`, the
+  task's id as its number, the task's folder as its URL, and `t<id>` as its head, which is no attempt's.
+  The agents manager writes `human_active_at` on the row of the pane you type in. Your chat with the liaison
+  therefore never sets the task row's, so the writer's prompts, the restarts and the copy's checks
+  (`AtWork`, `TouchedSince`) do not wait while you talk. The row needs its own repository because the store
+  keeps one number per repository, and the task's row already has the task's id there. `ownerOf` maps a row
+  to its task by its number, so it would give the liaison's events to the task's roles. It now answers
+  `errLiaisonRow` for a liaison's row. Its callers drop that error as they drop a row of no task. So the
+  liaison's AskUserQuestion dialog is no `EventBlocked` of the task, a liaison turn that ends is no
+  `EventEnded`, and a lost pane, a fresh start or a Codex login change restarts nothing as the task's role.
+  `LiaisonTask` reads the task's id from the node id, and `OwnerTask` still names none for such a row, so
+  copy reservations and `TaskSessions` (the screen, the CLI) see only the task's row. Rejected: the
+  liaison on the task's row (your chat would hold the task's agents for the human cooldown), and a flag on
+  the session in place of a row (the cooldown is the row's). A task whose repository is itself named
+  `liaison` would share the repository `factory/liaison`, and its liaison's row would then collide with the
+  task's row. Tests, failing first: TestChatWithTheLiaisonLeavesTheTasksRowAlone (it failed to build while
+  `liaisonRow` was missing), TestALiaisonsEventsNeverReachTheTasksRoles (with the row alone it gave the task
+  an `EventBlocked` and an `EventEnded` of `fx-liaison`), and TestTheLiaisonsRowIsApartFromTheTasks.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -557,7 +557,7 @@ func (r *Runtime) restartIdleCodex(ctx context.Context) {
 		}) {
 			continue
 		}
-		if err := r.relaunch(ctx, s); err != nil && !errors.Is(err, errRefusedRole) {
+		if err := r.relaunch(ctx, s); err != nil && !errors.Is(err, errRefusedRole) && !errors.Is(err, errLiaisonRow) {
 			r.log.Warn("restart an idle Codex session after a login change", "role", s.Role, "err", err)
 		}
 	}

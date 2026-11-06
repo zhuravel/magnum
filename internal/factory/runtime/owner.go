@@ -6,7 +6,8 @@ package runtime
 // factory/<repo name>, its number the task's id, its URL the task's
 // directory and its head the task's current attempt: every run's target is
 // the attempt it ran in. The row's head is the runtime's bookkeeping alone;
-// the task's own head (Task.HeadSHA) is the engine's, from git.
+// the task's own head (Task.HeadSHA) is the engine's, from git. A task's
+// liaison hangs on a row of its own (liaisonRow), never the task's.
 
 import (
 	"context"
@@ -106,6 +107,53 @@ func (r *Runtime) owner(ctx context.Context, t registry.Task, head string) (stor
 	return up.PR, nil
 }
 
+// liaisonRepo is the name part of the liaisons' rows' repository,
+// factory/liaison: a repository of their own, so a liaison's row takes its
+// task's id as its number beside the task's row.
+const liaisonRepo = "liaison"
+
+// liaisonNodePrefix starts the node id of a task's liaison row.
+const liaisonNodePrefix = "factory:liaison:"
+
+func liaisonNode(id int64) string { return liaisonNodePrefix + strconv.FormatInt(id, 10) }
+
+// LiaisonTask is the task a liaison row's node id names, false for a row
+// that is no liaison's.
+func LiaisonTask(nodeID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(nodeID, liaisonNodePrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil && id > 0
+}
+
+// liaisonRow upserts task t's liaison row: the owner row of the agent you
+// talk with about the task, apart from the task's own row, so your chat
+// with it is never input into the task's panes (the task row's
+// human_active_at) and its sessions are no role of the task's attempts
+// (ownerOf). Its repository is factory/liaison, its number the task's id,
+// its URL the task's folder (where the liaison works: never the copy), and
+// its head t<id>, no attempt's.
+func (r *Runtime) liaisonRow(ctx context.Context, t registry.Task) (store.PR, error) {
+	r.mu.Lock()
+	r.keys[t.ID] = taskKey(t)
+	r.mu.Unlock()
+	repo, err := r.st.UpsertRepo(ctx, store.Repo{NodeID: ownerRepo + ":" + liaisonRepo, Owner: ownerRepo, Name: liaisonRepo,
+		WatchOwner: ownerRepo, Mode: store.RepoModePerPR})
+	if err != nil {
+		return store.PR{}, fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	title := t.Title
+	up, err := r.st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: liaisonNode(t.ID), Number: int(t.ID),
+		URL: "file://" + r.d.Layout.FactoryTaskDir(t.ID), HeadSHA: "t" + strconv.FormatInt(t.ID, 10), Title: &title,
+		GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: ownerIdentity})
+	if err != nil {
+		return store.PR{}, fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+	}
+	return up.PR, nil
+}
+
 // ownerRow is task id's owner row as it is (store.ErrNotFound before the
 // task's first launch).
 func (r *Runtime) ownerRow(ctx context.Context, id int64) (store.PR, error) {
@@ -159,12 +207,21 @@ func (r *Runtime) ownerName(pr store.PR) string {
 	return "task " + strconv.Itoa(pr.Number)
 }
 
+// errLiaisonRow is ownerOf on a liaison's row (liaisonRow): its number is
+// its task's id, but its sessions are no role of the task's attempts, so
+// what they show (a dialog, a turn that ended, a lost pane) is no event of
+// the task's roles. The callers drop it as they drop a row of no task.
+var errLiaisonRow = errors.New("the liaison's row: no role of the task's")
+
 // ownerOf is the task and the current attempt of owner row prID (its
-// number, its head).
+// number, its head); errLiaisonRow for a liaison's row.
 func (r *Runtime) ownerOf(ctx context.Context, prID int64) (registry.Task, store.PR, error) {
 	pr, err := r.st.PRByID(ctx, prID)
 	if err != nil {
 		return registry.Task{}, store.PR{}, err
+	}
+	if _, ok := LiaisonTask(pr.NodeID); ok {
+		return registry.Task{}, pr, errLiaisonRow
 	}
 	t, err := r.reg.TaskByID(ctx, int64(pr.Number))
 	if err != nil {

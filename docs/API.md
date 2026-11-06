@@ -13684,6 +13684,10 @@ func IsUnknownReason(what string) bool
     IsUnknownReason reports whether a task's wait is UnknownReason's, as this
     build or an older one (whose wait named no command) wrote it.
 
+func LiaisonTask(nodeID string) (int64, bool)
+    LiaisonTask is the task a liaison row's node id names, false for a row that
+    is no liaison's.
+
 func OwnerTask(nodeID string) (int64, bool)
     OwnerTask is the task an owner row's node id names (Owner), false for a row
     that is no task's.
