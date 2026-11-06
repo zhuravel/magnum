@@ -40,14 +40,15 @@ func (g *rig) launchLiaison() store.PR {
 
 // liaisonAgent is the herdr name of the rig's task's liaison.
 func (g *rig) liaisonAgent() string {
-	return agents.TaggedAgentName(Tag, "factory/liaison", int(g.task.ID), agents.Role("fx-liaison"))
+	return agents.TaggedAgentName(Tag, "factory-liaison/liaison", int(g.task.ID), agents.Role("fx-liaison"))
 }
 
 // The liaison's owner row is apart from its task's: repository
-// factory/liaison, node id factory:liaison:<id>, the task's id as its
-// number, its URL the task's folder. It is created once, OwnerTask names no
-// task by it (the copies' reservations), and the task's sessions (the
-// screen's, the CLI's) are not the liaison's.
+// factory-liaison/liaison, node id factory:liaison:<id>, the task's id as
+// its number, its URL the task's folder. It is created once, OwnerTask
+// names no task by it (the copies' reservations), the task's sessions (the
+// screen's, the CLI's) are not the liaison's, and a task whose repository
+// is named liaison gets its own row and its liaison's both.
 func TestTheLiaisonsRowIsApartFromTheTasks(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-writer")
@@ -62,7 +63,7 @@ func TestTheLiaisonsRowIsApartFromTheTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.NodeID != "factory:liaison" || repo.Owner != "factory" || repo.Name != "liaison" {
+	if repo.NodeID != "factory-liaison" || repo.Owner != "factory-liaison" || repo.Name != "liaison" {
 		t.Fatalf("the liaison's repository = %s %s/%s", repo.NodeID, repo.Owner, repo.Name)
 	}
 	if again, err := g.r.liaisonRow(g.ctx, g.task); err != nil || again.ID != pr.ID {
@@ -86,6 +87,25 @@ func TestTheLiaisonsRowIsApartFromTheTasks(t *testing.T) {
 	}
 	if len(ss) != 1 || ss[0].Role != "fx-writer" {
 		t.Fatalf("the task's sessions = %+v, want fx-writer's alone", ss)
+	}
+
+	// A repository named liaison: the task's row and its liaison's row both.
+	named, err := g.reg.CreateTask(g.ctx, registry.Task{JiraKey: "PR-12346", Kind: "bug", Repo: "example/liaison",
+		State: registry.TaskActive, Stage: "investigate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := g.r.Owner(g.ctx, named)
+	if err != nil {
+		t.Fatalf("Owner of a task of example/liaison: %v", err)
+	}
+	other, err := g.r.liaisonRow(g.ctx, named)
+	if err != nil {
+		t.Fatalf("liaisonRow of a task of example/liaison: %v", err)
+	}
+	if own.ID == other.ID || own.NodeID != "factory:task:"+strconv.FormatInt(named.ID, 10) ||
+		other.NodeID != "factory:liaison:"+strconv.FormatInt(named.ID, 10) {
+		t.Fatalf("a task of example/liaison: its row %d %s, its liaison's %d %s", own.ID, own.NodeID, other.ID, other.NodeID)
 	}
 }
 

@@ -108,9 +108,16 @@ func (r *Runtime) owner(ctx context.Context, t registry.Task, head string) (stor
 }
 
 // liaisonRepo is the name part of the liaisons' rows' repository,
-// factory/liaison: a repository of their own, so a liaison's row takes its
-// task's id as its number beside the task's row.
+// factory-liaison/liaison: a repository of their own, so a liaison's row
+// takes its task's id as its number beside the task's row.
 const liaisonRepo = "liaison"
+
+// liaisonRepoNode is the node id and the owner of the liaisons' rows'
+// repository. The store keeps a repository once per node id and once per
+// owner and name, and a task's repository is factory/<repo name> (node id
+// factory:<repo name>): with an owner of its own, the liaisons' repository
+// can be no task's, one whose repository is named liaison included.
+const liaisonRepoNode = "factory-liaison"
 
 // liaisonNodePrefix starts the node id of a task's liaison row.
 const liaisonNodePrefix = "factory:liaison:"
@@ -132,14 +139,14 @@ func LiaisonTask(nodeID string) (int64, bool) {
 // talk with about the task, apart from the task's own row, so your chat
 // with it is never input into the task's panes (the task row's
 // human_active_at) and its sessions are no role of the task's attempts
-// (ownerOf). Its repository is factory/liaison, its number the task's id,
+// (ownerOf). Its repository is factory-liaison/liaison, its number the task's id,
 // its URL the task's folder (where the liaison works: never the copy), and
 // its head t<id>, no attempt's.
 func (r *Runtime) liaisonRow(ctx context.Context, t registry.Task) (store.PR, error) {
 	r.mu.Lock()
 	r.keys[t.ID] = taskKey(t)
 	r.mu.Unlock()
-	repo, err := r.st.UpsertRepo(ctx, store.Repo{NodeID: ownerRepo + ":" + liaisonRepo, Owner: ownerRepo, Name: liaisonRepo,
+	repo, err := r.st.UpsertRepo(ctx, store.Repo{NodeID: liaisonRepoNode, Owner: liaisonRepoNode, Name: liaisonRepo,
 		WatchOwner: ownerRepo, Mode: store.RepoModePerPR})
 	if err != nil {
 		return store.PR{}, fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
