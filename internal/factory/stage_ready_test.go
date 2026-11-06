@@ -196,8 +196,14 @@ func (r *readyRig) card(id int64) ReadyCardFile {
 // request) and runs the tick that answers it; the request as it ended.
 func (r *readyRig) decideOn(id int64, c ReadyCardFile, choice, reason, note string) registry.Request {
 	r.t.Helper()
-	qid, err := r.reg.EnqueueRequest(r.ctx, ReqDecide, DecidePayload{TaskID: id, Choice: choice, Reason: reason, Note: note, HeadSHA: c.Head,
+	return r.decideWith(DecidePayload{TaskID: id, Choice: choice, Reason: reason, Note: note, HeadSHA: c.Head,
 		ReportHash: c.ReportHash, DiffHash: c.DiffHash, Shown: c.Drawn, Surface: "screen"})
+}
+
+// decideWith is decideOn for the payload p as it stands.
+func (r *readyRig) decideWith(p DecidePayload) registry.Request {
+	r.t.Helper()
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqDecide, p)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -794,6 +800,50 @@ func TestASentBackChangeGetsAFreshLocalReviewBeforeANewCard(t *testing.T) {
 	}
 	if c := r.card(task.ID); c.Revision != 2 || c.Head != fix {
 		t.Fatalf("card %+v, want revision 2 at the new head", c)
+	}
+}
+
+// A decision from the liaison is recorded as the screen's is: the time the
+// card was shown, when the diff was read (zero when the operator did not say
+// they read it) and the surface it came from, with the decision and its
+// input; the stats time the operator's card from that time.
+func TestADecisionFromTheLiaisonRecordsItsSurfaceTheShownTimeAndTheReadDiff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		diffRead bool
+	}{{"diff read", true}, {"diff unread", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReadyRig(t)
+			task, _ := r.toCard("PR-12378")
+			c := r.card(task.ID)
+			r.clock.Add(10 * time.Minute)
+			shown := r.clock.Now().Add(-4 * time.Minute) // the liaison noted it before it asked
+			p := DecidePayload{TaskID: task.ID, Choice: ChoiceSendBack, Reason: "too-much", Note: "keep it small", HeadSHA: c.Head,
+				ReportHash: c.ReportHash, DiffHash: c.DiffHash, Shown: shown, Surface: "liaison"}
+			if tc.diffRead {
+				p.DiffOpened = shown
+			}
+			if q := r.decideWith(p); q.State != registry.RequestDone {
+				t.Fatalf("send back request %s: %q", q.State, q.Result)
+			}
+			ds, err := r.reg.Decisions(r.ctx, task.ID)
+			if err != nil || len(ds) != 1 {
+				t.Fatalf("decisions %+v (%v)", ds, err)
+			}
+			wantOpened := time.Time{}
+			if tc.diffRead {
+				wantOpened = shown
+			}
+			if !ds[0].Shown.Equal(shown) || !ds[0].DiffOpened.Equal(wantOpened) {
+				t.Errorf("decision shown %v, diff opened %v; want shown %v, diff opened %v", ds[0].Shown, ds[0].DiffOpened, shown, wantOpened)
+			}
+			ins, _ := r.reg.Inputs(r.ctx, task.ID)
+			for _, kind := range []string{registry.InputDecision, registry.InputSendBack} {
+				if !slices.ContainsFunc(ins, func(in registry.Input) bool { return in.Kind == kind && in.Surface == "liaison" }) {
+					t.Errorf("inputs %+v, want a %s input from the liaison", ins, kind)
+				}
+			}
+		})
 	}
 }
 

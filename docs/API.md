@@ -11902,13 +11902,18 @@ type AnswerPayload struct {
 	Answers  map[int]string
 	Needless map[int]string
 	Surface  string
+	Shown    time.Time `json:",omitzero"`
 }
     AnswerPayload is a ReqAnswer: your answers to the questions of revision
     Revision of task TaskID, by question index (from 0): an option's label,
     your own words, or "ask:<login>" (then, optionally, the comment for that
     person in your words) to ask someone else; Needless are the questions you
     call needless, by index, with the key of your reason. Surface is where you
-    answered (the screen, the CLI), for the record of your input.
+    answered (the screen, the CLI, the liaison), for the record of your input.
+    Shown is when the questions of Revision were shown to you, when the surface
+    knows it (the liaison notes it before it asks): the stats count your time on
+    the batch from it. It is left out of the request when zero, so a daemon that
+    predates it still takes an answer that names no time.
 
 type CardFile struct {
 	Path    string `json:"path"`
@@ -13378,6 +13383,11 @@ func (r *Registry) ShowQuestions(ctx context.Context, taskID int64, rev int) err
     the task. A question keeps the first time it was shown, whatever later shows
     say. A revision that has no questions (or a task that does not exist) is
     ErrNotFound.
+
+func (r *Registry) ShowQuestionsAt(ctx context.Context, taskID int64, rev int, at time.Time) error
+    ShowQuestionsAt is ShowQuestions for a batch that was shown at the time at,
+    which the registry could not see (the liaison notes it before it asks);
+    the zero time is the registry's own moment.
 
 func (r *Registry) Spans(ctx context.Context, taskID int64) ([]Span, error)
     Spans returns a task's spans oldest first; a task with none, or no task,

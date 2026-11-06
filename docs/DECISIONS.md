@@ -15891,6 +15891,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTalkAfterTheLiaisonExitedResumesItsConversation (a fresh agent on the old row, with no `--resume` and
   no first prompt) and TestTalkNamesTheLiaisonsPaneWhenItsFirstPromptWaitsForYou (no pane with the error).
 
+- `answer` and `decide` take `--surface` and `--shown`, and `decide` takes `--diff-read` (2026-11-06, the factory
+  liaison's first slice). The liaison records what you say in its chat with these two commands, and it passes
+  `--surface liaison` and `--shown <the time it noted before it asked>`. `--surface` is `cli` (the default) or
+  `liaison`, nothing else: the screen and a pane are not places these commands run from, and a typo would file
+  your input under a surface that means nothing, so any other value (and a `--shown` that is no RFC 3339 time)
+  is a usage error, exit 2, before the registry is opened. The surface is the input's, as before; the stats
+  never read it, so what you answer and decide in the chat counts as what you answer and decide on a card
+  (`AnswerBatches`, `Decisions`, `OperatorSecs`). `--shown` is when you were shown the card or the questions.
+  On `decide` it replaces the time the command read the card, which stays the default, and the decision stores
+  it as `shown_at`. `--diff-read` sets the decision's `DiffOpened` to that same time; without it the diff is
+  unread, as the screen's "Push without reading the diff?" records it, so the liaison adds it only when you
+  said in the chat that you read this card's diff. `AnswerPayload` gains `Shown`, which `answer` stores with
+  the new `registry.ShowQuestionsAt` for the whole revision (the first time a question was shown stays, as with
+  `ShowQuestions`, so a batch sent again after a restart moves nothing). `ShowQuestions` had no caller in the
+  daemon until now: a batch's time was never measured, so `OperatorSecs` left it out. A stale batch is refused
+  before its time is stored, a failure to store it is logged and refuses nothing, and an answer without
+  `--shown` records no time, as before. Version skew: `Shown` is left out of the request when zero
+  (`omitzero`), so a CLI of this build still talks to a daemon of an older one until it passes `--shown`. Then
+  `decode` refuses the field the old daemon does not know (`this factory daemon predates "Shown"`, `magnum
+  factory install` restarts it on the new build), the request fails whole, and nothing is recorded. Rejected:
+  a refusal of `--diff-read` on a drop (a drop is bound to no card, but the diff you read is still true), and
+  a time argument on `ShowQuestions` itself (it keeps the registry's clock for its callers; `ShowQuestionsAt`
+  takes the time).
+  Tests, failing first: TestAnswerAndDecideRecordTheLiaisonsSurfaceAndTime and TestAnUnknownSurfaceIsRefused (no
+  flag existed), TestAnAnswerFromTheLiaisonRecordsItsSurfaceAndWhenTheBatchWasShown and
+  TestAnAskedBatchFromTheLiaisonIsShownAllTheSame (the batch stayed unshown), TestShowQuestionsAtRecordsTheTimeItIsGiven
+  (no such method) and, with the field in, TestAStaleBatchFromTheLiaisonRecordsNoShownTime as its guard.
+  Guards that passed at once, since the daemon already stored a decision's surface, shown time and read diff,
+  and the stats never read a surface: TestADecisionFromTheLiaisonRecordsItsSurfaceTheShownTimeAndTheReadDiff
+  and TestStatsCountALiaisonsAnswerAsACards.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

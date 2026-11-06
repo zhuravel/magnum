@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -189,6 +190,152 @@ func TestFactoryAnswerRefusesFlagsThatDoNotGoTogether(t *testing.T) {
 		dt.stderr.Reset()
 		if code := dt.run("factory", args...); code != 2 || !strings.Contains(dt.stderr.String(), "usage") {
 			t.Errorf("%q: exit %d, stderr %q; want a usage error", args, code, dt.stderr)
+		}
+	}
+}
+
+// The liaison records what the operator said in its chat with --surface
+// liaison and --shown, the time it noted before it asked: the daemon
+// stores the surface with the input and counts the operator's time on the
+// batch or the card from that time. --diff-read says the operator read the
+// card's diff, as the time it was shown; without it the decision records an
+// unread diff. Without the flags a command is the CLI's, as before.
+func TestAnswerAndDecideRecordTheLiaisonsSurfaceAndTime(t *testing.T) {
+	storetest.Serial(t)
+	var answer factory.AnswerPayload
+	var decide factory.DecidePayload
+	var raw string
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		raw = string(q.Payload)
+		switch q.Kind {
+		case factory.ReqAnswer:
+			answer = factory.AnswerPayload{}
+			if err := json.Unmarshal(q.Payload, &answer); err != nil {
+				t.Error(err)
+			}
+		case factory.ReqDecide:
+			decide = factory.DecidePayload{}
+			if err := json.Unmarshal(q.Payload, &decide); err != nil {
+				t.Error(err)
+			}
+		default:
+			t.Errorf("request kind %q", q.Kind)
+		}
+		return registry.RequestDone, "recorded"
+	})
+	task := seedQuestions(t, dt)
+	decideTask, _ := seedReadyCard(t, dt)
+	file := filepath.Join(t.TempDir(), "answers.json")
+	if err := os.WriteFile(file, []byte(`{"revision": 1, "answers": {"1": "Seven days before it expires"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shown := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+
+	if code := dt.run("factory", "answer", "PR-12345", "--json", file, "--surface", "liaison", "--shown", "2026-11-06T10:00:00Z"); code != 0 {
+		t.Fatalf("answer: exit %d, stderr %s", code, dt.stderr)
+	}
+	if answer.TaskID != task.ID || answer.Surface != "liaison" || !answer.Shown.Equal(shown) {
+		t.Errorf("answer payload %+v, want task %d, surface liaison, shown %v", answer, task.ID, shown)
+	}
+
+	// An offset is a time too, and the same instant.
+	if code := dt.run("factory", "answer", "PR-12345", "--json", file, "--shown", "2026-11-06T12:00:00+02:00"); code != 0 {
+		t.Fatalf("answer with an offset: exit %d, stderr %s", code, dt.stderr)
+	}
+	if answer.Surface != "cli" || !answer.Shown.Equal(shown) {
+		t.Errorf("answer payload %+v, want the CLI's surface and the instant %v", answer, shown)
+	}
+
+	// Without the flags: the CLI's surface, and no shown time. The field is
+	// left out of the request, so a daemon that predates it still takes the
+	// answer.
+	if code := dt.run("factory", "answer", "PR-12345", "--json", file); code != 0 {
+		t.Fatalf("answer without the flags: exit %d, stderr %s", code, dt.stderr)
+	}
+	if answer.Surface != "cli" || !answer.Shown.IsZero() || strings.Contains(raw, "Shown") {
+		t.Errorf("answer payload %+v (%s), want the CLI's surface and no shown time in the request", answer, raw)
+	}
+
+	if code := dt.run("factory", "decide", "PR-12360", "push", "--card", "2", "--surface", "liaison", "--shown", "2026-11-06T10:00:00Z",
+		"--diff-read"); code != 0 {
+		t.Fatalf("decide: exit %d, stderr %s", code, dt.stderr)
+	}
+	if decide.TaskID != decideTask.ID || decide.Choice != factory.ChoicePush || decide.Surface != "liaison" || !decide.Shown.Equal(shown) ||
+		!decide.DiffOpened.Equal(shown) {
+		t.Errorf("decide payload %+v, want a push from the liaison, shown %v, its diff read at that time", decide, shown)
+	}
+
+	// Without --diff-read the diff is unread, whatever else is said.
+	if code := dt.run("factory", "decide", "PR-12360", "send_back", "--card", "2", "--reason", "too-much", "--note", "keep it small",
+		"--surface", "liaison", "--shown", "2026-11-06T10:00:00Z"); code != 0 {
+		t.Fatalf("send_back: exit %d, stderr %s", code, dt.stderr)
+	}
+	if decide.Choice != factory.ChoiceSendBack || decide.Surface != "liaison" || !decide.Shown.Equal(shown) || !decide.DiffOpened.IsZero() {
+		t.Errorf("decide payload %+v, want a send back from the liaison with an unread diff", decide)
+	}
+
+	// A drop is bound to no card but takes the surface and the time.
+	if code := dt.run("factory", "decide", "PR-12360", "drop", "--surface", "liaison", "--shown", "2026-11-06T10:00:00Z"); code != 0 {
+		t.Fatalf("drop: exit %d, stderr %s", code, dt.stderr)
+	}
+	if decide.Choice != factory.ChoiceDrop || decide.Surface != "liaison" || !decide.Shown.Equal(shown) || !decide.DiffOpened.IsZero() {
+		t.Errorf("decide payload %+v, want a drop from the liaison, shown %v", decide, shown)
+	}
+
+	// Without the flags: the CLI's surface, the time the command read the card
+	// and an unread diff.
+	read := time.Now()
+	if code := dt.run("factory", "decide", "PR-12360", "push", "--card", "2"); code != 0 {
+		t.Fatalf("decide without the flags: exit %d, stderr %s", code, dt.stderr)
+	}
+	if decide.Surface != "cli" || decide.Shown.Before(read) || !decide.DiffOpened.IsZero() {
+		t.Errorf("decide payload %+v, want the CLI's surface, shown at the read of the card and an unread diff", decide)
+	}
+
+	// --diff-read without --shown is the time the command read the card.
+	read = time.Now()
+	if code := dt.run("factory", "decide", "PR-12360", "push", "--card", "2", "--diff-read"); code != 0 {
+		t.Fatalf("decide --diff-read: exit %d, stderr %s", code, dt.stderr)
+	}
+	if decide.Shown.Before(read) || !decide.DiffOpened.Equal(decide.Shown) {
+		t.Errorf("decide payload %+v, want the diff read when the card was shown", decide)
+	}
+}
+
+// answer and decide take the surfaces cli and liaison and nothing else: the
+// screen and a pane are not places this command is run from, and a typo
+// would put the operator's input under a surface that means nothing. A shown
+// time is an RFC 3339 time. Each is a usage error, before anything is read
+// or sent.
+func TestAnUnknownSurfaceIsRefused(t *testing.T) {
+	storetest.Serial(t)
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		t.Errorf("request %q was sent", q.Kind)
+		return registry.RequestDone, ""
+	})
+	for _, args := range [][]string{
+		{"answer", "PR-12345", "--json", "a.json", "--surface", "screen"},
+		{"answer", "PR-12345", "--json", "a.json", "--surface", "x"},
+		{"decide", "PR-12360", "drop", "--surface", "screen"},
+		{"decide", "PR-12360", "drop", "--surface", "x"},
+		{"decide", "PR-12360", "drop", "--surface", "pane"},
+	} {
+		dt.stderr.Reset()
+		code := dt.run("factory", args...)
+		if got := dt.stderr.String(); code != 2 || !strings.Contains(got, "cli") || !strings.Contains(got, "liaison") ||
+			!strings.Contains(got, args[len(args)-1]) {
+			t.Errorf("%q: exit %d, stderr %q; want a usage error naming cli and liaison", args, code, got)
+		}
+	}
+	for _, args := range [][]string{
+		{"answer", "PR-12345", "--json", "a.json", "--shown", "yesterday"},
+		{"answer", "PR-12345", "--json", "a.json", "--shown", "2026-11-06 10:00"},
+		{"decide", "PR-12360", "drop", "--shown", "10:00"},
+	} {
+		dt.stderr.Reset()
+		code := dt.run("factory", args...)
+		if got := dt.stderr.String(); code != 2 || !strings.Contains(got, "RFC 3339") || !strings.Contains(got, args[len(args)-1]) {
+			t.Errorf("%q: exit %d, stderr %q; want a usage error naming RFC 3339", args, code, got)
 		}
 	}
 }

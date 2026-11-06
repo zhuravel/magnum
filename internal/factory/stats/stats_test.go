@@ -452,6 +452,46 @@ func TestStatsMeasuresTheOperatorsTimeOnCards(t *testing.T) {
 	}
 }
 
+// The stats never read the surface of an input: what the operator answers
+// and decides in the liaison's chat counts as what they answer and decide on
+// a card, an answered batch and a decision each, and their time on it runs
+// from the time it was shown to the answer or the decision.
+func TestStatsCountALiaisonsAnswerAsACards(t *testing.T) {
+	t.Parallel()
+	r, clk := openClocked(t)
+	ctx := t.Context()
+	for key, surface := range map[string]string{"PR-12306": "screen", "PR-12307": "liaison"} {
+		task := createTask(t, r, key)
+		askRevision(t, r, clk, task.ID, 1, 2, time.Minute, 2*time.Minute, 8*time.Minute) // 6m
+		d := registry.Decision{TaskID: task.ID, Kind: "ready_push", Choice: "push", Shown: t0.Add(time.Hour), DiffOpened: t0.Add(time.Hour),
+			At: t0.Add(time.Hour + 12*time.Minute)} // 12m
+		if err := r.RecordDecision(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		for _, in := range []registry.Input{
+			{TaskID: task.ID, Kind: registry.InputAnswer, Surface: surface, Text: "Seven days before it expires", At: t0.Add(8 * time.Minute)},
+			{TaskID: task.ID, Kind: registry.InputDecision, Surface: surface, Text: "push", At: d.At},
+		} {
+			if _, err := r.RecordInput(ctx, in); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, liaison := only(t, rep, "PR-12306"), only(t, rep, "PR-12307")
+	if want := 18 * time.Minute; liaison.OperatorSecs != want || liaison.AnswerBatches != 1 || liaison.Decisions != 1 || liaison.Typed != 0 {
+		t.Errorf("the liaison's task = %+v, want one answered batch and one decision, %s of the operator's time and nothing typed", liaison, want)
+	}
+	screen.TaskID, screen.Key = liaison.TaskID, liaison.Key
+	if screen != liaison {
+		t.Errorf("the liaison's task\n got %+v\nwant %+v, as the same from the screen", liaison, screen)
+	}
+}
+
 // A task that never reached the ready stage has no time to ready.
 func TestStatsLeavesStartToReadyEmptyBeforeTheReadyCard(t *testing.T) {
 	t.Parallel()

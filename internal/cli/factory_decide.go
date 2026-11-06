@@ -21,12 +21,15 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
-const factoryDecideUsage = "decide <task> [push|send_back --card <revision> [--reason <key> --note <text>]|drop]"
+const factoryDecideUsage = "decide <task> [push|send_back --card <revision> [--reason <key> --note <text>]|drop] " +
+	"[--surface cli|liaison] [--shown <time>] [--diff-read]"
 
 // factoryDecideFlags are the flags of `magnum factory decide`.
 type factoryDecideFlags struct {
 	card         int
 	reason, note string
+	where        whereFlags
+	diffRead     bool
 }
 
 func newFactoryDecideCmd(c *Context) *cobra.Command {
@@ -42,12 +45,17 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 			"read: a card drawn since is refused, and the daemon refuses one whose branch, report, PR body or diff "+
 			"changed after the card was drawn (\"the branch changed after you read it\") and draws the card again. "+
 			"A drop is bound to no card: it needs no --card, a stale one is not refused, and the daemon drops the "+
-			"task at its ready stage whatever its card shows, or when none could be drawn. The decision records the "+
-			"time this command read the card as when it was shown.",
+			"task at its ready stage whatever its card shows, or when none could be drawn. The decision records as "+
+			"when the card was shown the time this command read it, else --shown <time> (RFC 3339), which the factory's "+
+			"liaison, the agent that asks you in a chat, passes with --surface liaison (the default, cli, is you by "+
+			"hand). The decision records an unread diff unless you say with --diff-read that you read this card's "+
+			"diff, as of the time it was shown.",
 		func(pos []string) int { return runFactoryDecideCmd(c, f, pos) })
 	cmd.Flags().IntVar(&f.card, "card", 0, "the revision of the card you read (the printed card names it)")
 	cmd.Flags().StringVar(&f.reason, "reason", "", "send_back: the key of your reason (a word: lowercase letters, digits, - and _)")
 	cmd.Flags().StringVar(&f.note, "note", "", "send_back: your note to the writer, one line")
+	cmd.Flags().BoolVar(&f.diffRead, "diff-read", false, "you read this card's diff (as of the time it was shown); without it the decision records an unread diff")
+	f.where.add(cmd, "the card")
 	return cmd
 }
 
@@ -71,6 +79,10 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 	case choice != factory.ChoiceSendBack && (f.reason != "" || f.note != ""):
 		return inspUsage(c, "factory decide", "--reason and --note go with send_back", factoryDecideUsage)
 	}
+	surface, shown, err := f.where.resolve()
+	if err != nil {
+		return inspUsage(c, "factory decide", err.Error(), factoryDecideUsage)
+	}
 	if !fsx.Exists(c.Layout.FactoryDB()) {
 		fmt.Fprintln(c.Stderr, "magnum factory decide: the factory has no task yet (`magnum factory start` makes one)")
 		return 1
@@ -89,12 +101,22 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return 1
 	}
 	card, err := factory.ReadReadyCard(c.Layout, t.ID)
-	// When you were shown the card: the stats time your decision from it. A
-	// drop is bound to no card, as the daemon takes it.
-	read := time.Now()
+	// When you were shown the card: the stats time your decision from it. It
+	// is when this command read the card, unless the liaison says it showed it
+	// to you earlier. A drop is bound to no card, as the daemon takes it.
+	read := shown
+	if read.IsZero() {
+		read = time.Now()
+	}
+	// The diff was read when the card was shown, if you say you read it.
+	var diffOpened time.Time
+	if f.diffRead {
+		diffOpened = read
+	}
 	if choice == factory.ChoiceDrop {
 		return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, factory.DecidePayload{TaskID: t.ID, Choice: choice,
-			HeadSHA: card.Head, ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, Surface: "cli"}, "it takes your decision")
+			HeadSHA: card.Head, ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, DiffOpened: diffOpened, Surface: surface},
+			"it takes your decision")
 	}
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory decide: %s has no ready card: %v\n", factory.TaskKey(t), err)
@@ -109,7 +131,7 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return 1
 	}
 	p := factory.DecidePayload{TaskID: t.ID, Choice: choice, Reason: f.reason, Note: strings.TrimSpace(f.note), HeadSHA: card.Head,
-		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, Surface: "cli"}
+		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, DiffOpened: diffOpened, Surface: surface}
 	return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, p, "it takes your decision")
 }
 

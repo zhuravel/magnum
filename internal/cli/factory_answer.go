@@ -17,20 +17,55 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
-const factoryAnswerUsage = "answer <task> [--json <file> | [--revision <r>] --question <n> --text <file>]"
+const factoryAnswerUsage = "answer <task> [--json <file> | [--revision <r>] --question <n> --text <file>] [--surface cli|liaison] [--shown <time>]"
+
+// cliSurface is where `answer` and `decide` record your input when they are
+// run by hand.
+const cliSurface = "cli"
 
 // factoryAnswerFlags are the flags of `magnum factory answer`.
 type factoryAnswerFlags struct {
 	json, text         string
 	question, revision int
+	where              whereFlags
+}
+
+// whereFlags are the flags of `answer` and `decide` that say where you gave
+// the word they send and when you were shown what it answers: the liaison, the
+// agent that asks you in a chat, runs them for you and notes the time before
+// it asks. shown is an RFC 3339 time.
+type whereFlags struct{ surface, shown string }
+
+// add puts the flags on cmd; what is what a command records the time as.
+func (w *whereFlags) add(cmd *cobra.Command, what string) {
+	cmd.Flags().StringVar(&w.surface, "surface", cliSurface, "where you give this word: "+cliSurface+" (by hand) or "+runtime.SurfaceLiaison+
+		" (the factory's liaison, which runs it for you)")
+	cmd.Flags().StringVar(&w.shown, "shown", "", "an RFC 3339 time: when "+what+" was shown to you (the liaison notes it before it asks)")
+}
+
+// resolve checks the flags: the surface, and the time you were shown it
+// (zero when --shown is not given).
+func (w whereFlags) resolve() (surface string, shown time.Time, err error) {
+	if w.surface != cliSurface && w.surface != runtime.SurfaceLiaison {
+		return "", time.Time{}, fmt.Errorf("--surface %q: the surfaces are %s and %s", w.surface, cliSurface, runtime.SurfaceLiaison)
+	}
+	if w.shown == "" {
+		return w.surface, time.Time{}, nil
+	}
+	if shown, err = time.Parse(time.RFC3339, w.shown); err != nil {
+		return "", time.Time{}, fmt.Errorf("--shown %q: it is an RFC 3339 time, such as 2026-11-06T10:00:00Z", w.shown)
+	}
+	return w.surface, shown, nil
 }
 
 func newFactoryAnswerCmd(c *Context) *cobra.Command {
@@ -48,12 +83,16 @@ func newFactoryAnswerCmd(c *Context) *cobra.Command {
 			"--text <file> answers question n with the file's text (- for stdin), such as the answer of someone you "+
 			"asked: question n of --revision r, the revision that asked it (the daemon's answer to an ask names "+
 			"both), wherever a newer revision carried it; without --revision, of the newest revision. A batch for "+
-			"questions that changed since is refused, and nothing of it is kept.",
+			"questions that changed since is refused, and nothing of it is kept. --surface liaison says the factory's liaison, "+
+			"the agent that asks you in a chat, runs this for you (the default, cli, is you by hand), and --shown <time> "+
+			"(RFC 3339) is when the questions were shown to you: the stats count your time on the batch from it, and "+
+			"without it they count none.",
 		func(pos []string) int { return runFactoryAnswerCmd(c, f, pos) })
 	cmd.Flags().StringVar(&f.json, "json", "", "a JSON file of answers to send (- for stdin)")
 	cmd.Flags().IntVar(&f.question, "question", 0, "the number of the question --text answers (from 1)")
 	cmd.Flags().IntVar(&f.revision, "revision", 0, "the revision whose numbering --question uses (default: the newest)")
 	cmd.Flags().StringVar(&f.text, "text", "", "the file whose text answers --question (- for stdin)")
+	f.where.add(cmd, "the questions")
 	return cmd
 }
 
@@ -78,6 +117,10 @@ func runFactoryAnswerCmd(c *Context, f factoryAnswerFlags, pos []string) int {
 	case f.question < 0 || f.revision < 0:
 		return inspUsage(c, "factory answer", "--question and --revision count from 1", factoryAnswerUsage)
 	}
+	surface, shown, err := f.where.resolve()
+	if err != nil {
+		return inspUsage(c, "factory answer", err.Error(), factoryAnswerUsage)
+	}
 	if !fsx.Exists(c.Layout.FactoryDB()) {
 		fmt.Fprintln(c.Stderr, "magnum factory answer: the factory has no task yet (`magnum factory start` makes one)")
 		return 1
@@ -95,7 +138,7 @@ func runFactoryAnswerCmd(c *Context, f factoryAnswerFlags, pos []string) int {
 		fmt.Fprintf(c.Stderr, "magnum factory answer: %v\n", err)
 		return 1
 	}
-	p := factory.AnswerPayload{TaskID: t.ID, Revision: t.QuestionRev, Surface: "cli"}
+	p := factory.AnswerPayload{TaskID: t.ID, Revision: t.QuestionRev, Surface: surface, Shown: shown}
 	switch {
 	case f.json != "":
 		file, err := readAnswerFile(f.json)

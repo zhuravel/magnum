@@ -43,13 +43,18 @@ import (
 // your own words, or "ask:<login>" (then, optionally, the comment for that
 // person in your words) to ask someone else; Needless are the questions you
 // call needless, by index, with the key of your reason. Surface is where
-// you answered (the screen, the CLI), for the record of your input.
+// you answered (the screen, the CLI, the liaison), for the record of your
+// input. Shown is when the questions of Revision were shown to you, when the
+// surface knows it (the liaison notes it before it asks): the stats count your
+// time on the batch from it. It is left out of the request when zero, so a
+// daemon that predates it still takes an answer that names no time.
 type AnswerPayload struct {
 	TaskID   int64
 	Revision int
 	Answers  map[int]string
 	Needless map[int]string
 	Surface  string
+	Shown    time.Time `json:",omitzero"`
 }
 
 // askPrefix starts an answer that asks someone else (AnswerPayload).
@@ -92,11 +97,12 @@ type pendingAsk struct {
 // answer takes your answers p: it stores the batch (registry.AnswerBatch,
 // all or none) when p's revision is the task's newest, else refuses it with
 // questionsChanged; flags the needless questions; records each ask (asks.json
-// and the drafted comment); writes answers.md; records each answer and ask
-// as an answer input; and moves a task that waited for these answers: to
-// work when none is open any more, to whom you asked when only theirs are,
-// else it keeps waiting on you for the rest. A batch the daemon took before
-// a restart, sent again, stores nothing twice.
+// and the drafted comment); writes answers.md; records when the batch was
+// shown, if p says; records each answer and ask as an answer input; and moves
+// a task that waited for these answers: to work when none is open any more,
+// to whom you asked when only theirs are, else it keeps waiting on you for
+// the rest. A batch the daemon took before a restart, sent again, stores
+// nothing twice.
 func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -221,6 +227,12 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 	}
 	if err := e.writeAnswers(ctx, t); err != nil {
 		return err
+	}
+	if !p.Shown.IsZero() {
+		// Best effort, like the inputs below: a restart sends the batch again.
+		if err := e.reg.ShowQuestionsAt(ctx, t.ID, p.Revision, p.Shown); err != nil {
+			e.log.Warn("record when the questions were shown", "task", t.ID, "err", err)
+		}
 	}
 	surface := cmp.Or(p.Surface, answerSurface)
 	for _, idx := range slices.Sorted(maps.Keys(take)) {

@@ -282,7 +282,17 @@ func (r *Registry) AnswerHistory(ctx context.Context, questionID int64) ([]Answe
 // say. A revision that has no questions (or a task that does not exist) is
 // ErrNotFound.
 func (r *Registry) ShowQuestions(ctx context.Context, taskID int64, rev int) error {
-	res, err := r.db.ExecContext(ctx, "UPDATE questions SET shown_at = COALESCE(shown_at, ?) WHERE task_id = ? AND revision = ?", store.FormatTime(r.now()), taskID, rev)
+	return r.ShowQuestionsAt(ctx, taskID, rev, time.Time{})
+}
+
+// ShowQuestionsAt is ShowQuestions for a batch that was shown at the time at,
+// which the registry could not see (the liaison notes it before it asks);
+// the zero time is the registry's own moment.
+func (r *Registry) ShowQuestionsAt(ctx context.Context, taskID int64, rev int, at time.Time) error {
+	if at.IsZero() {
+		at = r.now()
+	}
+	res, err := r.db.ExecContext(ctx, "UPDATE questions SET shown_at = COALESCE(shown_at, ?) WHERE task_id = ? AND revision = ?", store.FormatTime(at), taskID, rev)
 	if err != nil {
 		return fmt.Errorf("show questions of task %d: %w", taskID, err)
 	}

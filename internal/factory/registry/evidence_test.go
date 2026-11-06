@@ -362,6 +362,46 @@ func TestShowQuestionsKeepsTheFirstShownTime(t *testing.T) {
 	}
 }
 
+// ShowQuestionsAt records the time the operator was shown a batch when it
+// was not the registry's moment to know it (the liaison noted it before it
+// asked); the first time a question was shown stays, as with ShowQuestions.
+func TestShowQuestionsAtRecordsTheTimeItIsGiven(t *testing.T) {
+	t.Parallel()
+	r, clk := openAt(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12301")
+	if err := r.ReplaceQuestions(ctx, task.ID, 1, askTwo()); err != nil {
+		t.Fatal(err)
+	}
+	clk.Add(10 * time.Minute)
+	noted := t0.Add(3 * time.Minute)
+	if err := r.ShowQuestionsAt(ctx, task.ID, 1, noted); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ShowQuestionsAt(ctx, task.ID, 1, t0.Add(8*time.Minute)); err != nil { // a batch sent again
+		t.Fatal(err)
+	}
+	for _, q := range mustQuestions(t, r, task.ID) {
+		if !q.Shown.Equal(noted) {
+			t.Errorf("question %d Shown = %v, want the time given, %v", q.Index, q.Shown, noted)
+		}
+	}
+	if err := r.ShowQuestionsAt(ctx, task.ID, 9, noted); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("ShowQuestionsAt of a revision that does not exist = %v, want ErrNotFound", err)
+	}
+
+	// No time given: the registry's moment, as ShowQuestions.
+	if err := r.ReplaceQuestions(ctx, task.ID, 2, askTwo()[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ShowQuestionsAt(ctx, task.ID, 2, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustQuestions(t, r, task.ID); !got[2].Shown.Equal(t0.Add(10 * time.Minute)) {
+		t.Errorf("Shown after a zero time = %v, want the registry's clock, %v", got[2].Shown, t0.Add(10*time.Minute))
+	}
+}
+
 func TestReplaceQuestionsKeepsWhoRaisedAQuestionAndWhatItCited(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)
