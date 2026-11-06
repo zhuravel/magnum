@@ -840,6 +840,13 @@ func (f *fakeNotifyHerdr) WorkspaceReportMetadata(_ context.Context, ws, _ strin
 	return nil
 }
 
+// tokens lists the sidebar tokens reported so far, "<workspace>:<tokens>".
+func (f *fakeNotifyHerdr) tokens() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.meta)
+}
+
 func (f *fakeNotifyHerdr) all() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2280,7 +2287,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		Herdr:  h.hd,
 		Agents: h.ag,
 		Rounds: func(string) Rounds { return h.rd },
-		Slots:  h.sl, Git: fakeGit{}, Inventory: h.inv, Cleanup: planner, Notifier: notifier,
+		Slots:  h.sl, Git: fakeGit{}, Inventory: h.inv, Cleanup: planner, Notifier: notifier, Sidebar: notifier.Sidebar,
 		Identities: map[string]identity.Source{"zhuravel": gh, "talkable-app": h.app},
 	}
 	for _, m := range mods {

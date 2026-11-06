@@ -1239,12 +1239,13 @@ func (e *Engine) dryRunRound(ctx context.Context, pr store.PR) (bool, error) {
 	return ok, nil
 }
 
-// sidebar publishes display-only workspace tokens (best effort).
+// sidebar publishes display-only workspace tokens (best effort), in the
+// herdr session of magnum's panes (Deps.Sidebar).
 func (e *Engine) sidebar(ctx context.Context, workspaceID string, tokens map[string]string) {
-	if e.d.DryRun || e.d.Notifier == nil || workspaceID == "" {
+	if e.d.DryRun || e.d.Sidebar == nil || workspaceID == "" {
 		return
 	}
-	if err := e.d.Notifier.Sidebar(ctx, workspaceID, tokens); err != nil {
+	if err := e.d.Sidebar(ctx, workspaceID, tokens); err != nil {
 		e.log.Debug("sidebar tokens", "err", err)
 	}
 }

@@ -2731,6 +2731,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheAppToastsInYourSessionAndLabelsWorkspacesInThePaneSession,
   TestTheSlotGuardAndInventoryReadThePaneSessionAndYours and TestOneSessionIsOneClient.
 
+- **The daemon labels magnum's workspaces in the panes' session, reveals that session, and caps Codex across
+  both** (2026-11-06). The engine took the sidebar tokens from its toast Notifier, which is your session's now:
+  a "reviewing" token would name a workspace id of the panes' server on yours, where it is someone else's
+  workspace or none. `Deps.Sidebar` (FromApp: `app.App.Sidebar`, on the panes' client) reports them instead,
+  and the toasts stay on `Deps.Notifier`. `reveal_on_attention` reveals a client of the panes' session
+  (`reveal.Options.Session` = `app.App.PaneSession`), the one that shows the PR's agent; the focus already
+  went to the panes' client. `max_total_working_codex` capped every working Codex agent of the one session,
+  yours included; with the panes elsewhere, `Deps.Yours` (FromApp: `app.App.Yours`, nil while the panes are in
+  yours, so nothing counts twice) adds your session's working Codex agents at each observe, read only while a
+  cap is set. Your session not answering or not running counts none: the cap then counts the panes' session
+  alone and herdr is not down for it, since dispatch needs only the panes' session. The factory's session is
+  not counted, as before. Tests: TestTheSidebarTokensGoToThePaneSession,
+  TestTheCodexCapCountsYourSessionsWorkingCodexToo, TestYourSessionDownLeavesTheCapToThePaneSession and
+  TestRevealOnAttentionRevealsThePaneSession.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

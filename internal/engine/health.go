@@ -56,7 +56,7 @@ func (e *Engine) observe(ctx context.Context) tickState {
 		return ts
 	}
 	ts.herdrUp, ts.snap = true, snap
-	ts.workingCodex = agents.CountWorking(snap.Agents, agents.KindCodex)
+	ts.workingCodex = agents.CountWorking(snap.Agents, agents.KindCodex) + e.yoursWorkingCodex(ctx)
 	if !e.d.DryRun && e.d.Agents != nil {
 		obs, err := e.d.Agents.ObserveSnapshotAt(ctx, snap, capturedAt)
 		if err != nil {
@@ -75,6 +75,24 @@ func (e *Engine) observe(ctx context.Context) tickState {
 		}
 	}
 	return ts
+}
+
+// yoursWorkingCodex counts the Codex agents working in your herdr session
+// while magnum's panes are in another (Deps.Yours): max_total_working_codex
+// caps them all, your own included, as it did while the panes were in
+// yours. Without a cap it reads nothing. Your session not answering, or not
+// running, counts none: the cap then counts the panes' session alone, and
+// herdr is not down for it.
+func (e *Engine) yoursWorkingCodex(ctx context.Context) int {
+	if e.d.Yours == nil || e.cfg.Daemon.MaxTotalWorkingCodex <= 0 {
+		return 0
+	}
+	snap, err := e.d.Yours.Snapshot(ctx)
+	if err != nil {
+		e.log.Debug("your herdr session: the Codex cap counts the panes' session only", "err", err)
+		return 0
+	}
+	return agents.CountWorking(snap.Agents, agents.KindCodex)
 }
 
 // noteHerdr logs herdr going down or coming back once per transition. A

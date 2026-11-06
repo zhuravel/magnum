@@ -370,6 +370,16 @@ type Deps struct {
 	// PR needs attention or an agent is blocked; nil skips them.
 	Focus  func(ctx context.Context, target string) error
 	Reveal func(ctx context.Context) error
+	// Sidebar reports display-only tokens for one of magnum's workspaces
+	// (notify.Notifier.Sidebar on the client of the panes' herdr session,
+	// which FromApp sets from app.App.Sidebar: the workspace ids are that
+	// server's, while the Notifier toasts in yours); nil = no tokens.
+	Sidebar func(ctx context.Context, workspaceID string, tokens map[string]string) error
+	// Yours is your herdr session ([herdr] socket) when magnum's panes are
+	// in another (app.App.Yours, which FromApp sets); nil = they are in
+	// yours, which Herdr reads. Its working Codex agents count toward
+	// max_total_working_codex beside the panes'.
+	Yours Herdr
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
@@ -761,6 +771,12 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	if a.Herdr != nil {
 		d.Focus = a.Herdr.AgentFocus
 	}
+	if a.Yours != nil {
+		d.Yours = a.Yours
+	}
+	if a.Sidebar != nil {
+		d.Sidebar = a.Sidebar.Sidebar
+	}
 	if h := a.Herdr; h != nil && !a.DryRun && a.AgentTag == "" && a.Config != nil {
 		// The retro's agent (retro_pane.go): an agents manager of its own,
 		// over a scratch registry, tagged apart from the PRs' agents; the
@@ -799,9 +815,10 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
 	}
 	if a.Runner != nil && a.Config != nil {
-		terminal, herdrBin := a.Config.Terminal, os.Getenv("HERDR_BIN_PATH")
+		// The session revealed is the panes': it shows the PR's agents.
+		terminal, herdrBin, session := a.Config.Terminal, os.Getenv("HERDR_BIN_PATH"), a.PaneSession.Name
 		d.Reveal = func(ctx context.Context) error {
-			_, err := reveal.Reveal(ctx, a.Runner, terminal, herdrBin, reveal.Options{})
+			_, err := reveal.Reveal(ctx, a.Runner, terminal, herdrBin, reveal.Options{Session: session})
 			return err
 		}
 	}

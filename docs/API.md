@@ -9053,6 +9053,16 @@ type Deps struct {
 	// PR needs attention or an agent is blocked; nil skips them.
 	Focus  func(ctx context.Context, target string) error
 	Reveal func(ctx context.Context) error
+	// Sidebar reports display-only tokens for one of magnum's workspaces
+	// (notify.Notifier.Sidebar on the client of the panes' herdr session,
+	// which FromApp sets from app.App.Sidebar: the workspace ids are that
+	// server's, while the Notifier toasts in yours); nil = no tokens.
+	Sidebar func(ctx context.Context, workspaceID string, tokens map[string]string) error
+	// Yours is your herdr session ([herdr] socket) when magnum's panes are
+	// in another (app.App.Yours, which FromApp sets); nil = they are in
+	// yours, which Herdr reads. Its working Codex agents count toward
+	// max_total_working_codex beside the panes'.
+	Yours Herdr
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.

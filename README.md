@@ -300,7 +300,7 @@ config change does. The CLI keeps the environment of the terminal it runs in. `f
 setup, reset and precheck commands itself. `logs/factory.log` says what the shell added, and a change takes
 effect at the next `magnum factory install`.
 
-Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included. `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
+Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included (those of your herdr session count beside the review panes' when `[herdr] review_session` puts these in another; a session of yours that does not answer counts none). `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
 
 magnum's review panes run in a herdr session: yours by default (`[herdr] socket`, named by `[terminal]
 session`). `[herdr] review_session = "reviews"` puts them in a session of their own (`herdr --session reviews`:
