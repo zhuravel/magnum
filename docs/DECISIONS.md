@@ -2704,6 +2704,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheReviewSessionCannotBeTheFactorys, TestTheReviewPanesStayInYourSessionWithAFactoryThereToo and
   TestAUserConfigSetsTheReviewSession.
 
+- **The App opens magnum's panes where the registry's herdr ids came from, and toasts in your session**
+  (2026-11-06). With the review panes in a session of their own, one App talks to two herdr servers: `Herdr`,
+  the client of the panes' session (`PaneSession`), which the agents, the rounds' keys, the engine and the CLI
+  drive, and `Yours`, a client of `[herdr] socket`, nil while the panes are there (one session, one client).
+  The untagged App, on the real registry (the daemon, the CLI), opens the panes in the session the registry
+  records (kv `herdr.panes`, `store.KVHerdrPanes`), your session while it records none, as every build before
+  the key did; never the one the config names. Each herdr server numbers its workspaces and panes from w1, so
+  the registry's ids are good only on the server that gave them, and a daemon can come up on a changed config
+  with sessions open in the old session (a crash, a learn landing or a settings-screen save restarts it while
+  idle); only the daemon's move, which parks every PR's sessions, closes their panes in the old session and
+  forgets the ids (`store.PRsWithHerdrIDs`, `ForgetHerdrIDs`), takes them to the session the config names. A
+  tagged App (an eval replay, the skill gate's, the factory's local review) runs on a scratch registry of its
+  own and opens its panes in `Config.ReviewHerdr` directly: the operator chose that the factory's local
+  review follows the review panes. A record that names no session stops the App: its ids could be any
+  server's, and another server's are someone else's panes. Toasts, the App's, the engine's and the agents',
+  go to your session (`Notify`), the one you look at; the sidebar tokens label magnum's workspaces, in the
+  panes' session (`Sidebar`). The slot guard and the inventory read `herdr.GuardView` over both, so your
+  agents and consoles in a checkout hold it wherever magnum's panes are. Rejected: the config's session for
+  the untagged App (ids of one server read on another's); the joined view for the agents, the keys or the
+  engine (their type assertions for keys and closes would no-op on a wrapper, so they take the plain
+  client); the configured review session for every App before a move (the CLI would look for the daemon's
+  live panes in a session that has none of them). Tests: TestAnUnrecordedRegistryKeepsThePanesOnYourSocket,
+  TestTheAppOpensPanesWhereTheRegistrysSessionsAre, TestARecordOfNoHerdrSessionIsRefused,
+  TestATaggedAppOpensItsPanesInTheConfiguredReviewSession,
+  TestTheAppToastsInYourSessionAndLabelsWorkspacesInThePaneSession,
+  TestTheSlotGuardAndInventoryReadThePaneSessionAndYours and TestOneSessionIsOneClient.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

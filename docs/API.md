@@ -3080,7 +3080,18 @@ type App struct {
 	// Mise is Options.Mise.
 	Mise string
 
-	Herdr *herdr.Client
+	// Herdr is the client of the herdr session magnum's panes are in,
+	// PaneSession: the agents, the rounds' keys and the engine drive it,
+	// and the registry's herdr ids are its server's.
+	Herdr       *herdr.Client
+	PaneSession herdr.Session
+	// Yours is a client of your herdr session ([herdr] socket), nil while
+	// the panes are in it (Herdr is then yours).
+	Yours *herdr.Client
+	// Guard is the herdr the slot guard and the inventory read: the panes'
+	// session and yours, its ids prefixed (herdr.GuardView), so your agents
+	// and consoles in a checkout hold it wherever magnum's panes are.
+	Guard herdr.GuardView
 	// GitHub returns the gh client acting as the named identity (nil for an
 	// unknown name). Clients are created once and shared.
 	GitHub     func(identity string) *github.Client
@@ -3098,7 +3109,11 @@ type App struct {
 	// acts as that identity).
 	Pipeline map[string]*pipeline.Runner
 	Cleanup  *cleanup.Planner
-	Notify   *notify.Notifier
+	// Notify toasts in your session (Yours, else Herdr): the one you look
+	// at. Sidebar labels magnum's workspaces (herdr's sidebar tokens) in
+	// the panes' session.
+	Notify  *notify.Notifier
+	Sidebar *notify.Notifier
 
 	Logger *slog.Logger
 
@@ -3146,7 +3161,8 @@ type Options struct {
 	// HTTPClient means the [github] transport client (see githubHTTPClient).
 	HTTPClient *http.Client
 	Getenv     func(string) string
-	// HerdrSocket overrides config [herdr] socket (tests).
+	// HerdrSocket overrides the socket of the herdr session magnum's panes
+	// are in (tests).
 	HerdrSocket string
 	// AgentTag tags the agents this App starts (agents.Deps.Tag,
 	// pipeline.Runner.AgentTag) and turns its toasts off: magnum eval uses

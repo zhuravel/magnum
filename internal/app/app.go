@@ -7,12 +7,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"syscall"
 	"time"
@@ -62,7 +64,8 @@ type Options struct {
 	// HTTPClient means the [github] transport client (see githubHTTPClient).
 	HTTPClient *http.Client
 	Getenv     func(string) string
-	// HerdrSocket overrides config [herdr] socket (tests).
+	// HerdrSocket overrides the socket of the herdr session magnum's panes
+	// are in (tests).
 	HerdrSocket string
 	// AgentTag tags the agents this App starts (agents.Deps.Tag,
 	// pipeline.Runner.AgentTag) and turns its toasts off: magnum eval uses
@@ -94,7 +97,18 @@ type App struct {
 	// Mise is Options.Mise.
 	Mise string
 
-	Herdr *herdr.Client
+	// Herdr is the client of the herdr session magnum's panes are in,
+	// PaneSession: the agents, the rounds' keys and the engine drive it,
+	// and the registry's herdr ids are its server's.
+	Herdr       *herdr.Client
+	PaneSession herdr.Session
+	// Yours is a client of your herdr session ([herdr] socket), nil while
+	// the panes are in it (Herdr is then yours).
+	Yours *herdr.Client
+	// Guard is the herdr the slot guard and the inventory read: the panes'
+	// session and yours, its ids prefixed (herdr.GuardView), so your agents
+	// and consoles in a checkout hold it wherever magnum's panes are.
+	Guard herdr.GuardView
 	// GitHub returns the gh client acting as the named identity (nil for an
 	// unknown name). Clients are created once and shared.
 	GitHub     func(identity string) *github.Client
@@ -112,7 +126,11 @@ type App struct {
 	// acts as that identity).
 	Pipeline map[string]*pipeline.Runner
 	Cleanup  *cleanup.Planner
-	Notify   *notify.Notifier
+	// Notify toasts in your session (Yours, else Herdr): the one you look
+	// at. Sidebar labels magnum's workspaces (herdr's sidebar tokens) in
+	// the panes' session.
+	Notify  *notify.Notifier
+	Sidebar *notify.Notifier
 
 	Logger *slog.Logger
 
@@ -180,11 +198,19 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	}
 
 	// Clients.
-	socket := opts.HerdrSocket
-	if socket == "" {
-		socket = cfg.Herdr.Socket
+	if a.PaneSession, err = paneSession(context.Background(), st, cfg, opts.AgentTag); err != nil {
+		return nil, fmt.Errorf("app: %w", err)
 	}
-	a.Herdr = &herdr.Client{Socket: socket, Logger: Printf{Logger: a.Logger, Level: slog.LevelDebug, Src: "herdr"}}
+	if opts.HerdrSocket != "" {
+		a.PaneSession.Socket = opts.HerdrSocket
+	}
+	herdrLog := Printf{Logger: a.Logger, Level: slog.LevelDebug, Src: "herdr"}
+	a.Herdr = &herdr.Client{Socket: a.PaneSession.Socket, Logger: herdrLog}
+	a.Guard = herdr.GuardView{Own: a.Herdr}
+	if filepath.Clean(cfg.Herdr.Socket) != filepath.Clean(a.PaneSession.Socket) {
+		a.Yours = &herdr.Client{Socket: cfg.Herdr.Socket, Logger: herdrLog}
+		a.Guard.Yours = a.Yours
+	}
 	a.Git = gitx.New(a.Runner)
 	a.Git.HTTPSFetch = true // fetch over HTTPS through gh, independent of the user's SSH agent
 	dsn := opts.MySQLDSN
@@ -285,7 +311,7 @@ func (a *App) wire() {
 	}
 	a.Slots = slots.New(slots.Deps{
 		Store: a.Store, Run: a.Runner, Git: a.Git, MySQL: my,
-		Snapshot: a.Herdr.Snapshot, ProcessInfo: a.Herdr.PaneProcessInfo,
+		Snapshot: a.Guard.Snapshot, ProcessInfo: a.Guard.ProcessInfo,
 		Layout: a.Layout, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "slots"},
 		Repos: cfg.Repos, DryRun: a.DryRun, Mise: a.Mise, SecretEnv: keyEnvs(cfg.Identities),
 	})
@@ -294,7 +320,7 @@ func (a *App) wire() {
 		invGH = c
 	}
 	a.Inventory = &inventory.Scanner{
-		Store: a.Store, Git: a.Git, MySQL: invMy, Herdr: a.Herdr, GitHub: invGH,
+		Store: a.Store, Git: a.Git, MySQL: invMy, Herdr: a.Guard, GitHub: invGH,
 		Runner: a.Runner, Config: cfg,
 	}
 	a.Agents = agents.New(agents.Deps{
@@ -325,11 +351,42 @@ func (a *App) wire() {
 		Runner: a.Runner, Config: cfg, Park: a.Agents.ParkClosingPanes,
 		Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "cleanup"},
 	}
-	a.Notify = &notify.Notifier{
-		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner,
-		Enabled: cfg.Herdr.Notify && !a.DryRun && a.AgentTag == "",
-		Log:     Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "notify"},
+	toasts := a.Herdr
+	if a.Yours != nil {
+		toasts = a.Yours
 	}
+	notifyLog := Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "notify"}
+	a.Notify = &notify.Notifier{
+		Herdr: toasts, Store: a.Store, Runner: a.Runner,
+		Enabled: cfg.Herdr.Notify && !a.DryRun && a.AgentTag == "",
+		Log:     notifyLog,
+	}
+	a.Sidebar = &notify.Notifier{Herdr: a.Herdr, Log: notifyLog}
+}
+
+// paneSession is the herdr session the App opens magnum's panes in. A
+// tagged App (an eval replay, the factory's local review) runs on a
+// registry of its own and opens them in the configured review session. The
+// untagged one, on the real registry (the daemon, the CLI), opens them where
+// the registry's herdr ids came from (store.KVHerdrPanes), your session when
+// it records none, as every build before the key: each herdr server numbers
+// its own ids, and only the daemon's move, which parks every session first,
+// takes the panes to the session the config names. A record that names no
+// session is an error: the ids could be any server's.
+func paneSession(ctx context.Context, st *store.Store, cfg *config.Config, tag string) (herdr.Session, error) {
+	if tag != "" {
+		return cfg.ReviewHerdr(), nil
+	}
+	v, ok, err := st.GetKV(ctx, store.KVHerdrPanes)
+	if err != nil || !ok {
+		return cfg.YourHerdr(), err
+	}
+	var s herdr.Session
+	if err := json.Unmarshal([]byte(v), &s); err != nil || s.Name == "" || !filepath.IsAbs(s.Socket) {
+		return herdr.Session{}, fmt.Errorf("kv %s holds no herdr session (%q): the registry's herdr ids are no known "+
+			"server's", store.KVHerdrPanes, v)
+	}
+	return s, nil
 }
 
 // agentToastWindow dedupes the agents' toasts by key (agents.Deps.Toast),

@@ -71,12 +71,34 @@ func testApp(t *testing.T, opts Options) (*App, paths.Layout) {
 // testAppWith is testApp on the config text cfgText.
 func testAppWith(t *testing.T, cfgText string, opts Options) (*App, paths.Layout) {
 	t.Helper()
+	return testAppSeeded(t, cfgText, opts, nil)
+}
+
+// testAppSeeded is testAppWith with seed (nil: none) run on the layout
+// before New opens its registry there.
+func testAppSeeded(t *testing.T, cfgText string, opts Options, seed func(*testing.T, paths.Layout)) (*App, paths.Layout) {
+	t.Helper()
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	layout := paths.Layout{Home: home}
-	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
+	if seed != nil {
+		seed(t, layout)
+	}
+	a, err := newTestApp(t, layout, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	return a, layout
+}
+
+// newTestApp runs New on the config.toml of layout's home, with a fake
+// runner and a silent logger unless opts names its own.
+func newTestApp(t *testing.T, layout paths.Layout, opts Options) (*App, error) {
+	t.Helper()
+	cfg, err := config.Load(layout, filepath.Join(layout.Home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +108,7 @@ func testAppWith(t *testing.T, cfgText string, opts Options) (*App, paths.Layout
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
-	a, err := New(cfg, layout, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = a.Close() })
-	return a, layout
+	return New(cfg, layout, opts)
 }
 
 func TestNewWiresEverything(t *testing.T) {
