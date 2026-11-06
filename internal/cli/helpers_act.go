@@ -64,7 +64,11 @@ type actDeps struct {
 	Layout paths.Layout
 	Store  *store.Store // nil in light mode
 
-	Herdr actHerdr
+	// Herdr is the client of PaneSession, the herdr session magnum's panes
+	// are in (app.App.PaneSession: where the registry's herdr ids came
+	// from): a focus reveals a client of it, and herdrErr names it.
+	Herdr       actHerdr
+	PaneSession herdr.Session
 	// GitHub is the read client of an identity; GHEnv its env overlay for
 	// `gh api` calls made directly (repository lookup). PrepareIdentity
 	// must run first: a GitHub App identity mints or refreshes its
@@ -138,7 +142,7 @@ var actNewDeps = func(c *Context, mode actMode) (*actDeps, error) {
 	}
 	herdrBin := os.Getenv("HERDR_BIN_PATH")
 	if mode == actLight {
-		d.Herdr = &herdr.Client{Socket: cfg.Herdr.Socket}
+		d.Herdr, d.PaneSession = &herdr.Client{Socket: cfg.Herdr.Socket}, cfg.YourHerdr()
 		d.Run = &execx.Real{}
 		d.Reveal = func(ctx context.Context, opts reveal.Options) (reveal.Outcome, error) {
 			return reveal.Reveal(ctx, d.Run, cfg.Terminal, herdrBin, opts)
@@ -153,7 +157,7 @@ var actNewDeps = func(c *Context, mode actMode) (*actDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.Store, d.Herdr, d.Run, d.Cleanup, d.close = a.Store, a.Herdr, a.Runner, a.Cleanup, a.Close
+	d.Store, d.Herdr, d.PaneSession, d.Run, d.Cleanup, d.close = a.Store, a.Herdr, a.PaneSession, a.Runner, a.Cleanup, a.Close
 	d.GitHub = func(id string) actGitHub {
 		if gc := a.GitHub(id); gc != nil {
 			return gc
@@ -680,16 +684,27 @@ type actFocusResult struct {
 	Reveal      *reveal.Outcome `json:"reveal,omitempty"`
 }
 
-// herdrErr turns a herdr failure into an error with the fix.
+// herdrErr turns a herdr failure into an error with the fix, naming the
+// herdr session the act commands drive (PaneSession, your session when none
+// is set) and the command that starts it: `herdr` for your default session,
+// `herdr --session <name>` for a named one.
 func (d *actDeps) herdrErr(err error) error {
-	if errors.Is(err, herdr.ErrUnavailable) {
-		return fmt.Errorf("herdr is not running (socket %s): start herdr, then retry: %w", d.Cfg.Herdr.Socket, err)
+	if !errors.Is(err, herdr.ErrUnavailable) {
+		return err
 	}
-	return err
+	s := d.PaneSession
+	if s.Socket == "" {
+		s = d.Cfg.YourHerdr()
+	}
+	if s.Name == "" || s.Name == "default" {
+		return fmt.Errorf("herdr is not running (socket %s): start herdr, then retry: %w", s.Socket, err)
+	}
+	return fmt.Errorf("herdr session %s is not running (socket %s): start `herdr --session %s`, then retry: %w", s.Name, s.Socket, s.Name, err)
 }
 
-// focus focuses the session's agent (or pane) in herdr, then reveals the
-// herdr client in the configured terminal unless noReveal.
+// focus focuses the session's agent (or pane) in herdr, then reveals a
+// client of the herdr session it is in (PaneSession; "" names [terminal]
+// session) in the configured terminal unless noReveal.
 func (d *actDeps) focus(ctx context.Context, res *actFocusResult, sess store.Session, noReveal, newWindow bool) error {
 	target := store.Deref(sess.AgentName)
 	if target == "" {
@@ -705,7 +720,7 @@ func (d *actDeps) focus(ctx context.Context, res *actFocusResult, sess store.Ses
 	if noReveal {
 		return nil
 	}
-	out, err := d.Reveal(ctx, reveal.Options{NewWindow: newWindow})
+	out, err := d.Reveal(ctx, reveal.Options{Session: d.PaneSession.Name, NewWindow: newWindow})
 	if _, denied := errors.AsType[*reveal.AutomationError](err); denied {
 		return fmt.Errorf("focused %s in herdr, but %w", target, err) // its fix is a permission, not [terminal]
 	}

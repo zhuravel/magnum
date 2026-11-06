@@ -3440,6 +3440,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   open, and the board, pick claude-review; with only the fixer's and the writer's parked, the judge's
   refusal and no request).
 
+- **`magnum open` reveals the herdr session of magnum's panes, and a herdr error names it** (2026-11-06).
+  With the review panes in `[herdr] review_session`, the act commands drove the panes' session (the App's
+  herdr client) but revealed `[terminal] session`, yours: `magnum open`, `review --focus`, `attention`,
+  the picker and the board's `o`, enter and `a` focused the PR's agent in one session and brought a client
+  of another to the front, and a herdr that did not answer said "start herdr" with your socket while the
+  panes' session was the one down. The act commands' deps now carry the App's `PaneSession` (where the
+  registry's herdr ids came from), the focus reveals a client of it (`reveal.Options.Session`), and
+  `herdrErr` names that session, its socket and the command that starts it (`herdr --session reviews`;
+  `herdr` for your default session, as before). `ui open` (light mode, no registry) keeps your session.
+  Tests, failing first: TestOpenRevealsTheClientOfThePaneSession, TestHerdrErrNamesThePaneSession.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);
