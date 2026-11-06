@@ -10,7 +10,10 @@
 
 **Spec:** docs/superpowers/specs/2026-11-06-factory-liaison-design.md (and docs/superpowers/specs/2026-11-03-factory-design.md for the factory).
 
-**Base:** start after the branch `review-herdr-session` lands on master. It changes the copies' guards (`herdr.GuardView`), the factory's herdr session (`cfg.FactoryHerdr()`) and reveal (`reveal.Options.Session`). Use those names. Do not use the APIs they replace.
+**Base:** master at or after c8fcd4c6, where the branch `review-herdr-session` landed. It changes the copies' guards, the factory's herdr session (`cfg.FactoryHerdr()`) and reveal (`reveal.Options.Session`). Use those names. Do not use the APIs they replace.
+- `herdr.GuardView` has three fields: `Own`, `Yours` and `Review`. The copies' guard reads magnum's review session too.
+- `YourHerdr()` is `[terminal] session` (else `default`) on `[herdr] socket`. `ReviewHerdr()` is `[herdr] review_session` on its own socket, else yours. `FactoryHerdr()` is `[factory] herdr_session`, else `default`.
+- A stopped herdr session counts the agents that herdr saved (its session.json beside the socket) as busy.
 
 ## Global Constraints
 
