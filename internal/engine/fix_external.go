@@ -199,6 +199,12 @@ type externalInput struct {
 	CommentsComplete bool
 	Author           string
 	Own              []string
+	// Markers are [pipeline] quiet_markers, and Resolvers the fixer's
+	// logins (Account form), whose resolution of another reviewer's thread
+	// does not close it: the look's part of the read (externalReadOf),
+	// which externalOf does not use.
+	Markers   []string
+	Resolvers []string
 }
 
 // ownWord reports whether a review body or comment by the author is the
@@ -346,16 +352,34 @@ func (e *Engine) fixReader(job *fixJob) (GitHub, externalReader, bool) {
 // items an outsider wrote, what GitHub cut short (cut: "over 1000 review
 // threads", "over 500 reviews", "over 1000 comments since the author's
 // last"; none when every list is whole) and the PR head it was read at.
+// autofix = "open" reads the rest from the same lists, with no call of its
+// own (fix_open_items.go): magnum's unresolved threads (mine), the review
+// bodies and comments whose whole body holds a quiet marker (quiet, by id)
+// and the other reviewers' threads a fixer login resolved (resolved).
 type externalRead struct {
-	items   externalItems
-	outside int
-	cut     []string
-	head    string
+	items    externalItems
+	outside  int
+	cut      []string
+	head     string
+	mine     []magnumThread
+	quiet    map[int64]bool
+	resolved []resolvedThread
+}
+
+// externalReadOf is the read of in at head: the file's content
+// (externalOf) and the look's part of it (fix_open_items.go), with no cut
+// list (readExternal adds it).
+func externalReadOf(in externalInput, head string) externalRead {
+	x, outside := externalOf(in)
+	return externalRead{items: x, outside: outside, head: head, mine: magnumThreadsOf(in.Threads, in.Own, in.Author), quiet: quietOf(in),
+		resolved: resolvedByFixerOf(in)}
 }
 
 // readExternal reads the job's PR from GitHub and makes the file's content
 // (externalOf), with the count of items an outsider wrote and which of the
-// three lists GitHub cut short.
+// three lists GitHub cut short, and the look's part of it
+// (externalReadOf): magnum's logins resolving another reviewer's thread
+// never close it.
 func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, error) {
 	ctx = github.WithOp(ctx, opFixExternal) // github_cost.go
 	gh, rd, ok := e.fixReader(job)
@@ -378,9 +402,9 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 	if err != nil {
 		return externalRead{}, err
 	}
-	x, outside := externalOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
-		Author: author, Own: e.fixLogins(ctx, job)})
-	read := externalRead{items: x, outside: outside, head: job.pr.HeadSHA}
+	own := e.fixLogins(ctx, job)
+	read := externalReadOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
+		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own}, job.pr.HeadSHA)
 	if !threadsComplete {
 		read.cut = append(read.cut, fmt.Sprintf("over %d review threads", github.MaxReviewThreads))
 	}

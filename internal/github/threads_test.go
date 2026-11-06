@@ -81,11 +81,41 @@ func TestReviewThreads(t *testing.T) {
 	}
 	q := oneLine(decodeReq(t, call).Query)
 	for _, want := range []string{"reviewThreads(first: 100, after: $cursor)", "id isResolved isOutdated path line originalLine startLine originalStartLine",
+		"resolvedBy { login __typename }",
 		"comments(first: 50)", "authorAssociation author { login __typename } pullRequestReview { databaseId }",
 		"root: comments(first: 1) { nodes { originalCommit { oid } diffHunk } }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
 		}
+	}
+}
+
+// A thread says who resolved it, in Account form (an App's login keeps its
+// "[bot]"): autofix = "open" keeps a person's thread that the fixer resolved
+// open, since a person's item never closes on the fixer's word alone.
+func TestAllReviewThreadsReadsWhoResolvedAThread(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		return okResult(compact(t, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":"c1"},"nodes":[
+		 {"id":"PRRT_1","isResolved":true,"isOutdated":false,"path":"a.rb","line":1,"originalLine":1,"resolvedBy":{"login":"factory-app","__typename":"Bot"},
+		  "comments":{"totalCount":1,"nodes":[{"databaseId":1,"body":"x","url":"u1","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"}}]}},
+		 {"id":"PRRT_2","isResolved":true,"isOutdated":false,"path":"a.rb","line":2,"originalLine":2,"resolvedBy":{"login":"rev-ann","__typename":"User"},
+		  "comments":{"totalCount":1,"nodes":[{"databaseId":2,"body":"y","url":"u2","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"}}]}},
+		 {"id":"PRRT_3","isResolved":false,"isOutdated":false,"path":"a.rb","line":3,"originalLine":3,"resolvedBy":null,
+		  "comments":{"totalCount":1,"nodes":[{"databaseId":3,"body":"z","url":"u3","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"}}]}}]}}}}}`))
+	})}}
+	got, _, err := (&Client{Run: f}).AllReviewThreads(context.Background(), "talkable", "talkable", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var by []string
+	for _, th := range got {
+		by = append(by, th.ResolvedBy)
+	}
+	if want := []string{"factory-app[bot]", "rev-ann", ""}; !reflect.DeepEqual(by, want) {
+		t.Errorf("ResolvedBy = %q, want %q", by, want)
+	}
+	if q := oneLine(decodeReq(t, f.Calls[0]).Query); !strings.Contains(q, "resolvedBy { login __typename }") {
+		t.Errorf("query lacks resolvedBy: %s", q)
 	}
 }
 

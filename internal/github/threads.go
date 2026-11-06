@@ -24,7 +24,11 @@ type Thread struct {
 	// new file's lines) or "LEFT" (deleted lines, numbered in the old file).
 	DiffSide string
 	Resolved bool
-	Outdated bool
+	// ResolvedBy is who resolved the thread (Account form: an App's login
+	// keeps its "[bot]"); "" for an unresolved thread and for a deleted
+	// account.
+	ResolvedBy string
+	Outdated   bool
 	// Comments are oldest first; Comments[0] started the thread and the rest
 	// are its replies. At most threadCommentsMax per thread: the first ones.
 	Comments []ThreadComment
@@ -97,6 +101,7 @@ var threadsQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $number: 
         pageInfo { hasNextPage endCursor }
         nodes {
           id isResolved isOutdated path line originalLine startLine originalStartLine diffSide
+          resolvedBy { login __typename }
           comments(first: %d) {
             totalCount
             nodes { `+threadCommentFields+` }
@@ -179,15 +184,16 @@ func (c *Client) AllReviewThreads(ctx context.Context, owner, repo string, numbe
 							EndCursor   string `json:"endCursor"`
 						} `json:"pageInfo"`
 						Nodes []struct {
-							ID                string `json:"id"`
-							IsResolved        bool   `json:"isResolved"`
-							IsOutdated        bool   `json:"isOutdated"`
-							Path              string `json:"path"`
-							Line              *int   `json:"line"`
-							OriginalLine      *int   `json:"originalLine"`
-							StartLine         *int   `json:"startLine"`
-							OriginalStartLine *int   `json:"originalStartLine"`
-							DiffSide          string `json:"diffSide"`
+							ID                string     `json:"id"`
+							IsResolved        bool       `json:"isResolved"`
+							IsOutdated        bool       `json:"isOutdated"`
+							Path              string     `json:"path"`
+							Line              *int       `json:"line"`
+							OriginalLine      *int       `json:"originalLine"`
+							StartLine         *int       `json:"startLine"`
+							OriginalStartLine *int       `json:"originalStartLine"`
+							DiffSide          string     `json:"diffSide"`
+							ResolvedBy        *actorJSON `json:"resolvedBy"`
 							Comments          struct {
 								TotalCount int                 `json:"totalCount"`
 								Nodes      []threadCommentJSON `json:"nodes"`
@@ -218,6 +224,9 @@ func (c *Client) AllReviewThreads(ctx context.Context, owner, repo string, numbe
 		rt := data.Repository.PullRequest.ReviewThreads
 		for _, n := range rt.Nodes {
 			t := Thread{ID: n.ID, Path: n.Path, DiffSide: n.DiffSide, Resolved: n.IsResolved, Outdated: n.IsOutdated, CommentCount: n.Comments.TotalCount}
+			if n.ResolvedBy != nil {
+				t.ResolvedBy = Account(n.ResolvedBy.Login, n.ResolvedBy.Typename)
+			}
 			if n.Line != nil {
 				t.Line = *n.Line
 			}

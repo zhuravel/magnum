@@ -15481,7 +15481,11 @@ type Thread struct {
 	// new file's lines) or "LEFT" (deleted lines, numbered in the old file).
 	DiffSide string
 	Resolved bool
-	Outdated bool
+	// ResolvedBy is who resolved the thread (Account form: an App's login
+	// keeps its "[bot]"); "" for an unresolved thread and for a deleted
+	// account.
+	ResolvedBy string
+	Outdated   bool
 	// Comments are oldest first; Comments[0] started the thread and the rest
 	// are its replies. At most threadCommentsMax per thread: the first ones.
 	Comments []ThreadComment
