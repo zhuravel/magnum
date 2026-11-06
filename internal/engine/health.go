@@ -95,13 +95,17 @@ func (e *Engine) yoursWorkingCodex(ctx context.Context) int {
 	return agents.CountWorking(snap.Agents, agents.KindCodex)
 }
 
-// noteHerdr logs herdr going down or coming back once per transition. A
-// snapshot that failed because the daemon is stopping (isStop) says nothing
-// about herdr: nothing is noted, and the next live tick decides.
+// noteHerdr logs herdr going down or coming back once per transition, and
+// opens the panes' session while it is down (openHerdr). A snapshot that
+// failed because the daemon is stopping (isStop) says nothing about herdr:
+// nothing is noted, and the next live tick decides.
 func (e *Engine) noteHerdr(ctx context.Context, err error) {
 	if err != nil && isStop(ctx, err) {
 		e.log.Debug("herdr snapshot cut short", "err", err)
 		return
+	}
+	if err != nil {
+		e.openHerdr(ctx, err)
 	}
 	up := err == nil
 	if e.herdrUp != nil && *e.herdrUp == up {
@@ -115,6 +119,38 @@ func (e *Engine) noteHerdr(ctx context.Context, err error) {
 	}
 	e.setKV(ctx, store.KVHerdrUp, "0")
 	e.event(ctx, "warn", "", "herdr.down", fmt.Sprintf("herdr unreachable: %v; dispatch waits", err), nil)
+}
+
+// herdrOpenGap keeps the daemon's opens of the panes' herdr session to at
+// most two an hour, as the factory's of its own (herdrRevealGap).
+const herdrOpenGap = 30 * time.Minute
+
+// openHerdr opens a client of the herdr session magnum's panes are in, in a
+// new terminal window (Deps.OpenHerdr), while it does not answer: at once,
+// which starts a server that is not running (after a reboot, say) and shows
+// the session, then at most every herdrOpenGap while it stays down, each
+// with a herdr.opened event. Never while a move takes the panes away from
+// it (panesMoving: the move needs nothing of it), and never your own
+// session: FromApp sets no opener while the panes are there.
+func (e *Engine) openHerdr(ctx context.Context, cause error) {
+	if e.d.OpenHerdr == nil || e.d.DryRun || e.panesMoving() != "" {
+		return
+	}
+	now := e.now()
+	if !e.herdrOpened.IsZero() && now.Sub(e.herdrOpened) < herdrOpenGap {
+		return
+	}
+	e.herdrOpened = now
+	name := e.d.PaneSession.Name
+	if err := e.d.OpenHerdr(ctx); err != nil {
+		e.event(ctx, "warn", "", "herdr.opened",
+			fmt.Sprintf("could not open `herdr --session %s`, the herdr session of magnum's panes, which does not answer (%v): %v; it is tried again in %s",
+				name, cause, err, humanDuration(herdrOpenGap)), nil)
+		return
+	}
+	e.event(ctx, "info", "", "herdr.opened",
+		fmt.Sprintf("opened `herdr --session %s` in a new terminal window: the herdr session of magnum's panes does not answer (%v); dispatch waits for it",
+			name, cause), nil)
 }
 
 func (e *Engine) onObservation(ctx context.Context, o agents.Observation) {

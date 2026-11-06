@@ -14634,6 +14634,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAMoveThatCannotParkAPRWaitsAndSaysWhy, TestAMoveCutShortGoesOnAtTheNextStart and
   TestTheRunLoopExitsForAMoveOfThePanes; TestNoMoveWhenThePanesAreWhereTheConfigSays pins the default.
 
+- **The daemon opens the named herdr session of its panes while it does not answer, never yours**
+  (2026-11-06). No launchd job runs herdr servers: the first `herdr --session <name>` client starts one, so
+  after a reboot, or the move to `[herdr] review_session`, nothing ran the review session's server, herdr
+  was down for the daemon and dispatch waited until you opened it by hand. The daemon now does what the
+  factory does for its own session (`checkHerdr`): a failed snapshot of the panes' session opens a client
+  of it in a new terminal window (`Deps.OpenHerdr`, `reveal.Reveal` with the session's name and
+  `NewWindow`), at once, then at most every 30 minutes while it stays down, each with a `herdr.opened` event
+  (warn when the open failed). FromApp sets the opener only for the daemon's App whose panes are in a
+  session other than yours: your own session is never opened, as before, nor by a replay's engine or a dry
+  run, and a session the panes are to move away from is left alone (the move needs nothing of it, and one
+  with no server has nothing to park). Toasts and the guards are unchanged: they read your session. Tests,
+  failing first: TestADownReviewSessionIsOpenedAtMostTwiceAnHour; TestTheDaemonNeverOpensYourOwnSession and
+  TestADownReviewSessionIsNotOpenedWhileThePanesMoveAway fail on the mutations they guard against.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

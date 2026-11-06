@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -237,5 +239,134 @@ func TestRevealOnAttentionRevealsThePaneSession(t *testing.T) {
 				t.Fatalf("revealed %v, want a client of session %s", args, tc.session)
 			}
 		})
+	}
+}
+
+// openWiring is a daemon's App wiring with a custom terminal launcher, so a
+// reveal or an open shows as one /bin/sh call of run; review names the
+// review session the config names ("" = yours).
+func openWiring(run *execx.Fake, review string) func(*config.Config) {
+	return func(cfg *config.Config) {
+		cfg.Terminal.App, cfg.Terminal.Launcher, cfg.Terminal.Session = "custom", "launch {herdr} {args}", "work"
+		if review != "" {
+			cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = review, "/nonexistent/"+review+"/herdr.sock"
+		}
+	}
+}
+
+// launchedSessions are the herdr sessions run's /bin/sh calls opened a
+// client of, in order.
+func launchedSessions(run *execx.Fake) []string {
+	var out []string
+	for _, c := range run.CallsWithPrefix("/bin/sh") {
+		if i := slices.Index(c.Args, "--session"); i >= 0 && i+1 < len(c.Args) {
+			out = append(out, c.Args[i+1])
+		}
+	}
+	return out
+}
+
+// A named review session whose server does not answer (none runs after a
+// reboot, or it is stuck) gets a client opened in a new terminal window at
+// once, which starts its server and shows it, then at most every 30
+// minutes while it stays down, each with a herdr.opened event; a session
+// that answers again opens nothing. The daemon's wiring opens a client of
+// the panes' session, `herdr --session reviews`.
+func TestADownReviewSessionIsOpenedAtMostTwiceAnHour(t *testing.T) {
+	var opened atomic.Int32
+	h := newHarness(t, func(h *harness) {
+		h.d.PaneSession = reviewsPanes
+		h.moveToReviews()
+		h.d.OpenHerdr = func(context.Context) error { opened.Add(1); return nil }
+	})
+	h.hd.mu.Lock()
+	h.hd.err = fmt.Errorf("herdr session.snapshot: %w: dial unix %s: %w", herdr.ErrUnavailable, reviewsPanes.Socket, syscall.ENOENT)
+	h.hd.mu.Unlock()
+	h.startup()
+	for _, step := range []struct {
+		after time.Duration
+		want  int32
+	}{{0, 1}, {10 * time.Minute, 1}, {20 * time.Minute, 2}, {29 * time.Minute, 2}, {time.Minute, 3}} {
+		h.advance(step.after)
+		h.tick()
+		if got := opened.Load(); got != step.want {
+			t.Fatalf("after %s more: opened %d times, want %d", step.after, got, step.want)
+		}
+	}
+	h.hd.mu.Lock()
+	h.hd.err = nil
+	h.hd.mu.Unlock()
+	h.advance(time.Hour)
+	h.tick()
+	if got := opened.Load(); got != 3 {
+		t.Fatalf("a session that answers was opened: %d opens", got)
+	}
+	if evs := h.events("herdr.opened"); len(evs) != 3 || !strings.Contains(evs[0].Message, "herdr --session reviews") {
+		t.Fatalf("herdr.opened events %+v", evs)
+	}
+
+	run := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/bin/sh"}}}}
+	e, _, _ := appEngine(t, &herdr.Session{Name: "reviews", Socket: "/nonexistent/reviews/herdr.sock"}, app.Options{Runner: run},
+		openWiring(run, "reviews"))
+	if e.d.OpenHerdr == nil {
+		t.Fatal("FromApp sets no opener for a named review session")
+	}
+	if ts := e.observe(t.Context()); ts.herdrUp {
+		t.Fatal("a session with no socket answered")
+	}
+	if got := launchedSessions(run); !slices.Equal(got, []string{"reviews"}) {
+		t.Fatalf("opened clients of %v, want one of session reviews", got)
+	}
+}
+
+// The daemon never opens your own herdr session, as before the review
+// session: while magnum's panes are in it (a move to session reviews
+// pending included), its wiring sets no opener and an observe that finds
+// it down opens nothing. Nor does a replay's engine (a tagged App) or a
+// dry run open the review session.
+func TestTheDaemonNeverOpensYourOwnSession(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		review string
+		opts   app.Options
+	}{
+		{"panes in your session", "", app.Options{}},
+		{"a move to session reviews pending", "reviews", app.Options{}},
+		{"a replay", "reviews", app.Options{AgentTag: "eval-1"}},
+		{"a dry run", "reviews", app.Options{DryRun: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/bin/sh"}}}}
+			tc.opts.Runner = run
+			e, _, _ := appEngine(t, nil, tc.opts, openWiring(run, tc.review))
+			if e.d.OpenHerdr != nil {
+				t.Fatal("FromApp sets an opener")
+			}
+			e.observe(t.Context())
+			if got := launchedSessions(run); len(got) != 0 {
+				t.Fatalf("opened clients of %v", got)
+			}
+		})
+	}
+}
+
+// While magnum's panes are to move away from the review session (the
+// config names yours again), a review session that does not answer is not
+// opened: the move needs nothing of it, and one with no server running has
+// nothing to park.
+func TestADownReviewSessionIsNotOpenedWhileThePanesMoveAway(t *testing.T) {
+	var opened atomic.Int32
+	h := newHarness(t, func(h *harness) {
+		h.d.PaneSession = reviewsPanes
+		h.d.OpenHerdr = func(context.Context) error { opened.Add(1); return nil }
+	})
+	h.hd.mu.Lock()
+	h.hd.err = fmt.Errorf("herdr session.snapshot: %w: context deadline exceeded", herdr.ErrTimeout)
+	h.hd.mu.Unlock()
+	if ts := h.e.observe(h.ctx); ts.herdrUp || h.e.panesMoving() == "" {
+		t.Fatalf("herdr up %v, move %q", ts.herdrUp, h.e.panesMoving())
+	}
+	if got := opened.Load(); got != 0 {
+		t.Fatalf("opened %d times during a move away from the session", got)
 	}
 }

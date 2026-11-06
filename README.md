@@ -303,25 +303,26 @@ effect at the next `magnum factory install`.
 Three more `[daemon]` keys pace the agents. `max_total_working_codex` (default 5) caps the Codex agents working at once, your own sessions included (those of your herdr session count beside the review panes' when `[herdr] review_session` puts these in another; a session of yours that does not answer counts none). `agent_start_stagger` (default `"15s"`) is the least time between two agent launches, across rounds, and at most 3 Codex agents start at once. `min_warm` (default `"30m"`) is how long a pool slot another PR holds must stay unused before a waiting PR may take it back, its sessions parked and the slot released: with no human typing, no session working, blocked or prompted within it, no run and no pin.
 
 magnum's review panes run in a herdr session: yours by default (`[herdr] socket`, named by `[terminal]
-session`). `[herdr] review_session = "reviews"` puts them in a session of their own (`herdr --session reviews`:
-its own herdr server and terminal windows), on `~/.config/herdr/sessions/<name>/herdr.sock` unless
+session`). `[herdr] review_session = "reviews"` puts them in a session of their own (`herdr --session
+reviews`: its own herdr server and terminal windows), on `~/.config/herdr/sessions/<name>/herdr.sock` unless
 `[herdr] review_socket` names another socket (absolute after `~` expands, and only with `review_session`;
 `"default"` is herdr's own default session). `[herdr] socket` stays your session whatever the panes' is: the
 toasts show there, the slot guards and the inventory read your agents and consoles there (a herdr of yours
 that is not running has none), and the herdr plugin and the LaunchAgent use it. `magnum open`, the board's `o`
 and `reveal_on_attention` reveal a client of the panes' session, and the daemon opens one in a new window when
-a named session does not answer (at most twice an hour; never your own). A change moves the panes once the
-daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing in flight: until then no
-round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and `magnum open` of a PR with
-nothing live asks to try again in a minute. Then it parks every PR's sessions, pinned PRs too (the
-conversations are kept; pins and slots stay), closes their workspaces in the old session, toasts once in yours
-and restarts, and launchd starts it in the new session. An old session with no herdr server running has
-nothing to park. A park that is refused (an agent at work, a busy pane of yours in a magnum workspace) or an
-old session that does not answer holds the move to the next idle moment: the event `herdr.panes_move_waits`
-names the PR and why, and a toast does after 30 minutes. A move cut short goes on at the next start. A named
-review session is never the factory's (`[factory] herdr_session`), by name or by socket; with
-`review_session = ""` the panes stay in your session, as before, even when the factory runs there too
-(`[factory] herdr_session = "default"`).
+a named session does not answer, which starts its server after a reboot (at once, then at most twice an hour
+while it stays down, each a `herdr.opened` event; never your own, nor one the panes move away from). A change
+moves the panes once the daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing
+in flight: until then no round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and
+`magnum open` of a PR with nothing live asks to try again in a minute. Then it parks every PR's sessions,
+pinned PRs too (the conversations are kept; pins and slots stay), closes their workspaces in the old session,
+toasts once in yours and restarts, and launchd starts it in the new session. An old session with no herdr
+server running has nothing to park. A park that is refused (an agent at work, a busy pane of yours in a magnum
+workspace) or an old session that does not answer holds the move to the next idle moment: the event
+`herdr.panes_move_waits` names the PR and why, and a toast does after 30 minutes. A move cut short goes on at
+the next start. A named review session is never the factory's (`[factory] herdr_session`), by name or by
+socket; with `review_session = ""` the panes stay in your session, as before, even when the factory runs there
+too (`[factory] herdr_session = "default"`).
 
 A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
 GitHub poll and between the poll's GitHub calls, so one waits for a single call); a request still pending says how to follow it (`magnum logs request:<id> -f`). A request

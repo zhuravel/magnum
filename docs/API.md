@@ -9084,6 +9084,12 @@ type Deps struct {
 	// session the daemon moves magnum's panes there (pane_move.go); zero =
 	// nothing is recorded or moved.
 	PaneSession herdr.Session
+	// OpenHerdr opens a client of the panes' herdr session (`herdr
+	// --session <name>`, which starts its server) in a new terminal window,
+	// which the daemon does while that session does not answer (openHerdr).
+	// FromApp sets it for the daemon's App whose panes are in a session
+	// other than yours; nil = never: your own session is never opened.
+	OpenHerdr func(ctx context.Context) error
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.

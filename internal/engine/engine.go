@@ -389,6 +389,12 @@ type Deps struct {
 	// session the daemon moves magnum's panes there (pane_move.go); zero =
 	// nothing is recorded or moved.
 	PaneSession herdr.Session
+	// OpenHerdr opens a client of the panes' herdr session (`herdr
+	// --session <name>`, which starts its server) in a new terminal window,
+	// which the daemon does while that session does not answer (openHerdr).
+	// FromApp sets it for the daemon's App whose panes are in a session
+	// other than yours; nil = never: your own session is never opened.
+	OpenHerdr func(ctx context.Context) error
 
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
@@ -617,6 +623,9 @@ type Engine struct {
 	// movingBegun: this daemon announced the move of magnum's panes
 	// (pane_move.go; the tick's goroutine only).
 	movingBegun bool
+	// herdrOpened is when the daemon last opened the panes' herdr session
+	// (openHerdr; the tick's goroutine only).
+	herdrOpened time.Time
 	// restartRefused is the user config on disk and binary an idle restart
 	// was last refused on (restartSafe's key; zero for none) and when, so
 	// later ticks check them again only after restartRefuseRetry and never
@@ -838,6 +847,14 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		d.Reveal = func(ctx context.Context) error {
 			_, err := reveal.Reveal(ctx, a.Runner, terminal, herdrBin, reveal.Options{Session: session})
 			return err
+		}
+		if a.AgentTag == "" && !a.DryRun && !sameServer(a.PaneSession, a.Config.YourHerdr()) {
+			// The daemon opens a named session of its panes that does not
+			// answer (openHerdr), never yours.
+			d.OpenHerdr = func(ctx context.Context) error {
+				_, err := reveal.Reveal(ctx, a.Runner, terminal, herdrBin, reveal.Options{Session: session, NewWindow: true})
+				return err
+			}
 		}
 	}
 	for _, m := range mods {
