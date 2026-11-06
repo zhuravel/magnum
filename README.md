@@ -310,17 +310,20 @@ reviews`: its own herdr server and terminal windows), on `~/.config/herdr/sessio
 toasts show there, the slot guards and the inventory read your agents and consoles there (a herdr of yours
 that is not running has none), and the herdr plugin and the LaunchAgent use it. `magnum open`, the board's `o`
 and `reveal_on_attention` reveal a client of the panes' session, and the daemon opens one in a new window when
-a named session does not answer, which starts its server after a reboot (at once, then at most twice an hour
-while it stays down, each a `herdr.opened` event; never your own, nor one the panes move away from). A change
-moves the panes once the daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing
-in flight: until then no round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and
-`magnum open` of a PR with nothing live asks to try again in a minute. Then it parks every PR's sessions,
-pinned PRs too (the conversations are kept; pins and slots stay), closes their workspaces in the old session,
-toasts once in yours and restarts, and launchd starts it in the new session. An old session with no herdr
-server running has nothing to park. A park that is refused (an agent at work, a busy pane of yours in a magnum
-workspace) or an old session that does not answer holds the move to the next idle moment: the event
-`herdr.panes_move_waits` names the PR and why, and a toast does after 30 minutes. A move cut short goes on at
-the next start. A named review session is never the factory's (`[factory] herdr_session`), by name or by
+no herdr server runs in a named session, which starts it after a reboot (at once, then at most twice an hour
+while it stays down, each a `herdr.opened` event; never your own, nor a session whose server runs but does not
+answer: a client of it may be open, and the open would bring it to the front). A change moves the panes once
+the daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing in flight: until then
+no round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and `magnum open` of a PR
+with nothing live asks to try again in a minute. Then it parks every PR's sessions, pinned PRs too (the
+conversations are kept; pins and slots stay), closes their workspaces in the old session, toasts once in yours
+and restarts, and launchd starts it in the new session. The move holds to the next idle moment while a park is
+refused (an agent at work, a busy pane of yours in a magnum workspace), while the old session does not answer,
+while no herdr server runs there and magnum recorded panes in it (herdr restores them and resumes their agents
+when its server starts, so the move waits to park them: it opens a named old session itself, and names the
+command that starts yours), and while the restart is refused because what launchd would start fails its check:
+the event `herdr.panes_move_waits` names the PR or the reason, and a toast does after 30 minutes. A move cut
+short goes on at the next start. A named review session is never the factory's (`[factory] herdr_session`), by name or by
 socket; with `review_session = ""` the panes stay in your session, as before, even when the factory runs there
 too (`[factory] herdr_session = "default"`).
 

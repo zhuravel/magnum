@@ -242,10 +242,12 @@ type restartCheck struct {
 }
 
 // restartRefusal is the idle restart last refused: restartSafe's key (the
-// file on disk and the binary) and when its check ran.
+// file on disk and the binary), when its check ran, and why, as a move of
+// magnum's panes that the refusal holds records it (panesMoveWaits).
 type restartRefusal struct {
 	key     string
 	checked time.Time
+	why     string
 }
 
 // refusedRecently reports whether key was refused less than

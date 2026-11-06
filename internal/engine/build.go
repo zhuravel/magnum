@@ -191,7 +191,8 @@ func (e *Engine) noteBuild(ctx context.Context) {
 // a saved config waits for one (configRestartDue, KVConfigRestart), or
 // ErrRestartForPanes once it moved magnum's panes to the herdr session the
 // config names (panesMoveDue, movePanes: a move that stops short waits for
-// the next idle tick, and a restart due for another reason with it), and
+// the next idle tick, and a restart due for another reason with it; a
+// refused restart holds it too, recorded as its other waits are), and
 // nothing is in flight: no round is claiming, reviewing or verifying, in
 // the registry or in this process, no notes curation, retro, skill edit or
 // gate runs (backgroundBusy), and no heavy job or GitHub write as the
@@ -215,16 +216,24 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 	}
 	chk, err := e.restartSafe(ctx, cfgDue)
 	if errors.Is(err, errRefusedBefore) {
+		if move { // the refusal holds the move: it says so as any of its waits does
+			e.panesMoveWaits(ctx, from, to, "", e.restartRefused.why)
+		}
 		return nil
 	}
 	if err != nil {
 		announce := chk.key != e.restartRefused.key
-		e.restartRefused = restartRefusal{key: chk.key, checked: e.now()}
+		why := "what launchd would start fails its check, so the daemon could not start again in the new session: " +
+			textx.FirstLine(err.Error())
+		e.restartRefused = restartRefusal{key: chk.key, checked: e.now(), why: why}
 		panes := ""
 		if move {
 			panes = to.Name
 		}
 		e.refuseRestart(ctx, chk, restartReasons(build, learn, cfgDue, panes), build || learn || move, raw, err, announce)
+		if move {
+			e.panesMoveWaits(ctx, from, to, "", why)
+		}
 		return nil
 	}
 	e.restartRefused = restartRefusal{}

@@ -10016,9 +10016,9 @@ type PanesMove struct {
 }
     PanesMove is a move of magnum's panes that waits (KVHerdrPanesMove):
     the session the registry's ids belong to and the one the config names,
-    since when it waits, and why the last try stopped short: Subject is the
-    PR whose park was refused ("" when the old server did not answer, or the
-    registry could not be read).
+    since when it waits, and why the last try stopped short: Subject is the PR
+    whose park was refused ("" when the old server did not answer or ran none,
+    the registry could not be read, or the restart was refused).
 
 func ReadPanesMove(ctx context.Context, st *store.Store) (PanesMove, bool)
     ReadPanesMove reads KVHerdrPanesMove (false when no move waits, or the

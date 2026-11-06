@@ -350,10 +350,49 @@ func TestTheDaemonNeverOpensYourOwnSession(t *testing.T) {
 	}
 }
 
+// A named review session whose server runs but does not answer (a
+// timeout, or one that holds its socket and accepts nothing) is not
+// opened: a client of it may be open already, and the open would bring it
+// to the front of your terminal at random, up to twice an hour, while a
+// new client would not make that server answer. Herdr is noted down and
+// dispatch waits, as before.
+func TestAReviewSessionThatRunsButDoesNotAnswerIsNotOpened(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"timeout", fmt.Errorf("herdr session.snapshot: %w: context deadline exceeded", herdr.ErrTimeout)},
+		{"no accept", fmt.Errorf("herdr session.snapshot: %w: a server holds the socket but accepts no connections (dial unix: connection refused)",
+			herdr.ErrUnavailable)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opened atomic.Int32
+			h := newHarness(t, func(h *harness) {
+				h.d.PaneSession = reviewsPanes
+				h.moveToReviews()
+				h.d.OpenHerdr = func(context.Context) error { opened.Add(1); return nil }
+			})
+			h.hd.mu.Lock()
+			h.hd.err = tc.err
+			h.hd.mu.Unlock()
+			h.startup()
+			h.tick()
+			h.advance(time.Hour)
+			h.tick()
+			if got := opened.Load(); got != 0 {
+				t.Fatalf("opened %d times a session whose server runs", got)
+			}
+			if evs := h.events("herdr.down"); len(evs) != 1 {
+				t.Fatalf("herdr.down events %+v, want one", evs)
+			}
+		})
+	}
+}
+
 // While magnum's panes are to move away from the review session (the
-// config names yours again), a review session that does not answer is not
-// opened: the move needs nothing of it, and one with no server running has
-// nothing to park.
+// config names yours again), an observe that finds no server running there
+// does not open it: the move does, and only while herdr ids recorded there
+// may come back with it (TestAMoveFromASessionWithNoServerWaitsForItsServer).
 func TestADownReviewSessionIsNotOpenedWhileThePanesMoveAway(t *testing.T) {
 	var opened atomic.Int32
 	h := newHarness(t, func(h *harness) {
@@ -361,7 +400,7 @@ func TestADownReviewSessionIsNotOpenedWhileThePanesMoveAway(t *testing.T) {
 		h.d.OpenHerdr = func(context.Context) error { opened.Add(1); return nil }
 	})
 	h.hd.mu.Lock()
-	h.hd.err = fmt.Errorf("herdr session.snapshot: %w: context deadline exceeded", herdr.ErrTimeout)
+	h.hd.err = fmt.Errorf("herdr session.snapshot: %w: dial unix %s: %w", herdr.ErrUnavailable, reviewsPanes.Socket, syscall.ENOENT)
 	h.hd.mu.Unlock()
 	if ts := h.e.observe(h.ctx); ts.herdrUp || h.e.panesMoving() == "" {
 		t.Fatalf("herdr up %v, move %q", ts.herdrUp, h.e.panesMoving())

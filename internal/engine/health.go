@@ -125,15 +125,29 @@ func (e *Engine) noteHerdr(ctx context.Context, err error) {
 // most two an hour, as the factory's of its own (herdrRevealGap).
 const herdrOpenGap = 30 * time.Minute
 
-// openHerdr opens a client of the herdr session magnum's panes are in, in a
-// new terminal window (Deps.OpenHerdr), while it does not answer: at once,
-// which starts a server that is not running (after a reboot, say) and shows
-// the session, then at most every herdrOpenGap while it stays down, each
-// with a herdr.opened event. Never while a move takes the panes away from
-// it (panesMoving: the move needs nothing of it), and never your own
-// session: FromApp sets no opener while the panes are there.
+// openHerdr opens a client of the herdr session magnum's panes are in
+// while no server runs there (openPaneSession), for dispatch. Never while a
+// move takes the panes away from it (panesMoving): the move opens it itself
+// when it has panes to park there (moveNoServer).
 func (e *Engine) openHerdr(ctx context.Context, cause error) {
-	if e.d.OpenHerdr == nil || e.d.DryRun || e.panesMoving() != "" {
+	if e.panesMoving() != "" {
+		return
+	}
+	e.openPaneSession(ctx, cause, "dispatch waits for it")
+}
+
+// openPaneSession opens a client of the herdr session magnum's panes are
+// in, in a new terminal window (Deps.OpenHerdr), when cause says that no
+// server runs there (herdr.NoServer): at once, which starts its server
+// (after a reboot, say) and shows the session, then at most every
+// herdrOpenGap while it stays down, each with a herdr.opened event that
+// says what waits for it. A server that runs but does not answer (a
+// timeout, one that accepts nothing) is never opened: a client of it may be
+// open already, which the open would bring to the front, and a new client
+// would not make it answer. Never your own session: FromApp sets no opener
+// while the panes are there.
+func (e *Engine) openPaneSession(ctx context.Context, cause error, waits string) {
+	if e.d.OpenHerdr == nil || e.d.DryRun || !herdr.NoServer(cause) {
 		return
 	}
 	now := e.now()
@@ -144,13 +158,13 @@ func (e *Engine) openHerdr(ctx context.Context, cause error) {
 	name := e.d.PaneSession.Name
 	if err := e.d.OpenHerdr(ctx); err != nil {
 		e.event(ctx, "warn", "", "herdr.opened",
-			fmt.Sprintf("could not open `herdr --session %s`, the herdr session of magnum's panes, which does not answer (%v): %v; it is tried again in %s",
+			fmt.Sprintf("could not open `herdr --session %s`, the herdr session of magnum's panes, where no server runs (%v): %v; it is tried again in %s",
 				name, cause, err, humanDuration(herdrOpenGap)), nil)
 		return
 	}
 	e.event(ctx, "info", "", "herdr.opened",
-		fmt.Sprintf("opened `herdr --session %s` in a new terminal window: the herdr session of magnum's panes does not answer (%v); dispatch waits for it",
-			name, cause), nil)
+		fmt.Sprintf("opened `herdr --session %s` in a new terminal window: no server ran in the herdr session of magnum's panes (%v); %s",
+			name, cause, waits), nil)
 }
 
 func (e *Engine) onObservation(ctx context.Context, o agents.Observation) {

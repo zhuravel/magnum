@@ -13,13 +13,16 @@ package engine
 // in the old session; forgets every id (store.ForgetHerdrIDs: the live rows
 // become lost and resume by their conversations); records the new session;
 // toasts once in your session; and exits (ErrRestartForPanes) for launchd to
-// start the daemon there. A park that is refused or an old server that does
-// not answer holds the move to the next idle tick, recorded for `magnum
+// start the daemon there. A park that is refused, an old server that does
+// not answer, or one that is not running (herdr.NoServer) while herdr ids
+// are recorded holds the move to the next idle tick, recorded for `magnum
 // status` (KVHerdrPanesMove) and toasted once it has waited
-// panesMoveToastAfter; an old session with no server running
-// (herdr.NoServer) has no panes, and nothing of it is parked. The record of
-// the old session changes last, so a move cut short starts again at the next
-// start, where the steps done already change nothing.
+// panesMoveToastAfter: herdr restores a session's workspaces when its
+// server starts again, and resumes their agents in their conversations, so
+// the move waits for that server to park them there (a named old session
+// the daemon opens itself, never yours). The record of the old session
+// changes last, so a move cut short starts again at the next start, where
+// the steps done already change nothing.
 
 import (
 	"context"
@@ -59,8 +62,8 @@ var ErrRestartForPanes = errors.New("magnum's panes moved to another herdr sessi
 // PanesMove is a move of magnum's panes that waits (KVHerdrPanesMove): the
 // session the registry's ids belong to and the one the config names, since
 // when it waits, and why the last try stopped short: Subject is the PR
-// whose park was refused ("" when the old server did not answer, or the
-// registry could not be read).
+// whose park was refused ("" when the old server did not answer or ran
+// none, the registry could not be read, or the restart was refused).
 type PanesMove struct {
 	From    herdr.Session `json:"from"`
 	To      herdr.Session `json:"to"`
@@ -147,8 +150,10 @@ func (e *Engine) recordPanes(ctx context.Context) {
 // movePanes moves magnum's panes from session from to session to, at an
 // idle tick (restartForBuild): every PR whose sessions record a herdr id is
 // parked and its retired panes closed in the old session, under the PR's
-// reservation, unless the old server is gone (herdr.NoServer); then every
-// id is forgotten and the new session recorded. It reports whether the
+// reservation; then every id is forgotten and the new session recorded. An
+// old server that is not running (herdr.NoServer), before or during the
+// parks, holds the move as one that does not answer does (moveNoServer):
+// herdr restores the panes when it starts. It reports whether the
 // move is done; when not, the try's wait is recorded (panesMoveWaits) and
 // the next idle tick tries again. A PR whose round is in flight is never
 // parked: restartBusy keeps the move off while any is, and the PR's own
@@ -164,26 +169,22 @@ func (e *Engine) movePanes(ctx context.Context, from, to herdr.Session) bool {
 	if err != nil {
 		return e.panesMoveWaits(ctx, from, to, "", "the registry cannot be read: "+err.Error())
 	}
-	gone := false
 	if len(prs) > 0 {
 		if _, err := e.d.Herdr.Snapshot(ctx); err != nil {
-			if !herdr.NoServer(err) {
-				return e.panesMoveWaits(ctx, from, to, "", fmt.Sprintf("herdr session %s does not answer: %v", from.Name, err))
+			if herdr.NoServer(err) {
+				return e.moveNoServer(ctx, from, to, err)
 			}
-			gone = true
+			return e.panesMoveWaits(ctx, from, to, "", fmt.Sprintf("herdr session %s does not answer: %v", from.Name, err))
 		}
 	}
 	var held struct{ subject, reason string }
 	for _, id := range prs {
-		if gone {
-			break
-		}
-		subject, reason := e.parkForMove(ctx, id, to)
+		subject, reason, err := e.parkForMove(ctx, id, to)
 		switch {
 		case ctx.Err() != nil:
 			return false // the daemon stops: the next start moves them
-		case reason == errNoServer:
-			gone = true // the old server went away meanwhile: nothing of it lives
+		case herdr.NoServer(err):
+			return e.moveNoServer(ctx, from, to, err) // the old server went away meanwhile
 		case reason != "" && held.reason == "":
 			held.subject, held.reason = subject, reason
 		}
@@ -201,55 +202,75 @@ func (e *Engine) movePanes(ctx context.Context, from, to herdr.Session) bool {
 	}
 	e.delKV(ctx, KVHerdrPanesMove)
 	how := textx.Count(len(prs), "PR's sessions", "PRs' sessions") + " parked in " + from.Name
-	if gone {
-		how = "no herdr server ran in " + from.Name + ", so nothing was parked"
-	}
 	e.event(ctx, "info", "", "herdr.panes_moved",
 		fmt.Sprintf("magnum's panes moved from herdr session %s to herdr session %s (%s; %d sessions forgot their herdr ids and resume by their conversations); the daemon restarts there",
 			from.Name, to.Name, how, n),
-		map[string]any{"from": from.Name, "to": to.Name, "prs": len(prs), "sessions": n, "no_server": gone})
+		map[string]any{"from": from.Name, "to": to.Name, "prs": len(prs), "sessions": n})
 	e.urgent("panes-moved:"+to.Name, "magnum: its review panes moved to herdr session "+to.Name,
 		"New rounds open there; `magnum open` reveals it. The conversations resume when the PRs' rounds or opens need them.",
 		time.Hour)
 	return true
 }
 
-// errNoServer is parkForMove's reason when the old session's server is
-// gone (herdr.NoServer).
-const errNoServer = "no herdr server"
-
 // parkForMove parks PR id's sessions and closes its retired panes in the
 // old session, under the PR's reservation, and returns the PR's audit
 // subject and why it could not ("" = parked): its round in flight, a
-// reservation another job holds, a park refused or failed, or errNoServer.
-// A PR the registry no longer has is nothing to park.
-func (e *Engine) parkForMove(ctx context.Context, id int64, to herdr.Session) (subject, reason string) {
+// reservation another job holds, or a park refused or failed, whose error
+// it returns too. A PR the registry no longer has is nothing to park.
+func (e *Engine) parkForMove(ctx context.Context, id int64, to herdr.Session) (subject, reason string, err error) {
 	pr, err := e.st.PRByID(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", ""
+		return "", "", nil
 	}
 	if err != nil {
-		return fmt.Sprintf("pr:%d", id), "the registry cannot read it: " + err.Error()
+		return fmt.Sprintf("pr:%d", id), "the registry cannot read it: " + err.Error(), err
 	}
 	subject = e.prLabelSubject(ctx, pr)
 	if slices.Contains(store.InFlightStates, pr.State) {
-		return subject, "its round is " + pr.State
+		return subject, "its round is " + pr.State, nil
 	}
 	if !e.reserveSlotWork(pr.ID, "its sessions are being parked to move magnum's panes to herdr session "+to.Name) {
-		return subject, e.heldReason(pr.ID)
+		return subject, e.heldReason(pr.ID), nil
 	}
 	defer e.endEviction(pr.ID)
 	err = e.d.Agents.Park(ctx, pr)
 	if err == nil {
 		err = e.d.Agents.CloseRetiredPanes(ctx, pr)
 	}
-	switch {
-	case err == nil:
-		return subject, ""
-	case herdr.NoServer(err):
-		return subject, errNoServer
+	if err != nil {
+		return subject, err.Error(), err
 	}
-	return subject, err.Error()
+	return subject, "", nil
+}
+
+// moveNoServer holds the move while no server runs in the old session
+// (herdr.NoServer) and herdr ids are recorded: herdr restores a session's
+// workspaces when its server starts again and resumes their agents in
+// their conversations, so ids forgotten now would leave those agents to
+// nobody, and a round resuming one of the conversations in the new session
+// would run it twice. A named old session the daemon opens to start its
+// server (openPaneSession, at most every herdrOpenGap); yours it never
+// opens (FromApp sets no opener while the panes are there), and the wait
+// names the command that starts it. Once the server answers, the next idle
+// tick parks what it restored.
+func (e *Engine) moveNoServer(ctx context.Context, from, to herdr.Session, cause error) bool {
+	how := "start it (`" + herdrCommand(from.Name) + "`)"
+	if e.d.OpenHerdr != nil {
+		how = "the daemon opens `" + herdrCommand(from.Name) + "` to start it"
+		e.openPaneSession(ctx, cause, "the move of magnum's panes to herdr session "+to.Name+" waits to park what it restores")
+	}
+	return e.panesMoveWaits(ctx, from, to, "", fmt.Sprintf(
+		"no herdr server runs in session %s, which restores magnum's panes when it starts: %s, and the move parks them there",
+		from.Name, how))
+}
+
+// herdrCommand is the command that opens a client of herdr session name,
+// which starts its server: `herdr` for the default session.
+func herdrCommand(name string) string {
+	if name == "" || name == "default" {
+		return "herdr"
+	}
+	return "herdr --session " + name
 }
 
 // panesMoveWaits records why the move's try stopped short (KVHerdrPanesMove,
@@ -267,14 +288,14 @@ func (e *Engine) panesMoveWaits(ctx context.Context, from, to herdr.Session, sub
 	if had && prev.From == from && prev.To == to {
 		mv.Since = prev.Since
 	}
-	what := "herdr session " + from.Name
+	on := "" // the PR it waits on; the reason says what else it waits on
 	if subject != "" {
-		what = strings.TrimPrefix(subject, "pr:")
+		on = " on " + strings.TrimPrefix(subject, "pr:")
 	}
 	if !had || prev.Subject != subject || prev.Reason != reason {
 		e.event(ctx, "warn", subject, "herdr.panes_move_waits",
-			fmt.Sprintf("the move of magnum's panes from herdr session %s to %s waits on %s: %s; new rounds wait too, and the next tick with nothing in flight tries again",
-				from.Name, to.Name, what, reason),
+			fmt.Sprintf("the move of magnum's panes from herdr session %s to %s waits%s: %s; new rounds wait too, and the next tick with nothing in flight tries again",
+				from.Name, to.Name, on, reason),
 			map[string]any{"from": from.Name, "to": to.Name})
 	}
 	if raw, err := json.Marshal(mv); err == nil {
@@ -282,7 +303,7 @@ func (e *Engine) panesMoveWaits(ctx context.Context, from, to herdr.Session, sub
 	}
 	if now.Sub(mv.Since) >= panesMoveToastAfter {
 		e.urgent("panes-move-waits:"+to.Name, "magnum: its panes wait to move to herdr session "+to.Name,
-			fmt.Sprintf("Since %s, on %s: %s. No round starts until they move.", mv.Since.Local().Format("15:04"), what, reason),
+			fmt.Sprintf("Since %s%s: %s. No round starts until they move.", mv.Since.Local().Format("15:04"), on, reason),
 			panesMoveToastSpan)
 	}
 	return false

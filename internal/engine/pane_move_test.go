@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -253,52 +256,79 @@ func TestNoMoveWhenThePanesAreWhereTheConfigSays(t *testing.T) {
 }
 
 // While a move waits, the daemon holds what would open panes in the old
-// session, as a drain does: no round starts (the PR's wait says why), a
-// `magnum retro` is queued for after the restart, and `magnum open` of a
-// PR with nothing live asks to try again in a minute. Once the move can
-// park every PR, it goes on and restarts; no round started meanwhile.
+// session, as a drain does: no round starts though a slot is free (the
+// PR's wait says why), a `magnum retro` is queued for after the restart
+// and does not start meanwhile, and `magnum open` of a PR with nothing
+// live asks to try again in a minute. Once the move can park every PR, it
+// goes on and restarts; no round or retro started meanwhile. Without the
+// move, the same PR takes the free slot and the retro starts at once.
 func TestAMoveHoldsNewRoundsAndRetros(t *testing.T) {
-	var ma *moveAgents
-	h := newHarness(t, withPanesInYours, withMoveAgents(&ma))
-	held := h.reviewedPR(5, "e1")
-	ma.refuse(held.ID, fmt.Errorf("agents: park pr 5: codex-judge is working: %w", agents.ErrBusy))
-	h.moveToReviews()
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 5, head: "e1"}, prSpec{n: 2, head: "b1"})
-	if err := h.moveTick(); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	h.advance(5 * time.Minute)
-	if err := h.moveTick(); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	h.wantState(2, store.PRQueued)
-	rounds := len(h.rd.all())
-	if w, ok := h.waitOf(2); !ok || w.Reason != WaitDraining ||
-		!strings.Contains(w.Detail, "moving magnum's panes from herdr session default to reviews") {
-		t.Fatalf("#2 waits %+v, %v; want the move's restart", w, ok)
-	}
+	for _, move := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no move", true: "a move"}[move], func(t *testing.T) {
+			var ma *moveAgents
+			h := newHarness(t, withPanesInYours, withMoveAgents(&ma), func(h *harness) { h.cfg.Pools[0].Max = 2 })
+			pool := h.cfg.Pools[0]
+			if _, err := h.st.CreateSlot(h.ctx, store.Slot{Name: pool.Slot(2), RepoFullName: pool.Repo, Kind: store.SlotKindPool,
+				Path: pool.Path(2), MainClone: pool.MainClone, PlaceholderBranch: new("review2"), DBSlug: new("review2"),
+				State: store.SlotFree}); err != nil {
+				t.Fatal(err)
+			}
+			held := h.reviewedPR(5, "e1")
+			ma.refuse(held.ID, fmt.Errorf("agents: park pr 5: codex-judge is working: %w", agents.ErrBusy))
+			if move {
+				h.moveToReviews()
+			}
+			rounds := len(h.rd.all())
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 5, head: "e1"}, prSpec{n: 2, head: "b1"})
+			if err := h.moveTick(); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			h.advance(5 * time.Minute)
+			if err := h.moveTick(); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if !move {
+				h.wantState(2, store.PRReviewed) // the free slot is #2's
+				if req := h.requestRetro(RetroPayload{}); req.State != store.RequestDone || !strings.Contains(deref(req.Result), "retro started") {
+					t.Fatalf("a retro asked with no move = %s %q, want it started", req.State, deref(req.Result))
+				}
+				return
+			}
+			h.wantState(2, store.PRQueued)
+			if w, ok := h.waitOf(2); !ok || w.Reason != WaitDraining ||
+				!strings.Contains(w.Detail, "moving magnum's panes from herdr session default to reviews") {
+				t.Fatalf("#2 waits %+v, %v; want the move's restart", w, ok)
+			}
 
-	req := h.requestRetro(RetroPayload{})
-	if req.State != store.RequestDone || !strings.Contains(deref(req.Result), drainStarts) {
-		t.Fatalf("a retro asked during the move = %s %q, want it queued for after the restart", req.State, deref(req.Result))
-	}
-	open := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
-	if err := h.moveTick(); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	if r := h.request(open); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "again in a minute") ||
-		!strings.Contains(deref(r.Result), "moving magnum's panes from herdr session default to reviews") {
-		t.Fatalf("magnum open during the move = %s %q", r.State, deref(r.Result))
-	}
+			req := h.requestRetro(RetroPayload{})
+			if req.State != store.RequestDone || !strings.Contains(deref(req.Result), drainStarts) {
+				t.Fatalf("a retro asked during the move = %s %q, want it queued for after the restart", req.State, deref(req.Result))
+			}
+			open := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
+			for range 2 {
+				h.advance(5 * time.Minute)
+				if err := h.moveTick(); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+			}
+			if r := h.request(open); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "again in a minute") ||
+				!strings.Contains(deref(r.Result), "moving magnum's panes from herdr session default to reviews") {
+				t.Fatalf("magnum open during the move = %s %q", r.State, deref(r.Result))
+			}
 
-	ma.refuse(held.ID, nil)
-	if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
-		t.Fatalf("tick once every PR parks = %v, want ErrRestartForPanes", err)
+			ma.refuse(held.ID, nil)
+			if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
+				t.Fatalf("tick once every PR parks = %v, want ErrRestartForPanes", err)
+			}
+			if n := len(h.rd.all()); n != rounds {
+				t.Fatalf("%d rounds started during the move", n-rounds)
+			}
+			h.wantState(2, store.PRQueued)
+			if evs := append(h.events("retro.start"), h.events("retro.done")...); len(evs) != 0 {
+				t.Fatalf("a retro ran during the move: %+v", evs)
+			}
+		})
 	}
-	if n := len(h.rd.all()); n != rounds {
-		t.Fatalf("%d rounds started during the move", n-rounds)
-	}
-	h.wantState(2, store.PRQueued)
 }
 
 // A move never parks a PR whose round is in flight: it waits for the
@@ -382,34 +412,169 @@ func TestAMoveParksEveryPRsSessionsThenRestarts(t *testing.T) {
 }
 
 // An old session with no server running (herdr.NoServer: its socket is
-// gone, or stale and refusing) has no panes: the move forgets the ids
-// without parking anything, the live rows lost, and restarts.
-func TestAMoveFromAServerThatIsGoneForgetsTheIdsWithoutParking(t *testing.T) {
+// gone, or stale and refusing) still has magnum's panes: herdr restores a
+// session's workspaces when its server starts again and resumes their
+// agents in their conversations ([session] resume_agents_on_restore). Ids
+// forgotten then would leave those agents to nobody, and a round resuming
+// one of the conversations in the new session would run it twice. So the
+// move parks and forgets nothing while that server is not running, or goes
+// away during the parks: it waits (kv herdr.panes_move, one event, a toast
+// after 30 minutes) and names how to start the session; a named one the
+// daemon opens itself (Deps.OpenHerdr, at most twice an hour), yours it
+// never opens. Once the server answers, the move parks what it restored and
+// goes on. With no herdr id recorded nothing can be restored, and the move
+// does not wait for the server.
+func TestAMoveFromASessionWithNoServerWaitsForItsServer(t *testing.T) {
+	noServer := func(s herdr.Session) error {
+		return fmt.Errorf("herdr session.snapshot: %w: dial unix %s: %w", herdr.ErrUnavailable, s.Socket, syscall.ECONNREFUSED)
+	}
+	for _, tc := range []struct {
+		name        string
+		named       bool // the panes move back from session reviews to yours
+		duringParks bool // the snapshot answers, then a park finds no server
+		start       string
+	}{
+		{"your session", false, false, "`herdr`"},
+		{"a named session", true, false, "`herdr --session reviews`"},
+		{"gone during the parks", false, true, "`herdr`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ma *moveAgents
+			var opened atomic.Int32
+			h := newHarness(t, withPanesInYours, withMoveAgents(&ma), func(h *harness) {
+				if tc.named {
+					h.d.PaneSession = reviewsPanes
+					h.moveToReviews()
+					h.d.OpenHerdr = func(context.Context) error { opened.Add(1); return nil }
+				}
+			})
+			pr := h.reviewedPR(2, "b1")
+			from, to := yourPanes, reviewsPanes
+			if tc.named {
+				from, to = reviewsPanes, yourPanes
+				h.cfg.Herdr.ReviewSession, h.cfg.Herdr.ReviewSocket = "", ""
+			} else {
+				h.moveToReviews()
+			}
+			if tc.duringParks {
+				ma.refuse(pr.ID, fmt.Errorf("agents: park pr 2: %w", noServer(from)))
+			} else {
+				h.hd.mu.Lock()
+				h.hd.err = noServer(from)
+				h.hd.mu.Unlock()
+			}
+			calls := len(h.ag.all())
+
+			if err := h.moveTick(); err != nil {
+				t.Fatalf("tick = %v, want the move to wait for herdr session %s", err, from.Name)
+			}
+			if moved := h.ag.all()[calls:]; slices.ContainsFunc(moved, func(c string) bool {
+				return strings.HasPrefix(c, "park:") || strings.HasPrefix(c, "close_panes")
+			}) {
+				t.Fatalf("parked or closed with no server: %v", moved)
+			}
+			if got, _ := h.panesRecord(); got != from || !slices.Contains(h.herdrIDPRs(), pr.ID) {
+				t.Fatalf("the move went on: record %+v, PRs with ids %v", got, h.herdrIDPRs())
+			}
+			mv, ok := ReadPanesMove(h.ctx, h.st)
+			if !ok || mv.From != from || mv.To != to || mv.Subject != "" ||
+				!strings.Contains(mv.Reason, "no herdr server runs in session "+from.Name) || !strings.Contains(mv.Reason, tc.start) {
+				t.Fatalf("the wait = %+v, %v", mv, ok)
+			}
+			h.advance(10 * time.Minute)
+			if err := h.moveTick(); err != nil {
+				t.Fatal(err)
+			}
+			h.advance(21 * time.Minute)
+			if err := h.moveTick(); err != nil {
+				t.Fatal(err)
+			}
+			if evs := h.events("herdr.panes_move_waits"); len(evs) != 1 {
+				t.Fatalf("waits events %+v", evs)
+			}
+			if got := h.nh.titles("wait to move to herdr session " + to.Name); len(got) != 1 {
+				t.Fatalf("toasts after 31 minutes %v, want one", got)
+			}
+			if want := map[bool]int32{false: 0, true: 2}[tc.named]; opened.Load() != want {
+				t.Fatalf("herdr session %s opened %d times, want %d", from.Name, opened.Load(), want)
+			}
+
+			h.hd.mu.Lock()
+			h.hd.err = nil
+			h.hd.mu.Unlock()
+			ma.refuse(pr.ID, nil)
+			calls = len(h.ag.all())
+			if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
+				t.Fatalf("tick once the server answers = %v, want ErrRestartForPanes", err)
+			}
+			if got, _ := h.panesRecord(); got != to || !slices.Contains(h.ag.all()[calls:], "park:"+itoa(pr.ID)) {
+				t.Fatalf("record %+v, calls %v", got, h.ag.all()[calls:])
+			}
+		})
+	}
+
+	t.Run("no herdr id recorded", func(t *testing.T) {
+		h := newHarness(t, withPanesInYours)
+		h.reviewedPR(2, "b1")
+		if _, err := h.st.ForgetHerdrIDs(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.hd.mu.Lock()
+		h.hd.err = noServer(yourPanes)
+		h.hd.mu.Unlock()
+		h.moveToReviews()
+		if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
+			t.Fatalf("tick = %v, want ErrRestartForPanes", err)
+		}
+		if got, _ := h.panesRecord(); got != reviewsPanes {
+			t.Fatalf("record %+v", got)
+		}
+	})
+}
+
+// A move whose restart is refused (what launchd would start fails its
+// check: a binary gone, or rebuilt so that it refuses the config, or a
+// config on disk that no longer loads) holds new rounds as any wait of the
+// move does, so it says so as they do: kv herdr.panes_move names why for
+// `magnum status` and doctor, one herdr.panes_move_waits event per reason,
+// and a toast in your session once it has waited 30 minutes, also from a
+// tick that only remembers the refusal. Nothing is parked or forgotten:
+// the daemon could not start again in the new session.
+func TestAMoveWhoseRestartIsRefusedWaitsAndSaysWhy(t *testing.T) {
 	h := newHarness(t, withPanesInYours)
+	h.e.supervised = true
 	pr := h.reviewedPR(2, "b1")
-	calls := len(h.ag.all())
-	h.hd.mu.Lock()
-	h.hd.err = fmt.Errorf("herdr session.snapshot: %w: dial unix %s: %w", herdr.ErrUnavailable, yourPanes.Socket, syscall.ECONNREFUSED)
-	h.hd.mu.Unlock()
+	bin := filepath.Join(t.TempDir(), "magnum")
+	if err := os.WriteFile(bin, []byte("v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.e.build = CurrentBuild("v1", bin)
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	parks := h.ag.count("park")
 	h.moveToReviews()
 
-	if err := h.moveTick(); !errors.Is(err, ErrRestartForPanes) {
-		t.Fatalf("tick = %v, want ErrRestartForPanes", err)
+	for _, step := range []time.Duration{0, 25 * time.Minute, 6 * time.Minute} { // the last within restartRefuseRetry
+		h.advance(step)
+		if err := h.moveTick(); err != nil {
+			t.Fatalf("tick = %v, want the move to wait", err)
+		}
 	}
-	if moved := h.ag.all()[calls:]; slices.ContainsFunc(moved, func(c string) bool {
-		return strings.HasPrefix(c, "park") || strings.HasPrefix(c, "close_panes")
-	}) {
-		t.Fatalf("a gone server's PRs were parked or closed: %v", moved)
+	if got, _ := h.panesRecord(); h.ag.count("park") != parks || got != yourPanes || !slices.Contains(h.herdrIDPRs(), pr.ID) {
+		t.Fatalf("the move went on: calls %v, record %+v", h.ag.all(), got)
 	}
-	if ids, n := h.herdrIDPRs(), h.liveCount(); len(ids) != 0 || n != 0 {
-		t.Fatalf("PRs with herdr ids %v, %d live sessions", ids, n)
+	mv, ok := ReadPanesMove(h.ctx, h.st)
+	if !ok || mv.From != yourPanes || mv.To != reviewsPanes || mv.Subject != "" ||
+		!strings.Contains(mv.Reason, "fails its check") || !strings.Contains(mv.Reason, "missing or cannot be read") {
+		t.Fatalf("the wait = %+v, %v", mv, ok)
 	}
-	ss, err := h.st.SessionsByPR(h.ctx, pr.ID)
-	if err != nil || len(ss) == 0 || slices.ContainsFunc(ss, func(s store.Session) bool { return s.State != store.SessionLost }) {
-		t.Fatalf("PR 2's sessions = %+v, %v; want them lost", ss, err)
+	if evs := h.events("herdr.panes_move_waits"); len(evs) != 1 || evs[0].Level != "warn" ||
+		!strings.Contains(evs[0].Message, "missing or cannot be read") {
+		t.Fatalf("waits events %+v", evs)
 	}
-	if got, _ := h.panesRecord(); got != reviewsPanes {
-		t.Fatalf("record = %+v", got)
+	if got := h.nh.titles("wait to move to herdr session reviews"); len(got) != 1 {
+		t.Fatalf("toasts after 31 minutes %v, want one", got)
 	}
 }
 

@@ -14648,6 +14648,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   failing first: TestADownReviewSessionIsOpenedAtMostTwiceAnHour; TestTheDaemonNeverOpensYourOwnSession and
   TestADownReviewSessionIsNotOpenedWhileThePanesMoveAway fail on the mutations they guard against.
 
+- **A move of magnum's panes waits for an old server that is not running, and for a refused restart**
+  (2026-11-06, a review of the two entries above). herdr restores a session's workspaces when its server
+  starts again and resumes their agents in their conversations (`[session] resume_agents_on_restore`, on by
+  default; `agents.StartAgent` already adopts such an agent by its conversation). So an old session with no
+  server running (`herdr.NoServer`) is not empty: the move forgot the ids and restarted in the new session,
+  and the operator's next `herdr` restored magnum's PR workspaces and agents in a session magnum no longer
+  drives, where nothing ever closed them; a round resuming one of those conversations in the new session
+  then ran it twice, the fork `StartAgent` is written to prevent. Now, while herdr ids are recorded, an old
+  server that is not running, before or during the parks, holds the move as a timeout does (kv
+  `herdr.panes_move`, a `herdr.panes_move_waits` event, a toast after 30 minutes): the wait names the
+  command that starts the session, the daemon opens a named old session itself (`Deps.OpenHerdr`, at most
+  twice an hour; a rollback from `reviews`), never yours, and once the server answers the next idle tick
+  parks what it restored. With no id recorded nothing can come back, and the move does not wait. This
+  replaces "an old session with no server running has no panes and is not parked" and, for the move, "a
+  session the panes are to move away from is left alone": an observe still never opens it, the move does.
+  Second, a restart refused because what launchd would start fails its check (`restartSafe`) held the move,
+  and with it every round, with only the restart's one `daemon.config_restart_refused` event: no kv record
+  for status and doctor, no `herdr.panes_move_waits` and no toast. The refusal is now one of the move's
+  waits, also on the ticks that only remember it (`errRefusedBefore`, whose reason `restartRefusal` keeps).
+  Third, the daemon opens the panes' session only when no server runs there: a server that runs but times
+  out, or accepts nothing, keeps its client, which a reveal would bring to the front of the terminal up to
+  twice an hour, and a new client would not make it answer. The factory's `checkHerdr`, which the open
+  copied, still reveals on any failure. Rejected: forgetting the ids and closing magnum's restored
+  workspaces in the old session later, matched by conversation (a round may resume the conversation before
+  that server answers, and the daemon would drive a second session it no longer runs in). Tests, failing
+  first: TestAMoveFromASessionWithNoServerWaitsForItsServer (it replaces
+  TestAMoveFromAServerThatIsGoneForgetsTheIdsWithoutParking), TestAMoveWhoseRestartIsRefusedWaitsAndSaysWhy
+  and TestAReviewSessionThatRunsButDoesNotAnswerIsNotOpened. TestAMoveHoldsNewRoundsAndRetros now gives the
+  queued PR a free slot, checks that it would start without the move, and that no retro runs during it: it
+  fails when `stopping` does not count the move, which it did not before.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
