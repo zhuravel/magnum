@@ -61,12 +61,11 @@ var _ tui.FactoryActions = (*factoryActions)(nil)
 func newFactoryActions(c *Context, src *factoryScreenSource) *factoryActions {
 	a := &factoryActions{c: c, src: src, pid: os.Getpid()}
 	a.focusPane = func(ctx context.Context, target string) error {
-		return (&herdr.Client{Socket: factoryHerdrSocket(c.Config)}).AgentFocus(ctx, target)
+		return (&herdr.Client{Socket: c.Config.FactoryHerdr().Socket}).AgentFocus(ctx, target)
 	}
 	a.revealSession = func(ctx context.Context) (string, error) {
-		term := c.Config.Terminal
-		term.Session = c.Config.Factory.HerdrSession
-		out, err := reveal.Reveal(ctx, daemonSys.runner(false, nil), term, os.Getenv("HERDR_BIN_PATH"), reveal.Options{})
+		out, err := reveal.Reveal(ctx, daemonSys.runner(false, nil), c.Config.Terminal, os.Getenv("HERDR_BIN_PATH"),
+			reveal.Options{Session: c.Config.FactoryHerdr().Name})
 		return out.String(), err
 	}
 	return a
@@ -205,7 +204,7 @@ func (a *factoryActions) Open(ctx context.Context, taskID int64) (tui.ActionResu
 	doing := a.doing(s.Role)
 	if err := a.focusPane(ctx, target); err != nil {
 		return tui.ActionResult{}, fmt.Errorf("focus the pane of the agent %s in the %s herdr session: %w", doing,
-			cmp.Or(a.c.Config.Factory.HerdrSession, "default"), err)
+			a.c.Config.FactoryHerdr().Name, err)
 	}
 	text := "you're in the pane of the agent " + doing
 	out, err := a.revealSession(ctx)

@@ -4748,6 +4748,12 @@ func (c *Config) EditorRole() Role
     editor_args, editor_prompt, editor_timeout and editor_fallback_models,
     writing changes.json, normalized like a configured role.
 
+func (c *Config) FactoryHerdr() herdr.Session
+    FactoryHerdr is the herdr session of the factory's panes: [factory]
+    herdr_session, on [factory] herdr_socket, else on that session's own socket
+    (herdr.SessionSocket; herdr's default session, "default", keeps herdr's
+    default socket).
+
 func (c *Config) FactoryRepo(full string) (FactoryRepo, bool)
     FactoryRepo returns the [[factory.repo]] for owner/name (case ignored).
 
@@ -21447,6 +21453,10 @@ func DetectKind(app string) Kind
 type Options struct {
 	// NewWindow opens a new window instead of a tab in the current one.
 	NewWindow bool
+	// Session is the herdr session to reveal (`herdr --session <name>`):
+	// the session of magnum's review panes or the factory's. "" means the
+	// configured [terminal] session, yours.
+	Session string
 }
     Options tunes Launch and Reveal.
 

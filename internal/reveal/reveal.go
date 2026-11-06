@@ -83,6 +83,10 @@ const (
 type Options struct {
 	// NewWindow opens a new window instead of a tab in the current one.
 	NewWindow bool
+	// Session is the herdr session to reveal (`herdr --session <name>`):
+	// the session of magnum's review panes or the factory's. "" means the
+	// configured [terminal] session, yours.
+	Session string
 }
 
 // Outcome describes what Reveal did, for `magnum open` output and --json.
@@ -186,8 +190,14 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 // terminal confirms there is none it launches a new client (a tab, or a window
 // with opts.NewWindow). When focus cannot be determined it only brings the
 // terminal app forward (opening a second client could duplicate one it cannot
-// see); a custom launcher has no app to raise, so it launches.
+// see); a custom launcher has no app to raise, so it launches. opts.Session,
+// when set, is the session it looks for and opens instead of r's.
 func (r *revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
+	if s := strings.TrimSpace(opts.Session); s != "" && s != r.session {
+		named := *r
+		named.session = s
+		r = &named
+	}
 	out := Outcome{Kind: r.kind, Session: r.session}
 	res, focusErr := r.focusExisting(ctx)
 	switch res {

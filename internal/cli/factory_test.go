@@ -552,17 +552,3 @@ func TestTheFactoryDaemonBuildsWithItsAlerts(t *testing.T) {
 			one.Notifier.Enabled)
 	}
 }
-
-// The factory's panes live in its own herdr session: the socket [factory]
-// herdr_socket names, else the named session's own, never the review panes'
-// default one.
-func TestTheFactorySessionHasItsOwnHerdrSocket(t *testing.T) {
-	cfg := config.Defaults()
-	if got := factoryHerdrSocket(cfg); !strings.HasSuffix(got, "/.config/herdr/sessions/factory/herdr.sock") {
-		t.Fatalf("socket %q, want the factory session's own", got)
-	}
-	cfg.Factory.HerdrSocket = "/run/herdr/factory.sock"
-	if got := factoryHerdrSocket(cfg); got != "/run/herdr/factory.sock" {
-		t.Fatalf("socket %q, want the configured one", got)
-	}
-}

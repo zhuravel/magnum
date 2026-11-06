@@ -112,6 +112,43 @@ func TestRevealPropagatesLaunchErrors(t *testing.T) {
 	}
 }
 
+// The options name the session to reveal (magnum's review panes' or the
+// factory's) over [terminal] session, yours: its client is focused, or one of
+// it is opened. No name reveals yours.
+func TestRevealUsesTheSessionTheOptionsName(t *testing.T) {
+	r, f := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
+		osaRule(func(s string) (string, error) { return "/dev/ttys051", nil }))
+	out, err := r.Reveal(ctx(), Options{Session: "other"})
+	if err != nil || out.Action != ActionFocused || out.Session != "other" {
+		t.Fatalf("got %+v %v, want the client of session other focused", out, err)
+	}
+	mustContain(t, scriptOf(t, f, 0), `whose tty is "/dev/ttys051"`)
+	if s := scriptOf(t, f, 0); strings.Contains(s, "/dev/ttys050") {
+		t.Fatalf("the focus looks for the client of [terminal] session too:\n%s", s)
+	}
+
+	r, f = newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
+		osaRule(func(s string) (string, error) {
+			if strings.Contains(s, "create window") {
+				return "", nil
+			}
+			return "miss", nil
+		}))
+	out, err = r.Reveal(ctx(), Options{Session: "reviews", NewWindow: true})
+	if err != nil || out.Action != ActionLaunched || out.Session != "reviews" {
+		t.Fatalf("got %+v %v, want a client of session reviews opened", out, err)
+	}
+	if n := len(f.CallsWithPrefix(osascript)); n != 1 {
+		t.Fatalf("a session with no client must be opened without a focus script: %v", names(f))
+	}
+	mustContain(t, scriptOf(t, f, 0), "create window", `write text "`+testHerdr+` --session reviews"`)
+
+	out, err = Reveal(ctx(), &execx.Fake{Rules: []execx.Rule{okRule(openBin)}}, terminalCfg("Muxy", "work"), testHerdr, Options{})
+	if err != nil || out.Session != "work" {
+		t.Fatalf("got %+v %v, want [terminal] session work", out, err)
+	}
+}
+
 func TestRevealPackageFunction(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{okRule(openBin)}}
 	out, err := Reveal(ctx(), f, terminalCfg("Muxy", ""), testHerdr, Options{})

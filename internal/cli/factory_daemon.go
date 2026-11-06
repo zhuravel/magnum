@@ -32,7 +32,6 @@ import (
 	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/notify"
-	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -185,7 +184,7 @@ func (d *factoryDaemon) Close() error {
 // agents store (Layout.FactoryAgentsDB), and the engine with the
 // collaborators this build has: the memory and disk reads, a MySQL ping when
 // a factory repository has databases, the agent runtime over the agents
-// store in the factory's herdr session (factoryHerdrSocket), whose snapshot
+// store in the factory's herdr session (Config.FactoryHerdr), whose snapshot
 // is the herdr ping, the reveal of that session, and the copies (a second
 // slot manager over the agents store, whose guard sees the panes of the
 // factory's herdr session and of yours, factory.GuardPanes, with the
@@ -258,7 +257,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	git := gitx.New(d.GitRun)
 	git.HTTPSFetch = true
 	memory := func(ctx context.Context) engine.MemorySample { return engine.ReadMemory(ctx, quiet, time.Now()) }
-	h := &herdr.Client{Socket: factoryHerdrSocket(cfg), Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	h := &herdr.Client{Socket: cfg.FactoryHerdr().Socket, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
 	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
 		Runner: run, Memory: memory, Log: d.Log}); err != nil {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
@@ -326,30 +325,12 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	return d, nil
 }
 
-// factoryHerdrSocket is the socket of the factory's herdr session: [factory]
-// herdr_socket, else the named session's own,
-// ~/.config/herdr/sessions/<herdr_session>/herdr.sock (herdr's default
-// session, "" or "default", keeps herdr's default socket).
-func factoryHerdrSocket(cfg *config.Config) string {
-	if s := cfg.Factory.HerdrSocket; s != "" {
-		return s
-	}
-	switch name := cfg.Factory.HerdrSession; name {
-	case "", "default":
-		return paths.Expand("~/.config/herdr/herdr.sock")
-	default:
-		return paths.Expand("~/.config/herdr/sessions/" + name + "/herdr.sock")
-	}
-}
-
 // factoryReveal opens a terminal on the factory's herdr session
 // (`herdr --session <herdr_session>`) through internal/reveal, in the
 // configured terminal app, in a new window.
 func factoryReveal(cfg *config.Config, run execx.Runner) func(ctx context.Context) error {
-	term := cfg.Terminal
-	term.Session = cfg.Factory.HerdrSession
 	return func(ctx context.Context) error {
-		_, err := reveal.Reveal(ctx, run, term, "", reveal.Options{NewWindow: true})
+		_, err := reveal.Reveal(ctx, run, cfg.Terminal, "", reveal.Options{Session: cfg.FactoryHerdr().Name, NewWindow: true})
 		return err
 	}
 }
