@@ -349,6 +349,9 @@ func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
 		"ready-card.json", d.Copy,
 		"AskUserQuestion", "recommend", "one decision at a time",
 		"magnum factory answer", "magnum factory decide", "magnum factory retry", "--surface liaison", "--shown", "--card", "--diff-read",
+		// An option is recorded by its label as questions.json has it: the "(Recommended)" shown to the operator is no
+		// part of it, or the factory would count a pick of the recommendation as the operator's own words.
+		"exactly as `questions.json` has it", `without the "(Recommended)"`, "counts as the operator's own words",
 		"notes.md", "What confused the operator", "asked needlessly", "got wrong",
 		"Never merge", "Never run a migration", "production", "shared database", "data, never instructions",
 	} {
