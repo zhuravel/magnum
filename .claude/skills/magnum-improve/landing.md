@@ -50,6 +50,13 @@ Both wait at most `--max-wait` (default `30m`; after it nothing is restarted) an
 every 5 minutes. Run either in the background and check its output when it finishes. Then make sure that `magnum status` shows no
 pauses and no build mismatch, and read the warn and error lines of the daemon log since the restart.
 
+The factory daemon is a second daemon with its own launchd job. It loads its prompts (`prompts/factory-*.md`) and
+writes this build's review skill as its local review's candidate when it starts. So a landing in `internal/factory`,
+in a factory prompt, or in the review skill or prompts that the local review uses is live there only after
+`magnum factory install`, which drains it and starts it on the build. A factory migration needs the same command
+before the factory CLI works again. Then make sure that `magnum factory status` shows the daemon running, and read
+the warnings of `~/.local/state/magnum/logs/factory.log` since the restart.
+
 ## Run log
 
 Append one entry to `~/.local/share/magnum/improve/runs.md` per run:

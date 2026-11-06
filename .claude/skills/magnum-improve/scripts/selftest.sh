@@ -532,4 +532,37 @@ grep -Fxq '| example/app#2 | fx1 | 2026-10-11T10:30 | 2 | 2 | 1 | j2 (r2) | 3 | 
 ! grep -q '^| example/app#2 | fx0 ' "$ev_md" || fail "a fix run that pushed nothing has no row"
 ok "evidence.sh's fixer trial counts the replies to a fix run's commits, \"also at\" and the next round's tagged findings"
 
+# 10. evidence.sh reads the factory's registry and its tasks' local review rounds: the PRs the factory published
+# (whose comments by people are misses of its local review) and the rounds' report directories; without a factory
+# registry it writes no factory section.
+fdb=$ev/factory.db
+sqlite3 "$fdb" <<'SQL'
+create table tasks (id integer primary key, jira_key text, repo text, kind text, state text, stage text, pr_number integer,
+  created_at text, updated_at text);
+create table pr_links (task_id integer, repo text, number integer, opened_head text, opened_at text);
+create table review_cycles (task_id integer, n integer, exit text, head_after text, tokens integer, started_at text);
+create table review_findings (task_id integer, priority text, class text, verdict text, outcome text, blocking integer,
+  first_cycle integer);
+create table events (at text, kind text, phase text);
+create table operator_inputs (at text, kind text, surface text);
+insert into tasks values (7, 'PR-12345', 'example/app', 'bug', 'published', 'publish', 4512, '2026-10-11T09:00:00Z', '2026-10-11T12:00:00Z');
+insert into pr_links values (7, 'example/app', 4512, 'abc123abc123abc1', '2026-10-11T11:00:00Z');
+insert into review_cycles values (7, 1, 'clean', 'abc123abc123abc1', 0, '2026-10-11T10:00:00Z');
+insert into review_findings values (7, 'P3', 'simplification', 'posted', 'open', 0, 1);
+insert into events values ('2026-10-11T09:30:00Z', 'claim', 'fail');
+insert into operator_inputs values ('2026-10-11T09:40:00Z', 'answer', 'screen');
+SQL
+round=$ev/factory-tasks/7/local-review/1-local-aaa/reviews/example/app/900071/abc123abc123
+mkdir -p "$round"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
+    run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
+[[ $rc == 0 ]] || fail "evidence.sh runs against a factory registry with only the columns it reads (rc $rc)"
+grep -q '^## Factory PRs' "$ev/fout/evidence.md" && tr -s ' ' <"$ev/fout/evidence.md" | grep -q '| 7 | example/app#4512 |' ||
+    fail "the factory section lists the PR the task published: $(sed -n '/^## Factory PRs/,/^## Factory local/p' "$ev/fout/evidence.md" | tr '\n' ';')"
+[[ $(cat "$ev/fout/factory-reports.txt") == "$round" ]] || fail "factory-reports.txt lists the local review round's report directory"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$ev/none.db MAGNUM_FACTORY_TASKS=$ev/none \
+    run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/nout"
+[[ $rc == 0 ]] && ! grep -q '^## Factory' "$ev/nout/evidence.md" || fail "without a factory registry there is no factory section (rc $rc)"
+ok "evidence.sh lists the factory's tasks, the PRs they published and their local review rounds' reports"
+
 echo "selftest: $checks checks passed"

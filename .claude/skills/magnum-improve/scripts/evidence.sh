@@ -10,13 +10,19 @@
 #   claude-review-origin.txt   each rejected finding claude-review alone raised, with whether it matches a
 #                 finding of the reviewer's report, a bullet of its Rejected list, or neither, and the text it
 #                 matched
-# It reads the registry with sqlite3 -readonly and never writes to it.
+#   factory-reports.txt   the report directories of the factory's local review rounds written since then
+#                 (<tasks>/<id>/local-review/<round>/reviews/<owner>/<repo>/<number>/<sha>)
+# With a factory registry, evidence.md ends with the factory's tasks, the PRs they published, their local reviews,
+# their waits and failures, and what they asked of the operator.
+# It reads the registries with sqlite3 -readonly and never writes to them.
 set -euo pipefail
 
 since=${1:?usage: evidence.sh <since> <run-dir>}
 dir=${2:?usage: evidence.sh <since> <run-dir>}
 db=${MAGNUM_DB:-$HOME/.local/share/magnum/magnum.db}
 reviews=${MAGNUM_REVIEWS:-$HOME/.local/share/magnum/reviews}
+fdb=${MAGNUM_FACTORY_DB:-$HOME/.local/share/magnum/factory/factory.db}
+ftasks=${MAGNUM_FACTORY_TASKS:-$HOME/.local/share/magnum/factory/tasks}
 repo=$(cd "$(dirname "$0")/../../../.." && pwd)
 
 if [[ $since =~ ^([0-9]+)d$ ]]; then
@@ -463,6 +469,9 @@ stamp=$(mktemp "$dir/.since.XXXXXX")
 touch -t "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$since" +%Y%m%d%H%M.%S)" "$stamp"
 find "$reviews" -mindepth 4 -maxdepth 4 -type d -newer "$stamp" -print 2>/dev/null |
 	xargs -I{} stat -f '%m %N' {} | sort -rn | cut -d' ' -f2- >"$dir/reports.txt" || true
+# The factory's local review rounds keep the same report directories, under each task's folder.
+find "$ftasks" -mindepth 8 -maxdepth 8 -type d -path '*/local-review/*/reviews/*' -newer "$stamp" -print 2>/dev/null |
+	xargs -I{} stat -f '%m %N' {} | sort -rn | cut -d' ' -f2- >"$dir/factory-reports.txt" || true
 rm -f "$stamp"
 
 # Every reply to magnum's threads: the newest review-threads.json of each PR
@@ -682,6 +691,39 @@ for name, _, d, p in rules:
 if not rules:
     print("| - | - | - |")
 PY
+
+# The factory (magnum factory): its local review is a blind round before the PR exists, so magnum's retro never
+# sees it. People's comments on a PR it published, after opened_at, are misses of that local review (lenses.md,
+# lens 0), and its waits, failures and questions are the factory lens's input (lens 13).
+if [[ -f $fdb ]]; then
+	fq() { sqlite3 -readonly -header -markdown "$fdb" "$1"; }
+	{
+		echo
+		echo "## Factory tasks (updated since)"
+		fq "select id, coalesce(jira_key, '-') as key, repo, kind, state, stage, coalesce(pr_number, '-') as pr,
+		          substr(created_at, 1, 16) as created, substr(updated_at, 1, 16) as updated
+		   from tasks where updated_at >= '$since' order by id"
+		echo
+		echo "## Factory PRs (people's comments after opened_at are misses of the local review)"
+		fq "select l.task_id as task, l.repo || '#' || l.number as pr, substr(l.opened_at, 1, 16) as opened,
+		          substr(l.opened_head, 1, 12) as head
+		   from pr_links l where l.opened_at >= '$since' order by l.opened_at"
+		echo
+		echo "## Factory local review cycles"
+		fq "select task_id as task, n, exit, substr(head_after, 1, 12) as head, tokens, substr(started_at, 1, 16) as started
+		   from review_cycles where started_at >= '$since' order by task_id, n"
+		fq "select f.task_id as task, coalesce(f.priority, '-') as pri, f.class, f.verdict, f.outcome, f.blocking, count(*) as n
+		   from review_findings f join review_cycles c on c.task_id = f.task_id and c.n = f.first_cycle
+		   where c.started_at >= '$since' group by 1, 2, 3, 4, 5, 6 order by 1, 7 desc"
+		echo
+		echo "## Factory waits and failures (events)"
+		fq "select kind, phase, count(*) as n, max(substr(at, 1, 16)) as last
+		   from events where at >= '$since' and phase in ('fail', 'held') group by 1, 2 order by 3 desc limit 30"
+		echo
+		echo "## Factory operator inputs (what it asked of you; magnum factory stats has the per-task numbers)"
+		fq "select kind, surface, count(*) as n from operator_inputs where at >= '$since' group by 1, 2 order by 3 desc"
+	} >>"$out"
+fi
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"
 

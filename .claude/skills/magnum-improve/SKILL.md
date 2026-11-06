@@ -1,6 +1,6 @@
 ---
 name: magnum-improve
-description: Runs one turn of magnum's improvement loop. It gathers evidence of what magnum did since the last run (posted reviews, findings, misses, author replies, failures, operator interventions), dispatches parallel subagents to analyze it and to review and simplify the code, fixes what is wrong, builds justified improvements in isolated worktrees, lands them through the gate and restarts the daemon. Use when the operator runs /magnum-improve or asks for an improvement pass, a review of recent magnum reviews, or "what should magnum do better".
+description: Runs one turn of magnum's improvement loop. It gathers evidence of what magnum did since the last run (posted reviews, findings, misses, author replies, failures, operator interventions, and the factory's tasks with their local reviews), dispatches parallel subagents to analyze it and to review and simplify the code, fixes what is wrong, builds justified improvements in isolated worktrees, lands them through the gate and restarts the daemon. Use when the operator runs /magnum-improve or asks for an improvement pass, a review of recent magnum reviews, or "what should magnum do better".
 ---
 
 # magnum improvement loop
@@ -25,7 +25,12 @@ PR" and "never a second CODEX_HOME".
    are bullets of its own Rejected list, a title match behind the `self` columns). Its last table, "Rules applied",
    counts the reports that hold each review rule's phrase (`rules.txt`, one `<rule> | <pattern>` line per rule; a
    new rule is one line); a rule at 0 for three runs is a cut candidate when the review skill is at its byte cap.
-   Read the summary yourself; it is the shared input of every analyst.
+   With a factory registry it ends with the factory's tables (tasks, the PRs they published, their local review
+   cycles and findings, waits, failures, operator inputs), and `factory-reports.txt` lists the local review rounds'
+   report directories. A factory PR's comments by people are misses of its local review (lens 0), and the factory's
+   costs are lens 13's.
+   Read the summary yourself; it is the shared input of every analyst. Lens 13 runs whenever the factory's tables
+   list a task.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its
    lens; every analyst prompt names [analyst-rules.md](analyst-rules.md) (read-only work and the return format) by
    absolute path. Lenses 0 and 1 run every time: what other reviewers found and magnum did not, and what magnum

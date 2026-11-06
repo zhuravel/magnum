@@ -14,6 +14,17 @@ labels own-thread misses "declined finding"; count only "comment" rows as what o
 comments and reviews by people (not magnum's logins, not the author) posted after magnum's latest review on the same
 head: read them with `gh api` (GET) for the PRs magnum reviewed since `since`, at most 30 PRs.
 
+The factory's PRs count too. Its local review is a blind round before the PR exists: nothing is posted, and the
+retro never sees it. The evidence's "Factory PRs" table lists each PR a factory task published, with its head and
+`opened_at`. Every comment or review by a person on it after `opened_at` is a miss of that local review, or a finding
+that its round dropped. Read them with `gh api` (GET), as for the open PRs above. That round's reports are the
+directories of `<run-dir>/factory-reports.txt` for that task: the same files as a real round (`codex-judge.json`,
+the reviewers' reports, `judge-own.md`), and its findings are in that round's scratch `magnum.db`, beside `reviews/`.
+The task's folder also holds `review-<n>.json` and `review-summary.json`. The local review uses this build's review
+skill and prompts as a candidate, so a change that catches a miss there catches it in real rounds too. A miss that
+came from what the local round was given, not from the skill, belongs to the factory: its inputs (`description.md`,
+`ticket.md`, the task's report) or its proof and precheck (a probe spec that the writer did not write).
+
 For each real miss (a problem a person raised that magnum's review on that head did not post), find out why:
 
 - **nobody raised it**: no reviewer report and not the judge's own pass (`judge-own.md`) mention it;
@@ -163,3 +174,17 @@ Compare README.md, AGENTS.md, prompts/README.md, the comments of config.defaults
 every event kind and file path the docs name. Report each statement that is wrong or missing (a key the code reads that
 no doc names, a doc that names a removed flag) with the doc's line and the code's file and line, and the docs that
 contradict each other. Fix nothing.
+
+## 13. The factory
+
+What the factory (`magnum factory`) did since `since`, and where it cost the operator time. Inputs: the evidence's
+factory tables (tasks, PRs, local review cycles and findings, waits and failures, operator inputs),
+`magnum factory stats --since <since> --markdown` (it only reads: what each task still asked of the operator against
+the frozen baseline), `~/.local/state/magnum/logs/factory.log` (its `factory tick` warnings name every wait), and each
+task's folder in `~/.local/share/magnum/factory/tasks/<id>/` (`precheck.md`, `factory-proof.json`, `handoff.md`).
+For each task: how long each stage took, every wait and who it named ("you", "copy", "agent", "magnum"), every
+failure and how it ended (a retry by the operator, a repair, a restart), and each question or step the operator had
+to give. Then name the change that removes the cost: a bug in internal/factory, a self-healing step (a retry, a
+repair, a longer wait), a configuration default, or a prompt in `prompts/factory-*.md`. Stalls caused by the machine
+(macOS privacy prompts, a locale, a PATH, a disk) count when the factory could detect them and say so, or work
+around them. Never propose a change that lets the factory merge, run a migration, or touch production.
