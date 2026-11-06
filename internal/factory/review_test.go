@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -974,4 +976,102 @@ func TestALocalRoundRunsInTheCopysEnvironment(t *testing.T) {
 func fileIn(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
 	return !errors.Is(err, os.ErrNotExist)
+}
+
+// reviewSession is magnum's review session as the local review sees it
+// (Deps.ReviewHerdrUp, ReviewReveal): down, when set, is its error; each
+// open is recorded at the rig's clock.
+type reviewSession struct {
+	mu     sync.Mutex
+	down   error
+	opened []time.Time
+}
+
+func (s *reviewSession) set(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = err
+}
+
+func (s *reviewSession) opens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.opened)
+}
+
+// wire puts the session in the rig's deps, the engine's too.
+func (s *reviewSession) wire(r *reviewRig) {
+	for _, d := range []*Deps{&r.deps, &r.e.d} {
+		d.ReviewHerdrUp = func(context.Context) error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.down
+		}
+		d.ReviewReveal = func(context.Context) error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.opened = append(s.opened, r.clock.Now())
+			return nil
+		}
+	}
+}
+
+// The local review opens its panes in magnum's review session ([herdr]
+// review_session): while that does not answer, no round starts and the
+// task waits on it, never ending its cycle unavailable; while no server
+// runs there the factory opens it, at most twice an hour. A round that
+// ended while the session went away runs again once it answers.
+func TestALocalReviewWaitsWhileTheReviewSessionDoesNotAnswer(t *testing.T) {
+	noServer := fmt.Errorf("herdr ping: %w: %w", herdr.ErrUnavailable, syscall.ENOENT)
+	r := newReviewRig(t, result())
+	r.cfg.Herdr.ReviewSession = "reviews"
+	s := &reviewSession{down: noServer}
+	s.wire(r)
+	task, _ := r.reviewTask("PR-12390")
+	r.run(4, nil)
+	got := r.reload(task.ID)
+	if len(r.rv.calls()) != 0 || got.State != registry.TaskActive || got.WaitsWho != HoldHerdr || !strings.Contains(got.WaitsWhat, "reviews") {
+		t.Fatalf("%d rounds; task %s waits %q: %q", len(r.rv.calls()), got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	if n := s.opens(); n != 1 {
+		t.Fatalf("the review session was opened %d times in a minute, want once", n)
+	}
+	r.clock.Add(herdrRevealGap)
+	r.run(2, nil)
+	if n := s.opens(); n != 2 {
+		t.Fatalf("the review session was opened %d times after %s, want twice", n, herdrRevealGap)
+	}
+	s.set(fmt.Errorf("herdr ping: %w", herdr.ErrTimeout)) // a server that runs: its client is open already
+	r.clock.Add(herdrRevealGap)
+	r.run(2, nil)
+	if n := s.opens(); n != 2 || len(r.rv.calls()) != 0 {
+		t.Fatalf("%d opens and %d rounds while the session runs but does not answer", n, len(r.rv.calls()))
+	}
+	s.set(nil)
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); len(r.rv.calls()) != 1 || got.Stage != "pr_body" {
+		t.Fatalf("%d rounds; task at %s once the session answered", len(r.rv.calls()), got.Stage)
+	}
+
+	// The session goes away under a round, which ends needing attention: it
+	// waits and runs again, rather than ending its cycle unavailable.
+	r = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		s.set(noServer)
+		return outcome(pipeline.OutcomeNeedsAttention)(c)
+	}, result())
+	s = &reviewSession{}
+	s.wire(r)
+	task, _ = r.reviewTask("PR-12391")
+	r.run(6, func() bool { return len(r.rv.calls()) == 1 && r.reload(task.ID).WaitsWho == HoldHerdr })
+	if got := r.reload(task.ID); len(r.rv.calls()) != 1 || got.State != registry.TaskActive || got.WaitsWho != HoldHerdr {
+		t.Fatalf("%d rounds; task %s waits %q: %q", len(r.rv.calls()), got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	s.set(nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); len(r.rv.calls()) != 2 || got.Stage != "pr_body" {
+		t.Fatalf("%d rounds; task %s at %s waits %q", len(r.rv.calls()), got.State, got.Stage, got.WaitsWhat)
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit == registry.ExitUnavailable {
+		t.Fatalf("cycles %+v, want one that did not end unavailable", cs)
+	}
 }

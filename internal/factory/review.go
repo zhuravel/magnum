@@ -47,6 +47,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -476,7 +477,8 @@ func untrackedPaths(ctx context.Context, git *gitx.Client, dir string) ([]string
 // the task's copy, the factory's checks of the head, magnum's real rounds
 // (Magnum.Busy: in flight and due, at its limit; its registry that cannot be read is a
 // wait too, with why), and, when the round runs a Codex role, Codex at or
-// past [usage] codex_soft. who and what are the task's wait.
+// past [usage] codex_soft, and magnum's review session that does not
+// answer (reviewHerdrDown). who and what are the task's wait.
 func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string) (who, what string, err error) {
 	if who, what, ok := e.mayLaunch(); !ok {
 		return who, what, nil
@@ -510,7 +512,50 @@ func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string
 			return waitUsage, what, nil
 		}
 	}
+	if what := e.reviewHerdrDown(ctx); what != "" {
+		return HoldHerdr, what, nil
+	}
 	return "", "", nil
+}
+
+// reviewHerdrDown says that the herdr session of magnum's review panes,
+// where a local round opens its panes (Deps.ReviewHerdrUp), does not answer
+// ("" when it does, or nothing asks): the round waits for it, the last of
+// its waits, and a round that ended while it was down runs again
+// (decideRound), never ending its cycle unavailable for it. While no
+// herdr server runs there (herdr.NoServer), ReviewReveal opens it, at most
+// every herdrRevealGap, as the factory opens its own session; one that runs
+// but does not answer keeps its client, which an open would only bring to
+// the front. Your own session the factory never opens: it says the command.
+func (e *Engine) reviewHerdrDown(ctx context.Context) string {
+	if e.d.ReviewHerdrUp == nil {
+		return ""
+	}
+	err := e.d.ReviewHerdrUp(ctx)
+	if err == nil {
+		return ""
+	}
+	name := e.cfg.ReviewHerdr().Name
+	start := "herdr"
+	if name != "default" {
+		start += " --session " + name
+	}
+	if !herdr.NoServer(err) {
+		return fmt.Sprintf("magnum's review session %s does not answer; the local review waits for it", name)
+	}
+	what := fmt.Sprintf("no herdr server runs in magnum's review session %s; the local review waits for it", name)
+	if e.d.ReviewReveal == nil {
+		return what + ": start it (`" + start + "`)"
+	}
+	if now := e.now(); e.reviewRevealed.IsZero() || now.Sub(e.reviewRevealed) >= herdrRevealGap {
+		e.reviewRevealed = now
+		phase, text := registry.PhaseInfo, "herdr: opened `"+start+"` for the local review"
+		if rerr := e.d.ReviewReveal(ctx); rerr != nil {
+			phase, text = registry.PhaseFail, text+": "+rerr.Error()
+		}
+		e.event(ctx, 0, "hold", phase, text)
+	}
+	return what + " (the factory opens `" + start + "` at most twice an hour)"
 }
 
 // runsCodex reports whether a round of roles runs a Codex role.
@@ -826,6 +871,9 @@ func roundTries(dir string, n int, why string) int {
 //   - a round that could not run for a fault of the configuration (no gh
 //     identity: res.ConfigKey) ends its cycle unavailable at once, and the
 //     task needs you naming the key: running it again changes nothing;
+//   - a round that did not finish, or went without a reviewer's report,
+//     while magnum's review session does not answer runs again once it
+//     does (reviewHerdrDown), never unavailable for it;
 //   - a round that did not finish (Blocks: unavailable) runs once more when
 //     it ended in an error or a timeout, then ends its cycle unavailable,
 //     and the task needs you with why: never read as clean;
@@ -861,6 +909,11 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	case unavailable && res.ConfigKey != "":
 		// A configuration fault: running it again changes nothing.
 		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why+": "+roundError(res.Error), "the local review cannot run")
+	case (unavailable || (!blocks && len(res.Missing) > 0)) && e.reviewHerdrDown(ctx) != "":
+		// magnum's review session went away under the round: it runs
+		// again once the session answers (reviewWait), never unavailable
+		// for that.
+		return again("herdr", "did not finish while magnum's review session did not answer")
 	case unavailable && roundTries(dir, cy.N, "retry") == 0 && (res.Outcome == pipeline.OutcomeError || res.Outcome == pipeline.OutcomeTimeout):
 		return again("retry", "ended "+res.Outcome)
 	case unavailable:

@@ -3811,7 +3811,10 @@ magnum's rounds: it waits while magnum's real rounds in flight and due fill `[da
 (`magnum: …`, "magnum runs 5 review rounds, its limit of 5"; with a limit of 1, any round; a queued PR that magnum's quiet
 hours hold is not due, and one that is due but has not started within 30 minutes, held by a gate of magnum's the
 factory cannot read, holds the local review no longer, and an event says so), while Codex is at or past
-`[usage] codex_soft` and the round runs a Codex role, while an agent or you work in the copy, and for a heavy
+`[usage] codex_soft` and the round runs a Codex role, while an agent or you work in the copy, while magnum's
+review session (`[herdr] review_session`, where a round opens its panes; yours by default) does not answer
+(`herdr: …`; with no herdr server running in a named one, the factory opens `herdr --session <name>` in a new
+terminal window, at most twice an hour, never your own session), and for a heavy
 slot; the factory reads magnum's registry and never migrates it (a registry of another schema waits, saying to
 restart magnum's daemon first). A round's roles work in the copy itself: before its result is read, the copy
 must be as the round found it (the task's branch, at the head it reviewed, no tracked change, no untracked file
@@ -3822,7 +3825,8 @@ ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose resu
 unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>): <the round's error>`),
 and nothing is pushed; an error or a timeout (a round over 3 hours) runs once more first (a configuration
 fault, such as no gh identity, goes to you at once, naming the key), and a clean round that went without a
-reviewer's report runs once more too, then is `review unavailable (no report from <roles>)`. A Codex refusal makes the task Codex-never for good, and the round runs
+reviewer's report runs once more too, then is `review unavailable (no report from <roles>)`. Neither counts
+while magnum's review session does not answer: such a round runs again once the session answers. A Codex refusal makes the task Codex-never for good, and the round runs
 again with `judge_fallback` in place of the Codex judge and without Codex's review. A blocking round hands
 the writer `review-<n>.json` for one fix turn (`factory-review-fix.md`): it fixes or declines each finding
 (a decline counts only with the risk of the suggested change), commits, writes `review-reply-<n>.json`, and

@@ -375,6 +375,42 @@ func TestTheFactoryOpensItsOwnHerdrSession(t *testing.T) {
 	}
 }
 
+// The local review opens its panes in magnum's review session: the factory
+// pings that session, and opens a named one (`herdr --session reviews`),
+// never yours.
+func TestTheFactorysLocalReviewOpensMagnumsReviewSession(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Terminal.App, cfg.Terminal.Launcher, cfg.Terminal.Session = "custom", "myterm -e {herdr} {args}", "default"
+	dir, err := os.MkdirTemp("", "fr") //nolint:usetesting // t.TempDir() can pass the 104 bytes of a socket path on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfg.Herdr.Socket = filepath.Join(dir, "yours.sock")
+	cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "reviews", filepath.Join(dir, "reviews.sock")
+	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/bin/sh"}}}}
+
+	up, open := factoryReviewSession(cfg, fake, nil)
+	if err := up(context.Background()); !herdr.NoServer(err) || !strings.Contains(err.Error(), "reviews.sock") {
+		t.Fatalf("the ping of a review session with no server: %v", err)
+	}
+	if open == nil {
+		t.Fatal("a named review session is never opened")
+	}
+	if err := open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := fake.CallsWithPrefix("/bin/sh")
+	if len(calls) != 1 || !strings.HasSuffix(strings.Join(calls[0].Args, " "), "myterm -e herdr --session reviews") {
+		t.Fatalf("calls %+v, want one launch of the review session", fake.Calls)
+	}
+
+	cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "", ""
+	if _, open := factoryReviewSession(cfg, fake, nil); open != nil {
+		t.Fatal("the factory would open your own session for the local review")
+	}
+}
+
 func TestFactoryKeyNamesATaskWithoutAJiraKeyByItsNumber(t *testing.T) {
 	if got := factory.TaskKey(registry.Task{ID: 7, Prompt: "x"}); got != "task 7" {
 		t.Fatalf("TaskKey = %q", got)

@@ -11985,6 +11985,14 @@ type Deps struct {
 	MySQL   func(ctx context.Context) error
 	HerdrUp func(ctx context.Context) error
 	Reveal  func(ctx context.Context) error
+	// ReviewHerdrUp asks the herdr session of magnum's review panes, where
+	// the local review opens its panes (config.Config.ReviewHerdr: [herdr]
+	// review_session, yours by default), whether it answers; nil takes it
+	// as up. ReviewReveal opens a client of it in a new terminal window,
+	// which starts its server; nil while that session is yours, which the
+	// factory never opens.
+	ReviewHerdrUp func(ctx context.Context) error
+	ReviewReveal  func(ctx context.Context) error
 	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
 	// your herdr session (osascript after), deduplicated in a store of
 	// magnum's schema (the factory's agents store); the delivery toasts

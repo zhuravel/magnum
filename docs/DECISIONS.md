@@ -15614,6 +15614,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   one view of two herdr sessions" in Agents in panes), the operator's choice for both daemons' guards. A
   session of yours that does not answer still holds the copy. TestYourSessionWithNoServerHasNoPanes.
 
+- The local review waits for magnum's review session instead of ending its cycle unavailable (2026-11-06).
+  The local review's rounds open their panes where magnum's tagged Apps do, in `[herdr] review_session` (the
+  operator chose that it follows the review panes there). That session has no launchd job: after a reboot, or
+  while its server is down, a round could not open a pane, ended in an error, ran once more and ended its
+  cycle "review unavailable", and the task needed you for a session nobody had opened. Now the session's
+  ping (`Deps.ReviewHerdrUp`) is the last of a round's waits (`herdr: …`): while it does not answer no round
+  starts, and while no herdr server runs in a named session the factory opens `herdr --session <name>` in a
+  new terminal window (`Deps.ReviewReveal`), at most every 30 minutes as its own session's hold does; a
+  server that runs but does not answer is not opened (its client is open already, and an open only brings
+  it to the front), and your own session is never opened (the wait names `herdr`). A round that did not
+  finish, or went without a reviewer's report, while the session does not answer is set aside (`herdr`) and
+  runs again once it does, neither counting as the retry nor ending the cycle unavailable. Rejected: a
+  machine hold (`HoldHerdr`), which would stop every stage for a session only the local review uses.
+  Tests, failing first: TestALocalReviewWaitsWhileTheReviewSessionDoesNotAnswer;
+  TestTheFactorysLocalReviewOpensMagnumsReviewSession pins the wiring.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

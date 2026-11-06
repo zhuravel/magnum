@@ -201,6 +201,14 @@ type Deps struct {
 	MySQL   func(ctx context.Context) error
 	HerdrUp func(ctx context.Context) error
 	Reveal  func(ctx context.Context) error
+	// ReviewHerdrUp asks the herdr session of magnum's review panes, where
+	// the local review opens its panes (config.Config.ReviewHerdr: [herdr]
+	// review_session, yours by default), whether it answers; nil takes it
+	// as up. ReviewReveal opens a client of it in a new terminal window,
+	// which starts its server; nil while that session is yours, which the
+	// factory never opens.
+	ReviewHerdrUp func(ctx context.Context) error
+	ReviewReveal  func(ctx context.Context) error
 	// Notifier shows the alerts' toasts (alerts.go): magnum's notify, through
 	// your herdr session (osascript after), deduplicated in a store of
 	// magnum's schema (the factory's agents store); the delivery toasts
@@ -267,8 +275,11 @@ type Engine struct {
 	// pruned is when the screen's own requests were last pruned
 	// (pruneScreenRequests).
 	pruned time.Time
-	// lastReveal is when a herdr hold last opened herdr's session.
-	lastReveal time.Time
+	// lastReveal is when a herdr hold last opened herdr's session;
+	// reviewRevealed when the local review last opened magnum's review
+	// session (reviewHerdrDown).
+	lastReveal     time.Time
+	reviewRevealed time.Time
 	// recovery is what the agents' recovery has left to do after a failure
 	// (nil: nothing); a tick herdr answers runs it once due (retryRecovery).
 	recovery *agentsRecovery

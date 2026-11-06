@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -319,11 +320,36 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		return nil, fmt.Errorf("factory: review candidate: %w", err)
 	}
 	deps.Magnum, deps.ReviewCandidate = factory.NewMagnum(l, cfg), candidate
+	// Its rounds open their panes in magnum's review session: a round waits
+	// while that does not answer, and the factory opens a named one.
+	deps.ReviewHerdrUp, deps.ReviewReveal = factoryReviewSession(reviewCfg, run,
+		app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"})
 	deps.Review = factory.NewLocalReviewer(evalrun.Deps{Layout: l, Config: reviewCfg, Logger: d.Log, Stderr: io.Discard, Runner: run,
 		Warn: func(format string, args ...any) { d.Log.Warn("local review: " + fmt.Sprintf(format, args...)) }})
 	d.Engine = factory.New(deps)
 	built = true
 	return d, nil
+}
+
+// factoryReviewSession is how the local review sees magnum's review session
+// (Config.ReviewHerdr: [herdr] review_session, yours by default), where its
+// rounds open their panes: up pings it, and open opens a client of it in a
+// new terminal window (internal/reveal), nil while that session is yours,
+// which the factory never opens.
+func factoryReviewSession(cfg *config.Config, run execx.Runner, log execx.Logger) (up, open func(ctx context.Context) error) {
+	s := cfg.ReviewHerdr()
+	h := &herdr.Client{Socket: s.Socket, Logger: log}
+	up = func(ctx context.Context) error {
+		_, err := h.Ping(ctx)
+		return err
+	}
+	if filepath.Clean(s.Socket) != filepath.Clean(cfg.YourHerdr().Socket) {
+		open = func(ctx context.Context) error {
+			_, err := reveal.Reveal(ctx, run, cfg.Terminal, "", reveal.Options{Session: s.Name, NewWindow: true})
+			return err
+		}
+	}
+	return up, open
 }
 
 // factoryReveal opens a terminal on the factory's herdr session
