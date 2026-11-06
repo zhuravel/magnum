@@ -985,6 +985,7 @@ type reviewSession struct {
 	mu     sync.Mutex
 	down   error
 	opened []time.Time
+	pings  int
 }
 
 func (s *reviewSession) set(err error) {
@@ -999,12 +1000,20 @@ func (s *reviewSession) opens() int {
 	return len(s.opened)
 }
 
+// asked is how many times the session was pinged.
+func (s *reviewSession) asked() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pings
+}
+
 // wire puts the session in the rig's deps, the engine's too.
 func (s *reviewSession) wire(r *reviewRig) {
 	for _, d := range []*Deps{&r.deps, &r.e.d} {
 		d.ReviewHerdrUp = func(context.Context) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
+			s.pings++
 			return s.down
 		}
 		d.ReviewReveal = func(context.Context) error {
@@ -1073,5 +1082,32 @@ func TestALocalReviewWaitsWhileTheReviewSessionDoesNotAnswer(t *testing.T) {
 	}
 	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit == registry.ExitUnavailable {
 		t.Fatalf("cycles %+v, want one that did not end unavailable", cs)
+	}
+}
+
+// magnum's review session is asked once a tick, however many tasks wait on
+// it at their local review: a server that hangs costs a tick one ping's
+// timeout, never one for each task.
+func TestTheReviewSessionIsAskedOnceATick(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.cfg.Herdr.ReviewSession = "reviews"
+	s := &reviewSession{down: fmt.Errorf("herdr ping: %w", herdr.ErrTimeout)}
+	s.wire(r)
+	var tasks []registry.Task
+	for _, key := range []string{"PR-12392", "PR-12393", "PR-12394"} {
+		task, _ := r.reviewTask(key)
+		tasks = append(tasks, task)
+	}
+	waiting := func() bool {
+		return !slices.ContainsFunc(tasks, func(task registry.Task) bool { return r.reload(task.ID).WaitsWho != HoldHerdr })
+	}
+	r.run(6, waiting)
+	if !waiting() {
+		t.Fatal("the tasks do not all wait on magnum's review session")
+	}
+	before := s.asked()
+	r.run(1, nil)
+	if n := s.asked() - before; n != 1 {
+		t.Fatalf("one tick asked the review session %d times for %d tasks, want once", n, len(tasks))
 	}
 }

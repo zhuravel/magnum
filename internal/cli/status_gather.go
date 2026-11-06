@@ -227,8 +227,22 @@ func statusGatherConfig(ctx context.Context, d statusDeps, r *statusReport) {
 // session, which holds every new round: one that waits (engine.PanesMove)
 // is a pause saying on what and why, as is one the config asks for while the
 // daemon runs that config; a daemon that does not run it yet holds nothing,
-// and a warning says how the move starts.
+// and a warning says how the move starts. Where the panes are is the
+// registry's record (store.KVHerdrPanes), read at each gather: a status
+// open across a move (`--watch`, the dashboard) shows no pause once they
+// moved, and a warning says that its herdr reads, the App's clients of
+// PaneSession, are the old session's.
 func statusGatherPanesMove(d statusDeps, kv statusKV, r *statusReport) {
+	panes := d.PaneSession
+	if v, ok := kv.get(store.KVHerdrPanes); ok {
+		if s, ok := panesRecorded(v); ok {
+			if d.PaneSession.Socket != "" && !herdrSameServer(s, d.PaneSession) {
+				r.Warnings = append(r.Warnings, fmt.Sprintf("herdr: magnum's panes moved to herdr session %s after this status opened: "+
+					"it still reads herdr session %s for working agents and panes; reopen it", s.Name, d.PaneSession.Name))
+			}
+			panes = s
+		}
+	}
 	if raw, ok := kv.get(engine.KVHerdrPanesMove); ok {
 		var mv engine.PanesMove
 		if json.Unmarshal([]byte(raw), &mv) == nil && !mv.Since.IsZero() {
@@ -243,12 +257,12 @@ func statusGatherPanesMove(d statusDeps, kv statusKV, r *statusReport) {
 		return
 	}
 	to := d.Config.ReviewHerdr()
-	due := panesMoveDue(d.PaneSession, to)
+	due := panesMoveDue(panes, to)
 	switch {
 	case due == "":
 	case r.Daemon.Running && r.Daemon.Config == nil:
 		r.Pauses = append(r.Pauses, statusPause{Scope: "herdr",
-			Reason: fmt.Sprintf("moving magnum's panes from herdr session %s to %s", d.PaneSession.Name, to.Name),
+			Reason: fmt.Sprintf("moving magnum's panes from herdr session %s to %s", panes.Name, to.Name),
 			Detail: "no new round starts; once none is in flight the daemon parks every PR's sessions and restarts in " + to.Name,
 			Fix:    "wait for the rounds in flight to end"})
 	default:

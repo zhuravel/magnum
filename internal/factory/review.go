@@ -527,11 +527,17 @@ func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string
 // every herdrRevealGap, as the factory opens its own session; one that runs
 // but does not answer keeps its client, which an open would only bring to
 // the front. Your own session the factory never opens: it says the command.
+// The session is pinged once a tick (reviewPing), as checkHerdr pings the
+// factory's: the tasks that wait on it, and their rounds' ends, read that
+// answer, so a server that hangs costs the loop one ping's timeout a tick.
 func (e *Engine) reviewHerdrDown(ctx context.Context) string {
 	if e.d.ReviewHerdrUp == nil {
 		return ""
 	}
-	err := e.d.ReviewHerdrUp(ctx)
+	if e.ticks == 0 || e.reviewPing.tick != e.ticks {
+		e.reviewPing.tick, e.reviewPing.err = e.ticks, e.d.ReviewHerdrUp(ctx)
+	}
+	err := e.reviewPing.err
 	if err == nil {
 		return ""
 	}

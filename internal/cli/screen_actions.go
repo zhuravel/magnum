@@ -29,6 +29,10 @@ type screenActions struct {
 	errs actCapture // stderr only
 	d    *actDeps
 	sent []tui.Request // the requests the action in flight queued
+	// retired are the act deps a move of magnum's panes replaced (deps):
+	// a reader that took them before (Runtime, daemonState) may still use
+	// them, so they close with the screens.
+	retired []*actDeps
 
 	stMu sync.Mutex
 	st   *store.Store // the registry the actions queue into, once built
@@ -48,19 +52,30 @@ func newScreenActions(c *Context) *screenActions {
 func (s *screenActions) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.d == nil {
-		return nil
+	var errs []error
+	for _, d := range append(s.retired, s.d) {
+		errs = append(errs, d.Close())
 	}
-	return s.d.Close()
+	s.retired = nil
+	return errors.Join(errs...)
 }
 
+// deps are the act dependencies, built on the first use and again once the
+// daemon moved magnum's panes to another herdr session (panesMoved):
+// the App's clients, the focus and the reveal follow the panes where the
+// registry records them now, as a command run now would.
 func (s *screenActions) deps() (*actDeps, error) {
 	if s.d != nil {
-		return s.d, nil
+		if !panesMoved(context.Background(), s.d.Store, s.d.PaneSession) {
+			return s.d, nil
+		}
 	}
 	d, err := actNewDeps(s.c, actFull)
 	if err != nil {
 		return nil, err
+	}
+	if s.d != nil {
+		s.retired = append(s.retired, s.d)
 	}
 	// The screen owns the terminal: no prompt, confirmation or key wait.
 	d.Stdin, d.in, d.StdinTTY, d.StdoutTTY = strings.NewReader(""), nil, false, false

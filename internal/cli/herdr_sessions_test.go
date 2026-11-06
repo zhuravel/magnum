@@ -276,3 +276,81 @@ func TestStatusShowsAMoveOfThePanes(t *testing.T) {
 	}
 	actContains(t, out, "warning: herdr: magnum's panes are in herdr session default and [herdr] review_session names reviews")
 }
+
+// A status opened before the daemon moved magnum's panes reads where the
+// registry records them now (store.KVHerdrPanes), not where they were when
+// it opened: once they moved no herdr pause holds the rounds, and a warning
+// says that its herdr reads are the old session's and to reopen it.
+func TestStatusOpenAcrossAMoveOfThePanesReadsWhereTheyAreNow(t *testing.T) {
+	_, st, d, _ := statusFixture(t)
+	d.PaneSession = d.Config.YourHerdr() // where the panes were when it opened
+	d.Config.Herdr.ReviewSession = "reviews"
+	raw, _ := json.Marshal(d.Config.ReviewHerdr())
+	if err := st.SetKV(context.Background(), store.KVHerdrPanes, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := statusGather(context.Background(), d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(r.Pauses, func(p statusPause) bool { return p.Scope == "herdr" }) {
+		t.Fatalf("a move that is done holds the rounds: %+v", r.Pauses)
+	}
+	var b bytes.Buffer
+	statusRender(&b, r)
+	actContains(t, b.String(), "warning: herdr: magnum's panes moved to herdr session reviews after this status opened: "+
+		"it still reads herdr session default for working agents and panes; reopen it")
+	if strings.Contains(b.String(), "review_session names") {
+		t.Fatalf("a move that is done is said to be due:\n%s", b.String())
+	}
+}
+
+// The screens' keys follow a move of magnum's panes made while the screen
+// is open: once the registry records another herdr session than the one
+// their act deps opened in, the next key opens them again (as app.New does,
+// in the session the registry records), and its focus reveals that session.
+func TestTheScreensKeysFollowAMoveOfThePanes(t *testing.T) {
+	storetest.Serial(t)
+	h := newActHarness(t)
+	reviews := reviewsSession(h)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
+	opened := 0
+	actNewDeps = func(*Context, actMode) (*actDeps, error) {
+		opened++
+		d := *h.d
+		d.PaneSession = herdr.Session{Name: "default", Socket: h.d.Cfg.Herdr.Socket}
+		if v, ok, err := h.st.GetKV(h.ctx, store.KVHerdrPanes); err == nil && ok {
+			if err := json.Unmarshal([]byte(v), &d.PaneSession); err != nil {
+				t.Error(err)
+			}
+		}
+		return &d, nil
+	}
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	open := func() string {
+		t.Helper()
+		before := len(h.reveals)
+		if _, err := acts.Open(h.ctx, "talkable#5"); err != nil {
+			t.Fatal(err)
+		}
+		if len(h.reveals) != before+1 {
+			t.Fatalf("reveals %+v", h.reveals)
+		}
+		return h.reveals[len(h.reveals)-1].Session
+	}
+	if got := open(); got != "default" || opened != 1 {
+		t.Fatalf("the first key revealed %q after %d opens of the act deps", got, opened)
+	}
+	raw, _ := json.Marshal(reviews)
+	if err := h.st.SetKV(h.ctx, store.KVHerdrPanes, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(); got != "reviews" || opened != 2 {
+		t.Fatalf("after the move a key revealed %q after %d opens of the act deps, want reviews after 2", got, opened)
+	}
+	if got := open(); got != "reviews" || opened != 2 {
+		t.Fatalf("with no move since, a key revealed %q after %d opens of the act deps, want reviews after 2", got, opened)
+	}
+}

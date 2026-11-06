@@ -3448,8 +3448,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   panes' session was the one down. The act commands' deps now carry the App's `PaneSession` (where the
   registry's herdr ids came from), the focus reveals a client of it (`reveal.Options.Session`), and
   `herdrErr` names that session, its socket and the command that starts it (`herdr --session reviews`;
-  `herdr` for your default session, as before). `ui open` (light mode, no registry) keeps your session.
-  Tests, failing first: TestOpenRevealsTheClientOfThePaneSession, TestHerdrErrNamesThePaneSession.
+  `herdr` for your default session, as before). `ui open` (light mode) reads no registry: the next entry
+  says where its popups open. Tests, failing first: TestOpenRevealsTheClientOfThePaneSession,
+  TestHerdrErrNamesThePaneSession.
 
 - **A plugin's workspace names a PR only in the session of magnum's panes, and its popups open where it
   ran** (2026-11-06). The plugin's actions pass the herdr workspace they ran in (`--workspace`), and each
@@ -14723,6 +14724,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStatusNamesTheHerdrSessionThatIsDown, TestStatusShowsAMoveOfThePanes; TestDoctorPingsOneSessionOnce pins
   the single session and fails on a second ping of it.
 
+- **A screen open across a move of magnum's panes reads where they are now** (2026-11-06). `magnum status
+  --watch`, the dashboard and the PR board open their App once, and its `PaneSession` is where the panes were
+  then: after the daemon moved them (kv `herdr.panes` names the new session, and the daemon runs the config
+  that asked for it), status kept showing the `herdr` pause "moving magnum's panes … no new round starts"
+  while rounds ran in the new session, and the screens' keys kept focusing and revealing the old session.
+  Status now reads where the panes are from kv `herdr.panes` at each gather (the App's session while it
+  records none), so a move that is done is no pause, and while that names another server than the App's a
+  warning says the screen still reads the old session for working agents and panes and to reopen it. The
+  screens' act deps are opened again at the next key once the kv names another server than theirs, so the
+  keys follow the panes; the deps they replace close with the screens, since a settings refresh may still
+  read them. Rejected: re-opening the status App's herdr clients on each refresh (its inventory and guards
+  are wired to them at `app.New`; the warning is enough for a once-only move). Tests, failing first:
+  TestStatusOpenAcrossAMoveOfThePanesReadsWhereTheyAreNow, TestTheScreensKeysFollowAMoveOfThePanes.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
@@ -15629,6 +15644,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   machine hold (`HoldHerdr`), which would stop every stage for a session only the local review uses.
   Tests, failing first: TestALocalReviewWaitsWhileTheReviewSessionDoesNotAnswer;
   TestTheFactorysLocalReviewOpensMagnumsReviewSession pins the wiring.
+
+- The local review pings magnum's review session once a tick (2026-11-06). Each task that reached the end
+  of its round's waits, and each round's end, pinged the session afresh on the factory's loop, with herdr's
+  15-second timeout: a server that accepts the connection but hangs stalled a tick that long for every task
+  at its local review, and the requests, answers and other stages with it. The answer is now kept for the
+  tick (`reviewPing`, keyed on the tick's number, not its time: a test's clock stands still), as the
+  factory's own session is pinged once a tick (`checkHerdr`), so a hang costs one timeout a tick. Rejected:
+  a shorter timeout on the ping alone (a slow but live server would read as down and hold the rounds).
+  Test, failing first: TestTheReviewSessionIsAskedOnceATick.
 
 ## Learned rules
 

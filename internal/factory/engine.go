@@ -256,6 +256,7 @@ type Engine struct {
 	// and writes it, except the heavy slots (heavyMu), which a stage's
 	// goroutine may release.
 	tickAt    time.Time // when the current tick started
+	ticks     uint64    // the ticks begun, the current one's number
 	tried     bool      // the current tick advanced the tasks: a try of the infrastructure hold
 	lastAlive time.Time // when the last tick or observe pass ended (wall clock)
 	uncounted bool      // a wake: this tick's failures count none (wake)
@@ -280,6 +281,12 @@ type Engine struct {
 	// session (reviewHerdrDown).
 	lastReveal     time.Time
 	reviewRevealed time.Time
+	// reviewPing is Deps.ReviewHerdrUp's answer in tick `tick`
+	// (reviewHerdrDown): one ping a tick, however many tasks ask.
+	reviewPing struct {
+		tick uint64
+		err  error
+	}
 	// recovery is what the agents' recovery has left to do after a failure
 	// (nil: nothing); a tick herdr answers runs it once due (retryRecovery).
 	recovery *agentsRecovery
@@ -613,6 +620,7 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
+	e.ticks++
 	e.jiraLeft = jiraTriesPerTick
 	e.wake(now)
 	defer e.alive()
