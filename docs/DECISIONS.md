@@ -14494,6 +14494,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLatestRoundRunsLeavesOutThePromptAndTheResult and
   TestRunsOfRoundsSinceLeavesOutThePromptButKeepsTheResult.
 
+- `make build` signs `bin/magnum` with a local code-signing identity when the keychain has one (2026-11-06).
+  After the review slots and the factory copies moved to an external volume, every rebuild stalled the
+  daemons there: Go signs each build ad hoc (identifier `a.out`, a new hash), macOS took it for a new app and
+  asked again for "Removable Volumes" access, and every read of the daemons and their git waited on the
+  prompt, which looked like a frozen disk (no I/O, no kernel errors). Signed with `SIGN_IDENTITY` (default
+  `magnum local signing`) and the identifier `zhuravel.magnum`, every build has one designated requirement,
+  so macOS keeps the answer. The build writes `bin/magnum.new`, signs it and moves it into place, so a daemon
+  that restarts on a new binary never starts the unsigned one; without the identity, or when codesign fails,
+  the ad-hoc build stays and the build says so in the second case.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

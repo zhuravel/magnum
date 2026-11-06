@@ -6,12 +6,22 @@ GOLANGCI_LINT ?= golangci-lint
 BIN           ?= bin/magnum
 VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 INSTALL_FLAGS ?= --plugin
+# SIGN_IDENTITY: a code-signing identity in your keychain that `make build` signs bin/magnum with, so macOS
+# keeps the privacy permissions you gave it (removable volumes, files and folders) across rebuilds. Without
+# one the build keeps Go's ad-hoc signature, which macOS treats as a new app at every build.
+SIGN_IDENTITY ?= magnum local signing
 
 .PHONY: build test check-private lint lint-fix vuln install api-doc api-doc-check release link unlink
 
-## build: compile bin/magnum (the binary launchd and the herdr plugin run)
+## build: compile bin/magnum (the binary launchd and the herdr plugin run), signed with SIGN_IDENTITY when your
+## keychain has it, and moved into place only then, so a daemon that restarts on a new binary never runs it unsigned
 build:
-	$(GO) build -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/magnum
+	$(GO) build -ldflags "-X main.version=$(VERSION)" -o $(BIN).new ./cmd/magnum
+	@if command -v codesign >/dev/null 2>&1 && security find-certificate -c "$(SIGN_IDENTITY)" >/dev/null 2>&1; then \
+		codesign --force --sign "$(SIGN_IDENTITY)" --identifier zhuravel.magnum $(BIN).new >/dev/null 2>&1 \
+			|| echo "build: could not sign with \"$(SIGN_IDENTITY)\"; macOS will ask for its permissions again"; \
+	fi
+	@mv -f $(BIN).new $(BIN)
 
 ## test: gofmt check (every tracked .go file, and new ones git does not ignore), go.sum verified and go.mod tidy,
 ## vet, the hermetic unit tests, and the private-name guard

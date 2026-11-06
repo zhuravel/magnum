@@ -5141,6 +5141,15 @@ Then the loop is: edit, `make build && magnum daemon-restart --drain` (the daemo
 the skill from the checkout when it starts, so a prompt edit needs the restart too). `make unlink` removes
 the link; `brew install zhuravel/tap/magnum && magnum install --plugin` switches to the released build.
 
+macOS asks each program once for access to an external volume and to protected folders, and a program's reads
+wait until you answer. Go signs every build ad hoc, so macOS takes each new `bin/magnum` for a new app and asks
+again: with slots or factory copies on an external disk, the daemons stall after every rebuild until you click
+Allow. `make build` therefore signs `bin/magnum` with the code-signing identity `SIGN_IDENTITY` (default
+`magnum local signing`) when your keychain has one, and macOS then keeps your answer across rebuilds. To make one,
+create a self-signed certificate of type Code Signing with that name in Keychain Access (Certificate Assistant),
+or import one with `security import <file>.p12 -T /usr/bin/codesign`. Without it the build keeps the ad-hoc
+signature.
+
 ```bash
 make test        # gofmt, check-private, go mod verify and tidy, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
 make lint        # golangci-lint with .golangci.yml (mise pins 2.15.0); make lint-fix applies only the safe fixes
