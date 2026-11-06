@@ -173,6 +173,36 @@ func TestYourSessionDownLeavesTheCapToThePaneSession(t *testing.T) {
 	}
 }
 
+// A tagged engine (an eval or learn-gate replay, the factory's local review)
+// never dispatches, so nothing caps it on your session's Codex agents: its
+// observe passes, every EvalObserveEvery, leave your herdr session alone,
+// where one that does not answer would hold each pass up to herdr's
+// timeout. Its App's guards still read your session.
+func TestATaggedEngineNeverReadsYourSessionWhenItObserves(t *testing.T) {
+	yours := &fakeHerdr{}
+	e, a, _ := appEngine(t, nil, app.Options{DryRun: true, AgentTag: "eval-1"}, func(cfg *config.Config) {
+		cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "reviews", "/nonexistent/reviews/herdr.sock"
+		cfg.Daemon.MaxTotalWorkingCodex = 5
+	}, func(d *Deps) {
+		d.Herdr = &fakeHerdr{}
+		if d.Yours != nil {
+			d.Yours = yours
+		}
+	})
+	if a.Yours == nil || a.Guard.Yours == nil {
+		t.Fatalf("the tagged App's Yours = %#v, guards' %#v: want your session beside the review session's panes", a.Yours, a.Guard.Yours)
+	}
+	if ts := e.observe(t.Context()); !ts.herdrUp {
+		t.Fatal("the replay's own herdr session was not read")
+	}
+	yours.mu.Lock()
+	calls := yours.calls
+	yours.mu.Unlock()
+	if calls != 0 || e.d.Yours != nil {
+		t.Fatalf("the tagged engine read your session %d times (Yours %T), want never", calls, e.d.Yours)
+	}
+}
+
 // reveal_on_attention brings forward a client of the session magnum's
 // panes are in, the one that shows the PR's agent, not [terminal] session's
 // while they are elsewhere.

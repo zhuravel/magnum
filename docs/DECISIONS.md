@@ -2742,9 +2742,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   yours, so nothing counts twice) adds your session's working Codex agents at each observe, read only while a
   cap is set. Your session not answering or not running counts none: the cap then counts the panes' session
   alone and herdr is not down for it, since dispatch needs only the panes' session. The factory's session is
-  not counted, as before. Tests: TestTheSidebarTokensGoToThePaneSession,
-  TestTheCodexCapCountsYourSessionsWorkingCodexToo, TestYourSessionDownLeavesTheCapToThePaneSession and
-  TestRevealOnAttentionRevealsThePaneSession.
+  not counted, as before. A tagged engine (an eval or learn-gate replay, the factory's local review) gets no
+  `Deps.Yours`: it never dispatches, so nothing reads its count, and its observe pass every
+  `EvalObserveEvery` would call your server for nothing, up to herdr's timeout when it does not answer; its
+  App's guards still read your session. Tests: TestTheSidebarTokensGoToThePaneSession,
+  TestTheCodexCapCountsYourSessionsWorkingCodexToo, TestYourSessionDownLeavesTheCapToThePaneSession,
+  TestATaggedEngineNeverReadsYourSessionWhenItObserves and TestRevealOnAttentionRevealsThePaneSession.
 
 ## Screens and commands
 

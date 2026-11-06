@@ -9059,8 +9059,9 @@ type Deps struct {
 	// server's, while the Notifier toasts in yours); nil = no tokens.
 	Sidebar func(ctx context.Context, workspaceID string, tokens map[string]string) error
 	// Yours is your herdr session ([herdr] socket) when magnum's panes are
-	// in another (app.App.Yours, which FromApp sets); nil = they are in
-	// yours, which Herdr reads. Its working Codex agents count toward
+	// in another (app.App.Yours, which FromApp sets for an untagged App
+	// only); nil = they are in yours, which Herdr reads, or the engine is
+	// tagged and never dispatches. Its working Codex agents count toward
 	// max_total_working_codex beside the panes'.
 	Yours Herdr
 
