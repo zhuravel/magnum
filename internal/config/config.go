@@ -301,7 +301,18 @@ type GitHub struct {
 }
 
 type Herdr struct {
-	Socket           string `toml:"socket"`
+	// Socket is your herdr session's socket: toasts show there, the slot
+	// guards read your agents there, and the plugin and the LaunchAgent's
+	// HERDR_SOCKET_PATH name it.
+	Socket string `toml:"socket"`
+	// ReviewSession is the herdr session magnum's review panes live in
+	// (`herdr --session <name>`): "" = yours, Socket and [terminal]
+	// session (Config.ReviewHerdr).
+	ReviewSession string `toml:"review_session"`
+	// ReviewSocket is that session's socket: "" = the named session's own
+	// (herdr.SessionSocket). Absolute after ~ expands; it needs
+	// ReviewSession, whose name the reveal opens.
+	ReviewSocket     string `toml:"review_socket"`
 	Notify           bool   `toml:"notify"`
 	ToastEveryReview bool   `toml:"toast_every_review"`
 }
@@ -1052,6 +1063,7 @@ func (c *Config) repoPath(p string) string {
 // defaults. It runs before Normalize, which reads prompts from prompts_dir.
 func (c *Config) expand() {
 	c.Herdr.Socket = paths.Expand(c.Herdr.Socket)
+	c.Herdr.ReviewSocket = paths.Expand(c.Herdr.ReviewSocket)
 	c.Usage.CodexHome = paths.Expand(c.Usage.CodexHome)
 	c.Pipeline.PromptsDir = c.repoPath(c.Pipeline.PromptsDir)
 	if d := c.Pipeline.PromptsDir; d != "" && !filepath.IsAbs(d) && c.Layout.Home != "" {

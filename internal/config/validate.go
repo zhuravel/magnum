@@ -233,6 +233,7 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Herdr.Socket) {
 		errs = append(errs, fmt.Errorf("herdr.socket must be absolute after expansion: %s", c.Herdr.Socket))
 	}
+	errs = append(errs, c.validateReviewHerdr()...)
 	errs = append(errs, c.Daemon.validateTimings()...)
 	errs = append(errs, c.Daemon.validateOpenHold()...)
 	errs = append(errs, validateQuietHours(c.Daemon.QuietHours)...)

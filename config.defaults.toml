@@ -109,7 +109,12 @@ open_hold = "30m"                 # `magnum open` (the board's o) that restores 
                                   # ends it ("0" = the restore pins for good, until `magnum unpin`)
 
 [herdr]
-socket = "~/.config/herdr/herdr.sock"
+socket = "~/.config/herdr/herdr.sock"  # your herdr session: toasts show there; the slot guards read your agents there
+review_session = ""               # the herdr session of magnum's review panes (`herdr --session <name>`, its own
+                                  # server and windows; `magnum open` reveals a client of it): "" = your session above.
+                                  # A change moves the panes at the daemon's next idle moment (it parks every session,
+                                  # then restarts)
+# review_socket = ""              # "" = the named session's own socket; else an absolute path (~ expands)
 notify = true                     # toasts (false = none, the factory's alerts too); a review you ask for toasts
                                   # how it went
 toast_every_review = false        # also toast every automatic review posted
@@ -117,8 +122,8 @@ toast_every_review = false        # also toast every automatic review posted
 [terminal]
 app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom | any other app name (only brought
                                   # to the front with `open -a`); override in your config
-session = "default"               # the herdr session `magnum open` focuses a client of, or opens one for
-                                  # (`herdr --session <name>`)
+session = "default"               # your herdr session's name: `magnum open` focuses a client of it, or opens one
+                                  # (`herdr --session <name>`), while magnum's review panes are there
 launcher = ""                     # custom: template with {herdr} {args} {command}
 reveal_on_attention = false       # true: when a PR needs you (an agent waits on a dialog, a round needs attention)
                                   # the daemon focuses its agent in herdr and brings the terminal's herdr client

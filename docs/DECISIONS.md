@@ -2673,6 +2673,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestSessionSocketFollowsHerdrsLayout, TestNoServerIsAMissingSocketOrARefusedConnection and
   TestATimeoutIsNotNoServer.
 
+- **magnum's review panes can run in a herdr session of their own, `[herdr] review_session`** (2026-11-06).
+  Rounds opened their workspaces in your herdr session, among your own agents and consoles; the factory
+  already ran in a session of its own. `[herdr] review_session` names the session of the review panes
+  (`herdr --session <name>`, its own server and windows) and `review_socket` its socket ("" = herdr's own for
+  the name, `herdr.SessionSocket`: `~/.config/herdr/sessions/<name>/herdr.sock`, and herdr's default socket
+  for `default`). `[herdr] socket` and `[terminal] session` keep one meaning, your session
+  (`Config.YourHerdr`): the toasts show there, the guards read your agents there, and the plugin and the
+  LaunchAgent's `HERDR_SOCKET_PATH` use it, so the factory, which reads your session through them, does not
+  change. `Config.ReviewHerdr` is the panes' session, yours while the key is "". The config is refused for a
+  name that is no session name, a socket that is not absolute, a socket without a name (`magnum open` opens
+  the session by its name) and the factory's session, by name or by socket: the factory's copies take a pane
+  of their session in a copy that no session of theirs is in for someone's, so review panes there would hold
+  them. The built-in default stays "" (one session, as before); the operator's own config names `reviews`.
+  This entry is the configuration; the panes follow it as later entries say. Rejected: a new meaning for
+  `[herdr] socket` (the LaunchAgent, the plugin and the factory rely on it as yours); `reviews` as the
+  built-in default. Tests: TestTheReviewPanesStayInYourSessionByDefault,
+  TestANamedReviewSessionHasItsOwnSocket, TestAReviewSocketWinsOverTheSessionsOwn,
+  TestAReviewSessionMustBeASessionName, TestAReviewSocketMustBeAbsolute, TestAReviewSocketNeedsAReviewSession,
+  TestTheReviewSessionCannotBeTheFactorys and TestAUserConfigSetsTheReviewSession.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

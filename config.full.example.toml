@@ -16,6 +16,10 @@ default_repo = "talkable/talkable"    # what a bare PR number means (`magnum rev
 [terminal]
 app = "iTerm2"                    # Terminal | iTerm2 | Ghostty | WezTerm | custom
 
+[herdr]
+review_session = "reviews"        # magnum's review panes in a herdr session of their own (`herdr --session reviews`);
+                                  # the toasts and the slot guards still read yours
+
 [notes]                           # repository notes: a curation organizes them and moves what it retires to the archive
 curate = ["over_limit", "weekly", "misses"]  # curate a repository past its limits too (off by default), every repository
                                   # with notes once a week, and one whose retro found misses for its notes; review a

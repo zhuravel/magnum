@@ -4912,6 +4912,12 @@ func (c *Config) ResolvePrompt(name string) (Prompt, error)
     resolves to the text loaded then, whatever the file holds now, and so does
     the partials file.
 
+func (c *Config) ReviewHerdr() herdr.Session
+    ReviewHerdr is the herdr session of magnum's review panes: yours while
+    herdr review_session is "", else that session, on herdr review_socket or
+    the session's own socket (herdr.SessionSocket: "default" is herdr's default
+    session on its default socket).
+
 func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool)
     RoleByNameOrAlias finds one of the watch's roles by name or alias (case and
     surrounding space ignored, so stored ids such as codex_review match too);
@@ -5083,6 +5089,11 @@ func (c *Config) WithoutSnapshot() *Config
     from disk, as the CLI does, whatever the daemon loaded at startup (a
     candidate replay reads another directory's), with its own Roles slice (every
     normalized role, AllRoles) for the caller to change.
+
+func (c *Config) YourHerdr() herdr.Session
+    YourHerdr is your herdr session: [terminal] session ("" = herdr's default
+    session) on herdr socket. Toasts show there, and the slot guards read your
+    agents there.
 
 type CurateTriggers []string
     CurateTriggers is [notes] curate: the triggers of a curation, written as
@@ -5542,7 +5553,18 @@ type HealthRegexps struct {
     HealthRegexps are compiled HealthPatterns.
 
 type Herdr struct {
-	Socket           string `toml:"socket"`
+	// Socket is your herdr session's socket: toasts show there, the slot
+	// guards read your agents there, and the plugin and the LaunchAgent's
+	// HERDR_SOCKET_PATH name it.
+	Socket string `toml:"socket"`
+	// ReviewSession is the herdr session magnum's review panes live in
+	// (`herdr --session <name>`): "" = yours, Socket and [terminal]
+	// session (Config.ReviewHerdr).
+	ReviewSession string `toml:"review_session"`
+	// ReviewSocket is that session's socket: "" = the named session's own
+	// (herdr.SessionSocket). Absolute after ~ expands; it needs
+	// ReviewSession, whose name the reveal opens.
+	ReviewSocket     string `toml:"review_socket"`
 	Notify           bool   `toml:"notify"`
 	ToastEveryReview bool   `toml:"toast_every_review"`
 }
