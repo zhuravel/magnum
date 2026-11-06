@@ -130,19 +130,23 @@ func (v OpenVerdict) sameAs(w OpenVerdict) bool {
 	return bytes.Equal(a, b)
 }
 
-// openLedger is what the look remembers of a PR (kvPRFixSeen): the keys a
-// finished loop's fixer had (Handed, with when that loop ended), the loop
-// it saw start (Running), magnum's reviews a fixer worked on (Reviews), the
-// heads the fixer pushed (FixerHeads, the last openFixerHeadsMax), the
-// last_error its own raise wrote (RaisedMsg) and the keys it raised
-// (Raised), the autofix starts of the last 24 hours (Starts), its last
-// read of GitHub (Read) and of the base (Conflict), the failed reads in a
-// row (ReadFails), and the head whose late review it toasted.
+// openLedger is what the look remembers of a PR (kvPRFixSeen): the keys
+// the fixers of finished loops had (Handed, with when the look saw that
+// loop end), magnum's reviews a loop worked on (Reviews), the heads the
+// fixer pushed (FixerHeads, the last openFixerHeadsMax), the PR's last
+// event the look read for the loops that ended (Cursor), the last_error
+// its own raise wrote (RaisedMsg) and the keys it raised (Raised), the
+// autofix starts of the last 24 hours (Starts), its last read of GitHub
+// (Read) and of the base (Conflict), the failed reads in a row
+// (ReadFails), the head whose late review it toasted, the commits after a
+// person's approval (Approval), and the fingerprint at which prepareFix
+// refused the look's start as nothing to fix, with its sentence (Refused,
+// RefusedWhy: not tried again until the PR changes).
 type openLedger struct {
 	Handed      map[string]time.Time `json:"handed,omitempty"`
-	Running     *openRun             `json:"running,omitempty"`
 	Reviews     []string             `json:"reviews,omitempty"`
 	FixerHeads  []string             `json:"fixer_heads,omitempty"`
+	Cursor      int64                `json:"cursor,omitempty"`
 	RaisedMsg   string               `json:"raised_msg,omitempty"`
 	Raised      []string             `json:"raised,omitempty"`
 	Starts      []time.Time          `json:"starts,omitempty"`
@@ -150,14 +154,17 @@ type openLedger struct {
 	Conflict    openConflict         `json:"conflict"`
 	ReadFails   int                  `json:"read_fails,omitempty"`
 	LateToasted string               `json:"late_toasted,omitempty"`
+	Approval    openApprovalCount    `json:"approval,omitzero"`
+	Refused     string               `json:"refused,omitempty"`
+	RefusedWhy  string               `json:"refused_why,omitempty"`
 }
 
-// openRun is a loop the look saw run: when it saw it start, the keys its
-// fixers had so far, and the reports whose external file it read.
-type openRun struct {
-	At      time.Time `json:"at"`
-	Keys    []string  `json:"keys,omitempty"`
-	Reports []string  `json:"reports,omitempty"`
+// openApprovalCount is the count of the commits on Head after the approved
+// commit SHA (-1: not counted).
+type openApprovalCount struct {
+	SHA   string `json:"sha,omitempty"`
+	Head  string `json:"head,omitempty"`
+	After int    `json:"after,omitempty"`
 }
 
 // openRead is the look's last read of GitHub: the PR's read fingerprint

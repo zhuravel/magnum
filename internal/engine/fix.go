@@ -708,6 +708,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 		e.unreserve(pr.ID)
 		return nil, err
 	}
+	e.noteLoopRan(pr.ID) // fix_open.go: its look reads the loop's events once it ended
 	started := *job
 	e.roundWG.Go(func() {
 		defer e.unreserve(pr.ID)
@@ -1064,8 +1065,8 @@ func (e *Engine) requestBaseCheck(ctx context.Context, repo store.Repo, pr store
 			dir = e.cloneOf(repo)
 			clone = dir
 		}
-		within := time.Duration(-1) // no fetch
-		if fetch {
+		within := time.Duration(-1)                                                                         // no fetch
+		if fetch && !e.fetchedThisTick(cmp.Or(clone, dir), cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)) { // fix_open.go fetched it
 			within = fixRequestFetch
 		}
 		c, err := e.baseConflict(ctx, repo, pr, dir, clone, pr.HeadSHA, within)
@@ -1227,7 +1228,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	}
 	msg := fmt.Sprintf("%s %s (run %s, cycle %d of %d)", job.role.Name, job.fixes(), run.ID, job.state.Cycle, job.state.Cap)
 	data := map[string]any{"run": run.ID, "role": job.role.Name, "slot": job.slot.Name, "report": job.state.Report,
-		"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By}
+		"cycle": job.state.Cycle, "cap": job.state.Cap, "by": job.state.By, "review_run": job.review.RunID, "head": job.head}
 	if job.schema != "" { // fixClaim: what the claim did to the slot's databases
 		msg += "; " + job.schema
 		data["schema"] = job.schema

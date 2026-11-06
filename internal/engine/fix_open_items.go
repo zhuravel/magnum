@@ -214,6 +214,14 @@ type itemsInput struct {
 // bodies and comments, magnum's threads that wait for an answer, the
 // findings a loop skipped, magnum's review and the conflict.
 func openItemsOf(in itemsInput) []openItem {
+	return append(othersItemsOf(in.read, in.quiet), magnumItemsOf(in.read.mine, in.sum, in.handed, in.conflict, in.head)...)
+}
+
+// othersItemsOf are the other reviewers' items of read: their unanswered
+// threads, their unanswered review bodies and comments that are not quiet,
+// and their threads a fixer login resolved. They do not depend on magnum's
+// review, so the look keeps them with its read (openRead.Others).
+func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 	var out []openItem
 	classOf := func(author string) string {
 		if github.IsBot("", author) {
@@ -221,7 +229,7 @@ func openItemsOf(in itemsInput) []openItem {
 		}
 		return classPerson
 	}
-	for _, t := range in.read.items.Threads {
+	for _, t := range read.items.Threads {
 		if t.Answered || len(t.Comments) == 0 {
 			continue
 		}
@@ -233,40 +241,50 @@ func openItemsOf(in itemsInput) []openItem {
 		}
 		out = append(out, it)
 	}
-	for _, r := range in.read.items.Conversation {
-		if r.Answered || in.quiet.login(r.Author) || in.read.quiet[r.ID] {
+	for _, r := range read.items.Conversation {
+		if r.Answered || quiet.login(r.Author) || read.quiet[r.ID] {
 			continue
 		}
 		out = append(out, openItem{Key: fmt.Sprintf("remark:%d", r.ID), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL})
 	}
-	for _, rt := range in.read.resolved {
+	for _, rt := range read.resolved {
 		class := classPerson
 		if rt.Bot {
 			class = classBot
 		}
 		out = append(out, openItem{Key: threadKey(rt.RootID, rt.LatestID), Class: class, Kind: itemThread, URL: rt.URL, FixerReplies: rt.FixerReplies})
 	}
+	return out
+}
+
+// magnumItemsOf are magnum's items: its threads of mine whose rebuttal after
+// sum (magnum's last review that stands at the head; nil: none) waits for
+// an answer, the findings of sum the fixer skipped once a finished loop was
+// handed it (handed), sum itself when it leaves the fixer work, and the
+// conflict of head with its base (zero: none).
+func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, conflict fixConflict, head string) []openItem {
+	var out []openItem
 	var since time.Time
-	if in.sum != nil {
-		since = in.sum.At
+	if sum != nil {
+		since = sum.At
 	}
-	for _, mt := range in.read.mine {
+	for _, mt := range mine {
 		if mt.Rebuttal && mt.LatestAt.After(since) {
 			out = append(out, openItem{Key: fmt.Sprintf("mthread:%d@%d", mt.RootID, mt.LatestID), Class: classMagnum, Kind: itemMagnum, URL: mt.URL})
 		}
 	}
-	if in.handed && in.sum != nil {
-		for _, mt := range in.read.mine {
-			if mt.ReviewID != 0 && mt.ReviewID == in.sum.ReviewID && !mt.Answered {
+	if handed && sum != nil {
+		for _, mt := range mine {
+			if mt.ReviewID != 0 && mt.ReviewID == sum.ReviewID && !mt.Answered {
 				out = append(out, openItem{Key: fmt.Sprintf("rthread:%d", mt.RootID), Class: classMagnum, Kind: itemFinding, URL: mt.URL})
 			}
 		}
 	}
-	if in.sum != nil && reviewWork(*in.sum) {
-		out = append(out, openItem{Key: reviewKey(in.sum.RunID), Class: classMagnum, Kind: itemFindings, URL: in.sum.URL})
+	if sum != nil && reviewWork(*sum) {
+		out = append(out, openItem{Key: reviewKey(sum.RunID), Class: classMagnum, Kind: itemFindings, URL: sum.URL})
 	}
-	if in.conflict.sha != "" && in.head != "" {
-		out = append(out, openItem{Key: conflictKey(in.head), Class: classConflict, Kind: itemConflict})
+	if conflict.sha != "" && head != "" {
+		out = append(out, openItem{Key: conflictKey(head), Class: classConflict, Kind: itemConflict})
 	}
 	return out
 }

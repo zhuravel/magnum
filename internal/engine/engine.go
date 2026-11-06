@@ -446,6 +446,18 @@ type Engine struct {
 	// autofixNoRole are the PRs autofix found no fix role for, logged once
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
+	// openReads are the reads of GitHub the look of autofix = "open" made in
+	// this tick, by PR, and openFetches its fetches of a base into a clone
+	// (openFetchKey) with their errors: a start in the same tick hands the
+	// read to prepareFix, whose look at the base fetches no second time
+	// (fix_open.go). Both are nil outside the look.
+	openReads   map[int64]externalRead
+	openFetches map[string]error
+	// openLoops are the PRs whose fix loop ran since the look last read
+	// their events, and openCaught those whose events the look read since
+	// the daemon started (fix_open.go), guarded by mu: a loop starts on a
+	// round's goroutine too.
+	openLoops, openCaught map[int64]bool
 	// drainHeld are the PRs whose fix loop a drain held before its next
 	// cycle, or whose `magnum fix` it held (holdFix), guarded by mu: a drain
 	// that ends without a restart continues them (continueAfterDrain), as
@@ -733,6 +745,8 @@ func New(d Deps) *Engine {
 		evicting:          map[int64]string{},
 		workEndedAt:       map[int64]time.Time{},
 		autofixNoRole:     map[int64]bool{},
+		openLoops:         map[int64]bool{},
+		openCaught:        map[int64]bool{},
 		drainHeld:         map[int64]bool{},
 		budgetHeld:        map[int64]bool{},
 		budgetWhiteboards: map[string]bool{},
@@ -1133,6 +1147,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.continueBudgetHeld(ctx)
 	e.continuePauseHeld(ctx)   // fix_held.go: the held fixes the fixer's pause held, once it ended
 	e.endOpenHolds(ctx)        // open_hold.go: a PR whose hold ended goes on in this dispatch
+	_ = e.autofixOpen(ctx)     // fix_open.go: a loop it starts reserves its PR before dispatch can claim it
 	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
