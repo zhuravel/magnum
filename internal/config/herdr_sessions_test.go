@@ -85,6 +85,7 @@ func TestAReviewSocketWinsOverTheSessionsOwn(t *testing.T) {
 
 func TestAReviewSessionMustBeASessionName(t *testing.T) {
 	cfg := validPipelineConfig()
+	cfg.Herdr.Socket = herdr.SessionSocket("default") // "default" is then your session, not a second one of its name
 	for _, name := range []string{"", "reviews", "default", "review.2"} {
 		cfg.Herdr.ReviewSession = name
 		if err := cfg.Validate(); err != nil {
@@ -132,6 +133,35 @@ func TestTheReviewSessionCannotBeTheFactorys(t *testing.T) {
 	wantError(t, cfg.Validate(), "herdr.review_session", "the factory's socket")
 
 	cfg.Factory.HerdrSocket = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// [terminal] session names your herdr session, the one `magnum open`
+// reveals while the panes are there. A review session of that name on
+// another server is two sessions under one name: a reveal of either would
+// bring the other forward, and the move records your name with the review
+// socket. The config is refused; the same name on your own socket is one
+// session (the panes stay in yours), and a review session of another name
+// is fine whatever your socket.
+func TestAReviewSessionNamedAsYoursOnAnotherSocketIsRefused(t *testing.T) {
+	cfg := validPipelineConfig()
+	cfg.Terminal.Session, cfg.Herdr.Socket = "reviews", "/run/herdr/herdr.sock"
+	cfg.Herdr.ReviewSession = "reviews"
+	wantError(t, cfg.Validate(), "herdr.review_session", "[terminal] session", "/run/herdr/herdr.sock")
+
+	cfg.Terminal.Session = ""
+	cfg.Herdr.ReviewSession = "default"
+	cfg.Herdr.ReviewSocket = "/run/herdr/other.sock"
+	wantError(t, cfg.Validate(), "herdr.review_session", "[terminal] session")
+
+	cfg.Herdr.ReviewSocket = "/run/herdr/herdr.sock" // your own session, by name and socket
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Herdr.ReviewSession, cfg.Herdr.ReviewSocket = "reviews", ""
+	cfg.Terminal.Session = "work"
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}

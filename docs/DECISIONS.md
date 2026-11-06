@@ -2772,6 +2772,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   as panes (no process to ask about, so each would hold its checkout). Tests, failing first: TestYourSessionWithNoServerShowsTheAgentsHerdrSavedAsIdle,
   TestASavedSessionThatCannotBeReadHoldsTheGuard, TestAnAgentHerdrSavedInYourStoppedSessionHoldsItsSlot.
 
+- **A review session named as yours on another socket is refused, and doctor warns while it is your own**
+  (2026-11-06, a review of "magnum's review panes can run in a herdr session of their own"). The config
+  checked `[herdr] review_session` against the factory's session only. Two configs the operator could reach
+  from a stopgap (`[terminal] session = "reviews"` and `[herdr] socket` on the reviews server, which made
+  your session magnum's before the key) passed. With the key added and the stopgap kept, the review session is
+  your own (`Config.ReviewHerdr` and `YourHerdr` one server): nothing moves, the toasts and the guards read
+  that session alone, and the session you work in, its agents in the slots and copies and its Codex agents
+  for the cap, is read by no one. With only the socket put back, your session's name is the review session's
+  on another server: a reveal of yours opens the review session, and a later rollback records the panes'
+  server under that name. The config now refuses a `review_session` that is `cmp.Or([terminal] session,
+  "default")` on another socket than `[herdr] socket` (two servers under one name), and doctor's `herdr review
+  session` warns while `review_session` is on `[herdr] socket` (refusing it would refuse `"default"` on the
+  default socket, which is one session as the design says). The README says how to leave such a stopgap: start
+  this build once on it, so the registry records the review session (`herdr.panes`), then point `[herdr]
+  socket` and `[terminal] session` back at yours and set `review_session`: no move is due. It also says that
+  the factory's local review reads the key at its own start (`magnum factory install` after a change), since
+  `magnum daemon-restart` restarts only the review daemon. Rejected: inferring your session from a pane's
+  `$HERDR_SOCKET_PATH` (the daemon runs outside herdr). Tests, failing first:
+  TestAReviewSessionNamedAsYoursOnAnotherSocketIsRefused, TestDoctorWarnsOfAReviewSessionThatIsYourOwn.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

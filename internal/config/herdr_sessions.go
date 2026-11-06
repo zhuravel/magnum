@@ -42,8 +42,11 @@ func (c *Config) ReviewHerdr() herdr.Session {
 // the session by its name), and a named session that is never the
 // factory's, by name or by socket: the factory's copies take a pane of its
 // session in a copy that no session of the factory's is in for someone's, so
-// magnum's review panes there would hold them. With review_session "" the
-// panes stay in your session, where a factory may run too, as before the key.
+// magnum's review panes there would hold them; nor is it named as your
+// session ([terminal] session) on another socket, two servers under one name
+// that the reveals and the move's record would take for each other. With
+// review_session "" the panes stay in your session, where a factory may run
+// too, as before the key.
 func (c *Config) validateReviewHerdr() []error {
 	h := c.Herdr
 	var errs []error
@@ -62,7 +65,13 @@ func (c *Config) validateReviewHerdr() []error {
 	if h.ReviewSession == "" || len(errs) > 0 {
 		return errs
 	}
-	review, factory := c.ReviewHerdr(), c.FactoryHerdr()
+	review, factory, yours := c.ReviewHerdr(), c.FactoryHerdr(), c.YourHerdr()
+	if review.Name == yours.Name && filepath.Clean(review.Socket) != filepath.Clean(yours.Socket) {
+		errs = append(errs, fmt.Errorf("herdr.review_session %q is your session's name ([terminal] session) on another socket, %s "+
+			"(yours, [herdr] socket: %s): one name for two herdr servers, so `magnum open` would reveal the wrong one; name the "+
+			"review session apart from yours, or point [herdr] socket and [terminal] session at the session you work in",
+			review.Name, review.Socket, yours.Socket))
+	}
 	switch {
 	case review.Name == factory.Name:
 		errs = append(errs, fmt.Errorf("herdr.review_session %q is factory.herdr_session too: magnum's review panes would "+

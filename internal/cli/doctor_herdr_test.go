@@ -103,6 +103,34 @@ func TestDoctorChecksThePaneSessionAndYours(t *testing.T) {
 	}
 }
 
+// [herdr] review_session that names your own session ([herdr] socket and
+// [terminal] session point at it) puts magnum's panes among your agents, and
+// no guard reads another session: a stopgap that pointed your session at
+// the review session's socket, kept when the key was added, does just that.
+// Doctor warns; review_session "" (the panes in yours on purpose) and a
+// review session of its own pass.
+func TestDoctorWarnsOfAReviewSessionThatIsYourOwn(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	reviews := herdr.SessionSocket("reviews")
+	d.Config.Terminal.Session, d.Config.Herdr.Socket, d.Config.Herdr.ReviewSession = "reviews", reviews, "reviews"
+	d.PaneSession = d.Config.YourHerdr()
+	c, ok := doctorByName(doctorHerdrChecks(context.Background(), d))["herdr review session"]
+	if !ok || c.Status != doctorWarn || !strings.Contains(c.Detail, "your own session") || !strings.Contains(c.Fix, "[herdr] socket") {
+		t.Fatalf("herdr review session = %+v (found %v), want a warning that it is your own session", c, ok)
+	}
+
+	for name, set := range map[string]func(){
+		"the key unset":        func() { d.Config.Herdr.ReviewSession = "" },
+		"a session of its own": func() { d.Config.Terminal.Session, d.Config.Herdr.Socket = "", herdr.SessionSocket("default") },
+	} {
+		d.Config.Terminal.Session, d.Config.Herdr.Socket, d.Config.Herdr.ReviewSession = "reviews", reviews, "reviews"
+		set()
+		if c, ok := doctorByName(doctorHerdrChecks(context.Background(), d))["herdr review session"]; ok {
+			t.Fatalf("%s: herdr review session = %+v, want no such check", name, c)
+		}
+	}
+}
+
 // With magnum's panes in your session, doctor pings it once and has no
 // second herdr check.
 func TestDoctorPingsOneSessionOnce(t *testing.T) {

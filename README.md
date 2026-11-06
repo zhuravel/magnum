@@ -313,7 +313,9 @@ and `reveal_on_attention` reveal a client of the panes' session, and the daemon 
 no herdr server runs in a named session, which starts it after a reboot (at once, then at most twice an hour
 while it stays down, each a `herdr.opened` event; never your own, nor a session whose server runs but does not
 answer: a client of it may be open, and the open would bring it to the front). A change moves the panes once
-the daemon runs on it (`magnum daemon-restart --drain`), at its first moment with nothing in flight: until then
+the daemon runs on it (`magnum daemon-restart --drain`; the factory's local review, whose rounds open there
+too, follows once the factory daemon starts on it: `magnum factory install`), at its first moment with nothing
+in flight: until then
 no round, retro, curation, fix or whiteboard starts (a PR's wait says `draining`), and `magnum open` of a PR
 with nothing live asks to try again in a minute. Then it rebinds every PR's sessions to the panes that hold
 their conversations (a server that started again restored them under new ids), parks them, pinned PRs too (the
@@ -326,7 +328,12 @@ when its server starts, so the move waits to park them: it opens a named old ses
 command that starts yours), and while the restart is refused because what launchd would start fails its check:
 the event `herdr.panes_move_waits` names the PR or the reason, and a toast does after 30 minutes. A move cut
 short goes on at the next start. A named review session is never the factory's (`[factory] herdr_session`), by name or by
-socket; with `review_session = ""` the panes stay in your session, as before, even when the factory runs there
+socket, nor your session's name (`[terminal] session`) on another socket, and doctor warns while it is your own
+session (`[herdr] socket` on its socket: the panes then share yours, and no guard reads where you work). The
+registry records which session its herdr ids are of once a daemon of this build starts: if `[herdr] socket`
+and `[terminal] session` point at the session the panes should run in, start the daemon on them first, then
+point them back at your session and set `review_session` to that session, and nothing moves. With
+`review_session = ""` the panes stay in your session, as before, even when the factory runs there
 too (`[factory] herdr_session = "default"`).
 
 A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
@@ -3593,7 +3600,8 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 herdr session of their own, `herdr_session` (`factory`): a separate herdr server, whose socket is
 `~/.config/herdr/sessions/<herdr_session>/herdr.sock` unless `herdr_socket` names another (herdr's default
 session, `default`, keeps herdr's own socket), so its panes open in a terminal window of their own, apart
-from yours and from magnum's review panes, which run in `[herdr] review_session`, your session by default.
+from yours and from magnum's review panes, which run in `[herdr] review_session`, your session by default
+(its local review reads that key at its start: `magnum factory install` after a change).
 It talks to your session too: the copies' guard reads its panes, and the alerts' toasts show there. Like the review daemon, it loads its
 prompts once, at its start, and a build with a new factory migration (`0005_task_request.sql` is the newest)
 runs no factory command until the factory daemon restarts on it: the factory CLI and the screen refuse to
@@ -5271,7 +5279,7 @@ naming the command that starts it; while those run in `[herdr] review_session`, 
 when it does not answer: the toasts then show with osascript, and the slot guards see only the agents herdr saved
 in your session (`session.json` beside its socket, which it restores when it starts) when no herdr server of yours
 runs, or hold every slot while yours runs but does not answer; one check while both are one
-session; a `herdr move` WARN while a move of the panes to the configured session waits, naming the PR or the
+session; a `herdr review session` WARN while `review_session` names your own session's socket; a `herdr move` WARN while a move of the panes to the configured session waits, naming the PR or the
 reason, or is due) and the plugin (listed in your session), the agent CLIs (logins, wrappers or autonomy flags),
 herdr's Codex session hook (a `codex session hook` WARN when no SessionStart hook in `$CODEX_HOME/hooks.json`
 names `herdr-agent-state.sh`, when its `[hooks.state]` entry in `config.toml` has `enabled = false`, naming

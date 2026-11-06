@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 // doctorHerdrChecks checks the herdr session of magnum's panes (PaneSession:
 // a FAIL when it does not answer, as no round can run), yours while the
 // panes are in another (a WARN: the toasts show with osascript, and the
-// slot guards read no agent of yours or hold every slot), a move of the
-// panes that waits or is due (doctorPanesMove), and the herdr CLI and
-// server's version and methods.
+// slot guards read no agent of yours or hold every slot), a review session
+// that is your own (doctorReviewIsYours), a move of the panes that waits or
+// is due (doctorPanesMove), and the herdr CLI and server's version and
+// methods.
 func doctorHerdrChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 	panes := d.PaneSession
 	if panes.Socket == "" {
@@ -47,6 +49,9 @@ func doctorHerdrChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 	}
 	if d.Yours != nil {
 		out = append(out, doctorYourHerdr(ctx, d))
+	}
+	if c, ok := doctorReviewIsYours(d); ok {
+		out = append(out, c)
 	}
 	out = append(out, doctorPanesMove(ctx, d)...)
 	cliOut, cerr := doctorExec(ctx, d, 5*time.Second, "", nil, "herdr", "--version")
@@ -106,6 +111,25 @@ func doctorYourHerdr(ctx context.Context, d doctorDeps) doctorCheck {
 			"osascript, and the slot guards hold every slot until it answers", yours.Name, socket, err),
 			"check your herdr server (`herdr status server`); quit and start it again when no agent of yours is working")
 	}
+}
+
+// doctorReviewIsYours warns while [herdr] review_session names your own
+// session ([herdr] socket): magnum's panes then share it with your agents,
+// and no guard reads another session. A stopgap that pointed [herdr] socket
+// and [terminal] session at the review session's server, kept when the key
+// was added, does that. false: the key is "" or names another server.
+func doctorReviewIsYours(d doctorDeps) (doctorCheck, bool) {
+	if d.Config == nil || d.Config.Herdr.ReviewSession == "" {
+		return doctorCheck{}, false
+	}
+	review, yours := d.Config.ReviewHerdr(), d.Config.YourHerdr()
+	if filepath.Clean(review.Socket) != filepath.Clean(yours.Socket) {
+		return doctorCheck{}, false
+	}
+	return doctorWarned("herdr review session", fmt.Sprintf("[herdr] review_session %q is your own session ([herdr] socket %s): "+
+		"magnum's review panes share it with your agents, and the slot guards read no other session", review.Name,
+		inspTilde(yours.Socket)), "point [herdr] socket and [terminal] session at the session you work in (a pane's "+
+		"$HERDR_SOCKET_PATH names it), or set review_session = \"\" to keep the panes in yours"), true
 }
 
 // doctorPanesMove warns of a move of magnum's panes to another herdr
