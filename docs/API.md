@@ -16214,6 +16214,16 @@ const Protocol = 22
     Protocol is the herdr socket protocol version this client was verified
     against (ServerInfo.Protocol); `magnum doctor` warns on any other.
 
+const SavedFile = "session.json"
+    SavedFile is the file beside a session's socket in which herdr keeps the
+    session's workspaces, tabs and panes, each pane's directory and its agent's
+    conversation: a server that starts restores them, and resumes the agents in
+    their conversations.
+
+const SavedPrefix = "saved:"
+    SavedPrefix starts the ids Saved gives the workspaces and panes herdr saved:
+    they are no server's, and a restore numbers them anew.
+
 const YourPrefix = "yours:"
     YourPrefix starts the ids of your herdr session's workspaces, tabs and panes
     as a GuardView shows them.
@@ -16403,6 +16413,15 @@ func (c *Client) Ping(ctx context.Context) (ServerInfo, error)
 func (c *Client) PluginPaneOpen(ctx context.Context, o PluginPaneOptions) (PluginPane, error)
     PluginPaneOpen opens a plugin pane; only the socket accepts popup placement.
 
+func (c *Client) Saved() (Snapshot, error)
+    Saved is what the session's server restores when it starts, as a guard sees
+    it (SavedFile beside the socket): each pane in which an agent's conversation
+    runs (agent_session) is an idle agent in the pane's directory, in workspace
+    "saved:<id>" as pane "saved:<id>:p<n>". A shell comes back an idle shell,
+    which holds nothing, so it is left out. A session that saved nothing (no
+    file) has no panes; a file that cannot be read, or of a version this build
+    does not know, is an error: it may hold an agent in any checkout.
+
 func (c *Client) Snapshot(ctx context.Context) (Snapshot, error)
     Snapshot returns the whole live session (session.snapshot).
 
@@ -16447,11 +16466,14 @@ func (g GuardView) ProcessInfo(ctx context.Context, paneID string) (ProcessInfo,
     prefixed id (without the prefix), else Own.
 
 func (g GuardView) Snapshot(ctx context.Context) (Snapshot, error)
-    Snapshot is Own's snapshot with Yours added, your workspaces', tabs' and
-    panes' ids prefixed. A session that does not answer is an error: the guard
-    then holds off, as on its own herdr. Your session with no server running
-    (NoServer) adds nothing: it has no pane processes, so nothing of yours can
-    be at work in a checkout. Own's never counts as empty: the panes its store
+    Snapshot is Own's snapshot with Yours added, your workspaces', tabs'
+    and panes' ids prefixed. A session that does not answer is an error:
+    the guard then holds off, as on its own herdr. Your session with no server
+    running (NoServer) has no pane processes, but herdr restores its panes when
+    the server starts and resumes their agents in their conversations: it adds
+    the agents herdr saved, idle in their directories (Saver: a client's Saved),
+    so one of yours in a checkout still holds it, and a saved state that cannot
+    be read is an error. Own's never counts as empty: the panes its store
     records could not be checked.
 
 type NotificationResult struct {
@@ -16559,6 +16581,12 @@ type ReadResult struct {
 	Truncated   bool   `json:"truncated"`
 }
     ReadResult is pane/agent output (pane.read, agent.read).
+
+type Saver interface {
+	Saved() (Snapshot, error)
+}
+    Saver is a herdr session whose saved state a guard reads while no server
+    runs in it (*Client).
 
 type ServerInfo struct {
 	Version  string `json:"version"`

@@ -3537,7 +3537,9 @@ stages = [
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over both herdr
   sessions, the factory's and yours (your agent or console in the copy, your changes, a moved HEAD; a session
-  that does not answer holds the copy, but yours with no herdr server running has no panes), and no
+  that does not answer holds the copy; yours with no herdr server running shows only the agents herdr saved
+  there, idle in their directories, since it restores them and resumes their conversations when it starts, and a
+  saved state it cannot read holds the copy), and no
   pane of the factory's session in the copy that no session of the factory's is in. Claims of different
   copies run side by side, and a release never waits for another copy's claim. Every claim runs these
   steps, so a stage claims its task's copy once and keeps it until the release: the claim runs off the
@@ -5263,8 +5265,9 @@ prompts, the judge and fix skills and the fix role, Whiteboard when a watch asks
 whiteboards are off; FAIL when the `whiteboard` CLI is not on PATH; WARN when Whiteboard is not running, since
 the job then skips whiteboards), herdr (the session of magnum's review panes, a FAIL when it does not answer,
 naming the command that starts it; while those run in `[herdr] review_session`, yours too, a `your herdr` WARN
-when it does not answer: the toasts then show with osascript, and the slot guards see no agent of yours when no
-herdr server of yours runs, or hold every slot while yours runs but does not answer; one check while both are one
+when it does not answer: the toasts then show with osascript, and the slot guards see only the agents herdr saved
+in your session (`session.json` beside its socket, which it restores when it starts) when no herdr server of yours
+runs, or hold every slot while yours runs but does not answer; one check while both are one
 session; a `herdr move` WARN while a move of the panes to the configured session waits, naming the PR or the
 reason, or is due) and the plugin (listed in your session), the agent CLIs (logins, wrappers or autonomy flags),
 herdr's Codex session hook (a `codex session hook` WARN when no SessionStart hook in `$CODEX_HOME/hooks.json`

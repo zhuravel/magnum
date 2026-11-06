@@ -2749,6 +2749,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheCodexCapCountsYourSessionsWorkingCodexToo, TestYourSessionDownLeavesTheCapToThePaneSession,
   TestATaggedEngineNeverReadsYourSessionWhenItObserves and TestRevealOnAttentionRevealsThePaneSession.
 
+- **Your herdr session with no server running shows the agents herdr saved** (2026-11-06, a review of "Every
+  slot guard reads one view of two herdr sessions"). That entry took your session with no server running for
+  one with no panes: no server, no pane processes, so nothing of yours could be at work in a checkout. But
+  herdr keeps a session's workspaces, tabs and panes in `session.json` beside its socket, each pane's directory
+  and its agent's conversation, and restores them when the server starts, resuming the agents (the move of
+  magnum's panes waits for an old server on that same fact). With `[herdr] review_session` set, the review
+  daemon's slot guard reads your session apart from its own, so after you quit herdr, or a reboot before you
+  opened it, your idle Claude in a per-PR worktree with uncommitted edits was invisible: a merge's reconcile
+  took the edits for magnum's residue and removed the worktree, a pool slot could be switched to another
+  PR's head and a factory copy reset, and herdr then restored the agent into a missing or changed tree.
+  Before the key the guard read one session, and one that did not answer held every slot. Now
+  `herdr.GuardView` adds, for your session with no server running, the panes herdr saved with an agent
+  conversation (`herdr.Client.Saved`, the `herdr.Saver` a view may be), each an idle agent in its directory
+  under ids `yours:saved:<workspace>:p<n>`, so the slot guard holds a checkout one is in
+  (`HoldForeignAgent`, as a live idle agent of yours does) and the inventory shows it. Saved shells are left
+  out: they come back idle shells, which hold nothing on a running server either. No file is nothing saved; a
+  file that cannot be read, or of another version than 3, is an error and holds, as a server that does not
+  answer does. This narrows the operator's choice (your server not running holds no copy and no slot) to the
+  checkouts your saved agents are in; the rest go on. Rejected: holding every slot and copy while your server
+  does not run (what one session did; the factory's copies would wait whenever herdr is quit); saved shells
+  as panes (no process to ask about, so each would hold its checkout). Tests, failing first: TestYourSessionWithNoServerShowsTheAgentsHerdrSavedAsIdle,
+  TestASavedSessionThatCannotBeReadHoldsTheGuard, TestAnAgentHerdrSavedInYourStoppedSessionHoldsItsSlot.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
@@ -15653,6 +15676,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   factory's own session is pinged once a tick (`checkHerdr`), so a hang costs one timeout a tick. Rejected:
   a shorter timeout on the ping alone (a slow but live server would read as down and hold the rounds).
   Test, failing first: TestTheReviewSessionIsAskedOnceATick.
+
+- Your herdr server not running holds the copies your saved agents are in (2026-11-06). herdr restores a
+  stopped session's panes and resumes their agents when its server starts, so the copies' guard now sees the
+  agents herdr saved in your session as idle ones (see "Your herdr session with no server running shows the
+  agents herdr saved" in Agents in panes): a copy one of them is in is held, the others are not, and a saved
+  state that cannot be read holds every copy. TestYourSessionWithNoServerShowsTheAgentsHerdrSavedAsIdle.
 
 ## Learned rules
 

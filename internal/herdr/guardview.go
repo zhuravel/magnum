@@ -34,9 +34,12 @@ type GuardView struct{ Own, Yours View }
 // Snapshot is Own's snapshot with Yours added, your workspaces', tabs' and
 // panes' ids prefixed. A session that does not answer is an error: the
 // guard then holds off, as on its own herdr. Your session with no server
-// running (NoServer) adds nothing: it has no pane processes, so nothing of
-// yours can be at work in a checkout. Own's never counts as empty: the
-// panes its store records could not be checked.
+// running (NoServer) has no pane processes, but herdr restores its panes
+// when the server starts and resumes their agents in their conversations:
+// it adds the agents herdr saved, idle in their directories (Saver: a
+// client's Saved), so one of yours in a checkout still holds it, and a
+// saved state that cannot be read is an error. Own's never counts as
+// empty: the panes its store records could not be checked.
 func (g GuardView) Snapshot(ctx context.Context) (Snapshot, error) {
 	var out Snapshot
 	if g.Own != nil {
@@ -51,7 +54,13 @@ func (g GuardView) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	s, err := g.Yours.Snapshot(ctx)
 	if NoServer(err) {
-		return out, nil
+		sv, ok := g.Yours.(Saver)
+		if !ok {
+			return out, nil
+		}
+		if s, err = sv.Saved(); err != nil {
+			return Snapshot{}, fmt.Errorf("your herdr session, which runs no server: %w", err)
+		}
 	}
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("your herdr session: %w", err)

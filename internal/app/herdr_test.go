@@ -280,6 +280,34 @@ func TestTheSlotGuardAndInventoryReadThePaneSessionAndYours(t *testing.T) {
 	}
 }
 
+// herdr restores your stopped session's panes when its server starts, and
+// resumes their agents in their conversations: with no server of yours
+// running, an agent herdr saved in a slot (session.json beside your socket)
+// holds the slot as a live one does, so a slot's switch or a worktree's
+// removal never takes the tree from under it.
+func TestAnAgentHerdrSavedInYourStoppedSessionHoldsItsSlot(t *testing.T) {
+	const slot = "/nonexistent/talkable.review1"
+	reviews := newHerdrServer(t, herdr.Snapshot{})
+	dir, err := os.MkdirTemp("", "hy") //nolint:usetesting // a dial of a longer path fails EINVAL, not ENOENT
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	saved := `{"version": 3, "workspaces": [{"id": "w2", "tabs": [{"panes": {"4": {"cwd": "` + slot + `",
+		"agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude", "value": "conv-1"}}}}]}]}`
+	if err := os.WriteFile(filepath.Join(dir, herdr.SavedFile), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := testAppSeeded(t, herdrConfig(filepath.Join(dir, "herdr.sock"), reviews.socket), Options{},
+		recordPanes(herdr.Session{Name: "reviews", Socket: reviews.socket}))
+
+	err = a.Slots.GuardLive(context.Background(), store.Slot{Name: "review1", Path: slot})
+	var hold slots.ErrHold
+	if !errors.As(err, &hold) || hold.Reason != slots.HoldForeignAgent || !strings.Contains(hold.Detail, herdr.YourPrefix+herdr.SavedPrefix) {
+		t.Fatalf("the slot guard = %v, want the agent herdr saved in your session to hold the slot", err)
+	}
+}
+
 // While the panes are in your session, one client reads it: the guard does
 // not list each of its panes twice (once as yours, which would hold every
 // slot for magnum's own agents), and the toasts and the sidebar share it.

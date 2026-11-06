@@ -3,9 +3,11 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,9 +86,9 @@ func TestTheGuardViewAsksTheSessionAPaneIsOf(t *testing.T) {
 	}
 }
 
-// Your herdr server not running (no socket, or a stale one) has no pane
-// processes, so it holds nothing: the guard sees its own session's panes
-// alone. Its own session down is still an error: the panes its store
+// Your herdr server not running (no socket, or a stale one) with nothing
+// saved beside its socket has no panes, so it holds nothing: the guard sees
+// its own session's panes alone. Its own session down is still an error: the panes its store
 // records cannot be checked.
 func TestYourSessionWithNoServerHasNoPanes(t *testing.T) {
 	dir := shortTempDir(t)
@@ -111,5 +113,71 @@ func TestYourSessionThatTimesOutHoldsTheGuard(t *testing.T) {
 	got, err := GuardView{Own: &fakeView{snap: oneWorkspace("mg-1-judge")}, Yours: slowYours}.Snapshot(t.Context())
 	if !IsTimeout(err) {
 		t.Fatalf("with your server not answering the view is %+v (%v), want the timeout", got, err)
+	}
+}
+
+// savedSession writes herdr's saved state of a session (session.json beside
+// its socket, version 3) with one workspace: a shell in /work/shell and a
+// Claude conversation in slot, as herdr keeps them while its server is
+// stopped. It returns the session's socket, where no server runs.
+func savedSession(t *testing.T, slot string) string {
+	t.Helper()
+	dir := shortTempDir(t)
+	state := `{"version": 3, "active": 0, "selected": 0, "workspaces": [{"id": "wAB", "active_tab": 1, "custom_name": null,
+		"identity_cwd": "/work", "tabs": [
+			{"custom_name": null, "root_pane": 1, "panes": {"1": {"cwd": "/work/shell", "agent_session": null, "label": "notes", "launch_argv": null}}},
+			{"custom_name": null, "root_pane": 6, "panes": {"6": {"cwd": "` + slot + `", "label": null, "launch_argv": null,
+				"agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude", "value": "conv-1"}}}}]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "herdr.sock")
+}
+
+// herdr restores a stopped session's panes when its server starts, in their
+// directories, and resumes their agents' conversations. So your session with
+// no server running is not empty for a guard: each pane herdr saved with an
+// agent conversation is an idle agent of yours in its directory, which holds
+// the checkout it is in as a live one does. A saved shell comes back an idle
+// shell, which holds nothing, so it is not shown.
+func TestYourSessionWithNoServerShowsTheAgentsHerdrSavedAsIdle(t *testing.T) {
+	own := &fakeView{snap: oneWorkspace("mg-1-judge")}
+	yours := &Client{Socket: savedSession(t, "/slots/review1")}
+	got, err := GuardView{Own: own, Yours: yours}.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := &AgentSession{Agent: "claude", Kind: "id", Source: "herdr:claude", Value: "conv-1"}
+	want := oneWorkspace("mg-1-judge")
+	want.Workspaces = append(want.Workspaces, Workspace{ID: "yours:saved:wAB"})
+	want.Panes = append(want.Panes, Pane{ID: "yours:saved:wAB:p6", WorkspaceID: "yours:saved:wAB", Agent: "claude",
+		AgentStatus: StatusIdle, AgentSession: conv, Cwd: "/slots/review1"})
+	want.Agents = append(want.Agents, AgentInfo{PaneID: "yours:saved:wAB:p6", WorkspaceID: "yours:saved:wAB", Agent: "claude",
+		AgentStatus: StatusIdle, AgentSession: conv, Cwd: "/slots/review1"})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("with your server stopped the view is\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// A saved state that cannot be read, or that a herdr magnum does not know
+// wrote (another version), may hold an agent of yours in any checkout: the
+// view is an error, and the guard holds off as on a server that does not
+// answer.
+func TestASavedSessionThatCannotBeReadHoldsTheGuard(t *testing.T) {
+	for name, state := range map[string]string{
+		"broken":        `{"version": 3, "workspaces": [`,
+		"other version": `{"version": 4, "workspaces": []}`,
+		"no workspaces": `{"version": 3}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			socket := savedSession(t, "/slots/review1")
+			if err := os.WriteFile(filepath.Join(filepath.Dir(socket), "session.json"), []byte(state), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GuardView{Own: &fakeView{}, Yours: &Client{Socket: socket}}.Snapshot(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "session.json") {
+				t.Fatalf("the view is %+v (%v), want an error naming the saved state", got, err)
+			}
+		})
 	}
 }

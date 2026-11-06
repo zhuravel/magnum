@@ -283,8 +283,8 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	// The guard of a copy sees the panes of both herdr sessions, yours with
 	// their ids prefixed: each session numbers its own from w1, and the
-	// agents store knows only the factory's. Your server not running has no
-	// panes, so it holds no copy.
+	// agents store knows only the factory's. Your server not running shows
+	// the agents herdr saved, which it restores when it starts.
 	// A factory in your own session (the same socket) is one session.
 	d.Guard = herdr.GuardView{Own: h}
 	yours := h

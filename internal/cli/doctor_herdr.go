@@ -99,7 +99,7 @@ func doctorYourHerdr(ctx context.Context, d doctorDeps) doctorCheck {
 			yours.Name, socket))
 	case herdr.NoServer(err):
 		return doctorWarned("your herdr", fmt.Sprintf("no herdr server runs in your session %s (socket %s): the toasts show with "+
-			"osascript, and the slot guards see no agent of yours", yours.Name, socket),
+			"osascript, and the slot guards see only the agents herdr saved there, which it restores when it starts", yours.Name, socket),
 			"start herdr (run `"+herdrStart(yours.Name)+"` in a terminal), or point [herdr] socket in config.toml at your session's socket")
 	default:
 		return doctorWarned("your herdr", fmt.Sprintf("your herdr session %s (socket %s) does not answer: %s; the toasts show with "+
