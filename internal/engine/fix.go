@@ -119,8 +119,9 @@ type fixJob struct {
 	// others is what the other reviewers wrote, as prepareFix read it before
 	// the start (nil when the read failed, or the budget held the job):
 	// writeExternal writes these without reading GitHub again. alone: the
-	// review found nothing and left nothing open, and the job, a new loop,
-	// answers their unanswered items alone (spec 96).
+	// review left the fixer no work of its own (reviewWork: no finding, no
+	// simplification, nothing open, not even an optional P3), and the job,
+	// a new loop, answers their unanswered items alone (spec 96).
 	others *externalRead
 	alone  bool
 	// budget is set when prepareFix found the GitHub budget of the identity
@@ -220,6 +221,7 @@ func (j *fixJob) work() string {
 	}
 	open := j.review.OpenProblems()
 	n := j.review.Findings() + open
+	optional := j.review.Simplifications + openP3(j.review)
 	switch {
 	case j.forMerge && j.conflict.sha != "":
 		return fmt.Sprintf("%s in %s (%s)", j.conflict.words(), where, note)
@@ -230,6 +232,8 @@ func (j *fixJob) work() string {
 		threads, conversation := j.others.items.unanswered()
 		return fmt.Sprintf("answers the other reviewers' %s in %s (%s)",
 			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), where, note)
+	case n == 0 && optional > 0:
+		return fmt.Sprintf("fixes the %s of the review on %s in %s", textx.Count(optional, "optional finding", "optional findings"), sha, where)
 	case n == 0:
 		return fmt.Sprintf("fixes the open earlier findings of the review on %s in %s", sha, where)
 	case open == 0:
@@ -237,6 +241,26 @@ func (j *fixJob) work() string {
 	}
 	return fmt.Sprintf("fixes the %s of the review on %s, %d of them open from earlier reviews, in %s",
 		textx.Count(n, "finding", "findings"), sha, open, where)
+}
+
+// reviewWork reports whether sum, magnum's review, leaves the fixer work of
+// its own: new findings (P0 to P3), simplifications, or earlier findings it
+// keeps open, the optional P3s among them (rule A1: an optional finding
+// counts as open until a fix or a fix-marked reply). prepareFix starts a job
+// on such a review without asking the other reviewers, and autofix = "open"
+// counts the review as an item (openItemsOf) by the same rule, so the look
+// never starts what prepareFix refuses.
+func reviewWork(sum store.ReviewSummary) bool {
+	return sum.Findings()+sum.Simplifications+sum.OpenProblems()+openP3(sum) > 0
+}
+
+// openP3 is the earlier P3s sum keeps open; 0 when its result gave only the
+// number of open findings (OpenProblems counts them all then).
+func openP3(sum store.ReviewSummary) int {
+	if sum.OpenCounts == nil {
+		return 0
+	}
+	return sum.OpenCounts[3]
 }
 
 // fixPin is what prepareFix does about a pinned PR or slot.
@@ -483,11 +507,11 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		return nil, err
 	}
 	// The other reviewers' items, read before the start (spec 102): a
-	// review that found nothing and left nothing open leaves the fixer only
-	// what waits for an answer there (spec 96; a next cycle's changes
+	// review that found nothing and left nothing open (reviewWork) leaves
+	// the fixer only what waits for an answer there (spec 96; a next cycle's changes
 	// request may keep earlier findings open with neither, fixRemains). A
 	// read GitHub refuses for the rate limit holds the job as the floor does.
-	alone := prev.Cycle == 0 && sum.Findings()+sum.OpenProblems() == 0
+	alone := prev.Cycle == 0 && !reviewWork(sum)
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
 	// for it only when nothing else would start the job.

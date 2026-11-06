@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -234,6 +235,19 @@ func fixablePROpen(h *harness, author string, findings, open map[string]int) sto
 	if open != nil {
 		body["previous_findings"] = map[string]any{"fixed": 1, "open": open, "answered": 0}
 	}
+	return recordReviewResult(h, pr, body)
+}
+
+// fixablePRResult is fixablePR whose posted review's result file is body.
+func fixablePRResult(h *harness, author string, body map[string]any) store.PR {
+	h.t.Helper()
+	return recordReviewResult(h, fixablePR(h, author, nil), body)
+}
+
+// recordReviewResult records the posted review of pr's head as the judge's
+// run with result file body (run-review-2, review 101).
+func recordReviewResult(h *harness, pr store.PR, body map[string]any) store.PR {
+	h.t.Helper()
 	result, err := json.Marshal(body)
 	if err != nil {
 		h.t.Fatal(err)
@@ -525,8 +539,8 @@ func TestFixRefusals(t *testing.T) {
 // 1 problem before merging", and the fix skill fixes the threads its body
 // names as still open: `magnum fix` (the board's f) starts on it, and the
 // answer and the fix.start event say how many of the findings are open from
-// earlier reviews. An earlier P3 left open is optional: alone it leaves
-// nothing to fix.
+// earlier reviews. An earlier P3 left open alone is work too (rule A1:
+// TestAFixOnAReviewThatKeepsAP3OpenStarts).
 func TestAFixStartsOnAReviewThatKeepsAnEarlierFindingOpen(t *testing.T) {
 	const what = "fixes the 1 finding of the review on a1a1a1a, 1 of them open from earlier reviews, in review1"
 	t.Run("an open P2", func(t *testing.T) {
@@ -543,18 +557,6 @@ func TestAFixStartsOnAReviewThatKeepsAnEarlierFindingOpen(t *testing.T) {
 		}
 		if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
 			t.Errorf("fix runs = %d, want the fixer's", n)
-		}
-	})
-	t.Run("only an open P3", func(t *testing.T) {
-		h, _ := fixHarness(t)
-		fixablePROpen(h, "zhuravel", map[string]int{}, map[string]int{"P3": 1})
-		id := h.fix(FixPayload{})
-		h.handle()
-		if r, want := h.request(id), othersOnly; r.State != store.RequestFailed || deref(r.Result) != want {
-			t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
-		}
-		if h.ag.count("submit:") != 0 {
-			t.Error("a refused request started the fixer")
 		}
 	})
 }
@@ -2048,4 +2050,70 @@ func TestAFixStartsAfterARoundThatOnlyReplied(t *testing.T) {
 			t.Error("a refused request started the fixer")
 		}
 	})
+}
+
+// A review whose only work is a simplification (rule A1: optional findings
+// count as open until a fix or a fix-marked reply) is work for `magnum fix`:
+// the loop starts on it, and its prompt is the one of a review with
+// findings, not the "found nothing" form. Before, it was refused as a
+// review that found nothing.
+func TestAFixOnASimplificationOnlyReviewFixesItsFindings(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePRResult(h, "zhuravel", map[string]any{"event": "COMMENTED", "findings": map[string]int{},
+		"candidates": map[string]any{"claude-simplify": map[string]int{"suggested": 1}}})
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "fixes the 1 optional finding of the review on a1a1a1a") {
+		t.Errorf("answer = %q, want it to fix the optional finding", res)
+	}
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 1 {
+		t.Fatalf("fix runs = %+v, want the fixer's", runs)
+	}
+	if slices.ContainsFunc(h.ag.all(), func(c string) bool { return strings.HasSuffix(c, "|no findings") }) {
+		t.Errorf("the fix prompt says the review found nothing: %v", h.ag.all())
+	}
+}
+
+// A review that keeps an earlier P3 open, and posts nothing new, is work
+// too: the open P3 is optional, and it stays open until a fix or a reply.
+func TestAFixOnAReviewThatKeepsAP3OpenStarts(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePROpen(h, "zhuravel", map[string]int{}, map[string]int{"P3": 1})
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "fixes the 1 optional finding of the review on a1a1a1a") {
+		t.Errorf("answer = %q, want it to fix the open P3", res)
+	}
+	if runs := h.fixRuns(pr.ID); len(runs) != 1 {
+		t.Fatalf("fix runs = %+v, want the fixer's", runs)
+	}
+}
+
+// autofix = "own" keeps starting only after a round that posted new
+// findings: a review with only simplifications starts nothing at the
+// round's end.
+func TestTheRoundEndAutofixStillIgnoresASimplificationOnlyReview(t *testing.T) {
+	h, git := autofixHarness(t, "zhuravel", findings(map[string]int{}, "COMMENTED"))
+	h.rd.mu.Lock()
+	inner := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		res, err := inner(in)
+		if err != nil {
+			return res, err
+		}
+		if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE runs SET result_json = ? WHERE pr_id = ? AND outcome = 'posted'`,
+			`{"event":"COMMENTED","findings":{},"candidates":{"claude-simplify":{"suggested":2}}}`, in.PR.ID); err != nil {
+			return failRound(h.t, err)
+		}
+		return res, nil
+	}
+	h.rd.mu.Unlock()
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Errorf("fix runs = %d, want none", n)
+	}
 }
