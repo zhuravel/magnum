@@ -15375,6 +15375,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   that wait every busy day) and a "review now" key (one more thing to remember). Tests:
   TestTheLocalReviewTakesAFreeRoundUnderMagnumsLimit, TestMagnumIsBusyWhileARoundRunsOrIsDue (at a limit of 1).
 
+- On the task card, enter opens the decision card its task waits on (2026-11-06). A task card left open
+  while its task came to need you showed the waiting stage in red, and enter did nothing: home's enter
+  opens the decision card, the task card had no enter at all (its stage cards are milestone 2's). Now enter
+  there opens the questions or the ready card, as home's does, and the footer offers it (`enter answer`,
+  `enter ready card`) only then; with no decision waiting, enter stays. Test:
+  TestEnterOnATaskCardOpensTheDecisionItsTaskWaitsOn.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

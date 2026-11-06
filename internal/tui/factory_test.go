@@ -345,6 +345,36 @@ func TestEnterOpensTheTaskCardOfOtherRows(t *testing.T) {
 	mustNotContain(t, h.view(), "ready to push", "question 1 of")
 }
 
+// On a task card that was open when its task came to need you (its
+// questions or its ready card), enter opens that decision card, as enter on
+// home does, and the footer says so; on a task card with no decision
+// waiting, enter stays.
+func TestEnterOnATaskCardOpensTheDecisionItsTaskWaitsOn(t *testing.T) {
+	h := testFactory(t, 140, 50)
+	taskCardOf := func(key string) {
+		t.Helper()
+		h.open(key)
+		r, _ := h.m.selectedRow()
+		h.m.view, h.m.task = fvTask, r.ID // the task card stayed open while the task came to wait on you
+	}
+	taskCardOf("PR-12345")
+	mustContain(t, h.view(), "STAGES", "enter answer")
+	h.press("enter")
+	mustContain(t, h.view(), "PR-12345 · question 2 of 3")
+	h.press("esc")
+
+	taskCardOf("PR-12360")
+	mustContain(t, h.view(), "enter ready card")
+	h.press("enter")
+	mustContain(t, h.view(), "PR-12360 · ready to push")
+	h.press("esc")
+
+	h.open("PR-12330")
+	mustNotContain(t, h.view(), "enter answer", "enter ready card")
+	h.press("enter")
+	mustContain(t, h.view(), "PR-12330 · bug · Advocate offer email locale", "STAGES")
+}
+
 func TestAWalksTheDecisionsOldestFirst(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	h.press("a")

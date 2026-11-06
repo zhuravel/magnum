@@ -965,7 +965,29 @@ func (m factoryModel) taskCard() TaskCard {
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
 	c.Hints = pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c)
+	if what := m.waitingDecision(m.task); what != "" && len(c.Hints) > 0 {
+		c.Hints = slices.Insert(c.Hints, 1, hint{"enter", what}) // after j k
+	}
 	return c
+}
+
+// waitingDecision is what enter opens on task id's card: "answer" for the
+// questions it waits on you for, "ready card" for its ready card, "" when
+// it waits on no decision card (enter then stays, as no stage card exists
+// yet). A task card left open while its task came to need you opens the
+// decision as enter on home does.
+func (m factoryModel) waitingDecision(id int64) string {
+	r, ok := m.row(id)
+	if !ok || r.Group != GroupNeedsYou {
+		return ""
+	}
+	switch cards := m.data.Cards[id]; {
+	case cards.Question != nil:
+		return "answer"
+	case cards.Ready != nil:
+		return "ready card"
+	}
+	return ""
 }
 
 // pageHints are the task card's hints hs with b and t after d, each when
@@ -1023,6 +1045,10 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 		return m.openDiff(task), true
 	case "b", "t":
 		return m.openPage(k, task), true
+	case "enter":
+		if m.waitingDecision(task) != "" {
+			m.openCard(task)
+		}
 	case "r":
 		if !c.Retry {
 			return nil, true // the board's r means nothing here
