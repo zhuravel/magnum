@@ -628,7 +628,7 @@ WHERE lower(r.owner) = lower(?) AND lower(r.name) = lower(?) AND p.number = ?`, 
 
 // readOnlyDSN opens the registry at path read-only, never creating it.
 func readOnlyDSN(path string) string {
-	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(1000)"}
+	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(1000)&_pragma=temp_store(MEMORY)"}
 	return u.String()
 }
 

@@ -56,10 +56,10 @@ type Store struct {
 }
 
 // Open creates the parent directory (0700), opens the database at path with
-// WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
-// pending migrations. It refuses a database whose schema version is newer
-// than this binary knows. The database, its -wal and its -shm file are made
-// 0600 whatever the umask.
+// WAL, busy_timeout=5000, foreign_keys=ON, synchronous=NORMAL and
+// temp_store=MEMORY, and applies pending migrations. It refuses a database
+// whose schema version is newer than this binary knows. The database, its
+// -wal and its -shm file are made 0600 whatever the umask.
 func Open(path string) (*Store, error) { return OpenWith(path, Options{}) }
 
 // Options tune OpenWith.
@@ -90,7 +90,12 @@ func OpenWith(path string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("store: create %s: %w", path, err)
 	}
 	f.Close()
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
+	// temp_store(MEMORY): a sort or temp table that outgrows the page cache
+	// stays in RAM; the driver's default spills it to an etilqs_* file in
+	// $TMPDIR, which the board's 5 s refresh turned into about 50 GB of disk
+	// writes a day.
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)" +
+		"&_pragma=temp_store(MEMORY)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)

@@ -15,7 +15,7 @@ func TestOpenPinsTheConnectionPragmas(t *testing.T) {
 	t.Parallel()
 	first, second := registrytest.OpenPair(t)
 	ctx := t.Context()
-	for pragma, want := range map[string]int{"busy_timeout": 5000, "synchronous": 1, "foreign_keys": 1} {
+	for pragma, want := range map[string]int{"busy_timeout": 5000, "synchronous": 1, "foreign_keys": 1, "temp_store": 2} {
 		var got int
 		if err := first.DBForTest().QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&got); err != nil || got != want {
 			t.Errorf("PRAGMA %s = %d, %v; want %d", pragma, got, err, want)

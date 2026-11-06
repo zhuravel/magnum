@@ -623,6 +623,27 @@ var (
 	eventColumns   = []string{"id", "at", "level", "subject", "kind", "step", "phase", "message", "data_json"}
 )
 
+// runColsWithout is cols(alias, runColumns) with the blank columns read as
+// empty in their places, an empty string for prompt_text (NOT NULL) and
+// NULL for the rest, so scanRun reads the row as is. It serves the queries
+// that sort or scan many runs and never read those columns, the biggest
+// ones: the sorted bytes stay small, and with temp_store(MEMORY) they are
+// RAM.
+func runColsWithout(alias string, blank ...string) string {
+	out := make([]string, len(runColumns))
+	for i, c := range runColumns {
+		switch {
+		case !slices.Contains(blank, c):
+			out[i] = alias + "." + c
+		case c == "prompt_text":
+			out[i] = "'' AS " + c
+		default:
+			out[i] = "NULL AS " + c
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // cols renders a column list, optionally qualified with a table alias.
 func cols(alias string, names []string) string {
 	if alias == "" {

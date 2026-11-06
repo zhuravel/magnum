@@ -43,6 +43,34 @@ func TestLatestRoundRunsKeepsEachPRsHighestRound(t *testing.T) {
 	}
 }
 
+// The board reads the latest round of every listed PR on each refresh.
+// A run's prompt and result are most of its bytes and no caller of
+// LatestRoundRuns reads them, so the query leaves them out; RunsByPR still
+// has them.
+func TestLatestRoundRunsLeavesOutThePromptAndTheResult(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 1, PRReviewed)
+	result := `{"findings":[]}`
+	created, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 1, Role: RoleJudge, Kind: RunInitial, TargetSHA: pr.HeadSHA,
+		Identity: "i", ReviewerLogin: "l", State: RunEnded, PromptText: "the whole prompt", ResultJSON: &result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := st.LatestRoundRuns(ctx, pr.ID)
+	if err != nil || len(latest[pr.ID]) != 1 {
+		t.Fatalf("LatestRoundRuns = %+v, %v", latest, err)
+	}
+	if r := latest[pr.ID][0]; r.ID != created.ID || r.PromptText != "" || r.ResultJSON != nil {
+		t.Fatalf("LatestRoundRuns run = id %q prompt %q result %v; want id %q, no prompt, no result", r.ID, r.PromptText, r.ResultJSON, created.ID)
+	}
+	full, err := st.RunsByPR(ctx, pr.ID)
+	if err != nil || len(full) != 1 || full[0].PromptText != "the whole prompt" || Deref(full[0].ResultJSON) != result {
+		t.Fatalf("RunsByPR = %+v, %v", full, err)
+	}
+}
+
 func TestCheckoutStepsSelectsThePRsSlotSubjects(t *testing.T) {
 	st, _ := newStore(t)
 	ctx := context.Background()

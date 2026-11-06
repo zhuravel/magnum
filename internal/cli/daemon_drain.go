@@ -108,7 +108,7 @@ func newBuildCheck(c *Context, run execx.Runner) func(ctx context.Context, bin s
 // or migrating it: --drain only sets one kv row of the running daemon's
 // registry, whatever schema version this binary expects.
 func registryWriteDSN(path string) string {
-	q := fmt.Sprintf("mode=rw&_pragma=busy_timeout(%d)", registryWriteBusy.Milliseconds())
+	q := fmt.Sprintf("mode=rw&_pragma=busy_timeout(%d)&_pragma=temp_store(MEMORY)", registryWriteBusy.Milliseconds())
 	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: q}
 	return u.String()
 }

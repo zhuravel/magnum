@@ -21,9 +21,10 @@ type RoundRun struct {
 // RunsOfRoundsSince returns every run of each round (pr_id, round) that has a
 // run created at or after since, oldest first, with its PR's repository and
 // number. A round that began before since and went on after it comes whole,
-// so the caller can tell when it began.
+// so the caller can tell when it began. Its runs carry no PromptText
+// (RunsByPR has it): stats and the shared-failure scan never read it.
 func (s *Store) RunsOfRoundsSince(ctx context.Context, since time.Time) ([]RoundRun, error) {
-	q := "SELECT " + cols("r", runColumns) + ", rp.owner || '/' || rp.name, p.number" +
+	q := "SELECT " + runColsWithout("r", "prompt_text") + ", rp.owner || '/' || rp.name, p.number" +
 		" FROM runs r JOIN prs p ON p.id = r.pr_id JOIN repos rp ON rp.id = p.repo_id" +
 		" WHERE (r.pr_id, r.round) IN (SELECT pr_id, round FROM runs WHERE created_at >= ?)" +
 		" ORDER BY r.created_at, r.rowid"

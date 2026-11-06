@@ -27,7 +27,7 @@ import (
 // read-only, never creating it. The path is URI-escaped, so a home
 // directory containing '?', '#' or '%' still opens the right file.
 func registryReadOnlyDSN(path string) string {
-	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(1000)"}
+	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(1000)&_pragma=temp_store(MEMORY)"}
 	return u.String()
 }
 

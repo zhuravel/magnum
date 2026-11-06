@@ -67,10 +67,11 @@ type Options struct {
 }
 
 // Open creates the parent directory (0700), opens the database at path with
-// WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
-// pending migrations after opts.BeforeMigrate agrees. It refuses a database
-// whose schema version is newer than this binary knows. The database, its
-// -wal and its -shm file are made 0600 whatever the umask.
+// WAL, busy_timeout=5000, foreign_keys=ON, synchronous=NORMAL and
+// temp_store=MEMORY, and applies pending migrations after opts.BeforeMigrate
+// agrees. It refuses a database whose schema version is newer than this
+// binary knows. The database, its -wal and its -shm file are made 0600
+// whatever the umask.
 func Open(path string, opts Options) (*Registry, error) {
 	if path == "" {
 		return nil, errors.New("factory registry: empty database path")
@@ -88,7 +89,9 @@ func Open(path string, opts Options) (*Registry, error) {
 		return nil, fmt.Errorf("factory registry: create %s: %w", path, err)
 	}
 	f.Close()
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
+	// temp_store(MEMORY), as store.Open: sorts never spill to $TMPDIR.
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)" +
+		"&_pragma=temp_store(MEMORY)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("factory registry: open %s: %w", path, err)

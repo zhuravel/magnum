@@ -14462,6 +14462,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheOperatorsOwnReviewStopsAutoApproval and TestAStoppedAutoApprovalSpeaksInTheThirdPerson.
   TestNoStoppedLineWhileTheApprovalStands uses a review a person dismissed. The two tests of an approval by
   hand after a failed post now see no hold.
+- **Every registry connection keeps its sorts in memory, and the board's round query leaves out the prompts
+  and the results** (2026-11-06). An audit of the internal SSD's writes found the PR board writing about
+  53 GB a day while it stayed open. Every 5 s refresh ran LatestRoundRuns twice, once for the timings and
+  once for the round progress. The query selected every column of the latest round's runs, prompt_text
+  (10 MB over 1,547 runs) and result_json among them, and sorted them in a temp B-tree. The modernc driver's
+  page cache is 2 MB and its default temp store is a file, so each sort spilled to an etilqs_* file in
+  $TMPDIR. Now store.Open, the factory registry and the CLI's and the eval replay's own DSNs set
+  temp_store(MEMORY), as the relay journal already did. LatestRoundRuns also returns its runs without
+  PromptText and ResultJSON, because none of its callers (the board's timings and round progress, a PR's
+  timings, the idle park) reads them; RunsByPR and RunByID still have them. RunsOfRoundsSince leaves out
+  the prompt the same way (stats reads only the result, the shared-failure scan the errors and times): in
+  memory, a full-history `magnum stats` would otherwise peak at 85.7 MB instead of 26.6 MB, growing with
+  every day of prompts. A probe on a copy of the live
+  registry ran the query 10 times a second for 30 s: 2,306.6 MB written before, 0.0 MB after. Rejected:
+  SQLITE_TMPDIR on the external disk (it moves the writes instead of removing them), and memory alone (each
+  refresh would still sort 11 MB twice). The dry-run copy (VACUUM INTO) keeps its DSN: it sorts nothing.
+  Tests, failing first: TestOpenPragmas, TestOpenPinsTheConnectionPragmas,
+  TestTheRegistryDSNsKeepTempTablesInMemory, TestTheReadOnlyDSNKeepsTempTablesInMemory and
+  TestLatestRoundRunsLeavesOutThePromptAndTheResult and
+  TestRunsOfRoundsSinceLeavesOutThePromptButKeepsTheResult.
 
 ## The factory (2026-11-03)
 

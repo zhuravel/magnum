@@ -125,6 +125,29 @@ func TestRunsOfRoundsSinceKeepsRoundsWhole(t *testing.T) {
 	}
 }
 
+// stats and the shared-failure scan sort the window's runs; neither reads
+// a prompt, the biggest column, so RunsOfRoundsSince leaves it out and
+// keeps the result stats counts findings from.
+func TestRunsOfRoundsSinceLeavesOutThePromptButKeepsTheResult(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	result := `{"findings":[]}`
+	run, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 1, Role: RoleJudge, Kind: RunInitial, State: RunVerified, TargetSHA: "h1",
+		Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "the whole prompt", ResultJSON: &result, CreatedAt: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.RunsOfRoundsSince(ctx, t0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("RunsOfRoundsSince = %+v, %v", got, err)
+	}
+	if r := got[0]; r.ID != run.ID || r.PromptText != "" || Deref(r.ResultJSON) != result {
+		t.Fatalf("run = id %q prompt %q result %q; want id %q, no prompt, result %q", r.ID, r.PromptText, Deref(r.ResultJSON), run.ID, result)
+	}
+}
+
 func TestEventsOfKindsSince(t *testing.T) {
 	st, _ := newStore(t)
 	ctx := context.Background()

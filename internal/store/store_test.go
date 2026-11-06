@@ -153,12 +153,15 @@ func TestOpenPragmas(t *testing.T) {
 	if err := st.DB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v", mode, err)
 	}
-	var fk, busy, sync int
+	var fk, busy, sync, temp int
 	st.DB().QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk)
 	st.DB().QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy)
 	st.DB().QueryRowContext(ctx, "PRAGMA synchronous").Scan(&sync)
-	if fk != 1 || busy != 5000 || sync != 1 {
-		t.Fatalf("foreign_keys=%d busy_timeout=%d synchronous=%d", fk, busy, sync)
+	// 2 = MEMORY: a sort or temp table that outgrows the page cache stays in
+	// RAM instead of spilling to an etilqs_* file in $TMPDIR.
+	st.DB().QueryRowContext(ctx, "PRAGMA temp_store").Scan(&temp)
+	if fk != 1 || busy != 5000 || sync != 1 || temp != 2 {
+		t.Fatalf("foreign_keys=%d busy_timeout=%d synchronous=%d temp_store=%d", fk, busy, sync, temp)
 	}
 }
 

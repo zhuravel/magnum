@@ -10,7 +10,9 @@ import (
 
 // LatestRoundRuns returns, per PR, the runs of its highest round, oldest
 // first. prIDs limits the PRs; empty means every PR with a run. A PR
-// without runs has no entry.
+// without runs has no entry. Its runs carry no PromptText and no
+// ResultJSON (RunsByPR and RunByID have them): the board reads this on
+// every refresh, and those two columns are most of a run's bytes.
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error) {
 	args := make([]any, 0, len(prIDs))
 	for _, id := range prIDs {
@@ -39,7 +41,7 @@ func latestRoundRunsQuery(n int) string {
 	if n > 0 {
 		latest += " WHERE pr_id IN (" + placeholders(n) + ")"
 	}
-	return "SELECT " + cols("r", runColumns) + " FROM (" + latest + " GROUP BY pr_id) m" +
+	return "SELECT " + runColsWithout("r", "prompt_text", "result_json") + " FROM (" + latest + " GROUP BY pr_id) m" +
 		" JOIN runs r ON r.pr_id = m.pr_id AND r.round = m.round ORDER BY r.pr_id, r.created_at, r.rowid"
 }
 

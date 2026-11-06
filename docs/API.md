@@ -5197,7 +5197,8 @@ type Daemon struct {
 	// first, so every command it starts finds the tools only the shell's
 	// exports name (DBngin's MySQL, PostgreSQL and Redis). A change of the
 	// shell's PATH takes effect at the next start. The CLI keeps its own
-	// environment.
+	// environment. The factory daemon takes the same PATH at its start, for
+	// its copies' setup, reset and precheck commands.
 	ShellPath bool `toml:"shell_path"`
 	// OpenHold is how long a restore by `magnum open` (the board's o) holds
 	// the PR and its slot for the operator, as a pin does: until the later
@@ -12967,10 +12968,11 @@ type Registry struct {
 
 func Open(path string, opts Options) (*Registry, error)
     Open creates the parent directory (0700), opens the database at path
-    with WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL,
-    and applies pending migrations after opts.BeforeMigrate agrees. It refuses a
-    database whose schema version is newer than this binary knows. The database,
-    its -wal and its -shm file are made 0600 whatever the umask.
+    with WAL, busy_timeout=5000, foreign_keys=ON, synchronous=NORMAL and
+    temp_store=MEMORY, and applies pending migrations after opts.BeforeMigrate
+    agrees. It refuses a database whose schema version is newer than this binary
+    knows. The database, its -wal and its -shm file are made 0600 whatever the
+    umask.
 
 func (r *Registry) AnswerBatch(ctx context.Context, taskID int64, rev int, answers map[int]string) error
     AnswerBatch records answers (question Index -> the answer text) to the open
@@ -24756,11 +24758,11 @@ type Store struct {
     Store is the registry handle. It is safe for concurrent use.
 
 func Open(path string) (*Store, error)
-    Open creates the parent directory (0700), opens the database at path with
-    WAL, busy_timeout=5000, foreign_keys=ON and synchronous=NORMAL, and applies
-    pending migrations. It refuses a database whose schema version is newer than
-    this binary knows. The database, its -wal and its -shm file are made 0600
-    whatever the umask.
+    Open creates the parent directory (0700), opens the database at path
+    with WAL, busy_timeout=5000, foreign_keys=ON, synchronous=NORMAL and
+    temp_store=MEMORY, and applies pending migrations. It refuses a database
+    whose schema version is newer than this binary knows. The database, its -wal
+    and its -shm file are made 0600 whatever the umask.
 
 func OpenWith(path string, opts Options) (*Store, error)
     OpenWith is Open with options.
@@ -25078,7 +25080,9 @@ func (s *Store) LatestNotesVersion(ctx context.Context, repoID int64) (NotesVers
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error)
     LatestRoundRuns returns, per PR, the runs of its highest round, oldest
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
-    runs has no entry.
+    runs has no entry. Its runs carry no PromptText and no ResultJSON (RunsByPR
+    and RunByID have them): the board reads this on every refresh, and those two
+    columns are most of a run's bytes.
 
 func (s *Store) LearnInputHistory(ctx context.Context, kind string, id int64) ([]LearnInputGate, error)
     LearnInputHistory lists the proposals that noted the input (kind, id) and
@@ -25377,7 +25381,8 @@ func (s *Store) RunsOfRoundsSince(ctx context.Context, since time.Time) ([]Round
     RunsOfRoundsSince returns every run of each round (pr_id, round) that has
     a run created at or after since, oldest first, with its PR's repository and
     number. A round that began before since and went on after it comes whole,
-    so the caller can tell when it began.
+    so the caller can tell when it began. Its runs carry no PromptText (RunsByPR
+    has it): stats and the shared-failure scan never read it.
 
 func (s *Store) SchemaChanged(ctx context.Context) (bool, error)
     SchemaChanged reports whether PRAGMA user_version differs from the value
