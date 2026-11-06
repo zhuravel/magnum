@@ -437,8 +437,11 @@ func (r *Runtime) mayRestart(ctx context.Context, t registry.Task, st *roleState
 // operatorIn reports whether the operator is in role st's pane: they typed
 // into one of the task's panes within the factory's human cooldown (the
 // owner row's human_active_at, as Send's refusal reads it), or herdr shows
-// the role's pane focused in their terminal. A herdr that cannot say counts
-// as in it: nothing is quit on a guess.
+// the role's pane focused while it showed them at work in a factory pane
+// within that cooldown (PaneFocus.Since). herdr's focus alone proves
+// nothing of them: it rests where it was when nobody is attached, and a
+// task's copy and prompts waited on it for good. A herdr that cannot say
+// counts as in it: nothing is quit on a guess.
 func (r *Runtime) operatorIn(ctx context.Context, st *roleState) bool {
 	pr, err := r.ownerRow(ctx, st.taskID)
 	if err != nil {
@@ -455,6 +458,9 @@ func (r *Runtime) operatorIn(ctx context.Context, st *roleState) bool {
 	snap, err := r.d.Herdr.Snapshot(ctx)
 	if err != nil {
 		return true
+	}
+	if since := r.PaneFocus().Since; since.IsZero() || !r.now().Before(r.cfg.Daemon.CooldownUntil(&since)) {
+		return false // no proof of you in any factory pane lately: the focus rests
 	}
 	if pane != "" && snap.FocusedPaneID == pane {
 		return true

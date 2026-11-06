@@ -15315,6 +15315,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   stays never loops. The wait says what repairs them: "copy: 0 busy, 3 broken (a restart repairs them:
   magnum factory install)". TestEachStartRepairsABrokenCopyOnce.
 
+- herdr's focus alone is no proof that you are in a factory pane, for the copy and the prompts either
+  (2026-11-06). The alerts already rejected focus alone, but `Runtime.operatorIn` (the copy's guard before
+  the proof, a prompt's hold, the Codex quit and the watchdog's fresh step) still counted herdr's focused
+  pane as you. In the first live task herdr's focus rested on the `fx-critic` pane of the factory's
+  session, and coding waited "you're in the fx-critic pane" for over 30 minutes with nobody there. A
+  focused pane now counts as you only while the observe pass saw you at work in a factory pane within
+  `human_cooldown` (PaneFocus.Since), as the alerts' hold does; your input into the task's panes within
+  it counts as before, and a herdr that cannot answer still counts as you in the pane. Tests:
+  TestHerdrsFocusCountsAsYouOnlyWhileYouWereAtWorkLately, and the focus cases of
+  TestAtWorkNamesTheRoleWhoseRunIsInFlight, TestQuitCodexQuitsOnlyTheTasksCodexSessions and
+  TestTheLoopLadderNeverQuitsAPaneTheOperatorIsIn now rest the focus or type.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

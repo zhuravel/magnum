@@ -3744,7 +3744,9 @@ that does not end within the precheck's `cap` counts as red on the base (a bug w
 fails at the head. It records the commands, the exits, the output and the trees (`factory-proof.json`, the
 `proof` artifact, and two `spec` checks). Any new commit voids it. Before the base run touches the copy,
 nobody may be at work there: no agent of the task with a turn in flight, and you in none of the task's
-panes (you typed into one within `human_cooldown`, or its pane is focused), where your edits would be lost;
+panes (you typed into one within `human_cooldown`, or its pane is focused while herdr showed you at work in a
+factory pane within `human_cooldown`: herdr's focus alone rests where it was when nobody is attached), where
+your edits would be lost;
 the task waits, saying who. `detached.json` and a begin event come first, and the branch and the head's tree
 come back after the run, whatever ended it, unless somebody else was at work in the copy meanwhile: then it
 stays detached, with its record, until nobody works there. A daemon killed in the middle has the next start restore them

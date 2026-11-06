@@ -716,7 +716,8 @@ func TestRunStateTellsAPausedRunFromAnEndedOne(t *testing.T) {
 // AtWork names who is at work in the task's copy, so the factory's own
 // commands there wait: the role whose run is in flight, then the role whose
 // pane you are in (your edits are there); a task whose runs ended and whose
-// panes you left, and one that never launched, has nobody at work.
+// panes you left, and one that never launched, has nobody at work. herdr's
+// focus resting on a pane is no proof of you.
 func TestAtWorkNamesTheRoleWhoseRunIsInFlight(t *testing.T) {
 	g := newRig(t)
 	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
@@ -734,12 +735,50 @@ func TestAtWorkNamesTheRoleWhoseRunIsInFlight(t *testing.T) {
 		t.Fatalf("AtWork after the run ended = %q, %v, %v; want nobody", role, you, err)
 	}
 	g.h.focus(g.agent("fx-repro"))
+	g.observe()
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
+		t.Fatalf("AtWork with herdr's focus resting on the pane = %q, %v, %v; want nobody", role, you, err)
+	}
+	g.clock.Add(2 * time.Minute)
+	g.youAtWork("fx-repro")
 	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" || !you {
 		t.Fatalf("AtWork with you in the pane = %q, %v, %v; want you, in fx-repro's pane", role, you, err)
 	}
 	g.h.focus("")
+	g.clock.Add(g.cfg.Daemon.HumanCooldown.Duration + time.Second)
 	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
 		t.Fatalf("AtWork after you left the pane = %q, %v, %v; want nobody", role, you, err)
+	}
+}
+
+// You are in a pane herdr shows focused only while herdr showed you at work
+// in a factory pane within the human cooldown: its focus rests where it was
+// when nobody is attached, and a task's copy waited on it for good.
+func TestHerdrsFocusCountsAsYouOnlyWhileYouWereAtWorkLately(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.focus(g.agent("fx-repro"))
+	g.observeN(3)
+	if _, you, err := g.r.AtWork(g.ctx, g.task); err != nil || you {
+		t.Fatalf("AtWork with the focus resting on the pane = %v, %v; want not you", you, err)
+	}
+	g.clock.Add(2 * time.Minute)
+	g.youAtWork("fx-repro")
+	old := g.clock.Now().Add(-time.Hour) // your input proves nothing more: only the focus and the observe pass's proof
+	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", old) }); err != nil {
+		t.Fatal(err)
+	}
+	if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" || !you {
+		t.Fatalf("AtWork with the focus on the pane you were at work in = %q, %v, %v; want you", role, you, err)
+	}
+	g.h.focus("")
+	if _, you, err := g.r.AtWork(g.ctx, g.task); err != nil || you {
+		t.Fatalf("AtWork with the focus off the pane = %v, %v; want not you", you, err)
+	}
+	g.h.focus(g.agent("fx-repro"))
+	g.clock.Add(g.cfg.Daemon.HumanCooldown.Duration)
+	if _, you, err := g.r.AtWork(g.ctx, g.task); err != nil || you {
+		t.Fatalf("AtWork a cooldown after you were at work = %v, %v; want not you", you, err)
 	}
 }
 
@@ -784,12 +823,19 @@ func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
 	cause := g.send("fx-cause", "find the cause")
 	g.send("fx-repro", "reproduce it")
 
-	g.h.focus(g.agent("fx-cause"))
+	typed := func(at time.Time) {
+		t.Helper()
+		if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", at) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	typed(g.clock.Now())
 	if err := g.r.QuitCodex(g.ctx, g.task); !errors.Is(err, ErrOperatorInPane) {
 		t.Fatalf("QuitCodex with you in the pane = %v, want ErrOperatorInPane", err)
 	}
 	g.session("fx-cause") // still live
-	g.h.focus("")
+	typed(g.clock.Now().Add(-time.Hour))
+	g.h.focus(g.agent("fx-cause")) // herdr's focus resting there is no proof of you
 
 	if err := g.r.QuitCodex(g.ctx, g.task); err != nil {
 		t.Fatalf("QuitCodex = %v", err)

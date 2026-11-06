@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 func TestAHungTurnClimbsTheWatchdogSteps(t *testing.T) {
@@ -456,7 +457,13 @@ func TestTheLoopLadderNeverQuitsAPaneTheOperatorIsIn(t *testing.T) {
 		}
 	}
 	starts, prompts, keys := len(g.h.startCalls()), len(g.h.promptTexts()), len(g.h.keyCalls())
-	g.h.focus(g.agent("fx-repro")) // the operator looks at the pane
+	typed := func(at time.Time) {
+		t.Helper()
+		if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", at) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	typed(g.clock.Now()) // the operator types in the pane
 
 	_, err := g.sendLoop("fx-repro", 2*MaxStagePrompts+1)
 
@@ -467,7 +474,7 @@ func TestTheLoopLadderNeverQuitsAPaneTheOperatorIsIn(t *testing.T) {
 		t.Fatal("the pane the operator is in was quit, restarted or prompted")
 	}
 
-	g.h.focus("") // gone
+	typed(g.clock.Now().Add(-time.Hour)) // gone
 	if _, err := g.sendLoop("fx-repro", 2*MaxStagePrompts+1); err != nil {
 		t.Fatal(err)
 	}
