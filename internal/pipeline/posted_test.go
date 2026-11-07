@@ -165,7 +165,9 @@ func TestLocalPathsInAPostedReviewAreAWarning(t *testing.T) {
 	if len(evs) != 1 || evs[0].Level != "warn" {
 		t.Fatalf("events = %+v", evs)
 	}
-	mustContain(t, "message", evs[0].Message, "/tmp/repro.rb", slotPath+"/app/x.rb", e.layout.State()+"/notes/x.md",
+	// The state path is the test's temp dir: localPathRe names the whole file under /var/folders, but a
+	// TMPDIR it does not know (/Volumes) is named by the literal State() alone (TestLocalPaths).
+	mustContain(t, "message", evs[0].Message, "/tmp/repro.rb", slotPath+"/app/x.rb", e.layout.State(),
 		"app/models/order.rb:12: /Users/me/scratch/order_spec.rb")
 	if strings.Contains(evs[0].Message, "order.rb:30") {
 		t.Errorf("a comment without a local path is reported: %s", evs[0].Message)
