@@ -18389,6 +18389,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   review, TestTheQAWalkersTurnNamesNoQuestionsFile (the walker's data named questions-fx-qa.json), the data
   sentence of the walker's prompt, and the rows for a bad PORT, a path without its slash, a qa stage after
   the ready card and a qa stage with two roles (each was accepted).
+- **The factory reads a QA walker's verdict and finds escaped markup, missing translations and error pages
+  itself** (2026-11-07, R55 slice 1, step 2). A walker's "looks fine" proves nothing, so the factory reads the
+  pages the walker saved. No stage runs this yet: step 5 calls it.
+  - The probe (`qa_probe.js`, embedded; `qaProbeScript` puts in the run's nonce) returns the page's URL, its
+    navigation status, its title, the text it shows and its HTML. The text is the rendered text nodes,
+    including open shadow roots, capped at 200,000 bytes. It leaves out code and input (PRE, CODE, KBD,
+    SAMP, TEXTAREA, editable elements) and what a page never shows (SCRIPT, STYLE, NOSCRIPT, TEMPLATE,
+    display none, visibility hidden). The HTML has its scripts, styles, templates and noscripts emptied and
+    is capped at 400,000 bytes. `overflow_x` compares the root's scrollWidth with its clientWidth and is
+    false when the root or the body clips sideways overflow.
+  - `readQAVerdict` refuses the verdict in these cases: a version other than 1, another head, or more pages
+    than `max_pages` or more than 30 PNGs in the run's folder. It also refuses a page without an id of its
+    own, a shot that is not a PNG, a probe without the run's nonce, a probe URL off the copy's own server (a
+    `LocalHost` host and the copy's port), or a missing console log. Every file must be a local path that
+    stays inside the folder: os.Root refuses a link out. It refuses a defect without an id of its own, with
+    an unknown class or severity, or on no page, and an acceptance check that no page, blocked step or
+    not_shown entry covers. A problem names `<run>/verdict.json`, and its words carry file names and the
+    host:port, never page text. The walker's defects come back as the walker's: the factory sets their
+    source and fingerprint, whatever the walker wrote, and clips and masks their quotes.
+  - `detectQA` gives at most one defect of each class per page:
+    - `escaped_markup` (P2) comes from the text only, never the HTML, where attributes hold escaped markup
+      legally. It is a closing tag, an opening tag with an attribute and its value, a `<br>`, or an entity.
+    - `raw_i18n_key` (P2): "translation missing" in the text, or a `translation_missing` class in the HTML.
+    - `error_page` (P2): a status of 500 or more, a 404, or an error page's words in the title, the text or
+      the HTML.
+    - `console_error` (P3): the page's `[error]` lines.
+    - `broken_layout` (P3): `overflow_x`.
+
+    Titles carry no page text. A quote is at most 120 runes around the find, masked before it is cut.
+  - `qaOutcome`: with no page the run is unavailable. A defect blocks when its class is escaped_markup,
+    raw_i18n_key or error_page, whoever found it, or when it is P1 or P2. pre_existing never unblocks a
+    defect. Two defects with one fingerprint count once. So does the walker's copy of a page-wide find
+    (escaped markup, translation, error page, console) on a page path where the factory found that class.
+    The factory's copy is kept, at the more severe severity and with the walker's code paths added.
+  - `factory-qa.md` names what the factory refuses, ids of their own, a defect's page, and an empty console
+    log when a page logs nothing.
+
+  Rejected:
+  - The plan's tag rule `</?NAME(\s[^<>]*)?/?>`. It flags a bare `<time>`, `<label>` or `<b>`, and `<b and c>`,
+    which prose uses as placeholders. A closing tag still finds markup that leaked whole.
+  - Scanning the HTML for escaped markup.
+  - Trusting the walker's `source` or `fingerprint`: a claimed fingerprint could fold the walker's P1 into
+    a P3.
+  - Fingerprints alone for the dedupe. The walker names code paths, so its copy of the factory's find never
+    shares one.
+  - `innerWidth` for the sideways scroll: a classic scrollbar hides 15 pixels of overflow.
+
+  Tests, failing first (none of it existed):
+  - TestDetectQAFindsTheEscapedTooltipSpan, the #785 case, with the span's attributes in either order.
+  - TestDetectQAPassesTheSamePageRenderedRight, TestDetectQAIgnoresEscapedHTMLInsideAttributes,
+    TestDetectQAIgnoresAnglePlaceholdersThatAreNoHTMLTags and
+    TestDetectQAFindsAClosingTagAnAttributeOrABreakShownAsText.
+  - TestDetectQAFindsADisplayedEntity, TestDetectQAFindsAMissingTranslation, TestDetectQAFindsAnErrorPage,
+    TestDetectQANotesConsoleErrorsAndSidewaysScroll and TestDetectQAQuotesAtMost120RunesAndMasksSecrets.
+  - TestReadQAVerdictTakesAValidRun, TestReadQAVerdictRefuses (21 rows),
+    TestQAOutcomeDecidesFromTheFilesNotTheWalker and TestTheProbeScriptCarriesTheNonceAndSkipsCode.
+  - New phrases in TestCheckPromptsRendersTheQAWalkersPrompt.
 
 ## Learned rules
 

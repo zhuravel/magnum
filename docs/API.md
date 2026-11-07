@@ -12301,6 +12301,30 @@ const (
     The kinds of Hold.
 
 const (
+	QAEscapedMarkup = "escaped_markup"
+	QARawI18nKey    = "raw_i18n_key"
+	QAErrorPage     = "error_page"
+	QABrokenLayout  = "broken_layout"
+	QAConsoleError  = "console_error"
+	QAFlow          = "flow"
+)
+    The classes of a QA defect. The factory finds the first three, the console's
+    errors and a page that scrolls sideways itself; flow is the walker's alone
+    (a step of a check that does not do what it says).
+
+const (
+	QAOutcomeClean       = "clean"
+	QAOutcomeDefects     = "defects"
+	QAOutcomeUnavailable = "unavailable"
+	QAOutcomeNotNeeded   = "not_needed"
+	QAOutcomePressure    = "pressure"
+	QAOutcomeInterrupted = "interrupted"
+)
+    The outcomes of a QA run: clean, defects (one blocks), unavailable (no page
+    to judge), not_needed (no user-facing file changed), pressure (the Mac's
+    memory stopped it) and interrupted (the daemon stopped it).
+
+const (
 	ReqStart   = "start"
 	ReqAnswer  = "answer"
 	ReqDecide  = "decide"
@@ -12351,6 +12375,13 @@ const LocalRoundCap = 3 * time.Hour
     LocalRoundCap ends a round of the local review that runs this long (a hang):
     a round takes 39 minutes at the median, its roles' own timeouts end within
     the hour. `magnum factory install --drain` waits longer.
+
+const QAMaxShots = 30
+    QAMaxShots is the most screenshots one QA run may leave in its folder.
+
+const QAVerdictVersion = 1
+    QAVerdictVersion is the version of the QA verdict this build reads;
+    a verdict of any other version is refused.
 
 const RedisDBsPerCopy = 16
     RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
@@ -13280,6 +13311,86 @@ type ProofRun struct {
     its output (redacted), the tree of the commit it ran on (the base's,
     with the head's spec files on it, for the base run), how long it took,
     and whether it hung (the factory stopped it at its bound: exit -1).
+
+type QABlocked struct {
+	What  string `json:"what"`
+	Why   string `json:"why"`
+	Check string `json:"check"`
+}
+    QABlocked is a state or page the walker could not reach, why, and the
+    acceptance check it was for.
+
+type QADefect struct {
+	ID          string   `json:"id"`
+	Class       string   `json:"class"`
+	Severity    string   `json:"severity"`
+	Page        string   `json:"page"`
+	Title       string   `json:"title"`
+	Quote       string   `json:"quote"`
+	Source      string   `json:"source"`
+	Paths       []string `json:"paths"`
+	PreExisting bool     `json:"pre_existing"`
+	Fingerprint string   `json:"fingerprint"`
+}
+    QADefect is one defect: its id, class, severity (P1 to P3) and page id,
+    a title, the quote as the page shows it, the code paths suspected, who found
+    it (Source: walker or factory), whether the walker thinks it was there
+    before the change (read, never trusted in slice 1), and the fingerprint the
+    factory follows it by (qaFingerprint).
+
+type QANotShown struct {
+	Check string `json:"check"`
+	Why   string `json:"why"`
+}
+    QANotShown is an acceptance check no page shows (a background job,
+    an email), and why.
+
+type QAPage struct {
+	ID      string   `json:"id"`
+	Path    string   `json:"path"`
+	State   string   `json:"state"`
+	Side    string   `json:"side"`
+	Shot    string   `json:"shot"`
+	Probe   string   `json:"probe"`
+	Console string   `json:"console"`
+	Status  int      `json:"status"`
+	Checks  []string `json:"checks"`
+}
+    QAPage is one page the walker captured: its id (P1), the path it loaded,
+    the state it reached, its side (after), its shot, probe and console files
+    relative to the run's folder, its HTTP status as the walker saw it, and the
+    acceptance checks it shows.
+
+type QAProbe struct {
+	Nonce     string `json:"nonce"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Text      string `json:"text"`
+	HTML      string `json:"html"`
+	Status    int    `json:"status"`
+	OverflowX bool   `json:"overflow_x"`
+	Truncated bool   `json:"truncated"`
+}
+    QAProbe is what the factory's probe (qa_probe.js) returned in one page:
+    the run's nonce, the page's URL, title, visible text and HTML, its HTTP
+    status (0 when unknown), whether it scrolls sideways, and whether the text
+    or the HTML was cut at its cap.
+
+type QAVerdict struct {
+	Version  int          `json:"version"`
+	Head     string       `json:"head"`
+	Base     string       `json:"base"`
+	URL      string       `json:"url"`
+	Walker   string       `json:"walker"`
+	Pages    []QAPage     `json:"pages"`
+	Defects  []QADefect   `json:"defects"`
+	Blocked  []QABlocked  `json:"blocked"`
+	NotShown []QANotShown `json:"not_shown"`
+}
+    QAVerdict is verdict.json, the walker's verdict on one QA run: its version
+    (QAVerdictVersion), the copy's head it walked, the pages it captured, its
+    defects, the states it could not reach (Blocked) and the acceptance checks
+    no page shows (NotShown). Base, URL and Walker are the factory's to fill.
 
 type QuestionFile struct {
 	Text        string            `json:"text"`

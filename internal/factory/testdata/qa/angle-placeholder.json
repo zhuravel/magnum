@@ -1,0 +1,10 @@
+{
+  "nonce": "n0nce",
+  "url": "http://app.example.localhost:3001/help/shortcuts",
+  "status": 200,
+  "title": "Shortcuts · Example Shop",
+  "overflow_x": false,
+  "text": "Shortcuts\nPress <Enter> to save, then <name> to rename it.\nRemind me at <time>, or pick a <label> and an <option>.\nIf a < b and c > d, the rows swap; a <= b keeps them.\nAT&T and R&D <3\nEmbed a badge with\nin any page.",
+  "html": "<html lang=\"en\"><head><title>Shortcuts · Example Shop</title></head><body><main><h1>Shortcuts</h1><p>Press <kbd>&lt;Enter&gt;</kbd> to save, then &lt;name&gt; to rename it.</p><p>Remind me at &lt;time&gt;, or pick a &lt;label&gt; and an &lt;option&gt;.</p><p>If a &lt; b and c &gt; d, the rows swap; a &lt;= b keeps them.</p><p>AT&amp;T and R&amp;D &lt;3</p><p>Embed a badge with</p><pre><code>&lt;span class=\"badge\" data-bs-toggle=\"tooltip\"&gt;New&lt;/span&gt; &amp;amp; &amp;lt;br&amp;gt;</code></pre><p>in any page.</p></main></body></html>",
+  "truncated": false
+}

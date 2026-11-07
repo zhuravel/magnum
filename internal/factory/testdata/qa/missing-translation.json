@@ -1,0 +1,10 @@
+{
+  "nonce": "n0nce",
+  "url": "http://app.example.localhost:3001/users",
+  "status": 200,
+  "title": "Example Shop",
+  "overflow_x": false,
+  "text": "Title\nalice@example.com\nrev-ann@example.com",
+  "html": "<html lang=\"en\"><head><title>Example Shop</title></head><body><main><h1><span class=\"translation_missing\" title=\"translation missing: en.users.index.title\">Title</span></h1><ul><li>alice@example.com</li><li>rev-ann@example.com</li></ul></main></body></html>",
+  "truncated": false
+}

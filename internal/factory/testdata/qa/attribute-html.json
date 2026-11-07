@@ -1,0 +1,10 @@
+{
+  "nonce": "n0nce",
+  "url": "http://app.example.localhost:3001/settings/roles",
+  "status": 200,
+  "title": "Roles · Example Shop",
+  "overflow_x": false,
+  "text": "Roles\nAdmin\nMember\nTom & Jerry's team",
+  "html": "<html lang=\"en\"><head><title>Roles · Example Shop</title><style></style></head><body><main><h1>Roles</h1><ul><li><span data-bs-toggle=\"tooltip\" data-bs-html=\"true\" data-bs-title=\"&lt;b&gt;Admins&lt;/b&gt; can add passkeys&lt;br&gt;and remove them\">Admin</span></li><li><span title=\"&lt;span class=&quot;badge&quot;&gt;Member&lt;/span&gt;\">Member</span></li></ul><p data-confirm=\"Remove &lt;strong&gt;Tom &amp;amp; Jerry&lt;/strong&gt;?\">Tom &amp; Jerry's team</p><input type=\"hidden\" name=\"note\" value=\"&lt;p&gt;draft&lt;/p&gt;\"></main></body></html>",
+  "truncated": false
+}

@@ -1,0 +1,10 @@
+{
+  "nonce": "n0nce",
+  "url": "http://app.example.localhost:3001/settings/security",
+  "status": 200,
+  "title": "Security · Example Shop",
+  "overflow_x": false,
+  "text": "Security\nPasskeys\nMacBook Touch ID\nAdded <span data-bs-toggle=\"tooltip\" data-bs-custom-class=\"tooltip-long\" title=\"Nov 07, 2026 10:15\">Nov 07, 2026</span>\nnever used\nAdd a passkey",
+  "html": "<html lang=\"en\"><head><title>Security · Example Shop</title><script src=\"/assets/application.js\"></script></head><body><main><h1>Security</h1><h2>Passkeys</h2><table class=\"table\"><tbody><tr><td>MacBook Touch ID</td><td>Added &lt;span data-bs-toggle=\"tooltip\" data-bs-custom-class=\"tooltip-long\" title=\"Nov 07, 2026 10:15\"&gt;Nov 07, 2026&lt;/span&gt;</td><td>never used</td></tr></tbody></table><button type=\"button\" class=\"btn btn-primary\">Add a passkey</button></main></body></html>",
+  "truncated": false
+}

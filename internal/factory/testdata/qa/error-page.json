@@ -1,0 +1,10 @@
+{
+  "nonce": "n0nce",
+  "url": "http://app.example.localhost:3001/settings/security",
+  "status": 500,
+  "title": "Action Controller: Exception caught",
+  "overflow_x": false,
+  "text": "NoMethodError in Settings::Security#show\nShowing /copies/shop1/app/views/settings/security/show.html.erb where line #12 raised:\nundefined method 'created_at' for nil\nRails.root: /copies/shop1",
+  "html": "<html lang=\"en\"><head><title>Action Controller: Exception caught</title><style></style></head><body><header><h1>NoMethodError in Settings::Security#show</h1></header><main><p>Showing <i>/copies/shop1/app/views/settings/security/show.html.erb</i> where line <b>#12</b> raised:</p><pre><code>undefined method 'created_at' for nil</code></pre></main></body></html>",
+  "truncated": false
+}
