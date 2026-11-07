@@ -1198,6 +1198,12 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			e.log.Warn("fix: freeze the repository notes", "subject", job.subject(), "err", err)
 		}
 	}
+	// A fixer App (FixerLogins) pushes with `magnum push` as its own login;
+	// a gh fixer pushes with git push as the author.
+	push, login := "", ""
+	if logins := e.cfg.FixerLogins(&job.watch); len(logins) > 0 {
+		push, login = agents.PushLine(e.d.Layout.Binary(), job.slot.Path), logins[0]
+	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:         deref(pr.HeadRef),
 		ReviewURL:       job.review.URL,
@@ -1207,6 +1213,8 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		DBLockCommand:   agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
 		FixReplyCommand: agents.FixReplyLine(e.d.Layout.Binary()),
 		FixSyncCommand:  e.fixSyncLine(job),
+		PushCommand:     push,
+		FixerLogin:      login,
 		NoFindings:      job.alone,
 		NotesParts:      notesParts,
 		ConflictBase:    job.conflict.base,

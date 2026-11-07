@@ -628,6 +628,10 @@ func TestRenderGolden(t *testing.T) {
 	fixMergeOnly.NoFindings, fixMergeOnly.ExternalFile = true, ""
 	fixMergeOnly.ConflictBase, fixMergeOnly.ConflictSHA = "master", "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
 	fixMergeOnly.ConflictPaths, fixMergeOnly.ConflictFiles = []string{"Gemfile.lock"}, 1
+	// A fixer that acts as a GitHub App of its own: its login, and the
+	// `magnum push` line in place of git push.
+	fixApp := fixFixture()
+	fixApp.FixerLogin, fixApp.PushCommand = "example-fixer[bot]", PushLine(fixApp.Magnum, fixApp.Checkout)
 
 	cases := []struct {
 		golden, name string
@@ -748,6 +752,7 @@ func TestRenderGolden(t *testing.T) {
 		{"fix_no_findings", "fix.md", fixNoFindings},
 		{"fix_conflict", "fix.md", fixConflict},
 		{"fix_merge_only", "fix.md", fixMergeOnly},
+		{"fix_app", "fix.md", fixApp},
 		{"whiteboard", "whiteboard.md", whiteboardFixture("")},
 		{"whiteboard_update", "whiteboard.md", whiteboardFixture("6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b")},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",

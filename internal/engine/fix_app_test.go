@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -135,5 +138,57 @@ func TestAGhFixPaneIsNotRenewedForTheNewMagnumVariables(t *testing.T) {
 	env := h.ag.paneEnv("claude-fix")
 	if env["MAGNUM_PUSH_BRANCH"] != deref(h.pr(2).HeadRef) || env["MAGNUM_DEFAULT_BRANCH"] == "" || env["MAGNUM_BASE_BRANCH"] == "" {
 		t.Errorf("the fixer's pane env = %v, want the PR's branch, the default branch and the base", env)
+	}
+}
+
+// fixInput is the last fix prompt input h's fake agents got.
+func (h *harness) fixInput() agents.FixPromptInput {
+	h.t.Helper()
+	h.ag.mu.Lock()
+	defer h.ag.mu.Unlock()
+	if len(h.ag.fixInputs) == 0 {
+		h.t.Fatal("no fix prompt was rendered")
+	}
+	return h.ag.fixInputs[len(h.ag.fixInputs)-1]
+}
+
+// A fixer App's prompt names the `magnum push` line of the slot's checkout
+// and the App's login, and its external file says it posts as the App
+// (`fixer`); a gh fixer's names neither, and its file says the author.
+func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mods       []func(*harness)
+		push       bool
+		login, fix string
+	}{
+		"app": {[]func(*harness){withFixerApp}, true, fixerAppLogin, fixerAppLogin},
+		"gh":  {nil, false, "", "zhuravel"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, git := fixHarness(t, tc.mods...)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+			id := h.fix(FixPayload{})
+			h.handle()
+			h.wantDone(id)
+			in := h.fixInput()
+			wantPush := ""
+			if tc.push {
+				wantPush = agents.PushLine(h.layout.Binary(), h.slot("review1").Path)
+			}
+			if in.PushCommand != wantPush || in.FixerLogin != tc.login {
+				t.Errorf("push %q, login %q; want %q, %q", in.PushCommand, in.FixerLogin, wantPush, tc.login)
+			}
+			b, err := os.ReadFile(in.ExternalFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var x struct {
+				Fixer string `json:"fixer"`
+			}
+			if err := json.Unmarshal(b, &x); err != nil || x.Fixer != tc.fix {
+				t.Errorf("the external file's fixer = %q (%v), want %q", x.Fixer, err, tc.fix)
+			}
+		})
 	}
 }

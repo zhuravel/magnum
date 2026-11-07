@@ -827,6 +827,12 @@ type RoleData struct {
 	// onto a merge of the base the branch gained. Never derived, since only
 	// the fix job knows the PR's base: "" = the prompt names no fix-sync.
 	FixSyncCommand string
+	// PushCommand and FixerLogin are the fix prompt's too, set for a fixer
+	// that acts as a GitHub App of its own: the line it pushes with
+	// (PushLine, `magnum push`; "" = `git push origin HEAD:<HeadRef>`, a
+	// gh fixer's) and the login its commits, push and replies carry ("" =
+	// the PR author's, a gh fixer's).
+	PushCommand, FixerLogin string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
 	// alone, and merges the base when the PR conflicts with it (the fix job
@@ -910,7 +916,9 @@ func PushLine(magnum, checkout string) string {
 // the line it posts every reply through (FixReplyCommand, FixReplyLine;
 // "" = magnum on PATH), the line it runs when a push is rejected because
 // the branch moved (FixSyncCommand, FixSyncLine; "" = none, the prompt
-// then names no such line), whether the review found nothing, leaving the
+// then names no such line), for a fixer App the line it pushes with and
+// the login it acts as (PushCommand, PushLine, and FixerLogin; "" = a gh
+// fixer, which pushes with git push as the author), whether the review found nothing, leaving the
 // fixer the external file's items and the base merge alone (NoFindings),
 // the job's frozen copy of the repository notes in parts (NotesParts,
 // FreezeNotes beside the report; zero = none), which the fixer reads and
@@ -920,7 +928,7 @@ func PushLine(magnum, checkout string) string {
 // conflicting paths (ConflictPaths, as git names them).
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
-	FixSyncCommand                                                                              string
+	FixSyncCommand, PushCommand, FixerLogin                                                     string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
 	ConflictBase, ConflictSHA                                                                   string
@@ -967,7 +975,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
-		FixSyncCommand: in.FixSyncCommand, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
+		FixSyncCommand: in.FixSyncCommand, PushCommand: in.PushCommand, FixerLogin: in.FixerLogin, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
 	}
 	if in.ConflictSHA != "" {
 		d.ConflictBase, d.ConflictSHA = in.ConflictBase, in.ConflictSHA

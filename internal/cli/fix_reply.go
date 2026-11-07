@@ -38,8 +38,8 @@ func newFixReplyCmd(c *Context) *cobra.Command {
 	var issue bool
 	cmd := newCommand(groupAct, fixReplyUsage, "post one reply of the fixer, read from stdin, signed with the fix marker (for the fixer)",
 		"For the fixer's pane: the fix prompt names the line, and the fixer posts every reply through it, the reply on "+
-			"standard input. It reads the pull request from the pane's MAGNUM_PR_URL and posts as the pane's gh login, the "+
-			"PR's author. With --comment it replies in the thread of that review comment (any comment of the thread; the "+
+			"standard input. It reads the pull request from the pane's MAGNUM_PR_URL and posts as the pane's gh login: the "+
+			"PR's author, or the fixer's GitHub App (the pane's GH_CONFIG_DIR). With --comment it replies in the thread of that review comment (any comment of the thread; the "+
 			"reply goes to its first comment), after checking that the comment is one of this pull request's; with --issue "+
 			"it writes a comment on the pull request's conversation.\n\n"+
 			"It refuses a reply that is empty, carries a <!-- magnum: marker of its own, names a local path or is longer "+

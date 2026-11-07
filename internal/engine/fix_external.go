@@ -66,12 +66,15 @@ const (
 	magnumMarker = "<!-- magnum:"
 )
 
-// externalItems is the file's content: the PR author (Account form), whom
-// the fixer posts as, and magnum's logins (FixerLogins, Account form), the
-// only two whose comments answer an item (the skill's look right before a
-// reply checks them by name), the threads and the conversation.
+// externalItems is the file's content: the PR author (Account form), the
+// login the fixer posts as (Fixer: a fixer App's login, else the author),
+// and magnum's logins (FixerLogins, Account form, a fixer App's
+// included), the only ones whose comments answer an item (the skill's look
+// right before a reply checks them by name), the threads and the
+// conversation.
 type externalItems struct {
 	Author       string           `json:"author"`
+	Fixer        string           `json:"fixer,omitempty"`
 	FixerLogins  []string         `json:"fixer_logins"`
 	Threads      []externalThread `json:"threads"`
 	Conversation []externalRemark `json:"conversation"`
@@ -547,6 +550,10 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) (pa
 		read, err = e.readExternal(ctx, job)
 	}
 	x, outside := read.items, read.outside
+	x.Fixer = x.Author // a gh fixer posts as the author
+	if logins := e.cfg.FixerLogins(&job.watch); len(logins) > 0 {
+		x.Fixer = logins[0]
+	}
 	path = filepath.Join(dir, externalFile)
 	cause := ""
 	if err != nil {

@@ -765,7 +765,8 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"Right before each reply to an external item, look again: the author may have answered it while you worked.",
 		// Only the author and magnum's logins answer an item, an outsider's comment is ignored as in the file,
 		// and a review body the author posts while the fixer works answers a review body or a comment.
-		"`author` is the PR author's login, which you post as, and `fixer_logins` are magnum's logins: only these two answer an item.",
+		"`author` is the PR author's login, `fixer` is the login you post as (the author's, or the App's), and `fixer_logins` are " +
+			"magnum's logins, the App's included: only `author` and `fixer_logins` answer an item.",
 		"Only `author` and `fixer_logins` (section 2) answer an item; a marker or a reply from anyone else answers nothing.",
 		"--jq '.[] | select(.id == <comment_id> or .in_reply_to_id == <comment_id>) | [.user.login, .user.type, .author_association, .body]'",
 		"Ignore an outsider's comment, as the file does: one whose `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` and whose author is no `Bot`, not `author` and none of `fixer_logins`.",

@@ -1194,7 +1194,7 @@ type FallbackData struct {
 
 type FixPromptInput struct {
 	HeadRef, ReviewURL, ReviewFile, ExternalFile, ReviewerLogin, DBLockCommand, FixReplyCommand string
-	FixSyncCommand                                                                              string
+	FixSyncCommand, PushCommand, FixerLogin                                                     string
 	NoFindings                                                                                  bool
 	NotesParts                                                                                  NotesParts
 	ConflictBase, ConflictSHA                                                                   string
@@ -1204,19 +1204,22 @@ type FixPromptInput struct {
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
     (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
     posted it), the file of the other reviewers' open items (ExternalFile,
-    external-threads.json beside the report; "" = none, the prompt then names
-    no such file), the line the fixer runs its database commands through
-    (DBLockCommand, DBLockLine; "" = derived without a checkout), the line it
-    posts every reply through (FixReplyCommand, FixReplyLine; "" = magnum on
-    PATH), the line it runs when a push is rejected because the branch moved
-    (FixSyncCommand, FixSyncLine; "" = none, the prompt then names no such
-    line), whether the review found nothing, leaving the fixer the external
-    file's items and the base merge alone (NoFindings), the job's frozen copy
-    of the repository notes in parts (NotesParts, FreezeNotes beside the report;
-    zero = none), which the fixer reads and never edits, and the PR's conflict
-    with its base, which the fixer merges first: the base branch (ConflictBase),
-    the tip of it magnum fetched (ConflictSHA; "" = no conflict, or magnum could
-    not check) and the conflicting paths (ConflictPaths, as git names them).
+    external-threads.json beside the report; "" = none, the prompt then
+    names no such file), the line the fixer runs its database commands
+    through (DBLockCommand, DBLockLine; "" = derived without a checkout),
+    the line it posts every reply through (FixReplyCommand, FixReplyLine;
+    "" = magnum on PATH), the line it runs when a push is rejected because the
+    branch moved (FixSyncCommand, FixSyncLine; "" = none, the prompt then names
+    no such line), for a fixer App the line it pushes with and the login it acts
+    as (PushCommand, PushLine, and FixerLogin; "" = a gh fixer, which pushes
+    with git push as the author), whether the review found nothing, leaving
+    the fixer the external file's items and the base merge alone (NoFindings),
+    the job's frozen copy of the repository notes in parts (NotesParts,
+    FreezeNotes beside the report; zero = none), which the fixer reads and never
+    edits, and the PR's conflict with its base, which the fixer merges first:
+    the base branch (ConflictBase), the tip of it magnum fetched (ConflictSHA;
+    "" = no conflict, or magnum could not check) and the conflicting paths
+    (ConflictPaths, as git names them).
 
 type Health struct {
 	Kind    HealthKind
@@ -2774,6 +2777,12 @@ type RoleData struct {
 	// onto a merge of the base the branch gained. Never derived, since only
 	// the fix job knows the PR's base: "" = the prompt names no fix-sync.
 	FixSyncCommand string
+	// PushCommand and FixerLogin are the fix prompt's too, set for a fixer
+	// that acts as a GitHub App of its own: the line it pushes with
+	// (PushLine, `magnum push`; "" = `git push origin HEAD:<HeadRef>`, a
+	// gh fixer's) and the login its commits, push and replies carry ("" =
+	// the PR author's, a gh fixer's).
+	PushCommand, FixerLogin string
 	// NoFindings is the fix prompt's too: the review found nothing and left
 	// nothing open, so the fixer handles ExternalFile's unanswered items
 	// alone, and merges the base when the PR conflicts with it (the fix job
