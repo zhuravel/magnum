@@ -4144,7 +4144,9 @@ reason (a baseline, a watch that leaves your PRs out) says why and runs nothing,
 runs, stops what magnum runs on the PR (`magnum abort`, the board's `K`; otherwise `no fix loop runs on #4611`).
 They go to magnum's registry and magnum's daemon, never through the factory daemon, which still never writes
 magnum's registry. The right-click menu of a PR row lists them, each asking the same y/N; a click never confirms. A registry of magnum's that cannot be read leaves
-your PRs out, and home's blocker line says `your PRs not read`, with why on a wide screen.
+your PRs out, and home's blocker line says `your PRs not read`, with why on a wide screen. The PR board keeps
+listing them too, each tagged with its verdict, unless `[board] own_prs = "factory"` leaves them to this screen
+alone (The PR board, below).
 
 Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt but
 the liaison's carries the rules of `factory-shared.md`: no interactive question dialog (an agent writes its questions
