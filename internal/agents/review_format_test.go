@@ -625,11 +625,13 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // true` (no gh call, the title and description from description_file, a
 // product question marked in the provenance).
 // Then still 39,194 (2026-11-07): the operator's rule that a rendering
-// defect users see is at least P2 (124 bytes) came from unpinned wording
-// (131): section 0's `phase` and lock-command glosses (27), the readiness
-// sentence (34), the instruction files' base copy (8), the body-only finding
-// (11), the `suggestion` block (22), magnum's re-review line (6), the
-// re-post sentence (5) and the verdict's count (18); 7 bytes are left.
+// defect users see in normal use is at least P2 (138 bytes) came from
+// unpinned wording (141): section 0's `phase` and lock-command glosses (27),
+// the readiness sentence (34), the instruction files' base copy (8), section
+// 5's anchor line, whose body-only sentence now names a finding (8), the
+// `suggestion` block (22) and the reproduction's place (2), section 3's
+// `environment` code (7), magnum's re-review line (10), the re-post sentence
+// (5) and the verdict's count (18); 3 bytes are left.
 // Every rule added must replace or shorten text.
 const skillMaxBytes = 39194
 
@@ -768,10 +770,12 @@ func TestSkillFindingsProveFiveFactsAndRankByReachability(t *testing.T) {
 // tooltip markup P3, the factory listed it as Known, and the PR shipped with
 // it (2026-11-07). The rule is in section 4, which every round reads, not in
 // the Local round section, so magnum's GitHub reviews and its eval replays
-// rank it the same way.
+// rank it the same way. It holds for what users see in normal use: an error
+// page only a hand-typed or malformed parameter reaches stays under the
+// section's "an input no caller, documented API or user sends is P3 at most".
 func TestAVisibleRenderingDefectIsAtLeastP2InEveryReview(t *testing.T) {
-	const rule = "A rendering defect users see (markup shown as text, a raw translation key, an error page, a broken layout) is at least P2."
-	skillSays(t, []string{rule}, nil)
+	const rule = "A rendering defect users see in normal use (markup shown as text, a raw translation key, an error page, a broken layout) is at least P2."
+	skillSays(t, []string{rule}, []string{"A rendering defect users see ("})
 	_, sec4, _ := strings.Cut(string(magnum.Skill), "## 4. Prove each finding")
 	sec4, _, _ = strings.Cut(sec4, "\n## ")
 	if !strings.Contains(sec4, rule) {
@@ -850,13 +854,16 @@ func TestJudgePromptsPostAtMostTheConfiguredSimplificationsThatRemoveSomething(t
 // A comment states the trigger and the consequence first and ends with the
 // code cause and the smallest safe change; structure counts only with an
 // input that goes wrong; the drafted review is reread once before posting.
+// Only a finding goes into the body for want of a useful changed line: the
+// body itself always carries the verdict, the titles and Checks (section 7).
 func TestSkillShapesCommentsAroundTriggerAndSmallestFix(t *testing.T) {
 	skillSays(t, []string{
 		"**Fix**: the code cause, one smallest safe change, what it must keep",
 		"Structure can hide a defect",
 		"Report one only with the input that goes wrong.",
 		"reread every comment once",
-	}, nil)
+		"Put a finding in the body only for a cross-cutting problem with no useful changed line.",
+	}, []string{"Use the body only for"})
 }
 
 // Fix advice was never run and did not say what the fix must keep: a PR got

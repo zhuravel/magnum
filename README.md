@@ -2811,8 +2811,8 @@ What an author gets, every review alike:
   (a `suggestion` is only ever the code fix). When that change would restore what the PR or a merged
   related PR removed or replaced on purpose, or two plausible fixes differ in what users or callers see
   (never only in rollout, staging or code structure), **Fix** names the options, each with what it keeps and costs, and ends "This is the author's call.", at the same
-  priority. A rendering defect users see (markup shown as text, a raw translation key, an error page, a
-  broken layout) is at least P2. A P3's title ends "(optional, no reply needed)"; a re-review's finding in code written to fix an
+  priority. A rendering defect users see in normal use (markup shown as text, a raw translation key, an
+  error page, a broken layout) is at least P2. A P3's title ends "(optional, no reply needed)"; a re-review's finding in code written to fix an
   earlier one ends "(in the fix for <earlier title>)".
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding

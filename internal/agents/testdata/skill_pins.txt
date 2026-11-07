@@ -44,7 +44,7 @@ A probe only this machine has gets a line that says what it exercised and its re
 A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`.
 A race names the window's length and how often the competing writer runs. When a rerun or retry recovers, seconds against a daily or rarer writer is P3. When the loss stays and matters beyond one record, it is P2. A failure that a plain rerun clears is not a broken migration or deploy.
 A rejected P0 to P2 entry that is not `duplicate` also carries `reason`: one sentence naming the fact that decided it.
-A rendering defect users see (markup shown as text, a raw translation key, an error page, a broken layout) is at least P2.
+A rendering defect users see in normal use (markup shown as text, a raw translation key, an error page, a broken layout) is at least P2.
 A reply that scores the fix (`Low priority, net -6. <reason>`) is decided by its reason, never by the number: rebut only a fact in it you disprove at `head_sha`, or a consequence your comment sized that the reply leaves out, with the evidence and no score of your own; honour a product decision, data only the author holds, and every decline of a P3.
 A reply that states a standing decision of the repository goes into the notes (section 2). So does a decline that calls an actor or precondition too rare to support: note what it accepts beside any probe line you wrote for it.
 A security one (an authorization bypass, data exposure, injection) goes only to the result file unless `base.repo.private` (section 1) is true.
@@ -84,6 +84,7 @@ Post every thread reply through `post_replies`, one per thread, after `post_revi
 Post exactly one GitHub review, or only thread replies where the prompt allows.
 Probe the real engine and framework while you look
 Prove it with a reproduction whenever practical (section 5); a security finding with the repository's own tests (a focused or request spec on the PR's code, through `db_lock`), never with attack tooling (browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools against hosts): call a probe a test of the PR's behaviour.
+Put a finding in the body only for a cross-cutting problem with no useful changed line.
 Reachability decides the priority
 Record each such fix in the own pass under `## Fix evidence`: the invariant, the writes that reach the state, those you probed and those unproven; an unproven write the fix left untouched keeps the finding open.
 Report one only with the input that goes wrong.

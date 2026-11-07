@@ -146,23 +146,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   with none, a line the doctor never printed before the fixer App. It now returns at once when no watch's
   fixer is an App (`AllFixerLogins` empty). Test, failing first:
   TestDoctorFixerReposReadsNothingWithoutAFixerApp.
-- **A rendering defect users see is at least P2, in every review** (2026-11-07, the operator's rule). A
-  factory local round found a settings page's dates shown as raw `<span data-bs-…>` tooltip markup and
-  ranked it P3, so the factory listed it as Known and the PR shipped with it. Section 4 of the review
-  skill now says, after the paragraph on developers' time: "A rendering defect users see (markup shown as
-  text, a raw translation key, an error page, a broken layout) is at least P2." A P2 blocks the factory's
-  publish and counts in a GitHub review's `Fix N problem(s) before merging.`. The skill stays within its
-  cap of 39,194 bytes (now 39,187): the rule's 124 bytes come from unpinned wording, and no rule went:
-  section 0's `phase` and lock-command glosses, the readiness sentence, the instruction files' base copy,
-  the body-only finding, the `suggestion` block, magnum's re-review line, the re-post sentence and the
-  verdict's count (131 bytes). None of the trims touches the lines a held skill-editor proposal changes,
-  so it still applies. `eval.toml.example` gains a generic case of the miss
-  (`settings-dates-escaped-markup`, wanted at P2: a P3 finding on it scores found at the wrong severity).
-  Rejected: the rule in the "Local round" section only (smaller, but magnum's GitHub reviews would keep
-  calling such a defect optional, and an eval replay, which runs as a GitHub round, could not measure it);
-  a raise of the cap (the trims paid for it); and leaving it to a visual QA stage (it may not run, and the
-  review would still call what it found optional). Tests, failing first:
-  TestAVisibleRenderingDefectIsAtLeastP2InEveryReview and TestTheExampleCorpusWantsEscapedMarkupOnAPageAtP2.
+- **A rendering defect users see in normal use is at least P2, in every review** (2026-11-07, the
+  operator's rule, roadmap R56). A factory local round found a settings page's dates shown as raw
+  `<span data-bs-…>` tooltip markup and ranked it P3, so the factory listed it as Known and the PR shipped
+  with it. Section 4 of the review skill now says, after the paragraph on developers' time: "A rendering
+  defect users see in normal use (markup shown as text, a raw translation key, an error page, a broken
+  layout) is at least P2." "In normal use" keeps section 4's reachability: an error page that only a
+  hand-typed or malformed parameter reaches stays "P3 at most". A GitHub review counts such a defect in
+  `Fix N problem(s) before merging.`, and the factory's local review hands it to the writer as a blocking
+  finding. It can still end in the factory's Known list by two exits of the review loop, which this entry
+  does not change: the writer declines it with a risk (the finding is rebutted, blocks no more, and the
+  Known list names it as declined), or it comes back twice after its fix (a doubt, and the loop ends on
+  the oscillation). Those two exits are the gap that roadmap R55's visual QA stage before publish closes
+  deterministically. The skill stays within its cap of 39,194 bytes (now 39,191): the rule's 138 bytes
+  come from unpinned wording, and no rule went: section 0's `phase` and lock-command glosses, the
+  readiness sentence, the instruction files' base copy, section 5's anchor line (whose body-only sentence
+  now says what goes into the body: a finding), the `suggestion` block and the reproduction's place,
+  section 3's `environment` code, magnum's re-review line, the re-post sentence and the verdict's count
+  (141 bytes). None of the trims touches the lines a held skill-editor proposal changes, so it still
+  applies. `eval.toml.example` gains a generic case of the miss (`settings-dates-escaped-markup`, wanted at
+  P2: a P3 finding on it scores found at the wrong severity). Rejected: the rule in the "Local round"
+  section only (smaller, but magnum's GitHub reviews would keep calling such a defect optional, and an
+  eval replay, which runs as a GitHub round, could not measure it); the rule without "in normal use" (it
+  would contradict section 4's ceiling for inputs no caller sends); a raise of the cap (the trims paid for
+  it); and leaving it to the QA stage alone (it may not run, and the review would still call what it found
+  optional). Tests, failing first: TestAVisibleRenderingDefectIsAtLeastP2InEveryReview,
+  TestTheExampleCorpusWantsEscapedMarkupOnAPageAtP2 and the body-only sentence in
+  TestSkillShapesCommentsAroundTriggerAndSmallestFix.
 
 ## Checkouts and pools
 
