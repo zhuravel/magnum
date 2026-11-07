@@ -4255,12 +4255,13 @@ own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`
 factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold, and a stage that meets herdr down inside its pass counts no failure) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
 hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops
 idle servers; a disk below half of `min_free_disk_gb` needs you. The memory hold's reason, which the held tasks'
-waits and the screen's wide blocker line show, names the 3 largest resident processes and the Codex app-server
-brokers whose parent is gone (`app-server-broker.mjs` under launchd, which keep their MCP servers for nobody),
-with their pids and the memory of their trees: `swap 97% used, launches wait below 80%; largest: codex 2.5 GB
-(pid 90), ...; orphaned Codex app-server brokers: pids 455, 457 (2.5 GB with their children)`. It reads the
-process table (`ps`) when the hold begins and every 10 minutes while it lasts, and kills nothing: what to stop is
-yours. At most `heavy_stages` heavy stages (local
+waits and the screen's wide blocker line show, names the 3 largest resident processes and every Codex app-server
+broker (`app-server-broker.mjs`) with its pid and age, oldest first, and the memory of their trees: `swap 97% used,
+launches wait below 80%; largest: codex 2.5 GB (pid 90), ...; Codex app-server brokers, oldest first: pid 455
+(3d2h, may be orphaned), pid 457 (2h), 2.3 GB with their children`. The plugin detaches each broker it starts, so
+the broker of a live Claude session runs under launchd too: only one older than a day is said to be possibly
+orphaned, and the age is a hint, not proof. It reads the process table (`ps`) when the hold begins and every 10
+minutes while it lasts, and stops no process. At most `heavy_stages` heavy stages (local
 review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request
 that waited 30 minutes expires.
 

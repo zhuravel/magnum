@@ -12237,8 +12237,8 @@ type Deps struct {
 	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
 	// bytes of the filesystem that holds path; MemProcs the process table
-	// (ReadMemProcs), whose largest processes and orphaned Codex brokers the
-	// memory hold names (nil names none).
+	// (ReadMemProcs), whose largest processes and Codex brokers the memory
+	// hold names (nil names none).
 	Memory   func(ctx context.Context) engine.MemorySample
 	Disk     func(path string) (free uint64, err error)
 	MemProcs func(ctx context.Context) ([]MemProc, error)
@@ -12457,17 +12457,19 @@ type MemProc struct {
 	RSS       int64
 	Name      string
 	Broker    bool
+	Age       time.Duration
 }
     MemProc is a process as the memory hold names it: its id, its parent's, its
-    resident memory in bytes, its executable's base name (never its arguments)
-    and whether it is a Codex app-server broker.
+    resident memory in bytes, its executable's base name (never its arguments),
+    whether it is a Codex app-server broker and how long it has run.
 
 func ReadMemProcs(ctx context.Context, r execx.Runner) ([]MemProc, error)
-    ReadMemProcs reads the process table through r for the memory hold: `ps -A
-    -o pid=,ppid=,rss=,comm=` for the ids, the resident memory and the names,
-    then `ps -A -o pid=,args=` to tell the brokers, both in the C locale.
-    The arguments stay here: only whether they name a broker leaves. It runs
-    nothing else. A line it cannot read is skipped.
+    ReadMemProcs reads the process table through r for the memory hold: `ps
+    -A -o pid=,ppid=,rss=,etime=,comm=` for the ids, the resident memory, the
+    ages and the names (each through execx.Redact), then `ps -A -o pid=,args=`
+    to tell the brokers, both in the C locale. The arguments stay here: only
+    whether they name a broker leaves. It runs nothing else. A line it cannot
+    read is skipped.
 
 type MigrationFlag struct {
 	Path                                   string

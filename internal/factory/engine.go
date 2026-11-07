@@ -225,8 +225,8 @@ type Deps struct {
 	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
 	// bytes of the filesystem that holds path; MemProcs the process table
-	// (ReadMemProcs), whose largest processes and orphaned Codex brokers the
-	// memory hold names (nil names none).
+	// (ReadMemProcs), whose largest processes and Codex brokers the memory
+	// hold names (nil names none).
 	Memory   func(ctx context.Context) engine.MemorySample
 	Disk     func(path string) (free uint64, err error)
 	MemProcs func(ctx context.Context) ([]MemProc, error)

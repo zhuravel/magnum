@@ -1,10 +1,10 @@
 package factory
 
 // The memory hold's culprits (B #13 of the 2026-11-07 audit): the hold's
-// reason names the largest resident processes and the Codex app-server
-// brokers whose parent is gone, with their pids, so you see what holds the
-// memory without looking for it. It reads the process table and kills
-// nothing: what to stop is yours to decide.
+// reason names the largest resident processes and every Codex app-server
+// broker with its age, so you see what holds the memory without looking for
+// it. It reads the process table and kills nothing: what to stop is yours
+// to decide.
 
 import (
 	"cmp"
@@ -31,26 +31,33 @@ const (
 	// memPsTimeout bounds each ps read of ReadMemProcs.
 	memPsTimeout = 10 * time.Second
 	// brokerMark is what the arguments of a Codex app-server broker hold
-	// (node .../app-server-broker.mjs): one whose parent is gone keeps its
-	// MCP servers alive for nobody.
+	// (node .../app-server-broker.mjs), which keeps MCP servers alive.
 	brokerMark = "app-server-broker"
+	// brokerOrphanAge is the age from which a broker under launchd may be
+	// orphaned. The plugin starts each broker detached, so a live Claude
+	// session's broker is under launchd too, and stops it at the session's
+	// end: only an old one may have outlived its session.
+	brokerOrphanAge = 24 * time.Hour
 )
 
 // MemProc is a process as the memory hold names it: its id, its parent's,
 // its resident memory in bytes, its executable's base name (never its
-// arguments) and whether it is a Codex app-server broker.
+// arguments), whether it is a Codex app-server broker and how long it has
+// run.
 type MemProc struct {
 	PID, PPID int
 	RSS       int64
 	Name      string
 	Broker    bool
+	Age       time.Duration
 }
 
 // ReadMemProcs reads the process table through r for the memory hold: `ps
-// -A -o pid=,ppid=,rss=,comm=` for the ids, the resident memory and the
-// names, then `ps -A -o pid=,args=` to tell the brokers, both in the C
-// locale. The arguments stay here: only whether they name a broker leaves.
-// It runs nothing else. A line it cannot read is skipped.
+// -A -o pid=,ppid=,rss=,etime=,comm=` for the ids, the resident memory, the
+// ages and the names (each through execx.Redact), then `ps -A -o pid=,args=`
+// to tell the brokers, both in the C locale. The arguments stay here: only
+// whether they name a broker leaves. It runs nothing else. A line it cannot
+// read is skipped.
 func ReadMemProcs(ctx context.Context, r execx.Runner) ([]MemProc, error) {
 	ps := func(cols string) (string, error) {
 		res, err := r.Run(ctx, execx.Cmd{Name: "ps", Args: []string{"-A", "-o", cols}, Env: map[string]string{"LC_ALL": "C"},
@@ -60,7 +67,7 @@ func ReadMemProcs(ctx context.Context, r execx.Runner) ([]MemProc, error) {
 		}
 		return string(res.Stdout), nil
 	}
-	table, err := ps("pid=,ppid=,rss=,comm=")
+	table, err := ps("pid=,ppid=,rss=,etime=,comm=")
 	if err != nil {
 		return nil, err
 	}
@@ -87,25 +94,53 @@ func ReadMemProcs(ctx context.Context, r execx.Runner) ([]MemProc, error) {
 		if pid <= 0 {
 			continue
 		}
-		out = append(out, MemProc{PID: pid, PPID: ppid, RSS: kb << 10, Name: filepath.Base(strings.TrimSpace(m[4])), Broker: brokers[pid]})
+		out = append(out, MemProc{PID: pid, PPID: ppid, RSS: kb << 10, Age: parseEtime(m[4]),
+			Name: execx.Redact(filepath.Base(strings.TrimSpace(m[5]))), Broker: brokers[pid]})
 	}
 	return out, nil
 }
 
-// psMemRow is a line of the table read: pid, ppid, rss (KiB) and comm, the
-// last column, which may hold spaces (an app bundle's path). psArgsRow is a
-// line of the arguments read: pid and the arguments.
+// psMemRow is a line of the table read: pid, ppid, rss (KiB), etime and
+// comm, the last column, which may hold spaces (an app bundle's path).
+// psArgsRow is a line of the arguments read: pid and the arguments.
 var (
-	psMemRow  = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S.*)$`)
+	psMemRow  = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S.*)$`)
 	psArgsRow = regexp.MustCompile(`^\s*(\d+)\s+(.*)$`)
 )
 
+// parseEtime is ps's elapsed time, [[dd-]hh:]mm:ss, as a duration; 0 for
+// one it cannot read.
+func parseEtime(s string) time.Duration {
+	var days int
+	if d, rest, ok := strings.Cut(s, "-"); ok {
+		n, err := strconv.Atoi(d)
+		if err != nil {
+			return 0
+		}
+		days, s = n, rest
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0
+	}
+	var secs int
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return 0
+		}
+		secs = secs*60 + n
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(secs)*time.Second
+}
+
 // culpritsText is what the memory hold adds to its reason from the process
-// table procs: the culpritsLargest largest resident processes, and the
-// brokers whose parent is gone (adopted by launchd, pid 1) with the memory
-// of their trees, e.g. "; largest: codex 2.5 GB (pid 90), ...; orphaned
-// Codex app-server brokers: pids 455, 457 (2.5 GB with their children)".
-// "" for an empty table.
+// table procs: the culpritsLargest largest resident processes, then every
+// Codex app-server broker with its age, oldest first, the one under launchd
+// (pid 1) past brokerOrphanAge "may be orphaned", and the memory of their
+// trees, e.g. "; largest: codex 2.5 GB (pid 90), ...; Codex app-server
+// brokers, oldest first: pid 455 (3d2h, may be orphaned), pid 457 (2h),
+// 2.3 GB with their children". "" for an empty table.
 func culpritsText(procs []MemProc) string {
 	if len(procs) == 0 {
 		return ""
@@ -125,24 +160,44 @@ func culpritsText(procs []MemProc) string {
 			children[p.PPID] = append(children[p.PPID], p)
 		}
 	}
-	var pids []string
+	var brokers []string
 	var held int64
-	for _, p := range slices.SortedFunc(slices.Values(procs), func(a, b MemProc) int { return cmp.Compare(a.PID, b.PID) }) {
-		if !p.Broker || p.PPID != 1 {
+	for _, p := range slices.SortedFunc(slices.Values(procs), func(a, b MemProc) int {
+		return cmp.Or(cmp.Compare(b.Age, a.Age), cmp.Compare(a.PID, b.PID))
+	}) {
+		if !p.Broker {
 			continue
 		}
-		pids = append(pids, strconv.Itoa(p.PID))
+		age := brokerAge(p.Age)
+		if p.PPID == 1 && p.Age >= brokerOrphanAge {
+			age += ", may be orphaned"
+		}
+		brokers = append(brokers, fmt.Sprintf("pid %d (%s)", p.PID, age))
 		held += treeRSS(p, children)
 	}
-	switch n := len(pids); {
+	switch n := len(brokers); {
 	case n == 0:
 		return text
 	case n == 1:
-		return text + fmt.Sprintf("; orphaned Codex app-server broker: pid %s (%s with its children)", pids[0], memSize(held))
+		return text + fmt.Sprintf("; Codex app-server broker: %s, %s with its children", brokers[0], memSize(held))
 	case n > culpritsBrokers:
-		pids = append(pids[:culpritsBrokers], fmt.Sprintf("and %d more", n-culpritsBrokers))
+		brokers = append(brokers[:culpritsBrokers], fmt.Sprintf("and %d more", n-culpritsBrokers))
 	}
-	return text + fmt.Sprintf("; orphaned Codex app-server brokers: pids %s (%s with their children)", strings.Join(pids, ", "), memSize(held))
+	return text + fmt.Sprintf("; Codex app-server brokers, oldest first: %s, %s with their children", strings.Join(brokers, ", "), memSize(held))
+}
+
+// brokerAge is a broker's age as the hold says it: "3d2h", "2h", "45m".
+func brokerAge(d time.Duration) string {
+	days, hours := int(d/(24*time.Hour)), int(d%(24*time.Hour)/time.Hour)
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd%dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0:
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dm", int(d/time.Minute))
 }
 
 // treeRSS is the resident memory of p and every process under it.

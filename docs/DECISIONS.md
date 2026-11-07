@@ -16691,26 +16691,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   waits are routine and short); a summary line per tick (a line every 45 seconds again); an event row per
   wait (the spans record them). Tests, failing first: TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold and
   TestAHeldWaitsEndLogsHowLongItHeld.
-- **The memory hold names the largest processes and the orphaned Codex brokers, and kills nothing**
+- **The memory hold names the largest processes and the Codex brokers with their ages, and kills nothing**
   (2026-11-07, the factory audit's self-healing report, item 13). On 11-05 the factory held every launch for
-  hours on "swap 97% used, launches wait below 80%", and the operator found the cause by hand: orphaned
-  `app-server-broker.mjs` processes (parent pid 1) that kept their MCP servers alive for nobody. The hold's
-  reason now adds the 3 largest resident processes and the Codex app-server brokers whose parent is gone
-  (adopted by launchd), with their pids and the resident memory of their trees ("; largest: codex 2.5 GB (pid
-  90), ...; orphaned Codex app-server brokers: pids 455, 457 (2.5 GB with their children)", at most 5 pids
-  and "and N more"). The reason is what the held tasks' waits, the hold's events and the screen's wide blocker
-  line already show, so no screen changed. `ReadMemProcs` reads the table with two `ps` reads in the C locale
-  (`pid,ppid,rss,comm`, then `pid,args` to tell a broker; the arguments never leave it, only the mark), through
+  hours on "swap 97% used, launches wait below 80%", and the operator found the cause by hand: Codex
+  `app-server-broker.mjs` processes that kept their MCP servers alive, the ones older than a day. The hold's
+  reason now adds the 3 largest resident processes and every Codex app-server broker with its pid and age, oldest
+  first, and the resident memory of their trees ("; largest: codex 2.5 GB (pid 90), ...; Codex app-server
+  brokers, oldest first: pid 455 (3d2h, may be orphaned), pid 457 (2h), 2.3 GB with their children", at most 5
+  pids and "and N more"). A broker's parent tells nothing: the plugin starts each broker detached and unrefs it,
+  so the broker of a live Claude session is under launchd (pid 1) seconds after it starts, and the plugin stops
+  it at the session's end. Only a broker under launchd older than a day (`brokerOrphanAge`) "may be orphaned",
+  the age the operator's own cleanup of 11-05 went by, and the text claims no more. The reason is what the held
+  tasks' waits, the hold's events and the screen's wide blocker line already show, so no screen changed.
+  `ReadMemProcs` reads the table with two `ps` reads in the C locale (`pid,ppid,rss,etime,comm`, then `pid,args`
+  to tell a broker; the arguments never leave it, only the mark, and a name goes through `execx.Redact`), through
   the daemon's quiet runner as the memory probe's `sysctl` is, and `memoryCulprits` reads it when the hold
   begins and again every 10 minutes while it lasts (a `ps` each tick under memory pressure is what the hold
   should not add), forgetting it when the hold lifts; a failed read logs at INFO and leaves the swap's reason
-  alone. Resident memory, not swap: `ps` has no per-process swap on macOS, and an orphaned broker's tree is
-  told by its pids whatever its size. The queued tasks' own wait ("memory: full, starts below 80% swap") is
-  unchanged. Rejected: killing the orphaned brokers (processes the factory did not start; which to stop is the
-  operator's call); `top -l 1` for the physical footprint (a second slower probe, and its columns
-  differ between macOS releases); the names in an alert of their own (the hold raises none, and the blocker
-  line names them). Tests, failing first: TestTheMemoryHoldNamesTheLargestProcessesAndOrphanedBrokers,
-  TestTheMemoryHoldWithoutBrokersOrATable and TestReadMemProcsReadsThePsTableAndKillsNothing.
+  alone. Resident memory, not swap: `ps` has no per-process swap on macOS. The queued tasks' own wait ("memory:
+  full, starts below 80% swap") is unchanged. Rejected: killing the brokers (processes the factory did not
+  start, and a live session's among them; which to stop is the operator's call); calling every broker under
+  launchd orphaned (the first build did, and it named the brokers of live sessions); `top -l 1` for the physical
+  footprint (a second slower probe, and its columns differ between macOS releases); the names in an alert of
+  their own (the hold raises none, and the blocker line names them). Tests, failing first:
+  TestTheMemoryHoldNamesTheLargestProcessesAndTheBrokersAges, TestTheMemoryHoldWithoutBrokersOrATable and
+  TestReadMemProcsReadsThePsTableAndKillsNothing.
 
 ## Learned rules
 

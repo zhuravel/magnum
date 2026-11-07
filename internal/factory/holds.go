@@ -427,8 +427,8 @@ func existingDir(dir string) string {
 
 // memoryPressure is the memory hold's reason ("" for none): the kernel's
 // pressure level at critical, or the swap at [factory] memory_gate_swap
-// percent or more, then the largest processes and the orphaned Codex
-// brokers (memoryCulprits). The warn level only staggers launches (the
+// percent or more, then the largest processes and the Codex brokers with
+// their ages (memoryCulprits). The warn level only staggers launches (the
 // runtime's).
 func (e *Engine) memoryPressure(ctx context.Context, now time.Time) string {
 	reason := ""
