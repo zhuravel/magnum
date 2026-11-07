@@ -15554,6 +15554,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   journal for the file tests too). Rejected: `file::memory:?cache=shared` (one database for each process).
   Rejected: the relay's journal in memory (its pool holds four connections, and it is the service on the
   internet).
+- **post-review refuses a checkout path on a mounted volume** (2026-11-07). The review slots moved to an
+  external disk (`/Volumes/<disk>/…`) on 2026-11-05, and post-review's local paths knew only `/Users/`,
+  `/private/`, `/var/folders/`, `~/` and `/tmp/`. So a review that quoted the judge's checkout path was no
+  longer refused, as it was while the slots lived under `/Users/`; only the posted round's warning
+  (`round.local_paths`, after the review was on GitHub) still caught it. A `/Volumes/` path is now refused
+  like a `/tmp/` one: when it is there on this machine at check time (as written, or without a `:line`
+  suffix). Rejected: refusing every `/Volumes/` path (a PR's script can name a disk this machine lacks);
+  passing the slot's root to post-review (it reads no config, and a scratch worktree of the judge's on the
+  same disk would still pass). Test, failing first: TestParseRefusesAVolumesPathOnlyWhenItIsHere.
 
 ## The factory (2026-11-03)
 

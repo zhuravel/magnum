@@ -2708,8 +2708,9 @@ there and runs the line, which:
 1. checks the file: a known event, bodies that are not empty and fit GitHub's 65,536 characters, sides
    `RIGHT` (the default) or `LEFT`, a `start_line` before `line` on the same side, no
    `<!-- magnum:footer -->` (Magnum appends the footer), no local path (one starting `/private/`,
-   `/var/folders/`, `/Users/` or `~/`, or a `/tmp/` path that is there on this machine, as the judge's
-   scratch files are; outside a repository path or URL; the problem names it, in a reply too), and appends
+   `/var/folders/`, `/Users/` or `~/`, or a `/tmp/` or `/Volumes/` path that is there on this machine, as
+   the judge's scratch files and checkouts are; outside a repository path or URL; the problem names it, in
+   a reply too), and appends
    the run marker when the body lacks it;
 2. checks every inline comment against the PR's diff as GitHub shows it (`pulls/{n}/files`, both sides,
    context lines included; a multi-line comment within one hunk). A file GitHub sends without a patch

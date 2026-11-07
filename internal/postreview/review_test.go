@@ -118,6 +118,29 @@ func TestParseRefusesATmpPathOnlyWhenItIsHere(t *testing.T) {
 	}
 }
 
+// Review slots can live on a mounted volume (/Volumes/<disk>/…), so a
+// path there that is on this machine is a checkout path of the judge's and
+// is refused, in a review and in a reply; a /Volumes path the PR's code
+// names and this machine lacks is a quote.
+func TestParseRefusesAVolumesPathOnlyWhenItIsHere(t *testing.T) {
+	slot := "/Volumes/Work/Projects/example.review3"
+	was := exists
+	exists = func(path string) bool { return path == slot || strings.HasPrefix(path, slot+"/") }
+	t.Cleanup(func() { exists = was })
+	text := "It fails at " + slot + "/app/x.rb:3."
+	want := "body names the local path " + strconv.Quote(slot+"/app/x.rb:3")
+	if _, _, problems := Parse([]byte(review("COMMENT", text)), opts()); !slices.ContainsFunc(problems, func(p string) bool { return strings.HasPrefix(p, want) }) {
+		t.Errorf("a slot path on a volume: problems %q, want %q", problems, want)
+	}
+	if _, problems := parseReplies([]byte(repliesFile(rep(1, "rebuttal", text))), opts()); !slices.ContainsFunc(problems, func(p string) bool { return strings.HasPrefix(p, "replies[0]: "+want) }) {
+		t.Errorf("a slot path on a volume in a reply: problems %q", problems)
+	}
+	quote := "The script copies to /Volumes/Backup/app/x.rb when the disk is mounted."
+	if _, _, problems := Parse([]byte(review("COMMENT", quote)), opts()); len(problems) > 0 {
+		t.Errorf("a /Volumes path not on this machine: problems %q", problems)
+	}
+}
+
 // The run marker is appended as the body's last line when the body lacks
 // it, and only then: a rerun with the marker in place leaves the body as is.
 func TestParseAppendsTheRunMarkerOnce(t *testing.T) {

@@ -134,34 +134,43 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string) 
 
 // localPathRe finds a path that may be on the judge's machine (no local path
 // in posted text; the skill leaves the rule to localPathProblem's words):
-// under a home directory or macOS's temp directories, or /tmp, at a word's
-// start (not inside a repository path, a URL or a word; a `~/` not after a
-// slash either), up to a blank, quote, backtick or bracket. /home is left
-// out: a PR's Dockerfile or CI config
-// names /home/app, and this machine (macOS) keeps no one's home there.
+// under a home directory or macOS's temp directories, /tmp, or a mounted
+// volume (/Volumes, where review slots can live), at a word's start (not
+// inside a repository path, a URL or a word; a `~/` not after a slash
+// either), up to a blank, quote, backtick or bracket. /home is left out: a
+// PR's Dockerfile or CI config names /home/app, and this machine (macOS)
+// keeps no one's home there.
 var localPathRe = regexp.MustCompile("(?:^|[^A-Za-z0-9_.~/-])(~/[^\\s`'\"()<>\\[\\]{}]*)" +
-	"|(?:^|[^A-Za-z0-9_.~-])((?:/tmp|/private|/var/folders|/Users)/[^\\s`'\"()<>\\[\\]{}]*)")
+	"|(?:^|[^A-Za-z0-9_.~-])((?:/tmp|/private|/var/folders|/Users|/Volumes)/[^\\s`'\"()<>\\[\\]{}]*)")
 
 // lineSuffix is a `:12` or `:12:5` after a file's path.
 var lineSuffix = regexp.MustCompile(`(?::\d+){1,2}$`)
 
 // localPath is the first local path text names (localPathRe), without
-// trailing punctuation; "" when it names none. A /tmp path counts only when
-// it is there on this machine now (as written, or without a line suffix):
-// the judge's own scratch files are, a path the PR's code names usually is
-// not.
+// trailing punctuation; "" when it names none. A /tmp or /Volumes path
+// counts only when it is there on this machine now (as written, or without
+// a line suffix): the judge's own scratch files and checkouts are, a path
+// the PR's code names usually is not.
 func localPath(text string) string {
 	for _, m := range localPathRe.FindAllStringSubmatch(text, -1) {
 		p := strings.TrimRight(m[1]+m[2], ".,;:!?")
-		if !strings.HasPrefix(p, "/tmp/") || exists(p) || exists(lineSuffix.ReplaceAllString(p, "")) {
+		if !mustExist(p) || exists(p) || exists(lineSuffix.ReplaceAllString(p, "")) {
 			return p
 		}
 	}
 	return ""
 }
 
-// exists reports whether path is there on this machine.
-func exists(path string) bool {
+// mustExist reports whether a path localPathRe found counts only when it is
+// on this machine: one under /tmp or a mounted volume, which a PR's code
+// can name too.
+func mustExist(p string) bool {
+	return strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/Volumes/")
+}
+
+// exists reports whether path is there on this machine (a variable for the
+// tests of paths on a mounted volume).
+var exists = func(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
