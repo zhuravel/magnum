@@ -399,8 +399,7 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 		return run, false
 	case denied != "":
 		p.say("\n- `%s`: denied: %s\n", cmd, denied)
-		p.failForYou(key + " `" + cmd + "` is denied: " + denied + "; fix: change " + key +
-			" in its [[factory.repo]] (the factory never runs that), then `magnum factory install`")
+		p.failForYou(key + " `" + cmd + "` is denied: " + denied + deniedFix(key))
 		return run, false
 	case errors.Is(err, context.DeadlineExceeded):
 		p.overCap = true // its own bound is the cap
@@ -428,6 +427,21 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 func runnableFix(key, cmd string) string {
 	return "; fix: make `" + firstWord(cmd) + "` runnable in the copy (install it, put its directory on your login shell's PATH, " +
 		"or change " + key + "), then `magnum factory install`"
+}
+
+// deniedFix is the fix of a command of key the deny list refuses: another
+// command in the configuration, which the daemon reads at its start.
+func deniedFix(key string) string {
+	return "; fix: change " + key + " in its [[factory.repo]] (the factory never runs that), then `magnum factory install`"
+}
+
+// problemFix is the fix of what keeps command cmd of key from running at
+// all (specRun's problem: denied, or missing or not executable).
+func problemFix(key, cmd, problem string) string {
+	if strings.HasPrefix(problem, "is denied") {
+		return deniedFix(key)
+	}
+	return runnableFix(key, cmd)
 }
 
 // dbKeys are the precheck's commands that use the copy's databases: they
@@ -646,7 +660,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 			p.err = err
 			return
 		case problem != "":
-			p.failForYou("precheck.specs `" + baseScript + "` " + problem)
+			p.failForYou("precheck.specs `" + baseScript + "` " + problem + problemFix("precheck.specs", baseScript, problem))
 			return
 		case base.Hung:
 			p.overCap = true

@@ -39,6 +39,7 @@ import (
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at
@@ -367,6 +368,8 @@ func (c *copySet) setupFailed(ctx context.Context, name string, err error) bool 
 // "setup failed twice", "its repair failed"; a verification failure has
 // moved it there already) and records a factory.copy_broken event; it
 // returns nil, so the claim goes on. This daemon start repairs it no more.
+// Why names the step that failed and the first line of its stderr that
+// says why (brokenWhy), and the setup's log, which has the rest.
 func (c *copySet) markBroken(ctx context.Context, name, what string, cause error) error {
 	c.mu.Lock()
 	c.tried[name] = true
@@ -375,7 +378,8 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 	if err != nil {
 		return err
 	}
-	why := execx.Redact(what + ": " + cause.Error())
+	why := execx.Redact(what + ": " + brokenWhy(cause) + " (its setup's log: " +
+		filepath.Join(c.cfg.Layout.Logs(), "provision-"+name+".log") + ")")
 	if sl.State == store.SlotProvisioning {
 		if err := c.st.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
 			func(u *store.SlotUpdate) { u.Set("last_error", why) }); err != nil {
@@ -384,6 +388,21 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 	}
 	c.event(ctx, name, "warn", "factory.copy_broken", why+"; no claim takes it until it is repaired")
 	return nil
+}
+
+// brokenWhy is why a copy's setup failed, in one line: the command that
+// exited (its label) and the first line of its stderr that says why, past
+// mise's warnings that come first (a copy's untrusted config: they named
+// no failure); else the error's first line (a verification's).
+func brokenWhy(cause error) string {
+	if ee, ok := errors.AsType[*execx.ExitError](cause); ok {
+		why := fmt.Sprintf("%s exited %d", cmp.Or(ee.Cmd.Label, firstWord(ee.Cmd.String())), ee.Code)
+		if line := firstLine(ee.Stderr); line != "" {
+			why += ": " + line
+		}
+		return why
+	}
+	return cleanLine(textx.FirstLine(cause.Error()))
 }
 
 // repairable is a broken copy of repo this daemon start neither broke nor

@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -60,7 +61,10 @@ type copiesRig struct {
 	mu        sync.Mutex
 	scripts   []miseCall     // every mise exec, in order
 	failSetup map[string]int // copy name -> setup failures left
-	failRedis int            // FLUSHDB failures left
+	// setupStderr is what a failed setup writes to stderr ("setup failed"
+	// when it is empty).
+	setupStderr string
+	failRedis   int // FLUSHDB failures left
 	// blocks hold a mise exec of "<script> <copy>" until its channel closes;
 	// entered gets "<script> <copy>" as one starts to wait.
 	blocks  map[string]chan struct{}
@@ -421,7 +425,10 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 		}
 	}
 	if fail {
-		return execx.Result{Code: 1, Stderr: []byte("setup failed")}, &execx.ExitError{Cmd: c, Code: 1, Stderr: "setup failed"}
+		r.mu.Lock()
+		stderr := cmp.Or(r.setupStderr, "setup failed")
+		r.mu.Unlock()
+		return execx.Result{Code: 1, Stderr: []byte(stderr)}, &execx.ExitError{Cmd: c, Code: 1, Stderr: stderr}
 	}
 	dbs := []string{"talkable_development__" + slot, "talkable_test__" + slot}
 	switch mc.Script {
@@ -1158,5 +1165,36 @@ func TestReleaseRefusesWhileAPaneRunsInTheCopy(t *testing.T) {
 	r.release(task)
 	if sl := r.slot("factory1"); sl.State != store.SlotFree {
 		t.Fatalf("factory1 = %s after the pane closed, want free", sl.State)
+	}
+}
+
+// A copy whose setup broke says why with the first line of its setup's
+// stderr that names the failure, never mise's warning about an untrusted
+// config that comes first, and names the setup's log, which has the rest.
+func TestABrokenCopySaysWhyPastMisesNoiseAndNamesItsLog(t *testing.T) {
+	r := newCopiesRig(t, 2)
+	r.failSetup["factory1"] = 2
+	r.setupStderr = "mise WARN No untrusted config files found in /tmp/talkable.factory1\n" +
+		"mise WARN Config files in /tmp/talkable.factory1/.mise.toml are not trusted.\n" +
+		"redis-server: command not found\n" +
+		"bin/worktree-setup: setup aborted\n"
+	if c := r.claim(r.task("PR-1")); c.Name != "factory2" {
+		t.Fatalf("claimed %s, want factory2 after factory1 broke", c.Name)
+	}
+	why := store.Deref(r.slot("factory1").LastError)
+	evs, err := r.st.EventsBySubject(r.ctx, "slot:factory1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(evs, func(e store.Event) bool { return e.Kind == "factory.copy_broken" })
+	if i < 0 {
+		t.Fatalf("events of factory1 %+v, want factory.copy_broken", evs)
+	}
+	log := filepath.Join(r.cfg.Layout.Logs(), "provision-factory1.log")
+	for name, text := range map[string]string{"last_error": why, "the event": evs[i].Message} {
+		if !strings.Contains(text, "redis-server: command not found") || strings.Contains(text, "mise WARN") ||
+			!strings.Contains(text, log) {
+			t.Errorf("%s = %q, want the setup's first failing line, no mise warning, and %s", name, text, log)
+		}
 	}
 }

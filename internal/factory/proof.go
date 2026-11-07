@@ -329,7 +329,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 			return proof, err
 		}
 		if problem != "" {
-			return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
+			return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem + problemFix(key, cmd, problem))
 		}
 		e.recordRun(ctx, t, "spec", bh.Base, run)
 		if run.Exit == 0 {
@@ -352,7 +352,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	case rerr != nil:
 		return proof, rerr
 	case problem != "":
-		return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem)
+		return forYou(repo.Repo + "'s " + key + " `" + cmd + "` " + problem + problemFix(key, cmd, problem))
 	}
 	e.recordRun(ctx, t, "spec", bh.Head, run)
 	if len(restored) > 0 { // as the precheck does: the files go back, the run is judged on its exit
