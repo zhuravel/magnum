@@ -26,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/prview"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -368,7 +369,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			// A check ignore_checks names is absent, as the approval's gates
 			// read the checks.
-			row.CI = prsCI(store.SeenCI(r.CI, r.HeadSHA, ignore), r.HeadSHA, req)
+			row.CI = prview.CI(store.SeenCI(r.CI, r.HeadSHA, ignore), r.HeadSHA, req)
 			if cfg != nil {
 				row.Badges = prsBadges(r.Labels, cfg.Board.Badges)
 			}
@@ -459,9 +460,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		if err == nil {
 			for i := range out {
 				if s, ok := sums[ids[i]]; ok {
-					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
-						Fixed: s.Fixed, Open: s.Open, OpenProblems: s.OpenProblems(), OpenCounts: s.OpenCounts, Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA,
-						Held: boardHeld(ctx, st, ids[i], s)}
+					out[i].Findings = prview.Findings(s, prview.Held(ctx, st, ids[i], s))
 				}
 			}
 		}
@@ -574,24 +573,6 @@ func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, 
 	}
 	_, off, err := st.GetKV(ctx, engine.KVPRFixOff(prID))
 	return fixing, loop, off && err == nil
-}
-
-// boardHeld reports whether s, PR prID's latest posted review, held its
-// approval: the approval hold record (engine.KVPRApprovalHold) names that
-// very review, as the engine's heldReviewOf requires; one it left behind for
-// an older review holds nothing. Only a clean verdict holds, so no other
-// reads the record; a clean comment without one is a comment-only
-// repository's. A registry that cannot say holds nothing.
-func boardHeld(ctx context.Context, st *store.Store, prID int64, s store.ReviewSummary) bool {
-	if s.Verdict != store.VerdictClean || s.ReviewID == 0 {
-		return false
-	}
-	v, ok, err := st.GetKV(ctx, engine.KVPRApprovalHold(prID))
-	if err != nil || !ok {
-		return false
-	}
-	id, ok := engine.HeldReviewID(v)
-	return ok && id == s.ReviewID
 }
 
 // boardWhiteboard is the PR's whiteboard as the board shows it (its
