@@ -770,7 +770,7 @@ func (p *factoryPainter) chipLine() string {
 		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d %s on others", waits, verb)))
 	}
 	if yours > 0 {
-		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d of your %s at work", yours, map[bool]string{true: "PR", false: "PRs"}[yours == 1])))
+		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d of your PRs at work", yours)))
 	}
 	chip := ""
 	if p.f.RuleChip != "" {

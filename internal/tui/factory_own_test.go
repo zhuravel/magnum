@@ -143,6 +143,10 @@ func TestTheChipCountsPRsThatNeedYou(t *testing.T) {
 	chip = strings.Split(ansi.Strip(frame), "\n")[1]
 	mustContain(t, chip, "● 2 PRs need you ·")
 	mustNotContain(t, chip, "task")
+
+	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Group == GroupYours && r.Key != "#4611" })
+	frame, _ = factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
+	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[1], "1 of your PRs at work")
 }
 
 // A row of your PR that magnum leaves alone is drawn dim, its "you:" too:
