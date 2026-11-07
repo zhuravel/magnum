@@ -129,3 +129,53 @@ func TestTwoPRsFailingTheSameWayRaiseOneSharedFailure(t *testing.T) {
 		t.Fatalf("a refused prompt and a lost agent's pane: events %+v", evs)
 	}
 }
+
+// abandonedWithRoundError records a run of role on PR n that the round's end
+// abandoned with the round's error, which named the judge's pane line, as
+// the pipeline leaves a reviewer's run when the judge's prompt is refused.
+func abandonedWithRoundError(h *harness, n int, role, line string) {
+	h.t.Helper()
+	now := h.clock.Now()
+	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: h.pr(n).ID, Round: 1, Role: role, Kind: store.RunInitial, TargetSHA: "a1",
+		Identity: "talkable-app", ReviewerLogin: magnumApp, State: store.RunPending, PromptText: "go", CreatedAt: now, SubmittedAt: &now})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.TransitionRun(h.ctx, run.ID, nil, store.RunAbandoned, func(u *store.RunUpdate) {
+		u.Set("ended_at", now)
+		u.Set("error", "pipeline: judge prompt refused, also after a restart of the judge: agents: prompt mg-codex-judge: "+
+			"herdr agent.prompt: agent_not_found: agent target not found; the pane shows: "+line)
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// On 2026-11-05 the shared failure named "claude-review and codex-judge"
+// and no tool: each PR's claude-review run was abandoned at the round's end
+// with the round's error, which quoted the judge's pane line. A run the
+// round abandoned with its own error is not a launch that failed: only the
+// judge's refused runs count, so the warning names codex-judge alone, under
+// tool:codex.
+func TestARunAbandonedWithItsRoundsErrorIsNotALaunchThatFailed(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "a1"}, prSpec{n: 2, head: "b2"}, prSpec{n: 3, head: "c3"})
+	h.startup()
+	h.tick() // the first sync: the open PRs are a baseline, nothing runs
+	for _, n := range []int{2, 3} {
+		abandonedWithRoundError(h, n, "claude-review", bootstrapLine) // created first, as the round prompts its reviewers first
+		h.advance(time.Minute)
+		refusedPrompt(h, n, "codex-judge", bootstrapLine)
+	}
+	h.tick()
+	evs := h.events(EventSharedFailure)
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "2 PRs' codex-judge launches end the same way") {
+		t.Fatalf("events %+v, want one naming codex-judge alone", evs)
+	}
+	var subject string
+	if err := h.st.DB().QueryRowContext(h.ctx, "SELECT subject FROM events WHERE kind = ?", EventSharedFailure).Scan(&subject); err != nil {
+		t.Fatal(err)
+	}
+	if subject != "tool:codex" {
+		t.Fatalf("subject %q, want tool:codex", subject)
+	}
+}

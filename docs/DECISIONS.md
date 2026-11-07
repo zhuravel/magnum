@@ -15692,6 +15692,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rounds settle between health checks), and no wait at all (with the kind still failing, a PR would start a
   round every minute). Tests, failing first: TestARoundThatDiesOnALaunchLineAnotherPRSharesChargesNoAttempt,
   TestASharedLaunchFailureGivesBackTheAttemptsItsLineCharged.
+- **A run its agent took the prompt of is not a launch that failed** (2026-11-07). On 2026-11-05
+  `agents.shared_failure` named "claude-review and codex-judge" and no tool: the round's end abandons each
+  reviewer's run with the round's error, which quoted the judge's pane line ("the pane shows: …"), and each
+  PR's first such run came before the judge's own refused run, so the grouping (one line per PR) took the
+  reviewer's role. The lines read from runs now skip a run that was submitted: only a prompt herdr refused
+  (never submitted) carries its own agent's pane line. The warning names codex-judge, under `tool:codex`.
+  Test, failing first: TestARunAbandonedWithItsRoundsErrorIsNotALaunchThatFailed.
 
 ## The factory (2026-11-03)
 

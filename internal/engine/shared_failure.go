@@ -105,7 +105,9 @@ func orderedLines(ls []launchLine) []string {
 	return out
 }
 
-// launchLines are the PRs' agents that ended with a pane error line since.
+// launchLines are the PRs' agents that ended with a pane error line since:
+// the launches agents cleared and the lost agents' panes it closed (their
+// events), and the runs whose prompt herdr refused (never submitted).
 func (e *Engine) launchLines(ctx context.Context, since time.Time) []launchLine {
 	var out []launchLine
 	evs, err := e.st.EventsOfKindsSince(ctx, since, agents.EventLaunchCleared, agents.EventPanesClosed)
@@ -139,8 +141,14 @@ func (e *Engine) launchLines(ctx context.Context, since time.Time) []launchLine 
 		e.warnUnlessStopped(ctx, err, "read the runs that failed")
 	}
 	for _, r := range runs {
+		if r.SubmittedAt != nil {
+			// Its agent took the prompt: its error is not its launch's. A
+			// reviewer's run the round's end abandoned carries the round's
+			// error, which quotes the judge's pane line.
+			continue
+		}
 		line := agents.PaneErrorOf(deref(r.Error))
-		at := cmp.Or(deref(r.EndedAt), deref(r.SubmittedAt), r.CreatedAt)
+		at := cmp.Or(deref(r.EndedAt), r.CreatedAt)
 		if line == "" || at.Before(since) {
 			continue
 		}
