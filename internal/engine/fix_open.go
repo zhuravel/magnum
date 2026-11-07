@@ -543,7 +543,7 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		}
 	}
 	cursor, loops := l.Cursor, 0
-	for _, ev := range slices.Backward(evs) { // oldest first
+	for _, ev := range evs { // oldest first (EventsBySubject's order), so the bounded lists keep the newest
 		if ev.ID <= l.Cursor {
 			continue
 		}

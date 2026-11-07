@@ -676,3 +676,33 @@ func TestAConflictStartWhoseBaseFetchFailedOnceIsAskedAgain(t *testing.T) {
 		t.Errorf("fix runs = %d five minutes later, want the loop for the conflict", n)
 	}
 }
+
+// The look reads the loops that ended oldest first, so the ledger's
+// bounded lists keep the newest: after more fix.pushed events than it
+// keeps heads, and more fix.start events than it keeps reviews, the
+// fixer's newest head (the PR's head after its last push) and the newest
+// review a loop worked on are in the ledger, the oldest are not.
+func TestTheLookKeepsTheNewestFixerHeadsAndReviews(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick() // reviewed
+	h.tick() // the look's first look: its ledger
+	h.advance(time.Minute)
+	pr := h.pr(2)
+	subject := "pr:talkable/talkable#2"
+	for i := range openReviewsMax + 1 {
+		h.e.event(h.ctx, "info", subject, "fix.start", "claude-fix starts", map[string]any{"review_run": fmt.Sprintf("run-old-%02d", i)})
+	}
+	for i := range openFixerHeadsMax + 2 {
+		h.e.event(h.ctx, "info", subject, "fix.pushed", "claude-fix pushed", map[string]any{"head": strings.Repeat(fmt.Sprintf("%x", i), 40)})
+	}
+	h.e.noteLoopRan(pr.ID) // the look reads the PR's events again
+	h.tick()
+	l := h.ledgerOf(2)
+	newest, oldest := strings.Repeat(fmt.Sprintf("%x", openFixerHeadsMax+1), 40), strings.Repeat("0", 40)
+	if !slices.Contains(l.FixerHeads, newest) || slices.Contains(l.FixerHeads, oldest) {
+		t.Errorf("fixer heads = %v, want the newest %d with %s, without %s", l.FixerHeads, openFixerHeadsMax, newest[:7], oldest[:7])
+	}
+	if last := fmt.Sprintf("review:run-old-%02d", openReviewsMax); !slices.Contains(l.Reviews, last) || slices.Contains(l.Reviews, "review:run-old-00") {
+		t.Errorf("reviews = %v, want the newest %d with %s", l.Reviews, openReviewsMax, last)
+	}
+}
