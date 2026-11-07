@@ -454,3 +454,66 @@ func TestScreenDataNamesTheRepositoryOfEveryRow(t *testing.T) {
 		t.Errorf("your PR's row: key %q, GitHub %q; want helm#12 and #12", row.Key, row.GitHub)
 	}
 }
+
+// prData is a PR's CI, magnum's last review and its people's reviews as
+// PRStates reads them: CI green, P1 P2×3 at the head, one approval of the
+// head and one of an older commit, one changes request.
+func prData(v *PRState) {
+	v.CI = &tui.CIInfo{State: "passed", Total: 3, Passed: 3}
+	v.Review = &store.ReviewSummary{SHA: prHead, Counts: [4]int{0, 1, 3, 0}, Verdict: store.VerdictBlocking, Event: "COMMENT"}
+	v.Findings = &tui.FindingsInfo{Counts: [4]int{0, 1, 3, 0}, Verdict: store.VerdictBlocking, SHA: prHead}
+	v.Gate = &store.ReviewGate{Decision: "CHANGES_REQUESTED", Opinions: []store.LatestReview{
+		{Login: "rev-ann", State: "APPROVED", CommitSHA: prHead}, {Login: "rev-bob", State: "APPROVED", CommitSHA: "0ld"},
+		{Login: "rev-cid", State: "CHANGES_REQUESTED", CommitSHA: prHead}, {Login: "rev-dee", State: "DISMISSED", CommitSHA: prHead}}}
+}
+
+// The row of your PR and of a published task carry their PR's CI, magnum's
+// findings and the people's reviews for the CI, FINDINGS and APPR columns,
+// as the board's columns read them; a task without a PR carries none.
+// Before, a row said none of them.
+func TestPRRowsCarryCIFindingsAndApprovals(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12320", 4530)
+	r.pr(4530, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "CI at a1b2c3d")
+		prData(v)
+	})
+	r.task("PR-12330", "bug", "Advocate offer email locale", registry.TaskActive, "coding", "", "")
+	r.own(71, 4601, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "CI at a1b2c3d")
+		prData(v)
+	})
+	d := r.data(time.Time{})
+	want := tui.FactoryApprovals{Approved: 2, Changes: 1, Stale: 1, Decision: "CHANGES_REQUESTED"}
+	for _, key := range []string{"PR-12320", "#4601"} {
+		row := rowOf(t, d, key)
+		switch {
+		case row.CI == nil || row.CI.State != "passed" || row.CI.Total != 3:
+			t.Errorf("%s: CI %+v", key, row.CI)
+		case row.Findings == nil || row.Findings.Counts != [4]int{0, 1, 3, 0}:
+			t.Errorf("%s: findings %+v", key, row.Findings)
+		case row.Approvals == nil || *row.Approvals != want:
+			t.Errorf("%s: approvals %+v, want %+v", key, row.Approvals, want)
+		}
+	}
+	if row := rowOf(t, d, "PR-12330"); row.CI != nil || row.Findings != nil || row.Approvals != nil {
+		t.Errorf("a task without a PR: CI %+v, findings %+v, approvals %+v", row.CI, row.Findings, row.Approvals)
+	}
+}
+
+// Your PR's WAITED counts from its last activity on GitHub when no verdict
+// says since when it waits, never from the last write of magnum's row
+// (any write moves it, which made a baseline open since August read 17d).
+func TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	active := screenNow.Add(-50 * 24 * time.Hour)
+	r.own(98, 4713, func(v *PRState) {
+		v.OpenWatch, v.State, v.ActivityAt = false, store.PRBaseline, active
+		v.UpdatedAt = screenNow.Add(-17 * 24 * time.Hour)
+	})
+	if row := rowOf(t, r.data(time.Time{}), "#4713"); !row.Since.Equal(active) {
+		t.Errorf("a baseline's row waits since %v, want its last activity %v", row.Since, active)
+	}
+}

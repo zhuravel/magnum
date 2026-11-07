@@ -84,8 +84,11 @@ func (s *screen) taskPRs() map[string]bool {
 // prKey is r as a key that ignores the case of the repository's name.
 func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo), r.Number) }
 
-// ownRow is your own PR st's row on home and its card (for b: its page):
-// magnumWait's wait, in NEEDS YOU when it is on you, except for a PR
+// ownRow is your own PR st's row on home and its card (for b: its page),
+// with its CI, FINDINGS and APPR cells, waiting since its wait began (the
+// verdict's Since, a loop's start, an attention's row change), else since
+// its last activity on GitHub, never magnum's last write of its row. It
+// is magnumWait's wait, in NEEDS YOU when it is on you, except for a PR
 // magnum's look leaves alone (off), which is dim in YOUR PRS. An attention
 // or a stalemate needs you whatever the verdict says (fix off does not
 // hide it, and a verdict decided before it is stale), unless a loop works
@@ -114,7 +117,8 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	}
 	key := s.ownKey(st.Ref)
 	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: fmt.Sprintf("#%d", n), Repo: st.Ref.Repo, Title: st.Title,
-		WaitsOn: []tui.WaitsOn{w.on}, Since: cmp.Or(w.since, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
+		WaitsOn: []tui.WaitsOn{w.on}, Since: cmp.Or(w.since, st.ActivityAt, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
+	cellsOf(st).fill(&row)
 	trackers := s.cfg.TrackersFor(st.Ref.Repo)
 	row.Jira, _ = config.Issue(st.Title, trackers)
 	row.PR = &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff, Off: off,

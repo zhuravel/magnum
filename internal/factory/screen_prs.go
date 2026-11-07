@@ -48,6 +48,52 @@ type prWait struct {
 	report          string
 	needs           []string
 	help, card      string
+	// cells are the PR's CI, FINDINGS and APPR cells (prCells).
+	cells prCells
+}
+
+// prCells are an open PR's cells on its row: its CI, magnum's findings and
+// the people's reviews, as magnum's registry tells them.
+type prCells struct {
+	ci        *tui.CIInfo
+	findings  *tui.FindingsInfo
+	approvals *tui.FactoryApprovals
+}
+
+// cellsOf are open PR st's cells; none for a PR magnum does not have or
+// that is no longer open.
+func cellsOf(st PRState) prCells {
+	if !st.Found || st.GHState != store.GHOpen {
+		return prCells{}
+	}
+	return prCells{ci: st.CI, findings: st.Findings, approvals: approvalsOf(st)}
+}
+
+// approvalsOf counts st's people's reviews as GitHub's merge gate does
+// (its latest opinion per reviewer with write access); nil before magnum
+// read the gate.
+func approvalsOf(st PRState) *tui.FactoryApprovals {
+	if st.Gate == nil {
+		return nil
+	}
+	a := &tui.FactoryApprovals{Decision: st.Gate.Decision}
+	for _, o := range st.Gate.Opinions {
+		switch o.State {
+		case "APPROVED":
+			a.Approved++
+			if o.CommitSHA != st.Head {
+				a.Stale++
+			}
+		case "CHANGES_REQUESTED":
+			a.Changes++
+		}
+	}
+	return a
+}
+
+// fill sets row's PR cells.
+func (c prCells) fill(row *tui.FactoryRow) {
+	row.CI, row.Findings, row.Approvals = c.ci, c.findings, c.approvals
 }
 
 // prRef is the PR of task view v as magnum's registry names it.
@@ -117,6 +163,9 @@ func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
 		}
 		st, ok := states[prRef(v)]
 		w := s.prWaitOf(v, st, ok && err == nil, err)
+		if ok && err == nil {
+			w.cells = cellsOf(st)
+		}
 		v.pr = &w
 		v.group = w.group
 		if w.since.After(v.since) {

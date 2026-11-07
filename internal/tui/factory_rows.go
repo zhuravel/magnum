@@ -85,6 +85,15 @@ type FactoryRow struct {
 	// narrow one keeps the blocker's Short, or Frees when it has none.
 	Frees string
 
+	// CI, Findings and Approvals are the row's PR as magnum's registry tells
+	// it, for the CI, FINDINGS and APPR columns: the head's CI and magnum's
+	// last posted review as the board's CI and FINDINGS columns say them,
+	// and the people's reviews GitHub counts. nil on a row without a PR, or
+	// before magnum read the PR.
+	CI        *CIInfo
+	Findings  *FindingsInfo
+	Approvals *FactoryApprovals
+
 	// PR is set on a row of your own PR from magnum's registry, not a task
 	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such
 	// a row's ID is the negative of magnum's id of the PR, which no task's
@@ -105,6 +114,17 @@ type FactoryPR struct {
 	// baseline, fix off, a watch that leaves your PRs out), in its words;
 	// "" when the look covers it. The row is drawn dim: it asks nothing.
 	Off string
+}
+
+// FactoryApprovals is what the people's reviews of a PR say, as GitHub's
+// merge gate counts them: Approved and Changes count the reviewers whose
+// latest opinion is an approval or a changes request, Stale the approvals
+// of an older commit than the head; Decision is GitHub's review decision
+// (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED; "" when the base branch
+// requires no review).
+type FactoryApprovals struct {
+	Approved, Changes, Stale int
+	Decision                 string
 }
 
 // Digest is what happened while the operator was away, shown until the next
