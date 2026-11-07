@@ -104,6 +104,9 @@ func newInspFixture(t *testing.T) *inspFixture {
 	prevHook, prevStdin, prevTTY, prevErrTTY, prevPoll, prevWait := inspAppHook, inspStdin, inspIsTTY, inspStderrTTY, inspPoll, inspHandoffWait
 	prevEval := evalSys
 	inspAppHook = func(o *app.Options) {
+		// A migrated copy, which app.New finds current: an older fixture
+		// already there is kept, and app.New migrates that one.
+		storetest.Seed(f.t, f.Ctx.Layout.DB())
 		o.Runner = f.Runner
 		o.MySQLDSN = "root:@tcp(127.0.0.1:1)/?timeout=1s"
 		o.Getenv = func(string) string { return "" }

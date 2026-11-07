@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -172,7 +173,7 @@ func writeFactoryRegistryAt(t *testing.T, path string, version int) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?"+sqlitetest.FastFile)
 	if err != nil {
 		t.Fatal(err)
 	}

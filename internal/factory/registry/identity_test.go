@@ -171,7 +171,7 @@ func TestATaskCarriesCodexNeverAndItsQuestionRevision(t *testing.T) {
 func writeVersion1(t *testing.T, path string) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_txlock=immediate")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(OFF)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -629,7 +630,7 @@ func olderSchemaRegistry(t *testing.T, dt *daemonGroupTest, n int) *sql.DB {
 	if err := dt.ctx.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", dt.ctx.Layout.DB())
+	db, err := sql.Open("sqlite", dt.ctx.Layout.DB()+"?"+sqlitetest.FastFile)
 	if err != nil {
 		t.Fatal(err)
 	}

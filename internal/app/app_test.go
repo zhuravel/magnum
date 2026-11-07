@@ -25,6 +25,7 @@ import (
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 const testConfig = `
@@ -75,7 +76,9 @@ func testAppWith(t *testing.T, cfgText string, opts Options) (*App, paths.Layout
 }
 
 // testAppSeeded is testAppWith with seed (nil: none) run on the layout
-// before New opens its registry there.
+// before New opens its registry there. The registry is a migrated copy
+// (storetest.Seed), so New finds it current instead of migrating a file; a
+// dry run gets none, since it must not touch the real one.
 func testAppSeeded(t *testing.T, cfgText string, opts Options, seed func(*testing.T, paths.Layout)) (*App, paths.Layout) {
 	t.Helper()
 	home := t.TempDir()
@@ -83,6 +86,9 @@ func testAppSeeded(t *testing.T, cfgText string, opts Options, seed func(*testin
 		t.Fatal(err)
 	}
 	layout := paths.Layout{Home: home}
+	if !opts.DryRun {
+		storetest.Seed(t, layout.DB())
+	}
 	if seed != nil {
 		seed(t, layout)
 	}
@@ -234,6 +240,7 @@ func TestDryRunUsesStoreCopy(t *testing.T) {
 	if err := layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
+	storetest.Seed(t, layout.DB())
 	real, err := store.Open(layout.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -510,6 +517,7 @@ func logAppIn(t *testing.T, daemon bool) (*App, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	storetest.Seed(t, layout.DB())
 	a, err := New(cfg, layout, Options{Runner: &execx.Fake{}, Stderr: io.Discard, Daemon: daemon})
 	if err != nil {
 		t.Fatal(err)

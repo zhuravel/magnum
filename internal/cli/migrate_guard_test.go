@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -22,7 +23,7 @@ func olderRegistry(t *testing.T, f *inspFixture) {
 	if err := f.Ctx.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", f.Ctx.Layout.DB())
+	db, err := sql.Open("sqlite", f.Ctx.Layout.DB()+"?"+sqlitetest.FastFile)
 	if err != nil {
 		t.Fatal(err)
 	}
