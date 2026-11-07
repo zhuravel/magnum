@@ -832,13 +832,14 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 // (fixConflictGone), quietly, as a stop does: nothing failed and why says
 // what happened (the retry, for the claim), so the loop's row goes, a
 // fix.ended event and an info toast say why, and nobody is called. The
-// event of a loop that found no slot says so, with the loop's start: the
-// look of autofix = "open" takes back the start it counted for it
-// (openLoopsEnded), since no fixer ran.
+// event of a loop whose first cycle found no slot says so, with the loop's
+// start: the look of autofix = "open" takes back the start it counted for
+// it (openLoopsEnded), since no fixer ran. A later cycle's does not: its
+// loop ran a fixer in cycle 1.
 func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string, noSlot bool) {
 	e.endFixState(ctx, job)
 	data := job.eventData()
-	if noSlot {
+	if noSlot && job.state.Cycle == 1 {
 		data["no_slot"], data["started_at"] = true, job.state.StartedAt
 	}
 	e.event(ctx, "info", job.subject(), "fix.ended", "the fix loop ends: "+why, data)

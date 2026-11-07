@@ -3299,7 +3299,7 @@ after the PR's current spell of activity began (as the look saw it: a colleague'
 on a head two days old start one loop after the third, not one after the first). A review body or comment by one of
 `quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
 lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
-most `autofix_max_loops` loops start on one PR in 24 hours (one that ended for want of a slot, a round having
+most `autofix_max_loops` loops start on one PR in 24 hours (one whose first cycle found no slot, a round having
 taken the free one first, started no fixer and does not count), none on a head you pushed until
 `hands_off_after_push` passed, and none on a draft, a fork, a muted PR (a mute stops every automatic round:
 `off`, "muted") or a PR you took out of autofix (`F`). `magnum pause` and `[daemon] quiet_hours` hold its

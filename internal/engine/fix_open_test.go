@@ -1198,6 +1198,37 @@ func TestAStartThatFoundNoSlotSpendsNoStart(t *testing.T) {
 	}
 }
 
+// A later cycle of a loop the look started that finds no slot (the PR's
+// idle slot went to another PR while the cycle waited, and a round took
+// the free one first) ends unclaimed, but its loop ran a fixer in cycle 1:
+// the loop's start stays one of the PR's daily starts.
+func TestALaterCycleThatFoundNoSlotKeepsItsLoopsStart(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	colleagueFixer(h, git)
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick() // the look starts a loop, whose fixer answers the thread
+	l := h.ledgerOf(2)
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 || len(l.Starts) != 1 {
+		t.Fatalf("fix runs %d, starts %v; want the loop the look started", n, l.Starts)
+	}
+	pr := h.pr(2)
+	repo, err := h.st.RepoByID(h.ctx, pr.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &fixJob{repo: repo, watch: h.cfg.Watches[0], pr: pr, state: FixState{Cycle: 2, Cap: 3, By: autofixBy, StartedAt: l.Starts[0]}}
+	h.e.endFixUnclaimed(h.ctx, job, noFreeFixSlot{repo: "talkable/talkable", label: "talkable/talkable#2"}.Error(), true)
+	h.e.noteLoopRan(pr.ID)
+	if err := h.e.autofixOpen(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if l := h.ledgerOf(2); len(l.Starts) != 1 {
+		t.Errorf("starts = %v after cycle 2 found no slot, want the loop's start kept", l.Starts)
+	}
+}
+
 // Two PRs without a slot and one free slot: the look starts one loop in
 // the tick, and the other PR waits for a slot, saying so, without a loop
 // that would lose the race for it ("fix not started") and without spending
