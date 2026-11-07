@@ -447,10 +447,11 @@ type Engine struct {
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
 	// openReads are the reads of GitHub the look of autofix = "open" made in
-	// this tick, by PR, and openFetches its fetches of a base into a clone
-	// (openFetchKey) with their errors: a start in the same tick hands the
-	// read to prepareFix, whose look at the base fetches no second time
-	// (fix_open.go). Both are nil outside the look.
+	// this tick, by PR (the tick's goroutine only), and openFetches its
+	// fetches of a base into a clone (openFetchKey) with their errors,
+	// guarded by mu: a start in the same tick hands the read to prepareFix,
+	// whose look at the base fetches no second time (fix_open.go). Both are
+	// nil outside the look.
 	openReads   map[int64]externalRead
 	openFetches map[string]error
 	// openLoops are the PRs whose fix loop ran since the look last read

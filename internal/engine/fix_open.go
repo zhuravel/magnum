@@ -70,8 +70,16 @@ type openCand struct {
 // that is not "open" gets no verdict, and a row an earlier look left is
 // deleted, so a switch back to "own" leaves no stale verdict.
 func (e *Engine) autofixOpen(ctx context.Context) error {
-	e.openReads, e.openFetches = map[int64]externalRead{}, map[string]error{}
-	defer func() { e.openReads, e.openFetches = nil, nil }() // a request of the next tick fetches again
+	e.openReads = map[int64]externalRead{}
+	e.mu.Lock()
+	e.openFetches = map[string]error{}
+	e.mu.Unlock()
+	defer func() { // a request of the next tick fetches again
+		e.openReads = nil
+		e.mu.Lock()
+		e.openFetches = nil
+		e.mu.Unlock()
+	}()
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{GHOpen: true})
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "autofix open: list the open PRs")
@@ -380,8 +388,29 @@ func openFetchKey(clone, base string) string { return clone + "\x00" + base }
 // fetchedThisTick reports whether the look fetched base into clone in this
 // tick: prepareFix's look at the base then fetches it no second time.
 func (e *Engine) fetchedThisTick(clone, base string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	err, ok := e.openFetches[openFetchKey(clone, base)]
 	return ok && err == nil
+}
+
+// openFetched reports whether the look fetched a base into a clone (key)
+// in this tick (done), and that fetch's error.
+func (e *Engine) openFetched(key string) (done bool, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	err, done = e.openFetches[key]
+	return done, err
+}
+
+// noteOpenFetch records the look's fetch of a base into a clone (key) in
+// this tick, with its error.
+func (e *Engine) noteOpenFetch(key string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.openFetches != nil {
+		e.openFetches[key] = err
+	}
 }
 
 // openConflictCheck checks pr's head against the tip of the base it merges
@@ -403,10 +432,10 @@ func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr stor
 	next := openConflict{Head: pr.HeadSHA, Base: base, At: now}
 	if e.d.Git != nil && dir != "" && gitx.ShellSafeRef(base) && !e.d.DryRun {
 		key := openFetchKey(clone, base)
-		ferr, done := e.openFetches[key]
+		done, ferr := e.openFetched(key)
 		if !done {
 			ferr = e.fetchBase(ctx, clone, base, fixRequestFetch)
-			e.openFetches[key] = ferr
+			e.noteOpenFetch(key, ferr)
 		}
 		if ferr != nil {
 			next.Unchecked = true
