@@ -29,8 +29,9 @@
 #     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
-#     files with a sample of each, a long dotted line scrubbed in seconds, and no notes read through a link, from a
-#     file over 1 MiB or from a foreign folder.
+#     files with a sample of each, a long dotted line scrubbed in seconds, no notes read through a link, from a
+#     file over 1 MiB or from a foreign folder, lens 13's stats command with the local date of the factory's since,
+#     and a since that is no real time and wrong arguments refused.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -800,6 +801,29 @@ TZ=America/New_York MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FA
 [[ $rc == 0 ]] && grep -Fq '`magnum factory stats --since 2026-10-10 --markdown`' "$ev/f7out/evidence.md" ||
     fail "the stats command names the factory since's local date: $(grep -F 'factory stats' "$ev/f7out/evidence.md" || echo none)"
 ok "evidence.sh prints lens 13's stats command with the local date of the factory's since"
+
+# 22. A since is a real time: a month 13, an hour 99, a February 31 and a count of days past any date are refused
+#     before anything is written. --factory-since counts after the other arguments too, and an unknown flag or a third
+#     argument is refused.
+for bad in 2026-13-01T00:00:00Z 2026-10-01T99:00:00Z 2026-02-31T00:00:00Z 99999999999d; do
+    rm -rf "$ev/bad"
+    MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" "$bad" "$ev/bad"
+    [[ $rc == 2 ]] && has "is not a since" && [[ ! -e $ev/bad ]] || fail "the since $bad is refused before anything is written (rc $rc)"
+    MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" --factory-since "$bad" 3d "$ev/bad"
+    [[ $rc == 2 ]] && has "is not a since" && [[ ! -e $ev/bad ]] || fail "the factory since $bad is refused before anything is written (rc $rc)"
+done
+[[ ! -e $ev/f5out ]] || fail "a since with a quote is refused before anything is written"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
+    run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/f8out" --factory-since 2026-10-11T09:45:00Z
+[[ $rc == 0 ]] && grep -q '^## Factory tasks (updated since 2026-10-11T09:45:00Z)' "$ev/f8out/evidence.md" ||
+    fail "--factory-since after the other arguments counts (rc $rc)"
+for args in "--factory 3d $ev/bad" "3d $ev/bad extra" "--factory-since"; do
+    rm -rf "$ev/bad"
+    # shellcheck disable=SC2086
+    MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" $args
+    [[ $rc != 0 ]] && has "usage: evidence.sh" && [[ ! -e $ev/bad ]] || fail "evidence.sh $args is refused with its usage (rc $rc)"
+done
+ok "evidence.sh refuses a since that is no real time and wrong arguments, and takes --factory-since anywhere"
 
 
 echo "selftest: $checks checks passed"

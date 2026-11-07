@@ -22,12 +22,20 @@ set -euo pipefail
 
 usage="usage: evidence.sh [--factory-since <since>] <since> <run-dir>"
 fsince=
-if [[ ${1:-} == --factory-since ]]; then
-	fsince=${2:?$usage}
-	shift 2
-fi
-since=${1:?$usage}
-dir=${2:?$usage}
+args=()
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	--factory-since)
+		[[ $# -ge 2 ]] || { echo "evidence.sh: --factory-since needs a since; $usage" >&2; exit 2; }
+		fsince=$2
+		shift 2 ;;
+	-*) echo "evidence.sh: unknown flag $1; $usage" >&2; exit 2 ;;
+	*) args+=("$1"); shift ;;
+	esac
+done
+[[ ${#args[@]} -eq 2 ]] || { echo "evidence.sh: want <since> and <run-dir>; $usage" >&2; exit 2; }
+since=${args[0]}
+dir=${args[1]}
 db=${MAGNUM_DB:-$HOME/.local/share/magnum/magnum.db}
 reviews=${MAGNUM_REVIEWS:-$HOME/.local/share/magnum/reviews}
 fdb=${MAGNUM_FACTORY_DB:-$HOME/.local/share/magnum/factory/factory.db}
@@ -35,12 +43,16 @@ ftasks=${MAGNUM_FACTORY_TASKS:-$HOME/.local/share/magnum/factory/tasks}
 repo=$(cd "$(dirname "$0")/../../../.." && pwd)
 
 # when prints a since as an RFC 3339 UTC time: "<n>d" is n days ago, and anything else but such a time is refused,
-# since it goes into SQL and into touch -t as it is.
+# since it goes into SQL and into touch -t as it is. The time must be a real one: date reads it and prints it back
+# unchanged (a month 13 does not parse, and a February 31 comes back as March 3).
 when() {
-	if [[ $1 =~ ^([0-9]+)d$ ]]; then
-		date -u -v-"${BASH_REMATCH[1]}"d +%Y-%m-%dT%H:%M:%SZ
-	elif [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-		echo "$1"
+	local t=$1
+	if [[ $t =~ ^([0-9]+)d$ ]]; then
+		t=$(date -u -v-"${BASH_REMATCH[1]}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || t=
+	fi
+	if [[ $t =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ &&
+		$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) == "$t" ]]; then
+		echo "$t"
 	else
 		echo "evidence.sh: '$1' is not a since (an RFC 3339 UTC time such as 2026-10-04T00:00:00Z, or 3d); $usage" >&2
 		return 2
