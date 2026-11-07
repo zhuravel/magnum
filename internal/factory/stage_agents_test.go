@@ -960,6 +960,33 @@ func TestAnAgentsPauseGoesOnAtTheNextPass(t *testing.T) {
 	}
 }
 
+// A Codex refusal that comes in the same pass as an event that needs you
+// is not forgotten by your retry: the pass ended before the task's Codex
+// sessions were quit, and the retry's rebuilt stage (as a restart's) reads
+// the task's mark and quits them, once.
+func TestARetryKeepsTheQuitOfATasksCodexSessions(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12391", "bug", "investigate")
+	h.startStage(task)
+	h.observeEvents(
+		runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: h.lastRun("fx-cause"), Kind: runtime.EventRefused,
+			Reason: "codex: flagged for possible cybersecurity risk"},
+		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventStuck},
+	)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || len(h.rt.codexQuits()) != 0 {
+		t.Fatalf("task %s with QuitCodex calls %v, want needs_you before the quit", got.State, h.rt.codexQuits())
+	}
+
+	if q := h.retry(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("your retry: %+v", q)
+	}
+	h.tick()
+	if got := h.rt.codexQuits(); !slices.Equal(got, []int64{task.ID}) {
+		t.Fatalf("QuitCodex calls %v after your retry, want the task's, once", got)
+	}
+}
+
 // A Codex refusal: the task is Codex-never, its other Codex sessions are
 // quit, and the refused role runs again as its Claude fallback, writing the
 // same file.

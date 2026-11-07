@@ -436,7 +436,11 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		run.turn = turn
 		return run, nil, nil
 	}
-	run := &agentsRun{attempt: a.ID, turn: turn}
+	// A task Codex never works on again may still have Codex sessions live:
+	// the pass that took the refusal can have ended before their quit, which
+	// the loop kept only in memory. QuitCodex quits only the sessions that
+	// start or run, so a quit done already does nothing again.
+	run := &agentsRun{attempt: a.ID, turn: turn, quitCodex: t.CodexNever}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
 		if !ok {

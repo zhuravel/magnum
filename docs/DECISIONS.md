@@ -17057,9 +17057,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and `RecoverLost` starts such a role's ladders over (a stuck turn still at work in its live pane is left to
   its end, or to you in it). The rebuild asks for it when the role's last run carries `RecoveryPrefix`; a lost
   pane's last run stays in flight on the lost session, which asks nothing yet (a follow-up, with the park of a
-  stopped task whose pane was lost). A crash between a quit that worked and the hand-over leaves the hung run
-  in flight on the quit session for a moment's work: the next daemon's watchdog takes it as any hung run, and
-  its restart, finding no live session, hands it over.
+  stopped task whose pane was lost). The rebuild also reads the task's Codex-never mark into the quit of its
+  Codex sessions, which only the loop's memory held: a refusal that came in the pass that sent the task to
+  you was otherwise never quit after a retry or a restart (`QuitCodex` quits only the sessions that start or
+  run, so a second quit does nothing). A crash between a quit that worked and the
+  hand-over leaves the hung run in flight on the quit session for a moment's work: the next daemon's watchdog
+  takes it as any hung run, and its restart, finding no live session, hands it over.
   Rejected: the first cut, which kept the hung run in flight until the replacement's prompt left (it left an
   orphan on a parked session once the start or the prompt failed); `recovering` set before the climb's steps
   (a failed resume of a hung turn would take the lost pane's ladder and end in "the pane was lost"); a mark in
@@ -17075,7 +17078,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   runtime), TestAStepThatCannotQuitLetsGoOfTheHungRunsUnknownPrompts (the nudge stayed unknown) and
   TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn (no `RecoverLost`); in the second review's round,
   TestARetryAfterAStuckRoleWithNoTurnRecoversIt (no `RecoverLost` after the retry) and
-  TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork (no start, stuck and lost);
+  TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork (no start, stuck and lost); in the third,
+  TestARetryKeepsTheQuitOfATasksCodexSessions (no `QuitCodex`);
   TestARecoveryPromptThatNeverArrivedIsRecoveredAgain holds the restart between the proof and the recovery.
 
 - **A continuation on the fallback model that never left pauses its role** (2026-11-07, the audit's R14). A run
