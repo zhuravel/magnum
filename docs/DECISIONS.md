@@ -140,6 +140,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   breaks every fetch over SSH, `magnum fix-sync`'s included); Verified commits made through the API (no
   merge commits through GraphQL); an on-demand mint in the pane (the key in a process the agent starts);
   a token in the env; and the review App as the fixer.
+- **The doctor's fixer repos check reads nothing without a fixer App** (2026-11-07, the review of the factory
+  bridge). It listed the registry's repositories before it looked for a watch with a fixer App, so a
+  registry busy past its timeout printed a warning about "the fixer App checks below" on a configuration
+  with none, a line the doctor never printed before the fixer App. It now returns at once when no watch's
+  fixer is an App (`AllFixerLogins` empty). Test, failing first:
+  TestDoctorFixerReposReadsNothingWithoutAFixerApp.
 
 ## Checkouts and pools
 

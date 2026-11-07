@@ -164,9 +164,13 @@ func doctorFixerPushURL(ctx context.Context, d doctorDeps) []doctorCheck {
 // (not a glob) and manual_repos, its pools' repositories, and those the
 // registry saw, each only while the watch covers it (config.Config.WatchFor).
 // The App's tokens reach those alone, so `magnum fix` refuses a PR of any
-// other repository of the watch; a gh fixer's watch is not read.
+// other repository of the watch; a gh fixer's watch is not read, and a
+// configuration with no fixer App reads nothing and says nothing.
 func doctorFixerRepos(ctx context.Context, d doctorDeps) []doctorCheck {
 	cfg := d.Config
+	if len(cfg.AllFixerLogins()) == 0 {
+		return nil
+	}
 	var out []doctorCheck
 	var known []string
 	for _, p := range cfg.Pools {

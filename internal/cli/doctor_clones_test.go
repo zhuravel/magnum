@@ -171,3 +171,19 @@ func TestDoctorNamesTheRepositoriesAFixerAppsTokensDoNotReach(t *testing.T) {
 		t.Errorf("every repository named: %+v, want a pass", c)
 	}
 }
+
+// Without a fixer App on any watch the fixer repos check reads nothing and
+// says nothing: a registry that cannot be listed (busy past its timeout,
+// closed) gives no warning about fixer App checks that do not exist.
+func TestDoctorFixerReposReadsNothingWithoutAFixerApp(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "me", Kind: "gh", Login: "zhuravel"}}
+	cfg.Watches = []config.Watch{{Owner: "talkable", Include: []string{"talkable"}, Identity: "me", PollIdentity: "me"}}
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if checks := doctorFixerRepos(context.Background(), doctorDeps{Config: cfg, Store: st}); len(checks) != 0 {
+		t.Errorf("checks = %+v, want none without a fixer App", checks)
+	}
+}
