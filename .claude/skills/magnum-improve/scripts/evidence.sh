@@ -808,10 +808,14 @@ TOKENS = re.compile("|".join([
 PAIRS = re.compile(r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)''', re.ASCII)
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.ASCII)
 HOST = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b", re.ASCII)
-# A line is scrubbed up to LINE_MAX characters (more than any shown), and HOST runs on each run of the characters a
-# host name or an address is made of: a match never leaves such a run, and the characters around a run are no word
-# characters, so the matches are the same as on the whole line. A run longer than a host name may be (253 characters)
-# is masked whole, since Python's engine, unlike Go's, backtracks on a long dotted run for minutes.
+# REDACT, TOKENS and PAIRS run on the whole text, in the Go scrub's order, since a private key, an Authorization value
+# and a key's value (on the next line, or quoted over lines) cross a line break; EMAIL and HOST, which cannot, run on
+# each line kept. Python's engine, unlike Go's, backtracks for minutes on some long lines (a dotted run, an eyJ
+# repeated), so first a line longer than LINE_MAX keeps only its first and last LINE_MAX / 2 characters: the first
+# hold every character shown (400), the last a key that ends the line, whose value is on the next. And HOST runs on
+# each run of the characters a host name or an address is made of: a match never leaves such a run, and the
+# characters around a run are no word characters, so the matches are the same as on the whole line; a run longer than
+# a host name may be (253 characters) is masked whole.
 LINE_MAX, HOST_MAX = 2000, 253
 HOST_RUN = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -829,18 +833,18 @@ def host(m):
     return "<host>" if len(run) > HOST_MAX else HOST.sub("<host>", run)
 
 
+def bounded(line):
+    half = LINE_MAX // 2
+    return line if len(line) <= LINE_MAX else line[:half] + " [...] " + line[-half:]
+
+
 def scrub_lines(text, keep=0):
-    """The lines of text scrubbed, the last keep of them (0: all), and how many it left out. REDACT runs on the whole
-    text, since a private key spans lines; the rest runs on each line kept."""
-    lines = REDACT.sub(redacted, text or "").splitlines()
+    """The lines of text scrubbed, the last keep of them (0: all), and how many it left out."""
+    text = "\n".join(bounded(line) for line in (text or "").split("\n"))
+    text = PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", REDACT.sub(redacted, text)))
+    lines = text.splitlines()
     left = max(0, len(lines) - keep) if keep else 0
-    out = []
-    for line in lines[left:]:
-        line = TOKENS.sub("<redacted>", line[:LINE_MAX])
-        line = PAIRS.sub(r"\1\2<redacted>", line)
-        line = EMAIL.sub("<email>", line)
-        out.append(HOST_RUN.sub(host, line))
-    return out, left
+    return [HOST_RUN.sub(host, EMAIL.sub("<email>", line)) for line in lines[left:]], left
 
 
 def scrub(s):

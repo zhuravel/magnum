@@ -29,8 +29,9 @@
 #     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
-#     files with a sample of each, a long dotted line scrubbed in seconds, no notes read through a link, from a
-#     file over 1 MiB or from a foreign folder, lens 13's stats command with the local date of the factory's since,
+#     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
+#     600 KB of eyJ scrubbed in seconds, no notes read through a link, from a file over 1 MiB or a foreign folder,
+#     lens 13's stats command with the local date of the factory's since,
 #     and a since that is no real time and wrong arguments refused.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
@@ -614,23 +615,30 @@ TZ=UTC touch -t 202610111000 "$round"
 echo '- 2026-10-11 09:00 an older note' >"$ev/factory-tasks/8/notes.md"
 TZ=UTC touch -t 202610110900 "$ev/factory-tasks/8/notes.md"
 # Task 9's notes hold one sample of every pattern of the factory's scrub (execx.Redact and runtime.Scrub, most of them
-# from those files' Go tests; a key shape a scanner knows is built from two pieces) and a dotted line of 20,000
-# characters. Task 10's notes.md links to a file outside, task 11 is a linked folder, task 12's notes.md is over
-# 1 MiB, and a folder named with a non-ASCII digit lies beside them.
-mkdir -p "$ev/factory-tasks/9" "$ev/factory-tasks/10" "$ev/factory-tasks/12" "$ev/outside/11" "$ev/factory-tasks/²"
+# from those files' Go tests; a key shape a scanner knows is built from two pieces), the values a key names across a
+# line break (on the next line, in quotes over two lines, after a key that ends a line of 2,500 characters, and on
+# the first line kept after the key's line was cut as the 81st from the end), and a dotted line of 20,000
+# characters. Task 13's notes are an eyJ repeated over 600 KB. Task 10's notes.md links to a file outside, task 11
+# is a linked folder, task 12's notes.md is over 1 MiB, and a folder named with a non-ASCII digit lies beside them.
+mkdir -p "$ev/factory-tasks/9" "$ev/factory-tasks/10" "$ev/factory-tasks/12" "$ev/outside/11" "$ev/factory-tasks/²" \
+    "$ev/factory-tasks/13"
 jwt="eyJhbGciOiJIUzI1NiJ9"".eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 leaks=(ghs_abcDEF123_x eyJzdWIiOiIxMjM0NTY3ODkwIn0 opaqueTOKEN123 dXNlcjpodW50ZXIy MIIEsecretbody MIIEtruncat
     AKIAABCDEFGHIJKLMNOP xoxb-123456789012-abcdefghijkl sk-abcdefghijklmnopqrstuvwxyz123456
     "sk-""ant-abcdefghijklmnopqrstuv" glpat-abcdefghij0123456789 "rk_""live_abcdefghij0123456789"
     "AI""zaSyA-abcdefghijklmnopqrstuvwxyz01234" wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY hunter3 s3cr3t-value
-    bob@example.org db1.internal.example.com 10.0.4.12)
+    bob@example.org db1.internal.example.com 10.0.4.12 CROSSLINE-SECRET QUOTED-SECOND LONGLINE-SECRET BOUNDARY-SECRET)
 {
+    printf '%s\n' '- boundary token:' "${leaks[22]}"
+    for i in $(seq 1 64); do echo "- task 9 filler $i"; done
     echo "- token ${leaks[0]} here, and a JWT $jwt"
     echo "- Authorization: Bearer ${leaks[2]}, then Authorization: Basic ${leaks[3]}"
     echo "- ${leaks[6]} and aws_secret_access_key=${leaks[13]}"
     echo "- token ${leaks[7]} and ${leaks[8]} and ${leaks[9]} and ${leaks[10]} and ${leaks[11]} and ${leaks[12]}"
     echo "- password=${leaks[14]} client_secret: \"${leaks[15]}\""
     echo "- mail ${leaks[16]} about ${leaks[17]} and ${leaks[18]}"
+    printf '%s\n' '- api_key:' "  ${leaks[19]}" '- password="QUOTED-FIRST' "${leaks[20]}\""
+    printf '%s\n' "- $(head -c 2500 /dev/zero | tr '\0' 'x') password:" "${leaks[21]}"
     printf -- '- %s\n' "$(printf 'a.%.0s' $(seq 1 10000))"
     printf '%s\n' '-----BEGIN RSA PRIVATE KEY-----' "${leaks[4]}" '-----END RSA PRIVATE KEY-----' '- the cut key follows'
     printf '%s\n' '-----BEGIN EC PRIVATE KEY-----' "${leaks[5]}"
@@ -641,12 +649,16 @@ echo '- LINKED-FOLDER-NOTE' >"$ev/outside/11/notes.md"
 ln -s "$ev/outside/11" "$ev/factory-tasks/11"
 { echo '- BIG-NOTE-LINE'; head -c 1100000 /dev/zero | tr '\0' 'x'; echo; } >"$ev/factory-tasks/12/notes.md"
 echo '- FOREIGN-FOLDER-NOTE' >"$ev/factory-tasks/²/notes.md"
+python3 -c 'print("- " + "eyJ" * 200000)' >"$ev/factory-tasks/13/notes.md"
+TZ=UTC touch -t 202610110900 "$ev/factory-tasks/13/notes.md"
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
 run1_secs=$((SECONDS - started))
 [[ $rc == 0 ]] || fail "evidence.sh runs against a factory registry with only the columns it reads (rc $rc)"
-grep -q '^## Factory PRs' "$ev/fout/evidence.md" && tr -s ' ' <"$ev/fout/evidence.md" | grep -q '| 7 | example/app#4512 |' ||
+# (a here-string, not a pipe: under pipefail grep -q ends the pipe at its match, and tr dies of SIGPIPE when
+# evidence.md outgrows the pipe's buffer)
+grep -q '^## Factory PRs' "$ev/fout/evidence.md" && grep -q '| 7 | example/app#4512 |' <<<"$(tr -s ' ' <"$ev/fout/evidence.md")" ||
     fail "the factory section lists the PR the task published: $(sed -n '/^## Factory PRs/,/^## Factory local/p' "$ev/fout/evidence.md" | tr '\n' ';')"
 [[ $(cat "$ev/fout/factory-reports.txt") == "$round" ]] || fail "factory-reports.txt lists the local review round's report directory"
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$ev/none.db MAGNUM_FACTORY_TASKS=$ev/none \
@@ -751,6 +763,10 @@ ok "evidence.sh lists the report directories since its UTC since in any time zon
 
 # 18. The scrub of the notes is the factory's own: every pattern of execx.Redact and runtime.Scrub stands in
 #     evidence.sh word for word (Go's end of text, $, is Python's \Z), and no sample of them is left in evidence.md.
+#     The first half reads only the backtick literals inside regexp.MustCompile( calls of the two Go files, so a
+#     pattern written another way escapes it, and a pattern that stands only in a comment of evidence.sh passes it.
+#     Only the samples pin how the patterns are applied: their order, their replacements and on what text (the whole
+#     text, so that a value on the next line is masked as the Go scrub masks it).
 repo_root=$(cd "$here/../../../.." && pwd)
 run python3 - "$repo_root/internal/execx/execx.go" "$repo_root/internal/factory/runtime/scrub.go" "$scripts/evidence.sh" <<'PY'
 import re, sys
@@ -776,13 +792,17 @@ PY
 for leak in "${leaks[@]}"; do
     ! grep -Fq -- "$leak" "$ev/fout/evidence.md" || fail "the notes' sample $leak is scrubbed: $(grep -F -- "$leak" "$ev/fout/evidence.md" | cut -c1-200)"
 done
-grep -Fxq '### Task 9 (task 9, -)' "$ev/fout/evidence.md" || fail "task 9's notes are listed"
+grep -A2 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | grep -Fxq '(1 earlier lines left out)' &&
+    ! grep -Fxq '> - boundary token:' "$ev/fout/evidence.md" && grep -Fxq '> - api_key:' "$ev/fout/evidence.md" ||
+    fail "task 9's notes are listed from the value of the key cut away: $(grep -A6 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | cut -c1-120 | tr '\n' ';')"
 ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
 
-# 19. A long dotted line, which Python's regex engine (unlike Go's) backtracks on for minutes, is scrubbed in seconds.
-[[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line in the notes took ${run1_secs}s"
-grep -Fxq '> - <host>' "$ev/fout/evidence.md" || fail "the long dotted line is masked whole: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
-ok "evidence.sh scrubs a 20,000-character dotted line in the notes in ${run1_secs}s"
+# 19. A long dotted line and a long run of eyJ, which Python's regex engine (unlike Go's) backtracks on for minutes,
+#     are scrubbed in seconds: a long line keeps its first and last 1,000 characters.
+[[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line and 600 KB of eyJ in the notes took ${run1_secs}s"
+grep -Fxq '> - <host> [...] <host>' "$ev/fout/evidence.md" ||
+    fail "the long dotted line is masked whole: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
+ok "evidence.sh scrubs a 20,000-character dotted line and 600 KB of eyJ in the notes in ${run1_secs}s"
 
 # 20. The notes are read only from a plain notes.md of 1 MiB at most, in a task folder that is no link and is named
 #     with ASCII digits.
