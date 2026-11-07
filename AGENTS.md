@@ -70,10 +70,12 @@ make vuln        # govulncheck, after a dependency or Go update
 and fix what it reports in the lines you touched (CI fails a PR on new issues only), and never run a
 blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`).
 
-Run `make test-race PKGS=…` on the packages you touched before `make test`; go test's 10-minute
-default is enough (the whole suite takes about 3 minutes under `-race` at a load of 15-25, the engine
-the longest, and about 40 seconds without it: a test binary skips the file syncs of `fsx.WriteFileAtomic`). A change is done when the gate is green, the API doc is regenerated if exports changed,
-and the README or config comments describe any new key, command or key binding.
+Run `make test-race PKGS=…` on the packages you touched before `make test`. It passes `-timeout 30m`
+(a `-timeout` in `TESTFLAGS` overrides it), since go test's 10-minute default is not enough: under
+`-race`, with 4 binaries at once on a busy laptop, the engine alone takes 8 to 10 minutes. Without
+`-race` the whole suite takes about 40 seconds (a test binary skips the file syncs of
+`fsx.WriteFileAtomic`). A change is done when the gate is green, the API doc is regenerated if exports
+changed, and the README or config comments describe any new key, command or key binding.
 
 **One gate at a time on this machine.** `make test` and `make test-race` take the lock file
 `/tmp/magnum-make-test.lock` (`lockf` on macOS, `flock` on Linux) and wait, saying so, while another

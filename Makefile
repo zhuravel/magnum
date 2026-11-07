@@ -58,11 +58,12 @@ gate: check-private
 	$(GO) vet ./...
 	$(GO) test $(TEST_P_FLAG) ./...
 
-## test-race: go test -count=1 -race on PKGS (the packages you touched; default ./...) under GATE_LOCK, TEST_P
-## binaries at once; TESTFLAGS adds flags (-run, -count=3 -cpu 1,3 -shuffle=on)
+## test-race: go test -count=1 -race -timeout 30m on PKGS (the packages you touched; default ./...) under GATE_LOCK,
+## TEST_P binaries at once (the engine alone takes 8-10 minutes under -race on a busy laptop); TESTFLAGS adds flags
+## and overrides these (-run, -count=3 -cpu 1,3 -shuffle=on, -timeout 45m)
 PKGS ?= ./...
 test-race:
-	@$(call gate_locked,$(GO) test -count=1 -race $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
+	@$(call gate_locked,$(GO) test -count=1 -race -timeout 30m $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
 
 ## check-private: this repo is public; fail when a tracked file mentions a name listed in MAGNUM_PRIVATE_PATTERNS
 ## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub
