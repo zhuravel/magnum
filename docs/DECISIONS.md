@@ -17721,6 +17721,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPublishedPRMagnumNeverPickedUpNeedsYou, TestABaselineWithoutAFreshVerdictIsLeftAlone,
   TestPRStatesSayMagnumsDaemonRunsAnOlderBuild, TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild; goldens
   repos-100, -120, -140 and -200, yours-100, -140 and -200.
+- **`f`, `F` and `K` act on every row with a PR, and home's hygiene** (2026-11-08, the 2026-11-07 audit's R6 and
+  R10, with its E #3 and A F10; amends "Your PRs on the factory screen", whose `f`, `F` and `x` refused a task's
+  row). Magnum's fix loop runs on the factory's own PRs, but their rows refused every fix key ("f, F and x act on
+  your PRs: PR-27536 is a task"), so a published task whose findings needed a fix sent the operator to the board.
+  - A task's row whose open PR magnum's registry has carries it (`FactoryRow.PR`, built by `screenPR` as your PR's
+    row is: its reference, magnum's loop, fix off, and why the look leaves it alone, `offOf`), and `f`, `F` and a
+    new `K` run the board's own code on it, behind y/N naming the task and its PR (`Fix PR-12320's #4530: magnum's
+    fixer takes what is open now?`). A row of your own PR is told by its id below zero (`FactoryRow.yourPR`), which
+    no task's has. A task's PR words name the screen's keys (`f fixes them`, `F turns it on`), not the board's.
+  - `K` stops what magnum runs on the PR (the board's `K`, `magnum abort`) on every row with a PR; `x` still does on
+    your PR's row, and on a task's row it says that `K` does and that `x` drops a task on its card.
+  - The help glosses only what the screen draws: the staging cells, QA, the CI fixer's tries, snooze, "say one
+    line", the learning view and the rating come with their features, and the stages are the built-in kinds'
+    (judge, reproduction, pr body, ready, publish), not "tests", "merge master" or "cleanup".
+  - WAITS ON OTHERS lists its rows oldest wait first, as NEEDS YOU and LEFT ALONE do; it kept the tasks' order.
+  - A title that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding`
+    beside `PR-12400`); below 120 columns your PR's row keys by its number, and its title keeps the key.
+  Rejected: `f` and `F` on a task's PR that magnum has not read (the request would name a PR magnum's daemon does
+  not have); marking the glossary's later words "to come" (the help would describe what the operator cannot see);
+  moving `x` off your PR's row here (decision R40 makes `K` the only stop). Tests, failing first:
+  TestATaskRowWithAPRCarriesItForTheFixKeys, TestTheFixKeysWorkOnATaskRowWithAPR, TestKOnAnOwnPRRowStopsTheLoop,
+  TestTheMenuOfATaskRowListsTheFixKeys, TestFOnATaskRowStartsNothing, TestTheHelpListsOnlyWhatExists,
+  TestWaitsOnOthersSortsByWait, TestATitleDropsTheKeyItsKeyCellShows.
 
 ## Learned rules
 
