@@ -35,8 +35,11 @@ package engine
 //     spending no start), never within hands_off_after_push of the
 //     operator's own push;
 //  10. a head the reviewers have not settled on waits;
-//  11. red required CI needs you, pending required CI waits; a merge with
-//     the base the look could not check is unknown;
+//  11. red required CI needs you, pending required CI waits; a required
+//     check with no run at a head whose checks magnum read whole waits
+//     until settle_max after the push and then needs you (it did not run:
+//     a workflow that runs only when the PR opens), never green; a merge
+//     with the base the look could not check is unknown;
 //  12. otherwise the PR is idle: nothing open at its head.
 //
 // Unknown is never idle.
@@ -290,19 +293,23 @@ type openSettle struct {
 }
 
 // openCI is what the head's required checks say (openCIOf): what failed
-// ("required check rspec", "CI" for the rollup; "" for nothing), and
-// whether one still runs or has not started.
+// ("required check rspec", "CI" for the rollup; "" for nothing), whether
+// one still runs or the rollup has not started, and the required entries
+// that name no run on the head (missing: whose checks magnum read whole,
+// openMissingCI).
 type openCI struct {
 	failed  string
 	pending bool
+	missing []string
 }
 
 // openCIOf is rule 11's CI of pr's head by required, its repository's
 // required checks (store.Store.RequiredChecks: the [[repo]] block's, else
 // GitHub's for the default branch): a known empty list leaves CI out; the
-// head's stored checks decide where they can (requiredCIOf), and GitHub's
-// rollup otherwise, a required list with no rollup at all (no check has
-// run) waiting for it.
+// head's stored checks decide where they can (requiredCIOf: an entry that
+// names no run there is missing, never green), and GitHub's rollup
+// otherwise, a required list with no rollup at all (no check has run)
+// waiting for it.
 func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 	if required.Source != "" && len(required.Checks) == 0 {
 		return openCI{}
@@ -311,7 +318,7 @@ func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 		if len(r.failed) > 0 {
 			return openCI{failed: "required check " + r.failed[0].Name}
 		}
-		return openCI{pending: r.running}
+		return openCI{pending: r.running, missing: r.missing}
 	}
 	switch deref(pr.CIState) {
 	case "FAILURE", "ERROR":
@@ -512,6 +519,8 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	case f.ci.failed != "":
 		v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
 		return say(OpenNeedsYou, fmt.Sprintf("%s failed at %s", f.ci.failed, short)), nil, needs
+	case len(f.ci.missing) > 0:
+		return openMissingCI(f, v), nil, needs
 	case f.ci.pending:
 		return say(OpenWaits, "CI at "+short), nil, needs
 	case f.mergeUnchecked != "":
@@ -765,4 +774,38 @@ func joinWords(parts []string) string {
 		return parts[0]
 	}
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+}
+
+// openMissingCI is rule 11's verdict v of f's head, at which the required
+// checks f.ci.missing names have no run (their words: missingWhat): a head
+// younger than settle_max waits for them to start (CI at the head, until
+// settle_max after its move), an older one needs you, with how to start
+// them: the head's checks are known in full, so they did not run there.
+func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
+	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
+	if due := f.pr.HeadChangedAt.Add(f.settle.max); f.now.Before(due) {
+		v.Verdict, v.Why, v.Until = OpenWaits, fmt.Sprintf("CI at %s: %s has not started", short, what), due
+		return v
+	}
+	v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
+	v.Verdict, v.Why = OpenNeedsYou, fmt.Sprintf("%s did not run at %s: run its workflow on the PR's branch, or push", what, short)
+	return v
+}
+
+// missingWhat names missing, required entries with no run on a head, in
+// the verdict's words: the first ("required check Completion", "required
+// workflow CI" for a workflow entry), and how many more ("and 1 more"). An
+// entry is the repository's configuration or GitHub's rulesets, never PR
+// text; one that is not plain text (shownCheckName) is "a required check".
+func missingWhat(missing []string) string {
+	what := "a required check"
+	if workflow, ok := strings.CutPrefix(missing[0], store.RequiredWorkflowPrefix); ok && shownCheckName(workflow) {
+		what = "required workflow " + workflow
+	} else if !ok && shownCheckName(missing[0]) {
+		what = "required check " + missing[0]
+	}
+	if n := len(missing) - 1; n > 0 {
+		what += fmt.Sprintf(" and %d more", n)
+	}
+	return what
 }

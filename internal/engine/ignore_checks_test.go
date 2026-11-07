@@ -191,9 +191,10 @@ func TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored(t *test
 // the list is still named in review.auto_approve_begin, review.auto_approved
 // and the daemon's log while the ignored one never is; "*" requires every
 // check but the ignored one, so a head whose only failure is ignored is
-// approved; and a list that names only the ignored check names no check on
-// the head, so the rollup derived from the rest decides, as for a list
-// whose entry never ran there.
+// approved; and a list that names only the ignored check names a check
+// that ran on the head but that magnum does not see: the entry does not
+// count (seenRequired), so the rollup derived from the rest decides, where
+// an entry with no run at all would hold the approval as missing.
 func TestRequiredChecksCountOnlyTheChecksMagnumSees(t *testing.T) {
 	failed, passed := github.CheckFailed, github.CheckPassed
 	for _, tc := range []struct {

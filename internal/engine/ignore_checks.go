@@ -20,6 +20,31 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
+// seenRequired is required, a repository's required checks, as its CI
+// readers read them beside ignore (its ignore_checks): without the entries
+// whose every run on pr's stored head checks is one ignore names. Such an
+// entry ran on the head, and magnum does not see it (seenPR): it is
+// neither passed nor missing there, so it does not count; the entries that
+// name no run at all stay, and requiredCIOf reads them as missing. nil when
+// none is left: the rollup derived from the checks magnum sees decides, as
+// without a list.
+func seenRequired(pr store.PR, required, ignore []string) []string {
+	if pr.CI == nil || len(ignore) == 0 {
+		return required
+	}
+	ignored := func(c store.CheckResult) bool {
+		return slices.ContainsFunc(ignore, func(entry string) bool { return store.RequiredNames(entry, c) })
+	}
+	var out []string
+	for _, entry := range required {
+		if runs := store.RequiredRuns(pr.CI.Checks, entry); len(runs) == 0 ||
+			slices.ContainsFunc(runs, func(c store.CheckResult) bool { return !ignored(c) }) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
 // seenPR is pr, a PR of repository full ("owner/name"), with its checks as
 // magnum reads them: those full's ignore_checks names left out
 // (store.PR.IgnoringChecks); pr itself when it names none of them.

@@ -531,14 +531,22 @@ func (c openConflict) fixConflict(head string) fixConflict {
 }
 
 // openCI is rule 11's CI of pr's head (openCIOf), with the checks the
-// configuration ignores left out.
+// configuration ignores left out, and the required entries that name only
+// such checks (seenRequired; none left: the rollup derived from the rest
+// decides, as without a list).
 func (e *Engine) openCI(ctx context.Context, repo store.Repo, pr store.PR) openCI {
 	full := repo.FullName()
 	required, err := e.st.RequiredChecks(ctx, full, e.cfg.RequiredChecks(full))
 	if err != nil {
 		return openCI{pending: true}
 	}
-	return openCIOf(pr.IgnoringChecks(e.cfg.IgnoreChecks(full)), required)
+	ignore := e.cfg.IgnoreChecks(full)
+	if len(required.Checks) > 0 {
+		if required.Checks = seenRequired(pr, required.Checks, ignore); len(required.Checks) == 0 {
+			required = store.RequiredChecks{}
+		}
+	}
+	return openCIOf(pr.IgnoringChecks(ignore), required)
 }
 
 // commitLister lists the commits of to that from lacks (gitx.Client's

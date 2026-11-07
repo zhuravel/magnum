@@ -12,9 +12,13 @@ package engine
 // fails goes to the base-tip comparison (failsLikeTheBase), one that runs
 // waits, and the checks outside the list neither refuse nor wait; the
 // approval's events and the daemon's log name the failing ones it ignored.
-// Where the stored checks cannot say (none of the head's, a list GitHub cut
-// at 100, an entry that names no check on the head), and without the key,
-// the rollup decides as before.
+// An entry that names no check on a head whose checks magnum read whole
+// holds it as a required run that has not finished (DECISIONS "A required
+// check that did not run at the head is never green"): the repository's CI
+// may run only when a PR opens, so a later push gets no run of it, and
+// GitHub will not merge that head. Where the stored checks cannot say (none
+// of the head's, a list GitHub cut at 100), and without the key, the rollup
+// decides as before.
 
 import (
 	"context"
@@ -32,18 +36,20 @@ import (
 type requiredCI struct {
 	failed  []store.CheckResult // the required runs that failed
 	running bool                // a required run has not finished
+	// missing are the entries that name no check on the head: it never ran
+	// there, or has not started yet.
+	missing []string
 	ignored []store.CheckResult // the failed checks no entry names
 }
 
 // requiredCIOf reads pr's stored checks against required, its repository's
-// required_checks (config.Config.RequiredChecks); ok is false when they
-// cannot decide and the rollup does, as without the key: no list, no checks
-// stored for the head or not every one (GitHub lists 100), checks an earlier
-// build kept by workflow name (CIStatus.ByWorkflowFile: a PR's own workflow
-// of the base's name, or a status, may have replaced a run there), or an
-// entry that names no check on the head (one that never ran there, or has
-// not started: what it would be is unknown). A run two entries name counts
-// once.
+// required checks; ok is false when they cannot decide and the rollup does,
+// as without a list: no list, no checks stored for the head or not every
+// one (GitHub lists 100), or checks an earlier build kept by workflow name
+// (CIStatus.ByWorkflowFile: a PR's own workflow of the base's name, or a
+// status, may have replaced a run there). An entry that names no check on
+// the head is missing there (CIStatus: the checks list every one, so it has
+// no run on the head), never passed. A run two entries name counts once.
 func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 	ci := pr.CI
 	if len(required) == 0 || ci == nil || ci.SHA != pr.HeadSHA || !ci.Complete || !ci.ByWorkflowFile {
@@ -54,7 +60,8 @@ func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 	for _, entry := range required {
 		runs := store.RequiredRuns(ci.Checks, entry)
 		if len(runs) == 0 {
-			return requiredCI{}, false
+			r.missing = append(r.missing, entry)
+			continue
 		}
 		for _, run := range runs {
 			k := run.Key()
@@ -80,13 +87,16 @@ func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 
 // requiredCIRefusal is the CI gate's answer (ciGateOf) for c by r, its
 // head's required checks: a failing one goes to the base-tip comparison
-// (failsLikeTheBase, which waits for a required one that still runs), a
-// running one waits (ciRunsRefusal), and every one passed or skipped lets
+// (failsLikeTheBase, which waits for a required one that still runs or has
+// no run yet), one with no run on the head waits for it (ciMissingRefusal),
+// a running one waits (ciRunsRefusal), and every one passed or skipped lets
 // it through, whatever the checks outside the list do.
 func (e *Engine) requiredCIRefusal(ctx context.Context, c store.RepoPR, r requiredCI) ciAnswer {
 	switch {
 	case len(r.failed) > 0:
-		return e.failsLikeTheBase(ctx, c, r.failed, r.running)
+		return e.failsLikeTheBase(ctx, c, r.failed, r.running || len(r.missing) > 0)
+	case len(r.missing) > 0:
+		return ciAnswer{why: ciMissingRefusal, waits: true, state: pipeline.CIRunning}
 	case r.running:
 		return ciAnswer{why: ciRunsRefusal, waits: true, state: pipeline.CIRunning}
 	}
@@ -107,7 +117,7 @@ const ignoredChecksShown = 5
 // repository's ignore_checks names is no failing check here either, as the
 // gate reads them (seenPR): the note never names it.
 func (e *Engine) ignoredChecksNote(full string, pr store.PR) string {
-	r, ok := requiredCIOf(e.seenPR(full, pr), e.cfg.RequiredChecks(full))
+	r, ok := requiredCIOf(e.seenPR(full, pr), seenRequired(pr, e.cfg.RequiredChecks(full), e.cfg.IgnoreChecks(full)))
 	if !ok || len(r.ignored) == 0 {
 		return ""
 	}

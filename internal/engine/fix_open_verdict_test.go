@@ -207,6 +207,7 @@ func TestTheOpenRowIsIdleOnlyWhenEverythingHolds(t *testing.T) {
 		},
 		"a pending check":     func(f *openFacts) { f.ci = openCI{pending: true} },
 		"a red check":         func(f *openFacts) { f.ci = openCI{failed: "required check rspec"} },
+		"a missing check":     func(f *openFacts) { f.ci = openCI{missing: []string{"Completion"}} },
 		"a loop":              func(f *openFacts) { f.fix = &FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing} },
 		"needs attention":     func(f *openFacts) { f.attention = "fix" },
 		"an unreadable loop":  func(f *openFacts) { f.fixBad = true },
@@ -255,13 +256,57 @@ func TestPendingRequiredCIWaits(t *testing.T) {
 	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a")
 }
 
+// A required check with no run at a head whose checks magnum read whole is
+// never green. The repository's CI runs only when a PR opens, so a later
+// push, the fixer's included, gets no run of Completion: GitHub blocked the
+// merge while the rollup of the other checks said SUCCESS, and the look
+// called the PR idle. While the head is younger than settle_max the run may
+// not have started yet, and it waits; after that the check did not run, and
+// the verdict needs you, says which check at which head and how to start
+// it. A required workflow is named as one, and the others are counted.
+func TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen(t *testing.T) {
+	success := "SUCCESS"
+	pr := idleFacts().pr // its head moved an hour ago, past settle_max
+	pr.CIState = &success
+	pr.CI = &store.CIStatus{SHA: fixHead, State: success, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+		{Name: "pronto", Workflow: "Pronto", WorkflowFile: "pronto.yml", State: store.CheckPassed},
+		{Name: "Devin Review", State: store.CheckPassed}}}
+	for _, tc := range []struct {
+		name     string
+		required store.RequiredChecks
+		what     string
+	}{
+		{"GitHub's rulesets", store.RequiredChecks{Checks: []string{"Completion"}, Source: store.RequiredFromGitHub}, "required check Completion"},
+		{"required_checks", store.RequiredChecks{Checks: []string{"Completion"}, Source: store.RequiredFromConfig}, "required check Completion"},
+		{"a workflow", store.RequiredChecks{Checks: []string{"workflow:CI"}, Source: store.RequiredFromConfig}, "required workflow CI"},
+		{"two", store.RequiredChecks{Checks: []string{"Completion", "pronto", "Lint"}, Source: store.RequiredFromConfig}, "required check Completion and 1 more"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := idleFacts()
+			f.pr = pr
+			f.ci = openCIOf(pr, tc.required)
+			v, _, _ := decideOpen(f)
+			wantVerdict(t, v, OpenNeedsYou, tc.what+" did not run at a1a1a1a: run its workflow on the PR's branch")
+			if len(v.Needs) != 1 || v.Needs[0].Kind != "ci" || v.Needs[0].URL != prPage {
+				t.Errorf("needs = %+v, want the PR's CI", v.Needs)
+			}
+			f.pr.HeadChangedAt = openNow.Add(-5 * time.Minute) // pushed five minutes ago: its run may not have started
+			v, _, _ = decideOpen(f)
+			wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: "+tc.what+" has not started")
+			if want := f.pr.HeadChangedAt.Add(20 * time.Minute); !v.Until.Equal(want) {
+				t.Errorf("until = %s, want settle_max after the push (%s)", v.Until, want)
+			}
+		})
+	}
+}
+
 // A branch GitHub says requires no checks leaves CI out of idle, even with
 // a red rollup.
 func TestAKnownEmptyRequiredListLeavesCIOut(t *testing.T) {
 	pr := idleFacts().pr
 	failure := "FAILURE"
 	pr.CIState = &failure
-	if ci := openCIOf(pr, store.RequiredChecks{Checks: []string{}, Source: store.RequiredFromGitHub}); ci != (openCI{}) {
+	if ci := openCIOf(pr, store.RequiredChecks{Checks: []string{}, Source: store.RequiredFromGitHub}); ci.failed != "" || ci.pending || len(ci.missing) > 0 {
 		t.Errorf("ci = %+v, want nothing", ci)
 	}
 }

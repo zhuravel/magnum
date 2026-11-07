@@ -1679,17 +1679,19 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   approval, whose `review.auto_approved` event and the daemon's log name it ("ignored 1 failing check
   outside required_checks: Terraform scripts / lint"; the posted approval does not), one outside it that
   still runs is not waited for, and a required one that fails or runs holds the PR as above, the base
-  tip's comparison included. A `workflow:<glob>` entry names every check of each workflow whose file
+  tip's comparison included. A required check with no run on a head whose checks Magnum read whole holds
+  the PR too, however the other checks read ("its head's required checks have not run (magnum approves it
+  once they pass)"): a CI workflow that runs only when a PR opens gives a later push no run of it, and
+  GitHub will not merge that head; Magnum approves once the check ran there and passed. A `workflow:<glob>` entry names every check of each workflow whose file
   (`ci.yml`) or declared name (`CI`) it matches; the head's checks are kept one run per workflow file and
   check name, so a workflow of the same name in another file never replaces the runs of the CI workflow's
   file (its runs count beside them). A name glob counts the latest check run of each matching name and,
   apart, the latest commit status of that name: a status, which anyone who can write to the repository
   posts, never stands for a check run, nor a check run for a status. When the head's stored checks cannot
-  say (none read for the head, more than GitHub lists, an entry that names no check on the head, checks a
-  build before this rule stored, which the poller reads again at once) every check counts, as without
-  the key; the list GitHub's rulesets declare does not change the gate. A check `ignore_checks` names
+  say (none read for the head, more than GitHub lists, checks a build before this rule stored, which the
+  poller reads again at once) every check counts, as without the key; the list GitHub's rulesets declare does not change the gate. A check `ignore_checks` names
   (Watches, pools and repos) is absent here as everywhere, before `required_checks` or the base tip's
-  comparison reads the checks: a head whose only failing check it names is approved once the others
+  comparison reads the checks (a `required_checks` entry that names only such checks does not count): a head whose only failing check it names is approved once the others
   pass, its rollup decided from them, and one where another check still runs waits for it;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not requested changes on the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
@@ -3385,7 +3387,12 @@ began (due inside them, or due before and kept from starting) counts `magnum_lat
 (`magnum resume`, or the end `--for` or `--until` set), when the round they held can start; one that was late
 before they began is late again, and toasted once if not yet, at their end. Red required CI
 needs you; pending required CI waits (the required checks are `[[repo]] required_checks`, else GitHub's for
-the default branch; a branch that requires none leaves CI out).
+the default branch; a branch that requires none leaves CI out). A required check with no run at a head whose
+checks Magnum read whole is never green: a CI workflow that runs only when a PR opens gives a later push,
+the fixer's included, no run of it, and GitHub blocks the merge whatever the other checks say. Until
+`settle_max` after the push the run may not have started yet ("CI at a1b2c3d: required check Completion has
+not started"); after that the PR needs you ("required check Completion did not run at a1b2c3d: run its
+workflow on the PR's branch, or push").
 
 **What you see.**
 

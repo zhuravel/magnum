@@ -155,11 +155,49 @@ func TestAFailingRequiredCheckStillHoldsTheApproval(t *testing.T) {
 	}
 }
 
+// ciMissingWords is the CI gate's refusal of a head a required check did
+// not run on.
+const ciMissingWords = "its head's required checks have not run (magnum approves it once they pass)"
+
+// A check required_checks names that has no run on a head whose checks
+// magnum read whole holds the approval as the operator, however the other
+// checks read: the repository's CI runs only when a PR opens, so a later
+// push gets no Completion, and GitHub will not merge the head. Before, such
+// an entry let the rollup decide, and the SUCCESS of the other checks
+// approved it (a failing check outside the list held it instead). The
+// refusal waits, as for checks that run: magnum approves once the check ran
+// and passed.
+func TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval(t *testing.T) {
+	failed, passed := github.CheckFailed, github.CheckPassed
+	for _, tc := range []struct {
+		name     string
+		required []string
+		ci       string
+		checks   []github.Check
+	}{
+		{name: "a named check", required: []string{"Completion"}, ci: "SUCCESS",
+			checks: []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("", "Devin Review", passed)}},
+		{name: "a workflow", required: []string{"workflow:CI"}, ci: "SUCCESS", checks: []github.Check{ciCheck("Pronto", "pronto", passed)}},
+		{name: "one of two, beside a failing unrequired check", required: []string{"workflow:CI", "Deploy preview"}, ci: "FAILURE",
+			checks: []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, withRequiredChecks(tc.required...), withBaseChecks(ciCheck("CI", "rspec", passed)))
+			reviewedWithChecks(h, tc.ci, tc.checks...)
+			h.wantRefused(2, ciMissingWords)
+			if got := h.autoRefused(2); got != ciMissingWords {
+				t.Fatalf("held back for %q, want exactly %q", got, ciMissingWords)
+			}
+			if evs := h.approvedEvents(); len(evs) != 0 {
+				t.Fatalf("review.auto_approved events = %q", evs)
+			}
+		})
+	}
+}
+
 // Without [[repo]] required_checks every check counts as before, the list
 // GitHub's rulesets declare included (it does not change the gate): the
-// 12036 layout is held for the unrequired job, and a running one waits. A
-// list whose entry names no check on the head (one that never ran there)
-// cannot say what the head's checks are, so every check counts there too.
+// 12036 layout is held for the unrequired job, and a running one waits.
 func TestNoRequiredChecksKeepsEveryCheckCounting(t *testing.T) {
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	layout := []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}
@@ -175,8 +213,6 @@ func TestNoRequiredChecksKeepsEveryCheckCounting(t *testing.T) {
 			mods: []func(*harness){func(h *harness) { h.gh.required = map[string][]string{"talkable/talkable": {"Completion"}} }}},
 		{name: "an unrequired check still runs", ci: "PENDING", want: ciRunsWords,
 			checks: []github.Check{ciCheck("CI", "rspec", passed), ciCheck("Terraform scripts", "lint", pending)}},
-		{name: "required_checks names no check on the head", ci: "FAILURE", checks: layout, want: ciFailsWords,
-			mods: []func(*harness){withRequiredChecks("workflow:CI", "Deploy preview")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := newAutoHarness(t, append([]func(*harness){withBaseChecks(ciCheck("CI", "rspec", passed))}, tc.mods...)...)

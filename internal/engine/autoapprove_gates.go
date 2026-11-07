@@ -163,7 +163,8 @@ func (e *Engine) authorRefusal(c store.RepoPR) autoRefusal {
 // base branch's tip (ciGateOf, whose going ahead on those it records:
 // noteCIBase); where the repository sets required_checks, the checks it
 // names decide in place of the rollup (requiredCIRefusal: one outside the
-// list neither fails nor runs). waits says the refusal is only checks that
+// list neither fails nor runs, one it names with no run on the head waits
+// as for checks that run). waits says the refusal is only checks that
 // still run, which a standing approval waits out (standingGateRefusal). A
 // reason never carries an error's text, and its class (publicRefusal) is
 // all GitHub hears of it: the status comment and a withdrawal say the

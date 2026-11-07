@@ -26,10 +26,13 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// The CI refusals of autoGateRefusal (the card's words).
+// The CI refusals of autoGateRefusal (the card's words). ciMissingRefusal
+// is a required check with no run on the head (requiredCIOf), which waits
+// as checks that run do, in the same class (publicCIRuns).
 const (
-	ciFailsRefusal = "its head's checks fail (magnum approves it once they pass)"
-	ciRunsRefusal  = "its head's checks have not finished (magnum approves it once they pass)"
+	ciFailsRefusal   = "its head's checks fail (magnum approves it once they pass)"
+	ciRunsRefusal    = "its head's checks have not finished (magnum approves it once they pass)"
+	ciMissingRefusal = "its head's required checks have not run (magnum approves it once they pass)"
 )
 
 // baseChecksTTL is how long the gates keep a base tip's checks
@@ -80,11 +83,12 @@ type ciAnswer struct {
 }
 
 // refusal is a as auto-approval's refusal (autoGateRefusal), with its class:
-// checks that run (ciRunsRefusal) or fail (ciFailsRefusal).
+// checks that run or have not run (ciRunsRefusal, ciMissingRefusal) or fail
+// (ciFailsRefusal).
 func (a ciAnswer) refusal() autoRefusal {
 	r := autoRefusal{why: a.why, waits: a.waits}
 	switch a.why {
-	case ciRunsRefusal:
+	case ciRunsRefusal, ciMissingRefusal:
 		r.public = publicCIRuns
 	case ciFailsRefusal:
 		r.public = publicCIFails
@@ -97,16 +101,19 @@ func (a ciAnswer) refusal() autoRefusal {
 // rollup derived from the rest of the head's complete checks): where the
 // repository sets required_checks, the checks it names decide in place of
 // the rollup (requiredCIRefusal: one outside the list neither fails nor
-// runs); else a rollup that fails goes to the base-tip comparison
-// (failingCIRefusal), one that runs waits (ciRunsRefusal), and any other
-// (passed, none) lets it through. A rollup the registry never read (a NULL
+// runs, and one the list names with no run on the head waits; an entry
+// that names only ignored checks does not count, seenRequired); else a
+// rollup that fails goes to the base-tip comparison (failingCIRefusal), one
+// that runs waits (ciRunsRefusal), and any other (passed, none) lets it
+// through. A rollup the registry never read (a NULL
 // ci_state: the poll's CI read failed, or the PR was never fetched in
 // full) lets it through too, as pipeline.CIUnknown, so that the judge's
 // event can tell "never read" from "passed".
 func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
-	c.PR = e.seenPR(c.Repo, c.PR) // ignore_checks.go
+	required := seenRequired(c.PR, e.cfg.RequiredChecks(c.Repo), e.cfg.IgnoreChecks(c.Repo)) // ignore_checks.go
+	c.PR = e.seenPR(c.Repo, c.PR)
 	pr := c.PR
-	if r, ok := requiredCIOf(pr, e.cfg.RequiredChecks(c.Repo)); ok {
+	if r, ok := requiredCIOf(pr, required); ok {
 		return e.requiredCIRefusal(ctx, c, r) // autoapprove_required.go: the rollup does not decide
 	}
 	if pr.CIState == nil {

@@ -187,9 +187,10 @@ databases = [
 #                                         # matches; the board shows their state, and the automatic approval
 #                                         # counts only these checks (a failing check outside the list never holds
 #                                         # it; without the key every check counts), one run per workflow file and
-#                                         # name, a commit status apart from a check run of its name; it never
-#                                         # approves a PR that changes .github/workflows/ or .github/actions/ on
-#                                         # its own
+#                                         # name, a commit status apart from a check run of its name; one with no
+#                                         # run on the head holds it (magnum approves once it ran and passed), and
+#                                         # autofix = "open" never calls such a head green; it never approves a PR
+#                                         # that changes .github/workflows/ or .github/actions/ on its own
 # ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]

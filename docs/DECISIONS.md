@@ -3085,6 +3085,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAnEditedRemarkIsNewWorkAgain; TestReviewsPagesInOrder and TestIssueCommentsReadBackToTheCallersStop
   read the edit time.
 
+- **A required check that did not run at the head is never green** (2026-11-07, an audit of what magnum
+  tracks on GitHub; amends "The approval's CI gate counts only the checks required_checks names"). The main
+  repository's CI workflow runs only when a PR opens (`pull_request: [opened]`), so a later push, the
+  fixer's included, gets no run of the check GitHub requires (`Completion`). On an own PR at the fixer's
+  head GitHub listed only other apps' checks, all passed, its rollup said SUCCESS and its merge state
+  BLOCKED, and the look called the PR idle ("nothing open"), which the factory screen turns into "merge it"
+  once a colleague approves; the operator started CI by hand six times in two days. The cause:
+  `requiredCIOf` gave up (ok false) on an entry that names no check on the head, and every reader then fell
+  back to the rollup. The stored checks list every check of the head (`Complete`, read by workflow file),
+  so such an entry is missing there, never passed: `requiredCIOf` now reports it (`missing`) and decides.
+  Rule 11 of the look: a missing required check waits, as CI at the head, until `settle_max` after the
+  push ("CI at a1b2c3d: required check Completion has not started"; a run may not have started yet), and
+  then needs you, with the check, the head and how to start it ("required check Completion did not run at
+  a1b2c3d: run its workflow on the PR's branch, or push"; a `ci` need with the PR's link). A failing
+  required check still comes first. The automatic approval's CI gate (`ciGateOf`, which its standing
+  re-gate and the judge's approval gate share) holds such a head with "its head's required checks have not
+  run (magnum approves it once they pass)", a wait of the `ci_runs` class (so a standing approval stands,
+  the judge's approval goes through as for checks that run, and the status comment says the approval waits
+  for the checks); before, the rollup decided, and the SUCCESS of the other checks approved a head GitHub
+  would not merge. An entry that names only checks `ignore_checks` leaves out still does not count
+  (`seenRequired`): the check ran, magnum does not see it, and the rollup derived from the rest decides as
+  "ignore_checks makes magnum treat a named check as absent wherever it reads CI" said. The board already
+  showed such a check as "– Completion not run" (`requiredCheck`), and the factory screen shows the look's
+  verdict, so neither changed. Where the stored checks cannot say (another commit's, a list GitHub cut at
+  100, a read before checks were kept by workflow file) the rollup still decides. Rejected: a fixed grace
+  instead of `settle_max` (the settle already says when a head's reviewers and checks should have moved,
+  and it is the operator's key); reading the head's workflow runs to tell "not triggered" from "not started"
+  (one more read per head, and the answer is the same after the grace). Tests, failing first:
+  TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen, TestTheLookNeverCallsAHeadIdleWhoseRequiredCheckDidNotRun,
+  TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval (its third case was
+  TestNoRequiredChecksKeepsEveryCheckCounting's "required_checks names no check on the head", which wanted
+  the rollup's refusal).
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
