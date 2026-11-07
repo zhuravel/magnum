@@ -68,8 +68,8 @@ func TestCommitChecksReadsTheCommitsRollup(t *testing.T) {
 	}
 	q := oneLine(req.Query)
 	for _, s := range []string{"repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { oid statusCheckRollup { contexts(first: 100) { nodes {",
-		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name resourcePath } } } }",
-		"... on StatusContext { context state createdAt }", "rateLimit { limit cost remaining used resetAt }"} {
+		"... on CheckRun { name status conclusion startedAt completedAt detailsUrl url checkSuite { workflowRun { workflow { name resourcePath } } } }",
+		"... on StatusContext { context state createdAt targetUrl }", "rateLimit { limit cost remaining used resetAt }"} {
 		if !strings.Contains(q, s) {
 			t.Errorf("query lacks %q:\n%s", s, q)
 		}

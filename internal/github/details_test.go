@@ -369,8 +369,8 @@ func TestDetailsCIFixture(t *testing.T) {
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
 	for _, want := range []string{"commits { totalCount }", "headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state",
 		"contexts(first: 100) { totalCount pageInfo { hasNextPage } checkRunCountsByState { state count } statusContextCountsByState { state count } nodes {",
-		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name resourcePath } } } }",
-		"... on StatusContext { context state createdAt }"} {
+		"... on CheckRun { name status conclusion startedAt completedAt detailsUrl url checkSuite { workflowRun { workflow { name resourcePath } } } }",
+		"... on StatusContext { context state createdAt targetUrl }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
 		}
@@ -611,5 +611,75 @@ func TestCheckStateNormalization(t *testing.T) {
 		if got := statusState(in); got != want {
 			t.Errorf("status %s = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// linksBody answers Details for #301: a GitHub Actions job's run and its
+// re-run, each with its own job page (detailsUrl), another app's check run
+// with no page of its own (its check run page, url), a commit status with
+// its target and one without, and GitHub's merge state BLOCKED; and #302,
+// answered as GitHub did before magnum asked for the merge state.
+func linksBody(t *testing.T) []byte {
+	t.Helper()
+	run := func(name, conclusion, done, details, page string) string {
+		return `{"__typename":"CheckRun","name":"` + name + `","status":"COMPLETED","conclusion":"` + conclusion + `",` +
+			`"startedAt":"2026-11-08T09:00:00Z","completedAt":"` + done + `","detailsUrl":` + details + `,"url":"` + page + `",` +
+			`"checkSuite":{"workflowRun":{"workflow":{"name":"CI","resourcePath":"/example/widget/actions/workflows/ci.yml"}}}}`
+	}
+	pr := func(n int, merge string) string {
+		return `"p` + fmt.Sprint(n) + `":{"id":"PR_` + fmt.Sprint(n) + `","number":` + fmt.Sprint(n) + `,"title":"t","url":"u",` + merge +
+			`"state":"OPEN","isDraft":false,"headRefOid":"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",` +
+			`"headCommit":{"nodes":[{"commit":{"oid":"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4","statusCheckRollup":{"state":"FAILURE",` +
+			`"contexts":{"totalCount":5,"pageInfo":{"hasNextPage":false},"nodes":[` +
+			run("rspec", "FAILURE", "2026-11-08T09:10:00Z", `"https://github.com/example/widget/actions/runs/7001/job/9001"`, "https://github.com/example/widget/runs/9001") + `,` +
+			run("rspec", "FAILURE", "2026-11-08T09:40:00Z", `"https://github.com/example/widget/actions/runs/7001/job/9002"`, "https://github.com/example/widget/runs/9002") + `,` +
+			strings.Replace(run("danger", "NEUTRAL", "2026-11-08T09:05:00Z", `null`, "https://github.com/example/widget/runs/9003"), `"checkSuite":{"workflowRun":{"workflow":{"name":"CI","resourcePath":"/example/widget/actions/workflows/ci.yml"}}}`, `"checkSuite":{"workflowRun":null}`, 1) + `,` +
+			`{"__typename":"StatusContext","context":"coverage","state":"FAILURE","createdAt":"2026-11-08T09:20:00Z","targetUrl":"https://ci.example.com/coverage/42"},` +
+			`{"__typename":"StatusContext","context":"license","state":"SUCCESS","createdAt":"2026-11-08T09:21:00Z","targetUrl":null}` +
+			`]}}}}]}}`
+	}
+	return compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-11-08T10:00:00Z"},`+
+		`"repository":{`+pr(301, `"mergeStateStatus":"BLOCKED",`)+`,`+pr(302, ``)+`}}}`)
+}
+
+// Each check keeps the page that shows its run: a check run's detailsUrl
+// (the job's page of a GitHub Actions run), else its own check run page on
+// GitHub (url), a commit status's targetUrl, none for a status that posted
+// none; a re-run's page replaces the run's it supersedes. The pull request
+// keeps GitHub's merge state (mergeStateStatus: why the merge button is
+// gray), "" from an answer that has none. Before, a failing job had a name
+// and no link, and GitHub's block of the merge was never read.
+func TestDetailsReadEachChecksPageAndGitHubsMergeState(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: linksBody(t)}}}}
+	got, _, err := (&Client{Run: f}).Details(context.Background(), "example", "widget", []int{301, 302})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	for _, want := range []string{"isDraft headRefOid baseRefOid mergeStateStatus",
+		"... on CheckRun { name status conclusion startedAt completedAt detailsUrl url checkSuite {",
+		"... on StatusContext { context state createdAt targetUrl }"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+	urls := map[string]string{}
+	for _, c := range got[301].CI.Checks {
+		urls[c.Name] = c.URL
+	}
+	want := map[string]string{
+		"rspec":    "https://github.com/example/widget/actions/runs/7001/job/9002",
+		"danger":   "https://github.com/example/widget/runs/9003",
+		"coverage": "https://ci.example.com/coverage/42",
+		"license":  "",
+	}
+	if !reflect.DeepEqual(urls, want) {
+		t.Errorf("the checks' pages = %v, want %v", urls, want)
+	}
+	if m := got[301].MergeState; m != "BLOCKED" {
+		t.Errorf("#301's merge state = %q, want BLOCKED", m)
+	}
+	if m := got[302].MergeState; m != "" {
+		t.Errorf("#302's merge state, from an answer without one = %q", m)
 	}
 }

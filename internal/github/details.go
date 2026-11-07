@@ -80,6 +80,10 @@ type PRDetails struct {
 	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
 	// GitHub returned no reviewDecision or latestOpinionatedReviews.
 	ReviewGate *ReviewGate
+	// MergeState is GitHub's mergeStateStatus of the pull request: BEHIND,
+	// BLOCKED, CLEAN, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN (GitHub is still
+	// computing it) or UNSTABLE; "" when GitHub did not say.
+	MergeState string
 	// Remarks are the submitted reviews and issue comments among the
 	// activity timeline's last ten items, as it lists them (oldest first);
 	// nil when GitHub returned no timeline. A reply in a review thread is a
@@ -215,6 +219,11 @@ type Check struct {
 	// At is when the check finished, else started (a check run), or was
 	// posted (a commit status); zero for a check run not started yet.
 	At time.Time
+	// URL is the page of the run: a check run's detailsUrl (a GitHub
+	// Actions job's page), else its check run page on GitHub, a commit
+	// status's targetUrl; "" for a status that posted none. Whoever posts
+	// the check sets it: a link to show, never one to follow.
+	URL string
 }
 
 // Check.State values.
@@ -285,13 +294,14 @@ type PRState struct {
 // ReviewAnswers about the reviews it needs beyond those two: 1 point a call
 // of up to 100 reviews, where the last ten reviews here would price batches
 // of 10, 20 and 40 at 2, 4 and 8 points instead of 1, 3 and 5 (dry run,
-// 2026-10-16).
+// 2026-10-16). GitHub's merge state (PRDetails.MergeState) and the checks'
+// pages (Check.URL) are fields, which GitHub does not price.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
   labels(first: 100) { totalCount pageInfo { hasNextPage } nodes { name } }
   headRefName baseRefName isCrossRepository
-  state merged mergedAt closedAt createdAt updatedAt lastEditedAt isDraft headRefOid baseRefOid
+  state merged mergedAt closedAt createdAt updatedAt lastEditedAt isDraft headRefOid baseRefOid mergeStateStatus
   additions deletions changedFiles commits { totalCount }
   files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }
   assignees(first: 10) { nodes { login } }
@@ -307,10 +317,11 @@ const detailsFragment = `fragment PRDetails on PullRequest {
 
 // contextNodes selects what Details and CommitChecks read of each context of
 // a check rollup (contextJSON): a check run's name, status, conclusion,
-// times and workflow (its name and the resourcePath that names its file, a
-// field of an object read already, which GitHub does not price), a commit
-// status's context, state and time.
-const contextNodes = `nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name resourcePath } } } } ... on StatusContext { context state createdAt } }`
+// times, pages (detailsUrl and url, Check.URL) and workflow (its name and
+// the resourcePath that names its file, a field of an object read already,
+// which GitHub does not price), a commit status's context, state, time and
+// target.
+const contextNodes = `nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt detailsUrl url checkSuite { workflowRun { workflow { name resourcePath } } } } ... on StatusContext { context state createdAt targetUrl } }`
 
 // activityTypes are the timeline items that are activity on a pull request
 // (PRDetails.ActivityAt): what a reviewer sees happen to it. A review counts
@@ -375,6 +386,7 @@ type detailsJSON struct {
 	IsDraft           bool      `json:"isDraft"`
 	HeadRefOid        string    `json:"headRefOid"`
 	BaseRefOid        string    `json:"baseRefOid"`
+	MergeStateStatus  string    `json:"mergeStateStatus"`
 	Additions         int       `json:"additions"`
 	Deletions         int       `json:"deletions"`
 	ChangedFiles      int       `json:"changedFiles"`
@@ -474,6 +486,8 @@ type contextJSON struct {
 	Conclusion  string    `json:"conclusion"`  // CheckRun
 	StartedAt   time.Time `json:"startedAt"`   // CheckRun
 	CompletedAt time.Time `json:"completedAt"` // CheckRun
+	DetailsURL  string    `json:"detailsUrl"`  // CheckRun: the integrator's page of the run; null for some apps
+	Page        string    `json:"url"`         // CheckRun: the check run's page on GitHub
 	CheckSuite  *struct {
 		WorkflowRun *struct {
 			Workflow struct {
@@ -485,6 +499,7 @@ type contextJSON struct {
 	Context   string    `json:"context"`   // StatusContext
 	State     string    `json:"state"`     // StatusContext
 	CreatedAt time.Time `json:"createdAt"` // StatusContext
+	TargetURL string    `json:"targetUrl"` // StatusContext; null when the status posted none
 }
 
 // checks is the latest run of each check of the connection's nodes
@@ -504,7 +519,7 @@ func (r rollupContextsJSON) checks() []Check {
 		var c Check
 		switch n.Typename {
 		case "CheckRun":
-			c = Check{Name: n.Name, State: checkRunState(n.Status, n.Conclusion), At: n.CompletedAt}
+			c = Check{Name: n.Name, State: checkRunState(n.Status, n.Conclusion), At: n.CompletedAt, URL: cmp.Or(n.DetailsURL, n.Page)}
 			if c.At.IsZero() {
 				c.At = n.StartedAt
 			}
@@ -513,7 +528,7 @@ func (r rollupContextsJSON) checks() []Check {
 				c.Workflow, c.WorkflowFile = w.Name, workflowFile(w.ResourcePath)
 			}
 		case "StatusContext":
-			c = Check{Name: n.Context, State: statusState(n.State), Status: true, At: n.CreatedAt}
+			c = Check{Name: n.Context, State: statusState(n.State), Status: true, At: n.CreatedAt, URL: n.TargetURL}
 		default:
 			continue
 		}
@@ -559,6 +574,7 @@ func (d detailsJSON) details() PRDetails {
 		IsDraft:           d.IsDraft,
 		HeadRefOid:        d.HeadRefOid,
 		BaseRefOid:        d.BaseRefOid,
+		MergeState:        d.MergeStateStatus,
 		Assignees:         []string{},
 		ReviewRequests:    []Reviewer{},
 		LatestReviews:     []LatestReview{},
