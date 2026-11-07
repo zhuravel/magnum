@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -733,5 +734,100 @@ func TestALoopThatEndedBeforeTheLooksFirstLookHandsNothing(t *testing.T) {
 	h.tick()
 	if n := len(h.fixRuns(h.pr(2).ID)); n != 2 || h.fixStartBy() != autofixBy {
 		t.Errorf("fix runs = %d, the last by %q; want autofix's loop for the thread", n, h.fixStartBy())
+	}
+}
+
+// simplifiedReReview runs, under "open", a loop on a review with a P2
+// whose fixer pushes fixPushed, and whose re-review posts only a
+// simplification on the fixer's change; a later cycle's fixer answers and
+// pushes nothing. mods run before the engine is built.
+func simplifiedReReview(t *testing.T, mods ...func(*harness)) *harness {
+	t.Helper()
+	h, git := openHarness(t, func(in pipeline.RoundInput) (map[string]int, string) {
+		if in.TargetSHA == fixPushed {
+			return map[string]int{}, "COMMENTED"
+		}
+		return map[string]int{"P2": 1}, "COMMENTED"
+	}, mods...)
+	h.rd.mu.Lock()
+	inner := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		res, err := inner(in)
+		if err != nil || in.TargetSHA != fixPushed {
+			return res, err
+		}
+		if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE runs SET result_json = ? WHERE pr_id = ? AND target_sha = ? AND outcome = 'posted'`,
+			`{"event":"COMMENTED","findings":{},"candidates":{"claude-simplify":{"suggested":1}}}`, in.PR.ID, fixPushed); err != nil {
+			return failRound(h.t, err)
+		}
+		return res, nil
+	}
+	h.rd.mu.Unlock()
+	var mu sync.Mutex
+	runs := 0
+	fixerBy(h, git, func(run store.Run) (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if runs++; runs == 1 {
+			return fixPushed, fixReport(run.ID, "b2b2b2b Fix the total (review comment 4100000001)", fixReplied, "none")
+		}
+		return "", fixReport(run.ID, "nothing", fixReplied, "none")
+	})
+	h.tick() // reviewed: a P2
+	h.pastSettle()
+	h.tick() // the look starts the loop; the fixer pushes, and the loop forces its re-review
+	for range 4 {
+		h.tick() // the re-review: a simplification
+		h.advance(10 * time.Minute)
+	}
+	return h
+}
+
+// Under "open" a loop goes on while its re-review leaves optional work
+// (here only a simplification on the fixer's own change), as rule A1 makes
+// it work for a start: the next cycle of the same loop fixes it, where an
+// end as done would have the look start a new loop on that re-review,
+// spending one of autofix_max_loops and resetting the cycle count.
+func TestAnOpenLoopGoesOnForASimplificationItsReReviewLeft(t *testing.T) {
+	h := simplifiedReReview(t)
+	var cycles []float64
+	for _, ev := range h.fixEvents("fix.start") {
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		c, _ := data["cycle"].(float64)
+		cycles = append(cycles, c)
+	}
+	if !slices.Equal(cycles, []float64{1, 2}) {
+		t.Errorf("fix.start cycles = %v, want the loop's two cycles", cycles)
+	}
+	if n := len(h.fixEvents("autofix.open")); n != 1 {
+		t.Errorf("autofix started %d loops, want the one", n)
+	}
+}
+
+// At its cap, a loop under "open" whose re-review left only optional work
+// needs you, and says what is left in those words.
+func TestAnOpenLoopAtItsCapSaysTheOptionalWorkLeft(t *testing.T) {
+	h := simplifiedReReview(t, func(h *harness) { h.cfg.Pipeline.FixCycles = 1 })
+	ev, ok := h.fixEvent("fix.capped")
+	if !ok || !strings.Contains(ev.Message, "1 fix cycle, 1 optional finding left") {
+		t.Errorf("fix.capped = %q, %v; want the optional finding left", ev.Message, ok)
+	}
+	if n := len(h.fixEvents("autofix.open")); n != 1 {
+		t.Errorf("autofix started %d loops, want the one", n)
+	}
+}
+
+// Under "own" a loop still ends as done on a re-review with only optional
+// work: the rule of "open" leaves the other values as they were.
+func TestAnOwnLoopStillEndsOnASimplificationOnlyReReview(t *testing.T) {
+	h := simplifiedReReview(t, func(h *harness) { h.cfg.Pipeline.Autofix = config.AutofixOwn })
+	if _, ok := h.fixEvent("fix.done"); !ok {
+		t.Error("no fix.done: the loop went on for the simplification")
+	}
+	if n := len(h.fixEvents("fix.start")); n != 1 {
+		t.Errorf("fix.start events = %d, want the one cycle", n)
 	}
 }

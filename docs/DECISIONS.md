@@ -2847,7 +2847,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   read GitHub cut short needs you. Red required CI needs you for now. With it, rule A1 changed `f` for every
   autofix value: a review with only simplifications, or one that keeps an optional P3 open, is work for the
   fixer (`reviewWork`, which the look and prepareFix share, so the look never starts what prepareFix
-  refuses). Rejected: starting at the round's end (it misses later reviewers); writing the ledger in
+  refuses), and under "open" a loop's re-review with only optional work left goes on to the next cycle
+  (`optionalLeft`): ending it as done had the look start a new loop on that re-review, one of
+  `autofix_max_loops` spent per optional nit and the cycle count reset; "own" keeps ending there. Rejected:
+  starting at the round's end (it misses later reviewers); writing the ledger in
   `settleFix` (no fresh read there, and two writers); a cap on magnum's wait; blanket notice logins (a lint
   poster's threads would vanish); filtering the fixer's external file (`f` must still see everything);
   "magnum spoke last" as an open magnum thread; handing the keys of the look's own read. Tests, failing

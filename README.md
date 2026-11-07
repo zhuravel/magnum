@@ -3198,7 +3198,10 @@ at the head is done, these last two waited for at most `settle_max`. A review bo
 `quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
 lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
 most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you pushed until
-`hands_off_after_push` passed, and none on a draft, a fork or a PR you took out of autofix (`F`).
+`hands_off_after_push` passed, and none on a draft, a fork or a PR you took out of autofix (`F`). A loop
+goes on while its re-review leaves optional work too (a simplification, an optional finding still open),
+within its `fix_cycles`, and at the cap says so ("1 optional finding left"); under `"own"` and `"never"` a
+loop still ends as done on such a re-review.
 
 Each tick, before dispatch, Magnum looks at every own open PR of such a watch and keeps a verdict for it in
 the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your

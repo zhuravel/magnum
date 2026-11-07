@@ -178,7 +178,8 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 // author when it pushed that still ask something of the author (magnum's
 // threads read again, from the re-review's threads file when it read them
 // after the fixer's report: freshNeedsYou), end it as needs attention; a
-// review that found nothing ends it as done; findings start the next cycle (startFix) while
+// review that found nothing ends it as done (under autofix = "open", one
+// that left no optional work either: optionalLeft); findings start the next cycle (startFix) while
 // cycles are left, and end it as needs attention at the cap, which says what
 // is left (capMessage); a next cycle that cannot start ends it as needs attention with why, unless the PR moved
 // on since the re-review (closed, or a newer head the operator pushed:
@@ -201,11 +202,17 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
+	remains, optional := fixRemains(res), 0
+	if !remains {
+		optional = e.optionalLeft(ctx, job, res)
+	}
 	left := textx.Count(found, "finding", "findings") + " left"
 	switch open := roundOpenProblems(res); {
 	case found > 0:
 	case open > 0:
 		left = textx.Count(open, "earlier finding", "earlier findings") + " still open"
+	case optional > 0:
+		left = textx.Count(optional, "optional finding", "optional findings") + " left"
 	default:
 		left = "earlier findings still open"
 	}
@@ -229,7 +236,7 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
 	case len(needs) > 0:
 		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYouText(needs, answered, st.Report, job.pr.URL, job.label(), true))
-	case !fixRemains(res):
+	case !remains && optional == 0:
 		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
 		e.endLoopForAttention(ctx, job, raw, "fix.capped", e.capMessage(ctx, job, res, found, left))
@@ -658,6 +665,26 @@ func (j *fixJob) loopData() map[string]any {
 // comment that says "Fix 1 problem before merging" with nothing new).
 func fixRemains(res pipeline.RoundResult) bool {
 	return roundFindings(res) > 0 || res.Event == "CHANGES_REQUESTED" || roundOpenProblems(res) > 0
+}
+
+// optionalLeft is how many optional items the posted re-review res left
+// on the job's PR (its simplifications and the earlier P3s it keeps open,
+// from its summary) when the PR's watch says autofix = "open": there they
+// are work as findings are (rule A1, reviewWork), and the loop goes on
+// with them within its cycles, where an end as done would have the look
+// start a new loop on the loop's own re-review. 0 under any other value,
+// whose loops end on them as before, and when the summary cannot be read
+// or is not that re-review's.
+func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.RoundResult) int {
+	if w := e.cfg.WatchFor(job.repo.FullName()); w == nil || e.cfg.AutofixFor(w) != config.AutofixOpen || res.Outcome != pipeline.OutcomePosted {
+		return 0
+	}
+	sums, err := e.st.LastReviewSummaries(ctx, []int64{job.pr.ID})
+	sum, ok := sums[job.pr.ID]
+	if err != nil || !ok || sum.SHA != cmp.Or(res.TargetSHA, job.state.Head) || res.ReviewID != 0 && sum.ReviewID != res.ReviewID {
+		return 0
+	}
+	return sum.Simplifications + openP3(sum)
 }
 
 // roundOpenProblems is how many earlier P0 to P2 findings a round's review
