@@ -547,9 +547,12 @@ func nextWait(st PRState, n int, clean string, ci bool, c prClock) prWait {
 			return w
 		case "pending":
 			next := "CI runs"
-			if progress != "" {
-				next += ": " + progress
+			if p := cmp.Or(progress, name); p != "" {
+				next += ": " + p
 			}
+			return waitsWait(waitCI, with(next), next, "")
+		case "stale":
+			next := "CI of " + textx.ShortSHA(st.Head) + " not read yet"
 			return waitsWait(waitCI, with(next), next, "")
 		case "missing":
 			next := name + " has not run at " + textx.ShortSHA(st.Head)
@@ -599,11 +602,16 @@ func nextWait(st PRState, n int, clean string, ci bool, c prClock) prWait {
 	return w
 }
 
-// ciOf is CI c's state as a wait reads it: "failed" (with the failing
+// ciOf is CI c's state as a wait reads it: "stale" (the checks are an
+// older commit's: the head's are not read yet), "failed" (with the failing
 // required check's name, else the first failing check's), "pending" (with
-// its progress, "25/41"), "missing" (a required check that has not run at
-// the head, by name), else "passed" or "none".
+// the running required check's name, else the progress, "25/41"),
+// "missing" (a required check that has not run at the head, by name), else
+// "passed" or "none".
 func ciOf(c *tui.CIInfo) (state, name, progress string) {
+	if c.Stale {
+		return "stale", "", ""
+	}
 	for _, r := range c.Required {
 		if r.State == store.CheckFailed {
 			return "failed", cmp.Or(r.Label, r.Name), ""

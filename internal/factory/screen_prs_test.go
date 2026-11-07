@@ -519,6 +519,14 @@ func TestARowSaysMagnumsOutcomeAndWhomItWaitsOn(t *testing.T) {
 			v.CI = &tui.CIInfo{State: "failed", Failed: 1, Required: []tui.CheckState{{Name: "Completion", Label: "Completion", State: "failed"}}}
 		}, tui.GroupNeedsYou, tui.WaitsOnYou, "no problems at a1b2c3d, 2 optional (P3×2) · CI failed: Completion", "CI failed: Completion",
 			"fix the CI"},
+		"clean, CI of an older commit": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.CI = &tui.CIInfo{State: "failed", Failed: 1, Stale: true}
+		}, tui.GroupWaits, "CI", "no findings at a1b2c3d · CI of a1b2c3d not read yet", "CI of a1b2c3d not read yet", ""},
+		"clean, a required check runs": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.CI.Required = []tui.CheckState{{Name: "rspec*", Label: "rspec", State: "pending", Done: 3, Total: 8}}
+		}, tui.GroupWaits, "CI", "no findings at a1b2c3d · CI runs: rspec", "CI runs: rspec", ""},
 		"clean, CI runs": {func(v *PRState) {
 			reviewedAt(v, [4]int{}, store.VerdictClean)
 			v.CI = &tui.CIInfo{State: "pending", Total: 41, Passed: 25, Pending: 16}
