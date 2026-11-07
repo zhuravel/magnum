@@ -517,7 +517,9 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 // unchangedSince is what your retry of task t adds when the precheck's
 // failure for you it waits on (precheck.json) would only come again:
 // nothing changed since (the branch's head, the precheck commands and
-// their environment, checksPrint), with the line the command printed; ""
+// their environment, checksPrint), with the line the command printed and
+// that an edit of the configuration or the PATH needs the daemon's restart
+// first (the daemon reads both at its start); ""
 // when something changed, or the task waits on you for another cause, or
 // any of it cannot be read. It refuses nothing: a cause of the moment may
 // be gone.
@@ -544,7 +546,7 @@ func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
 	if rec.Line != "" {
 		same += ": " + rec.Line
 	}
-	return same
+	return same + "; an edit of the configuration or of your shell's PATH reaches the checks only after `magnum factory install`"
 }
 
 // retryRefusal is the guard of a retry of task t, as retryTask and the

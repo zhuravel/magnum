@@ -680,8 +680,8 @@ func TestARetryThatChangedNothingSinceTheFailureSaysSo(t *testing.T) {
 
 	answer := r.retryAnswer(task.ID)
 	if !strings.Contains(answer, "goes on") || !strings.Contains(answer, "nothing the factory sees changed since its last failure") ||
-		!strings.Contains(answer, "Error: boom") {
-		t.Fatalf("the retry answers %q, want it to go on and say nothing changed, naming the line", answer)
+		!strings.Contains(answer, "Error: boom") || !strings.Contains(answer, "`magnum factory install`") {
+		t.Fatalf("the retry answers %q, want it to go on, say nothing changed, name the line and that an edit needs an install", answer)
 	}
 
 	for i := 0; i < 6 && r.reload(task.ID).State != registry.TaskNeedsYou; i++ { // the same failure again
@@ -697,5 +697,23 @@ func TestARetryThatChangedNothingSinceTheFailureSaysSo(t *testing.T) {
 	env["LANG"] = "en_US.UTF-8" // you fixed the environment
 	if answer := r.retryAnswer(task.ID); strings.Contains(answer, "changed since") {
 		t.Fatalf("the retry after the environment changed answers %q", answer)
+	}
+}
+
+// A retry after a commit at the branch says nothing of nothing changed: the
+// head moved, so the checks run on another change.
+func TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12393", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.setLintCrash("Error: boom\n")
+	r.endTurns(task, 2)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q; want needs_you", got.State, got.WaitsWhat)
+	}
+	r.commit("PR-12393 your fix of the lint", map[string]string{"bin/lint-notes": "fixed\n"})
+	if answer := r.retryAnswer(task.ID); !strings.Contains(answer, "goes on") || strings.Contains(answer, "changed since") {
+		t.Fatalf("the retry after a commit answers %q, want it to go on saying nothing of nothing changed", answer)
 	}
 }
