@@ -606,10 +606,11 @@ func prFiles(d github.PRDetails) *store.PRFiles {
 }
 
 // ciStatus is the registry's view of the Details' head checks, read keyed
-// by workflow file (store.CIStatus.ByWorkflowFile).
+// by workflow file (store.CIStatus.ByWorkflowFile), with GitHub's merge
+// state of the same read.
 func ciStatus(d github.PRDetails) *store.CIStatus {
 	ci := &store.CIStatus{SHA: d.CI.SHA, State: d.CI.State, Total: d.CI.Total, Complete: d.CI.Complete,
-		Checks: make([]store.CheckResult, 0, len(d.CI.Checks)), ByWorkflowFile: true}
+		Checks: make([]store.CheckResult, 0, len(d.CI.Checks)), ByWorkflowFile: true, Merge: d.MergeState}
 	if ci.SHA == "" {
 		ci.SHA = d.HeadRefOid // GitHub listed no commit: the head has no checks to wait for
 	}
@@ -624,7 +625,7 @@ func ciStatus(d github.PRDetails) *store.CIStatus {
 
 // checkResult is the registry's view of check c.
 func checkResult(c github.Check) store.CheckResult {
-	return store.CheckResult{Name: c.Name, State: c.State, Workflow: c.Workflow, WorkflowFile: c.WorkflowFile, Status: c.Status, At: c.At}
+	return store.CheckResult{Name: c.Name, State: c.State, Workflow: c.Workflow, WorkflowFile: c.WorkflowFile, Status: c.Status, At: c.At, URL: c.URL}
 }
 
 // ciCountsMoved reports whether the rollup's counts read now (CIStates)

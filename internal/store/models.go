@@ -302,6 +302,11 @@ type CIStatus struct {
 	// when the cheap rollup read counts other failed or pending ones. A zero
 	// Total is unknown (a read before the counts existed, or none given).
 	Rollup CheckCounts `json:"rollup,omitzero"`
+	// Merge is GitHub's merge state of the PR when Checks were read
+	// (github.PRDetails.MergeState: BLOCKED, BEHIND, DIRTY, CLEAN, UNSTABLE,
+	// HAS_HOOKS, DRAFT or UNKNOWN while GitHub computes it); "" in a read of
+	// an earlier build. It is SHA's, as the checks are.
+	Merge string `json:"merge,omitempty"`
 }
 
 // CheckCounts are check runs and statuses by state (CheckResult.State's
@@ -328,6 +333,10 @@ type CheckResult struct {
 	// At is when the check finished, else started, or the status was
 	// posted; zero for a check run not started yet (the newest run).
 	At time.Time `json:"at,omitzero"`
+	// URL is the run's page (github.Check.URL: a GitHub Actions job's, a
+	// check run's on GitHub, a status's target); "" for none, and in a read
+	// of an earlier build. Whoever posts the check sets it.
+	URL string `json:"url,omitempty"`
 }
 
 // CheckResult.State values (github.Check's).
@@ -363,10 +372,10 @@ func (c *CIStatus) Tally() {
 func (c CIStatus) equal(o CIStatus) bool {
 	return c.SHA == o.SHA && c.State == o.State && c.Total == o.Total && c.Passed == o.Passed && c.Failed == o.Failed &&
 		c.Pending == o.Pending && c.Skipped == o.Skipped && c.AllSkipped == o.AllSkipped && c.Complete == o.Complete &&
-		c.ByWorkflowFile == o.ByWorkflowFile &&
+		c.ByWorkflowFile == o.ByWorkflowFile && c.Merge == o.Merge &&
 		slices.EqualFunc(c.Checks, o.Checks, func(a, b CheckResult) bool {
 			return a.Name == b.Name && a.State == b.State && a.Workflow == b.Workflow && a.WorkflowFile == b.WorkflowFile &&
-				a.Status == b.Status && a.At.Equal(b.At)
+				a.Status == b.Status && a.At.Equal(b.At) && a.URL == b.URL
 		})
 }
 

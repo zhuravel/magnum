@@ -209,3 +209,34 @@ func TestRequiredChecksAccessor(t *testing.T) {
 		t.Fatalf("GitHub would not tell = %+v", got)
 	}
 }
+
+// A Details read whose only news is a check's page or GitHub's merge state
+// writes ci_json: the first poll after an upgrade fills both in, and a merge
+// GitHub stops blocking is not left blocked.
+func TestUpsertPRCIWritesACheckPageAndTheMergeState(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	bare := ciFixture("h1", "FAILURE", CheckResult{Name: "rspec", State: CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", At: t0})
+	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", InitialState: PRQueued, Identity: "talkable-app",
+		DetailsAt: new(t0), CIState: new("FAILURE"), CI: bare}
+	if _, err := st.UpsertPRFromGitHub(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	linked := ciFixture("h1", "FAILURE", CheckResult{Name: "rspec", State: CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", At: t0,
+		URL: "https://github.com/example/widget/actions/runs/7001/job/9001"})
+	blocked := *linked
+	blocked.Merge = "BLOCKED"
+	clean := blocked
+	clean.Merge = "CLEAN"
+	for _, ci := range []*CIStatus{linked, &blocked, &clean} {
+		in.CI = ci
+		res, err := st.UpsertPRFromGitHub(ctx, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.PR.CI == nil || !reflect.DeepEqual(*res.PR.CI, *ci) {
+			t.Fatalf("stored CI = %+v, want %+v", res.PR.CI, ci)
+		}
+	}
+}

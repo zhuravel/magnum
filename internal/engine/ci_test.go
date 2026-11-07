@@ -261,3 +261,16 @@ func TestRequiredChecksReadFromGitHub(t *testing.T) {
 		t.Fatalf("configured = %+v, %v", r, err)
 	}
 }
+
+// The registry's checks keep each check's page and GitHub's merge state of
+// the read, for the screens' CI lines.
+func TestTheStoredChecksKeepTheirPagesAndGitHubsMergeState(t *testing.T) {
+	job := "https://github.com/example/widget/actions/runs/7001/job/9001"
+	d := github.PRDetails{HeadRefOid: "h1", MergeState: "BLOCKED", CI: github.CIRollup{SHA: "h1", State: "FAILURE", Total: 2, Complete: true,
+		Checks: []github.Check{{Name: "rspec", State: github.CheckFailed, Workflow: "CI", WorkflowFile: "ci.yml", URL: job},
+			{Name: "coverage", State: github.CheckPassed, Status: true}}}}
+	ci := ciStatus(d)
+	if ci.Merge != "BLOCKED" || ci.Checks[0].URL != job || ci.Checks[1].URL != "" {
+		t.Fatalf("stored checks = %+v", ci)
+	}
+}

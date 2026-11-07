@@ -174,3 +174,18 @@ func TestFailingChecksLeaveOutAnIgnoredCheck(t *testing.T) {
 		t.Errorf("an ignored check alone: round.failing_checks events = %+v", evs)
 	}
 }
+
+// failing-checks.json names a failed check without its page: whoever posts
+// a check sets its link, and the judge's files carry what it did before
+// the screens read the links (the job's name, state, workflow and time).
+func TestFailingChecksLeaveOutACheckPage(t *testing.T) {
+	failed := store.CheckResult{Name: "RSpec", State: store.CheckFailed, Workflow: "CI", At: t0,
+		URL: "https://github.com/example/widget/actions/runs/7001/job/9001"}
+	rd := &round{owner: "example", name: "widget", in: RoundInput{PR: store.PR{Number: 7}, TargetSHA: target}}
+	got := rd.failingChecks(&store.CIStatus{SHA: target, Complete: true, Checks: []store.CheckResult{failed}})
+	want := failed
+	want.URL = ""
+	if len(got.Checks) != 1 || got.Checks[0] != want {
+		t.Fatalf("failing checks = %+v, want %+v", got.Checks, want)
+	}
+}

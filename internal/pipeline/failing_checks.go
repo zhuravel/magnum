@@ -38,7 +38,8 @@ type FailingChecks struct {
 }
 
 // failingChecks is failing-checks.json's content: the failed checks of
-// ci when it is the head's; nil Checks otherwise.
+// ci when it is the head's, each without its page (CheckResult.URL, which
+// whoever posts the check sets, is the screens'); nil Checks otherwise.
 func (rd *round) failingChecks(ci *store.CIStatus) FailingChecks {
 	out := FailingChecks{PR: fmt.Sprintf("%s/%s#%d", rd.owner, rd.name, rd.in.PR.Number), HeadSHA: rd.in.TargetSHA}
 	if ci == nil || ci.SHA == "" || ci.SHA != rd.in.TargetSHA {
@@ -47,6 +48,7 @@ func (rd *round) failingChecks(ci *store.CIStatus) FailingChecks {
 	out.Complete = ci.Complete
 	for _, c := range ci.Checks {
 		if c.State == store.CheckFailed {
+			c.URL = ""
 			out.Checks = append(out.Checks, c)
 		}
 	}
