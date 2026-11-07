@@ -2,6 +2,7 @@ package engine
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,6 +129,75 @@ func TestTheLookNeverRewritesOrLiftsALoopsOwnNeedsYou(t *testing.T) {
 	h.advance(time.Minute)
 	h.touch(fixHead)
 	h.wantState(2, store.PRNeedsAttention)
+}
+
+// The look raised a thread (its message in last_error), then an f loop on
+// the PR ended in its own Needs you (a push that failed), whose words
+// replaced the look's: your answer to the raised thread lifts nothing, as
+// the loop's Needs you is yours to act on. The look does not even try the
+// lift (whose compare-and-set would refuse it) and log a PR that moved on.
+func TestYourAnswerNeverLiftsALoopsNeedsYouThatFollowedTheLooksRaise(t *testing.T) {
+	th := extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "MINOR: `run` drops stderr", "rev-ann")
+	logs := &syncBuffer{}
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	h.setThreads(th)
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick() // the loop runs and ends, the thread unanswered
+	h.advance(time.Minute)
+	h.tick() // the look raises it
+	raised := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "push failed: remote rejected", "0 threads", "none")
+	})
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	msg := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+	if msg == raised {
+		t.Fatalf("last_error = %q: the f loop did not end in its own Needs you", msg)
+	}
+	h.setThreads(extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "MINOR: `run` drops stderr", "rev-ann", "zhuravel"))
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); got != msg {
+		t.Errorf("last_error = %q, want the loop's %q", got, msg)
+	}
+	if _, ok := h.fixEvent("fix.open_answered"); ok {
+		t.Error("the look lifted the loop's Needs you")
+	}
+	if strings.Contains(logs.String(), "moved on before the lift") {
+		t.Error("the look tried to lift the loop's Needs you")
+	}
+}
+
+// The lift is compare-and-set on the look's own message: a Needs you a
+// loop writes while the look reads GitHub (after the look read the PR's
+// row) is never lifted by your answer to what the look raised.
+func TestALoopsNeedsYouWrittenDuringTheLooksReadIsNeverLifted(t *testing.T) {
+	th := extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "MINOR: `run` drops stderr", "rev-ann")
+	h := loopLeaves(t, th)
+	pr := h.wantState(2, store.PRNeedsAttention)
+	const loops = "fix: claude-fix's push failed: remote rejected"
+	var once sync.Once
+	h.gh.mu.Lock()
+	h.gh.onThreads = func() {
+		once.Do(func() {
+			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", loops) }); err != nil {
+				h.t.Error(err)
+			}
+		})
+	}
+	h.gh.mu.Unlock()
+	h.setThreads(extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "MINOR: `run` drops stderr", "rev-ann", "zhuravel"))
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); got != loops {
+		t.Errorf("last_error = %q, want the loop's %q", got, loops)
+	}
 }
 
 // A failed run's Needs you has no item behind it: the look never lifts it.
