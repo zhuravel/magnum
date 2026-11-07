@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
@@ -211,6 +212,75 @@ func TestYourPRsWaitOldestFirst(t *testing.T) {
 	if looking := rowOf(t, d, "#4613"); looking.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "looking at #4613"}) {
 		t.Errorf("an own PR with no verdict yet: %+v", looking)
 	}
+}
+
+// In YOUR PRS a PR magnum's look leaves alone comes after the ones at
+// work, however old its wait: the group folds from its end on a short
+// screen, so the dim rows that ask nothing fold first and the fix loop at
+// work stays drawn. Before, a baseline's wait, kept since magnum's first
+// look, put it first.
+func TestYourPRsThatMagnumLeavesAloneComeLast(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.own(76, 4606, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenOff, "baseline")
+		v.Open.Off, v.Open.Since = engine.OpenOffBaseline, screenNow.Add(-26*time.Hour)
+	})
+	r.own(77, 4607, func(v *PRState) {
+		v.HasOpen, v.FixOff, v.Open = true, true, verdict(engine.OpenOff, "fix off")
+		v.Open.Off, v.Open.Since = engine.OpenOffFixOff, screenNow.Add(-5*time.Hour)
+	})
+	r.own(81, 4611, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "CI at a1b2c3d")
+		v.Open.Since = screenNow.Add(-10 * time.Minute)
+	})
+	r.own(82, 4612, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, cycle 1 of 5")
+		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 5, Phase: engine.FixPhaseFixing, Head: prHead}
+		v.Open.Since = screenNow.Add(-3 * time.Hour)
+	})
+	var keys []string
+	for _, row := range r.data(time.Time{}).Rows {
+		if row.Group == tui.GroupYours {
+			keys = append(keys, row.Key)
+		}
+	}
+	if want := []string{"#4612", "#4611", "#4606", "#4607"}; !slices.Equal(keys, want) {
+		t.Errorf("YOUR PRS in the order %q, want %q: the PRs at work oldest first, then the ones magnum leaves alone", keys, want)
+	}
+}
+
+// With two repositories in the factory, your PR's key names its
+// repository (talkable#12, widget#12), so two PRs of one number read apart
+// on home, in the y/N and to a double click; a factory of one repository
+// keeps the bare #12. Before, both read #12.
+func TestYourPRsOfTwoFactoryRepositoriesNameTheirRepository(t *testing.T) {
+	r := newScreenRig(t)
+	r.cfg.Factory.Repos = append(r.cfg.Factory.Repos, config.FactoryRepo{Repo: "example/widget", Base: "main", MainClone: t.TempDir()})
+	r.withMagnum()
+	r.own(91, 12, nil)
+	r.own(92, 12, func(v *PRState) {
+		v.Ref.Repo, v.URL = "example/widget", "https://github.com/example/widget/pull/12"
+	})
+	d := r.data(time.Time{})
+	for id, want := range map[int64]string{-91: "talkable#12", -92: "widget#12"} {
+		row, ok := rowByID(d, id)
+		switch {
+		case !ok:
+			t.Errorf("no row of your PR %d: %+v", id, d.Rows)
+		case row.Key != want || row.GitHub != want || d.Cards[id].Task.Key != want:
+			t.Errorf("your PR %d: key %q, GitHub %q, card %q; want %q", id, row.Key, row.GitHub, d.Cards[id].Task.Key, want)
+		}
+	}
+}
+
+// rowByID is d's row of id.
+func rowByID(d tui.FactoryData, id int64) (tui.FactoryRow, bool) {
+	i := slices.IndexFunc(d.Rows, func(r tui.FactoryRow) bool { return r.ID == id })
+	if i < 0 {
+		return tui.FactoryRow{}, false
+	}
+	return d.Rows[i], true
 }
 
 // A registry of magnum's that cannot be read leaves your PRs out and says

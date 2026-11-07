@@ -148,9 +148,10 @@ func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOpti
 // lists them ([board] own_prs = "factory": cfg.OwnPRsOnFactory): every row
 // GitHub has open, not a draft (the factory screen lists no drafts), whose
 // author is one of your logins (config.SelfMatch, the logins magnum's look
-// takes as yours) leaves; a closed or merged one stays in its section.
-// hidden, when set, keeps how many the last load left out, for the board's
-// footer. src itself otherwise.
+// takes as yours) and whose repository a [[watch]] covers (the factory
+// screen lists no other) leaves; a closed or merged one stays in its
+// section. hidden, when set, keeps how many the last load left out, for
+// the board's footer. src itself otherwise.
 func ownPRsSource(cfg *config.Config, src tui.PRBoardSourceFunc, hidden *atomic.Int64) tui.PRBoardSourceFunc {
 	if !cfg.OwnPRsOnFactory() {
 		return src
@@ -163,7 +164,7 @@ func ownPRsSource(cfg *config.Config, src tui.PRBoardSourceFunc, hidden *atomic.
 		}
 		n := 0
 		rows = slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool {
-			own := !r.Draft && strings.EqualFold(r.GHState, store.GHOpen) && self(r.Author)
+			own := !r.Draft && strings.EqualFold(r.GHState, store.GHOpen) && self(r.Author) && cfg.WatchFor(r.Owner+"/"+r.Repo) != nil
 			if own {
 				n++
 			}

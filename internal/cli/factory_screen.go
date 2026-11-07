@@ -185,12 +185,15 @@ func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) 
 }
 
 // Frame reads the factory (factory.ScreenData), with the published tasks'
-// PRs from magnum's registry, and keeps the ready cards it drew. An agents
-// store it cannot open is a blocker line of home, with why, and the rest is
-// drawn. A factory daemon that is down (daemonDown) is home's blocker line.
+// PRs and your own open PRs from magnum's registry, and keeps the ready
+// cards it drew. Without the factory's registry (no task was ever started)
+// home lists your PRs alone, and creates nothing: with [board] own_prs =
+// "factory" the board leaves them out. An agents store it cannot open is a
+// blocker line of home, with why, and the rest is drawn. A factory daemon
+// that is down (daemonDown) is home's blocker line.
 func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error) {
 	reg, err := s.registryFor(false)
-	if err != nil || reg == nil {
+	if err != nil || reg == nil && s.magnum == nil {
 		return tui.FactoryData{Cards: map[int64]tui.FactoryCards{}}, err
 	}
 	agents, aerr := s.agentsStore()

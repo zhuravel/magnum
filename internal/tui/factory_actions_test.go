@@ -430,3 +430,23 @@ func TestFactoryBarFollowsTheTerminalBackground(t *testing.T) {
 		t.Errorf("the light palette draws %q, the dark one %q: want the same text in other colors", light, dark)
 	}
 }
+
+// The factory's bar follows no request: an action that names one (f, F and
+// x run the board's own code, which reports the requests it queued) is
+// logged with its text alone, which says the daemon's answer or how to
+// follow it. Before, `!` showed such a request as "no answer yet" for
+// good, and the log kept it ahead of the others when it trimmed.
+func TestTheFactoryBarLogsNoRequestItDoesNotFollow(t *testing.T) {
+	b, log := testFactoryBar(t.Context())
+	text := "the daemon (pid 42) is running, so the work was queued as request 7 (fix); it has not answered yet"
+	confirmed(t, &b, "Fix #4602: magnum's fixer takes what is open now?", func(context.Context) (ActionResult, error) {
+		return ActionResult{Text: text, Requests: []Request{{ID: 7, Kind: "fix", State: RequestPending}}}, nil
+	})
+	entries, _ := log.snapshot()
+	if len(entries) != 1 || entries[0].text != text {
+		t.Fatalf("log %+v, want the fix with its text", entries)
+	}
+	if len(entries[0].reqs) != 0 || len(log.pendingIDs()) != 0 {
+		t.Errorf("the log keeps requests %+v that the factory's bar never re-reads", entries[0].reqs)
+	}
+}

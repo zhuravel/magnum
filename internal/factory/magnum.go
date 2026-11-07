@@ -6,9 +6,10 @@ package factory
 // tick read the factory's PRs there too (PRStates): magnum's row, its
 // autofix = "open" verdict, its fix loop, its stalemate and its attention;
 // and the screen your own open PRs (OwnPRs), for YOUR PRS. The factory
-// reads magnum's registry and never writes or migrates it: a
-// registry of another schema than this build's is an error, and its file
-// stays as it was.
+// reads magnum's registry and never writes or migrates it: it opens it
+// query_only, so a write through its handle fails, and a registry of
+// another schema than this build's is an error, and its file stays as it
+// was.
 
 import (
 	"context"
@@ -60,7 +61,8 @@ func refuseMagnumMigration(from, to int) error {
 		"restart magnum's daemon first (`magnum daemon-restart --drain`), then the factory goes on", from, to)
 }
 
-// open opens magnum's registry with every migration refused
+// open opens magnum's registry read only (store.Options.QueryOnly: a write
+// through the handle fails) with every migration refused
 // (refuseMagnumMigration), so one of a schema this build does not know is
 // an error and keeps its file; nil and no error when there is no registry,
 // which it never creates.
@@ -70,7 +72,7 @@ func (m *magnumRegistry) open() (*store.Store, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("magnum's registry: %w", err)
 	}
-	return store.OpenWith(m.l.DB(), store.Options{BeforeMigrate: refuseMagnumMigration})
+	return store.OpenWith(m.l.DB(), store.Options{BeforeMigrate: refuseMagnumMigration, QueryOnly: true})
 }
 
 // Busy reports whether magnum's review rounds fill its limit
@@ -237,12 +239,13 @@ func (m *magnumRegistry) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]
 }
 
 // OwnPRs reads your own open PRs from magnum's registry: the PRs GitHub has
-// open that are not drafts and whose author is one of your logins
-// (config.SelfMatch, the logins magnum's look takes as yours), ordered by
-// repository and number, each as PRStates reads a PR, in one opening of
-// the registry. It reads and never writes or migrates the registry; no
-// registry lists nothing and creates none, and neither does a config with
-// no login of yours.
+// open that are not drafts, whose author is one of your logins
+// (config.SelfMatch, the logins magnum's look takes as yours) and whose
+// repository a [[watch]] covers (magnum polls no other, so the row of a PR
+// there tells nothing true of it), ordered by repository and number, each
+// as PRStates reads a PR, in one opening of the registry. It reads and
+// never writes or migrates the registry; no registry lists nothing and
+// creates none, and neither does a config with no login of yours.
 func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 	if m.cfg == nil {
 		return nil, nil
@@ -279,6 +282,9 @@ func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 			repos[pr.RepoID] = repo
 		}
 		v := m.stateOf(PRRef{Repo: repo.FullName(), Number: pr.Number}, pid)
+		if !v.Watched {
+			continue
+		}
 		if err := m.fillPR(ctx, st, &v, repo, pr, tick); err != nil {
 			return nil, fmt.Errorf("magnum's registry: %s#%d: %w", v.Ref.Repo, pr.Number, err)
 		}

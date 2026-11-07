@@ -12085,9 +12085,11 @@ func SaveSeen(l paths.Layout, at time.Time) error
     stays.
 
 func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store, now, lastSeen time.Time, o ScreenOptions) (tui.FactoryData, error)
-    ScreenData is the factory screen's data at now for an operator last seen on
-    home at lastSeen (zero: never): see the file's comment. agents may be nil
-    (no agent ran yet): the tasks then have no agents.
+    ScreenData is the factory screen's data at now for an operator last seen
+    on home at lastSeen (zero: never): see the file's comment. agents may be
+    nil (no agent ran yet): the tasks then have no agents. reg may be nil (the
+    factory has no registry yet: no task was ever started): home then has no
+    task, news or alert, and lists your PRs alone.
 
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
@@ -24927,6 +24929,10 @@ type Options struct {
 	// CLI uses it so a newer build never migrates the registry under a
 	// running older daemon (which exits when the schema changes under it).
 	BeforeMigrate func(from, to int) error
+	// QueryOnly opens the database with PRAGMA query_only on its
+	// connection: every write through the handle fails (a migration's too),
+	// so a reader of another program's registry never changes it.
+	QueryOnly bool
 }
     Options tune OpenWith.
 

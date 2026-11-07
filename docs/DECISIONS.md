@@ -3637,35 +3637,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Phase A's fourth slice of the factory feedback bridge). The operator wants to follow their own PRs, the
   factory's and the hand-written ones alike, where the factory's tasks are, and not start their fixes by hand.
   - The factory screen lists your own open PRs from magnum's registry (`Magnum.OwnPRs`: GitHub has them open,
-    not drafts, their author one of `config.SelfMatch`'s logins, the same test magnum's look uses), read once
-    per frame, as `PRStates` reads a published task's PR: every migration refused, never written, never
-    created. The rows are read only. A PR that a task which is neither done nor stopped has stays that task's
+    not drafts, their author one of `config.SelfMatch`'s logins, the same test magnum's look uses, in a
+    repository a `[[watch]]` covers: magnum polls no other, so the row of a PR there stays open after its
+    merge), read once per frame, as `PRStates` reads a published task's PR: every migration refused, never
+    created, and never written, since the factory opens magnum's registry `query_only`
+    (`store.Options.QueryOnly`), so a write through its handle fails; a byte compare of the database file
+    alone missed a write, which lands in the -wal file while magnum's connection stays open. The screen
+    lists them before the factory has a registry too (`ScreenData` takes a nil one), or `own_prs =
+    "factory"` would show them nowhere. The rows are read only. A PR that a task which is neither done nor stopped has stays that task's
     row, so none is listed twice. A row's id is the negative of magnum's `prs.id`: home keys its cursor, order
     and rows by id, and no task's id is below one.
   - NEEDS YOU holds a PR only when its fresh verdict needs you, or is idle with a person's approval (the merge
     is yours): the walk and the chip stay honest ("1 task and 2 PRs need you"). Every other PR waits in YOUR
     PRS, between WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has
     (`magnumWait`, shared). A PR magnum's look leaves alone (a baseline, fix off, `include_own = false`) waits
-    there dim, with why: unlike a published task's, it asks nothing, and four October baselines open for weeks
-    would wear NEEDS YOU out. A PR row has no card: `a` walks past it, and once the cards are done the footer
+    there dim, with why, after the others: a group folds from its end, so on a short screen the rows that ask
+    nothing fold before a fix loop at work. Unlike a published task's, it asks nothing, and four October
+    baselines open for weeks would wear NEEDS YOU out. A PR row has no card: `a` walks past it, and once the cards are done the footer
     says how many PRs still need you. `o` and `t` stay a task's keys.
   - `f`, `F` and `x` on a PR row ask y/N and then run the board's own code (`screenActions.Fix`, `FixOff`,
     `Abort`: `fixMain` and `stopMain(stopAbort)`, the paths of the board's `f`, `F` and `K`), so the requests
     go to magnum's registry and magnum's daemon as from the board. The factory daemon still never writes
     magnum's registry, and the screen never acts on it directly. `F` on a PR magnum leaves alone for another
-    reason than fix off says why and runs nothing; `x` runs only while a fix loop runs. On a task's row the
+    reason than fix off says why and runs nothing; `x` runs only while a fix loop runs. The factory's action
+    bar logs their text and never the requests they name: it re-reads none, and their text already says the
+    daemon's answer or how to follow it, where a logged request would say "no answer yet" for good. On a task's row the
     three keys start nothing and say so; a click selects, and the menu's items ask the same y/N.
   - `[board] own_prs` defaults to `"board"`, today's board, whose own rows now carry the verdict: a title tag
     (`open: needs you`, `open: none`, `open: looking` for a stale one), a `verdict:` line on the card, and
     `open` in `tui --json`, added beside every existing key. `"factory"` leaves your open PRs that are not
-    drafts out of the board's open PRs, live and printed, and the status rule counts them; a draft stays,
-    since the factory screen lists none, and so does a closed PR. The board has no help line per row, unlike
+    drafts, in a repository a watch covers, out of the board's open PRs, live and printed, and the status rule
+    counts them; a draft and a PR of a repository no watch covers stay, since the factory screen lists
+    neither, and so does a closed PR. The board has no help line per row, unlike
     the factory's home: the tag and the card carry the verdict.
   Rejected: adopting your PRs as factory tasks (Phase B, with the look moved into the factory); f, F and x as
   factory requests (the factory daemon would write magnum's registry); NEEDS YOU for every `you:` blocker of a
   PR (an off PR and an attention under a watch that is not "open" ask nothing the screen can answer); hiding
   your drafts under `"factory"` (they would show nowhere); a key `#N` for every repository (two repositories'
-  PRs would read alike: a repository other than the factory's names itself, `shop#12`). Tests, failing first:
+  PRs would read alike: only a factory of one repository keys its PRs `#12`, and every other PR names its
+  repository, `shop#12`, `widget#12`); a row that says "magnum does not watch" for a PR of an unwatched
+  repository (magnum cannot tell when it merges, so the row would stay for good). Tests, failing first:
   TestOwnPRsShowOnTheFactoryScreenReadOnly, TestOwnPRsReadsYourOpenPRsAndWritesNothing,
   TestDraftsAndOtherAuthorsPRsAreNotListed, TestAnOwnPRThatNeedsYouIsInNeedsYou,
   TestAFactoryPRIsListedOnceAsItsTask, TestAnOffOwnPRWaitsInYourPRs, TestTheChipCountsPRsThatNeedYou,
@@ -3673,7 +3684,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestShiftFOnAnOwnPRRowSwitchesFixOff, TestXOnAnOwnPRRowAsksAndStopsTheLoop, TestAClickStartsNothingWithoutY,
   TestShiftFOnABaselinePRRowSaysWhyAndRunsNothing, TestFOnATaskRowStartsNothing, TestOwnPRsIsValidated,
   TestTheBoardHidesOwnPRsWhenTheFactoryShowsThem, TestTheBoardMarksOwnPRsWithTheVerdict,
-  TestPrsJSONCarriesTheVerdict; goldens yours-100, -140 and -200.
+  TestPrsJSONCarriesTheVerdict, TestTheFactorysHandleOnMagnumsRegistryRefusesWrites,
+  TestQueryOnlyRefusesEveryWrite, TestYourPRsThatMagnumLeavesAloneComeLast,
+  TestYourPRsOfARepositoryNoWatchCoversAreNotListed, TestTheBoardKeepsYourPRsOfARepositoryNoWatchCovers,
+  TestTheFactoryScreenWithoutARegistryListsYourPRs, TestYourPRsOfTwoFactoryRepositoriesNameTheirRepository,
+  TestTheFactoryBarLogsNoRequestItDoesNotFollow; goldens yours-100, -140 and -200.
 
 ## Operations
 

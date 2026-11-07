@@ -12,9 +12,10 @@ import (
 )
 
 // fixtureYours is home with your own PRs from magnum's registry beside the
-// tasks (factory.ScreenData's words): one PR needs you, one is approved
-// with nothing open, one magnum's fixer works on, one waits for CI and one
-// magnum leaves alone (a baseline), drawn dim.
+// tasks (factory.ScreenData's words and order): one PR needs you, one is
+// approved with nothing open, one magnum's fixer works on, one waits for
+// CI and one magnum leaves alone (a baseline), drawn dim and last however
+// old its wait.
 func fixtureYours() factoryFrame {
 	now := factoryNow
 	return factoryFrame{

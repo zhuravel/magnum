@@ -70,6 +70,10 @@ type Options struct {
 	// CLI uses it so a newer build never migrates the registry under a
 	// running older daemon (which exits when the schema changes under it).
 	BeforeMigrate func(from, to int) error
+	// QueryOnly opens the database with PRAGMA query_only on its
+	// connection: every write through the handle fails (a migration's too),
+	// so a reader of another program's registry never changes it.
+	QueryOnly bool
 }
 
 // OpenWith is Open with options.
@@ -96,6 +100,9 @@ func OpenWith(path string, opts Options) (*Store, error) {
 	// writes a day.
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)" +
 		"&_pragma=temp_store(MEMORY)&_txlock=immediate"
+	if opts.QueryOnly {
+		dsn += "&_pragma=query_only(1)"
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)

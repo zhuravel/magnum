@@ -165,6 +165,45 @@ func TestTheFactoryScreenWithoutARegistryShowsNoTask(t *testing.T) {
 	}
 }
 
+// ownOnlyMagnum is magnum's registry with your open PRs own and nothing
+// else.
+type ownOnlyMagnum struct{ own []factory.PRState }
+
+func (m ownOnlyMagnum) Busy(context.Context) (bool, string, error) { return false, "", nil }
+
+func (m ownOnlyMagnum) PRStates(context.Context, []factory.PRRef) (map[factory.PRRef]factory.PRState, error) {
+	return map[factory.PRRef]factory.PRState{}, nil
+}
+
+func (m ownOnlyMagnum) OwnPRs(context.Context) ([]factory.PRState, error) { return m.own, nil }
+
+// Without the factory's registry (no task was ever started) the screen
+// still lists your own open PRs from magnum's registry, and creates
+// nothing: with [board] own_prs = "factory" the board leaves them out, so
+// they would show nowhere. Before, the screen drew an empty home.
+func TestTheFactoryScreenWithoutARegistryListsYourPRs(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	cfg := *dt.ctx.Config
+	cfg.Board.OwnPRs = config.OwnPRsFactory
+	dt.ctx.Config = &cfg
+	own := factory.PRState{Ref: factory.PRRef{Repo: "example/shop", Number: 12}, ID: 5, Title: "Coupon rounding",
+		URL: "https://github.com/example/shop/pull/12", Found: true, DaemonUp: true, Watched: true, GHState: store.GHOpen,
+		State: store.PRReviewed, AuthorLogin: "zhuravel"}
+	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own}}}
+	defer src.close()
+	d, err := src.Frame(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Rows) != 1 || d.Rows[0].ID != -5 || d.Rows[0].PR == nil || d.Rows[0].PR.Ref != "example/shop#12" {
+		t.Fatalf("rows %+v, want your PR example/shop#12", d.Rows)
+	}
+	if fileExists(dt.ctx.Layout.FactoryDB()) {
+		t.Error("the frame created the factory's registry")
+	}
+}
+
 // The screen reads the published tasks' PRs from magnum's registry, which
 // it never migrates or writes: a published task's row says its PR's
 // verdict there, here that it needs you, with the needs as the card's

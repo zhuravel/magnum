@@ -102,12 +102,17 @@ var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, Req
 
 // ScreenData is the factory screen's data at now for an operator last seen
 // on home at lastSeen (zero: never): see the file's comment. agents may be
-// nil (no agent ran yet): the tasks then have no agents.
+// nil (no agent ran yet): the tasks then have no agents. reg may be nil
+// (the factory has no registry yet: no task was ever started): home then
+// has no task, news or alert, and lists your PRs alone.
 func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store, now, lastSeen time.Time, o ScreenOptions) (tui.FactoryData, error) {
 	d := tui.FactoryData{Cards: map[int64]tui.FactoryCards{}}
-	tasks, err := reg.Tasks(ctx)
-	if err != nil {
-		return d, err
+	var tasks []registry.Task
+	var err error
+	if reg != nil {
+		if tasks, err = reg.Tasks(ctx); err != nil {
+			return d, err
+		}
 	}
 	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks}
 	for _, t := range tasks {
@@ -147,6 +152,11 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou && a.Group != tui.GroupYours {
 			return c
 		}
+		// YOUR PRS: the PRs magnum leaves alone last, so a short screen folds
+		// them first (a group folds from its end).
+		if c := cmp.Compare(leftAlone(a), leftAlone(b)); c != 0 {
+			return c
+		}
 		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and YOUR PRS: the oldest wait first
 	})
 	d.Repo = s.repo()
@@ -178,6 +188,15 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		return d, err
 	}
 	return d, nil
+}
+
+// leftAlone is 1 for the row of your PR that magnum's look leaves alone (a
+// baseline, fix off: it asks nothing), else 0.
+func leftAlone(r tui.FactoryRow) int {
+	if r.PR != nil && r.PR.Off != "" {
+		return 1
+	}
+	return 0
 }
 
 // screen is one read of ScreenData.
@@ -1030,6 +1049,9 @@ func (s *screen) next(rows []tui.FactoryRow) string {
 // request of yours (flashKinds) it carried out within flashFor, read typed
 // from the requests ("14:02 started PR-12345 as task 3: ...").
 func (s *screen) flash() (string, error) {
+	if s.reg == nil {
+		return "", nil
+	}
 	q, ok, err := s.reg.LastDone(s.ctx, s.now.Add(-flashFor), flashKinds...)
 	if err != nil || !ok {
 		return "", err
@@ -1040,6 +1062,9 @@ func (s *screen) flash() (string, error) {
 // alerts are the alert events and their delivery's (each toast, hold and
 // drop, alertKinds), newest first.
 func (s *screen) alerts() ([]tui.FactoryAlert, error) {
+	if s.reg == nil {
+		return nil, nil
+	}
 	evs, err := s.reg.RecentEvents(s.ctx, alertsShown, alertKinds...)
 	if err != nil {
 		return nil, err

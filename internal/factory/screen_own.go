@@ -7,14 +7,14 @@ package factory
 // approved (your merge), is in NEEDS YOU; every other one waits in YOUR
 // PRS, oldest wait first, with the words a published task's row has
 // (magnumWait); one magnum's look leaves alone (a baseline, fix off) is
-// drawn dim with why, and asks nothing. The rows are read only: f, F and
+// drawn dim with why, after the others, and asks nothing. The rows are
+// read only: f, F and
 // x on them go through magnum's own request paths, as the board's keys
 // do, never through the factory daemon.
 
 import (
 	"cmp"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -112,11 +112,12 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	return row, card
 }
 
-// ownKey is the key of your PR's row: its number ("#4512") in a repository
-// of the factory's, else its repository's name before it ("shop#12"), so
-// two repositories' PRs are told apart.
+// ownKey is the key of your PR's row: its number ("#4512") when the
+// factory has one repository and the PR is of it, else its repository's
+// name before it ("shop#12", "widget#12"), so two repositories' PRs are
+// told apart, on home, in a y/N and to a double click.
 func (s *screen) ownKey(r PRRef) string {
-	if slices.ContainsFunc(s.cfg.Factory.Repos, func(f config.FactoryRepo) bool { return strings.EqualFold(f.Repo, r.Repo) }) {
+	if repos := s.cfg.Factory.Repos; len(repos) == 1 && strings.EqualFold(repos[0].Repo, r.Repo) {
 		return fmt.Sprintf("#%d", r.Number)
 	}
 	_, name, _ := strings.Cut(r.Repo, "/")

@@ -16,9 +16,12 @@ package tui
 //	cmd := bar.start(label, run)  // an action that asks nothing (o: step into the pane)
 //	bar.drop()                    // the screen quits: a question up is dropped, and nothing runs after
 //
-// An action returns its text only: the bar logs the ActionResult as it is but
-// does not follow a Request it names (the board's follow does that), so a
-// closure of the factory leaves Requests empty.
+// The bar follows no request: it logs an action's text and error, never the
+// Requests an ActionResult names, which only the board's actionBar re-reads.
+// f, F and x on your PR's row run the board's own code, which names the
+// requests it queued; their text already says the daemon's answer, or how to
+// follow a request still pending, and a logged request nothing re-reads would
+// say "no answer yet" for good.
 
 import (
 	"cmp"
@@ -190,7 +193,7 @@ func (b *factoryBar) run(label string, run factoryAction) tea.Cmd {
 	ctx, log, at := b.ctx, b.log, b.now()
 	return func() tea.Msg {
 		res, err := run(ctx)
-		e := logEntry{at: at, what: label, text: res.Text, reqs: res.Requests}
+		e := logEntry{at: at, what: label, text: res.Text} // no reqs: the bar follows none
 		if err != nil {
 			e.err = err.Error()
 		}

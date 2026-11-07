@@ -4123,16 +4123,20 @@ stages: a retry refuses it.
 
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
 wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's
-"mine": every watch's posting identity and every `gh` identity), read once per frame and never written. A PR that a
+"mine": every watch's posting identity and every `gh` identity), in a repository a `[[watch]]` covers (magnum
+polls no other, so a PR there would read open after its merge), read once per frame and never written (the
+screen opens magnum's registry read only), even before the factory's first task. A PR that a
 task which is neither done nor stopped has stays that task's row, so no PR is listed twice. A PR whose verdict
-needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`,
-`shop#12` in a repository that is not the factory's; the wide screen's JIRA column has the issue key of its title),
+needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`
+when the factory has one repository and the PR is of it; otherwise its repository names it, `shop#12`; the wide
+screen's JIRA column has the issue key of its title),
 with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); every other one waits in YOUR PRS, between
 WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has (`agent: magnum fixes
 #4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `magnum: looking at #4613`). A PR magnum's look leaves alone (a
 baseline, fix off, a watch whose `include_own` is false) waits there too, dim, with why (`#4606 is yours to
-follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`): it asks
-nothing, so a baseline open for weeks never sits in NEEDS YOU. The chip counts both kinds that need you (`1 task
+follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`), after
+the others, so a short screen folds it first: it asks nothing, so a baseline open for weeks never sits in NEEDS
+YOU. The chip counts both kinds that need you (`1 task
 and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`); the window title counts
 every row in NEEDS YOU. A PR row has no card: `enter` names its keys in the footer, `b` opens the PR, and `o`
 and `t` say they act on a task's row. `a` walks the task cards only and skips PR rows; once no card is left, the
@@ -4339,10 +4343,11 @@ when nothing is open, `open: off`, and `open: looking` while the verdict no long
 last tick four poll intervals ago, another head, a PR row that changed since), a `verdict: waits · settling until
 21:13` line under the card's header, and `"open": {"verdict", "why", "head", "stale"}` in `tui --json` (null on
 another's PR and on one without a verdict; every other key stays). `[board] own_prs` says where they are listed:
-`"board"` (the default) keeps them here as above; `"factory"` leaves your open PRs that are not drafts out of the
-board's open PRs, the live board and the printed rows alike, since the factory screen lists them in YOUR PRS
-(Factory, above), and the status rule says `3 of your PRs are on the factory screen (own_prs)`; a draft of yours,
-which the factory screen does not list, and your merged or closed PRs stay. The settings screen offers it
+`"board"` (the default) keeps them here as above; `"factory"` leaves your open PRs that are not drafts, in a
+repository a `[[watch]]` covers, out of the board's open PRs, the live board and the printed rows alike, since the
+factory screen lists them in YOUR PRS (Factory, above), and the status rule says `3 of your PRs are on the factory
+screen (own_prs)`; a draft of yours and a PR of a repository no watch covers, which the factory screen does not
+list, and your merged or closed PRs stay. The settings screen offers it
 (`your open PRs on`), and the next board or factory screen you open reads it.
 
 Star the PRs you must deliver, your own or a colleague's, so they stay on top. `*` stars the PR under the

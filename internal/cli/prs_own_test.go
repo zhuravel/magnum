@@ -96,6 +96,36 @@ func TestTheBoardHidesOwnPRsWhenTheFactoryShowsThem(t *testing.T) {
 	}
 }
 
+// With [board] own_prs = "factory" the board keeps your open PR of a
+// repository no [[watch]] covers: the factory screen lists only the PRs
+// magnum watches, so it would show nowhere, and the footer counts only the
+// PRs it left to the factory screen. Before, the board left it out too.
+func TestTheBoardKeepsYourPRsOfARepositoryNoWatchCovers(t *testing.T) {
+	f := newInspFixture(t)
+	st := prsSeedOwn(t, f)
+	defer st.Close()
+	ctx := context.Background()
+	inspSeedPR(t, st, "example/shop", 30, store.PRReviewed, func(u *store.PRUpdate) { u.Set("author_login", "zhuravel") })
+	a, err := inspOpenApp(f.Ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	cfg := a.Config
+	cfg.Board.OwnPRs = "factory"
+	var hidden atomic.Int64
+	rows, err := ownPRsSource(cfg, prsSource(st, cfg, store.BoardFilter{}, prsSelfLogins(cfg), f.Ctx.Layout), &hidden)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numbers(rows); !slices.Equal(got, []int{21, 22, 23, 30}) {
+		t.Errorf("own_prs = factory lists %v, want example/shop#30 kept beside your draft, your merged PR and alice's", got)
+	}
+	if hidden.Load() != 1 {
+		t.Errorf("the board's footer counts %d of your PRs on the factory screen, want 1 (#20)", hidden.Load())
+	}
+}
+
 // Your own open PRs on the board carry their autofix = "open" verdict
 // (pr.<id>.open): fresh, or stale ("looking") when magnum decided it at
 // another head, before the PR's row changed or long ago; a PR of someone

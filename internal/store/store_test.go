@@ -222,6 +222,36 @@ func TestBeforeMigrateRefusalLeavesTheFileAlone(t *testing.T) {
 	st.Close()
 }
 
+// TestQueryOnlyRefusesEveryWrite: a handle opened QueryOnly reads the
+// registry, and every write through it fails, so it never changes the
+// registry of the program that owns it.
+func TestQueryOnlyRefusesEveryWrite(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	if err := st.SetKV(ctx, "probe", "1"); err != nil {
+		t.Fatal(err)
+	}
+	var seq int
+	var name, path string
+	if err := st.DB().QueryRow("PRAGMA database_list").Scan(&seq, &name, &path); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := OpenWith(path, Options{QueryOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if v, ok, err := ro.GetKV(ctx, "probe"); err != nil || !ok || v != "1" {
+		t.Fatalf("a read through the query-only handle: %q, %v, %v", v, ok, err)
+	}
+	if err := ro.SetKV(ctx, "probe", "2"); err == nil {
+		t.Error("a write through the query-only handle succeeded")
+	}
+	if v, _, err := st.GetKV(ctx, "probe"); err != nil || v != "1" {
+		t.Errorf("the registry's probe is %q (%v) after the query-only handle's write, want 1", v, err)
+	}
+}
+
 // TestOpenFilesArePrivate: the database and its WAL and shared-memory files
 // hold the same data, so all three are 0600, on a fresh database and on a
 // pre-existing one that was group/world readable.

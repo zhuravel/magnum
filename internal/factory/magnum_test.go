@@ -491,10 +491,50 @@ func selfConfig() *config.Config {
 	return cfg
 }
 
+// registryBytes are magnum's registry and its write-ahead log, byte for
+// byte: a write by another connection while the fixture's stays open lands
+// in the log and is never checkpointed into the database file.
+func registryBytes(t *testing.T, l paths.Layout) []byte {
+	t.Helper()
+	db, err := os.ReadFile(l.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wal, err := os.ReadFile(l.DB() + "-wal")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return append(db, wal...)
+}
+
+// The factory's handle on magnum's registry is read only (PRAGMA
+// query_only): a write through it fails and leaves the registry as it was,
+// so no read of the factory's (Busy, PRStates, OwnPRs, FixLoopsOf) can
+// change magnum's registry, even by mistake. Before, the handle took
+// writes.
+func TestTheFactorysHandleOnMagnumsRegistryRefusesWrites(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	ro, err := (&magnumRegistry{l: l}).open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, _, err := ro.GetKV(ctx, "probe.write"); err != nil {
+		t.Fatalf("a read through the factory's handle: %v", err)
+	}
+	if err := ro.SetKV(ctx, "probe.write", "1"); err == nil {
+		t.Error("a write through the factory's handle on magnum's registry succeeded")
+	}
+	if _, ok, err := st.GetKV(ctx, "probe.write"); err != nil || ok {
+		t.Errorf("magnum's registry has the probe: %v, %v", ok, err)
+	}
+}
+
 // OwnPRs lists your own open PRs from magnum's registry, each read as
 // PRStates reads a PR (magnum's id, title and page, the verdict, the fix
-// loop, fix off), and changes nothing in the registry: its file is byte
-// for byte as it was.
+// loop, fix off), and changes nothing in the registry: its file and its
+// write-ahead log are byte for byte as they were.
 func TestOwnPRsReadsYourOpenPRsAndWritesNothing(t *testing.T) {
 	l, st := magnumLayout(t)
 	ctx := t.Context()
@@ -507,10 +547,7 @@ func TestOwnPRsReadsYourOpenPRsAndWritesNothing(t *testing.T) {
 	if _, err := st.DB().Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(l.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := registryBytes(t, l)
 	prs, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -527,12 +564,38 @@ func TestOwnPRsReadsYourOpenPRsAndWritesNothing(t *testing.T) {
 	case !v.HasOpen || v.Stale || v.Open.Off != engine.OpenOffFixOff || !v.FixOff:
 		t.Errorf("#7's verdict %+v (has %v, stale %v), fix off %v", v.Open, v.HasOpen, v.Stale, v.FixOff)
 	}
-	after, err := os.ReadFile(l.DB())
+	if !bytes.Equal(before, registryBytes(t, l)) {
+		t.Fatal("OwnPRs changed magnum's registry")
+	}
+}
+
+// A PR of yours in a repository no [[watch]] covers is not listed: magnum
+// no longer polls it, so its row stays open after a merge on GitHub and
+// says nothing true of it. Before, YOUR PRS showed it as "magnum: review
+// of #N" for good.
+func TestYourPRsOfARepositoryNoWatchCoversAreNotListed(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	head := strings.Repeat("cd", 20)
+	magnumPR(t, st, 1, head, nil)
+	other, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_site", Owner: "other", Name: "site", Mode: store.RepoModePerPR})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("OwnPRs changed magnum's registry")
+	if _, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: other.ID, NodeID: "PR_site_2", Number: 2, URL: "https://github.com/other/site/pull/2",
+		HeadSHA: head, GHState: store.GHOpen, InitialState: store.PRQueued, Identity: "zhuravel", AuthorLogin: new("zhuravel")}); err != nil {
+		t.Fatal(err)
+	}
+	prs, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []PRRef
+	for _, v := range prs {
+		got = append(got, v.Ref)
+	}
+	if want := []PRRef{{"example/shop", 1}}; !slices.Equal(got, want) {
+		t.Errorf("OwnPRs lists %v, want %v: other/site has no watch", got, want)
 	}
 }
 
