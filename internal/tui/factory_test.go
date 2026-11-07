@@ -43,7 +43,7 @@ func fixtureFactoryData() FactoryData {
 	cards[3] = FactoryCards{Task: TaskCard{Key: "PR-12360", Title: ready.Title}, Ready: &ready,
 		Bind: ReadyBinding{HeadSHA: "9c4e2d1f00aa", ReportHash: "report-1", DiffHash: "diff-1"}}
 	cards[5] = FactoryCards{Task: fixtureTaskCard()}
-	return FactoryData{Repo: f.Repo, Rows: f.Rows, Blocking: f.Blocking, BlockingLong: f.BlockingLong, RuleChip: f.RuleChip,
+	return FactoryData{Repos: f.Repos, Rows: f.Rows, Blocking: f.Blocking, BlockingLong: f.BlockingLong, RuleChip: f.RuleChip,
 		Decisions: f.Decisions, Cards: cards}
 }
 

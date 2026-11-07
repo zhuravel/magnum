@@ -60,13 +60,17 @@ type FactoryRow struct {
 	// number ("#4512") for a PR the operator wrote by hand. GitHub is the
 	// PR's number, shown beside the Jira key on a wide screen.
 	Key, GitHub, Title string
-	Group              FactoryGroup
-	Mark               FactoryMark
-	WaitsOn            []WaitsOn
-	Move               string // the step the factory recommends; NeedsYou rows only
-	Stagings           []StagingCell
-	Since              time.Time // when the task began to wait on this; zero = not shown
-	Help               string    // the line under the rule while the row is selected
+	// Repo is the repository the row is of ("owner/name"): the task's, or
+	// your PR's. The painter draws it in a column of its own, unless the
+	// title names one repository and every row is of it.
+	Repo     string
+	Group    FactoryGroup
+	Mark     FactoryMark
+	WaitsOn  []WaitsOn
+	Move     string // the step the factory recommends; NeedsYou rows only
+	Stagings []StagingCell
+	Since    time.Time // when the task began to wait on this; zero = not shown
+	Help     string    // the line under the rule while the row is selected
 
 	// Jira is the Jira key of a task keyed by its GitHub number, for the wide
 	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.

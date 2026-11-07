@@ -23,7 +23,7 @@ func factoryAgo(now time.Time, d time.Duration) time.Time { return now.Add(-d) }
 func fixtureHome() factoryFrame {
 	now := factoryNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 1, Key: "#4512", GitHub: "#4512", Jira: "PR-12310", Title: "Deploy list on campaigns",
@@ -117,7 +117,7 @@ func fixtureHome() factoryFrame {
 func fixtureNothing() factoryFrame {
 	now := factoryNothingNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 1, Key: "PR-12345", Title: "Credit expiry reminder email",
@@ -238,7 +238,7 @@ func fixtureTen() factoryFrame {
 func fixtureOne() factoryFrame {
 	now := factoryNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{{
 			ID: 1, Key: "PR-12371", Title: "Coupon CSV export times out",
 			Group: GroupWaits, Mark: MarkWorking,
@@ -253,7 +253,7 @@ func fixtureOne() factoryFrame {
 
 // fixtureEmpty is home with no task at all.
 func fixtureEmpty() factoryFrame {
-	return factoryFrame{Repo: "talkable", Hints: []hint{{"n", "new task"}, {"?", "more"}}}
+	return factoryFrame{Repos: []string{"example/talkable"}, Hints: []hint{{"n", "new task"}, {"?", "more"}}}
 }
 
 // factoryDigestNow is the morning after a night away.
@@ -264,7 +264,7 @@ var factoryDigestNow = time.Date(2026, 11, 4, 9, 5, 0, 0, time.Local)
 func fixtureDigest() factoryFrame {
 	now := factoryDigestNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 1, Key: "PR-12345", Title: "Credit expiry reminder email",

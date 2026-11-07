@@ -159,7 +159,9 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		}
 		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and YOUR PRS: the oldest wait first
 	})
-	d.Repo = s.repo()
+	if repo := s.repo(); repo != "" {
+		d.Repos = []string{repo}
+	}
 	switch {
 	case o.DaemonDown: // nothing moves: no hold of the last daemon's is in force, and no agent works for it
 		d.Blocking, d.BlockingLong = []string{daemonDownShort}, []string{daemonDownLong}
@@ -1090,9 +1092,6 @@ func (s *screen) repo() string {
 		full = s.cfg.Factory.Repos[0].Repo
 	case len(s.tasks) > 0:
 		full = s.tasks[0].Repo
-	}
-	if _, name, ok := strings.Cut(full, "/"); ok {
-		return name
 	}
 	return full
 }

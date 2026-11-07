@@ -64,7 +64,9 @@ type FactorySource interface {
 // task's cards. Rows are drawn grouped by Group (factory_rows.go); Cards
 // are by task id (FactoryRow.ID).
 type FactoryData struct {
-	Repo     string
+	// Repos are the factory's repositories ("owner/name"), in its config's
+	// order: the title line names them, or counts them when they do not fit.
+	Repos    []string
 	Rows     []FactoryRow
 	Blocking []string // the machine facts that stop work ("memory full: new tasks wait")
 	RuleChip string   // "1 rule to approve (L)"
@@ -954,7 +956,7 @@ func (m factoryModel) rule() string { return m.bar.note(max(m.viewWidth()-4, 1))
 // homeFrame is home as the painter draws it.
 func (m factoryModel) homeFrame() factoryFrame {
 	d := m.data
-	f := factoryFrame{Repo: d.Repo, Rows: d.Rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
+	f := factoryFrame{Repos: d.Repos, Rows: d.Rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
 		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1}
 	if _, ok := m.selectedRow(); ok {
 		f.Cursor = slices.IndexFunc(d.Rows, func(r FactoryRow) bool { return r.ID == m.selID })

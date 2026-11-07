@@ -22,7 +22,7 @@ const fixerReport = "/home/op/.local/share/magnum/reviews/example/talkable/4560/
 func fixtureFixer() factoryFrame {
 	now := factoryNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 1, Key: "PR-12360", GitHub: "#4560", Title: "Coupon rounding in the cart",

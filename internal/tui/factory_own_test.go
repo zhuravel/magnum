@@ -19,7 +19,7 @@ import (
 func fixtureYours() factoryFrame {
 	now := factoryNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 2, Key: "PR-12345", Title: "Credit expiry reminder email",
@@ -107,7 +107,7 @@ func yoursData() FactoryData {
 	q := fixtureQuestionCard()
 	q.Current, q.Cursor, q.Revision = 0, -1, 3
 	cards[2] = FactoryCards{Task: TaskCard{Key: "PR-12345", Title: q.Title}, Question: &q}
-	return FactoryData{Repo: f.Repo, Rows: f.Rows, Decisions: f.Decisions, Cards: cards}
+	return FactoryData{Repos: f.Repos, Rows: f.Rows, Decisions: f.Decisions, Cards: cards}
 }
 
 // testYours is the screen at w x h over yoursData.

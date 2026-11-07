@@ -113,7 +113,7 @@ func TestFactoryHomeNeverOverflows(t *testing.T) {
 	}{
 		"home": {fixtureHome(), factoryNow}, "nothing": {fixtureNothing(), factoryNothingNow},
 		"ten": {fixtureTen(), factoryNow}, "one": {fixtureOne(), factoryNow}, "empty": {fixtureEmpty(), factoryNow},
-		"digest": {fixtureDigest(), factoryDigestNow},
+		"digest": {fixtureDigest(), factoryDigestNow}, "repos": {fixtureTwoRepos(), factoryNow},
 	}
 	for name, c := range frames {
 		for _, mode := range []IconMode{IconsUnicode, IconsNerd, IconsASCII} {

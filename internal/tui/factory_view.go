@@ -4,8 +4,12 @@ package tui
 // no state and reads no clock; the screen model (a later task) feeds it the
 // rows of the factory registry and the key hints of the moment.
 //
-// A row is one line: cursor, mark, key, title, WAITS ON, YOUR MOVE, one
-// column per staging server, WAITED. The widths come from the data. When the
+// A row is one line: cursor, mark, repository, key, title, WAITS ON, YOUR
+// MOVE, one column per staging server, WAITED. The repository has a column
+// only when home shows more than one, or one the title does not name; it is
+// cut to 11 cells on a narrow screen and to 6 once the staging cells go
+// short, unless the title keeps 24 cells with its whole name. The widths
+// come from the data. When the
 // screen is too narrow the painter gives up, in this order, (1) the title's
 // width down to 14 cells, (2) YOUR MOVE for its short form, (3) WAITS ON for
 // its short form (both blockers stay), (4) the staging cells for their short
@@ -28,8 +32,8 @@ import (
 
 // factoryFrame is everything the home screen draws.
 type factoryFrame struct {
-	Repo string
-	Rows []FactoryRow // the painter groups them by Group, keeping their order in a group; Cursor indexes this slice
+	Repos []string     // the factory's repositories ("owner/name"), which the title names
+	Rows  []FactoryRow // the painter groups them by Group, keeping their order in a group; Cursor indexes this slice
 	// Blocking are the machine facts that stop work, drawn plain on the right
 	// of the title ("memory full: new tasks wait"); BlockingLong are the same
 	// facts for a wide screen, with their detail.
@@ -61,8 +65,12 @@ const (
 	factoryMarkW     = 4  // the cursor's cell, the row mark and the gap after each
 	factoryWaitedW   = 6  // the width of "WAITED"
 	factoryMinTitle  = 14 // the title's floor while the spec's shrink steps run
+	factoryKeepTitle = 24 // the title a cut REPO cell leaves when it takes its whole name back
 	factoryGitHubMin = 6  // room for "#12345", and the width of "GITHUB"
 	factoryCountMax  = 9  // a staging count wider than this reads as a percent
+	factoryRepoWide  = 24 // the repository's widest cell
+	factoryRepoMid   = 11 // ... on a narrow screen: "integration"
+	factoryRepoShort = 6  // ... once the staging cells go short
 	factoryTop       = 3  // the title, the chips and a blank above the body
 	factoryBottom    = 3  // the rule, the help line and the hints below it
 	factoryMoveFloor = 24 // the longest step the factory recommends: "read the diff, then push"
@@ -88,16 +96,21 @@ type factoryLayout struct {
 	waits, move, stage    factoryForm
 	keyGap                int
 	stageGap              int
+	repoCap               int // the repository's widest cell
 	hideStaging, hideMove bool
 
 	// measured
-	staging, hasMove                 bool
-	keyW, ghW, titleW, waitsW, moveW int
-	stageW                           []int
+	staging, hasMove                        bool
+	repoW, keyW, ghW, titleW, waitsW, moveW int // repoW 0: no REPO column
+	repoFull                                int // the widest REPO cell uncut (to factoryRepoWide)
+	stageW                                  []int
 }
 
 func (l factoryLayout) total() int {
 	n := factoryMarkW + l.keyW + l.keyGap + l.titleW + 2 + l.waitsW + factoryWaitedW
+	if l.repoW > 0 {
+		n += l.repoW + 2
+	}
 	if l.wide {
 		n += l.ghW + 2
 	}
@@ -125,6 +138,11 @@ type factoryPainter struct {
 	cursor int          // the selected row's index in rows, -1 for none
 	names  []string     // the staging columns, by first appearance
 	lay    factoryLayout
+
+	// repos is true when the rows need a REPO column: home shows more than
+	// one repository, or one the title does not name; owners when the rows
+	// span several owners, so their cells name them (as the board's do).
+	repos, owners bool
 }
 
 // renderFactory draws the home screen in width cells and at most height
@@ -141,7 +159,7 @@ func renderFactory(f factoryFrame, width, height int, st styles, g glyphs, now t
 func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.Time) *factoryPainter {
 	p := &factoryPainter{f: f, st: st, g: g, now: now, width: width, cursor: -1,
 		base: prbPainter{st: st, pal: newPRBPalette(st), g: g}}
-	p.f.Repo = cleanText(f.Repo)
+	p.f.Repos = cleanAll(f.Repos)
 	p.f.Blocking, p.f.BlockingLong = cleanAll(f.Blocking), cleanAll(f.BlockingLong)
 	p.f.RuleChip, p.f.Flash, p.f.Next = cleanText(f.RuleChip), cleanText(f.Flash), cleanText(f.Next)
 	p.f.Hints = make([]hint, len(f.Hints))
@@ -172,8 +190,56 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 			}
 		}
 	}
+	p.repos, p.owners = p.repoColumn()
 	p.lay = p.plan()
 	return p
+}
+
+// repoColumn says whether the rows need a REPO column, and whether they
+// span several owners. A title that names one repository every row is of
+// leaves the column out.
+func (p *factoryPainter) repoColumn() (column, owners bool) {
+	one := ""
+	if len(p.f.Repos) == 1 {
+		one = p.f.Repos[0]
+	}
+	seen := map[string]bool{}
+	for _, r := range p.rows {
+		if r.Repo == "" {
+			continue
+		}
+		column = column || !strings.EqualFold(r.Repo, one)
+		if owner, _, ok := strings.Cut(r.Repo, "/"); ok {
+			seen[strings.ToLower(owner)] = true
+		}
+	}
+	return column, len(seen) > 1
+}
+
+// repoText is the row's REPO cell: the repository's name, with its owner
+// when the rows span several.
+func (p *factoryPainter) repoText(r FactoryRow) string {
+	return repoLabel(r.Repo, p.owners)
+}
+
+// repoLabel is repository full ("owner/name") as the screen names it: its
+// name, or the whole of it when owners says the screen spans several.
+func repoLabel(full string, owners bool) string {
+	if _, name, ok := strings.Cut(full, "/"); ok && !owners {
+		return name
+	}
+	return full
+}
+
+// manyOwners says whether repositories span several owners.
+func manyOwners(repos []string) bool {
+	seen := map[string]bool{}
+	for _, full := range repos {
+		if owner, _, ok := strings.Cut(full, "/"); ok {
+			seen[strings.ToLower(owner)] = true
+		}
+	}
+	return len(seen) > 1
 }
 
 // digestDone is true when the digest has lines of what finished: they take
@@ -194,7 +260,7 @@ func (p *factoryPainter) digestLists(key string) bool {
 }
 
 func cleanFactoryRow(r FactoryRow) FactoryRow {
-	r.Key, r.GitHub, r.Jira, r.Title = cleanText(r.Key), cleanText(r.GitHub), cleanText(r.Jira), cleanText(r.Title)
+	r.Key, r.GitHub, r.Jira, r.Title, r.Repo = cleanText(r.Key), cleanText(r.GitHub), cleanText(r.Jira), cleanText(r.Title), cleanText(r.Repo)
 	r.Move, r.MoveShort, r.Frees = cleanText(r.Move), cleanText(r.MoveShort), cleanText(r.Frees)
 	r.Help, r.HelpShort, r.HelpLong = cleanText(r.Help), cleanText(r.HelpShort), cleanText(r.HelpLong)
 	r.WaitsOn = slices.Clone(r.WaitsOn)
@@ -262,13 +328,27 @@ func (r FactoryRow) helpText(form factoryForm) string {
 	return r.Help
 }
 
-// jiraKey is the row's JIRA cell on a wide screen.
+// jiraKey is the row's JIRA cell on a wide screen: your PR's row has only
+// the issue key of its title.
 func (r FactoryRow) jiraKey() string {
 	switch {
 	case r.Jira != "":
 		return r.Jira
-	case r.Key == r.GitHub:
+	case r.PR != nil || r.Key == r.GitHub:
 		return ""
+	}
+	return r.Key
+}
+
+// keyText is the row's key cell in layout l: the JIRA cell on a wide
+// screen; your PR's number when a REPO column names its repository; else
+// its key.
+func (r FactoryRow) keyText(l factoryLayout) string {
+	switch {
+	case l.wide:
+		return r.jiraKey()
+	case l.repoW > 0 && r.PR != nil && r.GitHub != "":
+		return r.GitHub
 	}
 	return r.Key
 }
@@ -459,17 +539,19 @@ func (p *factoryPainter) waitedCell(r FactoryRow) cell {
 func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	l.staging = len(p.names) > 0 && !l.hideStaging
 	l.hasMove = !l.hideMove
-	l.keyW, l.ghW, l.titleW, l.waitsW, l.moveW, l.stageW = 1, 0, 1, len("WAITS ON"), 0, nil
+	l.repoW, l.repoFull, l.keyW, l.ghW, l.titleW, l.waitsW, l.moveW, l.stageW = 0, 0, 1, 0, 1, len("WAITS ON"), 0, nil
 	if l.wide {
 		l.ghW = factoryGitHubMin
 	}
 	for _, r := range p.rows {
-		key := r.Key
+		if p.repos {
+			l.repoFull = max(l.repoFull, min(ansi.StringWidth(p.repoText(r)), factoryRepoWide), 1)
+			l.repoW = min(l.repoFull, l.repoCap)
+		}
 		if l.wide {
-			key = r.jiraKey()
 			l.ghW = max(l.ghW, ansi.StringWidth(r.GitHub))
 		}
-		l.keyW = max(l.keyW, ansi.StringWidth(key))
+		l.keyW = max(l.keyW, ansi.StringWidth(r.keyText(l)))
 		l.titleW = max(l.titleW, ansi.StringWidth(r.Title))
 		l.waitsW = max(l.waitsW, p.waitsCell(r, l.waits).width())
 		l.moveW = max(l.moveW, ansi.StringWidth(r.moveText(l.move)))
@@ -498,13 +580,17 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	return l
 }
 
-// grow shares the width the table does not need out to the title and WAITS
-// ON, the rest going to WAITS ON.
+// grow shares the width the table does not need out: to a cut REPO cell
+// first, up to its whole name, then to the title and WAITS ON, the rest
+// going to WAITS ON.
 func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 	slack := p.width - l.total()
 	if slack <= 0 {
 		return l
 	}
+	more := min(slack, max(l.repoFull-l.repoW, 0))
+	l.repoW += more
+	slack -= more
 	l.titleW += slack / 2
 	l.waitsW += slack - slack/2
 	return l
@@ -512,18 +598,20 @@ func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 
 // plan picks the fullest layout that fits the width.
 func (p *factoryPainter) plan() factoryLayout {
-	wide := p.measure(factoryLayout{wide: true, waits: formLong, move: formMid, stage: formLong, keyGap: 2, stageGap: 2})
+	wide := p.measure(factoryLayout{wide: true, waits: formLong, move: formMid, stage: formLong, keyGap: 2, stageGap: 2,
+		repoCap: factoryRepoWide})
 	if wide.total() <= p.width {
 		return p.grow(wide)
 	}
+	const mid, short = factoryRepoMid, factoryRepoShort
 	steps := []factoryLayout{
-		{waits: formMid, move: formMid, stage: formMid, keyGap: 2, stageGap: 2},
-		{waits: formMid, move: formShort, stage: formMid, keyGap: 2, stageGap: 2},
-		{waits: formShort, move: formShort, stage: formMid, keyGap: 2, stageGap: 2},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 2, stageGap: 1},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, hideStaging: true},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, hideStaging: true, hideMove: true},
+		{waits: formMid, move: formMid, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{waits: formMid, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{waits: formShort, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{waits: formShort, move: formShort, stage: formShort, keyGap: 2, stageGap: 1, repoCap: short},
+		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short},
+		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true},
+		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true, hideMove: true},
 	}
 	var l factoryLayout
 	for _, s := range steps {
@@ -531,6 +619,10 @@ func (p *factoryPainter) plan() factoryLayout {
 		room := p.width - (l.total() - l.titleW)
 		if room >= min(l.titleW, factoryMinTitle) {
 			l.titleW = min(l.titleW, room)
+			// A cut REPO cell takes its whole name back from a title that
+			// keeps factoryKeepTitle cells.
+			more := min(max(l.repoFull-l.repoW, 0), max(l.titleW-factoryKeepTitle, 0))
+			l.repoW, l.titleW = l.repoW+more, l.titleW-more
 			return p.grow(l)
 		}
 	}
@@ -550,14 +642,17 @@ type placed struct {
 
 // xs are the left edges of the columns.
 type factoryXs struct {
-	key, gh, title, waits, move, waited int
-	stageAt                             []int
+	repo, key, gh, title, waits, move, waited int
+	stageAt                                   []int
 }
 
 func (p *factoryPainter) xs() factoryXs {
 	l := p.lay
 	var x factoryXs
-	x.key = factoryMarkW
+	x.repo, x.key = factoryMarkW, factoryMarkW
+	if l.repoW > 0 {
+		x.key += l.repoW + 2
+	}
 	at := x.key + l.keyW + l.keyGap
 	if l.wide {
 		x.gh = at
@@ -598,14 +693,11 @@ func compose(pieces []placed) string {
 
 func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 	l, x := p.lay, p.xs()
-	key := r.Key
-	if l.wide {
-		key = r.jiraKey()
+	ps := []placed{{2, 1, cell{p.markSeg(r)}}}
+	if l.repoW > 0 {
+		ps = append(ps, placed{x.repo, l.repoW, cell{{p.repoText(r), p.st.Dim}}})
 	}
-	ps := []placed{
-		{2, 1, cell{p.markSeg(r)}},
-		{x.key, l.keyW, cell{{key, p.tone(r, p.st.Accent)}}},
-	}
+	ps = append(ps, placed{x.key, l.keyW, cell{{r.keyText(l), p.tone(r, p.st.Accent)}}})
 	if l.wide {
 		ps = append(ps, placed{x.gh, l.ghW, cell{{r.GitHub, p.tone(r, p.st.Accent)}}})
 	}
@@ -698,18 +790,35 @@ func (p *factoryPainter) titleLine() string {
 		rights = append(rights, fact+st.Dim.Render(p.g.sep)+clock+" ", fact+" ")
 	}
 	rights = append(rights, clock+" ")
-	lefts := []string{" " + st.Title.Render("magnum factory")}
-	if p.f.Repo != "" {
-		lefts = slices.Insert(lefts, 0, lefts[0]+st.Dim.Render(p.g.sep)+p.f.Repo)
+	bare := " " + st.Title.Render("magnum factory")
+	// The repositories' names give way to their count before the right side
+	// gives up anything, and go only when the count does not fit either.
+	var named []string
+	if n := len(p.f.Repos); n > 0 {
+		owners := manyOwners(p.f.Repos)
+		names := make([]string, n)
+		for i, full := range p.f.Repos {
+			names[i] = repoLabel(full, owners)
+		}
+		named = append(named, bare+st.Dim.Render(p.g.sep)+strings.Join(names, ", "))
+		if n > 1 {
+			named = append(named, bare+st.Dim.Render(p.g.sep)+fmt.Sprintf("%d repos", n))
+		}
 	}
-	for _, left := range lefts {
-		for _, right := range rights {
-			if ansi.StringWidth(left)+1+ansi.StringWidth(right) <= p.width {
+	fits := func(left, right string) bool { return ansi.StringWidth(left)+1+ansi.StringWidth(right) <= p.width }
+	for _, right := range rights {
+		for _, left := range named {
+			if fits(left, right) {
 				return spread(left, right, p.width)
 			}
 		}
 	}
-	return spread(lefts[len(lefts)-1], rights[len(rights)-1], p.width)
+	for _, right := range rights {
+		if fits(bare, right) {
+			return spread(bare, right, p.width)
+		}
+	}
+	return spread(bare, rights[len(rights)-1], p.width)
 }
 
 func factoryPlural(n int, one, many string) string {

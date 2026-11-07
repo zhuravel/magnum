@@ -278,8 +278,8 @@ func TestScreenDataGroupsByWhoTheTaskWaitsOn(t *testing.T) {
 	if got := rowOf(t, d, "PR-12302"); got.GitHub != "#4519" || got.Since.IsZero() {
 		t.Errorf("a PR published yesterday: %+v, want its number and its wait's start", got)
 	}
-	if d.Repo != "talkable" {
-		t.Errorf("repo %q", d.Repo)
+	if !slices.Equal(d.Repos, []string{"example/talkable"}) {
+		t.Errorf("repos %q", d.Repos)
 	}
 	if card := d.Cards[asks.ID].Task; card.Key != "PR-12345" || card.WaitingFor != "you: 3 questions before coding" || card.Kind != "feature" {
 		t.Errorf("the task card %+v", card)

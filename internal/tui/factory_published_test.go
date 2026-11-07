@@ -17,7 +17,7 @@ import (
 func fixturePublished() factoryFrame {
 	now := factoryNow
 	return factoryFrame{
-		Repo: "talkable",
+		Repos: []string{"example/talkable"},
 		Rows: []FactoryRow{
 			{
 				ID: 1, Key: "PR-12320", GitHub: "#4530", Title: "Coupon rounding in the cart",

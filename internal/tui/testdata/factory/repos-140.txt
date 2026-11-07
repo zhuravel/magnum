@@ -1,0 +1,22 @@
+ magnum factory · talkable, widget                                                                    memory full: new tasks wait · ↻ 14:09 
+ ● 2 tasks and 1 PR need you, 3 decisions · 3 wait on others · 1 of your PRs at work · 1 done today
+
+ NEEDS YOU                                                                       WAITS ON                            YOUR MOVE        WAITED
+› ● talkable  PR-12320  Coupon rounding in the cart                              you: 2 items need you               task card           35m
+  ● widget    #4602     Coupon rounding                                          you: 1 item needs you               b or f              25m
+  ● widget    task 5    In the offer page, a click on a record's link opens th…  you: ready to push                  diff, then push      2h
+
+ WAITS ON OTHERS
+  ⣷ talkable  PR-12321  Advocate offer email locale                              agent: magnum fixes #4531                                9m
+  ◷ talkable  PR-12325  Deploy list on campaigns                                 reviewers: nothing open at a1b2c3d                       3h
+  ◷ widget    task 6    Add passkey login support                                review: round 1 of 3                                    15m
+
+ YOUR PRS
+  ◷ talkable  #4611     Cart totals in the widget                                CI: CI at a1b2c3d                                       10m
+  ◷ widget    #4606     Old sync job cleanup                                     you: #4606 is yours to follow                            1d
+
+ DONE TODAY
+  ✓ talkable  PR-12302  Remove old sync job                                      nothing: merged 13:20
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ you: 2 items need you: 1 thread of a person and 1 skipped finding
+ enter task card · a oldest ask · n new task · ? more
