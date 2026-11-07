@@ -1246,7 +1246,8 @@ type mergeRead struct {
 // and kept for the daemon's life. They only inform the questions, so a
 // read that fails holds nothing up: the prompts go without them, and the
 // failure is kept mergeMethodsRetry, so the prompts after it do not wait
-// on GitHub again. "" without a GitHub, and for a read the daemon's stop
+// on GitHub again; the first failure of a run warns, and the read that
+// goes through after it says so. "" without a GitHub, and for a read the daemon's stop
 // cut (it is not kept).
 func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
 	if e.d.GitHub == nil || repo == "" {
@@ -1266,10 +1267,15 @@ func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
 		return ""
 	}
 	read := mergeRead{methods: m.String(), at: now}
-	if err != nil {
+	switch failedBefore := ok && kept.failed; {
+	case err != nil:
 		read = mergeRead{failed: true, at: now}
-		e.log.Warn("read the repository's merge methods; the prompts go without them", "repo", repo, "retry_in", mergeMethodsRetry,
-			"err", err)
+		if !failedBefore { // a failure that lasts (no gh identity, a login that may not push) warns once
+			e.log.Warn("read the repository's merge methods; the prompts go without them", "repo", repo, "retry_in", mergeMethodsRetry,
+				"err", err)
+		}
+	case failedBefore:
+		e.log.Info("read the repository's merge methods again", "repo", repo)
 	}
 	e.mergeMu.Lock()
 	defer e.mergeMu.Unlock()

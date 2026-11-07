@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -314,6 +315,30 @@ func TestAFailedMergeMethodsReadLeavesThemOut(t *testing.T) {
 	bare := newHarness(t)
 	if text := bare.renderInStage(bare.kindTask("PR-12386", "feature", "judge"), "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
 		t.Fatalf("a factory without GitHub names merge methods:\n%s", text)
+	}
+}
+
+// A read of the merge methods that keeps failing (a repository with no gh
+// identity, a login that may not push) warns once, not at each retry, and
+// the read that goes through again says so.
+func TestAMergeMethodsReadThatKeepsFailingWarnsOnce(t *testing.T) {
+	gh := &fakeGitHub{mergesErr: errors.New("gh: HTTP 404")}
+	log := &syncBuffer{}
+	h := newHarness(t, func(d *Deps) { d.GitHub, d.Log = gh, slog.New(slog.NewTextHandler(log, nil)) })
+	task := h.kindTask("PR-12390", "feature", "judge")
+	for range 3 {
+		h.renderInStage(task, "judge", "fx-judge")
+		h.clock.Add(mergeMethodsRetry)
+	}
+	if n, warns := gh.mergeReads(), strings.Count(log.String(), "level=WARN"); n != 3 || warns != 1 {
+		t.Fatalf("%d reads with %d warnings, want 3 reads and one warning:\n%s", n, warns, log.String())
+	}
+	gh.mu.Lock()
+	gh.merges, gh.mergesErr = MergeMethods{Squash: true}, nil
+	gh.mu.Unlock()
+	if text := h.renderInStage(task, "judge", "fx-judge"); !strings.Contains(text, "merges a pull request by squash") ||
+		!strings.Contains(log.String(), "merge methods again") {
+		t.Fatalf("the read that went through again:\n%s\nlog:\n%s", text, log.String())
 	}
 }
 

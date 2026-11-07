@@ -16537,8 +16537,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     answer without them, or allowing none, is an error, never "none allowed".
   - `PromptData.MergeMethods` names them ("squash", "merge commit, squash or rebase"). The engine reads them once
     per repository, at the first prompt it renders for it, bounded to 10 seconds on the loop, and keeps them for
-    the daemon's life; a failed read leaves them out, holds no task up, logs one warning and is kept 10 minutes,
-    so the prompts after it do not wait on GitHub again. A read the daemon's stop cut is not kept.
+    the daemon's life; a failed read leaves them out, holds no task up and is kept 10 minutes, so the prompts
+    after it do not wait on GitHub again. Only the first failure of a run warns (a repository with no gh
+    identity, or a login that may not push, would warn 144 times a day), and the read that goes through after
+    it logs that it did. A read the daemon's stop cut is not kept.
   - The prompts: a `merges` block of `factory-shared.md` ("example/shop merges a pull request by squash (its
     GitHub settings), so a PR reaches the base, and deploys, in one merge. One PR is the default. Offer a
     two-step deploy only for a migration or backfill that must run in production first, and name that reason
@@ -16553,7 +16555,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheGitHubClientReadsTheMergeMethods, TestTheQuestionRolesGetTheRepositorysMergeMethods and
   TestAFailedMergeMethodsReadLeavesThemOut; then TestTheMergeMethodsReadIsBoundedAndItsTimeoutKept, which a fake
   GitHub that does not answer drives through the bound (an engine seam shortens it), and which fails on a read
-  with no deadline, on a timeout not kept and on a cut read kept.
+  with no deadline, on a timeout not kept and on a cut read kept; and TestAMergeMethodsReadThatKeepsFailingWarnsOnce.
 
 ## Learned rules
 

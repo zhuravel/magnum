@@ -3972,7 +3972,8 @@ the critic's, the amend's) also name the merge methods the repository's GitHub s
 repos/<repo>` as your gh login, read once per repository while the factory daemon runs), with your rule: one
 PR is the default, and a two-step deploy is an option only for a migration or backfill that must run in
 production first, which the option names. A read that fails leaves them out, holds nothing up and is tried
-again after 10 minutes. A role that ends its turn with new questions in
+again after 10 minutes; `logs/factory.log` warns at its first failure and notes the read that goes through
+after it. A role that ends its turn with new questions in
 any stage (the writer in coding, an investigator with no findings yet) suspends its stage instead of getting a
 nudge: the task needs you, `you:
 1 question before coding goes on`, and once you answered, the same role in the same attempt gets your
