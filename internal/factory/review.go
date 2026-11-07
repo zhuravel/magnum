@@ -748,7 +748,8 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	}
 	// What the round left in the copy is never the writer's, nor read past:
 	// the round's roles work in the copy, and its result is read only on a
-	// copy as the round found it. Nothing of it is changed here.
+	// copy as the round found it. It is saved and put back when only the
+	// round could have made it, else the task needs you (putBackRound).
 	if p, pending, err := e.keptFirst(ctx, &t); err != nil || pending {
 		return false, err
 	} else if p != nil {
@@ -758,62 +759,64 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	if err != nil {
 		return false, err
 	}
-	if left != "" {
-		return false, e.stageFailed(ctx, t, needsYou{fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; "+
-			"put the copy back as the round found it (%s at %s, no tracked change, no new untracked file), then let the task go on",
-			round, left, t.Branch, short(cy.HeadBefore))})
+	if !left.none() {
+		why, err := e.putBackRound(ctx, t, c, cy, round, left)
+		if err != nil {
+			return false, err
+		}
+		if why != "" {
+			return false, e.stageFailed(ctx, t, needsYou{why})
+		}
 	}
 	return e.decideRound(ctx, t, st, cy, loop, res)
 }
 
 // roundLeft is what a round left in task t's copy c that keeps its result
-// from being read: tracked changes, the copy off the task's branch, the
-// branch at another head than head, the one the round reviewed, or
-// untracked files the listing taken before round n (untrackedBeforeFile)
-// does not have, which the writer's `git add -A` would commit ("" for
-// nothing). Nothing of it is removed.
-func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (string, error) {
+// from being read (roundLeftovers): tracked changes, the copy off the
+// task's branch or the branch at another head than head, the one the round
+// reviewed, and untracked paths the listing taken before round n
+// (untrackedBeforeFile) does not have, which the writer's `git add -A`
+// would commit. Nothing of it is removed here.
+func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (roundLeftovers, error) {
+	var left roundLeftovers
 	git := e.d.Git
 	dirty, err := trackedChanges(ctx, git, c.Path)
 	if err != nil {
-		return "", err
+		return left, err
 	}
-	if len(dirty) > 0 {
-		return fmt.Sprintf("%s in the copy (%s)", plural(len(dirty), "tracked change"), clipList(dirty)), nil
-	}
+	left.tracked = dirty
 	cur, err := git.CurrentBranch(ctx, c.Path)
 	if err != nil {
-		return "", err
+		return left, err
 	}
 	if cur != t.Branch {
-		return fmt.Sprintf("the copy on %s, not on %s", cmpJoin(nonEmpty(cur), "a detached HEAD"), t.Branch), nil
-	}
-	now, err := git.RevParse(ctx, c.Path, "HEAD")
-	if err != nil {
-		return "", err
-	}
-	if now != head {
-		return fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head)), nil
+		left.moved = fmt.Sprintf("the copy on %s, not on %s", cmpJoin(nonEmpty(cur), "a detached HEAD"), t.Branch)
+	} else {
+		now, err := git.RevParse(ctx, c.Path, "HEAD")
+		if err != nil {
+			return left, err
+		}
+		if now != head {
+			left.moved = fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head))
+		}
 	}
 	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(n)))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", nil // no listing (a round an older build began): nothing to tell new files by
+		return left, nil // no listing (a round an older build began): nothing to tell new files by
 	case err != nil:
-		return "", err
+		return left, err
 	}
 	var before []string
 	if parsed := json.Unmarshal(b, &before) == nil; !parsed {
-		return "", nil // a listing that does not parse tells no new file either
+		return left, nil // a listing that does not parse tells no new file either
 	}
 	untracked, err := untrackedPaths(ctx, git, c.Path)
 	if err != nil {
-		return "", err
+		return left, err
 	}
-	if added := slices.DeleteFunc(untracked, func(p string) bool { return slices.Contains(before, p) }); len(added) > 0 {
-		return fmt.Sprintf("%s in the copy (%s)", plural(len(added), "new untracked file"), clipList(added)), nil
-	}
-	return "", nil
+	left.added = slices.DeleteFunc(untracked, func(p string) bool { return slices.Contains(before, p) })
+	return left, nil
 }
 
 // readRoundResult reads the result round n left in dir; ok is false when

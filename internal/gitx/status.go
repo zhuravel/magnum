@@ -3,6 +3,7 @@ package gitx
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -95,6 +96,59 @@ func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// UntrackedFiles lists the untracked files at or under paths of the work
+// tree at dir that git does not ignore (`git ls-files --others
+// --exclude-standard`, each path taken literally from the top), one by one:
+// a wholly untracked directory, which StatusPaths names once, as each of
+// its files. Relative to the top, sorted. It is read-only and does not take
+// the index lock.
+func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error) {
+	specs, err := literal(paths)
+	if err != nil {
+		return nil, fmt.Errorf("gitx: ls-files --others: %w", err)
+	}
+	res, err := c.git(ctx, dir, call{label: "ls-files --others --exclude-standard"},
+		append([]string{"ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--"}, specs...)...)
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: ls-files --others in %s: more than %d bytes", dir, execx.MaxOutput)
+	}
+	var out []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
+// DiffHead is the binary patch of paths of the work tree at dir against
+// HEAD (`git diff --binary HEAD`, each path taken literally from the top):
+// their staged and unstaged changes as one, which `git apply` puts back in
+// a work tree as HEAD has them. Its prefixes are a/ and b/ whatever the
+// config says, and it runs no external diff or textconv. A patch over
+// execx.MaxOutput is an error, never part of one. It is read-only and does
+// not take the index lock.
+func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]byte, error) {
+	specs, err := literal(paths)
+	if err != nil {
+		return nil, fmt.Errorf("gitx: diff HEAD: %w", err)
+	}
+	res, err := c.git(ctx, dir, call{label: "diff --binary HEAD"},
+		append([]string{"diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+			"HEAD", "--"}, specs...)...)
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: diff HEAD in %s: more than %d bytes", dir, execx.MaxOutput)
+	}
+	return res.Stdout, nil
 }
 
 // parseStatusZ parses `git status --porcelain=v1 -z`: NUL-terminated "XY path"

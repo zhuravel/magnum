@@ -824,28 +824,17 @@ func (r *reviewRig) gitIn(dir string, args ...string) {
 }
 
 // A round's roles work in the task's copy, and what they leave there never
-// reaches the writer: a round that leaves a tracked change, the copy off
-// its branch or the branch at another head than it reviewed sends the task
-// to you, naming what it left, and the factory changes none of it. Once you
-// put the copy back and let the task go on, the round's result is read.
+// reaches the writer: a round that leaves the copy off its branch or the
+// branch at another head than it reviewed sends the task to you, naming
+// what it left, and the factory changes none of it, nor a tracked change
+// or a new file left beside it: it never moves a branch or HEAD here. Once
+// you put the copy back and let the task go on, the round's result is read.
 func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string
 		leave      func(r *reviewRig, dir string)
 		undo       func(r *reviewRig, branch, head string)
 	}{
-		{"a tracked change", "1 tracked change in the copy (README)",
-			func(r *reviewRig, dir string) {
-				if err := os.WriteFile(filepath.Join(dir, "README"), []byte("a reviewer's mutant\n"), 0o644); err != nil {
-					r.t.Error(err)
-				}
-			},
-			func(r *reviewRig, _, _ string) {
-				if got := r.read("README"); got != "a reviewer's mutant\n" {
-					r.t.Fatalf("README is %q: the factory changed what the round left", got)
-				}
-				r.git(r.copyDir, "checkout", "--", "README")
-			}},
 		{"a detached HEAD", "the copy on a detached HEAD",
 			func(r *reviewRig, dir string) { r.gitIn(dir, "switch", "--quiet", "--detach") },
 			func(r *reviewRig, branch, _ string) { r.git(r.copyDir, "switch", "--quiet", branch) }},
@@ -854,20 +843,22 @@ func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
 				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
 			},
 			func(r *reviewRig, _, head string) { r.git(r.copyDir, "reset", "--quiet", "--keep", head) }},
-		// A reviewer's probe file the writer's `git add -A` would commit.
-		{"a new untracked file", "1 new untracked file in the copy (spec/probe_spec.rb)",
+		// A tracked change and a new file on a moved head stay with it.
+		{"a moved head with a tracked change and a new file", "1 tracked change in the copy (README)",
 			func(r *reviewRig, dir string) {
-				if err := os.WriteFile(filepath.Join(dir, "spec", "probe_spec.rb"), []byte("a reviewer's probe\n"), 0o644); err != nil {
-					r.t.Error(err)
-				}
+				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
+				r.put(dir, "README", "a reviewer's mutant\n")
+				r.put(dir, "spec/probe_spec.rb", "a reviewer's probe\n")
 			},
-			func(r *reviewRig, _, _ string) {
-				if got := r.read("spec/probe_spec.rb"); got != "a reviewer's probe\n" {
-					r.t.Fatalf("spec/probe_spec.rb is %q: the factory changed what the round left", got)
+			func(r *reviewRig, _, head string) {
+				if got := r.read("README"); got != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb") {
+					r.t.Fatalf("README is %q: the factory changed what the round left", got)
 				}
+				r.git(r.copyDir, "checkout", "--", "README")
 				if err := os.Remove(filepath.Join(r.copyDir, "spec", "probe_spec.rb")); err != nil {
 					r.t.Fatal(err)
 				}
+				r.git(r.copyDir, "reset", "--quiet", "--keep", head)
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -889,6 +880,9 @@ func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
 			}
 			if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
 				t.Fatalf("the writer got %d prompts over the round's leftovers", len(ps))
+			}
+			if r.saved(task.ID, "round-1-left.patch") || r.saved(task.ID, "round-1-left") {
+				t.Fatal("the factory saved what it does not put back")
 			}
 			tc.undo(r, task.Branch, head)
 			r.letGoOn(task.ID)

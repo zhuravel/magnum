@@ -16733,6 +16733,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   their own (the hold raises none, and the blocker line names them). Tests, failing first:
   TestTheMemoryHoldNamesTheLargestProcessesAndTheBrokersAges, TestTheMemoryHoldWithoutBrokersOrATable and
   TestReadMemProcsReadsThePsTableAndKillsNothing.
+- **The factory puts back what a local round left when only the round could have made it** (2026-11-07). A
+  round's result is read only on a copy as the round found it. Before, anything a round left sent the task to
+  you: a live task waited on you because a reviewer's `bundle check` added one line to `Gemfile.lock`, and you
+  restored the file and retried by hand. Now, when the round left only tracked changes and new untracked
+  files, on the task's branch at the head it reviewed, and nobody else could have made them (`othersIn` since
+  the cycle's start: no agent of the task at work in the copy, and no prompt to one and none of your input in
+  its panes since; a cycle with no start fails the guard), the factory saves them first in the task's
+  directory: the tracked changes as `round-<n>-left.patch` (`git diff --binary HEAD`, `gitx.DiffHead`), and each
+  new file under `round-<n>-left/` (a new directory's files one by one, `gitx.UntrackedFiles`, so a file git
+  ignores in it is neither saved nor removed; regular files only, read through an `os.Root` of the copy, at most
+  64 MiB each). Then it restores the tracked paths, removes the new files and the directories that this
+  empties, looks again and reads the result. Begin, ok and fail events and one info event name the counts and
+  the saved files, never their content. A symlink or another file that is not regular, a save that fails
+  (which removes what it wrote), a put-back that fails or leaves something, and somebody else in the copy send
+  the task to you as before, now with why and the steps: `git -C <copy> restore --staged --worktree -- <paths>`,
+  `rm -- <files>` and `magnum factory retry <id>`. A copy off the branch or at another head stays yours: the
+  factory moves no branch or HEAD here. This keeps to "No git step the factory runs in a copy discards a change
+  it did not make": nothing goes back unsaved, and the guard rules out anybody else. Rejected: leaving every
+  leftover to you, as before (one line of a lockfile cost a NEEDS YOU and a retry by hand);
+  `git restore -- <paths>` alone in the steps (a staged change stays); removing a new directory whole (an
+  ignored file in it may be older than the round). Tests, failing first:
+  TestARoundsTrackedChangeIsSavedAndPutBackWhenNobodyElseCouldHaveMadeIt,
+  TestARoundsNewUntrackedFilesAreSavedAndRemovedWhenNobodyElseCouldHaveMadeThem,
+  TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem,
+  TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou, TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt
+  (its moved head with a tracked change and a new file), TestDiffHeadArgv,
+  TestRealDiffHeadIsAPatchThatPutsTheChangesBack and TestUntrackedFilesListsANewDirectoryFileByFile.
 
 ## Learned rules
 

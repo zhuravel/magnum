@@ -16178,6 +16178,14 @@ func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
     CurrentBranch is the branch checked out in repo, "" when its HEAD is
     detached (a rebase in progress included).
 
+func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]byte, error)
+    DiffHead is the binary patch of paths of the work tree at dir against HEAD
+    (`git diff --binary HEAD`, each path taken literally from the top): their
+    staged and unstaged changes as one, which `git apply` puts back in a work
+    tree as HEAD has them. Its prefixes are a/ and b/ whatever the config says,
+    and it runs no external diff or textconv. A patch over execx.MaxOutput is an
+    error, never part of one. It is read-only and does not take the index lock.
+
 func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
     DiffLines is the diff head made relative to its merge base with base,
     file by file in git's order, with its hunks' places in head's files and
@@ -16534,6 +16542,13 @@ func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error)
     UnpushedRef is Unpushed for an arbitrary ref (a placeholder branch,
     a detached sha): the commits reachable from ref that exist on no
     remote-tracking ref and no refs/magnum/* ref. Read-only.
+
+func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error)
+    UntrackedFiles lists the untracked files at or under paths of the work tree
+    at dir that git does not ignore (`git ls-files --others --exclude-standard`,
+    each path taken literally from the top), one by one: a wholly untracked
+    directory, which StatusPaths names once, as each of its files. Relative to
+    the top, sorted. It is read-only and does not take the index lock.
 
 func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) error
     UpdateRefDelete deletes a ref under refs/magnum/ (for example PRRef(n)).
