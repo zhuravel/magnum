@@ -3,15 +3,20 @@ package factory
 // A published task's row on home says what its PR waits on, from magnum's
 // registry (Magnum.PRStates, read once per frame): a merge is done, a close
 // waits for a reopen and then needs you, and an open PR shows the autofix =
-// "open" verdict magnum keeps for it. A verdict that no longer tells the
-// PR's state, a PR magnum has not read and a registry that cannot be read
-// are magnum looking at the PR, never idle. Without a verdict (the watch
-// does not run autofix = "open") the fix loop, the attention and magnum's
-// review still show, and so does a stalemate. A fix attention whose loop left
-// you items says the fixer's own items from its report (fixerWait). The row's WAITED counts from when the PR began to wait
-// as it does (the verdict's Since), so a PR that came to need you while you
-// were away is new for you. Without a Magnum the row keeps its words:
-// magnum reviews the PR.
+// "open" verdict magnum keeps for it, never idle unless that says so. A
+// verdict the look owes (one gone stale, or one still to come) is magnum
+// looking at the PR only while that is true (lookOwed: four of magnum's
+// polls, with its daemon ticking); past that, and without a verdict (the
+// watch does not run autofix = "open"), the row says what magnum's row says
+// (rowWait): its fix loop, its attention or stalemate, magnum's review to
+// come, else magnum's outcome at the head and whom it waits on next, never
+// a bare "reviewed". A PR magnum has not read is magnum looking at it until
+// it should have found it (pickupFor), then it needs you; a registry that
+// cannot be read is magnum looking. A fix attention whose loop left you
+// items says the fixer's own items from its report (fixerWait). The row's
+// WAITED counts from when the PR began to wait as it does (the verdict's
+// Since), so a PR that came to need you while you were away is new for
+// you. Without a Magnum the row keeps its words: magnum reviews the PR.
 
 import (
 	"cmp"
@@ -213,6 +218,13 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 			why += ": " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 		}
 		return waitsWait(waitMagnum, looking, "", looking+": "+why)
+	case !st.Found && st.Watched && st.DaemonUp && !v.since.IsZero() && s.now.Sub(v.since) > pickupFor(s.clock()):
+		// published long enough ago that magnum's poll should have found it
+		ref := prRef(v)
+		what := fmt.Sprintf("magnum has not picked #%d up since %s", ref.Number, when(v.since, s.now))
+		w := youWait(fmt.Sprintf("%s: `magnum review %s#%d` asks for it", what, ref.Repo, ref.Number), what, "")
+		w.move, w.moveShort = fmt.Sprintf("magnum review %s#%d", ref.Repo, ref.Number), "magnum review"
+		return w
 	}
 	return publishedWait(t, prRef(v), st, s.clock())
 }
@@ -278,10 +290,12 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, c prClock) prWait {
 // magnumWait is the wait of open PR #n as magnum's registry tells it (st):
 // its daemon down, the PR not read yet, its fix loop (the loop's row, which
 // a start writes at once, before the look's next verdict says fixing), its
-// verdict (verdictWait; a stale one is magnum looking), a verdict still to
-// come, its attention or stalemate (attentionWait), else what magnum's row
-// says (rowWait). own says the row is your PR's, whose F and f work on the
-// factory screen too (offWait).
+// fresh verdict (verdictWait), its attention or stalemate (attentionWait),
+// a verdict the look owes (a stale one, or one still to come: magnum
+// looking at the PR, while that is true, lookOwed; past it what magnum's
+// row says, with the look named), else what magnum's row says (rowWait).
+// own says the row is your PR's, whose F and f work on the factory screen
+// too (offWait).
 func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 	looking := fmt.Sprintf("looking at #%d", n)
 	switch {
@@ -297,18 +311,80 @@ func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 		// magnum's own row says it needs you: a verdict to come or one gone
 		// stale never hides it as "looking at".
 		return attentionWait(st, n)
-	case st.HasOpen && st.Stale:
-		return waitsWait("magnum", looking, "", "")
-	case st.HasOpen:
+	case st.HasOpen && !st.Stale:
 		w := verdictWait(st, n, own, c)
 		w.since = cmp.Or(st.Open.Since, st.Open.At)
 		return w
-	case st.OpenWatch: // its verdict is still to come
-		return waitsWait("magnum", looking, "", "")
 	case st.State == store.PRNeedsAttention || st.Stalemate:
 		return attentionWait(st, n)
+	case st.HasOpen || st.OpenWatch: // the look owes a verdict: a stale one, or one still to come
+		owed, why := lookOwed(st, c)
+		if why == "" {
+			w := waitsWait(waitMagnum, looking, "", "")
+			w.since = owed
+			return w
+		}
+		w := rowWait(st, n, own, c)
+		note := fmt.Sprintf("magnum's look has not decided #%d", n)
+		if !owed.IsZero() {
+			note += " since " + when(owed, c.now)
+		}
+		if why != lookLate {
+			note += ": " + why
+		}
+		w.on.Long = cmp.Or(w.on.Long, w.on.What) + " · " + note
+		if w.help != "" {
+			w.help += " · " + note
+		}
+		return w
 	}
 	return rowWait(st, n, own, c)
+}
+
+// lookLate is lookOwed's why for a look past its polls with magnum's
+// daemon ticking.
+const lookLate = "late"
+
+// lookOwed is since when magnum's look owes PR st a verdict (the later of
+// its stale verdict's decision and the row's last change, the row's last
+// change for one still to come), and why "looking at" is no longer true:
+// "" while it is (four of magnum's polls since then, OpenVerdict.Stale's
+// count, with magnum's daemon ticking), magnum's daemon that stopped
+// ticking, else lookLate.
+func lookOwed(st PRState, c prClock) (time.Time, string) {
+	owed := st.UpdatedAt
+	if st.HasOpen {
+		owed = later(owed, st.Open.At)
+	}
+	look := lookPolls * c.poll
+	switch {
+	case !st.LastTick.IsZero() && c.now.Sub(st.LastTick) > look:
+		return owed, "magnum's daemon has not ticked since " + when(st.LastTick, c.now)
+	case c.now.Sub(owed) > look:
+		return owed, lookLate
+	}
+	return owed, ""
+}
+
+// lookPolls is how many of magnum's polls its look may owe a verdict
+// before "looking at" is no longer true: OpenVerdict.Stale's count.
+const lookPolls = 4
+
+// pickupMin is the least a published PR may wait for magnum's poll to find
+// it before it needs you (pickupFor).
+const pickupMin = 10 * time.Minute
+
+// pickupFor is how long a published PR may wait for magnum's poll to find
+// it: lookPolls of its polls, at least pickupMin.
+func pickupFor(c prClock) time.Duration { return max(lookPolls*c.poll, pickupMin) }
+
+// when is t as a wait at now says it: its clock today, with its day
+// before.
+func when(t, now time.Time) string {
+	if sameDay(t, now) {
+		return clock(t)
+	}
+	return t.Local().Format("Jan 2 15:04")
 }
 
 // rowWait is what open PR #n waits on by magnum's row alone (st), with no
@@ -322,6 +398,13 @@ func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 func rowWait(st PRState, n int, own bool, c prClock) prWait {
 	short := textx.ShortSHA(st.Head)
 	switch {
+	case st.State == store.PRBaseline || st.State == store.PRIneligible:
+		why := engine.OpenOffIneligible
+		if st.State == store.PRBaseline {
+			why = engine.OpenOffBaseline
+		}
+		what := offWait(why, n, own)
+		return youWait(what, clauseShort(what), "")
 	case slices.Contains(store.InFlightStates, st.State):
 		w := waitsWait(waitMagnum, "magnum reviews "+short+" now", "", "")
 		w.since = st.HeadChangedAt

@@ -127,7 +127,7 @@ func TestAPublishedTaskIsIdleOnlyWhenTheOpenRowSaysIdle(t *testing.T) {
 			tui.WaitsOn{Who: "CI", What: "CI at a1b2c3d"}},
 		"unknown": {func(v *PRState) { v.HasOpen, v.Open = true, verdict(engine.OpenUnknown, "reading GitHub") },
 			tui.WaitsOn{Who: "magnum", What: "looking at #4532", Long: "looking at #4532: reading GitHub"}},
-		"no verdict yet": {nil, tui.WaitsOn{Who: "magnum", What: "looking at #4532"}},
+		"no verdict yet": {func(v *PRState) { v.UpdatedAt = screenNow.Add(-time.Minute) }, tui.WaitsOn{Who: "magnum", What: "looking at #4532"}},
 	} {
 		r.pr(4532, c.edit)
 		row := rowOf(t, r.data(time.Time{}), "PR-12322")
@@ -285,8 +285,9 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 		"no watch": {func(v *PRState) { *v = PRState{DaemonUp: true} }, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
 			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum does not watch example/talkable: merge or close #4540 yourself, then x drops the task",
 				Short: "magnum does not watch example/talkable", OnYou: true}},
-		"not found yet": {func(v *PRState) { *v = PRState{DaemonUp: true, Watched: true} }, nil, tui.GroupWaits, tui.MarkWaits,
-			tui.WaitsOn{Who: "magnum", What: "looking at #4540"}},
+		"not picked up a day after its publish": {func(v *PRState) { *v = PRState{DaemonUp: true, Watched: true} }, nil, tui.GroupNeedsYou,
+			tui.MarkNeedsYou, tui.WaitsOn{Who: tui.WaitsOnYou, OnYou: true, Short: "magnum has not picked #4540 up since Nov 3 07:05",
+				What: "magnum has not picked #4540 up since Nov 3 07:05: `magnum review example/talkable#4540` asks for it"}},
 		"registry unreadable": {nil, errors.New("magnum's registry is at schema 40 and this build needs 41"), tui.GroupWaits, tui.MarkWaits,
 			tui.WaitsOn{Who: "magnum", What: "looking at #4540",
 				Long: "looking at #4540: magnum's registry cannot be read: magnum's registry is at schema 40 and this build needs 41"}},
@@ -580,5 +581,92 @@ func TestAnIdleUnapprovedPRNamesItsReviewers(t *testing.T) {
 	if row := rowOf(t, d, "PR-12326"); row.Group != tui.GroupNeedsYou || row.Move != "ask a reviewer" ||
 		row.WaitsOn[0].What != "nothing open at a1b2c3d · no reviewer asked" {
 		t.Errorf("an idle PR nobody was asked to review: %+v, move %q", row.WaitsOn, row.Move)
+	}
+}
+
+// "looking at #N" is said only while it is true: magnum's look owes a
+// verdict (none yet under autofix = "open", or one gone stale) for at most
+// four of magnum's polls since the PR's row changed, and the row waits
+// since then, so WAITED gives its age. Past that the row says what
+// magnum's row says (rowWait's outcome and whom it waits on, which decide
+// its group) and its long form names the look that has not decided, with
+// why when magnum's daemon stopped ticking. Before, a verdict that never
+// came (a daemon on a build without the look) said "looking at" for good.
+func TestLookingAtIsSaidOnlyWhileItIsTrue(t *testing.T) {
+	clean := func(v *PRState) {
+		v.ReviewedSHA, v.ReviewEvent, v.LastTick = prHead, "APPROVED", screenNow.Add(-10*time.Second)
+		v.Gate = &store.ReviewGate{Decision: "APPROVED", Opinions: []store.LatestReview{{Login: "rev-ann", State: "APPROVED", CommitSHA: prHead}}}
+	}
+	stale := func(v *PRState) {
+		v.HasOpen, v.Stale, v.Approved = true, true, true
+		v.Open = verdict(engine.OpenIdle, "nothing open at a1b2c3d · approved, merge is yours")
+		v.Open.At = screenNow.Add(-4 * time.Hour)
+	}
+	for name, c := range map[string]struct {
+		edit    func(*PRState)
+		looking bool
+		since   time.Time
+		long    string
+	}{
+		"a verdict to come, the row changed a minute ago": {func(v *PRState) { clean(v); v.UpdatedAt = screenNow.Add(-time.Minute) },
+			true, screenNow.Add(-time.Minute), ""},
+		"a verdict to come for 3h": {func(v *PRState) { clean(v); v.UpdatedAt = screenNow.Add(-3 * time.Hour) },
+			false, time.Time{}, "magnum's look has not decided #4540 since 06:05"},
+		"a stale verdict, the row changed a minute ago": {func(v *PRState) {
+			clean(v)
+			stale(v)
+			v.UpdatedAt = screenNow.Add(-time.Minute)
+		}, true, screenNow.Add(-time.Minute), ""},
+		"a stale verdict for 3h": {func(v *PRState) {
+			clean(v)
+			stale(v)
+			v.UpdatedAt = screenNow.Add(-3 * time.Hour)
+		}, false, time.Time{}, "magnum's look has not decided #4540 since 06:05"},
+		"a stale verdict, magnum's daemon stuck": {func(v *PRState) {
+			clean(v)
+			stale(v)
+			v.UpdatedAt, v.LastTick = screenNow.Add(-time.Minute), screenNow.Add(-time.Hour)
+		}, false, time.Time{}, "magnum's look has not decided #4540 since 09:04: magnum's daemon has not ticked since 08:05"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newScreenRig(t)
+			r.withMagnum()
+			r.publishedTask("PR-12340", 4540)
+			r.pr(4540, c.edit)
+			row := rowOf(t, r.data(time.Time{}), "PR-12340")
+			w := row.WaitsOn[0]
+			switch {
+			case c.looking && (row.Group != tui.GroupWaits || w != tui.WaitsOn{Who: "magnum", What: "looking at #4540"} || !row.Since.Equal(c.since)):
+				t.Errorf("%+v since %v, want magnum looking at #4540 since %v", w, row.Since, c.since)
+			case !c.looking && (row.Group != tui.GroupNeedsYou || !strings.HasPrefix(w.What, "magnum approved a1b2c3d · approved by rev-ann") ||
+				!strings.Contains(w.Long, c.long) || !strings.Contains(row.Help, c.long)):
+				t.Errorf("group %d, %+v, help %q: want NEEDS YOU with the merge and the look named: %q", row.Group, w, row.Help, c.long)
+			}
+		})
+	}
+}
+
+// A published PR magnum has not picked up ten minutes after its publish
+// needs you, with the command that asks magnum for it; before that it is
+// magnum looking at it. Before, it said "looking at #N" for good.
+func TestAPublishedPRMagnumNeverPickedUpNeedsYou(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12340", 4540)
+	r.at(2 * time.Minute)
+	r.published(r.task("PR-12341", "bug", "PR-12341 title", registry.TaskActive, "publish", "", ""), 4541)
+	r.at(0)
+	for _, n := range []int{4540, 4541} {
+		r.pr(n, func(v *PRState) { *v = PRState{DaemonUp: true, Watched: true, OpenWatch: true} })
+	}
+	d := r.data(time.Time{})
+	if row := rowOf(t, d, "PR-12341"); row.Group != tui.GroupWaits || row.WaitsOn[0].What != "looking at #4541" {
+		t.Errorf("a PR published 2 minutes ago: %+v", row.WaitsOn)
+	}
+	row := rowOf(t, d, "PR-12340")
+	if w := row.WaitsOn[0]; row.Group != tui.GroupNeedsYou || !w.OnYou ||
+		w.What != "magnum has not picked #4540 up since Nov 3 07:05: `magnum review example/talkable#4540` asks for it" ||
+		row.Move != "magnum review example/talkable#4540" {
+		t.Errorf("a PR magnum never picked up: %+v, move %q", row.WaitsOn, row.Move)
 	}
 }

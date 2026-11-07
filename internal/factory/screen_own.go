@@ -95,8 +95,8 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // alone (off), which is dim in a group of its own. An attention
 // or a stalemate needs you whatever the verdict says (fix off does not
 // hide it, and a verdict decided before it is stale), unless a loop works
-// on the PR. Without a verdict, a PR magnum does not review (include_own =
-// false, a mute, a baseline) is off too.
+// on the PR. Without a fresh verdict, a PR magnum does not review (a
+// baseline, include_own = false, a mute) is off too: no review comes.
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
 	w := magnumWait(st, n, true, s.clock())
@@ -110,7 +110,7 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 		}
 	case fresh && st.Open.Verdict == engine.OpenOff:
 		off = w.on.What
-	case !st.HasOpen && !st.OpenWatch && (st.State == store.PRIneligible || st.State == store.PRBaseline):
+	case !fresh && (st.State == store.PRIneligible || st.State == store.PRBaseline):
 		why := engine.OpenOffIneligible
 		if st.State == store.PRBaseline {
 			why = engine.OpenOffBaseline

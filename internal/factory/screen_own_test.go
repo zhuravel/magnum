@@ -197,7 +197,7 @@ func TestYourPRsThatWaitOnOthersSitInWaitsOnOthers(t *testing.T) {
 		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 5, Phase: engine.FixPhaseFixing, Head: prHead}
 		v.Open.Since = screenNow.Add(-3 * time.Hour)
 	})
-	r.own(83, 4613, nil)
+	r.own(83, 4613, func(v *PRState) { v.UpdatedAt = screenNow.Add(-time.Minute) })
 	d := r.data(time.Time{})
 	for _, key := range []string{"#4611", "#4612", "#4613"} {
 		if row := rowOf(t, d, key); row.Group != tui.GroupWaits {
@@ -520,5 +520,25 @@ func TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity(t *testing.T) {
 	})
 	if row := rowOf(t, r.data(time.Time{}), "#4713"); !row.Since.Equal(active) {
 		t.Errorf("a baseline's row waits since %v, want its last activity %v", row.Since, active)
+	}
+}
+
+// A baseline or a PR magnum does not review is left alone without a fresh
+// verdict under autofix = "open" too: no review comes, so nothing is at
+// work on it. Before, a verdict still to come made a baseline "magnum:
+// looking at" and the chip counted it at work.
+func TestABaselineWithoutAFreshVerdictIsLeftAlone(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.own(98, 4713, func(v *PRState) { v.State = store.PRBaseline })
+	r.own(99, 4714, func(v *PRState) {
+		v.State, v.HasOpen, v.Stale = store.PRIneligible, true, true
+		v.Open = verdict(engine.OpenWaits, "magnum reviews a1b2c3d")
+	})
+	d := r.data(time.Time{})
+	for _, key := range []string{"#4713", "#4714"} {
+		if row := rowOf(t, d, key); row.Group != tui.GroupYours || row.PR.Off == "" {
+			t.Errorf("%s: group %d, %+v (%+v), want it left alone", key, row.Group, row.WaitsOn, row.PR)
+		}
 	}
 }

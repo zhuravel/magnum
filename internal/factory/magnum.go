@@ -218,7 +218,9 @@ type PRRef struct {
 // the head posted (prs.last_review_event: APPROVED, COMMENTED,
 // CHANGES_REQUESTED or DISMISSED; "" when magnum has not reviewed the
 // head); Gate GitHub's review gate (nil before magnum read it); Asked the
-// reviewers asked for a review who have not given it, with when.
+// reviewers asked for a review who have not given it, with when. LastTick
+// is magnum's last tick (zero with its daemon down or none recorded), which
+// tells whether its look still runs.
 type PRState struct {
 	Ref                                   PRRef
 	ID                                    int64
@@ -248,6 +250,7 @@ type PRState struct {
 	ReviewEvent               string
 	Gate                      *store.ReviewGate
 	Asked                     []ReviewAsk
+	LastTick                  time.Time
 }
 
 // ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is
@@ -435,7 +438,7 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	v.UpdatedAt = pr.UpdatedAt
 	v.Approved = pr.ReviewGate != nil && pr.ReviewGate.Decision == "APPROVED"
 	v.HeadRef, v.BaseRef, v.HeadChangedAt, v.CreatedAt = store.Deref(pr.HeadRef), store.Deref(pr.BaseRef), pr.HeadChangedAt, pr.CreatedAt
-	v.ActivityAt, v.Gate, v.Asked = store.Deref(pr.Activity()), pr.ReviewGate, asked(pr)
+	v.ActivityAt, v.Gate, v.Asked, v.LastTick = store.Deref(pr.Activity()), pr.ReviewGate, asked(pr), pass.last
 	if pr.ReviewedSHA != nil && *pr.ReviewedSHA == pr.HeadSHA {
 		v.ReviewEvent = store.Deref(pr.LastReviewEvent)
 	}
