@@ -1,12 +1,14 @@
 // Package registrytest gives tests a factory registry without migrating one
 // for each of them: the first call in a test binary migrates a template
-// database, and every call writes a copy of its bytes, which registry.Open
+// database in memory, and every call starts from a copy of its bytes. Open
+// and OpenWith keep that copy in memory, so the test writes no database
+// file; Seed, OpenFile and OpenPair write it to a file, which registry.Open
 // then finds current. Only _test.go files import it.
 package registrytest
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,33 +16,24 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 )
 
 var template = sync.OnceValues(migrate)
 
-// migrate opens a fresh database in a temporary directory, which applies
-// every migration, and returns its bytes once SQLite has checkpointed the
-// WAL into the main file and closed it.
+// migrate applies every migration to an in-memory database and returns its
+// image (sqlitetest.Image).
 func migrate() ([]byte, error) {
-	dir, err := os.MkdirTemp("", "magnum-registrytest-")
+	db, err := sqlitetest.Open(nil, sqlitetest.Params)
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "factory.db")
-	r, err := registry.Open(path, registry.Options{})
+	r, err := registry.OpenDB(db, registry.Options{})
 	if err != nil {
 		return nil, err
 	}
-	// Closing the last connection checkpoints the WAL into the main file and
-	// removes it; a WAL left behind would mean the copy lacks the schema.
-	if err := r.Close(); err != nil {
-		return nil, err
-	}
-	if st, err := os.Stat(path + "-wal"); err == nil && st.Size() > 0 {
-		return nil, fmt.Errorf("the template database kept a %d-byte WAL after Close", st.Size())
-	}
-	return os.ReadFile(path)
+	defer r.Close()
+	return sqlitetest.Image(context.Background(), db)
 }
 
 // Seed writes a migrated database to path, creating its directory (0700), for
@@ -48,7 +41,7 @@ func migrate() ([]byte, error) {
 // left as it is.
 func Seed(tb testing.TB, path string) {
 	tb.Helper()
-	data, err := template()
+	image, err := template()
 	if err != nil {
 		tb.Fatalf("registrytest: migrate the template: %v", err)
 	}
@@ -62,7 +55,7 @@ func Seed(tb testing.TB, path string) {
 	if err != nil {
 		tb.Fatalf("registrytest: %v", err)
 	}
-	if _, err := f.Write(data); err != nil {
+	if _, err := f.Write(sqlitetest.FileImage(image)); err != nil {
 		f.Close()
 		tb.Fatalf("registrytest: write %s: %v", path, err)
 	}
@@ -71,7 +64,7 @@ func Seed(tb testing.TB, path string) {
 	}
 }
 
-// Open seeds a database in the test's temporary directory and opens it; the
+// Open gives the test a migrated registry in memory, private to it; the
 // registry is closed when the test ends.
 func Open(tb testing.TB) *registry.Registry {
 	tb.Helper()
@@ -81,7 +74,27 @@ func Open(tb testing.TB) *registry.Registry {
 // OpenWith is Open with options, for a test that moves the registry's clock.
 func OpenWith(tb testing.TB, opts registry.Options) *registry.Registry {
 	tb.Helper()
-	path := filepath.Join(tb.TempDir(), "factory.db")
+	image, err := template()
+	if err != nil {
+		tb.Fatalf("registrytest: migrate the template: %v", err)
+	}
+	db, err := sqlitetest.Open(image, sqlitetest.Params)
+	if err != nil {
+		tb.Fatalf("registrytest: %v", err)
+	}
+	r, err := registry.OpenDB(db, opts)
+	if err != nil {
+		tb.Fatalf("registry.OpenDB: %v", err)
+	}
+	tb.Cleanup(func() { r.Close() })
+	return r
+}
+
+// OpenFile seeds path (see Seed) and opens it with registry.Open; the
+// registry is closed when the test ends. It is for a test whose code under
+// test opens the registry by path, such as the CLI's commands.
+func OpenFile(tb testing.TB, path string, opts registry.Options) *registry.Registry {
+	tb.Helper()
 	Seed(tb, path)
 	r, err := registry.Open(path, opts)
 	if err != nil {

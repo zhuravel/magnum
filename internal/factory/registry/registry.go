@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
 	"modernc.org/sqlite" // registers the "sqlite" database/sql driver
@@ -111,6 +112,30 @@ func Open(path string, opts Options) (*Registry, error) {
 			db.Close()
 			return nil, fmt.Errorf("factory registry: chmod %s: %w", p, err)
 		}
+	}
+	return &Registry{db: db, clock: opts.Clock}, nil
+}
+
+// OpenDB is Open for a database the caller opened: the in-memory registries
+// of tests (registrytest, sqlitetest.Open). Production opens files with
+// Open, and OpenDB refuses to run outside a test binary (testing.Testing).
+// It pins db to the one connection Open keeps, applies pending migrations
+// after opts.BeforeMigrate agrees and refuses a schema newer than this
+// binary, as Open does. It closes db when it fails.
+func OpenDB(db *sql.DB, opts Options) (*Registry, error) { return openDB(db, opts, testing.Testing()) }
+
+// openDB is OpenDB; inTest says whether this is a test binary, so a test can
+// see the refusal a production binary gets.
+func openDB(db *sql.DB, opts Options, inTest bool) (*Registry, error) {
+	if !inTest {
+		db.Close()
+		return nil, errors.New("factory registry: OpenDB is for tests; open the registry file with Open")
+	}
+	db.SetMaxOpenConns(1)
+	db.SetConnMaxLifetime(0)
+	if _, _, err := store.ApplyMigrations(context.Background(), db, migrations, opts.BeforeMigrate); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("factory registry: %w", err)
 	}
 	return &Registry{db: db, clock: opts.Clock}, nil
 }
