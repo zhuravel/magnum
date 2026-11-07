@@ -113,6 +113,11 @@ type PromptData struct {
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
 	Tracker string
+	// MergeMethods are the ways Repo's GitHub settings let a pull request
+	// merge ("squash", "merge commit, squash or rebase": MergeMethods.String),
+	// which the prompts of the roles that ask the operator questions name;
+	// "" while no read of them went through.
+	MergeMethods string
 }
 
 // agentsRun is what the loop knows of a task's agents stage attempt.
@@ -961,7 +966,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		text, next := "", r.next
 		switch {
 		case !r.prompted:
-			if text, err = e.renderRole(t, st, r.role, r.runAs, c); err != nil {
+			if text, err = e.renderRole(ctx, t, st, r.role, r.runAs, c); err != nil {
 				return nil, err
 			}
 		case next == nextNudge:
@@ -1162,17 +1167,17 @@ func (e *Engine) passStage(ctx context.Context, t registry.Task, st config.Facto
 // renderRole renders the prompt of role (as the stage names it) for task t
 // in stage st, as it runs as runAs in copy c: the stage's own prompt
 // (FactoryStage.Prompt) when it names one, else the role's.
-func (e *Engine) renderRole(t registry.Task, st config.FactoryStage, role, runAs config.Role, c Copy) (string, error) {
+func (e *Engine) renderRole(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role, c Copy) (string, error) {
 	p, err := e.cfg.ResolvePrompt(cmp.Or(st.Prompt, runAs.Prompt))
 	if err != nil {
 		return "", fmt.Errorf("the %s prompt: %w", runAs.Name, err)
 	}
-	return agents.RenderPrompt(p, e.promptData(t, st, role, runAs, c))
+	return agents.RenderPrompt(p, e.promptData(ctx, t, st, role, runAs, c))
 }
 
 // promptData is the data of role's prompt (as the stage names it, run as
 // runAs) for task t in stage st, in copy c.
-func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs config.Role, c Copy) PromptData {
+func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role, c Copy) PromptData {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	in := func(name string) string { return filepath.Join(dir, name) }
 	present := func(name string) string {
@@ -1196,6 +1201,7 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		d.ErrorSkill, d.PRBodySkill = repo.ErrorSkill, repo.PRBodySkill
 		d.Base = cmp.Or(repo.Base, d.Base)
 	}
+	d.MergeMethods = e.mergeMethods(ctx, t.Repo)
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
 	}
@@ -1217,6 +1223,61 @@ func (e *Engine) promptData(t registry.Task, st config.FactoryStage, role, runAs
 		}
 	}
 	return d
+}
+
+// mergeMethodsBound bounds a read of a repository's merge methods, which a
+// prompt's render makes on the loop; mergeMethodsRetry is how long a failed
+// read is kept before a prompt reads them again.
+const (
+	mergeMethodsBound = 10 * time.Second
+	mergeMethodsRetry = 10 * time.Minute
+)
+
+// mergeRead is a repository's merge methods as a read gave them
+// (MergeMethods.String), or that the read failed, and when.
+type mergeRead struct {
+	methods string
+	failed  bool
+	at      time.Time
+}
+
+// mergeMethods are the merge methods repo's GitHub settings allow, as the
+// prompts name them (PromptData.MergeMethods): read once per repository
+// and kept for the daemon's life. They only inform the questions, so a
+// read that fails holds nothing up: the prompts go without them, and the
+// failure is kept mergeMethodsRetry, so the prompts after it do not wait
+// on GitHub again. "" without a GitHub, and for a read the daemon's stop
+// cut (it is not kept).
+func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
+	if e.d.GitHub == nil || repo == "" {
+		return ""
+	}
+	now := e.now()
+	e.mergeMu.Lock()
+	kept, ok := e.merges[repo]
+	e.mergeMu.Unlock()
+	if ok && (!kept.failed || now.Sub(kept.at) < mergeMethodsRetry) {
+		return kept.methods
+	}
+	rctx, cancel := context.WithTimeout(ctx, mergeMethodsBound)
+	defer cancel()
+	m, err := e.d.GitHub.MergeMethods(rctx, repo)
+	if ctx.Err() != nil {
+		return ""
+	}
+	read := mergeRead{methods: m.String(), at: now}
+	if err != nil {
+		read = mergeRead{failed: true, at: now}
+		e.log.Warn("read the repository's merge methods; the prompts go without them", "repo", repo, "retry_in", mergeMethodsRetry,
+			"err", err)
+	}
+	e.mergeMu.Lock()
+	defer e.mergeMu.Unlock()
+	if e.merges == nil {
+		e.merges = map[string]mergeRead{}
+	}
+	e.merges[repo] = read
+	return read.methods
 }
 
 // questionsFileOf is the questions file role (as the stage names it) writes
@@ -1323,5 +1384,6 @@ func checkData(role config.Role) PromptData {
 		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
-		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum"}
+		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
+		MergeMethods: "squash"}
 }

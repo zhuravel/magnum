@@ -246,6 +246,34 @@ func (g ghClient) ActiveLogin(ctx context.Context, repo string) (string, error) 
 	return login, nil
 }
 
+// MergeMethods are the ways repo's GitHub settings let a PR merge, read as
+// you (`gh api repos/<repo>`). GitHub shows them only to a login that may
+// push to repo: an answer without them, or that allows none, is an error,
+// never "none allowed".
+func (g ghClient) MergeMethods(ctx context.Context, repo string) (MergeMethods, error) {
+	label := "gh api repos/" + repo
+	res, err := g.gh(ctx, repo, label, false, "api", "repos/"+repo, "--jq", "{allow_merge_commit, allow_squash_merge, allow_rebase_merge}")
+	if err != nil {
+		return MergeMethods{}, err
+	}
+	var s struct {
+		Merge  *bool `json:"allow_merge_commit"`
+		Squash *bool `json:"allow_squash_merge"`
+		Rebase *bool `json:"allow_rebase_merge"`
+	}
+	if err := json.Unmarshal(res.Stdout, &s); err != nil {
+		return MergeMethods{}, fmt.Errorf("%s: %w", label, err)
+	}
+	if s.Merge == nil || s.Squash == nil || s.Rebase == nil {
+		return MergeMethods{}, fmt.Errorf("%s names no merge methods: GitHub shows them only to a login that may push", label)
+	}
+	m := MergeMethods{Merge: *s.Merge, Squash: *s.Squash, Rebase: *s.Rebase}
+	if m == (MergeMethods{}) {
+		return MergeMethods{}, fmt.Errorf("%s allows no merge method", label)
+	}
+	return m, nil
+}
+
 // ViewPR reads PR number of repo back.
 func (g ghClient) ViewPR(ctx context.Context, repo string, number int) (PRView, error) {
 	res, err := g.gh(ctx, repo, fmt.Sprintf("gh pr view %s#%d", repo, number), false,

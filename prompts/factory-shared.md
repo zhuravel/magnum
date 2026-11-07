@@ -16,7 +16,11 @@ The task's inputs are files; read each of them first:{{with .Ticket}} the ticket
 {{- end}}
 
 {{define "questions" -}}
-It holds a JSON list of questions, each an object with `text` (the question, one sentence), `context` (the one line that says why it is asked), `example` (a concrete case the options can be read against), `options` (two or more, each `{"label": "...", "means": "..."}`: a short label and what it means for the example), `recommended` (the index of the option you recommend, from 0, or `null` when the evidence gives no clear answer), `why` (the reason for the recommendation, or `no recommendation` and why) and `evidence` (the file:line, command or finding the question rests on). Ask only what the code, the files and a command cannot answer. The other questions files of {{.TaskDir}} (questions.json, questions-<role>.json) reach the operator too: read them first, and never ask one of their questions again in other words; a question you share with them keeps its text word for word, and the operator gets it once.
+It holds a JSON list of questions, each an object with `text` (the question, one sentence), `context` (the one line that says why it is asked), `example` (a concrete case the options can be read against), `options` (two or more, each `{"label": "...", "means": "..."}`: a short label and what it means for the example), `recommended` (the index of the option you recommend, from 0, or `null` when the evidence gives no clear answer), `why` (the reason for the recommendation, or `no recommendation` and why) and `evidence` (the file:line, command or finding the question rests on). Ask only what the code, the files and a command cannot answer.{{template "merges" .}} The other questions files of {{.TaskDir}} (questions.json, questions-<role>.json) reach the operator too: read them first, and never ask one of their questions again in other words; a question you share with them keeps its text word for word, and the operator gets it once.
+{{- end}}
+
+{{define "merges" -}}
+{{with .MergeMethods}} {{$.Repo}} merges a pull request by {{.}} only (its GitHub settings): a PR reaches the base in one merge, so an option that deploys in two steps takes two PRs; say so in that option.{{end}}
 {{- end}}
 
 {{define "rules" -}}

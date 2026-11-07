@@ -16518,6 +16518,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAQuestionTwoRolesRaiseIsAskedOnce, TestAQuestionAskedBeforeIsNotAskedAgainByAnotherRole,
   TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst and TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged
   (the joined roles).
+- **The question roles know the repository's merge methods** (2026-11-07, audit B #10, roadmap R22). Task 1's critic
+  asked about "two deployments", you chose them, and one stage later the PR body's judge found the repository
+  merges by squash only and asked again: the answer reversed, 27 minutes in NEEDS YOU.
+  - `GitHub.MergeMethods` reads `allow_merge_commit`, `allow_squash_merge` and `allow_rebase_merge` with `gh api
+    repos/<repo>` as your gh login (the publish's identity). GitHub shows them only to a login that may push: an
+    answer without them, or allowing none, is an error, never "none allowed".
+  - `PromptData.MergeMethods` names them ("squash", "merge commit, squash or rebase"). The engine reads them once
+    per repository, at the first prompt it renders for it, bounded to 10 seconds on the loop, and keeps them for
+    the daemon's life; a failed read leaves them out, holds no task up, logs one warning and is kept 10 minutes,
+    so the prompts after it do not wait on GitHub again. A read the daemon's stop cut is not kept.
+  - The prompts: a `merges` block of `factory-shared.md` ("example/shop merges a pull request by squash only (its
+    GitHub settings): a PR reaches the base in one merge, so an option that deploys in two steps takes two PRs;
+    say so in that option"), in the `questions` block (the judge, the critic, the amend, the review's fix turn)
+    and in `factory-points.md`. It says what a split costs; whether to split stays the stacks design's question.
+    Every role's data has the field (the read is one per repository anyway), and only these prompts name it.
+  Rejected: a read off the loop (the first task of a repository would ask its investigators' questions without
+  it, and the cached read costs one bounded gh call per repository); a read per task or per prompt (the settings
+  rarely change, and a factory install restarts the daemon); a stage that waits for the read (it only informs a
+  question); a file of the task's directory (data the prompt can carry is no file to read). Tests, failing first:
+  TestTheGitHubClientReadsTheMergeMethods, TestTheQuestionRolesGetTheRepositorysMergeMethods and
+  TestAFailedMergeMethodsReadLeavesThemOut.
 
 ## Learned rules
 

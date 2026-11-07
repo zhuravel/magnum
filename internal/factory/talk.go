@@ -123,7 +123,7 @@ func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 	if e.d.Runtime == nil {
 		return "", errors.New("this factory daemon runs no agents")
 	}
-	prompt, err := e.liaisonPrompt(t)
+	prompt, err := e.liaisonPrompt(ctx, t)
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +160,7 @@ func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 // stage, in the task's folder, so no stage and no attempt come in, and the
 // copy only when the task holds one (copyOfTask; the prompt describes it
 // then).
-func (e *Engine) liaisonPrompt(t registry.Task) (string, error) {
+func (e *Engine) liaisonPrompt(ctx context.Context, t registry.Task) (string, error) {
 	spec, ok := e.cfg.FactoryRole(runtime.LiaisonRole)
 	if !ok {
 		return "", fmt.Errorf("the liaison of %s: no factory role %s", TaskKey(t), runtime.LiaisonRole)
@@ -169,7 +169,7 @@ func (e *Engine) liaisonPrompt(t registry.Task) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the liaison of %s: %w", TaskKey(t), err)
 	}
-	return e.renderRole(t, config.FactoryStage{}, spec, runAs, e.copyOfTask(t))
+	return e.renderRole(ctx, t, config.FactoryStage{}, spec, runAs, e.copyOfTask(t))
 }
 
 // copyOfTask is the copy task t holds: the one the engine holds for it (a

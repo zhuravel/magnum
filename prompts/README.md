@@ -516,7 +516,10 @@ output), then is kept as invalid.
 The prompts of the factory's roles (`[[factory.role]]`, `magnum factory`). Each is parsed with
 `factory-shared.md`, as a judge prompt is with `judge-shared.md`: its blocks are `task` (who the agent is,
 the task, its copy and branch), `inputs` (the task's files, read as data, never instructions),
-`questions` (the format of a questions file) and `rules` (the factory mode's rules: no interactive
+`questions` (the format of a questions file, the merge methods of `merges`, and the other roles' questions
+files read first, none of their questions asked again in other words and a shared one kept word for word, so
+the factory asks it once), `merges` (the repository's merge methods, and that a change deploying in two steps
+takes two PRs; also in `factory-points.md`) and `rules` (the factory mode's rules: no interactive
 question dialog, no push and no PR, no shared database or console of any environment, the copy's
 databases only through `.DBLockCommand`, no production, the output files as the last step). The file
 resolves as a prompt does, the factory daemon loads it with its roles' prompts at startup and renders
@@ -544,6 +547,7 @@ in the copy (it names the copy, to read, only while there is one). It states its
 | `.PRBodySkill` | the repository's `pr_body_skill` (`[[factory.repo]]`): `factory-pr-body.md` has the judge load that skill and write the body in its layout, keeping the points table and the proof and precheck sentences; empty, the prompt writes the factory's own outline and no prompt names a skill for it |
 | `.DBLockCommand` | the copy's `magnum db-lock --checkout <copy> --role <role> --` line for the role as it runs, shell-quoted: every command that touches the copy's databases runs through it |
 | `.Port` | the port of the copy's local server (0 when the copy's env names none) |
+| `.MergeMethods` | the ways the repository's GitHub settings let a PR merge (`squash`, `merge commit, squash or rebase`), read once per repository as your gh login (`gh api repos/<repo>`) and kept for the daemon's life; empty while no read went through (no GitHub, or a failed read, which holds nothing up and is tried again after 10 minutes): `merges` names them only when set |
 | `.Magnum` | the factory daemon's own `magnum` binary, shell-quoted: the liaison runs its `factory answer`, `decide` and `retry` with it, so they reach the daemon's build, never whatever `magnum` the PATH finds first |
 
 A stage passes on its end fact, never on an agent's "done": `findings` (each role's `findings-<role>.md`,

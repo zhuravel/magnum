@@ -462,7 +462,7 @@ func TestAnswersReachTheWriterAsADataFile(t *testing.T) {
 	}
 	coding, _ := h.e.stageOf(h.reload(task.ID), "coding")
 	writer, _ := h.cfg.FactoryRole("fx-writer")
-	text, err := h.e.renderRole(h.reload(task.ID), coding, writer, writer, h.stageCopy())
+	text, err := h.e.renderRole(h.ctx, h.reload(task.ID), coding, writer, writer, h.stageCopy())
 	if err != nil {
 		t.Fatal(err)
 	}

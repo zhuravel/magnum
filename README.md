@@ -3966,7 +3966,11 @@ before coding`. A question is told by its text (trimmed, lowercased, its runs of
 role raised it: the same question in two files of a batch is asked once, the first file's (`questions.json`
 comes first), raised by both roles (`fx-judge, fx-points`), and a role's repeat of a question asked before is
 not asked again, since its answer serves both. The roles that write questions read the other questions files
-first and ask none of their questions again in other words. A role that ends its turn with new questions in
+first and ask none of their questions again in other words. Their prompts (the points role's, the judge's,
+the critic's, the amend's) also name the merge methods the repository's GitHub settings allow (`gh api
+repos/<repo>` as your gh login, read once per repository while the factory daemon runs), and that a change
+that deploys in two steps takes two PRs; a read that fails leaves them out, holds nothing up and is tried
+again after 10 minutes. A role that ends its turn with new questions in
 any stage (the writer in coding, an investigator with no findings yet) suspends its stage instead of getting a
 nudge: the task needs you, `you:
 1 question before coding goes on`, and once you answered, the same role in the same attempt gets your

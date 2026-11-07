@@ -143,12 +143,37 @@ type PRView struct {
 
 // GitHub opens a task's PR (ready for review, never a draft) and reads it
 // back, by its branch or its number; ActiveLogin is the login gh acts as
-// for repo now (the account active in your gh config dir).
+// for repo now (the account active in your gh config dir), and
+// MergeMethods the ways repo's settings let a PR merge, which the prompts
+// of the roles that ask you questions name.
 type GitHub interface {
 	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
+	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
+}
+
+// MergeMethods are the ways a repository's GitHub settings let a pull
+// request merge: a merge commit, a squash, a rebase.
+type MergeMethods struct{ Merge, Squash, Rebase bool }
+
+// String is the methods m allows, as a prompt names them: "squash",
+// "merge commit or squash", "merge commit, squash or rebase"; "" for none.
+func (m MergeMethods) String() string {
+	var on []string
+	for _, w := range []struct {
+		on   bool
+		name string
+	}{{m.Merge, "merge commit"}, {m.Squash, "squash"}, {m.Rebase, "rebase"}} {
+		if w.on {
+			on = append(on, w.name)
+		}
+	}
+	if len(on) < 2 {
+		return strings.Join(on, "")
+	}
+	return strings.Join(on[:len(on)-1], ", ") + " or " + on[len(on)-1]
 }
 
 // Magnum is the review daemon as the factory sees it: busy while its real
@@ -314,6 +339,10 @@ type Engine struct {
 	overlapMu sync.Mutex
 	overlaps  map[string]overlapRead
 	jiraReads map[string]jiraRead
+	// merges are the merge methods of each repository the prompts name, a
+	// failed read included (mergeMethods).
+	mergeMu sync.Mutex
+	merges  map[string]mergeRead
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot

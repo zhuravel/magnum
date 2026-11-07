@@ -107,6 +107,43 @@ func TestTheGitHubClientOpensTheReadyPRAsYourGhLogin(t *testing.T) {
 	}
 }
 
+// The GitHub client reads a repository's merge methods from its settings as
+// your gh login; an answer without them (GitHub shows them only to a login
+// that may push) or allowing none is an error, never "none allowed".
+func TestTheGitHubClientReadsTheMergeMethods(t *testing.T) {
+	answer := `{"allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":false}`
+	run := &ghRunner{answer: func(execx.Cmd) string { return answer }}
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
+	gh := NewGitHub(cfg, run)
+	ctx := t.Context()
+
+	m, err := gh.MergeMethods(ctx, "example/shop")
+	if err != nil || m != (MergeMethods{Squash: true}) || m.String() != "squash" {
+		t.Fatalf("MergeMethods = %+v (%q), %v; want squash only", m, m, err)
+	}
+	c := run.cmds[0]
+	if c.Name != "gh" || len(c.Args) < 2 || c.Args[0] != "api" || c.Args[1] != "repos/example/shop" || c.Mutates ||
+		c.Env["GH_HOST"] != "github.com" || !slices.Contains(c.Unset, "GH_TOKEN") {
+		t.Fatalf("gh %q (mutates %v), env %v, unset %v; want a read of repos/example/shop as your login", c.Args, c.Mutates, c.Env, c.Unset)
+	}
+
+	answer = `{"allow_merge_commit":true,"allow_squash_merge":true,"allow_rebase_merge":true}`
+	if m, err := gh.MergeMethods(ctx, "example/shop"); err != nil || m.String() != "merge commit, squash or rebase" {
+		t.Fatalf("MergeMethods = %q, %v; want all three", m, err)
+	}
+	for _, bad := range []string{
+		`{"allow_merge_commit":null,"allow_squash_merge":null,"allow_rebase_merge":null}`,
+		`{"allow_merge_commit":false,"allow_squash_merge":false,"allow_rebase_merge":false}`,
+		`not json`,
+	} {
+		answer = bad
+		if m, err := gh.MergeMethods(ctx, "example/shop"); err == nil {
+			t.Errorf("MergeMethods of %s = %+v, want an error", bad, m)
+		}
+	}
+}
+
 // The publish checks the card's review again before it pushes: a task at
 // its publish stage whose review is no longer clean at the approved head
 // needs you, and nothing leaves the Mac.

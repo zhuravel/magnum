@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -219,6 +220,90 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 	}
 }
 
+// renderInStage renders the prompt of role name in stage of task t's kind,
+// as the stage sends it.
+func (h *harness) renderInStage(t registry.Task, stage, name string) string {
+	h.t.Helper()
+	kind := h.cfg.Factory.Kinds[t.Kind]
+	i := stageIndex(kind, stage)
+	role, ok := h.cfg.FactoryRole(name)
+	if i < 0 || !ok {
+		h.t.Fatalf("no stage %s or role %s in the %s kind", stage, name, t.Kind)
+	}
+	text, err := h.e.renderRole(h.ctx, t, kind.Stages[i], role, role, h.stageCopy())
+	if err != nil {
+		h.t.Fatalf("render %s: %v", name, err)
+	}
+	return text
+}
+
+// The roles that ask the operator product or deploy questions get the merge
+// methods the repository's GitHub settings allow, read once per repository:
+// the points role's, the judge's and the critic's prompts name them, and
+// that a change deploying in two steps takes two PRs.
+func TestTheQuestionRolesGetTheRepositorysMergeMethods(t *testing.T) {
+	gh := &fakeGitHub{merges: MergeMethods{Squash: true}}
+	h := newHarness(t, func(d *Deps) { d.GitHub = gh })
+	task := h.kindTask("PR-12383", "feature", "judge")
+	for _, rs := range [][2]string{{"investigate", "fx-points"}, {"judge", "fx-judge"}, {"critic", "fx-critic"}} {
+		text := h.renderInStage(task, rs[0], rs[1])
+		for _, want := range []string{"example/shop merges a pull request by squash only", "two PRs"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s's prompt lacks %q:\n%s", rs[1], want, text)
+			}
+		}
+	}
+	if n := gh.mergeReads(); n != 1 {
+		t.Fatalf("%d reads of example/shop's merge methods, want one", n)
+	}
+
+	other, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: "PR-12384", Kind: "feature", Repo: "example/other", Title: "t",
+		State: registry.TaskActive, Stage: "judge", Branch: "zhuravel-PR-12384-copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := h.renderInStage(other, "judge", "fx-judge"); !strings.Contains(text, "example/other merges a pull request by squash only") ||
+		gh.mergeReads() != 2 {
+		t.Fatalf("another repository's prompt (after %d reads):\n%s", gh.mergeReads(), text)
+	}
+	h.clock.Add(24 * time.Hour)
+	h.renderInStage(task, "judge", "fx-judge")
+	if n := gh.mergeReads(); n != 2 {
+		t.Fatalf("%d reads a day later, want the two repositories' reads kept", n)
+	}
+}
+
+// A read of the merge methods that fails holds nothing up: the prompts go
+// without them, and the next read waits mergeMethodsRetry rather than come
+// with each prompt.
+func TestAFailedMergeMethodsReadLeavesThemOut(t *testing.T) {
+	gh := &fakeGitHub{mergesErr: errors.New("gh: HTTP 502")}
+	h := newHarness(t, func(d *Deps) { d.GitHub = gh })
+	task := h.kindTask("PR-12385", "feature", "judge")
+	for range 2 {
+		if text := h.renderInStage(task, "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
+			t.Fatalf("the prompt names merge methods no read gave:\n%s", text)
+		}
+	}
+	if n := gh.mergeReads(); n != 1 {
+		t.Fatalf("%d reads, want the failed one kept for the second prompt", n)
+	}
+	gh.mu.Lock()
+	gh.merges, gh.mergesErr = MergeMethods{Squash: true, Rebase: true}, nil
+	gh.mu.Unlock()
+	h.clock.Add(mergeMethodsRetry)
+	if text := h.renderInStage(task, "judge", "fx-judge"); !strings.Contains(text, "example/shop merges a pull request by squash or rebase only") ||
+		gh.mergeReads() != 2 {
+		t.Fatalf("after the retry (%d reads):\n%s", gh.mergeReads(), text)
+	}
+
+	// A factory without GitHub names none, and the prompt still renders.
+	bare := newHarness(t)
+	if text := bare.renderInStage(bare.kindTask("PR-12386", "feature", "judge"), "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
+		t.Fatalf("a factory without GitHub names merge methods:\n%s", text)
+	}
+}
+
 // A task's prompts call a Jira key "the Jira issue"; a key of a tracker that
 // is not Jira is the issue of that tracker, never a Jira issue; a task of a
 // free prompt is the task by its id.
@@ -337,7 +422,7 @@ func TestThePRBodyTurnGetsTheTasksRepositorysSkill(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		text, err := h.e.renderRole(task, st, judge, judge, h.stageCopy())
+		text, err := h.e.renderRole(h.ctx, task, st, judge, judge, h.stageCopy())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -393,7 +478,7 @@ func TestTheLiaisonsPromptNamesItsFolderAndItsCommands(t *testing.T) {
 	// The engine's data names the daemon's own build, as .DBLockCommand does.
 	h := newHarness(t)
 	task := h.task("PR-12394", registry.TaskActive, "investigate")
-	if got := h.e.promptData(task, config.FactoryStage{}, role, role, Copy{}).Magnum; got != h.e.d.Layout.Binary() ||
+	if got := h.e.promptData(h.ctx, task, config.FactoryStage{}, role, role, Copy{}).Magnum; got != h.e.d.Layout.Binary() ||
 		!strings.HasSuffix(got, "/magnum") {
 		t.Errorf("the prompt data's Magnum = %q, want the daemon's build %q", got, h.e.d.Layout.Binary())
 	}
@@ -424,7 +509,7 @@ func TestFactoryPromptsCarryNoTicketText(t *testing.T) {
 	c := h.stageCopy()
 	for _, role := range h.cfg.Factory.Roles {
 		for _, st := range []config.FactoryStage{{Name: "investigate", End: config.FactoryEndFindings}, {Name: "judge", End: config.FactoryEndReport}} {
-			text, err := h.e.renderRole(task, st, role, role, c)
+			text, err := h.e.renderRole(h.ctx, task, st, role, role, c)
 			if err != nil {
 				t.Fatalf("render %s: %v", role.Name, err)
 			}

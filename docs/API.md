@@ -12371,10 +12371,13 @@ type GitHub interface {
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
+	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
-    repo now (the account active in your gh config dir).
+    repo now (the account active in your gh config dir), and MergeMethods the
+    ways repo's settings let a PR merge, which the prompts of the roles that ask
+    you questions name.
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
@@ -12440,6 +12443,14 @@ type Magnum interface {
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
     factory's local review sees it (Magnum).
+
+type MergeMethods struct{ Merge, Squash, Rebase bool }
+    MergeMethods are the ways a repository's GitHub settings let a pull request
+    merge: a merge commit, a squash, a rebase.
+
+func (m MergeMethods) String() string
+    String is the methods m allows, as a prompt names them: "squash", "merge
+    commit or squash", "merge commit, squash or rebase"; "" for none.
 
 type MigrationFlag struct {
 	Path                                   string
@@ -12578,6 +12589,11 @@ type PromptData struct {
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
 	Tracker string
+	// MergeMethods are the ways Repo's GitHub settings let a pull request
+	// merge ("squash", "merge commit, squash or rebase": MergeMethods.String),
+	// which the prompts of the roles that ask the operator questions name;
+	// "" while no read of them went through.
+	MergeMethods string
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the

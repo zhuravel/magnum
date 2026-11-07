@@ -37,6 +37,25 @@ type fakeGitHub struct {
 	// activeCalls counts its calls.
 	activeErr   error
 	activeCalls int
+	// merges are the repository's merge methods MergeMethods reads, or
+	// mergesErr its failure; mergesCalls counts its calls.
+	merges      MergeMethods
+	mergesErr   error
+	mergesCalls int
+}
+
+func (f *fakeGitHub) MergeMethods(context.Context, string) (MergeMethods, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mergesCalls++
+	return f.merges, f.mergesErr
+}
+
+// mergeReads is how many times MergeMethods was called.
+func (f *fakeGitHub) mergeReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mergesCalls
 }
 
 func (f *fakeGitHub) ActiveLogin(context.Context, string) (string, error) {

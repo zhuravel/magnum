@@ -275,11 +275,11 @@ func TestAKeyOfATrackerThatIsNotJiraIsNeverReadFromJira(t *testing.T) {
 	}
 	// The task's prompts call its key the issue of its tracker, never a
 	// Jira issue; a Jira key's prompts keep "the Jira issue".
-	if d := r.e.promptData(task, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "EX-12" || d.Tracker != "linear.app" {
+	if d := r.e.promptData(r.ctx, task, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "EX-12" || d.Tracker != "linear.app" {
 		t.Errorf("the prompt data of EX-12: key %q, tracker %q", d.Key, d.Tracker)
 	}
 	jira := r.mustStart("PR-12345 the advocates only")
-	if d := r.e.promptData(jira, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "PR-12345" || d.Tracker != "" {
+	if d := r.e.promptData(r.ctx, jira, config.FactoryStage{}, config.Role{}, config.Role{}, Copy{}); d.Key != "PR-12345" || d.Tracker != "" {
 		t.Errorf("the prompt data of PR-12345: key %q, tracker %q", d.Key, d.Tracker)
 	}
 	if ins, _ := r.reg.Inputs(r.ctx, task.ID); len(ins) != 1 || ins[0].Kind != registry.InputTaskText || ins[0].Text != text {
