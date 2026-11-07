@@ -122,6 +122,7 @@ func fixFixture() RoleData {
 	d.ExternalFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/external-threads.json"
 	d.ReviewerLogin = "talkable[bot]"
 	d.FixSyncCommand = FixSyncLine(d.Magnum, d.Checkout, d.HeadSHA, d.HeadRef, "master")
+	d.OwnPR = true // the fix job runs on the operator's own PRs alone
 	return d
 }
 

@@ -1245,6 +1245,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		PushCommand:     push,
 		FixerLogin:      login,
 		NoFindings:      job.alone,
+		OwnPR:           e.ownPR(pr), // prepareFix refused any other: it lets the fixer edit the description
 		NotesParts:      notesParts,
 		ConflictBase:    job.conflict.base,
 		ConflictSHA:     job.conflict.sha,

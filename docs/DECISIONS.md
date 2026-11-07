@@ -3187,6 +3187,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck pin the head's own file list and start record,
   the cut file list and the unknown branch.
 
+- **The fixer edits an own PR's description when an item names it or its own fix made a line untrue**
+  (2026-11-07, approved by the operator). An own PR's fix loop ended with one `Needs you` entry that asked the
+  operator to change a phrase of the PR body, and the operator edited it on GitHub by hand: the fixer's fix of
+  a P3 finding had made that line of the description untrue, but the skill let it edit the description only
+  "when a finding names it", so it left the line alone; and the review body's `Description: ✗` finding, which
+  has no thread, went under `Needs you` as "fixed in" for want of a reply. Nothing in magnum refuses or
+  reverts such an edit: the fixer writes the body with `gh pr edit --body-file` as the operator's gh login or
+  as the fixer App (pull_requests write; gh 2.103 ignores the refused project read an App token gets), no pane
+  guard or gh wrapper exists, the fixer App's `pushInsteadOf` rewrites git pushes only, `identity_leak` reads
+  review markers only, and the factory writes a PR's body once, when it opens the PR. Now the fix prompt says
+  that the PR is the operator's own (`FixPromptInput.OwnPR`, from the job's own `ownPR` check, which refuses
+  every other PR; a factory PR counts, since the factory opens it as the operator), and only then does the
+  skill edit the description, never the title: for a finding or another reviewer's item that names it (fix
+  when right and unscored, as a simplification, since it changes no code and the bar of 3 would decline every
+  one; one that needs what only the author knows stays the author's) and for a line one of its fixes made
+  untrue. It makes one edit after the push (none when the push failed) on a copy saved beside the report,
+  checks with `diff` that only those lines changed, never touches a hidden `<!-- … -->` marker or the block it
+  marks (the factory's Known list) nor a template checklist line, and reads the body again right before the
+  write: an edit meanwhile starts it over once, then leaves the item to the author, so a hand edit is never
+  reverted. Its reply says what changed ("Fixed: the description now …", or "; the description now …" after
+  the "Fixed in" of the fix that made the line untrue); a fixed `Description: ✗` finding is answered by the
+  report's `description:` line and is no longer under `Needs you`. The skill also says that the PR description
+  is not "anyone else's comment" to a fixer App. Rejected: a REST `PATCH` of the body in place of `gh pr edit`
+  (it already works for both identities, and the skill and the 2026-10-12 entry name it), an issue comment
+  that answers the `Description: ✗` line (the skill posts no summary comment; the report and the
+  `fix.description` event say what changed), and leaving lines a fix made untrue to the re-review (at best it
+  raises them as a new `Description: ✗` finding: one more cycle for a sentence). Tests, failing first:
+  TestTheFixPromptOfAnOwnPRLetsTheFixerEditItsDescription,
+  TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt,
+  TestTheFixJobTellsTheFixerThatThePRIsTheOperatorsOwn.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

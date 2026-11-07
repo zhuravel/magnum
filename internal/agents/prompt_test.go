@@ -659,7 +659,7 @@ func TestTheFixSkillProvesEachGuardFixesRegressionsAndSignsItsReplies(t *testing
 			"a broken reference, a failing test and a crash.",
 		"A simplification the review posted is `fix` when it keeps behaviour, stays in the PR's own lines and the specs that cover the changed code pass; " +
 			"it is `won't fix` only with a concrete risk: it drops a guard, changes behaviour or reaches outside the PR. Do not score it. A defect keeps its scoring.",
-		"`fix` with a net score of 3 or more, a simplification that is `fix`, and each finding that section 3 always makes `fix`",
+		"`fix` with a net score of 3 or more, a simplification or a description finding that is `fix`, and each finding that section 3 always makes `fix`",
 		"`fix` with a net score below 3 that is no simplification: make it `won't fix`",
 		"<fix-reply line> --comment <comment_id> <<'REPLY'\n<reply>\nREPLY\n",
 		"The fix-reply line ends every reply with a blank line and the hidden line `" + postreview.FixReplyMarker + "`.",
@@ -702,7 +702,7 @@ func TestTheFixSkillFixesTheSameDefectInThePRsOwnLines(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"- Change only what a finding or an external item names, or the same defect in the PR's own lines: " +
-			"the code, or the PR description when a finding names it (section 5).",
+			"the code, or the PR description when a finding or an external item names it, or when one of your fixes makes a line of it untrue (section 5).",
 		"2. Before you run the specs, look for the same defect in the rest of this PR's own lines (`gh pr diff {number}`): " +
 			"the other members of the set the finding's code belongs to that the PR adds beside it",
 		"(sibling rules, call sites, branches, parallel copies and untested guards of the same kind).",

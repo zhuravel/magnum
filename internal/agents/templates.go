@@ -838,6 +838,12 @@ type RoleData struct {
 	// alone, and merges the base when the PR conflicts with it (the fix job
 	// starts on such a review only when one of the two waits).
 	NoFindings bool
+	// OwnPR is the fix prompt's too: the PR's author is the operator, as
+	// the fix job checked before it started (a PR the factory opened
+	// counts: it opens them as the operator), so the fixer may edit the
+	// PR's description as the fix skill's section 5 says. false = the
+	// prompt grants no such edit, and the skill changes no description.
+	OwnPR bool
 	// ConflictBase, ConflictSHA, ConflictPaths and ConflictFiles are the fix
 	// prompt's too (FixPrompt fills them from FixPromptInput): the PR
 	// conflicts with its base branch ConflictBase, whose tip magnum fetched
@@ -925,7 +931,8 @@ func PushLine(magnum, checkout, base string) string {
 // the login it acts as (PushCommand, PushLine, and FixerLogin; "" = a gh
 // fixer, which pushes with git push as the author), whether the review found nothing, leaving the
 // fixer the external file's items and the base merge alone (NoFindings),
-// the job's frozen copy of the repository notes in parts (NotesParts,
+// whether the PR is the operator's own, which lets the fixer edit its
+// description (OwnPR; RoleData.OwnPR), the job's frozen copy of the repository notes in parts (NotesParts,
 // FreezeNotes beside the report; zero = none), which the fixer reads and
 // never edits, and the PR's conflict with its base, which the fixer merges
 // first: the base branch (ConflictBase), the tip of it magnum fetched
@@ -938,6 +945,7 @@ type FixPromptInput struct {
 	NotesParts                                                                                  NotesParts
 	ConflictBase, ConflictSHA                                                                   string
 	ConflictPaths                                                                               []string
+	OwnPR                                                                                       bool
 }
 
 // maxConflictPaths bounds the conflicting paths the fix prompt names: the
@@ -981,6 +989,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
 		FixSyncCommand: in.FixSyncCommand, PushCommand: in.PushCommand, FixerLogin: in.FixerLogin, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
+		OwnPR: in.OwnPR,
 	}
 	if in.ConflictSHA != "" {
 		d.ConflictBase, d.ConflictSHA = in.ConflictBase, in.ConflictSHA

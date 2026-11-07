@@ -3075,7 +3075,24 @@ from the code, which a finding whose **Fix** ends "This is the author's call." a
 picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
 the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is answered already, or its reply failed); each entry
 says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never resolves or minimizes a thread
-someone else started, never force-pushes or rebases what is on GitHub (`magnum fix-sync` replays only its own commits, below), never touches another branch, merges nothing but the base's tip when the PR conflicts with it (below), and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
+someone else started, never force-pushes or rebases what is on GitHub (`magnum fix-sync` replays only its own commits, below), never touches another branch, merges nothing but the base's tip when the PR conflicts with it (below), and adds no dependency.
+
+**Your PR's description.** The fix prompt says that the PR is your own when the fix job's check of its author
+says so (the job starts on no other PR; one the factory opened is yours too, since the factory opens it as you), and
+only then does the fixer edit the PR's description, never its title: for a finding or another reviewer's item
+that names the description (the review body's `Description: ✗` line, a comment about a deploy section that
+lists the head's migrations, a reviewer who asks to change a phrase), and for a line of it that one of its own
+fixes made untrue, instead of leaving that line to you under `Needs you`. Such an item is fixed when it is
+right, unscored like a simplification; one that needs what only you know (why, a decision, a plan, a link)
+stays yours. It makes one edit after the push (none when the push failed), as the gh login or the fixer App it
+pushes as: it saves the body beside its report, changes only those lines in a copy and checks with `diff`
+that nothing else moved, never touches a hidden `<!-- … -->` marker or the block it marks (the factory's
+Known list) nor a checklist line of the PR template, reads the body again right before it writes it with
+`gh pr edit --body-file`, and starts over once when you edited it meanwhile, then leaves the item to you.
+Its reply says what changed: "Fixed: the description now …", or "; the description now …" at the end of the
+"Fixed in" reply of the fix that made the line untrue. The review body's `Description: ✗` line has no
+thread, so it gets no reply and, once fixed, is no longer under `Needs you`. Such a change shows as
+`description: …` in the report and in a `fix.description` event.
 
 **What other reviewers wrote.** Each cycle the fixer also answers what other reviewers wrote on the PR that
 nobody answered yet, people and bots alike: a colleague, another review tool, a code-review bot. Before it
