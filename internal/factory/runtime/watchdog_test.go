@@ -718,7 +718,7 @@ func TestAFailedWatchdogStepStaysWatchedAcrossARestart(t *testing.T) {
 // recovers the role itself.
 func TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart(t *testing.T) {
 	g := newRig(t)
-	hung := g.hungTurn("reproduce the bug")
+	g.hungTurn("reproduce the bug")
 	stepFaults[1].inject(g) // the start fails
 	g.clock.Add(NoProgressAfter)
 	g.watchdog()
@@ -738,7 +738,7 @@ func TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart(t *
 	}
 
 	h := newRig(t)
-	hung = h.hungTurn("reproduce the bug")
+	hung := h.hungTurn("reproduce the bug")
 	stepFaults[1].inject(h)
 	h.clock.Add(NoProgressAfter)
 	h.watchdog()
