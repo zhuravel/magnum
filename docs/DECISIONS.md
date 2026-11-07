@@ -16492,6 +16492,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   reason (text to parse back). Tests, failing first: TestTheVerdictSaysSinceWhenItHasSaidTheSame,
   TestAPublishedRowWaitedSinceItsPRBeganToWaitSo, TestADoneTaskSaysWhenItsPRMerged,
   TestTheHelpGlossesThePublishedRowsWords and TestAnUnwatchedPRsRowNamesHowItsTaskEnds.
+- **One question once, whichever roles raise it** (2026-11-07, audit B #4, roadmap R11). Task 6's batch held 28
+  questions, 15 from fx-judge and 13 from fx-points; 7 had exactly the same text and 4 more were the same in
+  other words, and you answered each twice. `questionKey` put the role in the key, so the judge's copy of an
+  investigator's question was another question.
+  - A question is told by its text alone: trimmed, lowercased, its runs of spaces made one. `askQuestions` asks
+    the same question in two files of one batch once, the first file's (`questions.json` comes first, so the
+    judge's options and recommendation win), and its `raised_by` lists both roles, "fx-judge, fx-points"; a
+    role's repeat of a question asked before, open or answered, is not asked again, and the stage's answers
+    reach that role as they reach the one that asked first. The batch's event counts the repeats ("1 repeat
+    asked once"). The asks, the screen's card, answers.md and the local review's answered questions read the
+    same key. The screen's "The agent ... asked" names the first role of such a question.
+  - The prompts: the shared `questions` block (the judge, the critic, the amend, the review's fix turn) has a
+    role read the other questions files first, ask none of their questions again in other words, and keep the
+    text word for word when it shares one, so the key above merges it. The audit asked for fx-points to read
+    `questions.json` first, but in the default kinds fx-points investigates before the judge writes it (task
+    6's files: 13:14 against 13:44): the judge, who comes second, is the one that must read; fx-points' prompt
+    still reads `questions.json` first when a kind runs it after a judge.
+  - A role added to a stored question's `raised_by` only within the batch that asks it: a repeat of a question
+    asked in an earlier revision changes no stored row, since its answer serves it anyway.
+  Rejected: the judge merging the investigators' files into `questions.json` and the factory dropping theirs
+  (a role's file is its record, and the gate reads every file); a fuzzy match of questions in other words (a
+  wrong merge loses a question; the prompt's word-for-word rule leaves the match exact); an UPDATE of an
+  earlier revision's `raised_by` (a registry write for a label). Tests, failing first:
+  TestAQuestionTwoRolesRaiseIsAskedOnce, TestAQuestionAskedBeforeIsNotAskedAgainByAnotherRole,
+  TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst and TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged
+  (the joined roles).
 
 ## Learned rules
 

@@ -69,7 +69,7 @@ const answerSurface = "cli"
 const asksFile = "asks.json"
 
 // ask is a question you asked someone else: the role that raised it and its
-// text (questionKey), whom you asked, the file of the drafted comment and
+// text (its questionKey), whom you asked, the file of the drafted comment and
 // when.
 type ask struct {
 	RaisedBy string    `json:"raised_by"`
@@ -162,7 +162,7 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 			if q.State != registry.QuestionOpen {
 				return fmt.Errorf("question %d is %s: it cannot be asked of %s", idx+1, q.State, login)
 			}
-			if asked[questionKey(q.RaisedBy, q.Text)].Login != login { // else asked before a restart: the batch came again
+			if asked[questionKey(q.Text)].Login != login { // else asked before a restart: the batch came again
 				asks = append(asks, pendingAsk{q: q, login: login, comment: comment})
 			}
 			continue
@@ -595,7 +595,7 @@ func (e *Engine) recordAsks(ctx context.Context, t registry.Task, asks []pending
 	}
 	for _, q := range qs {
 		if _, ok := answered[q.Index]; ok && q.Revision == t.QuestionRev {
-			delete(have, questionKey(q.RaisedBy, q.Text))
+			delete(have, questionKey(q.Text))
 		}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
@@ -611,7 +611,7 @@ func (e *Engine) recordAsks(ctx context.Context, t registry.Task, asks []pending
 		if err := fsx.WriteFileAtomic(filepath.Join(dir, name), []byte(strings.TrimRight(text, "\n")+"\n"), 0o600); err != nil {
 			return fmt.Errorf("write the comment for %s: %w", a.login, err)
 		}
-		have[questionKey(a.q.RaisedBy, a.q.Text)] = ask{RaisedBy: a.q.RaisedBy, Text: a.q.Text, Login: a.login, Comment: name, At: e.now()}
+		have[questionKey(a.q.Text)] = ask{RaisedBy: a.q.RaisedBy, Text: a.q.Text, Login: a.login, Comment: name, At: e.now()}
 	}
 	return e.writeAsks(t.ID, have)
 }
@@ -647,7 +647,7 @@ func readAsksIn(dir string) (map[string]ask, error) {
 	}
 	out := map[string]ask{}
 	for _, a := range list {
-		out[questionKey(a.RaisedBy, a.Text)] = a
+		out[questionKey(a.Text)] = a
 	}
 	return out, nil
 }
@@ -655,7 +655,7 @@ func readAsksIn(dir string) (map[string]ask, error) {
 // writeAsks keeps asks in asks.json of task id, oldest first.
 func (e *Engine) writeAsks(id int64, asks map[string]ask) error {
 	list := slices.SortedFunc(maps.Values(asks), func(a, b ask) int {
-		return cmp.Or(a.At.Compare(b.At), cmp.Compare(questionKey(a.RaisedBy, a.Text), questionKey(b.RaisedBy, b.Text)))
+		return cmp.Or(a.At.Compare(b.At), cmp.Compare(questionKey(a.Text), questionKey(b.Text)))
 	})
 	b, err := json.MarshalIndent(append([]ask{}, list...), "", "  ")
 	if err != nil {
@@ -702,13 +702,13 @@ func (e *Engine) writeAnswers(ctx context.Context, t registry.Task) error {
 // answersMarkdown is answers.md of questions qs: each answered one, by
 // revision and position, with whether your answer took the recommended
 // option, another option or your own words; a question asked again (the
-// same role and text) shows only its newest answer, the one that stands;
+// same text, questionKey) shows only its newest answer, the one that stands;
 // "" when none is answered.
 func answersMarkdown(qs []registry.Question) string {
 	var b strings.Builder
 	for i, q := range qs {
 		if q.State != registry.QuestionAnswered || slices.ContainsFunc(qs[i+1:], func(later registry.Question) bool {
-			return later.State == registry.QuestionAnswered && questionKey(later.RaisedBy, later.Text) == questionKey(q.RaisedBy, q.Text)
+			return later.State == registry.QuestionAnswered && questionKey(later.Text) == questionKey(q.Text)
 		}) {
 			continue // not answered, or asked again and answered since: the answer that stands is the newer one
 		}

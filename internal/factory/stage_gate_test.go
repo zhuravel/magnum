@@ -221,6 +221,64 @@ func TestTheCriticsQuestionsJoinTheOneBatch(t *testing.T) {
 	}
 }
 
+// A question two roles raise is asked once: the same text, whatever its
+// case and spaces, in the judge's questions.json and in an investigator's
+// questions-fx-points.json is one question of the batch, the judge's (its
+// file is read first), raised by both, and one answer serves both.
+func TestAQuestionTwoRolesRaiseIsAskedOnce(t *testing.T) {
+	h := newHarness(t)
+	template := fileQuestion("Which email template does the reminder use?", 0, "the credit template", "a new template")
+	task := h.gateTask("PR-12381", "feature", whenQuestion, template)
+	again := fileQuestion("  when does the reminder\tgo out? ", 1, "a week before", "the day before")
+	h.taskFile(task.ID, "questions-fx-points.json", questionsJSON(t, again, whoQuestion))
+	h.tick()
+
+	got := h.reload(task.ID)
+	qs := h.newestQuestions(task.ID)
+	var who []string
+	for _, q := range qs {
+		who = append(who, q.RaisedBy+": "+q.Text)
+	}
+	want := []string{"fx-judge, fx-points: " + whenQuestion.Text, "fx-judge: " + template.Text, "fx-points: " + whoQuestion.Text}
+	if got.QuestionRev != 1 || got.WaitsWhat != "3 questions before coding" || !slices.Equal(who, want) {
+		t.Fatalf("revision %d waits %q with %q; want revision 1, 3 questions before coding: %q", got.QuestionRev, got.WaitsWhat, who, want)
+	}
+	if qs[0].Recommended != 0 || qs[0].Options[0].Label != whenQuestion.Options[0].Label {
+		t.Fatalf("the question asked once is %+v, want the judge's, with its options", qs[0])
+	}
+	if evs := h.events(task.ID, "questions"); len(evs) != 1 || !strings.Contains(evs[0].Text, "1 repeat asked once") {
+		t.Fatalf("questions events %+v, want one that counts the repeat", evs)
+	}
+
+	h.tick()
+	if rev := h.reload(task.ID).QuestionRev; rev != 1 {
+		t.Fatalf("a later tick made revision %d, want the batch asked once", rev)
+	}
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label,
+		1: template.Options[0].Label, 2: whoQuestion.Options[0].Label}})
+	if got := h.reload(task.ID); got.Stage != "coding" || got.QuestionRev != 1 {
+		t.Fatalf("after the answers the task is %s at %s, revision %d; want at coding, nothing asked again", got.State, got.Stage, got.QuestionRev)
+	}
+}
+
+// A question another role asked already is not asked again: the critic's
+// repeat of the judge's open question adds no revision, and the one answer
+// passes the gate.
+func TestAQuestionAskedBeforeIsNotAskedAgainByAnotherRole(t *testing.T) {
+	h := newHarness(t)
+	task := h.gateTask("PR-12382", "feature", whenQuestion)
+	h.tick()
+	h.taskFile(task.ID, "questions-fx-critic.json", questionsJSON(t, fileQuestion("When does the reminder go out?", 1, "now", "later")))
+	h.tick()
+	if got := h.reload(task.ID); got.QuestionRev != 1 || got.WaitsWhat != "1 question before coding" {
+		t.Fatalf("task at revision %d waits %q, want revision 1: 1 question before coding", got.QuestionRev, got.WaitsWhat)
+	}
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label}})
+	if got := h.reload(task.ID); got.Stage != "coding" || got.QuestionRev != 1 {
+		t.Fatalf("after the answer the task is %s at %s, revision %d; want at coding, nothing asked again", got.State, got.Stage, got.QuestionRev)
+	}
+}
+
 func TestABugThatDidNotReproduceAsksTheOperatorWithOptions(t *testing.T) {
 	notReproduced := reportWith("Proof", "## Proof\n- Reproduced: no. The spec passes on master.\n")
 	for _, tc := range []struct {

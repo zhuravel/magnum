@@ -188,8 +188,9 @@ func TestTheScreensPreviewIsTheDaemonsForm(t *testing.T) {
 
 // An answer the daemon refused because the questions changed reaches the
 // screen typed, never as prose: the adapter reads the task, and its newer
-// revision is the error's time; a refusal for another reason is the
-// daemon's words.
+// revision is the error's time, and the agent that asked it the first role
+// that raised its question; a refusal for another reason is the daemon's
+// words.
 func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 	storetest.Serial(t)
 	at := newScreenActionsTest(t, 250, func(registry.Request) (string, string) {
@@ -206,7 +207,7 @@ func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 	if err := reg.ReplaceQuestions(ctx, task.ID, 1, []registry.Question{q}); err != nil {
 		t.Fatal(err)
 	}
-	q2 := registry.Question{Text: "Which locale?", Recommended: -1, RaisedBy: "fx-cause"}
+	q2 := registry.Question{Text: "Which locale?", Recommended: -1, RaisedBy: "fx-cause, fx-points"} // two roles raised it: the first one says
 	if err := reg.ReplaceQuestions(ctx, task.ID, 2, []registry.Question{q2}); err != nil {
 		t.Fatal(err)
 	}

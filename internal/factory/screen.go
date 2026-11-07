@@ -854,7 +854,7 @@ func (s *screen) questionCard(v *taskView) *tui.QuestionCard {
 		}
 		// The ask: of whom it was asked already, else of the ticket's
 		// reporter (a task of your words, or a ticket with none, has none).
-		a, asked := v.asks[questionKey(q.RaisedBy, q.Text)]
+		a, asked := v.asks[questionKey(q.Text)]
 		switch who := cleanReporter(a.Login); {
 		case asked && q.State == registry.QuestionOpen && who != "":
 			cq.Options = append(cq.Options, askOption(who))
@@ -1199,7 +1199,7 @@ func shortWhat(who, what string) string {
 // firstOnYou is the first open question of task v that waits on you.
 func firstOnYou(v *taskView) registry.Question {
 	for _, q := range v.open {
-		if _, asked := v.asks[questionKey(q.RaisedBy, q.Text)]; !asked {
+		if _, asked := v.asks[questionKey(q.Text)]; !asked {
 			return q
 		}
 	}

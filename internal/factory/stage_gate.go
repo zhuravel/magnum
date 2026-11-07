@@ -310,9 +310,23 @@ func (e *Engine) reportRoles(t registry.Task) []string {
 	return nil
 }
 
-// questionKey is how a question of a file is told from the questions the
-// task asked: the role that raised it and its text.
-func questionKey(raisedBy, text string) string { return raisedBy + "\x00" + strings.TrimSpace(text) }
+// questionKey is how a question is told from the questions the task asked:
+// its text, trimmed, lowercased and with its runs of spaces made one, so
+// that a question two roles raise in the same words is one question,
+// whichever role raised it.
+func questionKey(text string) string { return strings.ToLower(strings.Join(strings.Fields(text), " ")) }
+
+// withRole is raisedBy with role added, when it is not one of its roles
+// already: a question two roles raised is raised by "fx-judge, fx-points".
+func withRole(raisedBy, role string) string {
+	if raisedBy == "" {
+		return role
+	}
+	if slices.Contains(strings.Split(raisedBy, ", "), role) {
+		return raisedBy
+	}
+	return raisedBy + ", " + role
+}
 
 // askedStates are the state of each question the task asked, by its
 // questionKey, the newest revision's winning: a question carried over is
@@ -321,7 +335,7 @@ func questionKey(raisedBy, text string) string { return raisedBy + "\x00" + stri
 func askedStates(have []registry.Question) map[string]string {
 	states := map[string]string{}
 	for _, q := range have { // by revision, oldest first
-		k := questionKey(q.RaisedBy, q.Text)
+		k := questionKey(q.Text)
 		if q.State == registry.QuestionVoided {
 			if states[k] == registry.QuestionOpen {
 				continue // voided by the revision that carries it over
@@ -335,11 +349,13 @@ func askedStates(have []registry.Question) map[string]string {
 }
 
 // askQuestions asks the questions of task t's questions files that it has
-// not asked (askedStates: no question of the same role and text is open or
-// answered) as one new revision (storeBatch). A file that does not parse
-// is, with strict, what the task waits on you for (needsYou); without, it
-// is left to its role's end fact (another role may still write it). asked
-// reports whether a revision was stored.
+// not asked (askedStates: no question of the same text, whichever role
+// raised it, is open or answered) as one new revision (storeBatch). A
+// question two files of the batch hold is asked once, the first file's
+// (questions.json comes first), raised by the roles of both (withRole).
+// A file that does not parse is, with strict, what the task waits on you
+// for (needsYou); without, it is left to its role's end fact (another role
+// may still write it). asked reports whether a revision was stored.
 func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool) (asked bool, err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	files, err := e.questionFiles(t, dir)
@@ -355,7 +371,9 @@ func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool)
 		seen[k] = true
 	}
 	var fresh []registry.Question
+	batch := map[string]int{} // the questions of fresh, by their key
 	var from []string
+	repeats := 0
 	for _, f := range files {
 		qs, p := readQuestions(dir, f.name, time.Time{})
 		if p != nil {
@@ -366,8 +384,17 @@ func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool)
 		}
 		n := len(fresh)
 		for _, q := range qs {
-			if k := questionKey(f.raisedBy, q.Text); !seen[k] {
+			k := questionKey(q.Text)
+			if i, ok := batch[k]; ok {
+				if raised := withRole(fresh[i].RaisedBy, f.raisedBy); raised != fresh[i].RaisedBy {
+					fresh[i].RaisedBy = raised
+					repeats++
+				}
+				continue
+			}
+			if !seen[k] {
 				seen[k] = true
+				batch[k] = len(fresh)
 				fresh = append(fresh, toQuestion(q, f.raisedBy))
 			}
 		}
@@ -378,7 +405,11 @@ func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool)
 	if len(fresh) == 0 {
 		return false, nil
 	}
-	return true, e.storeBatch(ctx, t, fresh, "from "+strings.Join(from, ", "))
+	why := "from " + strings.Join(from, ", ")
+	if repeats > 0 {
+		why += fmt.Sprintf("; %s asked once", plural(repeats, "repeat"))
+	}
+	return true, e.storeBatch(ctx, t, fresh, why)
 }
 
 // toQuestion is a question of a file as the registry keeps it, raised by
@@ -484,7 +515,7 @@ func (e *Engine) questionsWait(t registry.Task, open []registry.Question, asks m
 func questionsAsked(open []registry.Question, asks map[string]ask) (onYou int, first string, byLogin map[string]int) {
 	byLogin = map[string]int{}
 	for _, q := range open {
-		a, ok := asks[questionKey(q.RaisedBy, q.Text)]
+		a, ok := asks[questionKey(q.Text)]
 		if !ok {
 			onYou++
 			continue
@@ -647,7 +678,7 @@ func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.Factor
 	states := askedStates(have)
 	unasked, open := 0, 0
 	for _, q := range qs {
-		switch states[questionKey(r.role.Name, q.Text)] {
+		switch states[questionKey(q.Text)] {
 		case "":
 			unasked++
 		case registry.QuestionOpen:
@@ -680,11 +711,11 @@ func (e *Engine) answersDue(ctx context.Context, t registry.Task, a registry.Att
 	have []registry.Question) (bool, error) {
 	mine := map[string]bool{}
 	for _, q := range qs {
-		mine[questionKey(r.role.Name, q.Text)] = true
+		mine[questionKey(q.Text)] = true
 	}
 	var answered time.Time
 	for _, q := range have {
-		if q.State == registry.QuestionAnswered && mine[questionKey(q.RaisedBy, q.Text)] && q.Answered.After(answered) {
+		if q.State == registry.QuestionAnswered && mine[questionKey(q.Text)] && q.Answered.After(answered) {
 			answered = q.Answered
 		}
 	}

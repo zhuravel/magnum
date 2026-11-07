@@ -158,8 +158,10 @@ func (a *factoryActions) answerRefused(ctx context.Context, id int64, rev int, r
 	return changed
 }
 
-// doing is what role name's agent does ("finding the cause"), or its name.
+// doing is what role name's agent does ("finding the cause"), or its name;
+// of a question two roles raised ("fx-judge, fx-points"), the first's.
 func (a *factoryActions) doing(name string) string {
+	name, _, _ = strings.Cut(name, ", ")
 	i := slices.IndexFunc(a.c.Config.Factory.Roles, func(r config.Role) bool { return r.Name == name })
 	if i < 0 {
 		return name

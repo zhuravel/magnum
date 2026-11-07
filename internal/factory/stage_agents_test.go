@@ -197,6 +197,28 @@ func TestEveryFactoryPromptRenders(t *testing.T) {
 	}
 }
 
+// The roles that write questions read the questions the other roles wrote
+// first and ask none of them again in other words: a question they share
+// keeps its text word for word, so the factory asks it once (askQuestions).
+// The judge runs after the investigators and reads their
+// questions-<role>.json; the points role reads questions.json, there when a
+// judge ran before it.
+func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
+	cfg := config.Defaults()
+	d := fullPromptData()
+	for _, name := range []string{"factory-judge.md", "factory-critic.md", "factory-amend.md"} {
+		text := renderFactory(t, cfg, name, d)
+		for _, want := range []string{d.TaskDir + " (questions.json, questions-<role>.json)", "read them first", "in other words", "word for word"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, text)
+			}
+		}
+	}
+	if text := renderFactory(t, cfg, "factory-points.md", d); !strings.Contains(text, "read "+d.TaskDir+"/questions.json first") {
+		t.Errorf("the points role does not read questions.json first:\n%s", text)
+	}
+}
+
 // A task's prompts call a Jira key "the Jira issue"; a key of a tracker that
 // is not Jira is the issue of that tracker, never a Jira issue; a task of a
 // free prompt is the task by its id.
