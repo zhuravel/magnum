@@ -302,9 +302,11 @@ type precheckRun struct {
 	stderr, line string
 	exit         int
 	// repo is the task's repository; healed: a lint that crashed for lack
-	// of a gem or a library had its installs run in the copy (heal), once.
-	repo   config.FactoryRepo
-	healed bool
+	// of a gem or a library had its installs run in the copy (heal), once,
+	// and healFailed is why they failed ("" when they ran).
+	repo       config.FactoryRepo
+	healed     bool
+	healFailed string
 }
 
 // restoreOwn puts back what the precheck's commands changed so far
@@ -564,11 +566,11 @@ func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string,
 		return "env", false
 	case crash.sig.heal && !p.healed && len(p.repo.Installs) > 0:
 		p.healed = true
-		if p.heal(crash) {
+		if p.healFailed = p.heal(crash); p.healFailed == "" {
 			return "env", true
 		}
 	}
-	if theirs := branchCaused(crash.cmd, p.stderr, files); len(theirs) > 0 {
+	if theirs := branchCaused(crash, p.stderr, files); len(theirs) > 0 {
 		p.say("\nIt crashed for lack of %s, and the change touches %s, which the lint loads: the writer's to fix.\n",
 			crash.sig.lacks, clipList(theirs))
 		p.fail(fmt.Sprintf("lint: `%s` crashed for lack of %s (%s), and the change touches %s, which the lint loads",
@@ -576,7 +578,10 @@ func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string,
 		return "code", false
 	}
 	fix := crash.fix()
-	if p.healed {
+	switch {
+	case p.healFailed != "":
+		fix += " (the factory ran the repository's installs there, and the installs failed: " + p.healFailed + ")"
+	case p.healed:
 		fix += " (the factory ran the repository's installs there once, and the lint still crashed)"
 	}
 	if !p.res.ForYou {
@@ -588,23 +593,27 @@ func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string,
 
 // heal runs the repository's installs in the copy (`bundle install`), as a
 // claim runs them, after the lint crashed for lack of a gem or a library
-// (crash), with heal begin and ok or fail events; it reports whether they
-// all ran to a zero exit. What they change in tracked files (Gemfile.lock)
-// goes back with the precheck's own changes (restoreOwn).
-func (p *precheckRun) heal(crash envCrash) bool {
+// (crash), with heal begin and ok or fail events; failed is why one of them
+// did not run to a zero exit (its error's line), "" when they all did.
+// What they change in tracked files (Gemfile.lock) goes back with the
+// precheck's own changes (restoreOwn).
+func (p *precheckRun) heal(crash envCrash) (failed string) {
 	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseBegin, fmt.Sprintf("%s: %s crashed for lack of %s; runs the repository's installs",
 		p.c.Name, firstWord(crash.cmd), crash.sig.lacks))
 	for _, in := range p.repo.Installs {
 		if _, err := p.e.script(p.ctx, p.c, in.Run, "precheck heal "+in.Run, p.limit); err != nil {
 			why := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), outputLineRunes)
+			if ee, ok := errors.AsType[*execx.ExitError](err); ok && firstLine(ee.Stderr) != "" { // its own words, not mise's command line
+				why = fmt.Sprintf("exited %d: %s", ee.Code, firstLine(ee.Stderr))
+			}
 			p.say("\nThe heal's `%s` failed: %s\n", in.Run, why)
 			p.e.event(context.WithoutCancel(p.ctx), p.t.ID, "heal", registry.PhaseFail, p.c.Name+": `"+in.Run+"` failed: "+why)
-			return false
+			return "`" + in.Run + "`: " + why
 		}
 	}
 	p.say("\nIt crashed for lack of %s: the factory ran the repository's installs in the copy, and runs the lint again.\n", crash.sig.lacks)
 	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseOK, p.c.Name+": the installs ran; the lint runs again")
-	return true
+	return ""
 }
 
 // lintCrashWhy is why lint command cmd failed for you when its run exited

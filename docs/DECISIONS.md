@@ -16937,12 +16937,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     The first try whose checks pass lifts it; `envCrashTries` (3) crashes at one head send the task to you
     with the fix and the retry, and the hold lets the other tasks go.
   - A crash for lack of a gem or a Ruby library runs the repository's `installs` in the copy once per
-    precheck (`heal`, with heal begin and ok or fail events) and the lint again. A crash that stays, or one
-    for lack of a command, is the writer's fix turn when the change can be its cause (`branchCaused`: it
-    touches what the lint loads, its gems, packages, tool versions, lint config or cops, or the lint's own
-    script, or the stderr names a changed file), and yours with the fix otherwise. Neither holds another
-    task: a plugin the writer added to `.rubocop.yml`, or a misnamed `require` in a custom cop, held the
-    whole factory with no way out but a stop.
+    precheck (`heal`, with heal begin and ok or fail events) and the lint again. rubocop rescues the
+    LoadError of a plugin or a require itself and prints its bare message, `cannot load such file --
+    rubocop-foo`, then the backtrace: that whole line is the library's signature, as is Ruby's uncaught
+    `… (LoadError)`. A crash that stays is the writer's fix turn when the change can be its cause
+    (`branchCaused`: it touches what the lint loads, its gems, packages, tool versions, lint config or cops,
+    or the lint's own script, or the stderr names a changed file), and yours with the fix otherwise; when
+    the installs themselves failed, the line says so with their error, not that the lint still crashed. A
+    crash for lack of a command is the writer's only when the change touches the lint's script
+    (`scriptOnly`): a lint that echoes the files it lints to stderr names the change's files, which lack no
+    command. Neither holds another task: a plugin the writer added to `.rubocop.yml`, or a misnamed
+    `require` in a custom cop, held the whole factory with no way out but a stop.
   - Any other such lint failure still needs you, now with the last line of its stderr that may say why
     (past mise's warnings, a stack's frames, the code frames that quote the branch's source and a Ruby
     error's place; redacted, control characters out, 200 runes; never a stdout line), and the `--format`
@@ -16969,7 +16974,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAMissingGemIsHealedInTheCopy, TestAMissingGemTheHealCannotFixNeedsYouWithoutAHold,
   TestAnEnvironmentSignatureOnStdoutIsNoCrash, TestACrashOfTheEnvironmentIsToldByAWholeLineOfStderr,
   TestALintCommandNamesItsFormat, TestALineOfOutputIsClipped, TestTheLineThatSaysWhyACommandFailed,
-  TestARetryThatChangedNothingSinceTheFailureSaysSo and TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged.
+  TestARetryThatChangedNothingSinceTheFailureSaysSo, TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged,
+  TestAHealWhoseInstallsFailedSaysSo and TestAMissingCommandIsNotTheBranchsForTheFilesTheLintEchoes.
 - **A NEEDS YOU of the checks names the fix and the retry, and a broken copy its failing line and its log**
   (2026-11-07, audit item R16). Task 5 waited 127 minutes on a line that named no command, and task 1's
   copies broke with the reason "mise WARN No untrusted config": the first line of stderr, not the failure.

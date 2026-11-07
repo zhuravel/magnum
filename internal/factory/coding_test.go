@@ -46,12 +46,14 @@ type codingRig struct {
 	// every git command as the factory built it (its env and its unset).
 	lint func(files []string) string
 	// lintCrash, when it returns a stderr, makes bin/lint print nothing on
-	// stdout, that on stderr, and exit 2, as a lint that crashed does.
-	lintCrash func(files []string) string
-	migrate   func(dir, script string) int
-	hang      func(run scriptRun) bool
-	failGit   func(args []string) error
-	seenGit   func(c execx.Cmd)
+	// stdout, that on stderr, and exit 2, as a lint that crashed does;
+	// bundleFails, when set, is the stderr of a `bundle install` that exits 1.
+	bundleFails string
+	lintCrash   func(files []string) string
+	migrate     func(dir, script string) int
+	hang        func(run scriptRun) bool
+	failGit     func(args []string) error
+	seenGit     func(c execx.Cmd)
 	// during runs inside each script, before it does its work (a person
 	// entering the copy's pane mid-run, a spec writing a tracked file);
 	// startErr is the error of a script that did not start (nil: it starts).
@@ -214,7 +216,15 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 				run.Exit = 1
 			}
 		}
-	case "bin/jest", "bundle": // jest passes; `bundle install` (a heal) installs nothing
+	case "bundle": // `bundle install` (a heal) installs nothing, or fails with bundleFails
+		r.mu.Lock()
+		fails := r.bundleFails
+		r.mu.Unlock()
+		if fails != "" {
+			r.record(run)
+			return execx.Result{Code: 1, Stderr: []byte(fails)}, &execx.ExitError{Cmd: c, Code: 1, Stderr: fails}
+		}
+	case "bin/jest":
 	case "bin/rails":
 		r.mu.Lock()
 		migrate := r.migrate

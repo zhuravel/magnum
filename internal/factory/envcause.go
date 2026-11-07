@@ -98,11 +98,13 @@ func firstLine(out string) string {
 // lacked, and the fix ({copy} the copy's path). machine: the daemon's
 // environment, every copy's alike (the infrastructure hold takes it); else
 // the copy's or the task's own. heal: the repository's installs in the copy
-// may bring back what it lacked.
+// may bring back what it lacked. scriptOnly: the change can be its cause
+// only through the lint's own script (a lint that echoes the files it
+// lints names them on stderr, and they lack no command).
 type envSignature struct {
-	re            *regexp.Regexp
-	lacks, fix    string
-	machine, heal bool
+	re                        *regexp.Regexp
+	lacks, fix                string
+	machine, heal, scriptOnly bool
 }
 
 // envSignatures are the known crashes of the environment, first match
@@ -113,10 +115,12 @@ var envSignatures = []envSignature{
 			"then `magnum factory install`"},
 	{re: regexp.MustCompile(`\(Bundler::GemNotFound\)$|^Bundler::GemNotFound:|^Could not find gem '[^']+'`), lacks: "a gem", heal: true,
 		fix: "`bundle install` in {copy}"},
-	{re: regexp.MustCompile(`cannot load such file -- \S+ \(LoadError\)$`), lacks: "a Ruby library", heal: true,
-		fix: "`bundle install` in {copy}"},
+	// rubocop rescues the LoadError of a plugin or a require itself and
+	// prints its bare message; Ruby's own uncaught one ends in (LoadError).
+	{re: regexp.MustCompile(`^cannot load such file -- \S+$|cannot load such file -- \S+ \(LoadError\)$`), lacks: "a Ruby library",
+		heal: true, fix: "`bundle install` in {copy}"},
 	{re: regexp.MustCompile(`^(?:\S+: )*(?:line \d+: )?\S+: command not found$|^(?:\S+: )*command not found: \S+$`), lacks: "a command",
-		fix: "install it, or put its directory on your login shell's PATH ([daemon] shell_path), then `magnum factory install`"},
+		scriptOnly: true, fix: "install it, or put its directory on your login shell's PATH ([daemon] shell_path), then `magnum factory install`"},
 }
 
 // envCrash is a lint that crashed on its environment (an envSignature on a
@@ -165,12 +169,14 @@ var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:
 	`pnpm-lock\.yaml|\.tool-versions|\.ruby-version|\.?mise\.toml)$|rubocop|eslint|stylelint|prettier|(?:^|/)cops?/`)
 
 // branchCaused are the files of the change (files, as the copy names them)
-// that a lint crash of cmd can come from: one the lint loads (lintInputRe),
-// the lint's own script (cmd's first word), or one its stderr names.
-func branchCaused(cmd, stderr string, files []string) []string {
+// that crash c of a lint can come from: the lint's own script (its
+// command's first word), and, unless c's signature is the script's alone
+// (scriptOnly: a missing command), one the lint loads (lintInputRe) or one
+// its stderr names.
+func branchCaused(c envCrash, stderr string, files []string) []string {
 	var out []string
 	for _, f := range files {
-		if lintInputRe.MatchString(f) || f == firstWord(cmd) || strings.Contains(stderr, f) {
+		if f == firstWord(c.cmd) || !c.sig.scriptOnly && (lintInputRe.MatchString(f) || strings.Contains(stderr, f)) {
 			out = append(out, f)
 		}
 	}

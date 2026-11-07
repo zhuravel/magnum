@@ -19,6 +19,7 @@ func TestACrashOfTheEnvironmentIsToldByAWholeLineOfStderr(t *testing.T) {
 		{"Could not find rubocop-rails-2.30.0 in locally installed gems (Bundler::GemNotFound)\n", "a gem", false},
 		{"Could not find gem 'rubocop-rails' in locally installed gems.\n", "a gem", false},
 		{"/usr/lib/ruby/3.4/rubygems.rb:12:in 'require': cannot load such file -- rubocop-rspec (LoadError)\n", "a Ruby library", false},
+		{"cannot load such file -- rubocop-rspec\n/usr/lib/ruby/3.4/rubygems.rb:12:in 'Kernel#require'\n", "a Ruby library", false},
 		{"bin/lint: line 3: bundle: command not found\n", "a command", false},
 		{"Error: .rubocop.yml names Style/Gone\n", "", false},
 		{"bin/lint: echo 'yarn: command not found' in setup.sh, not an error\n", "", false},

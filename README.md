@@ -3876,10 +3876,12 @@ stages = [
   sequence in US-ASCII`) is the machine's: the infrastructure hold takes it, naming the line and the fix, and
   runs the checks again at each of its tries; after 3 such crashes at one head the task needs you, with the
   fix and the retry. One for lack of a gem or a Ruby library (`Bundler::GemNotFound`, `Could not find gem`,
-  `cannot load such file -- x (LoadError)`) runs the repository's `installs` in the copy once and the lint
-  again. A crash that stays, or one for lack of a command (`x: command not found`), goes to the writer as a
-  fix turn when the change touches what the lint loads (its gems, packages, lint config or cops, or the lint's
-  script) or its stderr names a changed file, and to you, with the fix, otherwise; it holds no other task.
+  rubocop's own `cannot load such file -- rubocop-foo` for a plugin or a require it could not load, or Ruby's
+  `… (LoadError)`) runs the repository's `installs` in the copy once and the lint again. A crash that stays
+  goes to the writer as a fix turn when the change touches what the lint loads (its gems, packages, lint
+  config or cops, or the lint's script) or its stderr names a changed file, and to you, with the fix,
+  otherwise, which says when the installs themselves failed; one for lack of a command (`x: command not
+  found`) is the writer's only when the change touches the lint's script. It holds no other task.
   A command that does not start for a reason of the moment (EAGAIN, ENOMEM) has the checks run again.
 - **Staging.** Each `[[factory.repo.staging]]` has a `name`, a `branch` (never the base), an optional `qa`
   skill and an optional `after`, another environment of the repository whose QA must pass first (no cycles).

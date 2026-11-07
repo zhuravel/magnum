@@ -543,13 +543,17 @@ func TestALintCrashTheBranchCausedGoesToTheWriterNotAHold(t *testing.T) {
 		files  map[string]string
 		stderr func(dir string) string
 	}{
+		// rubocop rescues the LoadError itself (cli.rb) and prints its message,
+		// then its backtrace, bare: no " (LoadError)" after the message.
 		{"a plugin in .rubocop.yml", map[string]string{".rubocop.yml": "plugins:\n  - rubocop-points\n"}, func(string) string {
-			return "/usr/lib/ruby/3.4.0/rubygems.rb:136:in 'require': cannot load such file -- rubocop-points (LoadError)\n" +
-				"\tfrom /gems/rubocop/lib/rubocop/plugin/loader.rb:20:in 'load'\n"
+			return "cannot load such file -- rubocop-points\n" +
+				"/usr/lib/ruby/3.4.0/rubygems.rb:136:in 'Kernel#require'\n" +
+				"/gems/rubocop-1.92.1/lib/rubocop/feature_loader.rb:46:in 'RuboCop::FeatureLoader#load'\n"
 		}},
 		{"a require in a custom cop", map[string]string{"lib/cops/points_cop.rb": "require_relative 'helprs'\n"}, func(dir string) string {
-			return dir + "/lib/cops/points_cop.rb:1:in 'require_relative': cannot load such file -- " + dir +
-				"/lib/cops/helprs (LoadError)\n"
+			return "cannot load such file -- " + dir + "/lib/cops/helprs\n" +
+				dir + "/lib/cops/points_cop.rb:1:in 'Kernel#require_relative'\n" +
+				"/gems/rubocop-1.92.1/lib/rubocop/config_loader_resolver.rb:20:in 'block in resolve_requires'\n"
 		}},
 	}
 	for _, tc := range cases {
@@ -716,5 +720,45 @@ func TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged(t *testing.T) {
 	r.commit("PR-12393 your fix of the lint", map[string]string{"bin/lint-notes": "fixed\n"})
 	if answer := r.retryAnswer(task.ID); !strings.Contains(answer, "goes on") || strings.Contains(answer, "changed since") {
 		t.Fatalf("the retry after a commit answers %q, want it to go on saying nothing of nothing changed", answer)
+	}
+}
+
+// A heal whose installs failed (rubygems.org out of reach) is no lint that
+// still crashed after it: the lint did not run again, and the NEEDS YOU
+// says the installs failed, with the line that says why.
+func TestAHealWhoseInstallsFailedSaysSo(t *testing.T) {
+	r := installsRig(t)
+	task := r.codingTask("PR-12394", "bug")
+	r.fix(task)
+	r.setLintCrash("Could not find rubocop-rails-2.30.0 in locally installed gems (Bundler::GemNotFound)\n")
+	r.bundleFails = "Could not reach host index.rubygems.org. Check your network connection and try again.\n"
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("precheck error %v; want a failure for you", err)
+	}
+	if !res.ForYou || !strings.Contains(res.Why, "the installs failed") || !strings.Contains(res.Why, "Could not reach host") ||
+		strings.Contains(res.Why, "still crashed") {
+		t.Fatalf("precheck %+v; want a failure for you saying the installs failed and why", res)
+	}
+	if n := len(r.ran("bin/lint")); n != 1 {
+		t.Fatalf("the lint ran %d times, want once: a failed heal runs it no more", n)
+	}
+}
+
+// A lint that echoes the files it lints to stderr (set -x, a progress
+// line) and then misses a command is no crash of the branch: the change
+// names the files, not the command. Only a change of the lint's own script
+// makes a missing command the writer's.
+func TestAMissingCommandIsNotTheBranchsForTheFilesTheLintEchoes(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12395", "bug")
+	r.fix(task)
+	r.setLintCrash("+ yarn eslint app/credit.rb spec/models/credit_points_spec.rb\nbin/lint: line 3: yarn: command not found\n")
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("precheck error %v; want a failure for you", err)
+	}
+	if !res.ForYou || !strings.Contains(res.Why, "a command") {
+		t.Fatalf("precheck %+v; want a failure for you for the missing command, not a fix turn for the writer", res)
 	}
 }
