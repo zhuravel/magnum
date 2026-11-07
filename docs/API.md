@@ -15151,10 +15151,10 @@ func BetweenCalls(ctx context.Context)
 
 func ConnectionCause(msg string) string
     ConnectionCause names the connection-class failure msg reports ("" = none:
-    a real verdict from GitHub, or about an identity): the network's (DNS,
-    a timeout, a refused or reset connection, TLS), gh unable to connect,
-    a closed connection, a GitHub server error (5xx, 499, an empty answer) or a
-    rate limit (429, secondary or primary).
+    a real verdict from GitHub, or about an identity): the network's (DNS, a
+    timeout, a refused or reset connection, TLS, a server curl could not reach),
+    gh unable to connect, a closed connection, a GitHub server error (5xx, 499,
+    an empty answer) or a rate limit (429, secondary or primary).
 
 func IsAccount(author, typename, login string, bot bool) bool
     IsAccount reports whether an author (its login in either form and its

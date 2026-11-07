@@ -15399,12 +15399,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   times with git's "unable to access '...': Failed to connect to github.com:443 after 75014 ms: Could not
   connect to server". `github.NetworkCause` had no pattern for it, so the infrastructure pause did not take
   it: each failure charged the PR an attempt, the PR needed attention for almost 14 hours, and its public
-  status comment said the review failed. curl's "Failed to connect to", its "Could not connect to server" and
-  the older "Couldn't connect to server" (git prints the bare text when curl gives no detail) now name
-  "server unreachable". They come last in the list, so a message that names the socket's own error
-  ("...port 443: Connection refused", "...: Operation timed out") keeps that cause. The factory's
-  infrastructure hold reads the same classifier (`engine.InfraCause`). Rejected: "GitHub unreachable" as the
-  cause (the classifier reads every remote and dependency step, not only GitHub's). Tests, failing first:
+  status comment said the review failed. curl's "Failed to connect to <host>:<port>" (or "<host> port
+  <port>", in older curls), its "Could not connect to server" and the older "Couldn't connect to server" (git
+  prints the bare text when curl gives no detail) now name "server unreachable". They are read after the
+  other patterns, so a message that names the socket's own error ("...port 443: Connection refused", "...:
+  Operation timed out") keeps that cause. The factory's infrastructure hold reads the same classifier
+  (`engine.InfraCause`). Rejected: "GitHub unreachable" as the cause (the classifier reads every remote and
+  dependency step, not only GitHub's), and "Failed to connect to" without a host and its port (a setup step's
+  "Failed to connect to the database" may be the PR's own, which broke its config, and a failure the
+  classifier takes pauses every PR and is never charged). Tests, failing first:
   TestNetworkCauseNamesOnlyTheNetworksFailures, TestConnectionCause, TestInfraCauseClassifiesOutsideFailures.
 - **A probe that times out waits before it is asked again** (2026-11-07; amends "The daemon records each agent
   CLI's version and names a launch failure shared across PRs" and "Whiteboards of reviewed PRs"). From 11-03

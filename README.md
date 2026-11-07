@@ -942,9 +942,10 @@ overload no other PR shares is charged as before, and a PR an overload already p
 
 A fetch, clone, checkout or dependency step that fails for a reason outside the PR (an SSH key the
 agent lost, DNS, a network timeout or refusal, a server curl could not connect to, TLS, or the same
-dependency error on two PRs within ten minutes) pauses dispatch for everything once, with one toast, and is never charged to the PR. Magnum
-probes `git ls-remote` of a watched clone (over HTTPS through gh, like its fetches) after 2 minutes, then after twice as long each time it still
-fails (up to 30 minutes), and resumes by itself when it answers; `magnum resume` lifts the pause at once.
+dependency error on two PRs within ten minutes) pauses dispatch for everything once, with one toast,
+and is never charged to the PR. Magnum probes `git ls-remote` of a watched clone (over HTTPS through
+gh, like its fetches) after 2 minutes, then after twice as long each time it still fails (up to 30
+minutes), and resumes by itself when it answers; `magnum resume` lifts the pause at once.
 
 A logged-out agent CLI pauses its kind: the login check before a round (`[kinds.*] login_check`) skips a
 logged-out reviewer and ends a round whose judge is logged out, and a run that fails with the login error

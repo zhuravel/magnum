@@ -14,11 +14,8 @@ import (
 type errPattern struct{ match, cause string }
 
 // networkPatterns are the infrastructure failures that are the network's
-// (DNS, timeouts, refusals, resets, TLS, a server curl could not reach);
-// ConnectionCause reads them too. The first pattern in the list wins, so
-// curl's connect failure comes last: one that names the socket's error
-// ("Failed to connect to github.com port 443: Connection refused") keeps
-// that cause.
+// (DNS, timeouts, refusals, resets, TLS); networkCause reads them, then
+// curlConnectRe. The first pattern in the list wins.
 var networkPatterns = []errPattern{
 	{"could not resolve host", "DNS lookup failed"},
 	{"temporary failure in name resolution", "DNS lookup failed"},
@@ -35,12 +32,6 @@ var networkPatterns = []errPattern{
 	{"ssl_connect", "TLS failure"},
 	{"gnutls_handshake", "TLS failure"},
 	{"tls handshake", "TLS failure"},
-	// curl's CURLE_COULDNT_CONNECT, as git over HTTPS prints it: "Failed to
-	// connect to github.com:443 after 75014 ms: Could not connect to
-	// server", or the bare error text ("Couldn't" in older curls).
-	{"failed to connect to", "server unreachable"},
-	{"could not connect to server", "server unreachable"},
-	{"couldn't connect to server", "server unreachable"},
 }
 
 // githubPatterns are the connection-class failures of a GitHub API call that
@@ -81,6 +72,15 @@ var (
 	rateLimitRe   = regexp.MustCompile(`\bhttp 429\b|\b(?:get|post|put|patch|delete) /\S*: 429\b`)
 	// eofRe is a connection closed mid-answer (`Get "...": EOF`, "unexpected EOF").
 	eofRe = regexp.MustCompile(`(?:: |unexpected )eof\b`)
+	// curlConnectRe is curl's CURLE_COULDNT_CONNECT as git over HTTPS prints
+	// it: "Failed to connect to github.com:443 after 75014 ms: Could not
+	// connect to server" ("github.com port 443" and "Couldn't" in older
+	// curls), or the bare error text when curl gives no detail. Only curl's
+	// shape, a host and its port: "Failed to connect to the database" from a
+	// setup step may be the PR's own. networkCause reads it after
+	// networkPatterns, so one that names the socket's error ("...port 443:
+	// Connection refused") keeps that cause.
+	curlConnectRe = regexp.MustCompile(`failed to connect to \S+?(?::\d+| port \d+)|could(?: not|n't) connect to server`)
 )
 
 // matchPattern is the cause of the first of patterns that msg (lower case)
@@ -99,17 +99,29 @@ func matchPattern(msg string, patterns []errPattern) string {
 // network or server, TLS. What git, ssh and curl print when a remote cannot
 // be reached.
 func NetworkCause(msg string) string {
-	return matchPattern(strings.ToLower(msg), networkPatterns)
+	return networkCause(strings.ToLower(msg))
+}
+
+// networkCause is NetworkCause of msg in lower case: networkPatterns, then
+// curl's connect failure (curlConnectRe).
+func networkCause(msg string) string {
+	if cause := matchPattern(msg, networkPatterns); cause != "" {
+		return cause
+	}
+	if curlConnectRe.MatchString(msg) {
+		return "server unreachable"
+	}
+	return ""
 }
 
 // ConnectionCause names the connection-class failure msg reports ("" = none:
 // a real verdict from GitHub, or about an identity): the network's (DNS, a
-// timeout, a refused or reset connection, TLS), gh unable to connect, a
-// closed connection, a GitHub server error (5xx, 499, an empty answer) or a
-// rate limit (429, secondary or primary).
+// timeout, a refused or reset connection, TLS, a server curl could not
+// reach), gh unable to connect, a closed connection, a GitHub server error
+// (5xx, 499, an empty answer) or a rate limit (429, secondary or primary).
 func ConnectionCause(msg string) string {
 	msg = strings.ToLower(msg)
-	if cause := matchPattern(msg, networkPatterns); cause != "" {
+	if cause := networkCause(msg); cause != "" {
 		return cause
 	}
 	if cause := matchPattern(msg, githubPatterns); cause != "" {

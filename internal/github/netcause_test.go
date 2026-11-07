@@ -77,6 +77,10 @@ func TestNetworkCauseNamesOnlyTheNetworksFailures(t *testing.T) {
 		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Could not connect to server", "server unreachable"},
 		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com port 443 after 75004 ms: Operation timed out", "network timeout"},
 		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com port 443: Connection refused", "connection refused"},
+		{"curl: (7) Failed to connect to example.com port 443 after 3 ms: Couldn't connect to server", "server unreachable"},
+		// Only curl's shape, a host and its port: a setup step's own words
+		// about its database are the PR's, which may have broken its config.
+		{"slots: deps review1: bin/setup: exit 1: Failed to connect to the database talkable_test", ""},
 		{"error connecting to api.github.com", ""},
 		{"gh: HTTP 502: Bad Gateway", ""},
 		{"fatal: couldn't find remote ref refs/pull/7/head", ""},
