@@ -589,6 +589,30 @@ func TestATurnThatAskedIsVoidedNotFailed(t *testing.T) {
 	}
 }
 
+// A role whose last turn that may have arrived was given up by a recovery
+// (the runtime's RecoveryPrefix: its session quit and no new turn took its
+// place, or the new turn's prompt proven never to have arrived) is
+// recovered once the stage is rebuilt, after a restart too: the runtime's
+// memory of it is gone, and the stage would wait in silence. A role whose
+// last turn paused is not: the stage sends it the prompt to go on.
+func TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12383", "bug", "investigate")
+	h.startStage(task)
+	h.rt.abandonRun(h.lastRun("fx-repro"), runtime.RecoveryPrefix+"its turn hung")
+	h.rt.abandonRun(h.lastRun("fx-history"), runtime.PausedPrefix+"usage: claude limit until 16:00")
+	h.restart()
+	h.startStage(task)
+
+	if got := h.rt.recoveries(); !slices.Equal(got, []string{TaskKey(task) + "/fx-repro"}) {
+		t.Fatalf("RecoverLost calls %v, want fx-repro's alone", got)
+	}
+	h.tick()
+	if got := h.rt.recoveries(); len(got) != 1 {
+		t.Fatalf("RecoverLost calls %v, want one: the stage known to this daemon asks no more", got)
+	}
+}
+
 // A restart between your answers and the resumed role's prompt sends that
 // prompt once.
 func TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce(t *testing.T) {

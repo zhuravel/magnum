@@ -350,7 +350,7 @@ func (r *Runtime) ended(ctx context.Context, run store.Run) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{run.TargetSHA, run.Role}]; st != nil {
-		st.step, st.stuck, st.recovering, st.sig, st.since = 0, false, false, "", time.Time{}
+		st.step, st.stuck, st.recovering, st.pending, st.sig, st.since = 0, false, false, false, "", time.Time{}
 	}
 }
 
@@ -481,23 +481,6 @@ func (r *Runtime) lostPane(ctx context.Context, o agents.Observation) []Event {
 		r.log.Warn("recover a lost pane", "task", t.ID, "role", role.Name, "err", err)
 	}
 	return nil
-}
-
-// recoverAgain makes the role of e, a prompt proven never to have arrived,
-// due a recovery when that prompt was a recovery's own (a resume's or a
-// fresh session's): the runs it replaced were abandoned once it might have
-// left, and the stage sends nothing for them, so the watchdog recovers the
-// role again (waitToRecover), the next step of its ladder.
-func (r *Runtime) recoverAgain(ctx context.Context, e registry.LedgerEntry) {
-	run, err := r.st.RunByID(ctx, e.RunID)
-	if err != nil || run.Kind != store.RunRecovery {
-		return
-	}
-	if _, err := r.stateFor(ctx, e.AttemptID, e.Role); err != nil {
-		return
-	}
-	r.log.Warn("a recovery's prompt never arrived: the role is recovered again", "task", e.TaskID, "role", e.Role)
-	r.waitToRecover(e.AttemptID, e.Role)
 }
 
 // waitToRecover marks role of attempt as due a recovery that waits (on a
@@ -751,7 +734,6 @@ func (r *Runtime) reconcileUnknown(ctx context.Context, reads turnReads) {
 		}
 		switch got {
 		case registry.DeliveredNo:
-			r.recoverAgain(ctx, e)
 			r.emit("", Event{TaskID: e.TaskID, Role: e.Role, RunID: e.RunID, Kind: EventUndelivered,
 				Reason: "the prompt to " + e.Role + " never arrived (its transcript, read twice, has no such turn): it goes once more"})
 			continue

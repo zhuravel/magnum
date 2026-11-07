@@ -566,41 +566,52 @@ func (g *rig) hungTurn(first string) string {
 	return id
 }
 
-// watchedRun fails t unless run id is still in flight (submitted or working):
-// the watchdog watches it.
-func (g *rig) watchedRun(id, when string) {
+// hungRunLeft fails t unless the hung run id is as a failed step leaves it:
+// still in flight on its live session when the step failed at the quit
+// (the watchdog watches the role through it), else abandoned for the
+// recovery that quit its session (RecoveryPrefix), so nothing holds the
+// task's park and the store says the role is due a recovery.
+func (g *rig) hungRunLeft(id string, quitFailed bool, when string) {
 	g.t.Helper()
-	if r := g.storeRun(id); r.State != store.RunSubmitted && r.State != store.RunWorking {
-		g.t.Fatalf("%s the hung run is %s, want it still in flight, so the watchdog watches its role", when, r.State)
+	r := g.storeRun(id)
+	switch {
+	case quitFailed && r.State != store.RunSubmitted && r.State != store.RunWorking:
+		g.t.Fatalf("%s the hung run is %s, want it still in flight on its live session, so the watchdog watches its role", when, r.State)
+	case !quitFailed && (r.State != store.RunAbandoned || !strings.HasPrefix(store.Deref(r.Error), RecoveryPrefix)):
+		g.t.Fatalf("%s the hung run is %s (%q), want it abandoned once its session was quit, with %q", when, r.State,
+			store.Deref(r.Error), RecoveryPrefix)
 	}
 }
 
 // The faults a watchdog step can meet partway, after it decided to restart
 // the role: the quit of the hung session, the start of its replacement, and
-// the replacement's prompt, which herdr refuses.
+// the replacement's prompt, which herdr refuses. quits says whether the
+// hung session was quit before the fault.
 var stepFaults = []struct {
 	name   string
+	quits  bool
 	inject func(g *rig)
 }{
-	{"the quit fails", func(g *rig) {
+	{"the quit fails", false, func(g *rig) {
 		g.h.keysErr = func(string) error { return errors.New("herdr: connection reset by peer") }
 	}},
-	{"the start fails", func(g *rig) {
+	{"the start fails", true, func(g *rig) {
 		g.h.startErr = func(herdr.AgentStartOptions) error {
 			return &herdr.Error{Method: "agent.start", Code: "agent_start_failed", Message: "the agent did not come up"}
 		}
 	}},
-	{"the prompt never leaves", func(g *rig) {
+	{"the prompt never leaves", true, func(g *rig) {
 		g.h.promptErr = func(string) error {
 			return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotFound, Message: "no such agent"}
 		}
 	}},
 }
 
-// A watchdog step that fails partway (its quit, its start, its prompt) gives
-// up nothing: the hung run stays in flight, so the role stays watched, and
-// the next step comes NoProgressAfter later; once it goes through, the hung
-// run is abandoned for the run that replaced it.
+// A watchdog step that fails partway (its quit, its start, its prompt)
+// leaves the role watched: the hung run stays in flight while its session
+// does, and once the step quit that session the run is abandoned and the
+// role is still due its next step, which comes NoProgressAfter later and
+// starts a fresh session.
 func TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched(t *testing.T) {
 	for _, fault := range stepFaults {
 		t.Run(fault.name, func(t *testing.T) {
@@ -614,7 +625,7 @@ func TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched(t *testing.T) {
 			if evs := g.watchdog(); len(evs) != 0 {
 				t.Fatalf("the failed step gave %+v, want nothing yet", evs)
 			}
-			g.watchedRun(hung, "after the failed resume")
+			g.hungRunLeft(hung, !fault.quits, "after the failed resume")
 
 			g.h.keysErr, g.h.startErr, g.h.promptErr = nil, nil, nil
 			g.clock.Add(NoProgressAfter / 2)
@@ -634,12 +645,17 @@ func TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched(t *testing.T) {
 			if r := g.storeRun(hung); r.State != store.RunAbandoned {
 				t.Fatalf("the hung run is %s once a fresh session replaced it, want abandoned", r.State)
 			}
+			if role, _, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "fx-repro" {
+				t.Fatalf("AtWork = %q, %v; want the fresh session's turn at work", role, err)
+			}
 		})
 	}
 }
 
 // Steps that all fail end where steps that do not help end: EventStuck, so
-// the task needs you, never a hung role nobody watches.
+// the task needs you, never a hung role nobody watches. Once the steps quit
+// its session, nothing of the role stays in flight: the task parks, and
+// nobody is at work in its copy.
 func TestAWatchdogWhoseStepsAllFailEndsStuck(t *testing.T) {
 	for _, fault := range stepFaults {
 		t.Run(fault.name, func(t *testing.T) {
@@ -654,14 +670,28 @@ func TestAWatchdogWhoseStepsAllFailEndsStuck(t *testing.T) {
 			if stuck := only(evs, EventStuck); len(stuck) != 1 || stuck[0].Role != "fx-repro" || stuck[0].TaskID != g.task.ID {
 				t.Fatalf("events %+v after every step failed, want fx-repro stuck once", evs)
 			}
-			g.watchedRun(hung, "once it is stuck")
+			g.hungRunLeft(hung, !fault.quits, "once it is stuck")
+			if !fault.quits {
+				return // its hung turn is still at work in its live session
+			}
+			g.h.keysErr, g.h.startErr, g.h.promptErr = nil, nil, nil
+			if role, you, err := g.r.AtWork(g.ctx, g.task); err != nil || role != "" || you {
+				t.Fatalf("AtWork = %q, %v, %v once it is stuck; want nobody at work in the copy", role, you, err)
+			}
+			g.endTask(registry.TaskStopped)
+			g.restart()
+			if err := g.r.Park(g.ctx, g.task); err != nil {
+				t.Fatalf("Park of the stopped task = %v, want its agents parked", err)
+			}
 		})
 	}
 }
 
-// A failed step survives a restart of the daemon: the hung run it left in
-// flight is in the agents store, and the fresh runtime's watchdog takes its
-// ladder over from it.
+// A failed step survives a restart of the daemon. One that failed at the
+// quit left the hung run in flight in the agents store, and the fresh
+// runtime's watchdog takes its ladder over from it; one that failed after
+// the quit left the run abandoned for a recovery, and RecoverLost, which the
+// stage calls on that reason once it is rebuilt, recovers the role.
 func TestAFailedWatchdogStepStaysWatchedAcrossARestart(t *testing.T) {
 	g := newRig(t)
 	g.hungTurn("reproduce the bug")
@@ -681,13 +711,59 @@ func TestAFailedWatchdogStepStaysWatchedAcrossARestart(t *testing.T) {
 	}
 }
 
+// After a step that failed once it quit the session, the role is the
+// watchdog's: RecoverLost, which the stage calls when it is rebuilt from a
+// run a recovery abandoned, starts nothing more in the same runtime, and
+// the climb's next step comes on its pace. After a restart RecoverLost
+// recovers the role itself.
+func TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart(t *testing.T) {
+	g := newRig(t)
+	hung := g.hungTurn("reproduce the bug")
+	stepFaults[1].inject(g) // the start fails
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+	g.h.startErr = nil
+	starts := len(g.h.startCalls())
+
+	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts from RecoverLost while the watchdog had the role, want none", n-starts)
+	}
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+	if n := len(g.h.startCalls()); n != starts+1 {
+		t.Fatalf("%d starts NoProgressAfter later, want the climb's next step", n-starts)
+	}
+
+	h := newRig(t)
+	hung = h.hungTurn("reproduce the bug")
+	stepFaults[1].inject(h)
+	h.clock.Add(NoProgressAfter)
+	h.watchdog()
+	h.h.startErr = nil
+	if _, why, err := h.r.RunState(h.ctx, hung); err != nil || !strings.HasPrefix(why, RecoveryPrefix) {
+		t.Fatalf("RunState of the hung run = %q, %v; want the recovery's reason, which a rebuilt stage reads", why, err)
+	}
+	h.restart()
+	starts = len(h.h.startCalls())
+	if err := h.r.RecoverLost(h.ctx, h.task, h.attempt, h.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if s := h.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v after the restart, want the role's conversation resumed", s[starts:])
+	}
+}
+
 // A recovery's prompt that herdr may have typed (its delivery unknown), and
 // that two reads of the transcript then prove never arrived, leaves no role
-// alone: the replaced run is gone, so the role's recovery is due again, and
-// the watchdog takes it NoProgressAfter later.
+// alone, across a restart too: the runs it replaced were abandoned for the
+// recovery (RecoveryPrefix), so the stage, rebuilt on EventUndelivered or
+// after the restart, calls RecoverLost, which recovers the role again.
 func TestARecoveryPromptThatNeverArrivedIsRecoveredAgain(t *testing.T) {
 	g := newRig(t)
-	g.hungTurn("reproduce the bug")
+	hung := g.hungTurn("reproduce the bug")
 	g.h.promptErr = func(text string) error {
 		if text == resumeText {
 			return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
@@ -711,16 +787,51 @@ func TestARecoveryPromptThatNeverArrivedIsRecoveredAgain(t *testing.T) {
 	if no := only(evs, EventUndelivered); len(no) != 1 || no[0].Role != "fx-repro" {
 		t.Fatalf("events %+v, want the resume prompt proven undelivered", evs)
 	}
-	starts := len(g.h.startCalls())
+	if _, why, err := g.r.RunState(g.ctx, hung); err != nil || !strings.HasPrefix(why, RecoveryPrefix) {
+		t.Fatalf("RunState of the replaced run = %q, %v; want the recovery's reason, which a rebuilt stage reads", why, err)
+	}
 
-	for range 2 {
-		g.clock.Add(NoProgressAfter)
-		g.watchdog()
+	g.restart() // before anything acted on the proof
+	starts := len(g.h.startCalls())
+	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
+		t.Fatal(err)
 	}
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after the resume prompt never arrived, want the role recovered again", s[starts:])
 	}
 	if p := g.h.promptTexts(); p[len(p)-1] != resumeText {
 		t.Fatalf("the recovered role got %q, want the resume prompt", p[len(p)-1])
+	}
+}
+
+// A step that cannot quit the hung session lets go of the hung run's
+// prompts of unknown delivery (the watchdog's nudge, say): the session is
+// to be restarted, so their fate no longer matters, and none of them sends
+// the task to you in the middle of the steps.
+func TestAStepThatCannotQuitLetsGoOfTheHungRunsUnknownPrompts(t *testing.T) {
+	g := newRig(t)
+	g.h.promptErr = func(text string) error {
+		if text == nudgeText {
+			return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+		}
+		return nil
+	}
+	g.hungTurn("reproduce the bug")
+	g.h.promptErr = nil
+	nudge := g.ledger()[1]
+	if nudge.Text != nudgeText || nudge.Delivered != registry.DeliveredUnknown {
+		t.Fatalf("the nudge's entry %q is %s, want unknown", nudge.Text, nudge.Delivered)
+	}
+	stepFaults[0].inject(g) // the quit fails
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+
+	if got := g.ledger()[1].Delivered; got != registry.DeliveredAbandoned {
+		t.Fatalf("the hung run's nudge is %s after the step, want let go", got)
+	}
+	g.h.keysErr = nil
+	g.clock.Add(UnknownAfter)
+	if evs := only(g.observeN(2), EventDeliveryUnknown); len(evs) != 0 {
+		t.Fatalf("events %+v: the nudge's fate went to you in the middle of the steps", evs)
 	}
 }

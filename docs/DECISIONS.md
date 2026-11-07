@@ -17032,6 +17032,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the prompt fail: the hung run was abandoned), TestAWatchdogWhoseStepsAllFailEndsStuck (no event),
   TestAFailedWatchdogStepStaysWatchedAcrossARestart (no step after the restart) and
   TestARecoveryPromptThatNeverArrivedIsRecoveredAgain (no recovery after the proof).
+- **A watchdog step that fails partway leaves its role watched** (2026-11-07, the audit's R13, with its review's
+  fixes). The hung-turn ladder's resume and fresh steps abandoned the role's runs in flight before they quit the
+  hung session, read its resume id, started its replacement and sent it its prompt. When one of those failed,
+  the role had no run in flight and was no recovery (`recovering` is the lost-pane ladder's), so the watchdog
+  never looked at it again and its stage waited in silence, after a restart too. `restart` and `fromFiles` now
+  keep the role's runs in flight while their session is live: a step that fails before the quit (or at it)
+  leaves the hung run in flight, and the watchdog watches the role through it, from the agents store after a
+  restart too. Once the session is quit, or found gone, the runs are abandoned for the recovery (`handOver`,
+  with `RecoveryPrefix`), and the role stays due its next step in memory (`pending`, cleared by its next run)
+  until a run of it is sent: a step that fails after the quit takes the next one `NoProgressAfter` later, and
+  the ladder ends in `EventStuck` as one whose steps do not help does. A run left in flight on a quit session
+  would be one nothing ends (the observe pass reads runs by their live session): it held the task's park
+  (`ErrBusy`), so its copy, and named the role at work in the copy, for good once the task stopped, which the
+  review's probe showed. The reason is what survives a restart: a stage rebuilt after one, or on
+  `EventUndelivered` (a recovery's prompt of unknown fate that two reads prove never arrived), whose role's
+  last run that may have arrived carries it, calls `RecoverLost`, which recovers the role (the lost-pane
+  ladder: resume, fresh session, `EventLost`) unless this runtime recovers it already, and makes it due the
+  watchdog's step when it cannot run now. A step also lets go of the hung run's prompts of unknown delivery
+  (the watchdog's nudge) before it quits: a quit that fails then sends none of them to you in the middle of
+  the steps.
+  Rejected: the first cut, which kept the hung run in flight until the replacement's prompt left (it left an
+  orphan on a parked session once the start or the prompt failed); `recovering` set before the climb's steps
+  (a failed resume of a hung turn would take the lost pane's ladder and end in "the pane was lost"); a mark in
+  memory alone (a restart forgets it, the first cut's `recoverAgain` included); the failed step tried again at
+  once (a herdr that fails now fails ten seconds later too, and the ladder's pace is the retry). After a
+  restart the climb's count is gone, so the rebuilt stage's recovery takes the lost-pane ladder. The resume
+  id's read fails only when the agents store does, so no fake injects it: it comes after the quit, where the
+  start's failure is tested. Tests, failing first: TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched (the
+  quit, the start and the prompt fail: the hung run was abandoned, then, in the review's round, left in
+  flight after the quit), TestAWatchdogWhoseStepsAllFailEndsStuck (no event, then a task that did not park),
+  TestAFailedWatchdogStepStaysWatchedAcrossARestart (no step after the restart),
+  TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart (a second start in the same
+  runtime), TestAStepThatCannotQuitLetsGoOfTheHungRunsUnknownPrompts (the nudge stayed unknown) and
+  TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn (no `RecoverLost`);
+  TestARecoveryPromptThatNeverArrivedIsRecoveredAgain holds the restart between the proof and the recovery.
 
 - **A continuation on the fallback model that never left pauses its role** (2026-11-07, the audit's R14). A run
   that ended on its model's own limit was abandoned, its session switched and the model-fallback prompt sent;

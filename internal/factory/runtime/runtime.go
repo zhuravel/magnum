@@ -216,8 +216,12 @@ type roleState struct {
 	fresh      bool
 	recovering bool
 	lost       bool
-	noPrompt   int
-	nudges     int
+	// pending: a recovery quit the role's session (or found it gone) and
+	// abandoned its runs, and no new run of it was sent yet (handOver): the
+	// watchdog keeps the role due its next step.
+	pending  bool
+	noPrompt int
+	nudges   int
 	// refused: the role's turn ended on a refusal; it never runs again in
 	// the attempt.
 	refused bool
@@ -509,7 +513,7 @@ func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{attempt, role}]; st != nil {
-		st.recovering, st.step, st.sig, st.since = false, 0, "", time.Time{}
+		st.recovering, st.pending, st.step, st.sig, st.since = false, false, 0, "", time.Time{}
 		st.refused = st.refused || refused
 	}
 	if refused && kind == agents.KindCodex {

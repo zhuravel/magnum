@@ -56,7 +56,9 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // sends through its ledger, the panes it observes and the watchdog over
 // them, the verification of a run's end (or its setting aside, a turn that
 // asked questions: Void), parking a task's sessions, the
-// reconcile of a prompt of unknown delivery, the recovery of a lost pane,
+// reconcile of a prompt of unknown delivery, the recovery of a lost pane
+// or of a role a recovery left without a turn (RecoverLost, which a rebuilt
+// stage calls),
 // the shift of every turn deadline after the Mac slept, the role that runs
 // for a role (its Claude fallback on a task Codex never works on), the quit
 // of such a task's Codex sessions, a run's state as the agents store keeps

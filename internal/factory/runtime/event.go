@@ -65,6 +65,15 @@ const (
 // once the pause is over.
 const PausedPrefix = "paused: "
 
+// RecoveryPrefix leads the error of a run a recovery gave up: the watchdog
+// quit its session (or found it gone) to resume the role or start it
+// afresh. While such a run is the role's last whose prompt may have
+// arrived, no turn took its place (a step failed after the quit, or the new
+// turn's prompt is proven never to have arrived), so the role is due a
+// recovery: a stage rebuilt after a restart, or on EventUndelivered, calls
+// Runtime.RecoverLost for it.
+const RecoveryPrefix = "recovery: "
+
 // SurfaceLiaison is the Surface of an EventTyped of the turns typed into a
 // task's liaison's pane (Runtime.Talk), and the surface the liaison records
 // your answers and decisions with.

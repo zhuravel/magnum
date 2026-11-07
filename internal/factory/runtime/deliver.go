@@ -180,12 +180,14 @@ func neverSent(err error) bool {
 		herdr.IsCode(err, herdr.CodeAgentNotFound)
 }
 
-// sent notes a new run of a role: the watchdog reads its progress afresh.
+// sent notes a new run of a role: the watchdog reads its progress afresh,
+// through that run (a recovery that handed its runs over is no longer
+// pending).
 func (r *Runtime) sent(attempt, role string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{attempt, role}]; st != nil {
-		st.sig, st.since = "", time.Time{}
+		st.sig, st.since, st.pending = "", time.Time{}, false
 	}
 }
 

@@ -198,6 +198,10 @@ type stageRole struct {
 	// asking: its run ended with questions that wait for your answers (the
 	// stage is suspended).
 	asking bool
+	// recover: its last run whose prompt may have arrived was given up by a
+	// recovery, and no turn took its place (runtime.RecoveryPrefix): the
+	// rebuilt stage has the runtime recover it (agentsRunOf).
+	recover bool
 }
 
 // The prompts a role gets after its first (stageRole.next): its one nudge
@@ -488,9 +492,24 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		if ev != nil {
 			evs = append(evs, *ev)
 		}
+		if r.recover {
+			r.recover = false
+			e.recoverLost(ctx, t, a, r)
+		}
 	}
 	e.agentRuns[t.ID] = run
 	return run, evs, nil
+}
+
+// recoverLost has the runtime recover role r of attempt a (Runtime.RecoverLost),
+// whose last turn a recovery gave up with no turn in its place: the runtime
+// forgot it in a restart, or its new turn's prompt never arrived. Recoveries
+// that ran out come back as EventLost; one that cannot run now is the
+// watchdog's to take later, so a failure is only logged.
+func (e *Engine) recoverLost(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) {
+	if err := e.d.Runtime.RecoverLost(ctx, t, a, r.runAs); err != nil {
+		e.log.Warn("recover a role a recovery left without a turn", "task", t.ID, "role", r.runAs.Name, "err", err)
+	}
 }
 
 // lastRunEvent is what role r's last run of the attempt, run, says of it in
@@ -506,6 +525,8 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 //   - abandoned because you let its prompt go: no event, its turn is not
 //     watched (letGo: recheckFailed waits on you until its end fact holds;
 //     the prompt is never sent again);
+//   - abandoned by a recovery (runtime.RecoveryPrefix) with no turn in its
+//     place: no event, the role is due a recovery (recover);
 //   - in flight, or unknown: nothing, its events come.
 func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole, run string) (*runtime.Event, error) {
 	state, why, err := e.d.Runtime.RunState(ctx, run)
@@ -529,6 +550,7 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 			ev.Kind, ev.Reason = runtime.EventPaused, pause
 			return ev, nil
 		}
+		r.recover = strings.HasPrefix(why, runtime.RecoveryPrefix)
 		r.letGo = why == runtime.LetGoWhy
 	}
 	return nil, nil

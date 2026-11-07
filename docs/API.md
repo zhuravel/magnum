@@ -12923,9 +12923,10 @@ type Runtime interface {
     ledger, the panes it observes and the watchdog over them, the verification
     of a run's end (or its setting aside, a turn that asked questions: Void),
     parking a task's sessions, the reconcile of a prompt of unknown delivery,
-    the recovery of a lost pane, the shift of every turn deadline after
-    the Mac slept, the role that runs for a role (its Claude fallback on a
-    task Codex never works on), the quit of such a task's Codex sessions,
+    the recovery of a lost pane or of a role a recovery left without a turn
+    (RecoverLost, which a rebuilt stage calls), the shift of every turn deadline
+    after the Mac slept, the role that runs for a role (its Claude fallback on
+    a task Codex never works on), the quit of such a task's Codex sessions,
     a run's state as the agents store keeps it across a restart, who is at work
     in a task's copy now (a run in flight, you in a pane: the factory's own
     commands that change the copy wait for them), and who could have changed it
@@ -14118,6 +14119,15 @@ const PausedPrefix = "paused: "
     wait ("usage: claude limit until 16:00"), which RunState returns, so a stage
     rebuilt after a restart knows the role is to go on once the pause is over.
 
+const RecoveryPrefix = "recovery: "
+    RecoveryPrefix leads the error of a run a recovery gave up: the watchdog
+    quit its session (or found it gone) to resume the role or start it afresh.
+    While such a run is the role's last whose prompt may have arrived, no turn
+    took its place (a step failed after the quit, or the new turn's prompt
+    is proven never to have arrived), so the role is due a recovery: a stage
+    rebuilt after a restart, or on EventUndelivered, calls Runtime.RecoverLost
+    for it.
+
 const SurfaceLiaison = "liaison"
     SurfaceLiaison is the Surface of an EventTyped of the turns typed into a
     task's liaison's pane (Runtime.Talk), and the surface the liaison records
@@ -14445,10 +14455,15 @@ func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error
 
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
     RecoverLost recovers role (as it runs) of attempt a of task t whose pane
-    was lost: a resume of its conversation (at most MaxResumes in the attempt),
-    then a fresh session from the files; then the recoveries ran out (EventLost,
-    "no progress after <n> recoveries", at the next Observe). Each recovery that
-    shows no progress within NoProgressAfter takes the next step (Watchdog).
+    was lost, or whose last turn a recovery gave up with no turn in its place
+    (RecoveryPrefix, which a stage rebuilt after a restart reads): a resume of
+    its conversation (at most MaxResumes in the attempt), then a fresh session
+    from the files; then the recoveries ran out (EventLost, "no progress after
+    <n> recoveries", at the next Observe). Each recovery that shows no progress
+    within NoProgressAfter takes the next step (Watchdog). A role this runtime
+    already recovers, or whose steps ran out, is left to the watchdog; one whose
+    recovery cannot run now (a pause, you in its pane, a failure) is due it,
+    and the watchdog takes it once it may.
 
 func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error)
     RunState is run id as the agents store keeps it: its state (store.Run*:

@@ -75,7 +75,7 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
 	r.mu.Lock()
 	var idle []*roleState
 	for k, st := range r.roles {
-		if !seen[k] && st.recovering && !st.lost {
+		if !seen[k] && (st.recovering || st.pending) && !st.lost && !st.stuck {
 			idle = append(idle, st)
 		}
 	}
@@ -88,8 +88,11 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
 	return evs, nil
 }
 
-// watch takes the step a role's run (none: a recovery waiting for one)
-// is due at now.
+// watch takes the step a role's run (none: a recovery waiting for one, or
+// a step that quit the role's session and failed before a new run took its
+// place, pending) is due at now. A pending role that was on no ladder yet
+// (a fresh start of a Codex session that took no prompt, a loop's fresh
+// session) takes the recoveries' steps.
 func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now time.Time) (Event, bool) {
 	r.mu.Lock()
 	climbing, recovering, done := st.step > 0, st.recovering, st.stuck || st.lost
@@ -139,7 +142,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		}
 		return Event{}, false // a pause, a refusal or you in the pane: no step now
 	}
-	if recovering {
+	if recovering || (run.ID == "" && !climbing) {
 		err := r.recoverRole(ctx, t, a, st.role, "no progress for "+NoProgressAfter.String())
 		if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 			return r.lostEvent(t, a, st.role, spent), true
@@ -269,19 +272,36 @@ func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt
 }
 
 // RecoverLost recovers role (as it runs) of attempt a of task t whose pane
-// was lost: a resume of its conversation (at most MaxResumes in the
-// attempt), then a fresh session from the files; then the recoveries ran
-// out (EventLost, "no progress after <n> recoveries", at the next Observe).
-// Each recovery that shows no progress within NoProgressAfter takes the
-// next step (Watchdog).
+// was lost, or whose last turn a recovery gave up with no turn in its place
+// (RecoveryPrefix, which a stage rebuilt after a restart reads): a resume
+// of its conversation (at most MaxResumes in the attempt), then a fresh
+// session from the files; then the recoveries ran out (EventLost, "no
+// progress after <n> recoveries", at the next Observe). Each recovery that
+// shows no progress within NoProgressAfter takes the next step (Watchdog).
+// A role this runtime already recovers, or whose steps ran out, is left to
+// the watchdog; one whose recovery cannot run now (a pause, you in its
+// pane, a failure) is due it, and the watchdog takes it once it may.
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error {
 	role, err := r.RunsAs(t, role)
 	if err != nil {
 		return err
 	}
-	err = r.recoverRole(ctx, t, a, role, "its pane was lost")
-	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
+	st, err := r.stateFor(ctx, a.ID, role.Name)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	owned := st.recovering || st.pending || st.stuck || st.lost
+	r.mu.Unlock()
+	if owned {
+		return nil
+	}
+	err = r.recoverRole(ctx, t, a, role, "its pane was lost or its recovery left no turn")
+	switch spent, ok := errors.AsType[errRecoveriesSpent](err); {
+	case ok:
 		r.emit("", r.lostEvent(t, a, role, spent))
+	case err != nil && !errors.Is(err, errRefusedRole):
+		r.waitToRecover(a.ID, role.Name)
 	}
 	return err
 }
@@ -290,7 +310,7 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Role, spent errRecoveriesSpent) Event {
 	r.mu.Lock()
 	if st := r.roles[roleKey{a.ID, role.Name}]; st != nil {
-		st.lost, st.recovering = true, false
+		st.lost, st.recovering, st.pending = true, false, false
 	}
 	r.mu.Unlock()
 	return Event{TaskID: t.ID, Role: role.Name, Kind: EventLost, Reason: spent.Error()}
@@ -347,11 +367,12 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 // restart starts role st again in attempt a, resumed from its stored
 // conversation when resume (and it has one), and tells it to go on: a live
 // session is quit hard first, and a lost one gets a pane again. Its runs in
-// flight are abandoned only once the prompt of the run that replaces them
-// may have left (replaced): a restart that fails before (its quit, its
-// resume id, its start, a prompt herdr refused) leaves them in flight, so
-// the watchdog goes on watching the role through them, after a restart of
-// the daemon too, and its next step comes NoProgressAfter later.
+// flight stay in flight while their session is live, so a restart that
+// fails before the quit leaves the watchdog watching the role through them;
+// once the session is quit (or found gone), they are abandoned for the
+// recovery and the role is due its next step until a new run of it is sent
+// (handOver), so a failure after the quit leaves nothing in flight on a
+// retired session to hold the task's park.
 func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, resume bool, why string) error {
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err
@@ -361,11 +382,13 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 		return err
 	}
 	old := r.runsInFlight(ctx, pr, st.role.Name)
+	r.letGoOf(ctx, t, old)
 	if s, ok := r.liveSession(ctx, st); ok {
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			return fmt.Errorf("quit %s: %w", st.role.Name, err)
 		}
 	}
+	r.handOver(ctx, st, old, why)
 	id, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(st.role.Name)) // after the quit: its own conversation is the newest
 	if err != nil {
 		return err
@@ -377,8 +400,7 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 	if err := r.startIn(ctx, t, a, st, pr, id); err != nil {
 		return err
 	}
-	run, err := r.send(ctx, t, a, st.role, pr, resumeText, store.RunRecovery)
-	r.replaced(ctx, old, run, "recovery: "+why)
+	_, err = r.send(ctx, t, a, st.role, pr, resumeText, store.RunRecovery)
 	return err
 }
 
@@ -386,8 +408,8 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 // first prompt again, the task's files being its inputs, with then after
 // it (a caller's prompt the fresh session is to act on; "" for none); the
 // run's id comes back. A role that may not restart (mayRestart) is left as
-// it is, with that error. Its runs in flight are abandoned once that prompt
-// may have left (replaced), as restart's are.
+// it is, with that error. Its runs in flight are handed over once its
+// session is quit, as restart's are.
 func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, why, then string) (string, error) {
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return "", err
@@ -401,12 +423,14 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 		return "", err
 	}
 	old := r.runsInFlight(ctx, pr, st.role.Name)
+	r.letGoOf(ctx, t, old)
 	if s, ok := r.liveSession(ctx, st); ok {
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			return "", fmt.Errorf("quit %s: %w", st.role.Name, err)
 		}
 		r.closeConversation(ctx, s)
 	}
+	r.handOver(ctx, st, old, "a fresh session: "+why)
 	// The old conversation is gone: whether its prompts arrived no longer
 	// matters, and none of them is sent again (the first prompt is the
 	// fresh session's own).
@@ -418,9 +442,34 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 	if err := r.startIn(ctx, t, a, st, pr, ""); err != nil {
 		return "", err
 	}
-	run, err := r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
-	r.replaced(ctx, old, run, "a fresh session: "+why)
-	return run, err
+	return r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
+}
+
+// letGoOf lets go of the prompts of unknown delivery of runs old, whose
+// session a recovery is about to restart (the watchdog's nudge, say): their
+// fate no longer matters, and a quit that fails leaves them watched by the
+// steps, not sent to you in the middle of them (EventDeliveryUnknown).
+func (r *Runtime) letGoOf(ctx context.Context, t registry.Task, old []string) {
+	if len(old) == 0 {
+		return
+	}
+	if _, err := r.letGoWhere(ctx, t.ID, func(e registry.LedgerEntry) bool { return slices.Contains(old, e.RunID) }); err != nil {
+		r.log.Warn("let go of the prompts of the runs a recovery replaces", "err", err)
+	}
+}
+
+// handOver abandons runs old, whose session the recovery quit or found
+// gone, with RecoveryPrefix and why, and keeps role st due its next step
+// until a new run of it is sent (pending, which sent clears): the watchdog
+// takes that step, and a stage rebuilt after a restart reads the reason
+// and calls RecoverLost.
+func (r *Runtime) handOver(ctx context.Context, st *roleState, old []string, why string) {
+	for _, id := range old {
+		r.abandon(ctx, id, RecoveryPrefix+why)
+	}
+	r.mu.Lock()
+	st.pending = true
+	r.mu.Unlock()
 }
 
 // freshText is the prompt a fresh session starts with: the attempt's first
@@ -542,21 +591,6 @@ func (r *Runtime) runsInFlight(ctx context.Context, pr store.PR, role string) []
 		}
 	}
 	return ids
-}
-
-// replaced abandons the runs old once run, the recovery's run that replaces
-// them, may have taken its prompt (its id came back from send): from then
-// on that run, or its ledger entry, is what the role is watched by. A
-// recovery whose prompt never left (no run) abandons nothing.
-func (r *Runtime) replaced(ctx context.Context, old []string, run, why string) {
-	if run == "" {
-		return
-	}
-	for _, id := range old {
-		if id != run {
-			r.abandon(ctx, id, why)
-		}
-	}
 }
 
 // The steps of a loop without progress (loopStep).

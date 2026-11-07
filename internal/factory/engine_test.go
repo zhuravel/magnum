@@ -63,6 +63,7 @@ type fakeRuntime struct {
 	sent          []sentPrompt
 	verified      []verifyCall
 	voided        []verifyCall
+	recovered     []string // the RecoverLost calls, "<task key>/<role>"
 	runs          int
 	sendErr       error
 	quits         []int64
@@ -610,8 +611,26 @@ func (f *fakeRuntime) Watchdog(context.Context, time.Time) ([]runtime.Event, err
 	return nil, nil
 }
 
-func (f *fakeRuntime) RecoverLost(context.Context, registry.Task, registry.Attempt, config.Role) error {
+// RecoverLost records the role it recovers, "<task key>/<role>".
+func (f *fakeRuntime) RecoverLost(_ context.Context, t registry.Task, _ registry.Attempt, role config.Role) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recovered = append(f.recovered, TaskKey(t)+"/"+role.Name)
 	return nil
+}
+
+func (f *fakeRuntime) recoveries() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.recovered)
+}
+
+// abandonRun has the agents store keep run id abandoned with why, as the
+// runtime leaves a run a recovery or a pause gave up.
+func (f *fakeRuntime) abandonRun(id, why string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setRunLocked(id, store.RunAbandoned, why)
 }
 
 // LetGo records the call and, as the runtime does, settles the role's
