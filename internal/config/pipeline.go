@@ -831,7 +831,7 @@ func readLayerData(file string, data []byte, builtin bool, md toml.MetaData, kin
 // no block of the operator's set, and its [spend.<level>] table over them
 // (applySpend). The factory's roles (Factory.Roles, merged by
 // overlayFactory) take their spend level the same way, the built-in factory
-// roles being theirs.
+// roles the notch reaches being theirs (factoryNotchRoles).
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
 	builtins := DefaultRoles()
@@ -878,7 +878,7 @@ func (c *Config) buildPipeline(base, over *layer) {
 	c.Kinds = kinds
 	c.unspent, c.spendSet = slices.Clone(roles), set
 	c.Roles = applySpend(c.SpendLevel, c.SpendLevels, roles, builtins, set)
-	c.Factory.Roles = applySpend(c.SpendLevel, c.SpendLevels, c.Factory.Roles, DefaultFactoryRoles(), c.factorySet)
+	c.Factory.Roles = applySpend(c.SpendLevel, c.SpendLevels, c.Factory.Roles, factoryNotchRoles(), c.factorySet)
 }
 
 // markKeys records in set the keys raw, a [[role]] or [[factory.role]] table

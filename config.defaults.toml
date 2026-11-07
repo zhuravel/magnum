@@ -477,8 +477,9 @@ spend = "medium"                  # the spend level: how hard, and on which mode
                                   # role that is not built in keeps its own. Any other name is a level of your
                                   # own, declared by its [spend.<name>] table, and starts from medium. The active
                                   # level's table sets model, effort, rereview_effort or max_subagents per role
-                                  # (a built-in role or one of your [[role]]s) over everything, your [[role]]
-                                  # blocks included; a table spend does not name waits for later. In your config:
+                                  # (a built-in role, one of your [[role]]s or a [[factory.role]]) over everything,
+                                  # your role blocks included; a table spend does not name waits for later. In
+                                  # your config:
                                   #   [spend.high]
                                   #   codex-judge = { model = "gpt-6-astra", rereview_effort = "xhigh" }
                                   #   claude-review = { model = "fable", effort = "xhigh" }
@@ -880,8 +881,10 @@ chore = ["upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"
 #                                   # (Claude Code's AskUserQuestion shows a Yes/No question as a permission
 #                                   # prompt) is never answered No by magnum; "" = the kind's
 # The roles take the spend level of their kind as the review roles do ([pipeline] spend above): its notch on the
-# efforts below that your own [[factory.role]] block does not set, and its [spend.<level>] table, which may name
-# a factory role. `magnum roles` shows the models and efforts they run with.
+# efforts below that your own [[factory.role]] block does not set (fx-history's excepted: it stays at medium), and
+# its [spend.<level>] table, which may name a factory role. Under high every other role runs at xhigh; an effort
+# line in your own [[factory.role]] block keeps a role where you put it. `magnum roles` shows the models and
+# efforts they run with.
 
 [[factory.role]]
 name = "fx-repro"
@@ -913,7 +916,7 @@ doing = "finding the cause"
 [[factory.role]]
 name = "fx-history"
 kind = "claude"
-effort = "medium"
+effort = "medium"                 # no spend level's notch moves it: a history summary gains little from xhigh
 prompt = "factory-history.md"
 timeout = "30m"
 why = "how the code changed, and why"
@@ -924,7 +927,7 @@ name = "fx-points"
 kind = "claude"
 effort = "high"
 prompt = "factory-points.md"
-timeout = "40m"
+timeout = "1h"                    # its one recorded run took 19 minutes at high: room for an xhigh run
 why = "test each point of the ticket against the code"
 doing = "checking the ticket's points"
 

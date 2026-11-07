@@ -594,7 +594,7 @@ func TestRolesPrintsTheFactoryRolesAtTheirSpendLevel(t *testing.T) {
 	rows := rolesRows(out)
 	for role, want := range map[string]string{
 		"fx-judge":   "fx-judge claude fable xhigh factory-judge.md (embedded) weighing the findings",
-		"fx-history": "fx-history claude - xhigh factory-history.md (embedded) reading the history",
+		"fx-history": "fx-history claude - medium factory-history.md (embedded) reading the history", // no notch moves it
 		"fx-critic":  "fx-critic codex - xhigh factory-critic.md (embedded) criticizing the plan",
 		"fx-writer":  "fx-writer claude opus xhigh factory-writer.md (embedded) writing the change",
 	} {

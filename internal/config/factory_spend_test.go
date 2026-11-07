@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 // factoryRoleOf is cfg's factory role called name (the zero Role when there
@@ -69,7 +70,8 @@ func TestTheDefaultConfigKeepsEveryFactoryRolesModel(t *testing.T) {
 // [pipeline] spend's notch reaches the built-in factory roles as it reaches
 // the built-in review roles: high is xhigh, low one notch down with medium
 // the floor, and a [[factory.role]] block's own effort wins over it; a
-// factory role that is not built in keeps its own effort.
+// factory role that is not built in keeps its own effort, and fx-history
+// keeps its medium (a history summary gains little from xhigh).
 func TestTheSpendLevelsNotchReachesTheFactoryRoles(t *testing.T) {
 	const roles = `
 [[factory.role]]
@@ -88,7 +90,7 @@ doing = "looking at extras"
 		spend string
 		want  map[string]string
 	}{
-		{SpendHigh, map[string]string{"fx-repro": "xhigh", "fx-history": "xhigh", "fx-cause": "xhigh", "fx-judge": "xhigh",
+		{SpendHigh, map[string]string{"fx-repro": "xhigh", "fx-history": "medium", "fx-cause": "xhigh", "fx-judge": "xhigh",
 			"fx-writer": "xhigh", "fx-liaison": "high", "fx-extra": "medium"}},
 		{SpendLow, map[string]string{"fx-repro": "medium", "fx-history": "medium", "fx-critic": "high", "fx-judge": "high",
 			"fx-writer": "medium", "fx-liaison": "high", "fx-extra": "medium"}},
@@ -152,4 +154,48 @@ doing = "looking at extras"
 
 	_, _, err = loadUser(t, spendUser(SpendHigh, "\n[spend.high]\nfx-nobody = { model = \"fable\" }\n"))
 	wantError(t, err, `spend.high: unknown role "fx-nobody"`, "[[factory.role]]")
+}
+
+// fx-history stays at its built-in effort under every built-in level and an
+// operator's own: the notch leaves it alone. A level's table still sets it,
+// as it sets any role.
+func TestTheNotchLeavesTheHistoryRolesEffort(t *testing.T) {
+	for _, level := range []string{SpendLow, SpendMedium, SpendHigh, "burn"} {
+		cfg, _, err := loadUser(t, spendUser(level, "\n[spend.burn]\nclaude-review = { effort = \"xhigh\" }\n"))
+		if err != nil {
+			t.Fatalf("spend %s: %v", level, err)
+		}
+		if r := factoryRoleOf(cfg, "fx-history"); r.Effort != "medium" {
+			t.Errorf("spend %s: fx-history effort %q, want its medium", level, r.Effort)
+		}
+	}
+	cfg, _, err := loadUser(t, spendUser(SpendHigh, "\n[spend.high]\nfx-history = { effort = \"high\" }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := factoryRoleOf(cfg, "fx-history"); r.Effort != "high" {
+		t.Errorf("fx-history effort %q under a table that names it, want the table's high", r.Effort)
+	}
+}
+
+// typicalFactoryRun is the mean wall time, in minutes, of each built-in
+// factory role's verified runs in the factory's registry (attempt_roles,
+// 2026-11-07), at the efforts config.defaults.toml writes. fx-scope,
+// fx-cause-claude and fx-critic-claude have no runs yet; fx-judge and
+// fx-critic already run at xhigh, and fx-history keeps medium.
+var typicalFactoryRun = map[string]float64{"fx-repro": 3.6, "fx-cause": 4.8, "fx-points": 18.9, "fx-writer": 11.4}
+
+// A role the high notch raises to xhigh keeps room in its timeout for a
+// typical xhigh run, taken as twice its typical run at its built-in effort:
+// past the timeout the watchdog treats 10 minutes without progress as a hung
+// run, so the timeout must not fall inside a typical turn.
+func TestARaisedFactoryRolesTimeoutFitsAnXhighRun(t *testing.T) {
+	for name, typical := range typicalFactoryRun {
+		r := factoryRoleOf(Defaults(), name)
+		need := time.Duration(2*typical*float64(time.Minute)) + 10*time.Minute
+		if r.Timeout.Duration < need {
+			t.Errorf("%s timeout %s, want at least %s (twice its typical %.1f-minute run, then the watchdog's 10 minutes)",
+				name, r.Timeout.Duration, need.Round(time.Minute), typical)
+		}
+	}
 }

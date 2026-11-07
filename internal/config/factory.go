@@ -336,7 +336,8 @@ func DefaultFactoryRoles() []Role {
 			Why: "find the cause on its own, apart from the others", Doing: "finding the cause"},
 		{Name: "fx-history", Kind: KindClaude, Effort: "medium", Prompt: "factory-history.md", Timeout: Duration{short},
 			Why: "how the code changed, and why", Doing: "reading the history"},
-		{Name: "fx-points", Kind: KindClaude, Effort: "high", Prompt: "factory-points.md", Timeout: Duration{investigate},
+		// fx-points's one recorded run took 19 minutes at high: an hour leaves an xhigh run room.
+		{Name: "fx-points", Kind: KindClaude, Effort: "high", Prompt: "factory-points.md", Timeout: Duration{time.Hour},
 			Why: "test each point of the ticket against the code", Doing: "checking the ticket's points"},
 		{Name: "fx-scope", Kind: KindClaude, Effort: "high", Prompt: "factory-scope.md", Timeout: Duration{investigate},
 			Why: "find every place the chore touches", Doing: "finding what it touches"},
@@ -354,6 +355,17 @@ func DefaultFactoryRoles() []Role {
 			OnPermissionPrompt: PermissionWait,
 			Why:                "talk with you about the task: ask its questions, explain, act on your word", Doing: "talking with you"},
 	}
+}
+
+// notchFixedFactoryRoles are the built-in factory roles whose effort no spend
+// level's notch moves (factoryNotchRoles): a history summary gains little
+// from xhigh. A level's table still sets them, as it sets any role.
+var notchFixedFactoryRoles = []string{"fx-history"}
+
+// factoryNotchRoles are the built-in factory roles the spend level's notch
+// reaches (applySpend's built-ins): all but notchFixedFactoryRoles.
+func factoryNotchRoles() []Role {
+	return slices.DeleteFunc(DefaultFactoryRoles(), func(r Role) bool { return slices.Contains(notchFixedFactoryRoles, r.Name) })
 }
 
 // DefaultFactoryKinds are the built-in kinds of task. They differ in what

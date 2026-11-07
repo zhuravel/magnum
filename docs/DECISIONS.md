@@ -16662,7 +16662,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   under any level whose table names none, every factory role runs the model it ran before (opus for fx-judge
   and fx-writer, the CLI's default for the rest); which entries the built-in levels get is the operator's
   decision. Under `high` the notch now raises the factory's built-in efforts to `xhigh`, as it does the review
-  roles'; a `[[factory.role]]` block's `effort` keeps one where it is. `magnum roles` lists the factory's roles
+  roles', all but fx-history's (`notchFixedFactoryRoles`: a history summary gains little from more thought, so
+  it keeps `medium` at every level unless a level's table names it); a `[[factory.role]]` block's `effort` keeps
+  one where it is. A raised role's timeout was checked against the factory's own records (the verified runs of
+  `attempt_roles`, mean wall minutes at the built-in efforts: fx-repro 3.6, fx-cause 4.8, fx-writer 11.4,
+  fx-points 18.9): past its timeout the watchdog takes 10 minutes without progress for a hung run, so a timeout
+  must leave room for a typical xhigh run, taken as twice the high one. fx-points' 40 minutes did not
+  (2 x 18.9 + 10), so it is an hour; the others did, and fx-scope, fx-cause-claude and fx-critic-claude have no
+  runs yet. The release order: an older build refuses a table entry that names a factory role ("unknown role"),
+  and both daemons read the same config, so put both on this build (`magnum daemon-restart --drain`, `magnum
+  factory install`) before such an entry goes into the config. `magnum roles` lists the factory's roles
   after the watches' (name, kind, model, effort, prompt, doing; `--repo` leaves them out, `--factory` prints
   them alone, `--factory --json` keyed like config.toml; the watch groups' JSON is unchanged), and `magnum
   config`, which showed no role at all, names the level they run at and points at `magnum roles`
@@ -16670,7 +16679,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   levels already say "Codex low, Claude high" for both daemons); applying the tables only, without the notch
   (two meanings of one level); the factory roles in the settings screen's spend grid (its own change, with
   its plan and commit code). Tests, failing first: TestTheSpendLevelsNotchReachesTheFactoryRoles,
-  TestASpendLevelTableSetsAFactoryRolesModel, TestRolesPrintsTheFactoryRolesAtTheirSpendLevel and
+  TestASpendLevelTableSetsAFactoryRolesModel, TestTheNotchLeavesTheHistoryRolesEffort,
+  TestARaisedFactoryRolesTimeoutFitsAnXhighRun, TestRolesPrintsTheFactoryRolesAtTheirSpendLevel and
   TestConfigNamesTheSpendLevelOfTheReviewAndFactoryRoles; TestTheDefaultConfigKeepsEveryFactoryRolesModel
   holds every factory role's model and effort under the default config, before and after.
 - **A task's held wait logs once at INFO, and at WARN only past 30 minutes** (2026-11-07, the factory audit's
