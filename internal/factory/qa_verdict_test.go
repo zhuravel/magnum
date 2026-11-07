@@ -729,3 +729,12 @@ func TestTheProbeReportsItsOwnFailure(t *testing.T) {
 		t.Errorf("probe = %+v, want the nonce and the error", p)
 	}
 }
+
+// A page whose code throws the empty string still gets a probe that says
+// it failed: an empty error would read as a page that probed clean.
+func TestAnEmptyThrowStillReportsTheProbesFailure(t *testing.T) {
+	p := runQAProbe(t, "throws-empty.dom.json")
+	if p.Error == "" || p.Text != "" {
+		t.Errorf("probe = %+v, want a non-empty error and no text", p)
+	}
+}

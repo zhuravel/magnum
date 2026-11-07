@@ -159,6 +159,7 @@ const NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_EL
 
 function createTreeWalker(start, show, filter) {
   if (page.throw) throw new Error("the page broke the probe");
+  if (page.throwEmpty) throw "";
   function* visit(n) {
     for (const c of n.childNodes) {
       const bit = c.nodeType === ELEMENT_NODE ? NodeFilter.SHOW_ELEMENT : c.nodeType === TEXT_NODE ? NodeFilter.SHOW_TEXT : 0;

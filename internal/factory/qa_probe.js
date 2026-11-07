@@ -93,6 +93,6 @@
       truncated,
     });
   } catch (e) {
-    return JSON.stringify({ nonce, url: String(location.href), error: String((e && e.message) || e).slice(0, 500) });
+    return JSON.stringify({ nonce, url: String(location.href), error: String((e && e.message) || e || "probe error").slice(0, 500) });
   }
 })()
