@@ -812,9 +812,9 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	var gone fixConflictGone
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot): // the claim lost its free slot (fixClaim): nothing failed
-		e.endFixUnclaimed(fctx, job, err.Error())
+		e.endFixUnclaimed(fctx, job, err.Error(), true)
 	case errors.As(err, &gone): // a merge-only job whose conflict is gone (checkFixBase): nothing to do
-		e.endFixUnclaimed(fctx, job, gone.Error())
+		e.endFixUnclaimed(fctx, job, gone.Error(), false)
 	case err != nil:
 		msg := failed + err.Error()
 		if job.touched {
@@ -827,14 +827,21 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 }
 
 // endFixUnclaimed ends the loop of a job whose claim found no free slot
-// after all (a round took the one the request saw free), or that started
-// for the merge alone and whose guard found the conflict gone
+// after all (noSlot: a round took the one the request saw free), or that
+// started for the merge alone and whose guard found the conflict gone
 // (fixConflictGone), quietly, as a stop does: nothing failed and why says
 // what happened (the retry, for the claim), so the loop's row goes, a
-// fix.ended event and an info toast say why, and nobody is called.
-func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string) {
+// fix.ended event and an info toast say why, and nobody is called. The
+// event of a loop that found no slot says so, with the loop's start: the
+// look of autofix = "open" takes back the start it counted for it
+// (openLoopsEnded), since no fixer ran.
+func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string, noSlot bool) {
 	e.endFixState(ctx, job)
-	e.event(ctx, "info", job.subject(), "fix.ended", "the fix loop ends: "+why, job.eventData())
+	data := job.eventData()
+	if noSlot {
+		data["no_slot"], data["started_at"] = true, job.state.StartedAt
+	}
+	e.event(ctx, "info", job.subject(), "fix.ended", "the fix loop ends: "+why, data)
 	title := fmt.Sprintf("magnum: fix not started: %s#%d", job.repo.Name, job.pr.Number)
 	e.info(notify.Item{Key: fmt.Sprintf("fix-unclaimed:%d:%s:%d", job.pr.ID, store.FormatTime(job.state.StartedAt), job.state.Cycle), Title: title,
 		Body: job.pr.URL + "\n" + why, Line: strings.TrimPrefix(title, "magnum: ") + ": " + why + " " + job.pr.URL, Kind: kindFixEnded})

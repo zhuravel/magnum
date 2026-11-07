@@ -1633,6 +1633,9 @@ type fakeSlots struct {
 	// reserveErr makes Reserve fail with it, after recording the call: a
 	// free slot another round took first.
 	reserveErr error
+	// reserveGate, when set, makes Reserve wait for it (or ctx) after
+	// recording the call: a claim still on its way while the tick goes on.
+	reserveGate chan struct{}
 	// resyncErr is what Resync fails with, after recording the call.
 	resyncErr error
 	// heads is the HEAD of each slot's folder by slot name: Unpin takes it as
@@ -1941,8 +1944,15 @@ func (f *fakeSlots) Pin(ctx context.Context, slot store.Slot) error {
 func (f *fakeSlots) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error) {
 	f.record(fmt.Sprintf("reserve:%d", pr.ID))
 	f.mu.Lock()
-	rerr := f.reserveErr
+	rerr, gate := f.reserveErr, f.reserveGate
 	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return store.Slot{}, ctx.Err()
+		}
+	}
 	if rerr != nil {
 		return store.Slot{}, rerr
 	}

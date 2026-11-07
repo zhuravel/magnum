@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/postreview"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -1168,4 +1169,102 @@ func TestAnApprovalOnACleanReviewStartsNoLoop(t *testing.T) {
 		t.Fatalf("fix runs = %d for an approval, want none", n)
 	}
 	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+}
+
+// A loop the look started that ended unclaimed because a round took the
+// free slot first started no fixer: it spends none of the PR's daily
+// starts. With autofix_max_loops = 1 the next look starts the loop again,
+// where before the PR needed you for "1 loop today".
+func TestAStartThatFoundNoSlotSpendsNoStart(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"), func(h *harness) { h.cfg.Pipeline.AutofixMaxLoops = 1 })
+	h.setThreads(h.colleagueThread(4322458360))
+	colleagueFixer(h, git)
+	h.tick() // reviewed in review1
+	handBack(h)
+	h.sl.reserveErr = fmt.Errorf("slots: reserve for PR #2 in talkable/talkable: %w", slots.ErrNoFreeSlot) // a round takes it first
+	h.pastSettle()
+	h.tick()
+	if ev, ok := h.fixEvent("fix.ended"); !ok || !strings.Contains(ev.Message, "no free talkable/talkable slot") {
+		t.Fatalf("fix.ended = %q, %v; want the loop ended for want of a slot", ev.Message, ok)
+	}
+	h.sl.reserveErr = nil
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		v, _ := h.openOf(2)
+		t.Fatalf("fix runs = %d (verdict %s %q), want the loop started again: the start that found no slot is not counted", n, v.Verdict, v.Why)
+	}
+	if l := h.ledgerOf(2); len(l.Starts) != 1 {
+		t.Errorf("starts = %v, want the one loop that ran", l.Starts)
+	}
+}
+
+// Two PRs without a slot and one free slot: the look starts one loop in
+// the tick, and the other PR waits for a slot, saying so, without a loop
+// that would lose the race for it ("fix not started") and without spending
+// a start. The first loop's claim is still on its way while the look goes
+// on (a goroutine of its own), so the pool still lists the slot free.
+func TestTheLookStartsNoMoreSlotLoopsInATickThanSlotsAreFree(t *testing.T) {
+	h, git := openOwnPRs(t, 2, 3)
+	colleagueFixer(h, git)
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {h.colleagueThread(4322458360)}, 3: {h.colleagueThread(4322458370)}}
+	h.gh.mu.Unlock()
+	h.pastSettle()
+	gate := make(chan struct{})
+	h.sl.mu.Lock()
+	h.sl.reserveGate = gate
+	h.sl.mu.Unlock()
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	for n := 2; n <= 3; n++ {
+		if v, _ := h.openOf(n); v.Verdict == OpenWaits && strings.Contains(v.Why, "waits for a free talkable/talkable slot") {
+			waits++
+		}
+	}
+	close(gate)
+	h.settle()
+	if waits != 1 {
+		t.Errorf("%d PRs wait for a slot while the first claim is on its way, want one", waits)
+	}
+	started, waiting := 0, 0
+	for n := 2; n <= 3; n++ {
+		v, _ := h.openOf(n)
+		switch {
+		case len(h.fixRuns(h.pr(n).ID)) == 1:
+			started++
+		case v.Verdict == OpenWaits && strings.Contains(v.Why, "waits for a free talkable/talkable slot"):
+			waiting++
+			if l := h.ledgerOf(n); len(l.Starts) != 0 {
+				t.Errorf("PR #%d waits for a slot with starts %v, want none spent", n, l.Starts)
+			}
+		default:
+			t.Errorf("PR #%d: verdict %s %q", n, v.Verdict, v.Why)
+		}
+	}
+	if started != 1 || waiting != 1 {
+		t.Errorf("started %d, waiting %d; want one loop and one PR waiting for a slot", started, waiting)
+	}
+	if ev, ok := h.fixEventOf(3, "fix.ended"); ok {
+		t.Errorf("fix.ended on #3 = %q, want no loop that lost the slot", ev.Message)
+	}
+	if ev, ok := h.fixEventOf(2, "fix.ended"); ok && strings.Contains(ev.Message, "no free") {
+		t.Errorf("fix.ended on #2 = %q, want no loop that lost the slot", ev.Message)
+	}
+}
+
+// fixEventOf is PR #n's newest event of kind (ok false: none).
+func (h *harness) fixEventOf(n int, kind string) (store.Event, bool) {
+	h.t.Helper()
+	evs, err := h.st.EventsBySubject(h.ctx, "pr:talkable/talkable#"+itoa(int64(n)), 0)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, ev := range slices.Backward(evs) {
+		if ev.Kind == kind {
+			return ev, true
+		}
+	}
+	return store.Event{}, false
 }

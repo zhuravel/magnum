@@ -438,7 +438,8 @@ magnum_late_after = "2h"          # autofix = "open": a head magnum has not revi
                                   # a round [daemon] quiet_hours hold is due at their end, and inside them
                                   # nothing is late (no toast at night)
 autofix_max_loops = 3             # autofix = "open": loops it starts on one PR in 24 hours, then the PR needs you
-                                  # (1 to 20); a loop you start with f does not count
+                                  # (1 to 20); a loop you start with f does not count, nor one that ended for
+                                  # want of a free slot (no fixer ran)
 hands_off_after_push = "30m"      # autofix = "open": no loop starts on a head you pushed (one the fixer did not)
                                   # until this long after it moved (0 to 24h)
 # quiet_logins = []               # autofix = "open": review bodies and conversation comments by these logins ask

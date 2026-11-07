@@ -3027,6 +3027,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestMagnumLateCountsFromTheEndOfQuietHours, TestMagnumIsNeverLateInsideQuietHours,
   TestMagnumLateToastsAtTheEndOfQuietHoursNotInsideThem.
 
+- **A loop that found no slot spends no start, and one tick starts no more slot loops than slots are free**
+  (2026-11-07, a read-only check before the operator's switch to "open"). A PR the pool took its slot from
+  gets a loop whose job claims one when it runs (`fixClaim`, on the loop's goroutine); `prepareFix` only
+  checks that the pool lists one free. The look counted the start in its ledger as soon as `startFix`
+  returned, so a loop whose claim lost the slot to a round ended "fix not started" (`endFixUnclaimed`) and
+  had still used one of the PR's `autofix_max_loops`; and two PRs of one repository the look started in the
+  same tick both saw the one freed slot, the loser ending with a toast and a spent start. The end of a loop
+  that found no slot now says so in its `fix.ended` event (`no_slot`, with the loop's start time), and the
+  look, reading the PR's events once the loop ended, takes that start back: the ledger keeps the loop's own
+  start time to match it. In a tick the look counts, by pool, the loops it started on PRs without a slot,
+  and starts none past the pool's free slots: the PR waits ("... waits for a free talkable/talkable slot")
+  and the pool is asked for one (`needSlot`), as it is when `prepareFix` finds none free, which now says the
+  same words and is asked again at the next look (a registry read) instead of 5 minutes later. A round that
+  takes the slot between the look and the claim can still end a loop unclaimed; its start no longer counts,
+  and the next look starts it again. Tests, failing first: TestAStartThatFoundNoSlotSpendsNoStart,
+  TestTheLookStartsNoMoreSlotLoopsInATickThanSlotsAreFree.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

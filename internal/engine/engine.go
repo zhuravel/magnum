@@ -458,6 +458,11 @@ type Engine struct {
 	// nil outside the look.
 	openReads   map[int64]externalRead
 	openFetches map[string]error
+	// openSlotStarts counts, by pool repository, the loops the look started
+	// in this tick on PRs without a slot (the tick's goroutine only; nil
+	// outside the look): their claims run on their own goroutines, so the
+	// pool's free slots do not count them yet (openStart).
+	openSlotStarts map[string]int
 	// openLoops are the PRs whose fix loop ran since the look last read
 	// their events, and openCaught those whose events the look read since
 	// the daemon started (fix_open.go), guarded by mu: a loop starts on a

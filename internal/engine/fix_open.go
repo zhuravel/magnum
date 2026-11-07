@@ -77,12 +77,12 @@ type openCand struct {
 // that is not "open" gets no verdict, and a row an earlier look left is
 // deleted, so a switch back to "own" leaves no stale verdict.
 func (e *Engine) autofixOpen(ctx context.Context) error {
-	e.openReads = map[int64]externalRead{}
+	e.openReads, e.openSlotStarts = map[int64]externalRead{}, map[string]int{}
 	e.mu.Lock()
 	e.openFetches = map[string]error{}
 	e.mu.Unlock()
 	defer func() { // a request of the next tick fetches again
-		e.openReads = nil
+		e.openReads, e.openSlotStarts = nil, nil
 		e.mu.Lock()
 		e.openFetches = nil
 		e.mu.Unlock()
@@ -594,9 +594,11 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		}
 		cursor = max(cursor, ev.ID)
 		var d struct {
-			Report    string `json:"report"`
-			ReviewRun string `json:"review_run"`
-			Head      string `json:"head"`
+			Report    string    `json:"report"`
+			ReviewRun string    `json:"review_run"`
+			Head      string    `json:"head"`
+			NoSlot    bool      `json:"no_slot"`
+			StartedAt time.Time `json:"started_at"`
 		}
 		if len(ev.Data) > 0 {
 			_ = json.Unmarshal(ev.Data, &d)
@@ -633,6 +635,10 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		case "fix.pushed":
 			if d.Head != "" {
 				l.FixerHeads = addFixerHead(l.FixerHeads, d.Head)
+			}
+		case "fix.ended": // a loop that found no slot started no fixer: its start is not one of the day's
+			if d.NoSlot && !d.StartedAt.IsZero() {
+				l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return at.Equal(d.StartedAt) })
 			}
 		}
 	}
@@ -690,13 +696,20 @@ func addFixerHead(heads []string, head string) []string {
 // (startFix, with this tick's read carried to prepareFix). A start records
 // itself in the ledger and an autofix.open event; a refusal makes the
 // verdict wait with its sentence (a budget below the floor, a paused kind,
-// a busy or pinned PR, no free slot, the human cooldown, a read of GitHub
-// that failed, a look at the base that failed: mergeUncheckedError, whose
-// conflict is unknown, not gone) and is tried again openReadRetry later,
-// not at every tick, since some refusals come after prepareFix read
-// GitHub; except "nothing to fix", where the look and prepareFix disagree:
-// that needs you, with the refusal, and is not tried again until the PR
-// changes (Refused). The PR's row is read again right before the start:
+// a busy or pinned PR, the human cooldown, a read of GitHub that failed, a
+// look at the base that failed: mergeUncheckedError, whose conflict is
+// unknown, not gone) and is tried again openReadRetry later, not at every
+// tick, since some refusals come after prepareFix read GitHub; except
+// "nothing to fix", where the look and prepareFix disagree: that needs
+// you, with the refusal, and is not tried again until the PR changes
+// (Refused), and no free slot, which waits for one and is asked again at
+// the next look (prepareFix refuses it on a registry read). A PR without a
+// slot waits for one too while this tick's earlier starts took every free
+// slot of its pool (openSlotStarts): their claims run on their own
+// goroutines, and two loops would race for one slot, the loser ending
+// unclaimed. The ledger counts a start at the loop's own start time, which
+// a loop that ended for want of a slot names (openLoopsEnded takes it
+// back). The PR's row is read again right before the start:
 // the look decided on the rows it listed at the start of its step, and a
 // loop's end on another goroutine may have moved the PR since (to needs
 // attention); a PR whose state, mute, reviewed head or fingerprint changed
@@ -726,17 +739,27 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	default:
 		pr = cur
 	}
+	pool := e.slotPoolOf(ctx, repo, pr) // nil: the PR has a slot, or its repository no pool
+	if pool != nil {
+		if free, err := e.st.FreeSlots(ctx, pool.Repo, pr.ID); err == nil && len(free) <= e.openSlotStarts[pool.Repo] {
+			e.needSlot(ctx, *pool, subject) // the free ones went to this tick's other starts
+			return slotWait(v, work, pool.Repo)
+		}
+	}
 	var carried *externalRead
 	if r, ok := e.openReads[pr.ID]; ok {
 		carried = &r
 	}
-	_, err := e.startFix(ctx, pr, autofixBy, FixState{}, carried)
+	job, err := e.startFix(ctx, pr, autofixBy, FixState{}, carried)
 	var budget *githubBudgetError
 	var unchecked *mergeUncheckedError
+	var noSlot noFreeFixSlot
 	switch {
 	case err == nil:
-		now := e.now()
-		l.Starts = append(l.Starts, now)
+		if pool != nil {
+			e.openSlotStarts[pool.Repo]++
+		}
+		l.Starts = append(l.Starts, cmp.Or(job.state.StartedAt, e.now())) // the loop's own time, which its end without a slot names
 		l.Refused, l.RefusedWhy, l.WaitAt, l.WaitWhy = "", "", time.Time{}, ""
 		counts := map[string]int{}
 		for _, it := range work {
@@ -748,6 +771,8 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	case errors.As(err, &budget):
 		v.Verdict, v.Why = OpenWaits, "GitHub budget: the loop waits for it"
 		l.WaitAt, l.WaitWhy = e.now(), v.Why
+	case errors.As(err, &noSlot): // prepareFix asked the pool for one (needSlot); the next look asks again, a registry read
+		return slotWait(v, work, noSlot.repo)
 	case errors.As(err, &unchecked): // the conflict is unknown, not gone: asked again, as a failed read is
 		v.Verdict, v.Why = OpenWaits, oneLine(unchecked.cause.Error(), 300)
 		l.WaitAt, l.WaitWhy = e.now(), v.Why
@@ -763,6 +788,26 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		l.WaitAt, l.WaitWhy = e.now(), v.Why
 		e.log.Info("autofix open: no fix loop started", "subject", subject, "why", v.Why)
 	}
+	return v
+}
+
+// slotPoolOf is the pool a loop on pr claims a slot from (fixClaim), nil
+// when it needs none: the PR holds a slot, or its repository has no pool
+// (a per-PR worktree is made for it).
+func (e *Engine) slotPoolOf(ctx context.Context, repo store.Repo, pr store.PR) *config.Pool {
+	pool := e.cfg.PoolFor(repo.FullName())
+	if pool == nil {
+		return nil
+	}
+	if _, has, err := e.slotOf(ctx, pr.ID); err != nil || has {
+		return nil
+	}
+	return pool
+}
+
+// slotWait is v waiting for a free slot of repo's pool for work.
+func slotWait(v OpenVerdict, work []openItem, repo string) OpenVerdict {
+	v.Verdict, v.Why = OpenWaits, workWords(work)+" waits for a free "+repo+" slot"
 	return v
 }
 

@@ -3297,14 +3297,18 @@ after the PR's current spell of activity began (as the look saw it: a colleague'
 on a head two days old start one loop after the third, not one after the first). A review body or comment by one of
 `quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
 lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
-most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you pushed until
+most `autofix_max_loops` loops start on one PR in 24 hours (one that ended for want of a slot, a round having
+taken the free one first, started no fixer and does not count), none on a head you pushed until
 `hands_off_after_push` passed, and none on a draft, a fork, a muted PR (a mute stops every automatic round:
 `off`, "muted") or a PR you took out of autofix (`F`). `magnum pause` and `[daemon] quiet_hours` hold its
 starts as they hold Magnum's rounds: the PR waits ("daemon paused: 1 thread of a person waits for `magnum
 resume`", "quiet hours (03:00-10:00): 1 thread of a person waits until 10:00"), spends none of its
 `autofix_max_loops` and needs nobody, and the first look after the pause or the window ends starts the loop,
 with nothing new on GitHub. A loop that already runs goes on (its forced re-reviews and its next cycles), and
-`f` still starts one. A loop
+`f` still starts one. A PR without a slot in a repository with a pool waits for a free one ("1 thread of a
+person waits for a free talkable/talkable slot"; the pool makes or frees one meanwhile), and in one tick the
+look starts no more such loops in a repository than its pool has free slots, so two PRs never race for one
+slot. A loop
 goes on while its re-review leaves optional work too (a simplification, an optional finding still open),
 within its `fix_cycles`, and at the cap says so ("1 optional finding left"); under `"own"` and `"never"` a
 loop still ends as done on such a re-review.
