@@ -152,7 +152,8 @@ func (e *Engine) autofixOpen(ctx context.Context) error {
 func (e *Engine) openSettle() openSettle {
 	p := e.cfg.Pipeline
 	return openSettle{quiet: p.SettleQuiet.Duration, max: p.SettleMax.Duration, late: p.MagnumLateAfter.Duration,
-		handsOff: p.HandsOffAfterPush.Duration, checks: p.SettleChecks, maxLoops: cmp.Or(p.AutofixMaxLoops, config.DefaultAutofixMaxLoops)}
+		handsOff: p.HandsOffAfterPush.Duration, checks: p.SettleChecks, maxLoops: cmp.Or(p.AutofixMaxLoops, config.DefaultAutofixMaxLoops),
+		quietHours: e.cfg.Daemon.QuietHours}
 }
 
 // quietRules is the configuration's.
@@ -204,6 +205,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	}
 	f.pending = len(pr.PendingReplies())
 	f.sum = c.sum
+	if f.pause = e.userPause(ctx); f.pause != "" { // it holds the look's starts, as it held "own"'s rounds
+		f.pauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
+	}
 	fp := openPrint(pr)
 	_, f.low = e.githubLow(c.w.PollIdentity)
 	f.pollStale = e.pollBehind(ctx, *c.w, now)

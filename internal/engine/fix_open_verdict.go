@@ -28,8 +28,10 @@ package engine
 //     drops out);
 //  9. work (an item never handed, magnum's review no loop worked on) starts
 //     a loop once settle allows: never on magnum's rebuttals alone with no
-//     review work, at most autofix_max_loops a day, never within
-//     hands_off_after_push of the operator's own push;
+//     review work, at most autofix_max_loops a day, never under `magnum
+//     pause` or inside [daemon] quiet_hours (the work waits for their end,
+//     spending no start), never within hands_off_after_push of the
+//     operator's own push;
 //  10. a head the reviewers have not settled on waits;
 //  11. red required CI needs you, pending required CI waits; a merge with
 //     the base the look could not check is unknown;
@@ -281,6 +283,8 @@ type openSettle struct {
 	quiet, max, late, handsOff time.Duration
 	checks                     []string
 	maxLoops                   int
+	// quietHours is [daemon] quiet_hours ("" = none).
+	quietHours string
 }
 
 // openCI is what the head's required checks say (openCIOf): what failed
@@ -327,8 +331,8 @@ func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 // failed: the last read failed; low: the GitHub budget is below the floor;
 // pollStale: the watch's poll is behind (pollBehind);
 // cut: what the read lacked), the items, the ledger, the settle's keys,
-// CI, the approval and the commits after it, and the base whose merge
-// with the head could not be checked.
+// CI, the approval and the commits after it, the base whose merge with
+// the head could not be checked, and `magnum pause`.
 type openFacts struct {
 	now        time.Time
 	pr         store.PR
@@ -354,6 +358,10 @@ type openFacts struct {
 	// mergeUnchecked is the base whose merge with the head the look's last
 	// check could not check ("" = checked, or not looked at this head).
 	mergeUnchecked string
+	// pause is `magnum pause`'s words ("" = none: userPause), and
+	// pauseUntil its end (zero: until `magnum resume`).
+	pause      string
+	pauseUntil time.Time
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -466,6 +474,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	if len(work) > 0 {
 		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum)
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
+		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
 		switch {
 		case onlyRebuttals:
 			v.Needs = append(v.Needs, openNeeds(work)...)
@@ -473,6 +482,14 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		case f.ledger.startsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
 			v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
 			return say(OpenNeedsYou, fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))), nil, needs
+		case f.pause != "" && f.pauseUntil.After(f.now):
+			v.Until = f.pauseUntil
+			return say(OpenWaits, f.pause+": "+workWords(work)+" waits until "+waitClock(f.pauseUntil, f.now)), nil, needs
+		case f.pause != "":
+			return say(OpenWaits, f.pause+": "+workWords(work)+" waits for `magnum resume`"), nil, needs
+		case quiet:
+			v.Until = quietEnd
+			return say(OpenWaits, fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, workWords(work), waitClock(quietEnd, f.now))), nil, needs
 		case !slices.Contains(f.ledger.FixerHeads, head) && f.now.Before(handsOff):
 			v.Until = handsOff
 			return say(OpenWaits, fmt.Sprintf("you pushed %s at %s; hands off until %s", short, waitClock(f.pr.HeadChangedAt, f.now),
@@ -553,6 +570,16 @@ func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 		until = *pr.NextEligibleAt
 	}
 	return "magnum reviews " + short, false, until
+}
+
+// quietHoursNow reports whether [daemon] quiet_hours (spec) hold a full
+// round at now, as they hold the look's start of a loop, and when they end.
+func quietHoursNow(spec string, now time.Time) (time.Time, bool) {
+	if !quietHoursHold(spec, now, false) {
+		return time.Time{}, false
+	}
+	end := quietHoursEnd(spec, now)
+	return end, !end.IsZero()
 }
 
 // settleDone is rule 2 of the settle: the head is settled once the PR saw

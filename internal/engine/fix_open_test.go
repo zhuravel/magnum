@@ -1061,3 +1061,87 @@ func TestAFailedBaseCheckIsNeverIdleAndIsTriedAgainSoon(t *testing.T) {
 	h.tick()
 	h.wantOpen(OpenIdle, "nothing open")
 }
+
+// colleagueFixer is the fake fixer that answers the colleague's thread of
+// colleagueThread and pushes nothing.
+func colleagueFixer(h *harness, git *fixGit) {
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+}
+
+// `magnum pause` holds the look's starts as it held "own"'s, whose loops
+// began at the end of rounds the pause held: a PR with work waits and says
+// so, spends none of its daily starts and needs nobody. The first look
+// after `magnum resume` starts the loop, with nothing new on GitHub.
+func TestAPausedLookStartsNothingUntilThePauseEnds(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	colleagueFixer(h, git)
+	h.tick() // reviewed
+	h.e.setKV(h.ctx, store.KVDaemonPaused, "1")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("fix runs = %d under the pause, want none", n)
+	}
+	if v := h.wantOpen(OpenWaits, "daemon paused: 1 thread of a person waits for `magnum resume`"); len(v.Needs) != 0 {
+		t.Errorf("needs = %+v under the pause, want none", v.Needs)
+	}
+	if l := h.ledgerOf(2); len(l.Starts) != 0 {
+		t.Errorf("starts = %v under the pause, want none spent", l.Starts)
+	}
+	h.wantState(2, store.PRReviewed)
+	h.e.delKV(h.ctx, store.KVDaemonPaused)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 || h.fixStartBy() != autofixBy {
+		t.Fatalf("fix runs = %d by %q after the pause, want autofix's loop", n, h.fixStartBy())
+	}
+}
+
+// [daemon] quiet_hours hold the look's starts until they end, as they hold
+// a full round: the verdict names the window's end, and the first look
+// after it starts the loop.
+func TestQuietHoursHoldTheLooksStartsUntilTheirEnd(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	colleagueFixer(h, git)
+	h.tick() // reviewed
+	h.pastSettle()
+	now := h.clock.Now()
+	end := now.Add(2 * time.Hour).Truncate(time.Minute)
+	h.cfg.Daemon.QuietHours = now.Add(-time.Hour).Format("15:04") + "-" + end.Format("15:04")
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("fix runs = %d inside quiet hours, want none", n)
+	}
+	if v := h.wantOpen(OpenWaits, "quiet hours ("+h.cfg.Daemon.QuietHours+"): 1 thread of a person waits until "+end.Format("15:04")); !v.Until.Equal(end) {
+		t.Errorf("until = %s, want the window's end %s", v.Until, end)
+	}
+	if l := h.ledgerOf(2); len(l.Starts) != 0 {
+		t.Errorf("starts = %v inside quiet hours, want none spent", l.Starts)
+	}
+	h.clock.Set(end)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 || h.fixStartBy() != autofixBy {
+		t.Fatalf("fix runs = %d by %q after quiet hours, want autofix's loop", n, h.fixStartBy())
+	}
+}
+
+// A loop you ask for runs under the pause: `magnum pause` holds what
+// starts by itself, never `f`.
+func TestFStartsALoopUnderThePause(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	colleagueFixer(h, git)
+	h.tick() // reviewed
+	h.e.setKV(h.ctx, store.KVDaemonPaused, "1")
+	h.pastSettle()
+	id := h.fix(FixPayload{})
+	h.tick()
+	h.wantDone(id)
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 || h.fixStartBy() != fixBy {
+		t.Fatalf("fix runs = %d by %q under the pause, want the loop f asked for", n, h.fixStartBy())
+	}
+}

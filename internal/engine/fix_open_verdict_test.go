@@ -517,3 +517,48 @@ func TestAnUncheckedMergeIsNeverIdle(t *testing.T) {
 		t.Errorf("work = %v, want the thread", work)
 	}
 }
+
+// `magnum pause` holds the look's new starts: work waits with the pause's
+// words and its end when it has one, starts nothing, spends none of
+// autofix_max_loops and needs nobody.
+func TestAPauseHoldsTheLooksStart(t *testing.T) {
+	f := idleFacts()
+	f.items = []openItem{personThread(4100)}
+	f.pause = "daemon paused lunch"
+	v, work, needs := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "daemon paused lunch: 1 thread of a person waits for `magnum resume`")
+	if len(work) != 0 || len(needs) != 0 || len(v.Needs) != 0 {
+		t.Errorf("work %v, needs %v, verdict needs %+v; want nothing started and nothing for you", work, needs, v.Needs)
+	}
+	f.pauseUntil = openNow.Add(2 * time.Hour)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "waits until")
+	if !v.Until.Equal(f.pauseUntil) {
+		t.Errorf("until = %s, want the pause's end %s", v.Until, f.pauseUntil)
+	}
+	f.pause, f.pauseUntil = "", time.Time{}
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenFixing, "starts a fix loop")
+}
+
+// [daemon] quiet_hours hold the look's new starts as they hold a full
+// round: work waits until the window ends, the verdict says so, and once it
+// ended the same work starts.
+func TestQuietHoursHoldTheLooksStartUntilTheyEnd(t *testing.T) {
+	f := idleFacts()
+	f.items = []openItem{personThread(4100)}
+	f.settle.quietHours = "03:00-10:00"
+	f.now = time.Date(2026, 11, 7, 4, 0, 0, 0, time.Local)
+	f.pr.HeadChangedAt, f.ledger.Spell = f.now.Add(-time.Hour), openSpell{}
+	activity := f.now.Add(-30 * time.Minute)
+	f.pr.ActivityAt = &activity
+	end := time.Date(2026, 11, 7, 10, 0, 0, 0, time.Local)
+	v, work, needs := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "quiet hours (03:00-10:00): 1 thread of a person waits until 10:00")
+	if !v.Until.Equal(end) || len(work) != 0 || len(needs) != 0 {
+		t.Errorf("until %s, work %v, needs %v; want %s and nothing started", v.Until, work, needs, end)
+	}
+	f.now = end
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenFixing, "starts a fix loop")
+}

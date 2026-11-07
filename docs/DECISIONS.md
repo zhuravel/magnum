@@ -2982,6 +2982,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   it be idle. Tests, failing first: TestAnUncheckedMergeIsNeverIdle,
   TestAFailedBaseCheckIsNeverIdleAndIsTriedAgainSoon.
 
+- **`magnum pause` and quiet hours hold the look's new fix loops** (2026-11-07, a read-only check before the
+  operator's switch to "open"). Under "own" a pause and `[daemon] quiet_hours` held new loops in practice:
+  those loops start at the end of a round, and the rounds wait. Under "open" the look starts its loops
+  itself, and neither `openStart`, `startFix` nor `prepareFix` read either (dispatch skips the pause for a
+  forced round, and quiet hours let one through), so a night's quiet hours, which the operator set to have
+  no automatic rounds at night instead of pausing by hand, or a pause still started loops, each push of
+  theirs forcing a re-review. Rule 9 now holds work under the pause ("daemon paused: 1 thread of a person
+  waits for `magnum resume`", or until the end `--for` or `--until` set) and inside quiet hours, by a full
+  round's hold ("quiet hours (03:00-10:00): ... waits until 10:00"), after its needs-you rules and before
+  hands-off and the settle: no start, none of `autofix_max_loops` spent, nothing raised. The work stays in
+  the ledger's last whole read, so the first look after the end starts the loop with nothing new on
+  GitHub. A loop that runs goes on as before (its forced re-reviews and its next cycles continue work begun
+  before), and `f` still starts one, as `magnum review` still runs a round. Not done: a gate in `startFix`
+  for every autofix start, which would also hold "own"'s start after a round the operator forced under the
+  pause. Tests, failing first: TestAPauseHoldsTheLooksStart, TestQuietHoursHoldTheLooksStartUntilTheyEnd,
+  TestAPausedLookStartsNothingUntilThePauseEnds, TestQuietHoursHoldTheLooksStartsUntilTheirEnd;
+  TestFStartsALoopUnderThePause keeps `f`.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

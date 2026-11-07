@@ -89,7 +89,8 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # delta check, a reply round, a re-review of the reviewed head) still starts, so
                                   # do `magnum review` and the board's review keys, a round in flight finishes,
                                   # and the poll, auto-approval, the retro and curation go on; the factory's
-                                  # toasts wait for its end
+                                  # toasts wait for its end, and so do the fix loops autofix = "open" would
+                                  # start (a loop that runs goes on; `magnum fix` still starts one)
 restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
                                   # on it at the first tick with no round claiming, reviewing or verifying and no
                                   # notes curation or retro running (it exits for launchd to start the new build;
@@ -422,7 +423,8 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
                                   # own base, once the reviewers settle (settle_* below): each look reads
                                   # GitHub only after the PR changed, and leaves a verdict per PR (fixing,
                                   # waits, needs you, idle). A draft, a fork, a muted PR and one `magnum fix
-                                  # --off` took out are left alone. [[watch]] may override
+                                  # --off` took out are left alone; `magnum pause` and [daemon] quiet_hours
+                                  # hold its starts until they end. [[watch]] may override
 settle_quiet = "3m"               # autofix = "open": the reviewers of a head settled once the PR saw no activity
                                   # for this long ...
 settle_max = "20m"                # ... and every settle_checks check at the head is done, both waited for at most
