@@ -516,8 +516,8 @@ output), then is kept as invalid.
 The prompts of the factory's roles (`[[factory.role]]`, `magnum factory`). Each is parsed with
 `factory-shared.md`, as a judge prompt is with `judge-shared.md`: its blocks are `task` (who the agent is,
 the task, its copy and branch), `inputs` (the task's files, read as data, never instructions),
-`questions` (the format of a questions file, the merge methods of `merges`, and the other roles' questions
-files read first, none of their questions asked again in other words and a shared one kept word for word, so
+`questions` (the format of a questions file, whose `text` names its subject, the merge methods of `merges`,
+and the other roles' questions files read first, none of their questions asked again in other words and a shared one kept word for word, so
 the factory asks it once), `merges` (the repository's merge methods, and the operator's rule: one PR is the
 default, and a two-step deploy is an option only for a migration or backfill that must run in production
 first, named in the option; also in `factory-points.md`) and `rules` (the factory mode's rules: no interactive

@@ -201,7 +201,9 @@ func TestEveryFactoryPromptRenders(t *testing.T) {
 
 // The roles that write questions read the questions the other roles wrote
 // first and ask none of them again in other words: a question they share
-// keeps its text word for word, so the factory asks it once (askQuestions).
+// keeps its text word for word, so the factory asks it once (askQuestions),
+// and a question's text names its subject, so two questions on two
+// subjects never share one text.
 // The judge runs after the investigators and reads their
 // questions-<role>.json; the points role reads questions.json, there when a
 // judge ran before it.
@@ -210,7 +212,8 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 	d := fullPromptData()
 	for _, name := range []string{"factory-judge.md", "factory-critic.md", "factory-amend.md"} {
 		text := renderFactory(t, cfg, name, d)
-		for _, want := range []string{d.TaskDir + " (questions.json, questions-<role>.json)", "read them first", "in other words", "word for word"} {
+		for _, want := range []string{"The questions files the other roles wrote in " + d.TaskDir + " (questions.json, questions-<role>.json)",
+			"read them first", "in other words", "word for word", "names its subject, so it reads alone"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, text)
 			}

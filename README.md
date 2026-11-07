@@ -3965,8 +3965,9 @@ Jira issue" question of a task from your words among them), and the task needs y
 before coding`. A question is told by its text (trimmed, lowercased, its runs of spaces made one), whichever
 role raised it: the same question in two files of a batch is asked once, the first file's (`questions.json`
 comes first), raised by both roles (`fx-judge, fx-points`), and a role's repeat of a question asked before is
-not asked again, since its answer serves both. The roles that write questions read the other questions files
-first and ask none of their questions again in other words. Their prompts (the points role's, the judge's,
+not asked again, since its answer serves both. The roles that write questions read the questions files the other
+roles wrote first, ask none of their questions again in other words, and name a question's subject in its
+text, so two questions on two subjects never share one. Their prompts (the points role's, the judge's,
 the critic's, the amend's) also name the merge methods the repository's GitHub settings allow (`gh api
 repos/<repo>` as your gh login, read once per repository while the factory daemon runs), with your rule: one
 PR is the default, and a two-step deploy is an option only for a migration or backfill that must run in
