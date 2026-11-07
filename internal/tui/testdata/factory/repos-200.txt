@@ -8,9 +8,9 @@
 
  WAITS ON OTHERS
   ⣷ talkable  PR-12321  #4531   Advocate offer email lo…  agent: magnum fixes #4531 (cycle 2 of 5)                          ◌ 25/41               ✗ P0 P2×2  ✗ 1                                      9m
-  ◷ talkable  PR-12325  #4535   Deploy list on campaigns  reviewers: nothing open at a1b2c3d · no approval yet              – Completion not run  ✔ clean    —                                        3h
+  ◷ talkable  PR-12325  #4535   Deploy list on campaigns  reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago        – Completion not run  ✔ clean    —                                        3h
   ◷ widget    task 6            Add passkey login suppo…  review: round 1 of 3 of the local review                                                                                                   15m
-  ◷ talkable  PR-12410  #4611   Cart totals in the widg…  CI: CI at a1b2c3d                                                 ◌ 40/41               ✔ clean    ✔ 2 ⟳                                   10m
+  ◷ talkable  PR-12410  #4611   Cart totals in the widg…  reviewers: all 3 findings fixed at a1b2c3d · asked rev-bob 2h a…  ✓ 41/41               ✔ clean    ✔ 2 ⟳                                   10m
 
  LEFT ALONE
   ◷ widget              #4606   Old sync job cleanup      you: #4606 is yours to follow: it was open before magnum first…                                                                             1d

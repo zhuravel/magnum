@@ -1,22 +1,22 @@
  magnum factory · talkable, widget                            memory full: new tasks wait · ↻ 14:09 
- ● 2 tasks and 1 PR need you, 3 decisions · 4 wait on others, 1 at work · 1 left alone · 1 done tod…
+ ● 2 tasks and 1 PR need you, 3 decisions · 4 wait on others, 1 at work · 1 left alone · 1 done
 
- NEEDS YOU                           WAITS ON                            CI  FINDINGS  APPR   WAITED
-› ● talka…  PR-12320 Coupon roundi…  you: 2 items need you               ✓   ✗ P1      —         35m
-  ● widget  #4602    Coupon roundi…  you: 1 item needs you               ✗   ● P3      ✔ 1       25m
-  ● widget  task 5   In the offer…   you: ready to push                                           2h
+ NEEDS YOU                             WAITS ON                          CI  FINDINGS  APPR   WAITED
+› ● talka…  PR-12320 Coupon rounding…  you: 2 items need you             ✓   ✗ P1      —         35m
+  ● widget  #4602    Coupon rounding   you: 1 item needs you             ✗   ● P3      ✔ 1       25m
+  ● widget  task 5   In the offer pa…  you: ready to push                                         2h
 
  WAITS ON OTHERS
-  ⣷ talka…  PR-12321 Advocate offe…  agent: magnum fixes #4531           ◌   ✗ P0      ✗ 1        9m
-  ◷ talka…  PR-12325 Deploy list o…  reviewers: nothing open at a1b2c3d  –   ✔ clean   —          3h
-  ◷ widget  task 6   Add passkey l…  review: round 1 of 3                                        15m
-  ◷ talka…  #4611    Cart totals i…  CI: CI at a1b2c3d                   ◌   ✔ clean   ✔ 2 ⟳     10m
+  ⣷ talka…  PR-12321 Advocate offer…   agent: magnum fixes #4531         ◌   ✗ P0      ✗ 1        9m
+  ◷ talka…  PR-12325 Deploy list on…   reviewers: asked rev-ann 17h ago  –   ✔ clean   —          3h
+  ◷ widget  task 6   Add passkey log…  review: round 1 of 3                                      15m
+  ◷ talka…  #4611    Cart totals in…   reviewers: asked rev-bob 2h ago   ✓   ✔ clean   ✔ 2 ⟳     10m
 
  LEFT ALONE
-  ◷ widget  #4606    Old sync job…   you: #4606 is yours to follow                                1d
+  ◷ widget  #4606    Old sync job cl…  you: #4606 is yours to follow                              1d
 
  DONE TODAY
-  ✓ talka…  PR-12302 Remove old sy…  nothing: merged 13:20
+  ✓ talka…  PR-12302 Remove old sync…  nothing: merged 13:20
 ────────────────────────────────────────────────────────────────────────────────────────────────────
  you: 2 items need you: 1 thread of a person and 1 skipped finding · your move: task card
  enter task card · a oldest ask · n new task · ? more

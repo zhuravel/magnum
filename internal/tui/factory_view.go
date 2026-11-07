@@ -1028,27 +1028,30 @@ func (p *factoryPainter) chipLine() string {
 	} else {
 		parts = append(parts, st.OK.Render(p.tick()+" nothing waits on you"))
 	}
+	// The waits' segment gives up its "at work" before the line is cut.
+	waitParts := []string{""}
 	if waits > 0 {
 		verb := "wait"
 		if waits == 1 {
 			verb = "waits"
 		}
 		text := fmt.Sprintf("%d %s on others", waits, verb)
+		waitParts = []string{st.Dim.Render(text)}
 		if working > 0 {
-			text += fmt.Sprintf(", %d at work", working)
+			waitParts = append([]string{st.Dim.Render(text + fmt.Sprintf(", %d at work", working))}, waitParts...)
 		}
-		parts = append(parts, st.Dim.Render(text))
 	}
+	var tail []string
 	if alone > 0 {
-		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d left alone", alone)))
+		tail = append(tail, st.Dim.Render(fmt.Sprintf("%d left alone", alone)))
 	}
 	chip := ""
 	if p.f.RuleChip != "" {
 		chip = st.Warn.Render(p.f.RuleChip) + " "
 	}
 	// "1 done today" gives way to "1 done" when the rule chip would sit close
-	// to it. A digest's segment takes the place of the done count, until the
-	// next key.
+	// to it, or the line would be cut. A digest's segment takes the place of
+	// the done count, until the next key.
 	dones := []string{fmt.Sprintf("%d done today", done), fmt.Sprintf("%d done", done)}
 	switch d := p.f.Digest; {
 	case d != nil && d.Chip != "":
@@ -1056,15 +1059,26 @@ func (p *factoryPainter) chipLine() string {
 	case done > 0:
 		dones = []string{st.Dim.Render(dones[0]), st.Dim.Render(dones[1])}
 	}
+	room := p.width
+	if chip != "" {
+		room -= ansi.StringWidth(chip) + factoryChipGap
+	}
 	left := ""
-	for _, segment := range dones {
-		all := parts
-		if done > 0 {
-			all = append(slices.Clone(parts), segment)
-		}
-		left = " " + strings.Join(all, st.Dim.Render(p.g.sep))
-		if chip == "" || ansi.StringWidth(left)+ansi.StringWidth(chip)+factoryChipGap <= p.width {
-			break
+fit:
+	for _, waitPart := range waitParts {
+		for _, segment := range dones {
+			all := slices.Clone(parts)
+			if waitPart != "" {
+				all = append(all, waitPart)
+			}
+			all = append(all, tail...)
+			if done > 0 {
+				all = append(all, segment)
+			}
+			left = " " + strings.Join(all, st.Dim.Render(p.g.sep))
+			if ansi.StringWidth(left) <= room {
+				break fit
+			}
 		}
 	}
 	if chip == "" {

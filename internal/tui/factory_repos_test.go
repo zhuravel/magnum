@@ -65,9 +65,9 @@ func fixtureTwoRepos() factoryFrame {
 			{
 				ID: 4, Key: "PR-12325", GitHub: "#4535", Repo: "example/talkable", Title: "Deploy list on campaigns",
 				Group: GroupWaits, Mark: MarkWaits,
-				WaitsOn: []WaitsOn{{Who: "reviewers", What: "nothing open at a1b2c3d · no approval yet", Short: "nothing open at a1b2c3d"}},
+				WaitsOn: []WaitsOn{{Who: "reviewers", What: "nothing open at a1b2c3d · asked rev-ann 17h ago", Short: "asked rev-ann 17h ago"}},
 				Since:   factoryAgo(now, 3*time.Hour),
-				Help:    "reviewers: nothing open at a1b2c3d · no approval yet",
+				Help:    "reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago",
 				CI: &CIInfo{State: "passed", Total: 41, Passed: 41, Required: []CheckState{
 					{Name: "Completion", Label: "Completion", State: "missing"}}},
 				Findings:  &FindingsInfo{Verdict: "clean", Fixed: 3},
@@ -83,13 +83,14 @@ func fixtureTwoRepos() factoryFrame {
 			{
 				ID: -81, Key: "talkable#4611", GitHub: "#4611", Jira: "PR-12410", Repo: "example/talkable", Title: "Cart totals in the widget",
 				Group: GroupWaits, Mark: MarkWaits,
-				WaitsOn:   []WaitsOn{{Who: "CI", What: "CI at a1b2c3d"}},
+				WaitsOn: []WaitsOn{{Who: "reviewers", What: "all 3 findings fixed at a1b2c3d · asked rev-bob 2h ago",
+					Short: "asked rev-bob 2h ago"}},
 				Since:     factoryAgo(now, 10*time.Minute),
-				Help:      "CI: CI at a1b2c3d",
+				Help:      "reviewers: all 3 findings fixed at a1b2c3d · asked rev-bob 2h ago",
 				PR:        &FactoryPR{Ref: "example/talkable#4611"},
-				CI:        &CIInfo{State: "pending", Total: 41, Passed: 40, Pending: 1},
-				Findings:  &FindingsInfo{Verdict: "clean"},
-				Approvals: &FactoryApprovals{Approved: 2, Stale: 1, Decision: "APPROVED"},
+				CI:        &CIInfo{State: "passed", Total: 41, Passed: 41},
+				Findings:  &FindingsInfo{Verdict: "clean", Fixed: 3},
+				Approvals: &FactoryApprovals{Approved: 2, Stale: 2, Decision: "REVIEW_REQUIRED"},
 			},
 			{
 				ID: -76, Key: "widget#4606", GitHub: "#4606", Repo: "example/widget", Title: "Old sync job cleanup",
