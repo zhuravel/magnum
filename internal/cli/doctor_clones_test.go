@@ -11,6 +11,8 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // TestDoctorClonesSuggestsHTTPSAndSSHHintOnlyForSSHOrigins: a missing main
@@ -113,5 +115,59 @@ func TestDoctorWarnsAboutAPushURLUnderAFixerApp(t *testing.T) {
 	}
 	if c, ok, _ := check(cfg, daemonRuleExit(pushURL, 1, "")); !ok || c.Status != doctorPass {
 		t.Fatalf("no pushurl under a fixer App = %+v, %v", c, ok)
+	}
+}
+
+// A fixer App's tokens reach its token_repositories alone, and `magnum fix`
+// refuses a PR of any other repository of its watch: the doctor names the
+// watch's repositories magnum knows (include and manual_repos names, its
+// pools, the repositories the registry saw under it) that the list leaves
+// out, before a loop is refused. A glob names none, another watch's
+// repositories and an excluded one are not the App's, and a gh fixer's
+// watch is not read.
+func TestDoctorNamesTheRepositoriesAFixerAppsTokensDoNotReach(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "me", Kind: "gh", Login: "zhuravel"}, {Name: "fixer-app", Kind: "app", Login: "fixer-app[bot]",
+		AppID: 7, ClientID: "Iv-fix", InstallationID: 8, PrivateKeyEnv: "FIX_KEY", TokenRepositories: []string{"talkable", "Web-App"},
+		TokenPermissions: map[string]string{"contents": "write", "pull_requests": "write"}, UserID: 4242}}
+	cfg.Watches = []config.Watch{
+		{Owner: "talkable", Include: []string{"talkable", "talkable-esp", "web-*", "docs"}, Exclude: []string{"web-old"}, ManualRepos: []string{"docs"},
+			Identity: "me", PollIdentity: "me", FixIdentity: "fixer-app"},
+		{Owner: "example", Include: []string{"*"}, Identity: "me", PollIdentity: "me"},
+	}
+	cfg.Pools = []config.Pool{{Repo: "talkable/talkable", MainClone: "/clones/talkable", Base: "master"}, {Repo: "talkable/web-shop", MainClone: "/clones/shop"}}
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
+	for _, r := range []store.Repo{{Owner: "talkable", Name: "web-app"}, {Owner: "talkable", Name: "web-old"}, {Owner: "talkable", Name: "web-api"},
+		{Owner: "example", Name: "talkable-esp"}} {
+		r.NodeID, r.Mode = "R-"+r.Owner+"-"+r.Name, store.RepoModePerPR
+		if _, err := st.UpsertRepo(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checks := doctorByName(doctorFixerRepos(context.Background(), doctorDeps{Config: cfg, Store: st}))
+	c, ok := checks["fixer repos talkable"]
+	if !ok || c.Status != doctorWarn {
+		t.Fatalf("checks %+v: want a warning for watch talkable", checks)
+	}
+	for _, want := range []string{"talkable/talkable-esp", "talkable/docs", "talkable/web-shop", "talkable/web-api", "magnum fix"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Errorf("detail %q does not name %s", c.Detail, want)
+		}
+	}
+	for _, not := range []string{"talkable/talkable,", "web-app", "web-old", "web-*", "example/"} {
+		if strings.Contains(c.Detail+" ", not) {
+			t.Errorf("detail %q names %s", c.Detail, not)
+		}
+	}
+	if !strings.Contains(c.Fix, "token_repositories") || !strings.Contains(c.Fix, "fixer-app") || strings.Count(c.Detail, "talkable/docs") != 1 {
+		t.Errorf("fix %q, detail %q", c.Fix, c.Detail)
+	}
+	if _, ok := checks["fixer repos example"]; ok {
+		t.Error("a gh fixer's watch was checked")
+	}
+
+	cfg.Identities[1].TokenRepositories = []string{"talkable", "talkable-esp", "docs", "web-shop", "web-api", "web-app"}
+	if c := doctorByName(doctorFixerRepos(context.Background(), doctorDeps{Config: cfg, Store: st}))["fixer repos talkable"]; c.Status != doctorPass {
+		t.Errorf("every repository named: %+v, want a pass", c)
 	}
 }

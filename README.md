@@ -1389,7 +1389,11 @@ numeric id. A fixer App must set all three, with `contents` and `pull_requests` 
 (`metadata = "read"` may be added); validation refuses it otherwise, and refuses the keys on a `gh` identity.
 Every token in the App's gh config directory is then that narrow, since the daemon's refresh and the check
 mint the same way; GitHub refuses a mint that names a repository outside the installation or a permission it
-lacks, and the token refresh then fails as any other does. For an App a watch's fixer acts as, `magnum
+lacks, and the token refresh then fails as any other does. A fixer App's tokens reach its `token_repositories`
+alone, so `magnum fix` (and autofix, whose PR then needs you) refuses a PR of any other repository of the watch
+("the fixer App ... tokens do not reach owner/repo: add repo to its token_repositories") before anything starts,
+and `magnum doctor` names the watch's repositories it knows (include and `manual_repos` names, its pools, the
+repositories the registry saw) that the list leaves out. For an App a watch's fixer acts as, `magnum
 identities check` also wants `contents` write in the installation (a reviewing App needs read), says whether
 `workflows` is granted (unused: `magnum push` refuses a change to `.github/workflows`), checks that the
 installation's account owns every repository the fixer pushes to and that `user_id` is the bot user's id

@@ -430,6 +430,10 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		return nil, fmt.Errorf("no identity %s for the fix role", role.Identity)
 	case fixer.Kind == "app" && !e.cfg.DedicatedFixApp(fixer.Name): // a poll identity the role took (an explicit one is a config error)
 		return nil, fmt.Errorf("the fix role's identity %s is the App magnum reviews as. Set fix_identity to your gh identity or a dedicated App", fixer.Name)
+	case fixer.Kind == "app" && !slices.ContainsFunc(fixer.TokenRepositories, func(r string) bool { return strings.EqualFold(r, repo.Name) }):
+		// Its tokens reach token_repositories alone: the mint would work and
+		// every gh call and the push then fail, after the fixer's work.
+		return nil, fmt.Errorf("the fixer App %s's tokens do not reach %s: add %s to its token_repositories", fixer.Name, full, repo.Name)
 	}
 	cur, running, err := e.fixState(ctx, pr.ID)
 	switch {

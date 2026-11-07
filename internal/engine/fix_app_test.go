@@ -71,6 +71,45 @@ func TestPrepareFixRefusesTheReviewApp(t *testing.T) {
 	}
 }
 
+// A fixer App's tokens reach its token_repositories alone: on a PR of
+// another repository of the watch the mint still works (the repository is
+// in the installation), the fixer edits and commits as the bot, and then
+// every gh call on the PR and its push fail. `magnum fix` refuses such a PR
+// before anything starts, and names the key to add; a PR of a repository
+// the list names (any case) starts as before.
+func TestPrepareFixRefusesARepositoryTheFixerAppsTokensDoNotReach(t *testing.T) {
+	narrowTo := func(repos ...string) func(*harness) {
+		return func(h *harness) {
+			for i := range h.cfg.Identities {
+				if h.cfg.Identities[i].Name == fixerAppName {
+					h.cfg.Identities[i].TokenRepositories = repos
+				}
+			}
+		}
+	}
+	h, git := fixHarness(t, withFixerApp, narrowTo("talkable-esp"))
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	const want = "the fixer App fixer-app's tokens do not reach talkable/talkable: add talkable to its token_repositories"
+	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+		t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+	}
+	if h.ag.count("submit:") != 0 || slices.ContainsFunc(h.ag.all(), func(c string) bool { return strings.HasSuffix(c, ":claude-fix") }) {
+		t.Errorf("calls %v: a refused request made the fixer's pane", h.ag.all())
+	}
+
+	h, git = fixHarness(t, withFixerApp, narrowTo("talkable-esp", "Talkable"))
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id = h.fix(FixPayload{})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "fixing talkable/talkable#2") {
+		t.Fatalf("answer = %q, want the loop started", res)
+	}
+}
+
 // fixerSession gives PR pr a live, idle fixer session whose pane was made
 // with env: a pane an earlier cycle opened.
 func fixerSession(h *harness, pr store.PR, env map[string]string) store.Session {

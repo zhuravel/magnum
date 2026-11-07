@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -152,6 +154,73 @@ func doctorFixerPushURL(ctx context.Context, d doctorDeps) []doctorCheck {
 		out = append(out, doctorWarned(name, "origin of "+p.Repo+" sets remote.origin.pushurl, and git ignores pushInsteadOf for it: "+
 			"the fixer App's pane can then `git push` past `magnum push`",
 			"git -C "+inspTilde(p.MainClone)+" config --unset remote.origin.pushurl"))
+	}
+	return out
+}
+
+// doctorFixerRepos checks, for each watch whose fixer acts as a dedicated
+// App (config.Config.FixerLogins), that the App's token_repositories name
+// every repository of the watch magnum knows: the names in its include
+// (not a glob) and manual_repos, its pools' repositories, and those the
+// registry saw, each only while the watch covers it (config.Config.WatchFor).
+// The App's tokens reach those alone, so `magnum fix` refuses a PR of any
+// other repository of the watch; a gh fixer's watch is not read.
+func doctorFixerRepos(ctx context.Context, d doctorDeps) []doctorCheck {
+	cfg := d.Config
+	var out []doctorCheck
+	var known []string
+	for _, p := range cfg.Pools {
+		known = append(known, p.Repo)
+	}
+	if d.Store != nil {
+		repos, err := d.Store.ListRepos(ctx)
+		if err != nil {
+			out = append(out, doctorWarned("fixer repos", "could not list the registry's repositories: "+err.Error(),
+				"run `magnum doctor` again; the fixer App checks below cover the configuration's repositories alone"))
+		}
+		for _, r := range repos {
+			known = append(known, r.FullName())
+		}
+	}
+	for i := range cfg.Watches {
+		w := &cfg.Watches[i]
+		if len(cfg.FixerLogins(w)) == 0 {
+			continue
+		}
+		r, _ := cfg.FixRoleFor(w)
+		id := cfg.IdentityByName(r.Identity)
+		cands := slices.Clone(known)
+		for _, n := range slices.Concat(w.Include, w.ManualRepos) {
+			if !strings.ContainsAny(n, `*?[\`) {
+				cands = append(cands, w.Owner+"/"+n)
+			}
+		}
+		var reach, missing []string
+		for _, full := range cands {
+			_, name, _ := strings.Cut(full, "/")
+			has := func(n string) bool { _, got, _ := strings.Cut(n, "/"); return strings.EqualFold(got, name) }
+			switch {
+			case cfg.WatchFor(full) != w || slices.ContainsFunc(reach, has) || slices.ContainsFunc(missing, has):
+			case slices.ContainsFunc(id.TokenRepositories, func(t string) bool { return strings.EqualFold(t, name) }):
+				reach = append(reach, full)
+			default:
+				missing = append(missing, w.Owner+"/"+name)
+			}
+		}
+		name := "fixer repos " + w.Owner
+		if len(missing) == 0 {
+			out = append(out, doctorOK(name, fmt.Sprintf("the fixer App %s's tokens reach every repository of watch %s magnum knows (%d)",
+				id.Name, w.Owner, len(reach))))
+			continue
+		}
+		names := make([]string, len(missing))
+		for i, m := range missing {
+			_, n, _ := strings.Cut(m, "/")
+			names[i] = strconv.Quote(n)
+		}
+		out = append(out, doctorWarned(name, fmt.Sprintf("the fixer App %s's tokens do not reach %s of watch %s: `magnum fix` refuses their PRs",
+			id.Name, strings.Join(missing, ", "), w.Owner),
+			fmt.Sprintf("add %s to token_repositories of identity %s in config.toml, then `magnum identities check`", strings.Join(names, ", "), id.Name)))
 	}
 	return out
 }
