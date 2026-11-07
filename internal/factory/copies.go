@@ -171,7 +171,7 @@ func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	cp := copyOf(repo, sl, n)
 	unlock := c.lockCopy(cp.Name)
 	defer unlock()
-	if err := c.prepare(ctx, t, repo, sl, cp); err != nil {
+	if err := c.prepare(ctx, t, pr, repo, sl, cp); err != nil {
 		return Copy{}, fmt.Errorf("claim %s for %s: %w", cp.Name, TaskKey(t), err)
 	}
 	return cp, nil
@@ -456,7 +456,7 @@ func (c *copySet) repair(ctx context.Context, repo config.FactoryRepo, sl store.
 // the copy's guard (guard) first. A step that fails fails the claim, which
 // keeps the copy: the task's next claim runs the steps not done yet, each
 // after its guard again, and never one that is done.
-func (c *copySet) prepare(ctx context.Context, t registry.Task, repo config.FactoryRepo, sl store.Slot, cp Copy) error {
+func (c *copySet) prepare(ctx context.Context, t registry.Task, pr store.PR, repo config.FactoryRepo, sl store.Slot, cp Copy) error {
 	a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID)
 	if err != nil {
 		return err
@@ -464,7 +464,7 @@ func (c *copySet) prepare(ctx context.Context, t registry.Task, repo config.Fact
 	subject := "slot:" + cp.Name + ":claim:" + strconv.FormatInt(a.ID, 10)
 	step := func(name string, fn func(ctx context.Context) error) error {
 		return steps.Step(ctx, c.st, subject, name, func(ctx context.Context) error {
-			if err := c.guard(ctx, t, sl, cp); err != nil {
+			if err := c.guard(ctx, t, pr, sl, cp); err != nil {
 				return err
 			}
 			return fn(ctx)
@@ -505,13 +505,14 @@ func (c *copySet) prepare(ctx context.Context, t registry.Task, repo config.Fact
 	return nil
 }
 
-// guard is what each claim step runs before it changes the copy or its
-// data: no factory pane works in the copy (paneIn), and magnum's slot guard
-// lets it go (a person's agent or process in it, their changes, a HEAD that
-// moved). HEAD at the tip of the task's own branch is the factory's own
-// (ownHead).
-func (c *copySet) guard(ctx context.Context, t registry.Task, sl store.Slot, cp Copy) error {
-	if err := c.paneIn(ctx, cp); err != nil {
+// guard is what each claim step of task t (its owner row pr) runs before
+// it changes the copy or its data: no factory pane works in the copy
+// (paneIn: the task's own sessions only while one of them is at work), and
+// magnum's slot guard lets it go (a person's agent or process in it, their
+// changes, a HEAD that moved). HEAD at the tip of the task's own branch is
+// the factory's own (ownHead).
+func (c *copySet) guard(ctx context.Context, t registry.Task, pr store.PR, sl store.Slot, cp Copy) error {
+	if err := c.paneIn(ctx, cp, pr); err != nil {
 		return err
 	}
 	if _, _, err := c.ownHead(ctx, t, sl, cp); err != nil {
@@ -859,7 +860,7 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 		return fmt.Errorf("release the copy of %s: %s is no copy of %s", TaskKey(t), sl.Name, repo.Repo)
 	}
 	cp := copyOf(repo, sl, n)
-	if err := c.paneIn(ctx, cp); err != nil {
+	if err := c.paneIn(ctx, cp, store.PR{}); err != nil {
 		return err
 	}
 	server, err := c.stopForRelease(ctx, cp)
@@ -879,8 +880,12 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 // paneIn refuses a copy one of the factory's live sessions works in (its
 // working directory is the copy or below it), and a copy a pane of the
 // factory's herdr session works in that no session row names (someone
-// opened it there; the shell a parked session left is the factory's).
-func (c *copySet) paneIn(ctx context.Context, cp Copy) error {
+// opened it there; the shell a parked session left is the factory's). The
+// sessions of own, the owner row of the task that claims the copy (none at
+// a release), refuse it only while one of them is at work (ownAtWork): one
+// that waits there (its stage passed, its turn ended) waits for the
+// factory's next prompt, which the claim comes before.
+func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR) error {
 	live, err := c.st.LiveSessions(ctx)
 	if err != nil {
 		return err
@@ -890,9 +895,22 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy) error {
 		dir = fsx.Canon(dir)
 		return dir != "" && (dir == root || strings.HasPrefix(dir, root+string(filepath.Separator)))
 	}
+	ownLooked := false
 	for _, s := range live {
-		if cwd := store.Deref(s.Cwd); in(cwd) {
+		cwd := store.Deref(s.Cwd)
+		switch {
+		case !in(cwd):
+			continue
+		case own.ID == 0 || s.PRID != own.ID:
 			return fmt.Errorf("%w: the %s session works in %s", ErrPaneInCopy, s.Role, cwd)
+		case ownLooked:
+			continue
+		}
+		ownLooked = true
+		if who, err := c.ownAtWork(ctx, own); err != nil {
+			return err
+		} else if who != "" {
+			return fmt.Errorf("%w: %s (%s)", ErrPaneInCopy, who, cwd)
 		}
 	}
 	if c.panes == nil {
@@ -916,6 +934,32 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy) error {
 		}
 	}
 	return nil
+}
+
+// ownAtWork says who of owner row pr's task is at work in its copy, "" for
+// nobody, as the factory's own changes of the copy ask it
+// (Runtime.AtWork): one of its runs in flight (pending, submitted or
+// working: its agent may be changing the copy), or you, who typed into one
+// of its panes within the human cooldown, where your edits are.
+func (c *copySet) ownAtWork(ctx context.Context, pr store.PR) (string, error) {
+	runs, err := c.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, run := range runs {
+		switch run.State {
+		case store.RunPending, store.RunSubmitted, store.RunWorking:
+			return "the task's " + run.Role + " agent works in it", nil
+		}
+	}
+	cur, err := c.st.PRByID(ctx, pr.ID)
+	if err != nil {
+		return "", err
+	}
+	if at := cur.HumanActiveAt; at != nil && c.now().Before(c.cfg.Daemon.CooldownUntil(at)) {
+		return "you typed into one of the task's panes at " + at.Local().Format("15:04:05"), nil
+	}
+	return "", nil
 }
 
 // leftCopy is how a task left its copy: the branch checked out ("" for a

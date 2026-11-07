@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -270,5 +271,71 @@ func TestAReleaseDoesNotWaitForAnotherCopysClaim(t *testing.T) {
 		if n := len(r.calls("bin/worktree-setup", filepath.Join(r.root, "talkable."+name))); n != 1 {
 			t.Errorf("%s's setup ran %d times, want once", name, n)
 		}
+	}
+}
+
+// A task's own session that waits in its copy (its stage passed, or its
+// turn ended) does not hold that task's own claim: after a restart task 1
+// waited 16 minutes on "a pane runs in it: the fx-repro session works in"
+// its own copy, whose claim had to switch it back to the task's branch.
+// Its run in flight, your typing into one of its panes within the human
+// cooldown, or another task's session still holds it.
+func TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	task := r.task("PR-1")
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) { u.Set("branch", "task-PR-1") }); err != nil {
+		t.Fatal(err)
+	}
+	task = r.reload(task.ID)
+	c := r.claim(task)
+	pr, err := r.owner(r.ctx, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.CreateSession(r.ctx, store.Session{PRID: pr.ID, Role: "fx-repro", State: store.SessionLive,
+		Cwd: new(c.Path)}); err != nil {
+		t.Fatal(err)
+	}
+	r.gitIn(c.Path, "switch", "--quiet", "-c", "elsewhere") // the claim after the restart switches back: a step, with its guard
+	r.c = r.newCopies()
+
+	run, err := r.st.CreateRun(r.ctx, store.Run{PRID: pr.ID, Role: "fx-writer", Kind: store.RunInitial, State: store.RunWorking,
+		TargetSHA: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "fx-writer") {
+		t.Fatalf("Claim while the task's writer is at work = %v, want ErrPaneInCopy naming it", err)
+	}
+	if err := r.st.TransitionRun(r.ctx, run.ID, nil, store.RunEnded, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.UpdatePR(r.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("human_active_at", r.clock.Now()) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "you typed") {
+		t.Fatalf("Claim while you type into the task's pane = %v, want ErrPaneInCopy saying so", err)
+	}
+	r.clock.Add(r.cfg.Daemon.HumanCooldown.Duration + time.Minute)
+
+	opr, err := r.owner(r.ctx, r.task("PR-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := r.st.CreateSession(r.ctx, store.Session{PRID: opr.ID, Role: "fx-cause", State: store.SessionLive,
+		Cwd: new(filepath.Join(c.Path, "app"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "fx-cause session") {
+		t.Fatalf("Claim with another task's session in the copy = %v, want ErrPaneInCopy naming it", err)
+	}
+	if err := r.st.TransitionSession(r.ctx, other.ID, nil, store.SessionClosed, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	r.claim(task) // only the task's own idle session is in the copy now
+	if b := r.gitIn(c.Path, "branch", "--show-current"); b != "task-PR-1" {
+		t.Fatalf("the copy is on %q after the claim, want the task's branch", b)
 	}
 }
