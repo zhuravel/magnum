@@ -975,10 +975,46 @@ func (p *prbPainter) ciLines(ci CIInfo) []string {
 			names = failingNames(names)
 		}
 		out = append(out, p.pal.red.Render("Failed:")+" "+strings.Join(names, ", "))
+		out = append(out, p.ciLinkLines(ci.Links, ci.Failing, names)...)
 	}
+	out = append(out, p.requiredLines(ci, mark)...)
+	if ci.Blocked != "" {
+		out = append(out, p.st.Warn.Render(ci.Blocked))
+	}
+	return out
+}
+
+// ciLinksShown bounds the failed jobs' pages a CI section lists; a last
+// line counts the rest.
+const ciLinksShown = 5
+
+// ciLinkLines are the failed jobs' pages under the Failed line, one a
+// line: each named as that line names it (shown[i] for failing[i]), at
+// most ciLinksShown and a line that counts the rest.
+func (p *prbPainter) ciLinkLines(links []CheckLink, failing, shown []string) []string {
+	var out []string
+	for i, l := range links {
+		if i == ciLinksShown {
+			out = append(out, p.st.Dim.Render(fmt.Sprintf("  +%d more", len(links)-i)))
+			break
+		}
+		name := l.Name
+		if j := slices.Index(failing, name); j >= 0 && j < len(shown) {
+			name = shown[j]
+		}
+		out = append(out, "  "+name+" "+p.st.Accent.Render(l.URL))
+	}
+	return out
+}
+
+// requiredLines are the required checks' states with who requires them
+// and, when one was skipped, why that matters; none without required
+// checks.
+func (p *prbPainter) requiredLines(ci CIInfo, mark func(string) string) []string {
 	if len(ci.Required) == 0 {
-		return out
+		return nil
 	}
+	var out []string
 	items := make([]string, len(ci.Required))
 	skipped := false
 	for i, c := range ci.Required {

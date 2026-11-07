@@ -7,6 +7,8 @@
 
  PR           open · head a1b2c3d · alice-PR-12400-coupon-rounding → master · last activity 13:17
  CI           ✗ Completion
+              GitHub blocks the merge: Completion failed, a required approval is missing
+              ✗ ci / Completion github.com/example/widget/actions/runs/7001/job/9001
  REVIEW       ✗ P2 P3×2 · magnum commented at a1b2c3d, 13:02 · earlier findings: 1 fixed, 1 open
  APPROVALS    ✔ 1 · approved by rev-bob · asked rev-ann 2h ago
  THREADS      2 replies magnum's judge has not read: rev-ann (in magnum's thread) and alice

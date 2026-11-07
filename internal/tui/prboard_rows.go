@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -953,5 +954,22 @@ func cleanCI(in *CIInfo) *CIInfo {
 		r := &ci.Required[i]
 		r.Name, r.Label, r.State = cleanText(r.Name), cleanText(r.Label), cleanText(r.State)
 	}
+	ci.Blocked, ci.Links = cleanText(ci.Blocked), cleanLinks(ci.Links)
 	return &ci
+}
+
+// cleanLinks are links with their text cleaned, leaving out a page that is
+// no web address (an http or https URL with a host): whoever posts a check
+// sets its page.
+func cleanLinks(in []CheckLink) []CheckLink {
+	var out []CheckLink
+	for _, l := range in {
+		l.Name, l.URL = cleanText(l.Name), cleanText(l.URL)
+		u, err := url.Parse(l.URL)
+		if err != nil || u.Host == "" || !strings.EqualFold(u.Scheme, "https") && !strings.EqualFold(u.Scheme, "http") || strings.Contains(l.URL, " ") {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }

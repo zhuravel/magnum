@@ -7,6 +7,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -207,7 +208,8 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 // PR, CI, REVIEW, APPROVALS, THREADS and FIX LOOP, each under its label in
 // WAITING FOR's column and only when it has its data, cut at the edge; the
 // CI, findings and approvals in the board's cells, as home's columns draw
-// them; a blank line after them.
+// them, the CI with why GitHub blocks the merge and the failed jobs'
+// pages under it (ciLinkRows); a blank line after them.
 func (p *cardPainter) prSection(c *CardPR) []string {
 	if c == nil {
 		return nil
@@ -229,13 +231,54 @@ func (p *cardPainter) prSection(c *CardPR) []string {
 		return append(cl, seg{text, noStyle})
 	}
 	row("PR", words(nil, c.State))
-	row("CI", p.ciText(FactoryRow{CI: c.CI}, formLong))
+	if ci := c.CI; ci != nil {
+		cl := p.ciText(FactoryRow{CI: ci}, formLong)
+		var under []string // GitHub's block when it does not fit beside the cell
+		if b := ci.Blocked; b != "" {
+			if with := append(slices.Clone(cl), p.sepSeg(), seg{b, p.st.Warn}); with.width() <= p.width-1-x {
+				cl = with
+			} else {
+				under = wrapText(b, p.wrapW(x), 2)
+			}
+		}
+		row("CI", cl)
+		out = append(out, p.textRows(x, p.st.Warn, under)...)
+		out = append(out, p.ciLinkRows(ci.Links)...)
+	}
 	row("REVIEW", words(p.findingsText(FactoryRow{Findings: c.Findings}, formLong), c.Review))
 	row("APPROVALS", words(p.apprText(FactoryRow{Approvals: c.Approvals}, formLong), c.Reviewers))
 	row("THREADS", words(nil, c.Threads))
 	row("FIX LOOP", words(nil, c.FixLoop))
 	if len(out) > 0 {
 		out = append(out, "")
+	}
+	return out
+}
+
+// ciCardLinksShown bounds the failed jobs' pages under the card's CI line; a
+// last line counts the rest.
+const ciCardLinksShown = 3
+
+// ciLinkRows are the failed jobs' pages under the card's CI line, one a
+// line in its column: the fail mark, the job's name and its page without
+// the scheme; a line too narrow for both keeps the page, cut from the left
+// when it must be (its end names the job); at most ciCardLinksShown and a
+// line that counts the rest.
+func (p *cardPainter) ciLinkRows(links []CheckLink) []string {
+	const x = 1 + len("WAITING FOR") + 2
+	w := max(p.width-1-x, 1)
+	var out []string
+	for i, l := range links {
+		if i == ciCardLinksShown {
+			out = append(out, p.line(at(x, w, seg{fmt.Sprintf("+%d more failed", len(links)-i), p.st.Dim})))
+			break
+		}
+		u := strings.TrimPrefix(strings.TrimPrefix(l.URL, "https://"), "http://")
+		cl := cell{{p.g.fail + " ", p.st.Err}, {l.Name + " ", p.st.Dim}, {u, p.st.Accent}}
+		if cl.width() > w {
+			cl = cell{{u, p.st.Accent}}.fitLeft(w)
+		}
+		out = append(out, p.line(placed{x, w, cl}))
 	}
 	return out
 }

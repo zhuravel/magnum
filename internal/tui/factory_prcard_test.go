@@ -12,10 +12,10 @@ import (
 
 // fixturePRCard is the card of your PR #4602 of example/widget: what its
 // fixer left you under WAITING FOR, a link of what needs you, and the PR's
-// own lines: its head and branches, CI failing on a required check,
-// magnum's last review, the people's reviews, the replies magnum's judge
-// has not read and the fix loop. It has no stages, agents or report: it is
-// no task's.
+// own lines: its head and branches, CI failing on a required check with
+// the failed job's page and why GitHub blocks the merge, magnum's last
+// review, the people's reviews, the replies magnum's judge has not read
+// and the fix loop. It has no stages, agents or report: it is no task's.
 func fixturePRCard() TaskCard {
 	return TaskCard{
 		Key: "widget#4602", Title: "Coupon rounding", Repo: "example/widget", PR: "#4602",
@@ -27,7 +27,9 @@ func fixturePRCard() TaskCard {
 		PRInfo: &CardPR{
 			State: "open · head a1b2c3d · alice-PR-12400-coupon-rounding → master · last activity 13:17",
 			CI: &CIInfo{State: "failed", Total: 41, Passed: 39, Failed: 1, Skipped: 1, Failing: []string{"ci / Completion"},
-				Required: []CheckState{{Name: "Completion", State: "failed"}}},
+				Required: []CheckState{{Name: "Completion", State: "failed"}},
+				Links:    []CheckLink{{Name: "ci / Completion", URL: "https://github.com/example/widget/actions/runs/7001/job/9001"}},
+				Blocked:  "GitHub blocks the merge: Completion failed, a required approval is missing"},
 			Review:    "magnum commented at a1b2c3d, 13:02 · earlier findings: 1 fixed, 1 open",
 			Findings:  &FindingsInfo{Counts: [4]int{0, 0, 1, 2}, Verdict: "blocking", Posted: "COMMENTED", SHA: "a1b2c3d"},
 			Approvals: &FactoryApprovals{Approved: 1, Decision: "REVIEW_REQUIRED"},
@@ -54,6 +56,20 @@ func TestThePRCardDrawsThePRsLines(t *testing.T) {
 		}
 	}
 	mustNotContain(t, frame, "STAGES", "AGENTS")
+	ci := cardLineWith(t, frame, " CI ")
+	if !strings.Contains(ci, "✗ Completion · GitHub blocks the merge: Completion failed, a required approval is missing") {
+		t.Errorf("the CI line %q does not say why GitHub blocks the merge", ci)
+	}
+	if l := strings.Split(frame, "\n"); !slices.ContainsFunc(l, func(s string) bool {
+		return strings.HasPrefix(s, strings.Repeat(" ", 14)+"✗ ci / Completion github.com/example/widget/actions/runs/7001/job/9001")
+	}) {
+		t.Errorf("no line under CI links the failed job:\n%s", frame)
+	}
+	// Where the block does not fit beside the cell, it goes whole under it.
+	if l := cardLineWith(t, plainCard(drawTask(fixturePRCard(), 0), 100), "GitHub blocks"); !strings.HasPrefix(l,
+		strings.Repeat(" ", 14)+"GitHub blocks the merge: Completion failed, a required approval is missing") {
+		t.Errorf("at 100 columns the block reads %q", l)
+	}
 	for _, mode := range []IconMode{IconsUnicode, IconsNerd, IconsASCII} {
 		for _, w := range factoryWidths(40) {
 			for i, l := range strings.Split(ansi.Strip(drawTask(fixturePRCard(), 0)(w, 0, true, mode)), "\n") {
@@ -135,4 +151,23 @@ func TestYourPRsCardGoesWhenItsPRDoes(t *testing.T) {
 		t.Fatalf("the card of a PR gone from home stays: view %v", h.m.view)
 	}
 	mustContain(t, h.view(), "#4603 is no longer open")
+}
+
+// The CI line lists at most three failed jobs' pages and counts the rest;
+// a page too long for the screen keeps its end (the job), not the name.
+func TestThePRCardsCILinksAreFewAndKeepTheirEnd(t *testing.T) {
+	c := fixturePRCard()
+	ci := *c.PRInfo.CI
+	ci.Links = nil
+	for i := range 5 {
+		ci.Links = append(ci.Links, CheckLink{Name: fmt.Sprintf("ci / rspec (%d)", i), URL: fmt.Sprintf("https://github.com/example/widget/actions/runs/7001/job/90%02d", i)})
+	}
+	c.PRInfo.CI = &ci
+	frame := plainCard(drawTask(c, 0), 140)
+	mustContain(t, frame, "rspec (0)", "rspec (2)", "+2 more failed")
+	mustNotContain(t, frame, "rspec (3)")
+	narrow := plainCard(drawTask(c, 0), 60)
+	if l := cardLineWith(t, narrow, "job/9000"); !strings.HasSuffix(strings.TrimRight(l, " "), "actions/runs/7001/job/9000") {
+		t.Errorf("a cut page lost its end: %q", l)
+	}
 }

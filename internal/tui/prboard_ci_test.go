@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +195,44 @@ func TestPRBoardSanitizesCI(t *testing.T) {
 	}
 	if r.CI.Failing[0] != "CI / \x1b[31mrspec" || r.CI.Workflows[0].Name != "C\x07I" || r.CI.Required[0].State != "pending\n" {
 		t.Errorf("sanitizing changed the source row: %+v", *r.CI)
+	}
+}
+
+// A failed job's page and GitHub's block reach the screen cleaned as the
+// rest of the CI is: a page that is no web address (a script, a file) is
+// dropped, never drawn, and cleaning leaves the source row untouched.
+func TestPRBoardSanitizesTheCIsLinksAndBlock(t *testing.T) {
+	r := PRBoardRow{Ref: "talkable/example#1", CI: &CIInfo{State: "failed", Blocked: "GitHub blocks the merge: Comp\x1b[31mletion failed",
+		Links: []CheckLink{{Name: "CI / \x1b[31mrspec", URL: "https://github.com/example/talkable/actions/runs/7/job/\x1b]8;;x\x079"},
+			{Name: "coverage", URL: "javascript:alert(1)"}, {Name: "lint", URL: "file:///etc/passwd"}, {Name: "e2e", URL: "http://ci.example.com/e2e/4"},
+			{Name: "jest", URL: "https://"}}}}
+	got := sanitizeRow(r).CI
+	want := []CheckLink{{Name: "CI / rspec", URL: "https://github.com/example/talkable/actions/runs/7/job/9"},
+		{Name: "e2e", URL: "http://ci.example.com/e2e/4"}}
+	if !slices.Equal(got.Links, want) || got.Blocked != "GitHub blocks the merge: Completion failed" {
+		t.Errorf("sanitized links %+v and block %q, want %+v", got.Links, got.Blocked, want)
+	}
+	if r.CI.Links[0].Name != "CI / \x1b[31mrspec" || len(r.CI.Links) != 5 {
+		t.Errorf("sanitizing changed the source row: %+v", r.CI.Links)
+	}
+}
+
+// The card's CI section links each failed job to its page, under the
+// failed checks' names and named as they are, and says why GitHub blocks
+// the merge after the required checks.
+func TestPRBoardCardLinksTheFailedJobsAndSaysWhyGitHubBlocksTheMerge(t *testing.T) {
+	r := ciRows()[3]
+	r.CI.Links = []CheckLink{{Name: "CI / rspec (3)", URL: "https://github.com/example/talkable/actions/runs/7001/job/9001"},
+		{Name: "Lint / rubocop", URL: "https://github.com/example/talkable/actions/runs/7002/job/9002"}}
+	r.CI.Blocked = "GitHub blocks the merge: Completion failed"
+	m := iconBoard(t, IconsUnicode, 120, 80, r)
+	m, _ = send(t, m, keyMsg("enter"))
+	v := viewOf(m)
+	mustContain(t, v, "Failed: CI / rspec (3), Lint / rubocop",
+		"CI / rspec (3) https://github.com/example/talkable/actions/runs/7001/job/9001",
+		"Lint / rubocop https://github.com/example/talkable/actions/runs/7002/job/9002",
+		"GitHub blocks the merge: Completion failed")
+	if f, b := strings.Index(v, "Failed:"), strings.Index(v, "GitHub blocks"); f < 0 || b < f {
+		t.Errorf("the block is said at %d, the failed checks at %d: want the block after them", b, f)
 	}
 }
