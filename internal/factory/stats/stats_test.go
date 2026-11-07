@@ -2,6 +2,7 @@ package stats_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -645,5 +646,67 @@ func TestStatsJSONIsStable(t *testing.T) {
 	}
 	if string(runs[0]) != string(runs[1]) {
 		t.Errorf("two runs differ:\n%s\n%s", runs[0], runs[1])
+	}
+}
+
+// A task's PR is its published one; the fix loops magnum started on it (read
+// from magnum's registry by the CLI, SetFixLoops) show per task, by hand
+// apart from autofix, with the total started by hand, the "no manual start"
+// measure; a registry that could not be read says so and counts nothing.
+func TestStatsShowTheFixLoopsOnTheTasksPRs(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	published := createTask(t, r, "PR-12320")
+	createTask(t, r, "PR-12321")
+	if err := r.LinkPR(ctx, registry.PRLink{TaskID: published.ID, Repo: "example/app", Number: 4530, Branch: "zhuravel-PR-12320"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.TransitionTask(ctx, published.ID, nil, registry.TaskPublished, func(u *registry.TaskUpdate) { u.Set("pr_number", 4530) }); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, rep, "PR-12320").PR; got != (stats.PR{Repo: "example/app", Number: 4530}) {
+		t.Fatalf("the published task's PR %+v", got)
+	}
+	if got := only(t, rep, "PR-12321").PR; got != (stats.PR{}) {
+		t.Fatalf("a task without a PR has PR %+v", got)
+	}
+
+	read := rep
+	read.SetFixLoops(map[stats.PR]stats.FixLoops{{Repo: "example/app", Number: 4530}: {ByHand: 1, ByAutofix: 2}}, "")
+	md := read.Markdown()
+	for _, want := range []string{
+		"## Fix loops on the factory's PRs",
+		"- PR-12320 (example/app#4530): fix loops on its PR: 1 by hand, 2 by autofix",
+		"Fix loops started by hand on factory PRs: 1.",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "PR-12321 (") {
+		t.Errorf("a task without a PR has a fix loops line:\n%s", md)
+	}
+	js, err := json.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"pr":"example/app#4530","fix_loops":{"by_hand":1,"by_autofix":2}`, `"fix_loops_by_hand":1`} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("the JSON lacks %s:\n%s", want, js)
+		}
+	}
+
+	unread := rep
+	unread.Tasks = slices.Clone(rep.Tasks)
+	unread.SetFixLoops(nil, "magnum's registry is at schema 40 and this build needs 41")
+	md = unread.Markdown()
+	if !strings.Contains(md, "magnum's registry was not read (magnum's registry is at schema 40 and this build needs 41): no fix loop is counted") ||
+		strings.Contains(md, "by hand on factory PRs") {
+		t.Errorf("an unread registry:\n%s", md)
 	}
 }

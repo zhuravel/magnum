@@ -435,3 +435,49 @@ func TestAnOpenRowOfAnOlderHeadIsStale(t *testing.T) {
 		t.Errorf("a verdict that does not parse: %+v, want none", v)
 	}
 }
+
+// fixStart records a fix.start event of magnum's on PR #n of example/shop:
+// cycle of the loop, started by by.
+func fixStart(t *testing.T, st *store.Store, n, cycle int, by string) {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"cycle": cycle, "by": by, "role": "claude-fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := "pr:example/shop#" + strconv.Itoa(n)
+	if _, err := st.AppendEvent(t.Context(), store.Event{Subject: &subject, Kind: "fix.start", Message: "claude-fix fixes", Data: data}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// FixLoopsOf counts, per PR, the fix loops magnum started (a fix.start of
+// cycle 1; a later cycle is the same loop), by hand (magnum fix, f on the
+// board) apart from autofix's, over the whole history magnum keeps; a PR
+// with none counts zero, and magnum's registry is only read.
+func TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem(t *testing.T) {
+	l, st := magnumLayout(t)
+	magnumPR(t, st, 7, strings.Repeat("ab", 20), nil)
+	magnumPR(t, st, 8, strings.Repeat("ab", 20), nil)
+	fixStart(t, st, 7, 1, "magnum fix")
+	fixStart(t, st, 7, 2, "magnum fix")
+	for range 250 { // a busy PR: more events than one page of the board's reads
+		subject := "pr:example/shop#7"
+		if _, err := st.AppendEvent(t.Context(), store.Event{Subject: &subject, Kind: "round.start", Message: "a round"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixStart(t, st, 7, 1, engine.AutofixBy)
+	fixStart(t, st, 7, 2, engine.AutofixBy)
+	fixStart(t, st, 7, 1, engine.AutofixBy)
+	fixStart(t, st, 8, 1, "magnum fix")
+	seven, eight, nine, other := PRRef{"example/shop", 7}, PRRef{"example/shop", 8}, PRRef{"example/shop", 9}, PRRef{"other/site", 1}
+	got, err := FixLoopsOf(t.Context(), l, []PRRef{seven, eight, nine, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ref, want := range map[PRRef]FixLoops{seven: {ByHand: 1, ByAutofix: 2}, eight: {ByHand: 1}, nine: {}, other: {}} {
+		if got[ref] != want {
+			t.Errorf("%s#%d: %+v, want %+v", ref.Repo, ref.Number, got[ref], want)
+		}
+	}
+}

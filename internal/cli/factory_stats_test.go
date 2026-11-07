@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
@@ -627,5 +629,56 @@ func TestFactoryBaselineLoadsTheConfiguration(t *testing.T) {
 	}
 	if got, err := stats.LoadBaseline(dt.ctx.Layout.FactoryBaseline()); err != nil || got == nil || got.Tickets != 2 {
 		t.Fatalf("LoadBaseline = %+v, %v; want the 2 tickets of the fixture", got, err)
+	}
+}
+
+// Stats counts, per factory task, the fix loops magnum started on its PR,
+// from magnum's registry (read only, as the screen reads it): a loop's later cycles are
+// not loops, autofix's count apart, and the total of the loops you started
+// by hand is the "no manual start" measure.
+func TestStatsCountsManualFixStartsOnFactoryPRs(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	task := seedStatsTask(t, dt, "PR-12316", time.Time{}, nil, 0)
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := reg.LinkPR(ctx, registry.PRLink{TaskID: task.ID, Repo: "example/shop", Number: 4530, Branch: "zhuravel-PR-12316"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.TransitionTask(ctx, task.ID, nil, registry.TaskPublished, func(u *registry.TaskUpdate) { u.Set("pr_number", 4530) }); err != nil {
+		t.Fatal(err)
+	}
+	reg.Close()
+	st := storetest.Open(t, dt.ctx.Layout.DB())
+	if _, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR}); err != nil {
+		t.Fatal(err)
+	}
+	subject := "pr:example/shop#4530"
+	for _, ev := range []struct {
+		cycle int
+		by    string
+	}{{1, "magnum fix"}, {2, "magnum fix"}, {1, engine.AutofixBy}, {2, engine.AutofixBy}, {3, engine.AutofixBy}, {1, "magnum fix"}} {
+		data, err := json.Marshal(map[string]any{"cycle": ev.cycle, "by": ev.by})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AppendEvent(ctx, store.Event{Subject: &subject, Kind: "fix.start", Message: "claude-fix fixes", Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := dt.run("factory", "stats"); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	out := dt.stdout.String()
+	for _, want := range []string{
+		"- PR-12316 (example/shop#4530): fix loops on its PR: 2 by hand, 1 by autofix",
+		"Fix loops started by hand on factory PRs: 2.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, out)
+		}
 	}
 }

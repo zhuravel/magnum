@@ -147,6 +147,10 @@ func prSubject(repo store.Repo, number int) string {
 	return fmt.Sprintf("pr:%s/%s#%d", repo.Owner, repo.Name, number)
 }
 
+// PRSubject is the audit subject of PR number of repo ("pr:owner/name#N"),
+// which the PR's events carry: the factory reads a PR's fix loops by it.
+func PRSubject(repo store.Repo, number int) string { return prSubject(repo, number) }
+
 // PlannedOp is one side effect a dry run decided on but did not perform.
 type PlannedOp struct {
 	At      time.Time `json:"at"`

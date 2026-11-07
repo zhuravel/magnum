@@ -6,6 +6,7 @@ package cli
 // the baseline is written once, before the first task.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -18,10 +19,13 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -50,7 +54,9 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 			"corrections and access, your answer batches (the revisions of questions you answered), your card "+
 			"decisions, the local review's rounds, your time on cards (for each decision and each answered batch, "+
 			"from the card shown to your answer, at most 30 minutes each, so a card left open and idle does not "+
-			"count), how long the task waited on you (asleep or not) and how long it took to reach its ready card. "+
+			"count), how long the task waited on you (asleep or not), how long it took to reach its ready card, and the fix "+
+			"loops magnum started on its PR, by hand (f on the board, `magnum fix`) and by autofix, with the total you started by hand "+
+			"(the target is zero; read from magnum's registry, never written or migrated, over the events it keeps). "+
 			"The numbers come from the evidence records of the factory's "+
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+
 			"factory daemon of an older build runs on it). The default output is markdown, which sets each task "+
@@ -100,6 +106,7 @@ func runFactoryStatsCmd(c *Context, f factoryStatsFlags, pos []string) int {
 		if rep, err = stats.Compute(ctx, reg, since); err != nil {
 			return fail(err)
 		}
+		countFixLoops(ctx, c.Layout, &rep)
 	}
 	rep.Baseline = baseline
 	if f.json {
@@ -110,6 +117,29 @@ func runFactoryStatsCmd(c *Context, f factoryStatsFlags, pos []string) int {
 	}
 	fmt.Fprint(c.Stdout, rep.Markdown())
 	return 0
+}
+
+// countFixLoops gives rep's tasks the fix loops magnum started on their
+// PRs (factory.FixLoopsOf: magnum's registry, read and never written or
+// migrated); a registry it cannot read is the report's note, and the rest
+// of the report stands.
+func countFixLoops(ctx context.Context, l paths.Layout, rep *stats.Report) {
+	var refs []factory.PRRef
+	for _, t := range rep.Tasks {
+		if t.PR.Number > 0 {
+			refs = append(refs, factory.PRRef{Repo: t.PR.Repo, Number: t.PR.Number})
+		}
+	}
+	got, err := factory.FixLoopsOf(ctx, l, refs)
+	if err != nil {
+		rep.SetFixLoops(nil, textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200))
+		return
+	}
+	loops := make(map[stats.PR]stats.FixLoops, len(got))
+	for ref, n := range got {
+		loops[stats.PR{Repo: ref.Repo, Number: ref.Number}] = stats.FixLoops{ByHand: n.ByHand, ByAutofix: n.ByAutofix}
+	}
+	rep.SetFixLoops(loops, "")
 }
 
 // factoryBaselineFlags are the flags of `magnum factory baseline`.

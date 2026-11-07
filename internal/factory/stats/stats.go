@@ -8,8 +8,10 @@
 package stats
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,10 +43,14 @@ const cardCap = 30 * time.Minute
 // shown to the first answer, each at most cardCap (a card never shown has no
 // time to measure). WaitedOnYou is how long the task waited on the operator,
 // asleep or not (its spans that wait on "you"). StartToReady is how long it
-// took to reach the ready card (zero before it does).
+// took to reach the ready card (zero before it does). PR is the task's PR
+// (zero before it has one), and FixLoops the fix loops magnum started on it
+// (nil: not counted, SetFixLoops).
 type TaskStats struct {
-	TaskID int64
-	Key    string
+	TaskID   int64
+	Key      string
+	PR       PR
+	FixLoops *FixLoops
 
 	Typed, StepStarts, Approvals, Corrections, Access int
 	UnknownOrigin                                     int
@@ -53,6 +59,28 @@ type TaskStats struct {
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
 	StartToReady time.Duration
+}
+
+// PR names a task's PR: its repository (owner/name) and number.
+type PR struct {
+	Repo   string
+	Number int
+}
+
+// String is "owner/name#N", "" for none.
+func (p PR) String() string {
+	if p.Number <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s#%d", p.Repo, p.Number)
+}
+
+// FixLoops counts the fix loops magnum started on a PR: by hand (`magnum
+// fix`, f on the board) and by autofix. The loops started by hand are the
+// "no manual start" measure: the target is zero.
+type FixLoops struct {
+	ByHand    int `json:"by_hand"`
+	ByAutofix int `json:"by_autofix"`
 }
 
 // IsTyped reports whether an input of the kind holds the operator's own
@@ -87,22 +115,24 @@ func startsTask(in registry.Input) bool {
 // whole seconds.
 func (t TaskStats) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Task          int64  `json:"task"`
-		Key           string `json:"key"`
-		Typed         int    `json:"typed"`
-		StepStarts    int    `json:"step_starts"`
-		Approvals     int    `json:"approvals"`
-		Corrections   int    `json:"corrections"`
-		Access        int    `json:"access"`
-		UnknownOrigin int    `json:"unknown_origin"`
-		AnswerBatches int    `json:"answer_batches"`
-		Decisions     int    `json:"decisions"`
-		ReviewRounds  int    `json:"review_rounds"`
-		OperatorSecs  int64  `json:"operator_secs"`
-		WaitedOnYou   int64  `json:"waited_on_you_secs"`
-		StartToReady  int64  `json:"start_to_ready_secs"`
+		Task          int64     `json:"task"`
+		Key           string    `json:"key"`
+		Typed         int       `json:"typed"`
+		StepStarts    int       `json:"step_starts"`
+		Approvals     int       `json:"approvals"`
+		Corrections   int       `json:"corrections"`
+		Access        int       `json:"access"`
+		UnknownOrigin int       `json:"unknown_origin"`
+		AnswerBatches int       `json:"answer_batches"`
+		Decisions     int       `json:"decisions"`
+		ReviewRounds  int       `json:"review_rounds"`
+		OperatorSecs  int64     `json:"operator_secs"`
+		WaitedOnYou   int64     `json:"waited_on_you_secs"`
+		StartToReady  int64     `json:"start_to_ready_secs"`
+		PR            string    `json:"pr,omitempty"`
+		FixLoops      *FixLoops `json:"fix_loops,omitempty"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
-		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady)})
+		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.PR.String(), t.FixLoops})
 }
 
 func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.Second) }
@@ -110,10 +140,41 @@ func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.S
 // Report is the stats of the tasks started at or after Since (the zero time:
 // all of them), oldest first, and the baseline to read them against (nil
 // when none is frozen; Compute leaves it to the caller to load).
+// FixLoopsRead says SetFixLoops counted the tasks' fix loops, and
+// FixLoopsUnread why it could not ("" when it could, or was not asked).
 type Report struct {
-	Since    time.Time
-	Tasks    []TaskStats
-	Baseline *Baseline
+	Since          time.Time
+	Tasks          []TaskStats
+	Baseline       *Baseline
+	FixLoopsRead   bool
+	FixLoopsUnread string
+}
+
+// SetFixLoops gives each task with a PR the fix loops magnum started on it
+// (loops, read from magnum's registry by the caller: this package reads
+// only the factory's; a PR loops lacks counts zero), or, with unread set,
+// records why they could not be read and counts none.
+func (r *Report) SetFixLoops(loops map[PR]FixLoops, unread string) {
+	r.FixLoopsRead, r.FixLoopsUnread = unread == "", unread
+	for i := range r.Tasks {
+		t := &r.Tasks[i]
+		t.FixLoops = nil
+		if unread == "" && t.PR.Number > 0 {
+			c := loops[t.PR]
+			t.FixLoops = &c
+		}
+	}
+}
+
+// fixLoopsByHand is the fix loops started by hand on the tasks' PRs.
+func (r Report) fixLoopsByHand() int {
+	n := 0
+	for _, t := range r.Tasks {
+		if t.FixLoops != nil {
+			n += t.FixLoops.ByHand
+		}
+	}
+	return n
 }
 
 // MarshalJSON writes the report with fixed keys, an empty list for no tasks
@@ -124,11 +185,18 @@ func (r Report) MarshalJSON() ([]byte, error) {
 		s := r.Since.UTC()
 		since = &s
 	}
+	var byHand *int
+	if r.FixLoopsRead {
+		n := r.fixLoopsByHand()
+		byHand = &n
+	}
 	return json.Marshal(struct {
-		Since    *time.Time  `json:"since"`
-		Tasks    []TaskStats `json:"tasks"`
-		Baseline *Baseline   `json:"baseline"`
-	}{since, nonNilTasks(r.Tasks), r.Baseline})
+		Since          *time.Time  `json:"since"`
+		Tasks          []TaskStats `json:"tasks"`
+		Baseline       *Baseline   `json:"baseline"`
+		FixLoopsByHand *int        `json:"fix_loops_by_hand,omitempty"`
+		FixLoopsUnread string      `json:"fix_loops_unread,omitempty"`
+	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread})
 }
 
 func nonNilTasks(ts []TaskStats) []TaskStats {
@@ -188,8 +256,17 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	if err != nil {
 		return TaskStats{}, err
 	}
+	pr := PR{Repo: t.Repo, Number: t.PRNumber}
+	if l, err := reg.LinkedPR(ctx, t.ID); err == nil && l.Number > 0 {
+		pr = PR{Repo: cmp.Or(l.Repo, t.Repo), Number: l.Number}
+	} else if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		return TaskStats{}, err
+	}
+	if pr.Number <= 0 {
+		pr = PR{}
+	}
 	batches, onQuestions := answeredBatches(questions)
-	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), AnswerBatches: batches, Decisions: len(decisions), ReviewRounds: len(cycles),
+	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, AnswerBatches: batches, Decisions: len(decisions), ReviewRounds: len(cycles),
 		OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
 	for _, in := range inputs {
 		switch {
@@ -356,6 +433,7 @@ func (r Report) Markdown() string {
 		}
 		b.WriteString("\nOrigin unknown: turns typed in a pane that nothing proves you typed, kept for evaluation only and never counted as typed.\n")
 	}
+	r.fixLoopsMarkdown(&b)
 	b.WriteString("\n## Against the baseline\n\n")
 	bl := r.Baseline
 	if bl == nil {
@@ -374,6 +452,35 @@ func (r Report) Markdown() string {
 			against(bl.StepStartsPerTicket, t.StepStarts))
 	}
 	return b.String()
+}
+
+// fixLoopsMarkdown is the section of the fix loops magnum started on the
+// tasks' PRs, when SetFixLoops was asked: per task with a PR, by hand and
+// by autofix, then the total started by hand (the target is zero); a
+// registry it could not read says so.
+func (r Report) fixLoopsMarkdown(b *strings.Builder) {
+	switch {
+	case r.FixLoopsUnread != "":
+		fmt.Fprintf(b, "\n## Fix loops on the factory's PRs\n\nmagnum's registry was not read (%s): no fix loop is counted.\n", r.FixLoopsUnread)
+		return
+	case !r.FixLoopsRead:
+		return
+	}
+	b.WriteString("\n## Fix loops on the factory's PRs\n\n")
+	counted := false
+	for _, t := range r.Tasks {
+		if t.FixLoops == nil {
+			continue
+		}
+		counted = true
+		fmt.Fprintf(b, "- %s (%s): fix loops on its PR: %d by hand, %d by autofix\n", t.Key, t.PR, t.FixLoops.ByHand, t.FixLoops.ByAutofix)
+	}
+	if !counted {
+		b.WriteString("No task has a PR yet.\n")
+		return
+	}
+	fmt.Fprintf(b, "\nFix loops started by hand on factory PRs: %d. A loop you start by hand (f on the board, `magnum fix`) is one "+
+		"autofix did not start: the target is zero. Counted from magnum's events, which it keeps for [daemon] keep_events.\n", r.fixLoopsByHand())
 }
 
 // against says where count lies against d's middle half.

@@ -36,8 +36,13 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// autofixBy is who starts a loop autofix starts (FixState.By).
-const autofixBy = "autofix"
+// AutofixBy is who starts a loop autofix starts (FixState.By, and the "by"
+// of its fix.start event); any other is a start by hand (`magnum fix`, f on
+// the board). The factory's stats count the two apart.
+const AutofixBy = "autofix"
+
+// autofixBy is AutofixBy, as the engine names it.
+const autofixBy = AutofixBy
 
 // needsYouEntryRe reads a "## Needs you" entry's comment id, priority and
 // place ("2101 P1 app/models/offer.rb:42: <reason>"; "5485002407

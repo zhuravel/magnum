@@ -11,6 +11,7 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -292,4 +293,58 @@ func (m *magnumRegistry) readPR(ctx context.Context, st *store.Store, v *PRState
 		v.AttentionMsg = attention.Explain(v.Attention, store.Deref(pr.LastError), ref).Summary
 	}
 	return nil
+}
+
+// FixLoops counts the fix loops magnum started on a PR: by hand (`magnum
+// fix`, f on the board) and by autofix.
+type FixLoops struct {
+	ByHand, ByAutofix int
+}
+
+// fixStartKind is the event magnum writes as a fix loop's cycle starts.
+const fixStartKind = "fix.start"
+
+// FixLoopsOf counts, per PR of refs, the fix loops magnum's registry in
+// layout l recorded: its fix.start events of cycle 1 (a later cycle is the
+// same loop), by who started each (engine.AutofixBy, or by hand), over the
+// whole history the registry keeps ([daemon] keep_events). A PR it has no
+// event of counts zero. It reads and never writes or migrates the
+// registry, as PRStates; no registry counts nothing and creates none.
+func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]FixLoops, error) {
+	out := make(map[PRRef]FixLoops, len(refs))
+	st, err := (&magnumRegistry{l: l}).open()
+	if st == nil || err != nil {
+		return out, err
+	}
+	defer st.Close()
+	for _, r := range refs {
+		repo, err := st.RepoByFullName(ctx, r.Repo)
+		if errors.Is(err, store.ErrNotFound) {
+			out[r] = FixLoops{}
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("magnum's registry: %w", err)
+		}
+		evs, err := st.EventsBySubject(ctx, engine.PRSubject(repo, r.Number), 0) // the whole history: a busy PR has hundreds
+		if err != nil {
+			return nil, fmt.Errorf("magnum's registry: %w", err)
+		}
+		var c FixLoops
+		for _, ev := range evs {
+			var d struct {
+				Cycle int    `json:"cycle"`
+				By    string `json:"by"`
+			}
+			if ev.Kind != fixStartKind || json.Unmarshal(ev.Data, &d) != nil || d.Cycle != 1 {
+				continue
+			}
+			if d.By == engine.AutofixBy {
+				c.ByAutofix++
+			} else {
+				c.ByHand++
+			}
+		}
+		out[r] = c
+	}
+	return out, nil
 }

@@ -8000,6 +8000,11 @@ const (
 const ApprovalDismissMessage = "magnum: new commits since this approval; a re-review follows"
     ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
 
+const AutofixBy = "autofix"
+    AutofixBy is who starts a loop autofix starts (FixState.By, and the "by" of
+    its fix.start event); any other is a start by hand (`magnum fix`, f on the
+    board). The factory's stats count the two apart.
+
 const BudgetOverruledNote = "the Codex budget caps wait for Codex's next reading"
     BudgetOverruledNote is what a resume of a budget-cap pause means (the CLI's
     offline resume says it too).
@@ -8576,6 +8581,10 @@ func OverruleHooksHold(ctx context.Context, st *store.Store) (bool, error)
     until they change (KVCodexHooksOverruled), for `magnum resume --tool codex`
     (or all): the daemon's, and the CLI's when no daemon runs. It reports
     whether it overruled a file not overruled yet.
+
+func PRSubject(repo store.Repo, number int) string
+    PRSubject is the audit subject of PR number of repo ("pr:owner/name#N"),
+    which the PR's events carry: the factory reads a PR's fix loops by it.
 
 func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error)
     PinnedSince is when each subject that is pinned now was pinned, by the
@@ -11984,6 +11993,14 @@ func Fingerprint(f evalrun.LocalFinding) string
     priority ("app/credit.rb:40:1a2b3c4d5e6f"). A finding re-ranked, or moved
     within its window, is the same one.
 
+func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]FixLoops, error)
+    FixLoopsOf counts, per PR of refs, the fix loops magnum's registry in
+    layout l recorded: its fix.start events of cycle 1 (a later cycle is the
+    same loop), by who started each (engine.AutofixBy, or by hand), over the
+    whole history the registry keeps ([daemon] keep_events). A PR it has no
+    event of counts zero. It reads and never writes or migrates the registry,
+    as PRStates; no registry counts nothing and creates none.
+
 func Guard(next execx.Runner, cfg *config.Config) execx.Runner
     Guard puts the deny list (Denied) in front of next, with the consoles of
     every [[factory.repo]] of cfg: a command it denies never starts, and its
@@ -12280,6 +12297,12 @@ type ErrRunning struct {
 
 func (e ErrRunning) Error() string
     Error implements error.
+
+type FixLoops struct {
+	ByHand, ByAutofix int
+}
+    FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
+    f on the board) and by autofix.
 
 type Flags struct {
 	Migrations                         []MigrationFlag
@@ -14519,6 +14542,14 @@ func (d Dist) Where(v float64) string
     Where says where v lies against the middle half of the tickets: "below" the
     first quartile, "above" the third, else "within".
 
+type FixLoops struct {
+	ByHand    int `json:"by_hand"`
+	ByAutofix int `json:"by_autofix"`
+}
+    FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
+    f on the board) and by autofix. The loops started by hand are the "no manual
+    start" measure: the target is zero.
+
 type Labelled struct {
 	Text  string `json:"text"`
 	Class string `json:"class"`
@@ -14530,14 +14561,27 @@ func ReadLabelled(path string) ([]Labelled, error)
     line, {"text": "...", "class": "step_start"}, blank lines skipped. An error
     names the line, never its text.
 
+type PR struct {
+	Repo   string
+	Number int
+}
+    PR names a task's PR: its repository (owner/name) and number.
+
+func (p PR) String() string
+    String is "owner/name#N", "" for none.
+
 type Report struct {
-	Since    time.Time
-	Tasks    []TaskStats
-	Baseline *Baseline
+	Since          time.Time
+	Tasks          []TaskStats
+	Baseline       *Baseline
+	FixLoopsRead   bool
+	FixLoopsUnread string
 }
     Report is the stats of the tasks started at or after Since (the zero time:
     all of them), oldest first, and the baseline to read them against (nil when
-    none is frozen; Compute leaves it to the caller to load).
+    none is frozen; Compute leaves it to the caller to load). FixLoopsRead says
+    SetFixLoops counted the tasks' fix loops, and FixLoopsUnread why it could
+    not ("" when it could, or was not asked).
 
 func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Report, error)
     Compute is ComputeAt at the clock's now.
@@ -14556,6 +14600,12 @@ func (r Report) Markdown() string
 func (r Report) MarshalJSON() ([]byte, error)
     MarshalJSON writes the report with fixed keys, an empty list for no tasks
     and null for no window and no baseline.
+
+func (r *Report) SetFixLoops(loops map[PR]FixLoops, unread string)
+    SetFixLoops gives each task with a PR the fix loops magnum started on it
+    (loops, read from magnum's registry by the caller: this package reads only
+    the factory's; a PR loops lacks counts zero), or, with unread set, records
+    why they could not be read and counts none.
 
 type Session struct {
 	Key      string
@@ -14609,8 +14659,10 @@ func (s Skipped) Total() int
     Total is how many transcripts were left out.
 
 type TaskStats struct {
-	TaskID int64
-	Key    string
+	TaskID   int64
+	Key      string
+	PR       PR
+	FixLoops *FixLoops
 
 	Typed, StepStarts, Approvals, Corrections, Access int
 	UnknownOrigin                                     int
@@ -14639,7 +14691,9 @@ type TaskStats struct {
     answer, each at most cardCap (a card never shown has no time to measure).
     WaitedOnYou is how long the task waited on the operator, asleep or not (its
     spans that wait on "you"). StartToReady is how long it took to reach the
-    ready card (zero before it does).
+    ready card (zero before it does). PR is the task's PR (zero before it has
+    one), and FixLoops the fix loops magnum started on it (nil: not counted,
+    SetFixLoops).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in
