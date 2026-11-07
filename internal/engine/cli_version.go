@@ -341,25 +341,16 @@ func cliFailureCause(err error) string {
 // cliStamp is the binary kind's command cmd (on the daemon's PATH) runs:
 // cmd with its links resolved, except that a mise shim, a link to mise
 // itself, runs the version mise picks when it runs, which `mise which
-// <kind>` names (the shim's own file never changes). When mise cannot
-// answer, the shim stands for itself.
+// <kind>` names (the shim's own file never changes; miseWhich). When mise
+// cannot answer, the shim stands for itself.
 func (e *Engine) cliStamp(ctx context.Context, kind, cmd string) (cliStamp, error) {
 	path, err := filepath.EvalSymlinks(cmd)
 	if err != nil {
 		return cliStamp{}, err
 	}
 	if filepath.Base(path) == "mise" {
-		res, err := e.d.Runner.Run(ctx, execx.Cmd{Name: path, Args: []string{"which", kind}, Timeout: cliVersionTimeout, Label: "mise which " + kind})
-		bin := strings.TrimSpace(textx.FirstLine(string(res.Stdout)))
-		switch {
-		case err != nil:
-			if e.logOnce("cli-mise:"+kind, err.Error(), e.now()) {
-				e.log.Info("mise does not say which binary its shim runs; the shim stands for it", "kind", kind, "err", err)
-			}
-		case bin != "":
-			if p, err := filepath.EvalSymlinks(bin); err == nil {
-				path = p
-			}
+		if bin, ok := e.miseWhich(ctx, kind, path); ok {
+			path = bin
 		}
 	}
 	fi, err := os.Stat(path)
@@ -367,6 +358,41 @@ func (e *Engine) cliStamp(ctx context.Context, kind, cmd string) (cliStamp, erro
 		return cliStamp{}, err
 	}
 	return cliStamp{path: path, mtime: fi.ModTime()}, nil
+}
+
+// miseWhich is the binary `mise which <kind>` names, its links resolved,
+// for the mise binary mise; false when mise does not answer, or while its
+// last ask timed out (e.cliWhich: no ask before the backoff's wait ends),
+// so that the shim stands for itself, as it does for a mise that cannot
+// answer.
+func (e *Engine) miseWhich(ctx context.Context, kind, mise string) (string, bool) {
+	b := e.cliWhich[kind]
+	if b == nil {
+		b = &probeBackoff{}
+		e.cliWhich[kind] = b
+	}
+	now := e.now()
+	if _, _, waiting := b.waiting(now); waiting {
+		return "", false
+	}
+	res, err := e.d.Runner.Run(ctx, execx.Cmd{Name: mise, Args: []string{"which", kind}, Timeout: cliVersionTimeout, Label: "mise which " + kind})
+	next := b.asked(now, probeTimedOut(ctx, err))
+	if err != nil {
+		if e.logOnce("cli-mise:"+kind, err.Error(), now) {
+			attrs := []any{"kind", kind, "err", err}
+			if !next.IsZero() {
+				attrs = append(attrs, "asked_again_at", next.Local().Format("15:04"))
+			}
+			e.log.Info("mise does not say which binary its shim runs; the shim stands for it", attrs...)
+		}
+		return "", false
+	}
+	bin := strings.TrimSpace(textx.FirstLine(string(res.Stdout)))
+	if bin == "" {
+		return "", false
+	}
+	p, err := filepath.EvalSymlinks(bin)
+	return p, err == nil
 }
 
 // cliVersion is the first line cmd --version prints (redacted, at most

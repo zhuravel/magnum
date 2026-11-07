@@ -31,11 +31,12 @@ type fakeCLIs struct {
 	dir string
 	run *execx.Fake
 
-	mu     sync.Mutex
-	out    map[string]string    // a command's path → what its --version prints
-	which  map[string]string    // kind → the binary `mise which <kind>` names
-	fails  map[string][]error   // a command's path → the errors its next --version reads fail with, in order
-	listed map[string]miseEntry // tool → what `mise ls --current --json` says of it
+	mu        sync.Mutex
+	out       map[string]string    // a command's path → what its --version prints
+	which     map[string]string    // kind → the binary `mise which <kind>` names
+	whichErrs map[string][]error   // kind → the errors its next `mise which` asks fail with, in order
+	fails     map[string][]error   // a command's path → the errors its next --version reads fail with, in order
+	listed    map[string]miseEntry // tool → what `mise ls --current --json` says of it
 }
 
 // miseEntry is a tool as `mise ls --current --json` lists it.
@@ -55,8 +56,8 @@ type miseSource struct {
 
 func newFakeCLIs(t *testing.T) *fakeCLIs {
 	t.Helper()
-	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}, fails: map[string][]error{},
-		listed: map[string]miseEntry{}}
+	c := &fakeCLIs{t: t, dir: t.TempDir(), out: map[string]string{}, which: map[string]string{}, whichErrs: map[string][]error{},
+		fails: map[string][]error{}, listed: map[string]miseEntry{}}
 	c.run = &execx.Fake{Rules: []execx.Rule{{Fn: c.answer}}}
 	return c
 }
@@ -87,6 +88,10 @@ func (c *fakeCLIs) answer(cmd execx.Cmd) (execx.Result, error) {
 			return execx.Result{Stdout: []byte(out)}, nil
 		}
 	case len(cmd.Args) == 2 && cmd.Args[0] == "which":
+		if errs := c.whichErrs[cmd.Args[1]]; len(errs) > 0 {
+			c.whichErrs[cmd.Args[1]] = errs[1:]
+			return execx.Result{Code: -1}, &execx.RunError{Cmd: cmd, Err: errs[0]}
+		}
 		if p, ok := c.which[cmd.Args[1]]; ok {
 			return execx.Result{Stdout: []byte(p + "\n")}, nil
 		}
@@ -172,6 +177,25 @@ func (c *fakeCLIs) names(kind, path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.which[kind] = path
+}
+
+// whichFails makes the next len(errs) `mise which kind` asks fail with
+// errs, in order; the asks after them answer what names says.
+func (c *fakeCLIs) whichFails(kind string, errs ...error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.whichErrs[kind] = append(c.whichErrs[kind], errs...)
+}
+
+// whichAsks counts the `mise which kind` commands the engine ran.
+func (c *fakeCLIs) whichAsks(kind string) int {
+	n := 0
+	for _, cmd := range c.run.CallsWithPrefix() {
+		if slices.Equal(cmd.Args, []string{"which", kind}) {
+			n++
+		}
+	}
+	return n
 }
 
 // versionReads counts the --version commands the engine ran.
@@ -339,6 +363,71 @@ func TestACLIBehindAMiseShimIsReadThroughMiseWhich(t *testing.T) {
 	if got := cli.run.CallsWithPrefix(shim, "--version"); len(got) != 2 {
 		t.Fatalf("the version is read through the shim: %d reads", len(got))
 	}
+}
+
+// From 2026-11-03 to 11-07 `mise which codex` ran out its 15 s 181 times,
+// in bursts under memory pressure: once a health check, each one holding
+// the tick for the whole wait. One that times out is asked again only after
+// a wait that doubles from probeBackoffFirst while it keeps timing out; the
+// shim stands for the binary meanwhile, as it does when mise does not
+// answer, so no version read runs again. An answer ends the wait: the
+// binary mise names is read, and the next health check asks again. A
+// failure that is no timeout costs nothing, and the next check asks again.
+func TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait(t *testing.T) {
+	cli := newFakeCLIs(t)
+	h := newHarness(t, cli.install)
+	mise := cli.binary("bin/mise", time.Date(2026, 7, 11, 1, 21, 0, 0, time.Local))
+	shim := filepath.Join(cli.dir, "codex")
+	if err := os.Symlink(mise, shim); err != nil {
+		t.Fatal(err)
+	}
+	bin := cli.binary("installs/codex/0.162.1/bin/codex", time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local))
+	cli.names("codex", bin)
+	cli.prints(shim, "codex-cli 0.162.1\n")
+	cli.whichFails("codex", context.DeadlineExceeded, context.DeadlineExceeded)
+	asks := func(want int, when string) {
+		t.Helper()
+		if n := cli.whichAsks("codex"); n != want {
+			t.Fatalf("%s: mise which asked %d times, want %d", when, n, want)
+		}
+	}
+
+	h.startup() // times out: the next ask waits probeBackoffFirst
+	asks(1, "at the start")
+	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.162.1" || v.Path != resolved(t, mise) {
+		t.Fatalf("codex while mise does not answer: %+v, want the shim's", v)
+	}
+	h.tick()
+	h.advance(probeBackoffFirst - time.Second)
+	h.tick()
+	asks(1, "within the first wait")
+
+	h.advance(time.Second)
+	h.tick() // times out again: the wait doubles
+	asks(2, "once the first wait ended")
+	h.advance(2*probeBackoffFirst - time.Second)
+	h.tick()
+	asks(2, "within the doubled wait")
+	if n := cli.versionReads(); n != 1 {
+		t.Fatalf("version reads = %d, want 1: the shim stands for the binary throughout", n)
+	}
+
+	h.advance(time.Second)
+	h.tick() // mise answers: the binary it names is read
+	asks(3, "once the doubled wait ended")
+	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.162.1" || v.Path != resolved(t, bin) {
+		t.Fatalf("codex once mise answered: %+v, want the binary it names", v)
+	}
+	h.advance(time.Minute)
+	h.tick()
+	asks(4, "the check after an answer")
+
+	cli.whichFails("codex", errors.New("exit status 1"))
+	h.advance(time.Minute)
+	h.tick() // fails at once: no wait
+	h.advance(time.Minute)
+	h.tick()
+	asks(6, "after a failure that is no timeout")
 }
 
 // From 2026-10-18 to 10-21 Claude Code's daily auto-update (2.1.302 to

@@ -404,16 +404,38 @@ func (e *Engine) prepareWhiteboard(ctx context.Context, pr store.PR, by string) 
 }
 
 // whiteboardReady checks that Whiteboard runs (WhiteboardStatusCmd through
-// the daemon's runner); the error is errWhiteboardDown.
-func (e *Engine) whiteboardReady(ctx context.Context) error {
+// the daemon's runner) for a job by starts; the error is errWhiteboardDown,
+// or whiteboardSlow for a check that timed out. A check that timed out
+// starts the backoff of e.wbStatus (probe_backoff.go): until its wait
+// ends, a review's whiteboard (by whiteboardAuto) runs no check and gets
+// whiteboardSlow, while `magnum whiteboard` (whiteboardBy) asks at once. A
+// check that does not time out ends the wait.
+func (e *Engine) whiteboardReady(ctx context.Context, by string) error {
 	if e.d.Runner == nil {
 		return errWhiteboardDown
 	}
-	if _, err := e.d.Runner.Run(ctx, WhiteboardStatusCmd()); err != nil {
-		e.log.Info("whiteboard: not ready", "err", err)
-		return errWhiteboardDown
+	now := e.now()
+	if at, next, waiting := e.wbStatus.waiting(now); waiting && by == whiteboardAuto {
+		return whiteboardSlow(at, next)
 	}
-	return nil
+	_, err := e.d.Runner.Run(ctx, WhiteboardStatusCmd())
+	next := e.wbStatus.asked(now, probeTimedOut(ctx, err))
+	switch {
+	case err == nil:
+		return nil
+	case !next.IsZero():
+		e.log.Info("whiteboard: not ready", "err", err, "asked_again_at", next.Local().Format("15:04"))
+		return whiteboardSlow(now, next)
+	}
+	e.log.Info("whiteboard: not ready", "err", err)
+	return errWhiteboardDown
+}
+
+// whiteboardSlow is why no whiteboard starts after Whiteboard's status
+// check timed out at at: a review's whiteboard asks again from next.
+func whiteboardSlow(at, next time.Time) error {
+	return fmt.Errorf("Whiteboard did not answer its status check in %s at %s; a review asks again from %s, `magnum whiteboard` at once", //nolint:staticcheck // ST1005: Whiteboard is the app's name
+		humanDuration(whiteboardCmdTimeout), at.Local().Format("15:04"), next.Local().Format("15:04"))
 }
 
 // startWhiteboard starts the whiteboard job on pr under prepareWhiteboard's
@@ -432,7 +454,7 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 	if e.d.Agents == nil || e.d.Slots == nil {
 		return nil, errors.New("the daemon has no agents or slots manager")
 	}
-	if err := e.whiteboardReady(ctx); err != nil {
+	if err := e.whiteboardReady(ctx, by); err != nil {
 		return nil, err
 	}
 	rctx, cancel := context.WithCancel(ctx)

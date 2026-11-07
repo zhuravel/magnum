@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -25,12 +26,14 @@ const wbSession = "6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b"
 // wbEnv is a harness for the whiteboard job: its git knows the slot's HEAD
 // (fixGit), its waits take a real millisecond, its rounds post a review the
 // registry records (wbPostsReviews), and its exec runner answers the
-// Whiteboard readiness check (down: Whiteboard is not running; hold, when
-// set, keeps the check from answering until it is closed).
+// Whiteboard readiness check (down: Whiteboard is not running; slow: the
+// check runs out its timeout, as the runner reports it; hold, when set,
+// keeps the check from answering until it is closed).
 type wbEnv struct {
 	*harness
 	run  *execx.Fake
 	down atomic.Bool
+	slow atomic.Bool
 	hold atomic.Pointer[chan struct{}]
 }
 
@@ -39,9 +42,12 @@ type wbEnv struct {
 func wbHarness(t *testing.T, auto bool, mods ...func(*harness)) *wbEnv {
 	t.Helper()
 	w := &wbEnv{}
-	w.run = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Fn: func(execx.Cmd) (execx.Result, error) {
+	w.run = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Fn: func(c execx.Cmd) (execx.Result, error) {
 		if hold := w.hold.Load(); hold != nil {
 			<-*hold
+		}
+		if w.slow.Load() {
+			return execx.Result{Code: -1}, &execx.RunError{Cmd: c, Err: context.DeadlineExceeded}
 		}
 		if w.down.Load() {
 			return execx.Result{Code: 1, Stderr: []byte("not ready")}, errors.New("whiteboard: exit status 1")
@@ -358,6 +364,84 @@ func TestTheWhiteboardJobSkipsWhenWhiteboardIsNotRunning(t *testing.T) {
 	}
 	if _, ok := w.wbRecord(); ok {
 		t.Error("a skipped whiteboard left a record")
+	}
+}
+
+// From 2026-11-03 to 11-06 Whiteboard's status check ran out its 15 s 153
+// times, in bursts under memory pressure, each one after a posted review.
+// A check that times out is not run again for a review's whiteboard until a
+// wait that doubles from probeBackoffFirst ends: the skips say when
+// Whiteboard did not answer and when a review asks again. `magnum
+// whiteboard` asks at once, and a check that does not time out ends the
+// wait, whatever it answers.
+func TestAWhiteboardStatusCheckThatTimesOutWaitsBeforeAReviewAsksAgain(t *testing.T) {
+	w := wbHarness(t, true)
+	w.slow.Store(true)
+	pr := w.wbReviewed() // the first check times out
+	checks := func(want int, when string) {
+		t.Helper()
+		if calls := w.run.CallsWithPrefix("whiteboard", "api", "whiteboard_status"); len(calls) != want {
+			t.Fatalf("%s: %d status checks, want %d", when, len(calls), want)
+		}
+	}
+	skipped := func(want string) {
+		t.Helper()
+		if ev, ok := w.fixEvent("whiteboard.skipped"); !ok || ev.Message != want {
+			t.Fatalf("whiteboard.skipped = %q, want %q", ev.Message, want)
+		}
+	}
+	reviewed := func() {
+		t.Helper()
+		w.e.whiteboardAfterRound(w.ctx, pr, pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: fixHead})
+		w.settle()
+	}
+	clock := func(at time.Time) string { return at.Local().Format("15:04") }
+	first := w.clock.Now()
+	checks(1, "the review's whiteboard")
+	slowText := func(at, next time.Time) string {
+		return "Whiteboard did not answer its status check in 15s at " + clock(at) + "; a review asks again from " + clock(next) + ", `magnum whiteboard` at once"
+	}
+	skipped(slowText(first, first.Add(probeBackoffFirst)))
+
+	reviewed() // within the wait: no check
+	checks(1, "a review within the wait")
+	skipped(slowText(first, first.Add(probeBackoffFirst)))
+
+	w.advance(probeBackoffFirst)
+	second := w.clock.Now()
+	reviewed() // the wait ended: the check times out again, and the wait doubles
+	checks(2, "a review once the wait ended")
+	skipped(slowText(second, second.Add(2*probeBackoffFirst)))
+	w.advance(2*probeBackoffFirst - time.Second)
+	reviewed()
+	checks(2, "a review within the doubled wait")
+
+	// Whiteboard answers again, though not running: the request asks at
+	// once, and the answer ends the wait.
+	w.slow.Store(false)
+	w.down.Store(true)
+	id := w.wbRequest()
+	w.wbAnswered(id)
+	w.wbFailed(id, whiteboardDownText)
+	checks(3, "magnum whiteboard within the wait")
+	reviewed()
+	checks(4, "a review after an answer")
+	skipped(whiteboardDownText)
+}
+
+// With whiteboards off ([pipeline] whiteboard = false, as the operator set
+// it on 2026-11-06), a posted review runs no status check at all: only
+// `magnum whiteboard` asks Whiteboard.
+func TestNoStatusCheckRunsWhileWhiteboardsAreOff(t *testing.T) {
+	w := wbHarness(t, false)
+	pr := w.wbReviewed()
+	w.e.whiteboardAfterRound(w.ctx, pr, pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: fixHead})
+	w.settle()
+	if calls := w.run.CallsWithPrefix("whiteboard", "api", "whiteboard_status"); len(calls) != 0 {
+		t.Fatalf("status checks with whiteboards off: %+v", calls)
+	}
+	if w.hasEvent("pr:talkable/talkable#2", "whiteboard.skipped") {
+		t.Error("whiteboards off recorded a skip")
 	}
 }
 

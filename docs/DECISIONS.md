@@ -15406,6 +15406,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   infrastructure hold reads the same classifier (`engine.InfraCause`). Rejected: "GitHub unreachable" as the
   cause (the classifier reads every remote and dependency step, not only GitHub's). Tests, failing first:
   TestNetworkCauseNamesOnlyTheNetworksFailures, TestConnectionCause, TestInfraCauseClassifiesOutsideFailures.
+- **A probe that times out waits before it is asked again** (2026-11-07; amends "The daemon records each agent
+  CLI's version and names a launch failure shared across PRs" and "Whiteboards of reviewed PRs"). From 11-03
+  to 11-07 the daemon's log had 181 `mise which codex` and 153 `whiteboard api whiteboard_status` runs that
+  ran out their 15 s, in bursts when the Mac was short of memory. The first ran at every health check, so the
+  tick waited 15 s each time, for 20 minutes at a stretch; the second ran after every posted review, and
+  Whiteboard's CLI is an Electron app, one more process on a machine already short of memory. Each one learned
+  only what the last ask had said. A probe whose command runs out its timeout now waits (`probeBackoff`): 2
+  minutes, doubled each time it runs out again, up to 30. An answer, or a failure that is no timeout (it costs
+  nothing), ends the wait, and a daemon stopping is no timeout; an ask that started inside the wait (two
+  reviews posted together, or `magnum whiteboard`) and timed out does not double it. During the wait `mise
+  which` is not run and the shim stands for the binary, as it always did when mise does not answer, so no
+  version read runs again; a review's whiteboard runs no check and is skipped with "Whiteboard did not answer
+  its status check in 15s at 14:02; a review asks again from 14:04, `magnum whiteboard` at once" (a timeout
+  used to read "Whiteboard is not running"), while `magnum whiteboard` always asks, and its answer ends the
+  wait. Nothing is cached: a wait replays the failure the last ask had, never an answer, and a version read
+  that fails is counted toward `kind.version_unknown` as before. `magnum doctor` runs its own checks and never
+  waits. With whiteboards off (`[pipeline] whiteboard = false`, as the operator set it on 11-06) no review
+  runs the status check at all: autoWhiteboard returns before it, and only `magnum whiteboard` asks
+  (TestNoStatusCheckRunsWhileWhiteboardsAreOff keeps that). No cache of `mise which` per tick either: the
+  start and the health check are its only callers, one ask per kind each, so a tick asks once. Rejected:
+  keeping the binary `mise which` last named for the wait (an answer kept past its tick, which records a path
+  mise may no longer run, where the shim claims nothing) and backing off a quick failure too (a Whiteboard the
+  operator just started would wait minutes for nothing). Tests, failing first:
+  TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait,
+  TestAWhiteboardStatusCheckThatTimesOutWaitsBeforeAReviewAsksAgain,
+  TestATimeoutOfAnAskStartedInsideTheWaitDoesNotDoubleIt.
 
 ## The factory (2026-11-03)
 

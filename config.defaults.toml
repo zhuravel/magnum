@@ -465,7 +465,9 @@ whiteboard = false                # true: writes a whiteboard (an interactive do
                                   # app) of every PR after every review magnum posts on a new head, through
                                   # whiteboard_role, in the PR's slot. Needs dev.fast Whiteboard: Whiteboard
                                   # Desktop running, or `whiteboard server start`, and the `whiteboard` CLI on
-                                  # PATH; a Whiteboard that is down skips the whiteboard, it does not wait.
+                                  # PATH; a Whiteboard that is down skips the whiteboard, it does not wait,
+                                  # and one whose status check timed out is not asked again for 2 minutes,
+                                  # doubling up to 30 (`magnum whiteboard` asks at once). false asks nothing.
                                   # [[watch]] may override
 whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that writes it. "" = no whiteboard job,
                                   # by hand or automatic. [[watch]] may override

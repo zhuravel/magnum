@@ -580,10 +580,15 @@ type Engine struct {
 	// cliRead is, by agent kind, the binary whose version this run read or
 	// found recorded (cli_version.go): the version command runs again only
 	// once the binary changed; cliFails, by agent kind, the reads that
-	// failed and left no stamp, tried again at every health check. Tick
+	// failed and left no stamp, tried again at every health check; cliWhich,
+	// by agent kind, the backoff of its `mise which` (probe_backoff.go). Tick
 	// goroutine only (startup and health).
 	cliRead  map[string]cliStamp
 	cliFails map[string]*cliReadFailures
+	cliWhich map[string]*probeBackoff
+	// wbStatus is the backoff of Whiteboard's status check
+	// (whiteboardReady), which round and request goroutines share.
+	wbStatus probeBackoff
 	// mem is the machine's memory as the health checks sampled it
 	// (memory.go), tick goroutine only; memWG waits for the sample in
 	// flight, which runs on a goroutine of its own.
@@ -776,6 +781,7 @@ func New(d Deps) *Engine {
 		netRuns:           map[string]netRun{},
 		cliRead:           map[string]cliStamp{},
 		cliFails:          map[string]*cliReadFailures{},
+		cliWhich:          map[string]*probeBackoff{},
 		kick:              make(chan struct{}, 1),
 		starts:            starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
