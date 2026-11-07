@@ -12242,16 +12242,18 @@ type Copies interface {
     reconcile of the servers after a restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
-	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies
+	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
+	atWork func(context.Context, registry.Task) (role string, you bool, err error)) Copies
     NewCopies returns the factory's copies: sm is magnum's slot manager over st,
     the factory's agents store (Layout.FactoryAgentsDB, magnum's schema), whose
     guard sees herdr.GuardView; git and run run the claim protocol's commands,
-    my reads a copy's development database (nil: no reset_db at a claim),
-    panes is the factory's herdr session's snapshot (a pane in a copy that no
-    session row names holds it; nil: no such check), and owner is the runtime's
-    Owner, the task's row in st a copy is claimed for. A claim adds copy n
-    on demand with sm.ProvisionPool (FactoryRepo.Pool with the copy's env),
-    up to max_copies.
+    my reads a copy's development database (nil: no reset_db at a claim), panes
+    is the factory's herdr session's snapshot (a pane in a copy that no session
+    row names holds it; nil: no such check), owner is the runtime's Owner,
+    the task's row in st a copy is claimed for, and atWork the runtime's AtWork,
+    who of the claiming task is at work in the copy (its own sessions hold a
+    claim only then; nil: they always do). A claim adds copy n on demand with
+    sm.ProvisionPool (FactoryRepo.Pool with the copy's env), up to max_copies.
 
 type Copy = runtime.Copy
     Copy is a task's copy of a repository: its name and path, its number (copy

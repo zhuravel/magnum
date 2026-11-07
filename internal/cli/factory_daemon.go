@@ -319,7 +319,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	copySlots := slots.New(slots.Deps{Store: d.Agents, Run: run, Git: git, MySQL: copyDBs,
 		Snapshot: d.Guard.Snapshot, ProcessInfo: d.Guard.ProcessInfo, Layout: l,
 		Log: app.Printf{Logger: d.Log, Level: slog.LevelInfo, Src: "copies"}, SecretEnv: identityKeyEnvs(cfg)})
-	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, h.Snapshot, d.Runtime.Owner)
+	d.Copies = factory.NewCopies(cfg, copySlots, d.Agents, git, run, copyDBs, h.Snapshot, d.Runtime.Owner, d.Runtime.AtWork)
 	deps.Copies = d.Copies
 	// The publish: gh as your gh identity, the one the local review runs as.
 	d.GitHub = factory.NewGitHub(cfg, run)

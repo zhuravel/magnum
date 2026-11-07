@@ -83,6 +83,9 @@ type copySet struct {
 	my    slots.MySQL
 	panes func(context.Context) (herdr.Snapshot, error)
 	owner func(context.Context, registry.Task) (store.PR, error)
+	// atWork is the runtime's AtWork: who of a task is at work in its copy
+	// (a run in flight, or you in one of its panes); nil: nobody can say.
+	atWork func(context.Context, registry.Task) (role string, you bool, err error)
 
 	// mu guards the copies' bookkeeping, held only while a claim counts the
 	// copies, reserves one or picks the one it adds: adding names the copies
@@ -113,13 +116,16 @@ var _ Copies = (*copySet)(nil)
 // whose guard sees herdr.GuardView; git and run run the claim protocol's
 // commands, my reads a copy's development database (nil: no reset_db at a
 // claim), panes is the factory's herdr session's snapshot (a pane in a copy
-// that no session row names holds it; nil: no such check), and owner is the
-// runtime's Owner, the task's row in st a copy is claimed for. A claim adds
-// copy n on demand with sm.ProvisionPool (FactoryRepo.Pool with the copy's
-// env), up to max_copies.
+// that no session row names holds it; nil: no such check), owner is the
+// runtime's Owner, the task's row in st a copy is claimed for, and atWork
+// the runtime's AtWork, who of the claiming task is at work in the copy
+// (its own sessions hold a claim only then; nil: they always do). A claim
+// adds copy n on demand with sm.ProvisionPool (FactoryRepo.Pool with the
+// copy's env), up to max_copies.
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
-	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error)) Copies {
-	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner,
+	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
+	atWork func(context.Context, registry.Task) (role string, you bool, err error)) Copies {
+	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner, atWork: atWork,
 		adding: map[string]bool{}, tried: map[string]bool{}, locks: map[string]*sync.Mutex{},
 		kill: func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
 		now:  time.Now}
@@ -512,7 +518,7 @@ func (c *copySet) prepare(ctx context.Context, t registry.Task, pr store.PR, rep
 // changes, a HEAD that moved). HEAD at the tip of the task's own branch is
 // the factory's own (ownHead).
 func (c *copySet) guard(ctx context.Context, t registry.Task, pr store.PR, sl store.Slot, cp Copy) error {
-	if err := c.paneIn(ctx, cp, pr); err != nil {
+	if err := c.paneIn(ctx, cp, pr, t); err != nil {
 		return err
 	}
 	if _, _, err := c.ownHead(ctx, t, sl, cp); err != nil {
@@ -860,7 +866,7 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 		return fmt.Errorf("release the copy of %s: %s is no copy of %s", TaskKey(t), sl.Name, repo.Repo)
 	}
 	cp := copyOf(repo, sl, n)
-	if err := c.paneIn(ctx, cp, store.PR{}); err != nil {
+	if err := c.paneIn(ctx, cp, store.PR{}, t); err != nil {
 		return err
 	}
 	server, err := c.stopForRelease(ctx, cp)
@@ -881,11 +887,13 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 // working directory is the copy or below it), and a copy a pane of the
 // factory's herdr session works in that no session row names (someone
 // opened it there; the shell a parked session left is the factory's). The
-// sessions of own, the owner row of the task that claims the copy (none at
-// a release), refuse it only while one of them is at work (ownAtWork): one
-// that waits there (its stage passed, its turn ended) waits for the
-// factory's next prompt, which the claim comes before.
-func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR) error {
+// sessions of own, the owner row of task t that claims the copy (none at a
+// release), refuse it only while somebody of t is at work, as the runtime's
+// AtWork says for the factory's other changes of the copy (a run in
+// flight, or you in one of its panes): one that waits there (its stage
+// passed, its turn ended) waits for the factory's next prompt, which the
+// claim comes before. Without AtWork they refuse it as any session does.
+func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR, t registry.Task) error {
 	live, err := c.st.LiveSessions(ctx)
 	if err != nil {
 		return err
@@ -901,16 +909,19 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR) error {
 		switch {
 		case !in(cwd):
 			continue
-		case own.ID == 0 || s.PRID != own.ID:
+		case own.ID == 0 || s.PRID != own.ID || c.atWork == nil:
 			return fmt.Errorf("%w: the %s session works in %s", ErrPaneInCopy, s.Role, cwd)
 		case ownLooked:
 			continue
 		}
 		ownLooked = true
-		if who, err := c.ownAtWork(ctx, own); err != nil {
+		switch role, you, err := c.atWork(ctx, t); {
+		case err != nil:
 			return err
-		} else if who != "" {
-			return fmt.Errorf("%w: %s (%s)", ErrPaneInCopy, who, cwd)
+		case role != "" && you:
+			return fmt.Errorf("%w: you're in the %s pane of %s (%s)", ErrPaneInCopy, role, TaskKey(t), cwd)
+		case role != "":
+			return fmt.Errorf("%w: the %s agent works in it (%s)", ErrPaneInCopy, role, cwd)
 		}
 	}
 	if c.panes == nil {
@@ -934,32 +945,6 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR) error {
 		}
 	}
 	return nil
-}
-
-// ownAtWork says who of owner row pr's task is at work in its copy, "" for
-// nobody, as the factory's own changes of the copy ask it
-// (Runtime.AtWork): one of its runs in flight (pending, submitted or
-// working: its agent may be changing the copy), or you, who typed into one
-// of its panes within the human cooldown, where your edits are.
-func (c *copySet) ownAtWork(ctx context.Context, pr store.PR) (string, error) {
-	runs, err := c.st.RunsByPR(ctx, pr.ID)
-	if err != nil {
-		return "", err
-	}
-	for _, run := range runs {
-		switch run.State {
-		case store.RunPending, store.RunSubmitted, store.RunWorking:
-			return "the task's " + run.Role + " agent works in it", nil
-		}
-	}
-	cur, err := c.st.PRByID(ctx, pr.ID)
-	if err != nil {
-		return "", err
-	}
-	if at := cur.HumanActiveAt; at != nil && c.now().Before(c.cfg.Daemon.CooldownUntil(at)) {
-		return "you typed into one of the task's panes at " + at.Local().Format("15:04:05"), nil
-	}
-	return "", nil
 }
 
 // leftCopy is how a task left its copy: the branch checked out ("" for a

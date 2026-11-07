@@ -64,7 +64,10 @@ type copiesRig struct {
 	// setupStderr is what a failed setup writes to stderr ("setup failed"
 	// when it is empty).
 	setupStderr string
-	failRedis   int // FLUSHDB failures left
+	// atWorkRole and atWorkYou are what the runtime's AtWork answers.
+	atWorkRole string
+	atWorkYou  bool
+	failRedis  int // FLUSHDB failures left
 	// blocks hold a mise exec of "<script> <copy>" until its channel closes;
 	// entered gets "<script> <copy>" as one starts to wait.
 	blocks  map[string]chan struct{}
@@ -196,13 +199,28 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 	return r
 }
 
+// atWork answers as the runtime's AtWork does, with the role and you the
+// rig's atWorkRole and atWorkYou say.
+func (r *copiesRig) atWork(context.Context, registry.Task) (string, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.atWorkRole, r.atWorkYou, nil
+}
+
+// setAtWork makes the runtime's AtWork answer role and you.
+func (r *copiesRig) setAtWork(role string, you bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.atWorkRole, r.atWorkYou = role, you
+}
+
 // newCopies builds the rig's copies afresh over the same store and git, as
 // a daemon restart does, with the rig's process seams.
 func (r *copiesRig) newCopies() *copySet {
 	c, ok := NewCopies(r.cfg, r.sm, r.st, r.git, routeRunner{real: r.real, fake: &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"mise"}, Fn: r.mise},
 		{Prefix: []string{"redis-cli"}, Fn: r.redis},
-	}}}, r.dbs, r.factoryHerdr.Snapshot, r.owner).(*copySet)
+	}}}, r.dbs, r.factoryHerdr.Snapshot, r.owner, r.atWork).(*copySet)
 	if !ok {
 		r.t.Fatal("NewCopies is not the copies' set")
 	}

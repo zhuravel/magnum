@@ -278,8 +278,10 @@ func TestAReleaseDoesNotWaitForAnotherCopysClaim(t *testing.T) {
 // turn ended) does not hold that task's own claim: after a restart task 1
 // waited 16 minutes on "a pane runs in it: the fx-repro session works in"
 // its own copy, whose claim had to switch it back to the task's branch.
-// Its run in flight, your typing into one of its panes within the human
-// cooldown, or another task's session still holds it.
+// Who of the task is at work is the runtime's AtWork's to say, as for the
+// factory's other changes of the copy: a run in flight holds it, and so do
+// you in one of its panes, typing or with the pane focused; another task's
+// session always does.
 func TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim(t *testing.T) {
 	r := newCopiesRig(t, 1)
 	task := r.task("PR-1")
@@ -299,24 +301,15 @@ func TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim(t *testing.T) {
 	r.gitIn(c.Path, "switch", "--quiet", "-c", "elsewhere") // the claim after the restart switches back: a step, with its guard
 	r.c = r.newCopies()
 
-	run, err := r.st.CreateRun(r.ctx, store.Run{PRID: pr.ID, Role: "fx-writer", Kind: store.RunInitial, State: store.RunWorking,
-		TargetSHA: "t1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "fx-writer") {
+	r.setAtWork("fx-writer", false)
+	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "fx-writer agent works") {
 		t.Fatalf("Claim while the task's writer is at work = %v, want ErrPaneInCopy naming it", err)
 	}
-	if err := r.st.TransitionRun(r.ctx, run.ID, nil, store.RunEnded, nil); err != nil {
-		t.Fatal(err)
+	r.setAtWork("fx-repro", true) // its pane focused while you compose a prompt: nothing typed yet
+	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "you're in the fx-repro pane") {
+		t.Fatalf("Claim while you are in the task's pane = %v, want ErrPaneInCopy saying so", err)
 	}
-	if err := r.st.UpdatePR(r.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("human_active_at", r.clock.Now()) }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.c.Claim(r.ctx, task); !errors.Is(err, ErrPaneInCopy) || !strings.Contains(err.Error(), "you typed") {
-		t.Fatalf("Claim while you type into the task's pane = %v, want ErrPaneInCopy saying so", err)
-	}
-	r.clock.Add(r.cfg.Daemon.HumanCooldown.Duration + time.Minute)
+	r.setAtWork("", false)
 
 	opr, err := r.owner(r.ctx, r.task("PR-2"))
 	if err != nil {
