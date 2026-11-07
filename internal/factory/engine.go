@@ -315,6 +315,10 @@ type Engine struct {
 	// publishFails counts the failed tries of each task's publish effect.
 	publishFails map[int64]publishFail
 	readFails    []error
+	inbox        map[int64][]runtime.Event
+	holds        map[string]*Hold
+	blockers     map[string]string
+	recent       map[string]recentFailure
 	// envFails are the crashes of the environment the tasks' checks met
 	// in this tick (envCrash), which the infrastructure hold weighs with
 	// its other failures; envCrashed names the tasks whose last check
@@ -324,10 +328,6 @@ type Engine struct {
 	envFails   []error
 	envCrashed map[int64]bool
 	holdTry    bool
-	inbox      map[int64][]runtime.Event
-	holds      map[string]*Hold
-	blockers   map[string]string
-	recent     map[string]recentFailure
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte

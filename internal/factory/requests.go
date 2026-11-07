@@ -540,7 +540,7 @@ func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
 	if commands, env := e.checksPrint(repo); commands != rec.Commands || env != rec.Env {
 		return ""
 	}
-	same := ", though nothing changed since its last failure (the same head, precheck commands and environment), so it will likely fail again"
+	same := ", though nothing the factory sees changed since its last failure (the same head, precheck commands and environment)"
 	if rec.Line != "" {
 		same += ": " + rec.Line
 	}

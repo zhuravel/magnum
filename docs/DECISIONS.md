@@ -16939,8 +16939,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - precheck.json records, for a failure for you, that line and hashes of the repository's precheck
     commands and of their environment (its configured env, the daemon's LANG, LC_ALL, LC_CTYPE and PATH;
     never a value). A retry of a task that waits on that failure still goes on, and its answer adds "though
-    nothing changed since its last failure (the same head, precheck commands and environment)" with the line
-    when none of them changed.
+    nothing the factory sees changed since its last failure (the same head, precheck commands and
+    environment)" with the line when none of them changed: a tool installed into a directory already on the
+    PATH changes none of them, so the note says what it compared and refuses nothing.
   Rejected: refusing such a retry (a cause of the moment may be gone, and the answer already tells you); a
   hold of the task alone (the incident's locale was the machine's, as an SSH key is, and the hold's backoff
   and blocker are what such a cause needs); lifting the hold on the try that starts the checks (each

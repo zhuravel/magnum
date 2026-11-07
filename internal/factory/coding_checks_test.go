@@ -535,7 +535,7 @@ func TestARetryThatChangedNothingSinceTheFailureSaysSo(t *testing.T) {
 	}
 
 	answer := r.retryAnswer(task.ID)
-	if !strings.Contains(answer, "goes on") || !strings.Contains(answer, "nothing changed since its last failure") ||
+	if !strings.Contains(answer, "goes on") || !strings.Contains(answer, "nothing the factory sees changed since its last failure") ||
 		!strings.Contains(answer, "Error: boom") {
 		t.Fatalf("the retry answers %q, want it to go on and say nothing changed, naming the line", answer)
 	}
@@ -551,7 +551,7 @@ func TestARetryThatChangedNothingSinceTheFailureSaysSo(t *testing.T) {
 	}
 	r.e.waitBackground()
 	env["LANG"] = "en_US.UTF-8" // you fixed the environment
-	if answer := r.retryAnswer(task.ID); strings.Contains(answer, "nothing changed") {
+	if answer := r.retryAnswer(task.ID); strings.Contains(answer, "changed since") {
 		t.Fatalf("the retry after the environment changed answers %q", answer)
 	}
 }
