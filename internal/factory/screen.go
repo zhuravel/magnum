@@ -150,10 +150,10 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 	d.Rows = append(d.Rows, own...)
 	maps.Copy(d.Cards, ownCards)
 	slices.SortStableFunc(d.Rows, func(a, b tui.FactoryRow) int {
-		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou && a.Group != tui.GroupYours {
+		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group == tui.GroupDone {
 			return c
 		}
-		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and your PRs magnum leaves alone: the oldest wait first
+		return a.Since.Compare(b.Since) // NEEDS YOU (as `a` walks it), WAITS ON OTHERS and LEFT ALONE: the oldest wait first
 	})
 	d.Repos = s.repos()
 	switch {

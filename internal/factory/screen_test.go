@@ -1081,3 +1081,29 @@ func TestAStartKeepsTheTicketsReporterBesideItsTicket(t *testing.T) {
 		t.Errorf("readReporter = %q", got)
 	}
 }
+
+// WAITS ON OTHERS lists its rows oldest wait first, as NEEDS YOU and LEFT
+// ALONE do, whatever their tasks' order, your PRs among them. Before, it
+// kept the tasks' order, then your PRs.
+func TestWaitsOnOthersSortsByWait(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.at(time.Hour)
+	r.task("PR-12371", "bug", "Coupon CSV export times out", registry.TaskActive, "coding", "", "")
+	r.at(3 * time.Hour)
+	r.task("PR-12372", "bug", "Cart totals in the widget", registry.TaskActive, "coding", "", "")
+	r.at(0)
+	r.own(81, 4611, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "CI runs at a1b2c3d")
+		v.Open.Since = screenNow.Add(-2 * time.Hour)
+	})
+	var keys []string
+	for _, row := range r.data(time.Time{}).Rows {
+		if row.Group == tui.GroupWaits {
+			keys = append(keys, row.Key)
+		}
+	}
+	if want := []string{"PR-12372", "#4611", "PR-12371"}; !slices.Equal(keys, want) {
+		t.Errorf("WAITS ON OTHERS lists %q, want the oldest wait first %q", keys, want)
+	}
+}

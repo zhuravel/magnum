@@ -250,8 +250,8 @@ func TestOnlyThePRsMagnumLeavesAloneKeepAGroupOfTheirOwn(t *testing.T) {
 	if want := []string{"#4606", "#4607"}; !slices.Equal(alone, want) {
 		t.Errorf("the PRs magnum leaves alone: %q, want %q, oldest first", alone, want)
 	}
-	if want := []string{"#4611", "#4612"}; !slices.Equal(waits, want) {
-		t.Errorf("WAITS ON OTHERS: %q, want %q", waits, want)
+	if want := []string{"#4612", "#4611"}; !slices.Equal(waits, want) { // the loop's row waits since an hour, CI's 10 minutes
+		t.Errorf("WAITS ON OTHERS: %q, want %q, oldest first", waits, want)
 	}
 }
 
