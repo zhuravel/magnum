@@ -459,8 +459,8 @@ func validateCheckGlobs(where, key string, entries []string) []error {
 
 // validateRepos checks the [[repo]] blocks: owner/name covered by a watch,
 // not a pool repository, no duplicates, shell-safe env keys, copy_files
-// that stay inside the clone and well-formed required_checks and
-// ignore_checks globs.
+// that stay inside the clone, well-formed required_checks and
+// ignore_checks globs and a ci_dispatch that names a workflow file.
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -479,10 +479,13 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks, ignore_checks and trackers apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers and ci_dispatch apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
 		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "required_checks", r.RequiredChecks)...)
 		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "ignore_checks", r.IgnoreChecks)...)
+		if r.CIDispatch != "" && !github.ValidWorkflowFile(r.CIDispatch) {
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch must be a workflow file of .github/workflows such as \"ci.yml\", got %q", r.Repo, r.CIDispatch))
+		}
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))
 		}

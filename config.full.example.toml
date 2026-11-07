@@ -171,8 +171,8 @@ databases = [
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers and the readiness keys
-# (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers, ci_dispatch and the
+# readiness keys (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -192,6 +192,11 @@ databases = [
 #                                         # autofix = "open" never calls such a head green; it never approves a PR
 #                                         # that changes .github/workflows/ or .github/actions/ on its own
 # ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone
+# ci_dispatch = "ci.yml"                  # the workflow file that produces the required checks, for a CI that
+#                                         # runs only when a PR opens: under autofix = "open" magnum starts it on
+#                                         # the PR's branch, as the watch's poll identity, once per head on an own
+#                                         # PR whose required check did not run there (past settle_max), never on
+#                                         # a PR that changes its own workflows or actions; default: none
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

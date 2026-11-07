@@ -781,6 +781,13 @@ type Repo struct {
 	// issue key prefix named here wins over its watch's and [board]'s (see
 	// Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
+
+	// CIDispatch names the workflow file of .github/workflows ("ci.yml")
+	// that produces the repository's required checks, for a CI that runs
+	// only when a PR opens: under autofix = "open" magnum starts it, at most
+	// once per head, on an own PR whose required check did not run at its
+	// head (see Config.CIDispatch). "" (the default) starts nothing.
+	CIDispatch string `toml:"ci_dispatch"`
 }
 
 // RequiredWorkflowPrefix marks a required_checks entry naming a whole
@@ -791,7 +798,8 @@ const RequiredWorkflowPrefix = "workflow:"
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
 // max_simplifications, auto_approve_skip_authors, auto_approve_authors,
-// allow_bot_authors, required_checks, ignore_checks and trackers).
+// allow_bot_authors, required_checks, ignore_checks, trackers and
+// ci_dispatch).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -1327,6 +1335,18 @@ func (c *Config) RequiredChecks(fullName string) []string {
 		return r.RequiredChecks
 	}
 	return nil
+}
+
+// CIDispatch returns the workflow file the [[repo]] block of repository
+// fullName ("owner/name", any case) names as the one that produces its
+// required checks (ci_dispatch), "" when none does: autofix = "open"
+// starts it once per head on an own PR whose required check did not run
+// at its head.
+func (c *Config) CIDispatch(fullName string) string {
+	if r := c.RepoFor(fullName); r != nil {
+		return r.CIDispatch
+	}
+	return ""
 }
 
 // IgnoreChecks returns the checks magnum treats as absent wherever it

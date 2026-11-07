@@ -4808,6 +4808,12 @@ func (c *Config) BaseRole(name string) (Role, bool)
     spend level: its model is the one a level whose table does not name the role
     runs. False for a name no role has, or a configuration Load did not build.
 
+func (c *Config) CIDispatch(fullName string) string
+    CIDispatch returns the workflow file the [[repo]] block of repository
+    fullName ("owner/name", any case) names as the one that produces its
+    required checks (ci_dispatch), "" when none does: autofix = "open" starts it
+    once per head on an own PR whose required check did not run at its head.
+
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
     a comment, not an approval, for a clean verdict on repository
@@ -6635,6 +6641,13 @@ type Repo struct {
 	// issue key prefix named here wins over its watch's and [board]'s (see
 	// Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
+
+	// CIDispatch names the workflow file of .github/workflows ("ci.yml")
+	// that produces the repository's required checks, for a CI that runs
+	// only when a PR opens: under autofix = "open" magnum starts it, at most
+	// once per head, on an own PR whose required check did not run at its
+	// head (see Config.CIDispatch). "" (the default) starts nothing.
+	CIDispatch string `toml:"ci_dispatch"`
 }
     Repo is a [[repo]] block: the repository's verdicts (any watched repository,
     pooled or not) and setup for the per-PR worktrees of a repository
