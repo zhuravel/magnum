@@ -10151,6 +10151,7 @@ type OpenVerdict struct {
 	Why           string     `json:"why"`
 	Head          string     `json:"head"`
 	At            time.Time  `json:"at"`
+	Since         time.Time  `json:"since,omitzero"`
 	ReadAt        time.Time  `json:"read_at,omitzero"`
 	Until         time.Time  `json:"until,omitzero"`
 	Open          int        `json:"open"`
@@ -10164,11 +10165,14 @@ type OpenVerdict struct {
     OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
     fixing, waits, needs_you, idle, unknown or off, why in plain words (counts,
     kinds, short SHAs and clock times, never PR text), when the look decided
-    it (At) and last read GitHub whole (ReadAt), when a wait ends where that is
-    known (Until), the open items (work and what needs the operator) and what
-    needs the operator (kind and link only), the short SHA a person approved (""
-    = none) and the commits on Head after it (-1 = not counted), and why an off
-    verdict is off.
+    it (At), since when it has said the same without a break (Since: the same
+    verdict, approval and reason to be off, whatever the words and however
+    often the PR changed; Since and At are equal when it began, and zero in
+    a row of a build before it), when it last read GitHub whole (ReadAt),
+    when a wait ends where that is known (Until), the open items (work and
+    what needs the operator) and what needs the operator (kind and link only),
+    the short SHA a person approved ("" = none) and the commits on Head after it
+    (-1 = not counted), and why an off verdict is off.
 
 func ParseOpenVerdict(s string) (OpenVerdict, bool)
     ParseOpenVerdict reads a KVPROpen value; ok is false for one that is not a

@@ -16204,6 +16204,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAMergedPRMovesItsTaskToDone, TestAClosedPRNeedsYouAfterTheGrace, TestAMergedTasksAgentsAreParkedAndItsCopyReleased
   (nothing followed the PRs), TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem and
   TestStatsCountsManualFixStartsOnFactoryPRs (no count existed).
+- **A published row waits since its PR began to wait so, and a done row says when its PR merged** (2026-11-07,
+  the review of the bridge's third slice). The rows by verdict kept two times of the factory's own: WAITED
+  counted from the task's last span, the publish, so a PR that came to need you on Wednesday said "2d", sorted
+  first in NEEDS YOU and was never "new for you" in the away digest; and a done row said "merged" at the time
+  the tick saw the merge, so the first tick after an install made every PR merged last week DONE TODAY at the
+  install's time, and news.
+  - The verdict says since when it has said the same (`OpenVerdict.Since`): the look's write keeps the stored
+    Since while the verdict goes on (the same verdict, approval and reason to be off, whatever its words, counts
+    or head), and begins at its own time otherwise; a change of the PR's row rewrites the verdict's At and keeps
+    Since. A verdict row of an older build has none, and a reader takes its At. Since lives in magnum's verdict,
+    not in the factory's spans, because the reader is live (the screen reads it per frame, the tick lags) and
+    the next slice's rows of your own PRs have no factory task at all.
+  - A published row waits since the later of the task's last span (the publish, a reopen) and when its PR
+    began to wait so: the verdict's Since, a loop's start without a verdict, the close (and the grace's end
+    before the tick marks it), the attention's row change. The digest's "new for you" counts such rows.
+  - The screen's one read of magnum's registry per frame also reads the PRs of the tasks done today or since you
+    were last seen: a done row and the digest say when the PR merged, home drops a task done today whose PR
+    merged before today, and an unreadable registry leaves the tick's time.
+  - The row of a PR no `[[watch]]` covers names the only end, since nothing tells the task you merged or closed
+    the PR: "..., then x drops the task", and x is its move. The `?` glossary says what the rows say now
+    ("done today": its PR merged today; "magnum:" reviews, reads or waits; "reviewers:").
+  Rejected: the verdict's At as the wait's start (it moves with every change of the PR's row, CI included);
+  the tick writing the verdict's group change as the task's wait (a span per change, a live screen behind the
+  tick, and a change of what the factory's stats count as its waits on you); the merge time in the done span's
+  reason (text to parse back). Tests, failing first: TestTheVerdictSaysSinceWhenItHasSaidTheSame,
+  TestAPublishedRowWaitedSinceItsPRBeganToWaitSo, TestADoneTaskSaysWhenItsPRMerged,
+  TestTheHelpGlossesThePublishedRowsWords and TestAnUnwatchedPRsRowNamesHowItsTaskEnds.
 
 ## Learned rules
 
