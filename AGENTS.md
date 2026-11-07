@@ -79,13 +79,14 @@ changed, and the README or config comments describe any new key, command or key 
 
 **One gate at a time on this machine.** `make test` and `make test-race` take the lock file
 `/tmp/magnum-make-test.lock` (`lockf` on macOS, `flock` on Linux) and wait, saying so, while another
-checkout's gate holds it; after an hour they give up with exit 75. Never run `go test ./...`, `go vet ./...`
-or a `-race` run outside them, and never start a gate in the background or in a second pane while one
-runs. A single package without `-race` (`go test -count=1 -run TestX ./internal/x`) needs no lock. Do not
-wrap `make test` in `lockf` yourself: an old `lockf -k /tmp/magnum-gate.lock` wrapper still works (a
-different file) but only adds a wait. A script that already holds the gate lock and runs make again sets
-`MAGNUM_GATE_LOCKED=1`. A gate runs at most `TEST_P` test binaries at once (default 4, `go test -p`), which
-keeps its memory and CPU low on a laptop; `TEST_P=` uses Go's default of one per CPU.
+checkout's gate holds it; after an hour they fail (the recipe's status is 75: make reports "Error 75"
+and exits 2). Never run `go test ./...`, `go vet ./...` or a `-race` run outside them, and never start a
+gate in the background or in a second pane while one runs. A single package without `-race` (`go test
+-count=1 -run TestX ./internal/x`) needs no lock. Do not wrap `make test` in `lockf` yourself: an old
+`lockf -k /tmp/magnum-gate.lock` wrapper still works (a different file) but only adds a wait. A script
+that already holds the gate lock and runs make again sets `MAGNUM_GATE_LOCKED=1`. A gate runs at most
+`TEST_P` test binaries at once (default 4, `go test -p`), which keeps its memory and CPU low on a
+laptop; `TEST_P=` uses Go's default of one per CPU.
 
 Tests open their registry with `storetest.Open` (`internal/store/storetest`: a copy of a database
 migrated once per test binary, never `store.Open` on a fresh file except to test migrations), and the

@@ -11,12 +11,12 @@ INSTALL_FLAGS ?= --plugin
 # one the build keeps Go's ad-hoc signature, which macOS treats as a new app at every build.
 SIGN_IDENTITY ?= magnum local signing
 
-# GATE_LOCK: the lock every gate on this machine takes (make test, make test-race), so two checkouts never run
-# their tests at once. lockf(1) takes it where it exists (macOS), flock(1) elsewhere (Linux); with neither the gate
-# runs unlocked. A gate that finds it taken says so and waits up to an hour, then gives up with exit 75. It is in
-# /tmp, not $TMPDIR (agent shells get a TMPDIR of their own), and it is not /tmp/magnum-gate.lock, which older
-# `lockf -k /tmp/magnum-gate.lock make test` wrappers hold: the same lock taken again inside them would wait for its
-# own parent. MAGNUM_GATE_LOCKED=1 marks a process that already holds it.
+# GATE_LOCK: the lock every gate on this machine takes (make test, make test-race), so two checkouts never run their
+# tests at once. lockf(1) takes it where it exists (macOS), flock(1) elsewhere (Linux); with neither the gate runs
+# unlocked. A gate that finds it taken says so and waits up to an hour, then its recipe fails with status 75 (make
+# reports "Error 75" and exits 2). It is in /tmp, not $TMPDIR (agent shells get a TMPDIR of their own), and it is
+# not /tmp/magnum-gate.lock, which older `lockf -k /tmp/magnum-gate.lock make test` wrappers hold: the same lock
+# taken again inside them would wait for its own parent. MAGNUM_GATE_LOCKED=1 marks a process that already holds it.
 GATE_LOCK ?= /tmp/magnum-make-test.lock
 # TEST_P: how many test binaries one gate runs at once (go test -p); 4 keeps one gate's memory and CPU low on a
 # laptop; TEST_P= uses Go's default (one per CPU)
@@ -26,10 +26,11 @@ gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
   elif command -v lockf >/dev/null 2>&1; then \
     lockf -k -s -t 0 "$(GATE_LOCK)" true || echo "make: waiting for $(GATE_LOCK): another checkout's gate runs"; \
     env MAGNUM_GATE_LOCKED=1 lockf -k -t 3600 "$(GATE_LOCK)" $(1); st=$$?; \
-    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (exit 75): is make test running inside lockf on it?"; fi; exit $$st; \
+    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (lockf exit 75): is make test running inside lockf on it?"; fi; exit $$st; \
   elif command -v flock >/dev/null 2>&1; then \
+    flock -n "$(GATE_LOCK)" true || echo "make: waiting for $(GATE_LOCK): another checkout's gate runs"; \
     env MAGNUM_GATE_LOCKED=1 flock -w 3600 -E 75 "$(GATE_LOCK)" $(1); st=$$?; \
-    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (exit 75)"; fi; exit $$st; \
+    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (flock exit 75)"; fi; exit $$st; \
   else $(1); fi
 
 .PHONY: build test gate test-race check-private lint lint-fix vuln install api-doc api-doc-check release link unlink
