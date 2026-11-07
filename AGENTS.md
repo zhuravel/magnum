@@ -88,11 +88,22 @@ that already holds the gate lock and runs make again sets `MAGNUM_GATE_LOCKED=1`
 `TEST_P` test binaries at once (default 4, `go test -p`), which keeps its memory and CPU low on a
 laptop; `TEST_P=` uses Go's default of one per CPU.
 
-Tests open their registry with `storetest.Open` (`internal/store/storetest`: a copy of a database
-migrated once per test binary, never `store.Open` on a fresh file except to test migrations), and the
-fixtures run them in parallel: `newHarness` (engine) and `newEnv` (pipeline, agents) call
-`storetest.Parallel`, gitx's `realEnv` its own. A test that swaps a package variable or calls
-`t.Setenv` calls `storetest.Serial(t)` (gitx: `keepSerial(t)`) before its fixture. A round's fakes
+Tests open their registry with `storetest.Open` (`internal/store/storetest`): a private in-memory copy
+of a database migrated once per test binary, so the test writes no database file. It creates the path's
+directory, leaves a placeholder at the path that SQLite refuses (`file is not a database`), and fails
+when the path already holds a file. That error fails a test only where the code passes it on: the notes
+command (`notesOpenStore`), shell completion (`completeQuery`) and daemon-restart's event writer
+(`writeRestartEvent`) swallow it and go on without the registry. So a test whose code under test opens
+the registry by path (the CLI's commands, `app.New`, the factory's read of magnum's registry, evalrun)
+or that checks the file (WAL, modes, a reopen, two handles, a read-only open) uses `storetest.OpenFile`:
+the same template written to the path and opened with `store.Open`. The cli's `newNotesHarness` does,
+through `newActHarnessOn`; `newActHarness` stays in memory. `registrytest.Open` and `OpenWith` give the
+factory registry in memory the same way; `registrytest.Seed`, `OpenFile` and `OpenPair` write files.
+Never `store.Open` or `registry.Open` on a fresh file except to test migrations: seed it first
+(`storetest.Seed`, `registrytest.Seed`); a test's raw `sql.Open` that writes an old-schema file adds
+`sqlitetest.FastFile`. The fixtures run them in parallel: `newHarness` (engine) and `newEnv` (pipeline,
+agents) call `storetest.Parallel`, gitx's `realEnv` its own. A test that swaps a package variable or
+calls `t.Setenv` calls `storetest.Serial(t)` (gitx: `keepSerial(t)`) before its fixture. A round's fakes
 share one clock that every fake Sleep moves at once: a pipeline role that must still be at work when
 another goroutine ends the round uses `fakeAgents.hangs` (its Submit returns when the round cancels
 it), not `hang()`, whose waits can run out its timeout first on a busy machine. Round scripts and fake
@@ -116,7 +127,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles |
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |
 | `internal/notes` | repository notes: limits, states and snapshots, the lock, curation proposals and their checks |
-| `internal/store`, `sqlitetest` | SQLite registry, migrations under `migrations/`, compare-and-set transitions; tests' private in-memory SQLite databases, loaded from a migrated image (`storetest`'s registries and the store's own tests) |
+| `internal/store`, `sqlitetest` | SQLite registry, migrations under `migrations/`, compare-and-set transitions; tests' private in-memory SQLite databases, loaded from a migrated image (`storetest`'s and `registrytest`'s registries, the store's own tests) |
 | `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge and fix skills |
 | `internal/learn`, `eval`, `evalrun` | the daily retro's candidates and answers and the learned corpus; scoring replays of seeded PRs; one case's replay, which the CLI and the daemon run |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |

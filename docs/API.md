@@ -46,7 +46,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
 | [factory](#factory) | Package factory is the magnum factory: a second daemon, in the magnum binary and with a registry of its own, that takes a Jira key or a free prompt and does the work up to the final merge, which stays the operator's. |
 | [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
-| [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
+| [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
@@ -69,9 +69,10 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
+| [sqlitetest](#sqlitetest) | Package sqlitetest keeps a test's SQLite database in memory: a private database on one connection, loaded from the image of a database a test binary migrated once, so the test writes no database file. |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
-| [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
+| [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals, thousands separators, durations in words and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch), the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2), and the factory's screen (RunFactory: one line per task, grouped by who it waits on, with the decision cards behind them; its data comes through FactorySource, its requests through FactoryActions, and every one that leaves the Mac, starts or stops agents or frees a copy asks y/N on the factory's own action bar, factory_actions.go). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
@@ -13606,6 +13607,14 @@ func Open(path string, opts Options) (*Registry, error)
     knows. The database, its -wal and its -shm file are made 0600 whatever the
     umask.
 
+func OpenDB(db *sql.DB, opts Options) (*Registry, error)
+    OpenDB is Open for a database the caller opened: the in-memory registries
+    of tests (registrytest, sqlitetest.Open). Production opens files with Open,
+    and OpenDB refuses to run outside a test binary (testing.Testing).
+    It pins db to the one connection Open keeps, applies pending migrations
+    after opts.BeforeMigrate agrees and refuses a schema newer than this binary,
+    as Open does. It closes db when it fails.
+
 func (r *Registry) AnswerBatch(ctx context.Context, taskID int64, rev int, answers map[int]string) error
     AnswerBatch records answers (question Index -> the answer text) to the open
     questions of revision rev, all or none, and keeps each as the first entry
@@ -14101,15 +14110,22 @@ func (u *TaskUpdate) Set(col string, v any)
 package registrytest // import "github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 
 Package registrytest gives tests a factory registry without migrating one for
-each of them: the first call in a test binary migrates a template database, and
-every call writes a copy of its bytes, which registry.Open then finds current.
+each of them: the first call in a test binary migrates a template database
+in memory, and every call starts from a copy of its bytes. Open and OpenWith
+keep that copy in memory, so the test writes no database file; Seed, OpenFile
+and OpenPair write it to a file, which registry.Open then finds current.
 Only _test.go files import it.
 
 FUNCTIONS
 
 func Open(tb testing.TB) *registry.Registry
-    Open seeds a database in the test's temporary directory and opens it;
-    the registry is closed when the test ends.
+    Open gives the test a migrated registry in memory, private to it; the
+    registry is closed when the test ends.
+
+func OpenFile(tb testing.TB, path string, opts registry.Options) *registry.Registry
+    OpenFile seeds path (see Seed) and opens it with registry.Open; the registry
+    is closed when the test ends. It is for a test whose code under test opens
+    the registry by path, such as the CLI's commands.
 
 func OpenPair(tb testing.TB) (first, second *registry.Registry)
     OpenPair opens two registries on one database file, the way the daemon and
@@ -23836,6 +23852,64 @@ func ParseWTHooks(data []byte) (WTHooks, error)
 
 ```
 
+## sqlitetest
+
+```text
+package sqlitetest // import "github.com/zhuravel/magnum/internal/sqlitetest"
+
+Package sqlitetest keeps a test's SQLite database in memory: a private database
+on one connection, loaded from the image of a database a test binary migrated
+once, so the test writes no database file. storetest and registrytest build
+their registries on it, and the store package's own tests use it directly (they
+cannot import storetest). It imports only the SQLite driver and the standard
+library. Only tests and those helpers import it.
+
+CONSTANTS
+
+const FastFile = "_pragma=journal_mode(MEMORY)&_pragma=synchronous(OFF)"
+    FastFile is what a test's own raw writer of a database file (an old schema
+    a migration test starts from) adds to its DSN: the rollback journal stays in
+    memory and nothing is synced, so the file is written once.
+
+const Params = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=temp_store(MEMORY)&_txlock=immediate"
+    Params are the connection settings of store.Open and registry.Open
+    (busy_timeout 5 s, foreign keys on, temporary tables in memory,
+    BEGIN IMMEDIATE) without the two that only a file has: journal_mode(WAL),
+    which a memory database refuses (its journal is in memory), and synchronous.
+
+
+VARIABLES
+
+var ErrLostConnection = errors.New("sqlitetest: the in-memory database lost its only connection")
+    ErrLostConnection is what every use of a database from Open returns after
+    its only connection was closed: the database lived in that connection,
+    so a new one would be empty.
+
+
+FUNCTIONS
+
+func FileImage(image []byte) []byte
+    FileImage returns a copy of image with header bytes 18 and 19 set to 2,
+    the bytes of a WAL database checkpointed and closed: what a test writes to a
+    file that store.Open or registry.Open then opens.
+
+func Image(ctx context.Context, db *sql.DB) ([]byte, error)
+    Image returns the bytes of db's main database (sqlite3_serialize): for an
+    in-memory database, the file SQLite would write, with a rollback header
+    (bytes 18 and 19 = 1), which Open loads.
+
+func Open(image []byte, params string) (*sql.DB, error)
+    Open opens a private in-memory database with params (Params, or a test's
+    own), loaded from image (nil starts empty). The pool holds one connection,
+    which never expires, because the connection is the database: once it is
+    closed every use fails with ErrLostConnection rather than going on with
+    an empty database. The image is copied, so one image serves every test of
+    a binary. It must be a rollback image (header bytes 18 and 19 = 1), which
+    Image returns; a WAL file's bytes are refused (FileImage turns one into the
+    other).
+
+```
+
 ## steps
 
 ```text
@@ -26077,6 +26151,15 @@ func Open(path string) (*Store, error)
     whose schema version is newer than this binary knows. The database, its -wal
     and its -shm file are made 0600 whatever the umask.
 
+func OpenDB(db *sql.DB, opts Options) (*Store, error)
+    OpenDB is OpenWith for a database the caller opened: the in-memory
+    registries of tests (storetest, sqlitetest.Open). Production opens files
+    with Open and OpenWith, and OpenDB refuses to run outside a test binary
+    (testing.Testing). It pins db to the one connection OpenWith keeps,
+    applies pending migrations after opts.BeforeMigrate agrees and refuses a
+    schema newer than this binary, as OpenWith does. It refuses opts.QueryOnly,
+    a setting of a connection's DSN. It closes db when it fails.
+
 func OpenWith(path string, opts Options) (*Store, error)
     OpenWith is Open with options.
 
@@ -26974,16 +27057,37 @@ func (m VersionMeasure) DeclinedShare() (float64, bool)
 package storetest // import "github.com/zhuravel/magnum/internal/store/storetest"
 
 Package storetest gives tests a registry without migrating one for each of them:
-the first call in a test binary migrates a template database, and every call
-writes a copy of its bytes, which store.Open then finds current. It also holds
-the settable clock the store's users share in their tests. Only _test.go files
-import it.
+the first call in a test binary migrates a template database in memory,
+and every call starts from a copy of its bytes. Open keeps that copy in memory,
+so the test writes no database file; OpenFile and Seed write it to a file, which
+store.Open then finds current, for code under test that opens the registry by
+path. It also holds the settable clock the store's users share in their tests.
+Only _test.go files import it.
 
 FUNCTIONS
 
-func Open(t testing.TB, path string) *store.Store
-    Open seeds path (see Seed) and opens it with store.Open; the store is closed
-    when the test ends.
+func Memory(tb testing.TB) *store.Store
+    Memory gives the test a migrated registry that lives in this process's
+    memory, private to it, and closes it when the test ends. Nothing but the
+    returned store reaches it.
+
+func Open(tb testing.TB, path string) *store.Store
+    Open gives the test a migrated registry in memory (Memory) and closes it
+    when the test ends. It creates path's directory (0700), as store.Open would,
+    and leaves a placeholder at path that SQLite refuses ("file is not a
+    database"), so code that opens the path gets an error instead of finding or
+    making a registry of its own there; a file already at path fails the test.
+    That error fails the test only where the code under test passes it on:
+    the cli's notes command (notesOpenStore), shell completion (completeQuery)
+    and daemon-restart's event writer (writeRestartEvent) swallow it and go on
+    without the registry, so a test can pass without ever reaching it. A test
+    whose code under test opens the registry by path, or that checks the file
+    (WAL, modes, a reopen, a second handle, a read-only open), uses OpenFile.
+
+func OpenFile(tb testing.TB, path string) *store.Store
+    OpenFile seeds path (see Seed) and opens it with store.Open; the store is
+    closed when the test ends. It is for a test whose code under test opens the
+    registry by path, or that checks the file.
 
 func Parallel(t *testing.T)
     Parallel runs t in parallel with the other tests (t.Parallel) the first time

@@ -15480,6 +15480,80 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAStatusCheckThatTimedOutAfterALaterOneAnsweredStartsNoWait,
   TestATimeoutOfAnAskStartedInsideTheWaitDoesNotDoubleIt, TestATimeoutOfAnAskStartedBeforeAnAnswerStartsNoWait.
 
+- **Tests keep their registries in memory, and one gate runs at a time per machine** (2026-11-07, amends
+  "Tests copy a migrated registry and run in parallel" and "The atomic file write skips its disk syncs in
+  a test binary"). Several worktrees ran `make test` at the same time, at loads above 200. Each gate wrote
+  about 5.4 GB to the internal disk, and the test binaries wrote most of it through SQLite. We measured
+  each test binary with `proc_pid_rusage` (`ri_diskio_byteswritten`, read from the exited process that `go
+  test -exec` runs) on master 9b7a813c. The engine wrote 2,774 MB, pipeline 510, cli 475, factory 457,
+  agents 408, store 255, slots 199, factory/runtime 143 and app 34. All of `go test -count=1 ./...` wrote
+  5,417 MB. Each `storetest.Open` copied a 372 KB template to a file. Then SQLite wrote it again through
+  the WAL and its checkpoint at Close. Skipping the syncs saves no bytes. A child process wrote 20 MB
+  without `fsync` and deleted the file 40 ms later. It was still charged 20.97 MB, the same as with
+  `fsync`. So `-tags libc.nofsync` and `synchronous(OFF)` save only latency. The lever is to write less.
+
+  `storetest.Open` now gives the test an in-memory database. The new package `internal/sqlitetest` opens a
+  private `:memory:` database on one connection and loads it with `sqlite3_deserialize` from an image. The
+  test binary migrates that image in memory once. This keeps "Tests copy a migrated registry": every test
+  still starts from a copy, not from a migration (about 1 s each under `-race`). `store.OpenDB` and
+  `registry.OpenDB` run the migrations on a database that the caller opened. They refuse to run outside a
+  test binary (`testing.Testing()`, the same check as the fsx syncs). `store.Open`, `OpenWith` and
+  `registry.Open` do not change, so the DSN, the pool and the file modes of production stay the same.
+  `registrytest.Open` and `OpenWith` are in memory in the same way. The connection is the database. The
+  pool never expires it, and the driver keeps an interrupted in-memory connection. When the connection is
+  lost, every later use fails. It never continues with an empty database.
+
+  `storetest.Open` writes a placeholder at the path, and SQLite refuses that file ("file is not a
+  database"). If the path already holds a file, it fails the test. So code under test that opens the
+  registry by path gets an error. That fails the test only where the code passes the error on: the CLI's
+  notes command, shell completion and daemon-restart's event writer swallow it and go on without the
+  registry, so a test whose code reaches them uses `OpenFile`, as the CLI's notes harness does (a probe
+  that logged each open of a placeholder there found 9 notes tests, 8 failing and 1 passing without the
+  registry, while that harness was in memory, and none once it was on a file). Some tests
+  need a real file: the CLI's commands, `app.New`, the factory's read of magnum's registry, evalrun, and
+  the tests that check WAL, modes, a reopen or two handles. These tests use `storetest.OpenFile` or
+  `registrytest.OpenFile`, which write the old file copy. `Seed` writes the image with a WAL header (bytes
+  18 and 19 set to 2), the same as the old template file. Some tests migrated a fresh registry on disk:
+  the app's `testApp` and the CLI's inspection commands. They now seed it first (a dry run gets none: it
+  must not touch the real registry).
+  The tests' own writers of old-schema files keep their journal in memory and skip the syncs
+  (`sqlitetest.FastFile`).
+
+  This is different from the scratch registry that "The atomic file write skips its disk syncs" tried and
+  left out (`store.Options.Scratch`, 2026-10-14). Production was able to flip that switch. It also kept a
+  file, and the 22 cli and evalrun tests that open the file again were locked out by its exclusive lock.
+  It was measured on wall time, and with the syncs gone there was nothing left to save. Here production
+  has no switch: `OpenDB` takes a database that production never opens, and it refuses to run outside a
+  test binary. The tests that open the file again use `OpenFile` by name, and any other test that does so
+  gets an error where its code opens the path. The measure is bytes written. After the change, measured
+  the same way, the engine wrote 138 MB, pipeline 13, cli 302, factory 79, agents 11, store 177, slots 42,
+  factory/runtime 0.7 and app 25, and the whole suite 843 MB. What is left is mostly files on purpose:
+  the CLI's inspection fixture, whose `app.New` opens a seeded file (216 MB over 285 tests), the store's
+  tests of migrations from old files (172 MB over 28 tests), and the engine's harness files, spread over
+  about 1,300 tests.
+
+  `make test` runs the gate under the lock file `/tmp/magnum-make-test.lock`. It uses lockf on macOS and
+  flock on Linux. Without either, it runs unlocked. While another checkout's gate holds the lock, it says
+  so and waits. After one hour the recipe fails with status 75 (make reports "Error 75" and exits 2).
+  `make test-race PKGS=...` is the focused `-race` run under the same lock, with `-timeout 30m` (the
+  engine alone took 504 s, and 10 minutes ran out beside the other packages), and `mise run test` runs it.
+  A gate runs at most `TEST_P` test binaries at the same time (default 4). This flag does not change the
+  binaries that are linked or the bytes that the tests write. It keeps the memory and CPU of one gate low
+  on a laptop. The lock is not `/tmp/magnum-gate.lock`, which the older `lockf` wrappers of the agents
+  hold. Inside such a wrapper, a gate that takes that lock again waits for its own parent forever
+  (flock(2) locks each open file description). The sub-make of the gate, and a script that holds the lock,
+  set `MAGNUM_GATE_LOCKED=1`. The improve loop's builders and analysts (lens 10's measures) run their
+  `./...` and `-race` runs under the same lock. Two runs are not under the lock: a plain `go test` of one
+  package, and the format gate of the daemon's skill editor (its three packages now write almost nothing).
+  Linking the test binaries is now about a third of what a gate writes: 460 MB as `go test` links them
+  (`-s -w`) and 703 MB under `-race`, measured on master 9b7a813c.
+
+  Rejected: `-ldflags=-w` for the gate (go test already links the binaries it runs with `-s -w`).
+  Rejected: memdb as the default VFS of a test binary (it is global, and it turns WAL into a rollback
+  journal for the file tests too). Rejected: `file::memory:?cache=shared` (one database for each process).
+  Rejected: the relay's journal in memory (its pool holds four connections, and it is the service on the
+  internet).
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
