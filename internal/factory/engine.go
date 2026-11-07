@@ -21,6 +21,7 @@ import (
 	ossignal "os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -299,6 +300,8 @@ type Engine struct {
 	uncounted bool      // a wake: this tick's failures count none (wake)
 	panics    map[int64]int
 	lastFail  map[int64]*stageFails
+	// helds are the live tasks' held waits as the log knows them (logHeld).
+	helds map[int64]*heldLog
 	// publishFails counts the failed tries of each task's publish effect.
 	publishFails map[int64]publishFail
 	readFails    []error
@@ -475,6 +478,7 @@ func New(d Deps) *Engine {
 		procs:        engine.SystemProcesses(),
 		panics:       map[int64]int{},
 		lastFail:     map[int64]*stageFails{},
+		helds:        map[int64]*heldLog{},
 		publishFails: map[int64]publishFail{},
 		inbox:        map[int64][]runtime.Event{},
 		holds:        map[string]*Hold{},
@@ -690,6 +694,53 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 // liveStates are the states of a task the loop advances.
 var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 
+// heldWarnAfter is how long a task's held wait logs at INFO alone: past it,
+// and each heldWarnAfter after, the wait logs at WARN (logHeld).
+const heldWarnAfter = 30 * time.Minute
+
+// heldLog is a task's held wait as the log knows it: the stage it held,
+// what it says, since when it holds and when it last logged at WARN.
+type heldLog struct {
+	stage, wait   string
+	since, warned time.Time
+}
+
+// logHeld logs task t's held wait err (an ErrHeld, which costs the task
+// nothing and is no failure of the tick): at INFO when it begins, nothing
+// while it holds the same (at the same stage, in the same words: a number
+// that moves is the same wait, sameWords), and at WARN once it has held
+// heldWarnAfter, then each heldWarnAfter after. A wait in other words ends
+// the one before (endHeld) and begins.
+func (e *Engine) logHeld(t registry.Task, err error, now time.Time) {
+	wait := err.Error()
+	h := e.helds[t.ID]
+	if h != nil && (h.stage != t.Stage || !sameWords(h.wait, wait)) {
+		e.endHeld(t.ID, now)
+		h = nil
+	}
+	if h == nil {
+		e.helds[t.ID] = &heldLog{stage: t.Stage, wait: wait, since: now}
+		e.log.Info("a factory task waits", "task", t.ID, "stage", t.Stage, "wait", wait)
+		return
+	}
+	h.wait = wait
+	if now.Sub(cmp.Or(h.warned, h.since)) >= heldWarnAfter {
+		h.warned = now
+		e.log.Warn("a factory task still waits", "task", t.ID, "stage", t.Stage, "wait", wait, "for", now.Sub(h.since).Round(time.Second))
+	}
+}
+
+// endHeld logs the end of task id's held wait, when it has one, with how
+// long it held.
+func (e *Engine) endHeld(id int64, now time.Time) {
+	h := e.helds[id]
+	if h == nil {
+		return
+	}
+	delete(e.helds, id)
+	e.log.Info("a factory task's wait ended", "task", id, "stage", h.stage, "wait", h.wait, "after", now.Sub(h.since).Round(time.Second))
+}
+
 // Tick runs one pass of the loop: the holds (herdr, disk and memory, then
 // the infrastructure hold and a MySQL ping before a pass that advances),
 // the requests, the published tasks' PRs (followPRs, whether or not the
@@ -699,7 +750,8 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 // base run left detached is swept (sweepDetached, each under safely too); a
 // failure that a hold covers costs its task nothing. Last, the alerts are
 // delivered (deliverAlerts). The returned error joins what failed, for the
-// log; each step records its own.
+// log; each step records its own. A task's held wait is no error of the
+// tick: logHeld logs it once, at WARN only past heldWarnAfter.
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -747,7 +799,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if tasks, err = e.reg.Tasks(ctx); err != nil { // the requests may have moved some
 			return fmt.Errorf("factory tick: %w", err)
 		}
-		for _, t := range live(tasks) {
+		lt := live(tasks)
+		for _, t := range lt {
 			if e.draining.Load() { // the task in progress ended its pass; the next daemon advances the others
 				break
 			}
@@ -755,10 +808,19 @@ func (e *Engine) Tick(ctx context.Context) error {
 			switch {
 			case err == nil:
 				delete(e.lastFail, t.ID)
-			case errors.Is(err, ErrHeld), errors.Is(err, errPanicked), herdrDown(err), ctx.Err() != nil:
+				e.endHeld(t.ID, now)
+			case errors.Is(err, ErrHeld):
+				e.logHeld(t, err, now) // a wait, logged by itself: no error of the tick, so no WARN each tick
+			case errors.Is(err, errPanicked), herdrDown(err), ctx.Err() != nil:
 				errs = append(errs, err) // herdr down inside the pass: herdr's hold covers it, no failure of the task
 			default:
+				e.endHeld(t.ID, now)
 				failures = append(failures, taskFailure{task: t, err: err})
+			}
+		}
+		for id := range e.helds { // a task that left the live states waits no more
+			if !slices.ContainsFunc(lt, func(t registry.Task) bool { return t.ID == id }) {
+				e.endHeld(id, now)
 			}
 		}
 	}

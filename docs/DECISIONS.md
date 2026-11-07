@@ -16673,6 +16673,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestASpendLevelTableSetsAFactoryRolesModel, TestRolesPrintsTheFactoryRolesAtTheirSpendLevel and
   TestConfigNamesTheSpendLevelOfTheReviewAndFactoryRoles; TestTheDefaultConfigKeepsEveryFactoryRolesModel
   holds every factory role's model and effort under the default config, before and after.
+- **A task's held wait logs once at INFO, and at WARN only past 30 minutes** (2026-11-07, the factory audit's
+  independent report, item 10). `Tick` joined every `ErrHeld` of a task's advance into its error, and the
+  daemon's loop logged each tick's error at WARN (`factory tick`), so a wait that costs the task nothing came
+  back every 45 seconds as a warning: on 11-06, 45 lines of "agent: you're in the fx-critic pane; ..." and 32
+  of "magnum: a review round of magnum's runs; the local review yields to it", and a failure that needed the
+  operator hid among them. Now a held wait is no error of the tick: `logHeld` logs "a factory task waits" at
+  INFO when it begins (the task, its stage, the wait), nothing while it holds the same (the same stage and
+  words; a number that moves is the same wait, `sameWords`), "a factory task still waits" at WARN once it has
+  held `heldWarnAfter` (30 minutes, the infrastructure hold's NEEDS YOU threshold) and every 30 minutes after,
+  with how long, and "a factory task's wait ended" at INFO with how long it held when the stage passes or
+  fails, the wait says other words (which begins the next one) or the task leaves the live states. A tick
+  that advances nothing (herdr down, the infrastructure hold) logs nothing for the waits: those holds log
+  their own lines. The registry's wait spans (`waitOn`) are unchanged, and `factory tick` at WARN is left to
+  failures, panics and herdr going down inside a pass. Rejected: dropping the waits from the log (their
+  beginnings and ends are the evidence of where a task spent its time); a WARN when a wait begins (most
+  waits are routine and short); a summary line per tick (a line every 45 seconds again); an event row per
+  wait (the spans record them). Tests, failing first: TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold and
+  TestAHeldWaitsEndLogsHowLongItHeld.
 
 ## Learned rules
 

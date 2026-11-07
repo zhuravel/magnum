@@ -12379,8 +12379,9 @@ func (e *Engine) Tick(ctx context.Context) error
     hold's tries, and while herdr does not answer no copy a base run left
     detached is swept (sweepDetached, each under safely too); a failure that
     a hold covers costs its task nothing. Last, the alerts are delivered
-    (deliverAlerts). The returned error joins what failed, for the log; each
-    step records its own.
+    (deliverAlerts). The returned error joins what failed, for the log;
+    each step records its own. A task's held wait is no error of the tick:
+    logHeld logs it once, at WARN only past heldWarnAfter.
 
 type ErrRunning struct {
 	PID  int
