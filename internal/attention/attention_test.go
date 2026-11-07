@@ -162,6 +162,27 @@ func TestExplainNamesTheFixerItsReportAndTheRemedies(t *testing.T) {
 	}
 }
 
+// A fix job's attention that counts the calls the fixer left you (a
+// description finding among them, which no thread shows done) names
+// `magnum fix --done` for once you did them all: the PR goes back to
+// reviewed with no review, where a review of the same head only to clear
+// the attention would cost a round. One that asks for something else (a
+// failed run, the cap) does not: nothing there is yours to mark done.
+func TestTheFixersCallsNameFixDone(t *testing.T) {
+	const report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+	const done = "`magnum fix --done talkable#2` once you did all it left (back to reviewed, no review runs)"
+	for msg, want := range map[string]bool{
+		"fix: 2 findings need your call: " + report:                                                                 true,
+		"fix: 1 finding needs your call (5808905525 description): " + report:                                        true,
+		"fix run failed: the fixer's push failed: " + report:                                                        false,
+		"5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the fixes: " + report: false,
+	} {
+		if fix := Explain(KindFix, msg, "talkable#2").Fix; strings.Contains(fix, done) != want {
+			t.Errorf("%q\n fix %q\n names --done: %v, want %v", msg, fix, !want, want)
+		}
+	}
+}
+
 // A fix reason too long for the toast's one line keeps the counts, which come
 // first, and drops the report's path, which the next step names in full,
 // instead of cutting the path in the middle.

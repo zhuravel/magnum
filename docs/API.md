@@ -9582,14 +9582,19 @@ func ParseFixOff(s string) (FixOff, bool)
 
 type FixPayload struct {
 	PRTarget
-	DryRun bool `json:"dry_run,omitempty"`
-	Off    bool `json:"off,omitempty"`
-	On     bool `json:"on,omitempty"`
+	DryRun bool   `json:"dry_run,omitempty"`
+	Off    bool   `json:"off,omitempty"`
+	On     bool   `json:"on,omitempty"`
+	Done   bool   `json:"done,omitempty"`
+	Seen   string `json:"seen,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it
-    (Off: autofix leaves it alone, KVPRFixOff) or on again (On). Neither Off nor
-    On starts a loop.
+    (Off: autofix leaves it alone, KVPRFixOff) or on again (On), or say that you
+    did what a loop left you (Done: the PR goes back to reviewed with no round,
+    fix_done.go; Seen is the attention you saw, the PR's last_error when you
+    asked, and a PR whose attention changed since is refused). None of Off,
+    On and Done starts a loop.
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".

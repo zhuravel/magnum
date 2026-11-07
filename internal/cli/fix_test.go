@@ -406,6 +406,66 @@ func TestFixOffAndOnQueueTheirRequests(t *testing.T) {
 	}
 }
 
+// --done says you did what a fix loop left you: it shows the attention you
+// mark done, asks its own y/N (only y confirms), sends the payload's Done
+// with that attention as Seen (the daemon refuses a PR whose attention
+// changed since), follows nothing, and goes alone: with --off, --on or
+// --wait it is a usage error that queues nothing.
+func TestFixDoneShowsAsksAndSendsTheAttentionYouSaw(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	pr := h.seedPR("talkable/talkable", 5, store.PRNeedsAttention)
+	const msg = "fix: 1 finding needs your call (5808905525 description): /state/reviews/talkable/talkable/5/abc1234def56/claude-fix.md"
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", msg) }); err != nil {
+		t.Fatal(err)
+	}
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	const answer = "PR #5 is back to reviewed at abc1234: you did what the fixer left; no review runs"
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, answer) }
+
+	h.stdin("n\n")
+	if code := h.cmd("fix", "5", "--done"); code != 1 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "  needs you: "+msg, "Mark what the fixer left on talkable#5 done (back to reviewed, no review)? [y/N]")
+	actContains(t, h.errb.String(), "nothing changed")
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("queued without a y: %+v", reqs)
+	}
+
+	h.stdin("y\n")
+	h.out.Reset()
+	if code := h.cmd("fix", "5", "--done"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), answer)
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqFix {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !p.Done || p.Seen != msg || p.Off || p.On || p.DryRun || p.Number != 5 {
+		t.Fatalf("payload = %+v", p)
+	}
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"5", "--done", "--off"}, "--done goes alone, without --off or --on"},
+		{[]string{"5", "--done", "--on"}, "--done goes alone, without --off or --on"},
+		{[]string{"5", "--done", "--wait"}, "--done starts no loop, so there is nothing for --wait to follow"},
+	} {
+		h.errb.Reset()
+		if code := h.cmd("fix", tc.args...); code != 2 {
+			t.Errorf("fix %v: exit %d, want 2", tc.args, code)
+		}
+		actContains(t, h.errb.String(), "magnum fix: "+tc.want, "usage: magnum fix ")
+	}
+	if got := len(h.requests()); got != 1 {
+		t.Errorf("a usage error queued %d requests", got-1)
+	}
+}
+
 // A PR argument is required, and only one.
 func TestFixNeedsOnePR(t *testing.T) {
 	h := newActHarness(t)
@@ -863,12 +923,12 @@ func TestFixMainTakesTheScreensOptions(t *testing.T) {
 	h.d.StdinTTY, h.d.StdoutTTY = true, true
 	h.stdin("")
 	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, fixAnswer) }
-	for i, o := range []fixOpts{{yes: true}, {yes: true, off: true}, {yes: true, on: true}} {
+	for i, o := range []fixOpts{{yes: true}, {yes: true, off: true}, {yes: true, on: true}, {yes: true, done: true}} {
 		if code := fixMain(h.ctx, h.c, h.d, "talkable#5", o); code != 0 {
 			t.Fatalf("%+v: exit %d: %s", o, code, h.errb.String())
 		}
 		p := actDecode[engine.FixPayload](t, h.requests()[i].Payload)
-		if p.Off != o.off || p.On != o.on || p.Number != 5 {
+		if p.Off != o.off || p.On != o.on || p.Done != o.done || p.Number != 5 {
 			t.Errorf("%+v: payload %+v", o, p)
 		}
 	}

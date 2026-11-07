@@ -3218,6 +3218,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt,
   TestTheFixJobTellsTheFixerThatThePRIsTheOperatorsOwn.
 
+- **`magnum fix --done` lifts a loop's Needs you on your word, with no review** (2026-11-07, asked by the
+  operator). An own PR's loop ended in needs attention, kind fix, with one call: change a line of the PR's
+  description. The operator made the edit on GitHub by hand, and nothing then cleared the attention short of
+  a review of the same head (`r`, the judge alone; `R`, `i` and `--fresh` run every reviewer), a push, or
+  `magnum ignore` then `unmute`, which parks the PR's sessions and frees its slot. Neither a daemon restart
+  (`retryParked` retries `failed` parks only) nor `autofix = "open"` (its look lifts only its own raise, and
+  starts no loop over a PR that needs attention) touches it, and a description entry has no thread, so no
+  read of GitHub can ever show it done (`freshNeedsYou` keeps it as it is). Now `magnum fix --done <ref>`
+  (`FixPayload.Done`) says that you did the fixer's calls: the PR goes from needs_attention back to reviewed
+  in one compare-and-set on its head, its reviewed head and the attention's words, the attention's rows go,
+  and a `fix.acknowledged` event names the head whose review stands; no round runs and nothing is read from
+  GitHub. A person's item never closes on the fixer's word alone, so it closes on yours, and only when what
+  you mark done is all there is: an attention that counts the fixer's calls (`attention.FixAsks`; not the cap,
+  a failed run, the look's raise or a round's attention, which ask for something else), the one you saw
+  (`FixPayload.Seen`, the PR's `last_error` when the command asked: a loop that ended meanwhile with new calls
+  is refused), on the head Magnum reviewed, with no loop running and no fix held for later. The attention's
+  next step names it after the report (`fixRemedy`), and the CLI shows the attention before its y/N.
+  Rejected: lifting it when the look sees the named items closed (a description entry or a decision is never
+  readable, so the case at hand would still need your word, and the look's ledger holds only its own items'
+  keys), a judge-alone review as the intended way (a round, and possibly a posted review, to clear a word
+  the operator can give), and making restarts or `autofix = "open"` lift it (both would close calls nobody
+  answered). Tests, failing first: TestFixDoneLiftsWhatTheFixerLeftWithoutAReview,
+  TestFixDoneRefusesWhatIsNotTheFixersCalls, TestFixDoneRefusesWhileSomethingIsUnknown, TestFixDoneGoesAlone,
+  TestTheFixersCallsNameFixDone, TestFixDoneShowsAsksAndSendsTheAttentionYouSaw.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

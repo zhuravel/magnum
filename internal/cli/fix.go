@@ -3,7 +3,8 @@ package cli
 // `magnum fix`: ask the daemon to start a fix loop on the operator's own PR
 // (a fixer agent fixes magnum's findings, then the push is re-reviewed, up to
 // [pipeline] fix_cycles times; engine/fix.go), to leave the PR out of autofix
-// (--off) or to put it back (--on). The daemon decides and answers with the
+// (--off) or to put it back (--on), or to say that the operator did what a
+// loop left them (--done: back to reviewed, no round). The daemon decides and answers with the
 // sentence this prints, the refusals included; --wait follows the loop with
 // the review follower until the loop's row is gone and says how it ended.
 
@@ -24,7 +25,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
+const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
 
 // fixDefaultTimeout is how long --wait follows a loop by default.
 const fixDefaultTimeout = reviewDefaultTimeout
@@ -38,8 +39,8 @@ const fixEndGrace = 3
 const fixEventWindow = 200
 
 type fixOpts struct {
-	off, on, wait, dryRun, json, yes bool
-	timeout                          time.Duration // --timeout: stop following after this long (0 = no limit)
+	off, on, done, wait, dryRun, json, yes bool
+	timeout                                time.Duration // --timeout: stop following after this long (0 = no limit)
 }
 
 func newFixCmd(c *Context) *cobra.Command {
@@ -72,11 +73,17 @@ func newFixCmd(c *Context) *cobra.Command {
 			"other reviewers' threads and comments, that they were not read); --timeout (default 2h, 0 = no limit) "+
 			"stops following it after that long, and the loop goes on; `magnum abort` stops a loop. --off takes the PR out "+
 			"of autofix ([pipeline] autofix = \"own\"), so its findings stay yours (a `magnum fix` you ask for still runs, "+
-			"with a note), and --on puts it back; both ask y/N and start no loop. --dry-run only asks the daemon what would happen.",
+			"with a note), and --on puts it back; both ask y/N and start no loop. --done says you did what a loop left you "+
+			"(its Needs you, such as a change to the PR's description you made on GitHub): it shows that attention, asks y/N, "+
+			"and the PR goes back from needs attention to reviewed at the head magnum reviewed, with no review and no loop. "+
+			"The daemon refuses it for an attention that is not the fixer's calls (its cap, a failed run, a round's), one that "+
+			"changed since you looked, a head magnum has not reviewed, a loop that runs and a fix held for later. "+
+			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.off, "off", false, "take the PR out of autofix: its findings stay yours (starts no loop)")
 	fs.BoolVar(&o.on, "on", false, "put the PR back into autofix (starts no loop)")
+	fs.BoolVar(&o.done, "done", false, "you did what the fix loop left you: back to reviewed with no review (starts no loop)")
 	fs.BoolVar(&o.wait, "wait", false, "follow the loop until it ends: clean, needs you, pushed nothing, aborted or ended")
 	fs.DurationVar(&o.timeout, "timeout", fixDefaultTimeout, "with --wait: stop following after this `duration` (0 = no limit); the loop goes on")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "ask the daemon what would happen; nothing is started or changed")
@@ -92,6 +99,10 @@ func runFix(c *Context, o fixOpts, pos []string) int {
 		return actUsage(c, "fix", "which PR?", fixUsage)
 	case len(pos) > 1:
 		return actUsage(c, "fix", "one PR at a time", fixUsage)
+	case o.done && (o.off || o.on):
+		return actUsage(c, "fix", "--done goes alone, without --off or --on", fixUsage)
+	case o.done && o.wait:
+		return actUsage(c, "fix", "--done starts no loop, so there is nothing for --wait to follow", fixUsage)
 	case o.off && o.on:
 		return actUsage(c, "fix", "--off and --on exclude each other", fixUsage)
 	case (o.off || o.on) && o.wait:
@@ -163,12 +174,18 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		reviewDescribe(ctx, c.Stdout, d, t, label, false, o.dryRun)
 	}
 	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on}
+	if o.done { // the attention you mark done: the daemon refuses one that changed since
+		payload.Done, payload.Seen = true, store.Deref(t.PR.LastError)
+		if !o.json && payload.Seen != "" {
+			fmt.Fprintln(c.Stdout, "  needs you: "+payload.Seen)
+		}
+	}
 	if o.dryRun {
 		out.Payload = &payload
 		b, _ := json.Marshal(payload)
 		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); nothing is changed\n", engine.ReqFix, b)
 	}
-	if t.PR.Pinned && !o.off && !o.on {
+	if t.PR.Pinned && !o.off && !o.on && !o.done {
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
 	if code, ok := fixConfirm(ctx, c, d, label, o); !ok {
@@ -196,7 +213,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	if !o.json {
 		res.print(c.Stdout, c.Stderr)
 	}
-	if !o.wait || o.dryRun || o.off || o.on || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
+	if !o.wait || o.dryRun || o.off || o.on || o.done || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
 		if o.json {
 			if pr, err := d.Store.PRByID(ctx, t.PR.ID); err == nil {
 				out.State = pr.State
@@ -237,6 +254,8 @@ func fixConfirm(ctx context.Context, c *Context, d *actDeps, label string, o fix
 		question, declined = fmt.Sprintf("Leave the findings of %s to you (no autofix)?", label), "nothing changed"
 	case o.on:
 		question, declined = fmt.Sprintf("Autofix %s again?", label), "nothing changed"
+	case o.done:
+		question, declined = fmt.Sprintf("Mark what the fixer left on %s done (back to reviewed, no review)?", label), "nothing changed"
 	}
 	if o.json {
 		return actUsage(c, "fix", "--json needs --yes to apply (a terminal asks y/N first); "+declined, fixUsage), false

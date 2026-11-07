@@ -453,14 +453,19 @@ func fixCause(line string) string {
 // fixRemedy is the next step of a fix job's attention: the fixer's report
 // when chain names one, with the fixer named by the report's file name (a
 // role's report is <role>.md unless the role sets another output), else
-// the fixer's pane; then `magnum fix` for another loop once the author
-// answered what it left, and `magnum abort` for a loop still running.
+// the fixer's pane; then, when chain counts the calls the fixer left
+// (FixAsks), `magnum fix --done` for once the author did them all; then
+// `magnum fix` for another loop once the author answered what it left,
+// and `magnum abort` for a loop still running.
 func fixRemedy(chain, ref string) string {
 	who, report := "the fixer", lastReport(chain)
 	if report != "" {
 		who = strings.TrimSuffix(filepath.Base(report), ".md")
 	}
 	again := "`magnum fix " + ref + "` runs " + who + " again once you answered what it left; `magnum abort " + ref + "` stops a loop still running"
+	if FixAsks(chain) {
+		again = "`magnum fix --done " + ref + "` once you did all it left (back to reviewed, no review runs); " + again
+	}
 	if report == "" {
 		return "`magnum open " + ref + "` shows " + who + "'s pane; " + again
 	}

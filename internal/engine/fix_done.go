@@ -1,0 +1,84 @@
+package engine
+
+// `magnum fix --done` (the board's d): you did what a fix loop left you, its
+// Needs you, so the PR goes back from needs_attention to reviewed at the
+// head whose review stands, and no round runs. Magnum cannot read every such
+// item as done: a finding about the PR's description has no thread, a call
+// can be a decision made elsewhere, and the look of autofix = "open" lifts
+// only its own raise (fix_open_needs.go). A person's item never closes on
+// the fixer's word, so it closes on yours: the lift takes only the fixer's
+// calls (attention.FixAsks; not its cap, a failed run, the look's raise or a
+// round's attention), only the attention you saw (FixPayload.Seen), only on
+// the head magnum reviewed, and never while a loop runs or a fix is held,
+// whose end could leave you something new.
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
+)
+
+// fixDoneBy is who lifts a loop's Needs you (the fix.acknowledged event).
+const fixDoneBy = "magnum fix --done"
+
+// fixDone serves `magnum fix --done` on pr: it moves the PR from
+// needs_attention back to reviewed under the refusals above, with one
+// compare-and-set on the head, the reviewed head and the attention's words
+// it read, and drops the attention's rows. seen is the attention the
+// operator saw ("" = whatever the PR's is now); a dry run answers what it
+// would do.
+func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen string, dry bool) (string, error) {
+	ref, msg := repo.FullName()+"#"+fmt.Sprint(pr.Number), deref(pr.LastError)
+	look := "`magnum status " + ref + "` says what"
+	if pr.State != store.PRNeedsAttention {
+		return "", fmt.Errorf("PR #%d needs nothing of you (%s): `magnum fix --done` answers what a fix loop left you", pr.Number, pr.State)
+	}
+	if kind, _ := e.getKV(ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
+		return "", fmt.Errorf("PR #%d needs attention for %s, not for what the fixer left you: %s",
+			pr.Number, cmp.Or(kind, "a reason magnum did not record"), look)
+	}
+	switch reviewed := deref(pr.ReviewedSHA); {
+	case !attention.FixAsks(msg):
+		return "", fmt.Errorf("PR #%d's fix loop asks for something else than calls you can mark done (%s): %s",
+			pr.Number, oneLine(msg, 200), look)
+	case seen != "" && seen != msg:
+		return "", fmt.Errorf("PR #%d needs you for something else since you looked: %s; nothing changed", pr.Number, look)
+	case reviewed != pr.HeadSHA:
+		return "", fmt.Errorf("PR #%d's head %s is not the one magnum reviewed (%s): its review comes first; nothing changed",
+			pr.Number, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(reviewed))
+	}
+	switch st, running, err := e.fixState(ctx, pr.ID); {
+	case err != nil:
+		return "", err
+	case running:
+		return "", errors.New(fixRunningSentence(st))
+	}
+	if _, held := e.getKV(ctx, KVPRFixHeld(pr.ID)); held {
+		return "", fmt.Errorf("a fix of PR #%d is held to start later: `magnum abort %s` takes it back first", pr.Number, ref)
+	}
+	head := textx.ShortSHA(pr.HeadSHA)
+	if dry {
+		return fmt.Sprintf("dry run: would put PR #%d back to reviewed at %s, with no review", pr.Number, head), nil
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, store.PRReviewed, func(u *store.PRUpdate) {
+		u.Set("last_error", nil)
+		u.Where("head_sha", pr.HeadSHA)
+		u.Where("reviewed_sha", pr.HeadSHA)
+		u.Where("last_error", msg)
+	})
+	if errors.Is(err, store.ErrConflict) {
+		return "", fmt.Errorf("PR #%d moved on while you answered: %s; nothing changed", pr.Number, look)
+	}
+	if err != nil {
+		return "", err
+	}
+	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.acknowledged",
+		"you did what the fixer left: the review of "+head+" stands, with no new round", map[string]any{"head": pr.HeadSHA, "by": fixDoneBy})
+	return fmt.Sprintf("PR #%d is back to reviewed at %s: you did what the fixer left; no review runs", pr.Number, head), nil
+}
