@@ -9929,7 +9929,8 @@ type KindVersion struct {
 	// Path is the binary read, its links resolved: the file mise's shim
 	// runs (`mise which <kind>`) for a command that is one; MTime is its
 	// modification time then. The version command runs again only once
-	// either differs.
+	// either differs, or at every health check while the shim stands for
+	// the binary because `mise which` is slow.
 	Path  string    `json:"path"`
 	MTime time.Time `json:"mtime"`
 	// SeenAt is when the version was read.

@@ -493,6 +493,11 @@ type Engine struct {
 	// (kvPRWhiteboardPending): a drain that ends without a restart makes the
 	// pending whiteboards (continueAfterDrain), as the restart's start would.
 	drainWhiteboards bool
+	// slowWhiteboards is set (guarded by mu) when a status check of
+	// Whiteboard that timed out, or its wait, skipped a whiteboard after a
+	// posted review and remembered it: the tick that finds the wait over
+	// makes the pending whiteboards (continueSlowWhiteboards).
+	slowWhiteboards bool
 	// pendingWhiteboardsMu keeps two passes over the pending whiteboards
 	// (startPendingWhiteboards) from taking the same entry.
 	pendingWhiteboardsMu sync.Mutex
@@ -579,7 +584,8 @@ type Engine struct {
 	machineToasted map[string]time.Time
 	// cliRead is, by agent kind, the binary whose version this run read or
 	// found recorded (cli_version.go): the version command runs again only
-	// once the binary changed; cliFails, by agent kind, the reads that
+	// once the binary changed, or at every check while mise's shim stands
+	// for it because `mise which` is slow; cliFails, by agent kind, the reads that
 	// failed and left no stamp, tried again at every health check; cliWhich,
 	// by agent kind, the backoff of its `mise which` (probe_backoff.go). Tick
 	// goroutine only (startup and health).

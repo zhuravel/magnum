@@ -467,7 +467,8 @@ whiteboard = false                # true: writes a whiteboard (an interactive do
                                   # Desktop running, or `whiteboard server start`, and the `whiteboard` CLI on
                                   # PATH; a Whiteboard that is down skips the whiteboard, it does not wait,
                                   # and one whose status check timed out is not asked again for 2 minutes,
-                                  # doubling up to 30 (`magnum whiteboard` asks at once). false asks nothing.
+                                  # doubling up to 30 (`magnum whiteboard` asks at once); the whiteboards
+                                  # skipped meanwhile are made once it answers. false asks nothing.
                                   # [[watch]] may override
 whiteboard_role = "claude-whiteboard"   # the role with whiteboard = true that writes it. "" = no whiteboard job,
                                   # by hand or automatic. [[watch]] may override

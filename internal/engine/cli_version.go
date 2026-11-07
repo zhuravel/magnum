@@ -73,7 +73,8 @@ type KindVersion struct {
 	// Path is the binary read, its links resolved: the file mise's shim
 	// runs (`mise which <kind>`) for a command that is one; MTime is its
 	// modification time then. The version command runs again only once
-	// either differs.
+	// either differs, or at every health check while the shim stands for
+	// the binary because `mise which` is slow.
 	Path  string    `json:"path"`
 	MTime time.Time `json:"mtime"`
 	// SeenAt is when the version was read.
@@ -135,8 +136,9 @@ func (e *Engine) checkCLIVersion(ctx context.Context, kind string) {
 	cmd, err := e.d.LookPath(kind)
 	if err == nil {
 		var stamp cliStamp
-		if stamp, err = e.cliStamp(ctx, kind, cmd); err == nil {
-			e.readCLIVersion(ctx, kind, cmd, stamp)
+		var blind bool
+		if stamp, blind, err = e.cliStamp(ctx, kind, cmd); err == nil {
+			e.readCLIVersion(ctx, kind, cmd, stamp, blind)
 			return
 		}
 	}
@@ -146,9 +148,13 @@ func (e *Engine) checkCLIVersion(ctx context.Context, kind string) {
 }
 
 // readCLIVersion is checkCLIVersion for kind's command cmd, which runs the
-// binary stamp.
-func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cliStamp) {
-	if e.cliRead[kind] == stamp {
+// binary stamp. blind: stamp is mise's shim standing for the binary while
+// `mise which` is slow (cliStamp), which no install changes, so the version
+// is read through it at each check and recorded only once it differs from
+// the one recorded; an install mise makes meanwhile (as on 2026-10-16) is
+// recorded at the next check, not when the wait of `mise which` ends.
+func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cliStamp, blind bool) {
+	if e.cliRead[kind] == stamp && !blind {
 		return
 	}
 	key := KVKindVersion(kind)
@@ -159,7 +165,8 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 			return // a stop cut the read: the next start reads it again
 		}
 	}
-	if had && prev.Path == stamp.path && prev.MTime.Equal(stamp.mtime) {
+	same := had && prev.Path == stamp.path && prev.MTime.Equal(stamp.mtime)
+	if same && !blind {
 		e.cliRead[kind] = stamp
 		return
 	}
@@ -173,6 +180,9 @@ func (e *Engine) readCLIVersion(ctx context.Context, kind, cmd string, stamp cli
 	if f := e.cliFails[kind]; f != nil {
 		failed = f.run
 		f.run, f.unknown = 0, false
+	}
+	if same && version == prev.Version && failed == 0 {
+		return // blind, and the shim still runs the version recorded
 	}
 	now := e.now()
 	v := KindVersion{Version: version, Path: stamp.path, MTime: stamp.mtime, SeenAt: now, Previous: prev.Previous, ChangedAt: prev.ChangedAt}
@@ -342,30 +352,33 @@ func cliFailureCause(err error) string {
 // cmd with its links resolved, except that a mise shim, a link to mise
 // itself, runs the version mise picks when it runs, which `mise which
 // <kind>` names (the shim's own file never changes; miseWhich). When mise
-// cannot answer, the shim stands for itself.
-func (e *Engine) cliStamp(ctx context.Context, kind, cmd string) (cliStamp, error) {
+// cannot answer, the shim stands for itself; blind says that it does
+// because `mise which` timed out or waits after a timeout, so the stamp
+// cannot tell an install (readCLIVersion).
+func (e *Engine) cliStamp(ctx context.Context, kind, cmd string) (stamp cliStamp, blind bool, err error) {
 	path, err := filepath.EvalSymlinks(cmd)
 	if err != nil {
-		return cliStamp{}, err
+		return cliStamp{}, false, err
 	}
 	if filepath.Base(path) == "mise" {
-		if bin, ok := e.miseWhich(ctx, kind, path); ok {
+		var bin string
+		if bin, blind = e.miseWhich(ctx, kind, path); bin != "" {
 			path = bin
 		}
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		return cliStamp{}, err
+		return cliStamp{}, false, err
 	}
-	return cliStamp{path: path, mtime: fi.ModTime()}, nil
+	return cliStamp{path: path, mtime: fi.ModTime()}, blind, nil
 }
 
 // miseWhich is the binary `mise which <kind>` names, its links resolved,
-// for the mise binary mise; false when mise does not answer, or while its
+// for the mise binary mise; "" when mise does not answer, or while its
 // last ask timed out (e.cliWhich: no ask before the backoff's wait ends),
 // so that the shim stands for itself, as it does for a mise that cannot
-// answer.
-func (e *Engine) miseWhich(ctx context.Context, kind, mise string) (string, bool) {
+// answer. slow: this ask timed out, or none ran for the wait.
+func (e *Engine) miseWhich(ctx context.Context, kind, mise string) (bin string, slow bool) {
 	b := e.cliWhich[kind]
 	if b == nil {
 		b = &probeBackoff{}
@@ -373,10 +386,11 @@ func (e *Engine) miseWhich(ctx context.Context, kind, mise string) (string, bool
 	}
 	now := e.now()
 	if _, _, waiting := b.waiting(now); waiting {
-		return "", false
+		return "", true
 	}
 	res, err := e.d.Runner.Run(ctx, execx.Cmd{Name: mise, Args: []string{"which", kind}, Timeout: cliVersionTimeout, Label: "mise which " + kind})
-	next := b.asked(now, probeTimedOut(ctx, err))
+	timedOut := probeTimedOut(ctx, err)
+	next := b.asked(now, timedOut)
 	if err != nil {
 		if e.logOnce("cli-mise:"+kind, err.Error(), now) {
 			attrs := []any{"kind", kind, "err", err}
@@ -385,14 +399,16 @@ func (e *Engine) miseWhich(ctx context.Context, kind, mise string) (string, bool
 			}
 			e.log.Info("mise does not say which binary its shim runs; the shim stands for it", attrs...)
 		}
-		return "", false
+		return "", timedOut
 	}
-	bin := strings.TrimSpace(textx.FirstLine(string(res.Stdout)))
-	if bin == "" {
+	if bin = strings.TrimSpace(textx.FirstLine(string(res.Stdout))); bin == "" {
 		return "", false
 	}
 	p, err := filepath.EvalSymlinks(bin)
-	return p, err == nil
+	if err != nil {
+		return "", false
+	}
+	return p, false
 }
 
 // cliVersion is the first line cmd --version prints (redacted, at most

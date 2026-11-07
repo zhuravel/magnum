@@ -31,6 +31,7 @@ type probeBackoff struct {
 	wait time.Duration // the last wait (0: the last ask did not time out)
 	at   time.Time     // when the last ask that timed out started
 	next time.Time     // no ask before this
+	ok   time.Time     // when the latest ask that did not time out started
 }
 
 // waiting reports whether the probe is in its wait at now, and if so when
@@ -46,13 +47,25 @@ func (b *probeBackoff) waiting(now time.Time) (at, next time.Time, ok bool) {
 // returns when the probe may be asked again; anything else ends the wait
 // (zero time). An ask that started inside the wait (one that ran beside the
 // ask that started it, or `magnum whiteboard`, which does not wait) and
-// timed out keeps the wait as it is, from its own start.
+// timed out keeps the wait as it is, from its own start. The timeout of an
+// ask that started before one that did not time out (two reviews' checks
+// side by side) is stale: the probe answered since, so it starts no wait
+// and keeps any a later timeout started.
 func (b *probeBackoff) asked(now time.Time, timedOut bool) time.Time {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !timedOut {
 		b.wait, b.at, b.next = 0, time.Time{}, time.Time{}
+		if now.After(b.ok) {
+			b.ok = now
+		}
 		return time.Time{}
+	}
+	if now.Before(b.ok) {
+		if b.wait == 0 {
+			return time.Time{}
+		}
+		return b.next
 	}
 	switch {
 	case b.wait == 0:

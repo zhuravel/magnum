@@ -15418,23 +15418,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   only what the last ask had said. A probe whose command runs out its timeout now waits (`probeBackoff`): 2
   minutes, doubled each time it runs out again, up to 30. An answer, or a failure that is no timeout (it costs
   nothing), ends the wait, and a daemon stopping is no timeout; an ask that started inside the wait (two
-  reviews posted together, or `magnum whiteboard`) and timed out does not double it. During the wait `mise
-  which` is not run and the shim stands for the binary, as it always did when mise does not answer, so no
-  version read runs again; a review's whiteboard runs no check and is skipped with "Whiteboard did not answer
-  its status check in 15s at 14:02; a review asks again from 14:04, `magnum whiteboard` at once" (a timeout
-  used to read "Whiteboard is not running"), while `magnum whiteboard` always asks, and its answer ends the
-  wait. Nothing is cached: a wait replays the failure the last ask had, never an answer, and a version read
-  that fails is counted toward `kind.version_unknown` as before. `magnum doctor` runs its own checks and never
-  waits. With whiteboards off (`[pipeline] whiteboard = false`, as the operator set it on 11-06) no review
-  runs the status check at all: autoWhiteboard returns before it, and only `magnum whiteboard` asks
+  reviews posted together, or `magnum whiteboard`) and timed out does not double it, and one that started
+  before an ask that answered (two reviews' checks side by side, the later one answering) starts no wait at
+  all: the probe answered since. Mise may answer again, and Whiteboard come back, long before a wait ends (up
+  to 30 minutes), when each ask of the old way would have seen it; so the wait must not hide what the next
+  ask would have found. During the wait `mise which` is not run and the shim stands for the binary, as it
+  always did when mise does not answer; no install changes the shim's stamp, so each health check reads the
+  version through it (`codex --version`, as the launches run it; the logs since 10-20 have one such read that
+  ran out its 15 s, against 233 `mise which codex`) and records a new version at once, an unchanged one
+  nothing. An install in the wait, such as the 10-16 one that died at launch, is thus recorded at the next
+  check, and the PRs its launches park name it; a version read that fails is counted toward
+  `kind.version_unknown` as before. A review's whiteboard runs no check during the wait and is skipped with
+  "Whiteboard did not answer its status check in 15s at 14:02 (asked again from 14:04, `magnum whiteboard`
+  at once); it is made once Whiteboard answers" (a timeout used to read "Whiteboard is not running", and its
+  skip was final); the skip is remembered as a drain's is (kv `pr.<id>.whiteboard_pending`, marked `slow`),
+  and the first tick that finds the wait over, whether it ran out or a check that answered ended it, makes
+  the pending whiteboards (`continueSlowWhiteboards`): the pass's first one asks, and when that check runs
+  out too the others are skipped without asking and wait for the next wait's end. One whose PR moved on is
+  dropped with `whiteboard.stopped` "skipped while Whiteboard did not answer its status check".
+  `magnum whiteboard` always asks, and its answer ends the wait. Nothing is cached: a wait replays the failure
+  the last ask had, never an answer. `magnum doctor` runs its own checks and never waits. With whiteboards off
+  (`[pipeline] whiteboard = false`, as the operator set it on 11-06) no review runs the status check at all:
+  autoWhiteboard returns before it, and only `magnum whiteboard` asks
   (TestNoStatusCheckRunsWhileWhiteboardsAreOff keeps that). No cache of `mise which` per tick either: the
   start and the health check are its only callers, one ask per kind each, so a tick asks once. Rejected:
   keeping the binary `mise which` last named for the wait (an answer kept past its tick, which records a path
-  mise may no longer run, where the shim claims nothing) and backing off a quick failure too (a Whiteboard the
-  operator just started would wait minutes for nothing). Tests, failing first:
-  TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait,
+  mise may no longer run, where the shim claims nothing), stamping the shim with the mtime of mise's install
+  directory (it depends on mise's layout and on the tool's name there), and backing off a quick failure too (a
+  Whiteboard the operator just started would wait minutes for nothing). Tests, failing first:
+  TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait, TestAnInstallDuringTheMiseWhichWaitIsSeenAtTheNextCheck,
   TestAWhiteboardStatusCheckThatTimesOutWaitsBeforeAReviewAsksAgain,
-  TestATimeoutOfAnAskStartedInsideTheWaitDoesNotDoubleIt.
+  TestAWhiteboardSkippedForASlowStatusCheckIsMadeOnceWhiteboardAnswers,
+  TestAWhiteboardASlowStatusCheckSkippedIsDroppedWhenThePRClosed,
+  TestAStatusCheckThatTimedOutAfterALaterOneAnsweredStartsNoWait,
+  TestATimeoutOfAnAskStartedInsideTheWaitDoesNotDoubleIt, TestATimeoutOfAnAskStartedBeforeAnAnswerStartsNoWait.
 
 ## The factory (2026-11-03)
 

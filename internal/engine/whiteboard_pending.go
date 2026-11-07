@@ -11,6 +11,11 @@ package engine
 // drain lifted without a restart (continueAfterDrain) start every pending
 // whiteboard whose PR still sits at that head as the posted review would
 // have (autoWhiteboard), and drop one whose PR moved on (whiteboard.stopped).
+// A posted review's whiteboard skipped because Whiteboard's status check
+// timed out, or during the wait that follows (whiteboardSlowError), is
+// remembered the same way: Whiteboard may answer again long before the
+// wait ends, and the tick that finds the wait over makes it
+// (continueSlowWhiteboards).
 
 import (
 	"cmp"
@@ -35,10 +40,12 @@ const whiteboardDrainText = "the daemon is draining; it is made after the restar
 func kvPRWhiteboardPending(prID int64) string { return fmt.Sprintf("pr.%d.whiteboard_pending", prID) }
 
 // whiteboardPending is a whiteboard a drain skipped: the reviewed head and
-// when.
+// when; Slow: a status check of Whiteboard that timed out skipped it
+// instead.
 type whiteboardPending struct {
 	Head string    `json:"head"`
 	At   time.Time `json:"at"`
+	Slow bool      `json:"slow,omitempty"`
 }
 
 // parseWhiteboardPending reads a kvPRWhiteboardPending value; ok is false
@@ -60,9 +67,7 @@ func parseWhiteboardPending(s string) (whiteboardPending, bool) {
 // identity whose budget is low ("" for a drain). It reports whether it did:
 // a write that failed leaves the skip final, as it was.
 func (e *Engine) rememberWhiteboard(ctx context.Context, subject string, prID int64, head, budget string) bool {
-	p := whiteboardPending{Head: head, At: e.now().UTC()}
-	if err := writeKVJSON(ctx, e, kvPRWhiteboardPending(prID), "pending whiteboard", p); err != nil {
-		e.log.Warn("whiteboard: the skip cannot be remembered; the next posted review is the next chance", "subject", subject, "err", err)
+	if !e.writeWhiteboardPending(ctx, subject, prID, whiteboardPending{Head: head, At: e.now().UTC()}) {
 		return false
 	}
 	e.mu.Lock()
@@ -75,6 +80,48 @@ func (e *Engine) rememberWhiteboard(ctx context.Context, subject string, prID in
 	return true
 }
 
+// rememberSlowWhiteboard is rememberWhiteboard for a whiteboard skipped
+// because Whiteboard's status check timed out, or during the wait that
+// follows (whiteboardSlowError): the tick that finds the wait over makes it
+// (slowWhiteboards, continueSlowWhiteboards).
+func (e *Engine) rememberSlowWhiteboard(ctx context.Context, subject string, prID int64, head string) bool {
+	if !e.writeWhiteboardPending(ctx, subject, prID, whiteboardPending{Head: head, At: e.now().UTC(), Slow: true}) {
+		return false
+	}
+	e.mu.Lock()
+	e.slowWhiteboards = true
+	e.mu.Unlock()
+	return true
+}
+
+// writeWhiteboardPending writes p as PR prID's pending whiteboard; false
+// when the write failed, which leaves the skip final.
+func (e *Engine) writeWhiteboardPending(ctx context.Context, subject string, prID int64, p whiteboardPending) bool {
+	if err := writeKVJSON(ctx, e, kvPRWhiteboardPending(prID), "pending whiteboard", p); err != nil {
+		e.log.Warn("whiteboard: the skip cannot be remembered; the next posted review is the next chance", "subject", subject, "err", err)
+		return false
+	}
+	return true
+}
+
+// continueSlowWhiteboards makes the whiteboards a status check of
+// Whiteboard that timed out skipped (slowWhiteboards), at the first tick
+// that finds its wait over: it ran out, or a check that answered ended it.
+// The pass's first whiteboard asks; when that check times out too, the
+// others are skipped without asking and wait for the next wait's end.
+func (e *Engine) continueSlowWhiteboards(ctx context.Context) {
+	e.mu.Lock()
+	slow := e.slowWhiteboards
+	e.mu.Unlock()
+	if !slow {
+		return
+	}
+	if _, _, waiting := e.wbStatus.waiting(e.now()); waiting {
+		return
+	}
+	e.startPendingWhiteboards(ctx, "once Whiteboard may be asked again")
+}
+
 // startPendingWhiteboards makes the whiteboards drains skipped (when says
 // when: "after the restart", "after the drain") on a goroutine of its own
 // under roundWG, as a `magnum whiteboard` request is answered off the tick:
@@ -85,7 +132,7 @@ func (e *Engine) rememberWhiteboard(ctx context.Context, subject string, prID in
 // those start holds the PR first, as a posted review's fix loop does.
 func (e *Engine) startPendingWhiteboards(ctx context.Context, when string) {
 	e.mu.Lock()
-	e.drainWhiteboards = false // the pass reads every entry, those of a skip from now on included
+	e.drainWhiteboards, e.slowWhiteboards = false, false // the pass reads every entry, those of a skip from now on included
 	e.mu.Unlock()
 	if e.d.DryRun {
 		return
@@ -169,18 +216,22 @@ func (e *Engine) pendingWhiteboard(ctx context.Context, prID int64, raw, when st
 	case pr.HeadSHA != p.Head:
 		e.dropPendingWhiteboard(ctx, subject, label, pr, p, "superseded by a push to "+textx.ShortSHA(pr.HeadSHA))
 	default:
-		e.log.Info("whiteboard: the whiteboard a drain skipped starts "+when, "subject", subject, "head", p.Head, "skipped_at", p.At)
+		e.log.Info("whiteboard: a pending whiteboard starts "+when, "subject", subject, "head", p.Head, "skipped_at", p.At)
 		if none := e.autoWhiteboard(ctx, repo, pr, p.Head); none != "" {
-			e.log.Info("whiteboard: the whiteboard a drain skipped is dropped", "subject", subject, "head", p.Head, "why", none)
+			e.log.Info("whiteboard: a pending whiteboard is dropped", "subject", subject, "head", p.Head, "why", none)
 		}
 	}
 }
 
 // dropPendingWhiteboard records whiteboard.stopped for the whiteboard a
-// drain skipped on pr at p.Head, which no job makes: why is "the PR
-// closed" or "superseded by a push to <sha7>".
+// drain (or a slow status check, p.Slow) skipped on pr at p.Head, which no
+// job makes: why is "the PR closed" or "superseded by a push to <sha7>".
 func (e *Engine) dropPendingWhiteboard(ctx context.Context, subject, label string, pr store.PR, p whiteboardPending, why string) {
-	msg := fmt.Sprintf("the whiteboard of %s at %s, skipped by a drain, stopped: %s", label, textx.ShortSHA(p.Head), why)
+	by := "by a drain"
+	if p.Slow {
+		by = "while Whiteboard did not answer its status check"
+	}
+	msg := fmt.Sprintf("the whiteboard of %s at %s, skipped %s, stopped: %s", label, textx.ShortSHA(p.Head), by, why)
 	e.event(ctx, "info", subject, "whiteboard.stopped", msg,
 		map[string]any{"head": p.Head, "pr_head": pr.HeadSHA, "skipped_at": store.FormatTime(p.At)})
 }

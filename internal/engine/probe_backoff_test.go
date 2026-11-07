@@ -46,3 +46,31 @@ func TestATimeoutOfAnAskStartedInsideTheWaitDoesNotDoubleIt(t *testing.T) {
 		t.Fatal("still waiting after an answer")
 	}
 }
+
+// Two reviews post together: the first one's status check hangs, the
+// second's starts a second later and answers. Whiteboard answered an ask
+// that started after the first one's, so that one's timeout, which comes
+// after the answer, starts no wait (any check that answers in time ends
+// it). A timeout of an ask that started after the answer starts the wait,
+// and a stale timeout that comes inside that wait keeps it.
+func TestATimeoutOfAnAskStartedBeforeAnAnswerStartsNoWait(t *testing.T) {
+	t.Parallel()
+	var b probeBackoff
+	t0 := time.Date(2026, 11, 7, 14, 0, 0, 0, time.UTC)
+	if next := b.asked(t0.Add(time.Second), false); !next.IsZero() {
+		t.Fatalf("an answer: next %v", next)
+	}
+	if next := b.asked(t0, true); !next.IsZero() {
+		t.Fatalf("the timeout of an ask started before the answer: next %v, want none", next)
+	}
+	if _, _, waiting := b.waiting(t0.Add(15 * time.Second)); waiting {
+		t.Fatal("waiting, though Whiteboard answered an ask that started later")
+	}
+	later := t0.Add(2 * time.Second)
+	if next := b.asked(later, true); !next.Equal(later.Add(probeBackoffFirst)) {
+		t.Fatalf("the timeout of an ask started after the answer: next %v, want the first wait", next)
+	}
+	if next := b.asked(t0.Add(time.Second/2), true); !next.Equal(later.Add(probeBackoffFirst)) {
+		t.Fatalf("a stale timeout inside the wait: next %v, want the wait as it is", next)
+	}
+}

@@ -19,7 +19,9 @@ package engine
 // whiteboard moves the same one. Whiteboard down, the PR busy or a failure
 // asks nothing of the operator: an event says so, and the next posted
 // review is the next chance. A drain for a restart is the exception: its
-// skip is remembered, and the drain's end makes it (whiteboard_pending.go).
+// skip is remembered, and the drain's end makes it (whiteboard_pending.go);
+// so are a low GitHub budget's, made once it recovers, and a status check's
+// that timed out, made once the check's wait is over.
 // The job is no round: the daily cap, the interval and quiet hours do not
 // apply, and max_concurrent_reviews does not count it.
 
@@ -268,7 +270,9 @@ func (e *Engine) whiteboardAfterRound(ctx context.Context, pr store.PR, res pipe
 // the next chance. A drain for a restart records the skip too, but
 // remembers the head (rememberWhiteboard), which the drain's end makes
 // (startPendingWhiteboards): a drain waits for the rounds in flight, so
-// their reviews post inside it. ctx is the daemon's.
+// their reviews post inside it. So does a status check that timed out, or
+// its wait (rememberSlowWhiteboard): the first check that answers makes it
+// (continueSlowWhiteboards). ctx is the daemon's.
 func (e *Engine) autoWhiteboard(ctx context.Context, repo store.Repo, cur store.PR, target string) (none string) {
 	w := e.cfg.WatchFor(repo.FullName())
 	if w == nil || !e.cfg.WhiteboardFor(w) {
@@ -299,11 +303,14 @@ func (e *Engine) autoWhiteboard(ctx context.Context, repo store.Repo, cur store.
 	}
 	msg := err.Error()
 	var budget *githubBudgetError
+	var slow *whiteboardSlowError
 	switch {
 	case errors.Is(err, errFixDraining) && e.rememberWhiteboard(ctx, subject, cur.ID, target, ""):
 		msg = whiteboardDrainText
 	case errors.As(err, &budget) && e.rememberWhiteboard(ctx, subject, cur.ID, target, budget.low.identity): // github_floor.go
 		msg += "; it is made once the budget recovers"
+	case errors.As(err, &slow) && e.rememberSlowWhiteboard(ctx, subject, cur.ID, target):
+		msg += "; it is made once Whiteboard answers"
 	}
 	e.event(ctx, "info", subject, "whiteboard.skipped", msg, map[string]any{"head": target})
 	return ""
@@ -405,37 +412,50 @@ func (e *Engine) prepareWhiteboard(ctx context.Context, pr store.PR, by string) 
 
 // whiteboardReady checks that Whiteboard runs (WhiteboardStatusCmd through
 // the daemon's runner) for a job by starts; the error is errWhiteboardDown,
-// or whiteboardSlow for a check that timed out. A check that timed out
-// starts the backoff of e.wbStatus (probe_backoff.go): until its wait
-// ends, a review's whiteboard (by whiteboardAuto) runs no check and gets
-// whiteboardSlow, while `magnum whiteboard` (whiteboardBy) asks at once. A
-// check that does not time out ends the wait.
+// or a whiteboardSlowError for a check that timed out. A check that timed
+// out starts the backoff of e.wbStatus (probe_backoff.go): until its wait
+// ends, a review's whiteboard (by whiteboardAuto) runs no check and gets a
+// whiteboardSlowError, while `magnum whiteboard` (whiteboardBy) asks at
+// once. A check that does not time out ends the wait.
 func (e *Engine) whiteboardReady(ctx context.Context, by string) error {
 	if e.d.Runner == nil {
 		return errWhiteboardDown
 	}
 	now := e.now()
 	if at, next, waiting := e.wbStatus.waiting(now); waiting && by == whiteboardAuto {
-		return whiteboardSlow(at, next)
+		return &whiteboardSlowError{at: at, next: next}
 	}
 	_, err := e.d.Runner.Run(ctx, WhiteboardStatusCmd())
-	next := e.wbStatus.asked(now, probeTimedOut(ctx, err))
+	timedOut := probeTimedOut(ctx, err)
+	next := e.wbStatus.asked(now, timedOut)
 	switch {
 	case err == nil:
 		return nil
-	case !next.IsZero():
-		e.log.Info("whiteboard: not ready", "err", err, "asked_again_at", next.Local().Format("15:04"))
-		return whiteboardSlow(now, next)
+	case timedOut:
+		attrs := []any{"err", err}
+		if !next.IsZero() {
+			attrs = append(attrs, "asked_again_at", next.Local().Format("15:04"))
+		}
+		e.log.Info("whiteboard: not ready", attrs...)
+		return &whiteboardSlowError{at: now, next: next}
 	}
 	e.log.Info("whiteboard: not ready", "err", err)
 	return errWhiteboardDown
 }
 
-// whiteboardSlow is why no whiteboard starts after Whiteboard's status
-// check timed out at at: a review's whiteboard asks again from next.
-func whiteboardSlow(at, next time.Time) error {
-	return fmt.Errorf("Whiteboard did not answer its status check in %s at %s; a review asks again from %s, `magnum whiteboard` at once", //nolint:staticcheck // ST1005: Whiteboard is the app's name
-		humanDuration(whiteboardCmdTimeout), at.Local().Format("15:04"), next.Local().Format("15:04"))
+// whiteboardSlowError is why no whiteboard starts after Whiteboard's status
+// check that started at at timed out: a review's whiteboard asks again from
+// next (zero: no wait, Whiteboard having answered a check that started
+// later, probeBackoff.asked). A posted review's whiteboard it skipped is
+// remembered and made once a check answers (continueSlowWhiteboards).
+type whiteboardSlowError struct{ at, next time.Time }
+
+func (s *whiteboardSlowError) Error() string {
+	msg := fmt.Sprintf("Whiteboard did not answer its status check in %s at %s", humanDuration(whiteboardCmdTimeout), s.at.Local().Format("15:04"))
+	if !s.next.IsZero() {
+		msg += fmt.Sprintf(" (asked again from %s, `magnum whiteboard` at once)", s.next.Local().Format("15:04"))
+	}
+	return msg
 }
 
 // startWhiteboard starts the whiteboard job on pr under prepareWhiteboard's

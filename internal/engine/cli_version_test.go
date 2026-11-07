@@ -394,6 +394,7 @@ func TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait(t *testing.T) {
 
 	h.startup() // times out: the next ask waits probeBackoffFirst
 	asks(1, "at the start")
+	start := h.clock.Now()
 	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.162.1" || v.Path != resolved(t, mise) {
 		t.Fatalf("codex while mise does not answer: %+v, want the shim's", v)
 	}
@@ -408,8 +409,8 @@ func TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait(t *testing.T) {
 	h.advance(2*probeBackoffFirst - time.Second)
 	h.tick()
 	asks(2, "within the doubled wait")
-	if n := cli.versionReads(); n != 1 {
-		t.Fatalf("version reads = %d, want 1: the shim stands for the binary throughout", n)
+	if v := kindVersion(h, "codex"); !v.SeenAt.Equal(start) {
+		t.Fatalf("codex read at %v, want the start's record kept: the shim stands for the binary throughout, at the same version", v.SeenAt)
 	}
 
 	h.advance(time.Second)
@@ -428,6 +429,55 @@ func TestAMiseWhichThatTimesOutIsAskedAgainOnlyAfterAWait(t *testing.T) {
 	h.advance(time.Minute)
 	h.tick()
 	asks(6, "after a failure that is no timeout")
+}
+
+// No install changes the shim's stamp, so while the shim stands for the
+// binary during the wait of `mise which` (up to 30 minutes, and mise may
+// answer again long before it ends), the version is read through the shim,
+// as the launches run it, at each health check. An install in the wait (on
+// 2026-10-16 an update installed a codex = "latest" that died at launch) is
+// recorded at the next check, so the PRs its launches park name it; a
+// check that reads the version recorded records nothing.
+func TestAnInstallDuringTheMiseWhichWaitIsSeenAtTheNextCheck(t *testing.T) {
+	cli := newFakeCLIs(t)
+	h := newHarness(t, cli.install)
+	mise := cli.binary("bin/mise", time.Date(2026, 7, 11, 1, 21, 0, 0, time.Local))
+	shim := filepath.Join(cli.dir, "codex")
+	if err := os.Symlink(mise, shim); err != nil {
+		t.Fatal(err)
+	}
+	cli.names("codex", cli.binary("installs/codex/0.162.1/bin/codex", time.Date(2026, 10, 9, 21, 20, 0, 0, time.Local)))
+	cli.prints(shim, "codex-cli 0.162.1\n")
+	cli.whichFails("codex", context.DeadlineExceeded)
+
+	h.startup() // times out: the wait starts
+	start := h.clock.Now()
+	h.advance(time.Minute)
+	h.tick()
+	if v, evs := kindVersion(h, "codex"), h.events(EventKindVersionChanged); v.Version != "codex-cli 0.162.1" || !v.SeenAt.Equal(start) || len(evs) != 0 {
+		t.Fatalf("a check in the wait at the same version: %+v, events %+v; want the start's record", v, evs)
+	}
+
+	h.advance(30 * time.Second) // mise installs 0.163.0, inside the wait
+	at := h.clock.Now()
+	cli.names("codex", cli.binary("installs/codex/0.163.0/bin/codex", at))
+	cli.prints(shim, "codex-cli 0.163.0\n")
+	h.tick()
+	if n := cli.whichAsks("codex"); n != 1 {
+		t.Fatalf("mise which asked %d times in the wait, want 1", n)
+	}
+	evs := h.events(EventKindVersionChanged)
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "the codex CLI changed: codex-cli 0.162.1 → 0.163.0 at "+at.Local().Format("15:04")) {
+		t.Fatalf("events %+v, want the change at the check after the install", evs)
+	}
+	if v := kindVersion(h, "codex"); v.Version != "codex-cli 0.163.0" || v.Previous != "codex-cli 0.162.1" || !v.ChangedAt.Equal(at) {
+		t.Fatalf("codex after the install in the wait: %+v", v)
+	}
+	h.advance(time.Second)
+	h.tick()
+	if evs := h.events(EventKindVersionChanged); len(evs) != 1 {
+		t.Fatalf("events %+v, want the one change", evs)
+	}
 }
 
 // From 2026-10-18 to 10-21 Claude Code's daily auto-update (2.1.302 to

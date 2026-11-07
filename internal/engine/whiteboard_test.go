@@ -27,14 +27,17 @@ const wbSession = "6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b"
 // (fixGit), its waits take a real millisecond, its rounds post a review the
 // registry records (wbPostsReviews), and its exec runner answers the
 // Whiteboard readiness check (down: Whiteboard is not running; slow: the
-// check runs out its timeout, as the runner reports it; hold, when set,
-// keeps the check from answering until it is closed).
+// check runs out its timeout, as the runner reports it; otherAnswers: the
+// check of another review, started a second after this one, answers while
+// this one runs; hold, when set, keeps the check from answering until it is
+// closed).
 type wbEnv struct {
 	*harness
-	run  *execx.Fake
-	down atomic.Bool
-	slow atomic.Bool
-	hold atomic.Pointer[chan struct{}]
+	run          *execx.Fake
+	down         atomic.Bool
+	slow         atomic.Bool
+	otherAnswers atomic.Bool
+	hold         atomic.Pointer[chan struct{}]
 }
 
 // wbHarness builds a wbEnv; auto switches [pipeline] whiteboard on, so a
@@ -45,6 +48,9 @@ func wbHarness(t *testing.T, auto bool, mods ...func(*harness)) *wbEnv {
 	w.run = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"whiteboard", "api", "whiteboard_status"}, Fn: func(c execx.Cmd) (execx.Result, error) {
 		if hold := w.hold.Load(); hold != nil {
 			<-*hold
+		}
+		if w.otherAnswers.Load() {
+			w.e.wbStatus.asked(w.clock.Now().Add(time.Second), false)
 		}
 		if w.slow.Load() {
 			return execx.Result{Code: -1}, &execx.RunError{Cmd: c, Err: context.DeadlineExceeded}
@@ -399,7 +405,8 @@ func TestAWhiteboardStatusCheckThatTimesOutWaitsBeforeAReviewAsksAgain(t *testin
 	first := w.clock.Now()
 	checks(1, "the review's whiteboard")
 	slowText := func(at, next time.Time) string {
-		return "Whiteboard did not answer its status check in 15s at " + clock(at) + "; a review asks again from " + clock(next) + ", `magnum whiteboard` at once"
+		return "Whiteboard did not answer its status check in 15s at " + clock(at) + " (asked again from " + clock(next) +
+			", `magnum whiteboard` at once); it is made once Whiteboard answers"
 	}
 	skipped(slowText(first, first.Add(probeBackoffFirst)))
 
@@ -427,6 +434,120 @@ func TestAWhiteboardStatusCheckThatTimesOutWaitsBeforeAReviewAsksAgain(t *testin
 	reviewed()
 	checks(4, "a review after an answer")
 	skipped(whiteboardDownText)
+}
+
+// A whiteboard skipped because Whiteboard's status check timed out, or
+// during the wait that follows, is remembered (pr.<id>.whiteboard_pending)
+// and made once Whiteboard answers. Whiteboard may answer again long
+// before the wait ends (up to 30 minutes), and each review's own check, as
+// it ran before the wait, would have made its whiteboard then; so the first
+// tick after the wait asks, and makes it. Until then no tick asks.
+func TestAWhiteboardSkippedForASlowStatusCheckIsMadeOnceWhiteboardAnswers(t *testing.T) {
+	w := wbHarness(t, true)
+	wbWriter(w.harness, wbDone(wbSession))
+	w.slow.Store(true)
+	pr := w.wbReviewed() // the check times out: the wait starts
+	checks := func(want int, when string) {
+		t.Helper()
+		if calls := w.run.CallsWithPrefix("whiteboard", "api", "whiteboard_status"); len(calls) != want {
+			t.Fatalf("%s: %d status checks, want %d", when, len(calls), want)
+		}
+	}
+	checks(1, "the review's whiteboard")
+	if p, ok := w.wbPending(pr.ID); !ok || p.Head != fixHead {
+		t.Fatalf("pending whiteboard = %+v, %v; want the reviewed head %s", p, ok, fixHead)
+	}
+
+	w.slow.Store(false) // Whiteboard answers again, inside the wait
+	w.e.whiteboardAfterRound(w.ctx, pr, pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: fixHead})
+	w.settle() // a review posted inside the wait: no check, remembered
+	w.tick()
+	checks(1, "a review and a tick inside the wait")
+	if runs := w.wbRuns(pr.ID); len(runs) != 0 {
+		t.Fatalf("whiteboard runs inside the wait = %+v", runs)
+	}
+	if ev, ok := w.fixEvent("whiteboard.skipped"); !ok || !strings.HasSuffix(ev.Message, "; it is made once Whiteboard answers") {
+		t.Fatalf("whiteboard.skipped = %+v, %v; want the promise", ev, ok)
+	}
+	if _, ok := w.wbPending(pr.ID); !ok {
+		t.Fatal("the review inside the wait left no pending whiteboard")
+	}
+
+	w.advance(probeBackoffFirst)
+	w.tick() // the wait ended: the pending whiteboard asks, and is made
+	checks(2, "the tick after the wait")
+	runs := w.wbRuns(pr.ID)
+	if len(runs) != 1 || runs[0].TargetSHA != fixHead || runs[0].State != store.RunVerified {
+		t.Fatalf("whiteboard runs after the wait = %+v, want one written for %s", runs, fixHead)
+	}
+	if p, ok := w.wbPending(pr.ID); ok {
+		t.Errorf("the pending whiteboard stays after its job started: %+v", p)
+	}
+	w.advance(probeBackoffFirst)
+	w.tick()
+	if runs := w.wbRuns(pr.ID); len(runs) != 1 {
+		t.Errorf("whiteboard runs = %+v, want the one", runs)
+	}
+}
+
+// A whiteboard a slow status check skipped whose PR closed before the wait
+// ended is dropped with whiteboard.stopped, which names that skip (not a
+// drain's), and no job starts.
+func TestAWhiteboardASlowStatusCheckSkippedIsDroppedWhenThePRClosed(t *testing.T) {
+	w := wbHarness(t, true)
+	wbWriter(w.harness, wbDone(wbSession))
+	w.slow.Store(true)
+	pr := w.wbReviewed()
+	w.slow.Store(false)
+	w.open(prSpec{n: 1, head: "base1"})
+	w.gh.mu.Lock()
+	w.gh.closed[2] = "CLOSED"
+	w.gh.mu.Unlock()
+	w.tick() // the close
+	w.advance(confirmGap)
+	w.tick() // and confirmed, inside the wait
+	if got := w.pr(2).GHState; got == store.GHOpen {
+		t.Fatalf("GitHub state = %s, want the close", got)
+	}
+	w.advance(probeBackoffFirst)
+	w.tick()
+	ev, ok := w.fixEvent("whiteboard.stopped")
+	if want := "skipped while Whiteboard did not answer its status check, stopped: the PR closed"; !ok || !strings.Contains(ev.Message, want) {
+		t.Fatalf("whiteboard.stopped = %+v, %v; want %q", ev, ok, want)
+	}
+	if runs := w.wbRuns(pr.ID); len(runs) != 0 {
+		t.Errorf("whiteboard runs = %+v, want none", runs)
+	}
+	if p, ok := w.wbPending(pr.ID); ok {
+		t.Errorf("the pending whiteboard stays after it was dropped: %+v", p)
+	}
+}
+
+// Two reviews post together: one's status check hangs while the other's,
+// started a moment later, answers. Whiteboard is up, so the hung check's
+// timeout starts no wait: its review's skip says the check timed out and
+// remembers the head, and the next tick asks again and makes the
+// whiteboard.
+func TestAStatusCheckThatTimedOutAfterALaterOneAnsweredStartsNoWait(t *testing.T) {
+	w := wbHarness(t, true)
+	wbWriter(w.harness, wbDone(wbSession))
+	w.slow.Store(true)
+	w.otherAnswers.Store(true)
+	pr := w.wbReviewed()
+	w.otherAnswers.Store(false)
+	at := w.clock.Now()
+	ev, ok := w.fixEvent("whiteboard.skipped")
+	if want := "Whiteboard did not answer its status check in 15s at " + at.Local().Format("15:04") + "; it is made once Whiteboard answers"; !ok || ev.Message != want {
+		t.Fatalf("whiteboard.skipped = %q, want %q", ev.Message, want)
+	}
+	if _, _, waiting := w.e.wbStatus.waiting(at); waiting {
+		t.Fatal("the stale timeout started a wait")
+	}
+	w.slow.Store(false)
+	w.tick()
+	if runs := w.wbRuns(pr.ID); len(runs) != 1 || runs[0].TargetSHA != fixHead {
+		t.Fatalf("whiteboard runs at the next tick = %+v, want one written for %s", runs, fixHead)
+	}
 }
 
 // With whiteboards off ([pipeline] whiteboard = false, as the operator set

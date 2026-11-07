@@ -1185,7 +1185,9 @@ no toast, and so is a change when mise cannot answer (mise is asked only when a 
 When `mise which <kind>` does not answer, the shim stands for the binary; when it runs out its 15 seconds
 (as it does in bursts when the Mac is short of memory), it is not asked again for 2 minutes, then twice as
 long each time it still runs out (up to 30 minutes), so a health check does not wait 15 seconds every tick.
-The shim stands for the binary during the wait; an answer, or a failure that is no timeout, ends it.
+The shim stands for the binary during the wait; an answer, or a failure that is no timeout, ends it. No
+install changes the shim, so meanwhile each health check reads the version through it (`codex --version`,
+as the launches run it) and records a new one at once; the same version records nothing.
 `magnum doctor` runs its own checks and never waits.
 For that day a PR that goes to needs attention because a role of that kind did not start (the "failed 3× …
 start codex-judge" line, a dead launch's line among them) ends its line with "; the codex CLI changed at
@@ -3546,12 +3548,16 @@ and still at the reviewed head, and the head must have no whiteboard yet. Magnum
 whether it runs (`whiteboard api whiteboard_status`). When it does not, the whiteboard is skipped, not waited
 for: a `whiteboard.skipped` event says "Whiteboard is not running (start Whiteboard Desktop or `whiteboard
 server start`)", and the next posted review is the next chance. A check that runs out its 15 seconds says
-so instead ("Whiteboard did not answer its status check in 15s at 14:02; a review asks again from 14:04,
-`magnum whiteboard` at once"), and the reviews posted before then skip their whiteboards without asking; the
-wait doubles each time the check runs out again (up to 30 minutes), and any check that answers in time ends
-it. `magnum whiteboard` asks at once, wait or not. With whiteboards off (`whiteboard = false`) a posted
-review asks Whiteboard nothing. A drain for a restart (`magnum daemon-restart --drain`) starts no whiteboard
-either, but it waits for the rounds in flight, so their reviews post inside it:
+so instead ("Whiteboard did not answer its status check in 15s at 14:02 (asked again from 14:04, `magnum
+whiteboard` at once); it is made once Whiteboard answers"), and the reviews posted before then skip their
+whiteboards without asking; the wait doubles each time the check runs out again (up to 30 minutes), and any
+check that answers in time ends it, even one that started later than a check that timed out. Magnum
+remembers each whiteboard such a check or its wait skipped (kv `pr.<id>.whiteboard_pending`), and the first
+tick after the wait asks again and makes it, as below for a drain; when that check runs out too, the next
+wait's end is the next chance. `magnum whiteboard` asks at once, wait or not. With whiteboards off
+(`whiteboard = false`) a posted review asks Whiteboard nothing. A drain for a restart (`magnum
+daemon-restart --drain`) starts no whiteboard either, but it waits for the rounds in flight, so their reviews
+post inside it:
 such a whiteboard is skipped with "the daemon is draining; it is made after the restart", and Magnum remembers
 the PR and the reviewed head (kv `pr.<id>.whiteboard_pending`). The restart makes it, as the posted review
 would have, when the PR is still open at that head and its watch still asks for whiteboards; a drain that ends
@@ -3561,7 +3567,8 @@ the GitHub budget of the watch's poll identity is below `[github] budget_floor` 
 budget recovered makes it, whatever another watch's budget; `magnum whiteboard` is then refused with the
 budget and its reset. One whose PR got a
 push or closed meanwhile is dropped with `whiteboard.stopped` ("superseded by a push to <sha7>", "the PR
-closed"). The job holds the PR as the fix job does, in
+closed"; one a status check skipped says "skipped while Whiteboard did not answer its status check"). The job
+holds the PR as the fix job does, in
 the PR's own slot, so no round or release touches the checkout meanwhile, and a round that waits for it
 reads `whiteboard in progress · claude-whiteboard` (`magnum abort` stops the writer). Your own request wins
 over it: `magnum review` and the board's `r`, `magnum fix` and `f`, and `magnum open` and `o` stop the writer
