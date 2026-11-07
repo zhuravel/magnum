@@ -11585,8 +11585,10 @@ func MergeEnv(base []string, env map[string]string, unset []string) []string
 
 func ProcessStart(ctx context.Context, r Runner, pid int) (string, error)
     ProcessStart is when process pid started, as ProcessTable reads it (ps's
-    lstart in the C locale, its words joined by one space): with the pid,
-    the process's lifetime identity. A pid no process has is an error.
+    lstart in the C locale and in UTC, its words joined by one space): with the
+    pid, the process's lifetime identity, the same text whatever TZ the reader
+    has (the install drain compares the command's read with the daemon's).
+    A pid no process has is an error.
 
 func Redact(s string) string
     Redact masks GitHub tokens, JWTs, Authorization header values and PEM
@@ -12099,6 +12101,13 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
+func QuestionKey(text string) string
+    QuestionKey is how a question is told from the questions the task asked,
+    here and in the CLI: its text, lowercased, without backticks and double
+    quotes, its runs of spaces made one and its end punctuation trimmed (an
+    agent's copy of a question changes those), so that a question two roles
+    raise in the same words is one question, whichever role raised it.
+
 func ReadDrain(l paths.Layout) (string, error)
     ReadDrain is the drain asked of the factory daemon of layout l ("" for
     none).
@@ -12420,10 +12429,13 @@ type GitHub interface {
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
+	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
-    repo now (the account active in your gh config dir).
+    repo now (the account active in your gh config dir), and MergeMethods the
+    ways repo's settings let a PR merge, which the prompts of the roles that ask
+    you questions name.
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
@@ -12489,6 +12501,14 @@ type Magnum interface {
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
     factory's local review sees it (Magnum).
+
+type MergeMethods struct{ Merge, Squash, Rebase bool }
+    MergeMethods are the ways a repository's GitHub settings let a pull request
+    merge: a merge commit, a squash, a rebase.
+
+func (m MergeMethods) String() string
+    String is the methods m allows, as a prompt names them: "squash", "merge
+    commit or squash", "merge commit, squash or rebase"; "" for none.
 
 type MigrationFlag struct {
 	Path                                   string
@@ -12627,6 +12647,11 @@ type PromptData struct {
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
 	Tracker string
+	// MergeMethods are the ways Repo's GitHub settings let a pull request
+	// merge ("squash", "merge commit, squash or rebase": MergeMethods.String),
+	// which the prompts of the roles that ask the operator questions name;
+	// "" while no read of them went through.
+	MergeMethods string
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the
