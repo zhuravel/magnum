@@ -508,6 +508,11 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	delete(e.panics, t.ID)
 	delete(e.lastFail, t.ID)
 	delete(e.publishFails, t.ID)
+	// The stage is rebuilt from the registry and the agents store, as after a
+	// restart: what the loop knew of it is what sent the task to you (a role
+	// stuck with no turn at work, which the rebuild hands the runtime to
+	// recover, agentsRunOf).
+	delete(e.agentRuns, t.ID)
 	e.checksMu.Lock()
 	delete(e.checkFails, t.ID)
 	e.checksMu.Unlock()

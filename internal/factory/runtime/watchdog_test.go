@@ -756,6 +756,74 @@ func TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart(t *
 	}
 }
 
+// A role whose steps ran out with nothing of it at work (every step failed
+// once the recovery quit its session, or its lost pane's recoveries ran
+// out) starts over when RecoverLost asks for it, which the stage does once
+// your retry rebuilt it: its ladders begin again in the same daemon. A role
+// stuck on a turn still at work in its live pane is left as it is: its end,
+// or you in its pane, moves it.
+func TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork(t *testing.T) {
+	g := newRig(t)
+	g.hungTurn("reproduce the bug")
+	stepFaults[1].inject(g) // the start fails, after the quit
+	var evs []Event
+	for range 3 {
+		g.clock.Add(NoProgressAfter)
+		evs = append(evs, g.watchdog()...)
+	}
+	if stuck := only(evs, EventStuck); len(stuck) != 1 {
+		t.Fatalf("events %+v, want fx-repro stuck", evs)
+	}
+	g.h.startErr = nil // you fixed the CLI
+	starts, prompts := len(g.h.startCalls()), len(g.h.promptTexts())
+
+	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v after your retry, want the role's conversation resumed", s[starts:])
+	}
+	if p := g.h.promptTexts(); len(p) != prompts+1 || p[len(p)-1] != resumeText {
+		t.Fatalf("prompts %q after your retry, want the resume prompt", p[prompts:])
+	}
+
+	h := newRig(t)
+	h.hungTurn("reproduce the bug")
+	for range 3 {
+		h.clock.Add(NoProgressAfter)
+		h.watchdog()
+	}
+	starts = len(h.h.startCalls())
+	if err := h.r.RecoverLost(h.ctx, h.task, h.attempt, h.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.h.startCalls()); n != starts {
+		t.Fatalf("%d starts: RecoverLost restarted a role whose stuck turn is at work in its live pane", n-starts)
+	}
+
+	l := newRig(t)
+	l.launch("fx-repro")
+	l.h.setSession(l.agent("fx-repro"), "sid-1")
+	l.send("fx-repro", "reproduce the bug")
+	l.observeN(2)
+	var lost []Event
+	for range MaxResumes + 2 {
+		l.h.losePane(l.agent("fx-repro"))
+		lost = append(lost, l.observe()...)
+		l.observeN(2)
+	}
+	if len(only(lost, EventLost)) != 1 {
+		t.Fatalf("events %+v, want the lost pane's recoveries run out", lost)
+	}
+	starts = len(l.h.startCalls())
+	if err := l.r.RecoverLost(l.ctx, l.task, l.attempt, l.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if s := l.h.startCalls(); len(s) != starts+1 {
+		t.Fatalf("starts %+v after your retry of a lost role, want its recoveries started over", s[starts:])
+	}
+}
+
 // A recovery's prompt that herdr may have typed (its delivery unknown), and
 // that two reads of the transcript then prove never arrived, leaves no role
 // alone, across a restart too: the runs it replaced were abandoned for the

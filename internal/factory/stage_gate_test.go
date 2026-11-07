@@ -613,6 +613,31 @@ func TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn(t *testing.T) {
 	}
 }
 
+// Your retry of a task whose role got stuck with nothing at work (every
+// step failed once the recovery quit its session, so its last turn is one a
+// recovery gave up) goes on: the retry rebuilds the stage, as a restart
+// does, and the role is recovered. Before, the retry kept the stage as it
+// was, which waited for the end of a turn that no longer existed.
+func TestARetryAfterAStuckRoleWithNoTurnRecoversIt(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12384", "bug", "investigate")
+	h.startStage(task)
+	h.rt.abandonRun(h.lastRun("fx-repro"), runtime.RecoveryPrefix+"its turn hung")
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventStuck})
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWhat != "the fx-repro agent is stuck" {
+		t.Fatalf("task %s waits %q, want needs_you: the fx-repro agent is stuck", got.State, got.WaitsWhat)
+	}
+
+	if q := h.retry(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("your retry: %+v", q)
+	}
+	h.tick()
+	if got := h.rt.recoveries(); !slices.Equal(got, []string{TaskKey(task) + "/fx-repro"}) {
+		t.Fatalf("RecoverLost calls %v after your retry, want fx-repro's", got)
+	}
+}
+
 // A restart between your answers and the resumed role's prompt sends that
 // prompt once.
 func TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce(t *testing.T) {

@@ -17051,7 +17051,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   ladder: resume, fresh session, `EventLost`) unless this runtime recovers it already, and makes it due the
   watchdog's step when it cannot run now. A step also lets go of the hung run's prompts of unknown delivery
   (the watchdog's nudge) before it quits: a quit that fails then sends none of them to you in the middle of
-  the steps.
+  the steps. A role whose steps ran out with nothing of it at work in a live pane (`EventStuck` after every
+  step failed once the session was quit, or `EventLost`) waited for an end that no turn would bring: your
+  retry kept the stage as the loop knew it. A retry now rebuilds the stage from the stores, as a restart does,
+  and `RecoverLost` starts such a role's ladders over (a stuck turn still at work in its live pane is left to
+  its end, or to you in it). The rebuild asks for it when the role's last run carries `RecoveryPrefix`; a lost
+  pane's last run stays in flight on the lost session, which asks nothing yet (a follow-up, with the park of a
+  stopped task whose pane was lost). A crash between a quit that worked and the hand-over leaves the hung run
+  in flight on the quit session for a moment's work: the next daemon's watchdog takes it as any hung run, and
+  its restart, finding no live session, hands it over.
   Rejected: the first cut, which kept the hung run in flight until the replacement's prompt left (it left an
   orphan on a parked session once the start or the prompt failed); `recovering` set before the climb's steps
   (a failed resume of a hung turn would take the lost pane's ladder and end in "the pane was lost"); a mark in
@@ -17065,7 +17073,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFailedWatchdogStepStaysWatchedAcrossARestart (no step after the restart),
   TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart (a second start in the same
   runtime), TestAStepThatCannotQuitLetsGoOfTheHungRunsUnknownPrompts (the nudge stayed unknown) and
-  TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn (no `RecoverLost`);
+  TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn (no `RecoverLost`); in the second review's round,
+  TestARetryAfterAStuckRoleWithNoTurnRecoversIt (no `RecoverLost` after the retry) and
+  TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork (no start, stuck and lost);
   TestARecoveryPromptThatNeverArrivedIsRecoveredAgain holds the restart between the proof and the recovery.
 
 - **A continuation on the fallback model that never left pauses its role** (2026-11-07, the audit's R14). A run

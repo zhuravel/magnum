@@ -278,9 +278,12 @@ func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt
 // session from the files; then the recoveries ran out (EventLost, "no
 // progress after <n> recoveries", at the next Observe). Each recovery that
 // shows no progress within NoProgressAfter takes the next step (Watchdog).
-// A role this runtime already recovers, or whose steps ran out, is left to
-// the watchdog; one whose recovery cannot run now (a pause, you in its
-// pane, a failure) is due it, and the watchdog takes it once it may.
+// A role this runtime already recovers is left to the watchdog. One whose
+// steps ran out (stuck, lost) is left so while a turn of it is at work in a
+// live pane (its end, or you in the pane, moves it); with nothing at work,
+// its ladders start over: the stage asks only once your retry rebuilt it.
+// One whose recovery cannot run now (a pause, you in its pane, a failure)
+// is due it, and the watchdog takes it once it may.
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error {
 	role, err := r.RunsAs(t, role)
 	if err != nil {
@@ -291,9 +294,17 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 		return err
 	}
 	r.mu.Lock()
-	owned := st.recovering || st.pending || st.stuck || st.lost
+	ranOut, owned := st.stuck || st.lost, st.recovering || st.pending
 	r.mu.Unlock()
-	if owned {
+	switch {
+	case ranOut && r.turnAtWork(ctx, t, role.Name):
+		return nil
+	case ranOut: // your retry: the ladders start over
+		r.mu.Lock()
+		st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
+		st.step, st.resumes, st.fresh = 0, 0, false
+		r.mu.Unlock()
+	case owned:
 		return nil
 	}
 	err = r.recoverRole(ctx, t, a, role, "its pane was lost or its recovery left no turn")
@@ -304,6 +315,28 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 		r.waitToRecover(a.ID, role.Name)
 	}
 	return err
+}
+
+// turnAtWork reports whether a run of role of task t is in flight in a live
+// session (one that starts or runs), or whether the store cannot tell.
+func (r *Runtime) turnAtWork(ctx context.Context, t registry.Task, role string) bool {
+	pr, err := r.ownerRow(ctx, t.ID)
+	if err != nil {
+		return true
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return true
+	}
+	for _, run := range runs {
+		if run.Role != role || !inFlight(run) || run.SessionID == nil {
+			continue
+		}
+		if s, err := r.st.SessionByID(ctx, *run.SessionID); err != nil || s.State == store.SessionStarting || s.State == store.SessionLive {
+			return true
+		}
+	}
+	return false
 }
 
 // lostEvent is EventLost for a role whose recoveries ran out, once.

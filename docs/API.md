@@ -14461,9 +14461,12 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
     from the files; then the recoveries ran out (EventLost, "no progress after
     <n> recoveries", at the next Observe). Each recovery that shows no progress
     within NoProgressAfter takes the next step (Watchdog). A role this runtime
-    already recovers, or whose steps ran out, is left to the watchdog; one whose
-    recovery cannot run now (a pause, you in its pane, a failure) is due it,
-    and the watchdog takes it once it may.
+    already recovers is left to the watchdog. One whose steps ran out (stuck,
+    lost) is left so while a turn of it is at work in a live pane (its end,
+    or you in the pane, moves it); with nothing at work, its ladders start over:
+    the stage asks only once your retry rebuilt it. One whose recovery cannot
+    run now (a pause, you in its pane, a failure) is due it, and the watchdog
+    takes it once it may.
 
 func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error)
     RunState is run id as the agents store keeps it: its state (store.Run*:
