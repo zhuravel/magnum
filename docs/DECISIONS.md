@@ -85,6 +85,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   pending duplicates (`DELETE .../reviews/{id}` works only for an unsubmitted review). A submitted
   duplicate stays, with a warning, because GitHub cannot delete it. Rejected: dismissing it (dismissal
   applies only to approvals and change requests, and the comments stay either way).
+- **The fixer can act as a dedicated App** (2026-11-07). The operator wants the fix loop to run on his own
+  PRs with no hand on it, and the fixer's pane held his own gh login and, through the daemon's
+  `SSH_AUTH_SOCK`, his SSH key: every permission of his account in an unattended agent's pane. A GitHub App of
+  the fixer's own now does that work with less power. It amends "The fixer acts as the watch's poll identity
+  unless its role names one" (2026-10-11), which refused every App, without rewriting it: an App may be the
+  fixer's identity when no watch reviews, polls or approves as it (`Config.DedicatedFixApp`), and the App
+  magnum reviews as stays refused, in the configuration, `magnum fix` and the doctor, because its replies
+  would read as magnum's own and its rebuttals would count as magnum's. The App's tokens are narrowed at
+  the mint: `token_repositories` and `token_permissions` (contents and pull_requests write, nothing else)
+  go into GitHub's `access_tokens` body, so every token the daemon's refresh writes to the App's gh config
+  is that narrow, and `user_id` gives its commits the bot's noreply email; `magnum identities check` checks
+  contents write, the installation's owner, the bot's id and an HTTPS ls-remote as the App.
+  `[[watch]] fix_identity` picks the identity per watch, since one App on two organizations is two
+  installations and so two `[[identity]]` blocks, while one fix role serves both. The bot identity is the
+  pane's env alone: `GIT_AUTHOR_*` and `GIT_COMMITTER_*` as the bot, `GIT_CONFIG_*` pairs for
+  `commit.gpgsign=false` (factory commits are unsigned, over the operator's global `commit.gpgsign = true`)
+  and three `url./use-magnum-push-not-git-push/.pushInsteadOf` rewrites, so a plain `git push` to
+  github.com fails before any network call and fetches still work; no git config is written anywhere,
+  since the pool's slots and the factory's copies share one clone's config. The token is never in the env:
+  `GH_CONFIG_DIR` is a path, and the daemon refreshes the token in it each tick, so a fixer that runs for
+  hours uses one minted less than an hour ago. A cycle parks a live fixer pane made for another identity
+  (`fix.pane_renewed`), since a pane keeps the env it was made with. The App pushes only through `magnum
+  push`: HEAD to `MAGNUM_PUSH_BRANCH` alone (never master, main, the default branch or the base, never a
+  branch argument), over HTTPS to the PR's repository whatever form origin has, with gh as git's only
+  credential helper (an HTTPS origin would reach the operator's keychain login, an SSH one his key), with a
+  lease on the head it read there and never a bare force, the bot's first-parent commits only, a merge of
+  the base as the only merge, and no change under `.github/workflows` (the App has no workflows
+  permission; such a push needs the operator). It runs through gitx, so no `pre-push` hook runs, as for
+  every gitx command. `magnum fix-sync` passes the pane's `commit.gpgsign` to its replay with `-c`, since
+  gitx replaces the pane's `GIT_CONFIG_*` pairs with its own and the replay would otherwise sign the bot's
+  commits with the operator's key or stop at the signing prompt. Replies post as the App through the pane's
+  `GH_CONFIG_DIR`, and every place that tells the fixer from a person or from the reviewer knows its login:
+  `fixLogins` (its fix-marked replies answer an item, its resolution of another reviewer's thread does not
+  close it), `sinceFixStart` (the operator's own replies during a run are his), `repliesOf` (its reply in
+  magnum's thread starts a reply round, though an App has no association with the repository); the retro's
+  own logins and the stalemate rule needed no change, and `identity_leak` looks only at reviews with the
+  run's marker. The `git push` refusal is a guard against a habit, not a boundary: `gh api` can still
+  write refs within the token's scope, another URL form is not rewritten, a remote with an explicit
+  `pushurl` skips `pushInsteadOf` (`magnum doctor` warns), and the pane can unset its env; the narrowed
+  token bounds what any of that can do. With no App identity configured the fixer behaves exactly as
+  before. Rejected: `git config` in the copies (they share one clone's config, and
+  `extensions.worktreeConfig` is per worktree only with `--worktree`); a refusing `GIT_SSH_COMMAND` (it
+  breaks every fetch over SSH, `magnum fix-sync`'s included); Verified commits made through the API (no
+  merge commits through GraphQL); an on-demand mint in the pane (the key in a process the agent starts);
+  a token in the env; and the review App as the fixer.
 
 ## Checkouts and pools
 

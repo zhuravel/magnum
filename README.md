@@ -2961,6 +2961,25 @@ differ, after you moved the watch's fixer to an App or back), it parks that sess
 `fix.pane_renewed` event, and the conversation resumes in a new pane with the new env; a park that fails
 fails the cycle rather than let the fixer act as the wrong identity.
 
+The fixer App pushes with `magnum push`, the line its prompt names in place of `git push` (see the commands
+table): HEAD to the PR's branch alone, over HTTPS as the App, with a lease, never a bare force, only the
+bot's own commits and a merge of the base, and no change under `.github/workflows`, which the App has no
+permission to push (the fixer lists such a fix under Needs you). A push it refuses goes under Needs you; one
+it rejects because the branch moved runs the fix-sync line, as a rejected `git push` does. On GitHub the PR
+then shows the bot as the author and the committer of the fixer's commits, unsigned, and as the author of
+its replies, each ending with the fix marker; Magnum's re-review reads those replies as the author's
+answers, a reply of the bot's in Magnum's thread starts a reply round, and its replies never count as
+Magnum's own. Setting one up:
+
+1. Create a GitHub App with Repository permissions Contents and Pull requests "Read and write" (Metadata
+   read comes with them; no Workflows), install it on each owner whose PRs it fixes, and save its private
+   key as `~/.config/magnum/keys/<name>.pem` (chmod 600).
+2. Add one `[[identity]]` block per installation, kind `app`, with `token_repositories`,
+   `token_permissions = { contents = "write", pull_requests = "write" }` and `user_id` (Identities: who
+   posts), and set `fix_identity` on each watch to the block of its owner's installation.
+3. Run `magnum identities check`, then `magnum daemon-restart --drain`: the prompt and the fix skill load
+   at the daemon's start.
+
 A watch that posts as your own login cannot tell the fixer's replies from its own. The re-review then does
 not read them as the author's answers, and `magnum fix` says so in a note. Post the reviews as an App
 identity when autofix is on. The configuration warns about this only under `autofix = "own"` or `"open"`,
