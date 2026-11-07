@@ -169,9 +169,11 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 			why += ": " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 		}
 		return waits("magnum", looking, "", looking+": "+why)
-	case !st.Found && !st.Watched:
-		what := fmt.Sprintf("magnum does not watch %s: merge #%d or close it yourself", ref.Repo, n)
-		return you(what, clauseShort(what), "")
+	case !st.Found && !st.Watched: // nothing tells the task when you did
+		what := fmt.Sprintf("magnum does not watch %s: merge or close #%d yourself, then x drops the task", ref.Repo, n)
+		w := you(what, clauseShort(what), "")
+		w.move, w.moveShort = fmt.Sprintf("merge or close #%d, then x drops the task", n), "then x"
+		return w
 	case st.GHState == store.GHMerged:
 		return prWait{group: tui.GroupDone, mark: tui.MarkDone, on: tui.WaitsOn{Who: "nothing", What: "merged " + clock(cmp.Or(store.Deref(st.MergedAt), t.Updated))}}
 	case st.GHState == store.GHClosed:

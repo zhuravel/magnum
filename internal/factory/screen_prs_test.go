@@ -250,7 +250,7 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 			v.Open.Off = engine.OpenOffDraft
 		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou, tui.WaitsOn{Who: tui.WaitsOnYou, What: "#4540 is a draft: mark it ready", Short: "#4540 is a draft", OnYou: true}},
 		"no watch": {func(v *PRState) { *v = PRState{DaemonUp: true} }, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
-			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum does not watch example/talkable: merge #4540 or close it yourself",
+			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum does not watch example/talkable: merge or close #4540 yourself, then x drops the task",
 				Short: "magnum does not watch example/talkable", OnYou: true}},
 		"not found yet": {func(v *PRState) { *v = PRState{DaemonUp: true, Watched: true} }, nil, tui.GroupWaits, tui.MarkWaits,
 			tui.WaitsOn{Who: "magnum", What: "looking at #4540"}},
@@ -403,5 +403,24 @@ func TestADoneTaskSaysWhenItsPRMerged(t *testing.T) {
 	r.magnum.setPRErr(errors.New("magnum's registry is locked"))
 	if row := rowOf(t, r.data(time.Time{}), "PR-12370"); row.WaitsOn[0].What != "merged 09:04" {
 		t.Errorf("without magnum's registry: %+v, want the time the task was done", row.WaitsOn[0])
+	}
+}
+
+// A PR in a repository no [[watch]] covers is yours to finish, and nothing
+// can tell the task when you did: its row says that x then ends the task,
+// and x is its move, as for a closed PR.
+func TestAnUnwatchedPRsRowNamesHowItsTaskEnds(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12380", 4580)
+	r.pr(4580, func(v *PRState) { *v = PRState{DaemonUp: true} })
+	row := rowOf(t, r.data(time.Time{}), "PR-12380")
+	want := tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum does not watch example/talkable: merge or close #4580 yourself, then x drops the task",
+		Short: "magnum does not watch example/talkable", OnYou: true}
+	if row.Group != tui.GroupNeedsYou || row.WaitsOn[0] != want {
+		t.Errorf("the row of an unwatched PR: %+v, want NEEDS YOU with %+v", row, want)
+	}
+	if row.Move != "merge or close #4580, then x drops the task" || row.MoveShort != "then x" {
+		t.Errorf("its move %q / %q, want x once you merged or closed it", row.Move, row.MoveShort)
 	}
 }
