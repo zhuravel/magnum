@@ -340,9 +340,12 @@ type Engine struct {
 	overlaps  map[string]overlapRead
 	jiraReads map[string]jiraRead
 	// merges are the merge methods of each repository the prompts name, a
-	// failed read included (mergeMethods).
-	mergeMu sync.Mutex
-	merges  map[string]mergeRead
+	// failed read included (mergeMethods). mergeBound bounds a read of them
+	// (0: mergeMethodsBound), a test's seam: a timeout without its 10
+	// seconds.
+	mergeMu    sync.Mutex
+	merges     map[string]mergeRead
+	mergeBound time.Duration
 
 	heavyMu   sync.Mutex
 	heavyHeld map[int64]*heavySlot

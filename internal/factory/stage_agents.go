@@ -1259,7 +1259,7 @@ func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
 	if ok && (!kept.failed || now.Sub(kept.at) < mergeMethodsRetry) {
 		return kept.methods
 	}
-	rctx, cancel := context.WithTimeout(ctx, mergeMethodsBound)
+	rctx, cancel := context.WithTimeout(ctx, cmp.Or(e.mergeBound, mergeMethodsBound))
 	defer cancel()
 	m, err := e.d.GitHub.MergeMethods(rctx, repo)
 	if ctx.Err() != nil {

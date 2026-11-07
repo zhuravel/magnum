@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -224,13 +225,19 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 // as the stage sends it.
 func (h *harness) renderInStage(t registry.Task, stage, name string) string {
 	h.t.Helper()
+	return h.renderInStageOn(h.ctx, t, stage, name)
+}
+
+// renderInStageOn is renderInStage on ctx.
+func (h *harness) renderInStageOn(ctx context.Context, t registry.Task, stage, name string) string {
+	h.t.Helper()
 	kind := h.cfg.Factory.Kinds[t.Kind]
 	i := stageIndex(kind, stage)
 	role, ok := h.cfg.FactoryRole(name)
 	if i < 0 || !ok {
 		h.t.Fatalf("no stage %s or role %s in the %s kind", stage, name, t.Kind)
 	}
-	text, err := h.e.renderRole(h.ctx, t, kind.Stages[i], role, role, h.stageCopy())
+	text, err := h.e.renderRole(ctx, t, kind.Stages[i], role, role, h.stageCopy())
 	if err != nil {
 		h.t.Fatalf("render %s: %v", name, err)
 	}
@@ -304,6 +311,53 @@ func TestAFailedMergeMethodsReadLeavesThemOut(t *testing.T) {
 	bare := newHarness(t)
 	if text := bare.renderInStage(bare.kindTask("PR-12386", "feature", "judge"), "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
 		t.Fatalf("a factory without GitHub names merge methods:\n%s", text)
+	}
+}
+
+// The read of the merge methods runs on the loop, so it is bounded
+// (mergeMethodsBound). A read GitHub leaves hanging ends at the bound, and
+// its timeout is kept as a failure: the prompts after it do not wait on
+// GitHub again. A read the daemon's stop cut says nothing of GitHub and is
+// not kept: the next prompt reads again.
+func TestTheMergeMethodsReadIsBoundedAndItsTimeoutKept(t *testing.T) {
+	gh := &fakeGitHub{merges: MergeMethods{Squash: true}}
+	h := newHarness(t, func(d *Deps) { d.GitHub = gh })
+	repoTask := func(key, repo string) registry.Task {
+		task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: key, Kind: "feature", Repo: repo, Title: "t",
+			State: registry.TaskActive, Stage: "judge", Branch: "zhuravel-" + key + "-copy"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+
+	h.renderInStage(repoTask("PR-12387", "example/shop"), "judge", "fx-judge")
+	if left, ok := gh.readDeadline(); !ok || left <= 0 || left > mergeMethodsBound {
+		t.Fatalf("the read's deadline was %v away (one set: %v), want at most %v", left, ok, mergeMethodsBound)
+	}
+
+	h.e.mergeBound = 20 * time.Millisecond // the bound, without its 10 seconds
+	gh.hangReads(true, nil)
+	hung := repoTask("PR-12388", "example/hung")
+	for range 2 {
+		if text := h.renderInStage(hung, "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
+			t.Fatalf("a read that timed out named merge methods:\n%s", text)
+		}
+	}
+	if n := gh.mergeReads(); n != 2 {
+		t.Fatalf("%d reads, want example/hung's one: its timeout kept for the second prompt", n)
+	}
+
+	ctx, stop := context.WithCancel(h.ctx)
+	gh.hangReads(true, stop) // the daemon stops while GitHub has not answered
+	cut := repoTask("PR-12389", "example/cut")
+	if text := h.renderInStageOn(ctx, cut, "judge", "fx-judge"); strings.Contains(text, "merges a pull request") {
+		t.Fatalf("a read the stop cut named merge methods:\n%s", text)
+	}
+	gh.hangReads(false, nil)
+	if text := h.renderInStage(cut, "judge", "fx-judge"); !strings.Contains(text, "example/cut merges a pull request by squash") ||
+		gh.mergeReads() != 4 {
+		t.Fatalf("after a cut read (%d reads), want the next prompt to read again:\n%s", gh.mergeReads(), text)
 	}
 }
 

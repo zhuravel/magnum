@@ -16540,7 +16540,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rarely change, and a factory install restarts the daemon); a stage that waits for the read (it only informs a
   question); a file of the task's directory (data the prompt can carry is no file to read). Tests, failing first:
   TestTheGitHubClientReadsTheMergeMethods, TestTheQuestionRolesGetTheRepositorysMergeMethods and
-  TestAFailedMergeMethodsReadLeavesThemOut.
+  TestAFailedMergeMethodsReadLeavesThemOut; then TestTheMergeMethodsReadIsBoundedAndItsTimeoutKept, which a fake
+  GitHub that does not answer drives through the bound (an engine seam shortens it), and which fails on a read
+  with no deadline, on a timeout not kept and on a cut read kept.
 
 ## Learned rules
 

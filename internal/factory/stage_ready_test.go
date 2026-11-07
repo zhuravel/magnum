@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,17 +39,56 @@ type fakeGitHub struct {
 	activeErr   error
 	activeCalls int
 	// merges are the repository's merge methods MergeMethods reads, or
-	// mergesErr its failure; mergesCalls counts its calls.
-	merges      MergeMethods
-	mergesErr   error
-	mergesCalls int
+	// mergesErr its failure; mergesCalls counts its calls. mergesHang has
+	// it wait for its ctx's end, as a GitHub that does not answer (5
+	// seconds at most: a read nothing cuts fails the test, never hangs it),
+	// and mergesOnRead runs as each read begins. mergesLeft is how far the
+	// last read's deadline was when it began, mergesDeadline whether it had
+	// one.
+	merges         MergeMethods
+	mergesErr      error
+	mergesCalls    int
+	mergesHang     bool
+	mergesOnRead   func()
+	mergesLeft     time.Duration
+	mergesDeadline bool
 }
 
-func (f *fakeGitHub) MergeMethods(context.Context, string) (MergeMethods, error) {
+func (f *fakeGitHub) MergeMethods(ctx context.Context, _ string) (MergeMethods, error) {
+	f.mu.Lock()
+	f.mergesCalls++
+	dl, ok := ctx.Deadline()
+	f.mergesLeft, f.mergesDeadline = time.Until(dl), ok
+	m, err, hang, onRead := f.merges, f.mergesErr, f.mergesHang, f.mergesOnRead
+	f.mu.Unlock()
+	if onRead != nil {
+		onRead()
+	}
+	if !hang {
+		return m, err
+	}
+	select {
+	case <-ctx.Done():
+		return MergeMethods{}, ctx.Err()
+	case <-time.After(5 * time.Second):
+		return MergeMethods{}, errors.New("nothing cut the read GitHub left hanging")
+	}
+}
+
+// readDeadline is how far the last read's deadline was as it began, and
+// whether it had one.
+func (f *fakeGitHub) readDeadline() (time.Duration, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.mergesCalls++
-	return f.merges, f.mergesErr
+	return f.mergesLeft, f.mergesDeadline
+}
+
+// hangReads has the reads wait for their ctx's end (hang), with onRead run
+// as each begins.
+func (f *fakeGitHub) hangReads(hang bool, onRead func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mergesHang, f.mergesOnRead = hang, onRead
 }
 
 // mergeReads is how many times MergeMethods was called.
