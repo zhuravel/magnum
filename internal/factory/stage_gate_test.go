@@ -280,6 +280,34 @@ func TestAQuestionAskedBeforeIsNotAskedAgainByAnotherRole(t *testing.T) {
 	}
 }
 
+// A role that asks a question another role asked and you answered gets
+// your answers as its next prompt, not a new question: the writer in coding
+// repeats the judge's answered question.
+func TestARoleRepeatingAnAnsweredQuestionGetsTheAnswers(t *testing.T) {
+	h := newHarness(t)
+	codingEndsOnFindings(h)
+	task := h.gateTask("PR-12391", "feature", whenQuestion)
+	h.tick()
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label}})
+	if got := h.reload(task.ID); got.Stage != "coding" {
+		t.Fatalf("after the answer the task is %s at %s, want at coding", got.State, got.Stage)
+	}
+	h.startStage(task)
+	if n := len(h.rt.promptsTo("fx-writer")); n != 1 {
+		t.Fatalf("the writer got %d prompts, want its first", n)
+	}
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("When does the reminder go out?", 1, "now", "later")))
+	h.ended(task, "fx-writer")
+	h.tick()
+
+	got := h.reload(task.ID)
+	ps := h.rt.promptsTo("fx-writer")
+	if got.QuestionRev != 1 || got.State != registry.TaskActive || len(ps) != 2 || !strings.HasPrefix(ps[1].Text, answersLead) {
+		t.Fatalf("task %s at revision %d, the writer's prompts %+v; want active at revision 1, the answers as its next prompt",
+			got.State, got.QuestionRev, ps)
+	}
+}
+
 func TestABugThatDidNotReproduceAsksTheOperatorWithOptions(t *testing.T) {
 	notReproduced := reportWith("Proof", "## Proof\n- Reproduced: no. The spec passes on master.\n")
 	for _, tc := range []struct {
