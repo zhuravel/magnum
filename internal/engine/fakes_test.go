@@ -173,6 +173,16 @@ type fakeGH struct {
 	// rate is the rate limit Radar answers when set (zero: 4900 of 5000
 	// points with no reset time, which the meter ignores).
 	rate github.RateLimit
+	// dispatchErr fails DispatchWorkflow, whose calls record
+	// "dispatch:<owner>/<repo>:<workflow>@<ref>".
+	dispatchErr error
+}
+
+func (g *fakeGH) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref string) error {
+	g.record(fmt.Sprintf("dispatch:%s/%s:%s@%s", owner, repo, workflow, ref))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.dispatchErr
 }
 
 func (g *fakeGH) ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error) {

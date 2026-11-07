@@ -112,8 +112,10 @@ type OpenVerdict struct {
 	Off           string     `json:"off,omitempty"`
 	// leftovers: the verdict needs you for what loops left (rule 8), which
 	// the look raises to needs_attention; late: for magnum's late review
-	// (rule 5), which it toasts once per head. Neither is stored.
-	leftovers, late bool
+	// (rule 5), which it toasts once per head; dispatch: for a required
+	// check that did not run, whose workflow the look starts (rule 11,
+	// openStartCI). None is stored.
+	leftovers, late, dispatch bool
 }
 
 // OpenNeed is one thing that needs the operator: its kind (thread, review,
@@ -373,6 +375,11 @@ type openFacts struct {
 	pause      string
 	pauseUntil time.Time
 	pauses     []openHold
+	// ciWorkflow is [[repo]] ci_dispatch where a required check did not
+	// run at the head ("" = magnum starts none), and ciStart the look's
+	// start of it at the head (zero: none; fix_open_ci.go).
+	ciWorkflow string
+	ciStart    ciStart
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -774,38 +781,4 @@ func joinWords(parts []string) string {
 		return parts[0]
 	}
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
-}
-
-// openMissingCI is rule 11's verdict v of f's head, at which the required
-// checks f.ci.missing names have no run (their words: missingWhat): a head
-// younger than settle_max waits for them to start (CI at the head, until
-// settle_max after its move), an older one needs you, with how to start
-// them: the head's checks are known in full, so they did not run there.
-func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
-	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
-	if due := f.pr.HeadChangedAt.Add(f.settle.max); f.now.Before(due) {
-		v.Verdict, v.Why, v.Until = OpenWaits, fmt.Sprintf("CI at %s: %s has not started", short, what), due
-		return v
-	}
-	v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
-	v.Verdict, v.Why = OpenNeedsYou, fmt.Sprintf("%s did not run at %s: run its workflow on the PR's branch, or push", what, short)
-	return v
-}
-
-// missingWhat names missing, required entries with no run on a head, in
-// the verdict's words: the first ("required check Completion", "required
-// workflow CI" for a workflow entry), and how many more ("and 1 more"). An
-// entry is the repository's configuration or GitHub's rulesets, never PR
-// text; one that is not plain text (shownCheckName) is "a required check".
-func missingWhat(missing []string) string {
-	what := "a required check"
-	if workflow, ok := strings.CutPrefix(missing[0], store.RequiredWorkflowPrefix); ok && shownCheckName(workflow) {
-		what = "required workflow " + workflow
-	} else if !ok && shownCheckName(missing[0]) {
-		what = "required check " + missing[0]
-	}
-	if n := len(missing) - 1; n > 0 {
-		what += fmt.Sprintf(" and %d more", n)
-	}
-	return what
 }

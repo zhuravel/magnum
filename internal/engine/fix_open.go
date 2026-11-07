@@ -256,6 +256,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		f.mergeUnchecked = c.Base
 	}
 	f.ci = e.openCI(ctx, repo, pr)
+	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
 	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised
@@ -277,6 +278,11 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		v, work, _ = decideOpen(f)
 	case v.late:
 		e.openLate(ctx, repo, pr, &l, v.Why)
+	case v.dispatch: // fix_open_ci.go: a required check did not run at the head
+		if s, ok := e.openStartCI(ctx, repo, *c.w, pr, f.ciWorkflow, missingWhat(f.ci.missing)); ok {
+			f.ciStart = s
+			v, work, _ = decideOpen(f)
+		}
 	}
 	if v.Verdict == OpenFixing && len(work) > 0 {
 		v = e.openStart(ctx, repo, pr, &l, v, work, fp)

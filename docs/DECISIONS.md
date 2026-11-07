@@ -3118,6 +3118,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestNoRequiredChecksKeepsEveryCheckCounting's "required_checks names no check on the head", which wanted
   the rollup's refusal).
 
+- **The look starts the CI workflow a head's required check did not run in, where the repository names it**
+  (2026-11-07, the same audit; off by default). What the operator did by hand six times, the look can do:
+  `[[repo]] ci_dispatch = "ci.yml"` names the workflow file that produces the repository's required checks,
+  and where rule 11 finds a required check that did not run at an own PR's head (past `settle_max`, all else
+  idle), the look starts that workflow on the PR's branch (`github.Client.DispatchWorkflow`, a
+  `workflow_dispatch` run; the branch, the PR's text, goes on gh's stdin, never in argv or an event) and
+  waits `settle_max` for its run: "CI at a1b2c3d: magnum started ci.yml at 14:05, as required check
+  Completion did not run". The safe way, by its parts. Who: the daemon, as the watch's poll identity (else
+  its review identity), a client it already holds and the identity whose GitHub budget the look reads;
+  never the fixer's pane, which pushes as the fix identity and runs a model's commands. What runs: GitHub
+  runs the workflow as the branch has it and refuses (HTTP 422) one whose file there has no
+  `workflow_dispatch` trigger, so "the workflow allows a dispatch on the branch" is GitHub's own answer, not
+  a guess from a YAML read magnum would need a parser for; a PR whose files include `.github/workflows/` or
+  `.github/actions/` (`changesWorkflow`, the approval's own test), or whose files GitHub did not list whole,
+  is never started, since its CI would run its own workflow with the repository's secrets; a PR the look
+  does not cover (a draft, a fork, `F`, a mute) never reaches rule 11. How often: once per head, recorded
+  before the call (`pr.<id>.ci_dispatch`: the head, the workflow, the time, and how it ended), so a crash
+  between the record and the call starts nothing twice; a new head starts again. Recorded:
+  `fix.open_ci_dispatch` (info), `fix.open_ci_dispatch_failed` (warn, GitHub's status only: its message
+  can name the branch) and `fix.open_ci_dispatch_refused` (info). A start GitHub refused, a refused PR and a
+  run that never came within `settle_max` of the start need you as before, with the reason in the
+  verdict. The start waits for the end of `magnum pause` and for the poll identity's GitHub budget (both
+  hold the look's other writes), not for `[daemon] quiet_hours` (a CI run is no agent's time). A dry run
+  starts nothing. Rejected: starting CI as soon as the head moved (a PR that opens runs it by itself, and
+  the grace keeps a double run off that head; rule 11 also means nothing else is left open, so a fix loop
+  that would push again has not started); starting it while magnum's review of the head still runs (it
+  would save the review's time, but a review with findings starts a loop that pushes a new head, and the
+  run would be spent); a fixed workflow file guessed from the base tip's checks (the base may not run CI on
+  push, and the operator's key is plain); dispatching as the fix identity (a dedicated fix App rarely has
+  Actions: write). Tests, failing first: TestTheLookStartsTheCIWorkflowOnceForAHeadWhoseRequiredCheckDidNotRun,
+  TestTheRunOfTheStartedCIWorkflowEndsTheWait, TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows,
+  TestAFailedStartOfTheCIWorkflowNeedsYouAndIsNotRepeated, TestTheStartOfTheCIWorkflowWaitsForThePauseAndTheBudget,
+  TestDispatchWorkflowPostsTheBranchOnStdin, TestDispatchWorkflowRefusals, TestCIDispatchIsOffUnlessARepoNamesItsWorkflow
+  and TestABadCIDispatchFailsValidation; TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows pins the new
+  key in the pooled repository's texts.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

@@ -1689,10 +1689,11 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   apart, the latest commit status of that name: a status, which anyone who can write to the repository
   posts, never stands for a check run, nor a check run for a status. When the head's stored checks cannot
   say (none read for the head, more than GitHub lists, checks a build before this rule stored, which the
-  poller reads again at once) every check counts, as without the key; the list GitHub's rulesets declare does not change the gate. A check `ignore_checks` names
-  (Watches, pools and repos) is absent here as everywhere, before `required_checks` or the base tip's
-  comparison reads the checks (a `required_checks` entry that names only such checks does not count): a head whose only failing check it names is approved once the others
-  pass, its rollup decided from them, and one where another check still runs waits for it;
+  poller reads again at once) every check counts, as without the key; the list GitHub's rulesets declare
+  does not change the gate. A check `ignore_checks` names (Watches, pools and repos) is absent here as
+  everywhere, before `required_checks` or the base tip's comparison reads the checks (a `required_checks`
+  entry that names only such checks does not count): a head whose only failing check it names is approved
+  once the others pass, its rollup decided from them, and one where another check still runs waits for it;
 - on GitHub (read just before posting) you have not approved that head, have no review in progress, and
   have not requested changes on the PR by hand; a PR with more reviews than Magnum reads (500) is not approved.
 
@@ -3392,7 +3393,18 @@ checks Magnum read whole is never green: a CI workflow that runs only when a PR 
 the fixer's included, no run of it, and GitHub blocks the merge whatever the other checks say. Until
 `settle_max` after the push the run may not have started yet ("CI at a1b2c3d: required check Completion has
 not started"); after that the PR needs you ("required check Completion did not run at a1b2c3d: run its
-workflow on the PR's branch, or push").
+workflow on the PR's branch, or push"). With `[[repo]] ci_dispatch = "ci.yml"`, the workflow file that
+produces the repository's required checks, Magnum starts it instead (a `workflow_dispatch` run on the PR's
+branch, as the watch's `poll_identity`, else its `identity`: the daemon's own client, never the fixer's
+pane), once per head, recorded before the call so that nothing starts it twice (`fix.open_ci_dispatch`), and
+waits `settle_max` for its run ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
+did not run"); a run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
+without a `workflow_dispatch` trigger on the branch answers HTTP 422) and a PR it will not start
+(`fix.open_ci_dispatch_refused`: one that changes its own `.github/workflows/` or `.github/actions/`, which
+would run its own CI with the repository's secrets, or whose files GitHub did not list whole) need you as
+above. The start waits for the end of `magnum pause` and for the identity's GitHub budget, not for quiet
+hours. The identity needs the right to run workflows (a gh login that can push to the repository, or an
+App with Actions: write). Without the key (the default) Magnum starts nothing.
 
 **What you see.**
 
@@ -3406,7 +3418,8 @@ workflow on the PR's branch, or push").
 - `magnum logs <ref>` shows `fix.start`, `fix.conflict_unchecked`, `fix.compacted`, `fix.fresh_session`, `fix.context_unknown`,
   `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`, `fix.needs_you`, `fix.time_up`,
   `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`, and under `autofix = "open"`
-  `autofix.open`, `fix.open_needs_you`, `fix.open_answered` and `fix.open_magnum_late`. A fixer that runs out of the
+  `autofix.open`, `fix.open_needs_you`, `fix.open_answered`, `fix.open_magnum_late`, `fix.open_ci_dispatch`,
+  `fix.open_ci_dispatch_failed` and `fix.open_ci_dispatch_refused`. A fixer that runs out of the
   role's `timeout` is asked once to stop its background tasks and write its report now (the `fix.time_up`
   warning); the job fails if no report comes within 5 more minutes.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
