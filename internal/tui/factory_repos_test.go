@@ -24,8 +24,11 @@ func fixtureTwoRepos() factoryFrame {
 				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "2 items need you: 1 thread of a person and 1 skipped finding",
 					Short: "2 items need you", OnYou: true}},
 				Move: "see the task card", MoveShort: "task card",
-				Since: factoryAgo(now, 35*time.Minute),
-				Help:  "you: 2 items need you: 1 thread of a person and 1 skipped finding",
+				Since:     factoryAgo(now, 35*time.Minute),
+				Help:      "you: 2 items need you: 1 thread of a person and 1 skipped finding",
+				CI:        &CIInfo{State: "passed", Total: 41, Passed: 41},
+				Findings:  &FindingsInfo{Counts: [4]int{0, 1, 3, 0}, Verdict: "blocking"},
+				Approvals: &FactoryApprovals{Decision: "REVIEW_REQUIRED"},
 			},
 			{
 				ID: -72, Key: "widget#4602", GitHub: "#4602", Jira: "PR-12400", Repo: "example/widget", Title: "Coupon rounding",
@@ -35,6 +38,10 @@ func fixtureTwoRepos() factoryFrame {
 				Since: factoryAgo(now, 25*time.Minute),
 				Help:  "you: 1 item needs you: 1 thread of a person",
 				PR:    &FactoryPR{Ref: "example/widget#4602"},
+				CI: &CIInfo{State: "failed", Total: 12, Passed: 11, Failed: 1, Required: []CheckState{
+					{Name: "Completion", Label: "Completion", State: "failed", Done: 1, Total: 1}, {Name: "rspec*", Label: "rspec", State: "passed", Done: 8, Total: 8}}},
+				Findings:  &FindingsInfo{Counts: [4]int{0, 0, 0, 2}, Verdict: "non_blocking"},
+				Approvals: &FactoryApprovals{Approved: 1, Decision: "APPROVED"},
 			},
 			{
 				ID: 5, Key: "task 5", Repo: "example/widget",
@@ -48,9 +55,12 @@ func fixtureTwoRepos() factoryFrame {
 			{
 				ID: 3, Key: "PR-12321", GitHub: "#4531", Repo: "example/talkable", Title: "Advocate offer email locale",
 				Group: GroupWaits, Mark: MarkWorking,
-				WaitsOn: []WaitsOn{{Who: "agent", What: "magnum fixes #4531 (cycle 2 of 5)", Short: "magnum fixes #4531"}},
-				Since:   factoryAgo(now, 9*time.Minute),
-				Help:    "agent: magnum fixes #4531 (cycle 2 of 5)",
+				WaitsOn:   []WaitsOn{{Who: "agent", What: "magnum fixes #4531 (cycle 2 of 5)", Short: "magnum fixes #4531"}},
+				Since:     factoryAgo(now, 9*time.Minute),
+				Help:      "agent: magnum fixes #4531 (cycle 2 of 5)",
+				CI:        &CIInfo{State: "pending", Total: 41, Passed: 25, Pending: 16},
+				Findings:  &FindingsInfo{Counts: [4]int{1, 0, 2, 0}, Verdict: "blocking"},
+				Approvals: &FactoryApprovals{Changes: 1, Decision: "CHANGES_REQUESTED"},
 			},
 			{
 				ID: 4, Key: "PR-12325", GitHub: "#4535", Repo: "example/talkable", Title: "Deploy list on campaigns",
@@ -58,6 +68,10 @@ func fixtureTwoRepos() factoryFrame {
 				WaitsOn: []WaitsOn{{Who: "reviewers", What: "nothing open at a1b2c3d · no approval yet", Short: "nothing open at a1b2c3d"}},
 				Since:   factoryAgo(now, 3*time.Hour),
 				Help:    "reviewers: nothing open at a1b2c3d · no approval yet",
+				CI: &CIInfo{State: "passed", Total: 41, Passed: 41, Required: []CheckState{
+					{Name: "Completion", Label: "Completion", State: "missing"}}},
+				Findings:  &FindingsInfo{Verdict: "clean", Fixed: 3},
+				Approvals: &FactoryApprovals{Decision: "REVIEW_REQUIRED"},
 			},
 			{
 				ID: 6, Key: "task 6", Repo: "example/widget", Title: "Add passkey login support",
@@ -69,10 +83,13 @@ func fixtureTwoRepos() factoryFrame {
 			{
 				ID: -81, Key: "talkable#4611", GitHub: "#4611", Jira: "PR-12410", Repo: "example/talkable", Title: "Cart totals in the widget",
 				Group: GroupYours, Mark: MarkWaits,
-				WaitsOn: []WaitsOn{{Who: "CI", What: "CI at a1b2c3d"}},
-				Since:   factoryAgo(now, 10*time.Minute),
-				Help:    "CI: CI at a1b2c3d",
-				PR:      &FactoryPR{Ref: "example/talkable#4611"},
+				WaitsOn:   []WaitsOn{{Who: "CI", What: "CI at a1b2c3d"}},
+				Since:     factoryAgo(now, 10*time.Minute),
+				Help:      "CI: CI at a1b2c3d",
+				PR:        &FactoryPR{Ref: "example/talkable#4611"},
+				CI:        &CIInfo{State: "pending", Total: 41, Passed: 40, Pending: 1},
+				Findings:  &FindingsInfo{Verdict: "clean"},
+				Approvals: &FactoryApprovals{Approved: 2, Stale: 1, Decision: "APPROVED"},
 			},
 			{
 				ID: -76, Key: "widget#4606", GitHub: "#4606", Repo: "example/widget", Title: "Old sync job cleanup",
@@ -210,4 +227,53 @@ func TestFactoryOneRepositoryDrawsNoRepoColumn(t *testing.T) {
 	lines := factoryRowLines(t, frame, f.Rows)
 	mustContain(t, lines[0], "talkable")
 	mustContain(t, lines[4], "helm")
+}
+
+// Rows with a PR draw its CI, magnum's findings and the people's approvals
+// in columns of their own after WAITS ON, in the board's own cells on a
+// wide screen (the worst required check or the counts, the findings by
+// priority) and in their short forms on a narrower one (the CI's glyph,
+// the findings' verdict and worst priority); past the spec's steps they
+// outlast YOUR MOVE, whose step the help line then says, and the CI's glyph
+// outlasts the others. A task without a PR leaves them empty, and every row
+// stays one line. Before, home drew none of them.
+func TestFactoryPRColumnsDrawTheBoardsCells(t *testing.T) {
+	f := fixtureTwoRepos()
+	lines := func(w int) []string {
+		frame, _ := factoryFrameOf(f, w, factoryReposHeight, true, IconsUnicode, factoryNow)
+		return strings.Split(ansi.Strip(frame), "\n")
+	}
+	row := func(w, i int) string {
+		frame, _ := factoryFrameOf(f, w, factoryReposHeight, true, IconsUnicode, factoryNow)
+		return factoryRowLines(t, frame, f.Rows)[i]
+	}
+	mustContain(t, lines(200)[3], "CI", "FINDINGS", "APPR")
+	mustContain(t, row(200, 0), "✓ 41/41", "✗ P1 P2×3", "—")
+	mustContain(t, row(200, 1), "✗ Completion +1", "● P3×2", "✔ 1")
+	mustContain(t, row(200, 3), "◌ 25/41", "✗ P0 P2×2", "✗ 1")
+	mustContain(t, row(200, 4), "– Completion not run", "✔ clean")
+	mustContain(t, row(200, 6), "✔ 2 ⟳")
+	for _, w := range []int{100, 120, 140} {
+		mustContain(t, lines(w)[3], "CI", "FINDINGS", "APPR")
+		mustContain(t, row(w, 0), "✓", "✗ P1", "—")
+		mustContain(t, row(w, 1), "✗", "● P3", "✔ 1")
+		if r := row(w, 0); strings.Contains(r, "41/41") || strings.Contains(r, "P2×3") {
+			t.Errorf("%d columns: the CI and the findings keep their short forms: %q", w, r)
+		}
+	}
+	mustContain(t, lines(140)[3], "YOUR MOVE")
+	for _, w := range []int{100, 120} {
+		if strings.Contains(lines(w)[3], "YOUR MOVE") {
+			t.Errorf("%d columns: YOUR MOVE gives way to the PR's columns: %q", w, lines(w)[3])
+		}
+		mustContain(t, lines(w)[factoryReposHeight-2], "your move: task card")
+	}
+	if l := lines(90); !strings.Contains(l[3], "CI") || strings.Contains(l[3], "FINDINGS") || strings.Contains(l[3], "APPR") {
+		t.Errorf("90 columns: the CI's glyph outlasts FINDINGS and APPR: %q", l[3])
+	}
+	for _, w := range []int{100, 120, 140, 200} {
+		if task := row(w, 2); strings.ContainsAny(task, "✓◌✔—") {
+			t.Errorf("%d columns: a task without a PR draws a PR cell: %q", w, task)
+		}
+	}
 }

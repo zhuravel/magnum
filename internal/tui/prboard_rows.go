@@ -852,20 +852,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		r.Requests = qs
 	}
 	r.SinceReview = cleanDelta(r.SinceReview)
-	if r.CI != nil {
-		ci := *r.CI
-		ci.State, ci.RequiredSource, ci.Failing = cleanText(ci.State), cleanText(ci.RequiredSource), cleanAll(ci.Failing)
-		ci.Workflows = slices.Clone(ci.Workflows)
-		for i := range ci.Workflows {
-			ci.Workflows[i].Name, ci.Workflows[i].State = cleanText(ci.Workflows[i].Name), cleanText(ci.Workflows[i].State)
-		}
-		ci.Required = slices.Clone(ci.Required)
-		for i := range ci.Required {
-			r := &ci.Required[i]
-			r.Name, r.Label, r.State = cleanText(r.Name), cleanText(r.Label), cleanText(r.State)
-		}
-		r.CI = &ci
-	}
+	r.CI = cleanCI(r.CI)
 	if r.LastRound != nil {
 		lr := *r.LastRound
 		lr.Kind = cleanText(lr.Kind)
@@ -935,4 +922,24 @@ func cleanAll(ss []string) []string {
 		out[i] = cleanText(s)
 	}
 	return out
+}
+
+// cleanCI is a copy of ci with its text cleaned (check and workflow names
+// come from the PR's own workflow files); nil for nil.
+func cleanCI(in *CIInfo) *CIInfo {
+	if in == nil {
+		return nil
+	}
+	ci := *in
+	ci.State, ci.RequiredSource, ci.Failing = cleanText(ci.State), cleanText(ci.RequiredSource), cleanAll(ci.Failing)
+	ci.Workflows = slices.Clone(ci.Workflows)
+	for i := range ci.Workflows {
+		ci.Workflows[i].Name, ci.Workflows[i].State = cleanText(ci.Workflows[i].Name), cleanText(ci.Workflows[i].State)
+	}
+	ci.Required = slices.Clone(ci.Required)
+	for i := range ci.Required {
+		r := &ci.Required[i]
+		r.Name, r.Label, r.State = cleanText(r.Name), cleanText(r.Label), cleanText(r.State)
+	}
+	return &ci
 }

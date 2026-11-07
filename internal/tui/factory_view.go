@@ -4,8 +4,14 @@ package tui
 // no state and reads no clock; the screen model (a later task) feeds it the
 // rows of the factory registry and the key hints of the moment.
 //
-// A row is one line: cursor, mark, repository, key, title, WAITS ON, YOUR
-// MOVE, one column per staging server, WAITED. The repository has a column
+// A row is one line: cursor, mark, repository, key, title, WAITS ON, its
+// PR's CI, FINDINGS and APPR, YOUR MOVE, one column per staging server,
+// WAITED. The PR's columns are drawn when a row has their data, in the PR
+// board's own cells (ciCell, findingsCell) on a wide screen, their short
+// forms (the CI's glyph, the findings' verdict and worst priority) on a
+// narrower one; past the spec's steps the PR's columns outlast YOUR MOVE,
+// whose step the help line then names, and the CI's glyph outlasts the
+// FINDINGS and APPR columns. The repository has a column
 // only when home shows more than one, or one the title does not name; it is
 // cut to 11 cells on a narrow screen and to 6 once the staging cells go
 // short, unless the title keeps 24 cells with its whole name. The widths
@@ -17,9 +23,11 @@ package tui
 // columns, YOUR MOVE, and squeezes the title and WAITS ON. When the screen is
 // wide enough for everything at its fullest (long blockers, the age of each
 // staging cell) with the title squeezed to no less than 24 cells, it draws
-// that instead and shares the spare width out. From 120 columns, at every
-// step, a row with a PR shows its number in a column of its own after the
-// key, which is then the Jira key.
+// that instead and shares the spare width out; from 180 columns the
+// longest blockers give up their ends there, down to 48 cells, before the
+// title goes under 24.
+// From 120 columns, at every step, a row with a PR shows its number in a
+// column of its own after the key, which is then the Jira key.
 
 import (
 	"fmt"
@@ -80,6 +88,12 @@ const (
 	factoryMoveShort = 15  // ... and its short form, "diff, then push"
 	factoryMoveWide  = 28  // YOUR MOVE on a wide screen: the longest step and a little air
 	factoryChipGap   = 16  // the room the rule chip keeps from the counts
+	factoryWaitsWide = 48  // WAITS ON's floor on a wide screen, whose longest blockers give their ends up for the title ...
+	factoryCutFrom   = 180 // ... from this width
+	factoryCIMid     = 14  // the CI cell's widest on a 140-column screen ...
+	factoryCILong    = 22  // ... and on a wide one
+	factoryFindMid   = 14  // the FINDINGS cell's widest on a 140-column screen ...
+	factoryFindLong  = 18  // ... and on a wide one
 	factoryLate      = 30 * time.Minute
 	factoryDefaultW  = 140
 )
@@ -98,6 +112,8 @@ type factoryLayout struct {
 	wide                  bool // long blockers, ages on the staging cells, long chips and help
 	split                 bool // the key is the Jira key, the PR number in a column of its own
 	waits, move, stage    factoryForm
+	pr                    factoryForm // the PR's CI, FINDINGS and APPR cells
+	prMin                 bool        // the CI's glyph alone: no FINDINGS or APPR
 	keyGap                int
 	stageGap              int
 	repoCap               int // the repository's widest cell
@@ -108,6 +124,7 @@ type factoryLayout struct {
 	repoW, keyW, ghW, titleW, waitsW, moveW int // repoW 0: no REPO column
 	repoFull                                int // the widest REPO cell uncut (to factoryRepoWide)
 	stageW                                  []int
+	ciW, findW, apprW                       int // 0: no such column
 }
 
 func (l factoryLayout) total() int {
@@ -120,6 +137,11 @@ func (l factoryLayout) total() int {
 	}
 	if l.hasMove {
 		n += 2 + l.moveW
+	}
+	for _, w := range []int{l.ciW, l.findW, l.apprW} {
+		if w > 0 {
+			n += w + 2
+		}
 	}
 	if l.staging {
 		for _, w := range l.stageW {
@@ -280,6 +302,17 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 		pr := *r.PR
 		pr.Ref, pr.Off = cleanText(pr.Ref), cleanText(pr.Off)
 		r.PR = &pr
+	}
+	r.CI = cleanCI(r.CI)
+	if r.Findings != nil {
+		f := *r.Findings
+		f.Verdict, f.Posted, f.SHA = cleanText(f.Verdict), cleanText(f.Posted), cleanText(f.SHA)
+		r.Findings = &f
+	}
+	if r.Approvals != nil {
+		a := *r.Approvals
+		a.Decision = cleanText(a.Decision)
+		r.Approvals = &a
 	}
 	return r
 }
@@ -537,6 +570,67 @@ func (p *factoryPainter) waitedCell(r FactoryRow) cell {
 	return cell{{spaces(factoryWaitedW - ansi.StringWidth(text)), noStyle}, {text, style}}
 }
 
+// ciText is the row's CI cell in a form: the board's (ciCell), its glyph
+// alone in the short form (the worst required check's, else the counts');
+// nothing for a row without a PR.
+func (p *factoryPainter) ciText(r FactoryRow, form factoryForm) cell {
+	ci := r.CI
+	switch {
+	case ci == nil:
+		return nil
+	case form != formShort:
+		return p.base.ciCell(ci)
+	}
+	state := ci.State
+	if len(ci.Required) > 0 {
+		state = slices.MinFunc(ci.Required, func(a, b CheckState) int { return ciRank(a.State) - ciRank(b.State) }).State
+	}
+	if l := p.base.ciLook(state); l.glyph != "" {
+		return cell{{l.glyph, l.glyphSt}}
+	}
+	return p.base.dash()
+}
+
+// findingsText is the row's FINDINGS cell in a form: the board's
+// (findingsCell), in the short form the review's verdict and its worst
+// priority, new or still open ("✗ P1"), or the board's cell when it lists
+// no priority ("✔ clean", "● 3 open"); nothing for a row without a PR.
+func (p *factoryPainter) findingsText(r FactoryRow, form factoryForm) cell {
+	f := r.Findings
+	if f == nil {
+		return nil
+	}
+	if form == formShort {
+		for i := range f.Counts {
+			if f.Counts[i] > 0 || f.OpenCounts != nil && f.OpenCounts[i] > 0 {
+				glyph, vst := p.base.findingsVerdict(f.Verdict)
+				return cell{{glyph + " ", vst}, {"P" + strconv.Itoa(i), p.base.priorityStyle(i)}}
+			}
+		}
+	}
+	return p.base.findingsCell(f)
+}
+
+// apprText is the row's APPR cell: the changes requested ("✗ 1"), else the
+// approvals ("✔ 2", "⟳" when one is of an older commit than the head),
+// else a dash; nothing for a row without a PR.
+func (p *factoryPainter) apprText(r FactoryRow, _ factoryForm) cell {
+	a := r.Approvals
+	switch {
+	case a == nil:
+		return nil
+	case a.Changes > 0:
+		return cell{{p.g.changes + " " + strconv.Itoa(a.Changes), p.base.pal.red}}
+	case a.Approved > 0:
+		c := cell{{p.g.approved + " " + strconv.Itoa(a.Approved), p.base.pal.green}}
+		if a.Stale > 0 {
+			c = append(c, seg{" " + p.g.stale, p.base.pal.yellow})
+		}
+		return c
+	}
+	return p.base.dash()
+}
+
 // layout
 
 // measure sizes every column of l from the data, the title at its natural width.
@@ -544,6 +638,11 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	l.staging = len(p.names) > 0 && !l.hideStaging
 	l.hasMove = !l.hideMove
 	l.repoW, l.repoFull, l.keyW, l.ghW, l.titleW, l.waitsW, l.moveW, l.stageW = 0, 0, 1, 0, 1, len("WAITS ON"), 0, nil
+	l.ciW, l.findW, l.apprW = 0, 0, 0
+	ciCap, findCap := factoryCIMid, factoryFindMid
+	if l.pr == formLong {
+		ciCap, findCap = factoryCILong, factoryFindLong
+	}
 	if l.split {
 		l.ghW = factoryGitHubMin
 	}
@@ -559,6 +658,15 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 		l.titleW = max(l.titleW, ansi.StringWidth(r.Title))
 		l.waitsW = max(l.waitsW, p.waitsCell(r, l.waits).width())
 		l.moveW = max(l.moveW, ansi.StringWidth(r.moveText(l.move)))
+		if r.CI != nil {
+			l.ciW = max(l.ciW, len("CI"), min(p.ciText(r, l.pr).width(), ciCap))
+		}
+		if r.Findings != nil && !l.prMin {
+			l.findW = max(l.findW, len("FINDINGS"), min(p.findingsText(r, l.pr).width(), findCap))
+		}
+		if r.Approvals != nil && !l.prMin {
+			l.apprW = max(l.apprW, len("APPR"), p.apprText(r, l.pr).width())
+		}
 	}
 	if l.hasMove {
 		floor := factoryMoveFloor
@@ -602,23 +710,34 @@ func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 
 // plan picks the fullest layout that fits the width.
 func (p *factoryPainter) plan() factoryLayout {
-	wide := p.measure(factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, keyGap: 2, stageGap: 2,
-		repoCap: factoryRepoWide})
-	if room := p.width - (wide.total() - wide.titleW); room >= min(wide.titleW, factoryKeepTitle) {
+	wide := p.measure(factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, pr: formLong, keyGap: 2,
+		stageGap: 2, repoCap: factoryRepoWide})
+	need, room := min(wide.titleW, factoryKeepTitle), p.width-(wide.total()-wide.titleW)
+	if cut := min(need-room, wide.waitsW-factoryWaitsWide); p.width >= factoryCutFrom && cut > 0 && room+cut >= need {
+		// The longest blockers give up their ends (the help line says them
+		// whole) before the wide layout gives up the PR's columns.
+		wide.waitsW -= cut
+		room += cut
+	}
+	if room >= need {
 		wide.titleW = min(wide.titleW, room)
 		return p.grow(wide)
 	}
 	const mid, short = factoryRepoMid, factoryRepoShort
 	split := p.prs && p.width >= factoryPRFrom
 	steps := []factoryLayout{
-		{split: split, waits: formMid, move: formMid, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{split: split, waits: formMid, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{split: split, waits: formShort, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 2, stageGap: 1, repoCap: short},
-		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short},
-		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true},
-		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true,
-			hideMove: true},
+		{split: split, waits: formMid, move: formMid, stage: formMid, pr: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formMid, move: formShort, stage: formMid, pr: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formMid, move: formShort, stage: formMid, pr: formShort, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formShort, move: formShort, stage: formMid, pr: formShort, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, keyGap: 2, stageGap: 1, repoCap: short},
+		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, keyGap: 1, stageGap: 1, repoCap: short},
+		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, keyGap: 1, stageGap: 1, repoCap: short,
+			hideStaging: true},
+		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, keyGap: 1, stageGap: 1, repoCap: short,
+			hideStaging: true, hideMove: true},
+		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, prMin: true, keyGap: 1, stageGap: 1,
+			repoCap: short, hideStaging: true, hideMove: true},
 	}
 	var l factoryLayout
 	for _, s := range steps {
@@ -649,8 +768,8 @@ type placed struct {
 
 // xs are the left edges of the columns.
 type factoryXs struct {
-	repo, key, gh, title, waits, move, waited int
-	stageAt                                   []int
+	repo, key, gh, title, waits, ci, find, appr, move, waited int
+	stageAt                                                   []int
 }
 
 func (p *factoryPainter) xs() factoryXs {
@@ -668,6 +787,15 @@ func (p *factoryPainter) xs() factoryXs {
 	x.title = at
 	x.waits = x.title + l.titleW + 2
 	at = x.waits + l.waitsW + 2
+	for _, c := range []struct {
+		x *int
+		w int
+	}{{&x.ci, l.ciW}, {&x.find, l.findW}, {&x.appr, l.apprW}} {
+		if c.w > 0 {
+			*c.x = at
+			at += c.w + 2
+		}
+	}
 	if l.hasMove {
 		x.move = at
 		at += l.moveW + 2
@@ -711,6 +839,15 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 	ps = append(ps,
 		placed{x.title, l.titleW, cell{{r.Title, p.tone(r, noStyle)}}},
 		placed{x.waits, l.waitsW, p.waitsCell(r, l.waits)})
+	if l.ciW > 0 {
+		ps = append(ps, placed{x.ci, l.ciW, p.ciText(r, l.pr)})
+	}
+	if l.findW > 0 {
+		ps = append(ps, placed{x.find, l.findW, p.findingsText(r, l.pr)})
+	}
+	if l.apprW > 0 {
+		ps = append(ps, placed{x.appr, l.apprW, p.apprText(r, l.pr)})
+	}
 	if l.hasMove {
 		ps = append(ps, placed{x.move, l.moveW, cell{{r.moveText(l.move), noStyle}}})
 	}
@@ -759,6 +896,14 @@ func (p *factoryPainter) headerLine(label string, columns bool, above int) strin
 	if columns {
 		head := func(at, w int, s string) placed { return placed{at, w, cell{{s, p.st.Header}}} }
 		ps = append(ps, head(x.waits, l.waitsW, "WAITS ON"))
+		for _, c := range []struct {
+			x, w int
+			name string
+		}{{x.ci, l.ciW, "CI"}, {x.find, l.findW, "FINDINGS"}, {x.appr, l.apprW, "APPR"}} {
+			if c.w > 0 {
+				ps = append(ps, head(c.x, c.w, c.name))
+			}
+		}
 		if l.hasMove {
 			ps = append(ps, head(x.move, l.moveW, "YOUR MOVE"))
 		}
@@ -1194,7 +1339,12 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	}
 	help := ""
 	if p.cursor >= 0 {
-		if t := p.rows[p.cursor].helpText(p.helpForm()); t != "" {
+		r := p.rows[p.cursor]
+		t := r.helpText(p.helpForm())
+		if m := r.moveText(formShort); !p.lay.hasMove && m != "" { // the layout gave YOUR MOVE up: the help line says it
+			t = strings.TrimPrefix(t+p.g.sep+"your move: "+m, p.g.sep)
+		}
+		if t != "" {
 			help = truncate(" "+t, p.width)
 		}
 	}
