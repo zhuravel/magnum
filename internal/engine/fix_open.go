@@ -220,6 +220,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
 		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA)...)
 	}
+	if c := l.Conflict; c.Unchecked && c.Head == pr.HeadSHA {
+		f.mergeUnchecked = c.Base
+	}
 	f.ci = e.openCI(ctx, repo, pr)
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
@@ -441,10 +444,17 @@ func (e *Engine) noteOpenFetch(key string, err error) {
 // openConflictEvery and whenever the head or the base changed, in the PR's
 // slot, else its clone. The base is fetched once per clone in the tick (a
 // dry run fetches nothing, and checks the tip last fetched); a check that
-// fails leaves the conflict unknown, and no conflict item.
+// fails leaves the conflict unknown (Unchecked: no conflict item, and the
+// verdict is never idle) and is tried again openReadRetry later. A PR
+// nothing can check (no git, no checkout, a base name magnum does not pass
+// to a shell) has no conflict item and is not unknown for it.
 func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, now time.Time) {
 	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
-	if c := l.Conflict; c.Head == pr.HeadSHA && c.Base == base && now.Sub(c.At) < openConflictEvery {
+	every := openConflictEvery
+	if l.Conflict.Unchecked {
+		every = openReadRetry
+	}
+	if c := l.Conflict; c.Head == pr.HeadSHA && c.Base == base && now.Sub(c.At) < every {
 		return
 	}
 	dir, clone := e.cloneOf(repo), ""
@@ -453,7 +463,11 @@ func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr stor
 	}
 	clone = cmp.Or(clone, dir)
 	next := openConflict{Head: pr.HeadSHA, Base: base, At: now}
-	if e.d.Git != nil && dir != "" && gitx.ShellSafeRef(base) && !e.d.DryRun {
+	if e.d.Git == nil || dir == "" || !gitx.ShellSafeRef(base) {
+		l.Conflict = next
+		return
+	}
+	if !e.d.DryRun {
 		key := openFetchKey(clone, base)
 		done, ferr := e.openFetched(key)
 		if !done {

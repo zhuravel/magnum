@@ -3303,12 +3303,14 @@ Each tick, before dispatch, Magnum looks at every own open PR of such a watch an
 the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your
 own push), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", with "· 2 commits after
 the approval" when the head moved past a person's approval), `unknown` (it has not read GitHub since the PR
-changed: never idle) or `off`, with since when it has said the same (`since`: a change of the PR keeps it while
+changed, or could not check the head's merge with its base: never idle) or `off`, with since when it has said the same (`since`: a change of the PR keeps it while
 the verdict, the approval and the reason to be off stay). The look reads GitHub (the three reads the fix job makes of the other
 reviewers) only when the PR changed (its head, its updatedAt, its activity or Magnum's last review), 30
 minutes after its last read as a safety net, and 5 minutes after a failed read; never below `[github]
 budget_floor`, and for at most 4 PRs a tick. It checks each head against the base the PR merges into (a
-stacked PR's own base) every 30 minutes, with one fetch of that base per clone in a tick. A start hands its
+stacked PR's own base) every 30 minutes, with one fetch of that base per clone in a tick; a check that failed
+(the fetch, say) leaves the merge unknown, never idle ("the merge with master could not be checked"), and is
+tried again 5 minutes later. A start hands its
 read to the fix job, which reads GitHub no second time. While the poll of the watch is behind (two of its polls in a
 row failed, or its last good poll is over four poll intervals old; one failed poll is not) the PR's row may be
 old: the verdict is `unknown` and nothing starts. A start reads the PR's row again first: one that changed

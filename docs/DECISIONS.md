@@ -2965,6 +2965,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheSettleWaitsForQuietOnAnOldHead, TestTheSpellOfActivityBeginsGoesOnAndEnds,
   TestAColleaguesThreadOnAnOldHeadWaitsForQuiet.
 
+- **A merge the look could not check is unknown, never idle** (2026-11-07, the review of the factory bridge).
+  The look's base check recorded a failure (`Conflict.Unchecked`), but nothing read it: the failed check
+  gave no conflict item, so an approved PR read "nothing open · approved, merge is yours" while its base had
+  moved under it, for 30 minutes and again at each failed check (a locked SSH agent after a reboot fails
+  every one). Rule 11 now says unknown ("the merge with master could not be checked") instead of idle, and a
+  failed check is tried again 5 minutes later, as a failed read is. Work still starts a loop, whose job checks
+  the base itself. A PR that nothing can check (no git, no checkout, a base name magnum does not pass to a
+  shell) stays as it was, with no conflict item and not unknown for it: a permanent unknown would never let
+  it be idle. Tests, failing first: TestAnUncheckedMergeIsNeverIdle,
+  TestAFailedBaseCheckIsNeverIdleAndIsTriedAgainSoon.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

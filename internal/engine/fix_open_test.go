@@ -1039,3 +1039,25 @@ func TestAColleaguesThreadOnAnOldHeadWaitsForQuiet(t *testing.T) {
 		t.Errorf("fix runs = %d once quiet (verdict %s: %s), want the loop", n, v.Verdict, v.Why)
 	}
 }
+
+// A failed fetch of the base leaves the head's merge unknown, never idle,
+// and the look checks again 5 minutes later, as a failed read is tried
+// again, not 30 minutes later. Before, the failed check counted as no
+// conflict: an approved PR read idle, merge yours, while its base had moved
+// under it.
+func TestAFailedBaseCheckIsNeverIdleAndIsTriedAgainSoon(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick() // reviewed
+	git.mu.Lock()
+	git.fetchErr = errors.New("gitx: fetch master: exit 128: fatal: unable to access the remote")
+	git.mu.Unlock()
+	h.pastSettle()
+	h.tick()
+	h.wantOpen(OpenUnknown, "the merge with master could not be checked")
+	git.mu.Lock()
+	git.fetchErr = nil
+	git.mu.Unlock()
+	h.advance(6 * time.Minute)
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open")
+}

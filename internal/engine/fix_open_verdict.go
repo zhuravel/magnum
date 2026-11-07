@@ -31,7 +31,8 @@ package engine
 //     review work, at most autofix_max_loops a day, never within
 //     hands_off_after_push of the operator's own push;
 //  10. a head the reviewers have not settled on waits;
-//  11. red required CI needs you, pending required CI waits;
+//  11. red required CI needs you, pending required CI waits; a merge with
+//     the base the look could not check is unknown;
 //  12. otherwise the PR is idle: nothing open at its head.
 //
 // Unknown is never idle.
@@ -326,7 +327,8 @@ func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 // failed: the last read failed; low: the GitHub budget is below the floor;
 // pollStale: the watch's poll is behind (pollBehind);
 // cut: what the read lacked), the items, the ledger, the settle's keys,
-// CI, the approval and the commits after it.
+// CI, the approval and the commits after it, and the base whose merge
+// with the head could not be checked.
 type openFacts struct {
 	now        time.Time
 	pr         store.PR
@@ -349,6 +351,9 @@ type openFacts struct {
 	ci         openCI
 	approved   string
 	afterCount int
+	// mergeUnchecked is the base whose merge with the head the look's last
+	// check could not check ("" = checked, or not looked at this head).
+	mergeUnchecked string
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -488,6 +493,8 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenNeedsYou, fmt.Sprintf("%s failed at %s", f.ci.failed, short)), nil, needs
 	case f.ci.pending:
 		return say(OpenWaits, "CI at "+short), nil, needs
+	case f.mergeUnchecked != "":
+		return say(OpenUnknown, "the merge with "+f.mergeUnchecked+" could not be checked; trying again shortly"), nil, needs
 	}
 	why := "nothing open at " + short
 	if f.pr.ReviewGate != nil && f.pr.ReviewGate.Decision == "APPROVED" {

@@ -500,3 +500,20 @@ func TestTheSpellOfActivityBeginsGoesOnAndEnds(t *testing.T) {
 		t.Errorf("a spell after a night the look did not see = %+v, want a new one at %s", next, *pr.ActivityAt)
 	}
 }
+
+// A look at the base that failed leaves the merge unknown, and unknown is
+// never idle: an approved PR whose merge with its base could not be
+// checked does not say "merge is yours". Work still starts a loop, whose
+// job checks the base itself.
+func TestAnUncheckedMergeIsNeverIdle(t *testing.T) {
+	f := idleFacts()
+	f.mergeUnchecked = "master"
+	v, _, _ := decideOpen(f)
+	wantVerdict(t, v, OpenUnknown, "the merge with master could not be checked")
+	f.items = []openItem{personThread(4100)}
+	v, work, _ := decideOpen(f)
+	wantVerdict(t, v, OpenFixing, "starts a fix loop")
+	if len(work) != 1 {
+		t.Errorf("work = %v, want the thread", work)
+	}
+}
