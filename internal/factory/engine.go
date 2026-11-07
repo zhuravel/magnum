@@ -155,10 +155,12 @@ type GitHub interface {
 // rounds in flight and due fill its limit (max_concurrent_reviews), so a
 // local round takes a free round or waits; and what its registry says of
 // the factory's PRs (PRStates: the row, the verdict, the loop), which the
-// screen draws and the tick follows.
+// screen draws and the tick follows, and of your own open PRs (OwnPRs),
+// which the screen lists.
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
+	OwnPRs(ctx context.Context) ([]PRState, error)
 }
 
 // LocalReviewer runs one round of magnum's review on a task's change in its

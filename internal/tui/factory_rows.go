@@ -18,6 +18,9 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
+	// GroupYours holds your own open PRs from magnum's registry that are no
+	// task's (YOUR PRS): those that need you are in GroupNeedsYou.
+	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone
 )
@@ -77,6 +80,27 @@ type FactoryRow struct {
 	// PR-12360 is pushed"), after the blocker's own text on a wide one; a
 	// narrow one keeps the blocker's Short, or Frees when it has none.
 	Frees string
+
+	// PR is set on a row of your own PR from magnum's registry, not a task
+	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such
+	// a row's ID is the negative of magnum's id of the PR, which no task's
+	// has.
+	PR *FactoryPR
+}
+
+// FactoryPR is your own PR on the factory screen, as magnum's registry
+// tells it: what the row's keys go by.
+type FactoryPR struct {
+	// Ref names it as magnum's commands do ("owner/name#4512").
+	Ref string
+	// Fixing says magnum's fix loop runs on it.
+	Fixing bool
+	// FixOff says you switched it out of autofix (`magnum fix --off`).
+	FixOff bool
+	// Off is why magnum's look leaves it alone (its verdict is off: a
+	// baseline, fix off, a watch that leaves your PRs out), in its words;
+	// "" when the look covers it. The row is drawn dim: it asks nothing.
+	Off string
 }
 
 // Digest is what happened while the operator was away, shown until the next

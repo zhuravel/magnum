@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -479,5 +480,93 @@ func TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem(t *testing.T) {
 		if got[ref] != want {
 			t.Errorf("%s#%d: %+v, want %+v", ref.Repo, ref.Number, got[ref], want)
 		}
+	}
+}
+
+// selfConfig is openWatchConfig with zhuravel as the watch's identity, so
+// zhuravel's PRs are your own (config.SelfMatch).
+func selfConfig() *config.Config {
+	cfg := openWatchConfig()
+	cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
+	return cfg
+}
+
+// OwnPRs lists your own open PRs from magnum's registry, each read as
+// PRStates reads a PR (magnum's id, title and page, the verdict, the fix
+// loop, fix off), and changes nothing in the registry: its file is byte
+// for byte as it was.
+func TestOwnPRsReadsYourOpenPRsAndWritesNothing(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	now := time.Now()
+	head := strings.Repeat("ab", 20)
+	pr := magnumPR(t, st, 7, head, func(g *store.GitHubPR) { g.Title = new("Coupon cache warmup") })
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now))
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenOff, Why: "fix off", Head: head, At: now.Add(time.Minute), Off: engine.OpenOffFixOff})
+	setKV(t, st, engine.KVPRFixOff(pr.ID), "1")
+	if _, err := st.DB().Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(l.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prs, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("OwnPRs = %+v, want #7", prs)
+	}
+	v := prs[0]
+	switch {
+	case v.Ref != (PRRef{"example/shop", 7}) || v.ID != pr.ID || v.Title != "Coupon cache warmup" || v.URL != "https://github.com/example/shop/pull/7":
+		t.Errorf("#7: ref %+v, id %d, title %q, url %q", v.Ref, v.ID, v.Title, v.URL)
+	case !v.Found || !v.DaemonUp || !v.Watched || !v.OpenWatch:
+		t.Errorf("#7: found %v, daemon up %v, watched %v, open watch %v", v.Found, v.DaemonUp, v.Watched, v.OpenWatch)
+	case !v.HasOpen || v.Stale || v.Open.Off != engine.OpenOffFixOff || !v.FixOff:
+		t.Errorf("#7's verdict %+v (has %v, stale %v), fix off %v", v.Open, v.HasOpen, v.Stale, v.FixOff)
+	}
+	after, err := os.ReadFile(l.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("OwnPRs changed magnum's registry")
+	}
+}
+
+// A draft, a PR of someone else, a merged or closed PR and a PR of yours
+// that GitHub no longer has open are not your open PRs; without magnum's
+// registry nothing is listed, and nothing is created.
+func TestDraftsAndOtherAuthorsPRsAreNotListed(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("cd", 20)
+	magnumPR(t, st, 1, head, nil)
+	magnumPR(t, st, 2, head, func(g *store.GitHubPR) { g.IsDraft = true })
+	magnumPR(t, st, 3, head, func(g *store.GitHubPR) { g.AuthorLogin = new("alice") })
+	magnumPR(t, st, 4, head, func(g *store.GitHubPR) {
+		g.GHState, g.MergedAt, g.ClosedAt = store.GHMerged, new(time.Now()), new(time.Now())
+	})
+	magnumPR(t, st, 5, head, func(g *store.GitHubPR) { g.GHState, g.ClosedAt = store.GHClosed, new(time.Now()) })
+	magnumPR(t, st, 6, head, func(g *store.GitHubPR) { g.AuthorLogin = new("Zhuravel") })
+	prs, err := NewMagnum(l, selfConfig()).OwnPRs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, v := range prs {
+		got = append(got, v.Ref.Number)
+	}
+	if !slices.Equal(got, []int{1, 6}) {
+		t.Errorf("OwnPRs lists %v, want your open non-draft PRs #1 and #6", got)
+	}
+
+	none := paths.Layout{Home: t.TempDir()}
+	if prs, err := NewMagnum(none, selfConfig()).OwnPRs(t.Context()); err != nil || len(prs) != 0 {
+		t.Errorf("no registry: OwnPRs = %+v, %v", prs, err)
+	}
+	if fsx.Exists(none.DB()) {
+		t.Fatal("OwnPRs created magnum's registry")
 	}
 }

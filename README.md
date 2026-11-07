@@ -3808,8 +3808,8 @@ factory never migrates magnum's registry, which it only reads for the local revi
 | `magnum factory daemon [--log-level LEVEL]` | The daemon in the foreground, what the job runs. A second one says so, naming the first one's pid, and exits 0 before it opens a log or a store, so it migrates nothing and launchd does not restart it. |
 
 **The factory's screen.** `magnum factory` with no command, in a terminal, shows one line per task, grouped
-by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY): what it waits on and, when it needs you, your
-move. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
+by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY), and one per open PR of yours that no task has
+(YOUR PRS, below): what it waits on and, when it needs you, your move. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
 PR-12345, PR-12346`; NEEDS YOU and the selected row never fold, and when folding is not enough the list
 scrolls. The window title counts the tasks that need you (`factory · 3 need you`, `factory · nothing waits on
 you`), and the screen tells the factory when its terminal gains or loses focus. Home only opens cards
@@ -4120,6 +4120,24 @@ a stop does, its agents parked, which waits for herdr when herdr is down); a PR 
 task published and, after `[daemon] close_grace`, has it wait on you (`PR #4530 closed without a merge: reopen it,
 or x drops the task`, alerted once), and a reopen clears that wait. A task whose PR closed stays out of the live
 stages: a retry refuses it.
+
+**Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
+wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's
+"mine": every watch's posting identity and every `gh` identity), read once per frame and never written. A PR that a
+task which is neither done nor stopped has stays that task's row, so no PR is listed twice. A PR whose verdict
+needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`,
+`shop#12` in a repository that is not the factory's; the wide screen's JIRA column has the issue key of its title),
+with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); every other one waits in YOUR PRS, between
+WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has (`agent: magnum fixes
+#4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `magnum: looking at #4613`). A PR magnum's look leaves alone (a
+baseline, fix off, a watch whose `include_own` is false) waits there too, dim, with why (`#4606 is yours to
+follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`): it asks
+nothing, so a baseline open for weeks never sits in NEEDS YOU. The chip counts both kinds that need you (`1 task
+and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`); the window title counts
+every row in NEEDS YOU. A PR row has no card: `enter` names its keys in the footer, `b` opens the PR, and `o`
+and `t` say they act on a task's row. `a` walks the task cards only and skips PR rows; once no card is left, the
+footer says `2 of your PRs need you: f, F or b on their rows`. A registry of magnum's that cannot be read leaves
+your PRs out, and home's blocker line says `your PRs not read`, with why on a wide screen.
 
 Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt but
 the liaison's carries the rules of `factory-shared.md`: no interactive question dialog (an agent writes its questions

@@ -24,7 +24,9 @@ package tui
 // cards' keys are in factory_keys.go. The board's letters keep their
 // meaning: b and t open the PR and the issue (on home and the task card),
 // and r, p and x do nothing here, except x on the task card (drop, y/N) and
-// r there for a task that can go on (retry, y/N).
+// r there for a task that can go on (retry, y/N). A row of your own PR
+// (FactoryRow.PR) has no card: enter names its keys in the footer, b opens
+// the PR, o and t say they act on a task's row, and a walks past it.
 
 import (
 	"cmp"
@@ -978,11 +980,15 @@ func (m factoryModel) homeFrame() factoryFrame {
 	return f
 }
 
-// homeHints are home's key hints for the row under the cursor.
+// homeHints are home's key hints for the row under the cursor: on your
+// PR's row its own keys, which open no card.
 func (m factoryModel) homeHints() []hint {
 	var hs []hint
 	r, ok := m.selectedRow()
-	if ok {
+	switch {
+	case ok && r.PR != nil:
+		hs = append(hs, hint{"b", "PR"})
+	case ok:
 		hs = append(hs, hint{"enter", m.openVerb(r)})
 	}
 	if _, ok := m.nextDecision(); ok {
@@ -1003,6 +1009,9 @@ func (m factoryModel) homeHints() []hint {
 // itself; "" for a row with no pane to step into (a review by a person, a
 // queued or a done task): o is not offered there.
 func (m factoryModel) paneHint(r FactoryRow) string {
+	if r.PR != nil { // your PR: magnum's panes are the board's
+		return ""
+	}
 	if r.Group == GroupNeedsYou && m.data.Cards[r.ID].Question != nil {
 		return "pane that asked"
 	}

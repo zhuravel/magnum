@@ -12,6 +12,7 @@ var factoryWords = [][2]string{
 	{"needs you", "stopped until you decide or act"},
 	{"Nothing waits on you", "no task is blocked on you"},
 	{"waits on others", "blocked by someone or something, not you"},
+	{"YOUR PRS", "your open PRs that no task has, from magnum's registry; one that needs you is in NEEDS YOU"},
 	{"done today", "its PR merged today"},
 	{"WAITS ON", "who the task waits on, and why"},
 	{"YOUR MOVE", "the step the factory recommends to you"},

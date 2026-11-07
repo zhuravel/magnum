@@ -5,7 +5,8 @@ package factory
 // tui.FactoryData. Home gets one row per task, grouped by who it waits on
 // (needs_you is NEEDS YOU, done today is DONE TODAY, a published task goes
 // by its PR in magnum's registry, screen_prs.go, and the rest waits on
-// others), each blocker naming who first
+// others), and one per open PR of yours no task has (YOUR PRS, or NEEDS
+// YOU when it needs you: screen_own.go), each blocker naming who first
 // (WaitsWho and WaitsWhat, the agents at work from the sessions), the count
 // of the decisions owed apart from the tasks, the holds of the machine, what
 // frees a queued task, the digest after an absence of more than an hour and
@@ -61,8 +62,9 @@ type ScreenOptions struct {
 	DaemonDown bool
 	// Magnum reads the published tasks' PRs in magnum's registry
 	// (Magnum.PRStates), once per call: a published task's row then says
-	// its PR's verdict. nil keeps the words of a screen without it ("magnum:
-	// review of #N").
+	// its PR's verdict; and your own open PRs (Magnum.OwnPRs), once per
+	// call, for YOUR PRS. nil keeps the words of a screen without it
+	// ("magnum: review of #N"), and lists no PR of yours.
 	Magnum Magnum
 }
 
@@ -135,18 +137,24 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			o.ReadyCards(v.t.ID, *v.card)
 		}
 	}
+	own, ownCards, ownErr := s.ownRows(o.Magnum)
+	if ctx.Err() != nil {
+		return d, ctx.Err()
+	}
+	d.Rows = append(d.Rows, own...)
+	maps.Copy(d.Cards, ownCards)
 	slices.SortStableFunc(d.Rows, func(a, b tui.FactoryRow) int {
-		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou {
+		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou && a.Group != tui.GroupYours {
 			return c
 		}
-		return a.Since.Compare(b.Since) // NEEDS YOU: the oldest wait first, as `a` walks it
+		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and YOUR PRS: the oldest wait first
 	})
 	d.Repo = s.repo()
 	switch {
 	case o.DaemonDown: // nothing moves: no hold of the last daemon's is in force, and no agent works for it
 		d.Blocking, d.BlockingLong = []string{daemonDownShort}, []string{daemonDownLong}
 		for i := range d.Rows {
-			if d.Rows[i].Mark == tui.MarkWorking {
+			if d.Rows[i].Mark == tui.MarkWorking && d.Rows[i].PR == nil { // magnum's fixer on your PR is magnum's daemon's
 				d.Rows[i].Mark = tui.MarkWaits
 			}
 		}
@@ -154,6 +162,10 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		if d.Blocking, d.BlockingLong, err = blockingLines(o.Layout); err != nil {
 			return d, err
 		}
+	}
+	if ownErr != nil {
+		d.Blocking = append(slices.Clone(d.Blocking), ownUnread)
+		d.BlockingLong = append(slices.Clone(d.BlockingLong), ownUnreadLong(ownErr))
 	}
 	if d.Digest, err = s.digest(lastSeen, d.Rows); err != nil {
 		return d, err

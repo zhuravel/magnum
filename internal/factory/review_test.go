@@ -66,13 +66,28 @@ func (f *fakeReviewer) calls() []evalrun.LocalCase {
 
 // fakeMagnum is magnum's daemon: busy says why it is busy ("" = it is not);
 // prs are the PRs its registry has (a ref it lacks is not found, its
-// daemon up), prErr fails PRStates, and reads counts the PRStates calls.
+// daemon up), prErr fails PRStates, and reads counts the PRStates calls;
+// own are your own open PRs OwnPRs lists, ownErr fails it, and ownReads
+// counts its calls.
 type fakeMagnum struct {
-	mu    sync.Mutex
-	busy  string
-	prs   map[PRRef]PRState
-	prErr error
-	reads int
+	mu       sync.Mutex
+	busy     string
+	prs      map[PRRef]PRState
+	prErr    error
+	reads    int
+	own      []PRState
+	ownErr   error
+	ownReads int
+}
+
+func (f *fakeMagnum) OwnPRs(context.Context) ([]PRState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ownReads++
+	if f.ownErr != nil {
+		return nil, f.ownErr
+	}
+	return slices.Clone(f.own), nil
 }
 
 func (f *fakeMagnum) Busy(context.Context) (bool, string, error) {

@@ -110,7 +110,11 @@ func (m factoryModel) rowAt(y int) (int64, bool) {
 // item runs only while it still is.
 func (m factoryModel) menuOwner() string {
 	if m.view == fvHome {
-		if r, ok := m.selectedRow(); ok {
+		r, ok := m.selectedRow()
+		switch {
+		case ok && r.PR != nil:
+			return r.PR.Ref
+		case ok:
 			return m.taskKey(r.ID)
 		}
 		return ""
@@ -128,6 +132,12 @@ func (m factoryModel) menuItems() []menuItem {
 		sel, row := m.selectedRow()
 		_, decision := m.nextDecision()
 		c := m.data.Cards[sel.ID].Task
+		if row && sel.PR != nil { // your PR: no card, no pane of the factory's
+			return []menuItem{
+				{"open its PR", "b", "b", acts && c.PRURL != ""}, {"oldest decision", "a", "a", decision}, {"new task", "n", "n", acts},
+				{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
+			}
+		}
 		return []menuItem{
 			{"open its card", "enter", "enter", row}, {"oldest decision", "a", "a", decision},
 			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""},

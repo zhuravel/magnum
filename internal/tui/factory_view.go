@@ -206,6 +206,11 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 	for i, c := range r.Stagings {
 		r.Stagings[i].Name, r.Stagings[i].State, r.Stagings[i].Count = cleanText(c.Name), cleanText(c.State), cleanText(c.Count)
 	}
+	if r.PR != nil {
+		pr := *r.PR
+		pr.Ref, pr.Off = cleanText(pr.Ref), cleanText(pr.Off)
+		r.PR = &pr
+	}
 	return r
 }
 
@@ -315,9 +320,10 @@ func (p *factoryPainter) markSeg(r FactoryRow) seg {
 	return seg{p.markGlyph(r.Mark), p.st.Dim}
 }
 
-// tone is st, or Dim on a done row.
+// tone is st, or Dim on a done row and on the row of your PR that magnum
+// leaves alone (it asks nothing).
 func (p *factoryPainter) tone(r FactoryRow, st lipgloss.Style) lipgloss.Style {
-	if r.Group == GroupDone {
+	if r.Group == GroupDone || r.PR != nil && r.PR.Off != "" {
 		return p.st.Dim
 	}
 	return st
@@ -713,26 +719,42 @@ func factoryPlural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
+// chipLine counts the rows by group: the tasks and your PRs that need you
+// apart ("1 task and 2 PRs need you"), the tasks that wait on others, your
+// PRs at work (YOUR PRS) and the tasks done today.
 func (p *factoryPainter) chipLine() string {
 	st := p.st
-	var needs, waits, done int
+	var tasks, prs, waits, yours, done int
 	for _, r := range p.rows {
 		switch r.Group {
 		case GroupNeedsYou:
-			needs++
+			if r.PR != nil {
+				prs++
+			} else {
+				tasks++
+			}
 		case GroupWaits:
 			waits++
+		case GroupYours:
+			yours++
 		default:
 			done++
 		}
 	}
 	var parts []string
-	if needs > 0 {
+	if needs := tasks + prs; needs > 0 {
 		verb := "need"
 		if needs == 1 {
 			verb = "needs"
 		}
-		head := st.Warn.Render(p.markGlyph(MarkNeedsYou) + " " + factoryPlural(needs, "task", "tasks") + " " + verb + " you")
+		var who []string
+		if tasks > 0 {
+			who = append(who, factoryPlural(tasks, "task", "tasks"))
+		}
+		if prs > 0 {
+			who = append(who, factoryPlural(prs, "PR", "PRs"))
+		}
+		head := st.Warn.Render(p.markGlyph(MarkNeedsYou) + " " + strings.Join(who, " and ") + " " + verb + " you")
 		if p.f.Decisions > 0 {
 			head += st.Dim.Render(", " + factoryPlural(p.f.Decisions, "decision", "decisions"))
 		}
@@ -746,6 +768,9 @@ func (p *factoryPainter) chipLine() string {
 			verb = "waits"
 		}
 		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d %s on others", waits, verb)))
+	}
+	if yours > 0 {
+		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d of your %s at work", yours, map[bool]string{true: "PR", false: "PRs"}[yours == 1])))
 	}
 	chip := ""
 	if p.f.RuleChip != "" {
@@ -815,7 +840,7 @@ type factoryLine struct {
 	tasks int    // the tasks the line stands for: 1 for a row, n for a more line
 }
 
-var factoryGroupLabels = [...]string{"NEEDS YOU", "WAITS ON OTHERS", "DONE TODAY"}
+var factoryGroupLabels = [...]string{"NEEDS YOU", "WAITS ON OTHERS", "YOUR PRS", "DONE TODAY"}
 
 // factoryBand is one group of the home list: its heading and its items, of
 // which the first keep are drawn and the rest folded into one more line.

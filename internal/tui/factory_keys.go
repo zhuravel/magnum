@@ -210,11 +210,48 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 			if !ok {
 				return nil
 			}
+			if r.PR != nil {
+				return m.note(prRowTaskKeys(r))
+			}
 			task = r.ID
 		}
 		return m.stepIn(task)
 	}
 	return nil
+}
+
+// prKeys is the footer of enter on your PR's row: its keys, since it has no
+// card.
+const prKeys = "your PR: f fix, F fix off, x stop the loop, b browser"
+
+// prRowTaskKeys is the footer of o and t on your PR's row r: they act on a
+// task's.
+func prRowTaskKeys(r FactoryRow) string {
+	return "o and t act on a task's row: " + cleanText(r.Key) + " is your PR (b opens it)"
+}
+
+// prsNeedYou counts the rows of your PRs that need you.
+func (m factoryModel) prsNeedYou() int {
+	n := 0
+	for _, r := range m.data.Rows {
+		if r.Group == GroupNeedsYou && r.PR != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// prsNeedYouNote says how many of your PRs need you once no task's card
+// does, and their keys; "" when none does.
+func (m factoryModel) prsNeedYouNote() string {
+	switch n := m.prsNeedYou(); n {
+	case 0:
+		return ""
+	case 1:
+		return "1 of your PRs needs you: f, F or b on its row"
+	default:
+		return fmt.Sprintf("%d of your PRs need you: f, F or b on their rows", n)
+	}
 }
 
 // stepIn steps into the pane of the task (asks nothing, spec 9.D).
@@ -244,14 +281,16 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "pgup", "ctrl+u":
 		m.moveTo(m.selIdx - page)
 	case "enter":
-		if r, ok := m.selectedRow(); ok {
+		if r, ok := m.selectedRow(); ok && r.PR != nil {
+			return m.note(prKeys), true
+		} else if ok {
 			m.openCard(r.ID)
 		}
 	case "a":
 		m.walked = map[int64]bool{}
 		id, ok := m.nextDecision()
 		if !ok {
-			return m.note("Nothing waits on you."), true
+			return m.note(cmp.Or(m.prsNeedYouNote(), "Nothing waits on you.")), true
 		}
 		m.walk = true
 		m.openCard(id)
@@ -262,7 +301,11 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		m.view = fvNew
 		return m.textChanged(), true
 	case "b", "t":
-		if r, ok := m.selectedRow(); ok {
+		r, ok := m.selectedRow()
+		switch {
+		case ok && r.PR != nil && k == "t":
+			return m.note(prRowTaskKeys(r)), true
+		case ok:
 			return m.openPage(k, r.ID), true
 		}
 	default:
@@ -300,8 +343,12 @@ func (m *factoryModel) openPage(k string, task int64) tea.Cmd {
 }
 
 // openCard opens a task's card: the decision card a task that needs the
-// operator waits on, else its task card.
+// operator waits on, else its task card. A row of your PR (its id below
+// zero) has no card: nothing opens.
 func (m *factoryModel) openCard(id int64) {
+	if id <= 0 {
+		return
+	}
 	cards := m.data.Cards[id]
 	r, _ := m.row(id)
 	m.selID = id
@@ -368,6 +415,9 @@ func (m *factoryModel) leaveDecision(task int64) tea.Cmd {
 			return nil
 		}
 		m.goHome()
+		if note := m.prsNeedYouNote(); note != "" { // the walk visits cards only: your PRs' rows have none
+			return m.note(note)
+		}
 		return m.bar.show("Nothing else waits on you.", factoryFlashDone)
 	}
 	m.goHome()

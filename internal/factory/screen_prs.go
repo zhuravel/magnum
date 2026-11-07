@@ -136,42 +136,23 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 	ref := prRef(v)
 	n := ref.Number
 	looking := fmt.Sprintf("looking at #%d", n)
-	waits := func(who, what, short, long string) prWait {
-		return prWait{group: tui.GroupWaits, mark: tui.MarkWaits, on: tui.WaitsOn{Who: who, What: what, Short: short, Long: long}}
-	}
-	you := func(what, short, long string) prWait {
-		return prWait{group: tui.GroupNeedsYou, mark: tui.MarkNeedsYou,
-			on: tui.WaitsOn{Who: waitsYou, What: what, Short: short, Long: long, OnYou: true}}
-	}
-	fixing := func() prWait {
-		what := fmt.Sprintf("magnum fixes #%d", n)
-		switch {
-		case st.Fix.Phase == engine.FixPhaseReviewing:
-			what += " (re-review of " + textx.ShortSHA(st.Fix.Head) + ")"
-		case st.Fix.Cycle > 0:
-			what += fmt.Sprintf(" (cycle %d of %d)", st.Fix.Cycle, st.Fix.Cap)
-		}
-		w := waits("agent", what, clauseShort(what), "")
-		w.mark = tui.MarkWorking
-		return w
-	}
 	closedYou := func() prWait {
-		w := you(fmt.Sprintf("PR #%d closed without a merge", n), "", fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove))
+		w := youWait(fmt.Sprintf("PR #%d closed without a merge", n), "", fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove))
 		w.move, w.moveShort = reopenMove, "reopen or x"
 		return w
 	}
 	switch {
 	case !read && waitsOnYou(t): // the tick's own wait on you (a close past the grace) stands
-		return you(t.WaitsWhat, clauseShort(t.WaitsWhat), "")
+		return youWait(t.WaitsWhat, clauseShort(t.WaitsWhat), "")
 	case !read:
 		why := "magnum's registry cannot be read"
 		if err != nil {
 			why += ": " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 		}
-		return waits("magnum", looking, "", looking+": "+why)
+		return waitsWait("magnum", looking, "", looking+": "+why)
 	case !st.Found && !st.Watched: // nothing tells the task when you did
 		what := fmt.Sprintf("magnum does not watch %s: merge or close #%d yourself, then x drops the task", ref.Repo, n)
-		w := you(what, clauseShort(what), "")
+		w := youWait(what, clauseShort(what), "")
 		w.move, w.moveShort = fmt.Sprintf("merge or close #%d, then x drops the task", n), "then x"
 		return w
 	case st.GHState == store.GHMerged:
@@ -188,45 +169,84 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 			return w
 		}
 		what := fmt.Sprintf("#%d closed %s; the task waits until %s for a reopen", n, clock(closed), clock(until))
-		w := waits("magnum", what, clauseShort(what), "")
+		w := waitsWait("magnum", what, clauseShort(what), "")
 		w.since = closed
 		return w
+	}
+	return magnumWait(st, n, false)
+}
+
+// magnumWait is the wait of open PR #n as magnum's registry tells it (st):
+// its daemon down, the PR not read yet, its verdict (verdictWait; a stale
+// one is magnum looking), a verdict still to come, its fix loop, its
+// attention, else magnum's review. own says the row is your PR's, whose F
+// works on the factory screen too (offWait).
+func magnumWait(st PRState, n int, own bool) prWait {
+	looking := fmt.Sprintf("looking at #%d", n)
+	switch {
 	case !st.DaemonUp:
-		return waits("magnum", "daemon down", "", fmt.Sprintf("magnum's daemon is down: nothing looks at #%d", n))
+		return waitsWait("magnum", "daemon down", "", fmt.Sprintf("magnum's daemon is down: nothing looks at #%d", n))
 	case !st.Found:
-		return waits("magnum", looking, "", "")
+		return waitsWait("magnum", looking, "", "")
 	case st.HasOpen && st.Stale:
-		return waits("magnum", looking, "", "")
+		return waitsWait("magnum", looking, "", "")
 	case st.HasOpen:
-		w := s.verdictWait(st, n, waits, you, fixing)
+		w := verdictWait(st, n, own)
 		w.since = cmp.Or(st.Open.Since, st.Open.At)
 		return w
 	case st.OpenWatch: // its verdict is still to come
-		return waits("magnum", looking, "", "")
+		return waitsWait("magnum", looking, "", "")
 	case st.Fixing:
-		w := fixing()
+		w := fixingWait(st, n)
 		w.since = st.Fix.StartedAt
 		return w
 	case st.State == store.PRNeedsAttention:
 		msg := cmp.Or(st.AttentionMsg, st.Attention, "needs attention")
-		w := you("magnum: "+msg, "magnum: "+firstClause(msg), "")
+		w := youWait("magnum: "+msg, "magnum: "+firstClause(msg), "")
 		w.since = st.UpdatedAt
 		return w
 	}
-	return waits("magnum", fmt.Sprintf("review of #%d", n), "", "")
+	return waitsWait("magnum", fmt.Sprintf("review of #%d", n), "", "")
+}
+
+// waitsWait is a wait on others: who, and what in its three forms.
+func waitsWait(who, what, short, long string) prWait {
+	return prWait{group: tui.GroupWaits, mark: tui.MarkWaits, on: tui.WaitsOn{Who: who, What: what, Short: short, Long: long}}
+}
+
+// youWait is a wait on you: what in its three forms.
+func youWait(what, short, long string) prWait {
+	return prWait{group: tui.GroupNeedsYou, mark: tui.MarkNeedsYou,
+		on: tui.WaitsOn{Who: waitsYou, What: what, Short: short, Long: long, OnYou: true}}
+}
+
+// fixingWait is magnum's fix loop at work on PR #n (st.Fix): an agent at
+// work, the moving mark.
+func fixingWait(st PRState, n int) prWait {
+	what := fmt.Sprintf("magnum fixes #%d", n)
+	switch {
+	case st.Fix.Phase == engine.FixPhaseReviewing:
+		what += " (re-review of " + textx.ShortSHA(st.Fix.Head) + ")"
+	case st.Fix.Cycle > 0:
+		what += fmt.Sprintf(" (cycle %d of %d)", st.Fix.Cycle, st.Fix.Cap)
+	}
+	w := waitsWait("agent", what, clauseShort(what), "")
+	w.mark = tui.MarkWorking
+	return w
 }
 
 // reopenMove is your move on a task whose PR closed without a merge.
 const reopenMove = "reopen it, or x drops the task"
 
-// verdictWait is the wait of a PR whose verdict st.Open tells its state.
-func (s *screen) verdictWait(st PRState, n int, waits func(who, what, short, long string) prWait,
-	you func(what, short, long string) prWait, fixing func() prWait) prWait {
+// verdictWait is the wait of a PR whose verdict st.Open tells its state;
+// own as for magnumWait.
+func verdictWait(st PRState, n int, own bool) prWait {
+	waits, you := waitsWait, youWait
 	o := st.Open
 	short := clauseShort(o.Why)
 	switch o.Verdict {
 	case engine.OpenFixing:
-		return fixing()
+		return fixingWait(st, n)
 	case engine.OpenNeedsYou:
 		w := you(o.Why, short, "")
 		for _, need := range o.Needs {
@@ -243,7 +263,7 @@ func (s *screen) verdictWait(st PRState, n int, waits func(who, what, short, lon
 		}
 		return waits("reviewers", o.Why, short, "")
 	case engine.OpenOff:
-		what := offWait(o.Off, n)
+		what := offWait(o.Off, n, own)
 		return you(what, clauseShort(what), "")
 	case engine.OpenWaits:
 		who := "magnum"
@@ -260,10 +280,13 @@ func (s *screen) verdictWait(st PRState, n int, waits func(who, what, short, lon
 }
 
 // offWait is why magnum's look leaves PR #n alone (OpenVerdict.Off), as
-// your move on it.
-func offWait(off string, n int) string {
+// your move on it; own says it is your PR's row, whose own F turns fix on.
+func offWait(off string, n int, own bool) string {
 	switch off {
 	case engine.OpenOffFixOff:
+		if own {
+			return fmt.Sprintf("fix is off for #%d (F turns it on)", n)
+		}
 		return fmt.Sprintf("fix is off for #%d (F on the board turns it on)", n)
 	case engine.OpenOffDraft:
 		return fmt.Sprintf("#%d is a draft: mark it ready", n)

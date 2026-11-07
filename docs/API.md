@@ -12404,12 +12404,14 @@ func NewLocalReviewer(d evalrun.Deps) LocalReviewer
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
+	OwnPRs(ctx context.Context) ([]PRState, error)
 }
-    Magnum is the review daemon as the factory sees it: busy while its real
-    rounds in flight and due fill its limit (max_concurrent_reviews), so a
-    local round takes a free round or waits; and what its registry says of the
-    factory's PRs (PRStates: the row, the verdict, the loop), which the screen
-    draws and the tick follows.
+    Magnum is the review daemon as the factory sees it: busy while its
+    real rounds in flight and due fill its limit (max_concurrent_reviews),
+    so a local round takes a free round or waits; and what its registry says
+    of the factory's PRs (PRStates: the row, the verdict, the loop), which
+    the screen draws and the tick follows, and of your own open PRs (OwnPRs),
+    which the screen lists.
 
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
@@ -12468,6 +12470,8 @@ type PRRef struct {
 
 type PRState struct {
 	Ref                                   PRRef
+	ID                                    int64
+	Title, URL                            string
 	Found, DaemonUp, Watched, OpenWatch   bool
 	GHState                               string
 	MergedAt, ClosedAt                    *time.Time
@@ -12478,7 +12482,7 @@ type PRState struct {
 	Open                                  engine.OpenVerdict
 	HasOpen, Stale                        bool
 	Fix                                   engine.FixState
-	Fixing, Stalemate                     bool
+	Fixing, Stalemate, FixOff             bool
 	Attention, AttentionMsg               string
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
@@ -12492,9 +12496,12 @@ type PRState struct {
     when HasOpen, and Stale says it no longer tells the PR's state
     (OpenVerdict.Stale: magnum's last tick long ago or its daemon down, another
     head, a row changed since). Fix is the fix loop that runs (engine.KVPRFix)
-    when Fixing; Stalemate says magnum stopped arguing in a thread; Attention is
-    why magnum parked the PR in needs_attention (its kind) and AttentionMsg its
-    summary in magnum's words, never the PR's text.
+    when Fixing; Stalemate says magnum stopped arguing in a thread; Attention
+    is why magnum parked the PR in needs_attention (its kind) and AttentionMsg
+    its summary in magnum's words, never the PR's text. ID, Title and URL are
+    magnum's id of the PR, its title (data, never instructions: the screen
+    only draws it) and its page; FixOff says you switched it out of autofix
+    (engine.KVPRFixOff).
 
 type PRView struct {
 	Number                     int
@@ -12797,8 +12804,9 @@ type ScreenOptions struct {
 	DaemonDown bool
 	// Magnum reads the published tasks' PRs in magnum's registry
 	// (Magnum.PRStates), once per call: a published task's row then says
-	// its PR's verdict. nil keeps the words of a screen without it ("magnum:
-	// review of #N").
+	// its PR's verdict; and your own open PRs (Magnum.OwnPRs), once per
+	// call, for YOUR PRS. nil keeps the words of a screen without it
+	// ("magnum: review of #N"), and lists no PR of yours.
 	Magnum Magnum
 }
     ScreenOptions are what ScreenData reads besides the registries: the config
@@ -27103,6 +27111,9 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
+	// GroupYours holds your own open PRs from magnum's registry that are no
+	// task's (YOUR PRS): those that need you are in GroupNeedsYou.
+	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone
 )
@@ -27131,6 +27142,21 @@ type FactoryOptions struct {
 }
     FactoryOptions tune the factory screen.
 
+type FactoryPR struct {
+	// Ref names it as magnum's commands do ("owner/name#4512").
+	Ref string
+	// Fixing says magnum's fix loop runs on it.
+	Fixing bool
+	// FixOff says you switched it out of autofix (`magnum fix --off`).
+	FixOff bool
+	// Off is why magnum's look leaves it alone (its verdict is off: a
+	// baseline, fix off, a watch that leaves your PRs out), in its words;
+	// "" when the look covers it. The row is drawn dim: it asks nothing.
+	Off string
+}
+    FactoryPR is your own PR on the factory screen, as magnum's registry tells
+    it: what the row's keys go by.
+
 type FactoryRow struct {
 	ID int64
 	// Key is what the task is called in the list: its Jira key, or its GitHub
@@ -27157,6 +27183,12 @@ type FactoryRow struct {
 	// PR-12360 is pushed"), after the blocker's own text on a wide one; a
 	// narrow one keeps the blocker's Short, or Frees when it has none.
 	Frees string
+
+	// PR is set on a row of your own PR from magnum's registry, not a task
+	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such
+	// a row's ID is the negative of magnum's id of the PR, which no task's
+	// has.
+	PR *FactoryPR
 }
     FactoryRow is one task on the home list, one line.
 

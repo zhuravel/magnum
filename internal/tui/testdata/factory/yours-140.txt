@@ -1,0 +1,22 @@
+ magnum factory · talkable                                                                                                          ↻ 14:09 
+ ● 1 task and 2 PRs need you, 3 decisions · 1 waits on others · 3 of your PRs at work · 1 done today
+
+ NEEDS YOU                     WAITS ON                                                                              YOUR MOVE        WAITED
+› ● PR-12345  Credit expiry…   you: 3 questions before coding                                                        answer them         41m
+  ● #4602     Coupon rounding  you: 1 item needs you: 1 thread of a person                                           b or f              25m
+  ● #4603     Referral expor…  you: nothing open at a1b2c3d · approved, merge is yours                               merge it             5m
+
+ WAITS ON OTHERS
+  ⣷ PR-12371  Coupon CSV exp…  agent: finding the cause, 2 of 3 done                                                                      9m
+
+ YOUR PRS
+  ⣷ #4612     Weekly gem upg…  agent: magnum fixes #4612 (cycle 1 of 5)                                                                   3h
+  ◷ #4611     Cart totals in…  CI: CI at a1b2c3d                                                                                         10m
+  ◷ #4606     Old sync job c…  you: #4606 is yours to follow: it was open before magnum first synced the repository                       1d
+
+ DONE TODAY
+  ✓ PR-12302  Remove old syn…  nothing: merged 13:20
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 3 questions before coding · first: "When does the reminder go out?"
+ enter answer · a oldest ask · n new task · ? more
