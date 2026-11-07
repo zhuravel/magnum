@@ -1,22 +1,22 @@
- magnum factory · talkable, widget                                                                                                                                memory full: new tasks wait · ↻ 14:09 
+ magnum factory · talkable, widget                                                                                                                     memory full: new tasks wait (swap 91%) · ↻ 14:09 
  ● 2 tasks and 1 PR need you, 3 decisions · 3 wait on others · 1 of your PRs at work · 1 done today
 
- NEEDS YOU                                                                        WAITS ON                                                                              YOUR MOVE                 WAITED
-› ● talkable  PR-12320  Coupon rounding in the cart                               you: 2 items need you: 1 thread of a person and 1 skipped finding                     see the task card            35m
-  ● widget    #4602     Coupon rounding                                           you: 1 item needs you: 1 thread of a person                                           b opens it, f fixes          25m
-  ● widget    task 5    In the offer page, a click on a record's link opens the…  you: ready to push · 2 files +39 −6                                                   read the diff, then push      2h
+ NEEDS YOU                                                                    WAITS ON                                                                              YOUR MOVE                     WAITED
+› ● talkable  PR-12320  #4530   Coupon rounding in the cart                   you: 2 items need you: 1 thread of a person and 1 skipped finding                     see the task card                35m
+  ● widget    PR-12400  #4602   Coupon rounding                               you: 1 item needs you: 1 thread of a person                                           b opens it, f fixes              25m
+  ● widget    task 5            In the offer page, a click on a record's li…  you: ready to push · 2 files +39 −6                                                   read the diff, then push          2h
 
  WAITS ON OTHERS
-  ⣷ talkable  PR-12321  Advocate offer email locale                               agent: magnum fixes #4531 (cycle 2 of 5)                                                                            9m
-  ◷ talkable  PR-12325  Deploy list on campaigns                                  reviewers: nothing open at a1b2c3d · no approval yet                                                                3h
-  ◷ widget    task 6    Add passkey login support                                 review: round 1 of 3 of the local review                                                                           15m
+  ⣷ talkable  PR-12321  #4531   Advocate offer email locale                   agent: magnum fixes #4531 (cycle 2 of 5)                                                                                9m
+  ◷ talkable  PR-12325  #4535   Deploy list on campaigns                      reviewers: nothing open at a1b2c3d · no approval yet                                                                    3h
+  ◷ widget    task 6            Add passkey login support                     review: round 1 of 3 of the local review                                                                               15m
 
  YOUR PRS
-  ◷ talkable  #4611     Cart totals in the widget                                 CI: CI at a1b2c3d                                                                                                  10m
-  ◷ widget    #4606     Old sync job cleanup                                      you: #4606 is yours to follow: it was open before magnum first synced the repository                                1d
+  ◷ talkable  PR-12410  #4611   Cart totals in the widget                     CI: CI at a1b2c3d                                                                                                      10m
+  ◷ widget              #4606   Old sync job cleanup                          you: #4606 is yours to follow: it was open before magnum first synced the repository                                    1d
 
  DONE TODAY
-  ✓ talkable  PR-12302  Remove old sync job                                       nothing: merged 13:20
+  ✓ talkable  PR-12302  #4519   Remove old sync job                           nothing: merged 13:20
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  you: 2 items need you: 1 thread of a person and 1 skipped finding
  enter task card · a oldest ask · n new task · ? more

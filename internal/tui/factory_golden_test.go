@@ -388,7 +388,7 @@ func TestFactoryGroupsRowsByWhoTheyWaitOnAndTheCursorFollowsItsRow(t *testing.T)
 	if want := []string{"NEEDS YOU", "WAITS ON OTHERS", "DONE TODAY"}; !slices.Equal(groups, want) {
 		t.Errorf("groups = %q, want %q", groups, want)
 	}
-	if got := lines[rowLines[1]]; !strings.HasPrefix(got, "› ● #4512") {
+	if got := lines[rowLines[1]]; !strings.HasPrefix(got, "› ● PR-12310  #4512") {
 		t.Errorf("the cursor stayed with its row, but the row reads %q", got)
 	}
 }

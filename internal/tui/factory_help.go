@@ -14,6 +14,7 @@ var factoryWords = [][2]string{
 	{"waits on others", "blocked by someone or something, not you"},
 	{"YOUR PRS", "your open PRs that no task has, from magnum's registry; one that needs you is in NEEDS YOU"},
 	{"talkable, widget", "the factory's repositories on the title line (\"3 repos\" when they do not fit); with more than one, each row names its own first"},
+	{"#4530", "the row's PR on GitHub, beside its Jira key from 120 columns"},
 	{"done today", "its PR merged today"},
 	{"WAITS ON", "who the task waits on, and why"},
 	{"YOUR MOVE", "the step the factory recommends to you"},

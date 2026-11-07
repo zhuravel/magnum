@@ -150,3 +150,53 @@ func TestTheHelpGlossesThePublishedRowsWords(t *testing.T) {
 		"reviewers:  the PR's reviewers must review, approve or settle")
 	mustNotContain(t, help, "pushed today", "a magnum review round is running")
 }
+
+// From 120 columns every row with a PR shows its number in a column of its
+// own, between the key and the title, a task's and your PR's alike; the
+// key is then the Jira key. Before, the number showed only when the whole
+// wide layout fitted, about 210 columns with a long title.
+func TestFactoryRowsKeepTheirPRNumberFrom120Columns(t *testing.T) {
+	for name, f := range map[string]factoryFrame{"published": fixturePublished(), "repos": fixtureTwoRepos()} {
+		for _, w := range []int{120, 140, 160, 200} {
+			frame, _ := factoryFrameOf(f, w, factoryReposHeight, true, IconsUnicode, factoryNow)
+			at := -1
+			for i, line := range factoryRowLines(t, frame, f.Rows) {
+				r := f.Rows[i]
+				if r.GitHub == "" {
+					continue
+				}
+				x, title := strings.Index(line, r.GitHub+" "), strings.Index(line, r.Title[:10])
+				if x >= 0 {
+					x = ansi.StringWidth(line[:x])
+				}
+				switch {
+				case x < 0 || title < 0 || x > ansi.StringWidth(line[:title]):
+					t.Errorf("%s at %d: the row of %s has no PR column with %s: %q", name, w, r.Key, r.GitHub, line)
+				case at >= 0 && x != at:
+					t.Errorf("%s at %d: %s's number at %d, the others' at %d: %q", name, w, r.Key, x, at, line)
+				default:
+					at = x
+				}
+				if key := r.jiraKey(); key != "" && !strings.Contains(line, key+" ") {
+					t.Errorf("%s at %d: the row of %s does not show its Jira key %s: %q", name, w, r.Key, key, line)
+				}
+			}
+		}
+	}
+}
+
+// A long title no longer costs a wide screen its wide layout: the layout
+// squeezes the title, down to 24 cells, and keeps the long blockers and
+// the staging cells' ages. Before, a 93-cell title needed every column at
+// its natural width, so 200 columns drew the narrow forms.
+func TestFactoryTheWideLayoutSqueezesALongTitle(t *testing.T) {
+	f := fixtureHome()
+	f.Rows[1].Title = "Credit expiry reminder email goes out a week before the credit expires, in the advocate's locale"
+	frame, _ := factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	plain := ansi.Strip(frame)
+	mustContain(t, plain, "agent: fixing 2 conflicts in bart", "conflict 11m", "3 questions before coding · first: when is it sent?")
+	line := factoryRowLines(t, frame, f.Rows[:len(f.Rows)])[1]
+	if strings.Contains(line, f.Rows[1].Title) || !strings.Contains(line, "Credit expiry reminder email goes") {
+		t.Errorf("the long title is not squeezed to at least 24 cells: %q", line)
+	}
+}

@@ -1,18 +1,18 @@
  [1;94mmagnum factory[m[37m · [mtalkable                                                                            memory full: new tasks wait[37m · [m[37m↻ 14:09[m 
  [1;93m● 3 tasks need you[m[37m, 5 decisions[m[37m · [m[37m3 wait on others[m[37m · [m[37m1 done today[m                                                    [1;93m1 rule to approve (L)[m 
 
- [1;96mNEEDS YOU[m                          [1;37mWAITS ON[m                                  [1;37mYOUR MOVE[m                 [1;37mVOID[m      [1;37mBART[m      [1;37mBASTION[m   [1;37mWAITED[m
-› [7m● #4512     Deploy list on camp…  you: reply to alice · agent: fixing bart  post the drafted reply    QA ✓      conflict  QA 4/9        2h[m
-  [1;93m●[m [94mPR-12345[m  Credit expiry remin…  [1;93myou:[m 3 questions before coding            answer 3 questions                                         [1;93m41m[m
-  [1;93m●[m [94mPR-12360[m  Custom activities l…  [1;93myou:[m ready to push · 3 files +48 −6       read the diff, then push                                   12m
+ [1;96mNEEDS YOU[m                                   [1;37mWAITS ON[m                                  [1;37mYOUR MOVE[m        [1;37mVOID[m      [1;37mBART[m      [1;37mBASTION[m   [1;37mWAITED[m
+› [7m● PR-12310  #4512   Deploy list on campa…  you: reply to alice · agent: fixing bart  post reply       QA ✓      conflict  QA 4/9        2h[m
+  [1;93m●[m [94mPR-12345[m          Credit expiry remind…  [1;93myou:[m 3 questions before coding            answer them                                       [1;93m41m[m
+  [1;93m●[m [94mPR-12360[m          Custom activities lo…  [1;93myou:[m ready to push · 3 files +48 −6       diff, then push                                   12m
 
  [1;96mWAITS ON OTHERS[m
-  [94m⣷[m [94mPR-12371[m  Coupon CSV export t…  [94magent:[m finding the cause, 2 of 3 done                                                                 9m
-  [37m◷[m [94mPR-12330[m  Advocate offer emai…  [94mrev-ann:[m review of #4527                                            [92mQA ✓[m      [92mlatest[m    outdated      3h
-  [37m◷[m [94mPR-12388[m  Weekly gem upgrades   memory: full, starts below 80% swap                                                                  18m
+  [94m⣷[m [94mPR-12371[m          Coupon CSV export ti…  [94magent:[m finding the cause, 2 of 3 done                                                        9m
+  [37m◷[m [94mPR-12330[m  [94m#4527[m   Advocate offer email…  [94mrev-ann:[m review of #4527                                   [92mQA ✓[m      [92mlatest[m    outdated      3h
+  [37m◷[m [94mPR-12388[m          Weekly gem upgrades    memory: full, starts below 80% swap                                                         18m
 
  [1;96mDONE TODAY[m
-  [37m✓[m [37mPR-12302[m  [37mRemove old sync job[m   [37mnothing:[m[37m merged 13:20 · not rated yet[m                               [92mQA ✓[m      [92mlatest[m    [92mQA ✓[m
+  [37m✓[m [37mPR-12302[m  [37m#4519[m   [37mRemove old sync job[m    [37mnothing:[m[37m merged 13:20 · not rated yet[m                      [92mQA ✓[m      [92mlatest[m    [92mQA ✓[m
 [90m──[m [92m✓ 14:02 you said MFA done → bart deploy resumed[m [90m─────────────────────────────────────────────────────────────────────────────────────────[m
  alice on #4512: "Do we need the deploy list for archived campaigns too?" · reply drafted · also: agent fixing 2 conflicts in bart, 10m
  [1;94menter[m [37mread and reply[m[37m · [m[1;94ma[m [37moldest ask[m[37m · [m[1;94mo[m [37mpane fixing bart[m[37m · [m[1;94mn[m [37mnew task[m[37m · [m[1;94m?[m [37mmore[m

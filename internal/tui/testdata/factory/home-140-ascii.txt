@@ -1,18 +1,18 @@
  magnum factory | talkable                                                                           memory full: new tasks wait | at 14:09 
  * 3 tasks need you, 5 decisions | 3 wait on others | 1 done today                                                    1 rule to approve (L) 
 
- NEEDS YOU                          WAITS ON                                  YOUR MOVE                 VOID      BART      BASTION   WAITED
-> * #4512     Deploy list on camp…  you: reply to alice | agent: fixing bart  post the drafted reply    QA pass   conflict  QA 4/9        2h
-  * PR-12345  Credit expiry remin…  you: 3 questions before coding            answer 3 questions                                         41m
-  * PR-12360  Custom activities l…  you: ready to push · 3 files +48 −6       read the diff, then push                                   12m
+ NEEDS YOU                                   WAITS ON                                  YOUR MOVE        VOID      BART      BASTION   WAITED
+> * PR-12310  #4512   Deploy list on campa…  you: reply to alice | agent: fixing bart  post reply       QA pass   conflict  QA 4/9        2h
+  * PR-12345          Credit expiry remind…  you: 3 questions before coding            answer them                                       41m
+  * PR-12360          Custom activities lo…  you: ready to push · 3 files +48 −6       diff, then push                                   12m
 
  WAITS ON OTHERS
-  | PR-12371  Coupon CSV export t…  agent: finding the cause, 2 of 3 done                                                                 9m
-  o PR-12330  Advocate offer emai…  rev-ann: review of #4527                                            QA pass   latest    outdated      3h
-  o PR-12388  Weekly gem upgrades   memory: full, starts below 80% swap                                                                  18m
+  | PR-12371          Coupon CSV export ti…  agent: finding the cause, 2 of 3 done                                                        9m
+  o PR-12330  #4527   Advocate offer email…  rev-ann: review of #4527                                   QA pass   latest    outdated      3h
+  o PR-12388          Weekly gem upgrades    memory: full, starts below 80% swap                                                         18m
 
  DONE TODAY
-  + PR-12302  Remove old sync job   nothing: merged 13:20 · not rated yet                               QA pass   latest    QA pass
+  + PR-12302  #4519   Remove old sync job    nothing: merged 13:20 · not rated yet                      QA pass   latest    QA pass
 -- + 14:02 you said MFA done → bart deploy resumed -----------------------------------------------------------------------------------------
  alice on #4512: "Do we need the deploy list for archived campaigns too?" · reply drafted · also: agent fixing 2 conflicts in bart, 10m
  enter read and reply · a oldest ask · o pane fixing bart · n new task · ? more

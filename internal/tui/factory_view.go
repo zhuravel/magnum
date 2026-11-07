@@ -15,9 +15,11 @@ package tui
 // its short form (both blockers stay), (4) the staging cells for their short
 // forms, (5) the gap after the key; beyond the spec it then drops the staging
 // columns, YOUR MOVE, and squeezes the title and WAITS ON. When the screen is
-// wide enough for everything at its fullest (key split into JIRA and GITHUB,
-// long blockers, the age of each staging cell) it draws that instead and
-// shares the spare width out.
+// wide enough for everything at its fullest (long blockers, the age of each
+// staging cell) with the title squeezed to no less than 24 cells, it draws
+// that instead and shares the spare width out. From 120 columns, at every
+// step, a row with a PR shows its number in a column of its own after the
+// key, which is then the Jira key.
 
 import (
 	"fmt"
@@ -62,21 +64,22 @@ type factoryFrame struct {
 }
 
 const (
-	factoryMarkW     = 4  // the cursor's cell, the row mark and the gap after each
-	factoryWaitedW   = 6  // the width of "WAITED"
-	factoryMinTitle  = 14 // the title's floor while the spec's shrink steps run
-	factoryKeepTitle = 24 // the title a cut REPO cell leaves when it takes its whole name back
-	factoryGitHubMin = 6  // room for "#12345", and the width of "GITHUB"
-	factoryCountMax  = 9  // a staging count wider than this reads as a percent
-	factoryRepoWide  = 24 // the repository's widest cell
-	factoryRepoMid   = 11 // ... on a narrow screen: "integration"
-	factoryRepoShort = 6  // ... once the staging cells go short
-	factoryTop       = 3  // the title, the chips and a blank above the body
-	factoryBottom    = 3  // the rule, the help line and the hints below it
-	factoryMoveFloor = 24 // the longest step the factory recommends: "read the diff, then push"
-	factoryMoveShort = 15 // ... and its short form, "diff, then push"
-	factoryMoveWide  = 28 // YOUR MOVE on a wide screen: the longest step and a little air
-	factoryChipGap   = 16 // the room the rule chip keeps from the counts
+	factoryMarkW     = 4   // the cursor's cell, the row mark and the gap after each
+	factoryWaitedW   = 6   // the width of "WAITED"
+	factoryMinTitle  = 14  // the title's floor while the spec's shrink steps run
+	factoryKeepTitle = 24  // the title the wide layout, or a cut REPO cell that takes its whole name back, leaves
+	factoryPRFrom    = 120 // the narrowest screen with a PR column at every step
+	factoryGitHubMin = 6   // room for "#12345", and the width of "GITHUB"
+	factoryCountMax  = 9   // a staging count wider than this reads as a percent
+	factoryRepoWide  = 24  // the repository's widest cell
+	factoryRepoMid   = 11  // ... on a narrow screen: "integration"
+	factoryRepoShort = 6   // ... once the staging cells go short
+	factoryTop       = 3   // the title, the chips and a blank above the body
+	factoryBottom    = 3   // the rule, the help line and the hints below it
+	factoryMoveFloor = 24  // the longest step the factory recommends: "read the diff, then push"
+	factoryMoveShort = 15  // ... and its short form, "diff, then push"
+	factoryMoveWide  = 28  // YOUR MOVE on a wide screen: the longest step and a little air
+	factoryChipGap   = 16  // the room the rule chip keeps from the counts
 	factoryLate      = 30 * time.Minute
 	factoryDefaultW  = 140
 )
@@ -92,7 +95,8 @@ const (
 
 // factoryLayout is how the table is laid out at one width.
 type factoryLayout struct {
-	wide                  bool // JIRA and GITHUB apart, ages on the staging cells, long chips and help
+	wide                  bool // long blockers, ages on the staging cells, long chips and help
+	split                 bool // the key is the Jira key, the PR number in a column of its own
 	waits, move, stage    factoryForm
 	keyGap                int
 	stageGap              int
@@ -111,7 +115,7 @@ func (l factoryLayout) total() int {
 	if l.repoW > 0 {
 		n += l.repoW + 2
 	}
-	if l.wide {
+	if l.split {
 		n += l.ghW + 2
 	}
 	if l.hasMove {
@@ -143,6 +147,8 @@ type factoryPainter struct {
 	// one repository, or one the title does not name; owners when the rows
 	// span several owners, so their cells name them (as the board's do).
 	repos, owners bool
+	// prs is true when a row has a PR: a split layout has a PR column.
+	prs bool
 }
 
 // renderFactory draws the home screen in width cells and at most height
@@ -191,6 +197,7 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 		}
 	}
 	p.repos, p.owners = p.repoColumn()
+	p.prs = slices.ContainsFunc(p.rows, func(r FactoryRow) bool { return r.GitHub != "" })
 	p.lay = p.plan()
 	return p
 }
@@ -328,7 +335,7 @@ func (r FactoryRow) helpText(form factoryForm) string {
 	return r.Help
 }
 
-// jiraKey is the row's JIRA cell on a wide screen: your PR's row has only
+// jiraKey is the row's key cell beside a PR column: your PR's row has only
 // the issue key of its title.
 func (r FactoryRow) jiraKey() string {
 	switch {
@@ -340,12 +347,12 @@ func (r FactoryRow) jiraKey() string {
 	return r.Key
 }
 
-// keyText is the row's key cell in layout l: the JIRA cell on a wide
-// screen; your PR's number when a REPO column names its repository; else
+// keyText is the row's key cell in layout l: the Jira key beside a PR
+// column; your PR's number when a REPO column names its repository; else
 // its key.
 func (r FactoryRow) keyText(l factoryLayout) string {
 	switch {
-	case l.wide:
+	case l.split:
 		return r.jiraKey()
 	case l.repoW > 0 && r.PR != nil && r.GitHub != "":
 		return r.GitHub
@@ -540,7 +547,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	l.staging = len(p.names) > 0 && !l.hideStaging
 	l.hasMove = !l.hideMove
 	l.repoW, l.repoFull, l.keyW, l.ghW, l.titleW, l.waitsW, l.moveW, l.stageW = 0, 0, 1, 0, 1, len("WAITS ON"), 0, nil
-	if l.wide {
+	if l.split {
 		l.ghW = factoryGitHubMin
 	}
 	for _, r := range p.rows {
@@ -548,7 +555,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 			l.repoFull = max(l.repoFull, min(ansi.StringWidth(p.repoText(r)), factoryRepoWide), 1)
 			l.repoW = min(l.repoFull, l.repoCap)
 		}
-		if l.wide {
+		if l.split {
 			l.ghW = max(l.ghW, ansi.StringWidth(r.GitHub))
 		}
 		l.keyW = max(l.keyW, ansi.StringWidth(r.keyText(l)))
@@ -598,20 +605,23 @@ func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 
 // plan picks the fullest layout that fits the width.
 func (p *factoryPainter) plan() factoryLayout {
-	wide := p.measure(factoryLayout{wide: true, waits: formLong, move: formMid, stage: formLong, keyGap: 2, stageGap: 2,
+	wide := p.measure(factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, keyGap: 2, stageGap: 2,
 		repoCap: factoryRepoWide})
-	if wide.total() <= p.width {
+	if room := p.width - (wide.total() - wide.titleW); room >= min(wide.titleW, factoryKeepTitle) {
+		wide.titleW = min(wide.titleW, room)
 		return p.grow(wide)
 	}
 	const mid, short = factoryRepoMid, factoryRepoShort
+	split := p.prs && p.width >= factoryPRFrom
 	steps := []factoryLayout{
-		{waits: formMid, move: formMid, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{waits: formMid, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{waits: formShort, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 2, stageGap: 1, repoCap: short},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true},
-		{waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true, hideMove: true},
+		{split: split, waits: formMid, move: formMid, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formMid, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formShort, move: formShort, stage: formMid, keyGap: 2, stageGap: 2, repoCap: mid},
+		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 2, stageGap: 1, repoCap: short},
+		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short},
+		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true},
+		{split: split, waits: formShort, move: formShort, stage: formShort, keyGap: 1, stageGap: 1, repoCap: short, hideStaging: true,
+			hideMove: true},
 	}
 	var l factoryLayout
 	for _, s := range steps {
@@ -654,7 +664,7 @@ func (p *factoryPainter) xs() factoryXs {
 		x.key += l.repoW + 2
 	}
 	at := x.key + l.keyW + l.keyGap
-	if l.wide {
+	if l.split {
 		x.gh = at
 		at += l.ghW + 2
 	}
@@ -698,7 +708,7 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 		ps = append(ps, placed{x.repo, l.repoW, cell{{p.repoText(r), p.st.Dim}}})
 	}
 	ps = append(ps, placed{x.key, l.keyW, cell{{r.keyText(l), p.tone(r, p.st.Accent)}}})
-	if l.wide {
+	if l.split {
 		ps = append(ps, placed{x.gh, l.ghW, cell{{r.GitHub, p.tone(r, p.st.Accent)}}})
 	}
 	ps = append(ps,
