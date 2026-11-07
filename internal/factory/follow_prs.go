@@ -32,10 +32,12 @@ func closedWait(n int) string {
 // followPRs follows the PRs of tasks that are published with one, on every
 // tick, whether or not the tick advances (it needs neither herdr nor
 // MySQL; a park herdr cannot take waits, parkEnded): see the file's
-// comment. A failed read is logged once while it stays the same.
-func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) {
+// comment. A failed read is logged once while it stays the same. It
+// returns what magnum's registry said of the PRs (nil when it read none),
+// which the PRs' status files are written from (writePRStatuses).
+func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) map[PRRef]PRState {
 	if e.d.Magnum == nil {
-		return
+		return nil
 	}
 	refs := map[int64]PRRef{}
 	var list []PRRef
@@ -54,7 +56,7 @@ func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) {
 		list = append(list, ref)
 	}
 	if len(list) == 0 {
-		return
+		return nil
 	}
 	states, err := e.d.Magnum.PRStates(ctx, list)
 	if err != nil {
@@ -62,7 +64,7 @@ func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) {
 			e.followErr = msg
 			e.log.Warn("follow the published tasks' PRs: magnum's registry cannot be read; no task moves", "err", msg)
 		}
-		return
+		return nil
 	}
 	e.followErr = ""
 	now := e.now()
@@ -79,6 +81,7 @@ func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) {
 			e.log.Warn("follow a published task's PR", "task", t.ID, "pr", ref.Number, "err", err)
 		}
 	}
+	return states
 }
 
 // followPR moves published task t by its PR's state st in magnum's

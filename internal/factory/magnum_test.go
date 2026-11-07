@@ -483,6 +483,71 @@ func TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem(t *testing.T) {
 	}
 }
 
+// fixEvent records a fix event of magnum's of kind on PR #n of
+// example/shop, with data.
+func fixEvent(t *testing.T, st *store.Store, n int, kind string, data map[string]any) {
+	t.Helper()
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := "pr:example/shop#" + strconv.Itoa(n)
+	if _, err := st.AppendEvent(t.Context(), store.Event{Subject: &subject, Kind: kind, Message: kind + " of the fix loop", Data: b}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// FixRecords folds, per PR, magnum's fix events into counts: the loops
+// started, the newest start's cycle, the fixers' pushes, the threads they
+// replied in, and whether the newest loop's last word left the PR to you.
+// The same Magnum reads only the events written since its last call; a PR
+// or a repository magnum does not have is the zero record, and magnum's
+// registry is only read.
+func TestFixRecordsFoldTheFixEventsOfAPR(t *testing.T) {
+	l, st := magnumLayout(t)
+	magnumPR(t, st, 7, strings.Repeat("ab", 20), nil)
+	magnumPR(t, st, 8, strings.Repeat("ab", 20), nil)
+	fixStart(t, st, 7, 1, "magnum fix")
+	fixEvent(t, st, 7, "fix.pushed", map[string]any{"cycle": 1, "commits": 2})
+	fixEvent(t, st, 7, "fix.replied", map[string]any{"cycle": 1, "threads": 3})
+	fixEvent(t, st, 7, "round.start", map[string]any{"threads": 40})
+	fixStart(t, st, 7, 2, "magnum fix")
+	fixEvent(t, st, 7, "fix.pushed", map[string]any{"cycle": 2, "commits": 1})
+	fixEvent(t, st, 7, "fix.replied", map[string]any{"cycle": 2}) // a reply without a count of its threads
+	fixEvent(t, st, 7, "fix.needs_you", map[string]any{"cycle": 2, "needs_you": 1})
+	fixEvent(t, st, 8, "fix.replied", map[string]any{"threads": 9})
+	m := NewMagnum(l, openWatchConfig())
+	seven, eight, nine, other := PRRef{"example/shop", 7}, PRRef{"example/shop", 8}, PRRef{"example/shop", 9}, PRRef{"other/site", 1}
+	before := registryBytes(t, l)
+	got, err := m.FixRecords(t.Context(), []PRRef{seven, eight, nine, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, registryBytes(t, l)) {
+		t.Error("FixRecords changed magnum's registry")
+	}
+	for ref, want := range map[PRRef]FixRecord{seven: {Loops: 1, Cycle: 2, Pushes: 2, Threads: 3, LeftToYou: true}, eight: {Threads: 9},
+		nine: {}, other: {}} {
+		if got[ref] != want {
+			t.Errorf("%s#%d: %+v, want %+v", ref.Repo, ref.Number, got[ref], want)
+		}
+	}
+
+	fixStart(t, st, 7, 1, engine.AutofixBy)
+	fixEvent(t, st, 7, "fix.replied", map[string]any{"cycle": 1, "threads": 2})
+	fixEvent(t, st, 7, "fix.done", map[string]any{"cycle": 1})
+	got, err = m.FixRecords(t.Context(), []PRRef{seven})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (FixRecord{Loops: 2, Cycle: 1, Pushes: 2, Threads: 5}); got[seven] != want {
+		t.Errorf("after a second loop: %+v, want %+v", got[seven], want)
+	}
+	if again, err := NewMagnum(l, openWatchConfig()).FixRecords(t.Context(), []PRRef{seven}); err != nil || again[seven] != got[seven] {
+		t.Errorf("a fresh Magnum reads %+v (%v), want the same %+v", again[seven], err, got[seven])
+	}
+}
+
 // selfConfig is openWatchConfig with zhuravel as the watch's identity, so
 // zhuravel's PRs are your own (config.SelfMatch).
 func selfConfig() *config.Config {

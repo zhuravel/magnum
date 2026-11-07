@@ -12437,14 +12437,14 @@ func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
     then the infrastructure hold and a MySQL ping before a pass that advances),
     the requests, the published tasks' PRs (followPRs, whether or not the pass
-    advances), then each live task's advance under its own panic guard (safely).
-    During an infrastructure or a herdr hold no task advances except on the
-    hold's tries, and while herdr does not answer no copy a base run left
-    detached is swept (sweepDetached, each under safely too); a failure that
-    a hold covers costs its task nothing. Last, the alerts are delivered
-    (deliverAlerts). The returned error joins what failed, for the log;
-    each step records its own. A task's held wait is no error of the tick:
-    logHeld logs it once, at WARN only past heldWarnAfter.
+    advances) and their status files (writePRStatuses), then each live task's
+    advance under its own panic guard (safely). During an infrastructure or a
+    herdr hold no task advances except on the hold's tries, and while herdr
+    does not answer no copy a base run left detached is swept (sweepDetached,
+    each under safely too); a failure that a hold covers costs its task nothing.
+    Last, the alerts are delivered (deliverAlerts). The returned error joins
+    what failed, for the log; each step records its own. A task's held wait is
+    no error of the tick: logHeld logs it once, at WARN only past heldWarnAfter.
 
 type ErrRunning struct {
 	PID  int
@@ -12461,6 +12461,19 @@ type FixLoops struct {
 }
     FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
     f on the board) and by autofix.
+
+type FixRecord struct {
+	Loops, Cycle, Pushes, Threads int
+	LeftToYou                     bool
+}
+    FixRecord is what magnum's registry recorded of the fix loops on a PR
+    (Magnum.FixRecords), from its fix events over the history it keeps ([daemon]
+    keep_events): the loops started (a fix.start of cycle 1), the cycle of the
+    newest fix.start, the fixers' pushes (fix.pushed), the review threads they
+    replied in (fix.replied's count), and whether the newest of the loop's
+    starts and ends left the PR to you (fix.needs_you, fix.capped, fix.failed)
+    rather than ending it (fix.done, fix.ended, fix.stopped) or starting a
+    cycle. Counts only, never an event's text.
 
 type Flags struct {
 	Migrations                         []MigrationFlag
@@ -12562,12 +12575,14 @@ type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 	OwnPRs(ctx context.Context) ([]PRState, error)
+	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
 }
-    Magnum is the review daemon as the factory sees it: busy while its
-    real rounds in flight and due fill its limit (max_concurrent_reviews),
-    so a local round takes a free round or waits; and what its registry says
-    of the factory's PRs (PRStates: the row, the verdict, the loop), which
-    the screen draws and the tick follows, and of your own open PRs (OwnPRs),
+    Magnum is the review daemon as the factory sees it: busy while its real
+    rounds in flight and due fill its limit (max_concurrent_reviews), so a
+    local round takes a free round or waits; and what its registry says of the
+    factory's PRs (PRStates: the row, the verdict, the loop), which the screen
+    draws and the tick follows, of their fix loops over time (FixRecords),
+    which the PRs' status files count, and of your own open PRs (OwnPRs),
     which the screen lists.
 
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
@@ -12845,6 +12860,7 @@ type ReadyCardFile struct {
 	Drawn      time.Time     `json:"drawn"`
 	Head       string        `json:"head"`
 	Base       string        `json:"base"`
+	Commits    int           `json:"commits"`
 	ReportHash string        `json:"report_hash"`
 	DiffHash   string        `json:"diff_hash"`
 	Branch     string        `json:"branch"`
@@ -12856,13 +12872,15 @@ type ReadyCardFile struct {
 	Review     ReviewSummary `json:"review"`
 	Files      []CardFile    `json:"files"`
 }
-    ReadyCardFile is ready-card.json, the ready card as the factory drew it: its
-    revision (a new one each time what it shows changed) and when it was drawn,
-    the head and the base of the change (the PR's diff is base...head), the hash
-    of report.md and pr-body.md as shown and the hash of the diff (the patch
-    id of base...head), the branch, the PR's title, the copy a push frees (its
-    directory's name) and its path, the FLAGS lines (Flags.Lines), the local
-    review's end and the changed files, the flagged ones first (cardFilesOf).
+    ReadyCardFile is ready-card.json, the ready card as the factory drew it:
+    its revision (a new one each time what it shows changed) and when it was
+    drawn, the head and the base of the change (the PR's diff is base...head),
+    the branch's commits after origin/<base> (0 in a card an older build drew;
+    the PR's status file counts them), the hash of report.md and pr-body.md as
+    shown and the hash of the diff (the patch id of base...head), the branch,
+    the PR's title, the copy a push frees (its directory's name) and its path,
+    the FLAGS lines (Flags.Lines), the local review's end and the changed files,
+    the flagged ones first (cardFilesOf).
 
 func ReadReadyCard(l paths.Layout, id int64) (ReadyCardFile, error)
     ReadReadyCard reads the ready card of task id in layout l.

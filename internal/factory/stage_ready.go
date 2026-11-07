@@ -90,16 +90,19 @@ type DecidePayload struct {
 // ReadyCardFile is ready-card.json, the ready card as the factory drew it:
 // its revision (a new one each time what it shows changed) and when it was
 // drawn, the head and the base of the change (the PR's diff is
-// base...head), the hash of report.md and pr-body.md as shown and the hash
-// of the diff (the patch id of base...head), the branch, the PR's title,
-// the copy a push frees (its directory's name) and its path, the FLAGS
-// lines (Flags.Lines), the local review's end and the changed files, the
-// flagged ones first (cardFilesOf).
+// base...head), the branch's commits after origin/<base> (0 in a card an
+// older build drew; the PR's status file counts them), the hash of
+// report.md and pr-body.md as shown and the hash of the diff (the patch id
+// of base...head), the branch, the PR's title, the copy a push frees (its
+// directory's name) and its path, the FLAGS lines (Flags.Lines), the local
+// review's end and the changed files, the flagged ones first
+// (cardFilesOf).
 type ReadyCardFile struct {
 	Revision   int           `json:"revision"`
 	Drawn      time.Time     `json:"drawn"`
 	Head       string        `json:"head"`
 	Base       string        `json:"base"`
+	Commits    int           `json:"commits"`
 	ReportHash string        `json:"report_hash"`
 	DiffHash   string        `json:"diff_hash"`
 	Branch     string        `json:"branch"`
@@ -400,9 +403,11 @@ func (e *Engine) runDecision(ctx context.Context, t registry.Task, st config.Fac
 }
 
 // cardState is what a card shows of task's change now: its head and base,
-// the hash of report.md and pr-body.md and the hash of the diff.
+// the hash of report.md and pr-body.md, the hash of the diff and the
+// branch's commits after origin/<base>.
 type cardState struct {
 	head, base, reportHash, diffHash string
+	commits                          int
 }
 
 // runReady runs one pass of the ready stage of task t: your push decision
@@ -587,7 +592,7 @@ func (e *Engine) cardNow(ctx context.Context, t registry.Task, c Copy, bh branch
 	if err != nil {
 		return cardState{}, err
 	}
-	return cardState{head: bh.Head, base: bh.Base, reportHash: rh, diffHash: dh}, nil
+	return cardState{head: bh.Head, base: bh.Base, reportHash: rh, diffHash: dh, commits: bh.Commits}, nil
 }
 
 // reportHash is the hash of report.md and pr-body.md in dir, as the card
@@ -639,7 +644,7 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 	if err != nil {
 		return ReadyCardFile{}, err
 	}
-	card := ReadyCardFile{Head: now.head, Base: now.base, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
+	card := ReadyCardFile{Head: now.head, Base: now.base, Commits: now.commits, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
 		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum,
 		Files: files}
 	old, err := readCard(dir)

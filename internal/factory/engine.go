@@ -185,12 +185,14 @@ func (m MergeMethods) String() string {
 // rounds in flight and due fill its limit (max_concurrent_reviews), so a
 // local round takes a free round or waits; and what its registry says of
 // the factory's PRs (PRStates: the row, the verdict, the loop), which the
-// screen draws and the tick follows, and of your own open PRs (OwnPRs),
-// which the screen lists.
+// screen draws and the tick follows, of their fix loops over time
+// (FixRecords), which the PRs' status files count, and of your own open
+// PRs (OwnPRs), which the screen lists.
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 	OwnPRs(ctx context.Context) ([]PRState, error)
+	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
 }
 
 // LocalReviewer runs one round of magnum's review on a task's change in its
@@ -448,6 +450,14 @@ type Engine struct {
 	// own.
 	followErr string
 	parkOwed  map[int64]bool
+	// statusErrs are the failures of the PRs' status files last logged, by
+	// task; statusReadErr the failed read of magnum's registry for them
+	// ("" after a read that worked); statusFinal the ended tasks whose last
+	// write is done or that never had a file (writePRStatuses). The loop's
+	// own.
+	statusErrs    map[int64]string
+	statusReadErr string
+	statusFinal   map[int64]bool
 	// beforeStop runs between the end of a loop's cycle that needs you
 	// (unavailable, the cap) and the task's move to you; an error stops
 	// there (a test's seam: the daemon stopping in between). nil in a
@@ -518,6 +528,8 @@ func New(d Deps) *Engine {
 		claimWaits:   map[int64]*claimWait{},
 		held:         map[int64]Copy{},
 		debts:        map[int64]*releaseDebt{},
+		statusErrs:   map[int64]string{},
+		statusFinal:  map[int64]bool{},
 		agentRuns:    map[int64]*agentsRun{},
 		run:          Guard(d.Run, d.Config),
 		checks:       map[int64]*headCheck{},
@@ -808,14 +820,15 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // Tick runs one pass of the loop: the holds (herdr, disk and memory, then
 // the infrastructure hold and a MySQL ping before a pass that advances),
 // the requests, the published tasks' PRs (followPRs, whether or not the
-// pass advances), then each live task's advance under its own panic guard
-// (safely). During an infrastructure or a herdr hold no task advances
-// except on the hold's tries, and while herdr does not answer no copy a
-// base run left detached is swept (sweepDetached, each under safely too); a
-// failure that a hold covers costs its task nothing. Last, the alerts are
-// delivered (deliverAlerts). The returned error joins what failed, for the
-// log; each step records its own. A task's held wait is no error of the
-// tick: logHeld logs it once, at WARN only past heldWarnAfter.
+// pass advances) and their status files (writePRStatuses), then each live
+// task's advance under its own panic guard (safely). During an
+// infrastructure or a herdr hold no task advances except on the hold's
+// tries, and while herdr does not answer no copy a base run left detached
+// is swept (sweepDetached, each under safely too); a failure that a hold
+// covers costs its task nothing. Last, the alerts are delivered
+// (deliverAlerts). The returned error joins what failed, for the log; each
+// step records its own. A task's held wait is no error of the tick:
+// logHeld logs it once, at WARN only past heldWarnAfter.
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -858,7 +871,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.handleRequests(ctx)
 	e.pruneScreenRequests(ctx, now)
 	e.admit(ctx)
-	e.followPRs(ctx, tasks) // its moves are compare-and-set from published: a request's stop since wins
+	states := e.followPRs(ctx, tasks) // its moves are compare-and-set from published: a request's stop since wins
+	e.writePRStatuses(ctx, tasks, states)
 
 	if advance {
 		if tasks, err = e.reg.Tasks(ctx); err != nil { // the requests may have moved some

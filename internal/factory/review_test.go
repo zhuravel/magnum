@@ -68,7 +68,8 @@ func (f *fakeReviewer) calls() []evalrun.LocalCase {
 // prs are the PRs its registry has (a ref it lacks is not found, its
 // daemon up), prErr fails PRStates, and reads counts the PRStates calls;
 // own are your own open PRs OwnPRs lists, ownErr fails it, and ownReads
-// counts its calls.
+// counts its calls; fix are the PRs' fix records (a ref it lacks has the
+// zero record), and fixErr fails FixRecords.
 type fakeMagnum struct {
 	mu       sync.Mutex
 	busy     string
@@ -78,6 +79,38 @@ type fakeMagnum struct {
 	own      []PRState
 	ownErr   error
 	ownReads int
+	fix      map[PRRef]FixRecord
+	fixErr   error
+}
+
+func (f *fakeMagnum) FixRecords(_ context.Context, refs []PRRef) (map[PRRef]FixRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fixErr != nil {
+		return nil, f.fixErr
+	}
+	out := make(map[PRRef]FixRecord, len(refs))
+	for _, r := range refs {
+		out[r] = f.fix[r]
+	}
+	return out, nil
+}
+
+// setFix makes magnum's registry record rec of ref's fix loops.
+func (f *fakeMagnum) setFix(ref PRRef, rec FixRecord) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fix == nil {
+		f.fix = map[PRRef]FixRecord{}
+	}
+	f.fix[ref] = rec
+}
+
+// setFixErr makes FixRecords fail with err (nil: it reads).
+func (f *fakeMagnum) setFixErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fixErr = err
 }
 
 func (f *fakeMagnum) OwnPRs(context.Context) ([]PRState, error) {

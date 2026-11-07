@@ -121,11 +121,13 @@ func readProofFile(dir string, since time.Time) (ProofFile, *endProblem) {
 }
 
 // branchHead is the task's branch as its copy has it: HEAD, the base it
-// starts from (the merge base with origin/<base>), and what keeps it from
-// the factory's checks ("" for nothing): another branch or no branch
-// checked out, tracked changes, no commit after origin/<base>.
+// starts from (the merge base with origin/<base>), its commits after
+// origin/<base>, and what keeps it from the factory's checks ("" for
+// nothing): another branch or no branch checked out, tracked changes, no
+// commit after origin/<base>.
 type branchHead struct {
 	Head, Base string
+	Commits    int
 	Problem    string
 }
 
@@ -160,6 +162,7 @@ func (e *Engine) branchHead(ctx context.Context, t registry.Task, c Copy, repo c
 	if err != nil {
 		return bh, err
 	}
+	bh.Commits = len(commits)
 	if len(commits) == 0 {
 		bh.Problem = t.Branch + " has no commit after " + upstream + ": commit your change on it"
 	}

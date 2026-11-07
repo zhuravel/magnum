@@ -5,11 +5,12 @@ package factory
 // rounds, so it waits while one is in flight or due. The screen and the
 // tick read the factory's PRs there too (PRStates): magnum's row, its
 // autofix = "open" verdict, its fix loop, its stalemate and its attention;
-// and the screen your own open PRs (OwnPRs), for YOUR PRS. The factory
-// reads magnum's registry and never writes or migrates it: it opens it
-// query_only, so a write through its handle fails, and a registry of
-// another schema than this build's is an error, and its file stays as it
-// was.
+// the tick their fix loops' record (FixRecords), for the PRs' status
+// files; and the screen your own open PRs (OwnPRs), for YOUR PRS. The
+// factory reads magnum's registry and never writes or migrates it: it
+// opens it query_only, so a write through its handle fails, and a registry
+// of another schema than this build's is an error, and its file stays as
+// it was.
 
 import (
 	"context"
@@ -47,6 +48,10 @@ type magnumRegistry struct {
 	// that never starts holds the local review dueHold at most.
 	mu       sync.Mutex
 	dueSince map[int64]time.Time
+	// fixFolds are the PRs' fix records as FixRecords folded them, by
+	// magnum's subject of the PR; fixMu guards them.
+	fixMu    sync.Mutex
+	fixFolds map[string]fixFold
 }
 
 // dueHold is how long a queued round of magnum's that is due and never
@@ -525,6 +530,98 @@ func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]Fi
 			}
 		}
 		out[r] = c
+	}
+	return out, nil
+}
+
+// FixRecord is what magnum's registry recorded of the fix loops on a PR
+// (Magnum.FixRecords), from its fix events over the history it keeps
+// ([daemon] keep_events): the loops started (a fix.start of cycle 1), the
+// cycle of the newest fix.start, the fixers' pushes (fix.pushed), the
+// review threads they replied in (fix.replied's count), and whether the
+// newest of the loop's starts and ends left the PR to you (fix.needs_you,
+// fix.capped, fix.failed) rather than ending it (fix.done, fix.ended,
+// fix.stopped) or starting a cycle. Counts only, never an event's text.
+type FixRecord struct {
+	Loops, Cycle, Pushes, Threads int
+	LeftToYou                     bool
+}
+
+// fixFold is a PR's FixRecord as folded so far, and the id of the last
+// event of the PR it folded.
+type fixFold struct {
+	last int64
+	rec  FixRecord
+}
+
+// add folds magnum's event ev of the PR into f.
+func (f *fixFold) add(ev store.Event) {
+	f.last = max(f.last, ev.ID)
+	var d struct {
+		Cycle   int `json:"cycle"`
+		Threads int `json:"threads"`
+	}
+	if len(ev.Data) > 0 {
+		_ = json.Unmarshal(ev.Data, &d) // an event without them counts no cycle and no thread
+	}
+	switch ev.Kind {
+	case fixStartKind:
+		if d.Cycle == 1 {
+			f.rec.Loops++
+		}
+		f.rec.Cycle, f.rec.LeftToYou = max(d.Cycle, 0), false
+	case "fix.pushed":
+		f.rec.Pushes++
+	case "fix.replied":
+		f.rec.Threads += max(d.Threads, 0)
+	case "fix.needs_you", "fix.capped", "fix.failed":
+		f.rec.LeftToYou = true
+	case "fix.done", "fix.ended", "fix.stopped":
+		f.rec.LeftToYou = false
+	}
+}
+
+// FixRecords reads, per PR of refs, its FixRecord from magnum's registry,
+// in one opening of the registry. m keeps each PR's record and the last
+// event it folded, so a call reads only the PR's events written since: its
+// whole kept history only the first time. A repository or a PR magnum
+// does not have, and no registry, are the zero record (nothing created).
+// It reads and never writes or migrates the registry, as PRStates; a read
+// that fails is an error, and the caller then knows no record.
+func (m *magnumRegistry) FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error) {
+	out := make(map[PRRef]FixRecord, len(refs))
+	st, err := m.open()
+	if st == nil || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	defer st.Close()
+	m.fixMu.Lock()
+	defer m.fixMu.Unlock()
+	for _, r := range refs {
+		repo, err := st.RepoByFullName(ctx, r.Repo)
+		if errors.Is(err, store.ErrNotFound) {
+			out[r] = FixRecord{}
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("magnum's registry: %w", err)
+		}
+		subject := engine.PRSubject(repo, r.Number)
+		f := m.fixFolds[subject]
+		evs, err := st.EventsMatching(ctx, []store.SubjectMatch{{Exact: subject}}, f.last, 0)
+		if err != nil {
+			return nil, fmt.Errorf("magnum's registry: %w", err)
+		}
+		for _, ev := range evs {
+			f.add(ev)
+		}
+		if m.fixFolds == nil {
+			m.fixFolds = map[string]fixFold{}
+		}
+		m.fixFolds[subject] = f
+		out[r] = f.rec
 	}
 	return out, nil
 }
