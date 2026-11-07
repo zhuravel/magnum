@@ -208,6 +208,10 @@ type externalInput struct {
 	// which externalOf does not use.
 	Markers   []string
 	Resolvers []string
+	// AppFixer says the watch's fixer acts as a dedicated App, whose
+	// resolution GitHub names no one for (a review thread's resolvedBy is
+	// a User): a person's thread resolved by no one named is the fixer's.
+	AppFixer bool
 }
 
 // ownWord reports whether a review body or comment by the author is the
@@ -412,7 +416,7 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 	}
 	own := e.fixLogins(ctx, job)
 	read := externalReadOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
-		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own}, job.pr.HeadSHA)
+		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own, AppFixer: len(e.cfg.FixerLogins(&job.watch)) > 0}, job.pr.HeadSHA)
 	if !threadsComplete {
 		read.cut = append(read.cut, fmt.Sprintf("over %d review threads", github.MaxReviewThreads))
 	}

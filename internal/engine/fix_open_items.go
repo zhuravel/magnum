@@ -7,8 +7,10 @@ package engine
 // last review of the head and from a conflict with the PR's base:
 //
 //   - thread:<root id>@<latest id>: another reviewer's unresolved thread
-//     with no answer, or one of theirs that a fixer login resolved (a
-//     person's item never closes on the fixer's word alone);
+//     with no answer, or one of theirs with no answer that a fixer login
+//     resolved (a person's item never closes on the fixer's word alone; an
+//     answer closes it, as it closes an unresolved one). No loop can be
+//     handed a resolved one, so it needs you, never work;
 //   - remark:<id>: another reviewer's review body or conversation comment
 //     with no answer, unless it is quiet ([pipeline] quiet_logins and
 //     quiet_markers; threads never go quiet);
@@ -64,13 +66,16 @@ const (
 // openItem is one thing open on a PR: its ledger key, whose word it is, its
 // kind and link, and, for another reviewer's thread, how many fix-marked
 // replies the fixer gave in it (the thread's first and newest comments
-// only: a long thread can undercount, which errs toward work).
+// only: a long thread can undercount, which errs toward work) and whether
+// a fixer login resolved it (Resolved: the fixer's file leaves resolved
+// threads out, so it is never work).
 type openItem struct {
 	Key          string `json:"key"`
 	Class        string `json:"class"`
 	Kind         string `json:"kind"`
 	URL          string `json:"url,omitempty"`
 	FixerReplies int    `json:"fixer_replies,omitempty"`
+	Resolved     bool   `json:"resolved,omitempty"`
 }
 
 // quietRules are [pipeline] quiet_logins and quiet_markers: a review body
@@ -146,27 +151,50 @@ func magnumThreadsOf(threads []github.Thread, own []string, author string) []mag
 
 // resolvedByFixerOf are the resolved threads of threads that another
 // reviewer started (a bot, or an owner, member or collaborator: what
-// externalOf counts) and that one of resolvers resolved (Thread.ResolvedBy):
+// externalOf counts), that one of resolvers resolved (Thread.ResolvedBy):
 // the fixer's logins, whose resolution of another reviewer's thread does
-// not close it.
+// not close it, and that nobody answered. A person's thread that GitHub
+// names no resolver of is the fixer's under an App fixer (AppFixer: a
+// review thread's resolvedBy is a User, so an App's resolution reads
+// null); a bot's is the bot's own, which resolves its threads once the
+// code changed. The answer is externalOf's: the latest of the reviewers'
+// comments is the author's, or a fix-marked reply of one of magnum's
+// logins; the key's latest comment is that one too, so a thread that is
+// resolved and unresolved again keeps its key.
 func resolvedByFixerOf(in externalInput) []resolvedThread {
 	inList := func(list []string, login, typ string) bool {
 		a := github.Account(login, typ)
 		return slices.ContainsFunc(list, func(o string) bool { return github.SameAccount(o, a) })
 	}
+	byAuthor := func(login, typ string) bool { return github.SameAccount(github.Account(login, typ), in.Author) }
+	reviewer := func(c github.ThreadComment) bool {
+		return github.IsBot(c.AuthorType, c.AuthorLogin) || trustedReplier(c.AuthorAssociation) || byAuthor(c.AuthorLogin, c.AuthorType) ||
+			inList(in.Own, c.AuthorLogin, c.AuthorType)
+	}
 	var out []resolvedThread
 	for _, t := range in.Threads {
 		all := t.AllComments()
-		if !t.Resolved || len(all) == 0 || t.ResolvedBy == "" || !inList(in.Resolvers, t.ResolvedBy, "") {
+		if !t.Resolved || len(all) == 0 {
 			continue
 		}
-		root, latest := all[0], all[len(all)-1]
-		if inList(in.Own, root.AuthorLogin, root.AuthorType) || github.SameAccount(github.Account(root.AuthorLogin, root.AuthorType), in.Author) ||
-			!(github.IsBot(root.AuthorType, root.AuthorLogin) || trustedReplier(root.AuthorAssociation)) {
-			continue
+		root := all[0]
+		bot := github.IsBot(root.AuthorType, root.AuthorLogin)
+		switch {
+		case inList(in.Own, root.AuthorLogin, root.AuthorType) || byAuthor(root.AuthorLogin, root.AuthorType) || !(bot || trustedReplier(root.AuthorAssociation)):
+			continue // magnum's or the author's own thread, or an outsider's
+		case t.ResolvedBy == "" && (bot || !in.AppFixer):
+			continue // resolved by no one GitHub names: the bot itself, or an account gone
+		case t.ResolvedBy != "" && !inList(in.Resolvers, t.ResolvedBy, ""):
+			continue // its reviewer, the author or another person resolved it
 		}
-		rt := resolvedThread{RootID: root.ID, LatestID: latest.ID, URL: root.URL, Bot: github.IsBot(root.AuthorType, root.AuthorLogin)}
-		for _, c := range all[1:] {
+		cs := slices.DeleteFunc(slices.Clone(all), func(c github.ThreadComment) bool { return !reviewer(c) })
+		latest := cs[len(cs)-1]
+		if len(cs) > 1 && (byAuthor(latest.AuthorLogin, latest.AuthorType) ||
+			postreview.IsFixReply(latest.Body) && inList(in.Own, latest.AuthorLogin, latest.AuthorType)) {
+			continue // answered, as externalOf answers an unresolved one
+		}
+		rt := resolvedThread{RootID: root.ID, LatestID: latest.ID, URL: root.URL, Bot: bot}
+		for _, c := range cs[1:] {
 			if postreview.IsFixReply(c.Body) {
 				rt.FixerReplies++
 			}
@@ -252,7 +280,8 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 		if rt.Bot {
 			class = classBot
 		}
-		out = append(out, openItem{Key: threadKey(rt.RootID, rt.LatestID), Class: class, Kind: itemThread, URL: rt.URL, FixerReplies: rt.FixerReplies})
+		out = append(out, openItem{Key: threadKey(rt.RootID, rt.LatestID), Class: class, Kind: itemThread, URL: rt.URL, FixerReplies: rt.FixerReplies,
+			Resolved: true})
 	}
 	return out
 }

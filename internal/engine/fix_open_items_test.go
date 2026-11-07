@@ -172,13 +172,14 @@ func TestAnUnmarkedMagnumReplyCountsAsARebuttal(t *testing.T) {
 }
 
 // A person's thread never closes on the fixer's word alone: one that a
-// fixer login resolved (the fixer may hold the right to) stays a person's
-// item; one its reviewer or the author resolved is gone.
+// fixer login resolved (the fixer may hold the right to) while its
+// reviewer's word is the latest stays a person's item; one its reviewer or
+// the author resolved is gone.
 func TestAPersonsThreadThatAFixerResolvedStaysOpen(t *testing.T) {
-	th := extThread(4100, "app/a.rb", 3, itemsAt.Add(time.Minute), "Rename this", "rev-ann", "zhuravel")
+	th := extThread(4100, "app/a.rb", 3, itemsAt.Add(time.Minute), "Rename this", "rev-ann", "zhuravel", "rev-ann")
 	th.Comments[1].Body = "Renamed.\n\n" + postreview.FixReplyMarker
 	th.Resolved = true
-	for by, want := range map[string][]string{"factory-app[bot]": {"thread:4100@4101"}, "rev-ann": nil, "zhuravel": nil} {
+	for by, want := range map[string][]string{"factory-app[bot]": {"thread:4100@4102"}, "rev-ann": nil, "zhuravel": nil} {
 		th.ResolvedBy = by
 		items := openItemsOf(itemsInput{read: readFor([]github.Thread{th}, nil, nil, nil, []string{"factory-app[bot]"}), sum: cleanSum(), head: fixHead})
 		if !slices.Equal(itemKeys(items), want) {
@@ -246,5 +247,68 @@ func TestAConflictIsAnItemKeyedByTheHead(t *testing.T) {
 	got := openItemsOf(itemsInput{read: readFor(nil, nil, nil, nil, nil), sum: cleanSum(), head: fixHead, conflict: c})
 	if len(got) != 1 || got[0].Key != "conflict:"+fixHead[:12] || got[0].Class != classConflict {
 		t.Errorf("items = %+v, want the conflict keyed by the head", got)
+	}
+}
+
+// A thread a fixer login resolved closes as an unresolved one does: on a
+// fix-marked reply of a fixer login, or on the author's reply after the
+// resolution. Its reviewer's word after the fixer's keeps it open. Before,
+// it stayed open whatever came after, and the fixer's own reply gave it a
+// new key that no loop could be handed (the fixer's file leaves resolved
+// threads out): work for good, refused as nothing to fix.
+func TestAThreadAFixerResolvedClosesOnAnAnswer(t *testing.T) {
+	root := github.ThreadComment{ID: 10, AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER", Body: "MINOR: rename",
+		URL: prPage + "#discussion_r10", CreatedAt: itemsAt}
+	fix := github.ThreadComment{ID: 11, AuthorLogin: "factory-app", AuthorType: "Bot", Body: "Fixed in abc1234.\n\n" + postreview.FixReplyMarker,
+		CreatedAt: itemsAt.Add(time.Minute)}
+	author := github.ThreadComment{ID: 12, AuthorLogin: "zhuravel", AuthorType: "User", AuthorAssociation: "MEMBER", Body: "agreed, thanks",
+		CreatedAt: itemsAt.Add(2 * time.Minute)}
+	again := github.ThreadComment{ID: 13, AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER", Body: "still wrong",
+		CreatedAt: itemsAt.Add(3 * time.Minute)}
+	logins := []string{"talkable[bot]", "factory-app[bot]"}
+	for name, tc := range map[string]struct {
+		comments []github.ThreadComment
+		want     []string
+	}{
+		"the fixer's fix-marked reply":            {[]github.ThreadComment{root, fix}, nil},
+		"the author's reply after the resolution": {[]github.ThreadComment{root, author}, nil},
+		"the reviewer's word after the fixer's":   {[]github.ThreadComment{root, fix, again}, []string{"thread:10@13"}},
+		"no word at all":                          {[]github.ThreadComment{root}, []string{"thread:10@10"}},
+	} {
+		th := github.Thread{Resolved: true, ResolvedBy: "factory-app[bot]", Comments: tc.comments}
+		read := externalReadOf(externalInput{Threads: []github.Thread{th}, CommentsComplete: true, Author: "zhuravel", Own: logins, Resolvers: logins}, fixHead)
+		if got := itemKeys(othersItemsOf(read, quietRules{})); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: items = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// GitHub names no one for a resolution an App makes (a review thread's
+// resolvedBy is a User, so an App's reads null). On a watch whose fixer
+// acts as a dedicated App, a person's thread resolved by no one GitHub
+// names counts as the fixer's resolution and stays open, as one the App
+// resolved by name would; a gh fixer's resolution reads as a login, so
+// there it closes. A bot's thread resolved so closes either way: a bot
+// resolves its own threads once the code changed. Before, the App's
+// resolution of a person's thread closed it on the fixer's word alone.
+func TestAPersonsThreadResolvedByNoOneNamedStaysOpenUnderAnAppFixer(t *testing.T) {
+	person := extThread(4100, "app/a.rb", 3, itemsAt, "Rename this", "rev-ann")
+	person.Resolved = true
+	bot := extThread(4200, "app/b.rb", 4, itemsAt, "P1: nil check", "lint-bot")
+	bot.Resolved = true
+	logins := []string{"talkable[bot]", "factory-app[bot]"}
+	in := externalInput{Threads: []github.Thread{person, bot}, CommentsComplete: true, Author: "zhuravel", Own: logins, Resolvers: logins, AppFixer: true}
+	items := othersItemsOf(externalReadOf(in, fixHead), quietRules{})
+	if got := itemKeys(items); !slices.Equal(got, []string{"thread:4100@4100"}) {
+		t.Errorf("under an App fixer: items = %v, want the person's thread alone", got)
+	}
+	for _, it := range items {
+		if it.Class != classPerson || !it.Resolved {
+			t.Errorf("item %+v, want a person's thread a fixer resolved", it)
+		}
+	}
+	in.AppFixer = false
+	if got := itemKeys(othersItemsOf(externalReadOf(in, fixHead), quietRules{})); len(got) != 0 {
+		t.Errorf("under a gh fixer: items = %v, want none", got)
 	}
 }

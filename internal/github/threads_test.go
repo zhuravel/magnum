@@ -90,13 +90,15 @@ func TestReviewThreads(t *testing.T) {
 	}
 }
 
-// A thread says who resolved it, in Account form (an App's login keeps its
-// "[bot]"): autofix = "open" keeps a person's thread that the fixer resolved
-// open, since a person's item never closes on the fixer's word alone.
+// A thread says who resolved it, in Account form: autofix = "open" keeps a
+// person's thread that the fixer resolved open, since a person's item never
+// closes on the fixer's word alone. GitHub types resolvedBy as a User, so an
+// App's resolution reads null, as a deleted account's does: "" (the engine
+// takes it as the fixer App's on a person's thread).
 func TestAllReviewThreadsReadsWhoResolvedAThread(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
 		return okResult(compact(t, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":"c1"},"nodes":[
-		 {"id":"PRRT_1","isResolved":true,"isOutdated":false,"path":"a.rb","line":1,"originalLine":1,"resolvedBy":{"login":"factory-app","__typename":"Bot"},
+		 {"id":"PRRT_1","isResolved":true,"isOutdated":false,"path":"a.rb","line":1,"originalLine":1,"resolvedBy":null,
 		  "comments":{"totalCount":1,"nodes":[{"databaseId":1,"body":"x","url":"u1","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"}}]}},
 		 {"id":"PRRT_2","isResolved":true,"isOutdated":false,"path":"a.rb","line":2,"originalLine":2,"resolvedBy":{"login":"rev-ann","__typename":"User"},
 		  "comments":{"totalCount":1,"nodes":[{"databaseId":2,"body":"y","url":"u2","createdAt":"2026-10-03T09:00:00Z","author":{"login":"rev-ann","__typename":"User"}}]}},
@@ -111,7 +113,7 @@ func TestAllReviewThreadsReadsWhoResolvedAThread(t *testing.T) {
 	for _, th := range got {
 		by = append(by, th.ResolvedBy)
 	}
-	if want := []string{"factory-app[bot]", "rev-ann", ""}; !reflect.DeepEqual(by, want) {
+	if want := []string{"", "rev-ann", ""}; !reflect.DeepEqual(by, want) {
 		t.Errorf("ResolvedBy = %q, want %q", by, want)
 	}
 	if q := oneLine(decodeReq(t, f.Calls[0]).Query); !strings.Contains(q, "resolvedBy { login __typename }") {

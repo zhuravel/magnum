@@ -3323,7 +3323,12 @@ hands nothing, so what it left open is work for a loop again rather than a lefto
 carries its latest comment, so a reviewer's new reply opens it again. A handed item that is still open after
 the loop needs you: a person's item never closes on the fixer's word alone (only a fix-marked reply, your
 reply, a resolution that is not the fixer's, or your later word on the conversation close it), and neither
-does a bot's inline thread, which is a finding. A bot's handed review body or comment (a receipt, a
+does a bot's inline thread, which is a finding. A thread the fixer resolved with no answer needs you whether
+or not a loop was handed it (the fixer's file leaves resolved threads out, so no loop can take it), and an
+answer after the resolution (a fix-marked reply, or yours) closes it. GitHub names no one for a resolution
+an App makes (a thread's `resolvedBy` is a User), so on a watch whose fixer is a dedicated App a person's
+thread resolved by no one named counts as the fixer's; a bot's thread resolved so is the bot's own, which
+resolves its threads once the code changed. A bot's handed review body or comment (a receipt, a
 summary, a status note) drops out as seen. A finding of Magnum's handed review that the fixer neither
 resolved nor answered (an optional one too) needs you, and so does a thread the fixer answered twice whose
 reviewer answered again. Magnum's own thread waits for your answer only after a rebuttal of Magnum's that

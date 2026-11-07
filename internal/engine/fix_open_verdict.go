@@ -23,8 +23,9 @@ package engine
 //     or waits for the GitHub budget; a read GitHub cut short needs you;
 //  8. a handed item still open needs you: a person's, magnum's, a conflict,
 //     a bot's thread, a finding the fixer skipped without a word, a thread
-//     with two fixer replies that the reviewer answered again (a bot's
-//     receipt or note is seen and drops out);
+//     a fixer resolved with no answer, a thread with two fixer replies that
+//     the reviewer answered again (a bot's receipt or note is seen and
+//     drops out);
 //  9. work (an item never handed, magnum's review no loop worked on) starts
 //     a loop once settle allows: never on magnum's rebuttals alone with no
 //     review work, at most autofix_max_loops a day, never within
@@ -313,9 +314,11 @@ type openFacts struct {
 // sortOpen splits items by the ledger: work, never handed (and magnum's
 // review no loop worked on), and needs, handed and still open (a person's,
 // magnum's, a conflict, a bot's thread), every finding a fixer skipped
-// without a word, and every thread a fixer answered twice whose reviewer
-// answered again (never work again). A handed bot's review body or comment
-// is seen: a receipt, a summary or a note, it drops out.
+// without a word, every thread a fixer resolved with no answer (no loop
+// can be handed it: the fixer's file leaves resolved threads out) and every
+// thread a fixer answered twice whose reviewer answered again (never work
+// again). A handed bot's review body or comment is seen: a receipt, a
+// summary or a note, it drops out.
 func sortOpen(items []openItem, l openLedger) (work, needs []openItem) {
 	for _, it := range items {
 		_, handed := l.Handed[it.Key]
@@ -324,7 +327,7 @@ func sortOpen(items []openItem, l openLedger) (work, needs []openItem) {
 			if !l.handedReview(strings.TrimPrefix(it.Key, "review:")) {
 				work = append(work, it)
 			}
-		case it.Kind == itemFinding:
+		case it.Kind == itemFinding, it.Resolved:
 			needs = append(needs, it)
 		case it.Kind == itemThread && it.FixerReplies >= 2:
 			needs = append(needs, it)

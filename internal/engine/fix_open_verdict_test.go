@@ -420,3 +420,19 @@ func TestAPollThatIsBehindIsUnknown(t *testing.T) {
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "GitHub budget")
 }
+
+// A thread a fixer resolved with no answer is never work: the fixer's file
+// leaves resolved threads out, so no loop can be handed it, and prepareFix
+// refused such a start as nothing to fix. Never handed, it needs you at
+// once, as a leftover the look raises.
+func TestAThreadTheFixerResolvedUnansweredNeedsYouNotALoop(t *testing.T) {
+	f := idleFacts()
+	it := personThread(4100)
+	it.Resolved = true
+	f.items = []openItem{it}
+	v, work, needs := decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "1 item needs you")
+	if len(work) != 0 || len(needs) != 1 || !v.leftovers {
+		t.Errorf("work %+v, needs %+v, leftovers %v: want the thread among the leftovers", work, needs, v.leftovers)
+	}
+}

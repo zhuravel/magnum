@@ -2929,6 +2929,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLookStartsNothingOnAPRThatChangedDuringIt, TestAutofixRefusesAMutedPROrOneThatNeedsAttention,
   TestAMutedOwnPRSaysItIsMuted.
 
+- **A thread the fixer resolved closes on an answer, needs you otherwise, and an App's resolution is the
+  one GitHub names no one for** (2026-11-07, the review of the factory bridge). A person's thread a fixer
+  login resolved stayed an item whatever came after it, under a key carrying its latest comment: the
+  fixer's own reply, or the author's "agreed", made a new key no loop had been handed, and since the
+  fixer's file leaves resolved threads out, prepareFix refused every start on it as nothing to fix. Such a
+  thread now closes as an unresolved one does (the latest reviewer comment is the author's, or a
+  fix-marked reply of magnum's logins), keeps the key an unresolved one would have, and, unanswered, is
+  never work: it needs you at once (the look raises it as a leftover). GitHub's schema types a review
+  thread's `resolvedBy` as `User` ("The user who resolved this thread"), so an App's resolution reads null
+  and the guard never fired for the fixer App S2 sets up; the old test's fixture sent a `Bot` there, a
+  shape GitHub cannot return. Under an App fixer a person's thread resolved by no one named now counts as
+  the fixer's. A bot's thread resolved so closes: bots resolve their own threads once the code changed,
+  and a fixer's resolution of one cannot be told apart (the fixer's skill forbids it). Not done: matching
+  a user-typed resolver to the App with `SameLogin`, which would also take the operator's resolution for
+  an App named like his login ("zhuravel[bot]" and "zhuravel" are two accounts). Not seen live yet: what
+  `resolvedBy` reads for a thread the fixer App resolved (the schema says null), worth a look at the App's
+  first loops. Tests, failing first:
+  TestAThreadAFixerResolvedClosesOnAnAnswer, TestAPersonsThreadResolvedByNoOneNamedStaysOpenUnderAnAppFixer,
+  TestAThreadTheFixerResolvedUnansweredNeedsYouNotALoop; TestAPersonsThreadThatAFixerResolvedStaysOpen now
+  ends on the reviewer's word, and TestAllReviewThreadsReadsWhoResolvedAThread reads a null resolver.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
