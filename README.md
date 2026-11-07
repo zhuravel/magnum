@@ -3640,7 +3640,7 @@ heavy_stages = 1                     # heavy stages at once across tasks (a loca
 herdr_session = "factory"            # the herdr session of the factory's panes: its own windows, apart from reviews
 # diff_pager = "hunk pager"          # the pager of the screen's d (GIT_PAGER); "" = git's own
 observe = "10s"                      # how often it reads its panes
-poll = "45s"                         # how often it reads CI and the staging branches' tips
+poll = "45s"                         # how often its main tick moves the tasks (a request kicks one at once)
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
 

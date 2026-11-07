@@ -53,8 +53,11 @@ type Factory struct {
 	// (GIT_PAGER, which git prefers over core.pager), such as "hunk pager";
 	// "" = git's own. The card's file order stays: it is git's diff.
 	DiffPager string `toml:"diff_pager"`
-	// Observe is how often the factory reads its panes; Poll how often it
-	// reads CI and the staging branches' tips from GitHub.
+	// Observe is how often the factory reads its panes; Poll how often its
+	// main tick runs (the holds, your requests, the published tasks' PRs as
+	// magnum's registry has them, then a step of each live task); a request
+	// kicks a tick at once. The factory itself reads nothing from GitHub
+	// after the publish.
 	Observe Duration `toml:"observe"`
 	Poll    Duration `toml:"poll"`
 	// HumanCooldown is how long the factory leaves a pane alone after you
