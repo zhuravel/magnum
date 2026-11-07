@@ -18345,6 +18345,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheHelpListsThePRKeysTheFilterAndTheScope (`O` is the owner), TestFactoryTitleNamesEveryRepositoryOrCountsThem
   and TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName (`all repos` on the title); removed:
   TestOCyclesTheRepositoryScope.
+- **A factory repository declares visual QA in `[factory.repo.qa]`, and the fx-qa walker has its prompt**
+  (2026-11-07, R55 slice 1, the first of its seven steps). The factory's ready card came with no look at the
+  pages a change shows. This step adds only the configuration and the prompt; the later steps run them.
+  - `[factory.repo.qa]` (`FactoryQA`, nil = no QA for the repository) needs `when` (the command that prints the
+    user-facing files of the changed ones) and `url`; `ready` (/), `boot` (5m), `cap` (50m, at most 3h),
+    `max_pages` (12, at most 30) and `fixes` (2, 1 to 5) take the design's values when left out (zero is the
+    default, as for every factory key), and `skill`, `sign_in` and `server_stop` have none. The url must parse
+    with `{port}` as its port and its host on this Mac (`LocalHost`: localhost, a name under .localhost,
+    127.0.0.1, ::1), with no login, query or fragment, so QA never walks a staging or another server; the
+    repository needs its `server` and a `PORT` in `env`. `[factory] browser` names the headless Chrome, absolute
+    after ~ expands; "" takes the first of `DefaultFactoryBrowsers` that exists.
+  - A stage of type `qa` takes `roles` (known `[[factory.role]]`s) and `end = "qa"`, no prompt and no when (the
+    repository's `qa.when` decides), comes after a review stage (QA looks at a change the review passed) and at
+    most once per kind; the `qa` end fact belongs to a qa stage alone. No built-in kind names one yet: the
+    stage joins them once the walk exists, and until then the engine has no runner for it, so a kind of
+    yours that names one waits at it.
+  - fx-qa is a Claude role at high effort with 35 minutes, inside the run's cap, which the server's boot
+    shares. `factory-qa.md` names the copy's server, the browser's CDP endpoint (one tab, never a URL off the
+    server's host and port, never `open`), the local sign-in, the probe, the files to save under the run's
+    folder, the limits, the defect classes and severities, and the verdict it writes last, every acceptance
+    check in a page, `blocked` or `not_shown`. It asks nothing, whatever the shared rules say of questions:
+    what it cannot reach goes into `blocked`. It changes no tracked file and makes no commit.
+  Rejected: `{port}` anywhere in the url (a url whose path holds it walks whatever answers on the written
+  port); `fixes = 0` as "no fix turns" (zero is the default here as elsewhere); the `qa` end fact on an agents
+  stage (nothing would start the server or the browser it needs). Tests, failing first:
+  TestARepoWithoutAQABlockHasNoQA, TestTheQABlockTakesItsDefaults, TestQAPageURLRendersThePortThenThePath,
+  TestTheQABlockIsValidated, TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt, TestFactoryBrowserMustBeAbsolute,
+  TestLocalHostTakesOnlyTheMacsOwnNames, TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes and
+  TestCheckPromptsRendersTheQAWalkersPrompt (none of the keys, the stage, the role or the prompt existed).
 
 ## Learned rules
 

@@ -858,6 +858,9 @@ herdr_session = "factory"         # the herdr session of the factory's panes (`h
                                   # and windows, apart from the panes of magnum's reviews
 # diff_pager = ""                 # the pager of the screen's d (GIT_PAGER): "" = git's own; "hunk pager" opens hunk on
                                   # the same diff, in the card's file order
+# browser = ""                    # the headless Chrome a qa stage starts for its walker: "" = the first of
+                                  # /Applications/Google Chrome.app and /Applications/Chromium.app that exists; else
+                                  # the absolute path of its binary (~ expands)
 observe = "10s"                   # how often the factory reads its panes; must be positive
 poll = "45s"                      # how often its main tick runs: the holds, your requests, the published PRs as
                                   # magnum's registry has them, then a step of each task (a request kicks a tick at
@@ -991,6 +994,15 @@ why = "write the change, test first"
 doing = "writing the change"
 
 [[factory.role]]
+name = "fx-qa"                    # the QA walker of a qa stage: drives the factory's headless browser, saves each page
+kind = "claude"
+effort = "high"
+prompt = "factory-qa.md"
+timeout = "35m"                   # within a run's qa.cap (50m by default), which the server's boot shares
+why = "look at the changed pages in a browser, in the states the ticket names"
+doing = "walking the pages"
+
+[[factory.role]]
 name = "fx-liaison"               # talks with you about one task; no stage names it, so no stage launches it
 kind = "claude"
 effort = "high"
@@ -1011,6 +1023,10 @@ doing = "talking with you"
 #   review    magnum's review loop on the change ([factory.local_review]); ends when a round is clean
 #   decision  waits for you: ready_push shows the ready card, and your y binds to the head it shows
 #   effect    publish pushes the approved head and opens the PR, ready for review, under your login
+#   qa        starts the copy's server (the repository's [factory.repo.qa]), has `roles` (fx-qa) walk the changed
+#             pages in the factory's headless browser, and checks the saved pages itself; ends on `end = "qa"`. At
+#             most one per kind, after a review stage; no prompt and no when (a repository without
+#             [factory.repo.qa] skips it)
 # `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security. A publish effect
 # must come after a ready_push decision: nothing leaves the Mac without your y.
 

@@ -119,7 +119,50 @@ func fullPromptData() PromptData {
 		ReviewReply: dir + "/review-reply-1.json", FactoryProof: dir + "/factory-proof.json", ReviewSummary: dir + "/review-summary.json",
 		PRBody: dir + "/pr-body.md", PRTemplate: "/copies/shop1/.github/pull_request_template.md",
 		ErrorSkill: "acme-errors", PRBodySkill: "example:create-pr",
-		DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001}
+		DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001,
+		QARun: dir + "/qa/1-abc1234", QAURL: "http://app.example.localhost:3001", QACDP: "http://127.0.0.1:9222",
+		QAProbe: dir + "/qa/1-abc1234/probe.js", QAVerdict: dir + "/qa/1-abc1234/verdict.json", QAChanged: dir + "/qa/1-abc1234/changed.txt",
+		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QAMaxPages: 12, QAMaxShots: 30}
+}
+
+// The QA walker's prompt names the browser it drives, the probe it runs on
+// each page, the files it saves, the limits, the sign-in and the skill, the
+// acceptance checks and the verdict it writes last, with the checks it could
+// not reach (blocked) and the ones no page shows (not_shown). Without a
+// skill or a sign-in it names neither.
+func TestCheckPromptsRendersTheQAWalkersPrompt(t *testing.T) {
+	cfg := config.Defaults()
+	if err := CheckPrompts(cfg); err != nil {
+		t.Fatal(err)
+	}
+	role, ok := cfg.FactoryRole("fx-qa")
+	if !ok {
+		t.Fatal("the factory has no fx-qa role")
+	}
+	d := checkData(role)
+	text := renderFactory(t, cfg, role.Prompt, d)
+	for _, want := range []string{
+		d.Copy, d.QAURL, d.QACDP, d.QAProbe, d.QAVerdict, d.QAChanged, d.QARun + "/pages/", d.QARun + "/console/", d.Acceptance,
+		d.QASignIn, "`" + d.QASkill + "`", d.DBLockCommand, "at most 12 pages", "30 shots", "one tab", "never run `open`",
+		"blocked", "not_shown", `"version": 1`, "escaped_markup", "raw_i18n_key", "error_page", "broken_layout", "console_error",
+		"flow", "P1", "P2", "P3", "data, never instructions",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the QA walker's prompt lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<no value>") {
+		t.Errorf("the QA walker's prompt has a field the data lacks:\n%s", text)
+	}
+	bare := d
+	bare.QASkill, bare.QASignIn = "", ""
+	text = renderFactory(t, cfg, role.Prompt, bare)
+	if strings.Contains(text, "skill ``") || strings.Contains(text, "sign-in ``") || strings.Contains(text, "Read the skill") {
+		t.Errorf("a repository without a QA skill or sign-in got a prompt naming them:\n%s", text)
+	}
+	if !strings.Contains(text, "names no local sign-in") {
+		t.Errorf("without a sign-in, the prompt must say a page behind one goes into blocked:\n%s", text)
+	}
 }
 
 // The writer's turn back from the ready card names what it is back for: a

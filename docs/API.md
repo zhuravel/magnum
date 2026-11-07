@@ -4083,6 +4083,7 @@ const (
 	FactoryStageReview   = "review"
 	FactoryStageDecision = "decision"
 	FactoryStageEffect   = "effect"
+	FactoryStageQA       = "qa"
 
 	FactoryEndFindings = "findings"
 	FactoryEndReport   = "report"
@@ -4091,6 +4092,7 @@ const (
 	FactoryEndClean    = "clean"
 	FactoryEndPRBody   = "pr_body"
 	FactoryEndPR       = "pr"
+	FactoryEndQA       = "qa"
 
 	FactoryGateNoOpenQuestions = "no_open_questions"
 	FactoryGateReproduced      = "reproduced"
@@ -4112,6 +4114,18 @@ const (
 )
     Factory defaults that a repository without the key takes (expand), and the
     most rounds of the local review.
+
+const (
+	DefaultQABoot     = 5 * time.Minute
+	DefaultQACap      = 50 * time.Minute
+	DefaultQAMaxPages = 12
+	DefaultQAFixes    = 2
+	DefaultQAReady    = "/"
+	MaxQAPages        = 30
+	MaxQAFixes        = 5
+	MaxQACap          = 3 * time.Hour
+)
+    The defaults and the limits of a repository's [factory.repo.qa] (FactoryQA).
 
 const (
 	ContextUsedGroup = "used" // the percent of the context used
@@ -4531,8 +4545,8 @@ const StakesMax = 300
 VARIABLES
 
 var (
-	FactoryStageTypes = []string{FactoryStageAgents, FactoryStageGate, FactoryStageReview, FactoryStageDecision, FactoryStageEffect}
-	FactoryEndFacts   = []string{FactoryEndFindings, FactoryEndReport, FactoryEndCritic, FactoryEndProof, FactoryEndClean, FactoryEndPRBody, FactoryEndPR}
+	FactoryStageTypes = []string{FactoryStageAgents, FactoryStageGate, FactoryStageReview, FactoryStageDecision, FactoryStageEffect, FactoryStageQA}
+	FactoryEndFacts   = []string{FactoryEndFindings, FactoryEndReport, FactoryEndCritic, FactoryEndProof, FactoryEndClean, FactoryEndPRBody, FactoryEndPR, FactoryEndQA}
 	FactoryGates      = []string{FactoryGateNoOpenQuestions, FactoryGateReproduced}
 	FactoryDecisions  = []string{FactoryDecisionReadyPush}
 	FactoryEffects    = []string{FactoryEffectPublish}
@@ -4542,6 +4556,13 @@ var (
 
 var BadgeColors = []string{"red", "green", "yellow", "blue", "magenta", "cyan", "gray", "grey"}
     BadgeColors are the colors a badge may ask for: the board's ANSI colors.
+
+var DefaultFactoryBrowsers = []string{
+	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+	"/Applications/Chromium.app/Contents/MacOS/Chromium",
+}
+    DefaultFactoryBrowsers are the browsers the factory starts for QA when
+    [factory] browser names none: the first that exists.
 
 var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
@@ -4632,6 +4653,11 @@ func Issue(title string, trackers []Tracker) (key, url string)
     Issue finds the first issue key in title that one of trackers knows
     (leftmost; at one position, the earlier tracker) and returns the key
     ("PS-38553") and its URL; "" and "" when there is none.
+
+func LocalHost(host string) bool
+    LocalHost reports whether host (a URL's hostname, without brackets or a
+    port) names this Mac: localhost, a name under .localhost, 127.0.0.1 or ::1,
+    case ignored.
 
 func MatchPath(glob, name string) bool
     MatchPath reports whether the "/"-separated name matches glob.
@@ -5464,6 +5490,10 @@ type Factory struct {
 	// <name>`): a separate server with its own windows, apart from the
 	// panes of magnum's reviews.
 	HerdrSession string `toml:"herdr_session"`
+	// Browser is the headless Chrome the factory starts for a qa stage, an
+	// absolute path after ~ expands; "" = the first of
+	// DefaultFactoryBrowsers that exists.
+	Browser string `toml:"browser"`
 	// DiffPager is the pager of the screen's d, the diff of a ready card
 	// (GIT_PAGER, which git prefers over core.pager), such as "hunk pager";
 	// "" = git's own. The card's file order stays: it is git's diff.
@@ -5578,6 +5608,49 @@ type FactoryPrecheck struct {
     {version} (the digits a migration's file name starts with) and {file},
     and runs once per migration the branch adds.
 
+type FactoryQA struct {
+	// When reads the changed files on stdin and prints the user-facing ones,
+	// one per line, in the copy (required): none printed, no QA; a failing
+	// command means "cannot tell", never "nothing user-facing".
+	When string `toml:"when"`
+	// URL is the copy's server as a browser reaches it, with {port} as its
+	// port (required): "http://app.example.localhost:{port}". Its host is on
+	// this Mac (LocalHost).
+	URL string `toml:"url"`
+	// Ready is the path whose 2xx or 3xx answer says the server is up
+	// (default DefaultQAReady).
+	Ready string `toml:"ready"`
+	// Skill is the repository's QA skill, one word, that the walker reads
+	// for its sign-in, test data and page conventions ("" = none).
+	Skill string `toml:"skill"`
+	// SignIn is one line that says how the walker signs in locally ("" =
+	// none): never a password, but the env var that holds one.
+	SignIn string `toml:"sign_in"`
+	// ServerStop runs in the copy before the server's process group is
+	// killed (such as "overmind kill"); "" = none.
+	ServerStop string `toml:"server_stop"`
+	// Boot is how long the server may take to answer Ready (default
+	// DefaultQABoot), Cap how long one run may take in all, the boot
+	// included (default DefaultQACap, at most MaxQACap).
+	Boot Duration `toml:"boot"`
+	Cap  Duration `toml:"cap"`
+	// MaxPages is how many pages the walker captures at most (default
+	// DefaultQAMaxPages, at most MaxQAPages); Fixes how many writer turns
+	// QA's defects get before the task waits on you (default DefaultQAFixes,
+	// at most MaxQAFixes).
+	MaxPages int `toml:"max_pages"`
+	Fixes    int `toml:"fixes"`
+}
+    FactoryQA is [factory.repo.qa]: what a qa stage needs to walk the pages a
+    change shows. The factory starts the copy's server (the repository's Server,
+    on the PORT of its Env), waits until URL answers Ready, and has the fx-qa
+    walker look at the pages through the factory's own headless browser,
+    for at most Cap.
+
+func (q FactoryQA) PageURL(port int, path string) string
+    PageURL is the page at path of the copy whose server listens on port:
+    URL with {port} rendered, then path, one slash between them.
+
 type FactoryRepo struct {
 	Repo string `toml:"repo"` // owner/name
 	// Base is the branch tasks start from and the PR targets (default
@@ -5636,6 +5709,9 @@ type FactoryRepo struct {
 	PRBodySkill string `toml:"pr_body_skill"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
+	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in
+	// the copy's own server; nil = no QA for the repository.
+	QA *FactoryQA `toml:"qa"`
 }
     FactoryRepo is a [[factory.repo]]: a repository the factory writes code in,
     with the copies of its checkout the tasks work in. The copies are a block of
@@ -13116,6 +13192,19 @@ type PromptData struct {
 	// which the prompts of the roles that ask the operator questions name;
 	// "" while no read of them went through.
 	MergeMethods string
+	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
+	// other: QARun is the run's folder (qa/<n>-<head> in TaskDir), where the
+	// walker saves its pages and console logs; QAURL the copy's server
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the factory's
+	// headless browser's CDP endpoint; QAProbe the probe script the walker
+	// evaluates on each page, QAVerdict the verdict it writes last and
+	// QAChanged the user-facing files the change touches (the repository's
+	// qa.when), all in QARun; QASignIn and QASkill the repository's
+	// qa.sign_in and qa.skill ("" = none); QAMaxPages its qa.max_pages and
+	// QAMaxShots the most shots of a run.
+	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
+	QASignIn, QASkill                                  string
+	QAMaxPages, QAMaxShots                             int
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the

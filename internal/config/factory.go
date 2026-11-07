@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -49,6 +51,10 @@ type Factory struct {
 	// <name>`): a separate server with its own windows, apart from the
 	// panes of magnum's reviews.
 	HerdrSession string `toml:"herdr_session"`
+	// Browser is the headless Chrome the factory starts for a qa stage, an
+	// absolute path after ~ expands; "" = the first of
+	// DefaultFactoryBrowsers that exists.
+	Browser string `toml:"browser"`
 	// DiffPager is the pager of the screen's d, the diff of a ready card
 	// (GIT_PAGER, which git prefers over core.pager), such as "hunk pager";
 	// "" = git's own. The card's file order stays: it is git's diff.
@@ -170,6 +176,72 @@ type FactoryRepo struct {
 	PRBodySkill string `toml:"pr_body_skill"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
+	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in
+	// the copy's own server; nil = no QA for the repository.
+	QA *FactoryQA `toml:"qa"`
+}
+
+// FactoryQA is [factory.repo.qa]: what a qa stage needs to walk the pages a
+// change shows. The factory starts the copy's server (the repository's
+// Server, on the PORT of its Env), waits until URL answers Ready, and has
+// the fx-qa walker look at the pages through the factory's own headless
+// browser, for at most Cap.
+type FactoryQA struct {
+	// When reads the changed files on stdin and prints the user-facing ones,
+	// one per line, in the copy (required): none printed, no QA; a failing
+	// command means "cannot tell", never "nothing user-facing".
+	When string `toml:"when"`
+	// URL is the copy's server as a browser reaches it, with {port} as its
+	// port (required): "http://app.example.localhost:{port}". Its host is on
+	// this Mac (LocalHost).
+	URL string `toml:"url"`
+	// Ready is the path whose 2xx or 3xx answer says the server is up
+	// (default DefaultQAReady).
+	Ready string `toml:"ready"`
+	// Skill is the repository's QA skill, one word, that the walker reads
+	// for its sign-in, test data and page conventions ("" = none).
+	Skill string `toml:"skill"`
+	// SignIn is one line that says how the walker signs in locally ("" =
+	// none): never a password, but the env var that holds one.
+	SignIn string `toml:"sign_in"`
+	// ServerStop runs in the copy before the server's process group is
+	// killed (such as "overmind kill"); "" = none.
+	ServerStop string `toml:"server_stop"`
+	// Boot is how long the server may take to answer Ready (default
+	// DefaultQABoot), Cap how long one run may take in all, the boot
+	// included (default DefaultQACap, at most MaxQACap).
+	Boot Duration `toml:"boot"`
+	Cap  Duration `toml:"cap"`
+	// MaxPages is how many pages the walker captures at most (default
+	// DefaultQAMaxPages, at most MaxQAPages); Fixes how many writer turns
+	// QA's defects get before the task waits on you (default DefaultQAFixes,
+	// at most MaxQAFixes).
+	MaxPages int `toml:"max_pages"`
+	Fixes    int `toml:"fixes"`
+}
+
+// PageURL is the page at path of the copy whose server listens on port: URL
+// with {port} rendered, then path, one slash between them.
+func (q FactoryQA) PageURL(port int, path string) string {
+	base := strings.ReplaceAll(q.URL, "{port}", strconv.Itoa(port))
+	if strings.HasPrefix(path, "/") {
+		base = strings.TrimSuffix(base, "/")
+	}
+	return base + path
+}
+
+// LocalHost reports whether host (a URL's hostname, without brackets or a
+// port) names this Mac: localhost, a name under .localhost, 127.0.0.1 or
+// ::1, case ignored.
+func LocalHost(host string) bool {
+	h := strings.ToLower(host)
+	switch {
+	case h == "localhost", h == "127.0.0.1", h == "::1":
+		return true
+	case strings.HasSuffix(h, ".localhost"):
+		return len(h) > len(".localhost")
+	}
+	return false
 }
 
 // FactoryInstall is an `installs` entry of a repository: Run runs when the
@@ -256,6 +328,7 @@ const (
 	FactoryStageReview   = "review"
 	FactoryStageDecision = "decision"
 	FactoryStageEffect   = "effect"
+	FactoryStageQA       = "qa"
 
 	FactoryEndFindings = "findings"
 	FactoryEndReport   = "report"
@@ -264,6 +337,7 @@ const (
 	FactoryEndClean    = "clean"
 	FactoryEndPRBody   = "pr_body"
 	FactoryEndPR       = "pr"
+	FactoryEndQA       = "qa"
 
 	FactoryGateNoOpenQuestions = "no_open_questions"
 	FactoryGateReproduced      = "reproduced"
@@ -278,8 +352,8 @@ const (
 // FactoryStageTypes, FactoryEndFacts, FactoryGates, FactoryDecisions and
 // FactoryEffects list what a stage may name, in the order the docs give.
 var (
-	FactoryStageTypes = []string{FactoryStageAgents, FactoryStageGate, FactoryStageReview, FactoryStageDecision, FactoryStageEffect}
-	FactoryEndFacts   = []string{FactoryEndFindings, FactoryEndReport, FactoryEndCritic, FactoryEndProof, FactoryEndClean, FactoryEndPRBody, FactoryEndPR}
+	FactoryStageTypes = []string{FactoryStageAgents, FactoryStageGate, FactoryStageReview, FactoryStageDecision, FactoryStageEffect, FactoryStageQA}
+	FactoryEndFacts   = []string{FactoryEndFindings, FactoryEndReport, FactoryEndCritic, FactoryEndProof, FactoryEndClean, FactoryEndPRBody, FactoryEndPR, FactoryEndQA}
 	FactoryGates      = []string{FactoryGateNoOpenQuestions, FactoryGateReproduced}
 	FactoryDecisions  = []string{FactoryDecisionReadyPush}
 	FactoryEffects    = []string{FactoryEffectPublish}
@@ -293,6 +367,26 @@ const (
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
 )
+
+// The defaults and the limits of a repository's [factory.repo.qa]
+// (FactoryQA).
+const (
+	DefaultQABoot     = 5 * time.Minute
+	DefaultQACap      = 50 * time.Minute
+	DefaultQAMaxPages = 12
+	DefaultQAFixes    = 2
+	DefaultQAReady    = "/"
+	MaxQAPages        = 30
+	MaxQAFixes        = 5
+	MaxQACap          = 3 * time.Hour
+)
+
+// DefaultFactoryBrowsers are the browsers the factory starts for QA when
+// [factory] browser names none: the first that exists.
+var DefaultFactoryBrowsers = []string{
+	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+	"/Applications/Chromium.app/Contents/MacOS/Chromium",
+}
 
 // DefaultFactory returns the built-in [factory] values, the ones
 // config.defaults.toml writes out (TestFactoryGoDefaultsEqualTheEmbeddedFile
@@ -349,6 +443,8 @@ func DefaultFactoryRoles() []Role {
 			Why: "merge the findings into one report and the questions", Doing: "weighing the findings"},
 		{Name: "fx-writer", Kind: KindClaude, Model: "opus", Effort: "high", Prompt: "factory-writer.md", Timeout: Duration{90 * time.Minute},
 			Why: "write the change, test first", Doing: "writing the change"},
+		{Name: "fx-qa", Kind: KindClaude, Effort: "high", Prompt: "factory-qa.md", Timeout: Duration{35 * time.Minute},
+			Why: "look at the changed pages in a browser, in the states the ticket names", Doing: "walking the pages"},
 		// The liaison talks with you about a task; no stage names it. It asks you itself (AskUserQuestion), so
 		// magnum leaves its dialogs to you.
 		{Name: "fx-liaison", Kind: KindClaude, Effort: "high", Prompt: "factory-liaison.md", Timeout: Duration{24 * time.Hour},
@@ -522,6 +618,7 @@ func readFactoryRoles(file string, data []byte, md toml.MetaData) ([]map[string]
 func (c *Config) expandFactory() {
 	f := &c.Factory
 	f.HerdrSocket = paths.Expand(f.HerdrSocket)
+	f.Browser = paths.Expand(f.Browser)
 	for i := range f.Repos {
 		r := &f.Repos[i]
 		r.MainClone = paths.Expand(r.MainClone)
@@ -541,6 +638,32 @@ func (c *Config) expandFactory() {
 		if r.Precheck.Cap.Duration == 0 {
 			r.Precheck.Cap = Duration{DefaultPrecheckCap}
 		}
+		if r.QA != nil {
+			q := *r.QA // the layer's block stays as it was decoded
+			q.expand()
+			r.QA = &q
+		}
+	}
+}
+
+// expand fills the defaults of the keys a [factory.repo.qa] leaves out and
+// trims the skill.
+func (q *FactoryQA) expand() {
+	q.Skill = strings.TrimSpace(q.Skill)
+	if q.Ready == "" {
+		q.Ready = DefaultQAReady
+	}
+	if q.Boot.Duration == 0 {
+		q.Boot = Duration{DefaultQABoot}
+	}
+	if q.Cap.Duration == 0 {
+		q.Cap = Duration{DefaultQACap}
+	}
+	if q.MaxPages == 0 {
+		q.MaxPages = DefaultQAMaxPages
+	}
+	if q.Fixes == 0 {
+		q.Fixes = DefaultQAFixes
 	}
 }
 
@@ -570,6 +693,10 @@ func (c *Config) validateFactory() []error {
 	}
 	if f.HerdrSocket != "" && !filepath.IsAbs(f.HerdrSocket) {
 		bad("factory.herdr_socket must be absolute after expansion (or empty for the session's own socket): %s", f.HerdrSocket)
+	}
+	if f.Browser != "" && !filepath.IsAbs(f.Browser) {
+		bad("factory.browser must be absolute after expansion (or empty for the first of %s that exists): %s",
+			strings.Join(DefaultFactoryBrowsers, ", "), f.Browser)
 	}
 	if !herdrSessionRe.MatchString(f.HerdrSession) {
 		bad("factory.herdr_session %q must be a session name (letters, digits, . _ -)", f.HerdrSession)
@@ -692,7 +819,9 @@ func (c *Config) validateFactoryKinds() []error {
 				where, k.Proof, FactoryProofRed, FactoryProofGreen))
 		}
 		seen := map[string]bool{}
-		decided := false // a ready_push decision stage came before
+		decided := false  // a ready_push decision stage came before
+		reviewed := false // a review stage came before
+		qa := ""          // the kind's qa stage, once one came
 		for _, st := range k.Stages {
 			bad := func(format string, a ...any) {
 				errs = append(errs, fmt.Errorf("%s: stage %q: "+format, append([]any{where, st.Name}, a...)...))
@@ -710,6 +839,18 @@ func (c *Config) validateFactoryKinds() []error {
 			}
 			if st.Type == FactoryStageEffect && st.Effect == FactoryEffectPublish && !decided {
 				bad("the %s effect must come after a %s decision stage (nothing leaves the Mac without your y)", FactoryEffectPublish, FactoryDecisionReadyPush)
+			}
+			if st.Type == FactoryStageQA {
+				switch {
+				case qa != "":
+					bad("a kind has at most one qa stage, and %q is one already", qa)
+				case !reviewed:
+					bad("a qa stage must come after a review stage (QA looks at a change the review passed)")
+				}
+				qa = st.Name
+			}
+			if st.Type == FactoryStageReview {
+				reviewed = true
 			}
 		}
 	}
@@ -733,14 +874,22 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 		bad("type %q must be one of %s", st.Type, strings.Join(FactoryStageTypes, ", "))
 		return errs
 	}
-	if st.When != "" && st.When != FactoryWhenWide {
+	switch {
+	case st.Type == FactoryStageQA && st.When != "":
+		bad("when %q is not for a qa stage (the repository's qa.when says whether a change shows pages)", st.When)
+	case st.When != "" && st.When != FactoryWhenWide:
 		bad("when %q must be empty or %q", st.When, FactoryWhenWide)
 	}
-	if st.End != "" {
+	switch {
+	case st.Type == FactoryStageQA && st.End != FactoryEndQA:
+		bad("end %q must be %s (the walker's verdict and the factory's own checks of the pages)", st.End, FactoryEndQA)
+	case st.Type != FactoryStageQA && st.End == FactoryEndQA:
+		bad("end %q is for qa stages only", st.End)
+	case st.End != "":
 		oneOf("end", st.End, FactoryEndFacts)
 	}
-	if st.Type != FactoryStageAgents && len(st.Roles) > 0 {
-		bad("roles are for agents stages only")
+	if st.Type != FactoryStageAgents && st.Type != FactoryStageQA && len(st.Roles) > 0 {
+		bad("roles are for agents and qa stages only")
 	}
 	if st.Type != FactoryStageAgents && st.Prompt != "" {
 		bad("prompt is for agents stages only")
@@ -755,10 +904,9 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 		bad("effect is for effect stages only")
 	}
 	if (st.Type == FactoryStageGate || st.Type == FactoryStageDecision) && st.End != "" {
-		bad("end is for agents, review and effect stages")
+		bad("end is for agents, review, effect and qa stages")
 	}
-	switch st.Type {
-	case FactoryStageAgents:
+	if st.Type == FactoryStageAgents || st.Type == FactoryStageQA {
 		if len(st.Roles) == 0 {
 			bad("needs roles")
 		}
@@ -767,6 +915,9 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 				bad("names unknown role %q (declare it as a [[factory.role]])", r)
 			}
 		}
+	}
+	switch st.Type {
+	case FactoryStageAgents:
 		if st.End == "" {
 			bad("needs an end fact (one of %s)", strings.Join(FactoryEndFacts, ", "))
 		}
@@ -949,9 +1100,69 @@ func (c *Config) validateFactoryRepos() []error {
 			}
 		}
 		errs = append(errs, validateFactoryStaging(where, r)...)
+		if r.QA != nil {
+			errs = append(errs, validateFactoryQA(where, r)...)
+		}
 		if c.WatchFor(r.Repo) == nil {
 			bad("no [[watch]] covers it (the local review runs the review roles of its watch)")
 		}
+	}
+	return errs
+}
+
+// validateFactoryQA checks a repository's [factory.repo.qa]: a when command;
+// a url on this Mac whose port is {port}, with no login, query or fragment;
+// a ready path; a skill of one word and a sign-in of one line; a boot within
+// the cap and the cap, the pages and the fix turns within their limits; and
+// the server and the copy's PORT that QA starts and walks.
+func validateFactoryQA(where string, r FactoryRepo) []error {
+	var errs []error
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
+	q := r.QA
+	if strings.TrimSpace(q.When) == "" {
+		bad("qa.when must be the command that prints the user-facing files of the changed ones it reads on stdin")
+	}
+	switch u, err := url.Parse(strings.ReplaceAll(q.URL, "{port}", "1")); {
+	case err != nil:
+		bad("qa.url %q does not parse: %v", q.URL, err)
+	case u.Scheme != "http" && u.Scheme != "https":
+		bad("qa.url %q must be http or https", q.URL)
+	case !LocalHost(u.Hostname()):
+		bad("qa.url %q must be on this Mac: localhost, a name under .localhost, 127.0.0.1 or ::1", q.URL)
+	case u.User != nil || u.RawQuery != "" || u.Fragment != "":
+		bad("qa.url %q must carry no login, query or fragment", q.URL)
+	case u.Port() != "1" || !strings.Contains(q.URL, "{port}"):
+		bad("qa.url %q must name the copy's port as {port} (http://app.example.localhost:{port})", q.URL)
+	}
+	if !strings.HasPrefix(q.Ready, "/") {
+		bad("qa.ready %q must be a path that starts with /", q.Ready)
+	}
+	if strings.ContainsFunc(q.Skill, unicode.IsSpace) {
+		bad("qa.skill %q must be the skill's name, one word", q.Skill)
+	}
+	if strings.ContainsAny(q.SignIn, "\r\n") {
+		bad("qa.sign_in must be one line")
+	}
+	switch boot, limit := q.Boot.Duration, q.Cap.Duration; {
+	case boot <= 0:
+		bad("qa.boot must be positive, got %s", boot)
+	case boot > limit:
+		bad("qa.boot %s must be at most qa.cap %s (the boot is part of the run)", boot, limit)
+	}
+	if limit := q.Cap.Duration; limit > MaxQACap {
+		bad("qa.cap must be at most %s, got %s", MaxQACap, limit)
+	}
+	if q.MaxPages < 1 || q.MaxPages > MaxQAPages {
+		bad("qa.max_pages must be between 1 and %d, got %d", MaxQAPages, q.MaxPages)
+	}
+	if q.Fixes < 1 || q.Fixes > MaxQAFixes {
+		bad("qa.fixes must be between 1 and %d, got %d", MaxQAFixes, q.Fixes)
+	}
+	if strings.TrimSpace(r.Server) == "" {
+		bad("qa needs server, the command that starts the copy's server")
+	}
+	if strings.TrimSpace(r.Env["PORT"]) == "" {
+		bad(`qa needs the copy's port: env must name PORT (such as PORT = "31{n}0")`)
 	}
 	return errs
 }

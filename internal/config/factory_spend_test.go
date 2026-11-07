@@ -26,6 +26,7 @@ var builtinFactoryModels = map[string][2]string{
 	"fx-critic-claude": {"", "high"},
 	"fx-judge":         {"opus", "xhigh"},
 	"fx-writer":        {"opus", "high"},
+	"fx-qa":            {"", "high"},
 	"fx-liaison":       {"", "high"},
 }
 

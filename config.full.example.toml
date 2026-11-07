@@ -249,8 +249,9 @@ databases = [
 #   { lock = "pnpm-lock.yaml", run = "pnpm install --frozen-lockfile" },
 # ]
 # server = "bin/worktree-run"              # starts the copy's local server
-# env = { WT_BRANCH = "{copy}", REDIS_DB_OFFSET = "{n*16}", REDIS_URL = "redis://127.0.0.1:6379" }
-#                                          # {copy} (or {slot}): the copy's name, {n}: its number;
+# env = { WT_BRANCH = "{copy}", PORT = "31{n}0", REDIS_DB_OFFSET = "{n*16}", REDIS_URL = "redis://127.0.0.1:6379" }
+#                                          # {copy} (or {slot}): the copy's name, {n}: its number; PORT: the port of
+#                                          # the copy's server, which [factory.repo.qa] needs;
 #                                          # REDIS_DB_OFFSET named here is copy n's n*16, its 16 Redis databases, which
 #                                          # a claim flushes on the Redis REDIS_URL (or REDIS_HOST, REDIS_PORT) names;
 #                                          # keep them clear of the REDIS_DB_OFFSET of magnum's [[pool]] env
@@ -275,6 +276,23 @@ databases = [
 #   cap = "10m"                            # a precheck stops after this long (default 10m)
 #   skip_specs_for_kinds = ["chore"]       # a gem upgrade runs no specs
 #
+#   [factory.repo.qa]                      # visual QA of the change's pages in the copy's own server, by a kind's qa
+#                                          # stage; none = no QA. Needs server and a PORT in env above
+#   when = "bin/user-facing"               # reads the changed files on stdin, prints the user-facing ones (none: no
+#                                          # QA); a failing command waits on you, never skips QA
+#   url = "http://app.example.localhost:{port}"   # the copy's server; on this Mac (localhost, *.localhost, 127.0.0.1,
+#                                          # ::1), with {port} as its port
+#   ready = "/"                            # a 2xx or 3xx answer here says the server is up (default /)
+#   skill = "example:qa"                   # the repository's QA skill, one word: the walker reads it for sign-in, test
+#                                          # data and page conventions only (default none)
+#   sign_in = "visit /dev/sign-in?as=qa@example.com"   # one line: how the walker signs in locally; never a
+#                                          # password, name the env var that holds one (default none)
+#   server_stop = "overmind kill"          # runs in the copy before the server's process group is killed (default none)
+#   boot = "5m"                            # the server must answer ready within this (default 5m)
+#   cap = "50m"                            # one run in all, the boot included (default 50m, at most 3h)
+#   max_pages = 12                         # pages the walker captures at most (default 12, at most 30)
+#   fixes = 2                              # writer turns for QA's defects before the task waits on you (1 to 5, default 2)
+#
 #   [[factory.repo.staging]]               # staging environments: a branch the factory merges into after your approval
 #   name = "alpha"
 #   branch = "staging-alpha"
@@ -292,6 +310,8 @@ databases = [
 #
 # [factory]                                # a few keys you may set (the rest, with their meaning, are in config.defaults.toml)
 # max_active = 3                           # tasks with live agents or a held copy at once
+# browser = "/Applications/Chromium.app/Contents/MacOS/Chromium"   # the headless Chrome of QA (default: Google
+#                                          # Chrome, else Chromium, in /Applications)
 # sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**", "db/schema.rb"]   # files the ready card flags
 # [factory.local_review]
 # cycles = 3                               # at most this many local review rounds

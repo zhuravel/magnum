@@ -118,6 +118,19 @@ type PromptData struct {
 	// which the prompts of the roles that ask the operator questions name;
 	// "" while no read of them went through.
 	MergeMethods string
+	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
+	// other: QARun is the run's folder (qa/<n>-<head> in TaskDir), where the
+	// walker saves its pages and console logs; QAURL the copy's server
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the factory's
+	// headless browser's CDP endpoint; QAProbe the probe script the walker
+	// evaluates on each page, QAVerdict the verdict it writes last and
+	// QAChanged the user-facing files the change touches (the repository's
+	// qa.when), all in QARun; QASignIn and QASkill the repository's
+	// qa.sign_in and qa.skill ("" = none); QAMaxPages its qa.max_pages and
+	// QAMaxShots the most shots of a run.
+	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
+	QASignIn, QASkill                                  string
+	QAMaxPages, QAMaxShots                             int
 }
 
 // agentsRun is what the loop knows of a task's agents stage attempt.
@@ -1431,6 +1444,7 @@ func PromptNames(cfg *config.Config) []string {
 func checkData(role config.Role) PromptData {
 	dir := "/factory/tasks/1"
 	copyPath := "/factory/copies/copy1"
+	qaRun := dir + "/qa/1-abc1234"
 	return PromptData{TaskID: 1, Key: "PR-1", Kind: "bug", RedRun: true, Repo: "example/app", Branch: "factory-check", Base: "master", Copy: copyPath,
 		TaskDir: dir, Ticket: dir + "/ticket.md", Guidance: dir + "/guidance.md", Prompt: dir + "/prompt.md",
 		Answers: dir + "/" + answersFile, Rules: dir + "/rules.md", Findings: dir + "/" + findingsFile(role.Name),
@@ -1440,5 +1454,7 @@ func checkData(role config.Role) PromptData {
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
-		MergeMethods: "squash"}
+		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
+		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt",
+		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QAMaxPages: 12, QAMaxShots: 30}
 }

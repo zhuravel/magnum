@@ -992,3 +992,220 @@ func TestThePRBodyStageHasItsOwnPrompt(t *testing.T) {
 		}
 	}
 }
+
+// qaRepoToml is factoryRepoToml with what QA needs of the repository: the
+// server and the copy's PORT.
+const qaRepoToml = factoryRepoToml + `server = "bin/dev"
+env = { PORT = "31{n}0" }
+`
+
+// validQAConfig is validFactoryConfig whose repository declares QA, every
+// key at its default: a server, the copy's PORT, a when and a url.
+func validQAConfig() *Config {
+	cfg := validFactoryConfig()
+	r := &cfg.Factory.Repos[0]
+	r.Server = "bin/dev"
+	r.Env = map[string]string{"PORT": "31{n}0"}
+	r.QA = &FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}", Ready: DefaultQAReady,
+		Boot: Duration{DefaultQABoot}, Cap: Duration{DefaultQACap}, MaxPages: DefaultQAMaxPages, Fixes: DefaultQAFixes}
+	return cfg
+}
+
+// A repository runs no visual QA unless its block says how: no
+// [factory.repo.qa], no QA.
+func TestARepoWithoutAQABlockHasNoQA(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+qaRepoToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := cfg.FactoryRepo("talkable/talkable"); !ok || r.QA != nil {
+		t.Fatalf("repo = %+v, %v: no [factory.repo.qa] must mean no QA", r.QA, ok)
+	}
+	if cfg.Factory.Browser != "" {
+		t.Errorf("factory.browser = %q, want none: the first browser of DefaultFactoryBrowsers that exists", cfg.Factory.Browser)
+	}
+}
+
+// [factory.repo.qa] needs only when and url: the ready path, the boot, the
+// cap, the pages and the fix turns take the design's values, and the skill
+// is trimmed.
+func TestTheQABlockTakesItsDefaults(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+qaRepoToml+`
+  [factory.repo.qa]
+  when = "bin/user-facing"
+  url = "http://app.example.localhost:{port}"
+  skill = "  example:qa  "
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := cfg.FactoryRepo("talkable/talkable")
+	q := r.QA
+	if q == nil {
+		t.Fatal("the repository has no QA")
+	}
+	if q.When != "bin/user-facing" || q.URL != "http://app.example.localhost:{port}" || q.Skill != "example:qa" || q.SignIn != "" || q.ServerStop != "" {
+		t.Errorf("qa = %+v", *q)
+	}
+	if q.Ready != "/" || q.Boot.Duration != 5*time.Minute || q.Cap.Duration != 50*time.Minute || q.MaxPages != 12 || q.Fixes != 2 {
+		t.Errorf("qa = %+v, want ready /, boot 5m, cap 50m, 12 pages and 2 fixes", *q)
+	}
+	if got := q.PageURL(3110, q.Ready); got != "http://app.example.localhost:3110/" {
+		t.Errorf("PageURL = %q", got)
+	}
+}
+
+// PageURL is the url with the copy's port in place of {port}, then the
+// path, with one slash between them.
+func TestQAPageURLRendersThePortThenThePath(t *testing.T) {
+	for _, tc := range []struct{ url, path, want string }{
+		{"http://app.example.localhost:{port}", "/settings/security", "http://app.example.localhost:3120/settings/security"},
+		{"http://127.0.0.1:{port}/", "/", "http://127.0.0.1:3120/"},
+		{"https://app.example.localhost:{port}/shop", "/cart", "https://app.example.localhost:3120/shop/cart"},
+	} {
+		if got := (FactoryQA{URL: tc.url}).PageURL(3120, tc.path); got != tc.want {
+			t.Errorf("PageURL(%q, %q) = %q, want %q", tc.url, tc.path, got, tc.want)
+		}
+	}
+}
+
+// QA walks the copy's own server and nothing else: its url is on this Mac,
+// on the copy's port, and the repository has the server and the PORT that
+// make that port; the limits stay within the design's.
+func TestTheQABlockIsValidated(t *testing.T) {
+	if err := validQAConfig().Validate(); err != nil {
+		t.Fatalf("a valid QA block: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		edit func(r *FactoryRepo)
+		want string
+	}{
+		"no when":            {func(r *FactoryRepo) { r.QA.When = " " }, "qa.when"},
+		"url off the Mac":    {func(r *FactoryRepo) { r.QA.URL = "http://staging.example.com:{port}" }, "qa.url"},
+		"url not http":       {func(r *FactoryRepo) { r.QA.URL = "ftp://localhost:{port}" }, "qa.url"},
+		"url with a login":   {func(r *FactoryRepo) { r.QA.URL = "http://qa:secret@localhost:{port}" }, "qa.url"},
+		"url without {port}": {func(r *FactoryRepo) { r.QA.URL = "http://app.example.localhost:3000" }, "{port}"},
+		"{port} not as port": {func(r *FactoryRepo) { r.QA.URL = "http://localhost:3000/{port}" }, "{port}"},
+		"a written port 1":   {func(r *FactoryRepo) { r.QA.URL = "http://localhost:1" }, "{port}"},
+		"ready":              {func(r *FactoryRepo) { r.QA.Ready = "up" }, "qa.ready"},
+		"skill":              {func(r *FactoryRepo) { r.QA.Skill = "a b" }, "qa.skill"},
+		"sign_in two lines":  {func(r *FactoryRepo) { r.QA.SignIn = "/dev/sign-in\nthen the form" }, "qa.sign_in"},
+		"boot over cap":      {func(r *FactoryRepo) { r.QA.Boot = Duration{time.Hour} }, "qa.boot"},
+		"no boot":            {func(r *FactoryRepo) { r.QA.Boot = Duration{-time.Minute} }, "qa.boot"},
+		"cap over 3h":        {func(r *FactoryRepo) { r.QA.Boot, r.QA.Cap = Duration{time.Hour}, Duration{4 * time.Hour} }, "qa.cap"},
+		"31 pages":           {func(r *FactoryRepo) { r.QA.MaxPages = 31 }, "qa.max_pages"},
+		"no pages":           {func(r *FactoryRepo) { r.QA.MaxPages = 0 }, "qa.max_pages"},
+		"no fixes":           {func(r *FactoryRepo) { r.QA.Fixes = 0 }, "qa.fixes"},
+		"6 fixes":            {func(r *FactoryRepo) { r.QA.Fixes = 6 }, "qa.fixes"},
+		"env without PORT":   {func(r *FactoryRepo) { r.Env = map[string]string{"WT_BRANCH": "{copy}"} }, "PORT"},
+		"no server":          {func(r *FactoryRepo) { r.Server = "" }, "server"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validQAConfig()
+			tc.edit(&cfg.Factory.Repos[0])
+			err := cfg.Validate()
+			wantError(t, err, "factory repo acme/app", tc.want)
+			if errs := validateErrs(err); len(errs) != 1 {
+				t.Errorf("%d errors, want the one of %s alone: %v", len(errs), name, errs)
+			}
+		})
+	}
+}
+
+// A qa stage runs the fx-qa walker (or the roles it names) and ends on the
+// qa end fact; it looks at a change the review passed, so it comes after a
+// review stage, once per kind, and a field of another type is a mistake.
+func TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt(t *testing.T) {
+	qa := func(before string, edits ...func(st *FactoryStage)) func(s []FactoryStage) []FactoryStage {
+		return func(s []FactoryStage) []FactoryStage {
+			st := FactoryStage{Name: "qa", Type: FactoryStageQA, Roles: []string{"fx-qa"}, End: FactoryEndQA}
+			for _, edit := range edits {
+				edit(&st)
+			}
+			return slices.Insert(s, findStage(s, before), st)
+		}
+	}
+	cfg := validFactoryConfig()
+	editKind(cfg, "bug", qa("pr_body"))
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a qa stage after the local review: %v", err)
+	}
+	cases := map[string]struct {
+		edit func(s []FactoryStage) []FactoryStage
+		want []string
+	}{
+		"before the review": {qa("local_review"), []string{`stage "qa"`, "must come after a review stage"}},
+		"no roles":          {qa("pr_body", func(st *FactoryStage) { st.Roles = nil }), []string{`stage "qa"`, "needs roles"}},
+		"unknown role":      {qa("pr_body", func(st *FactoryStage) { st.Roles = []string{"fx-nope"} }), []string{`stage "qa"`, `unknown role "fx-nope"`}},
+		"end clean":         {qa("pr_body", func(st *FactoryStage) { st.End = FactoryEndClean }), []string{`stage "qa"`, `end "clean" must be qa`}},
+		"no end":            {qa("pr_body", func(st *FactoryStage) { st.End = "" }), []string{`stage "qa"`, `end "" must be qa`}},
+		"a prompt":          {qa("pr_body", func(st *FactoryStage) { st.Prompt = "factory-qa.md" }), []string{`stage "qa"`, "prompt is for agents stages only"}},
+		"when wide":         {qa("pr_body", func(st *FactoryStage) { st.When = FactoryWhenWide }), []string{`stage "qa"`, "when"}},
+		"two qa stages": {func(s []FactoryStage) []FactoryStage {
+			s = qa("pr_body")(s)
+			return qa("pr_body", func(st *FactoryStage) { st.Name = "qa_again" })(s)
+		}, []string{`stage "qa_again"`, "at most one qa stage"}},
+		"the qa end on an agents stage": {func(s []FactoryStage) []FactoryStage { s[0].End = FactoryEndQA; return s },
+			[]string{`stage "investigate"`, `end "qa" is for qa stages only`}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := validFactoryConfig()
+			editKind(cfg, "bug", tc.edit)
+			err := cfg.Validate()
+			wantError(t, err, append([]string{"factory kind bug"}, tc.want...)...)
+			if errs := validateErrs(err); len(errs) != 1 {
+				t.Errorf("%d errors, want the one of %s alone: %v", len(errs), name, errs)
+			}
+		})
+	}
+}
+
+// The factory's headless browser is a path it starts as it is: absolute
+// after ~ expands, or none (the first of DefaultFactoryBrowsers that exists).
+func TestFactoryBrowserMustBeAbsolute(t *testing.T) {
+	cfg := validFactoryConfig()
+	cfg.Factory.Browser = "chrome"
+	wantError(t, cfg.Validate(), "factory.browser", "chrome")
+	cfg.Factory.Browser = DefaultFactoryBrowsers[1]
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadCommittedWithLocal(t, testLocalConfig+"\n[factory]\nbrowser = \"~/Applications/Chromium.app/Contents/MacOS/Chromium\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := loaded.Factory.Browser; strings.Contains(b, "~") || !strings.HasSuffix(b, "/Applications/Chromium.app/Contents/MacOS/Chromium") {
+		t.Errorf("factory.browser = %q, want ~ expanded", b)
+	}
+}
+
+// LocalHost is true for this Mac's own names only: localhost, a name under
+// .localhost, and the loopback addresses QA's pages may sit on.
+func TestLocalHostTakesOnlyTheMacsOwnNames(t *testing.T) {
+	for _, h := range []string{"localhost", "LOCALHOST", "app.example.localhost", "127.0.0.1", "::1"} {
+		if !LocalHost(h) {
+			t.Errorf("LocalHost(%q) = false", h)
+		}
+	}
+	for _, h := range []string{"example.com", "localhost.example.com", "10.0.0.1", "127.0.0.2", "", ".localhost", "[::1]"} {
+		if LocalHost(h) {
+			t.Errorf("LocalHost(%q) = true", h)
+		}
+	}
+}
+
+// fx-qa, the QA walker, looks at the changed pages in a browser: a Claude
+// session at high effort with 35 minutes, which no built-in kind names yet.
+func TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes(t *testing.T) {
+	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
+		r, ok := cfg.FactoryRole("fx-qa")
+		if !ok {
+			t.Fatal("the factory has no fx-qa role")
+		}
+		if r.Kind != KindClaude || r.Effort != "high" || r.Prompt != "factory-qa.md" || r.Timeout.Duration != 35*time.Minute ||
+			r.Why != "look at the changed pages in a browser, in the states the ticket names" || r.Doing != "walking the pages" {
+			t.Errorf("fx-qa = %+v", r)
+		}
+	}
+}
