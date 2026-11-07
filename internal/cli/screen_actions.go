@@ -247,6 +247,16 @@ func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.A
 	})
 }
 
+// FixDone says that the operator did what the PR's fix loop left them
+// (magnum fix --done, with the attention the registry holds as the one
+// they saw): the PR goes back to reviewed with no review; the screen asked
+// first.
+func (s *screenActions) FixDone(ctx context.Context, ref string) (tui.ActionResult, error) {
+	return s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{yes: true, done: true})
+	})
+}
+
 // OpenWhiteboard opens the PR's whiteboard in Whiteboard Desktop (magnum
 // whiteboard --open); the screen asked first, and refused a row without one.
 func (s *screenActions) OpenWhiteboard(ctx context.Context, ref string) (tui.ActionResult, error) {

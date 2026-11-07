@@ -356,17 +356,18 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"open pane": true, "browser": true, "tracker": false, "pin": false, "unpin": true, "release": false, // pinned: unpin first
 		"mute": true, "unmute": false, "details": true, "reset column widths": false,
 		"approve": false, "request changes": false, // the fixture has no findings for #11920
-		"withdraw approval": false, // nor an approval magnum posted as the operator
-		"snooze 2h":         true,
-		"fix findings":      false, // nor a review to fix
-		"fix off":           true,
-		"open whiteboard":   false, // nor a whiteboard
-		"star":              true,
+		"withdraw approval":  false, // nor an approval magnum posted as the operator
+		"snooze 2h":          true,
+		"fix findings":       false, // nor a review to fix
+		"fix off":            true,
+		"fixer's calls done": false, // it needs nothing of the operator
+		"open whiteboard":    false, // nor a whiteboard
+		"star":               true,
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 23 {
+	if len(m.menuItems()) != 24 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 

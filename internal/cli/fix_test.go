@@ -980,3 +980,32 @@ func TestScreenFixAndFixOff(t *testing.T) {
 		t.Errorf("a refused fix reported %+v, want the failed request", res.Requests)
 	}
 }
+
+// The board's d sends `magnum fix --done` as the command does, without
+// asking again (the screen asked): the payload's Done with the attention
+// the registry holds as Seen, and the daemon's answer goes back to the
+// screen.
+func TestScreenFixDone(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	pr := h.seedPR("talkable/talkable", 5, store.PRNeedsAttention)
+	const msg = "fix: 2 findings need your call: /state/reviews/talkable/talkable/5/abc1234def56/claude-fix.md"
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", msg) }); err != nil {
+		t.Fatal(err)
+	}
+	const answer = "PR #5 is back to reviewed at abc1234: you did what the fixer left; no review runs"
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, answer) }
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	res, err := acts.FixDone(context.Background(), "talkable#5")
+	if err != nil || !strings.Contains(res.Text, answer) {
+		t.Fatalf("fix --done returned %q, %v (%s)", res.Text, err, h.errb.String())
+	}
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqFix {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !p.Done || p.Seen != msg || p.Off || p.On || p.Number != 5 {
+		t.Errorf("payload = %+v", p)
+	}
+}

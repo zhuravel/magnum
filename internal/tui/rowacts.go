@@ -47,6 +47,7 @@ const (
 	actFixOff
 	actWhiteboard
 	actStar
+	actFixDone
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -82,6 +83,7 @@ var rowActDefs = [...]rowActDef{
 	actFixOff:         {"F", "fix off", "fix off", "fix --off"},
 	actWhiteboard:     {"w", "open whiteboard", "whiteboard", "whiteboard --open"},
 	actStar:           {"*", "star", "star", "star"},
+	actFixDone:        {"d", "fixer's calls done", "done", "fix --done"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
@@ -89,7 +91,7 @@ var rowActDefs = [...]rowActDef{
 // shows and hides the manual worktrees, as its t switches to the board, and
 // a star orders the board's rows, not the dashboard's queue.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
 		actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
 	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
@@ -179,6 +181,11 @@ type actRow struct {
 	// (PRBoardRow.FixLoop, PRRow.FixLoop), which K aborts although the PR
 	// stays reviewed while its fixer works.
 	fixOff, fixLoop bool
+	// attentionKind is why the PR needs attention (PRBoardRow.AttentionKind;
+	// "" when it does not, or the screen does not know: only the board
+	// does), which d checks: only the fixer's calls (kind fix) are yours to
+	// mark done, and the daemon decides the rest.
+	attentionKind string
 	// whiteboard is the head the PR's whiteboard describes
 	// (PRBoardRow.Whiteboard; "" when it has none, or the screen does not
 	// know: only the board offers w), which w's question names.
@@ -423,6 +430,22 @@ func actionRefusal(a rowAct, r actRow) string {
 		if r.whiteboard == "" {
 			return "no whiteboard of " + l + " yet (magnum whiteboard writes one)"
 		}
+	case actFixDone:
+		return fixDoneRefusal(r)
+	}
+	return ""
+}
+
+// fixDoneRefusal says why d cannot mark what the fixer left on r done: the
+// PR needs nothing of you, or needs attention for something else. The
+// daemon decides the rest (a cap or a failed run, an attention that changed,
+// an unreviewed head, a loop that runs).
+func fixDoneRefusal(r actRow) string {
+	switch {
+	case r.state != "" && r.state != "needs_attention":
+		return r.label + " does not need you (" + stateLabel(r.state) + "): the fixer left you nothing to mark done"
+	case r.attentionKind != "" && r.attentionKind != "fix":
+		return r.label + " needs attention for " + r.attentionKind + ", not for what the fixer left you"
 	}
 	return ""
 }
@@ -520,6 +543,12 @@ func actionQuestion(a rowAct, r actRow) string {
 			untilClock(r.now.Add(boardSnooze), r.now) + " (" + cmp.Or(r.key(actReview), "a review") + " and review requests still run)?"
 	case actWhiteboard: // the whiteboard may describe an earlier head than the PR's: say which
 		return "Open the whiteboard of " + l + " (" + textx.ShortSHA(r.whiteboard) + ") in Whiteboard Desktop?"
+	case actFixDone:
+		at := ""
+		if r.head != "" {
+			at = " at " + textx.ShortSHA(r.head)
+		}
+		return "Mark what the fixer left on " + l + " done: back to reviewed" + at + ", no review runs?"
 	}
 	return ""
 }
@@ -683,6 +712,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		}
 	case actWhiteboard:
 		return what, on(DashboardActions.OpenWhiteboard)
+	case actFixDone:
+		return what, on(DashboardActions.FixDone)
 	case actStar:
 		star := !r.starred
 		if !star {
@@ -846,7 +877,8 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		pinned: r.Pinned, pinKnown: true, starred: r.Starred, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		hold: r.SlotHold, holdSlot: r.Slot, inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
-		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != ""}
+		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != "",
+		attentionKind: r.AttentionKind}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

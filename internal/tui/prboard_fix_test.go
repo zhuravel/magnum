@@ -213,6 +213,59 @@ func TestShiftFTogglesFixOff(t *testing.T) {
 	}
 }
 
+// d says you did what a fix loop left you (`magnum fix --done`): on a row
+// that needs attention for the fixer's calls it asks y/N, naming the head
+// whose review stands, and only y sends it; on a row that needs nothing of
+// you, or attention of another kind, it is refused before anything is
+// asked. The card offers it only where it runs, and the help names it.
+func TestDMarksWhatTheFixerLeftDone(t *testing.T) {
+	needs := func(r *PRBoardRow) {
+		r.State, r.AttentionKind, r.LastError = "needs_attention", "fix", "fix: 1 finding needs your call"
+	}
+	const ask = "Mark what the fixer left on talkable#5 done: back to reviewed at abcdef1, no review runs?"
+	m, act := fixBoard(t, needs)
+	card, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(card), "d fixer's calls done")
+	m, cmd := send(t, m, keyMsg("d"))
+	if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
+		t.Fatalf("d alone ran %v", act.calls)
+	}
+	if m.confirm == nil || m.confirm.question != ask || m.confirm.what != "fix --done talkable/talkable#5" {
+		t.Fatalf("d asked %+v, want %q", m.confirm, ask)
+	}
+	mustContain(t, viewOf(m), ask+" y/N")
+	if n, _ := send(t, m, keyMsg("enter")); n.confirm != nil || len(act.calls) != 0 {
+		t.Errorf("enter acted or left the question up: %v", act.calls)
+	}
+	if _, follow := boardAct(t, m, "y"); !slices.Equal(act.calls, []string{"fix --done talkable/talkable#5"}) || !hasMsg[prbDataMsg](follow) {
+		t.Errorf("y called %v, want the --done of the row's ref", act.calls)
+	}
+
+	for _, c := range []struct {
+		name string
+		edit func(r *PRBoardRow)
+		want string
+	}{
+		{"reviewed", nil, "talkable#5 does not need you (reviewed): the fixer left you nothing to mark done"},
+		{"a round's failure", func(r *PRBoardRow) { needs(r); r.AttentionKind = "failed" },
+			"talkable#5 needs attention for failed, not for what the fixer left you"},
+	} {
+		m, act := fixBoard(t, c.edit)
+		card, _ := send(t, m, keyMsg("enter"))
+		if strings.Contains(viewOf(card), "fixer's calls done") {
+			t.Errorf("%s: the card offers d", c.name)
+		}
+		m, _ = send(t, m, keyMsg("d"))
+		if m.confirm != nil || len(act.calls) != 0 {
+			t.Errorf("%s: d asked %+v or ran %v", c.name, m.confirm, act.calls)
+		}
+		mustContain(t, viewOf(m), c.want)
+	}
+	m, _ = fixBoard(t, needs)
+	help, _ := send(t, m, keyMsg("?"))
+	mustContain(t, viewOf(help), "you did what a fix loop left you (asks y/N)")
+}
+
 // The help, the card's actions and the right-click menu name both keys.
 func TestTheBoardNamesTheFixKeys(t *testing.T) {
 	m, _ := fixBoard(t, nil)

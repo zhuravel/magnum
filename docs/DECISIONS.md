@@ -4039,6 +4039,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPublishedTasksRowFollowsItsPR (a stalemate, reviewed at the head, a loop after a fresh verdict),
   TestTheChipCountsPRsThatNeedYou; goldens yours-100, -140 and -200.
 
+- **The board's `d` is `magnum fix --done`** (2026-11-07, asked by the operator). The operator acts on a loop's
+  Needs you from the PR board (`f`, `r`), so the word that the fixer's calls are done is a key there too:
+  `d` ("fixer's calls done") asks "Mark what the fixer left on talkable#5 done: back to reviewed at a1b2c3d,
+  no review runs?" and sends `magnum fix --done` with the attention the registry holds as the one seen
+  (`DashboardActions.FixDone`). The board refuses it before asking on a row that needs nothing of you or needs
+  attention of another kind (`actRow.attentionKind`, from `PRBoardRow.AttentionKind`); the daemon decides the
+  rest, as for the command. The menu and the card list it, the help says it in one line (the overlay test's
+  board is one line taller), and it is not in the key hints, as `F` is not. The status dashboard does not
+  offer it: its rows do not know the attention's kind. Tests, failing first: TestDMarksWhatTheFixerLeftDone,
+  TestScreenFixDone.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

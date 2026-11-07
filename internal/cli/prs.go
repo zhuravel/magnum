@@ -47,7 +47,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"reviews (R fresh, i with /simplify), K kills its running or queued review, I ignores it (kill, mute, free "+
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
 			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as you "+
-			"(F takes it out of autofix or puts it back), w opens its whiteboard, o opens the judge's pane, "+
+			"(F takes it out of autofix or puts it back; on a PR whose fix loop left you calls, d says you did them all: "+
+			"back to reviewed, with no review), w opens its whiteboard, o opens the judge's pane, "+
 			"p/u pin and unpin, * stars it or unstars it (`magnum star`), x releases, M/U mute and unmute, b opens the "+
 			"PR in the browser and t its issue in the tracker; every one of them but o, p, u, *, b and t asks y/N "+
 			"first, and only y confirms. Starred PRs (✪ before the title) lead their section, the open PRs or the "+
