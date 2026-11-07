@@ -21986,6 +21986,11 @@ func Path(l paths.Layout, owner, repo string, number int) (string, error)
     positive, or Path refuses them. The names are lower-cased: GitHub ignores
     their case, so the writer's spelling and the reader's name one file.
 
+func StagingEnv(name string) string
+    StagingEnv is the Env of the configured staging environment name: the name
+    when it is a slug, else "" (the row then has the state without a name),
+    so a name such as "Alpha" or "qa env" never makes Write refuse the status.
+
 func Write(path string, s Status) (bool, error)
     Write writes s to path when its content differs from the file's, and reports
     whether it wrote. It sets V and Digest, keeps the times in UTC to the second
@@ -22115,7 +22120,9 @@ type Staging struct {
 	State StagingState `json:"state"`
 }
     Staging is the deploy of the change: Env is the configured staging
-    environment's name, a short slug ([a-z0-9-]{1,32}), or "".
+    environment's name when it is a short slug ([a-z0-9-]{1,32}), else "".
+    The config takes any name that is not blank, and Write refuses a whole
+    status whose Env is not a slug, so the writer sets Env with StagingEnv.
 
 type StagingState string
     StagingState is the staging deploy's state.

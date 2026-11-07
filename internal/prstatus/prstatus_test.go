@@ -305,6 +305,35 @@ func TestWriteReplacesAFileReadRefuses(t *testing.T) {
 	readOK(t, path)
 }
 
+// The config takes any staging name that is not blank; one that is not a
+// slug goes into the file as "", and the status is still written, its
+// staging state with it.
+func TestAStagingNameThatIsNotASlugIsWrittenWithoutAName(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]string{
+		"alpha":                 "alpha",
+		"staging-a":             "staging-a",
+		strings.Repeat("a", 32): strings.Repeat("a", 32),
+		"Alpha":                 "",
+		"staging_1":             "",
+		"qa env":                "",
+		" alpha":                "",
+		strings.Repeat("a", 33): "",
+		"":                      "",
+	} {
+		if got := StagingEnv(name); got != want {
+			t.Errorf("StagingEnv(%q) = %q, want %q", name, got, want)
+		}
+		path := statusPath(t)
+		s := sample()
+		s.Staging = Staging{Env: StagingEnv(name), State: StagingDeploying}
+		mustWrite(t, path, s)
+		if got := readOK(t, path).Staging; got != s.Staging {
+			t.Errorf("staging of %q = %+v, want %+v", name, got, s.Staging)
+		}
+	}
+}
+
 func TestWriteRefusesAnInvalidStatusAndWritesNothing(t *testing.T) {
 	t.Parallel()
 	path := statusPath(t)

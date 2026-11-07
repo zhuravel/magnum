@@ -16616,6 +16616,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - It holds fixed words only: counts, enums (each a string type with its constants and `Valid`), times, the
     task id, the Jira key (ABC-123) and the staging environment's slug; never text from a PR, a ticket, a
     question or an agent, so nothing the comment renders comes from them.
+  - The staging env is the configured name only when it is a slug (`[a-z0-9-]{1,32}`). The config takes any
+    staging name that is not blank, and `Write` refuses a whole status whose env is not a slug, which would
+    leave the file at its last content for the rest of the PR. So the writer sets it with
+    `prstatus.StagingEnv`, which keeps a slug and gives "" for any other name: the row shows the deploy's
+    state without the name. Requiring slugs in `validateFactoryStaging` is the other way; it changes what
+    configs load, so it is left to the writer's slice.
   - `v` is 1. A field that changes its meaning or type, or goes away, bumps it, and a reader refuses any v but
     its own; a new field or a new enum word keeps it (readers ignore the fields they do not know, and refuse
     only a file holding a word they do not know). The proof has a `green` beside `none`, `red` and
@@ -16639,7 +16645,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestReadRefusesAFileOver64KiB, TestReadRefusesACutShortFile, TestReadRefusesAnUnknownVersion,
   TestReadRefusesAWordOutsideItsEnum, TestReadRefusesADigestThatDoesNotMatch,
   TestPathRefusesWhatIsNotAGitHubRepoOrAPRNumber, TestWriteKeepsTheFileAndItsFoldersPrivate,
-  TestReadOfAMissingFileIsAbsent and the others; the package did not exist).
+  TestReadOfAMissingFileIsAbsent, TestAStagingNameThatIsNotASlugIsWrittenWithoutAName and the others; the
+  package did not exist).
 
 ## Learned rules
 

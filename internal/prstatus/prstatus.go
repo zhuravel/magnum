@@ -140,10 +140,23 @@ type FixLoop struct {
 }
 
 // Staging is the deploy of the change: Env is the configured staging
-// environment's name, a short slug ([a-z0-9-]{1,32}), or "".
+// environment's name when it is a short slug ([a-z0-9-]{1,32}), else "".
+// The config takes any name that is not blank, and Write refuses a whole
+// status whose Env is not a slug, so the writer sets Env with StagingEnv.
 type Staging struct {
 	Env   string       `json:"env"`
 	State StagingState `json:"state"`
+}
+
+// StagingEnv is the Env of the configured staging environment name: the
+// name when it is a slug, else "" (the row then has the state without a
+// name), so a name such as "Alpha" or "qa env" never makes Write refuse the
+// status.
+func StagingEnv(name string) string {
+	if envRe.MatchString(name) {
+		return name
+	}
+	return ""
 }
 
 // Now is who the PR waits on and the task's stage.
