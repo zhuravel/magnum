@@ -7667,6 +7667,16 @@ const (
     Verdicts of autofix = "open" (OpenVerdict.Verdict).
 
 const (
+	OpenOffFixOff     = "fix_off"     // `magnum fix --off`
+	OpenOffDraft      = "draft"       // a draft PR
+	OpenOffFork       = "fork"        // its head lives in a fork
+	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
+	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
+	OpenOffIneligible = "ineligible"  // magnum does not review it
+)
+    Why an off verdict is off (OpenVerdict.Off).
+
+const (
 	// FixPhaseFixing: the fixer works on the head the cycle fixes.
 	FixPhaseFixing = "fixing"
 	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
@@ -12757,6 +12767,11 @@ type ScreenOptions struct {
 	// start it, the last daemon's holds.json is not read, and no working
 	// mark turns.
 	DaemonDown bool
+	// Magnum reads the published tasks' PRs in magnum's registry
+	// (Magnum.PRStates), once per call: a published task's row then says
+	// its PR's verdict. nil keeps the words of a screen without it ("magnum:
+	// review of #N").
+	Magnum Magnum
 }
     ScreenOptions are what ScreenData reads besides the registries: the config
     (the roles' words, the kinds' stages, the repositories) and the layout (the
@@ -28324,8 +28339,11 @@ type TaskCard struct {
 	Copy       string
 	Started    time.Time
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
-	Stages     []CardStage
-	Agents     []CardAgent
+	// Links are what the task waits on you for, as links (the threads and
+	// findings its PR's verdict says need you), drawn under WAITING FOR.
+	Links  []string
+	Stages []CardStage
+	Agents []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

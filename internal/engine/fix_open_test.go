@@ -289,17 +289,17 @@ func TestAutofixOpenLeavesDraftsForksFixOffAndOthersPRsAlone(t *testing.T) {
 		name, author, off string
 		edit              func(h *harness, pr store.PR)
 	}{
-		{name: "draft", author: "zhuravel", off: openOffDraft, edit: func(h *harness, pr store.PR) {
+		{name: "draft", author: "zhuravel", off: OpenOffDraft, edit: func(h *harness, pr store.PR) {
 			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("is_draft", true) }); err != nil {
 				h.t.Fatal(err)
 			}
 		}},
-		{name: "fork", author: "zhuravel", off: openOffFork, edit: func(h *harness, pr store.PR) {
+		{name: "fork", author: "zhuravel", off: OpenOffFork, edit: func(h *harness, pr store.PR) {
 			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("is_cross_repo", true) }); err != nil {
 				h.t.Fatal(err)
 			}
 		}},
-		{name: "fix off", author: "zhuravel", off: openOffFixOff, edit: func(h *harness, pr store.PR) {
+		{name: "fix off", author: "zhuravel", off: OpenOffFixOff, edit: func(h *harness, pr store.PR) {
 			if err := h.e.setFixOff(h.ctx, pr.ID, FixOff{Since: h.clock.Now(), By: fixOffBy}); err != nil {
 				h.t.Fatal(err)
 			}

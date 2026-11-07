@@ -34,6 +34,7 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 	}
 	if c.WaitingFor != "" {
 		head = append(head, p.waitingRows(c.WaitingFor)...)
+		head = append(head, p.waitLinkRows(c.Links)...)
 		head = append(head, "")
 	}
 	body, cursor := p.taskBody(c)
@@ -75,6 +76,29 @@ func (p *cardPainter) waitingRows(text string) []string {
 		}
 	}
 	return p.labelRowsAs(label, p.st.Section, x, cells)
+}
+
+// cardLinksShown bounds the links WAITING FOR lists; a last line counts the
+// rest.
+const cardLinksShown = 5
+
+// waitLinkRows are the links of what the task waits on you for, under
+// WAITING FOR's text: each without its scheme, cut from the left when it
+// must be (its end names the thread), at most cardLinksShown and a line
+// that counts the rest.
+func (p *cardPainter) waitLinkRows(links []string) []string {
+	const x = 1 + len("WAITING FOR") + 2
+	w := max(p.width-1-x, 1)
+	shown := links[:min(len(links), cardLinksShown)]
+	out := make([]string, 0, len(shown)+1)
+	for _, l := range shown {
+		u := strings.TrimPrefix(strings.TrimPrefix(l, "https://"), "http://")
+		out = append(out, p.line(placed{x, w, cell{{u, p.st.Accent}}.fitLeft(w)}))
+	}
+	if n := len(links) - len(shown); n > 0 {
+		out = append(out, p.line(at(x, w, seg{fmt.Sprintf("+%d more", n), p.st.Dim})))
+	}
+	return out
 }
 
 // heading is a section's name with its text, from column 1.

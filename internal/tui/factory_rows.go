@@ -338,8 +338,11 @@ type TaskCard struct {
 	Copy       string
 	Started    time.Time
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
-	Stages     []CardStage
-	Agents     []CardAgent
+	// Links are what the task waits on you for, as links (the threads and
+	// findings its PR's verdict says need you), drawn under WAITING FOR.
+	Links  []string
+	Stages []CardStage
+	Agents []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

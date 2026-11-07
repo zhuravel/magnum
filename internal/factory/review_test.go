@@ -64,10 +64,15 @@ func (f *fakeReviewer) calls() []evalrun.LocalCase {
 	return slices.Clone(f.cases)
 }
 
-// fakeMagnum is magnum's daemon: busy says why it is busy ("" = it is not).
+// fakeMagnum is magnum's daemon: busy says why it is busy ("" = it is not);
+// prs are the PRs its registry has (a ref it lacks is not found, its
+// daemon up), prErr fails PRStates, and reads counts the PRStates calls.
 type fakeMagnum struct {
-	mu   sync.Mutex
-	busy string
+	mu    sync.Mutex
+	busy  string
+	prs   map[PRRef]PRState
+	prErr error
+	reads int
 }
 
 func (f *fakeMagnum) Busy(context.Context) (bool, string, error) {
@@ -76,13 +81,50 @@ func (f *fakeMagnum) Busy(context.Context) (bool, string, error) {
 	return f.busy != "", f.busy, nil
 }
 
-// PRStates knows no PR: none is found.
 func (f *fakeMagnum) PRStates(_ context.Context, refs []PRRef) (map[PRRef]PRState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.prErr != nil {
+		return nil, f.prErr
+	}
 	out := make(map[PRRef]PRState, len(refs))
 	for _, r := range refs {
-		out[r] = PRState{Ref: r, DaemonUp: true}
+		v, ok := f.prs[r]
+		if !ok {
+			v = PRState{DaemonUp: true}
+		}
+		v.Ref = r
+		out[r] = v
 	}
 	return out, nil
+}
+
+// setPR makes magnum's registry say v of ref (nil: it lacks the PR).
+func (f *fakeMagnum) setPR(ref PRRef, v *PRState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.prs == nil {
+		f.prs = map[PRRef]PRState{}
+	}
+	if v == nil {
+		delete(f.prs, ref)
+		return
+	}
+	f.prs[ref] = *v
+}
+
+// setPRErr makes PRStates fail with err (nil: it reads again).
+func (f *fakeMagnum) setPRErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prErr = err
+}
+
+func (f *fakeMagnum) prReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 func (f *fakeMagnum) set(why string) {

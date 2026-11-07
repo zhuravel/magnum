@@ -3,8 +3,9 @@ package factory
 // The factory screen's data (spec 9): ScreenData reads the factory's
 // registry, its agents store and the tasks' directories into the screen's
 // tui.FactoryData. Home gets one row per task, grouped by who it waits on
-// (needs_you is NEEDS YOU, done today and published on the day of its PR is
-// DONE TODAY, the rest waits on others), each blocker naming who first
+// (needs_you is NEEDS YOU, done today is DONE TODAY, a published task goes
+// by its PR in magnum's registry, screen_prs.go, and the rest waits on
+// others), each blocker naming who first
 // (WaitsWho and WaitsWhat, the agents at work from the sessions), the count
 // of the decisions owed apart from the tasks, the holds of the machine, what
 // frees a queued task, the digest after an absence of more than an hour and
@@ -58,6 +59,11 @@ type ScreenOptions struct {
 	// start it, the last daemon's holds.json is not read, and no working
 	// mark turns.
 	DaemonDown bool
+	// Magnum reads the published tasks' PRs in magnum's registry
+	// (Magnum.PRStates), once per call: a published task's row then says
+	// its PR's verdict. nil keeps the words of a screen without it ("magnum:
+	// review of #N").
+	Magnum Magnum
 }
 
 // The blocker lines of a factory daemon that is down, short and long.
@@ -117,6 +123,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			s.views = append(s.views, v)
 		}
 	}
+	s.readPRs(o.Magnum)
 	for _, v := range s.views {
 		row, cards, decisions := s.task(v)
 		d.Rows = append(d.Rows, row)
@@ -192,11 +199,14 @@ type taskView struct {
 	// ("" for none, and for a task of your words).
 	reporter string
 	retry    bool
+	// pr is what a published task waits on by its PR in magnum's registry
+	// (readPRs); nil without a read of it.
+	pr *prWait
 }
 
 // read is what the screen shows of task t, nil for a task home leaves out
-// (stopped, or done before today; a published task stays, waiting on
-// magnum's review after its PR's day).
+// (stopped, or done before today; a published task stays, its group set by
+// its PR once readPRs read it).
 func (s *screen) read(t registry.Task) (*taskView, error) {
 	if t.State == registry.TaskStopped || (t.State == registry.TaskDone && !sameDay(t.Updated, s.now)) {
 		return nil, nil
@@ -211,8 +221,6 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	}
 	switch {
 	case t.State == registry.TaskDone:
-		v.group = tui.GroupDone
-	case t.State == registry.TaskPublished && sameDay(cmp.Or(v.link.Opened, t.Updated), s.now):
 		v.group = tui.GroupDone
 	case waitsOnYou(t):
 		v.group = tui.GroupNeedsYou
@@ -374,6 +382,9 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 			row.Mark = tui.MarkWorking // only a working agent moves
 		}
 	}
+	if v.pr != nil {
+		row.Mark = v.pr.mark // magnum's fixer at work on the PR moves too
+	}
 	if t.State == registry.TaskQueued && t.WaitsWho == waitCopy {
 		row.Frees = s.frees(v)
 	}
@@ -401,13 +412,12 @@ func (s *screen) onQuestions(v *taskView) bool {
 func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 	t := v.t
 	switch {
-	case v.group == tui.GroupDone && t.State == registry.TaskDone:
-		at := clock(t.Updated)
-		return []tui.WaitsOn{{Who: "nothing", What: "merged " + at}}
-	case v.group == tui.GroupDone:
-		at := clock(cmp.Or(v.link.Opened, t.Updated))
-		return []tui.WaitsOn{{Who: "nothing", What: fmt.Sprintf("you pushed %s, PR #%d", at, cmp.Or(v.link.Number, t.PRNumber)),
-			Short: "pushed " + at}}
+	case v.pr != nil:
+		return []tui.WaitsOn{v.pr.on}
+	case t.State == registry.TaskDone:
+		return []tui.WaitsOn{{Who: "nothing", What: "merged " + clock(t.Updated)}}
+	case t.State == registry.TaskPublished && waitsOnYou(t): // the tick's own wait on you (a close past the grace)
+		return []tui.WaitsOn{{Who: waitsYou, What: t.WaitsWhat, Short: clauseShort(t.WaitsWhat), OnYou: true}}
 	case t.State == registry.TaskPublished:
 		return []tui.WaitsOn{{Who: "magnum", What: fmt.Sprintf("review of #%d", cmp.Or(v.link.Number, t.PRNumber))}}
 	}
@@ -525,6 +535,8 @@ func (s *screen) stageBlocker(t registry.Task) tui.WaitsOn {
 // short form: answer its questions, read the diff and push, retry.
 func (s *screen) move(v *taskView) (long, short string) {
 	switch {
+	case v.pr != nil && v.pr.move != "":
+		return v.pr.move, v.pr.moveShort
 	case s.onQuestions(v) && v.onYou == 1:
 		return "answer 1 question", "answer it"
 	case s.onQuestions(v):
@@ -623,6 +635,9 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 		parts = append(parts, "let go: "+v.letGo[role])
 	}
 	c.WaitingFor = strings.Join(parts, " · ")
+	if v.pr != nil {
+		c.Links = v.pr.links
+	}
 	c.Stages = s.stages(v, row)
 	for _, x := range v.agents {
 		c.Agents = append(c.Agents, s.cardAgent(x))

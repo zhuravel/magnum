@@ -1,0 +1,18 @@
+ magnum factory · talkable                                                                                                          ↻ 14:09 
+ ● 2 tasks need you · 3 wait on others · 1 done today
+
+ NEEDS YOU                                                    WAITS ON                                               YOUR MOVE        WAITED
+› ● PR-12320  Coupon rounding in the cart                     you: 2 items need you                                  task card           35m
+  ● PR-12324  Referral export column order                    you: nothing open at a1b2c3d                           merge it            12m
+
+ WAITS ON OTHERS
+  ⣷ PR-12321  Advocate offer email locale                     agent: magnum fixes #4531                                                   9m
+  ◷ PR-12323  Weekly gem upgrades                             magnum: looking at #4533                                                    2h
+  ◷ PR-12325  Deploy list on campaigns                        reviewers: nothing open at a1b2c3d                                          3h
+
+ DONE TODAY
+  ✓ PR-12302  Remove old sync job                             nothing: merged 13:20
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ you: 2 items need you: 1 thread of a person and 1 skipped finding
+ enter task card · n new task · ? more

@@ -1,0 +1,13 @@
+ magnum factory · PR-12320 · bug · Coupon rounding in the cart                              ↻ 14:09 
+ zhuravel-PR-12320-coupon-rounding · #4530 · started 08:40
+
+ WAITING FOR  you: 2 items need you: 1 thread of a person and 1 skipped finding
+              github.com/example/talkable/pull/4530#discussion_r9100
+              github.com/example/talkable/pull/4530#discussion_r9101
+
+ STAGES                                                                            took   finished
+  ✓ start   Jira PR-12320 read                                                       0s      08:40
+  ✓ coding  spec red before, green after                                             0s      09:35
+  ✓ pushed  #4530 opened                                                             0s      10:02
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ j k move · enter open the line · d diff · l log · + − rate · esc back · ? more

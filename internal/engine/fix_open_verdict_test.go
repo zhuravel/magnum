@@ -133,9 +133,9 @@ func TestAutofixOpenNeverCapsTheWaitForMagnum(t *testing.T) {
 	if len(v.Needs) == 0 || v.Needs[len(v.Needs)-1].Kind != "magnum_late" {
 		t.Errorf("needs = %+v, want magnum_late", v.Needs)
 	}
-	f.off, f.pr.State = openOffBaseline, store.PRBaseline
+	f.off, f.pr.State = OpenOffBaseline, store.PRBaseline
 	v, _, _ = decideOpen(f)
-	if v.Verdict != OpenOff || v.Off != openOffBaseline {
+	if v.Verdict != OpenOff || v.Off != OpenOffBaseline {
 		t.Errorf("a baseline PR: %+v", v)
 	}
 }
@@ -307,7 +307,7 @@ func TestOnlyAMagnumRebuttalWithNoReviewWorkNeedsYou(t *testing.T) {
 
 // The off verdict names why the look leaves the PR alone.
 func TestTheOffVerdictNamesItsReason(t *testing.T) {
-	for _, off := range []string{openOffDraft, openOffFork, openOffFixOff, openOffIncludeOwn, openOffBaseline, openOffIneligible} {
+	for _, off := range []string{OpenOffDraft, OpenOffFork, OpenOffFixOff, OpenOffIncludeOwn, OpenOffBaseline, OpenOffIneligible} {
 		f := idleFacts()
 		f.off = off
 		v, work, needs := decideOpen(f)

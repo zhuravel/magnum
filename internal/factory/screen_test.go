@@ -40,6 +40,9 @@ type screenRig struct {
 	repo   int64 // the owner repository of the agents store, once made
 	// cards are the ready cards the last data drew (ScreenOptions.ReadyCards).
 	cards map[int64]ReadyCardFile
+	// magnum is magnum's registry as the data reads it (ScreenOptions.Magnum);
+	// nil: the data reads none.
+	magnum *fakeMagnum
 }
 
 func newScreenRig(t *testing.T) *screenRig {
@@ -199,8 +202,11 @@ func (r *screenRig) verified(t registry.Task, stage string, roles ...string) {
 func (r *screenRig) data(lastSeen time.Time) tui.FactoryData {
 	r.t.Helper()
 	r.cards = map[int64]ReadyCardFile{}
-	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, lastSeen, ScreenOptions{Config: r.cfg, Layout: r.layout,
-		ReadyCards: func(id int64, c ReadyCardFile) { r.cards[id] = c }})
+	o := ScreenOptions{Config: r.cfg, Layout: r.layout, ReadyCards: func(id int64, c ReadyCardFile) { r.cards[id] = c }}
+	if r.magnum != nil {
+		o.Magnum = r.magnum
+	}
+	d, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, lastSeen, o)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -342,10 +348,10 @@ func TestScreenDataCountsTasksAndDecisionsApart(t *testing.T) {
 	}
 }
 
-// DONE TODAY keeps the tasks done today and the ones published today, the
-// day of their PR (nothing: you pushed 09:40, PR #4519); a task done
-// yesterday is gone, and one published yesterday waits on magnum's review.
-func TestScreenDataKeepsDoneAndPublishedTasksOfToday(t *testing.T) {
+// DONE TODAY keeps the tasks done today (merged); a task done yesterday is
+// gone, and a published one, of today or yesterday, waits on magnum's
+// review: its PR is open (TestAPublishedTaskIsNoLongerDoneOnItsDay).
+func TestScreenDataKeepsTheTasksDoneToday(t *testing.T) {
 	r := newScreenRig(t)
 	r.at(30 * time.Hour)
 	old := r.task("PR-12301", "chore", "Done yesterday", registry.TaskActive, "publish", "", "")
@@ -364,17 +370,15 @@ func TestScreenDataKeepsDoneAndPublishedTasksOfToday(t *testing.T) {
 	if hasRow(d, "PR-12301") {
 		t.Errorf("a task done yesterday is on home")
 	}
-	for key, want := range map[string]tui.WaitsOn{
-		"PR-12302": {Who: "nothing", What: "merged 08:20"},
-		"PR-12305": {Who: "nothing", What: "you pushed 08:40, PR #4519", Short: "pushed 08:40"},
-	} {
-		row := rowOf(t, d, key)
-		if row.Group != tui.GroupDone || row.Mark != tui.MarkDone || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want || !row.Since.IsZero() {
-			t.Errorf("%s: %+v, want DONE TODAY with %+v", key, row, want)
-		}
+	want := tui.WaitsOn{Who: "nothing", What: "merged 08:20"}
+	if row := rowOf(t, d, "PR-12302"); row.Group != tui.GroupDone || row.Mark != tui.MarkDone || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want || !row.Since.IsZero() {
+		t.Errorf("PR-12302: %+v, want DONE TODAY with %+v", row, want)
 	}
-	if row := rowOf(t, d, "PR-12303"); row.Group != tui.GroupWaits || row.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "review of #4520"}) {
-		t.Errorf("published yesterday: %+v", row)
+	for key, n := range map[string]int{"PR-12303": 4520, "PR-12305": 4519} {
+		row := rowOf(t, d, key)
+		if want := (tui.WaitsOn{Who: "magnum", What: "review of #" + strconv.Itoa(n)}); row.Group != tui.GroupWaits || row.WaitsOn[0] != want {
+			t.Errorf("%s, published: %+v, want it waiting with %+v", key, row, want)
+		}
 	}
 	if card := d.Cards[pushed.ID].Task; card.PR != "#4519" {
 		t.Errorf("the pushed task's card names PR %q", card.PR)

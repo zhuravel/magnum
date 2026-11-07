@@ -285,18 +285,18 @@ func (e *Engine) pollBehind(ctx context.Context, w config.Watch, now time.Time) 
 func (e *Engine) openOff(ctx context.Context, pr store.PR, w config.Watch) string {
 	switch {
 	case pr.IsDraft:
-		return openOffDraft
+		return OpenOffDraft
 	case pr.IsCrossRepo:
-		return openOffFork
+		return OpenOffFork
 	case !w.OwnIncluded():
-		return openOffIncludeOwn
+		return OpenOffIncludeOwn
 	case pr.State == store.PRBaseline:
-		return openOffBaseline
+		return OpenOffBaseline
 	case pr.State == store.PRIneligible:
-		return openOffIneligible
+		return OpenOffIneligible
 	}
 	if _, off, err := e.fixOff(ctx, pr.ID); err != nil || off {
-		return openOffFixOff
+		return OpenOffFixOff
 	}
 	return ""
 }

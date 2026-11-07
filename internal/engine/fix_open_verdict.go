@@ -67,12 +67,12 @@ const (
 
 // Why an off verdict is off (OpenVerdict.Off).
 const (
-	openOffFixOff     = "fix_off"     // `magnum fix --off`
-	openOffDraft      = "draft"       // a draft PR
-	openOffFork       = "fork"        // its head lives in a fork
-	openOffIncludeOwn = "include_own" // its watch reviews no own PRs
-	openOffBaseline   = "baseline"    // open before magnum first synced the repository
-	openOffIneligible = "ineligible"  // magnum does not review it
+	OpenOffFixOff     = "fix_off"     // `magnum fix --off`
+	OpenOffDraft      = "draft"       // a draft PR
+	OpenOffFork       = "fork"        // its head lives in a fork
+	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
+	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
+	OpenOffIneligible = "ineligible"  // magnum does not review it
 )
 
 // OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
@@ -451,15 +451,15 @@ const heldRestart = "restart"
 // offWords is why the look leaves a PR alone, by its off reason.
 func offWords(off string) string {
 	switch off {
-	case openOffFixOff:
+	case OpenOffFixOff:
 		return "fix is off (F)"
-	case openOffDraft:
+	case OpenOffDraft:
 		return "a draft"
-	case openOffFork:
+	case OpenOffFork:
 		return "the head lives in a fork"
-	case openOffIncludeOwn:
+	case OpenOffIncludeOwn:
 		return "its watch leaves your own PRs out (include_own)"
-	case openOffBaseline:
+	case OpenOffBaseline:
 		return "open before magnum first synced the repository"
 	}
 	return "magnum does not review it"

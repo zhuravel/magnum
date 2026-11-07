@@ -38,7 +38,7 @@ func runFactoryScreen(c *Context) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	src := &factoryScreenSource{c: c, now: inspNow}
+	src := &factoryScreenSource{c: c, now: inspNow, magnum: factory.NewMagnum(c.Layout, c.Config)}
 	defer src.close()
 	acts := newScreenActions(c) // the settings screen's, as the board's
 	defer acts.Close()
@@ -68,6 +68,10 @@ func runFactoryScreen(c *Context) int {
 type factoryScreenSource struct {
 	c   *Context
 	now func() time.Time
+	// magnum reads the published tasks' PRs from magnum's registry, never
+	// migrated or written (factory.NewMagnum); nil: a published task keeps
+	// the words of a screen without it.
+	magnum factory.Magnum
 
 	mu     sync.Mutex
 	reg    *registry.Registry
@@ -180,10 +184,10 @@ func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) 
 	return c, ok
 }
 
-// Frame reads the factory (factory.ScreenData) and keeps the ready cards
-// it drew. An agents store it cannot open is a blocker line of home, with
-// why, and the rest is drawn. A factory daemon that is down (daemonDown)
-// is home's blocker line.
+// Frame reads the factory (factory.ScreenData), with the published tasks'
+// PRs from magnum's registry, and keeps the ready cards it drew. An agents
+// store it cannot open is a blocker line of home, with why, and the rest is
+// drawn. A factory daemon that is down (daemonDown) is home's blocker line.
 func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error) {
 	reg, err := s.registryFor(false)
 	if err != nil || reg == nil {
@@ -192,7 +196,7 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 	agents, aerr := s.agentsStore()
 	cards := map[int64]factory.ReadyCardFile{}
 	d, err := factory.ScreenData(ctx, reg, agents, s.now(), s.lastSeen(), factory.ScreenOptions{Config: s.c.Config, Layout: s.c.Layout,
-		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout)})
+		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout), Magnum: s.magnum})
 	if err != nil {
 		return d, err
 	}
