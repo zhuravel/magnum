@@ -1,13 +1,15 @@
 package tui
 
-// The factory screen's help (?: its keys and the words of spec 9.E, each
-// with its gloss) and its action log (!: the outcome of every action, then
-// every alert the factory raised, with its time; spec 9.F: nothing
-// vanishes).
+// The factory screen's help (?: its keys and the words of spec 9.E that the
+// screen draws, each with its gloss; a word of a feature still to come, such
+// as staging, QA, snooze, the learning view or the rating, comes with it)
+// and its action log (!: the outcome of every action, then every alert the
+// factory raised, with its time; spec 9.F: nothing vanishes).
 
 import "github.com/charmbracelet/x/ansi"
 
-// factoryWords are the screen's words and their glosses (spec 9.E).
+// factoryWords are the screen's words and their glosses (spec 9.E), only
+// those the screen draws: the stages are the built-in kinds'.
 var factoryWords = [][2]string{
 	{"needs you", "stopped until you decide or act"},
 	{"Nothing waits on you", "no task is blocked on you"},
@@ -35,27 +37,23 @@ var factoryWords = [][2]string{
 	{"usage:", "an agent plan's limit is reached"},
 	{"nothing:", "finished; nobody needs to act"},
 	{"memory full: new tasks wait", "new tasks start when memory frees"},
-	{"codex limit: waits till 16:00", "Codex stages pause until the limit resets"},
-	{"start", "read the Jira issue or your prompt"},
 	{"investigate", "agents reproduce, find the cause, read history"},
+	{"judge", "an agent weighs the findings and writes the report and its questions"},
+	{"critic", "an agent reads the plan before coding (on a wide plan)"},
 	{"questions", "agents stopped for your answers"},
+	{"reproduction", "the bug must reproduce before the fix"},
 	{"coding", "a failing spec first, then the change"},
-	{"tests", "the factory's proof and the precheck: specs, lint, migrations"},
 	{"local review", "magnum's review on this Mac, before the PR"},
+	{"pr body", "an agent drafts the PR's description"},
+	{"ready", "the ready card waits for your push, send back or drop"},
+	{"publish", "the factory pushes the branch and opens the PR"},
 	{"FLAGS", "what needs a second look before the push"},
 	{"Known", "the local review's notes that do not block, listed in the PR body"},
 	{"review unavailable", "the local review did not finish; never read as clean"},
-	{"published", "the PR is open; work on it goes on"},
-	{"runbook", "the steps of a manual migration, for you to run"},
 	{"needless", "you flagged a question that the factory did not need to ask"},
 	{"ready to push", "committed on this Mac, not on GitHub"},
 	{"push + PR", "push the branch, open a PR ready for review"},
 	{"you pushed 11:02", "you said y; the factory pushed"},
-	{"pushed", "the branch is on GitHub, the PR is open"},
-	{"review", "magnum's rounds and people's comments"},
-	{"merge master", "master merged into the branch, conflicts fixed"},
-	{"merge", "your final merge into master"},
-	{"cleanup", "free the copy after your merge"},
 	{"send back with a note", "the writer tries again with your note"},
 	{"drop", "stop, free the copy, keep the branch"},
 	{"proof", "the spec failed before the fix, passes after"},
@@ -65,43 +63,10 @@ var factoryWords = [][2]string{
 	{"no recommendation", "the evidence favours no answer; you choose"},
 	{"ask someone", "post a Jira question; the task waits"},
 	{"question 2 of 3", "the second of three questions here"},
-	{"void, bart, bastion", "the three staging servers"},
-	{"–", "nothing of this task is there"},
-	{"outdated", "an older head is there; updated automatically"},
-	{"latest", "your latest head is deployed there"},
-	{"merging", "merging your latest head into that branch"},
-	{"conflict", "the merge clashes; an agent fixes it"},
-	{"CI 12/41", "12 of 41 checks done on that branch"},
-	{"deploying", "merged; the server is not on it yet"},
-	{"QA 4/9", "t:qa has run 4 of 9 checks"},
-	{"QA ✓ / QA ✗", "QA passed or failed on your latest head"},
-	{"?", "unknown: the factory could not read it"},
-	{"bart: no QA", "bart gets merges and deploys, never QA"},
-	{"bastion waits for void QA", "bastion QA starts after void passes"},
 	{"head", "the newest commit of your branch"},
-	{"code failed", "a check failed because of the code"},
-	{"runner died", "CI's machine died; rerun, no code change"},
-	{"try 1 of 2", "first try; a second failure asks you"},
-	{"out of fix tries", "the agent gave up; you decide now"},
-	{"ready to merge", "QA passed on void and bastion, latest head"},
-	{"access needed", "a login, MFA or VPN step for you"},
-	{"snooze", "hide it 2h, or until it changes"},
 	{"queued", "waits for a free copy or memory"},
 	{"copy", "the task's own checkout, databases and port"},
-	{"your PR, written by hand", "you wrote it; the factory ships it"},
-	{"no output 9m", "the pane printed nothing for 9 minutes"},
 	{"step in", "open the real agent pane in herdr"},
-	{"say one line", "send one message to that agent"},
-	{"you're in it", "you're in that pane; the factory sends nothing"},
-	{"lesson", "one thing a task taught the factory"},
-	{"rule", "a lesson added to one repo's prompts"},
-	{"skill edit", "a change to a factory skill or prompt"},
-	{"test case", "an earlier task kept for replays"},
-	{"replay", "rerun an earlier task to test a change"},
-	{"used in", "tasks whose prompts carried the rule"},
-	{"repeats seen after the rule", "the same mistake, seen in later tasks"},
-	{"rule to approve", "a proposed rule waits for your y"},
-	{"rate + / −", "say whether a finished task was right"},
 }
 
 // factoryKeyHelp are the screen's keys, view by view.
