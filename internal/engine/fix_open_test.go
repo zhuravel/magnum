@@ -138,7 +138,8 @@ func answeredBy(th github.Thread) github.Thread {
 
 // A clean review of magnum's at the head, a colleague's thread that nobody
 // answered, the reviewers settled: one tick starts a fix loop by itself,
-// with by = autofix, where "own" started nothing after a clean review.
+// with by = autofix, where "own" started nothing after a clean review. The
+// look hands its read of GitHub to the job, which reads it no second time.
 func TestAutofixOpenStartsForAColleaguesThreadAfterACleanReview(t *testing.T) {
 	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
 	h.setThreads(h.colleagueThread(4322458360))
@@ -150,9 +151,15 @@ func TestAutofixOpenStartsForAColleaguesThreadAfterACleanReview(t *testing.T) {
 		t.Fatalf("fix runs = %d before the settle", n)
 	}
 	h.pastSettle()
+	reads := h.gh.count("threads:talkable/talkable#2")
 	h.tick()
 	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
 		t.Fatalf("fix runs = %d, want the loop autofix started", n)
+	}
+	// The look's read, which the start hands to the job, and the settle's
+	// (nameUnmarkedReplies): the job reads GitHub no second time.
+	if n := h.gh.count("threads:talkable/talkable#2") - reads; n != 2 {
+		t.Errorf("threads read %d times in the start's tick, want twice: the job took the look's read", n)
 	}
 	if by := h.fixStartBy(); by != autofixBy {
 		t.Errorf("the loop was started by %q, want autofix", by)
@@ -858,4 +865,41 @@ func TestOneFailedPollIsNotAPollBehind(t *testing.T) {
 	h.advance(50 * time.Second)
 	failedTick()
 	h.wantOpen(OpenUnknown, "the poll of GitHub is behind")
+}
+
+// A loop whose push and end the look never saw in phase reviewing (it ran
+// before the look tracked the PR, as around a restart) still makes its
+// pushed head the fixer's: the look reads it from the loop's fix.pushed
+// event, so no hands-off wait follows it, and a loop starts on the new
+// work once the reviewers settle.
+func TestAPushTheLookNeverSawIsStillTheFixers(t *testing.T) {
+	h, git := autofixHarness(t, "zhuravel", func(in pipeline.RoundInput) (map[string]int, string) {
+		if in.TargetSHA == fixPushed {
+			return map[string]int{}, "COMMENTED"
+		}
+		return map[string]int{"P2": 1}, "COMMENTED"
+	}, func(h *harness) { h.cfg.Pipeline.Autofix = config.AutofixNever })
+	h.tick() // reviewed: a P2
+	pushingFixer(h, git, fixPushed)
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review is clean: the loop ends
+	if _, ok := h.fixStateOf(2); ok {
+		t.Fatal("the loop goes on after a clean re-review")
+	}
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", "0 threads", "none") })
+	h.setThreads(h.colleagueThread(4322458360))
+	h.cfg.Pipeline.Autofix = config.AutofixOpen
+	h.advance(time.Minute)
+	h.tick() // the look's first look
+	if l := h.ledgerOf(2); !slices.Contains(l.FixerHeads, fixPushed) {
+		t.Errorf("fixer heads = %v, want %s from the loop's fix.pushed", l.FixerHeads, fixPushed)
+	}
+	h.advance(5 * time.Minute) // past the settle, within hands_off_after_push of the fixer's push
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 2 || h.fixStartBy() != autofixBy {
+		v, _ := h.openOf(2)
+		t.Errorf("fix runs = %d, the last by %q (verdict %s: %s); want autofix's loop with no hands-off wait", n, h.fixStartBy(), v.Verdict, v.Why)
+	}
 }

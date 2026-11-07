@@ -215,7 +215,7 @@ func TestAFailedRunsNeedsYouIsNeverLiftedByTheLook(t *testing.T) {
 	h.wantState(2, store.PRNeedsAttention)
 }
 
-// magnum's late review of a head is toasted once per head.
+// magnum's late review of a head is toasted, and recorded, once per head.
 func TestMagnumLateToastsOncePerHead(t *testing.T) {
 	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
 	h.tick()
@@ -238,7 +238,7 @@ func TestMagnumLateToastsOncePerHead(t *testing.T) {
 	if got := toastsWith(h, "magnum's review of a1a1a1a is late"); len(got) != 1 {
 		t.Errorf("toasts = %v, want one", h.nh.shown())
 	}
-	if _, ok := h.fixEvent("fix.open_magnum_late"); !ok {
-		t.Error("no fix.open_magnum_late event")
+	if n := len(h.fixEvents("fix.open_magnum_late")); n != 1 {
+		t.Errorf("fix.open_magnum_late events = %d, want one for the head", n)
 	}
 }
