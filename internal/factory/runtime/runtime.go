@@ -915,6 +915,7 @@ func (r *Runtime) recordLaunch(ctx context.Context, pr store.PR, a registry.Atte
 		MagnumBuild: engine.CurrentBuild("", r.d.Layout.Binary()).Label(), Launched: launched}
 	if launch {
 		rr.PromptHash, rr.ConfigHash = r.promptHash(role), configHash(role)
+		r.forget(outsideKey(a.ID, role.Name)) // the observe pass records its sessions now (launchedIn)
 	}
 	if s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name); err == nil {
 		rr.SessionID = store.Deref(s.SessionID)
@@ -1090,9 +1091,13 @@ const (
 // settleRun is Verify and Void: run runID, ended, moves to verified (that
 // outcome) or failed (the others), and its RoleRun records the end.
 func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) error {
+	verb := "verify"
+	if outcome == outcomeVoided {
+		verb = "void"
+	}
 	run, err := r.st.RunByID(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("verify %s: %w", runID, err)
+		return fmt.Errorf("%s %s: %w", verb, runID, err)
 	}
 	now := r.now()
 	ok := outcome == outcomeVerified
@@ -1109,11 +1114,11 @@ func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) err
 			u.Set("error", why)
 		}
 	}); err != nil {
-		return fmt.Errorf("verify %s: %w", runID, err)
+		return fmt.Errorf("%s %s: %w", verb, runID, err)
 	}
 	st, err := r.stateFor(ctx, run.TargetSHA, run.Role)
 	if err != nil {
-		return fmt.Errorf("verify %s: %w", runID, err)
+		return fmt.Errorf("%s %s: %w", verb, runID, err)
 	}
 	rr := registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role, EndFact: r.endFact(ctx, st), EndWhy: textx.Clip(why, 300)}
 	if run.EndedAt != nil {

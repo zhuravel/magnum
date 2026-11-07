@@ -253,11 +253,27 @@ func (r *Runtime) noteSession(ctx context.Context, o agents.Observation) {
 }
 
 // launchedIn reports whether attempt launched role: the registry holds the
-// role's record of the attempt, which its launch writes first.
+// role's record of the attempt, which its launch writes first. A role it
+// did not launch is remembered (outsideKey) until a launch of it in the
+// attempt forgets it, so an idle pane of an earlier stage costs no read per
+// pass.
 func (r *Runtime) launchedIn(ctx context.Context, attempt, role string) bool {
+	if r.marked(outsideKey(attempt, role)) {
+		return false
+	}
 	runs, err := r.reg.RoleRuns(ctx, attempt)
-	return err == nil && slices.ContainsFunc(runs, func(rr registry.RoleRun) bool { return rr.Role == role })
+	if err != nil {
+		return false // read again on the next pass
+	}
+	if slices.ContainsFunc(runs, func(rr registry.RoleRun) bool { return rr.Role == role }) {
+		return true
+	}
+	r.first(outsideKey(attempt, role))
+	return false
 }
+
+// outsideKey marks role as no role attempt launched (launchedIn).
+func outsideKey(attempt, role string) string { return "outside:" + attempt + ":" + role }
 
 // record writes rr, logging a failure (an attempt the registry does not
 // know is no factory run's).

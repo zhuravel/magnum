@@ -17104,10 +17104,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `factory-judge.md` for the PR body's turn (`factory-pr-body.md`), the amend's and a review's fix turn too. An
     edit to the PR body's prompt would never show, and one to the judge's would seem to change the PR body. The
     stage now launches and prompts its roles as it runs them (`asStageRuns`: the stage's prompt when it names
-    one, the file `renderRole` renders), the launch records that file's hash, every prompt that may have left
-    records it again (`notePrompt`, so an attempt an older build launched gets it as well), and a recovery's
-    start, whose role a restarted runtime reads afresh from the configuration, keeps the hashes the launch
-    recorded. The config hash is of the role as the stage runs it too.
+    one, the file `renderRole` renders), the launch records that file's hash, and so does the role's first
+    prompt of the attempt (`notePrompt`, so an attempt an older build launched gets it as well). A later
+    prompt (a nudge, your answers) renders no prompt file and keeps the hash the first turn ran on, whatever an
+    install changed since, and a recovery's start, whose role a restarted runtime reads afresh from the
+    configuration, keeps the hashes the launch recorded. The config hash is of the role as the stage runs it
+    too. An idle pane outside the stage costs one registry read per attempt, not one per pass.
   - A turn that ended asking questions was settled failed ("it asked questions: the stage waits for your
     answers"): 4 of the factory's 10 failed runs on 2026-11-07. It did what it was asked, so it is now voided
     (`Runtime.Void`): the agents store keeps the run failed, which a stage rebuilt after a restart takes the end
@@ -17129,7 +17131,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the judge's attempt), TestTheRoleRunRecordsThePromptTheStageRuns (a prompt left an older build's hash, and a
   recovery after a restart wrote the role's own), TestVoidSetsAsideATurnThatAskedQuestions (outcome failed),
   TestATurnThatAskedIsVoidedNotFailed (no Void) and TestAStageRunsItsRoleWithItsOwnPrompt (the launch carried
-  `factory-judge.md`).
+  `factory-judge.md`); in the review's round, the later prompt of TestTheRoleRunRecordsThePromptTheStageRuns
+  (each prompt rewrote the hash). A voided run stays failed in the agents store: what counts failed turns
+  there filters on `outcome`.
 
 ## Learned rules
 

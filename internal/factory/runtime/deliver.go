@@ -78,9 +78,7 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 	case err != nil:
 		return "", err
 	case step == loopFresh:
-		id, err := r.fromFiles(ctx, t, a, st, "a loop without progress", text)
-		r.notePrompt(ctx, a, role, id)
-		return id, err
+		return r.fromFiles(ctx, t, a, st, "a loop without progress", text)
 	}
 	kind := store.RunNudge
 	if !hasPrompt(entries, a.ID, role.Name) {
@@ -91,15 +89,17 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 		r.mu.Lock()
 		st.first = text
 		r.mu.Unlock()
+		r.notePrompt(ctx, a, role, id)
 	}
-	r.notePrompt(ctx, a, role, id)
 	return id, err
 }
 
 // notePrompt records on role's RoleRun of attempt a the hash of the prompt
-// file its turns come from (role as the stage runs it) once run, a prompt's
-// run, may have taken it: every prompt says which prompt version the role
-// ran, so an attempt a build without it launched gets it too.
+// file its first turn was rendered from (role as the stage runs it) once
+// run, that turn's run, may have taken it, so an attempt a build without
+// the hash launched gets it too. A later prompt (a nudge, your answers)
+// renders no prompt file and keeps the hash the first turn ran on, whatever
+// an install changed since.
 func (r *Runtime) notePrompt(ctx context.Context, a registry.Attempt, role config.Role, run string) {
 	if hash := r.promptHash(role); run != "" && hash != "" {
 		r.record(ctx, registry.RoleRun{AttemptID: a.ID, Role: role.Name, PromptHash: hash})

@@ -183,11 +183,11 @@ func TestObserveAddsNoRowForARoleOutsideTheStage(t *testing.T) {
 	}
 }
 
-// Every launch and every prompt records the hash of the prompt file the
-// role's turns come from, as the stage runs the role: a stage's own prompt
-// (the PR body's, the amend's, a review's fix turn) and not the role's.
-// A recovery's start after a restart (its role read afresh from the
-// configuration) keeps the hash the launch recorded.
+// A launch and a role's first prompt in the attempt record the hash of the
+// prompt file the role's turns come from, as the stage runs the role: a
+// stage's own prompt (the PR body's, the amend's, a review's fix turn) and
+// not the role's. A later prompt and a recovery's start after a restart
+// (its role read afresh from the configuration) keep the hash recorded.
 func TestTheRoleRunRecordsThePromptTheStageRuns(t *testing.T) {
 	g := newRig(t)
 	judge := g.role("fx-judge")
@@ -213,8 +213,22 @@ func TestTheRoleRunRecordsThePromptTheStageRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rr := g.roleRun("fx-judge"); rr.PromptHash != want {
-		t.Fatalf("after a prompt the record holds prompt hash %q, want the stage's %q", rr.PromptHash, want)
+		t.Fatalf("after the first prompt the record holds prompt hash %q, want the stage's %q", rr.PromptHash, want)
 	}
+	// A later prompt (a nudge, the answers) is no turn rendered from the
+	// prompt file: it leaves the hash the first turn ran on, whatever an
+	// install changed since.
+	if err := g.reg.RecordRoleRun(g.ctx, registry.RoleRun{AttemptID: g.attempt.ID, Role: "fx-judge", PromptHash: "first-turn"}); err != nil {
+		t.Fatal(err)
+	}
+	g.h.setStatus(g.agent("fx-judge"), herdr.StatusIdle)
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, staged, "the factory checked your output"); err != nil {
+		t.Fatal(err)
+	}
+	if rr := g.roleRun("fx-judge"); rr.PromptHash != "first-turn" {
+		t.Fatalf("a later prompt rewrote the prompt hash to %q, want the first turn's kept", rr.PromptHash)
+	}
+	want = "first-turn"
 
 	g.restart()
 	g.h.losePane(g.agent("fx-judge"))
@@ -223,7 +237,7 @@ func TestTheRoleRunRecordsThePromptTheStageRuns(t *testing.T) {
 		t.Fatalf("starts %+v, want the lost pane recovered", s)
 	}
 	if rr := g.roleRun("fx-judge"); rr.PromptHash != want {
-		t.Fatalf("after a recovery the record holds prompt hash %q, want the launch's %q", rr.PromptHash, want)
+		t.Fatalf("after a recovery the record holds prompt hash %q, want the one recorded, %q", rr.PromptHash, want)
 	}
 }
 
