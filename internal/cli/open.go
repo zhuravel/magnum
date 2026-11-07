@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -103,7 +102,7 @@ func openMain(ctx context.Context, c *Context, d *actDeps, ref string, o openOpt
 		// The judge's session gone (lost or closed) and another role's
 		// parked: that conversation restores the PR, as --role would.
 		if all, err := d.Store.SessionsByPR(ctx, t.PR.ID); err == nil {
-			if r := openRestoreRole(all, spec.Name, openRestorable(d.Cfg, t.full())); r != spec.Name {
+			if r := engine.OpenRestoreRole(all, spec.Name, engine.OpenRestorable(d.Cfg, t.full())); r != spec.Name {
 				if alt, err := actRoleFor(d.Cfg, t.full(), r); err == nil {
 					spec = alt
 				}
@@ -180,107 +179,13 @@ func openFail(c *Context, o openOpts, res actFocusResult, err error) int {
 // restore's question.
 var errOpenDeclined = errors.New("restore declined")
 
-// openSessions is what the PR's sessions of role say an open of it does:
-// latest is the newest, parked the newest parked one, and starting says the
-// newest is starting or live (the open waits for its pane). An open
-// restores when one is parked and none is starting (openWouldRestore).
-func openSessions(all []store.Session, role string) (parked, latest *store.Session, starting bool) {
-	for i := range all {
-		s := &all[i]
-		if s.Role != role {
-			continue
-		}
-		latest = s
-		if s.State == store.SessionParked {
-			parked = s
-		}
-	}
-	starting = latest != nil && (latest.State == store.SessionStarting || latest.State == store.SessionLive)
-	return parked, latest, starting
-}
-
-// openRestoreRole is the role `magnum open` without --role restores the PR
-// through when role, the one it would open, has nothing to open: its newest
-// session is lost or closed, none of its sessions is parked or up, and no
-// session of the PR is starting or live (a live pane is what the open
-// focuses). The newest parked session by started_at (the later one of two
-// that started together) of a role the daemon's open restores (restorable,
-// openRestorable) then stands in for it; with none, role stays and the open
-// refuses, as it did. A role named with --role is never replaced.
-func openRestoreRole(all []store.Session, role string, restorable func(string) bool) string {
-	parked, latest, starting := openSessions(all, role)
-	if parked != nil || starting || latest == nil {
-		return role
-	}
-	var newest *store.Session
-	for i := range all {
-		s := &all[i]
-		switch s.State {
-		case store.SessionStarting, store.SessionLive:
-			return role
-		case store.SessionParked:
-			if restorable(s.Role) && (newest == nil || !s.StartedAt.Before(newest.StartedAt)) {
-				newest = s
-			}
-		}
-	}
-	if newest == nil {
-		return role
-	}
-	return newest.Role
-}
-
-// openRestorable reports whether a parked session of a role may stand in
-// for the judge's in `magnum open` of a PR of repository full
-// (openRestoreRole): the role is one the daemon's open restores, one the
-// repository's watch runs (config.Config.RolesFor). Park parks every
-// session with a session id, the fixer's, the whiteboard writer's and a
-// judge's in reserve too, and the daemon refuses those roles ("unknown
-// role"). Without a config any role may.
-func openRestorable(cfg *config.Config, full string) func(string) bool {
-	if cfg == nil {
-		return func(string) bool { return true }
-	}
-	roles := cfg.RolesFor(cfg.WatchFor(full))
-	return func(role string) bool {
-		return slices.ContainsFunc(roles, func(r config.Role) bool { return r.Name == role })
-	}
-}
-
-// openWouldRestore reports whether `magnum open` of role (as it opens
-// without --role) asks the daemon to restore the PR (claim a slot, resume
-// its sessions, hold it): no session of role is up (starting, or live with a
-// pane or an agent: the open focuses it), and one is parked, role's own or,
-// when role's session is gone, a restorable role's (openRestoreRole). The
-// board's o asks first when it does.
-func openWouldRestore(all []store.Session, role string, restorable func(string) bool) bool {
-	role = openRestoreRole(all, role, restorable)
-	for _, s := range all {
-		if s.Role == role && (s.State == store.SessionStarting || s.State == store.SessionLive) {
-			return false
-		}
-	}
-	parked, _, starting := openSessions(all, role)
-	return parked != nil && !starting
-}
-
 // openRoleOf is the role `magnum open` of the PR opens without --role, as
-// openMain resolves it: the fixer's while a fix loop's fixer works, else the
-// watch's judge; the parked role that stands in for it when its session is
-// gone (openRestoreRole over all, the PR's sessions, among the roles the
-// daemon's open restores, openRestorable).
+// openMain resolves it (engine.OpenRole): the fixer's while a fix loop's
+// fixer works (statusFix), else the watch's judge, or the parked role that
+// stands in for it.
 func openRoleOf(ctx context.Context, st *store.Store, cfg *config.Config, prID int64, full string, all []store.Session) string {
-	asked := ""
-	if fs, _ := statusFix(ctx, st, prID); fs != nil && fs.Phase == engine.FixPhaseFixing && fs.Role != "" {
-		asked = fs.Role
-	}
-	role := actJudgeFor(cfg, full)
-	if cfg != nil {
-		if r, err := actRoleFor(cfg, full, asked); err == nil {
-			role = r.Name
-		}
-	}
-	return openRestoreRole(all, role, openRestorable(cfg, full))
+	fs, _ := statusFix(ctx, st, prID)
+	return engine.OpenRole(cfg, full, fs, all)
 }
 
 // openHoldEnd is when h, the hold `magnum open` set on PR prID, ends: its
@@ -304,7 +209,7 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 	if err != nil {
 		return store.Session{}, err
 	}
-	parked, latest, starting := openSessions(all, role)
+	parked, latest, starting := engine.OpenSessions(all, role)
 	if parked == nil && !starting {
 		if latest != nil {
 			return store.Session{}, &openGoneError{state: latest.State,

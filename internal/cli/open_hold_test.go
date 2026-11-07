@@ -136,7 +136,7 @@ func TestOpenWouldRestoreOnlyAParkedRoleWithoutALiveOne(t *testing.T) {
 		{"another role parked", []store.Session{other}, false},
 		{"none", nil, false},
 	} {
-		if got := openWouldRestore(tc.all, store.RoleJudge, anyRole); got != tc.want {
+		if got := engine.OpenWouldRestore(tc.all, store.RoleJudge, anyRole); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}

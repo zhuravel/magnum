@@ -222,7 +222,13 @@ type PRRef struct {
 // is magnum's last tick (zero with its daemon down or none recorded), which
 // tells whether its look still runs; OldBuild the build magnum's daemon
 // runs when its binary on disk is newer (engine.SkewNote), nil when it runs
-// what is on disk, when it is down or when it recorded none.
+// what is on disk, when it is down or when it recorded none. Replies are
+// the replies to magnum's reviews its judge has not read yet
+// (store.PR.PendingReplies), oldest first. OpenRestores says magnum's open
+// of the PR (the screens' o, `magnum open`) restores it in a slot, which
+// claims the slot and holds the PR for OpenHold ([daemon] open_hold), as
+// the board tells it (engine.OpenWouldRestore over the PR's sessions); false
+// when it focuses a live pane.
 type PRState struct {
 	Ref                                   PRRef
 	ID                                    int64
@@ -254,6 +260,9 @@ type PRState struct {
 	Asked                     []ReviewAsk
 	LastTick                  time.Time
 	OldBuild                  *engine.Build
+	Replies                   []store.Reply
+	OpenRestores              bool
+	OpenHold                  time.Duration
 }
 
 // ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is
@@ -485,6 +494,10 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	if _, v.FixOff, err = st.GetKV(ctx, engine.KVPRFixOff(pr.ID)); err != nil {
 		return err
 	}
+	if err := m.openFacts(ctx, st, v, repo.FullName()); err != nil {
+		return err
+	}
+	v.Replies = pr.PendingReplies()
 	if s, err = kv(engine.KVPRStalemate(pr.ID)); err != nil {
 		return err
 	}
@@ -499,6 +512,25 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 		if why.Kind == attention.KindFix {
 			v.FixReport, v.FixNeeds = m.fixerReport(store.Deref(pr.LastError))
 		}
+	}
+	return nil
+}
+
+// openFacts fills what magnum's open of PR v (of repository full) does,
+// from its sessions in st: whether it restores the PR (OpenRestores) and how
+// long a restore holds it.
+func (m *magnumRegistry) openFacts(ctx context.Context, st *store.Store, v *PRState, full string) error {
+	ss, err := st.SessionsByPR(ctx, v.ID)
+	if err != nil {
+		return err
+	}
+	var fix *engine.FixState
+	if v.Fixing {
+		fix = &v.Fix
+	}
+	v.OpenRestores = engine.OpenWouldRestore(ss, engine.OpenRole(m.cfg, full, fix, ss), engine.OpenRestorable(m.cfg, full))
+	if m.cfg != nil {
+		v.OpenHold = m.cfg.Daemon.OpenHold.Duration
 	}
 	return nil
 }

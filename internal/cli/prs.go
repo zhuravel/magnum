@@ -501,7 +501,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 // read), whether o restores the PR, so it asks first (OpenRestores: the role
 // open opens has no live pane and one of its sessions is parked, or, when its
 // own session is gone, another role's is and stands in for it,
-// openWouldRestore), and for how long a restore holds it (OpenHold, [daemon]
+// engine.OpenWouldRestore), and for how long a restore holds it (OpenHold, [daemon]
 // open_hold). A registry that cannot say leaves them out rather than the
 // board.
 func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows []store.BoardRow, out []tui.PRBoardRow) {
@@ -517,7 +517,7 @@ func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows
 		}
 		if ss, err := st.SessionsByPR(ctx, r.PRID); err == nil {
 			full := r.Owner + "/" + r.Name
-			out[i].OpenRestores = openWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, full, ss), openRestorable(cfg, full))
+			out[i].OpenRestores = engine.OpenWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, full, ss), engine.OpenRestorable(cfg, full))
 		}
 	}
 }

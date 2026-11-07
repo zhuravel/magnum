@@ -826,3 +826,47 @@ func TestPRStatesSayMagnumsDaemonRunsAnOlderBuild(t *testing.T) {
 		t.Errorf("a daemon that runs the build on disk: old build %+v", v.OldBuild)
 	}
 }
+
+// PRStates and OwnPRs say what magnum's open of the PR does, as the board
+// tells it for its o: whether it restores the PR in a slot (the judge's
+// session parked: it claims a slot and holds the PR, so the screen asks
+// y/N) or focuses a live pane, and how long a restore holds it ([daemon]
+// open_hold); and the replies magnum's judge has not read yet.
+func TestPRStatesSayWhatMagnumsOpenDoes(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	head := strings.Repeat("ab", 20)
+	now := time.Now().UTC().Truncate(time.Second)
+	parked := magnumPR(t, st, 7, head, nil)
+	live := magnumPR(t, st, 8, head, func(g *store.GitHubPR) {
+		g.Replies = []store.Reply{{At: now.Add(-time.Hour), By: "rev-ann", Thread: true}, {At: now.Add(-time.Minute), By: "alice"}}
+	})
+	for pr, state := range map[int64]string{parked.ID: store.SessionParked, live.ID: store.SessionLive} {
+		if _, err := st.CreateSession(ctx, store.Session{PRID: pr, Role: store.RoleJudge, State: state, AgentName: new("mg-judge")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.TransitionPR(ctx, live.ID, nil, store.PRReviewed, func(u *store.PRUpdate) {
+		u.Set("reviewed_sha", head)
+		u.Set("reviewed_at", store.FormatTime(now.Add(-2*time.Hour)))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := openWatchConfig()
+	cfg.Daemon.OpenHold = config.Duration{Duration: 30 * time.Minute}
+	refs := []PRRef{{"example/shop", 7}, {"example/shop", 8}}
+	views, err := NewMagnum(l, cfg).PRStates(ctx, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := views[refs[0]]; !v.OpenRestores || v.OpenHold != 30*time.Minute {
+		t.Errorf("a PR whose judge is parked: restores %v, hold %v; want a restore held 30m", v.OpenRestores, v.OpenHold)
+	}
+	v := views[refs[1]]
+	if v.OpenRestores {
+		t.Error("a PR whose judge's pane is live restores: its open focuses the pane")
+	}
+	if len(v.Replies) != 2 || v.Replies[0].By != "rev-ann" || !v.Replies[0].Thread || v.Replies[1].By != "alice" {
+		t.Errorf("replies %+v, want rev-ann's in magnum's thread and alice's, both after magnum's review", v.Replies)
+	}
+}

@@ -376,7 +376,7 @@ func TestOpenOfAClosedJudgeFocusesALivePaneBeforeItRestoresAParkedOne(t *testing
 
 // The board's o asks the question open decides: the parked session of another
 // role restores the PR when the judge's is gone, as open does without --role
-// (openRoleOf names that role, openWouldRestore says it restores); a live
+// (openRoleOf names that role, engine.OpenWouldRestore says it restores); a live
 // session of the PR, no parked one and a judge that never had a session
 // restore nothing.
 func TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone(t *testing.T) {
@@ -400,8 +400,8 @@ func TestTheBoardsOpenFollowsTheParkedSessionWhenTheJudgesIsGone(t *testing.T) {
 		{"no parked session", []store.Session{judgeGone}, store.RoleJudge, false},
 		{"no judge session at all", []store.Session{claude}, store.RoleJudge, false},
 	} {
-		if got := openWouldRestore(tc.all, store.RoleJudge, openRestorable(h.d.Cfg, "talkable/talkable")); got != tc.want {
-			t.Errorf("%s: openWouldRestore %v, want %v", tc.name, got, tc.want)
+		if got := engine.OpenWouldRestore(tc.all, store.RoleJudge, engine.OpenRestorable(h.d.Cfg, "talkable/talkable")); got != tc.want {
+			t.Errorf("%s: OpenWouldRestore %v, want %v", tc.name, got, tc.want)
 		}
 		if got := openRoleOf(h.ctx, h.st, h.d.Cfg, pr.ID, "talkable/talkable", tc.all); got != tc.role {
 			t.Errorf("%s: openRoleOf %s, want %s", tc.name, got, tc.role)
@@ -417,16 +417,16 @@ func TestOpenRestoreRoleTakesTheLaterOfTwoParkedSessionsThatStartedTogether(t *t
 	judge := store.Session{ID: 1, Role: store.RoleJudge, State: store.SessionClosed, StartedAt: at.Add(-time.Hour)}
 	claude := store.Session{ID: 2, Role: store.RoleClaude, State: store.SessionParked, StartedAt: at}
 	simplify := store.Session{ID: 3, Role: store.RoleSimplify, State: store.SessionParked, StartedAt: at}
-	if got := openRestoreRole([]store.Session{judge, claude, simplify}, store.RoleJudge, anyRole); got != store.RoleSimplify {
+	if got := engine.OpenRestoreRole([]store.Session{judge, claude, simplify}, store.RoleJudge, anyRole); got != store.RoleSimplify {
 		t.Errorf("claude-review (id 2) and claude-simplify (id 3) parked together: %s, want %s", got, store.RoleSimplify)
 	}
 	simplify.ID, claude.ID = 2, 3
-	if got := openRestoreRole([]store.Session{judge, simplify, claude}, store.RoleJudge, anyRole); got != store.RoleClaude {
+	if got := engine.OpenRestoreRole([]store.Session{judge, simplify, claude}, store.RoleJudge, anyRole); got != store.RoleClaude {
 		t.Errorf("claude-simplify (id 2) and claude-review (id 3) parked together: %s, want %s", got, store.RoleClaude)
 	}
 }
 
-// anyRole lets any parked role stand in (openRestoreRole), as without a
+// anyRole lets any parked role stand in (engine.OpenRestoreRole), as without a
 // config.
 func anyRole(string) bool { return true }
 
@@ -469,7 +469,7 @@ func TestOpenStandsInOnlyWithARoleTheDaemonRestores(t *testing.T) {
 		t.Fatal(err)
 	}
 	role := openRoleOf(h2.ctx, h2.st, h2.d.Cfg, pr2.ID, "talkable/talkable", all2)
-	if restores := openWouldRestore(all2, role, openRestorable(h2.d.Cfg, "talkable/talkable")); role != store.RoleJudge || restores {
+	if restores := engine.OpenWouldRestore(all2, role, engine.OpenRestorable(h2.d.Cfg, "talkable/talkable")); role != store.RoleJudge || restores {
 		t.Errorf("openRoleOf = %s (restores %v), want %s and no restore", role, restores, store.RoleJudge)
 	}
 	if code := h2.cmd("open", "5", "--no-reveal"); code != 1 {
