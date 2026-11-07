@@ -847,6 +847,15 @@ func ProjectTouched(kind string, paths []string) bool
     directory, in any case (pathOf: macOS opens .Claude/settings.json for
     .claude/settings.json). A kind magnum does not compare touches nothing.
 
+func PushLine(magnum, checkout string) string
+    PushLine is the line a fixer App pushes with (FixPromptInput.PushCommand):
+    `magnum push` of the daemon's binary (else magnum on PATH) with the
+    fixer's checkout (the slot's path, so the line pushes from there wherever
+    the fixer's shell stands, as DBLockLine's does; "" leaves it out, and the
+    command takes the git work tree it runs in), each shell-quoted. The command
+    reads the PR's branch and repository from the pane's env and pushes HEAD
+    there alone, with a lease, as the App.
+
 func RecentSessionIDs(ctx context.Context, st *store.Store, kind string, now time.Time, wait time.Duration) ([]store.Session, error)
     RecentSessionIDs are the sessions of agent kind kind started within
     SessionIDWindow before now whose session id tells whether herdr's hook
@@ -15976,6 +15985,14 @@ func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (
     lookups cost a directory listing and a few stats. ErrNoClone (wrapped) means
     nothing matched; any other error is an unreadable root.
 
+func (c *Client) FirstParentIdentities(ctx context.Context, dir, from, to string) ([]CommitIdentity, error)
+    FirstParentIdentities lists the commits of to that from lacks on to's
+    first-parent chain (`git log --first-parent ^from to`), newest first,
+    each with its parents and its author's and committer's emails (%ae and %ce,
+    which ignore .mailmap: the commit's own words). A merge is one entry,
+    without the commits it brought in. Nothing when from has every commit of to.
+    `magnum push` checks that each is the fixer's.
+
 func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
     InProgress names the operation repo is in the middle of: "rebase", "merge",
     "cherry-pick", "revert", or "" for none.
@@ -15990,6 +16007,16 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
     A failure is an expected answer (logged at Debug): callers probe with it.
+
+func (c *Client) LsRemoteGitHub(ctx context.Context, dir, owner, repo string, timeout time.Duration, patterns ...string) (string, error)
+    LsRemoteGitHub is LsRemoteVia of github.com/<owner>/<repo> over HTTPS
+    (GitHubHTTPSURL).
+
+func (c *Client) LsRemoteVia(ctx context.Context, dir, url string, timeout time.Duration, patterns ...string) (string, error)
+    LsRemoteVia runs `git ls-remote <url> patterns...` in dir with gh as
+    git's only credential helper, and returns its output; `magnum push` reads
+    a branch's head on GitHub so, whatever form origin has. A failure is an
+    expected answer (logged at Debug).
 
 func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
     Mentions returns where the files of rev name each of words: for each word,
@@ -16083,6 +16110,20 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
     expect is refused before anything is pushed (ErrNotDescendant), so the
     lease never rewrites history; an expect dir does not have is an error too,
     never a push.
+
+func (c *Client) PushLeaseGitHub(ctx context.Context, dir, owner, repo, sha, branch, expect string) error
+    PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS
+    (GitHubHTTPSURL).
+
+func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect string) error
+    PushLeaseVia is PushLease to url instead of origin, with gh as git's only
+    credential helper (`git -c credential.helper= -c credential.helper='!gh auth
+    git-credential' push --force-with-lease= refs/heads/<branch>:<expect> <url>
+    <sha>:refs/heads/<branch>`), with PushLease's guards: never a bare --force
+    or a + refspec, and a sha that does not descend from expect refused before
+    anything is pushed (ErrNotDescendant). `magnum push` pushes a fixer App's
+    commits so, as the App, whatever form origin has and whichever helper the
+    operator's config names.
 
 func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
     RebaseOnto replays the commits of the branch checked out at dir that
@@ -16287,6 +16328,15 @@ type Commit struct {
 	Subject string // the message's subject line ("" when the message is empty)
 }
     Commit is one commit of a file's log (FileLog).
+
+type CommitIdentity struct {
+	SHA                         string
+	Parents                     []string
+	AuthorEmail, CommitterEmail string
+}
+    CommitIdentity is one commit FirstParentIdentities lists: its id, its
+    parents' and the emails of its author and committer as the commit records
+    them.
 
 type FileChange struct {
 	Path   string

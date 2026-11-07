@@ -692,3 +692,49 @@ func below(root, path string) bool {
 	rel, err := filepath.Rel(canonPath(root), canonPath(path))
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
+
+// CommitIdentity is one commit FirstParentIdentities lists: its id, its
+// parents' and the emails of its author and committer as the commit
+// records them.
+type CommitIdentity struct {
+	SHA                         string
+	Parents                     []string
+	AuthorEmail, CommitterEmail string
+}
+
+// FirstParentIdentities lists the commits of to that from lacks on to's
+// first-parent chain (`git log --first-parent ^from to`), newest first,
+// each with its parents and its author's and committer's emails (%ae and
+// %ce, which ignore .mailmap: the commit's own words). A merge is one
+// entry, without the commits it brought in. Nothing when from has every
+// commit of to. `magnum push` checks that each is the fixer's.
+func (c *Client) FirstParentIdentities(ctx context.Context, dir, from, to string) ([]CommitIdentity, error) {
+	if err := errors.Join(checkRev("from", from), checkRev("to", to)); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: "log --first-parent " + from + ".." + to},
+		"log", "--first-parent", "--no-show-signature", "--no-color", "--format=%H%x00%P%x00%ae%x00%ce", "^"+from, to, "--")
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: log %s..%s: too many commits", from, to)
+	}
+	var out []CommitIdentity
+	for line := range strings.Lines(res.Out()) {
+		line = strings.TrimRight(line, "\n")
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\x00")
+		if len(f) != 4 || !isOID(f[0]) {
+			return nil, fmt.Errorf("gitx: log %s..%s: unreadable line %.100q", from, to, line)
+		}
+		parents := strings.Fields(f[1])
+		if slices.ContainsFunc(parents, func(p string) bool { return !isOID(p) }) {
+			return nil, fmt.Errorf("gitx: log %s..%s: unreadable parents %.100q", from, to, f[1])
+		}
+		out = append(out, CommitIdentity{SHA: f[0], Parents: parents, AuthorEmail: f[2], CommitterEmail: f[3]})
+	}
+	return out, nil
+}

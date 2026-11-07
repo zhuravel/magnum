@@ -885,6 +885,21 @@ func FixSyncLine(magnum, checkout, from, branch, base string) string {
 	return shellLine(append(args, "--from", from, "--branch", branch, "--base", base))
 }
 
+// PushLine is the line a fixer App pushes with (FixPromptInput.PushCommand):
+// `magnum push` of the daemon's binary (else magnum on PATH) with the
+// fixer's checkout (the slot's path, so the line pushes from there wherever
+// the fixer's shell stands, as DBLockLine's does; "" leaves it out, and the
+// command takes the git work tree it runs in), each shell-quoted. The
+// command reads the PR's branch and repository from the pane's env and
+// pushes HEAD there alone, with a lease, as the App.
+func PushLine(magnum, checkout string) string {
+	args := []string{cmp.Or(magnum, "magnum"), "push"}
+	if checkout != "" {
+		args = append(args, "--checkout", checkout)
+	}
+	return shellLine(args)
+}
+
 // FixPromptInput is what the fix job knows beyond the PR, the role and the
 // run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
 // (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that

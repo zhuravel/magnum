@@ -77,6 +77,18 @@ const pushTimeout = 5 * time.Minute
 // the lease never rewrites history; an expect dir does not have is an
 // error too, never a push.
 func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error {
+	url := ""
+	if c.HTTPSFetch {
+		url, _ = c.RemoteURL(ctx, dir)
+	}
+	opts, target := NetworkRemote(url, c.HTTPSFetch)
+	return c.pushLease(ctx, dir, opts, target, sha, branch, expect)
+}
+
+// pushLease is PushLease's and PushLeaseVia's core: the checks, then the
+// push of sha to target's refs/heads/<branch> with a lease on expect, opts
+// before the subcommand.
+func (c *Client) pushLease(ctx context.Context, dir string, opts []string, target, sha, branch, expect string) error {
 	if !isOID(sha) {
 		return fmt.Errorf("gitx: push: %q is not a full commit id", sha)
 	}
@@ -96,11 +108,6 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
 			return fmt.Errorf("gitx: push %s: %s over %s: %w", branch, sha[:12], expect[:12], ErrNotDescendant)
 		}
 	}
-	url := ""
-	if c.HTTPSFetch {
-		url, _ = c.RemoteURL(ctx, dir)
-	}
-	opts, target := NetworkRemote(url, c.HTTPSFetch)
 	args := slices.Concat(opts, []string{"push", "--quiet", "--force-with-lease=" + ref + ":" + expect, target, sha + ":" + ref})
 	_, err := c.git(ctx, dir, call{label: "push " + branch, mutates: true, timeout: pushTimeout}, args...)
 	return err
@@ -297,4 +304,82 @@ func ParseRemote(raw string) (Remote, bool) {
 		return Remote{}, false
 	}
 	return Remote{Host: strings.ToLower(host), Owner: owner, Repo: repo}, true
+}
+
+// ghOnlyHelper is the git options that make gh the only credential helper
+// of one command (the empty value clears the user's helpers, such as a
+// keychain holding the operator's login): with a pane's GH_CONFIG_DIR, gh
+// answers with that identity's token.
+var ghOnlyHelper = []string{"-c", "credential.helper=", "-c", "credential.helper=" + GHCredentialHelper}
+
+// LsRemoteVia runs `git ls-remote <url> patterns...` in dir with gh as
+// git's only credential helper, and returns its output; `magnum push`
+// reads a branch's head on GitHub so, whatever form origin has. A failure
+// is an expected answer (logged at Debug).
+func (c *Client) LsRemoteVia(ctx context.Context, dir, url string, timeout time.Duration, patterns ...string) (string, error) {
+	if err := checkURL(url); err != nil {
+		return "", err
+	}
+	args := slices.Concat(ghOnlyHelper, []string{"ls-remote", url}, patterns)
+	res, err := c.git(ctx, dir, call{label: "ls-remote " + url, timeout: timeout, probe: true}, args...)
+	if err != nil {
+		return "", err
+	}
+	return res.Out(), nil
+}
+
+// LsRemoteGitHub is LsRemoteVia of github.com/<owner>/<repo> over HTTPS
+// (GitHubHTTPSURL).
+func (c *Client) LsRemoteGitHub(ctx context.Context, dir, owner, repo string, timeout time.Duration, patterns ...string) (string, error) {
+	url, err := gitHubURL(owner, repo)
+	if err != nil {
+		return "", err
+	}
+	return c.LsRemoteVia(ctx, dir, url, timeout, patterns...)
+}
+
+// PushLeaseVia is PushLease to url instead of origin, with gh as git's
+// only credential helper (`git -c credential.helper= -c
+// credential.helper='!gh auth git-credential' push --force-with-lease=
+// refs/heads/<branch>:<expect> <url> <sha>:refs/heads/<branch>`), with
+// PushLease's guards: never a bare --force or a + refspec, and a sha that
+// does not descend from expect refused before anything is pushed
+// (ErrNotDescendant). `magnum push` pushes a fixer App's commits so, as
+// the App, whatever form origin has and whichever helper the operator's
+// config names.
+func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect string) error {
+	if err := checkURL(url); err != nil {
+		return err
+	}
+	return c.pushLease(ctx, dir, ghOnlyHelper, url, sha, branch, expect)
+}
+
+// PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS
+// (GitHubHTTPSURL).
+func (c *Client) PushLeaseGitHub(ctx context.Context, dir, owner, repo, sha, branch, expect string) error {
+	url, err := gitHubURL(owner, repo)
+	if err != nil {
+		return err
+	}
+	return c.PushLeaseVia(ctx, dir, url, sha, branch, expect)
+}
+
+// gitHubURL is GitHubHTTPSURL of owner and repo, each one path segment.
+func gitHubURL(owner, repo string) (string, error) {
+	if badPathSegment(owner) || badPathSegment(repo) {
+		return "", fmt.Errorf("gitx: %q/%q names no GitHub repository", owner, repo)
+	}
+	return GitHubHTTPSURL(owner, repo), nil
+}
+
+// checkURL refuses a URL git could read as an option, one with spaces or
+// control characters, and one with embedded credentials.
+func checkURL(url string) error {
+	if url == "" || strings.HasPrefix(url, "-") || strings.ContainsFunc(url, func(r rune) bool { return r <= ' ' }) {
+		return fmt.Errorf("gitx: malformed remote URL %q", url)
+	}
+	if stripUserinfo(url) != url {
+		return errors.New("gitx: refusing a URL with embedded credentials")
+	}
+	return nil
 }
