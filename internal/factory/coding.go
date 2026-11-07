@@ -494,8 +494,8 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		delete(e.envCrashed, t.ID) // a check ran past the environment: no try of the hold any more
 	}
 	if !ready {
-		e.holdTryRuns(t.ID)
-		if e.checkRuns(t.ID) {
+		if e.checkRuns(t.ID) { // a check that waits for a heavy slot is no try yet: the hold is not held up by it
+			e.holdTryRuns(t.ID)
 			e.precheckWait(ctx, t)
 		} else if fresh, rerr := e.reg.TaskByID(ctx, t.ID); rerr == nil { // a heavy slot's wait, or the drain
 			t.WaitsWho, t.WaitsWhat = fresh.WaitsWho, fresh.WaitsWhat
@@ -511,12 +511,23 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		t.WaitsWho, t.WaitsWhat = w.who, w.what
 		return nil, "", true, nil
 	case crashed:
-		// The environment's: the infrastructure hold weighs it with the
-		// tick's other failures (Tick), at no cost to the task, and the next
-		// check, at the hold's try, is the try (holdTryRuns).
+		// The machine's environment: the infrastructure hold weighs it with
+		// the tick's other failures (Tick), at no cost to the task, and the
+		// next check, at the hold's try, is the try (holdTryRuns). A crash
+		// that stays at one head envCrashTries times is no wait's to end:
+		// the task needs you, and the hold no longer counts it.
 		e.dropCheck(t.ID)
 		e.checkRanToItsEnd(t.ID)
-		e.envCrashed[t.ID] = true
+		ec := e.envCrashed[t.ID]
+		if ec.head != bh.Head {
+			ec = envCrashes{head: bh.Head}
+		}
+		if ec.n++; ec.n >= envCrashTries {
+			delete(e.envCrashed, t.ID)
+			return operatorProblem(*t, precheckFile, fmt.Sprintf("precheck: %s, %d times at %s; fix: %s", crash.Error(), ec.n,
+				short(bh.Head), crash.fix())), "", false, nil
+		}
+		e.envCrashed[t.ID] = ec
 		e.envFails = append(e.envFails, taskFailure{task: *t, err: crash})
 		what := crash.Error() + "; the infrastructure hold runs the checks again"
 		e.waitOn(ctx, *t, waitPrecheck, what)
@@ -550,13 +561,20 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 }
 
 // holdTryRuns notes that the checks of task id, whose last check crashed
-// on the environment (envCrashed), run or wait to run: they are the
+// on the machine's environment (envCrashed), run: they are the
 // infrastructure hold's try, which neither lifts the hold nor fails until
 // they end (hold).
 func (e *Engine) holdTryRuns(id int64) {
-	if e.envCrashed[id] {
+	if _, ok := e.envCrashed[id]; ok {
 		e.holdTry = true
 	}
+}
+
+// envCrashes are the crashes of a task's lint on the machine's environment
+// at one head, in a row: the head and how many.
+type envCrashes struct {
+	head string
+	n    int
 }
 
 // operatorProblem is an end problem of task t's checks that needs you

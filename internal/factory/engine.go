@@ -319,14 +319,15 @@ type Engine struct {
 	holds        map[string]*Hold
 	blockers     map[string]string
 	recent       map[string]recentFailure
-	// envFails are the crashes of the environment the tasks' checks met
-	// in this tick (envCrash), which the infrastructure hold weighs with
-	// its other failures; envCrashed names the tasks whose last check
-	// crashed so, whose next check is the hold's try, and holdTry says that
-	// such a check runs or waits to run in this tick: the hold neither lifts
-	// nor counts a failed try before it ends.
+	// envFails are the crashes of the machine's environment the tasks'
+	// checks met in this tick (envCrash), which the infrastructure hold
+	// weighs with its other failures; envCrashed has the tasks whose last
+	// check crashed so (at which head, how many times in a row), whose next
+	// check is the hold's try, and holdTry says that such a check runs in
+	// this tick: the hold neither lifts nor counts a failed try before it
+	// ends.
 	envFails   []error
-	envCrashed map[int64]bool
+	envCrashed map[int64]envCrashes
 	holdTry    bool
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
@@ -518,7 +519,7 @@ func New(d Deps) *Engine {
 		checks:       map[int64]*headCheck{},
 		checkNotes:   map[int64]string{},
 		checkFails:   map[int64]int{},
-		envCrashed:   map[int64]bool{},
+		envCrashed:   map[int64]envCrashes{},
 		keptCopies:   map[int64]keptCopy{},
 		keptMem:      map[int64]keptUnwritten{},
 		lockPoll:     specsLockPoll,

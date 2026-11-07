@@ -1,15 +1,15 @@
 package factory
 
-// The causes of a failure that are the machine's or the configuration's,
-// never the change's: the line of a command's output that says why it
-// failed, the crashes of a check's command that its environment caused
-// (envCrash: the infrastructure hold takes them, never you), and the
-// retry a NEEDS YOU for such a cause ends with.
+// The causes of a failure that are the machine's, the copy's or the
+// configuration's, never the change's: the line of a command's stderr that
+// says why it failed, the crashes of a lint that its environment caused
+// (envCrash: the machine's go to the infrastructure hold, the copy's are
+// healed or the task's), and the retry a NEEDS YOU for such a cause ends
+// with.
 
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 
@@ -22,11 +22,24 @@ import (
 // hold or an event names.
 const outputLineRunes = 200
 
+// envCrashTries is how many times a lint may crash on the machine's
+// environment at one head of a task before the task needs you (and the
+// infrastructure hold lets the other tasks go): a crash that stays while
+// the head does is not one a wait ends.
+const envCrashTries = 3
+
 // noiseRe matches a line of a command's output that never says why it
-// failed: mise's own warnings and notes (a copy's untrusted config), and a
+// failed: mise's own warnings and notes (a copy's untrusted config); a
 // stack's frames, whose message is on a line of its own (Ruby's
-// `x.rb:12:in 'm'` and `from x.rb:12:in 'm'`, JavaScript's `at f (x.js:1:2)`).
-var noiseRe = regexp.MustCompile("^(?:mise (?:WARN|INFO|DEBUG|TRACE)\\b|(?:from\\s+)?\\S+:\\d+:in\\s+[`'][^`']*'$|at\\s)")
+// `x.rb:12:in 'm'` and `from x.rb:12:in 'm'`, JavaScript's
+// `at f (x.js:1:2)` and `at x.js:1:2`); and the code frames that quote the
+// branch's source (`> 3 | code`, `    | ^`, prettier's `[error] 3 | code`,
+// Ruby's `^~~~`).
+var noiseRe = regexp.MustCompile("^(?:mise (?:WARN|INFO|DEBUG|TRACE)\\b" +
+	"|(?:from\\s+)?\\S+:\\d+:in\\s+[`'][^`']*'$" +
+	"|at\\s+.*\\(\\S*:\\d+:\\d+\\)$|at\\s+\\S+:\\d+:\\d+$" +
+	"|(?:\\[\\w+\\]\\s*)?>?\\s*\\d*\\s*\\|" +
+	"|[\\^~]+$)")
 
 // meaningfulLines are the lines of out that may say why a command failed:
 // trimmed, none blank and none noise (noiseRe).
@@ -40,10 +53,18 @@ func meaningfulLines(out string) []string {
 	return lines
 }
 
-// cleanLine is line as a NEEDS YOU, a hold or an event may name it:
-// redacted (a token or a key is masked), its control characters turned into
-// spaces, valid UTF-8, at most outputLineRunes runes.
+// rubyPlaceRe is the place a Ruby error's line starts with
+// (`/gems/x.rb:12:in 'require': `), before its message.
+var rubyPlaceRe = regexp.MustCompile("^(?:from\\s+)?\\S+:\\d+:in\\s+[`'][^`']*':\\s*")
+
+// cleanLine is line as a NEEDS YOU, a hold or an event may name it: the
+// error's message without the place a Ruby error starts with, redacted (a
+// token or a key is masked), its control characters turned into spaces,
+// valid UTF-8, at most outputLineRunes runes.
 func cleanLine(line string) string {
+	if msg := rubyPlaceRe.ReplaceAllString(line, ""); msg != "" {
+		line = msg
+	}
 	s := strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
@@ -53,8 +74,9 @@ func cleanLine(line string) string {
 	return textx.Clip(strings.TrimSpace(s), outputLineRunes)
 }
 
-// lastLine is the last line of a failed command's output out that may
-// say why it failed (meaningfulLines), cleaned (cleanLine); "" for none.
+// lastLine is the last line of a failed command's stderr out that may say
+// why it failed (meaningfulLines), cleaned (cleanLine); "" for none. Only
+// stderr is read: a lint's stdout is what it says about the branch.
 func lastLine(out string) string {
 	if lines := meaningfulLines(out); len(lines) > 0 {
 		return cleanLine(lines[len(lines)-1])
@@ -71,28 +93,37 @@ func firstLine(out string) string {
 }
 
 // envSignature is a crash of a command that its environment caused: the
-// words of its output that tell it (lower case), what it lacked, and the
-// fix ({copy} the copy's path).
-type envSignature struct{ match, lacks, fix string }
+// whole line of stderr that tells it (re, matched on the trimmed line, so
+// the same words inside a line of the branch's text tell nothing), what it
+// lacked, and the fix ({copy} the copy's path). machine: the daemon's
+// environment, every copy's alike (the infrastructure hold takes it); else
+// the copy's or the task's own. heal: the repository's installs in the copy
+// may bring back what it lacked.
+type envSignature struct {
+	re            *regexp.Regexp
+	lacks, fix    string
+	machine, heal bool
+}
 
 // envSignatures are the known crashes of the environment, first match
 // first.
 var envSignatures = []envSignature{
-	{"invalid byte sequence in us-ascii", "a UTF-8 locale",
-		"give the copies a UTF-8 locale (LANG = \"en_US.UTF-8\" in its [[factory.repo]] env, and no LC_ALL = \"C\"), then `magnum factory install`"},
-	{"bundler::gemnotfound", "a gem", "`bundle install` in {copy}"},
-	{"could not find gem", "a gem", "`bundle install` in {copy}"},
-	{"cannot load such file", "a Ruby library", "`bundle install` in {copy}"},
-	{"command not found", "a command",
-		"install it, or put its directory on your login shell's PATH ([daemon] shell_path), then `magnum factory install`"},
+	{re: regexp.MustCompile(`(?:^|: )invalid byte sequence in US-ASCII(?: \([\w:]+\))?$`), lacks: "a UTF-8 locale", machine: true,
+		fix: "give the copies a UTF-8 locale (LANG = \"en_US.UTF-8\" in its [[factory.repo]] env, and no LC_ALL = \"C\"), " +
+			"then `magnum factory install`"},
+	{re: regexp.MustCompile(`\(Bundler::GemNotFound\)$|^Bundler::GemNotFound:|^Could not find gem '[^']+'`), lacks: "a gem", heal: true,
+		fix: "`bundle install` in {copy}"},
+	{re: regexp.MustCompile(`cannot load such file -- \S+ \(LoadError\)$`), lacks: "a Ruby library", heal: true,
+		fix: "`bundle install` in {copy}"},
+	{re: regexp.MustCompile(`^(?:\S+: )*(?:line \d+: )?\S+: command not found$|^(?:\S+: )*command not found: \S+$`), lacks: "a command",
+		fix: "install it, or put its directory on your login shell's PATH ([daemon] shell_path), then `magnum factory install`"},
 }
 
-// envCrash is a check's command that crashed on its environment (an
-// envSignature in its output), not on the change nor on its configuration:
-// the infrastructure hold takes it (infraCause), never you nor the writer.
-// key and cmd are the command's configuration key and its command as
-// configured, line the output line that tells the crash (cleaned), copy the
-// copy it ran in.
+// envCrash is a lint that crashed on its environment (an envSignature on a
+// line of its stderr), not on the change nor on its configuration. key and
+// cmd are the command's configuration key and its command as configured,
+// line the stderr line that tells the crash (cleaned), copy the copy it ran
+// in.
 type envCrash struct {
 	key, cmd, line, copy string
 	sig                  envSignature
@@ -102,26 +133,48 @@ func (c envCrash) Error() string {
 	return fmt.Sprintf("%s `%s` crashed for lack of %s: %s", c.key, firstWord(c.cmd), c.sig.lacks, c.line)
 }
 
-// holdCause is the infrastructure hold's reason for c: what crashed, the
-// line that says so and its fix.
+// fix is what ends c, in the copy it ran in.
+func (c envCrash) fix() string { return strings.ReplaceAll(c.sig.fix, "{copy}", c.copy) }
+
+// holdCause is the infrastructure hold's reason for c, a crash of the
+// machine's: what crashed, the line that says so and its fix.
 func (c envCrash) holdCause() string {
-	return fmt.Sprintf("the environment: %s crashed for lack of %s (%s); fix: %s", firstWord(c.cmd), c.sig.lacks, c.line,
-		strings.ReplaceAll(c.sig.fix, "{copy}", c.copy))
+	return fmt.Sprintf("the environment: %s crashed for lack of %s (%s); fix: %s", firstWord(c.cmd), c.sig.lacks, c.line, c.fix())
 }
 
 // crashOf is the envCrash of command cmd of key that ran in the copy at
-// dir and failed with stderr and stdout, when one of their lines tells a
-// known crash of the environment (envSignatures).
-func crashOf(key, cmd, dir, stderr, stdout string) (envCrash, bool) {
-	lines := slices.Concat(meaningfulLines(stderr), meaningfulLines(stdout))
+// dir and failed with stderr, when a whole line of it tells a known crash
+// of the environment (envSignatures). The command's stdout tells none: it
+// is what the lint says about the branch (its source, a script's echo).
+func crashOf(key, cmd, dir, stderr string) (envCrash, bool) {
+	lines := meaningfulLines(stderr)
 	for _, sig := range envSignatures {
 		for _, line := range lines {
-			if strings.Contains(strings.ToLower(line), sig.match) {
+			if sig.re.MatchString(line) {
 				return envCrash{key: key, cmd: cmd, line: cleanLine(line), copy: dir, sig: sig}, true
 			}
 		}
 	}
 	return envCrash{}, false
+}
+
+// lintInputRe matches a changed file a lint loads (its gems and packages,
+// the tools' versions, a lint's configuration or its own cops): a crash
+// for lack of something, in a branch that changed one, is the branch's.
+var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:rb|locked)|package(?:-lock)?\.json|yarn\.lock|` +
+	`pnpm-lock\.yaml|\.tool-versions|\.ruby-version|\.?mise\.toml)$|rubocop|eslint|stylelint|prettier|(?:^|/)cops?/`)
+
+// branchCaused are the files of the change (files, as the copy names them)
+// that a lint crash of cmd can come from: one the lint loads (lintInputRe),
+// the lint's own script (cmd's first word), or one its stderr names.
+func branchCaused(cmd, stderr string, files []string) []string {
+	var out []string
+	for _, f := range files {
+		if lintInputRe.MatchString(f) || f == firstWord(cmd) || strings.Contains(stderr, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // retryHint ends a NEEDS YOU of task t whose cause is the machine's or the
@@ -131,6 +184,18 @@ func retryHint(t registry.Task) string {
 	return fmt.Sprintf("; then `magnum factory retry %d`", t.ID)
 }
 
-// formatRe matches a lint command that names its output's format
-// (rubocop's and eslint's `--format emacs`, `--format=unix`, `-f emacs`).
-var formatRe = regexp.MustCompile(`(?:^|\s)(?:--format(?:=|\s)|--formatter(?:=|\s)|-f\s)`)
+// formatRe matches a lint command that names its output's format with a
+// long flag (rubocop's and eslint's `--format emacs`, `--format=unix`,
+// golangci-lint's `--out-format`, ruff's `--output-format`, `--formatter`,
+// `--reporter`), and lintShortFormatRe one that names it with `-f` after a
+// lint whose short flag that is (rubocop, eslint, stylelint and the like):
+// make's and docker compose's `-f` name a file.
+var (
+	formatRe          = regexp.MustCompile(`(?:^|\s)--(?:(?:out|output)-)?format(?:ter)?(?:=|\s)|(?:^|\s)--reporter(?:=|\s)`)
+	lintShortFormatRe = regexp.MustCompile(`(?:^|[\s/])(?:rubocop|standardrb|eslint|stylelint|erb_lint|erblint|haml-lint|scss-lint)\s(?:[^|;&]*\s)?-f(?:\s|=)`)
+)
+
+// namesFormat reports whether lint command cmd names its output's format.
+func namesFormat(cmd string) bool {
+	return formatRe.MatchString(cmd) || lintShortFormatRe.MatchString(cmd)
+}

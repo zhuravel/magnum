@@ -341,9 +341,9 @@ func TestThePrecheckTakesTheCopysDatabaseLock(t *testing.T) {
 
 // A lint that exits non-zero and names no offense by path:line needs you,
 // and the ask carries the line of its stderr that says why it failed: the
-// last one, past mise's own warnings and the stack's frames, redacted (no
-// token in it) and clipped. Its command names no format, so the ask still
-// hints at one.
+// last one, past mise's own warnings, the stack's frames and the code
+// frames of the branch's source, redacted (no token in it) and clipped.
+// Its stderr says why, so no format hint stands in for the fix.
 func TestALintCrashsAskNamesItsLastStderrLine(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12380", "bug")
@@ -353,6 +353,8 @@ func TestALintCrashsAskNamesItsLastStderrLine(t *testing.T) {
 			"Error: .rubocop.yml names Style/Gone, which this rubocop lacks (token ghp_abcdefghijklmnopqrstuvwxyz0123456789)\n" +
 			"/gems/rubocop/lib/rubocop/config.rb:12:in 'validate'\n" +
 			"\tfrom /gems/rubocop/exe/rubocop:15:in '<main>'\n" +
+			"> 3 | secret_source_line = 1\n" +
+			"    |                     ^\n" +
 			"mise WARN Config files in /tmp/shop.factory1/.mise.toml are not trusted.\n"
 	}
 	res, err := r.e.precheck(r.ctx, task, r.cp)
@@ -362,13 +364,12 @@ func TestALintCrashsAskNamesItsLastStderrLine(t *testing.T) {
 	if res.Passed || !res.ForYou {
 		t.Fatalf("precheck %+v, want a failure for you", res)
 	}
-	for _, want := range []string{"precheck.lint", "names no offense by path:line", "Style/Gone, which this rubocop lacks",
-		"rubocop --format emacs"} {
+	for _, want := range []string{"precheck.lint", "names no offense by path:line", "Style/Gone, which this rubocop lacks"} {
 		if !strings.Contains(res.Why, want) {
 			t.Errorf("the ask %q does not name %q", res.Why, want)
 		}
 	}
-	for _, not := range []string{"mise WARN", "config.rb:12", "exe/rubocop", "ghp_abcdefghij"} {
+	for _, not := range []string{"mise WARN", "config.rb:12", "exe/rubocop", "ghp_abcdefghij", "secret_source_line", "rubocop --format emacs"} {
 		if strings.Contains(res.Why, not) {
 			t.Errorf("the ask %q names %q", res.Why, not)
 		}

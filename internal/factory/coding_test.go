@@ -214,7 +214,7 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 				run.Exit = 1
 			}
 		}
-	case "bin/jest":
+	case "bin/jest", "bundle": // jest passes; `bundle install` (a heal) installs nothing
 	case "bin/rails":
 		r.mu.Lock()
 		migrate := r.migrate

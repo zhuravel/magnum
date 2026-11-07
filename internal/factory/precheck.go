@@ -35,6 +35,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // precheckFile is the precheck's report in the task's directory: what ran,
@@ -140,7 +141,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 	}()
 
-	p := &precheckRun{e: e, t: t, c: c, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: started,
+	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n", t.Branch, short(bh.Head), short(bh.Base), len(files))
 	steps := []func(){
@@ -294,10 +295,16 @@ type precheckRun struct {
 	// kept: it left changes for you (keep); it runs nothing more and puts
 	// nothing back after that.
 	kept bool
-	// stderr is what the command it ran last wrote to stderr, as it wrote
-	// it (the lint's ask names its last line, redacted), and line that line
-	// of the lint whose failure for you is the precheck's (precheck.json).
+	// stderr and exit are what the command it ran last wrote to stderr, as
+	// it wrote it (the lint's ask names its last line, redacted), and its
+	// exit; line is that line of the lint whose failure for you is the
+	// precheck's (precheck.json).
 	stderr, line string
+	exit         int
+	// repo is the task's repository; healed: a lint that crashed for lack
+	// of a gem or a library had its installs run in the copy (heal), once.
+	repo   config.FactoryRepo
+	healed bool
 }
 
 // restoreOwn puts back what the precheck's commands changed so far
@@ -393,7 +400,7 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
-	p.stderr = string(res.Stderr)
+	p.stderr, p.exit = string(res.Stderr), code
 	switch {
 	case p.ctx.Err() != nil:
 		return run, false
@@ -470,7 +477,8 @@ var offenseRe = regexp.MustCompile(`^(?:\./)?([^\s:]+):(\d+)(?::\d+)?:?\s+(.*)$`
 // about the changed lines only: a command that exits non-zero fails the
 // precheck when it names an offense on a changed line, or names none it can
 // be read by (path:line: message), and passes when every offense it names
-// is on a line the change did not touch.
+// is on a line the change did not touch. One that crashed on its
+// environment is lintCrashed's: a command it healed runs once more.
 func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines) {
 	if len(cmds) == 0 || len(files) == 0 {
 		return
@@ -481,72 +489,139 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 		if p.stopped() {
 			return
 		}
-		script := renderCommand(cmd, files, p.base)
-		run, ok := p.run("precheck.lint", "lint ("+firstWord(cmd)+")", script)
-		if !ok {
-			if !p.stopped() {
-				p.record(registry.Check{Kind: registry.CheckLint, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
-			}
+		if p.lintCmd(cmd, files, changed) && !p.stopped() {
+			p.lintCmd(cmd, files, changed) // after the heal, once
+		}
+	}
+}
+
+// lintCmd runs lint command cmd on files (lint's): healed reports that it
+// crashed for lack of something the repository's installs bring, and that
+// they ran in the copy, so it runs again.
+func (p *precheckRun) lintCmd(cmd string, files []string, changed map[string]map[int]bool) (healed bool) {
+	script := renderCommand(cmd, files, p.base)
+	run, ok := p.run("precheck.lint", "lint ("+firstWord(cmd)+")", script)
+	if !ok {
+		if !p.stopped() {
+			p.record(registry.Check{Kind: registry.CheckLint, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
+		}
+		return false
+	}
+	var mine []string
+	named := 0
+	for line := range strings.SplitSeq(run.Output, "\n") {
+		m := offenseRe.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
 			continue
 		}
-		var mine []string
-		named := 0
-		for line := range strings.SplitSeq(run.Output, "\n") {
-			m := offenseRe.FindStringSubmatch(strings.TrimSpace(line))
-			if m == nil {
-				continue
-			}
-			named++
-			file := strings.TrimPrefix(strings.TrimPrefix(m[1], p.c.Path+"/"), "./")
-			n, _ := strconv.Atoi(m[2])
-			if changed[file][n] {
-				mine = append(mine, strings.TrimSpace(line))
-			}
+		named++
+		file := strings.TrimPrefix(strings.TrimPrefix(m[1], p.c.Path+"/"), "./")
+		n, _ := strconv.Atoi(m[2])
+		if changed[file][n] {
+			mine = append(mine, strings.TrimSpace(line))
 		}
-		check := registry.Check{Kind: registry.CheckLint, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
-		switch {
-		case run.Exit == 0:
-			p.say("\n- `%s`: passed\n", script)
-		case len(mine) > 0:
-			check.Result, check.Cause = registry.CheckFail, "code"
-			p.say("\n- `%s`: %s on the changed lines:\n\n```\n%s\n```\n", script, plural(len(mine), "offense"), strings.Join(mine, "\n"))
-			p.fail(fmt.Sprintf("lint: %s on the changed lines (%s)", plural(len(mine), "offense"), firstWord(cmd)))
-		case named == 0:
-			check.Result, check.Cause = registry.CheckFail, "unknown"
-			p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-			if crash, ok := crashOf("precheck.lint", cmd, p.c.Path, p.stderr, run.Output); ok {
-				// The environment's, not the change's nor yours to retry: the
-				// infrastructure hold runs the checks again (provenHead).
-				check.Cause = "env"
-				p.say("\nIt crashed for lack of %s: the infrastructure hold runs the checks again at its next try.\n", crash.sig.lacks)
-				p.err = crash
-				break
-			}
-			p.failForYou(p.lintCrashWhy(cmd, run))
-		default:
-			p.say("\n- `%s`: %s, none on a changed line\n", script, plural(named, "offense"))
-		}
-		p.record(check)
 	}
+	check := registry.Check{Kind: registry.CheckLint, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
+	switch {
+	case run.Exit == 0:
+		p.say("\n- `%s`: passed\n", script)
+	case len(mine) > 0:
+		check.Result, check.Cause = registry.CheckFail, "code"
+		p.say("\n- `%s`: %s on the changed lines:\n\n```\n%s\n```\n", script, plural(len(mine), "offense"), strings.Join(mine, "\n"))
+		p.fail(fmt.Sprintf("lint: %s on the changed lines (%s)", plural(len(mine), "offense"), firstWord(cmd)))
+	case named == 0:
+		check.Result, check.Cause = registry.CheckFail, "unknown"
+		p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
+		if crash, ok := crashOf("precheck.lint", cmd, p.c.Path, p.stderr); ok {
+			check.Cause, healed = p.lintCrashed(crash, files)
+			break
+		}
+		p.failForYou(p.lintCrashWhy(cmd))
+	default:
+		p.say("\n- `%s`: %s, none on a changed line\n", script, plural(named, "offense"))
+	}
+	p.record(check)
+	return healed
+}
+
+// lintCrashed takes a lint that crashed on its environment (crash), the
+// change being files: its check's cause, and healed when it ran the
+// repository's installs in the copy and the lint runs again.
+//   - One the machine's environment caused (a locale) is the precheck's
+//     error: the infrastructure hold runs the checks again (provenHead),
+//     at most envCrashTries times at one head.
+//   - One for lack of a gem or a library runs the repository's installs in
+//     the copy, once per precheck (heal), and the lint again.
+//   - Else, a crash the change can be the cause of (it changed what the
+//     lint loads, or its stderr names a changed file: branchCaused) is the
+//     writer's to fix, and any other is yours, with the fix. Neither holds
+//     another task.
+func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string, healed bool) {
+	switch {
+	case crash.sig.machine:
+		p.say("\nIt crashed for lack of %s: the infrastructure hold runs the checks again at its next try.\n", crash.sig.lacks)
+		p.err = crash
+		return "env", false
+	case crash.sig.heal && !p.healed && len(p.repo.Installs) > 0:
+		p.healed = true
+		if p.heal(crash) {
+			return "env", true
+		}
+	}
+	if theirs := branchCaused(crash.cmd, p.stderr, files); len(theirs) > 0 {
+		p.say("\nIt crashed for lack of %s, and the change touches %s, which the lint loads: the writer's to fix.\n",
+			crash.sig.lacks, clipList(theirs))
+		p.fail(fmt.Sprintf("lint: `%s` crashed for lack of %s (%s), and the change touches %s, which the lint loads",
+			firstWord(crash.cmd), crash.sig.lacks, crash.line, clipList(theirs)))
+		return "code", false
+	}
+	fix := crash.fix()
+	if p.healed {
+		fix += " (the factory ran the repository's installs there once, and the lint still crashed)"
+	}
+	if !p.res.ForYou {
+		p.line = crash.line
+	}
+	p.failForYou(crash.Error() + "; fix: " + fix)
+	return "env", false
+}
+
+// heal runs the repository's installs in the copy (`bundle install`), as a
+// claim runs them, after the lint crashed for lack of a gem or a library
+// (crash), with heal begin and ok or fail events; it reports whether they
+// all ran to a zero exit. What they change in tracked files (Gemfile.lock)
+// goes back with the precheck's own changes (restoreOwn).
+func (p *precheckRun) heal(crash envCrash) bool {
+	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseBegin, fmt.Sprintf("%s: %s crashed for lack of %s; runs the repository's installs",
+		p.c.Name, firstWord(crash.cmd), crash.sig.lacks))
+	for _, in := range p.repo.Installs {
+		if _, err := p.e.script(p.ctx, p.c, in.Run, "precheck heal "+in.Run, p.limit); err != nil {
+			why := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), outputLineRunes)
+			p.say("\nThe heal's `%s` failed: %s\n", in.Run, why)
+			p.e.event(context.WithoutCancel(p.ctx), p.t.ID, "heal", registry.PhaseFail, p.c.Name+": `"+in.Run+"` failed: "+why)
+			return false
+		}
+	}
+	p.say("\nIt crashed for lack of %s: the factory ran the repository's installs in the copy, and runs the lint again.\n", crash.sig.lacks)
+	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseOK, p.c.Name+": the installs ran; the lint runs again")
+	return true
 }
 
 // lintCrashWhy is why lint command cmd failed for you when its run exited
 // non-zero naming no offense by path:line: the last line of its stderr
-// that may say why (else of its output), and, when cmd names no format of
-// its own, a hint at one.
-func (p *precheckRun) lintCrashWhy(cmd string, run ProofRun) string {
-	why := fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line", cmd, run.Exit)
+// that may say why (lastLine; its stdout, what it says about the branch,
+// never), else, when cmd names no format of its own, a hint at one.
+func (p *precheckRun) lintCrashWhy(cmd string) string {
+	why := fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line", cmd, p.exit)
 	line := lastLine(p.stderr)
-	if line != "" {
+	switch {
+	case line != "":
 		why += "; its stderr ends: " + line
-	} else if line = lastLine(run.Output); line != "" {
-		why += "; its output ends: " + line
+	case !namesFormat(cmd):
+		why += "; fix: have it print them so (rubocop --format emacs, eslint --format unix) in precheck.lint, then `magnum factory install`"
 	}
 	if !p.res.ForYou { // the failure for you the precheck says
 		p.line = line
-	}
-	if !formatRe.MatchString(cmd) {
-		why += "; fix: have it print them so (rubocop --format emacs, eslint --format unix) in precheck.lint, then `magnum factory install`"
 	}
 	return why
 }

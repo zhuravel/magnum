@@ -400,7 +400,9 @@ func TestANeedsYouForTheChecksNamesTheFixAndTheRetry(t *testing.T) {
 			r.cfg.Factory.Repos[0].Precheck.Lint = []string{"kubectl exec web-1 -- bin/lint {files}"}
 		}, []string{"denied", "fix: change precheck.lint", "`magnum factory install`"}},
 		{"a lint that crashed", func(r *codingRig) { r.lintCrash = func([]string) string { return "Error: boom\n" } },
-			[]string{"its stderr ends: Error: boom", "fix: have it print them so"}},
+			[]string{"its stderr ends: Error: boom"}},
+		{"a lint that printed no offense", func(r *codingRig) { r.lint = func([]string) string { return "something is wrong\n" } },
+			[]string{"names no offense by path:line", "fix: have it print them so"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -435,9 +437,8 @@ func (r *codingRig) setLintCrash(stderr string) {
 
 // A lint that crashed on its environment (rubocop without a UTF-8 locale)
 // is neither the writer's to fix nor yours to retry: the infrastructure
-// hold takes it, at no cost to the task, and runs the checks again at each
-// of its tries; a crash that lasts 30 minutes needs you once, naming the
-// line and the fix, and the first try after the fix lifts the hold.
+// hold takes it, at no cost to the task, naming the line and the fix, and
+// its next try runs the checks again; the first try after the fix lifts it.
 func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12383", "bug")
@@ -453,7 +454,6 @@ func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 	if !held || !strings.Contains(hd.Reason, "invalid byte sequence in US-ASCII") || !strings.Contains(hd.Reason, "LANG") {
 		t.Fatalf("hold %+v (%v), want an infrastructure hold naming the crash and the fix", hd, held)
 	}
-	attempt := r.reload(task.ID).Attempt
 	if got := r.reload(task.ID); got.State != registry.TaskActive || !strings.Contains(got.WaitsWhat, "a UTF-8 locale") {
 		t.Fatalf("task %s waits %q; want active, waiting on the hold", got.State, got.WaitsWhat)
 	}
@@ -461,30 +461,8 @@ func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 		t.Fatalf("lint checks %q, want one failed on the environment", got)
 	}
 
-	for range 31 { // its tries at 2, 6, 14 and 30 minutes crash again
-		r.clock.Add(time.Minute)
-		r.tick()
-		r.e.waitBackground()
-		r.tick()
-	}
-	hd, held = r.e.holds[HoldInfra]
-	if !held || hd.Tries < 3 {
-		t.Fatalf("hold %+v (%v) after 31 minutes, want held with its tries failed", hd, held)
-	}
-	if got := r.e.Blocking(); len(got) != 1 || !strings.Contains(got[0], "invalid byte sequence in US-ASCII") ||
-		!strings.Contains(got[0], "magnum factory install") {
-		t.Fatalf("blocking %q, want the crash and its fix", got)
-	}
-	got := r.reload(task.ID)
-	if got.State != registry.TaskActive || got.Attempt != attempt {
-		t.Fatalf("the hold cost the task: %s, attempt %d", got.State, got.Attempt)
-	}
-	if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
-		t.Fatalf("the writer got %d prompts, want no fix turn for the environment's crash", n)
-	}
-
 	r.setLintCrash("") // the locale is fixed
-	for range 40 {
+	for range 10 {
 		if _, held := r.e.holds[HoldInfra]; !held {
 			break
 		}
@@ -498,6 +476,172 @@ func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 	}
 	if got := r.checksOf(task.ID, "lint"); got[len(got)-1] != "pass" {
 		t.Fatalf("lint checks %q, want the last one passed", got)
+	}
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("the hold cost the task: it needs you, %q", got.WaitsWhat)
+	}
+	if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
+		t.Fatalf("the writer got %d prompts, want no fix turn for the environment's crash", n)
+	}
+}
+
+// A crash of the environment that stays on the same head is not the
+// machine's to hold for ever: after its tries (envCrashTries crashes on
+// one head) the task needs you, naming the crash, the fix and the retry,
+// and the hold lifts, so the other tasks go on.
+func TestALocaleCrashThatStaysOnTheSameHeadNeedsYouAndLiftsTheHold(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12388", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.setLintCrash("invalid byte sequence in US-ASCII\n")
+	r.ended(task, "fx-writer")
+	for range 20 {
+		if r.reload(task.ID).State == registry.TaskNeedsYou {
+			break
+		}
+		r.clock.Add(time.Minute)
+		r.tick()
+		r.e.waitBackground()
+		r.tick()
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q after 20 minutes of crashes on one head; want needs_you", got.State, got.WaitsWhat)
+	}
+	for _, w := range []string{"a UTF-8 locale", "invalid byte sequence in US-ASCII", "LANG", fmt.Sprintf("then `magnum factory retry %d`", got.ID)} {
+		if !strings.Contains(got.WaitsWhat, w) {
+			t.Errorf("the wait %q does not name %q", got.WaitsWhat, w)
+		}
+	}
+	if n := len(r.ran("bin/lint")); n != envCrashTries {
+		t.Errorf("the lint ran %d times, want %d: the crash and its tries", n, envCrashTries)
+	}
+	r.clock.Add(time.Minute)
+	r.tick()
+	if hd, held := r.e.holds[HoldInfra]; held {
+		t.Fatalf("hold %+v outlived the task that crashed: it holds the other tasks for nothing", hd)
+	}
+}
+
+// installsRig is the coding rig whose repository installs its gems
+// (`bundle install` when Gemfile.lock changes), which a heal runs.
+func installsRig(t *testing.T) *codingRig {
+	r := newCodingRig(t)
+	r.cfg.Factory.Repos[0].Installs = []config.FactoryInstall{{Lock: "Gemfile.lock", Run: "bundle install"}}
+	return r
+}
+
+// A lint crash the branch caused (the writer added a rubocop plugin to
+// .rubocop.yml, or a require to a custom cop) holds nothing and needs
+// nobody: once `bundle install` in the copy did not end it, the writer gets
+// a fix turn naming the crash, and no other task waits.
+func TestALintCrashTheBranchCausedGoesToTheWriterNotAHold(t *testing.T) {
+	cases := []struct {
+		name   string
+		files  map[string]string
+		stderr func(copy string) string
+	}{
+		{"a plugin in .rubocop.yml", map[string]string{".rubocop.yml": "plugins:\n  - rubocop-points\n"}, func(string) string {
+			return "/usr/lib/ruby/3.4.0/rubygems.rb:136:in 'require': cannot load such file -- rubocop-points (LoadError)\n" +
+				"\tfrom /gems/rubocop/lib/rubocop/plugin/loader.rb:20:in 'load'\n"
+		}},
+		{"a require in a custom cop", map[string]string{"lib/cops/points_cop.rb": "require_relative 'helprs'\n"}, func(copy string) string {
+			return copy + "/lib/cops/points_cop.rb:1:in 'require_relative': cannot load such file -- " + copy +
+				"/lib/cops/helprs (LoadError)\n"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := installsRig(t)
+			task := r.codingTask("PR-12389", "bug")
+			r.startStage(task)
+			r.fix(task)
+			r.commit("PR-12389 the lint's own change", tc.files)
+			r.setLintCrash(tc.stderr(r.copyDir))
+			r.ended(task, "fx-writer")
+			r.tick()
+			r.e.waitBackground()
+			r.tick()
+			r.tick()
+			if hd, held := r.e.holds[HoldInfra]; held {
+				t.Fatalf("hold %+v: the branch's crash held every task", hd)
+			}
+			if n := len(r.ran("bundle install")); n != 1 {
+				t.Fatalf("bundle install ran %d times, want the one heal before the crash counts", n)
+			}
+			ps := r.rt.promptsTo("fx-writer")
+			if len(ps) != 2 || !strings.Contains(ps[1].Text, "crashed") || !strings.Contains(ps[1].Text, "cannot load such file") {
+				t.Fatalf("the writer's prompts %d, the last %q; want a fix turn naming the crash", len(ps), ps[len(ps)-1].Text)
+			}
+			if got := r.reload(task.ID); got.State != registry.TaskActive {
+				t.Fatalf("task %s waits %q; want the writer at work", got.State, got.WaitsWhat)
+			}
+		})
+	}
+}
+
+// A gem the copy lacks is the copy's, not the machine's: the precheck runs
+// the repository's installs in the copy once and the lint again, and a
+// heal that works ends it there, with no hold and nobody asked.
+func TestAMissingGemIsHealedInTheCopy(t *testing.T) {
+	r := installsRig(t)
+	task := r.codingTask("PR-12390", "bug")
+	r.fix(task)
+	r.lintCrash = func([]string) string {
+		if len(r.ran("bundle install")) > 0 {
+			return ""
+		}
+		return "Could not find rubocop-rails-2.30.0 in locally installed gems (Bundler::GemNotFound)\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || !res.Passed {
+		t.Fatalf("precheck %+v, %v; want passed once the heal installed the gem", res, err)
+	}
+	if n := len(r.ran("bundle install")); n != 1 {
+		t.Fatalf("bundle install ran %d times, want 1", n)
+	}
+	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{"fail/env", "pass"}) {
+		t.Fatalf("lint checks %q, want the crash, then the pass after the heal", got)
+	}
+}
+
+// A gem the heal cannot bring back, in a branch that changed nothing the
+// lint loads, needs you with the crash and the fix, and holds no other
+// task.
+func TestAMissingGemTheHealCannotFixNeedsYouWithoutAHold(t *testing.T) {
+	r := installsRig(t)
+	task := r.codingTask("PR-12391", "bug")
+	r.fix(task)
+	r.setLintCrash("Could not find rubocop-rails-2.30.0 in locally installed gems (Bundler::GemNotFound)\n")
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("precheck error %v; want a failure for you, not a hold", err)
+	}
+	if res.Passed || !res.ForYou || !strings.Contains(res.Why, "a gem") || !strings.Contains(res.Why, "bundle install") {
+		t.Fatalf("precheck %+v, want a failure for you naming the gem and the heal it tried", res)
+	}
+}
+
+// Words of a crash that the lint prints on stdout are the branch's text
+// (a script's echo, a source line), never a crash of the environment, and
+// never in the ask: only stderr, matched whole, tells one.
+func TestAnEnvironmentSignatureOnStdoutIsNoCrash(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12392", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		return "scripts/setup.sh: echo \"yarn: command not found\"\ninvalid byte sequence in US-ASCII\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("precheck error %v; want no crash of the environment", err)
+	}
+	if !res.ForYou || strings.Contains(res.Why, "yarn") || strings.Contains(res.Why, "US-ASCII") {
+		t.Fatalf("precheck %+v; want the ask, naming none of the lint's stdout", res)
+	}
+	if !strings.Contains(res.Why, "rubocop --format emacs") {
+		t.Fatalf("the ask %q; want the format hint, its stderr having said nothing", res.Why)
 	}
 }
 
