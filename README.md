@@ -4011,7 +4011,8 @@ factory never migrates magnum's registry, which it only reads for the local revi
 
 **The factory's screen.** `magnum factory` with no command, in a terminal, shows one line per task, grouped
 by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY), and one per open PR of yours that no task has
-(YOUR PRS, below): what it waits on and, when it needs you, your move. When home shows more than one
+(below), grouped the same way by what it waits on, or LEFT ALONE: what it waits on and, when it needs you, your
+move. When home shows more than one
 repository, or your PR of a repository the factory does not have, each row names its own first, in a column of its own: the name without the owner the rows share
 (`owner/name` when they span several owners, as the board's REPO does), cut to 11 cells on a narrow screen and to
 6 once the staging cells go short, whole when the title keeps 24 cells; a factory of one repository whose rows
@@ -4039,7 +4040,7 @@ after `q` or `ctrl+c` starts nothing. Answers, stepping into a pane and opening 
 
 | Where | Keys |
 |---|---|
-| Home | `j k g G` move, `pgdn pgup` (or `space`, `ctrl+d`, `ctrl+u`) a page; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `b` the row's PR and `t` its Jira issue in the browser, as on the board (the issue's link is its key's by the trackers, `[board] trackers` or its `[[repo]]`'s or `[[watch]]`'s; a task with nothing to open says why in the footer, `no PR yet for PR-12345`); `n` new task; on your PR's row (YOUR PRS, or NEEDS YOU) `f` has magnum's fixer take what is open, `F` switches it out of autofix or back in, and `x` stops what magnum runs on it (its fix loop and the re-review the loop forced), each y/N (on a task's row they say so and start nothing); `e` the report of magnum's fixer (`claude-fix.md`, by its role's name) in the pager (`$PAGER`, else `less`), asking nothing, on a published task's row or your PR's whose fix loop left you items (the hints offer it as `e claude-fix.md`; a row without one says so in the footer); `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` (or `f5`) refresh; `q` quit. Every card takes `o` (the task's pane), `!`, `?`, `,`, `m`, `ctrl+r` and `q` too, except while you type a line in its footer |
+| Home | `j k g G` move, `pgdn pgup` (or `space`, `ctrl+d`, `ctrl+u`) a page; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `b` the row's PR and `t` its Jira issue in the browser, as on the board (the issue's link is its key's by the trackers, `[board] trackers` or its `[[repo]]`'s or `[[watch]]`'s; a task with nothing to open says why in the footer, `no PR yet for PR-12345`); `n` new task; on your PR's row (in NEEDS YOU, WAITS ON OTHERS or LEFT ALONE) `f` has magnum's fixer take what is open, `F` switches it out of autofix or back in, and `x` stops what magnum runs on it (its fix loop and the re-review the loop forced), each y/N (on a task's row they say so and start nothing); `e` the report of magnum's fixer (`claude-fix.md`, by its role's name) in the pager (`$PAGER`, else `less`), asking nothing, on a published task's row or your PR's whose fix loop left you items (the hints offer it as `e claude-fix.md`; a row without one says so in the footer); `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` (or `f5`) refresh; `q` quit. Every card takes `o` (the task's pane), `!`, `?`, `,`, `m`, `ctrl+r` and `q` too, except while you type a line in its footer |
 | Question card | `j k` move the mark (it starts on the recommendation); `1-9` answer and move on; `enter` the marked one (with no recommendation, pick one first); `−` (or `-`) then a digit flags the question needless, with its reason (`1` the ticket answers it, `2` the code answers it, `3` any answer works, `4` you asked it before); `backspace` the previous question; `esc` back, the answers kept (home's line for the task then counts them, `2 answered, 1 to go`, and its rule
 says `you answered 2 of 3 · nothing sent yet`). "Type your own answer" takes a line typed in the footer, at
 whose end the cursor stays. Nothing is sent before the recap's `y`, which sends the batch, once; on the recap `1-9` changes an answer. A batch for questions that changed meanwhile is refused and nothing of it is kept: the recap says so, and `enter` shows the question open again. Each question of a ticket task offers "Ask <reporter> in Jira (the task waits)", the ticket's reporter (a question asked already keeps whom it asked); asking someone shows the Jira comment the factory drafts for them |
@@ -4359,11 +4360,22 @@ published task's row says what the PR waits on, by magnum's `autofix = "open"` v
 open): `agent: magnum fixes #4530 (cycle 2 of 5)`, a wait on `magnum`, `CI` or `reviewers` in the verdict's words,
 `you:` with the verdict's words when the PR needs you (its task card lists the threads and findings as links under
 WAITING FOR), `you: nothing open at a1b2c3d · approved, merge is yours` (your move: the merge, which stays yours)
-or `reviewers: nothing open at a1b2c3d · no approval yet`, and `you:` with why when magnum leaves the PR alone
+or `reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago` (the reviewers asked and not yet answered, with how
+long ago; with nobody asked it needs you, `you: nothing open at a1b2c3d · no reviewer asked`, your move `ask a
+reviewer`), and `you:` with why when magnum leaves the PR alone
 (`fix is off for #4530 (F on the board turns it on)`, `#4530 is a draft: mark it ready`). A verdict that no longer
-tells the PR's state (magnum's last tick four poll intervals ago, another head, a PR row that changed since), a PR
-magnum has not read yet and a registry that cannot be read say `magnum: looking at #4530`, and magnum's daemon
-down says so: never idle. A PR in a repository no `[[watch]]` covers needs you (`magnum does not watch
+tells the PR's state (magnum's last tick four poll intervals ago, another head, a PR row that changed since), or
+one still to come, says `magnum: looking at #4530` only while that is true: for four of magnum's polls since
+the PR's row last changed, with magnum's daemon ticking, waiting since then (WAITED gives its age). Past that the
+row says what magnum's row says (below), and its long form and help line name the look that has not decided
+(`· magnum's look has not decided #4530 since 06:05`, with `: magnum's daemon has not ticked since 08:05` or
+`: magnum's daemon runs an old build` when that is why). A PR magnum has not read yet says `magnum: looking at
+#4530` until its poll should have found it (four polls, at least 10 minutes after the publish), then needs you
+(``magnum has not picked #4530 up since 14:05: `magnum review example/talkable#4530` asks for it``); a registry that
+cannot be read says `magnum: looking at #4530`, and magnum's daemon down says so: never idle. When magnum's
+daemon runs an older build than the one on disk (its binary changed since it started), the title line says
+`magnum's daemon runs an old build`, and on a wide screen ``magnum's daemon runs dev (c8fcd4c) since Nov 6 22:29:
+verdicts wait for `magnum daemon-restart --drain` ``. A PR in a repository no `[[watch]]` covers needs you (`magnum does not watch
 example/shop: merge or close #4530 yourself, then x drops the task`: nothing tells the task when you did, so x is
 its move). A fix attention whose fix loop left you items (the settle's or the loop's end
 asks for them: `N findings need your call`, or a call per thread) shows the fixer's first item in its own words
@@ -4375,7 +4387,17 @@ items listed below it; `e` opens the report. A cap's or a failed run's attention
 still opens its report. The screen reads the report magnum's attention names, under magnum's reviews directory
 only, and only draws it. Without the verdict (the watch's autofix is not `"open"`) the row shows magnum's fix loop, its attention
 (`you: magnum: <why>`, or what the fixer left as above) or stalemate (`you: magnum stopped arguing on #4530: the thread is yours`), `magnum:
-reviewed a1b2c3d` once magnum reviewed the head, or `magnum: review of #4530`. A fix loop shows as soon as it
+review of #4530` before magnum reviewed the head, `magnum: magnum reviews a1b2c3d now` while its round runs, and
+once it reviewed the head, never a bare "reviewed": magnum's outcome there, what comes next and whom it waits on,
+which decide the row's group. Findings it keeps open there, new and earlier ones, by priority (`4 findings open at
+a1b2c3d (P1 P2×3)`) wait on magnum when its fixer takes them (`autofix = "own"` or `"open"`, fix not off: `· magnum's
+fixer takes them`) and on you otherwise (`· f fixes them` on your PR, `· f on the board fixes them` on a task's).
+A head clean on magnum's side (`magnum approved a1b2c3d`, `all 3 findings fixed at a1b2c3d`, `no problems at
+a1b2c3d, 2 optional (P3×2)`, `no findings at a1b2c3d`) never waits on magnum: a failed CI waits on you (`· CI
+failed: Completion`, your move `fix the CI`), a running one or a required check that has not run on `CI` (`· CI
+runs: 25/41`), then GitHub's review gate: approved, or no review required, waits on your merge (`· approved by
+rev-ann, merge is yours`), changes asked on your answer (`· rev-cid asked for changes`), the reviewers asked on
+them (`reviewers: … · asked rev-ann 17h ago`), nobody asked on you (`· no reviewer asked`). A fix loop shows as soon as it
 starts (its row in magnum's registry), before the look's next verdict says `fixing`. WAITED counts from when the PR began to wait as it does (the
 verdict's `since`, a loop's start, the close), or from the publish or a reopen when that is later, so a PR that
 came to need you while you were away is "new for you" in the digest. A published task
@@ -4410,7 +4432,8 @@ wrote them or you did: every PR GitHub has open, not a draft, whose author is on
 polls no other, so a PR there would read open after its merge), read once per frame and never written (the
 screen opens magnum's registry read only), even before the factory's first task. A PR that a
 task which is neither done nor stopped has stays that task's row, so no PR is listed twice. A PR whose verdict
-needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`
+needs you, that is idle with a person's approval (your merge), or whose row says it waits on you (above), is in
+NEEDS YOU, keyed by its number (`#4602`
 when the factory has one repository and the PR is of it; otherwise its repository names it in the y/N and a more
 line, `shop#12`, while the row draws the repository in its own column and `#12`; beside the PR column, from 120
 columns, the key cell has the issue key of its title),
@@ -4419,16 +4442,19 @@ magnum stopped arguing, whatever its verdict says (fix off hides no attention) a
 <why>`, or the first item its fixer left you, as a published task's row says it, with every item on the help
 line and `e` for the report), unless a fix loop works on it. Its WAITED counts from when it began to wait so
 (the verdict's, the loop's start, the attention), else from its last activity on GitHub, never from magnum's last
-write of its row. Every other one waits in YOUR PRS, between
-WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has (`agent: magnum fixes
-#4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `magnum: looking at #4613`). A PR magnum's look leaves alone (a
-baseline, fix off, a mute, a watch whose `include_own` is false; without a verdict, one magnum does not review)
-waits there too, dim, with why (`#4606 is yours to
+write of its row. Every other one waits in WAITS ON OTHERS, beside the tasks whose PRs wait alike, in the words a
+published task's row has (`agent: magnum fixes #4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `reviewers: all 3
+findings fixed at a1b2c3d · asked rev-bob 2h ago`, `magnum: looking at #4613`): the same state is never in two
+groups. A PR magnum's look leaves alone (a baseline, fix off, a mute, a watch whose `include_own` is false;
+without a fresh verdict, a baseline or one magnum does not review, whatever the watch's autofix) waits in LEFT
+ALONE, between WAITS ON OTHERS and DONE TODAY, oldest first, dim, with why (`#4606 is yours to
 follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`), after
 the others, so a short screen folds it first: it asks nothing, so a baseline open for weeks never sits in NEEDS
 YOU. The chip counts both kinds that need you (`1 task
-and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`, leaving out the dim
-ones magnum leaves alone); the window title counts
+and 2 PRs need you`, or `2 PRs need you`), the rows that wait on others with those an agent or magnum's fixer
+works on now, the moving mark (`5 wait on others, 2 at work`), and your PRs magnum leaves alone apart (`4 left
+alone`), never as at work; a narrow chip gives up `today`, then its `at work`, before it is cut. The window title
+counts
 every row in NEEDS YOU. A PR row has no card: `enter` names its keys in the footer, `b` opens the PR, and `o`
 and `t` say they act on a task's row. `a` walks the task cards only and skips PR rows; once no card is left, the
 footer says `2 of your PRs need you: f, F or b on their rows`. On a PR row, `f`, `F` and `x` run the board's own
@@ -4645,7 +4671,7 @@ last tick four poll intervals ago, another head, a PR row that changed since), a
 another's PR and on one without a verdict; every other key stays). `[board] own_prs` says where they are listed:
 `"board"` (the default) keeps them here as above; `"factory"` leaves your open PRs that are not drafts, in a
 repository a `[[watch]]` covers, out of the board's open PRs, the live board and the printed rows alike, since the
-factory screen lists them in YOUR PRS (Factory, above), and the status rule says `3 of your PRs are on the factory
+factory screen lists them (Factory, above), and the status rule says `3 of your PRs are on the factory
 screen (own_prs)`; a draft of yours and a PR of a repository no watch covers, which the factory screen does not
 list, and your merged or closed PRs stay. The settings screen offers it
 (`your open PRs on`), and the next board or factory screen you open reads it.

@@ -17678,6 +17678,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestPRStatesReadsCIReviewsAndReviewers, TestPRRowsCarryCIFindingsAndApprovals,
   TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity, TestFactoryPRColumnsDrawTheBoardsCells; goldens
   repos-100, -120, -140 and -200.
+- **A PR's row says magnum's outcome and whom it waits on, the outcome decides its group, and "looking at" is
+  said only while it is true** (2026-11-07, the 2026-11-07 audit's R4 with the audit's E #6; the operator: "'magnum:
+  reviewed' line does not tell me much either. reviewed and everything fixed? reviewed and made findings? I see
+  'magnum: reviewed ...' state in both 'Your PRs' and 'Waits on others' table which also is unclear"; amends
+  "Your PRs on the factory screen" and "Your PR that needs your attention is in NEEDS YOU whatever its verdict
+  says"). Without a verdict, magnumWait's fallback said `magnum: reviewed a1b2c3d`; with a verdict still to come
+  or gone stale, every row said `magnum: looking at #N`, with no age, so a daemon on a build without the look kept
+  14 rows that way for good; nothing said that daemon was old; your PRs that waited on reviewers sat in YOUR PRS
+  while a task's PR in the same state sat in WAITS ON OTHERS; and the chip counted four baselines "at work".
+  - Without a verdict that tells it, a row says what magnum's row says (`rowWait`): its round under way, its review
+    to come, else its outcome at the head (`outcomeOf`: the findings it keeps open by priority, only optional
+    ones, all fixed, its approval, none) with what comes next and whom it waits on. Problems no loop of magnum's
+    takes wait on you; ones its fixer takes wait on magnum; a head clean on magnum's side waits on CI (failed: you),
+    then GitHub's review gate (`nextWait`): your merge, your answer to a changes request, the reviewers asked with
+    how long ago, or you to ask one. An idle verdict without a person's approval waits the same way once magnum
+    read the gate.
+  - The outcome decides the group, for your PR as for a task's: your PR that waits on others is in WAITS ON
+    OTHERS, and only the PRs magnum's look leaves alone keep a group of their own, LEFT ALONE (`tui.GroupYours`).
+    A baseline or a PR magnum does not review is left alone without a fresh verdict under autofix = "open" too.
+  - "looking at #N" is said for four of magnum's polls (OpenVerdict.Stale's count) since the PR's row changed,
+    with magnum's daemon ticking, and waits since then; past that the row says what magnum's row says and names
+    the look that has not decided, with why (its daemon stopped ticking, or runs an old build). A published PR
+    magnum has not read needs you once its poll should have found it (four polls, at least 10 minutes), with
+    `magnum review <ref>` (E #6: a handoff never picked up).
+  - The pass over magnum's registry reads its daemon's build (`engine.KVDaemonBuild`): while the daemon runs a
+    binary older than the one on disk (`engine.SkewNote`), the title line says so, with `magnum daemon-restart
+    --drain` on a wide screen.
+  - The chip counts the rows that wait on others with those an agent or magnum's fixer works on now ("5 wait on
+    others, 2 at work") and the PRs left alone apart ("4 left alone"), and gives up "at work" before it is cut.
+  Rejected: needs-you for every row whose look is late (one old daemon would fill NEEDS YOU with one cause, which
+  the title line says once); the verdict's last words for a stale verdict (an idle "merge is yours" would outlive
+  a new head); a YOUR PRS group beside WAITS ON OTHERS (the same state in two groups); the CI's state for a head
+  magnum has not reviewed (the review comes first, and its words say so). Tests, failing first:
+  TestARowSaysMagnumsOutcomeAndWhomItWaitsOn, TestAnIdleUnapprovedPRNamesItsReviewers,
+  TestYourPRsThatWaitOnOthersSitInWaitsOnOthers, TestOnlyThePRsMagnumLeavesAloneKeepAGroupOfTheirOwn,
+  TestTheChipCountsHonestly, TestTheHelpGlossesYourPRs, TestLookingAtIsSaidOnlyWhileItIsTrue,
+  TestAPublishedPRMagnumNeverPickedUpNeedsYou, TestABaselineWithoutAFreshVerdictIsLeftAlone,
+  TestPRStatesSayMagnumsDaemonRunsAnOlderBuild, TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild; goldens
+  repos-100, -120, -140 and -200, yours-100, -140 and -200.
 
 ## Learned rules
 

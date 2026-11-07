@@ -4699,7 +4699,7 @@ type Board struct {
 	// OwnPRs says where your own open PRs are listed: OwnPRsBoard (the
 	// default) keeps them on the PR board, each marked with its autofix =
 	// "open" verdict; OwnPRsFactory lists them on the factory screen alone
-	// (its YOUR PRS) and the board leaves them out of its open PRs (a
+	// (beside its tasks) and the board leaves them out of its open PRs (a
 	// draft, which the factory screen does not list, and a closed one
 	// stay). "" is the default.
 	OwnPRs string `toml:"own_prs"`
@@ -12719,6 +12719,8 @@ type PRState struct {
 	ReviewEvent               string
 	Gate                      *store.ReviewGate
 	Asked                     []ReviewAsk
+	LastTick                  time.Time
+	OldBuild                  *engine.Build
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -12754,8 +12756,12 @@ type PRState struct {
     column says it, and ReviewEvent what magnum's review of the head posted
     (prs.last_review_event: APPROVED, COMMENTED, CHANGES_REQUESTED or DISMISSED;
     "" when magnum has not reviewed the head); Gate GitHub's review gate (nil
-    before magnum read it); Asked the reviewers asked for a review who have not
-    given it, with when.
+    before magnum read it); Asked the reviewers asked for a review who have
+    not given it, with when. LastTick is magnum's last tick (zero with its
+    daemon down or none recorded), which tells whether its look still runs;
+    OldBuild the build magnum's daemon runs when its binary on disk is newer
+    (engine.SkewNote), nil when it runs what is on disk, when it is down or when
+    it recorded none.
 
 type PRView struct {
 	Number                     int
@@ -13077,7 +13083,7 @@ type ScreenOptions struct {
 	// Magnum reads the published tasks' PRs in magnum's registry
 	// (Magnum.PRStates), once per call: a published task's row then says
 	// its PR's verdict; and your own open PRs (Magnum.OwnPRs), once per
-	// call, for YOUR PRS. nil keeps the words of a screen without it
+	// call, for their rows. nil keeps the words of a screen without it
 	// ("magnum: review of #N"), and lists no PR of yours.
 	Magnum Magnum
 }
@@ -27972,8 +27978,10 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
-	// GroupYours holds your own open PRs from magnum's registry that are no
-	// task's (YOUR PRS): those that need you are in GroupNeedsYou.
+	// GroupYours holds your own open PRs from magnum's registry that
+	// magnum's look leaves alone (LEFT ALONE: a baseline, fix off, a mute):
+	// they ask nothing. Your other PRs sit in GroupNeedsYou or GroupWaits by
+	// what they wait on, as the tasks do.
 	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone
@@ -28059,7 +28067,7 @@ type FactoryRow struct {
 	Approvals *FactoryApprovals
 
 	// PR is set on a row of your own PR from magnum's registry, not a task
-	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such
+	// (in any group but DONE TODAY); nil on a task's row. Such
 	// a row's ID is the negative of magnum's id of the PR, which no task's
 	// has.
 	PR *FactoryPR
