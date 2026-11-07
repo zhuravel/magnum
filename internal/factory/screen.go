@@ -182,7 +182,8 @@ type screen struct {
 type taskView struct {
 	t     registry.Task
 	group tui.FactoryGroup
-	// since is when the task began to wait as it does (its last span).
+	// since is when the task began to wait as it does: its last span, or
+	// for a published task the later of it and its PR's wait (readPRs).
 	since  time.Time
 	link   registry.PRLink // its PR, Number 0 before it has one
 	spans  []registry.Span

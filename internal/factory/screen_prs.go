@@ -7,13 +7,16 @@ package factory
 // PR's state, a PR magnum has not read and a registry that cannot be read
 // are magnum looking at the PR, never idle. Without a verdict (the watch
 // does not run autofix = "open") the fix loop, the attention and magnum's
-// review still show. Without a Magnum the row keeps its words: magnum
-// reviews the PR.
+// review still show. The row's WAITED counts from when the PR began to wait
+// as it does (the verdict's Since), so a PR that came to need you while you
+// were away is new for you. Without a Magnum the row keeps its words:
+// magnum reviews the PR.
 
 import (
 	"cmp"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -24,13 +27,15 @@ import (
 )
 
 // prWait is what a published task waits on, by its PR: its group and mark
-// on home, its blocker, the links of what needs you, and your move.
+// on home, its blocker, the links of what needs you, your move, and since
+// when the PR has waited so (zero: not known, the task's last span tells).
 type prWait struct {
 	group           tui.FactoryGroup
 	mark            tui.FactoryMark
 	on              tui.WaitsOn
 	links           []string
 	move, moveShort string
+	since           time.Time
 }
 
 // prRef is the PR of task view v as magnum's registry names it.
@@ -39,8 +44,10 @@ func prRef(v *taskView) PRRef {
 }
 
 // readPRs reads the PRs of the published views from magnum's registry,
-// once, and sets each one's wait and group (prWaitOf); without a Magnum, or
-// with no published task, it reads nothing.
+// once, and sets each one's wait and group (prWaitOf), and since when it
+// waits so: the later of the task's last span (its publish, a reopen) and
+// when its PR began to wait as it does; without a Magnum, or with no
+// published task, it reads nothing.
 func (s *screen) readPRs(m Magnum) {
 	var refs []PRRef
 	for _, v := range s.views {
@@ -60,11 +67,18 @@ func (s *screen) readPRs(m Magnum) {
 		w := s.prWaitOf(v, st, ok && err == nil, err)
 		v.pr = &w
 		v.group = w.group
+		if w.since.After(v.since) {
+			v.since = w.since
+		}
 	}
 }
 
 // prWaitOf is the wait of published task v whose PR magnum's registry
-// tells as st (read false: it could not be read, err says why).
+// tells as st (read false: it could not be read, err says why), with since
+// when the PR has waited so where magnum's registry tells it: a verdict's
+// Since (its At in a row of an older build), a loop's start, the close and
+// the grace's end, the attention's row change (magnum's row changed then
+// last).
 func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait {
 	t := v.t
 	ref := prRef(v)
@@ -111,11 +125,18 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 	case st.GHState == store.GHClosed:
 		closed := cmp.Or(store.Deref(st.ClosedAt), t.Updated)
 		until := closed.Add(s.cfg.Daemon.CloseGrace.Duration)
-		if waitsOnYou(t) || !s.now.Before(until) {
+		if waitsOnYou(t) { // the tick's span says since when
 			return closedYou()
 		}
+		if !s.now.Before(until) { // the tick has not marked it yet
+			w := closedYou()
+			w.since = until
+			return w
+		}
 		what := fmt.Sprintf("#%d closed %s; the task waits until %s for a reopen", n, clock(closed), clock(until))
-		return waits("magnum", what, clauseShort(what), "")
+		w := waits("magnum", what, clauseShort(what), "")
+		w.since = closed
+		return w
 	case !st.DaemonUp:
 		return waits("magnum", "daemon down", "", fmt.Sprintf("magnum's daemon is down: nothing looks at #%d", n))
 	case !st.Found:
@@ -123,14 +144,20 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 	case st.HasOpen && st.Stale:
 		return waits("magnum", looking, "", "")
 	case st.HasOpen:
-		return s.verdictWait(st, n, waits, you, fixing)
+		w := s.verdictWait(st, n, waits, you, fixing)
+		w.since = cmp.Or(st.Open.Since, st.Open.At)
+		return w
 	case st.OpenWatch: // its verdict is still to come
 		return waits("magnum", looking, "", "")
 	case st.Fixing:
-		return fixing()
+		w := fixing()
+		w.since = st.Fix.StartedAt
+		return w
 	case st.State == store.PRNeedsAttention:
 		msg := cmp.Or(st.AttentionMsg, st.Attention, "needs attention")
-		return you("magnum: "+msg, "magnum: "+firstClause(msg), "")
+		w := you("magnum: "+msg, "magnum: "+firstClause(msg), "")
+		w.since = st.UpdatedAt
+		return w
 	}
 	return waits("magnum", fmt.Sprintf("review of #%d", n), "", "")
 }

@@ -78,8 +78,12 @@ const (
 // OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
 // fixing, waits, needs_you, idle, unknown or off, why in plain words
 // (counts, kinds, short SHAs and clock times, never PR text), when the
-// look decided it (At) and last read GitHub whole (ReadAt), when a wait
-// ends where that is known (Until), the open items (work and what needs the
+// look decided it (At), since when it has said the same without a break
+// (Since: the same verdict, approval and reason to be off, whatever the
+// words and however often the PR changed; Since and At are equal when it
+// began, and zero in a row of a build before it), when it last read GitHub
+// whole (ReadAt), when a wait ends where that is known (Until), the open
+// items (work and what needs the
 // operator) and what needs the operator (kind and link only), the short SHA
 // a person approved ("" = none) and the commits on Head after it (-1 = not
 // counted), and why an off verdict is off.
@@ -88,6 +92,7 @@ type OpenVerdict struct {
 	Why           string     `json:"why"`
 	Head          string     `json:"head"`
 	At            time.Time  `json:"at"`
+	Since         time.Time  `json:"since,omitzero"`
 	ReadAt        time.Time  `json:"read_at,omitzero"`
 	Until         time.Time  `json:"until,omitzero"`
 	Open          int        `json:"open"`
@@ -126,6 +131,14 @@ func ParseOpenVerdict(s string) (OpenVerdict, bool) {
 // PR's row changed after v was decided (prUpdated).
 func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool {
 	return lastTick.IsZero() || now.Sub(lastTick) > openStalePolls*poll || v.Head != prHead || v.At.Before(prUpdated)
+}
+
+// goesOn reports whether v goes on saying what prev said, so it keeps
+// prev's Since: the same verdict, the same approval (a person's or none)
+// and the same reason to be off; the words, the counts and the head may
+// change.
+func (v OpenVerdict) goesOn(prev OpenVerdict) bool {
+	return v.Verdict == prev.Verdict && (v.Approved == "") == (prev.Approved == "") && v.Off == prev.Off
 }
 
 // sameAs reports whether v and w say the same, whenever each was decided.

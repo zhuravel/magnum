@@ -731,8 +731,9 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 
 // openWrite writes the ledger when it changed, and the verdict when it
 // says something else, or the PR's row changed after it (a reader takes
-// such a verdict as stale): an unchanged PR costs no write. A dry run
-// writes nothing.
+// such a verdict as stale): an unchanged PR costs no write. The verdict
+// keeps the stored one's Since while it goes on saying the same (goesOn),
+// and begins at its own time otherwise. A dry run writes nothing.
 func (e *Engine) openWrite(ctx context.Context, pr store.PR, raw string, l openLedger, v OpenVerdict) {
 	if e.d.DryRun {
 		return
@@ -740,9 +741,15 @@ func (e *Engine) openWrite(ctx context.Context, pr store.PR, raw string, l openL
 	if b, err := json.Marshal(l); err == nil && string(b) != raw {
 		e.setKV(ctx, kvPRFixSeen(pr.ID), string(b))
 	}
+	v.Since = v.At
 	if cur, ok := e.getKV(ctx, KVPROpen(pr.ID)); ok {
-		if prev, ok := ParseOpenVerdict(cur); ok && prev.sameAs(v) && !pr.UpdatedAt.After(prev.At) {
-			return
+		if prev, ok := ParseOpenVerdict(cur); ok {
+			if v.goesOn(prev) {
+				v.Since = cmp.Or(prev.Since, prev.At)
+			}
+			if prev.sameAs(v) && !pr.UpdatedAt.After(prev.At) {
+				return
+			}
 		}
 	}
 	if b, err := json.Marshal(v); err == nil {

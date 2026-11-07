@@ -403,6 +403,45 @@ func TestTheOpenRowIsRewrittenOnlyWhenSomethingChanged(t *testing.T) {
 	}
 }
 
+// The verdict says since when it has said what it says (Since): a change
+// of the PR's row rewrites it at a new time and keeps when that began, and
+// another verdict begins anew. A reader tells from it how long a PR has
+// needed you, not how long ago the look last decided.
+func TestTheVerdictSaysSinceWhenItHasSaidTheSame(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick()
+	h.pastSettle()
+	h.tick()
+	idle := h.wantOpen(OpenIdle, "nothing open")
+	if !idle.Since.Equal(idle.At) {
+		t.Fatalf("a new idle verdict says since %s, want its own time %s", idle.Since, idle.At)
+	}
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	if v := h.wantOpen(OpenIdle, "nothing open"); !v.At.After(idle.At) || !v.Since.Equal(idle.At) {
+		t.Errorf("idle again after a change of the PR: at %s since %s, want a new time since %s", v.At, v.Since, idle.At)
+	}
+
+	h.advance(time.Minute)
+	pr := h.pr(2)
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{pr.State}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", "the round failed")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.setKV(h.ctx, KVPRAttention(pr.ID), "failed")
+	h.tick()
+	needs := h.wantOpen(OpenNeedsYou, "needs your attention")
+	if !needs.Since.Equal(needs.At) || !needs.Since.After(idle.At) {
+		t.Errorf("a verdict that needs you after idle says since %s (at %s), want its own time", needs.Since, needs.At)
+	}
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	if v := h.wantOpen(OpenNeedsYou, "needs your attention"); !v.At.After(needs.At) || !v.Since.Equal(needs.At) {
+		t.Errorf("still needs you after a change of the PR: at %s since %s, want since %s", v.At, v.Since, needs.At)
+	}
+}
+
 // A cycle whose fixer got no external file (both reads failed) hands no
 // other reviewer's key: after the loop, a bot's thread the look read
 // before the start is still work, never seen.

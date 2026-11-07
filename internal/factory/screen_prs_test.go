@@ -297,3 +297,75 @@ func TestScreenDataReadsMagnumOncePerFrame(t *testing.T) {
 		t.Errorf("%d reads of magnum's registry for 2 published tasks, want 1", n)
 	}
 }
+
+// A published row waited since its PR began to wait as it does, not since
+// the task was published: a verdict's Since (its At in a row of an older
+// build), a loop's start, a close's time and the grace's end, the attention's
+// row change; a reopen after it is the later start. A row that needs you
+// since you were last seen is new for you in the digest.
+func TestAPublishedRowWaitedSinceItsPRBeganToWaitSo(t *testing.T) {
+	since, at := screenNow.Add(-2*time.Hour), screenNow.Add(-5*time.Minute)
+	closed := screenNow.Add(-time.Hour)
+	needs := func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenNeedsYou, "1 item needs you: 1 thread of a person")
+		v.Open.At, v.Open.Since = at, since
+	}
+	for name, c := range map[string]struct {
+		edit   func(*PRState)
+		reopen bool
+		want   time.Time
+	}{
+		"needs you": {needs, false, since},
+		"approved, idle": {func(v *PRState) {
+			v.HasOpen, v.Approved, v.Open = true, true, verdict(engine.OpenIdle, "nothing open at a1b2c3d · approved, merge is yours")
+			v.Open.At, v.Open.Since = at, since
+		}, false, since},
+		"fixing": {func(v *PRState) {
+			v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, cycle 1 of 3")
+			v.Open.At, v.Open.Since = at, since
+		}, false, since},
+		"a verdict of an older build": {func(v *PRState) {
+			needs(v)
+			v.Open.Since = time.Time{}
+		}, false, at},
+		"a reopen after the verdict began": {needs, true, screenNow.Add(-time.Hour)},
+		"no verdict, a loop": {func(v *PRState) {
+			v.OpenWatch, v.Fixing, v.Fix = false, true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead, StartedAt: since}
+		}, false, since},
+		"no verdict, attention": {func(v *PRState) {
+			v.OpenWatch, v.State, v.Attention, v.UpdatedAt = false, store.PRNeedsAttention, "blocked", since
+		}, false, since},
+		"closed within the grace": {func(v *PRState) {
+			closedNow := screenNow.Add(-2 * time.Minute)
+			v.GHState, v.ClosedAt = store.GHClosed, &closedNow
+		}, false, screenNow.Add(-2 * time.Minute)},
+		"closed past the grace, before the tick": {func(v *PRState) { v.GHState, v.ClosedAt = store.GHClosed, &closed },
+			false, closed.Add(10 * time.Minute)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newScreenRig(t)
+			r.withMagnum()
+			task := r.publishedTask("PR-12360", 4560)
+			if c.reopen {
+				r.at(time.Hour)
+				r.move(task, registry.TaskPublished, "", "", func(u *registry.TaskUpdate) { u.Because("PR #4560 reopened") })
+			}
+			r.pr(4560, c.edit)
+			if row := rowOf(t, r.data(time.Time{}), "PR-12360"); !row.Since.Equal(c.want) {
+				t.Errorf("waited since %s, want %s", row.Since.Format(time.TimeOnly), c.want.Format(time.TimeOnly))
+			}
+		})
+	}
+
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12361", 4561)
+	r.pr(4561, needs)
+	r.at(time.Hour)
+	r.published(r.task("PR-12362", "bug", "Pushed while away", registry.TaskActive, "publish", "", ""), 4562)
+	r.pr(4562, func(v *PRState) { v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "magnum reviews a1b2c3d") })
+	d := r.data(screenNow.Add(-3 * time.Hour))
+	if d.Digest == nil || d.Digest.Chip != "away 3h: 1 done, 1 new for you" {
+		t.Errorf("the digest %+v, want the PR that came to need you counted new for you", d.Digest)
+	}
+}
