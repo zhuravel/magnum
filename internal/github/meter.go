@@ -83,6 +83,7 @@ var callKinds = func() [][2]string {
 		{"review", "review"},
 		{"dismiss review", "dismiss review"},
 		{"update review", "update review"},
+		{"dispatch", "dispatch workflow"},
 	}
 	slices.SortStableFunc(kinds, func(a, b [2]string) int { return cmp.Compare(len(b[0]), len(a[0])) })
 	return kinds

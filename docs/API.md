@@ -15105,6 +15105,10 @@ func ValidLogin(s string) bool
     letters, digits and hyphens, 1 to 39 of them, not starting with a hyphen (no
     "@", no "[bot]").
 
+func ValidWorkflowFile(name string) bool
+    ValidWorkflowFile reports whether name is a workflow file DispatchWorkflow
+    takes: a plain file name of .github/workflows ending in .yml or .yaml.
+
 func WithBetweenCalls(ctx context.Context, fn func()) context.Context
     WithBetweenCalls returns ctx carrying fn, which the client runs before
     every gh command it makes with that context (BetweenCalls), on the caller's
@@ -15349,6 +15353,18 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number i
     the message as JSON on gh's stdin, so a failing call logs none of it.
     It is marked Mutates, so execx.DryRun only plans it. A missing permission is
     an error matching ErrForbidden; callers report it and do not retry.
+
+func (c *Client) DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string) error
+    DispatchWorkflow starts a run of the workflow file workflow ("ci.yml")
+    on ref, a branch of owner/repo, as the client's identity: POST
+    /repos/{o}/{r}/actions/workflows/{file}/dispatches. GitHub runs the workflow
+    as the branch has it, at its tip, and refuses (HTTP 422) one whose file
+    there has no workflow_dispatch trigger; the identity needs the right to
+    run workflows (a gh login that can push, an App with Actions: write). The
+    branch, which a PR names, goes as JSON on gh's stdin, so a failing call logs
+    none of it. A workflow that is not a plain file name of .github/workflows
+    (ValidWorkflowFile) or an empty ref is refused before any call. It is marked
+    Mutates, so execx.DryRun only plans it.
 
 func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (IssueComment, error)
     EditIssueComment replaces the body of issue comment commentID (PATCH
