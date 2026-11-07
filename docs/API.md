@@ -64,6 +64,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
+| [prstatus](#prstatus) | Package prstatus is the contract of the factory part of a PR's status comment: one JSON file per PR a factory task published, <factory dir>/pr-status/<owner>/<repo>/<number>.json (Path, which takes GitHub names only, in lower case, and a positive number). |
 | [relay](#relay) | Package relay is magnum-relay, the small service that receives a GitHub App's webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT and cannot receive them itself. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
@@ -20260,6 +20261,11 @@ func (l Layout) FactoryLock() string
 func (l Layout) FactoryLog() string
     FactoryLog is the factory daemon's log file in Logs.
 
+func (l Layout) FactoryPRStatus() string
+    FactoryPRStatus is the root of the status files the factory daemon writes
+    for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
+    (internal/prstatus names one and holds its contract), beside FactoryDB.
+
 func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
     daemon's: the two daemons can run at once.
@@ -21910,6 +21916,291 @@ type SkippedReply struct {
     the reviewer's: another reviewer or the author started it, so it is theirs
     and never answered inline (DECISIONS "An author's own inline threads are not
     replies").
+
+```
+
+## prstatus
+
+```text
+package prstatus // import "github.com/zhuravel/magnum/internal/prstatus"
+
+Package prstatus is the contract of the factory part of a PR's status
+comment: one JSON file per PR a factory task published, <factory
+dir>/pr-status/<owner>/<repo>/<number>.json (Path, which takes GitHub names
+only, in lower case, and a positive number).
+
+  - Who writes: the factory daemon (Write), from the publish on, and only when
+    the content changes: no file exists before the PR is published.
+  - Who reads: magnum's review daemon, read-only (Read), to render it in the
+    status comment it already keeps on the PR. A missing file is no factory
+    part; a file Read refuses counts as missing.
+  - Fixed words only: counts, enums, times, the task id, the Jira key and the
+    staging environment's slug, never free text from a PR, a ticket, a question
+    or an agent. Every enum is a string type whose Valid lists its words,
+    and Read refuses any other word.
+  - Version rule: v is Version, and Read refuses any other. A field that changes
+    its meaning or its type, or goes away, bumps it. A new field or a new
+    word of an enum keeps it: a reader ignores the fields it does not know,
+    and refuses only a file that holds a word it does not know.
+  - Digest rule: digest is the hex sha256 of the canonical JSON of every field
+    but updated_at and digest, the fields a reader does not know included:
+    encoding/json's encoding of the object decoded as a map (keys sorted at
+    every level, no spaces, numbers as written). Neither the order of the keys
+    nor the update time changes it. Read refuses a file whose digest does not
+    match; Write writes nothing when the file already has the digest, so an
+    unchanged status costs no write and no edit of the comment.
+
+It imports only the standard library, internal/paths and internal/fsx (the
+atomic write and the capped read; a leaf internal/paths already imports),
+so either daemon imports it without the other.
+
+CONSTANTS
+
+const MaxSize = 64 << 10
+    MaxSize is the most bytes Read reads: a bigger file is refused.
+
+const Version = 1
+    Version is the schema version Write writes and Read accepts.
+
+
+VARIABLES
+
+var (
+	ErrTooBig   = errors.New("over 64 KiB")
+	ErrCutShort = errors.New("cut short")
+	ErrNotJSON  = errors.New("not a JSON object")
+	ErrVersion  = errors.New("unknown schema version")
+	ErrInvalid  = errors.New("invalid field")
+	ErrDigest   = errors.New("digest does not match the content")
+)
+    Read's refusals, each wrapped with the file's path (and, for ErrInvalid,
+    the field's name, never its value).
+
+
+FUNCTIONS
+
+func Path(l paths.Layout, owner, repo string, number int) (string, error)
+    Path is the status file of PR number of owner/repo in l's factory directory:
+    paths.Layout.FactoryPRStatus, then owner, repo and <number>.json. owner and
+    repo must be GitHub names (no "." or "..", no slash, not empty) and number
+    positive, or Path refuses them. The names are lower-cased: GitHub ignores
+    their case, so the writer's spelling and the reader's name one file.
+
+func Write(path string, s Status) (bool, error)
+    Write writes s to path when its content differs from the file's, and reports
+    whether it wrote. It sets V and Digest, keeps the times in UTC to the second
+    (a zero UpdatedAt is the time of the write) and refuses a status Read would
+    refuse (ErrInvalid), writing nothing. When the file on disk has the same
+    digest it writes nothing and returns false, so the file keeps the UpdatedAt
+    of the last change. The write is atomic and durable: a temporary file in
+    the same folder, synced, renamed over the file, then the folder synced;
+    the file is 0600, the folders it makes 0700.
+
+
+TYPES
+
+type Code struct {
+	Commits int   `json:"commits"`
+	Proof   Proof `json:"proof"`
+	Specs   int   `json:"specs"`
+}
+    Code is the change: its commits, its proof and its specs.
+
+type FixLoop struct {
+	State           FixState `json:"state"`
+	Cycle           int      `json:"cycle"`
+	Pushes          int      `json:"pushes"`
+	ThreadsAnswered int      `json:"threads_answered"`
+}
+    FixLoop is magnum's fix loop on the PR: its state, its cycle, its pushes and
+    the review threads it answered.
+
+type FixState string
+    FixState is the fix loop's state: none yet, running, needing you, done,
+    or off for the PR.
+
+const (
+	FixNone     FixState = "none"
+	FixRunning  FixState = "running"
+	FixNeedsYou FixState = "needs_you"
+	FixDone     FixState = "done"
+	FixOff      FixState = "off"
+)
+    The fix loop's states.
+
+func (s FixState) Valid() bool
+    Valid reports whether s is one of the fix loop's states.
+
+type Jira struct {
+	Key    string     `json:"key"`
+	Status JiraStatus `json:"status"`
+}
+    Jira is the task's Jira issue: its key (ABC-123) and status. Both are "" for
+    a task without an issue.
+
+type JiraStatus string
+    JiraStatus is the issue's status, in the factory's words.
+
+const (
+	JiraToDo          JiraStatus = "to_do"
+	JiraInDevelopment JiraStatus = "in_development"
+	JiraInCodeReview  JiraStatus = "in_code_review"
+	JiraDone          JiraStatus = "done"
+	JiraOther         JiraStatus = "other"
+	JiraUnknown       JiraStatus = "unknown"
+)
+    The Jira statuses.
+
+func (s JiraStatus) Valid() bool
+    Valid reports whether s is one of the Jira statuses.
+
+type LocalReview struct {
+	Rounds    int     `json:"rounds"`
+	Verdict   Verdict `json:"verdict"`
+	NotesOpen int     `json:"notes_open"`
+}
+    LocalReview is the local review's rounds, its last verdict and the notes it
+    left open.
+
+type Now struct {
+	Who   Who   `json:"who"`
+	Stage Stage `json:"stage"`
+}
+    Now is who the PR waits on and the task's stage.
+
+type Plan struct {
+	QuestionsAsked    int `json:"questions_asked"`
+	QuestionsAnswered int `json:"questions_answered"`
+}
+    Plan counts the questions the task asked you and the ones you answered.
+
+type Proof string
+    Proof is what the coding stage proved: nothing yet, the spec red on the
+    base, red on the base and green at the head, or (a kind whose proof is
+    green) the specs green at the head.
+
+const (
+	ProofNone       Proof = "none"
+	ProofRed        Proof = "red"
+	ProofRedToGreen Proof = "red_to_green"
+	ProofGreen      Proof = "green"
+)
+    The proofs.
+
+func (p Proof) Valid() bool
+    Valid reports whether p is one of the proofs.
+
+type Stage string
+    Stage is the task's stage, in fixed words: the phase its kind's configured
+    stage falls in (a kind names its own stages; these words do not change with
+    it), then the task's state once it is published.
+
+const (
+	StagePlan      Stage = "plan"      // investigate, judge, critic and the questions and reproduction gates
+	StageCode      Stage = "code"      // the writer's stage, up to its proof
+	StageReview    Stage = "review"    // the local review loop
+	StageReady     Stage = "ready"     // the PR body and the ready card
+	StagePublished Stage = "published" // the PR is open
+	StageDone      Stage = "done"      // the PR merged
+	StageStopped   Stage = "stopped"   // you stopped the task
+	StageFailed    Stage = "failed"    // the task failed
+)
+    The stages.
+
+func (s Stage) Valid() bool
+    Valid reports whether s is one of the stages.
+
+type Staging struct {
+	Env   string       `json:"env"`
+	State StagingState `json:"state"`
+}
+    Staging is the deploy of the change: Env is the configured staging
+    environment's name, a short slug ([a-z0-9-]{1,32}), or "".
+
+type StagingState string
+    StagingState is the staging deploy's state.
+
+const (
+	StagingNone      StagingState = "none"
+	StagingDeploying StagingState = "deploying"
+	StagingDeployed  StagingState = "deployed"
+	StagingFailed    StagingState = "failed"
+)
+    The staging deploy's states.
+
+func (s StagingState) Valid() bool
+    Valid reports whether s is one of the staging deploy's states.
+
+type Status struct {
+	// V is the schema version, Version.
+	V int `json:"v"`
+	// Digest is the hex sha256 of the content (the package doc's digest
+	// rule); Write sets it.
+	Digest string `json:"digest"`
+	// UpdatedAt is when the content last changed, in UTC to the second
+	// (Write keeps the file, and its time, while the content stays the same).
+	UpdatedAt time.Time `json:"updated_at"`
+	// TaskID is the factory task that published the PR, positive.
+	TaskID int64 `json:"task_id"`
+	// Jira is the task's issue; the zero Jira says it has none.
+	Jira Jira `json:"jira"`
+	// Plan counts the task's questions.
+	Plan Plan `json:"plan"`
+	// Code is the change's commits, proof and specs.
+	Code Code `json:"code"`
+	// LocalReview is the factory's review of the change before the publish.
+	LocalReview LocalReview `json:"local_review"`
+	// PublishedAt is when the PR was published, in UTC to the second; never
+	// zero, since the file begins at the publish.
+	PublishedAt time.Time `json:"published_at"`
+	// FixLoop is magnum's fix loop on the PR.
+	FixLoop FixLoop `json:"fix_loop"`
+	// Staging is the change's deploy to a staging environment.
+	Staging Staging `json:"staging"`
+	// Now is who the PR waits on, and the task's stage.
+	Now Now `json:"now"`
+}
+    Status is one PR's factory part. Every count is 0 or more and every enum one
+    of its words; Write refuses, and Read refuses, any other.
+
+func Read(path string) (Status, bool, error)
+    Read reads the status file at path, a regular file of at most MaxSize bytes
+    (a symbolic link is refused, not followed). A missing file is no status:
+    (zero, false, nil). A file Read refuses is the zero Status and an error
+    that says why (errors.Is ErrTooBig, ErrCutShort, ErrNotJSON, ErrVersion,
+    ErrInvalid or ErrDigest), in fixed words and the field's name, never the
+    file's content; the caller treats it as missing. Fields Read does not know
+    are ignored, and the digest covers them.
+
+type Verdict string
+    Verdict is the local review's last verdict.
+
+const (
+	VerdictNone     Verdict = "none"
+	VerdictClean    Verdict = "clean"
+	VerdictFindings Verdict = "findings"
+	VerdictFailed   Verdict = "failed"
+)
+    The verdicts.
+
+func (v Verdict) Valid() bool
+    Valid reports whether v is one of the verdicts.
+
+type Who string
+    Who is who the PR waits on.
+
+const (
+	WhoYou       Who = "you"
+	WhoMagnum    Who = "magnum"
+	WhoReviewers Who = "reviewers"
+	WhoCI        Who = "ci"
+	WhoFactory   Who = "factory"
+	WhoNone      Who = "none"
+)
+    Who the PR can wait on.
+
+func (w Who) Valid() bool
+    Valid reports whether w is one of who a PR waits on.
 
 ```
 

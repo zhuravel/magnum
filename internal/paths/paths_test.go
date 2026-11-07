@@ -365,6 +365,7 @@ func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
 				l.FactoryBaseline():  filepath.Join(tc.data, "factory", "baseline.json"),
 				l.FactoryTasks():     filepath.Join(tc.data, "factory", "tasks"),
 				l.FactoryTaskDir(42): filepath.Join(tc.data, "factory", "tasks", "42"),
+				l.FactoryPRStatus():  filepath.Join(tc.data, "factory", "pr-status"),
 				l.FactoryPid():       filepath.Join(tc.state, "factory.pid"),
 				l.FactoryLock():      filepath.Join(tc.state, "factory.lock"),
 				l.FactorySpecsLock(): filepath.Join(tc.state, "factory-specs.lock"),

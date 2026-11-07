@@ -16602,6 +16602,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADrainWhosePidWasReusedIsLifted, TestAFailedWriteOfTheRecordRemovesIt,
   TestFactoryInstallDrainWaitsForItsOwnDrain, TestFactoryInstallDrainChecksTheBuildAgainAfterTheWait and
   TestFactoryStatusShowsTheDrainAndTheWorkInFlight.
+- **One status comment per factory PR: the factory part's file and its contract** (2026-11-07, the first slice
+  of the factory part of magnum's status comment). A PR a factory task published is to get one status comment,
+  the one magnum already keeps, with a factory part below magnum's lines: a table of the factory's steps (Plan,
+  Code, Local review, Published, Fix loop, Staging) and a "Now: ... · updated HH:MM UTC" line. The factory
+  daemon writes a file per PR when its content changes, and magnum's engine reads it, read-only, and renders
+  it under the comment's existing rate limits.
+  `internal/prstatus` holds that contract, which both sides import; it imports only the standard library,
+  `internal/paths` and `internal/fsx` (a leaf `internal/paths` already imports).
+  - The file is `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json` (`paths.Layout.FactoryPRStatus`,
+    `prstatus.Path`): owner and repo must be GitHub names and are lower-cased, the number positive; anything
+    else is refused. The factory writes it from the publish on, so no file exists before the PR does.
+  - It holds fixed words only: counts, enums (each a string type with its constants and `Valid`), times, the
+    task id, the Jira key (ABC-123) and the staging environment's slug; never text from a PR, a ticket, a
+    question or an agent, so nothing the comment renders comes from them.
+  - `v` is 1. A field that changes its meaning or type, or goes away, bumps it, and a reader refuses any v but
+    its own; a new field or a new enum word keeps it (readers ignore the fields they do not know, and refuse
+    only a file holding a word they do not know). The proof has a `green` beside `none`, `red` and
+    `red_to_green`: a chore kind's proof is its specs green at the head, with no run on the base.
+  - `digest` is the hex sha256 of the canonical JSON (keys sorted, no spaces) of every field but `updated_at`
+    and `digest`, the fields a reader does not know included. `Write` writes nothing when the file already
+    has the digest, so an unchanged status costs neither a write nor an edit of the comment, and the file
+    keeps the time of its last change; otherwise it writes atomically (a temporary file, synced and renamed,
+    the folder synced), 0600 in folders 0700, and refuses a status `Read` would refuse.
+  - `Read` caps the file at 64 KiB; a missing file is no factory part, and a file too big, cut short, not a
+    JSON object, of another v, with a word outside its enum or a digest that does not match is an error that
+    says which (the field's name, never its value), which the reader treats as missing.
+  The renderer in `internal/engine/status_comment.go` and the factory's writer come later, each in its own
+  slice. Rejected: a second comment, the factory's own (one comment per PR is what the operator chose); free
+  text such as the PR's title, the ticket's or a question (the comment says only fixed words, as magnum's
+  lines do); a digest of the file's bytes (a writer that orders its keys otherwise, or only moves the update
+  time, would read as a change). Tests, failing first: the tests of `internal/prstatus` (TestWriteThenReadGivesTheStatusBack,
+  TestTheDigestIgnoresKeyOrderAndUpdatedAt, TestAnUnchangedStatusIsNotWrittenAgain,
+  TestReadRefusesAFileOver64KiB, TestReadRefusesACutShortFile, TestReadRefusesAnUnknownVersion,
+  TestReadRefusesAWordOutsideItsEnum, TestReadRefusesADigestThatDoesNotMatch,
+  TestPathRefusesWhatIsNotAGitHubRepoOrAPRNumber, TestWriteKeepsTheFileAndItsFoldersPrivate,
+  TestReadOfAMissingFileIsAbsent and the others; the package did not exist).
 
 ## Learned rules
 

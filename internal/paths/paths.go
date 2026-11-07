@@ -307,6 +307,11 @@ func (l Layout) FactoryTaskDir(id int64) string {
 	return filepath.Join(l.FactoryTasks(), strconv.FormatInt(id, 10))
 }
 
+// FactoryPRStatus is the root of the status files the factory daemon writes
+// for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
+// (internal/prstatus names one and holds its contract), beside FactoryDB.
+func (l Layout) FactoryPRStatus() string { return filepath.Join(l.factoryDir(), "pr-status") }
+
 // FactoryPid is the factory daemon's pidfile under State, beside the review
 // daemon's: the two daemons can run at once.
 func (l Layout) FactoryPid() string { return filepath.Join(l.State(), "factory.pid") }
