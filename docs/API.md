@@ -12365,10 +12365,13 @@ func NewLocalReviewer(d evalrun.Deps) LocalReviewer
 
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
+	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 }
-    Magnum is the review daemon as the factory's local review sees it:
-    busy while its real rounds in flight and due fill its limit
-    (max_concurrent_reviews), so a local round takes a free round or waits.
+    Magnum is the review daemon as the factory sees it: busy while its real
+    rounds in flight and due fill its limit (max_concurrent_reviews), so a
+    local round takes a free round or waits; and what its registry says of the
+    factory's PRs (PRStates: the row, the verdict, the loop), which the screen
+    draws and the tick follows.
 
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
@@ -12417,6 +12420,43 @@ type OldGuard struct {
     OldGuard is a guard the change touches (a condition, a rescue, a validation,
     an early return): its place in the base, how long ago the line was written,
     and why it was added, as the history agent found it.
+
+type PRRef struct {
+	Repo   string
+	Number int
+}
+    PRRef names a PR as the factory knows it: its repository (owner/name) and
+    number.
+
+type PRState struct {
+	Ref                                   PRRef
+	Found, DaemonUp, Watched, OpenWatch   bool
+	GHState                               string
+	MergedAt, ClosedAt                    *time.Time
+	Draft                                 bool
+	Head, ReviewedSHA, State, AuthorLogin string
+	UpdatedAt                             time.Time
+	Approved                              bool
+	Open                                  engine.OpenVerdict
+	HasOpen, Stale                        bool
+	Fix                                   engine.FixState
+	Fixing, Stalemate                     bool
+	Attention, AttentionMsg               string
+}
+    PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
+    Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
+    pidfile names a live process); Watched that a [[watch]] of the config covers
+    the repository, so a PR not found yet will be; OpenWatch that the watch
+    runs autofix = "open", so a PR without a verdict has one still to come.
+    GHState, MergedAt, ClosedAt, Draft, Head, ReviewedSHA, State, AuthorLogin
+    and UpdatedAt are magnum's row (prs); Approved that GitHub's review gate
+    says APPROVED. Open is the autofix = "open" verdict (engine.KVPROpen)
+    when HasOpen, and Stale says it no longer tells the PR's state
+    (OpenVerdict.Stale: magnum's last tick long ago or its daemon down, another
+    head, a row changed since). Fix is the fix loop that runs (engine.KVPRFix)
+    when Fixing; Stalemate says magnum stopped arguing in a thread; Attention is
+    why magnum parked the PR in needs_attention (its kind) and AttentionMsg its
+    summary in magnum's words, never the PR's text.
 
 type PRView struct {
 	Number                     int

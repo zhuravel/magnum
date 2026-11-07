@@ -76,6 +76,15 @@ func (f *fakeMagnum) Busy(context.Context) (bool, string, error) {
 	return f.busy != "", f.busy, nil
 }
 
+// PRStates knows no PR: none is found.
+func (f *fakeMagnum) PRStates(_ context.Context, refs []PRRef) (map[PRRef]PRState, error) {
+	out := make(map[PRRef]PRState, len(refs))
+	for _, r := range refs {
+		out[r] = PRState{Ref: r, DaemonUp: true}
+	}
+	return out, nil
+}
+
 func (f *fakeMagnum) set(why string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

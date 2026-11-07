@@ -1,7 +1,9 @@
 package factory
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"net/url"
 	"os"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -199,5 +202,236 @@ func TestMagnumIsBusyWhileARoundRunsOrIsDue(t *testing.T) {
 	}
 	if fsx.Exists(none.DB()) {
 		t.Fatal("Busy created magnum's registry")
+	}
+}
+
+// magnumPR is PR #n of example/shop in magnum's registry, open at head and
+// opened by zhuravel, as edit shapes it.
+func magnumPR(t *testing.T, st *store.Store, n int, head string, edit func(*store.GitHubPR)) store.PR {
+	t.Helper()
+	ctx := t.Context()
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := store.GitHubPR{RepoID: repo.ID, NodeID: "PR_" + strconv.Itoa(n), Number: n, URL: "https://github.com/example/shop/pull/" + strconv.Itoa(n),
+		HeadSHA: head, GHState: store.GHOpen, InitialState: store.PRQueued, Identity: "zhuravel", AuthorLogin: new("zhuravel")}
+	if edit != nil {
+		edit(&g)
+	}
+	up, err := st.UpsertPRFromGitHub(ctx, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return up.PR
+}
+
+// setKV stores value (JSON for a struct) under key in magnum's registry.
+func setKV(t *testing.T, st *store.Store, key string, value any) {
+	t.Helper()
+	s, ok := value.(string)
+	if !ok {
+		b, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s = string(b)
+	}
+	if err := st.SetKV(t.Context(), key, s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// openWatchConfig is the defaults with a watch of example's repositories
+// under autofix = "open".
+func openWatchConfig() *config.Config {
+	cfg := config.Defaults()
+	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel", Autofix: config.AutofixOpen}}
+	return cfg
+}
+
+// The factory reads magnum's registry for its PRs and never migrates it:
+// one a migration behind this build (magnum's daemon still runs the build
+// before) or one ahead of it (a newer magnum) is an error, and the file is
+// byte for byte as it was.
+func TestPRStateRefusesAMagnumRegistryOfAnotherSchema(t *testing.T) {
+	for name, delta := range map[string]int{"behind": -1, "ahead": 1} {
+		t.Run(name, func(t *testing.T) {
+			l, st := magnumLayout(t)
+			v := store.LatestSchemaVersion() + delta
+			if _, err := st.DB().Exec("PRAGMA user_version = " + strconv.Itoa(v)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.DB().Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+				t.Fatal(err)
+			}
+			st.Close()
+			before, err := os.ReadFile(l.DB())
+			if err != nil {
+				t.Fatal(err)
+			}
+			views, err := NewMagnum(l, openWatchConfig()).PRStates(t.Context(), []PRRef{{Repo: "example/shop", Number: 1}})
+			if err == nil {
+				t.Fatalf("PRStates on a registry at schema %d = %+v, want an error", v, views)
+			}
+			after, err := os.ReadFile(l.DB())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("PRStates changed magnum's registry")
+			}
+			if got := userVersion(t, l.DB()); got != v {
+				t.Fatalf("user_version %d after PRStates, want %d", got, v)
+			}
+		})
+	}
+}
+
+// PRStates reads, per PR, magnum's row (its GitHub state, head, review and
+// author), the open verdict, the fix loop and the stalemate, and the
+// attention a PR needs in magnum's words; a PR magnum does not have, in a
+// repository it has or not, is not found, and whether a watch covers it
+// says if it ever will be.
+func TestPRStatesReadsTheRowTheVerdictTheLoopAndTheStalemate(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	now := time.Now()
+	head := strings.Repeat("ab", 20)
+	fixing := magnumPR(t, st, 7, head, func(g *store.GitHubPR) {
+		g.ReviewGate = &store.ReviewGate{Decision: "APPROVED"}
+	})
+	magnumPR(t, st, 8, head, func(g *store.GitHubPR) {
+		g.GHState, g.MergedAt, g.ClosedAt = store.GHMerged, new(now.Add(-time.Hour)), new(now.Add(-time.Hour))
+	})
+	attn := magnumPR(t, st, 9, head, nil)
+	if err := st.TransitionPR(ctx, attn.ID, nil, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", "judge reported a blocker: the slot's database is gone")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setKV(t, st, engine.KVPRAttention(attn.ID), "blocked")
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now))
+	verdict := engine.OpenVerdict{Verdict: engine.OpenFixing, Why: "fixing, cycle 2 of 5", Head: head, At: now.Add(time.Minute)}
+	setKV(t, st, engine.KVPROpen(fixing.ID), verdict)
+	setKV(t, st, engine.KVPRFix(fixing.ID), engine.FixState{Cycle: 2, Cap: 5, Phase: "fixing", Head: head})
+	setKV(t, st, engine.KVPRStalemate(fixing.ID), engine.Stalemate{Threads: []engine.StalemateThread{{ID: "T1", URL: "https://github.com/example/shop/pull/7#r1"}}})
+
+	refs := []PRRef{{"example/shop", 7}, {"example/shop", 8}, {"example/shop", 9}, {"example/shop", 10}, {"other/site", 1}}
+	views, err := NewMagnum(l, openWatchConfig()).PRStates(ctx, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != len(refs) {
+		t.Fatalf("%d views for %d refs: %+v", len(views), len(refs), views)
+	}
+	v := views[refs[0]]
+	switch {
+	case !v.Found || !v.DaemonUp || !v.Watched || v.Ref != refs[0]:
+		t.Errorf("#7: found %v, daemon up %v, watched %v, ref %+v", v.Found, v.DaemonUp, v.Watched, v.Ref)
+	case v.GHState != store.GHOpen || v.Head != head || v.AuthorLogin != "zhuravel" || v.Draft || !v.Approved:
+		t.Errorf("#7's row: %+v", v)
+	case !v.HasOpen || v.Open.Verdict != engine.OpenFixing || v.Open.Why != verdict.Why || v.Stale:
+		t.Errorf("#7's verdict %+v (has %v, stale %v), want %+v, fresh", v.Open, v.HasOpen, v.Stale, verdict)
+	case !v.Fixing || v.Fix.Cycle != 2 || v.Fix.Cap != 5:
+		t.Errorf("#7's loop: fixing %v, %+v", v.Fixing, v.Fix)
+	case !v.Stalemate:
+		t.Error("#7's stalemate not read")
+	}
+	if v := views[refs[1]]; !v.Found || v.GHState != store.GHMerged || v.MergedAt == nil || v.HasOpen || v.Fixing {
+		t.Errorf("#8, merged: %+v", v)
+	}
+	if v := views[refs[2]]; v.State != store.PRNeedsAttention || v.Attention != "blocked" || !strings.Contains(v.AttentionMsg, "the slot's database is gone") {
+		t.Errorf("#9, needs attention: state %q, attention %q, %q", v.State, v.Attention, v.AttentionMsg)
+	}
+	if v := views[refs[3]]; v.Found || !v.Watched || !v.DaemonUp {
+		t.Errorf("#10, not in magnum's registry: %+v", v)
+	}
+	if v := views[refs[4]]; v.Found || v.Watched {
+		t.Errorf("other/site#1, in no watch: %+v", v)
+	}
+}
+
+// With magnum's daemon down (its pidfile names no live process) every
+// view says so, and without its registry nothing is found and nothing is
+// created.
+func TestPRStatesWithoutMagnumsDaemonSaysSo(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("cd", 20)
+	pr := magnumPR(t, st, 7, head, nil)
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(time.Now()))
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open", Head: head, At: time.Now()})
+	if err := os.Remove(l.Pid()); err != nil {
+		t.Fatal(err)
+	}
+	ref := PRRef{"example/shop", 7}
+	views, err := NewMagnum(l, openWatchConfig()).PRStates(t.Context(), []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := views[ref]; v.DaemonUp || !v.Found || !v.Stale {
+		t.Errorf("magnum's daemon down: %+v, want found, the daemon down and its verdict stale", v)
+	}
+
+	none := paths.Layout{Home: t.TempDir()}
+	if err := os.MkdirAll(none.State(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsx.WriteFileAtomic(none.Pid(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	views, err = NewMagnum(none, openWatchConfig()).PRStates(t.Context(), []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := views[ref]; v.Found || !v.DaemonUp {
+		t.Errorf("no registry: %+v, want not found", v)
+	}
+	if fsx.Exists(none.DB()) {
+		t.Fatal("PRStates created magnum's registry")
+	}
+}
+
+// A verdict decided at an older head, before the PR's row last changed, or
+// with magnum's last tick long ago no longer tells the PR's state: it is
+// stale, which the screen shows as magnum looking, never as idle.
+func TestAnOpenRowOfAnOlderHeadIsStale(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	now := time.Now()
+	head, older := strings.Repeat("ef", 20), strings.Repeat("01", 20)
+	pr := magnumPR(t, st, 7, head, nil)
+	ref := PRRef{"example/shop", 7}
+	m := NewMagnum(l, openWatchConfig())
+	read := func() PRState {
+		t.Helper()
+		views, err := m.PRStates(ctx, []PRRef{ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return views[ref]
+	}
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now))
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open", Head: head, At: now.Add(time.Minute)})
+	if v := read(); !v.HasOpen || v.Stale {
+		t.Fatalf("a verdict at the PR's head after its row changed: %+v, want fresh", v)
+	}
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open", Head: older, At: now.Add(time.Minute)})
+	if v := read(); !v.HasOpen || !v.Stale {
+		t.Errorf("a verdict of an older head: %+v, want stale", v)
+	}
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open", Head: head, At: pr.UpdatedAt.Add(-time.Minute)})
+	if v := read(); !v.Stale {
+		t.Errorf("a verdict decided before the PR's row changed: %+v, want stale", v)
+	}
+	setKV(t, st, engine.KVPROpen(pr.ID), engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open", Head: head, At: now.Add(time.Minute)})
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now.Add(-time.Hour)))
+	if v := read(); !v.Stale {
+		t.Errorf("a verdict with magnum's last tick an hour ago: %+v, want stale", v)
+	}
+	setKV(t, st, engine.KVPROpen(pr.ID), "not a verdict")
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now))
+	if v := read(); v.HasOpen {
+		t.Errorf("a verdict that does not parse: %+v, want none", v)
 	}
 }

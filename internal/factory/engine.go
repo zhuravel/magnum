@@ -151,11 +151,14 @@ type GitHub interface {
 	ActiveLogin(ctx context.Context, repo string) (string, error)
 }
 
-// Magnum is the review daemon as the factory's local review sees it: busy
-// while its real rounds in flight and due fill its limit
-// (max_concurrent_reviews), so a local round takes a free round or waits.
+// Magnum is the review daemon as the factory sees it: busy while its real
+// rounds in flight and due fill its limit (max_concurrent_reviews), so a
+// local round takes a free round or waits; and what its registry says of
+// the factory's PRs (PRStates: the row, the verdict, the loop), which the
+// screen draws and the tick follows.
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
+	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 }
 
 // LocalReviewer runs one round of magnum's review on a task's change in its
