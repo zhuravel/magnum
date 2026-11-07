@@ -30,8 +30,9 @@
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
 #     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
-#     600 KB of eyJ scrubbed in seconds, no notes read through a link, from a file over 1 MiB or a foreign folder,
-#     lens 13's stats command with the local date of the factory's since,
+#     600 KB of eyJ scrubbed in seconds, no notes read through a link, from a folder, an unreadable file, a file over
+#     1 MiB or a foreign folder, notes that start as a left-out note does scrubbed all the same, lens 13's stats
+#     command with the local date of the factory's since,
 #     and a since that is no real time and wrong arguments refused.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
@@ -619,9 +620,10 @@ TZ=UTC touch -t 202610110900 "$ev/factory-tasks/8/notes.md"
 # line break (on the next line, in quotes over two lines, after a key that ends a line of 2,500 characters, and on
 # the first line kept after the key's line was cut as the 81st from the end), and a dotted line of 20,000
 # characters. Task 13's notes are an eyJ repeated over 600 KB. Task 10's notes.md links to a file outside, task 11
-# is a linked folder, task 12's notes.md is over 1 MiB, and a folder named with a non-ASCII digit lies beside them.
+# is a linked folder, task 12's notes.md is over 1 MiB, task 6's is a folder, task 14's starts with what a left-out
+# note says, task 15's cannot be read, task 16 is a file, and a folder named with a non-ASCII digit lies beside them.
 mkdir -p "$ev/factory-tasks/9" "$ev/factory-tasks/10" "$ev/factory-tasks/12" "$ev/outside/11" "$ev/factory-tasks/²" \
-    "$ev/factory-tasks/13"
+    "$ev/factory-tasks/6/notes.md" "$ev/factory-tasks/13" "$ev/factory-tasks/14" "$ev/factory-tasks/15"
 jwt="eyJhbGciOiJIUzI1NiJ9"".eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 leaks=(ghs_abcDEF123_x eyJzdWIiOiIxMjM0NTY3ODkwIn0 opaqueTOKEN123 dXNlcjpodW50ZXIy MIIEsecretbody MIIEtruncat
     AKIAABCDEFGHIJKLMNOP xoxb-123456789012-abcdefghijkl sk-abcdefghijklmnopqrstuvwxyz123456
@@ -651,6 +653,10 @@ ln -s "$ev/outside/11" "$ev/factory-tasks/11"
 echo '- FOREIGN-FOLDER-NOTE' >"$ev/factory-tasks/²/notes.md"
 python3 -c 'print("- " + "eyJ" * 200000)' >"$ev/factory-tasks/13/notes.md"
 TZ=UTC touch -t 202610110900 "$ev/factory-tasks/13/notes.md"
+printf '%s\n' '(notes.md is not a plain file: left out)' '- PREFIX password=PARENSECRET' >"$ev/factory-tasks/14/notes.md"
+echo '- UNREADABLE-NOTE' >"$ev/factory-tasks/15/notes.md"
+chmod 000 "$ev/factory-tasks/15/notes.md"
+echo 'a task folder that is a file' >"$ev/factory-tasks/16"
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
@@ -810,9 +816,14 @@ f_md=$ev/fout/evidence.md
 ! grep -Eq 'LINKED-FILE-NOTE|LINKED-FOLDER-NOTE|BIG-NOTE-LINE|FOREIGN-FOLDER-NOTE' "$f_md" && ! grep -q '^### Task 11 ' "$f_md" &&
     grep -A2 -Fx '### Task 10 (task 10, -)' "$f_md" | grep -Fxq '(notes.md is not a plain file: left out)' &&
     grep -A2 -Fx '### Task 12 (task 12, -)' "$f_md" | grep -Fxq '(notes.md is over 1 MiB: left out)' &&
+    grep -A2 -Fx '### Task 6 (task 6, -)' "$f_md" | grep -Fxq '(notes.md is not a plain file: left out)' &&
+    grep -A2 -Fx '### Task 15 (task 15, -)' "$f_md" | grep -Fxq '(notes.md cannot be read: left out)' &&
+    ! grep -q '^### Task 16 ' "$f_md" && ! grep -q 'UNREADABLE-NOTE' "$f_md" &&
     grep -Fxq '### Task 7 (PR-12345, example/app)' "$f_md" ||
-    fail "the notes skip links, files over 1 MiB and foreign folders: $(fsect 'Factory liaison notes' "$f_md" | cut -c1-600)"
-ok "evidence.sh reads no notes.md that is a link or over 1 MiB, nor one in a linked or foreign folder"
+    fail "the notes skip links, folders, unreadable files, files over 1 MiB and foreign folders: $(fsect 'Factory liaison notes' "$f_md" | cut -c1-600)"
+grep -Fxq '> (notes.md is not a plain file: left out)' "$f_md" && grep -Fxq '> - PREFIX password=<redacted>' "$f_md" &&
+    ! grep -q PARENSECRET "$f_md" || fail "notes that start as a left-out note says are scrubbed: $(grep -F PREFIX "$f_md")"
+ok "evidence.sh reads no notes.md that is a link, a folder, unreadable or over 1 MiB, nor one in a linked or foreign folder"
 
 # 21. evidence.sh prints lens 13's stats command for the factory's since, whose --since takes a date and no time: the
 #     local date of the factory's since, so it starts at or before it, west of UTC too.

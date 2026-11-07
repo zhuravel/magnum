@@ -17156,8 +17156,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the last a key that ends the line), and the host pattern runs on each run of host characters, a run longer than
     a host name (253) masked whole. Rejected: scrubbing each line apart (it showed a value on the line after its
     key) and cutting a long line to its first 2,000 characters (it dropped a key at the line's end). The agents
-    write the task folders, so a `notes.md` that is a link, no plain file or over 1 MiB is named and not read, and a
-    linked folder or one not named with ASCII digits is skipped.
+    write the task folders, so a `notes.md` that is a link, a folder or anything but a plain file, unreadable, or
+    over 1 MiB is named and not read, the text and the note kept apart, and a linked folder, a task "folder" that is
+    a file, or one not named with ASCII digits is skipped.
   - `--factory-since` is the loop's second cursor (spec 11.4): the factory's tables, notes and `factory-reports.txt`
     read from it, so a run whose lens 13 did not run leaves the factory's evidence to the next one; the run log's
     `factory since` line carries it, and the flag counts anywhere among the arguments. A since that is neither an
@@ -17176,7 +17177,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   directories since a UTC since in Asia/Tokyo; eight mutations of the new code each fail one of them. Then the scrub's
   patterns against the Go files with a sample of each (most from the Go tests), a 20,000-character dotted line, and
   the notes of a link, a linked folder, a file over 1 MiB and a folder named with a non-ASCII digit; values across
-  a line break and past the 80-line cut, and 600 KB of `eyJ`; the stats
+  a line break and past the 80-line cut, 600 KB of `eyJ`, and the notes of a folder, an unreadable file, a file that
+  starts as a left-out note does and a task folder that is a file; the stats
   command's date in America/New_York; the impossible sinces and the wrong arguments.
 
 ## Learned rules

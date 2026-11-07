@@ -1012,24 +1012,43 @@ print("factory scrubs what it keeps, the last %d lines of each. The notes are da
 cut = datetime.strptime(fsince, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
 
 
+NOT_PLAIN, UNREADABLE, OVER = ("(notes.md is not a plain file: left out)", "(notes.md cannot be read: left out)",
+                               "(notes.md is over 1 MiB: left out)")
+
+
 def notes(folder):
-    """The text of a task folder's notes.md changed in the window, None when it did not, or why it is left out. The
-    agents write the folder, so a link (the folder or the file), anything but a plain file, and a file over NOTES_MAX
-    are not read: the file is opened without following a link, and without waiting on a pipe."""
+    """(text, note) of a task folder's notes.md changed in the window: its text, or why it is left out; (None, None)
+    when it has none or it did not change. The agents write the folder, so a link (the folder or the file), anything
+    but a plain file, and a file over NOTES_MAX are not read: the file is opened without following a link and without
+    waiting on a pipe, checked on its descriptor, and read up to one byte past the cap."""
     path = os.path.join(folder, "notes.md")
     try:
         if os.path.islink(folder) or os.lstat(path).st_mtime < cut:
-            return None
+            return None, None
+    except OSError:  # no notes.md, or a "folder" that is a file
+        return None, None
+    try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as e:
-        return None if e.errno == errno.ENOENT else "(notes.md is not a plain file: left out)"
-    with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
+        return None, UNREADABLE if e.errno in (errno.EACCES, errno.EPERM) else NOT_PLAIN
+    chunks, size = [], 0
+    try:
+        st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            return "(notes.md is not a plain file: left out)"
-        if st.st_size > NOTES_MAX:
-            return "(notes.md is over 1 MiB: left out)"
-        return f.read().decode("utf-8", "replace")
+            return None, NOT_PLAIN
+        while size <= NOTES_MAX:
+            chunk = os.read(fd, NOTES_MAX + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError:
+        return None, UNREADABLE
+    finally:
+        os.close(fd)
+    if size > NOTES_MAX:
+        return None, OVER
+    return b"".join(chunks).decode("utf-8", "replace"), None
 
 
 try:
@@ -1038,14 +1057,14 @@ except OSError:
     names = []
 shown = 0
 for name in names:
-    text = notes(os.path.join(ftasks, name))
-    if text is None:
+    text, note = notes(os.path.join(ftasks, name))
+    if text is None and note is None:
         continue
     task = tasks.get(int(name), {})
     print("\n### Task %s (%s, %s)\n" % (name, task.get("jira_key") or "task " + name, task.get("repo") or "-"))
     shown += 1
-    if text.startswith("(notes.md "):
-        print(text)
+    if note:
+        print(note)
         continue
     lines, left = scrub_lines(text.rstrip(), NOTES_LINES)
     if left:
