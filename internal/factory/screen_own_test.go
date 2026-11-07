@@ -252,8 +252,9 @@ func TestYourPRsThatMagnumLeavesAloneComeLast(t *testing.T) {
 
 // With two repositories in the factory, your PR's key names its
 // repository (talkable#12, widget#12), so two PRs of one number read apart
-// on home, in the y/N and to a double click; a factory of one repository
-// keeps the bare #12. Before, both read #12.
+// in the y/N and to a double click; on home its row names the repository
+// and its GitHub cell the number, #12. A factory of one repository keeps
+// the bare #12. Before, both read #12.
 func TestYourPRsOfTwoFactoryRepositoriesNameTheirRepository(t *testing.T) {
 	r := newScreenRig(t)
 	r.cfg.Factory.Repos = append(r.cfg.Factory.Repos, config.FactoryRepo{Repo: "example/widget", Base: "main", MainClone: t.TempDir()})
@@ -265,11 +266,14 @@ func TestYourPRsOfTwoFactoryRepositoriesNameTheirRepository(t *testing.T) {
 	d := r.data(time.Time{})
 	for id, want := range map[int64]string{-91: "talkable#12", -92: "widget#12"} {
 		row, ok := rowByID(d, id)
+		repo, _, _ := strings.Cut(want, "#")
 		switch {
 		case !ok:
 			t.Errorf("no row of your PR %d: %+v", id, d.Rows)
-		case row.Key != want || row.GitHub != want || d.Cards[id].Task.Key != want:
-			t.Errorf("your PR %d: key %q, GitHub %q, card %q; want %q", id, row.Key, row.GitHub, d.Cards[id].Task.Key, want)
+		case row.Key != want || d.Cards[id].Task.Key != want:
+			t.Errorf("your PR %d: key %q, card %q; want %q", id, row.Key, d.Cards[id].Task.Key, want)
+		case row.GitHub != "#12" || row.Repo != "example/"+repo:
+			t.Errorf("your PR %d: GitHub %q, repository %q; want #12 of example/%s", id, row.GitHub, row.Repo, repo)
 		}
 	}
 }
@@ -410,5 +414,40 @@ func TestAnOwnPRWhoseLoopStartedAfterItsVerdictMoves(t *testing.T) {
 	if row.Group != tui.GroupYours || row.Mark != tui.MarkWorking || !row.PR.Fixing || row.Move != "" ||
 		row.WaitsOn[0].What != "magnum fixes #4721 (cycle 1 of 3)" {
 		t.Errorf("an own PR whose loop started after its idle verdict: %+v (%+v), want it moving in YOUR PRS", row, row.PR)
+	}
+}
+
+// Home names every repository the factory has, in its config's order, never
+// the first task's alone; and every row names its own: a task's, a
+// published task's by its PR, and your PR's, whose number is its GitHub
+// cell while its key keeps naming the repository for the y/N.
+func TestScreenDataNamesTheRepositoryOfEveryRow(t *testing.T) {
+	r := newScreenRig(t)
+	r.cfg.Factory.Repos = append(r.cfg.Factory.Repos, config.FactoryRepo{Repo: "example/widget", Base: "main", MainClone: t.TempDir()})
+	r.withMagnum()
+	r.at(3 * time.Hour)
+	widget, err := r.reg.CreateTask(r.ctx, registry.Task{Kind: "bug", Repo: "example/widget", Title: "offer page link", Prompt: "fix the offer page link",
+		State: registry.TaskActive, Stage: "coding", Branch: "zhuravel-offer-link"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.at(2 * time.Hour)
+	talkable := r.task("PR-12330", "bug", "Advocate offer email locale", registry.TaskActive, "coding", "", "")
+	published := r.publishedTask("PR-12320", 4530)
+	r.own(91, 12, func(v *PRState) {
+		v.Ref.Repo, v.URL = "example/helm", "https://github.com/example/helm/pull/12"
+	})
+	d := r.data(time.Time{})
+	if want := []string{"example/talkable", "example/widget"}; !slices.Equal(d.Repos, want) {
+		t.Errorf("home's repositories %q, want %q", d.Repos, want)
+	}
+	for id, want := range map[int64]string{widget.ID: "example/widget", talkable.ID: "example/talkable",
+		published.ID: "example/talkable", -91: "example/helm"} {
+		if row, ok := rowByID(d, id); !ok || row.Repo != want {
+			t.Errorf("row %d: %+v, want repository %q", id, row, want)
+		}
+	}
+	if row, _ := rowByID(d, -91); row.Key != "helm#12" || row.GitHub != "#12" {
+		t.Errorf("your PR's row: key %q, GitHub %q; want helm#12 and #12", row.Key, row.GitHub)
 	}
 }

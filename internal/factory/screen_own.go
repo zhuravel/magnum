@@ -113,8 +113,8 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 		w = youWait(off, clauseShort(off), "")
 	}
 	key := s.ownKey(st.Ref)
-	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: key, Title: st.Title, WaitsOn: []tui.WaitsOn{w.on},
-		Since: cmp.Or(w.since, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
+	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: fmt.Sprintf("#%d", n), Repo: st.Ref.Repo, Title: st.Title,
+		WaitsOn: []tui.WaitsOn{w.on}, Since: cmp.Or(w.since, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
 	trackers := s.cfg.TrackersFor(st.Ref.Repo)
 	row.Jira, _ = config.Issue(st.Title, trackers)
 	row.PR = &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff, Off: off,
@@ -136,7 +136,8 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 // ownKey is the key of your PR's row: its number ("#4512") when the
 // factory has one repository and the PR is of it, else its repository's
 // name before it ("shop#12", "widget#12"), so two repositories' PRs are
-// told apart, on home, in a y/N and to a double click.
+// told apart in a y/N, a more line and to a double click. On home the
+// row's REPO column names the repository and its GitHub cell the number.
 func (s *screen) ownKey(r PRRef) string {
 	if repos := s.cfg.Factory.Repos; len(repos) == 1 && strings.EqualFold(repos[0].Repo, r.Repo) {
 		return fmt.Sprintf("#%d", r.Number)

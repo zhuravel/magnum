@@ -159,9 +159,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		}
 		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and YOUR PRS: the oldest wait first
 	})
-	if repo := s.repo(); repo != "" {
-		d.Repos = []string{repo}
-	}
+	d.Repos = s.repos()
 	switch {
 	case o.DaemonDown: // nothing moves: no hold of the last daemon's is in force, and no agent works for it
 		d.Blocking, d.BlockingLong = []string{daemonDownShort}, []string{daemonDownLong}
@@ -297,7 +295,7 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 func unreadable(t registry.Task, err error) (tui.FactoryRow, tui.FactoryCards) {
 	what := "the screen cannot read it: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 	w := tui.WaitsOn{Who: waitsYou, What: what, Short: "the screen cannot read it", OnYou: true}
-	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Group: tui.GroupNeedsYou, Mark: tui.MarkNeedsYou,
+	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Repo: t.Repo, Group: tui.GroupNeedsYou, Mark: tui.MarkNeedsYou,
 		WaitsOn: []tui.WaitsOn{w}, Since: t.Updated, Move: "see the task card", MoveShort: "task card", Help: waitsYou + ": " + what}
 	card := tui.TaskCard{Key: row.Key, Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
 		Started: t.Created, WaitingFor: waitsYou + ": " + what}
@@ -399,7 +397,7 @@ func (s *screen) readQuestions(v *taskView) error {
 // task is task v's row on home, its cards and the decisions it owes you.
 func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	t := v.t
-	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Group: v.group, Since: v.since}
+	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Repo: prRef(v).Repo, Group: v.group, Since: v.since}
 	if n := cmp.Or(v.link.Number, t.PRNumber); n > 0 {
 		row.GitHub = "#" + strconv.Itoa(n)
 	}
@@ -1083,17 +1081,24 @@ func (s *screen) alerts() ([]tui.FactoryAlert, error) {
 	return out, nil
 }
 
-// repo names the repository home is of: the only configured one, else the
-// first task's.
-func (s *screen) repo() string {
-	full := ""
-	switch {
-	case len(s.cfg.Factory.Repos) == 1:
-		full = s.cfg.Factory.Repos[0].Repo
-	case len(s.tasks) > 0:
-		full = s.tasks[0].Repo
+// repos are the repositories home is of, which its title names: the
+// configured ones, in the config's order; without any, the tasks'.
+func (s *screen) repos() []string {
+	var out []string
+	add := func(full string) {
+		if full != "" && !slices.ContainsFunc(out, func(r string) bool { return strings.EqualFold(r, full) }) {
+			out = append(out, full)
+		}
 	}
-	return full
+	for _, r := range s.cfg.Factory.Repos {
+		add(r.Repo)
+	}
+	if len(out) == 0 {
+		for _, t := range s.tasks {
+			add(t.Repo)
+		}
+	}
+	return out
 }
 
 // blockingLines are the blocker lines of the holds of the machine in force,
