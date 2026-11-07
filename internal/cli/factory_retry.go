@@ -23,7 +23,8 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"stage's own checks run again (a file you fixed, the local review's fresh loop after it stopped for you, "+
 			"what a check kept for you, the publish's checks before any step); a prompt whose delivery is unknown is "+
 			"still sent to nobody (`magnum factory let-go` lets one go, once you looked at its pane), and a task Codex never "+
-			"works on stays so. A task that "+
+			"works on stays so. When the task waits on a precheck failure and nothing changed since (the branch's head, "+
+			"the precheck commands, their environment), the answer says so, and the task still goes on. A task that "+
 			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`).",
 		func(pos []string) int { return runFactoryRetryCmd(c, pos) })
 }
