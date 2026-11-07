@@ -204,6 +204,10 @@ func magnumWait(st PRState, n int, own bool) prWait {
 		w := fixingWait(st, n)
 		w.since = st.Fix.StartedAt
 		return w
+	case st.State == store.PRNeedsAttention && (!st.HasOpen || st.Stale):
+		// magnum's own row says it needs you: a verdict to come or one gone
+		// stale never hides it as "looking at".
+		return attentionWait(st, n)
 	case st.HasOpen && st.Stale:
 		return waitsWait("magnum", looking, "", "")
 	case st.HasOpen:

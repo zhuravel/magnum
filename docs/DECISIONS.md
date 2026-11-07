@@ -17317,6 +17317,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   key opened the report, no card listed the items), and the goldens `fixer-100/140/200` and `task-fixer-100/140`;
   after review, TestFixNeedsAskedKeepsWhatTheAttentionStillAsks and TestTaskCardCleansTheFixersItems (no test
   held the card's scrub of the items).
+- **A published task's PR in needs attention is in NEEDS YOU, whatever the look's verdict** (2026-11-07, a
+  2026-11-07 audit found it live). `magnumWait` read a verdict still to come under autofix = "open", or one gone
+  stale, before magnum's own row, so a PR that magnum had put in needs attention sat under WAITS ON OTHERS as
+  "magnum: looking at #N" for 12 hours. Your own PR's row already had this override. Now the attention comes
+  first unless a fresh verdict stands (a fresh one says needs you for it too, by rule 2). Test, failing first:
+  TestAPublishedTaskInNeedsAttentionNeedsYouWithoutAFreshVerdict (both cases said "looking at #N").
 
 ## Learned rules
 

@@ -160,6 +160,37 @@ func TestAStaleOpenRowIsNeverIdle(t *testing.T) {
 	}
 }
 
+// A PR in needs attention needs you whatever the look's verdict is: one to
+// come under autofix = "open", or one gone stale, never hides it under
+// WAITS ON OTHERS as "looking at".
+func TestAPublishedTaskInNeedsAttentionNeedsYouWithoutAFreshVerdict(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12329", 4539)
+	msg := "fix: 1 finding needs your call (5808905525 description)"
+	for name, edit := range map[string]func(*PRState){
+		"a verdict to come": func(v *PRState) { v.OpenWatch = true },
+		"a stale verdict": func(v *PRState) {
+			v.OpenWatch, v.HasOpen, v.Stale = true, true, true
+			v.Open = verdict(engine.OpenNeedsYou, "needs your attention (fix)")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r.pr(4539, func(v *PRState) {
+				v.State, v.Attention, v.AttentionMsg = store.PRNeedsAttention, "fix", msg
+				edit(v)
+			})
+			row := rowOf(t, r.data(time.Time{}), "PR-12329")
+			if row.Group != tui.GroupNeedsYou || len(row.WaitsOn) == 0 || !row.WaitsOn[0].OnYou {
+				t.Fatalf("a PR in needs attention with %s: %+v, want NEEDS YOU", name, row)
+			}
+			if w := row.WaitsOn[0]; strings.Contains(w.What, "looking at") {
+				t.Errorf("its wait says %q, want the attention", w.What)
+			}
+		})
+	}
+}
+
 // An idle PR a person approved needs only your merge: NEEDS YOU, the
 // merge your move, and the commits pushed after the approval named.
 func TestAnIdleApprovedPRWaitsOnYouToMerge(t *testing.T) {
