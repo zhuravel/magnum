@@ -171,9 +171,13 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 		Code: prstatus.Code{Commits: card.Commits, Proof: prstatus.ProofNone},
 		LocalReview: prstatus.LocalReview{Rounds: card.Review.Rounds, Verdict: verdictOf(card.Review.Exit),
 			NotesOpen: len(knownLines(card.Review, false))},
-		FixLoop: fixLoopOf(st, fix), Staging: prstatus.Staging{State: prstatus.StagingNone}, Now: nowOf(j.t, st)}
+		FixLoop: fixLoopOf(st, fix), Staging: prstatus.Staging{State: prstatus.StagingNone}, Now: nowOf(j.t, st, now, e.cfg.Daemon.CloseGrace.Duration)}
 	if p, ok := readProof(dir); ok {
 		s.Code.Proof, s.Code.Specs = proofOf(p, true), len(p.Specs)
+	}
+	if old, ok, err := prstatus.Read(j.path); err == nil && ok { // magnum prunes old events: a count never goes down
+		s.FixLoop.Pushes = max(s.FixLoop.Pushes, old.FixLoop.Pushes)
+		s.FixLoop.ThreadsAnswered = max(s.FixLoop.ThreadsAnswered, old.FixLoop.ThreadsAnswered)
 	}
 	return s, nil
 }
@@ -248,10 +252,9 @@ func fixLoopOf(st PRState, fix FixRecord) prstatus.FixLoop {
 
 // nowOf is who task t's PR waits on and the task's stage, in the file's
 // words: an ended task's end, waiting on nobody; a published one's PR
-// waits as its row on the screen says (magnumWait, by magnum's view st):
-// on you while the task waits on you (its PR closed past the grace), on
-// nobody once merged, on magnum while a closed PR may still reopen.
-func nowOf(t registry.Task, st PRState) prstatus.Now {
+// waits as its row on the screen says (publishedWait, by magnum's view st
+// at now, a closed PR waiting grace for a reopen).
+func nowOf(t registry.Task, st PRState, now time.Time, grace time.Duration) prstatus.Now {
 	switch t.State {
 	case registry.TaskDone:
 		return prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageDone}
@@ -260,45 +263,35 @@ func nowOf(t registry.Task, st PRState) prstatus.Now {
 	case registry.TaskFailed:
 		return prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageFailed}
 	}
-	now := prstatus.Now{Who: prstatus.WhoMagnum, Stage: prstatus.StagePublished}
-	switch {
-	case waitsOnYou(t):
-		now.Who = prstatus.WhoYou
-	case st.GHState == store.GHMerged:
-		now.Who = prstatus.WhoNone
-	case st.GHState == store.GHClosed: // within [daemon] close_grace: a reopen may come
-	default:
-		now.Who = whoOf(magnumWait(st, st.Ref.Number, false).on.Who)
-	}
-	return now
+	return prstatus.Now{Who: whoOf(publishedWait(t, st.Ref, st, now, grace).on.Who), Stage: prstatus.StagePublished}
 }
 
-// whoOf is who a published task's row waits on (magnumWait) in the file's
-// words: magnum for magnum, its fixer at work and any word of a later
-// build.
+// whoOf is who a published task's row waits on (publishedWait) in the
+// file's words: magnum for magnum, its fixer at work and any word of a
+// later build.
 func whoOf(who string) prstatus.Who {
 	switch who {
 	case waitsYou:
 		return prstatus.WhoYou
-	case "reviewers":
+	case waitReviewers:
 		return prstatus.WhoReviewers
-	case "CI":
+	case waitCI:
 		return prstatus.WhoCI
-	case "nothing":
+	case waitNothing:
 		return prstatus.WhoNone
 	}
 	return prstatus.WhoMagnum
 }
 
-// statusFailed logs the failure err of task id's status file, once while
-// it stays the same.
+// statusFailed logs the failure err of task id's status file, once until
+// a write of it succeeds: the error's words change from one try to the next
+// (a refused temporary file has a new random name each time).
 func (e *Engine) statusFailed(id int64, err error) {
-	msg := textx.FirstLine(execx.Redact(err.Error()))
-	if e.statusErrs[id] == msg {
+	if e.statusErrs[id] {
 		return
 	}
-	e.statusErrs[id] = msg
-	e.log.Warn("a published PR's status file is not written", "task", id, "err", msg)
+	e.statusErrs[id] = true
+	e.log.Warn("a published PR's status file is not written", "task", id, "err", textx.FirstLine(execx.Redact(err.Error())))
 }
 
 // statusReadFailed logs a failed read of magnum's registry for the status

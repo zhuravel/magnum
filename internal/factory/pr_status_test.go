@@ -290,29 +290,103 @@ func TestAnEndedTaskGetsOneLastWriteAndNoneAfter(t *testing.T) {
 	}
 }
 
-// A status file that cannot be written is logged once while the failure
-// stays the same, and costs the tick nothing: the PR is still followed.
+// A status file that cannot be written is logged once until a write
+// succeeds, whatever the error says each time (a refused temporary file
+// has a new random name on each tick), and costs the tick nothing: the PR
+// is still followed. A failure after a write that worked is logged again.
 func TestAFailedStatusWriteIsLoggedOnceAndTheTickGoesOn(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		breakIt func(r *followRig) (mend func())
+	}{
+		{"a file where its folder goes", func(r *followRig) func() {
+			path := filepath.Join(r.layout.FactoryPRStatus(), "example")
+			if err := os.MkdirAll(r.layout.FactoryPRStatus(), 0o700); err != nil {
+				r.t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("not a folder"), 0o600); err != nil {
+				r.t.Fatal(err)
+			}
+			return func() {
+				if err := os.Remove(path); err != nil {
+					r.t.Fatal(err)
+				}
+			}
+		}},
+		{"a folder that refuses new files", func(r *followRig) func() {
+			dir := filepath.Dir(r.statusPath())
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				r.t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0o500); err != nil {
+				r.t.Fatal(err)
+			}
+			r.t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			return func() {
+				if err := os.Chmod(dir, 0o700); err != nil {
+					r.t.Fatal(err)
+				}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newFollowRig(t)
+			r.published("fail")
+			mend := c.breakIt(r)
+			for range 3 {
+				r.clock.Add(time.Minute)
+				if err := r.e.Tick(r.ctx); err != nil {
+					t.Fatalf("a failed status write failed the tick: %v", err)
+				}
+			}
+			if n := strings.Count(r.log.String(), "status file"); n != 1 {
+				t.Errorf("the failed write is logged %d times over 3 ticks, want once:\n%s", n, r.log.String())
+			}
+			mend()
+			r.tick()
+			if _, ok := r.status(); !ok {
+				t.Fatal("no status file once the folder takes it")
+			}
+			dir := filepath.Dir(r.statusPath())
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			r.magnum.setFix(followRef, FixRecord{Loops: 1, Cycle: 1, Pushes: 1})
+			r.tick()
+			r.tick()
+			if n := strings.Count(r.log.String(), "status file"); n != 2 {
+				t.Errorf("a failure after a write that worked is logged %d times in all, want 2:\n%s", n, r.log.String())
+			}
+			r.prIs(store.GHMerged, r.clock.Now())
+			r.tick()
+			if got := r.reload(r.task.ID); got.State != registry.TaskDone {
+				t.Fatalf("after a failed status write the merged PR's task is %s, want done", got.State)
+			}
+		})
+	}
+}
+
+// The fix loop's pushes and threads in the file never go down: magnum
+// prunes old events ([daemon] keep_events), and a daemon that starts after
+// it counts fewer, so the file keeps the larger of its count and the
+// record's.
+func TestTheFixLoopsCountsInTheStatusFileNeverGoDown(t *testing.T) {
 	r := newFollowRig(t)
-	r.published("fail")
-	if err := os.MkdirAll(r.layout.FactoryPRStatus(), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(r.layout.FactoryPRStatus(), "example"), []byte("not a folder"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := r.e.Tick(r.ctx); err != nil {
-			t.Fatalf("a failed status write failed the tick: %v", err)
-		}
-	}
-	if n := strings.Count(r.log.String(), "status file"); n != 1 {
-		t.Errorf("the failed write is logged %d times over 2 ticks, want once:\n%s", n, r.log.String())
-	}
-	r.prIs(store.GHMerged, r.clock.Now())
+	r.published("pruned")
+	r.magnum.setFix(followRef, FixRecord{Loops: 1, Cycle: 2, Pushes: 3, Threads: 6})
 	r.tick()
-	if got := r.reload(r.task.ID); got.State != registry.TaskDone {
-		t.Fatalf("after a failed status write the merged PR's task is %s, want done", got.State)
+	r.magnum.setFix(followRef, FixRecord{Loops: 1, Cycle: 2, Pushes: 1, Threads: 2})
+	r.restart()
+	r.clock.Add(time.Minute)
+	r.tick()
+	if got := r.mustStatus().FixLoop; got.Pushes != 3 || got.ThreadsAnswered != 6 {
+		t.Errorf("after magnum pruned events: %+v, want 3 pushes and 6 threads kept", got)
+	}
+	r.magnum.setFix(followRef, FixRecord{Loops: 2, Cycle: 1, Pushes: 4, Threads: 7})
+	r.tick()
+	if got := r.mustStatus().FixLoop; got.Pushes != 4 || got.ThreadsAnswered != 7 {
+		t.Errorf("after a new push: %+v, want 4 pushes and 7 threads", got)
 	}
 }
 
@@ -358,6 +432,10 @@ func TestWhoAPublishedPRWaitsOnInTheStatusFile(t *testing.T) {
 	published := registry.Task{ID: 1, State: registry.TaskPublished, PRNumber: 4530}
 	closedYou := published
 	closedYou.WaitsWho, closedYou.WaitsWhat = waitsYou, closedWait(4530)
+	grace := time.Hour
+	closedAt := func(ago time.Duration) PRState {
+		return PRState{Ref: followRef, Found: true, DaemonUp: true, GHState: store.GHClosed, ClosedAt: new(t0.Add(-ago))}
+	}
 	cases := []struct {
 		name string
 		t    registry.Task
@@ -373,12 +451,16 @@ func TestWhoAPublishedPRWaitsOnInTheStatusFile(t *testing.T) {
 		{"approved: the merge is yours", published, verdict(engine.OpenIdle, "nothing open", true), prstatus.WhoYou},
 		{"the PR needs you", published, verdict(engine.OpenNeedsYou, "a thread", false), prstatus.WhoYou},
 		{"it needs your attention", published, func() PRState { p := up; p.OpenWatch, p.State = false, store.PRNeedsAttention; return p }(), prstatus.WhoYou},
-		{"closed, past the grace", closedYou, PRState{Found: true, DaemonUp: true, GHState: store.GHClosed}, prstatus.WhoYou},
-		{"closed, within the grace", published, PRState{Found: true, DaemonUp: true, GHState: store.GHClosed}, prstatus.WhoMagnum},
+		{"fix is off", published, func() PRState { p := verdict(engine.OpenOff, "", false); p.Open.Off = engine.OpenOffFixOff; return p }(),
+			prstatus.WhoYou},
+		{"a repository magnum does not watch", published, PRState{Ref: followRef, DaemonUp: true}, prstatus.WhoYou},
+		{"closed, past the grace", closedYou, closedAt(2 * time.Hour), prstatus.WhoYou},
+		{"closed past the grace, before the tick marks it", published, closedAt(2 * time.Hour), prstatus.WhoYou},
+		{"closed, within the grace", published, closedAt(time.Minute), prstatus.WhoMagnum},
 		{"merged", published, PRState{Found: true, DaemonUp: true, GHState: store.GHMerged}, prstatus.WhoNone},
 	}
 	for _, c := range cases {
-		if got := nowOf(c.t, c.pr); got != (prstatus.Now{Who: c.want, Stage: prstatus.StagePublished}) {
+		if got := nowOf(c.t, c.pr, t0, grace); got != (prstatus.Now{Who: c.want, Stage: prstatus.StagePublished}) {
 			t.Errorf("%s: %+v, want %s at published", c.name, got, c.want)
 		}
 	}
@@ -386,7 +468,7 @@ func TestWhoAPublishedPRWaitsOnInTheStatusFile(t *testing.T) {
 		registry.TaskFailed: prstatus.StageFailed} {
 		ended := published
 		ended.State = state
-		if got := nowOf(ended, verdict(engine.OpenNeedsYou, "a thread", false)); got != (prstatus.Now{Who: prstatus.WhoNone, Stage: stage}) {
+		if got := nowOf(ended, verdict(engine.OpenNeedsYou, "a thread", false), t0, grace); got != (prstatus.Now{Who: prstatus.WhoNone, Stage: stage}) {
 			t.Errorf("a task %s: %+v, want none at %s", state, got, stage)
 		}
 	}

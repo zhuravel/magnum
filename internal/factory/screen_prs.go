@@ -135,6 +135,16 @@ func (s *screen) doneAt(t registry.Task) time.Time {
 	return t.Updated
 }
 
+// The words of who a published task's PR waits on besides you, magnum and
+// its fixer at work (waitMagnum, waitAgent): the PR's reviewers, its CI,
+// and nothing once it merged. The PR's status file maps them to its own
+// words (whoOf).
+const (
+	waitReviewers = "reviewers"
+	waitCI        = "CI"
+	waitNothing   = "nothing"
+)
+
 // prWaitOf is the wait of published task v whose PR magnum's registry
 // tells as st (read false: it could not be read, err says why), with since
 // when the PR has waited so where magnum's registry tells it: a verdict's
@@ -143,14 +153,7 @@ func (s *screen) doneAt(t registry.Task) time.Time {
 // last).
 func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait {
 	t := v.t
-	ref := prRef(v)
-	n := ref.Number
-	looking := fmt.Sprintf("looking at #%d", n)
-	closedYou := func() prWait {
-		w := youWait(fmt.Sprintf("PR #%d closed without a merge", n), "", fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove))
-		w.move, w.moveShort = reopenMove, "reopen or x"
-		return w
-	}
+	looking := fmt.Sprintf("looking at #%d", prRef(v).Number)
 	switch {
 	case !read && waitsOnYou(t): // the tick's own wait on you (a close past the grace) stands
 		return youWait(t.WaitsWhat, clauseShort(t.WaitsWhat), "")
@@ -159,27 +162,44 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 		if err != nil {
 			why += ": " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 		}
-		return waitsWait("magnum", looking, "", looking+": "+why)
+		return waitsWait(waitMagnum, looking, "", looking+": "+why)
+	}
+	return publishedWait(t, prRef(v), st, s.now, s.cfg.Daemon.CloseGrace.Duration)
+}
+
+// publishedWait is the wait of published task t whose PR ref magnum's
+// registry tells as st, at now: a repository no watch covers is yours, a
+// merge waits on nothing, a close waits grace for a reopen and then on
+// you, and an open PR waits as magnum tells it (magnumWait). The screen's
+// row (prWaitOf) and the PR's status file (nowOf) both say it.
+func publishedWait(t registry.Task, ref PRRef, st PRState, now time.Time, grace time.Duration) prWait {
+	n := ref.Number
+	closedYou := func() prWait {
+		w := youWait(fmt.Sprintf("PR #%d closed without a merge", n), "", fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove))
+		w.move, w.moveShort = reopenMove, "reopen or x"
+		return w
+	}
+	switch {
 	case !st.Found && !st.Watched: // nothing tells the task when you did
 		what := fmt.Sprintf("magnum does not watch %s: merge or close #%d yourself, then x drops the task", ref.Repo, n)
 		w := youWait(what, clauseShort(what), "")
 		w.move, w.moveShort = fmt.Sprintf("merge or close #%d, then x drops the task", n), "then x"
 		return w
 	case st.GHState == store.GHMerged:
-		return prWait{group: tui.GroupDone, mark: tui.MarkDone, on: tui.WaitsOn{Who: "nothing", What: "merged " + clock(cmp.Or(store.Deref(st.MergedAt), t.Updated))}}
+		return prWait{group: tui.GroupDone, mark: tui.MarkDone, on: tui.WaitsOn{Who: waitNothing, What: "merged " + clock(cmp.Or(store.Deref(st.MergedAt), t.Updated))}}
 	case st.GHState == store.GHClosed:
 		closed := cmp.Or(store.Deref(st.ClosedAt), t.Updated)
-		until := closed.Add(s.cfg.Daemon.CloseGrace.Duration)
+		until := closed.Add(grace)
 		if waitsOnYou(t) { // the tick's span says since when
 			return closedYou()
 		}
-		if !s.now.Before(until) { // the tick has not marked it yet
+		if !now.Before(until) { // the tick has not marked it yet
 			w := closedYou()
 			w.since = until
 			return w
 		}
 		what := fmt.Sprintf("#%d closed %s; the task waits until %s for a reopen", n, clock(closed), clock(until))
-		w := waitsWait("magnum", what, clauseShort(what), "")
+		w := waitsWait(waitMagnum, what, clauseShort(what), "")
 		w.since = closed
 		return w
 	}
@@ -337,7 +357,7 @@ func verdictWait(st PRState, n int, own bool) prWait {
 			w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
 			return w
 		}
-		return waits("reviewers", o.Why, short, "")
+		return waits(waitReviewers, o.Why, short, "")
 	case engine.OpenOff:
 		what := offWait(o.Off, n, own)
 		return you(what, clauseShort(what), "")
@@ -345,9 +365,9 @@ func verdictWait(st PRState, n int, own bool) prWait {
 		who := "magnum"
 		switch {
 		case strings.HasPrefix(o.Why, "CI "):
-			who = "CI"
+			who = waitCI
 		case strings.HasPrefix(o.Why, "settling"):
-			who = "reviewers"
+			who = waitReviewers
 		}
 		return waits(who, o.Why, short, "")
 	}

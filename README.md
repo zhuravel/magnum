@@ -4329,21 +4329,22 @@ task published and, after `[daemon] close_grace`, has it wait on you (`PR #4530 
 or x drops the task`, alerted once), and a reopen clears that wait. A task whose PR closed stays out of the live
 stages: a retry refuses it.
 
-**The PR's status file.** Each tick also writes, for every PR a task published, the file that magnum's status
-comment on the PR renders as its factory part: `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`
-(`internal/prstatus` holds its contract). It holds counts, fixed words and times, never the text of a PR, a ticket,
-a question or an agent: the task's id; the plan (the questions it asked you that stand, and the ones you answered);
-the code (the branch's commits after the base, as the ready card you pushed counted them; the factory's proof,
-`none`, `red`, `red_to_green`, or `green` for a kind whose proof is green; its spec files); the local review (its
-rounds, its end, `clean`, `findings` or `failed`, and the notes it left open, the PR body's Known list); the
-publish time; magnum's fix loop on the PR, from magnum's registry (`none`, `running`, `needs_you` while its end
-left the PR to you and it still needs your attention, `done`, or `off`, with the cycle, the fixers' pushes and the
-review threads they replied in); and now, who the PR waits on (`you`, `magnum`, `reviewers`, `ci` or `none`, as
-the task's row says) and the stage (`published`, then `done`, `stopped` or `failed`). The Jira row stays empty
-while the factory keeps no status of the issue, and so does the staging row. The file is written only when its
-content changes, so its `updated_at` is the time of the last change, and a task that ended gets one last write with
-its end and none after. Nothing is written before the publish, or while magnum's registry cannot be read (the file
-keeps its last content); a write that fails is logged once and holds nothing up.
+**The PR's status file.** Each tick also writes, for every PR a task published, the file that magnum's status comment
+on the PR renders as its factory part: `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`
+(`internal/prstatus` holds its contract). It holds counts, fixed words and times, never the text of a PR, a ticket, a
+question or an agent: the task's id; the plan (the questions it asked you that stand, and the ones you answered); the
+code (the branch's commits after the base, as the ready card you pushed counted them; the factory's proof, `none`,
+`red`, `red_to_green`, or `green` for a kind whose proof is green; its spec files); the local review (its rounds, its
+end, `clean`, `findings` or `failed`, and the notes it left open, the PR body's Known list); the publish time;
+magnum's fix loop on the PR, from magnum's registry (`none`, `running`, `needs_you` while its end left the PR to you
+and it still needs your attention, `done`, or `off`, with the cycle, the fixers' pushes and the review threads they
+replied in, never fewer than the file had, since magnum prunes old events); and now, who the PR waits on (`you`,
+`magnum`, `reviewers`, `ci` or `none`, as the task's row says) and the stage (`published`, then `done`, `stopped` or
+`failed`). The Jira row stays empty while the factory keeps no status of the issue, and so does the staging row. The
+file is written only when its content changes, so its `updated_at` is the time of the last change, and a task that
+ended gets one last write with its end and none after. Nothing is written before the publish, or while magnum's
+registry cannot be read (the file keeps its last content); a write that fails is logged once until a write succeeds
+and holds nothing up.
 
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
 wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's

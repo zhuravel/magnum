@@ -17325,57 +17325,6 @@ skill versions); people add theirs to the sections before it, at the end of the 
   secrets a cut would part from their keys, and the notes of a folder, an unreadable file, a file that starts as a
   left-out note does and a task folder that is a file; the stats command's date in America/New_York; the impossible
   sinces and the wrong arguments.
-- **The factory writes each published PR's status file** (2026-11-07, roadmap R48, the writer's slice of "One status
-  comment per factory PR: the factory part's file and its contract"). A step of the tick right after `followPRs`
-  (`writePRStatuses`, internal/factory/pr_status.go) writes, for every task with a published PR, the file
-  `prstatus.Path` names, with `prstatus.Write`, which writes only when the content changed. It only reads, and
-  cheaply: the tasks the tick loaded, the PR states `followPRs` read (it returns them now, so magnum's registry is
-  not opened a second time for them), the task's link, questions, ready card and proof, and one
-  `Magnum.FixRecords` read per tick; a task that ended since `followPRs` last read its PR has it read once more.
-  - The data map: the plan counts the questions that stand (open or answered: a question a later revision voided
-    was replaced, so counting it would show an answer missing) and the answered ones; the code is the ready card's
-    commit count, the proof (`factory-proof.json`: passed with a base run is `red_to_green`, passed without one
-    `green`, red on the base with the head not green `red`, else `none`) and its spec files; the local review is
-    the card's review summary, its rounds, its exit (clean, findings for an oscillation, the cap or a stop for you,
-    failed for an unavailable review) and its Known list's length (`knownLines`); the publish time is the PR
-    link's; the fix loop is running while magnum's fix row says so (its cycle), off with magnum's opt-out, none
-    before a first loop, needs you while the newest loop's end left the PR to you and the PR is still in
-    needs_attention, else done; who the PR waits on maps the words of the task's row (`magnumWait`: an agent at
-    work is magnum, `CI` is ci, `nothing` is none) after the task's own wait on you, a merge (none) and a close
-    within the grace (magnum, as the row says).
-  - The commit count is recorded on the ready card (`ReadyCardFile.Commits`, from the commits after
-    origin/<base> that `branchHead` already lists), so the tick never runs git: the copy is released at the
-    publish and may be another task's by then. A card an older build drew counts 0, and a task at its card when
-    this build starts gets one new revision of it (the file gained a field); the push binds the head, the report
-    and the diff, not the revision, so a push decided on the old revision still holds.
-  - Magnum's fix row lasts only while a loop runs, so the counts come from its events (`FixRecord`: fix.start's
-    cycle and the loops of cycle 1, fix.pushed, fix.replied's threads, and whether the newest start or end left
-    the PR to you: fix.needs_you, fix.capped, fix.failed). The daemon's `Magnum` folds each PR's events as it
-    reads them and reads only those after the last it folded (`EventsMatching` after an id), the whole kept
-    history once per daemon; events `[daemon] keep_events` pruned count no more after a restart.
-  - Jira stays empty: the factory's registry holds no status of the issue (its refresh is R26), and the contract
-    takes a key only with a status. Staging stays empty until R27.
-  - A task that ended (done, stopped, failed) gets one last write, its end as its stage and waiting on nobody, and
-    none after: the daemon remembers it, and a later daemon reads the file once and finds the end there. A task
-    that ended without a file (one an older build published) gets none, so the first start of this build writes
-    nothing for old PRs.
-  - Nothing is written without a `Magnum`, before the publish (a link whose move to published was cut has no PR
-    number), or while magnum's registry cannot be read: the file keeps its last content rather than a fix loop of
-    none. A failure (a write, a read of the factory's registry, a repository name `prstatus.Path` refuses) is
-    logged once per task while it stays the same, and a failed read of magnum's registry once; neither fails the
-    tick.
-  Rejected: counting the commits with git each tick (the copy is gone after the publish); reading the PR's whole
-  event history each tick (FixLoopsOf does, for a command; a tick every 45 seconds would read hundreds of rows per
-  PR for nothing new); the Jira key with the status `unknown` (every factory PR would say "unknown" until R26);
-  a final write for every ended task with a PR (the first start would write files for PRs merged long ago); writing
-  only at the publish (the fix loop and who the PR waits on move after it). Tests, failing first:
-  TestAPublishedPRsStatusFileHoldsTheFactorysCountsAndWords, TestNoStatusFileForATaskWithoutAPublishedPR,
-  TestAnUnchangedPRStatusIsNotWrittenAgain, TestAChangeOfMagnumsFixLoopChangesTheStatusFile,
-  TestAnEndedTaskGetsOneLastWriteAndNoneAfter (a merge and a stop, with a restart),
-  TestAFailedStatusWriteIsLoggedOnceAndTheTickGoesOn, TestNoFreeTextReachesThePRStatusFile,
-  TestWhoAPublishedPRWaitsOnInTheStatusFile, TestTheProofAndTheReviewInTheStatusFile,
-  TestAnUnreadableFixRecordKeepsTheStatusFile, TestThePublishedPRsStatusFileCountsTheCommitsOfItsCard (the
-  ready card's count, through a real publish) and TestFixRecordsFoldTheFixEventsOfAPR.
 
 - **The factory screen says what magnum's fixer left you, and e opens its report** (2026-11-07, approved by the
   operator). An own PR's fix loop ended with one `Needs you` item (change a phrase of the PR body), and the
@@ -17431,6 +17380,66 @@ skill versions); people add theirs to the sections before it, at the end of the 
   "magnum: looking at #N" for 12 hours. Your own PR's row already had this override. Now the attention comes
   first unless a fresh verdict stands (a fresh one says needs you for it too, by rule 2). Test, failing first:
   TestAPublishedTaskInNeedsAttentionNeedsYouWithoutAFreshVerdict (both cases said "looking at #N").
+- **The factory writes each published PR's status file** (2026-11-07, roadmap R48, the writer's slice of "One status
+  comment per factory PR: the factory part's file and its contract"). A step of the tick right after `followPRs`
+  (`writePRStatuses`, internal/factory/pr_status.go) writes, for every task with a published PR, the file
+  `prstatus.Path` names, with `prstatus.Write`, which writes only when the content changed. It only reads, and
+  cheaply: the tasks the tick loaded, the PR states `followPRs` read (it returns them now, so magnum's registry is
+  not opened a second time for them), the task's link, questions, ready card and proof, and one
+  `Magnum.FixRecords` read per tick; a task that ended since `followPRs` last read its PR has it read once more.
+  - The data map: the plan counts the questions that stand (open or answered: a question a later revision voided
+    was replaced, so counting it would show an answer missing) and the answered ones; the code is the ready card's
+    commit count, the proof (`factory-proof.json`: passed with a base run is `red_to_green`, passed without one
+    `green`, red on the base with the head not green `red`, else `none`) and its spec files; the local review is
+    the card's review summary, its rounds, its exit (clean, findings for an oscillation, the cap or a stop for you,
+    failed for an unavailable review) and its Known list's length (`knownLines`); the publish time is the PR
+    link's; the fix loop is running while magnum's fix row says so (its cycle), off with magnum's opt-out, none
+    before a first loop, needs you while the newest loop's end left the PR to you and the PR is still in
+    needs_attention, else done, its pushes and threads never below the file's own (magnum prunes old events,
+    so a later daemon can count fewer); who the PR waits on is the task's row's (`publishedWait`, which the
+    screen's `prWaitOf` calls too, so the two cannot drift), its words mapped to the file's: an agent at work
+    is magnum, `CI` is ci, `nothing` is none, so a repository no watch covers or a close past the grace is
+    you, a merge none and a close within the grace magnum.
+  - The commit count is recorded on the ready card (`ReadyCardFile.Commits`, from the commits after
+    origin/<base> that `branchHead` already lists), so the tick never runs git: the copy is released at the
+    publish and may be another task's by then. A card an older build drew counts 0. A card this build draws
+    again (a retry at the card, or a change of the branch, the report or the diff) gets a new revision, since
+    the file gained a field; a task that waits at its card waits on you and is not live, so a start of this
+    build draws nothing. A push binds the head, the report and the diff, not the revision, so a decision on
+    the old revision stays valid, and `magnum factory decide --card N` tells you to read the new card.
+  - Magnum's fix row lasts only while a loop runs, so the counts come from its events (`FixRecord`: fix.start's
+    cycle and the loops of cycle 1, fix.pushed, fix.replied's threads, and whether the newest start or end left
+    the PR to you: fix.needs_you, fix.capped, fix.failed). The daemon's `Magnum` folds each PR's events as it
+    reads them and reads only those after the last it folded (`EventsMatching` after an id), the whole kept
+    history once per daemon; events `[daemon] keep_events` pruned count no more after a restart, so the file
+    keeps the larger of its pushes and threads and the record's.
+  - Jira stays empty: the factory's registry holds no status of the issue (its refresh is R26), and the contract
+    takes a key only with a status. Staging stays empty until R27.
+  - A task that ended (done, stopped, failed) gets one last write, its end as its stage and waiting on nobody, and
+    none after: the daemon remembers it, and a later daemon reads the file once and finds the end there. A task
+    that ended without a file (one an older build published) gets none, so the first start of this build writes
+    nothing for old PRs.
+  - Nothing is written without a `Magnum`, before the publish (a link whose move to published was cut has no PR
+    number), or while magnum's registry cannot be read: the file keeps its last content rather than a fix loop of
+    none. A failure (a write, a read of the factory's registry, a repository name `prstatus.Path` refuses) is
+    logged once per task until a write of it succeeds, whatever its words (a refused temporary file has a new
+    random name on each try, so a comparison of the words logged each tick), and a failed read of magnum's
+    registry once while it stays the same; neither fails the tick.
+  Rejected: counting the commits with git each tick (the copy is gone after the publish); reading the PR's whole
+  event history each tick (FixLoopsOf does, for a command; a tick every 45 seconds would read hundreds of rows per
+  PR for nothing new); the Jira key with the status `unknown` (every factory PR would say "unknown" until R26);
+  a final write for every ended task with a PR (the first start would write files for PRs merged long ago); writing
+  only at the publish (the fix loop and who the PR waits on move after it). Tests, failing first:
+  TestAPublishedPRsStatusFileHoldsTheFactorysCountsAndWords, TestNoStatusFileForATaskWithoutAPublishedPR,
+  TestAnUnchangedPRStatusIsNotWrittenAgain, TestAChangeOfMagnumsFixLoopChangesTheStatusFile,
+  TestAnEndedTaskGetsOneLastWriteAndNoneAfter (a merge and a stop, with a restart),
+  TestAFailedStatusWriteIsLoggedOnceAndTheTickGoesOn (a file where the folder goes, and a folder that refuses
+  new files: the review's probe logged it on each tick), TestTheFixLoopsCountsInTheStatusFileNeverGoDown,
+  TestNoFreeTextReachesThePRStatusFile,
+  TestWhoAPublishedPRWaitsOnInTheStatusFile (fix off, a repository no watch covers, a close past the grace that
+  the tick has not marked), TestTheProofAndTheReviewInTheStatusFile,
+  TestAnUnreadableFixRecordKeepsTheStatusFile, TestThePublishedPRsStatusFileCountsTheCommitsOfItsCard (the
+  ready card's count, through a real publish) and TestFixRecordsFoldTheFixEventsOfAPR.
 
 ## Learned rules
 

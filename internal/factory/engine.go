@@ -450,12 +450,12 @@ type Engine struct {
 	// own.
 	followErr string
 	parkOwed  map[int64]bool
-	// statusErrs are the failures of the PRs' status files last logged, by
-	// task; statusReadErr the failed read of magnum's registry for them
-	// ("" after a read that worked); statusFinal the ended tasks whose last
-	// write is done or that never had a file (writePRStatuses). The loop's
-	// own.
-	statusErrs    map[int64]string
+	// statusErrs are the tasks whose status file failed since its last
+	// write that worked, logged once; statusReadErr the failed read of
+	// magnum's registry for them ("" after a read that worked); statusFinal
+	// the ended tasks whose last write is done or that never had a file
+	// (writePRStatuses). The loop's own.
+	statusErrs    map[int64]bool
 	statusReadErr string
 	statusFinal   map[int64]bool
 	// beforeStop runs between the end of a loop's cycle that needs you
@@ -528,7 +528,7 @@ func New(d Deps) *Engine {
 		claimWaits:   map[int64]*claimWait{},
 		held:         map[int64]Copy{},
 		debts:        map[int64]*releaseDebt{},
-		statusErrs:   map[int64]string{},
+		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
 		agentRuns:    map[int64]*agentsRun{},
 		run:          Guard(d.Run, d.Config),

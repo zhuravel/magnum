@@ -452,7 +452,7 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 	case v.pr != nil:
 		return []tui.WaitsOn{v.pr.on}
 	case t.State == registry.TaskDone:
-		return []tui.WaitsOn{{Who: "nothing", What: "merged " + clock(s.doneAt(t))}}
+		return []tui.WaitsOn{{Who: waitNothing, What: "merged " + clock(s.doneAt(t))}}
 	case t.State == registry.TaskPublished && waitsOnYou(t): // the tick's own wait on you (a close past the grace)
 		return []tui.WaitsOn{{Who: waitsYou, What: t.WaitsWhat, Short: clauseShort(t.WaitsWhat), OnYou: true}}
 	case t.State == registry.TaskPublished:
