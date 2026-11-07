@@ -166,7 +166,8 @@ func (v OpenVerdict) sameAs(w OpenVerdict) bool {
 // refused the look's start as nothing to fix, with its sentence (Refused,
 // RefusedWhy: not tried again until the PR changes), and when the fix job
 // last refused it otherwise, with its sentence (WaitAt, WaitWhy: tried
-// again openReadRetry later).
+// again openReadRetry later), and the PR's current spell of activity
+// (Spell, the settle's).
 type openLedger struct {
 	Handed      map[string]time.Time `json:"handed,omitempty"`
 	Reviews     []string             `json:"reviews,omitempty"`
@@ -185,6 +186,45 @@ type openLedger struct {
 	RefusedWhy  string               `json:"refused_why,omitempty"`
 	WaitAt      time.Time            `json:"wait_at,omitzero"`
 	WaitWhy     string               `json:"wait_why,omitempty"`
+	Spell       openSpell            `json:"spell,omitzero"`
+}
+
+// openSpell is the PR's current spell of activity as the look saw it:
+// when it began (Start: the activity the look first saw within
+// settle_quiet) and when the look last saw it go on (Seen); zero while the
+// PR is quiet. The settle's cap counts from its start on a head older than
+// it (settleDone), so quiet still holds on an old head.
+type openSpell struct {
+	Start time.Time `json:"start,omitzero"`
+	Seen  time.Time `json:"seen,omitzero"`
+}
+
+// next is s at the look at now on pr: none once the PR is quiet (no
+// activity, its head's move included, for quiet) or while a loop runs or
+// is held on it (its fixer's activity is the loop's; the spell after it
+// begins when the look first sees it again without one); a new one at the
+// PR's last activity when none was going on, or when the look did not see
+// it go on for gap (the daemon slept, and the PR may have been quiet in
+// between: the caller's gap is at least quiet, and longer than looks a few
+// poll intervals apart); else s, seen now.
+func (s openSpell) next(pr store.PR, quiet, gap time.Duration, now time.Time, looping bool) openSpell {
+	activity := lastActivity(pr)
+	if looping || !now.Before(activity.Add(quiet)) {
+		return openSpell{}
+	}
+	if s.Start.IsZero() || now.Sub(s.Seen) >= gap {
+		s.Start = activity
+	}
+	s.Seen = now
+	return s
+}
+
+// lastActivity is pr's last activity: its head's move, or a later one.
+func lastActivity(pr store.PR) time.Time {
+	if pr.ActivityAt != nil && pr.ActivityAt.After(pr.HeadChangedAt) {
+		return *pr.ActivityAt
+	}
+	return pr.HeadChangedAt
 }
 
 // openApprovalCount is the count of the commits on Head after the approved
@@ -511,18 +551,22 @@ func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 // settleDone is rule 2 of the settle: the head is settled once the PR saw
 // no activity for settle_quiet and every settle_checks check that exists
 // at the head is done (one with checks of another head is not known yet,
-// and waited for), both waited for at most settle_max after the head moved.
-// until is when the wait ends at the latest.
+// and waited for), both waited for at most settle_max after the head moved
+// or, when it began later, after the PR's current spell of activity began
+// (the ledger's Spell): on a head older than settle_max, a reviewer's
+// first comment of several still waits for quiet. until is when the wait
+// ends at the latest.
 func settleDone(f openFacts) (bool, time.Time) {
 	pr := f.pr
-	capAt := pr.HeadChangedAt.Add(f.settle.max)
+	start := pr.HeadChangedAt
+	if f.ledger.Spell.Start.After(start) {
+		start = f.ledger.Spell.Start
+	}
+	capAt := start.Add(f.settle.max)
 	if !f.now.Before(capAt) {
 		return true, time.Time{}
 	}
-	activity := pr.HeadChangedAt
-	if pr.ActivityAt != nil && pr.ActivityAt.After(activity) {
-		activity = *pr.ActivityAt
-	}
+	activity := lastActivity(pr)
 	quietAt := activity.Add(f.settle.quiet)
 	if f.now.Before(quietAt) {
 		if capAt.Before(quietAt) {

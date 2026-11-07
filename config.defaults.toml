@@ -425,8 +425,9 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
 settle_quiet = "3m"               # autofix = "open": the reviewers of a head settled once the PR saw no activity
                                   # for this long ...
 settle_max = "20m"                # ... and every settle_checks check at the head is done, both waited for at most
-                                  # this long after the head moved (at least settle_quiet). magnum's own review
-                                  # of the head is waited for without a cap
+                                  # this long after the head moved or, on an older head, after the PR's current
+                                  # spell of activity began (at least settle_quiet). magnum's own review of the
+                                  # head is waited for without a cap
 # settle_checks = []              # check names (a check run's or its workflow's, any case) the settle waits for
                                   # at the head, e.g. ["pronto"]; one the head does not have is not waited for
 magnum_late_after = "2h"          # autofix = "open": a head magnum has not reviewed this long after its round was

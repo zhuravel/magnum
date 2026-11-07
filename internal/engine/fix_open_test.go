@@ -1009,3 +1009,33 @@ func TestTheLookStartsNothingOnAPRThatChangedDuringIt(t *testing.T) {
 	h.tick()
 	h.wantOpen(OpenNeedsYou, "needs your attention")
 }
+
+// On a head older than settle_max the look still waits for the reviewers
+// to go quiet: a colleague's thread on a head two hours old starts no loop
+// while the colleague may still be at work, and starts one once
+// settle_quiet passed. Before, the cap counted from the head's move had
+// passed long ago, and the first comment of several started a loop at once.
+func TestAColleaguesThreadOnAnOldHeadWaitsForQuiet(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	h.advance(2 * time.Hour)
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open")
+	h.setThreads(h.colleagueThread(4322458360))
+	now := h.clock.Now()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", updated: now, activity: now})
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("fix runs = %d a tick after the colleague's comment, want none before settle_quiet", n)
+	}
+	h.wantOpen(OpenWaits, "settling")
+	h.advance(4 * time.Minute)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		v, _ := h.openOf(2)
+		t.Errorf("fix runs = %d once quiet (verdict %s: %s), want the loop", n, v.Verdict, v.Why)
+	}
+}

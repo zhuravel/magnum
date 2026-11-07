@@ -92,14 +92,15 @@ func TestAutofixOpenWaitsForProntoAtTheHead(t *testing.T) {
 }
 
 // settle_max caps the wait for quiet and checks, counted from the head's
-// move: 21 minutes after it, a loop starts despite a comment a minute ago
-// and a check still running.
+// move: 21 minutes after it, with the PR active since, a loop starts
+// despite a comment a minute ago and a check still running.
 func TestAutofixOpenStartsAfterSettleMaxDespiteActivity(t *testing.T) {
 	f := idleFacts()
 	f.items = []openItem{personThread(4100)}
 	f.pr.HeadChangedAt = openNow.Add(-21 * time.Minute)
 	activity := openNow.Add(-time.Minute)
 	f.pr.ActivityAt = &activity
+	f.ledger.Spell = openSpell{Start: f.pr.HeadChangedAt, Seen: openNow.Add(-30 * time.Second)}
 	f.settle.checks = []string{"pronto"}
 	f.pr.CI = &store.CIStatus{SHA: fixHead, Checks: []store.CheckResult{{Name: "pronto", State: store.CheckPending}}}
 	v, work, _ := decideOpen(f)
@@ -434,5 +435,68 @@ func TestAThreadTheFixerResolvedUnansweredNeedsYouNotALoop(t *testing.T) {
 	wantVerdict(t, v, OpenNeedsYou, "1 item needs you")
 	if len(work) != 0 || len(needs) != 1 || !v.leftovers {
 		t.Errorf("work %+v, needs %+v, leftovers %v: want the thread among the leftovers", work, needs, v.leftovers)
+	}
+}
+
+// On a head older than settle_max the settle still waits for quiet: the
+// cap counts from the start of the PR's current spell of activity, as the
+// look saw it, not from the head's move. A colleague who posts three
+// comments a minute apart on a head two days old gets one loop after the
+// third, not one after the first and another for the rest. A spell longer
+// than settle_max starts the loop anyway.
+func TestTheSettleWaitsForQuietOnAnOldHead(t *testing.T) {
+	f := idleFacts()
+	f.items = []openItem{personThread(4100)}
+	f.pr.HeadChangedAt = openNow.Add(-48 * time.Hour)
+	activity := openNow.Add(-30 * time.Second)
+	f.pr.ActivityAt = &activity
+	f.ledger.Spell = openSpell{Start: openNow.Add(-2 * time.Minute), Seen: openNow.Add(-30 * time.Second)}
+	v, work, _ := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "settling")
+	if !v.Until.Equal(activity.Add(3*time.Minute)) || len(work) != 0 {
+		t.Errorf("until %s, work %v; want %s and no start", v.Until, work, activity.Add(3*time.Minute))
+	}
+	f.ledger.Spell.Start = openNow.Add(-21 * time.Minute)
+	v, work, _ = decideOpen(f)
+	wantVerdict(t, v, OpenFixing, "starts a fix loop")
+	if len(work) != 1 {
+		t.Errorf("work = %v after a spell of 21 minutes, want the thread", work)
+	}
+}
+
+// The look's spell of activity on a PR: a new one begins at the activity
+// the look first sees within settle_quiet, goes on while the activity
+// does, also across looks further apart than settle_quiet (a long poll
+// interval), ends once the PR is quiet or while a loop runs (its fixer's
+// activity is the loop's), and begins anew when the look did not see it go
+// on for the gap (the daemon slept): yesterday's spell does not cap this
+// morning's comment.
+func TestTheSpellOfActivityBeginsGoesOnAndEnds(t *testing.T) {
+	quiet, gap := 3*time.Minute, 3*time.Minute
+	pr := store.PR{HeadChangedAt: openNow.Add(-48 * time.Hour)}
+	at := func(d time.Duration) *time.Time { t := openNow.Add(d); return &t }
+	pr.ActivityAt = at(-30 * time.Second)
+	s := openSpell{}.next(pr, quiet, gap, openNow, false)
+	if !s.Start.Equal(*pr.ActivityAt) || !s.Seen.Equal(openNow) {
+		t.Errorf("a new spell = %+v, want it to begin at the activity, seen now", s)
+	}
+	pr.ActivityAt = at(time.Minute)
+	if next := s.next(pr, quiet, gap, openNow.Add(90*time.Second), false); !next.Start.Equal(s.Start) {
+		t.Errorf("a spell that goes on = %+v, want its start kept", next)
+	}
+	pr.ActivityAt = at(4 * time.Minute)
+	if next := s.next(pr, quiet, 20*time.Minute, openNow.Add(5*time.Minute), false); !next.Start.Equal(s.Start) {
+		t.Errorf("a spell that goes on across looks 5 minutes apart = %+v, want its start kept", next)
+	}
+	pr.ActivityAt = at(time.Minute)
+	if next := s.next(pr, quiet, gap, openNow.Add(5*time.Minute), false); !next.Start.IsZero() {
+		t.Errorf("a quiet PR's spell = %+v, want none", next)
+	}
+	if next := s.next(pr, quiet, gap, openNow.Add(90*time.Second), true); !next.Start.IsZero() {
+		t.Errorf("a spell under a loop = %+v, want none", next)
+	}
+	pr.ActivityAt = at(10 * time.Hour)
+	if next := s.next(pr, quiet, gap, openNow.Add(10*time.Hour+30*time.Second), false); !next.Start.Equal(*pr.ActivityAt) {
+		t.Errorf("a spell after a night the look did not see = %+v, want a new one at %s", next, *pr.ActivityAt)
 	}
 }

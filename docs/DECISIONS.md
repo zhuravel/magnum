@@ -2950,6 +2950,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAThreadTheFixerResolvedUnansweredNeedsYouNotALoop; TestAPersonsThreadThatAFixerResolvedStaysOpen now
   ends on the reviewer's word, and TestAllReviewThreadsReadsWhoResolvedAThread reads a null resolver.
 
+- **The settle's cap counts from the PR's spell of activity on an old head** (2026-11-07, the review of the
+  factory bridge). `settle_max` capped the wait for quiet from the head's move, so on any head older than 20
+  minutes the first comment of a reviewer still at work started a loop within a tick, and the rest of the
+  reviewer's comments started a second one: two of `autofix_max_loops` and two forced re-reviews where one
+  would do. The ledger now keeps the PR's current spell of activity as the look saw it (`Spell`: its start,
+  the activity the look first saw within `settle_quiet`, and when it last saw it go on), and the cap counts
+  from the later of the head's move and that start: quiet holds on old heads, and a spell longer than
+  `settle_max` still starts a loop. The spell ends once the PR is quiet and while a loop runs or is held (the
+  fixer's activity is the loop's), and begins anew when the look did not see it go on for `settle_quiet` or four
+  poll intervals, whichever is longer (looks a long poll interval apart would otherwise restart it at each
+  look, and a chatty bot would never be capped): the Mac sleeps at night, and yesterday's spell must not cap
+  this morning's comment. Tests, failing first:
+  TestTheSettleWaitsForQuietOnAnOldHead, TestTheSpellOfActivityBeginsGoesOnAndEnds,
+  TestAColleaguesThreadOnAnOldHeadWaitsForQuiet.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

@@ -3248,6 +3248,7 @@ autofix = "never"          # never | own | open: own starts a loop by itself aft
 fix_compact_at = 70        # compact a resumed fixer whose context is this full (percent; 0 = off, at most 99)
 settle_quiet = "3m"        # open: no activity on the PR for this long ...
 settle_max = "20m"         # ... and the settle_checks done, waited for at most this long after the head moved
+                           # (on an older head, after the PR's current spell of activity began)
 settle_checks = []         # check names the settle waits for at the head, e.g. ["pronto"]
 magnum_late_after = "2h"   # open: magnum's review of a head this late past due needs you ("0" = never)
 autofix_max_loops = 3      # open: loops it starts on one PR in 24 hours (1 to 20); f does not count
@@ -3286,7 +3287,9 @@ open: Magnum's findings (simplifications and optional findings included), anothe
 thread, review body or comment, or a conflict with the PR's own base. It starts only once the reviewers
 settled on the head: Magnum reviewed it (waited for without a cap; `magnum_late_after` past the time its
 round was due, the PR needs you), nobody touched the PR for `settle_quiet`, and every `settle_checks` check
-at the head is done, these last two waited for at most `settle_max`. A review body or comment by one of
+at the head is done, these last two waited for at most `settle_max` after the head moved or, on an older head,
+after the PR's current spell of activity began (as the look saw it: a colleague's three comments a minute apart
+on a head two days old start one loop after the third, not one after the first). A review body or comment by one of
 `quiet_logins`, or one that holds a `quiet_markers` text, asks nothing; review threads never go quiet, so a
 lint bot that posts notices as comments and findings as threads still starts loops for its findings. At
 most `autofix_max_loops` loops start on one PR in 24 hours, none on a head you pushed until

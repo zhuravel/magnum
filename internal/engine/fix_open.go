@@ -230,6 +230,8 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	if f.whole && !f.failed && len(f.cut) == 0 {
 		openPrune(&l, f.items)
 	}
+	gap := max(f.settle.quiet, openStalePolls*e.cfg.Daemon.PollInterval.Duration) // longer than the looks' own spacing
+	l.Spell = l.Spell.next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
 	f.ledger = l
 	v, work, needs := decideOpen(f)
 	switch {
