@@ -43,7 +43,8 @@ func prRows(d tui.FactoryData) []tui.FactoryRow {
 }
 
 // Your own open PRs show on the factory screen, read from magnum's
-// registry: each one row of its own in YOUR PRS, keyed by its number, with
+// registry: each one row of its own, in the group its wait says (WAITS ON
+// OTHERS for one that waits on its reviewers), keyed by its number, with
 // magnum's id negated so no task's row shares it, its verdict's words, its
 // reference for the board's requests, and its page for b. Before, the
 // screen read no PR of magnum's but the published tasks'.
@@ -69,8 +70,8 @@ func TestOwnPRsShowOnTheFactoryScreenReadOnly(t *testing.T) {
 	switch {
 	case row.ID != -71 || row.Key != "#4601" || row.GitHub != "#4601" || row.Title != "Coupon cache warmup":
 		t.Errorf("the row of your PR: id %d, key %q, GitHub %q, title %q", row.ID, row.Key, row.GitHub, row.Title)
-	case row.Group != tui.GroupYours || row.Mark != tui.MarkWaits || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want:
-		t.Errorf("the row of your settling PR: %+v, want it in YOUR PRS with %+v", row, want)
+	case row.Group != tui.GroupWaits || row.Mark != tui.MarkWaits || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want:
+		t.Errorf("the row of your settling PR: %+v, want it in WAITS ON OTHERS with %+v", row, want)
 	case row.PR.Ref != "example/talkable#4601" || row.PR.Fixing || row.PR.FixOff || row.PR.Off != "":
 		t.Errorf("its PR: %+v", *row.PR)
 	case !row.Since.Equal(screenNow.Add(-40*time.Minute)) || row.Move != "":
@@ -87,7 +88,7 @@ func TestOwnPRsShowOnTheFactoryScreenReadOnly(t *testing.T) {
 // An own PR whose verdict needs you, or that is idle and approved (your
 // merge), sits in NEEDS YOU keyed by its number, with its issue key from
 // the title; it adds no decision, which counts answers to tasks only. A
-// stale verdict never does: magnum looks at the PR, in YOUR PRS.
+// stale verdict never does: magnum looks at the PR, in WAITS ON OTHERS.
 func TestAnOwnPRThatNeedsYouIsInNeedsYou(t *testing.T) {
 	r := newScreenRig(t)
 	r.cfg.Board.Trackers = []string{"https://example.atlassian.net/browse/PR-{num}"}
@@ -118,11 +119,11 @@ func TestAnOwnPRThatNeedsYouIsInNeedsYou(t *testing.T) {
 	if merge := rowOf(t, d, "#4603"); merge.Group != tui.GroupNeedsYou || merge.Move != "merge #4603 on GitHub" {
 		t.Errorf("an own PR idle and approved: %+v, want NEEDS YOU with your merge", merge)
 	}
-	if stale := rowOf(t, d, "#4604"); stale.Group != tui.GroupYours || stale.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "looking at #4604"}) {
-		t.Errorf("an own PR with a stale verdict: %+v, want magnum looking at it in YOUR PRS", stale)
+	if stale := rowOf(t, d, "#4604"); stale.Group != tui.GroupWaits || stale.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "looking at #4604"}) {
+		t.Errorf("an own PR with a stale verdict: %+v, want magnum looking at it in WAITS ON OTHERS", stale)
 	}
-	if idle := rowOf(t, d, "#4605"); idle.Group != tui.GroupYours || idle.WaitsOn[0].Who != "reviewers" {
-		t.Errorf("an own PR idle without an approval: %+v, want it in YOUR PRS waiting on reviewers", idle)
+	if idle := rowOf(t, d, "#4605"); idle.Group != tui.GroupWaits || idle.WaitsOn[0].Who != "reviewers" {
+		t.Errorf("an own PR idle without an approval: %+v, want it in WAITS ON OTHERS waiting on reviewers", idle)
 	}
 	if d.Decisions != 0 {
 		t.Errorf("%d decisions: your PRs owe no answers", d.Decisions)
@@ -180,9 +181,11 @@ func TestAnOffOwnPRWaitsInYourPRs(t *testing.T) {
 	}
 }
 
-// Your PRs wait in YOUR PRS oldest first, a fix loop at work moves, and a
-// PR with no verdict yet under autofix = "open" is magnum looking.
-func TestYourPRsWaitOldestFirst(t *testing.T) {
+// Your PRs that wait on others sit in WAITS ON OTHERS, with the published
+// tasks whose PRs wait alike: a fix loop at work moves, and a PR with no
+// verdict yet under autofix = "open" is magnum looking. Before, they sat in
+// YOUR PRS, so one state was in two groups.
+func TestYourPRsThatWaitOnOthersSitInWaitsOnOthers(t *testing.T) {
 	r := newScreenRig(t)
 	r.withMagnum()
 	r.own(81, 4611, func(v *PRState) {
@@ -196,14 +199,10 @@ func TestYourPRsWaitOldestFirst(t *testing.T) {
 	})
 	r.own(83, 4613, nil)
 	d := r.data(time.Time{})
-	var keys []string
-	for _, row := range d.Rows {
-		if row.Group == tui.GroupYours {
-			keys = append(keys, row.Key)
+	for _, key := range []string{"#4611", "#4612", "#4613"} {
+		if row := rowOf(t, d, key); row.Group != tui.GroupWaits {
+			t.Errorf("%s in group %d, want WAITS ON OTHERS", key, row.Group)
 		}
-	}
-	if !slices.Equal(keys, []string{"#4612", "#4613", "#4611"}) {
-		t.Errorf("YOUR PRS in the order %q, want the oldest wait first", keys)
 	}
 	fixing := rowOf(t, d, "#4612")
 	if fixing.Mark != tui.MarkWorking || !fixing.PR.Fixing || fixing.WaitsOn[0].What != "magnum fixes #4612 (cycle 1 of 5)" {
@@ -214,12 +213,11 @@ func TestYourPRsWaitOldestFirst(t *testing.T) {
 	}
 }
 
-// In YOUR PRS a PR magnum's look leaves alone comes after the ones at
-// work, however old its wait: the group folds from its end on a short
-// screen, so the dim rows that ask nothing fold first and the fix loop at
-// work stays drawn. Before, a baseline's wait, kept since magnum's first
-// look, put it first.
-func TestYourPRsThatMagnumLeavesAloneComeLast(t *testing.T) {
+// Only your PRs magnum's look leaves alone keep a group of their own, oldest
+// first: they ask nothing and nothing works on them, so a short screen
+// folds them first (the group comes after WAITS ON OTHERS and folds from its
+// end); the ones at work wait on others.
+func TestOnlyThePRsMagnumLeavesAloneKeepAGroupOfTheirOwn(t *testing.T) {
 	r := newScreenRig(t)
 	r.withMagnum()
 	r.own(76, 4606, func(v *PRState) {
@@ -239,14 +237,20 @@ func TestYourPRsThatMagnumLeavesAloneComeLast(t *testing.T) {
 		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 5, Phase: engine.FixPhaseFixing, Head: prHead}
 		v.Open.Since = screenNow.Add(-3 * time.Hour)
 	})
-	var keys []string
+	var alone, waits []string
 	for _, row := range r.data(time.Time{}).Rows {
-		if row.Group == tui.GroupYours {
-			keys = append(keys, row.Key)
+		switch row.Group {
+		case tui.GroupYours:
+			alone = append(alone, row.Key)
+		case tui.GroupWaits:
+			waits = append(waits, row.Key)
 		}
 	}
-	if want := []string{"#4612", "#4611", "#4606", "#4607"}; !slices.Equal(keys, want) {
-		t.Errorf("YOUR PRS in the order %q, want %q: the PRs at work oldest first, then the ones magnum leaves alone", keys, want)
+	if want := []string{"#4606", "#4607"}; !slices.Equal(alone, want) {
+		t.Errorf("the PRs magnum leaves alone: %q, want %q, oldest first", alone, want)
+	}
+	if want := []string{"#4611", "#4612"}; !slices.Equal(waits, want) {
+		t.Errorf("WAITS ON OTHERS: %q, want %q", waits, want)
 	}
 }
 
@@ -332,7 +336,7 @@ func TestAMutedOwnPRSaysItIsMuted(t *testing.T) {
 // whether it has one: fix off (F) does not hide an attention, a verdict
 // decided before the attention is stale, and a watch without autofix =
 // "open" has no verdict. A loop at work on it (f on a PR that needs
-// attention) moves, in YOUR PRS. Before, all of these sat in YOUR PRS and
+// attention) moves, in WAITS ON OTHERS. Before, all of these sat in YOUR PRS and
 // the chip counted them at work.
 func TestAnOwnPRThatNeedsAttentionIsInNeedsYouWhateverItsVerdict(t *testing.T) {
 	r := newScreenRig(t)
@@ -369,25 +373,26 @@ func TestAnOwnPRThatNeedsAttentionIsInNeedsYouWhateverItsVerdict(t *testing.T) {
 	if row := rowOf(t, d, "#4704"); row.Group != tui.GroupNeedsYou || !strings.HasPrefix(row.WaitsOn[0].What, "magnum stopped arguing on #4704") {
 		t.Errorf("a stalemate: %+v, want NEEDS YOU", row)
 	}
-	if row := rowOf(t, d, "#4705"); row.Group != tui.GroupYours || row.Mark != tui.MarkWorking || !row.PR.Fixing {
-		t.Errorf("a loop at work on a PR that needs attention: %+v (%+v), want it moving in YOUR PRS", row, row.PR)
+	if row := rowOf(t, d, "#4705"); row.Group != tui.GroupWaits || row.Mark != tui.MarkWorking || !row.PR.Fixing {
+		t.Errorf("a loop at work on a PR that needs attention: %+v (%+v), want it moving in WAITS ON OTHERS", row, row.PR)
 	}
 }
 
 // Without a verdict (the watch's autofix is not "open") an own PR says
-// what magnum did: "reviewed a1b2c3d" once it reviewed the head, and one
+// what magnum did: what its review of the head posted and whom it waits
+// on next (never a bare "reviewed"), and one
 // magnum does not review (include_own = false, a mute, a baseline) is dim
 // with why, as one the look leaves alone is, and asks nothing. Before,
 // each said "review of #N".
 func TestAnOwnPRWithoutAVerdictSaysWhatMagnumDid(t *testing.T) {
 	r := newScreenRig(t)
 	r.withMagnum()
-	r.own(96, 4711, func(v *PRState) { v.OpenWatch, v.ReviewedSHA = false, prHead })
+	r.own(96, 4711, func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.ReviewEvent = false, prHead, "COMMENTED" })
 	r.own(97, 4712, func(v *PRState) { v.OpenWatch, v.State = false, store.PRIneligible })
 	r.own(98, 4713, func(v *PRState) { v.OpenWatch, v.State = false, store.PRBaseline })
 	d := r.data(time.Time{})
-	if row := rowOf(t, d, "#4711"); row.Group != tui.GroupYours || row.PR.Off != "" ||
-		row.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "reviewed a1b2c3d"}) {
+	if row := rowOf(t, d, "#4711"); row.Group != tui.GroupWaits || row.PR.Off != "" ||
+		row.WaitsOn[0] != (tui.WaitsOn{Who: "reviewers", What: "magnum commented at a1b2c3d · no approval yet", Short: "no approval yet"}) {
 		t.Errorf("an own PR magnum reviewed at its head: %+v (%+v)", row, row.PR)
 	}
 	for key, want := range map[string]string{"#4712": "#4712 is yours to follow: magnum does not review it",
@@ -411,9 +416,9 @@ func TestAnOwnPRWhoseLoopStartedAfterItsVerdictMoves(t *testing.T) {
 		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
 	})
 	row := rowOf(t, r.data(time.Time{}), "#4721")
-	if row.Group != tui.GroupYours || row.Mark != tui.MarkWorking || !row.PR.Fixing || row.Move != "" ||
+	if row.Group != tui.GroupWaits || row.Mark != tui.MarkWorking || !row.PR.Fixing || row.Move != "" ||
 		row.WaitsOn[0].What != "magnum fixes #4721 (cycle 1 of 3)" {
-		t.Errorf("an own PR whose loop started after its idle verdict: %+v (%+v), want it moving in YOUR PRS", row, row.PR)
+		t.Errorf("an own PR whose loop started after its idle verdict: %+v (%+v), want it moving in WAITS ON OTHERS", row, row.PR)
 	}
 }
 

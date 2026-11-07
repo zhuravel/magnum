@@ -2,11 +2,13 @@ package factory
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
@@ -296,8 +298,8 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
 			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum: judge blocked: the slot's database is gone", Short: "magnum: judge blocked", OnYou: true}},
 		"no verdict": {func(v *PRState) { v.OpenWatch = false }, nil, tui.GroupWaits, tui.MarkWaits, tui.WaitsOn{Who: "magnum", What: "review of #4540"}},
-		"no verdict, reviewed at the head": {func(v *PRState) { v.OpenWatch, v.ReviewedSHA = false, prHead }, nil, tui.GroupWaits, tui.MarkWaits,
-			tui.WaitsOn{Who: "magnum", What: "reviewed a1b2c3d"}},
+		"no verdict, reviewed at the head": {func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.ReviewEvent = false, prHead, "COMMENTED" }, nil,
+			tui.GroupWaits, tui.MarkWaits, tui.WaitsOn{Who: "reviewers", What: "magnum commented at a1b2c3d · no approval yet", Short: "no approval yet"}},
 		"no verdict, a stalemate": {func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.Stalemate = false, prHead, true }, nil, tui.GroupNeedsYou,
 			tui.MarkNeedsYou, tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum stopped arguing on #4540: the thread is yours",
 				Short: "magnum stopped arguing on #4540", OnYou: true}},
@@ -462,5 +464,121 @@ func TestAnUnwatchedPRsRowNamesHowItsTaskEnds(t *testing.T) {
 	}
 	if row.Move != "merge or close #4580, then x drops the task" || row.MoveShort != "then x" {
 		t.Errorf("its move %q / %q, want x once you merged or closed it", row.Move, row.MoveShort)
+	}
+}
+
+// reviewedAt makes v a PR magnum reviewed at its head, outside autofix =
+// "open" (no verdict): its review found counts, with CI green.
+func reviewedAt(v *PRState, counts [4]int, verdict string) {
+	v.OpenWatch, v.Autofix, v.ReviewedSHA = false, config.AutofixNever, prHead
+	v.Review = &store.ReviewSummary{SHA: prHead, Counts: counts, Verdict: verdict, At: screenNow.Add(-2 * time.Hour)}
+	v.CI = &tui.CIInfo{State: "passed", Total: 41, Passed: 41}
+}
+
+// A row never says a bare "reviewed": magnum's outcome at the head (the
+// findings open by priority, all fixed, magnum approved, none), what comes
+// next and whom it waits on, and the outcome decides the group. Findings
+// no loop of magnum's takes wait on you (NEEDS YOU, f fixes them on your
+// PR); a PR clean on magnum's side waits on the reviewers it asked, or on
+// you to merge it, to ask one or to fix its CI, never on magnum. Before,
+// each said "magnum: reviewed a1b2c3d", in YOUR PRS for your PR and in WAITS
+// ON OTHERS for a task's.
+func TestARowSaysMagnumsOutcomeAndWhomItWaitsOn(t *testing.T) {
+	asked := screenNow.Add(-17 * time.Hour)
+	for name, c := range map[string]struct {
+		edit        func(*PRState)
+		group       tui.FactoryGroup
+		who, what   string
+		short, move string
+	}{
+		"findings, no loop takes them": {func(v *PRState) { reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking) },
+			tui.GroupNeedsYou, tui.WaitsOnYou, "4 findings open at a1b2c3d (P1 P2×3) · f fixes them", "4 findings open", "f fixes them"},
+		"findings, magnum's fixer takes them": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
+			v.Autofix = config.AutofixOwn
+		}, tui.GroupWaits, "magnum", "4 findings open at a1b2c3d (P1 P2×3) · magnum's fixer takes them", "4 findings open", ""},
+		"all fixed, a reviewer asked": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.Review.Fixed = 3
+			v.Gate = &store.ReviewGate{Decision: "REVIEW_REQUIRED"}
+			v.Asked = []ReviewAsk{{Who: "rev-ann", At: asked}}
+		}, tui.GroupWaits, "reviewers", "all 3 findings fixed at a1b2c3d · asked rev-ann 17h ago", "asked rev-ann 17h ago", ""},
+		"magnum approved, a person too": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.Review, v.ReviewEvent = nil, "APPROVED"
+			v.Gate = &store.ReviewGate{Decision: "APPROVED", Opinions: []store.LatestReview{{Login: "rev-ann", State: "APPROVED", CommitSHA: prHead}}}
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "magnum approved a1b2c3d · approved by rev-ann, merge is yours", "approved, merge is yours",
+			"merge #%d on GitHub"},
+		"clean, nobody asked": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.Gate = &store.ReviewGate{Decision: "REVIEW_REQUIRED"}
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "no findings at a1b2c3d · no reviewer asked", "no reviewer asked", "ask a reviewer"},
+		"only optional findings, CI failed": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 0, 0, 2}, store.VerdictNonBlocking)
+			v.CI = &tui.CIInfo{State: "failed", Failed: 1, Required: []tui.CheckState{{Name: "Completion", Label: "Completion", State: "failed"}}}
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "no problems at a1b2c3d, 2 optional (P3×2) · CI failed: Completion", "CI failed: Completion",
+			"fix the CI"},
+		"clean, CI runs": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.CI = &tui.CIInfo{State: "pending", Total: 41, Passed: 25, Pending: 16}
+		}, tui.GroupWaits, "CI", "no findings at a1b2c3d · CI runs: 25/41", "CI runs: 25/41", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newScreenRig(t)
+			r.withMagnum()
+			r.publishedTask("PR-12340", 4540)
+			r.pr(4540, c.edit)
+			r.own(81, 4541, c.edit)
+			d := r.data(time.Time{})
+			for key, n := range map[string]int{"PR-12340": 4540, "#4541": 4541} {
+				row := rowOf(t, d, key)
+				w := row.WaitsOn[0]
+				what, move := c.what, c.move
+				if strings.Contains(move, "%d") {
+					move = fmt.Sprintf(move, n)
+				}
+				if key == "PR-12340" { // f works on your PR's row; a task's names the board's
+					what = strings.Replace(what, "· f fixes them", "· f on the board fixes them", 1)
+					move = strings.Replace(move, "f fixes them", "fix them, or f on the board", 1)
+				}
+				switch {
+				case strings.Contains(w.What, "reviewed "):
+					t.Errorf("%s says a bare reviewed: %q", key, w.What)
+				case row.Group != c.group || w.Who != c.who || w.What != what || w.Short != c.short || w.OnYou != (c.who == tui.WaitsOnYou):
+					t.Errorf("%s: group %d, %+v; want group %d, %s: %q (short %q)", key, row.Group, w, c.group, c.who, what, c.short)
+				case c.group == tui.GroupNeedsYou && row.Move != move:
+					t.Errorf("%s: move %q, want %q", key, row.Move, move)
+				}
+			}
+		})
+	}
+}
+
+// An idle verdict without an approval names whom it waits on: the
+// reviewers asked, with how long ago; with nobody asked it needs you to ask
+// one.
+func TestAnIdleUnapprovedPRNamesItsReviewers(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12325", 4535)
+	r.publishedTask("PR-12326", 4536)
+	idle := func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenIdle, "nothing open at a1b2c3d · no approval yet")
+		v.Gate = &store.ReviewGate{Decision: "REVIEW_REQUIRED"}
+	}
+	r.pr(4535, func(v *PRState) {
+		idle(v)
+		v.Asked = []ReviewAsk{{Who: "rev-ann", At: screenNow.Add(-17 * time.Hour)}, {Who: "team:core"}}
+	})
+	r.pr(4536, idle)
+	d := r.data(time.Time{})
+	if row := rowOf(t, d, "PR-12325"); row.Group != tui.GroupWaits ||
+		row.WaitsOn[0] != (tui.WaitsOn{Who: "reviewers", What: "nothing open at a1b2c3d · asked rev-ann 17h ago and team:core",
+			Short: "asked rev-ann 17h ago and team:core"}) {
+		t.Errorf("an idle PR whose reviewers were asked: %+v", row.WaitsOn)
+	}
+	if row := rowOf(t, d, "PR-12326"); row.Group != tui.GroupNeedsYou || row.Move != "ask a reviewer" ||
+		row.WaitsOn[0].What != "nothing open at a1b2c3d · no reviewer asked" {
+		t.Errorf("an idle PR nobody was asked to review: %+v, move %q", row.WaitsOn, row.Move)
 	}
 }

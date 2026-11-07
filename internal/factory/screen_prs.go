@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -213,15 +214,34 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 		}
 		return waitsWait(waitMagnum, looking, "", looking+": "+why)
 	}
-	return publishedWait(t, prRef(v), st, s.now, s.cfg.Daemon.CloseGrace.Duration)
+	return publishedWait(t, prRef(v), st, s.clock())
 }
 
+// prClock is when a PR's wait is read and the timings of magnum's daemon it
+// is read by: [daemon] close_grace, and poll_interval (30s unset).
+type prClock struct {
+	now         time.Time
+	grace, poll time.Duration
+}
+
+// clockOf is cfg's prClock at now.
+func clockOf(cfg *config.Config, now time.Time) prClock {
+	c := prClock{now: now, poll: 30 * time.Second}
+	if cfg != nil {
+		c.grace, c.poll = cfg.Daemon.CloseGrace.Duration, cmp.Or(cfg.Daemon.PollInterval.Duration, c.poll)
+	}
+	return c
+}
+
+// clock is the screen's prClock.
+func (s *screen) clock() prClock { return clockOf(s.cfg, s.now) }
+
 // publishedWait is the wait of published task t whose PR ref magnum's
-// registry tells as st, at now: a repository no watch covers is yours, a
-// merge waits on nothing, a close waits grace for a reopen and then on
+// registry tells as st, at c: a repository no watch covers is yours, a
+// merge waits on nothing, a close waits c.grace for a reopen and then on
 // you, and an open PR waits as magnum tells it (magnumWait). The screen's
 // row (prWaitOf) and the PR's status file (nowOf) both say it.
-func publishedWait(t registry.Task, ref PRRef, st PRState, now time.Time, grace time.Duration) prWait {
+func publishedWait(t registry.Task, ref PRRef, st PRState, c prClock) prWait {
 	n := ref.Number
 	closedYou := func() prWait {
 		w := youWait(fmt.Sprintf("PR #%d closed without a merge", n), "", fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove))
@@ -238,11 +258,11 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, now time.Time, grace 
 		return prWait{group: tui.GroupDone, mark: tui.MarkDone, on: tui.WaitsOn{Who: waitNothing, What: "merged " + clock(cmp.Or(store.Deref(st.MergedAt), t.Updated))}}
 	case st.GHState == store.GHClosed:
 		closed := cmp.Or(store.Deref(st.ClosedAt), t.Updated)
-		until := closed.Add(grace)
+		until := closed.Add(c.grace)
 		if waitsOnYou(t) { // the tick's span says since when
 			return closedYou()
 		}
-		if !now.Before(until) { // the tick has not marked it yet
+		if !c.now.Before(until) { // the tick has not marked it yet
 			w := closedYou()
 			w.since = until
 			return w
@@ -252,17 +272,17 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, now time.Time, grace 
 		w.since = closed
 		return w
 	}
-	return magnumWait(st, n, false)
+	return magnumWait(st, n, false, c)
 }
 
 // magnumWait is the wait of open PR #n as magnum's registry tells it (st):
 // its daemon down, the PR not read yet, its fix loop (the loop's row, which
 // a start writes at once, before the look's next verdict says fixing), its
 // verdict (verdictWait; a stale one is magnum looking), a verdict still to
-// come, its attention or stalemate (attentionWait), magnum's review of the
-// head, else magnum's review to come. own says the row is your PR's, whose
-// F works on the factory screen too (offWait).
-func magnumWait(st PRState, n int, own bool) prWait {
+// come, its attention or stalemate (attentionWait), else what magnum's row
+// says (rowWait). own says the row is your PR's, whose F and f work on the
+// factory screen too (offWait).
+func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 	looking := fmt.Sprintf("looking at #%d", n)
 	switch {
 	case !st.DaemonUp:
@@ -280,17 +300,255 @@ func magnumWait(st PRState, n int, own bool) prWait {
 	case st.HasOpen && st.Stale:
 		return waitsWait("magnum", looking, "", "")
 	case st.HasOpen:
-		w := verdictWait(st, n, own)
+		w := verdictWait(st, n, own, c)
 		w.since = cmp.Or(st.Open.Since, st.Open.At)
 		return w
 	case st.OpenWatch: // its verdict is still to come
 		return waitsWait("magnum", looking, "", "")
 	case st.State == store.PRNeedsAttention || st.Stalemate:
 		return attentionWait(st, n)
-	case st.ReviewedSHA != "" && st.ReviewedSHA == st.Head && st.State == store.PRReviewed:
-		return waitsWait("magnum", "reviewed "+textx.ShortSHA(st.Head), "", "")
 	}
-	return waitsWait("magnum", fmt.Sprintf("review of #%d", n), "", "")
+	return rowWait(st, n, own, c)
+}
+
+// rowWait is what open PR #n waits on by magnum's row alone (st), with no
+// verdict that tells it: magnum's round under way, magnum's review of the
+// head to come, else magnum's outcome at the head (outcomeOf), never a bare
+// "reviewed", with what comes next and whom it waits on. Problems no loop
+// of magnum's takes (autofix is "never", or fix is off) wait on you, which
+// f fixes on your PR; ones magnum's fixer takes (autofix "own" or "open")
+// wait on magnum; a head clean on magnum's side waits as nextWait says, on
+// the reviewers, CI or you, never on magnum. own as for magnumWait.
+func rowWait(st PRState, n int, own bool, c prClock) prWait {
+	short := textx.ShortSHA(st.Head)
+	switch {
+	case slices.Contains(store.InFlightStates, st.State):
+		w := waitsWait(waitMagnum, "magnum reviews "+short+" now", "", "")
+		w.since = st.HeadChangedAt
+		return w
+	case st.ReviewedSHA == "" || st.ReviewedSHA != st.Head:
+		return waitsWait(waitMagnum, fmt.Sprintf("review of #%d", n), "", "")
+	}
+	what, count, problems := outcomeOf(st)
+	since := st.HeadChangedAt
+	if st.Review != nil && st.Review.SHA == st.Head && st.Review.At.After(since) {
+		since = st.Review.At
+	}
+	var w prWait
+	switch {
+	case problems && (st.Autofix == config.AutofixOwn || st.Autofix == config.AutofixOpen) && !st.FixOff:
+		w = waitsWait(waitMagnum, what+" · magnum's fixer takes them", count, "")
+	case problems && own:
+		w = youWait(what+" · f fixes them", count, "")
+		w.move, w.moveShort = "f fixes them", "f"
+	case problems:
+		w = youWait(what+" · f on the board fixes them", count, "")
+		w.move, w.moveShort = "fix them, or f on the board", "fix them"
+	default:
+		w = nextWait(st, n, what, true, c)
+		if w.since.After(since) {
+			since = w.since
+		}
+	}
+	w.since = since
+	return w
+}
+
+// outcomeOf is magnum's review of st's head in words: the findings it
+// keeps open there by priority, new and earlier ones ("4 findings open at
+// a1b2c3d (P1 P2×3)"), only optional ones ("no problems at a1b2c3d, 2
+// optional (P3×2)"), the earlier ones all fixed ("all 3 findings fixed at
+// a1b2c3d"), magnum's approval or none ("magnum approved a1b2c3d", "no
+// findings at a1b2c3d"); a review whose result magnum did not keep says
+// what it posted. count is the short form of open findings ("4 findings
+// open", "" for none), and problems says a P0 to P2 is open (or, without
+// its result, that magnum asked for changes).
+func outcomeOf(st PRState) (what, count string, problems bool) {
+	short := textx.ShortSHA(st.Head)
+	r := st.Review
+	if r == nil || r.SHA != st.Head {
+		switch st.ReviewEvent {
+		case "APPROVED":
+			return "magnum approved " + short, "", false
+		case "CHANGES_REQUESTED":
+			return "magnum asked for changes at " + short, "changes asked", true
+		case "COMMENTED":
+			return "magnum commented at " + short, "", false
+		}
+		return "magnum's review of " + short + " (its findings not kept)", "", false
+	}
+	all, unknown := r.Counts, 0
+	if r.OpenCounts != nil {
+		for i, n := range r.OpenCounts {
+			all[i] += n
+		}
+	} else {
+		unknown = r.Open // earlier findings still open, of priorities the result did not give
+	}
+	var list []string
+	total := unknown
+	for i, n := range all {
+		total += n
+		switch {
+		case n == 1:
+			list = append(list, fmt.Sprintf("P%d", i))
+		case n > 1:
+			list = append(list, fmt.Sprintf("P%d×%d", i, n))
+		}
+	}
+	if unknown > 0 {
+		list = append(list, fmt.Sprintf("%d earlier", unknown))
+	}
+	switch {
+	case all[0]+all[1]+all[2]+unknown > 0:
+		count = plural(total, "finding") + " open"
+		return fmt.Sprintf("%s at %s (%s)", count, short, strings.Join(list, " ")), count, true
+	case all[3] > 0:
+		return fmt.Sprintf("no problems at %s, %d optional (%s)", short, all[3], strings.Join(list, " ")), "", false
+	case r.Fixed == 1:
+		return "1 finding fixed at " + short, "", false
+	case r.Fixed > 1:
+		return fmt.Sprintf("all %d findings fixed at %s", r.Fixed, short), "", false
+	case st.ReviewEvent == "APPROVED" || r.Event == "APPROVE" || r.Event == "APPROVED":
+		return "magnum approved " + short, "", false
+	}
+	return "no findings at " + short, "", false
+}
+
+// nextWait is what a PR clean on magnum's side (clean says so: "nothing
+// open at a1b2c3d", "magnum approved a1b2c3d") waits on next: with ci, its
+// CI first (failed: you; running, or a required check that has not run:
+// CI); then GitHub's review gate: approved or no review required, your
+// merge; changes asked, your answer; the reviewers asked, with how long
+// ago; nobody asked, you to ask one. A gate magnum has not read waits on
+// the reviewers. since is the newest ask.
+func nextWait(st PRState, n int, clean string, ci bool, c prClock) prWait {
+	with := func(next string) string { return clean + " · " + next }
+	if ci && st.CI != nil {
+		switch state, name, progress := ciOf(st.CI); state {
+		case "failed":
+			next := "CI failed"
+			if name != "" {
+				next += ": " + name
+			}
+			w := youWait(with(next), next, "")
+			w.move, w.moveShort = "fix the CI", "fix CI"
+			return w
+		case "pending":
+			next := "CI runs"
+			if progress != "" {
+				next += ": " + progress
+			}
+			return waitsWait(waitCI, with(next), next, "")
+		case "missing":
+			next := name + " has not run at " + textx.ShortSHA(st.Head)
+			return waitsWait(waitCI, with(next), name+" has not run", "")
+		}
+	}
+	merge := func(next string) prWait {
+		w := youWait(with(next), "approved, merge is yours", "")
+		w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
+		return w
+	}
+	g := st.Gate
+	switch {
+	case g == nil:
+		return waitsWait(waitReviewers, with("no approval yet"), "no approval yet", "")
+	case g.Decision == "APPROVED":
+		if by := opinionsOf(g, "APPROVED"); by != "" {
+			return merge("approved by " + by + ", merge is yours")
+		}
+		return merge("approved, merge is yours")
+	case g.Decision == "CHANGES_REQUESTED":
+		by := cmp.Or(opinionsOf(g, "CHANGES_REQUESTED"), "a reviewer")
+		w := youWait(with(by+" asked for changes"), by+" asked for changes", "")
+		w.move, w.moveShort = "answer "+by, "answer them"
+		return w
+	case g.Decision == "":
+		w := merge("no review required, merge is yours")
+		w.on.Short = "merge is yours"
+		return w
+	case len(st.Asked) > 0:
+		names := make([]string, len(st.Asked))
+		var since time.Time
+		for i, a := range st.Asked {
+			names[i] = a.Who
+			if !a.At.IsZero() {
+				names[i] += " " + shortAge(max(c.now.Sub(a.At), 0)) + " ago"
+				since = later(since, a.At)
+			}
+		}
+		next := "asked " + andList(names)
+		w := waitsWait(waitReviewers, with(next), next, "")
+		w.since = since
+		return w
+	}
+	w := youWait(with("no reviewer asked"), "no reviewer asked", "")
+	w.move, w.moveShort = "ask a reviewer", "ask one"
+	return w
+}
+
+// ciOf is CI c's state as a wait reads it: "failed" (with the failing
+// required check's name, else the first failing check's), "pending" (with
+// its progress, "25/41"), "missing" (a required check that has not run at
+// the head, by name), else "passed" or "none".
+func ciOf(c *tui.CIInfo) (state, name, progress string) {
+	for _, r := range c.Required {
+		if r.State == store.CheckFailed {
+			return "failed", cmp.Or(r.Label, r.Name), ""
+		}
+	}
+	if c.State == "failed" {
+		if len(c.Failing) > 0 {
+			name = c.Failing[0]
+		}
+		return "failed", name, ""
+	}
+	for _, r := range c.Required {
+		if r.State == store.CheckPending {
+			return "pending", cmp.Or(r.Label, r.Name), ""
+		}
+	}
+	if c.State == "pending" {
+		if c.Total > 0 {
+			progress = fmt.Sprintf("%d/%d", c.Total-c.Pending, c.Total)
+		}
+		return "pending", "", progress
+	}
+	for _, r := range c.Required {
+		if r.State == "missing" {
+			return "missing", cmp.Or(r.Label, r.Name), ""
+		}
+	}
+	return c.State, "", ""
+}
+
+// opinionsOf are the reviewers whose latest opinion in gate g is state, in
+// words ("rev-ann and rev-bob"); "" for none.
+func opinionsOf(g *store.ReviewGate, state string) string {
+	var who []string
+	for _, o := range g.Opinions {
+		if o.State == state && o.Login != "" {
+			who = append(who, o.Login)
+		}
+	}
+	return andList(who)
+}
+
+// andList joins items as a sentence does: "a", "a and b", "a, b and c".
+func andList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// later is the later of a and b.
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // attentionWait is the wait on you of PR #n that magnum's row (st) says
@@ -384,8 +642,10 @@ func fixingWait(st PRState, n int) prWait {
 const reopenMove = "reopen it, or x drops the task"
 
 // verdictWait is the wait of a PR whose verdict st.Open tells its state;
-// own as for magnumWait.
-func verdictWait(st PRState, n int, own bool) prWait {
+// own as for magnumWait. An idle one that no person approved waits as
+// nextWait says, once magnum read GitHub's review gate: on the reviewers
+// asked, else on you to ask one.
+func verdictWait(st PRState, n int, own bool, c prClock) prWait {
 	waits, you := waitsWait, youWait
 	o := st.Open
 	short := clauseShort(o.Why)
@@ -406,7 +666,11 @@ func verdictWait(st PRState, n int, own bool) prWait {
 			w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
 			return w
 		}
-		return waits(waitReviewers, o.Why, short, "")
+		if st.Gate == nil {
+			return waits(waitReviewers, o.Why, short, "")
+		}
+		clean, _, _ := strings.Cut(o.Why, " · ")
+		return nextWait(st, n, clean, false, c)
 	case engine.OpenOff:
 		what := offWait(o.Off, n, own)
 		return you(what, clauseShort(what), "")

@@ -152,12 +152,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		if c := cmp.Compare(a.Group, b.Group); c != 0 || a.Group != tui.GroupNeedsYou && a.Group != tui.GroupYours {
 			return c
 		}
-		// YOUR PRS: the PRs magnum leaves alone last, so a short screen folds
-		// them first (a group folds from its end).
-		if c := cmp.Compare(leftAlone(a), leftAlone(b)); c != 0 {
-			return c
-		}
-		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and YOUR PRS: the oldest wait first
+		return a.Since.Compare(b.Since) // NEEDS YOU, as `a` walks it, and your PRs magnum leaves alone: the oldest wait first
 	})
 	d.Repos = s.repos()
 	switch {
@@ -188,15 +183,6 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		return d, err
 	}
 	return d, nil
-}
-
-// leftAlone is 1 for the row of your PR that magnum's look leaves alone (a
-// baseline, fix off: it asks nothing), else 0.
-func leftAlone(r tui.FactoryRow) int {
-	if r.PR != nil && r.PR.Off != "" {
-		return 1
-	}
-	return 0
 }
 
 // screen is one read of ScreenData.

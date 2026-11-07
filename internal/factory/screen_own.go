@@ -1,17 +1,19 @@
 package factory
 
-// YOUR PRS on home: your own open PRs from magnum's registry
-// (Magnum.OwnPRs, read once per frame), one row each, whether the factory
-// wrote them or you did. A PR a task that is not done or stopped has stays
-// that task's row. A PR whose verdict needs you, that is idle and approved
-// (your merge), or that needs your attention or where magnum stopped
-// arguing (whatever its verdict says, and without one) is in NEEDS YOU;
-// every other one waits in YOUR PRS, oldest wait first, with the words a
-// published task's row has (magnumWait); one magnum's look leaves alone (a
-// baseline, fix off), or without a verdict one magnum does not review, is
-// drawn dim with why, after the others, and asks nothing. The rows are
-// read only: f, F and x on them go through magnum's own request paths, as
-// the board's keys do, never through the factory daemon.
+// Your own open PRs on home: from magnum's registry (Magnum.OwnPRs, read
+// once per frame), one row each, whether the factory wrote them or you
+// did. A PR a task that is not done or stopped has stays that task's row.
+// A row says what a published task's row says of its PR (magnumWait), and
+// that decides its group, as for a task's: a PR whose verdict needs you,
+// whose findings no loop takes, that waits on your merge, or that needs
+// your attention or where magnum stopped arguing (whatever its verdict
+// says, and without one) is in NEEDS YOU; one that waits on others (its
+// reviewers, CI, magnum, a fix loop at work) in WAITS ON OTHERS; one
+// magnum's look leaves alone (a baseline, fix off), or without a verdict
+// one magnum does not review, is drawn dim with why in a group of its own
+// (tui.GroupYours), oldest first, and asks nothing. The rows are read
+// only: f, F and x on them go through magnum's own request paths, as the
+// board's keys do, never through the factory daemon.
 
 import (
 	"cmp"
@@ -88,15 +90,16 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // with its CI, FINDINGS and APPR cells, waiting since its wait began (the
 // verdict's Since, a loop's start, an attention's row change), else since
 // its last activity on GitHub, never magnum's last write of its row. It
-// is magnumWait's wait, in NEEDS YOU when it is on you, except for a PR
-// magnum's look leaves alone (off), which is dim in YOUR PRS. An attention
+// is magnumWait's wait, in NEEDS YOU when it is on you and in WAITS ON
+// OTHERS when it waits on others, except for a PR magnum's look leaves
+// alone (off), which is dim in a group of its own. An attention
 // or a stalemate needs you whatever the verdict says (fix off does not
 // hide it, and a verdict decided before it is stale), unless a loop works
 // on the PR. Without a verdict, a PR magnum does not review (include_own =
 // false, a mute, a baseline) is off too.
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
-	w := magnumWait(st, n, true)
+	w := magnumWait(st, n, true, s.clock())
 	fresh := st.HasOpen && !st.Stale
 	off := ""
 	switch {
@@ -124,11 +127,12 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	row.PR = &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff, Off: off,
 		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing}
 	switch {
-	case off == "" && w.group == tui.GroupNeedsYou:
+	case off != "": // magnum leaves it alone: it asks nothing
+	case w.group == tui.GroupNeedsYou:
 		row.Group, row.Mark = tui.GroupNeedsYou, tui.MarkNeedsYou
 		row.Move, row.MoveShort = cmp.Or(w.move, ownMove), cmp.Or(w.moveShort, ownMoveShort)
-	case w.mark == tui.MarkWorking:
-		row.Mark = tui.MarkWorking
+	default: // it waits on others, as a published task's row that says the same
+		row.Group, row.Mark = tui.GroupWaits, w.mark
 	}
 	row.Help = cmp.Or(w.help, w.on.Who+": "+cmp.Or(w.on.Long, w.on.What))
 	card := tui.TaskCard{Key: key, Title: st.Title, Repo: st.Ref.Repo, PR: fmt.Sprintf("#%d", n), PRURL: cmp.Or(st.URL, githubPR(st.Ref)),

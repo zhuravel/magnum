@@ -460,7 +460,7 @@ func TestWhoAPublishedPRWaitsOnInTheStatusFile(t *testing.T) {
 		{"merged", published, PRState{Found: true, DaemonUp: true, GHState: store.GHMerged}, prstatus.WhoNone},
 	}
 	for _, c := range cases {
-		if got := nowOf(c.t, c.pr, t0, grace); got != (prstatus.Now{Who: c.want, Stage: prstatus.StagePublished}) {
+		if got := nowOf(c.t, c.pr, prClock{now: t0, grace: grace, poll: 30 * time.Second}); got != (prstatus.Now{Who: c.want, Stage: prstatus.StagePublished}) {
 			t.Errorf("%s: %+v, want %s at published", c.name, got, c.want)
 		}
 	}
@@ -468,7 +468,7 @@ func TestWhoAPublishedPRWaitsOnInTheStatusFile(t *testing.T) {
 		registry.TaskFailed: prstatus.StageFailed} {
 		ended := published
 		ended.State = state
-		if got := nowOf(ended, verdict(engine.OpenNeedsYou, "a thread", false), t0, grace); got != (prstatus.Now{Who: prstatus.WhoNone, Stage: stage}) {
+		if got := nowOf(ended, verdict(engine.OpenNeedsYou, "a thread", false), prClock{now: t0, grace: grace, poll: 30 * time.Second}); got != (prstatus.Now{Who: prstatus.WhoNone, Stage: stage}) {
 			t.Errorf("a task %s: %+v, want none at %s", state, got, stage)
 		}
 	}

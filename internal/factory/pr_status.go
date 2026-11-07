@@ -171,7 +171,7 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 		Code: prstatus.Code{Commits: card.Commits, Proof: prstatus.ProofNone},
 		LocalReview: prstatus.LocalReview{Rounds: card.Review.Rounds, Verdict: verdictOf(card.Review.Exit),
 			NotesOpen: len(knownLines(card.Review, false))},
-		FixLoop: fixLoopOf(st, fix), Staging: prstatus.Staging{State: prstatus.StagingNone}, Now: nowOf(j.t, st, now, e.cfg.Daemon.CloseGrace.Duration)}
+		FixLoop: fixLoopOf(st, fix), Staging: prstatus.Staging{State: prstatus.StagingNone}, Now: nowOf(j.t, st, clockOf(e.cfg, now))}
 	if p, ok := readProof(dir); ok {
 		s.Code.Proof, s.Code.Specs = proofOf(p, true), len(p.Specs)
 	}
@@ -253,8 +253,8 @@ func fixLoopOf(st PRState, fix FixRecord) prstatus.FixLoop {
 // nowOf is who task t's PR waits on and the task's stage, in the file's
 // words: an ended task's end, waiting on nobody; a published one's PR
 // waits as its row on the screen says (publishedWait, by magnum's view st
-// at now, a closed PR waiting grace for a reopen).
-func nowOf(t registry.Task, st PRState, now time.Time, grace time.Duration) prstatus.Now {
+// at c, a closed PR waiting c.grace for a reopen).
+func nowOf(t registry.Task, st PRState, c prClock) prstatus.Now {
 	switch t.State {
 	case registry.TaskDone:
 		return prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageDone}
@@ -263,7 +263,7 @@ func nowOf(t registry.Task, st PRState, now time.Time, grace time.Duration) prst
 	case registry.TaskFailed:
 		return prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageFailed}
 	}
-	return prstatus.Now{Who: whoOf(publishedWait(t, st.Ref, st, now, grace).on.Who), Stage: prstatus.StagePublished}
+	return prstatus.Now{Who: whoOf(publishedWait(t, st.Ref, st, c).on.Who), Stage: prstatus.StagePublished}
 }
 
 // whoOf is who a published task's row waits on (publishedWait) in the
