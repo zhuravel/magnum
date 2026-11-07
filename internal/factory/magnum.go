@@ -215,8 +215,9 @@ type PRRef struct {
 // at the head is missing, never green; nil before magnum read the checks);
 // Review magnum's last posted review (nil for none), Findings it as the
 // board's FINDINGS column says it, and ReviewEvent what magnum's review of
-// ReviewedSHA posted (APPROVE, REQUEST_CHANGES or COMMENT; "" when not
-// known); Gate GitHub's review gate (nil before magnum read it); Asked the
+// the head posted (prs.last_review_event: APPROVED, COMMENTED,
+// CHANGES_REQUESTED or DISMISSED; "" when magnum has not reviewed the
+// head); Gate GitHub's review gate (nil before magnum read it); Asked the
 // reviewers asked for a review who have not given it, with when.
 type PRState struct {
 	Ref                                   PRRef

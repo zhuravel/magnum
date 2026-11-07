@@ -4019,7 +4019,16 @@ are all of it draws no such column. From 120 columns a row with a PR shows its n
 after the key, which is then the Jira key (`PR-12320  #4530`); below 120 the key alone stays. The title line
 names the factory's repositories (`magnum factory · talkable, widget`, the configured ones in their order), or
 counts them (`4 repos`) when they do not fit beside the blocker line. A wide screen draws the long forms (the
-whole blockers, the staging cells' ages) with the title cut down to 24 cells rather than giving them up. The task
+whole blockers, the staging cells' ages) with the title cut down to 24 cells rather than giving them up; from 180
+columns the longest blockers give up their ends there, down to 48 cells, before the title goes under 24 (the
+help line says them whole). A row with a PR (a published task's, your PR's) draws three columns after WAITS ON, as
+the PR board's cells say them, each only when a row has its data: CI, the head's checks by the repository's
+required checks (`✓ 41/41`, `◌ 25/41`, `✗ Completion +1` for the worst required check and how many more, `–
+Completion not run` for one that never ran at the head, never green); FINDINGS, what magnum's last posted review
+found (`✗ P1 P2×3`, `● P3×2`, `✔ clean`); APPR, the people's reviews GitHub counts (`✗ 1` changes requested,
+else `✔ 2` approvals, `⟳` when one is of an older commit, else `—`). Below the wide layout they draw their short
+forms (the CI's glyph, the verdict and the worst priority, `✗ P1`); on a narrow screen they outlast YOUR MOVE,
+whose step the help line then says (`· your move: b or f`), and the CI's glyph outlasts the other two. The task
 card's facts start with the repository and the PR's number (`example/talkable #4530`), then the branch. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
 PR-12345, PR-12346`; NEEDS YOU and the selected row never fold, and when folding is not enough the list
 scrolls. The window title counts the tasks that need you (`factory · 3 need you`, `factory · nothing waits on
@@ -4408,7 +4417,9 @@ columns, the key cell has the issue key of its title),
 with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); so is one that needs your attention or where
 magnum stopped arguing, whatever its verdict says (fix off hides no attention) and without one (`you: magnum:
 <why>`, or the first item its fixer left you, as a published task's row says it, with every item on the help
-line and `e` for the report), unless a fix loop works on it. Every other one waits in YOUR PRS, between
+line and `e` for the report), unless a fix loop works on it. Its WAITED counts from when it began to wait so
+(the verdict's, the loop's start, the attention), else from its last activity on GitHub, never from magnum's last
+write of its row. Every other one waits in YOUR PRS, between
 WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has (`agent: magnum fixes
 #4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `magnum: looking at #4613`). A PR magnum's look leaves alone (a
 baseline, fix off, a mute, a watch whose `include_own` is false; without a verdict, one magnum does not review)

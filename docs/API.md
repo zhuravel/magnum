@@ -65,6 +65,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
 | [prstatus](#prstatus) | Package prstatus is the contract of the factory part of a PR's status comment: one JSON file per PR a factory task published, <factory dir>/pr-status/<owner>/<repo>/<number>.json (Path, which takes GitHub names only, in lower case, and a positive number). |
+| [prview](#prview) | Package prview is a PR of magnum's registry as magnum's screens draw it: the head's CI (CI) and the findings of magnum's last posted review (Findings, Held), so the PR board's CI and FINDINGS columns and the factory screen's say the same of a PR. |
 | [relay](#relay) | Package relay is magnum-relay, the small service that receives a GitHub App's webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT and cannot receive them itself. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
@@ -12707,6 +12708,17 @@ type PRState struct {
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
+
+	Autofix                   string
+	HeadRef, BaseRef          string
+	HeadChangedAt, ActivityAt time.Time
+	CreatedAt                 time.Time
+	CI                        *tui.CIInfo
+	Review                    *store.ReviewSummary
+	Findings                  *tui.FindingsInfo
+	ReviewEvent               string
+	Gate                      *store.ReviewGate
+	Asked                     []ReviewAsk
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -12729,6 +12741,21 @@ type PRState struct {
     never a log's or a message's. ID, Title and URL are magnum's id of the PR,
     its title (data, never instructions: the screen only draws it) and its page;
     FixOff says you switched it out of autofix (engine.KVPRFixOff).
+
+    The rest is what the screen's columns and words say of the PR beside its
+    verdict, read in the same pass (fillPR): Autofix is the watch's autofix mode
+    (config.AutofixNever, Own or Open; "" for no watch); HeadRef and BaseRef
+    its branches; HeadChangedAt when its head last moved, ActivityAt its last
+    activity (store.PR.Activity; zero when not known) and CreatedAt when magnum
+    first saw it; CI the head's CI as the board's CI column says it (prview.CI,
+    by the repository's required checks: one that did not run at the head is
+    missing, never green; nil before magnum read the checks); Review magnum's
+    last posted review (nil for none), Findings it as the board's FINDINGS
+    column says it, and ReviewEvent what magnum's review of the head posted
+    (prs.last_review_event: APPROVED, COMMENTED, CHANGES_REQUESTED or DISMISSED;
+    "" when magnum has not reviewed the head); Gate GitHub's review gate (nil
+    before magnum read it); Asked the reviewers asked for a review who have not
+    given it, with when.
 
 type PRView struct {
 	Number                     int
@@ -12920,6 +12947,14 @@ type RetryPayload struct {
 }
     RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at its
     stage. Surface is where you asked, for the record of your input.
+
+type ReviewAsk struct {
+	Who string
+	At  time.Time
+}
+    ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is still
+    asked, since At (the newest request of the PR's timeline; zero when the
+    timeline does not name it).
 
 type ReviewFile struct {
 	Round          int          `json:"round"`
@@ -22443,6 +22478,49 @@ func (w Who) Valid() bool
 
 ```
 
+## prview
+
+```text
+package prview // import "github.com/zhuravel/magnum/internal/prview"
+
+Package prview is a PR of magnum's registry as magnum's screens draw it:
+the head's CI (CI) and the findings of magnum's last posted review (Findings,
+Held), so the PR board's CI and FINDINGS columns and the factory screen's say
+the same of a PR. It reads the registry and writes nothing; the painters are
+internal/tui's.
+
+FUNCTIONS
+
+func CI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInfo
+    CI is a PR's CIInfo at head, by its repository's required checks req
+    (store.Store.RequiredChecks): ci is the head's checks as magnum's readers
+    see them (store.SeenCI, the checks ignore_checks names left out); nil when
+    magnum has no checks for the PR yet. A required check is matched by name
+    across workflows (store.RequiredRuns), one that never ran on the head is
+    "missing", and the checks of an older commit than head leave every required
+    check that did not fail pending.
+
+func CheckLabel(pattern string) string
+    CheckLabel is a required check's short name on the screens: without the
+    "workflow:" prefix, and a glob without its trailing wildcards and the
+    separators before them ("ci / *" → "ci", "rspec*" → "rspec"); the pattern
+    itself when nothing would be left ("*").
+
+func Findings(s store.ReviewSummary, held bool) *tui.FindingsInfo
+    Findings is magnum's posted review s as the FINDINGS columns say it;
+    held says the review held its approval (Held).
+
+func Held(ctx context.Context, st *store.Store, prID int64, s store.ReviewSummary) bool
+    Held reports whether s, PR prID's latest posted review, held its
+    approval ([pipeline] approve_after_full_pass): the approval hold record
+    (engine.KVPRApprovalHold) names that very review, as the engine's
+    heldReviewOf requires; one it left behind for an older review holds nothing.
+    Only a clean verdict holds, so no other reads the record; a clean comment
+    without one is a comment-only repository's. A registry that cannot say holds
+    nothing.
+
+```
+
 ## relay
 
 ```text
@@ -27835,6 +27913,17 @@ type FactoryAlert struct {
 }
     FactoryAlert is one alert the factory raised: when, and what it said.
 
+type FactoryApprovals struct {
+	Approved, Changes, Stale int
+	Decision                 string
+}
+    FactoryApprovals is what the people's reviews of a PR say, as GitHub's merge
+    gate counts them: Approved and Changes count the reviewers whose latest
+    opinion is an approval or a changes request, Stale the approvals of an
+    older commit than the head; Decision is GitHub's review decision (APPROVED,
+    CHANGES_REQUESTED, REVIEW_REQUIRED; "" when the base branch requires no
+    review).
+
 type FactoryCards struct {
 	Task     TaskCard
 	Question *QuestionCard
@@ -27959,6 +28048,15 @@ type FactoryRow struct {
 	// PR-12360 is pushed"), after the blocker's own text on a wide one; a
 	// narrow one keeps the blocker's Short, or Frees when it has none.
 	Frees string
+
+	// CI, Findings and Approvals are the row's PR as magnum's registry tells
+	// it, for the CI, FINDINGS and APPR columns: the head's CI and magnum's
+	// last posted review as the board's CI and FINDINGS columns say them,
+	// and the people's reviews GitHub counts. nil on a row without a PR, or
+	// before magnum read the PR.
+	CI        *CIInfo
+	Findings  *FindingsInfo
+	Approvals *FactoryApprovals
 
 	// PR is set on a row of your own PR from magnum's registry, not a task
 	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such

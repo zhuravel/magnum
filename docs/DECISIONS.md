@@ -17651,6 +17651,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestScreenDataNamesTheRepositoryOfEveryRow, TestFactoryRowsKeepTheirPRNumberFrom120Columns,
   TestFactoryTheWideLayoutSqueezesALongTitle, TestTaskCardNamesItsRepositoryFirst; goldens repos-100, -120,
   -140 and -200, and the 140-column goldens with the PR column.
+- **A PR's row says its CI, magnum's findings and the approvals, in the board's cells** (2026-11-07, the
+  2026-11-07 audit's R5; the operator: "As you moved my PRs from magnum to magnum factory, I should not have less
+  visibility"). The factory home drew a PR's wait and nothing of its CI, its findings or its approvals, which the
+  board's columns had: magnum's registry held them, but `PRState` passed an `Approved` bool only, and WAITED on
+  your PR without a verdict counted from `prs.updated_at`, magnum's last write of the row (17 days for a baseline
+  whose last activity was in September).
+  - `fillPR` reads, in the same opening of magnum's registry, the head's CI by the repository's required checks,
+    magnum's last posted review, GitHub's review gate, the reviewers asked and not yet answered with their newest
+    request, the branches, the head's last move, the PR's activity and when magnum first saw it, and the watch's
+    autofix mode; the required checks once per repository per pass.
+  - The board's builders of its CI and FINDINGS cells' data move from `internal/cli` to `internal/prview` (`CI`,
+    `Findings`, `Held`), which the factory reaches (cli imports factory), so both screens say the same of a PR: a
+    required check with no run at the head is missing, never green, on both.
+  - Home draws CI, FINDINGS and APPR after WAITS ON, each only when a row has its data, in the board's own cells
+    on a wide screen (`ciCell`, `findingsCell`) and in short forms below it (the CI's glyph, the verdict and the
+    worst priority). Past the spec's steps they outlast YOUR MOVE, whose step the help line then names, and the
+    CI's glyph outlasts the other two. From 180 columns the longest blockers give up their ends, down to 48
+    cells, before the wide layout gives up for a title under 24: without it the 200-column home of two
+    repositories lost the wide layout to the three columns.
+  - Your PR's WAITED counts from its wait's start, else from its last activity on GitHub (`store.PR.Activity`).
+  Rejected: building the cells in the factory package (a second copy of the board's CI rules, which drift);
+  `tui` reading the registry (its painters take data only); YOUR MOVE before the PR's columns on a narrow
+  screen (the step is advice the blocker mostly says, the columns are facts the screen had none of); counts in
+  the CI's short form (the glyph says the state, the counts go to 200 columns). Tests, failing first:
+  TestPRStatesReadsCIReviewsAndReviewers, TestPRRowsCarryCIFindingsAndApprovals,
+  TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity, TestFactoryPRColumnsDrawTheBoardsCells; goldens
+  repos-100, -120, -140 and -200.
 
 ## Learned rules
 
