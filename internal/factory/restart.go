@@ -7,14 +7,16 @@ package factory
 // proof and the precheck run again), a claim of a copy (its steps run
 // again) and a talk with a liaison (it starts again). The daemon keeps that
 // work in work.json, under its pid, from its start to its stop, and install
-// reads it first: it refuses while anything runs, unless --now. With
-// --drain, install writes drain.json (engine.Drain: since when, and its
-// pid). The tick that takes it starts nothing new while it holds (no
-// launch, effect, round, check, claim or talk, as a stop's drain), the loop
-// goes on and collects what ends, and the record says the drain holds:
+// reads it first: it refuses while anything runs, unless --now. A check
+// stays in the record until a tick took its result, which lives only in
+// the daemon's memory. With --drain, install writes drain.json (Drain:
+// since when, and its pid and start). The tick that takes it starts nothing
+// new while it holds (no launch, effect, round, check, claim or talk, as a
+// stop's drain), shows it as a hold of the machine (HoldDrain), and the
+// loop goes on and collects what ends; the record says the drain holds:
 // install restarts the daemon only once the record says so and nothing
-// runs. A drain whose command is gone (engine.DrainerAlive) is lifted, and
-// the daemon that starts ends the drain it was waited for.
+// runs. A drain whose command is gone (liveDrainer) is lifted, and the
+// daemon that starts ends the drain it was waited for.
 
 import (
 	"bytes"
@@ -28,12 +30,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // The kinds of WorkItem.
@@ -63,6 +68,43 @@ type WorkRecord struct {
 	Work  []WorkItem `json:"work"`
 }
 
+// Drain is a drain install asks for (drain.json): when it started, and the
+// pid and the start (ps's lstart: a pid another process took since has
+// another) of the command that asks.
+type Drain struct {
+	Since time.Time
+	PID   int
+	Start string
+}
+
+// Value is d as drain.json holds it.
+func (d Drain) Value() string {
+	b, _ := json.Marshal(struct {
+		Since string `json:"since"`
+		PID   int    `json:"pid,omitempty"`
+		Start string `json:"start,omitempty"`
+	}{store.FormatTime(d.Since), d.PID, d.Start})
+	return string(b)
+}
+
+// ParseDrain reads a drain.json value (Drain.Value); false for anything
+// else.
+func ParseDrain(v string) (Drain, bool) {
+	var raw struct {
+		Since string `json:"since"`
+		PID   int    `json:"pid"`
+		Start string `json:"start"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(v)), &raw) != nil {
+		return Drain{}, false
+	}
+	t, err := store.ParseTime(raw.Since)
+	if err != nil {
+		return Drain{}, false
+	}
+	return Drain{Since: t, PID: raw.PID, Start: raw.Start}, true
+}
+
 // ReadWork reads the record the factory daemon of layout l keeps; ok is
 // false when there is none (no daemon of this build runs, or it stopped).
 func ReadWork(l paths.Layout) (WorkRecord, bool, error) {
@@ -81,7 +123,7 @@ func ReadWork(l paths.Layout) (WorkRecord, bool, error) {
 }
 
 // WriteDrain asks the factory daemon of layout l for a drain: value is
-// engine.Drain.Value (since when, and the asking command's pid), and it
+// Drain.Value (since when, and the asking command's pid and start), and it
 // replaces any drain asked before.
 func WriteDrain(l paths.Layout, value string) error {
 	path := l.FactoryDrain()
@@ -141,13 +183,15 @@ func (e *Engine) saveWork() {
 }
 
 // saveWorkLocked writes the record (work.json) when it changed, under
-// workMu; a write that fails is logged, and install reads the older record.
-// After closeWork it writes nothing.
+// workMu, with fsx.ReplaceFile: a record lost in a crash is no record, and
+// install then fails closed. A write that fails removes the record for the
+// same reason (a full disk still lets a file go), and the next change
+// writes it again. After closeWork it writes nothing.
 func (e *Engine) saveWorkLocked() {
 	if e.workClosed {
 		return
 	}
-	rec := WorkRecord{PID: os.Getpid(), Drain: e.drainHeld, Work: []WorkItem{}}
+	rec := WorkRecord{PID: os.Getpid(), Drain: e.heldDrain(), Work: []WorkItem{}}
 	for _, k := range slices.Sorted(maps.Keys(e.work)) {
 		rec.Work = append(rec.Work, e.work[k])
 	}
@@ -156,12 +200,20 @@ func (e *Engine) saveWorkLocked() {
 		return
 	}
 	path := e.d.Layout.FactoryWork()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		e.log.Warn("write the record of the work a restart would cut", "err", err)
-		return
+	write := e.workWrite
+	if write == nil {
+		write = func(path string, b []byte) error { return fsx.ReplaceFile(path, b, 0o600) }
 	}
-	if err := fsx.WriteFileAtomic(path, append(b, '\n'), 0o600); err != nil {
-		e.log.Warn("write the record of the work a restart would cut", "err", err)
+	err = os.MkdirAll(filepath.Dir(path), 0o700)
+	if err == nil {
+		err = write(path, append(b, '\n'))
+	}
+	if err != nil {
+		e.log.Warn("write the record of the work a restart would cut; removed it, so install cannot trust an old one", "err", err)
+		e.workSaved = nil
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			e.log.Warn("remove the record of the work a restart would cut", "err", err)
+		}
 		return
 	}
 	e.workSaved = b
@@ -179,28 +231,59 @@ func (e *Engine) closeWork() {
 
 // heldDrain is the drain the daemon holds ("" for none).
 func (e *Engine) heldDrain() string {
-	e.workMu.Lock()
-	defer e.workMu.Unlock()
-	return e.drainHeld
+	v, _ := e.drainHeld.Load().(string)
+	return v
 }
 
 // startsHeld reports whether nothing new may start: the daemon stops (a
 // stop's drain) or holds the drain install asked for.
 func (e *Engine) startsHeld() bool { return e.draining.Load() || e.heldDrain() != "" }
 
+// processStart is when process pid started (execx.ProcessStart, with the
+// real ps): Engine.procStart's default.
+func processStart(pid int) (string, error) {
+	return execx.ProcessStart(context.Background(), &execx.Real{}, pid)
+}
+
+// liveDrainer reports whether the command that asked for drain d still
+// runs: the process at its pid started when the command did (procStart),
+// so a pid another process took since is not the command. A drain that
+// names no start falls back on engine.DrainerAlive (a magnum process holds
+// the pid). A pid whose start ps cannot read counts as the command unless
+// no process has it.
+func (e *Engine) liveDrainer(d Drain) bool {
+	if d.Start == "" {
+		return engine.DrainerAlive(d.PID)
+	}
+	start, err := e.procStart(d.PID)
+	if err != nil {
+		return !errors.Is(syscall.Kill(d.PID, 0), syscall.ESRCH)
+	}
+	return start == d.Start
+}
+
 // takeDrain reads, at the start of a tick, the drain install asks for and
 // holds it, or lets go of the one it held, and writes the record that says
 // so: every work that started in an earlier tick is in it, and none starts
-// in this one once it holds. A drain whose command is gone is lifted. A
-// drain.json it cannot read changes nothing.
+// in this one once it holds. While it holds, the drain is a hold of the
+// machine (HoldDrain), which holds.json shows the screen. A drain whose
+// command is gone is lifted. A drain.json it cannot read is no drain, said
+// once.
 func (e *Engine) takeDrain(ctx context.Context) {
 	value, err := ReadDrain(e.d.Layout)
-	if err != nil {
-		e.log.Warn("read the drain install asked for", "err", err)
-		return
+	d, ok := ParseDrain(value)
+	switch {
+	case err != nil:
+		e.warnDrain(err.Error())
+		value = ""
+	case value != "" && !ok:
+		e.warnDrain("not a drain install writes")
+		value = ""
+	default:
+		e.drainWarned = ""
 	}
 	gone := false
-	if d, ok := engine.ParseDrain(value); ok && d.PID > 0 && !e.drainerAlive(d.PID) {
+	if value != "" && d.PID > 0 && !e.drainerAlive(d) {
 		if err := LiftDrain(e.d.Layout, value); err != nil {
 			e.log.Warn("lift a drain whose command is gone", "err", err)
 		}
@@ -208,11 +291,15 @@ func (e *Engine) takeDrain(ctx context.Context) {
 			"so no restart follows; work starts again", d.Since.Local().Format("15:04:05"), d.PID))
 		value, gone = "", true
 	}
-	e.workMu.Lock()
-	prev := e.drainHeld
-	e.drainHeld = value
-	e.saveWorkLocked()
-	e.workMu.Unlock()
+	prev := e.heldDrain()
+	e.drainHeld.Store(value)
+	if value == "" {
+		delete(e.holds, HoldDrain)
+	} else if h := e.holds[HoldDrain]; h == nil || value != prev {
+		e.holds[HoldDrain] = &Hold{Kind: HoldDrain, Reason: drainOwner(value) + ": nothing new starts until the restart",
+			Since: d.Since.Round(0)}
+	}
+	e.saveWork()
 	switch {
 	case value == prev:
 	case value != "":
@@ -225,9 +312,19 @@ func (e *Engine) takeDrain(ctx context.Context) {
 	}
 }
 
+// warnDrain logs, once while it lasts, that drain.json cannot be read
+// (why): no drain holds.
+func (e *Engine) warnDrain(why string) {
+	if why == e.drainWarned {
+		return
+	}
+	e.drainWarned = why
+	e.log.Warn("the drain install asked for cannot be read; no drain holds", "file", filepath.Base(e.d.Layout.FactoryDrain()), "why", why)
+}
+
 // drainOwner names the command a drain value came from.
 func drainOwner(value string) string {
-	d, ok := engine.ParseDrain(value)
+	d, ok := ParseDrain(value)
 	switch {
 	case !ok:
 		return "a command"

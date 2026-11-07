@@ -115,9 +115,10 @@ const (
 // heavyReview is a local round's use of a heavy slot.
 const heavyReview = "local review"
 
-// localRoundCap ends a round that runs this long (a hang): a round takes
-// 39 minutes at the median, its roles' own timeouts end within the hour.
-const localRoundCap = 3 * time.Hour
+// LocalRoundCap ends a round of the local review that runs this long (a
+// hang): a round takes 39 minutes at the median, its roles' own timeouts
+// end within the hour. `magnum factory install --drain` waits longer.
+const LocalRoundCap = 3 * time.Hour
 
 // ReviewItem is one finding of the local review as the factory hands it on:
 // its id in the round's file (F1, F2, ...), its fingerprint, severity,

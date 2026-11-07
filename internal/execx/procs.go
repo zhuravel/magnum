@@ -76,6 +76,22 @@ func ProcessTable(ctx context.Context, r Runner) ([]Process, error) {
 	return out, nil
 }
 
+// ProcessStart is when process pid started, as ProcessTable reads it (ps's
+// lstart in the C locale, its words joined by one space): with the pid, the
+// process's lifetime identity. A pid no process has is an error.
+func ProcessStart(ctx context.Context, r Runner, pid int) (string, error) {
+	res, err := r.Run(ctx, Cmd{Name: "ps", Args: []string{"-p", strconv.Itoa(pid), "-o", "lstart="},
+		Env: map[string]string{"LC_ALL": "C"}, Timeout: processTableTimeout, Label: "ps process start", Quiet: true})
+	if err != nil {
+		return "", fmt.Errorf("read the start of pid %d: %w", pid, err)
+	}
+	start := strings.Join(strings.Fields(res.Out()), " ")
+	if start == "" {
+		return "", fmt.Errorf("read the start of pid %d: no such process", pid)
+	}
+	return start, nil
+}
+
 // psRow is one line of ProcessTable's ps: pid, ppid, pgid, stat, the five
 // words of lstart and comm.
 var psRow = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(\S.*)$`)

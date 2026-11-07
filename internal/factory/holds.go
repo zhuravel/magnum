@@ -37,6 +37,9 @@ const (
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
 	HoldMemory = "memory"
+	// HoldDrain is the drain `magnum factory install --drain` asks for:
+	// nothing new starts until the restart.
+	HoldDrain = "drain"
 	// holdRestart is the drain's reason in a heldError (a stop's drain, or
 	// the one `magnum factory install --drain` asks for); it is no Hold and
 	// no task waits on it (the daemon exits, or install restarts it).
@@ -205,7 +208,7 @@ func (e *Engine) clearBlocker(ctx context.Context, key string) {
 
 // holdsOrder is the order the screen names the holds in: the ones that stop
 // every stage first.
-var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDisk, HoldMemory}
+var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDrain, HoldDisk, HoldMemory}
 
 // saveHolds writes the holds in force to holds.json (Layout.FactoryHolds),
 // in holdsOrder, when they changed since the last write of this daemon (and

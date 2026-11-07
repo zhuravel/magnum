@@ -278,12 +278,16 @@ type Engine struct {
 	drainAt atomic.Int64
 
 	// Seams: the signal subscription, the process table that names the
-	// daemon that holds the lock, and whether the command that asked for a
-	// drain still runs (engine.DrainerAlive).
+	// daemon that holds the lock, whether the command that asked for a
+	// drain still runs (liveDrainer), a process's start (procStart:
+	// execx.ProcessStart) and the write of work.json (workWrite; nil:
+	// fsx.ReplaceFile).
 	notify       func(c chan<- os.Signal, sig ...os.Signal)
 	stopNotify   func(c chan<- os.Signal)
 	procs        engine.Processes
-	drainerAlive func(pid int) bool
+	drainerAlive func(d Drain) bool
+	procStart    func(pid int) (string, error)
+	workWrite    func(path string, b []byte) error
 
 	// What follows is the loop's own: Run's goroutine (or a test's) reads
 	// and writes it, except the heavy slots (heavyMu), which a stage's
@@ -403,7 +407,7 @@ type Engine struct {
 
 	// The local review's rounds that run off the loop, one per task
 	// (launchRound), which reviewMu guards; roundCap ends a round that runs
-	// longer (localRoundCap; a seam of the tests).
+	// longer (LocalRoundCap; a seam of the tests).
 	reviewMu sync.Mutex
 	reviews  map[int64]*localRound
 	roundCap time.Duration
@@ -432,15 +436,19 @@ type Engine struct {
 	// The work a restart would cut (beginWork), by its sequence, and the
 	// record of it the daemon keeps for `magnum factory install`
 	// (work.json: workSaved is what it last wrote, workClosed that it stopped
-	// writing as the daemon stops), with drainHeld, the drain install asked
-	// for that the daemon holds ("" for none; takeDrain). workMu guards them:
-	// the work's goroutines end their own.
-	workMu     sync.Mutex
-	work       map[int]WorkItem
-	workSeq    int
-	workSaved  []byte
-	workClosed bool
-	drainHeld  string
+	// writing as the daemon stops). workMu guards them: the work's
+	// goroutines end their own. drainHeld is the drain install asked for
+	// that the daemon holds (a string, "" for none): takeDrain sets it, and
+	// the start gates read it without a lock. drainWarned is the last
+	// warning about a drain.json the daemon could not read (said once):
+	// the loop's own.
+	workMu      sync.Mutex
+	work        map[int]WorkItem
+	workSeq     int
+	workSaved   []byte
+	workClosed  bool
+	drainHeld   atomic.Value
+	drainWarned string
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -465,7 +473,6 @@ func New(d Deps) *Engine {
 		notify:       ossignal.Notify,
 		stopNotify:   ossignal.Stop,
 		procs:        engine.SystemProcesses(),
-		drainerAlive: engine.DrainerAlive,
 		panics:       map[int64]int{},
 		lastFail:     map[int64]*stageFails{},
 		publishFails: map[int64]publishFail{},
@@ -494,8 +501,9 @@ func New(d Deps) *Engine {
 		work:         map[int]WorkItem{},
 		magnumNotes:  map[int64]string{},
 		parkOwed:     map[int64]bool{},
-		roundCap:     localRoundCap,
+		roundCap:     LocalRoundCap,
 	}
+	e.drainerAlive, e.procStart = e.liveDrainer, processStart
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate
 	e.runners[config.FactoryStageReview] = e.runReview

@@ -11583,6 +11583,11 @@ func MergeEnv(base []string, env map[string]string, unset []string) []string
     it is what Run gives every subprocess and what other runners (the CLI's TTY
     runner) use to honour Cmd.Env and Cmd.Unset the same way.
 
+func ProcessStart(ctx context.Context, r Runner, pid int) (string, error)
+    ProcessStart is when process pid started, as ProcessTable reads it (ps's
+    lstart in the C locale, its words joined by one space): with the pid,
+    the process's lifetime identity. A pid no process has is an error.
+
 func Redact(s string) string
     Redact masks GitHub tokens, JWTs, Authorization header values and PEM
     private keys in free text. An Authorization header keeps its name.
@@ -11835,6 +11840,9 @@ const (
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
 	HoldMemory = "memory"
+	// HoldDrain is the drain `magnum factory install --drain` asks for:
+	// nothing new starts until the restart.
+	HoldDrain = "drain"
 )
     The kinds of Hold.
 
@@ -11884,6 +11892,11 @@ const LaunchLabel = "zhuravel.magnum.factory"
     LaunchLabel is the launchd label of the factory daemon's LaunchAgent,
     apart from the review daemon's (launchd.DefaultLabel), so either restarts
     without the other.
+
+const LocalRoundCap = 3 * time.Hour
+    LocalRoundCap ends a round of the local review that runs this long (a hang):
+    a round takes 39 minutes at the median, its roles' own timeouts end within
+    the hour. `magnum factory install --drain` waits longer.
 
 const RedisDBsPerCopy = 16
     RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
@@ -12118,7 +12131,7 @@ func TaskKey(t registry.Task) string
 
 func WriteDrain(l paths.Layout, value string) error
     WriteDrain asks the factory daemon of layout l for a drain: value is
-    engine.Drain.Value (since when, and the asking command's pid), and it
+    Drain.Value (since when, and the asking command's pid and start), and it
     replaces any drain asked before.
 
 func WriteReviewCandidate(l paths.Layout) (string, error)
@@ -12285,6 +12298,21 @@ type Deps struct {
     required; any other may be nil, and what needs it waits (a collaborator a
     build does not wire yet) or is skipped (a function field: no memory read,
     no disk check, no MySQL ping, herdr taken as up, no reveal).
+
+type Drain struct {
+	Since time.Time
+	PID   int
+	Start string
+}
+    Drain is a drain install asks for (drain.json): when it started, and the pid
+    and the start (ps's lstart: a pid another process took since has another) of
+    the command that asks.
+
+func ParseDrain(v string) (Drain, bool)
+    ParseDrain reads a drain.json value (Drain.Value); false for anything else.
+
+func (d Drain) Value() string
+    Value is d as drain.json holds it.
 
 type Engine struct {
 	// Has unexported fields.

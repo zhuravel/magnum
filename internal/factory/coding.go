@@ -219,6 +219,18 @@ type headCheck struct {
 	res         checkResult
 	// counted: its failure to run to its end is counted (checkFails).
 	counted bool
+	// endWork takes the check out of the record of the work a restart
+	// would cut (beginWork): once a tick took its result, which lives only
+	// here, or once it is dropped. A restart before then loses the result.
+	endWork func()
+}
+
+// end takes x out of the record of the work a restart would cut; a second
+// call does nothing.
+func (x *headCheck) end() {
+	if x.endWork != nil {
+		x.endWork()
+	}
 }
 
 // checkResult is a check's end: its proof (nil without one), its precheck
@@ -284,10 +296,14 @@ func (e *Engine) checkRanToItsEnd(id int64) {
 // forgetCheck drops x, the check of task id, once it ended or was stopped.
 func (e *Engine) forgetCheck(id int64, x *headCheck) {
 	e.checksMu.Lock()
-	defer e.checksMu.Unlock()
-	if e.checks[id] == x {
+	forgot := e.checks[id] == x
+	if forgot {
 		delete(e.checks, id)
 		delete(e.checkNotes, id)
+	}
+	e.checksMu.Unlock()
+	if forgot {
+		x.end() // its record's write runs outside checksMu
 	}
 }
 
@@ -313,6 +329,7 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 			x.cancel() // the head moved: this check is void, a new one comes once it ended
 			return checkResult{}, false
 		case same:
+			x.end() // taken: the stage that asked records what it did
 			return x.res, true
 		}
 		e.forgetCheck(t.ID, x)
@@ -334,10 +351,10 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 	e.checks[t.ID] = x
 	e.checkNotes[t.ID] = waitPrecheck + ": starts " + what + " of " + short(head)
 	e.checksMu.Unlock()
-	endWork := e.beginWork(WorkCheck, t.ID, work+TaskKey(t))
+	x.endWork = e.beginWork(WorkCheck, t.ID, work+TaskKey(t))
 	e.event(ctx, t.ID, "check", registry.PhaseBegin, "checks "+short(head)+" off the loop: "+what)
 	e.bg.Go(func() {
-		defer endWork()
+		defer e.Kick() // a tick takes the result now: until then a restart loses it
 		defer close(x.done)
 		defer cancel()
 		defer release()
@@ -619,8 +636,8 @@ func (e *Engine) sweepChecks(tasks []registry.Task) {
 			live[t.ID] = true
 		}
 	}
+	var swept []*headCheck
 	e.checksMu.Lock()
-	defer e.checksMu.Unlock()
 	for id := range e.checkFails {
 		if !live[id] {
 			delete(e.checkFails, id)
@@ -636,6 +653,11 @@ func (e *Engine) sweepChecks(tasks []registry.Task) {
 		}
 		delete(e.checks, id)
 		delete(e.checkNotes, id)
+		swept = append(swept, x)
+	}
+	e.checksMu.Unlock()
+	for _, x := range swept {
+		x.end() // its record's write runs outside checksMu
 	}
 }
 

@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
@@ -39,7 +39,7 @@ func whats(rec WorkRecord) []string {
 // started now by pid, and returns its value.
 func (h *harness) installDrain(pid int) string {
 	h.t.Helper()
-	value := engine.Drain{Since: h.clock.Now(), PID: pid}.Value()
+	value := Drain{Since: h.clock.Now(), PID: pid}.Value()
 	if err := WriteDrain(h.layout, value); err != nil {
 		h.t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestTheWorkRecordNamesTheClaimAndTheTalkThatRun(t *testing.T) {
 }
 
 // A check of a task's head (the factory's proof and the precheck) is in the
-// record while it runs.
+// record while it runs, and until a tick took its result.
 func TestTheWorkRecordNamesTheCheckThatRuns(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12392", "bug")
@@ -117,8 +117,9 @@ func TestTheWorkRecordNamesTheCheckThatRuns(t *testing.T) {
 	}
 	close(block)
 	r.e.waitBackground()
+	r.tick()
 	if got := whats(r.workRecord()); len(got) != 0 {
-		t.Fatalf("the record holds %q after the check ended, want nothing", got)
+		t.Fatalf("the record holds %q after a tick took the check's result, want nothing", got)
 	}
 }
 
@@ -147,7 +148,7 @@ func TestTheWorkRecordNamesTheLocalRoundThatRuns(t *testing.T) {
 // and once the command lifts it they start again.
 func TestAnInstallDrainHoldsNewWorkUntilItIsLifted(t *testing.T) {
 	h := newHarness(t)
-	h.e.drainerAlive = func(int) bool { return true }
+	h.e.drainerAlive = func(Drain) bool { return true }
 	claimer := h.task("PR-12394", registry.TaskActive, "investigate")
 	talker := h.task("PR-12395", registry.TaskNeedsYou, "report")
 	var claimErr, launchErr, effectErr error
@@ -204,7 +205,7 @@ func TestAnInstallDrainHoldsNewWorkUntilItIsLifted(t *testing.T) {
 // tick: no restart follows it, so the work it held starts again.
 func TestADrainWhoseCommandIsGoneIsLifted(t *testing.T) {
 	h := newHarness(t)
-	h.e.drainerAlive = func(pid int) bool { return pid != 4243 }
+	h.e.drainerAlive = func(d Drain) bool { return d.PID != 4243 }
 	task := h.task("PR-12396", registry.TaskActive, "investigate")
 	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
 		_, err := h.e.claimCopy(ctx, t)
@@ -233,7 +234,7 @@ func TestADrainWhoseCommandIsGoneIsLifted(t *testing.T) {
 // its start and removes the record as it stops.
 func TestTheRestartEndsTheInstallDrain(t *testing.T) {
 	h := newHarness(t)
-	h.e.drainerAlive = func(int) bool { return true }
+	h.e.drainerAlive = func(Drain) bool { return true }
 	h.task("PR-12397", registry.TaskActive, "investigate")
 	h.installDrain(4244)
 	ticked := make(chan struct{}, 1)
@@ -273,5 +274,166 @@ func TestTheRestartEndsTheInstallDrain(t *testing.T) {
 	}
 	if _, ok, err := ReadWork(h.layout); ok || err != nil {
 		t.Fatalf("the record is still there after the daemon stopped (%v)", err)
+	}
+}
+
+// A check the drain waited for is the drain's until a tick took its result:
+// the result lives only in the daemon's memory, so a restart right after
+// the check ended would run the proof and the precheck again. The end of a
+// check wakes the loop, and the tick that takes the result ends its item.
+func TestADrainWaitsForTheCheckUntilATickTakesItsResult(t *testing.T) {
+	r := newCodingRig(t)
+	r.e.drainerAlive = func(Drain) bool { return true }
+	task := r.codingTask("PR-12398", "bug")
+	r.startStage(task)
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.clock.Add(time.Minute)
+	r.fix(task)
+	block := make(chan struct{})
+	r.blocks["bin/lint"] = block
+	r.ended(task, "fx-writer")
+	r.tick()
+	<-r.entered
+	value := r.installDrain(4245)
+	r.tick()
+	want := []string{"check: proof and precheck of PR-12398"}
+	if rec := r.workRecord(); rec.Drain != value || !slices.Equal(whats(rec), want) {
+		t.Fatalf("the record says drain %q, work %q; want the drain held and the check", rec.Drain, whats(rec))
+	}
+	select {
+	case <-r.e.kick:
+	default:
+	}
+
+	close(block)
+	r.e.waitBackground()
+
+	if got := whats(r.workRecord()); !slices.Equal(got, want) {
+		t.Fatalf("the record holds %q once the check ended, before any tick took its result; want %q", got, want)
+	}
+	select {
+	case <-r.e.kick:
+	default:
+		t.Fatal("the end of the check did not wake the loop")
+	}
+	r.tick()
+	if got := whats(r.workRecord()); len(got) != 0 {
+		t.Fatalf("the record holds %q after the tick took the check's result, want nothing", got)
+	}
+	if got := r.reload(task.ID); got.Stage != "local_review" {
+		t.Fatalf("task at %s after the tick, want local_review: the result was taken", got.Stage)
+	}
+}
+
+// The install drain is a hold of the machine while it holds: holds.json,
+// which the screen draws, names it, whose it is and since when, and it
+// leaves holds.json once the drain is lifted.
+func TestAnInstallDrainIsAHoldTheScreenDraws(t *testing.T) {
+	h := newHarness(t)
+	h.e.drainerAlive = func(Drain) bool { return true }
+	value := h.installDrain(4242)
+
+	h.tick()
+
+	hs, err := ReadHolds(h.layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hs) != 1 || hs[0].Kind != HoldDrain || !strings.Contains(hs[0].Reason, "pid 4242") ||
+		!strings.Contains(hs[0].Reason, "nothing new starts") || hs[0].Since.IsZero() {
+		t.Fatalf("holds %+v, want the drain's, whose it is and since when", hs)
+	}
+	if err := LiftDrain(h.layout, value); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if hs, err := ReadHolds(h.layout); err != nil || len(hs) != 0 {
+		t.Fatalf("holds %+v (%v) after the lift, want none", hs, err)
+	}
+}
+
+// A drain.json the daemon cannot read is no drain: the work goes on, and
+// the daemon says so once, not on every tick.
+func TestAnUnreadableDrainIsIgnoredWithOneWarning(t *testing.T) {
+	log := &syncBuffer{}
+	h := newHarness(t, func(d *Deps) { d.Log = slog.New(slog.NewTextHandler(log, nil)) })
+	h.task("PR-12399", registry.TaskActive, "investigate")
+	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		_, err := h.e.claimCopy(ctx, t)
+		return false, err
+	})
+	if err := WriteDrain(h.layout, "not a drain"); err != nil {
+		t.Fatal(err)
+	}
+
+	h.tickAndWait()
+	h.tickAndWait()
+
+	if n := h.copies.claimCount(); n != 1 {
+		t.Fatalf("%d claims, want the claim run: an unreadable drain holds nothing", n)
+	}
+	if rec := h.workRecord(); rec.Drain != "" {
+		t.Fatalf("the record says drain %q, want none", rec.Drain)
+	}
+	if n := strings.Count(log.String(), "drain.json"); n != 1 {
+		t.Fatalf("the log names drain.json %d times, want one warning:\n%s", n, log.String())
+	}
+}
+
+// A drain names its command by pid and start: a pid that another process
+// took since (the factory's agents run magnum too) is not the command, so
+// the drain is lifted; the command itself still holds it.
+func TestADrainWhosePidWasReusedIsLifted(t *testing.T) {
+	h := newHarness(t)
+	h.e.procStart = func(int) (string, error) { return "Sat Nov  7 10:00:00 2026", nil }
+	held := Drain{Since: h.clock.Now(), PID: 4246, Start: "Sat Nov  7 10:00:00 2026"}.Value()
+	if err := WriteDrain(h.layout, held); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if rec := h.workRecord(); rec.Drain != held {
+		t.Fatalf("the record says drain %q, want the command's own held", rec.Drain)
+	}
+
+	reused := Drain{Since: h.clock.Now(), PID: 4246, Start: "Sat Nov  7 09:00:00 2026"}.Value()
+	if err := WriteDrain(h.layout, reused); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if v, err := ReadDrain(h.layout); err != nil || v != "" {
+		t.Fatalf("drain.json holds %q (%v), want it lifted: pid 4246 is another process now", v, err)
+	}
+	if rec := h.workRecord(); rec.Drain != "" {
+		t.Fatalf("the record says drain %q, want none", rec.Drain)
+	}
+}
+
+// A record the daemon cannot write is removed, not left stale: install then
+// cannot tell what runs and fails closed. The next write that goes through
+// writes it again.
+func TestAFailedWriteOfTheRecordRemovesIt(t *testing.T) {
+	h := newHarness(t)
+	h.copies.block = make(chan struct{})
+	h.task("PR-12400", registry.TaskActive, "investigate")
+	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		_, err := h.e.claimCopy(ctx, t)
+		return false, err
+	})
+	h.tick()
+	if got := whats(h.workRecord()); len(got) != 1 {
+		t.Fatalf("the record holds %q, want the claim", got)
+	}
+
+	h.e.workWrite = func(string, []byte) error { return errors.New("no space left on device") }
+	close(h.copies.block)
+	h.e.waitBackground()
+	if _, ok, err := ReadWork(h.layout); ok || err != nil {
+		t.Fatalf("a record is still there after its write failed (%v): install would trust it", err)
+	}
+
+	h.e.workWrite = nil
+	h.tick()
+	if _, ok, err := ReadWork(h.layout); !ok || err != nil {
+		t.Fatalf("no record after a write went through again (%v)", err)
 	}
 }
