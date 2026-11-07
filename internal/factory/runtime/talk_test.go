@@ -669,6 +669,41 @@ func TestLiaisonSessionIsTheLiveLiaisonInTheTalksPane(t *testing.T) {
 	}
 }
 
+// The liaison's agent exits (your /exit, a crash of its CLI) and an observe
+// pass marks its row lost before the next Talk: Talk finds no live liaison
+// and resumes the lost conversation on a row of its own, and the
+// conversation, which had its first prompt, gets none.
+func TestTalkAfterTheLiaisonsRowWasMarkedLostResumesItsConversation(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.h.setSession(g.liaisonAgent(), "sid-liaison")
+	g.endLiaisonTurn()
+	old := g.liaisonSession()
+	pane := store.Deref(old.HerdrPaneID)
+	g.h.mu.Lock()
+	g.h.agents = slices.DeleteFunc(g.h.agents, func(a herdr.AgentInfo) bool { return a.PaneID == pane }) // the shell stays
+	g.h.mu.Unlock()
+	g.clock.Add(agents.LostGrace)
+	g.observe()
+	if lost, err := g.st.SessionByID(g.ctx, old.ID); err != nil || lost.State != store.SessionLost {
+		t.Fatalf("the exited agent's row after an observe pass: %+v, %v; want lost", lost, err)
+	}
+
+	again := g.talk()
+
+	starts := g.h.startCalls()
+	if len(starts) != 2 || !slices.Contains(starts[1].Args, "sid-liaison") || starts[1].PaneID != again {
+		t.Fatalf("agents started %+v (Talk named pane %s), want the conversation sid-liaison resumed in that pane", starts, again)
+	}
+	if s := g.liaisonSession(); s.ID == old.ID || store.Deref(s.SessionID) != "sid-liaison" || store.Deref(s.HerdrPaneID) != again {
+		t.Fatalf("the liaison's live session %d carries %q in pane %s, want a new row resuming sid-liaison in pane %s (the old row %d)",
+			s.ID, store.Deref(s.SessionID), store.Deref(s.HerdrPaneID), again, old.ID)
+	}
+	if got := g.h.promptTexts(); len(got) != 1 {
+		t.Fatalf("herdr got prompts %q, want the first Talk's alone: the resumed conversation had its first prompt", got)
+	}
+}
+
 // youTypeIntoTheLiaison is you typing into the liaison's pane ("drop it",
 // "push it"): herdr shows its agent at work with no prompt of the
 // factory's, so the liaison's row notes you, and the agent stays at work.
