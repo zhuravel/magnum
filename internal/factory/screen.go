@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
@@ -168,6 +169,10 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			return d, err
 		}
 	}
+	if short, long := s.oldBuildLines(); short != "" {
+		d.Blocking = append(slices.Clone(d.Blocking), short)
+		d.BlockingLong = append(slices.Clone(d.BlockingLong), long)
+	}
 	if ownErr != nil {
 		d.Blocking = append(slices.Clone(d.Blocking), ownUnread)
 		d.BlockingLong = append(slices.Clone(d.BlockingLong), ownUnreadLong(ownErr))
@@ -197,6 +202,9 @@ type screen struct {
 	views  []*taskView
 	// merged is when the PRs of the done tasks it read merged (readPRs).
 	merged map[int64]time.Time
+	// oldBuild is the build magnum's daemon runs when its binary on disk is
+	// newer, as a PR's read said it (noteBuild); nil for none.
+	oldBuild *engine.Build
 }
 
 // taskView is what the screen read of a task on home.

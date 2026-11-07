@@ -54,6 +54,7 @@ func (s *screen) ownRows(m Magnum) ([]tui.FactoryRow, map[int64]tui.FactoryCards
 	var rows []tui.FactoryRow
 	cards := map[int64]tui.FactoryCards{}
 	for _, st := range prs {
+		s.noteBuild(st)
 		if st.ID <= 0 || tasks[prKey(st.Ref)] {
 			continue
 		}

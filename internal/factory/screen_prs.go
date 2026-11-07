@@ -168,6 +168,7 @@ func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
 			continue
 		}
 		st, ok := states[prRef(v)]
+		s.noteBuild(st)
 		w := s.prWaitOf(v, st, ok && err == nil, err)
 		if ok && err == nil {
 			w.cells = cellsOf(st)
@@ -179,6 +180,30 @@ func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
 		}
 	}
 	return nil
+}
+
+// noteBuild keeps the old build magnum's daemon runs, as PR st's read
+// says it (PRState.OldBuild), for home's title line (oldBuildLines).
+func (s *screen) noteBuild(st PRState) {
+	if st.OldBuild != nil && s.oldBuild == nil {
+		s.oldBuild = st.OldBuild
+	}
+}
+
+// oldBuildLines are home's blocker lines, short and long, for magnum's
+// daemon on an older build than the one on disk: its look may write no
+// verdict the screen reads until it restarts. None when no PR's read says
+// so.
+func (s *screen) oldBuildLines() (short, long string) {
+	b := s.oldBuild
+	if b == nil {
+		return "", ""
+	}
+	long = "magnum's daemon runs " + b.Label()
+	if !b.StartedAt.IsZero() {
+		long += " since " + when(b.StartedAt, s.now)
+	}
+	return "magnum's daemon runs an old build", long + ": verdicts wait for `magnum daemon-restart --drain`"
 }
 
 // doneAt is when done task t's PR merged, as magnum's registry tells it
@@ -349,8 +374,9 @@ const lookLate = "late"
 // its stale verdict's decision and the row's last change, the row's last
 // change for one still to come), and why "looking at" is no longer true:
 // "" while it is (four of magnum's polls since then, OpenVerdict.Stale's
-// count, with magnum's daemon ticking), magnum's daemon that stopped
-// ticking, else lookLate.
+// count, with magnum's daemon ticking), magnum's daemon on an older build
+// than the one on disk (its look may predate the verdict it owes), one that
+// stopped ticking, else lookLate.
 func lookOwed(st PRState, c prClock) (time.Time, string) {
 	owed := st.UpdatedAt
 	if st.HasOpen {
@@ -358,6 +384,8 @@ func lookOwed(st PRState, c prClock) (time.Time, string) {
 	}
 	look := lookPolls * c.poll
 	switch {
+	case c.now.Sub(owed) > look && st.OldBuild != nil:
+		return owed, "magnum's daemon runs an old build (`magnum daemon-restart --drain`)"
 	case !st.LastTick.IsZero() && c.now.Sub(st.LastTick) > look:
 		return owed, "magnum's daemon has not ticked since " + when(st.LastTick, c.now)
 	case c.now.Sub(owed) > look:

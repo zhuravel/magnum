@@ -783,3 +783,46 @@ func TestPRStatesReadsCIReviewsAndReviewers(t *testing.T) {
 		t.Errorf("autofix %q, want the watch's %q", v.Autofix, config.AutofixOpen)
 	}
 }
+
+// PRStates and OwnPRs say when magnum's daemon runs an older build than the
+// one on disk (engine.SkewNote: its binary changed since the daemon
+// started), from the build the daemon recorded (engine.KVDaemonBuild); one
+// that runs what is on disk, and a daemon that is down, say nothing. Before,
+// nothing under internal/factory read the daemon's build, so a daemon
+// without the look left every verdict to come for good, unexplained.
+func TestPRStatesSayMagnumsDaemonRunsAnOlderBuild(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	magnumPR(t, st, 7, strings.Repeat("ab", 20), nil)
+	bin := l.Home + "/magnum"
+	if err := os.WriteFile(bin, []byte("new build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 11, 6, 22, 29, 0, 0, time.UTC)
+	ref := PRRef{"example/shop", 7}
+	read := func() PRState {
+		t.Helper()
+		views, err := NewMagnum(l, openWatchConfig()).PRStates(ctx, []PRRef{ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		own, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
+		if err != nil || len(own) != 1 || (own[0].OldBuild == nil) != (views[ref].OldBuild == nil) {
+			t.Fatalf("OwnPRs = %+v, %v: want the same build as PRStates", own, err)
+		}
+		return views[ref]
+	}
+	setKV(t, st, engine.KVDaemonBuild, engine.Build{Version: "dev", Revision: strings.Repeat("c8fcd4c6", 5), Path: bin,
+		ModTime: fi.ModTime().Add(-time.Hour), StartedAt: started})
+	if v := read(); v.OldBuild == nil || v.OldBuild.Label() != "dev (c8fcd4c)" || !v.OldBuild.StartedAt.Equal(started) {
+		t.Errorf("a daemon whose binary changed since it started: old build %+v", v.OldBuild)
+	}
+	setKV(t, st, engine.KVDaemonBuild, engine.Build{Version: "dev", Path: bin, ModTime: fi.ModTime(), StartedAt: started})
+	if v := read(); v.OldBuild != nil {
+		t.Errorf("a daemon that runs the build on disk: old build %+v", v.OldBuild)
+	}
+}

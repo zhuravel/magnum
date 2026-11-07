@@ -670,3 +670,24 @@ func TestAPublishedPRMagnumNeverPickedUpNeedsYou(t *testing.T) {
 		t.Errorf("a PR magnum never picked up: %+v, move %q", row.WaitsOn, row.Move)
 	}
 }
+
+// The title line says when magnum's daemon runs an older build than the
+// one on disk, with the command that restarts it, and a row whose verdict
+// the look owes past its polls names it as the cause.
+func TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12340", 4540)
+	old := &engine.Build{Version: "dev", Revision: strings.Repeat("c8fcd4c6", 5), StartedAt: time.Date(2026, 11, 3, 20, 29, 0, 0, time.Local)}
+	r.pr(4540, func(v *PRState) {
+		v.UpdatedAt, v.LastTick, v.OldBuild = screenNow.Add(-3*time.Hour), screenNow, old
+	})
+	d := r.data(time.Time{})
+	if !slices.Contains(d.Blocking, "magnum's daemon runs an old build") ||
+		!slices.Contains(d.BlockingLong, "magnum's daemon runs dev (c8fcd4c) since Nov 3 20:29: verdicts wait for `magnum daemon-restart --drain`") {
+		t.Errorf("blocking %q, long %q: want magnum's daemon's old build", d.Blocking, d.BlockingLong)
+	}
+	if row := rowOf(t, d, "PR-12340"); !strings.Contains(row.Help, "magnum's look has not decided #4540 since 06:05: magnum's daemon runs an old build") {
+		t.Errorf("the row's help %q: want the old build named as the cause", row.Help)
+	}
+}

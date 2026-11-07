@@ -220,7 +220,9 @@ type PRRef struct {
 // head); Gate GitHub's review gate (nil before magnum read it); Asked the
 // reviewers asked for a review who have not given it, with when. LastTick
 // is magnum's last tick (zero with its daemon down or none recorded), which
-// tells whether its look still runs.
+// tells whether its look still runs; OldBuild the build magnum's daemon
+// runs when its binary on disk is newer (engine.SkewNote), nil when it runs
+// what is on disk, when it is down or when it recorded none.
 type PRState struct {
 	Ref                                   PRRef
 	ID                                    int64
@@ -251,6 +253,7 @@ type PRState struct {
 	Gate                      *store.ReviewGate
 	Asked                     []ReviewAsk
 	LastTick                  time.Time
+	OldBuild                  *engine.Build
 }
 
 // ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is
@@ -369,15 +372,18 @@ func (m *magnumRegistry) stateOf(r PRRef, pid int) PRState {
 // magnumPass is what one opening of magnum's registry reads once for all
 // its PRs: what a verdict's staleness reads (OpenVerdict.Stale: magnum's
 // last tick, zero with its daemon down, as no daemon decides anything now;
-// its poll interval; and now), and each repository's required checks as
-// the PRs' CI reads them (requiredOf), by repository.
+// its poll interval; and now), the build magnum's daemon runs when its
+// binary on disk is newer (PRState.OldBuild), and each repository's
+// required checks as the PRs' CI reads them (requiredOf), by repository.
 type magnumPass struct {
 	last, now time.Time
 	poll      time.Duration
 	required  map[string]store.RequiredChecks
+	oldBuild  *engine.Build
 }
 
-// passOf reads magnum's last tick from st, for its daemon of pid (0: none).
+// passOf reads magnum's last tick and its daemon's build from st, for its
+// daemon of pid (0: none).
 func (m *magnumRegistry) passOf(ctx context.Context, st *store.Store, pid int) (*magnumPass, error) {
 	t := &magnumPass{now: m.now(), required: map[string]store.RequiredChecks{}}
 	if s, ok, err := st.GetKV(ctx, store.KVDaemonLastTick); err != nil {
@@ -387,6 +393,9 @@ func (m *magnumRegistry) passOf(ctx context.Context, st *store.Store, pid int) (
 	}
 	if m.cfg != nil {
 		t.poll = m.cfg.Daemon.PollInterval.Duration
+	}
+	if b, ok := engine.ReadDaemonBuild(ctx, st); ok && pid > 0 && engine.SkewNote(b, "", engine.FileModTime) != "" {
+		t.oldBuild = &b
 	}
 	return t, nil
 }
@@ -438,7 +447,7 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	v.UpdatedAt = pr.UpdatedAt
 	v.Approved = pr.ReviewGate != nil && pr.ReviewGate.Decision == "APPROVED"
 	v.HeadRef, v.BaseRef, v.HeadChangedAt, v.CreatedAt = store.Deref(pr.HeadRef), store.Deref(pr.BaseRef), pr.HeadChangedAt, pr.CreatedAt
-	v.ActivityAt, v.Gate, v.Asked, v.LastTick = store.Deref(pr.Activity()), pr.ReviewGate, asked(pr), pass.last
+	v.ActivityAt, v.Gate, v.Asked, v.LastTick, v.OldBuild = store.Deref(pr.Activity()), pr.ReviewGate, asked(pr), pass.last, pass.oldBuild
 	if pr.ReviewedSHA != nil && *pr.ReviewedSHA == pr.HeadSHA {
 		v.ReviewEvent = store.Deref(pr.LastReviewEvent)
 	}
