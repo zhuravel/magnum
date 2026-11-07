@@ -831,3 +831,31 @@ func TestAnOwnLoopStillEndsOnASimplificationOnlyReReview(t *testing.T) {
 		t.Errorf("fix.start events = %d, want the one cycle", n)
 	}
 }
+
+// One failed poll of GitHub (an HTTP 502 in GitHub's bad hour) is not a
+// poll behind: the tick before answered, so the PR's row is a tick old at
+// most, though ticks start a poll interval plus a tick's length apart. The
+// verdict stays as it was; a second failed poll in a row makes it unknown.
+func TestOneFailedPollIsNotAPollBehind(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick()
+	h.pastSettle()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open")
+	h.gh.mu.Lock()
+	h.gh.radarErr = errors.New("HTTP 502")
+	h.gh.mu.Unlock()
+	failedTick := func() {
+		h.t.Helper()
+		if err := h.e.Tick(h.ctx); err == nil {
+			h.t.Fatal("the tick's poll did not fail")
+		}
+		h.settle()
+	}
+	h.advance(62 * time.Second) // a 20-second tick, the 30-second wait, 12 seconds into this one
+	failedTick()
+	h.wantOpen(OpenIdle, "nothing open")
+	h.advance(50 * time.Second)
+	failedTick()
+	h.wantOpen(OpenUnknown, "the poll of GitHub is behind")
+}

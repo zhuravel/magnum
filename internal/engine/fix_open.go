@@ -52,6 +52,13 @@ const (
 	// openEventsRead is how many of a PR's newest events the look reads for
 	// the loops that ended since its last look.
 	openEventsRead = 200
+	// openStalePolls is how many poll intervals since the daemon's last
+	// sign of polling (a watch's last good poll for the look, the last
+	// tick's start for a verdict's reader) make it behind: the run loop
+	// waits a whole interval after each tick ends, so ticks start an
+	// interval plus a tick's length apart, and one failed poll puts the
+	// last good one two such spans back.
+	openStalePolls = 4
 )
 
 // openCand is an own PR the look covers this tick: its row, repository,
@@ -254,16 +261,21 @@ func openPrune(l *openLedger, items []openItem) {
 	l.Raised = slices.DeleteFunc(l.Raised, func(k string) bool { return !open[k] })
 }
 
-// pollBehind reports whether w's last good poll of GitHub (WatchPoll) is
-// over two poll intervals old, or unknown: the PR rows of its PRs may not
-// show what happened on GitHub since, so the look starts nothing on them.
+// pollBehind reports whether w's poll of GitHub (WatchPoll) is behind,
+// so that the PR rows of its PRs may not show what happened on GitHub
+// since and the look starts nothing on them: no good poll known, two
+// polls in a row failed, or the last good one is over openStalePolls poll
+// intervals old (polls that did not run or count: the Mac slept, no
+// client). One failed poll is not: GitHub's bad minute leaves the rows a
+// tick old, and a verdict that flapped to unknown with every HTTP 502
+// would be rewritten twice for nothing.
 func (e *Engine) pollBehind(ctx context.Context, w config.Watch, now time.Time) bool {
 	raw, ok := e.getKV(ctx, store.KVWatchPoll(strings.ToLower(w.Owner)))
 	if !ok {
 		return true
 	}
 	p, ok := ParseWatchPoll(raw)
-	return !ok || p.LastOK.IsZero() || now.Sub(p.LastOK) > 2*e.cfg.Daemon.PollInterval.Duration
+	return !ok || p.LastOK.IsZero() || p.Failures >= 2 || now.Sub(p.LastOK) > openStalePolls*e.cfg.Daemon.PollInterval.Duration
 }
 
 // openOff is why the look leaves pr alone ("" = it covers it): a draft, a

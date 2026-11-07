@@ -10084,10 +10084,11 @@ func ParseOpenVerdict(s string) (OpenVerdict, bool)
 
 func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool
     Stale reports whether v no longer tells the PR's state, for a reader
-    (the factory's screen) that then shows the PR as looked at: the daemon's
-    last tick (lastTick, zero for none) is older than two poll intervals,
-    the PR's head moved past v's, or the PR's row changed after v was decided
-    (prUpdated).
+    (the factory's screen) that then shows the PR as looked at: the start of
+    the daemon's last tick (lastTick, zero for none) is older than four poll
+    intervals (ticks start an interval plus a tick's length apart, so two would
+    call a long tick a stop), the PR's head moved past v's, or the PR's row
+    changed after v was decided (prUpdated).
 
 type Options struct {
 	// Once runs startup and a single tick, then keeps observing herdr only

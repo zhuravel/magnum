@@ -2838,7 +2838,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   only when the PR's fingerprint changed (head, updatedAt, activity, the last review), 30 minutes after its
   last read and 5 after a failed one, never below the floor, for 4 PRs a tick at most, and fetches a base
   once per clone in a tick; a start hands its read to prepareFix. Nothing starts while the watch's poll is
-  behind (the PR row may be old: unknown), and a start prepareFix refuses is tried again 5 minutes later, not
+  behind (the PR row may be old: unknown): two failed polls in a row, or no good one for four poll intervals,
+  since ticks start an interval plus a tick's length apart and one HTTP 502 crossed two intervals, flapping
+  every own PR's verdict; a reader takes a verdict as stale after four intervals without a tick for the same
+  reason. A start prepareFix refuses is tried again 5 minutes later, not
   every tick, since some refusals come after its own read of GitHub; a "nothing to fix" whose look at the base
   failed too (`mergeUncheckedError`: its conflict is unknown, not gone), where one failed fetch had left a
   real conflict unfixed until someone touched the PR. Bounds: `fix_cycles` per loop,

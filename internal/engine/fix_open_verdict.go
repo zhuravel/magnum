@@ -119,12 +119,13 @@ func ParseOpenVerdict(s string) (OpenVerdict, bool) {
 }
 
 // Stale reports whether v no longer tells the PR's state, for a reader
-// (the factory's screen) that then shows the PR as looked at: the daemon's
-// last tick (lastTick, zero for none) is older than two poll intervals,
-// the PR's head moved past v's, or the PR's row changed after v was
-// decided (prUpdated).
+// (the factory's screen) that then shows the PR as looked at: the start of
+// the daemon's last tick (lastTick, zero for none) is older than four poll
+// intervals (ticks start an interval plus a tick's length apart, so two
+// would call a long tick a stop), the PR's head moved past v's, or the
+// PR's row changed after v was decided (prUpdated).
 func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool {
-	return lastTick.IsZero() || now.Sub(lastTick) > 2*poll || v.Head != prHead || v.At.Before(prUpdated)
+	return lastTick.IsZero() || now.Sub(lastTick) > openStalePolls*poll || v.Head != prHead || v.At.Before(prUpdated)
 }
 
 // sameAs reports whether v and w say the same, whenever each was decided.
@@ -268,7 +269,7 @@ func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
 // stalemate, magnum's last review that stands at the head (nil: none), its
 // pending replies, the read of GitHub (whole: one since the PR changed;
 // failed: the last read failed; low: the GitHub budget is below the floor;
-// pollStale: the watch's last good poll is over two poll intervals old;
+// pollStale: the watch's poll is behind (pollBehind);
 // cut: what the read lacked), the items, the ledger, the settle's keys,
 // CI, the approval and the commits after it.
 type openFacts struct {

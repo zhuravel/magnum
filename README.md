@@ -3212,8 +3212,9 @@ reviewers) only when the PR changed (its head, its updatedAt, its activity or Ma
 minutes after its last read as a safety net, and 5 minutes after a failed read; never below `[github]
 budget_floor`, and for at most 4 PRs a tick. It checks each head against the base the PR merges into (a
 stacked PR's own base) every 30 minutes, with one fetch of that base per clone in a tick. A start hands its
-read to the fix job, which reads GitHub no second time. While the poll of the watch is behind (its last good
-poll is over two poll intervals old) the PR's row may be old: the verdict is `unknown` and nothing starts. A
+read to the fix job, which reads GitHub no second time. While the poll of the watch is behind (two of its polls in a
+row failed, or its last good poll is over four poll intervals old; one failed poll is not) the PR's row may be
+old: the verdict is `unknown` and nothing starts. A
 start the fix job refuses waits with the refusal's words and is tried again 5 minutes later; "nothing to
 fix" (the look and the job disagree) needs you, and is not tried again until the PR changes, unless the job
 could not check the PR's merge with its base (a failed fetch): the conflict is then unknown, not gone, and

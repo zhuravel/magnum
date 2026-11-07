@@ -374,17 +374,22 @@ func TestTheVerdictCarriesNoPRText(t *testing.T) {
 
 // A reader takes the verdict as stale, and shows the PR as looked at, when
 // the daemon stopped ticking, the head moved or the PR's row changed after
-// the verdict.
+// the verdict. A long tick is no stop: the next tick starts a whole poll
+// interval after it ends, so a tick of 45 seconds puts 75 seconds between
+// two starts.
 func TestOpenVerdictStaleness(t *testing.T) {
 	v := OpenVerdict{Verdict: OpenIdle, Head: fixHead, At: openNow}
 	poll := 30 * time.Second
 	if v.Stale(fixHead, openNow.Add(-time.Minute), openNow.Add(-10*time.Second), openNow, poll) {
 		t.Error("a fresh verdict is stale")
 	}
+	if v.Stale(fixHead, openNow.Add(-time.Minute), openNow.Add(-75*time.Second), openNow, poll) {
+		t.Error("a verdict is stale near the end of a long tick")
+	}
 	for name, stale := range map[string]bool{
 		"head moved":  v.Stale(fixPushed, openNow.Add(-time.Minute), openNow, openNow, poll),
 		"row changed": v.Stale(fixHead, openNow.Add(time.Second), openNow, openNow, poll),
-		"no tick":     v.Stale(fixHead, openNow.Add(-time.Minute), openNow.Add(-2*time.Minute), openNow, poll),
+		"no tick":     v.Stale(fixHead, openNow.Add(-time.Minute), openNow.Add(-3*time.Minute), openNow, poll),
 		"never":       v.Stale(fixHead, openNow.Add(-time.Minute), time.Time{}, openNow, poll),
 	} {
 		if !stale {
