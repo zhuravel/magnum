@@ -5,8 +5,8 @@ package factory
 // tui.FactoryData. Home gets one row per task, grouped by who it waits on
 // (needs_you is NEEDS YOU, done today is DONE TODAY, a published task goes
 // by its PR in magnum's registry, screen_prs.go, and the rest waits on
-// others), and one per open PR of yours no task has (YOUR PRS, or NEEDS
-// YOU when it needs you: screen_own.go), each blocker naming who first
+// others), and one per open PR of yours no task has (by what it waits on,
+// as a task's, or LEFT ALONE: screen_own.go), each blocker naming who first
 // (WaitsWho and WaitsWhat, the agents at work from the sessions), the count
 // of the decisions owed apart from the tasks, the holds of the machine, what
 // frees a queued task, the digest after an absence of more than an hour and
@@ -63,7 +63,7 @@ type ScreenOptions struct {
 	// Magnum reads the published tasks' PRs in magnum's registry
 	// (Magnum.PRStates), once per call: a published task's row then says
 	// its PR's verdict; and your own open PRs (Magnum.OwnPRs), once per
-	// call, for YOUR PRS. nil keeps the words of a screen without it
+	// call, for their rows. nil keeps the words of a screen without it
 	// ("magnum: review of #N"), and lists no PR of yours.
 	Magnum Magnum
 }

@@ -1,5 +1,5 @@
  magnum factory · talkable                                                                                                          ↻ 09:05 
- ● 2 tasks need you, 4 decisions · 2 wait on others · away 14h: 2 done, 2 new for you
+ ● 2 tasks need you, 4 decisions · 2 wait on others, 1 at work · away 14h: 2 done, 2 new for you
 
  NEEDS YOU                                           WAITS ON                                           YOUR MOVE                     WAITED
 › ● PR-12345  Credit expiry reminder email           you: 3 questions before coding                     answer 3 questions               10h

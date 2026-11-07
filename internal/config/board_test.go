@@ -104,7 +104,7 @@ func TestBoardShimmer(t *testing.T) {
 }
 
 // [board] own_prs says where your own open PRs are listed: "board" (the
-// default, today's board) or "factory" (the factory screen's YOUR PRS, and
+// default, today's board) or "factory" (the factory screen alone, and
 // the board hides them); anything else is refused.
 func TestOwnPRsIsValidated(t *testing.T) {
 	user := filepath.Join(t.TempDir(), "config.toml")

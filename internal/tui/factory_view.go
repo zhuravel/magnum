@@ -981,12 +981,13 @@ func factoryPlural(n int, one, many string) string {
 }
 
 // chipLine counts the rows by group: the tasks and your PRs that need you
-// apart ("1 task and 2 PRs need you"), the tasks that wait on others, your
-// PRs at work (YOUR PRS, but for those magnum leaves alone: they ask
-// nothing, and nothing works on them) and the tasks done today.
+// apart ("1 task and 2 PRs need you"), the rows that wait on others with
+// those an agent or magnum's fixer works on now (the moving mark: "3 wait
+// on others, 2 at work"), your PRs magnum leaves alone ("1 left alone":
+// they ask nothing, and nothing works on them) and the tasks done today.
 func (p *factoryPainter) chipLine() string {
 	st := p.st
-	var tasks, prs, waits, yours, done int
+	var tasks, prs, waits, working, alone, done int
 	for _, r := range p.rows {
 		switch r.Group {
 		case GroupNeedsYou:
@@ -997,10 +998,11 @@ func (p *factoryPainter) chipLine() string {
 			}
 		case GroupWaits:
 			waits++
-		case GroupYours:
-			if r.PR == nil || r.PR.Off == "" {
-				yours++
+			if r.Mark == MarkWorking {
+				working++
 			}
+		case GroupYours:
+			alone++
 		default:
 			done++
 		}
@@ -1031,10 +1033,14 @@ func (p *factoryPainter) chipLine() string {
 		if waits == 1 {
 			verb = "waits"
 		}
-		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d %s on others", waits, verb)))
+		text := fmt.Sprintf("%d %s on others", waits, verb)
+		if working > 0 {
+			text += fmt.Sprintf(", %d at work", working)
+		}
+		parts = append(parts, st.Dim.Render(text))
 	}
-	if yours > 0 {
-		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d of your PRs at work", yours)))
+	if alone > 0 {
+		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d left alone", alone)))
 	}
 	chip := ""
 	if p.f.RuleChip != "" {
@@ -1104,7 +1110,7 @@ type factoryLine struct {
 	tasks int    // the tasks the line stands for: 1 for a row, n for a more line
 }
 
-var factoryGroupLabels = [...]string{"NEEDS YOU", "WAITS ON OTHERS", "YOUR PRS", "DONE TODAY"}
+var factoryGroupLabels = [...]string{"NEEDS YOU", "WAITS ON OTHERS", "LEFT ALONE", "DONE TODAY"}
 
 // factoryBand is one group of the home list: its heading and its items, of
 // which the first keep are drawn and the rest folded into one more line.

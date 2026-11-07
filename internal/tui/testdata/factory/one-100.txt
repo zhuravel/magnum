@@ -1,5 +1,5 @@
  magnum factory · talkable                                                                  ↻ 14:09 
- ✓ nothing waits on you · 1 waits on others
+ ✓ nothing waits on you · 1 waits on others, 1 at work
 
  WAITS ON OTHERS                      WAITS ON                               YOUR MOVE        WAITED
 › ⣷ PR-12371  Coupon CSV export tim…  agent: finding the cause, 2 of 3 done                       9m

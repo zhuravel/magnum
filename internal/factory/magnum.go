@@ -6,7 +6,7 @@ package factory
 // tick read the factory's PRs there too (PRStates): magnum's row, its
 // autofix = "open" verdict, its fix loop, its stalemate and its attention;
 // the tick their fix loops' record (FixRecords), for the PRs' status
-// files; and the screen your own open PRs (OwnPRs), for YOUR PRS. The
+// files; and the screen your own open PRs (OwnPRs), for home's rows. The
 // factory reads magnum's registry and never writes or migrates it: it
 // opens it query_only, so a write through its handle fails, and a registry
 // of another schema than this build's is an error, and its file stays as

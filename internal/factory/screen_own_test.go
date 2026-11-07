@@ -153,7 +153,7 @@ func TestAFactoryPRIsListedOnceAsItsTask(t *testing.T) {
 	}
 }
 
-// A PR magnum's look leaves alone (a baseline, fix off) waits in YOUR PRS
+// A PR magnum's look leaves alone (a baseline, fix off) waits in LEFT ALONE
 // with its reason and asks nothing, never in NEEDS YOU: a baseline open
 // for weeks would wear that group out. Fix off says that F turns it on.
 func TestAnOffOwnPRWaitsInYourPRs(t *testing.T) {
@@ -170,7 +170,7 @@ func TestAnOffOwnPRWaitsInYourPRs(t *testing.T) {
 	d := r.data(time.Time{})
 	base := rowOf(t, d, "#4606")
 	if base.Group != tui.GroupYours || base.PR.Off == "" || !strings.Contains(base.WaitsOn[0].What, "open before magnum first synced") {
-		t.Errorf("a baseline PR: %+v, want it in YOUR PRS with its reason", base)
+		t.Errorf("a baseline PR: %+v, want it in LEFT ALONE with its reason", base)
 	}
 	if base.Move != "" || base.Mark == tui.MarkNeedsYou {
 		t.Errorf("a baseline PR asks something: move %q, mark %v", base.Move, base.Mark)
@@ -327,7 +327,7 @@ func TestAMutedOwnPRSaysItIsMuted(t *testing.T) {
 	})
 	row := rowOf(t, r.data(time.Time{}), "#4608")
 	if row.Group != tui.GroupYours || row.PR.Off == "" || row.WaitsOn[0].What != "#4608 is muted: U on the board unmutes it" {
-		t.Errorf("a muted PR: %+v (%+v), want it dim in YOUR PRS with the way to unmute it", row, row.PR)
+		t.Errorf("a muted PR: %+v (%+v), want it dim in LEFT ALONE with the way to unmute it", row, row.PR)
 	}
 }
 
@@ -399,7 +399,7 @@ func TestAnOwnPRWithoutAVerdictSaysWhatMagnumDid(t *testing.T) {
 		"#4713": "#4713 is yours to follow: it was open before magnum first synced the repository"} {
 		row := rowOf(t, d, key)
 		if row.Group != tui.GroupYours || row.PR.Off != want || row.WaitsOn[0].What != want || row.Move != "" {
-			t.Errorf("%s: %+v (%+v), want it dim in YOUR PRS: %q", key, row, row.PR, want)
+			t.Errorf("%s: %+v (%+v), want it dim in LEFT ALONE: %q", key, row, row.PR, want)
 		}
 	}
 }

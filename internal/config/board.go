@@ -37,7 +37,7 @@ type Board struct {
 	// OwnPRs says where your own open PRs are listed: OwnPRsBoard (the
 	// default) keeps them on the PR board, each marked with its autofix =
 	// "open" verdict; OwnPRsFactory lists them on the factory screen alone
-	// (its YOUR PRS) and the board leaves them out of its open PRs (a
+	// (beside its tasks) and the board leaves them out of its open PRs (a
 	// draft, which the factory screen does not list, and a closed one
 	// stay). "" is the default.
 	OwnPRs string `toml:"own_prs"`

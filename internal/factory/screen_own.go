@@ -65,7 +65,7 @@ func (s *screen) ownRows(m Magnum) ([]tui.FactoryRow, map[int64]tui.FactoryCards
 }
 
 // taskPRs are the PRs of the tasks that are neither done nor stopped (by
-// prKey): their rows say what the PRs wait on, so YOUR PRS leaves them
+// prKey): their rows say what the PRs wait on, so your PRs' rows leave them
 // out.
 func (s *screen) taskPRs() map[string]bool {
 	out := map[string]bool{}

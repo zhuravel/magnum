@@ -259,7 +259,7 @@ func Fields() []Field {
 			Description: "working Codex agents at once, your own included (0 = no cap)"},
 		{ID: "board.own_prs", Section: SectionReviews, Label: "your open PRs on", Key: "board.own_prs", Type: TypeEnum,
 			Options: []string{config.OwnPRsBoard, config.OwnPRsFactory}, DefaultText: config.OwnPRsBoard, Applies: AppliesNow,
-			Description: "board: the PR board lists them with their verdict; factory: the factory screen's YOUR PRS alone (the next screen you open)"},
+			Description: "board: the PR board lists them with their verdict; factory: the factory screen alone, beside its tasks (the next screen you open)"},
 	}
 }
 

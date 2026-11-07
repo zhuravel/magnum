@@ -18,8 +18,10 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
-	// GroupYours holds your own open PRs from magnum's registry that are no
-	// task's (YOUR PRS): those that need you are in GroupNeedsYou.
+	// GroupYours holds your own open PRs from magnum's registry that
+	// magnum's look leaves alone (LEFT ALONE: a baseline, fix off, a mute):
+	// they ask nothing. Your other PRs sit in GroupNeedsYou or GroupWaits by
+	// what they wait on, as the tasks do.
 	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone
@@ -95,7 +97,7 @@ type FactoryRow struct {
 	Approvals *FactoryApprovals
 
 	// PR is set on a row of your own PR from magnum's registry, not a task
-	// (YOUR PRS, or NEEDS YOU when it needs you); nil on a task's row. Such
+	// (in any group but DONE TODAY); nil on a task's row. Such
 	// a row's ID is the negative of magnum's id of the PR, which no task's
 	// has.
 	PR *FactoryPR

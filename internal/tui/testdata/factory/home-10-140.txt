@@ -1,5 +1,5 @@
  magnum factory · talkable                                                                            memory full: new tasks wait · ↻ 14:09 
- ● 4 tasks need you, 5 decisions · 4 wait on others · 2 done today                                                    1 rule to approve (L) 
+ ● 4 tasks need you, 5 decisions · 4 wait on others, 1 at work · 2 done today                                         1 rule to approve (L) 
 
  NEEDS YOU                                   WAITS ON                                  YOUR MOVE        VOID      BART      BASTION   WAITED
 › ● PR-12310  #4512   Deploy list on campa…  you: reply to alice · agent: fixing bart  post reply       QA ✓      conflict  QA 4/9        2h

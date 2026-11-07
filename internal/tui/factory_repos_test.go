@@ -82,7 +82,7 @@ func fixtureTwoRepos() factoryFrame {
 			},
 			{
 				ID: -81, Key: "talkable#4611", GitHub: "#4611", Jira: "PR-12410", Repo: "example/talkable", Title: "Cart totals in the widget",
-				Group: GroupYours, Mark: MarkWaits,
+				Group: GroupWaits, Mark: MarkWaits,
 				WaitsOn:   []WaitsOn{{Who: "CI", What: "CI at a1b2c3d"}},
 				Since:     factoryAgo(now, 10*time.Minute),
 				Help:      "CI: CI at a1b2c3d",

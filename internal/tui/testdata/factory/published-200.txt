@@ -1,5 +1,5 @@
  magnum factory · talkable                                                                                                                                                                      ↻ 14:09 
- ● 2 tasks need you · 3 wait on others · 1 done today
+ ● 2 tasks need you · 3 wait on others, 1 at work · 1 done today
 
  NEEDS YOU                                                      WAITS ON                                                                                            YOUR MOVE                     WAITED
 › ● PR-12320  #4530   Coupon rounding in the cart               you: 2 items need you: 1 thread of a person and 1 skipped finding                                   see the task card                35m

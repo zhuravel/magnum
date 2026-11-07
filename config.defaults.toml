@@ -153,8 +153,8 @@ shimmer = true                    # a PR magnum approved that GitHub still block
                                   # slides while it is on screen; false keeps the colors still (NO_COLOR: reverse video)
 own_prs = "board"                 # where your own open PRs are listed: "board" keeps them on the PR board, each
                                   # tagged with its autofix = "open" verdict ("open: needs you", the card's
-                                  # "verdict:" line); "factory" lists them on the factory screen alone (YOUR PRS,
-                                  # with f, F and x) and the board's open PRs leave them out (drafts, closed ones
+                                  # "verdict:" line); "factory" lists them on the factory screen alone (beside
+                                  # its tasks, with f, F and x) and the board's open PRs leave them out (drafts, closed ones
                                   # and those of a repository no [[watch]] covers stay), its footer counting them
 
 [github]

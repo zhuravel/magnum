@@ -57,7 +57,7 @@ func fixtureYours() factoryFrame {
 			},
 			{
 				ID: -82, Key: "#4612", GitHub: "#4612", Title: "Weekly gem upgrades",
-				Group: GroupYours, Mark: MarkWorking,
+				Group: GroupWaits, Mark: MarkWorking,
 				WaitsOn: []WaitsOn{{Who: "agent", What: "magnum fixes #4612 (cycle 1 of 5)", Short: "magnum fixes #4612"}},
 				Since:   factoryAgo(now, 3*time.Hour),
 				Help:    "agent: magnum fixes #4612 (cycle 1 of 5)",
@@ -65,7 +65,7 @@ func fixtureYours() factoryFrame {
 			},
 			{
 				ID: -81, Key: "#4611", GitHub: "#4611", Jira: "PR-12410", Title: "Cart totals in the widget",
-				Group: GroupYours, Mark: MarkWaits,
+				Group: GroupWaits, Mark: MarkWaits,
 				WaitsOn: []WaitsOn{{Who: "CI", What: "CI at a1b2c3d"}},
 				Since:   factoryAgo(now, 10*time.Minute),
 				Help:    "CI: CI at a1b2c3d",
@@ -119,7 +119,8 @@ func testYours(t *testing.T, w, h int) *factoryHarness {
 	return hs
 }
 
-// YOUR PRS is a group of its own, between the tasks that wait on others
+// Your PRs sit with the tasks in the group their wait says, and the ones
+// magnum leaves alone in LEFT ALONE, between the rows that wait on others
 // and those done today, at the spec's three widths: a baseline PR is dim
 // with its reason, and nothing is cut past the screen.
 func TestFactoryFramesWithYourPRs(t *testing.T) {
@@ -130,13 +131,17 @@ func TestFactoryFramesWithYourPRs(t *testing.T) {
 }
 
 // The chip counts the tasks and the PRs that need you apart ("1 task and
-// 2 PRs need you"), and your PRs at work in a dim part of their own, never
-// one magnum leaves alone (a baseline asks nothing, and nothing works on
-// it); with no task to decide it says "2 PRs need you".
-func TestTheChipCountsPRsThatNeedYou(t *testing.T) {
+// 2 PRs need you"), the rows that wait on others with those an agent or
+// magnum's fixer works on ("3 wait on others, 2 at work"), and your PRs
+// magnum leaves alone apart ("1 left alone"), never as at work: a baseline
+// asks nothing and nothing works on it. With no task to decide it says "2
+// PRs need you". Before, "2 of your PRs at work" counted every PR row that
+// was not left alone, whether anything worked on it or not.
+func TestTheChipCountsHonestly(t *testing.T) {
 	frame, _ := factoryFrameOf(fixtureYours(), 140, 22, true, IconsUnicode, factoryNow)
 	chip := strings.Split(ansi.Strip(frame), "\n")[1]
-	mustContain(t, chip, "1 task and 2 PRs need you, 3 decisions", "1 waits on others", "2 of your PRs at work", "1 done today")
+	mustContain(t, chip, "1 task and 2 PRs need you, 3 decisions", "3 wait on others, 2 at work", "1 left alone", "1 done today")
+	mustNotContain(t, chip, "of your PRs")
 
 	f := fixtureYours()
 	f.Rows = f.Rows[1:] // the task with questions answered
@@ -146,13 +151,11 @@ func TestTheChipCountsPRsThatNeedYou(t *testing.T) {
 	mustContain(t, chip, "● 2 PRs need you ·")
 	mustNotContain(t, chip, "task")
 
-	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Group == GroupYours && r.Key != "#4611" && r.Key != "#4606" })
+	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Mark == MarkWorking || r.Group == GroupYours })
 	frame, _ = factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
-	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[1], "1 of your PRs at work")
-
-	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Key == "#4611" })
-	frame, _ = factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
-	mustNotContain(t, strings.Split(ansi.Strip(frame), "\n")[1], "at work")
+	chip = strings.Split(ansi.Strip(frame), "\n")[1]
+	mustContain(t, chip, "1 waits on others")
+	mustNotContain(t, chip, "at work", "left alone")
 }
 
 // A row of your PR that magnum leaves alone is drawn dim, its "you:" too:
@@ -196,7 +199,7 @@ func TestPRRowsKeepTheirOwnCursor(t *testing.T) {
 	h.press("g", "j", "j", "j", "j", "j") // #4611
 	h.src.change(func(d *FactoryData) {
 		d.Rows = append(d.Rows[:4:4], append([]FactoryRow{{ID: -90, Key: "#4620", GitHub: "#4620", Title: "New one",
-			Group: GroupYours, Mark: MarkWaits, Since: factoryAgo(factoryNow, 4*time.Hour), PR: &FactoryPR{Ref: "example/talkable#4620"}}},
+			Group: GroupWaits, Mark: MarkWaits, Since: factoryAgo(factoryNow, 4*time.Hour), PR: &FactoryPR{Ref: "example/talkable#4620"}}},
 			d.Rows[4:]...)...)
 	})
 	h.press("ctrl+r")
@@ -252,15 +255,15 @@ func TestThePRRowsKeysOnHome(t *testing.T) {
 	}
 }
 
-// The help glosses YOUR PRS.
+// The help glosses LEFT ALONE, and says where your other PRs are.
 func TestTheHelpGlossesYourPRs(t *testing.T) {
 	h := testFactory(t, 140, 50)
 	mustContain(t, ansi.Strip(strings.Join(h.m.helpContent(140), "\n")),
-		"YOUR PRS  your open PRs that no task has, from magnum's registry; one that needs you is in NEEDS YOU")
+		"LEFT ALONE  your PRs magnum's look leaves alone (a baseline, fix off): they ask nothing; the others sit with the tasks")
 }
 
 // withFixOff adds to the screen's data your PR #4607, switched out of
-// autofix, in YOUR PRS.
+// autofix, in LEFT ALONE.
 func withFixOff(h *factoryHarness) {
 	h.src.change(func(d *FactoryData) {
 		off := "fix is off for #4607 (F turns it on)"
