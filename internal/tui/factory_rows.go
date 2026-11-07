@@ -364,9 +364,16 @@ type TaskCard struct {
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
-	Links  []string
-	Stages []CardStage
-	Agents []CardAgent
+	Links []string
+	// FixNeeds are what magnum's fixer left you on the PR, one item each in
+	// its own words (its report's Needs you, the comment id left out), drawn
+	// under WAITING FOR before the links; FixReport is that report (absolute),
+	// which e opens in the pager: set for any fix attention whose report
+	// magnum keeps, "" for none.
+	FixNeeds  []string
+	FixReport string
+	Stages    []CardStage
+	Agents    []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

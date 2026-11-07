@@ -1,0 +1,117 @@
+package tui
+
+// The report of magnum's fixer on the factory screen: e opens it in the
+// pager, asking nothing (spec 9.D: opening asks nothing), on home's row of
+// a published task or of your PR whose fix loop left you items, and on the
+// task card. The card's FixReport names it (factory.ScreenData sets it
+// only for a report under magnum's reviews directory), and the task card
+// lists the items it left you under WAITING FOR (fixNeedRows).
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// reportKey opens the fixer's report.
+const reportKey = "e"
+
+// defaultPager is $PAGER (its words split, as defaultEditor splits
+// $EDITOR's), else less, on path, with -+F added to LESS (yours, else R) so
+// less never quits at once on a report that fits the screen, as the diff's
+// pager does.
+func defaultPager(ctx context.Context, path string) *exec.Cmd {
+	args := strings.Fields(cmp.Or(strings.TrimSpace(os.Getenv("PAGER")), "less"))
+	cmd := exec.CommandContext(ctx, args[0], append(args[1:], path)...) //nolint:gosec // the operator's own pager on magnum's own report
+	cmd.Env = append(os.Environ(), "LESS="+cmp.Or(strings.TrimSpace(os.Getenv("LESS")), "R")+" -+F")
+	return cmd
+}
+
+// reportOf is the fixer's report of the row or task id ("" for none) and
+// its name ("claude-fix.md").
+func (m factoryModel) reportOf(id int64) (path, name string) {
+	path = m.data.Cards[id].Task.FixReport
+	if path == "" {
+		return "", ""
+	}
+	return path, cleanText(filepath.Base(path))
+}
+
+// reportTarget is what e acts on: home's row, the task card's task; false
+// on any other view.
+func (m factoryModel) reportTarget() (int64, bool) {
+	switch m.view {
+	case fvHome:
+		r, ok := m.selectedRow()
+		return r.ID, ok
+	case fvTask:
+		return m.task, true
+	}
+	return 0, false
+}
+
+// openReport runs the pager on the fixer's report of e's row or task card
+// (asks nothing); one without a report says so in the footer.
+func (m *factoryModel) openReport() tea.Cmd {
+	id, ok := m.reportTarget()
+	if !ok {
+		return nil
+	}
+	path, _ := m.reportOf(id)
+	if path == "" || !filepath.IsAbs(path) {
+		return m.note(fmt.Sprintf("no report of magnum's fixer for %s: e opens one when its fix loop left you items", m.taskKey(id)))
+	}
+	return tea.ExecProcess(m.pager(m.ctx, path), func(err error) tea.Msg { return factoryPagerMsg{task: id, err: err} })
+}
+
+// reportHints are hs with e and the report's name after the last hint
+// whose key is one of after (at the end when none is), when task or row
+// id has a report.
+func (m factoryModel) reportHints(hs []hint, id int64, after ...string) []hint {
+	_, name := m.reportOf(id)
+	if name == "" {
+		return hs
+	}
+	i := len(hs)
+	for j, h := range hs {
+		if slices.Contains(after, h.key) {
+			i = j + 1
+		}
+	}
+	return slices.Insert(slices.Clone(hs), i, hint{reportKey, name})
+}
+
+// reportItem is the menu's item for e on task or row id: dimmed without a
+// report.
+func (m factoryModel) reportItem(id int64) menuItem {
+	path, _ := m.reportOf(id)
+	return menuItem{"read the fixer's report", reportKey, reportKey, path != ""}
+}
+
+// cardFixNeedsShown bounds the items WAITING FOR lists; a last line counts
+// the rest, which the report has.
+const cardFixNeedsShown = 5
+
+// fixNeedRows are the items magnum's fixer left you, under WAITING FOR's
+// text: one line each behind a dash, cut at the edge, at most
+// cardFixNeedsShown and a line that counts the rest.
+func (p *cardPainter) fixNeedRows(items []string) []string {
+	const x = 1 + len("WAITING FOR") + 2
+	w := max(p.width-1-x, 1)
+	shown := items[:min(len(items), cardFixNeedsShown)]
+	out := make([]string, 0, len(shown)+1)
+	for _, it := range shown {
+		out = append(out, p.line(at(x, w, seg{p.dash() + " ", p.st.Dim}, seg{it, noStyle})))
+	}
+	if n := len(items) - len(shown); n > 0 {
+		out = append(out, p.line(at(x, w, seg{fmt.Sprintf("+%d more: %s opens the report", n, reportKey), p.st.Dim})))
+	}
+	return out
+}

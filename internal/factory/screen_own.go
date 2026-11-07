@@ -126,9 +126,9 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	case w.mark == tui.MarkWorking:
 		row.Mark = tui.MarkWorking
 	}
-	row.Help = w.on.Who + ": " + cmp.Or(w.on.Long, w.on.What)
+	row.Help = cmp.Or(w.help, w.on.Who+": "+cmp.Or(w.on.Long, w.on.What))
 	card := tui.TaskCard{Key: key, Title: st.Title, PR: fmt.Sprintf("#%d", n), PRURL: cmp.Or(st.URL, githubPR(st.Ref)),
-		WaitingFor: w.on.Who + ": " + w.on.What, Links: w.links}
+		WaitingFor: cmp.Or(w.card, w.on.Who+": "+w.on.What), Links: w.links, FixNeeds: w.needs, FixReport: w.report}
 	card.Issue, card.IssueURL = config.Issue(st.Title, trackers)
 	return row, card
 }

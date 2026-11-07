@@ -7,7 +7,8 @@ package factory
 // PR's state, a PR magnum has not read and a registry that cannot be read
 // are magnum looking at the PR, never idle. Without a verdict (the watch
 // does not run autofix = "open") the fix loop, the attention and magnum's
-// review still show, and so does a stalemate. The row's WAITED counts from when the PR began to wait
+// review still show, and so does a stalemate. A fix attention whose loop left
+// you items says the fixer's own items from its report (fixerWait). The row's WAITED counts from when the PR began to wait
 // as it does (the verdict's Since), so a PR that came to need you while you
 // were away is new for you. Without a Magnum the row keeps its words:
 // magnum reviews the PR.
@@ -16,6 +17,8 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -31,6 +34,10 @@ import (
 // prWait is what a published task waits on, by its PR: its group and mark
 // on home, its blocker, the links of what needs you, your move, and since
 // when the PR has waited so (zero: not known, the task's last span tells).
+// A fix attention adds the fixer's report (report, which e opens) and,
+// when the fixer left you items, those items (needs), the help line that
+// lists them (help) and the card's WAITING FOR (card); "" keeps the
+// blocker's words there (fixerWait).
 type prWait struct {
 	group           tui.FactoryGroup
 	mark            tui.FactoryMark
@@ -38,6 +45,9 @@ type prWait struct {
 	links           []string
 	move, moveShort string
 	since           time.Time
+	report          string
+	needs           []string
+	help, card      string
 }
 
 // prRef is the PR of task view v as magnum's registry names it.
@@ -217,12 +227,57 @@ func attentionWait(st PRState, n int) prWait {
 	var w prWait
 	if st.State == store.PRNeedsAttention {
 		msg := cmp.Or(st.AttentionMsg, st.Attention, "needs attention")
-		w = youWait("magnum: "+msg, "magnum: "+firstClause(msg), "")
+		w = fixerWait(st, youWait("magnum: "+msg, "magnum: "+firstClause(msg), ""))
 	} else {
 		what := fmt.Sprintf("magnum stopped arguing on #%d: the thread is yours", n)
 		w = youWait(what, clauseShort(what), "")
 	}
 	w.since = st.UpdatedAt
+	return w
+}
+
+// The runes of the fixer's first item a row draws, by its form (100, 140
+// and 200 columns): the wide form names the fixer before it.
+const (
+	fixerItemShort = 32
+	fixerItemWhat  = 64
+	fixerItemLong  = 120
+)
+
+// fixerItemRe is the comment id that starts an entry of the fixer's Needs
+// you ("2101 P1 app/a.rb:42: …"), which a row and a card leave out.
+var fixerItemRe = regexp.MustCompile(`^\d{1,20}\s+`)
+
+// fixerWait is w, the wait on you of PR st's attention or of its verdict
+// that needs you, with what the fix job's attention keeps of the fixer
+// (PRState.FixReport, FixNeeds): its report, which e opens, and, when the
+// fixer left you items, the first one on the row in its own words without
+// its comment id (cut to fit the row's form; the wide form names the fixer
+// before it, and " · 1 more" counts the rest), every one on the help line
+// and the card's list, and on the card's WAITING FOR who left how many and
+// that e opens the report. Any other attention, and a fix attention without
+// a report, keep w; its links, move and since stay.
+func fixerWait(st PRState, w prWait) prWait {
+	if st.State != store.PRNeedsAttention || st.FixReport == "" {
+		return w
+	}
+	w.report = st.FixReport
+	if len(st.FixNeeds) == 0 {
+		return w
+	}
+	fixer := strings.TrimSuffix(filepath.Base(st.FixReport), ".md")
+	items := make([]string, len(st.FixNeeds))
+	for i, e := range st.FixNeeds {
+		items[i] = cmp.Or(fixerItemRe.ReplaceAllString(e, ""), e)
+	}
+	more := ""
+	if n := len(items) - 1; n > 0 {
+		more = fmt.Sprintf(" · %d more", n)
+	}
+	w.on = tui.WaitsOn{Who: waitsYou, OnYou: true, Short: textx.Clip(items[0], fixerItemShort),
+		What: textx.Clip(items[0], fixerItemWhat) + more, Long: fixer + ": " + textx.Clip(items[0], fixerItemLong) + more}
+	left := fmt.Sprintf("%s: %s left you %s", waitsYou, fixer, plural(len(items), "item"))
+	w.needs, w.help, w.card = items, left+": "+strings.Join(items, " · "), left+": e opens its report"
 	return w
 }
 
@@ -271,7 +326,7 @@ func verdictWait(st PRState, n int, own bool) prWait {
 				w.links = append(w.links, need.URL)
 			}
 		}
-		return w
+		return fixerWait(st, w)
 	case engine.OpenIdle:
 		if st.Approved {
 			w := you(o.Why, short, "")

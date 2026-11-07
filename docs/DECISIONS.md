@@ -17216,6 +17216,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   left-out note does and a task folder that is a file; the stats command's date in America/New_York; the impossible
   sinces and the wrong arguments.
 
+- **The factory screen says what magnum's fixer left you, and e opens its report** (2026-11-07, approved by the
+  operator). An own PR's fix loop ended with one `Needs you` item (change a phrase of the PR body), and the
+  factory screen said only `you: magnum: fix`: the settle's message counts what the fixer left ("fix: 1 finding
+  needs your call: <report>"; the description item has no thread, so no call names it), the row's short form
+  cuts that at its first ": ", and nothing on the screen opened the report the message names. The item was only
+  in the fixer's report, which magnum keeps (`claude-fix.md` in the PR's reviews directory).
+  - The factory's read of magnum's registry (`PRState.FixReport`, `FixNeeds`) takes, for a PR whose attention
+    is a fix job's, the report its message names (`attention.FixReport`: the last `.md` path of its first line,
+    as the remedy names it), read only under magnum's reviews directory through an `os.Root` (a path elsewhere,
+    a link out of it, a missing file: none), and, when the message asks for what the fixer left
+    (`attention.FixAsks`: the calls, or the findings and conflicts named or counted, after a loop's own words
+    too), the report's `## Needs you` entries (`engine.ParseFixReport`), clipped and with token shapes masked.
+    A cap's or a failed run's message asks for something else: its report's entries are not what the attention
+    is about (a failed push lists every committed finding there), so those rows keep magnum's words, and e still
+    opens the report.
+  - A published task's row and your PR's row then say the first item without its comment id, in the fixer's own
+    words, cut to each form (its start at 100 columns, 64 runes and " · 1 more" at 140, the fixer's name before it
+    at 200, so the 140 layout keeps its titles); the help line lists every item ("you: claude-fix left you 2
+    items: …"); the task card says who left how many and that e opens the report under WAITING FOR, and lists
+    the items under it, before the verdict's links. A verdict that says the PR needs your attention reads the
+    same, its links kept. Your PR's row has no card, so its help line is where every item shows.
+  - e opens the report in the pager, asking nothing (spec 9.D: opening asks nothing), on home's row and on the
+    task card: `$PAGER`, else less, with `-+F` added to LESS as the diff's pager has it, through
+    `tea.ExecProcess` as ctrl+g runs the editor; the hints offer it by the report's name (`e claude-fix.md`), the
+    menu has it (dimmed without one), and a row without one says so. The PR board has no key that opens a fix
+    report or a review file, so there was none to reuse. e is not one of the board's letters (spec 9.D keeps
+    those), and the spec's e on the recap and the ready card are views without a PR. The pager is the screen's
+    own (`factoryModel.pager`), not a `FactoryActions` method: it reads nothing of the factory's.
+  - The fixer's entries are its words about the PR, which the engine never reads into a message, an event or a
+    toast (`needsYouEntryRe`), and still does not: the screen only draws them (cleaned of escapes and control
+    characters, as a PR title), as data, never instructions.
+  Rejected: the entries in magnum's attention message (a message carries no fixer or PR text); dropping the
+  entries magnum found answered since (the settle's counted form names none, so the screen cannot tell which;
+  the report is what the fixer left, and the attention's calls still name each thread); opening the report in
+  the operator's editor (it is magnum's record of the run: a pager reads it and changes nothing); a card for
+  your PR's row (its keys would act on a task that is not there). Tests, failing first:
+  TestFixReportIsTheReportAFixMessageNames and TestFixAsksOnlyForWhatTheFixerLeft (neither existed),
+  TestPRStatesReadsTheFixersNeedsYouFromItsReport (nothing read the report),
+  TestAPublishedTasksFixAttentionSaysWhatTheFixerLeft and TestAnOwnPRsFixAttentionSaysWhatTheFixerLeft (the
+  rows said "magnum: fix"), TestAFixAttentionOfACapKeepsMagnumsWordsAndItsReport, TestEOpensTheFixersReportInThePager,
+  TestTheHelpAndTheMenuNameTheFixersReport, TestThePagerIsYoursElseLess and TestTaskCardListsWhatTheFixerLeft (no
+  key opened the report, no card listed the items), and the goldens `fixer-100/140/200` and `task-fixer-100/140`.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -456,9 +456,8 @@ func fixCause(line string) string {
 // the fixer's pane; then `magnum fix` for another loop once the author
 // answered what it left, and `magnum abort` for a loop still running.
 func fixRemedy(chain, ref string) string {
-	who, report := "the fixer", ""
-	if m := fixReportRe.FindAllString(chain, -1); len(m) > 0 {
-		report = m[len(m)-1]
+	who, report := "the fixer", lastReport(chain)
+	if report != "" {
 		who = strings.TrimSuffix(filepath.Base(report), ".md")
 	}
 	again := "`magnum fix " + ref + "` runs " + who + " again once you answered what it left; `magnum abort " + ref + "` stops a loop still running"

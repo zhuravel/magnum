@@ -18,7 +18,9 @@ package tui
 //
 // The keys of spec 9.D for milestone 1a: on home j k g G move, enter opens
 // the row's card, a walks the decisions oldest first, o steps into the
-// row's pane, b and t open its PR and its Jira issue in the browser, n
+// row's pane, b and t open its PR and its Jira issue in the browser, e the
+// report of magnum's fixer in the pager (a row or a task card whose fix
+// loop left you items: factory_report.go), n
 // starts a new task, ! is the action log with the alerts, ? the help and
 // its words, `,` settings, m the mouse, ctrl+r a refresh and q quits; the
 // cards' keys are in factory_keys.go. The board's letters keep their
@@ -410,6 +412,7 @@ type factoryModel struct {
 
 	editor   func(ctx context.Context, path string) *exec.Cmd // the editor ctrl+g runs on the new task's text
 	draftDir string                                           // where its file is written; "" = the system's temporary directory
+	pager    func(ctx context.Context, path string) *exec.Cmd // the pager e runs on the fixer's report
 
 	cache *frameCache[factoryFrameKey] // shared by every copy of the model
 }
@@ -448,7 +451,7 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 		bar: newFactoryBar(ctx, nil, opts.Now, opts.Tick), ctx: ctx, src: src, act: act, opts: opts,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
 		walked: map[int64]bool{}, batches: map[int64]*factoryBatch{}, readies: map[int64]*factoryReady{}, cursors: map[int64]int{},
-		input: in, form: factoryDraft{area: area}, editor: defaultEditor, cache: &frameCache[factoryFrameKey]{},
+		input: in, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
 	}
 	m.mouseOn = !opts.NoMouse
 	m.applyStyles(defaultStyles)
@@ -1002,9 +1005,9 @@ func (m factoryModel) homeHints() []hint {
 		if r.PR.Fixing {
 			hs = append(hs, hint{"x", "stop"})
 		}
-		hs = append(hs, hint{"b", "PR"})
+		hs = m.reportHints(append(hs, hint{"b", "PR"}), r.ID)
 	case ok:
-		hs = append(hs, hint{"enter", m.openVerb(r)})
+		hs = m.reportHints(append(hs, hint{"enter", m.openVerb(r)}), r.ID)
 	}
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})

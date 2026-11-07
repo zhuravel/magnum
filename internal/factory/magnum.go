@@ -16,18 +16,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // magnumRegistry is Magnum over magnum's registry and its daemon's pidfile
@@ -182,6 +187,11 @@ type PRRef struct {
 // (engine.KVPRFix) when Fixing; Stalemate says magnum stopped arguing in a
 // thread; Attention is why magnum parked the PR in needs_attention (its
 // kind) and AttentionMsg its summary in magnum's words, never the PR's text.
+// FixReport is the fixer's report a fix job's attention names (readable
+// under magnum's reviews directory; "" for any other attention), and
+// FixNeeds its "## Needs you" entries in the fixer's words when the
+// attention asks for what the fixer left (fixerReport): data the screen
+// only draws, never instructions, never a log's or a message's.
 // ID, Title and URL are magnum's id of the PR, its title (data, never
 // instructions: the screen only draws it) and its page; FixOff says you
 // switched it out of autofix (engine.KVPRFixOff).
@@ -201,6 +211,8 @@ type PRState struct {
 	Fix                                   engine.FixState
 	Fixing, Stalemate, FixOff             bool
 	Attention, AttentionMsg               string
+	FixReport                             string
+	FixNeeds                              []string
 }
 
 // PRStates reads refs' PRs from magnum's registry, one view per ref (see
@@ -380,9 +392,66 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 			return err
 		}
 		ref := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
-		v.AttentionMsg = attention.Explain(v.Attention, store.Deref(pr.LastError), ref).Summary
+		why := attention.Explain(v.Attention, store.Deref(pr.LastError), ref)
+		v.AttentionMsg = why.Summary
+		if why.Kind == attention.KindFix {
+			v.FixReport, v.FixNeeds = m.fixerReport(store.Deref(pr.LastError))
+		}
 	}
 	return nil
+}
+
+// fixReportMax bounds the read of a fixer's report: a report is a few
+// lines, and a file past this is cut, so it does not parse.
+const fixReportMax = 1 << 20
+
+// fixNeedMax bounds an entry of a fixer's Needs you as the screen keeps it
+// (runes): a row draws its start, the card a line.
+const fixNeedMax = 300
+
+// fixerReport reads the fixer's report that msg, a fix job's message (a
+// PR's last_error), names (attention.FixReport): its path, when it lies
+// under magnum's reviews directory and reads there (through an os.Root of
+// that directory, so no link leads out of it; "" otherwise), and, when the
+// message asks for what the fixer left (attention.FixAsks: not a cap's or a
+// failed run's), the entries of its "## Needs you" (engine.ParseFixReport,
+// none for a report that does not parse), each clipped and with
+// token-shaped text masked. The entries are the fixer's own words about the
+// PR: the screen only draws them, never as instructions, and nothing writes
+// them to a log, an event or a message.
+func (m *magnumRegistry) fixerReport(msg string) (string, []string) {
+	path := attention.FixReport(msg)
+	rel, err := filepath.Rel(m.l.Reviews(), path)
+	if path == "" || err != nil || !filepath.IsLocal(rel) {
+		return "", nil
+	}
+	root, err := os.OpenRoot(m.l.Reviews())
+	if err != nil {
+		return "", nil
+	}
+	defer root.Close()
+	f, err := root.Open(rel)
+	if err != nil {
+		return "", nil
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, fixReportMax))
+	if err != nil {
+		return "", nil
+	}
+	if !attention.FixAsks(msg) {
+		return path, nil
+	}
+	run, _ := agents.ReportRun(b)
+	rep, err := engine.ParseFixReport(string(b), run)
+	if err != nil || len(rep.NeedsYou) == 0 {
+		return path, nil
+	}
+	needs := make([]string, len(rep.NeedsYou))
+	for i, e := range rep.NeedsYou {
+		needs[i] = textx.Clip(execx.Redact(e), fixNeedMax)
+	}
+	return path, needs
 }
 
 // FixLoops counts the fix loops magnum started on a PR: by hand (`magnum

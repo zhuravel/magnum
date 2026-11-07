@@ -1,0 +1,14 @@
+ magnum factory · PR-12360 · bug · Coupon rounding in the cart                                                                      ↻ 14:09 
+ zhuravel-PR-12320-coupon-rounding · #4560 · started 08:40
+
+ WAITING FOR  you: claude-fix left you 2 items: e opens its report
+              – description: change "fixes the cart total" to "rounds the cart total"
+              – P1 app/models/offer.rb:42: not fixed. which rounding does the cart want? Both round half up today, the cart's spec says ba…
+              github.com/example/talkable/pull/4530#discussion_r9100
+
+ STAGES                                                                                                                    took   finished
+  ✓ start   Jira PR-12320 read                                                                                               0s      08:40
+  ✓ coding  spec red before, green after                                                                                     0s      09:35
+  ✓ pushed  #4530 opened                                                                                                     0s      10:02
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ j k move · enter open the line · d diff · l log · + − rate · esc back · ? more

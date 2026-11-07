@@ -203,6 +203,8 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 		return m.note(mouseNote(m.mouseOn))
 	case "ctrl+r", "f5":
 		return m.reload()
+	case reportKey:
+		return m.openReport()
 	case "o":
 		task := m.task
 		if m.view == fvHome {
@@ -1058,7 +1060,7 @@ func (m factoryModel) taskCard() TaskCard {
 	c.Ask = m.bar.question()
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
-	c.Hints = pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c)
+	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c), m.task, "d", "b", "t")
 	if what := m.waitingDecision(m.task); what != "" && len(c.Hints) > 0 {
 		c.Hints = slices.Insert(c.Hints, 1, hint{"enter", what}) // after j k
 	}

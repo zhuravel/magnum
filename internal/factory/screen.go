@@ -589,6 +589,8 @@ func (s *screen) move(v *taskView) (long, short string) {
 // help is the line under the rule while task v's row is selected.
 func (s *screen) help(v *taskView, row tui.FactoryRow) string {
 	switch {
+	case v.pr != nil && v.pr.help != "": // what the fixer left you, every item
+		return v.pr.help
 	case s.onQuestions(v):
 		return fmt.Sprintf("%s · first: %q", v.t.WaitsWhat, firstOnYou(v).Text)
 	case v.card != nil:
@@ -673,7 +675,10 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	}
 	c.WaitingFor = strings.Join(parts, " · ")
 	if v.pr != nil {
-		c.Links = v.pr.links
+		c.Links, c.FixNeeds, c.FixReport = v.pr.links, v.pr.needs, v.pr.report
+		if v.pr.card != "" { // who left you how many items; the card lists them
+			c.WaitingFor = strings.Join(append([]string{v.pr.card}, parts[1:]...), " · ")
+		}
 	}
 	c.Stages = s.stages(v, row)
 	for _, x := range v.agents {

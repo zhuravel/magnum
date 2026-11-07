@@ -3362,11 +3362,25 @@ func CLIChange(kind string, at, now time.Time) string
     role's start ("start <role>: …"), so a command's output that ends the same
     way says nothing of a CLI.
 
+func FixAsks(msg string) bool
+    FixAsks reports whether msg, a fix job's message, asks the author for the
+    calls of what its fixer left them, whatever the loop's own words before
+    them (a re-review that did not post): the calls (FixCallsText) or the
+    findings and conflicts named or counted ("2 findings need your call (…)",
+    the settle's "1 finding needs your call: <report>"). A loop that ended
+    otherwise (its cap, a failed run, a guard) asks for something else.
+
 func FixCallsText(calls []FixCall, more, report string) string
     FixCallsText is the part of a fix job's message that names its calls,
     joined by "; ": each call's sentence, then more (the findings named in the
     older words, "1 more finding needs your call (…)"; "" for none), then the
     report ("details: <report>"). Explain reads it back.
+
+func FixReport(msg string) string
+    FixReport is the fixer's report that a fix job's message msg (a PR's
+    last_error under KindFix) names: the last absolute path to a .md file of its
+    first line, as the remedy names the report (fixRemedy); "" when that line
+    names none.
 
 func Kinds() []string
     Kinds are every kind above: Explain reads each as a message's leading
@@ -12635,6 +12649,8 @@ type PRState struct {
 	Fix                                   engine.FixState
 	Fixing, Stalemate, FixOff             bool
 	Attention, AttentionMsg               string
+	FixReport                             string
+	FixNeeds                              []string
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -12647,12 +12663,16 @@ type PRState struct {
     when HasOpen, and Stale says it no longer tells the PR's state
     (OpenVerdict.Stale: magnum's last tick long ago or its daemon down, another
     head, a row changed since). Fix is the fix loop that runs (engine.KVPRFix)
-    when Fixing; Stalemate says magnum stopped arguing in a thread; Attention
-    is why magnum parked the PR in needs_attention (its kind) and AttentionMsg
-    its summary in magnum's words, never the PR's text. ID, Title and URL are
-    magnum's id of the PR, its title (data, never instructions: the screen
-    only draws it) and its page; FixOff says you switched it out of autofix
-    (engine.KVPRFixOff).
+    when Fixing; Stalemate says magnum stopped arguing in a thread;
+    Attention is why magnum parked the PR in needs_attention (its kind) and
+    AttentionMsg its summary in magnum's words, never the PR's text. FixReport
+    is the fixer's report a fix job's attention names (readable under magnum's
+    reviews directory; "" for any other attention), and FixNeeds its "## Needs
+    you" entries in the fixer's words when the attention asks for what the
+    fixer left (fixerReport): data the screen only draws, never instructions,
+    never a log's or a message's. ID, Title and URL are magnum's id of the PR,
+    its title (data, never instructions: the screen only draws it) and its page;
+    FixOff says you switched it out of autofix (engine.KVPRFixOff).
 
 type PRView struct {
 	Number                     int
@@ -29033,9 +29053,16 @@ type TaskCard struct {
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
-	Links  []string
-	Stages []CardStage
-	Agents []CardAgent
+	Links []string
+	// FixNeeds are what magnum's fixer left you on the PR, one item each in
+	// its own words (its report's Needs you, the comment id left out), drawn
+	// under WAITING FOR before the links; FixReport is that report (absolute),
+	// which e opens in the pager: set for any fix attention whose report
+	// magnum keeps, "" for none.
+	FixNeeds  []string
+	FixReport string
+	Stages    []CardStage
+	Agents    []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

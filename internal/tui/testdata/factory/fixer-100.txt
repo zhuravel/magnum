@@ -1,0 +1,18 @@
+ magnum factory · talkable                                                                  ↻ 14:09 
+ ● 1 task and 1 PR need you · 1 waits on others · 1 done today
+
+ NEEDS YOU                             WAITS ON                              YOUR MOVE        WAITED
+› ● PR-12360  Coupon rounding in the…  you: description: change "fixes the…  task card           35m
+  ● #4612     Weekly gem upgrades      you: P1 app/models/offer.rb:42: not…  b or f              25m
+
+ WAITS ON OTHERS
+  ⣷ PR-12321  Advocate offer email l…  agent: magnum fixes #4531                                  9m
+
+ DONE TODAY
+  ✓ PR-12302  Remove old sync job      nothing: merged 13:20
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ you: claude-fix left you 2 items: description: change "fixes the cart total" to "rounds the cart t…
+ enter task card · e claude-fix.md · n new task · ? more
