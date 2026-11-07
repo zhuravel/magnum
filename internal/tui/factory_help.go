@@ -75,7 +75,7 @@ var factoryKeyHelp = []struct {
 	keys  []hint
 }{
 	{"Home", []hint{{"j k g G", "move"}, {"enter", "the row's card: its decision when it needs you, else its task card; your PR's card on its row"},
-		{"a", "the oldest decision card, then the next"},
+		{"a", "the oldest card that needs you, then the next: a task's decision, a PR's card (a on a card goes on)"},
 		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one)"},
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},

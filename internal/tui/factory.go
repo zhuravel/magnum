@@ -361,6 +361,7 @@ const (
 	followStart
 	followTask // a retry: the task card stays
 	followStop // a drop from the task card: home, once it is done
+	followPR   // f, F or K on a PR: on a walk, its card leaves for the next
 )
 
 // factoryFollow is what the screen does when an action it asked ends: an

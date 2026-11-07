@@ -212,24 +212,51 @@ func TestPRRowsKeepTheirOwnCursor(t *testing.T) {
 	}
 }
 
-// a walks the task cards only: a PR row that needs you is no card, so the
-// walk skips it, and once the cards are done the footer says how many of
-// your PRs still need you and their keys.
-func TestTheWalkSkipsPRRows(t *testing.T) {
+// a walks everything in NEEDS YOU that has a card, oldest first: the task
+// cards' decisions and the PRs that need you, yours and a published
+// task's, each on its card. On a PR's card a goes on to the next, and so
+// does an f, F or K that went through; once nothing is left the footer says
+// so. Before, a walked the decision cards only and the footer counted the
+// PRs left ("2 of your PRs need you: f, F or b on their rows").
+func TestTheWalkVisitsThePRsThatNeedYou(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("a")
 	if h.m.view != fvQuestion || h.m.task != 2 {
-		t.Fatalf("a opened view %v of task %d, want the questions of PR-12345", h.m.view, h.m.task)
+		t.Fatalf("a opened view %v of task %d, want the questions of PR-12345 (41m)", h.m.view, h.m.task)
 	}
-	h.src.change(func(d *FactoryData) {
+	h.src.change(func(d *FactoryData) { // its answers went through: the task moved on
 		d.Rows = d.Rows[1:]
 		delete(d.Cards, 2)
 	})
-	h.press("esc", "ctrl+r", "a")
+	h.press("ctrl+r")
 	if h.m.view != fvHome {
-		t.Fatalf("a with only PR rows that need you opened view %v", h.m.view)
+		h.press("esc")
 	}
-	mustContain(t, h.view(), "2 of your PRs need you: f, F or b on their rows")
+	h.press("a")
+	if h.m.view != fvTask || h.m.task != -72 {
+		t.Fatalf("a with PRs that need you opened view %v of %d, want #4602's card (25m)", h.m.view, h.m.task)
+	}
+	mustContain(t, h.view(), "a next")
+	h.press("f", "y")
+	if h.m.view != fvTask || h.m.task != -73 {
+		t.Fatalf("the fix of #4602 left the walk on view %v of %d, want #4603's card (5m)", h.m.view, h.m.task)
+	}
+	h.press("a")
+	if h.m.view != fvHome {
+		t.Fatalf("a on the last card of the walk opened view %v of %d", h.m.view, h.m.task)
+	}
+	mustContain(t, h.view(), "Nothing else waits on you.")
+	mustNotContain(t, h.view(), "of your PRs need you")
+
+	p := testPublished(t, 140, 40)
+	p.press("a") // PR-12320's PR has waited 35m, PR-12324's 12m on your merge: the oldest first
+	if p.m.view != fvTask || p.m.task != 1 {
+		t.Fatalf("a over published tasks opened view %v of %d, want PR-12320's card", p.m.view, p.m.task)
+	}
+	p.press("a")
+	if p.m.view != fvTask || p.m.task != 2 {
+		t.Errorf("a on PR-12320's card opened view %v of %d, want PR-12324's", p.m.view, p.m.task)
+	}
 }
 
 // enter on your PR's row opens its card; on home o steps into magnum's

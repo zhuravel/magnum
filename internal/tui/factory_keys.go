@@ -252,25 +252,26 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		return m.note("f, F and K act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
 	}
 	pr, key, act := *r.PR, prLabel(r), m.act
+	f := &factoryFollow{kind: followPR, task: r.ID} // on a walk, its card leaves for the next
 	switch {
 	case k == "f":
-		return m.ask(nil, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
+		return m.ask(f, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
 			return act.Fix(ctx, pr.Ref)
 		})
 	case k == "F" && pr.FixOff:
-		return m.ask(nil, "Switch fix on again for "+key+"?", func(ctx context.Context) (ActionResult, error) {
+		return m.ask(f, "Switch fix on again for "+key+"?", func(ctx context.Context) (ActionResult, error) {
 			return act.FixOff(ctx, pr.Ref, false)
 		})
 	case k == "F" && pr.Off != "":
 		return m.note(cleanText(pr.Off))
 	case k == "F":
-		return m.ask(nil, "Switch fix off for "+key+": autofix leaves it to you?", func(ctx context.Context) (ActionResult, error) {
+		return m.ask(f, "Switch fix off for "+key+": autofix leaves it to you?", func(ctx context.Context) (ActionResult, error) {
 			return act.FixOff(ctx, pr.Ref, true)
 		})
 	case !pr.Fixing:
 		return m.note("no fix loop runs on " + key)
 	}
-	return m.ask(nil, "Stop what magnum runs on "+key+" (its fix loop and the re-review the loop forced)?",
+	return m.ask(f, "Stop what magnum runs on "+key+" (its fix loop and the re-review the loop forced)?",
 		func(ctx context.Context) (ActionResult, error) { return act.Abort(ctx, pr.Ref) })
 }
 
@@ -291,30 +292,6 @@ func prFixOffVerb(pr FactoryPR) string {
 		return "fix on"
 	}
 	return "fix off"
-}
-
-// prsNeedYou counts the rows of your PRs that need you.
-func (m factoryModel) prsNeedYou() int {
-	n := 0
-	for _, r := range m.data.Rows {
-		if r.Group == GroupNeedsYou && r.yourPR() {
-			n++
-		}
-	}
-	return n
-}
-
-// prsNeedYouNote says how many of your PRs need you once no task's card
-// does, and their keys; "" when none does.
-func (m factoryModel) prsNeedYouNote() string {
-	switch n := m.prsNeedYou(); n {
-	case 0:
-		return ""
-	case 1:
-		return "1 of your PRs needs you: f, F or b on its row"
-	default:
-		return fmt.Sprintf("%d of your PRs need you: f, F or b on their rows", n)
-	}
 }
 
 // stepIn steps into the pane of the task (asks nothing, spec 9.D).
@@ -351,7 +328,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		m.walked = map[int64]bool{}
 		id, ok := m.nextDecision()
 		if !ok {
-			return m.note(cmp.Or(m.prsNeedYouNote(), "Nothing waits on you.")), true
+			return m.note("Nothing waits on you."), true
 		}
 		m.walk = true
 		m.openCard(id)
@@ -432,13 +409,14 @@ func (m *factoryModel) openCard(id int64) {
 	}
 }
 
-// nextDecision is the oldest decision card not walked yet: a task that
-// needs the operator with its questions or its ready card.
+// nextDecision is the oldest card in NEEDS YOU not walked yet: a task's
+// decision card (its questions, its ready card), and the card of a PR that
+// needs you, your PR's or a published task's.
 func (m factoryModel) nextDecision() (int64, bool) {
 	var rows []FactoryRow
 	for _, r := range m.data.Rows {
 		c := m.data.Cards[r.ID]
-		if r.Group == GroupNeedsYou && (c.Question != nil || c.Ready != nil) && !m.walked[r.ID] {
+		if r.Group == GroupNeedsYou && (c.Question != nil || c.Ready != nil || r.PR != nil) && !m.walked[r.ID] {
 			rows = append(rows, r)
 		}
 	}
@@ -467,23 +445,16 @@ func (m *factoryModel) goHome() {
 }
 
 // leaveDecision leaves a card decided on: for the next one on a walk, else
-// for home with the cursor on the next row. A card the operator left while
-// the decision ran stays left.
+// for home with the cursor on the next row; a PR's card (the task card's
+// view) is left so on a walk only. A card the operator left while the
+// decision ran stays left.
 func (m *factoryModel) leaveDecision(task int64) tea.Cmd {
-	if m.task != task || (m.view != fvQuestion && m.view != fvRecap && m.view != fvReady) {
+	walkedPR := m.view == fvTask && m.walk
+	if m.task != task || (m.view != fvQuestion && m.view != fvRecap && m.view != fvReady && !walkedPR) {
 		return nil
 	}
 	if m.walk {
-		m.walked[task] = true
-		if next, ok := m.nextDecision(); ok {
-			m.openCard(next)
-			return nil
-		}
-		m.goHome()
-		if note := m.prsNeedYouNote(); note != "" { // the walk visits cards only: your PRs' rows have none
-			return m.note(note)
-		}
-		return m.bar.show("Nothing else waits on you.", factoryFlashDone)
+		return m.walkOn(task)
 	}
 	m.goHome()
 	ids := m.order()
@@ -491,6 +462,18 @@ func (m *factoryModel) leaveDecision(task int64) tea.Cmd {
 		m.selID, m.selIdx = ids[i+1], i+1
 	}
 	return nil
+}
+
+// walkOn ends the walk's visit of task's card: the next card that needs
+// you, else home and the footer says nothing else waits.
+func (m *factoryModel) walkOn(task int64) tea.Cmd {
+	m.walked[task] = true
+	if next, ok := m.nextDecision(); ok {
+		m.openCard(next)
+		return nil
+	}
+	m.goHome()
+	return m.bar.show("Nothing else waits on you.", factoryFlashDone)
 }
 
 // dropSent takes out of task f.task's batch what answer f sent: an answer
@@ -562,6 +545,10 @@ func (m *factoryModel) followed(f *factoryFollow, err error) tea.Cmd {
 	case followStop:
 		if err == nil && m.view == fvTask && m.task == f.task {
 			m.goHome()
+		}
+	case followPR:
+		if err == nil {
+			cmds = append(cmds, m.leaveDecision(f.task))
 		}
 	}
 	return tea.Batch(cmds...)
@@ -1081,7 +1068,7 @@ func (m factoryModel) taskCard() TaskCard {
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
 	r, _ := m.row(m.task)
 	if r.yourPR() {
-		c.Hints = m.reportHints(m.prCardHints(r, c), m.task, "b", "t")
+		c.Hints = m.walkHint(m.reportHints(m.prCardHints(r, c), m.task, "b", "t"))
 		return c
 	}
 	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c), m.task, "d", "b", "t")
@@ -1091,7 +1078,17 @@ func (m factoryModel) taskCard() TaskCard {
 	if r.PR != nil && r.PR.Fixing { // magnum's loop on the task's PR
 		c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), hint{"K", "stop magnum"})
 	}
+	c.Hints = m.walkHint(c.Hints)
 	return c
+}
+
+// walkHint is hs with a's "next" before esc while a walk visits the card.
+func (m factoryModel) walkHint(hs []hint) []hint {
+	i := slices.IndexFunc(hs, func(h hint) bool { return h.key == "esc" })
+	if !m.walk || i < 0 {
+		return hs
+	}
+	return slices.Insert(slices.Clone(hs), i, hint{"a", "next"})
 }
 
 // prCardHints are the hints of your PR's card c, of row r: the fix keys,
@@ -1187,6 +1184,11 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 		return m.note("no diff of the factory's for " + m.taskKey(task) + ": b opens the PR"), true
 	}
 	switch k {
+	case "a": // the walk's next card; off a walk, its first
+		if !m.walk {
+			m.walk, m.walked = true, map[int64]bool{}
+		}
+		return m.walkOn(task), true
 	case "j", "down":
 		m.cursors[task] = min(cur+1, max(n-1, 0))
 	case "k", "up":
