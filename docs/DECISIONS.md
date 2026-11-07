@@ -15303,12 +15303,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   factory copy on "invalid byte sequence in US-ASCII", and the fix was LANG added by hand to three
   `[factory.repo.env]` blocks, which every new factory repository would need again. Next to the login
   shell's PATH (`daemonEnv`, before anything runs, whatever `[daemon] shell_path` says), each daemon sets
-  LANG=en_US.UTF-8 in its own environment when it names neither, and logs it; every command it runs
-  inherits it. A LANG or an LC_ALL already set is kept, and LANG ranks below every LC_ variable, so no
+  LANG=en_US.UTF-8 in its own environment when it names neither, and logs it (a LANG it cannot set is a
+  warning); every command it runs inherits it. A LANG or an LC_ALL already set is kept, and LANG ranks below every LC_ variable, so no
   locale already set is overridden. Rejected: the LaunchAgent's plist (a daemon started by hand, `magnum
   daemon`, would still have none, and a plist change needs a reinstall), and taking the locale from the login
   shell (the shell may set none either, and its exports stay a PATH-only import). Tests, failing first:
-  TestTheDaemonSetsAUTF8LocaleWhenLaunchdGivesNone, TestTheDaemonKeepsALocaleAlreadySet and
+  TestTheDaemonSetsAUTF8LocaleWhenLaunchdGivesNone, TestTheDaemonKeepsALocaleAlreadySet,
+  TestTheDaemonsLocaleKeepsAnLCCTYPE, TestALocaleTheDaemonCannotSetIsAWarning and
   TestTheFactoryDaemonSetsAUTF8LocaleWhenLaunchdGivesNone.
 
 ## The factory (2026-11-03)
@@ -16926,30 +16927,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   without a locale: task 1 needed you three times with "names no offense by path:line: (have it print them
   so: rubocop --format emacs, …)", when the command had `--format emacs` and the stderr said "invalid byte
   sequence in US-ASCII", and three retries ran the same command in the same environment.
-  - A lint that exits non-zero naming no offense, and whose output tells a known crash of the environment
-    (`envSignatures`: no UTF-8 locale, a missing gem or Ruby library, a command not found), records an `env`
-    check and is the precheck's error (`envCrash`), its report written. `provenHead` hands it to the tick's
-    infrastructure hold (`envFails`) at no cost to the task, whose reason names the line and the fix. The
-    next check of that task is the hold's try (`envCrashed`): while it runs or waits to run, the hold neither
-    lifts nor counts a failed try (`holdTry`), so a crash that lasts keeps one hold, with its backoff, and
-    needs you once after 30 minutes; the first try whose checks pass lifts it.
+  - A lint that exits non-zero naming no offense is a crash of the environment only when a whole line of its
+    stderr matches an anchored signature (`envSignatures`): its stdout is what it says about the branch (a
+    source line, a script's echo), and the same words inside a longer line tell nothing.
+  - Only the machine's crash, no UTF-8 locale, is the precheck's error (`envCrash`), its report written:
+    `provenHead` hands it to the tick's infrastructure hold (`envFails`) at no cost to the task, whose reason
+    names the line and the fix, and the task's next check is the hold's try (`envCrashed`). While that check
+    runs (not while it waits for a heavy slot), the hold neither lifts nor counts a failed try (`holdTry`).
+    The first try whose checks pass lifts it; `envCrashTries` (3) crashes at one head send the task to you
+    with the fix and the retry, and the hold lets the other tasks go.
+  - A crash for lack of a gem or a Ruby library runs the repository's `installs` in the copy once per
+    precheck (`heal`, with heal begin and ok or fail events) and the lint again. A crash that stays, or one
+    for lack of a command, is the writer's fix turn when the change can be its cause (`branchCaused`: it
+    touches what the lint loads, its gems, packages, tool versions, lint config or cops, or the lint's own
+    script, or the stderr names a changed file), and yours with the fix otherwise. Neither holds another
+    task: a plugin the writer added to `.rubocop.yml`, or a misnamed `require` in a custom cop, held the
+    whole factory with no way out but a stop.
   - Any other such lint failure still needs you, now with the last line of its stderr that may say why
-    (past mise's warnings and a stack's frames; redacted, control characters out, 200 runes), and the
-    `--format` hint only when the command names no format (`--format`, `--formatter`, `-f`).
+    (past mise's warnings, a stack's frames, the code frames that quote the branch's source and a Ruby
+    error's place; redacted, control characters out, 200 runes; never a stdout line), and the `--format`
+    hint only when that stderr says nothing and the command names no format (`--format`, `--out-format`,
+    `--output-format`, `--formatter`, `--reporter`, or `-f` after a lint whose flag it is, never make's or
+    docker compose's).
   - precheck.json records, for a failure for you, that line and hashes of the repository's precheck
     commands and of their environment (its configured env, the daemon's LANG, LC_ALL, LC_CTYPE and PATH;
     never a value). A retry of a task that waits on that failure still goes on, and its answer adds "though
     nothing the factory sees changed since its last failure (the same head, precheck commands and
-    environment)" with the line when none of them changed: a tool installed into a directory already on the
-    PATH changes none of them, so the note says what it compared and refuses nothing.
-  Rejected: refusing such a retry (a cause of the moment may be gone, and the answer already tells you); a
-  hold of the task alone (the incident's locale was the machine's, as an SSH key is, and the hold's backoff
-  and blocker are what such a cause needs); lifting the hold on the try that starts the checks (each
-  lift-and-hold began a new 2-minute hold, so one never reached its blocker); the env signatures for the
-  specs (a spec run's crash may be the change's, which the writer gets). Tests, failing first:
+    environment)" with the line when none of them changed, and that an edit of the configuration or of the
+    shell's PATH reaches the checks only after `magnum factory install`: a tool installed into a directory
+    already on the PATH changes none of them, so the note says what it compared and refuses nothing.
+  Rejected: refusing such a retry (a cause of the moment may be gone, and the answer already tells you); the
+  global hold for a gem, a library or a command (the copy's or the branch's, not the machine's: a
+  branch-caused crash held every repository and never lifted); a hold without a bound at one head (no wait
+  ends a crash that stays while the head does); lifting the hold on the try that starts the checks (each
+  lift-and-hold began a new 2-minute hold); counting a check that waits for a heavy slot as the try (the
+  hold showed as in force while every task went on); the env signatures for the specs (a spec run's crash
+  may be the change's, which the writer gets). Tests, failing first:
   TestALintCrashsAskNamesItsLastStderrLine, TestALintCrashsAskDropsTheFormatHintWhenTheCommandNamesOne,
-  TestALintCrashOfTheEnvironmentGoesToTheInfraHold, TestACrashOfTheEnvironmentIsToldByItsOutput,
-  TestTheLineThatSaysWhyACommandFailed and TestARetryThatChangedNothingSinceTheFailureSaysSo.
+  TestALintCrashOfTheEnvironmentGoesToTheInfraHold, TestALocaleCrashThatStaysOnTheSameHeadNeedsYouAndLiftsTheHold,
+  TestALintCrashTheBranchCausedGoesToTheWriterNotAHold (the reviewer's plugin and custom-cop cases),
+  TestAMissingGemIsHealedInTheCopy, TestAMissingGemTheHealCannotFixNeedsYouWithoutAHold,
+  TestAnEnvironmentSignatureOnStdoutIsNoCrash, TestACrashOfTheEnvironmentIsToldByAWholeLineOfStderr,
+  TestALintCommandNamesItsFormat, TestALineOfOutputIsClipped, TestTheLineThatSaysWhyACommandFailed,
+  TestARetryThatChangedNothingSinceTheFailureSaysSo and TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged.
 - **A NEEDS YOU of the checks names the fix and the retry, and a broken copy its failing line and its log**
   (2026-11-07, audit item R16). Task 5 waited 127 minutes on a line that named no command, and task 1's
   copies broke with the reason "mise WARN No untrusted config": the first line of stderr, not the failure.
@@ -16958,23 +16978,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
     fix when one is known: a command the deny list refuses ("change <key> in its [[factory.repo]], then
     `magnum factory install`"), one missing or not executable ("make `<word>` runnable in the copy …"), a
     lint without a format.
+  - So do the other NEEDS YOU lines of such a cause: a claim's switch git refused over your file (move or
+    remove it), a stage that failed 5 times in a row (fix its cause; a configuration change takes effect
+    after `magnum factory install`, one of magnum's code after `make build && magnum factory install`), and a
+    copy a base run left detached with changes the factory did not make (after its `git switch`).
   - `markBroken` says which setup command exited and the first line of its stderr that is not mise's own
     warning or note (`brokenWhy`), and names `provision-<copy>.log` in the logs directory, which has the rest.
   Rejected: a retry hint on every NEEDS YOU (a question, the ready card or a stop of the local review have
   their own actions); the setup's last stderr line for a broken copy (a setup's last lines are often
   Bundler's "In Gemfile:" tail, its first failing line says more). Tests, failing first:
-  TestANeedsYouForTheChecksNamesTheFixAndTheRetry and TestABrokenCopySaysWhyPastMisesNoiseAndNamesItsLog.
+  TestANeedsYouForTheChecksNamesTheFixAndTheRetry, TestTheOtherEnvironmentNeedsYouLinesNameTheRetry and
+  TestABrokenCopySaysWhyPastMisesNoiseAndNamesItsLog.
 - **A task's own idle session does not hold its own claim** (2026-11-07, audit item R23). After a restart a
   task claims the copy it holds again, and a claim step it has not done yet (the switch back to the task's
-  branch, which a git read that timed out also asks for) runs the copy's guard; `paneIn` refused any live session in the copy, the task's own included, so task 1
-  waited 16 minutes on "a pane runs in it: the fx-repro session works in" its own copy, an agent of a stage
-  that had passed. The claim's guard now takes the claiming task's own sessions (its owner row's) as the
-  factory's other changes of the copy do (`Runtime.AtWork`): they hold it only while one of the task's runs
-  is in flight or you typed into one of its panes within the human cooldown (`ownAtWork`). Another task's
-  session, and any session at a release, still holds the copy. Rejected: parking the task's sessions before
+  branch, which a git read that timed out also asks for) runs the copy's guard; `paneIn` refused any live
+  session in the copy, the task's own included, so task 1 waited 16 minutes on "a pane runs in it: the
+  fx-repro session works in" its own copy, an agent of a stage that had passed. `NewCopies` now takes the
+  runtime's `AtWork`, as it takes its `Owner`, and the claim's guard asks it about the claiming task's own
+  sessions (its owner row's), as the factory's other changes of the copy do: they hold it only while one of
+  the task's runs is in flight or you are in one of its panes (typing within the human cooldown, or the
+  pane focused while herdr showed you at work, or a herdr that cannot say). Without `AtWork` they hold it
+  as any session does. Another task's session, and any session at a release, still holds the copy. Rejected: parking the task's sessions before
   the claim (a park quits every idle agent of the task, the current stage's too, and needs herdr), and
   skipping the task's own sessions outright (a writer mid-turn after a restart would have its branch
-  switched or its gems installed under it). Test, failing first: TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim.
+  switched or its gems installed under it), and a second reading of runs and `human_active_at` in the copies
+  (it missed a focused pane where you still compose a prompt). Test, failing first:
+  TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim.
 
 ## Learned rules
 
