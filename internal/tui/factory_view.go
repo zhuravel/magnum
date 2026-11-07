@@ -7,27 +7,25 @@ package tui
 // A row is one line: cursor, mark, repository, key, title, WAITS ON, its
 // PR's CI, FINDINGS and APPR, YOUR MOVE, one column per staging server,
 // WAITED. The PR's columns are drawn when a row has their data, in the PR
-// board's own cells (ciCell, findingsCell) on a wide screen, their short
-// forms (the CI's glyph, the findings' verdict and worst priority) on a
-// narrower one; past the spec's steps the PR's columns outlast YOUR MOVE,
-// whose step the help line then names, and the CI's glyph outlasts the
-// FINDINGS and APPR columns. The repository has a column
-// only when home shows more than one, or one the title does not name; it is
-// cut to 11 cells on a narrow screen and to 6 once the staging cells go
+// board's own cells (ciCell, findingsCell). The repository has a column
+// only when home shows more than one, or one the title does not name; it
+// is cut to 11 cells on a narrow screen and to 6 once the staging cells go
 // short, unless the title keeps 24 cells with its whole name. The widths
-// come from the data. When the
-// screen is too narrow the painter gives up, in this order, (1) the title's
-// width down to 14 cells, (2) YOUR MOVE for its short form, (3) WAITS ON for
-// its short form (both blockers stay), (4) the staging cells for their short
-// forms, (5) the gap after the key; beyond the spec it then drops the staging
-// columns, YOUR MOVE, and squeezes the title and WAITS ON. When the screen is
-// wide enough for everything at its fullest (long blockers, the age of each
-// staging cell) with the title squeezed to no less than 24 cells, it draws
-// that instead and shares the spare width out; from 180 columns the
-// longest blockers give up their ends there, down to 48 cells, before the
-// title goes under 24.
-// From 120 columns, at every step, a row with a PR shows its number in a
-// column of its own after the key, which is then the Jira key.
+// come from the data. When the screen is too narrow the painter gives up,
+// in this order, (1) the title's width down to 14 cells, (2) YOUR MOVE for
+// its short form, then the PR's cells for theirs (the CI's glyph, the
+// findings' verdict and worst priority), (3) WAITS ON for its short form
+// (both blockers stay), (4) the staging cells for their short forms, (5)
+// the gap after the key; beyond the spec it then drops the staging
+// columns, YOUR MOVE (whose step the help line then names), FINDINGS and
+// APPR (the CI's glyph stays), and squeezes the title and WAITS ON. When
+// the screen is wide enough for everything at its fullest (long blockers,
+// the age of each staging cell, the PR's whole cells) with the title
+// squeezed to no less than 24 cells, it draws that instead and shares the
+// spare width out; from 180 columns the longest blockers give up their
+// ends there, down to 48 cells, before the title goes under 24. From 120
+// columns, at every step, a row with a PR shows its number in a column of
+// its own after the key, which is then the Jira key.
 
 import (
 	"fmt"
