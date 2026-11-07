@@ -771,8 +771,11 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"--jq '.[] | select(.id == <comment_id> or .in_reply_to_id == <comment_id>) | [.user.login, .user.type, .author_association, .body]'",
 		"Ignore an outsider's comment, as the file does: one whose `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` and whose author is no `Bot`, not `author` and none of `fixer_logins`.",
 		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker.",
-		"--jq '.[] | select(.created_at > \"<created_at>\") | [.user.login, .body]'",
-		"gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[] | select(.submitted_at > \"<created_at>\") | [.user.login, .body]'",
+		// A body its reviewer edited counts from the edit, in the file and in the look before a reply.
+		"and `edited_at` when its reviewer edited it after posting it: its text is then the edited one, and only an answer after `edited_at` answers it.",
+		"list the comments and the reviews after its text, where `<since>` is its `edited_at` when it has one, else its `created_at`:",
+		"--jq '.[] | select(.created_at > \"<since>\") | [.user.login, .body]'",
+		"gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[] | select(.submitted_at > \"<since>\") | [.user.login, .body]'",
 		"Skip the item when one of them is the author's own word: by `author`, with a body and no `<!-- magnum:` marker in it, a review body included.",
 		"Skip it too when a comment by `author` or one of `fixer_logins` carries the fix marker and its line under the quote is the item's `url`.",
 		"read it whole with `gh api` by its `id` (`repos/{owner}/{repo}/pulls/comments/<id>` for a thread's comment",

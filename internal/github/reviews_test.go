@@ -39,7 +39,7 @@ func TestReviewsWithMarker(t *testing.T) {
 		t.Errorf("review = %+v", r)
 	}
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
-	if !strings.Contains(q, "reviews(last: 30)") || !strings.Contains(q, "databaseId state body url submittedAt commit { oid } author { login __typename }") {
+	if !strings.Contains(q, "reviews(last: 30)") || !strings.Contains(q, "databaseId state body url submittedAt lastEditedAt commit { oid } author { login __typename }") {
 		t.Errorf("query = %s", q)
 	}
 }
@@ -275,11 +275,12 @@ func TestUpdateReviewBodyForbidden(t *testing.T) {
 	}
 }
 
-// Synthetic pages of the paged reviews connection: the first has a review by a
-// ghost (null author), the second one whose commit is gone (null commit).
+// Synthetic pages of the paged reviews connection: the first has a review
+// whose body was edited and one by a ghost (null author), the second one whose
+// commit is gone (null commit).
 const reviewsPage1 = `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-04T12:00:00Z"},
 "repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":true,"endCursor":"Y3Vyc29yOjE="},"nodes":[
- {"databaseId":1001,"state":"COMMENTED","body":"first","url":"https://github.com/talkable/talkable/pull/5#pullrequestreview-1001","submittedAt":"2026-10-03T09:00:00Z","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"COLLABORATOR"},
+ {"databaseId":1001,"state":"COMMENTED","body":"first","url":"https://github.com/talkable/talkable/pull/5#pullrequestreview-1001","submittedAt":"2026-10-03T09:00:00Z","lastEditedAt":"2026-10-03T09:30:00Z","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"COLLABORATOR"},
  {"databaseId":1002,"state":"DISMISSED","body":"from a deleted account","url":"u1002","submittedAt":"2026-10-03T10:00:00Z","commit":{"oid":"1111111111111111111111111111111111111111"},"author":null}]}}}}}`
 
 const reviewsPage2 = `{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":false,"endCursor":"Y3Vyc29yOjI="},"nodes":[
@@ -305,7 +306,7 @@ func TestReviewsPagesInOrder(t *testing.T) {
 	at := func(h int) time.Time { return time.Date(2026, 10, 3, h, 0, 0, 0, time.UTC) }
 	want := []Review{
 		{DatabaseID: 1001, State: "COMMENTED", Body: "first", URL: "https://github.com/talkable/talkable/pull/5#pullrequestreview-1001",
-			SubmittedAt: at(9), CommitOid: "1111111111111111111111111111111111111111", AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "COLLABORATOR"},
+			SubmittedAt: at(9), EditedAt: at(9).Add(30 * time.Minute), CommitOid: "1111111111111111111111111111111111111111", AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "COLLABORATOR"},
 		// A ghost: no author.
 		{DatabaseID: 1002, State: "DISMISSED", Body: "from a deleted account", URL: "u1002", SubmittedAt: at(10), CommitOid: "1111111111111111111111111111111111111111"},
 		// No commit: CommitOid stays empty.
@@ -320,7 +321,7 @@ func TestReviewsPagesInOrder(t *testing.T) {
 	}
 	q := oneLine(decodeReq(t, call).Query)
 	for _, want := range []string{"reviews(first: 100, after: $cursor)", "pageInfo { hasNextPage endCursor }",
-		"nodes { databaseId state body url submittedAt commit { oid } author { login __typename } authorAssociation }"} {
+		"nodes { databaseId state body url submittedAt lastEditedAt commit { oid } author { login __typename } authorAssociation }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
 		}

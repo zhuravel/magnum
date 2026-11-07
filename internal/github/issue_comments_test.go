@@ -108,16 +108,16 @@ func TestEditIssueCommentReportsAGoneComment(t *testing.T) {
 // The comments of a PR's conversation are read over GraphQL from the newest
 // back, a page of 100 at a time, until a page holds a comment the caller's
 // stop accepts (the author's last word, past more than a page of others'),
-// and come back oldest first, each with its REST id, link, body, time,
-// author (a ghost's empty) and the author's association with the
-// repository; the read mutates nothing.
+// and come back oldest first, each with its REST id, link, body, time, the
+// time its body was last edited (zero: never), author (a ghost's empty) and
+// the author's association with the repository; the read mutates nothing.
 func TestIssueCommentsReadBackToTheCallersStop(t *testing.T) {
 	newest := `{"data":{"repository":{"pullRequest":{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"c1"},"nodes":[
 	 {"databaseId":702,"url":"https://github.com/talkable/talkable/pull/5#issuecomment-702","body":"CI passed","createdAt":"2026-10-20T07:30:00Z","author":{"login":"bob-rev","__typename":"Bot"}},
 	 {"databaseId":703,"url":"u703","body":"gone","createdAt":"2026-10-20T07:40:00Z","author":null}]}}}}}`
 	older := `{"data":{"repository":{"pullRequest":{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"c2"},"nodes":[
 	 {"databaseId":700,"url":"u700","body":"addressing it","createdAt":"2026-10-20T07:20:00Z","author":{"login":"zhuravel","__typename":"User"},"authorAssociation":"OWNER"},
-	 {"databaseId":701,"url":"https://github.com/talkable/talkable/pull/5#issuecomment-701","body":"Please also log stderr.","createdAt":"2026-10-20T07:24:00Z","author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"MEMBER"}]}}}}}`
+	 {"databaseId":701,"url":"https://github.com/talkable/talkable/pull/5#issuecomment-701","body":"Please also log stderr.","createdAt":"2026-10-20T07:24:00Z","lastEditedAt":"2026-10-20T07:26:00Z","author":{"login":"rev-ann","__typename":"User"},"authorAssociation":"MEMBER"}]}}}}}`
 	var cursors []any
 	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(_ execx.Cmd, req gqlReq) (execx.Result, error) {
 		cursors = append(cursors, req.Variables["cursor"])
@@ -137,7 +137,7 @@ func TestIssueCommentsReadBackToTheCallersStop(t *testing.T) {
 	at := func(m int) time.Time { return time.Date(2026, 10, 20, 7, m, 0, 0, time.UTC) }
 	want := []PRComment{
 		{ID: 700, URL: "u700", Body: "addressing it", CreatedAt: at(20), AuthorLogin: "zhuravel", AuthorType: "User", AuthorAssociation: "OWNER"},
-		{ID: 701, URL: "https://github.com/talkable/talkable/pull/5#issuecomment-701", Body: "Please also log stderr.", CreatedAt: at(24), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"},
+		{ID: 701, URL: "https://github.com/talkable/talkable/pull/5#issuecomment-701", Body: "Please also log stderr.", CreatedAt: at(24), EditedAt: at(26), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"},
 		{ID: 702, URL: "https://github.com/talkable/talkable/pull/5#issuecomment-702", Body: "CI passed", CreatedAt: at(30), AuthorLogin: "bob-rev", AuthorType: "Bot"},
 		{ID: 703, URL: "u703", Body: "gone", CreatedAt: at(40)},
 	}
@@ -148,7 +148,7 @@ func TestIssueCommentsReadBackToTheCallersStop(t *testing.T) {
 		t.Errorf("call = %+v", call)
 	}
 	if q := oneLine(decodeReq(t, f.Calls[0]).Query); !strings.Contains(q, "comments(last: 100, before: $cursor) { pageInfo { hasPreviousPage startCursor } "+
-		"nodes { databaseId url body createdAt author { login __typename } authorAssociation } }") {
+		"nodes { databaseId url body createdAt lastEditedAt author { login __typename } authorAssociation } }") {
 		t.Errorf("query = %s", q)
 	}
 

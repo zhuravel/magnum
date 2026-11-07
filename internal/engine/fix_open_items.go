@@ -11,9 +11,10 @@ package engine
 //     resolved (a person's item never closes on the fixer's word alone; an
 //     answer closes it, as it closes an unresolved one). No loop can be
 //     handed a resolved one, so it needs you, never work;
-//   - remark:<id>: another reviewer's review body or conversation comment
-//     with no answer, unless it is quiet ([pipeline] quiet_logins and
-//     quiet_markers; threads never go quiet);
+//   - remark:<id>, or remark:<id>@<edit> once edited: another reviewer's
+//     review body or conversation comment with no answer since its last
+//     edit, unless it is quiet ([pipeline] quiet_logins and quiet_markers in
+//     its body as it is now; threads never go quiet);
 //   - mthread:<root id>@<latest id>: magnum's unresolved thread whose latest
 //     comment is magnum's rebuttal (or an unmarked reply of magnum's, which
 //     postreview reads as one) made after its latest review: it waits for
@@ -30,7 +31,8 @@ package engine
 //     the head, not the base's tip, which moves several times a day.
 //
 // A key carries the thread's latest comment where it has one, so a new
-// reply makes a new key and opens the item again. Items carry kinds, links
+// reply makes a new key and opens the item again, and a remark's last
+// edit, so an edit in place does too (remarkKey). Items carry kinds, links
 // and counts only, never PR text.
 
 import (
@@ -273,7 +275,7 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 		if r.Answered || quiet.login(r.Author) || read.quiet[r.ID] {
 			continue
 		}
-		out = append(out, openItem{Key: fmt.Sprintf("remark:%d", r.ID), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL})
+		out = append(out, openItem{Key: remarkKey(r), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL})
 	}
 	for _, rt := range read.resolved {
 		class := classPerson

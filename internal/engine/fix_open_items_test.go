@@ -342,3 +342,53 @@ func TestAnApprovalBodyIsNoItem(t *testing.T) {
 		t.Errorf("items = %v, want the comment review and the changes request alone", got)
 	}
 }
+
+// A review body or comment edited in place asks anew: a review tool that
+// rewrites its guide on each new commit, or a colleague who edits their
+// comment, makes it work again after the fixer answered the old text, and
+// a bot's note handed to a loop (seen) comes back under a new key. The key
+// carries the edit time, and the answer counts only after the edit; the
+// fixer's file says the same and gives the edit time. A quiet body stays
+// quiet when edited, and an unedited remark keeps its key.
+func TestAnEditedRemarkIsNewWorkAgain(t *testing.T) {
+	guide := github.PRComment{ID: 701, URL: prPage + "#issuecomment-701", Body: "## Reviewer guide\nConcurrency race in the job", CreatedAt: itemsAt.Add(time.Minute),
+		AuthorLogin: "example-bot", AuthorType: "User", AuthorAssociation: "MEMBER"}
+	answer := github.PRComment{ID: 702, URL: prPage + "#issuecomment-702", Body: "> ## Reviewer guide\n" + guide.URL + "\n\nNot a bug: the job holds the lock.\n\n" +
+		postreview.FixReplyMarker, CreatedAt: itemsAt.Add(5 * time.Minute), AuthorLogin: "zhuravel", AuthorType: "User", AuthorAssociation: "OWNER"}
+	note := github.Review{DatabaseID: 801, State: "COMMENTED", Body: "Automated review: 2 suggestions", URL: prPage + "#pullrequestreview-801",
+		SubmittedAt: itemsAt.Add(2 * time.Minute), AuthorLogin: "review-tool", AuthorType: "Bot"}
+	receipt := github.PRComment{ID: 703, URL: prPage + "#issuecomment-703", Body: "Reviewed.\n<!-- review-receipt:v1 -->", CreatedAt: itemsAt.Add(3 * time.Minute),
+		AuthorLogin: "review-tool", AuthorType: "Bot"}
+	q := quietRules{markers: []string{"<!-- review-receipt:v1 -->"}}
+	items := func(reviews []github.Review, comments ...github.PRComment) (externalRead, []string) {
+		read := readFor(nil, reviews, comments, q.markers, nil)
+		return read, itemKeys(openItemsOf(itemsInput{read: read, sum: cleanSum(), head: fixHead, quiet: q}))
+	}
+	if _, got := items([]github.Review{note}, guide, answer, receipt); !slices.Equal(got, []string{"remark:801"}) {
+		t.Fatalf("items before the edits = %v, want the bot's note alone (the guide is answered)", got)
+	}
+	edited := itemsAt.Add(20 * time.Minute)
+	guide.Body, guide.EditedAt = "## Reviewer guide\nReview updated until commit b2b2b2b\nMissing pagination", edited
+	note.Body, note.EditedAt = "Automated review: 3 suggestions", edited
+	receipt.Body, receipt.EditedAt = "Reviewed again.\n<!-- review-receipt:v1 -->", edited
+	read, got := items([]github.Review{note}, guide, answer, receipt)
+	at := itoa(edited.Unix())
+	if want := []string{"remark:701@" + at, "remark:801@" + at}; !slices.Equal(got, want) {
+		t.Fatalf("items after the edits = %v, want %v: the edited guide answered before the edit, the bot's note anew; the quiet receipt stays quiet", got, want)
+	}
+	work, _ := sortOpen(openItemsOf(itemsInput{read: read, sum: cleanSum(), head: fixHead, quiet: q}),
+		openLedger{Handed: map[string]time.Time{"remark:801": itemsAt.Add(10 * time.Minute)}})
+	if len(work) != 2 {
+		t.Errorf("work = %+v, want the guide and the note: the note's handed key was its text before the edit", work)
+	}
+	for _, r := range read.items.Conversation {
+		if r.ID == 701 && (r.Answered || r.EditedAt != rfc3339(edited)) {
+			t.Errorf("the fixer's file says %+v, want the guide unanswered, edited at %s", r, rfc3339(edited))
+		}
+	}
+	later := answer
+	later.ID, later.URL, later.CreatedAt = 704, prPage+"#issuecomment-704", edited.Add(time.Minute)
+	if _, got := items([]github.Review{note}, guide, answer, receipt, later); !slices.Equal(got, []string{"remark:801@" + at}) {
+		t.Errorf("items after a reply to the edited guide = %v, want the note alone", got)
+	}
+}

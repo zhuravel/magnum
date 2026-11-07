@@ -15435,8 +15435,9 @@ type PRComment struct {
 	URL         string // its link: <pull request>#issuecomment-<id>
 	Body        string
 	CreatedAt   time.Time
-	AuthorLogin string // "" for a ghost
-	AuthorType  string // GraphQL __typename: User | Bot | ...
+	EditedAt    time.Time // when its body was last edited (lastEditedAt); zero when it never was
+	AuthorLogin string    // "" for a ghost
+	AuthorType  string    // GraphQL __typename: User | Bot | ...
 	// AuthorAssociation is the author's authorAssociation with the
 	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
 	// the reading identity sees it; "" when GitHub did not say.
@@ -15653,9 +15654,10 @@ type Review struct {
 	Body        string
 	URL         string
 	SubmittedAt time.Time
-	CommitOid   string // "" when the commit is gone
-	AuthorLogin string // "" for a ghost
-	AuthorType  string // GraphQL __typename
+	EditedAt    time.Time // when its body was last edited (lastEditedAt); zero when it never was
+	CommitOid   string    // "" when the commit is gone
+	AuthorLogin string    // "" for a ghost
+	AuthorType  string    // GraphQL __typename
 	// AuthorAssociation is the author's authorAssociation with the
 	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
 	// the reading identity sees it; "" when GitHub did not say.

@@ -3044,6 +3044,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the next look starts it again. Tests, failing first: TestAStartThatFoundNoSlotSpendsNoStart,
   TestTheLookStartsNoMoreSlotLoopsInATickThanSlotsAreFree.
 
+- **A review body or comment edited in place is new work again** (2026-11-07, a read-only check before the
+  operator's switch to "open"). A remark's key was its id, and it was answered once a fix-marked reply named
+  its link: a review tool that rewrites its guide in place on each new commit, adding findings, or a
+  colleague who edits a comment, was never raised again after the fixer answered the first text, and a bot's
+  handed note stayed seen. The reads of the review bodies and the conversation now take GitHub's
+  `lastEditedAt` of each (one more field in the same two queries: no new call, no extra GraphQL cost), and a
+  remark counts from its last edit: it is another reviewer's when the edit came after the author's last own
+  word, answered only by a fix-marked reply after the edit, and keyed `remark:<id>@<edit>` once edited, so
+  the look takes it as new work whatever was handed before; the fixer's file gives `edited_at`, and the
+  skill's look before a reply lists what came after it. An unedited remark keeps its key, so ledgers written
+  before keep theirs. Quiet bodies stay quiet (the quiet rules read the body as it is now), and threads keep
+  their keys. Chosen: the edit time over a digest of the body, which the reads have whole already. A digest
+  changes the key, but the fixer's answer names the remark's link, which an edit keeps: with a digest alone an
+  answered remark stays answered after the edit, and binding an answer to the text it saw would take a ledger
+  the fixer's file and the skill's look before a reply could not follow. The time orders the answer against
+  the edit with no state. A bot that rewrites a comment on every push without asking anything starts a loop
+  per edit until `quiet_logins` or `quiet_markers` quiet it, within `autofix_max_loops`. Tests, failing first:
+  TestAnEditedRemarkIsNewWorkAgain; TestReviewsPagesInOrder and TestIssueCommentsReadBackToTheCallersStop
+  read the edit time.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

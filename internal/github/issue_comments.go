@@ -76,8 +76,9 @@ type PRComment struct {
 	URL         string // its link: <pull request>#issuecomment-<id>
 	Body        string
 	CreatedAt   time.Time
-	AuthorLogin string // "" for a ghost
-	AuthorType  string // GraphQL __typename: User | Bot | ...
+	EditedAt    time.Time // when its body was last edited (lastEditedAt); zero when it never was
+	AuthorLogin string    // "" for a ghost
+	AuthorType  string    // GraphQL __typename: User | Bot | ...
 	// AuthorAssociation is the author's authorAssociation with the
 	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...), as
 	// the reading identity sees it; "" when GitHub did not say.
@@ -102,7 +103,7 @@ var issueCommentsQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $nu
     pullRequest(number: $number) {
       comments(last: %d, before: $cursor) {
         pageInfo { hasPreviousPage startCursor }
-        nodes { databaseId url body createdAt author { login __typename } authorAssociation }
+        nodes { databaseId url body createdAt lastEditedAt author { login __typename } authorAssociation }
       }
     }
   }
@@ -141,6 +142,7 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
 							URL        string     `json:"url"`
 							Body       string     `json:"body"`
 							CreatedAt  time.Time  `json:"createdAt"`
+							EditedAt   time.Time  `json:"lastEditedAt"` // zero (null) when never edited
 							Author     *actorJSON `json:"author"`
 							Assoc      string     `json:"authorAssociation"`
 						} `json:"nodes"`
@@ -160,7 +162,7 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
 		page := make([]PRComment, 0, len(cs.Nodes))
 		found := false
 		for _, n := range cs.Nodes {
-			pc := PRComment{ID: n.DatabaseID, URL: n.URL, Body: n.Body, CreatedAt: n.CreatedAt, AuthorAssociation: n.Assoc}
+			pc := PRComment{ID: n.DatabaseID, URL: n.URL, Body: n.Body, CreatedAt: n.CreatedAt, EditedAt: n.EditedAt, AuthorAssociation: n.Assoc}
 			if n.Author != nil {
 				pc.AuthorLogin, pc.AuthorType = n.Author.Login, n.Author.Typename
 			}

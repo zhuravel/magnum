@@ -629,7 +629,7 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 			}
 			for _, r := range x.Conversation {
 				if !r.Answered {
-					hand(fmt.Sprintf("remark:%d", r.ID))
+					hand(remarkKey(r))
 				}
 			}
 		case "fix.pushed":

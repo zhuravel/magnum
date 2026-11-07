@@ -424,7 +424,8 @@ autofix = "never"                 # never: a fix loop starts only when you ask f
                                   # GitHub only after the PR changed, and leaves a verdict per PR (fixing,
                                   # waits, needs you, idle). A draft, a fork, a muted PR and one `magnum fix
                                   # --off` took out are left alone; `magnum pause` and [daemon] quiet_hours
-                                  # hold its starts until they end. [[watch]] may override
+                                  # hold its starts until they end. A review body or comment its reviewer
+                                  # edits in place asks anew, answered before or not. [[watch]] may override
 settle_quiet = "3m"               # autofix = "open": the reviewers of a head settled once the PR saw no activity
                                   # for this long ...
 settle_max = "20m"                # ... and every settle_checks check at the head is done, both waited for at most

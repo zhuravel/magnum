@@ -122,6 +122,7 @@ type externalRemark struct {
 	Author    string `json:"author"`
 	State     string `json:"state,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+	EditedAt  string `json:"edited_at,omitempty"`
 	Body      string `json:"body"`
 	Truncated bool   `json:"truncated,omitempty"`
 	Answered  bool   `json:"answered"`
@@ -238,7 +239,9 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // stop short of that word (CommentsComplete false), after the oldest comment
 // GitHub listed; it is answered when a later comment of the author or of
 // magnum's logins carrying the fixer's marker names it as its target
-// (replyTarget). The conversation is oldest first.
+// (replyTarget). A remark edited in place counts from its last edit, for
+// both (its text is new: an answer to the old text answers nothing), and
+// the file gives that time (edited_at). The conversation is oldest first.
 func externalOf(in externalInput) (externalItems, int) {
 	isOwn := func(login, typ string) bool {
 		a := github.Account(login, typ)
@@ -294,8 +297,8 @@ func externalOf(in externalInput) (externalItems, int) {
 		}
 	}
 	type dated struct {
-		at time.Time
-		r  externalRemark
+		at, text time.Time // when it was made, and its text (its last edit)
+		r        externalRemark
 	}
 	var items []dated
 	// other reports whether a remark is another reviewer's, after the
@@ -311,31 +314,55 @@ func externalOf(in externalInput) (externalItems, int) {
 		return true
 	}
 	for _, r := range in.Reviews {
-		if strings.TrimSpace(r.Body) == "" || !remarkState(r.State) || !other(r.AuthorLogin, r.AuthorType, r.AuthorAssociation, r.SubmittedAt) {
+		if strings.TrimSpace(r.Body) == "" || !remarkState(r.State) || !other(r.AuthorLogin, r.AuthorType, r.AuthorAssociation, later(r.SubmittedAt, r.EditedAt)) {
 			continue
 		}
 		er := externalRemark{Kind: remarkReview, ID: r.DatabaseID, URL: r.URL, Author: name(r.AuthorLogin, r.AuthorType), State: r.State,
-			CreatedAt: rfc3339(r.SubmittedAt)}
+			CreatedAt: rfc3339(r.SubmittedAt), EditedAt: editedAt(r.SubmittedAt, r.EditedAt)}
 		er.Body, er.Truncated = excerptOf(r.Body)
-		items = append(items, dated{r.SubmittedAt, er})
+		items = append(items, dated{r.SubmittedAt, later(r.SubmittedAt, r.EditedAt), er})
 	}
 	for _, c := range in.Comments {
-		if strings.TrimSpace(c.Body) == "" || !other(c.AuthorLogin, c.AuthorType, c.AuthorAssociation, c.CreatedAt) {
+		if strings.TrimSpace(c.Body) == "" || !other(c.AuthorLogin, c.AuthorType, c.AuthorAssociation, later(c.CreatedAt, c.EditedAt)) {
 			continue
 		}
-		er := externalRemark{Kind: remarkComment, ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt)}
+		er := externalRemark{Kind: remarkComment, ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt),
+			EditedAt: editedAt(c.CreatedAt, c.EditedAt)}
 		er.Body, er.Truncated = excerptOf(c.Body)
-		items = append(items, dated{c.CreatedAt, er})
+		items = append(items, dated{c.CreatedAt, later(c.CreatedAt, c.EditedAt), er})
 	}
 	slices.SortStableFunc(items, func(a, b dated) int { return a.at.Compare(b.at) })
 	for _, it := range items {
 		it.r.Answered = it.r.URL != "" && slices.ContainsFunc(in.Comments, func(c github.PRComment) bool {
-			return c.CreatedAt.After(it.at) && postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || isOwn(c.AuthorLogin, c.AuthorType)) &&
+			return c.CreatedAt.After(it.text) && postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || isOwn(c.AuthorLogin, c.AuthorType)) &&
 				replyTarget(c.Body) == it.r.URL
 		})
 		x.Conversation = append(x.Conversation, it.r)
 	}
 	return x, outside
+}
+
+// editedAt is the file's edited_at of a remark made at made and last
+// edited at edited: "" for one never edited after it was made.
+func editedAt(made, edited time.Time) string {
+	if !edited.After(made) {
+		return ""
+	}
+	return rfc3339(edited)
+}
+
+// remarkKey is the look's key of a remark of the file (fix_open_items.go):
+// its id, and the time of its last edit when it was edited, so an edit
+// makes a new key, as a new reply makes a thread's.
+func remarkKey(r externalRemark) string {
+	key := fmt.Sprintf("remark:%d", r.ID)
+	if r.EditedAt == "" {
+		return key
+	}
+	if at, err := time.Parse(time.RFC3339, r.EditedAt); err == nil {
+		return fmt.Sprintf("%s@%d", key, at.Unix())
+	}
+	return key + "@" + r.EditedAt
 }
 
 // remarkState reports whether a review in state asks something of the

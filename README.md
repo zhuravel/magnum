@@ -3054,7 +3054,9 @@ comment's id and link, marked answered when its latest comment is yours or the f
 than the 50 comments GitHub lists first, Magnum reads its newest ones too, so the latest is the real one), and
 the review bodies and conversation comments of others since your own last comment (one without a Magnum
 marker; Magnum pages back through the conversation until it finds it), each marked answered once a later reply
-of the fixer names it on the line under its quote. Magnum's own review bodies, its status comment and the
+of the fixer names it on the line under its quote. One its reviewer edited in place counts from the edit (its
+`edited_at`, GitHub's last edit time, read with it): its new text is unanswered until a reply after the edit,
+and an edit after your last comment brings it back. Magnum's own review bodies, its status comment and the
 fixer's replies are not in it, nor an approval's body (it asks for nothing, so the fixer would give it no
 reply), and neither is what someone outside the repository wrote: only its owners,
 members and collaborators and GitHub Apps count, as for a reply round, since in a public repository anyone may
@@ -3339,7 +3341,9 @@ What a loop was handed is remembered by key: the items of the `external-threads.
 the look's own read), Magnum's review it worked on, Magnum's rebuttals and the conflict. The look tracks a
 PR's loops from its first look at the PR: a loop that ended before (an `f` while autofix was not `"open"`)
 hands nothing, so what it left open is work for a loop again rather than a leftover that needs you. A thread's key
-carries its latest comment, so a reviewer's new reply opens it again. A handed item that is still open after
+carries its latest comment, so a reviewer's new reply opens it again, and a review body's or comment's key its
+last edit, so one edited in place opens again, answered before or not (a review tool that rewrites its guide on
+each new commit, a colleague who edits a comment); a quiet one stays quiet. A handed item that is still open after
 the loop needs you: a person's item never closes on the fixer's word alone (only a fix-marked reply, your
 reply, a resolution that is not the fixer's, or your later word on the conversation close it), and neither
 does a bot's inline thread, which is a finding. A thread the fixer resolved with no answer needs you whether
