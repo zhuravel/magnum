@@ -15516,8 +15516,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   18 and 19 set to 2), the same as the old template file. Some tests migrated a fresh registry on disk:
   the app's `testApp` and the CLI's inspection commands. They now seed it first (a dry run gets none: it
   must not touch the real registry).
-  The tests' own writers of old-schema files keep their journal in memory and skip the syncs
-  (`sqlitetest.FastFile`).
+  The old-schema files that the CLI's tests and the OpenDB tests write themselves keep their journal in
+  memory and skip the syncs (`sqlitetest.FastFile`). The store's migration tests do not do this yet: 26
+  of their files still write the old schema with a raw `sql.Open`.
 
   This is different from the scratch registry that "The atomic file write skips its disk syncs" tried and
   left out (`store.Options.Scratch`, 2026-10-14). Production was able to flip that switch. It also kept a
