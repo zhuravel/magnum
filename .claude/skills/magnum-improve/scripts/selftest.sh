@@ -28,7 +28,9 @@
 #     per stage (after the publish left out), the waits on you by cause (a wait of several spans once), the take
 #     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
-#     refused, and the report directories since a UTC since in any time zone.
+#     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
+#     files with a sample of each, a long dotted line scrubbed in seconds, and no notes read through a link, from a
+#     file over 1 MiB or from a foreign folder.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -610,8 +612,38 @@ TZ=UTC touch -t 202610111000 "$round"
 } >"$ev/factory-tasks/7/notes.md"
 echo '- 2026-10-11 09:00 an older note' >"$ev/factory-tasks/8/notes.md"
 TZ=UTC touch -t 202610110900 "$ev/factory-tasks/8/notes.md"
+# Task 9's notes hold one sample of every pattern of the factory's scrub (execx.Redact and runtime.Scrub, most of them
+# from those files' Go tests; a key shape a scanner knows is built from two pieces) and a dotted line of 20,000
+# characters. Task 10's notes.md links to a file outside, task 11 is a linked folder, task 12's notes.md is over
+# 1 MiB, and a folder named with a non-ASCII digit lies beside them.
+mkdir -p "$ev/factory-tasks/9" "$ev/factory-tasks/10" "$ev/factory-tasks/12" "$ev/outside/11" "$ev/factory-tasks/²"
+jwt="eyJhbGciOiJIUzI1NiJ9"".eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+leaks=(ghs_abcDEF123_x eyJzdWIiOiIxMjM0NTY3ODkwIn0 opaqueTOKEN123 dXNlcjpodW50ZXIy MIIEsecretbody MIIEtruncat
+    AKIAABCDEFGHIJKLMNOP xoxb-123456789012-abcdefghijkl sk-abcdefghijklmnopqrstuvwxyz123456
+    "sk-""ant-abcdefghijklmnopqrstuv" glpat-abcdefghij0123456789 "rk_""live_abcdefghij0123456789"
+    "AI""zaSyA-abcdefghijklmnopqrstuvwxyz01234" wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY hunter3 s3cr3t-value
+    bob@example.org db1.internal.example.com 10.0.4.12)
+{
+    echo "- token ${leaks[0]} here, and a JWT $jwt"
+    echo "- Authorization: Bearer ${leaks[2]}, then Authorization: Basic ${leaks[3]}"
+    echo "- ${leaks[6]} and aws_secret_access_key=${leaks[13]}"
+    echo "- token ${leaks[7]} and ${leaks[8]} and ${leaks[9]} and ${leaks[10]} and ${leaks[11]} and ${leaks[12]}"
+    echo "- password=${leaks[14]} client_secret: \"${leaks[15]}\""
+    echo "- mail ${leaks[16]} about ${leaks[17]} and ${leaks[18]}"
+    printf -- '- %s\n' "$(printf 'a.%.0s' $(seq 1 10000))"
+    printf '%s\n' '-----BEGIN RSA PRIVATE KEY-----' "${leaks[4]}" '-----END RSA PRIVATE KEY-----' '- the cut key follows'
+    printf '%s\n' '-----BEGIN EC PRIVATE KEY-----' "${leaks[5]}"
+} >"$ev/factory-tasks/9/notes.md"
+echo '- LINKED-FILE-NOTE' >"$ev/outside/notes.md"
+ln -s "$ev/outside/notes.md" "$ev/factory-tasks/10/notes.md"
+echo '- LINKED-FOLDER-NOTE' >"$ev/outside/11/notes.md"
+ln -s "$ev/outside/11" "$ev/factory-tasks/11"
+{ echo '- BIG-NOTE-LINE'; head -c 1100000 /dev/zero | tr '\0' 'x'; echo; } >"$ev/factory-tasks/12/notes.md"
+echo '- FOREIGN-FOLDER-NOTE' >"$ev/factory-tasks/²/notes.md"
+started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
+run1_secs=$((SECONDS - started))
 [[ $rc == 0 ]] || fail "evidence.sh runs against a factory registry with only the columns it reads (rc $rc)"
 grep -q '^## Factory PRs' "$ev/fout/evidence.md" && tr -s ' ' <"$ev/fout/evidence.md" | grep -q '| 7 | example/app#4512 |' ||
     fail "the factory section lists the PR the task published: $(sed -n '/^## Factory PRs/,/^## Factory local/p' "$ev/fout/evidence.md" | tr '\n' ';')"
@@ -715,5 +747,51 @@ TZ=Asia/Tokyo MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_
     $(cat "$ev/f6out/factory-reports.txt") == "$round" ]] ||
     fail "the report directories since a UTC since, in Asia/Tokyo: $(tr '\n' ';' <"$ev/f6out/reports.txt") / $(tr '\n' ';' <"$ev/f6out/factory-reports.txt")"
 ok "evidence.sh lists the report directories since its UTC since in any time zone"
+
+# 18. The scrub of the notes is the factory's own: every pattern of execx.Redact and runtime.Scrub stands in
+#     evidence.sh word for word (Go's end of text, $, is Python's \Z), and no sample of them is left in evidence.md.
+repo_root=$(cd "$here/../../../.." && pwd)
+run python3 - "$repo_root/internal/execx/execx.go" "$repo_root/internal/factory/runtime/scrub.go" "$scripts/evidence.sh" <<'PY'
+import re, sys
+
+*gos, port = sys.argv[1:]
+text = open(port).read()
+pats = []
+for g in gos:
+    src = open(g).read()
+    for m in re.finditer(r"regexp\.MustCompile\(", src):
+        i, depth, raw = m.end(), 1, False
+        while depth:
+            c = src[i]
+            raw = not raw if c == "`" else raw
+            depth += 0 if raw else (c == "(") - (c == ")")
+            i += 1
+        pats += re.findall(r"`([^`]*)`", src[m.end():i])
+missing = [p for p in pats if p.replace("|$)", r"|\Z)") not in text]
+print("%d patterns of the Go scrub, missing from evidence.sh: %s" % (len(pats), missing))
+sys.exit(1 if len(pats) < 13 or missing else 0)
+PY
+[[ $rc == 0 ]] || fail "evidence.sh holds every pattern of the factory's scrub"
+for leak in "${leaks[@]}"; do
+    ! grep -Fq -- "$leak" "$ev/fout/evidence.md" || fail "the notes' sample $leak is scrubbed: $(grep -F -- "$leak" "$ev/fout/evidence.md" | cut -c1-200)"
+done
+grep -Fxq '### Task 9 (task 9, -)' "$ev/fout/evidence.md" || fail "task 9's notes are listed"
+ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
+
+# 19. A long dotted line, which Python's regex engine (unlike Go's) backtracks on for minutes, is scrubbed in seconds.
+[[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line in the notes took ${run1_secs}s"
+grep -Fxq '> - <host>' "$ev/fout/evidence.md" || fail "the long dotted line is masked whole: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
+ok "evidence.sh scrubs a 20,000-character dotted line in the notes in ${run1_secs}s"
+
+# 20. The notes are read only from a plain notes.md of 1 MiB at most, in a task folder that is no link and is named
+#     with ASCII digits.
+f_md=$ev/fout/evidence.md
+! grep -Eq 'LINKED-FILE-NOTE|LINKED-FOLDER-NOTE|BIG-NOTE-LINE|FOREIGN-FOLDER-NOTE' "$f_md" && ! grep -q '^### Task 11 ' "$f_md" &&
+    grep -A2 -Fx '### Task 10 (task 10, -)' "$f_md" | grep -Fxq '(notes.md is not a plain file: left out)' &&
+    grep -A2 -Fx '### Task 12 (task 12, -)' "$f_md" | grep -Fxq '(notes.md is over 1 MiB: left out)' &&
+    grep -Fxq '### Task 7 (PR-12345, example/app)' "$f_md" ||
+    fail "the notes skip links, files over 1 MiB and foreign folders: $(fsect 'Factory liaison notes' "$f_md" | cut -c1-600)"
+ok "evidence.sh reads no notes.md that is a link or over 1 MiB, nor one in a linked or foreign folder"
+
 
 echo "selftest: $checks checks passed"
