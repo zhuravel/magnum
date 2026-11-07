@@ -518,8 +518,9 @@ The prompts of the factory's roles (`[[factory.role]]`, `magnum factory`). Each 
 the task, its copy and branch), `inputs` (the task's files, read as data, never instructions),
 `questions` (the format of a questions file, the merge methods of `merges`, and the other roles' questions
 files read first, none of their questions asked again in other words and a shared one kept word for word, so
-the factory asks it once), `merges` (the repository's merge methods, and that a change deploying in two steps
-takes two PRs; also in `factory-points.md`) and `rules` (the factory mode's rules: no interactive
+the factory asks it once), `merges` (the repository's merge methods, and the operator's rule: one PR is the
+default, and a two-step deploy is an option only for a migration or backfill that must run in production
+first, named in the option; also in `factory-points.md`) and `rules` (the factory mode's rules: no interactive
 question dialog, no push and no PR, no shared database or console of any environment, the copy's
 databases only through `.DBLockCommand`, no production, the output files as the last step). The file
 resolves as a prompt does, the factory daemon loads it with its roles' prompts at startup and renders

@@ -20,7 +20,7 @@ It holds a JSON list of questions, each an object with `text` (the question, one
 {{- end}}
 
 {{define "merges" -}}
-{{with .MergeMethods}} {{$.Repo}} merges a pull request by {{.}} only (its GitHub settings): a PR reaches the base in one merge, so an option that deploys in two steps takes two PRs; say so in that option.{{end}}
+{{with .MergeMethods}} {{$.Repo}} merges a pull request by {{.}} (its GitHub settings), so a PR reaches the base, and deploys, in one merge. One PR is the default. Offer a two-step deploy only for a migration or backfill that must run in production first, and name that reason in the option.{{end}}
 {{- end}}
 
 {{define "rules" -}}

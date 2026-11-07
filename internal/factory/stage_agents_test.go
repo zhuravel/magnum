@@ -239,15 +239,18 @@ func (h *harness) renderInStage(t registry.Task, stage, name string) string {
 
 // The roles that ask the operator product or deploy questions get the merge
 // methods the repository's GitHub settings allow, read once per repository:
-// the points role's, the judge's and the critic's prompts name them, and
-// that a change deploying in two steps takes two PRs.
+// the points role's, the judge's and the critic's prompts name them, with
+// the operator's rule: one PR is the default, and a two-step deploy is an
+// option only for a migration or backfill that must run in production
+// first.
 func TestTheQuestionRolesGetTheRepositorysMergeMethods(t *testing.T) {
 	gh := &fakeGitHub{merges: MergeMethods{Squash: true}}
 	h := newHarness(t, func(d *Deps) { d.GitHub = gh })
 	task := h.kindTask("PR-12383", "feature", "judge")
 	for _, rs := range [][2]string{{"investigate", "fx-points"}, {"judge", "fx-judge"}, {"critic", "fx-critic"}} {
 		text := h.renderInStage(task, rs[0], rs[1])
-		for _, want := range []string{"example/shop merges a pull request by squash only", "two PRs"} {
+		for _, want := range []string{"example/shop merges a pull request by squash (its GitHub settings)", "One PR is the default.",
+			"Offer a two-step deploy only for a migration or backfill that must run in production first, and name that reason in the option."} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s's prompt lacks %q:\n%s", rs[1], want, text)
 			}
@@ -262,7 +265,7 @@ func TestTheQuestionRolesGetTheRepositorysMergeMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := h.renderInStage(other, "judge", "fx-judge"); !strings.Contains(text, "example/other merges a pull request by squash only") ||
+	if text := h.renderInStage(other, "judge", "fx-judge"); !strings.Contains(text, "example/other merges a pull request by squash (its GitHub settings)") ||
 		gh.mergeReads() != 2 {
 		t.Fatalf("another repository's prompt (after %d reads):\n%s", gh.mergeReads(), text)
 	}
@@ -292,7 +295,7 @@ func TestAFailedMergeMethodsReadLeavesThemOut(t *testing.T) {
 	gh.merges, gh.mergesErr = MergeMethods{Squash: true, Rebase: true}, nil
 	gh.mu.Unlock()
 	h.clock.Add(mergeMethodsRetry)
-	if text := h.renderInStage(task, "judge", "fx-judge"); !strings.Contains(text, "example/shop merges a pull request by squash or rebase only") ||
+	if text := h.renderInStage(task, "judge", "fx-judge"); !strings.Contains(text, "example/shop merges a pull request by squash or rebase (its GitHub settings)") ||
 		gh.mergeReads() != 2 {
 		t.Fatalf("after the retry (%d reads):\n%s", gh.mergeReads(), text)
 	}
