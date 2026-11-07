@@ -222,14 +222,15 @@ func TestTheCriticsQuestionsJoinTheOneBatch(t *testing.T) {
 }
 
 // A question two roles raise is asked once: the same text, whatever its
-// case and spaces, in the judge's questions.json and in an investigator's
+// case, spaces, end punctuation, backticks and double quotes (an agent's
+// copy changes them), in the judge's questions.json and in an investigator's
 // questions-fx-points.json is one question of the batch, the judge's (its
 // file is read first), raised by both, and one answer serves both.
 func TestAQuestionTwoRolesRaiseIsAskedOnce(t *testing.T) {
 	h := newHarness(t)
 	template := fileQuestion("Which email template does the reminder use?", 0, "the credit template", "a new template")
 	task := h.gateTask("PR-12381", "feature", whenQuestion, template)
-	again := fileQuestion("  when does the reminder\tgo out? ", 1, "a week before", "the day before")
+	again := fileQuestion("  when does the `reminder`\tgo \"out\". ", 1, "a week before", "the day before")
 	h.taskFile(task.ID, "questions-fx-points.json", questionsJSON(t, again, whoQuestion))
 	h.tick()
 

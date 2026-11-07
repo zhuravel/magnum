@@ -952,9 +952,9 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 			leftovers = append(leftovers, item)
 		case s.reg.Outcome == registry.FindingRebutted || s.reg.Outcome == registry.FindingWaived:
 			rebutted = append(rebutted, item)
-		case s.f.Question && strings.EqualFold(strings.TrimSpace(answered[questionKey(item.Title)]), changeIt):
+		case s.f.Question && strings.EqualFold(strings.TrimSpace(answered[QuestionKey(item.Title)]), changeIt):
 			live = append(live, item) // you said change it, and the round finds it still: the writer did not
-		case s.f.Question && answered[questionKey(item.Title)] != "":
+		case s.f.Question && answered[QuestionKey(item.Title)] != "":
 			leftovers = append(leftovers, item) // you decided it: keep it
 		case s.f.Question:
 			questions = append(questions, item)
@@ -1072,7 +1072,7 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 }
 
 // answeredQuestions are your answers to task t's questions, by their key
-// (questionKey); an answer the registry keeps no text of is "answered".
+// (QuestionKey); an answer the registry keeps no text of is "answered".
 func (e *Engine) answeredQuestions(ctx context.Context, t registry.Task) (map[string]string, error) {
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
@@ -1081,7 +1081,7 @@ func (e *Engine) answeredQuestions(ctx context.Context, t registry.Task) (map[st
 	out := map[string]string{}
 	for _, q := range qs {
 		if q.State == registry.QuestionAnswered {
-			out[questionKey(q.Text)] = cmp.Or(q.Answer, "answered")
+			out[QuestionKey(q.Text)] = cmp.Or(q.Answer, "answered")
 		}
 	}
 	return out, nil

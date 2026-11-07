@@ -175,8 +175,9 @@ func runFactoryAnswerCmd(c *Context, f factoryAnswerFlags, pos []string) int {
 // questionNow is the index in task t's newest revision of question n (from
 // 1) of revision rev (0 = the newest): a newer revision puts the open
 // questions it carries over first, so the same question may hold another
-// number there; it is found by the role that raised it and its text. A
-// question open in no newer revision is refused.
+// number there; it is found by its text, as the factory tells questions
+// apart (factory.QuestionKey). A question open in no newer revision is
+// refused.
 func questionNow(ctx context.Context, reg *registry.Registry, t registry.Task, rev, n int) (int, error) {
 	if rev == 0 || rev == t.QuestionRev {
 		return n - 1, nil
@@ -191,8 +192,7 @@ func questionNow(ctx context.Context, reg *registry.Registry, t registry.Task, r
 	}
 	asked := all[i]
 	for _, q := range all {
-		if q.Revision == t.QuestionRev && q.State == registry.QuestionOpen && q.RaisedBy == asked.RaisedBy &&
-			strings.TrimSpace(q.Text) == strings.TrimSpace(asked.Text) {
+		if q.Revision == t.QuestionRev && q.State == registry.QuestionOpen && factory.QuestionKey(q.Text) == factory.QuestionKey(asked.Text) {
 			return q.Index, nil
 		}
 	}

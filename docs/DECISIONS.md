@@ -16496,28 +16496,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   questions, 15 from fx-judge and 13 from fx-points; 7 had exactly the same text and 4 more were the same in
   other words, and you answered each twice. `questionKey` put the role in the key, so the judge's copy of an
   investigator's question was another question.
-  - A question is told by its text alone: trimmed, lowercased, its runs of spaces made one. `askQuestions` asks
+  - A question is told by its text alone (`factory.QuestionKey`): lowercased, without backticks and double
+    quotes, its runs of spaces made one and its end punctuation trimmed, which an agent's copy of a question
+    changes. `askQuestions` asks
     the same question in two files of one batch once, the first file's (`questions.json` comes first, so the
     judge's options and recommendation win), and its `raised_by` lists both roles, "fx-judge, fx-points"; a
     role's repeat of a question asked before, open or answered, is not asked again, and the stage's answers
     reach that role as they reach the one that asked first. The batch's event counts the repeats ("1 repeat
-    asked once"). The asks, the screen's card, answers.md and the local review's answered questions read the
-    same key. The screen's "The agent ... asked" names the first role of such a question.
+    asked once"). The asks, the screen's card, answers.md, the local review's answered questions and the CLI
+    (`factory answer --revision --question`, and the screen's count of new questions after a refused batch) read
+    the same key. The screen's "The agent ... asked" names the first role of such a question.
   - The prompts: the shared `questions` block (the judge, the critic, the amend, the review's fix turn) has a
-    role read the other questions files first, ask none of their questions again in other words, and keep the
-    text word for word when it shares one, so the key above merges it. The audit asked for fx-points to read
+    role read the questions files the other roles wrote first, ask none of their questions again in other words,
+    and keep the text word for word when it shares one, so the key above merges it. A question's text names
+    its subject, so it reads alone: with the role out of the key, two roles asking one general sentence about
+    two subjects ("Should the current behaviour stay?") would be one question, and the second role would get
+    the first one's answer. The audit asked for fx-points to read
     `questions.json` first, but in the default kinds fx-points investigates before the judge writes it (task
     6's files: 13:14 against 13:44): the judge, who comes second, is the one that must read; fx-points' prompt
     still reads `questions.json` first when a kind runs it after a judge.
   - A role added to a stored question's `raised_by` only within the batch that asks it: a repeat of a question
     asked in an earlier revision changes no stored row, since its answer serves it anyway.
+  - No migration: no key is stored, the registry and asks.json keep the role and the text, and the key is made
+    on each read. A task in flight at the install whose batch, asked before it, holds two open rows of one text
+    from two roles keeps both rows; asks.json keeps one ask for them, so both read as asked of the same login,
+    and an ask of the second of the same login reads as one made before a restart. That ends when the task
+    passes its gate; it was accepted rather than a migration for a handful of in-flight rows.
   Rejected: the judge merging the investigators' files into `questions.json` and the factory dropping theirs
   (a role's file is its record, and the gate reads every file); a fuzzy match of questions in other words (a
   wrong merge loses a question; the prompt's word-for-word rule leaves the match exact); an UPDATE of an
   earlier revision's `raised_by` (a registry write for a label). Tests, failing first:
   TestAQuestionTwoRolesRaiseIsAskedOnce, TestAQuestionAskedBeforeIsNotAskedAgainByAnotherRole,
   TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst and TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged
-  (the joined roles).
+  (the joined roles, and a repeat by another role that is no new question).
 - **The question roles know the repository's merge methods** (2026-11-07, audit B #10, roadmap R22). Task 1's critic
   asked about "two deployments", you chose them, and one stage later the PR body's judge found the repository
   merges by squash only and asked again: the answer reversed, 27 minutes in NEEDS YOU.

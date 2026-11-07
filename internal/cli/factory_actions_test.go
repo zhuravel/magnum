@@ -189,8 +189,9 @@ func TestTheScreensPreviewIsTheDaemonsForm(t *testing.T) {
 // An answer the daemon refused because the questions changed reaches the
 // screen typed, never as prose: the adapter reads the task, and its newer
 // revision is the error's time, and the agent that asked it the first role
-// that raised its question; a refusal for another reason is the daemon's
-// words.
+// that raised its first new question, a question being new by its text as
+// the factory tells questions apart (factory.QuestionKey); a refusal for
+// another reason is the daemon's words.
 func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 	storetest.Serial(t)
 	at := newScreenActionsTest(t, 250, func(registry.Request) (string, string) {
@@ -208,7 +209,8 @@ func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	q2 := registry.Question{Text: "Which locale?", Recommended: -1, RaisedBy: "fx-cause, fx-points"} // two roles raised it: the first one says
-	if err := reg.ReplaceQuestions(ctx, task.ID, 2, []registry.Question{q2}); err != nil {
+	again := registry.Question{Text: "  when? ", Recommended: -1, RaisedBy: "fx-points"}             // revision 1's question, by another role
+	if err := reg.ReplaceQuestions(ctx, task.ID, 2, []registry.Question{again, q2}); err != nil {
 		t.Fatal(err)
 	}
 	qs, err := reg.Questions(ctx, task.ID)
@@ -222,7 +224,7 @@ func TestAStaleAnswerReachesTheScreenAsTheQuestionsChanged(t *testing.T) {
 	if !ok || !errors.Is(err, tui.ErrQuestionsChanged) {
 		t.Fatalf("error %v (%T), want the questions changed, typed", err, err)
 	}
-	if !changed.At.Equal(newer) || !strings.Contains(changed.Why, "finding the cause") {
+	if !changed.At.Equal(newer) || !strings.Contains(changed.Why, "finding the cause asked 1 new question.") {
 		t.Errorf("changed at %v (%q), want the newer revision's time %v and the agent that asked", changed.At, changed.Why, newer)
 	}
 

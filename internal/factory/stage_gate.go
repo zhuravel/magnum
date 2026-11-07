@@ -310,11 +310,19 @@ func (e *Engine) reportRoles(t registry.Task) []string {
 	return nil
 }
 
-// questionKey is how a question is told from the questions the task asked:
-// its text, trimmed, lowercased and with its runs of spaces made one, so
-// that a question two roles raise in the same words is one question,
-// whichever role raised it.
-func questionKey(text string) string { return strings.ToLower(strings.Join(strings.Fields(text), " ")) }
+// QuestionKey is how a question is told from the questions the task asked,
+// here and in the CLI: its text, lowercased, without backticks and double quotes, its runs of
+// spaces made one and its end punctuation trimmed (an agent's copy of a
+// question changes those), so that a question two roles raise in the same
+// words is one question, whichever role raised it.
+func QuestionKey(text string) string {
+	words := strings.Fields(questionMarks.Replace(text))
+	return strings.TrimRight(strings.ToLower(strings.Join(words, " ")), ".?!:; ")
+}
+
+// questionMarks are the marks QuestionKey drops: backticks, and straight
+// and curly double quotes.
+var questionMarks = strings.NewReplacer("`", "", `"`, "", "\u201c", "", "\u201d", "")
 
 // withRole is raisedBy with role added, when it is not one of its roles
 // already: a question two roles raised is raised by "fx-judge, fx-points".
@@ -329,13 +337,13 @@ func withRole(raisedBy, role string) string {
 }
 
 // askedStates are the state of each question the task asked, by its
-// questionKey, the newest revision's winning: a question carried over is
+// QuestionKey, the newest revision's winning: a question carried over is
 // open there. A question voided and never carried over (it is open nowhere)
 // counts as not asked.
 func askedStates(have []registry.Question) map[string]string {
 	states := map[string]string{}
 	for _, q := range have { // by revision, oldest first
-		k := questionKey(q.Text)
+		k := QuestionKey(q.Text)
 		if q.State == registry.QuestionVoided {
 			if states[k] == registry.QuestionOpen {
 				continue // voided by the revision that carries it over
@@ -384,7 +392,7 @@ func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool)
 		}
 		n := len(fresh)
 		for _, q := range qs {
-			k := questionKey(q.Text)
+			k := QuestionKey(q.Text)
 			if i, ok := batch[k]; ok {
 				if raised := withRole(fresh[i].RaisedBy, f.raisedBy); raised != fresh[i].RaisedBy {
 					fresh[i].RaisedBy = raised
@@ -515,7 +523,7 @@ func (e *Engine) questionsWait(t registry.Task, open []registry.Question, asks m
 func questionsAsked(open []registry.Question, asks map[string]ask) (onYou int, first string, byLogin map[string]int) {
 	byLogin = map[string]int{}
 	for _, q := range open {
-		a, ok := asks[questionKey(q.Text)]
+		a, ok := asks[QuestionKey(q.Text)]
 		if !ok {
 			onYou++
 			continue
@@ -678,7 +686,7 @@ func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.Factor
 	states := askedStates(have)
 	unasked, open := 0, 0
 	for _, q := range qs {
-		switch states[questionKey(q.Text)] {
+		switch states[QuestionKey(q.Text)] {
 		case "":
 			unasked++
 		case registry.QuestionOpen:
@@ -711,11 +719,11 @@ func (e *Engine) answersDue(ctx context.Context, t registry.Task, a registry.Att
 	have []registry.Question) (bool, error) {
 	mine := map[string]bool{}
 	for _, q := range qs {
-		mine[questionKey(q.Text)] = true
+		mine[QuestionKey(q.Text)] = true
 	}
 	var answered time.Time
 	for _, q := range have {
-		if q.State == registry.QuestionAnswered && mine[questionKey(q.Text)] && q.Answered.After(answered) {
+		if q.State == registry.QuestionAnswered && mine[QuestionKey(q.Text)] && q.Answered.After(answered) {
 			answered = q.Answered
 		}
 	}

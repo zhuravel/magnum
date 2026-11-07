@@ -1041,7 +1041,7 @@ func TestAnAskOfTheTicketsReporterTakesTheirWholeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, ok := asks[questionKey("Can a merchant turn it off?")]
+	a, ok := asks[QuestionKey("Can a merchant turn it off?")]
 	if !ok || a.Login != "Rev Ann" {
 		t.Fatalf("asks %+v, want the reporter asked by their whole name", asks)
 	}

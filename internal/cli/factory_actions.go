@@ -136,7 +136,7 @@ func (a *factoryActions) answerRefused(ctx context.Context, id int64, rev int, r
 	before := map[string]bool{}
 	for _, q := range qs {
 		if q.Revision < t.QuestionRev {
-			before[q.RaisedBy+"\x00"+strings.TrimSpace(q.Text)] = true
+			before[factory.QuestionKey(q.Text)] = true
 		}
 	}
 	asker, n := "", 0
@@ -147,7 +147,7 @@ func (a *factoryActions) answerRefused(ctx context.Context, id int64, rev int, r
 		if !q.Asked.IsZero() {
 			changed.At = q.Asked
 		}
-		if !before[q.RaisedBy+"\x00"+strings.TrimSpace(q.Text)] {
+		if !before[factory.QuestionKey(q.Text)] {
 			n++
 			asker = cmp.Or(asker, q.RaisedBy)
 		}

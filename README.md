@@ -3962,8 +3962,8 @@ Questions come to you in one batch. At the `no_open_questions` gate, the questio
 `questions.json` and of every `questions-<role>.json` (the critic's, an investigator's) that the task has not
 asked yet become one new revision of its questions, with the questions still open carried over (the "which
 Jira issue" question of a task from your words among them), and the task needs you, `you: 3 questions
-before coding`. A question is told by its text (trimmed, lowercased, its runs of spaces made one), whichever
-role raised it: the same question in two files of a batch is asked once, the first file's (`questions.json`
+before coding`. A question is told by its text (lowercased, without backticks and double quotes, its runs of
+spaces made one, its end punctuation trimmed), whichever role raised it: the same question in two files of a batch is asked once, the first file's (`questions.json`
 comes first), raised by both roles (`fx-judge, fx-points`), and a role's repeat of a question asked before is
 not asked again, since its answer serves both. The roles that write questions read the questions files the other
 roles wrote first, ask none of their questions again in other words, and name a question's subject in its

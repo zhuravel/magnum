@@ -12074,6 +12074,13 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
+func QuestionKey(text string) string
+    QuestionKey is how a question is told from the questions the task asked,
+    here and in the CLI: its text, lowercased, without backticks and double
+    quotes, its runs of spaces made one and its end punctuation trimmed (an
+    agent's copy of a question changes those), so that a question two roles
+    raise in the same words is one question, whichever role raised it.
+
 func ReadSeen(l paths.Layout) (time.Time, error)
     ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
     in layout l; the zero time before the first.
