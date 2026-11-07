@@ -925,6 +925,26 @@ func TestAPausedRoleWaitsThenGoesOn(t *testing.T) {
 	}
 }
 
+// The runtime's pause of one agent (a continuation on its fallback model
+// that never left: no pause of its kind) is no hold: the role gets the
+// prompt to go on at the next pass, naming why its turn stopped, and no
+// wait stays behind.
+func TestAnAgentsPauseGoesOnAtTheNextPass(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12331", "bug", "investigate")
+	h.startStage(task)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventPaused,
+		Reason: "agent: its turn hit opus's limit; the session runs on sonnet now"})
+	h.tick()
+	ps := h.rt.promptsTo("fx-repro")
+	if len(ps) != 2 || !strings.Contains(ps[1].Text, "runs on sonnet now") || !strings.Contains(ps[1].Text, "findings-fx-repro.md") {
+		t.Fatalf("fx-repro's prompts %+v, want the one to go on, naming why its turn stopped", ps)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != "" || got.WaitsWhat != "" {
+		t.Fatalf("task %s waits %q: %q; want active with no wait", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+}
+
 // A Codex refusal: the task is Codex-never, its other Codex sessions are
 // quit, and the refused role runs again as its Claude fallback, writing the
 // same file.

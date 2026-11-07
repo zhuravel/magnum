@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"reflect"
 	"slices"
 	"strconv"
@@ -349,6 +351,83 @@ func TestAModelLimitSwitchesToTheFallbackModel(t *testing.T) {
 	}
 	if r := g.storeRun(first); r.State != store.RunAbandoned {
 		t.Fatalf("the limited run is %s, want abandoned for its continuation", r.State)
+	}
+}
+
+// modelLimited has fx-judge's turn, its first run returned, end on Opus's
+// own limit with sonnet free as its fallback; the next two observe passes
+// switch it, and fail answers the prompt to go on (nil: it goes).
+func (g *rig) modelLimited(fail func(text string) error) string {
+	g.t.Helper()
+	g.launch("fx-judge")
+	first := g.send("fx-judge", "merge the findings")
+	g.observe()
+	g.h.onRun = func(f *fakeHerdr, pane, command string) {
+		if command == "/model sonnet" {
+			f.screens[pane] = "Switched.\nSonnet 5 | copy | 12% context\n"
+		}
+	}
+	g.h.promptErr = func(text string) error {
+		if strings.Contains(text, "switched this session to sonnet") {
+			return fail(text)
+		}
+		return nil
+	}
+	g.h.screen(g.agent("fx-judge"), "You've hit your Opus limit · resets 3:45pm\n")
+	g.h.setStatus(g.agent("fx-judge"), herdr.StatusIdle)
+	return first
+}
+
+// A continuation on the fallback model that herdr refuses before it left is
+// no turn that goes on: the stage hears its role paused (the agent's, no
+// pause of its kind), its limited run is settled as a pause, so the stage
+// sends the prompt to go on once it may, after a restart too, and its
+// record says paused.
+func TestAFallbackContinuationThatNeverLeftPausesTheRole(t *testing.T) {
+	g := newRig(t)
+	first := g.modelLimited(func(string) error {
+		return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotFound, Message: "no such agent"}
+	})
+
+	evs := g.observeN(2)
+
+	if len(evs) != 1 || evs[0].Kind != EventPaused || evs[0].RunID != first || evs[0].Role != "fx-judge" ||
+		!strings.HasPrefix(evs[0].Reason, pauseAgent+": ") || !strings.Contains(evs[0].Reason, "sonnet") {
+		t.Fatalf("events %+v, want fx-judge's limited run paused for the agent, on sonnet now", evs)
+	}
+	state, why, err := g.r.RunState(g.ctx, first)
+	if err != nil || state != store.RunAbandoned || why != PausedPrefix+evs[0].Reason {
+		t.Fatalf("RunState of the limited run = %q, %q, %v; want abandoned, %s%s", state, why, err, PausedPrefix, evs[0].Reason)
+	}
+	if rr := g.roleRun("fx-judge"); rr.Outcome != "paused" {
+		t.Fatalf("role run outcome %q, want paused", rr.Outcome)
+	}
+	if w := g.r.paused(agents.KindClaude); w != nil {
+		t.Fatalf("Claude pauses (%v): a prompt herdr refused is no limit of the kind", w)
+	}
+	g.h.promptErr = nil
+	g.send("fx-judge", "Your turn stopped, and that is over now. Go on.")
+}
+
+// A continuation herdr may have typed (its delivery unknown) is the
+// ledger's to settle, as any prompt's: no event. Its limited run is settled
+// as a pause all the same, so a stage rebuilt once the continuation is
+// proven never to have arrived sends the prompt to go on.
+func TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind(t *testing.T) {
+	g := newRig(t)
+	first := g.modelLimited(func(string) error {
+		return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+	})
+
+	if evs := g.observeN(2); len(evs) != 0 {
+		t.Fatalf("events %+v, want none while the continuation's delivery is unknown", evs)
+	}
+	if _, why, _ := g.r.RunState(g.ctx, first); !strings.HasPrefix(why, PausedPrefix+pauseAgent+": ") {
+		t.Fatalf("the limited run was given up with %q, want a pause for the agent, %s%s: ...", why, PausedPrefix, pauseAgent)
+	}
+	es := g.ledger()
+	if last := es[len(es)-1]; last.Delivered != registry.DeliveredUnknown || !strings.Contains(last.Text, "sonnet") {
+		t.Fatalf("the continuation's entry %q is %s, want unknown", last.Text, last.Delivered)
 	}
 }
 

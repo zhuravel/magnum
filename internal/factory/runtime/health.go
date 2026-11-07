@@ -15,6 +15,7 @@ package runtime
 // fresh.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,11 +32,15 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// The kinds of a pause (pause.who), as a wait names them.
+// The kinds of a pause (pause.who), as a wait names them. pauseAgent is no
+// pause of a kind: one role's turn stopped and waits for its prompt to go
+// on (a continuation on its fallback model that never left), the agent's
+// wait as the factory's stage names it.
 const (
 	pauseUsage    = "usage"
 	pauseLogin    = "login"
 	pauseOverload = "overload"
+	pauseAgent    = "agent"
 )
 
 // pause is a hold on an agent kind: who and what as the wait says them,
@@ -288,8 +293,8 @@ func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run)
 		ev.Kind, ev.Reason = EventPaused, w.Error()
 		return []Event{ev}
 	case agents.HealthModelLimit:
-		if r.modelFallback(ctx, t, pr, s, run, h) {
-			return nil
+		if evs, ok := r.modelFallback(ctx, t, pr, s, run, h); ok {
+			return evs
 		}
 		var until time.Time
 		if h.ResetAt != nil {
@@ -489,30 +494,37 @@ func (r *Runtime) waitToRecover(attempt, role string) {
 
 // modelFallback continues run's turn, which ended on its model's own limit
 // h, on the role's next fallback model: the limit recorded, the session
-// switched (agents.Manager.SwitchModel), the run abandoned and the
-// model-fallback prompt sent as its continuation. false when the kind
-// cannot switch, no fallback is free, or the switch failed: the kind
-// pauses as for a usage limit.
-func (r *Runtime) modelFallback(ctx context.Context, t registry.Task, pr store.PR, s store.Session, run store.Run, h agents.Health) bool {
+// switched (agents.Manager.SwitchModel), the run settled as the agent's
+// pause (pauseAgent, abandoned with PausedPrefix) and the model-fallback
+// prompt sent as its continuation. The run is settled so before the prompt
+// goes, so a stage rebuilt while that prompt's fate is unknown, or once it
+// is proven never to have arrived, sends the role its prompt to go on. A
+// continuation that never left (refused before it was sent, or no run for
+// it) comes back as EventPaused for that pause, which the stage takes as
+// any pause: the role gets the prompt to go on once it may. One of unknown
+// delivery is the ledger's to settle (no event). false when the kind cannot
+// switch, no fallback is free, or the switch failed: the kind pauses as for
+// a usage limit.
+func (r *Runtime) modelFallback(ctx context.Context, t registry.Task, pr store.PR, s store.Session, run store.Run, h agents.Health) ([]Event, bool) {
 	limit, err := r.mgr.NoteModelLimit(ctx, s, h)
 	if err != nil {
 		r.log.Warn("record a model's limit", "role", run.Role, "err", err)
 	}
 	model, ok := r.mgr.FallbackModel(ctx, s, nil)
 	if !ok {
-		return false
+		return nil, false
 	}
 	if err := r.mgr.SwitchModel(ctx, s, model, agents.SwitchLimitHit); err != nil {
 		r.log.Warn("switch a limited session to its fallback model", "role", run.Role, "model", model, "err", err)
-		return false
+		return nil, false
 	}
 	a, err := r.reg.AttemptByID(ctx, run.TargetSHA)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	role, ok := r.d.Config.FactoryRole(run.Role)
 	if !ok {
-		return false
+		return nil, false
 	}
 	head := t.HeadSHA
 	if head == "" {
@@ -521,13 +533,22 @@ func (r *Runtime) modelFallback(ctx context.Context, t registry.Task, pr store.P
 	text, err := r.mgr.FallbackPrompt(agents.FallbackData{Model: model, Previous: limit.Model, Role: role.Name, URL: pr.URL, HeadSHA: head})
 	if err != nil {
 		r.log.Warn("the model-fallback prompt", "err", err)
-		return false
+		return nil, false
 	}
-	r.abandon(ctx, run.ID, "its model's limit: continued on "+model)
-	if _, err := r.send(ctx, t, a, role, pr, text, store.RunContinue); err != nil {
-		r.log.Warn("continue on the fallback model", "role", role.Name, "model", model, "err", err)
+	w := &WaitError{Who: pauseAgent, What: "its turn hit " + cmp.Or(limit.Model, "its model") + "'s limit; the session runs on " + model + " now"}
+	r.abandon(ctx, run.ID, PausedPrefix+w.Error())
+	id, err := r.send(ctx, t, a, role, pr, text, store.RunContinue)
+	if id == "" {
+		r.log.Warn("the continuation on the fallback model never left: the role waits for its prompt to go on", "role", role.Name,
+			"model", model, "err", err)
+		r.record(ctx, registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role, Ended: r.now(), Outcome: "paused", EndWhy: w.Error()})
+		r.calm(run.TargetSHA, run.Role, t.ID, store.Deref(s.AgentKind), false)
+		return []Event{{TaskID: t.ID, Role: run.Role, RunID: run.ID, Kind: EventPaused, Reason: w.Error()}}, true
 	}
-	return true
+	if err != nil {
+		r.log.Warn("continue on the fallback model: its delivery is unknown", "role", role.Name, "model", model, "err", err)
+	}
+	return nil, true
 }
 
 // checkLogin, at most once every loginEvery: a login pause whose CLI's own

@@ -17033,6 +17033,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFailedWatchdogStepStaysWatchedAcrossARestart (no step after the restart) and
   TestARecoveryPromptThatNeverArrivedIsRecoveredAgain (no recovery after the proof).
 
+- **A continuation on the fallback model that never left pauses its role** (2026-11-07, the audit's R14). A run
+  that ended on its model's own limit was abandoned, its session switched and the model-fallback prompt sent;
+  a send that failed was logged, and the run counted as continued: no event, the run abandoned and no new run
+  in flight, so the stage waited for an end that never came, and after a restart it read the abandoned run as
+  nothing to act on. The limited run is now settled as the agent's pause before the continuation goes
+  (abandoned with `PausedPrefix` and "agent: its turn hit <model>'s limit; the session runs on <fallback>
+  now"), so a stage rebuilt while the continuation's fate is unknown, or once it is proven never to have
+  arrived, sends the role its prompt to go on (`lastRunEvent`'s pause). A continuation that never left (herdr
+  refused it before it was sent, or no run was made for it) comes back as `EventPaused` with that reason and a
+  paused record: the stage takes it as any pause and sends the prompt to go on once `Send` may, and the wait it
+  shows is the agent's (`pauseAgent`), which the stage clears once the prompt goes, never a hold of the kind.
+  One of unknown delivery stays the ledger's to settle (no event).
+  Rejected: the usage pause of the kind the switch failure falls back to (one prompt that did not go would
+  hold every role of the kind for an hour); the continuation sent again by the runtime (Send's refusals, you in
+  the pane or a delivery of unknown fate, are the stage's to wait on); a failed run (a turn its model's limit
+  stopped did not fail). Tests, failing first: TestAFallbackContinuationThatNeverLeftPausesTheRole (no event)
+  and TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind (the run was abandoned as "its model's
+  limit: continued on sonnet"); TestAnAgentsPauseGoesOnAtTheNextPass holds the stage's side.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
