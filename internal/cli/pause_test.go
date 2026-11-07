@@ -305,3 +305,15 @@ func TestPauseUsage(t *testing.T) {
 		t.Errorf("no daemon: exit %d %s", code, h.errb.String())
 	}
 }
+
+// `magnum pause --help` says what the pause holds under autofix = "open":
+// the fix loops the look would start, while a loop that runs goes on and
+// `magnum fix` still starts one. Before, it named only the reviews.
+func TestPauseHelpNamesTheFixLoopsItHolds(t *testing.T) {
+	help := commandHelp(t, "pause")
+	for _, want := range []string{`autofix = "open"`, "fix loops the look would start", "a loop that runs goes on", "`magnum fix`"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("pause --help lacks %q:\n%s", want, help)
+		}
+	}
+}

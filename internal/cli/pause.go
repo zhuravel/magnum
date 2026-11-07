@@ -29,7 +29,9 @@ func newPauseCmd(c *Context) *cobra.Command {
 	var o pauseOpts
 	cmd := newCommand(groupAct, pauseUsage, "pause automatic reviews (running rounds finish; reviews you ask for still run)",
 		"Pause automatic reviews: running rounds finish and no automatic round starts, while a review you ask for "+
-			"(`magnum review`, the board's r/R/i, the picker) still runs. The pause lasts until `magnum resume`, "+
+			"(`magnum review`, the board's r/R/i, the picker) still runs. Under autofix = \"open\" it also holds the fix "+
+			"loops the look would start (a loop that runs goes on, and `magnum fix` or the board's f still starts one), and "+
+			"a review it holds is not late (magnum_late_after counts from its end). The pause lasts until `magnum resume`, "+
 			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp); --reason, or the words "+
 			"after `pause`, say why and show in `magnum status` (a word that reads as a duration is refused: use "+
 			"--for). It is recorded in the registry, so it applies even when no daemon runs yet.",
