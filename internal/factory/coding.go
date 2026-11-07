@@ -462,7 +462,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 	if res, ok := e.endedResult(t.ID); ok && res.Err == nil && res.forYou() {
 		e.clearPrecheckWait(ctx, t)
 		e.dropCheck(t.ID)
-		return &endProblem{file: precheckFile, why: res.why(), operator: true}, "", false, nil
+		return operatorProblem(*t, precheckFile, res.why()), "", false, nil
 	}
 	if p, pending, err := e.keptFirst(ctx, t); p != nil || pending || err != nil {
 		return p, "", pending, err
@@ -503,8 +503,8 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if n := e.countFailedCheck(t.ID); n >= checkTries {
 			e.dropCheck(t.ID)
 			e.checkRanToItsEnd(t.ID)
-			return &endProblem{file: "the checks", operator: true, why: fmt.Sprintf("the factory's checks of %s did not run to their end "+
-				"%d times: %s", short(bh.Head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))}, "", false, nil
+			return operatorProblem(*t, "the checks", fmt.Sprintf("the factory's checks of %s did not run to their end "+
+				"%d times: %s", short(bh.Head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))), "", false, nil
 		}
 		e.retryCheck(ctx, t, res.Err)
 		return nil, "", true, nil // a wait: a check that did not run to its end runs again after checkRetry
@@ -518,10 +518,19 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if res.Proof != nil && !res.Proof.Passed {
 			file = factoryProofFile
 		}
-		forYou := res.forYou()
-		return &endProblem{file: file, why: res.why(), change: !forYou, operator: forYou}, "", false, nil
+		if res.forYou() {
+			return operatorProblem(*t, file, res.why()), "", false, nil
+		}
+		return &endProblem{file: file, why: res.why(), change: true}, "", false, nil
 	}
 	return nil, bh.Head, false, nil
+}
+
+// operatorProblem is an end problem of task t's checks that needs you
+// (the configuration's or the machine's, never the writer's): why, then the
+// retry that lets the task go on once you fixed it (retryHint).
+func operatorProblem(t registry.Task, file, why string) *endProblem {
+	return &endProblem{file: file, why: why + retryHint(t), operator: true}
 }
 
 // keptFirst is provenHead's guard before it reads the tree: while task t
@@ -545,8 +554,8 @@ func (e *Engine) keptFirst(ctx context.Context, t *registry.Task) (p *endProblem
 				e.dropCheck(t.ID)
 				e.checkRanToItsEnd(t.ID)
 				e.clearPrecheckWait(ctx, t)
-				return &endProblem{file: "the checks", operator: true, why: fmt.Sprintf("the factory's checks of %s did not run to their end "+
-					"%d times: %s", short(x.head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))}, false, nil
+				return operatorProblem(*t, "the checks", fmt.Sprintf("the factory's checks of %s did not run to their end "+
+					"%d times: %s", short(x.head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))), false, nil
 			}
 		}
 		e.dropCheck(t.ID)
@@ -562,7 +571,7 @@ func (e *Engine) keptFirst(ctx context.Context, t *registry.Task) (p *endProblem
 		return nil, false, err
 	case why != "":
 		e.clearPrecheckWait(ctx, t)
-		return &endProblem{file: keptFile, why: why, operator: true}, false, nil
+		return operatorProblem(*t, keptFile, why), false, nil
 	}
 	return nil, false, nil
 }

@@ -338,3 +338,61 @@ func TestThePrecheckTakesTheCopysDatabaseLock(t *testing.T) {
 		t.Fatalf("precheck %+v after the reviewer's command ended, want passed", res)
 	}
 }
+
+// A lint that exits non-zero and names no offense by path:line needs you,
+// and the ask carries the line of its stderr that says why it failed: the
+// last one, past mise's own warnings and the stack's frames, redacted (no
+// token in it) and clipped. Its command names no format, so the ask still
+// hints at one.
+func TestALintCrashsAskNamesItsLastStderrLine(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12380", "bug")
+	r.fix(task)
+	r.lintCrash = func([]string) string {
+		return "mise WARN Config files in /tmp/shop.factory1/.mise.toml are not trusted.\n" +
+			"Error: .rubocop.yml names Style/Gone, which this rubocop lacks (token ghp_abcdefghijklmnopqrstuvwxyz0123456789)\n" +
+			"/gems/rubocop/lib/rubocop/config.rb:12:in 'validate'\n" +
+			"\tfrom /gems/rubocop/exe/rubocop:15:in '<main>'\n" +
+			"mise WARN Config files in /tmp/shop.factory1/.mise.toml are not trusted.\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Passed || !res.ForYou {
+		t.Fatalf("precheck %+v, want a failure for you", res)
+	}
+	for _, want := range []string{"precheck.lint", "names no offense by path:line", "Style/Gone, which this rubocop lacks",
+		"rubocop --format emacs"} {
+		if !strings.Contains(res.Why, want) {
+			t.Errorf("the ask %q does not name %q", res.Why, want)
+		}
+	}
+	for _, not := range []string{"mise WARN", "config.rb:12", "exe/rubocop", "ghp_abcdefghij"} {
+		if strings.Contains(res.Why, not) {
+			t.Errorf("the ask %q names %q", res.Why, not)
+		}
+	}
+}
+
+// A lint command that names its format already gets no hint to name one:
+// the hint was wrong when rubocop crashed with `--format emacs` given.
+func TestALintCrashsAskDropsTheFormatHintWhenTheCommandNamesOne(t *testing.T) {
+	for _, lint := range []string{"bin/lint --format emacs {files}", "bin/lint --format=unix {files}", "bin/lint -f emacs {files}"} {
+		r := newCodingRig(t)
+		r.cfg.Factory.Repos[0].Precheck.Lint = []string{lint}
+		task := r.codingTask("PR-12381", "bug")
+		r.fix(task)
+		r.lintCrash = func([]string) string { return "Error: something else entirely\n" }
+		res, err := r.e.precheck(r.ctx, task, r.cp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.ForYou || !strings.Contains(res.Why, "something else entirely") {
+			t.Fatalf("%s: precheck %+v, want a failure for you naming its stderr", lint, res)
+		}
+		if strings.Contains(res.Why, "--format emacs, eslint") || strings.Contains(res.Why, "have it print") {
+			t.Fatalf("%s: the ask %q hints at a format the command names already", lint, res.Why)
+		}
+	}
+}

@@ -256,6 +256,9 @@ type precheckRun struct {
 	// kept: it left changes for you (keep); it runs nothing more and puts
 	// nothing back after that.
 	kept bool
+	// stderr is what the command it ran last wrote to stderr, as it wrote
+	// it (the lint's ask names its last line, redacted).
+	stderr string
 }
 
 // restoreOwn puts back what the precheck's commands changed so far
@@ -351,12 +354,14 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
+	p.stderr = string(res.Stderr)
 	switch {
 	case p.ctx.Err() != nil:
 		return run, false
 	case denied != "":
 		p.say("\n- `%s`: denied: %s\n", cmd, denied)
-		p.failForYou(key + " `" + cmd + "` is denied: " + denied)
+		p.failForYou(key + " `" + cmd + "` is denied: " + denied + "; fix: change " + key +
+			" in its [[factory.repo]] (the factory never runs that), then `magnum factory install`")
 		return run, false
 	case errors.Is(err, context.DeadlineExceeded):
 		p.overCap = true // its own bound is the cap
@@ -368,14 +373,22 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 			p.err = fmt.Errorf("precheck %s: %s %w", what, cmd, err)
 			return run, false
 		}
-		p.failForYou(key + " `" + cmd + "` " + why)
+		p.failForYou(key + " `" + cmd + "` " + why + runnableFix(key, cmd))
 		return run, false
 	case notRunnable(code) != "":
 		p.say("\n- `%s` %s\n", cmd, notRunnable(code))
-		p.failForYou(key + " `" + cmd + "` " + notRunnable(code))
+		p.failForYou(key + " `" + cmd + "` " + notRunnable(code) + runnableFix(key, cmd))
 		return run, false
 	}
 	return run, true
+}
+
+// runnableFix is the fix of a command of key that is missing or not
+// executable (cmd its script): its first word made runnable, then the
+// factory daemon restarted on the PATH or the configuration that runs it.
+func runnableFix(key, cmd string) string {
+	return "; fix: make `" + firstWord(cmd) + "` runnable in the copy (install it, put its directory on your login shell's PATH, " +
+		"or change " + key + "), then `magnum factory install`"
 }
 
 // dbKeys are the precheck's commands that use the copy's databases: they
@@ -448,13 +461,29 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 		case named == 0:
 			check.Result, check.Cause = registry.CheckFail, "unknown"
 			p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-			p.failForYou(fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line: (have it print them so: "+
-				"rubocop --format emacs, eslint --format unix)", cmd, run.Exit))
+			p.failForYou(p.lintCrashWhy(cmd, run))
 		default:
 			p.say("\n- `%s`: %s, none on a changed line\n", script, plural(named, "offense"))
 		}
 		p.record(check)
 	}
+}
+
+// lintCrashWhy is why lint command cmd failed for you when its run exited
+// non-zero naming no offense by path:line: the last line of its stderr
+// that may say why (else of its output), and, when cmd names no format of
+// its own, a hint at one.
+func (p *precheckRun) lintCrashWhy(cmd string, run ProofRun) string {
+	why := fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line", cmd, run.Exit)
+	if line := lastLine(p.stderr); line != "" {
+		why += "; its stderr ends: " + line
+	} else if line := lastLine(run.Output); line != "" {
+		why += "; its output ends: " + line
+	}
+	if !formatRe.MatchString(cmd) {
+		why += "; fix: have it print them so (rubocop --format emacs, eslint --format unix) in precheck.lint, then `magnum factory install`"
+	}
+	return why
 }
 
 // changedLines are the lines each file of diff has at the head that the

@@ -44,11 +44,14 @@ type codingRig struct {
 	// its command's timeout or its context, as execx ends one); failGit
 	// fails the git commands it names (an error, not nil); seenGit sees
 	// every git command as the factory built it (its env and its unset).
-	lint    func(files []string) string
-	migrate func(dir, script string) int
-	hang    func(run scriptRun) bool
-	failGit func(args []string) error
-	seenGit func(c execx.Cmd)
+	lint func(files []string) string
+	// lintCrash, when it returns a stderr, makes bin/lint print nothing on
+	// stdout, that on stderr, and exit 2, as a lint that crashed does.
+	lintCrash func(files []string) string
+	migrate   func(dir, script string) int
+	hang      func(run scriptRun) bool
+	failGit   func(args []string) error
+	seenGit   func(c execx.Cmd)
 	// during runs inside each script, before it does its work (a person
 	// entering the copy's pane mid-run, a spec writing a tracked file);
 	// startErr is the error of a script that did not start (nil: it starts).
@@ -198,8 +201,14 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		run.Exit, run.Out = r.specs(c.Dir, words[1:], run.Specs)
 	case "bin/lint":
 		r.mu.Lock()
-		lint := r.lint
+		lint, crash := r.lint, r.lintCrash
 		r.mu.Unlock()
+		if crash != nil {
+			if stderr := crash(words[1:]); stderr != "" {
+				r.record(run)
+				return execx.Result{Code: 2, Stderr: []byte(stderr)}, &execx.ExitError{Cmd: c, Code: 2, Stderr: stderr}
+			}
+		}
 		if lint != nil {
 			if run.Out = lint(words[1:]); run.Out != "" {
 				run.Exit = 1

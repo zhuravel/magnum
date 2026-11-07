@@ -2,6 +2,7 @@ package factory
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -381,5 +382,43 @@ func TestThePrecheckRestoresWhatItsCommandsChanged(t *testing.T) {
 	}
 	if !slices.ContainsFunc(r.events(task.ID, "check"), func(e registry.Event) bool { return strings.Contains(e.Text, "db/schema.rb") }) {
 		t.Fatalf("no check event names the restore of db/schema.rb: %+v", r.events(task.ID, "check"))
+	}
+}
+
+// A NEEDS YOU whose cause is the configuration's or the machine's names
+// the fix, then the command that lets the task go on once it is fixed:
+// task 5 waited 127 minutes on a line that named neither.
+func TestANeedsYouForTheChecksNamesTheFixAndTheRetry(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(r *codingRig)
+		want []string
+	}{
+		{"a missing lint", func(r *codingRig) { r.cfg.Factory.Repos[0].Precheck.Lint = []string{"bin/nolint {files}"} },
+			[]string{"exited 127", "fix: make `bin/nolint` runnable", "`magnum factory install`"}},
+		{"a denied lint", func(r *codingRig) {
+			r.cfg.Factory.Repos[0].Precheck.Lint = []string{"kubectl exec web-1 -- bin/lint {files}"}
+		}, []string{"denied", "fix: change precheck.lint", "`magnum factory install`"}},
+		{"a lint that crashed", func(r *codingRig) { r.lintCrash = func([]string) string { return "Error: boom\n" } },
+			[]string{"its stderr ends: Error: boom", "fix: have it print them so"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			tc.edit(r)
+			task := r.codingTask("PR-12382", "bug")
+			r.startStage(task)
+			r.fix(task)
+			r.endTurns(task, 2)
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou {
+				t.Fatalf("task %s waits %q; want needs_you", got.State, got.WaitsWhat)
+			}
+			for _, w := range append(tc.want, fmt.Sprintf("; then `magnum factory retry %d`", got.ID)) {
+				if !strings.Contains(got.WaitsWhat, w) {
+					t.Errorf("the wait %q does not name %q", got.WaitsWhat, w)
+				}
+			}
+		})
 	}
 }
