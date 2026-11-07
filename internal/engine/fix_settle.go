@@ -509,8 +509,10 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // needs_attention (needsAttention: its toast and attention key), and so
 // does one already there, a second loop's (`magnum fix` once the author
 // answered the first): its message replaces the first loop's, and keeps the
-// first's decision calls when it asks for no call of its own
-// (keepDecisions: a failed run, the cap). A PR waiting
+// first's decision calls that GitHub does not show built when it asks for
+// no call of its own (keepDecisions: a failed run, the cap), at the time
+// recorded for them (recordFixCalls, which dates the message's other calls
+// at its report's run). A PR waiting
 // for a round keeps it, because a push came during the fix and that
 // re-review still runs: it gets the urgent toast alone. A PR elsewhere
 // (closed, ineligible) has the events only. The toast's dedupe key is the
@@ -524,13 +526,18 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	}
 	rj := job.asRound()
 	rj.pr = pr
+	var kept map[int64]time.Time // fix_decide.go: the calls kept from the attention replaced, with when they were made
 	if kind, _ := e.getKV(ctx, KVPRAttention(pr.ID)); pr.State == store.PRNeedsAttention && kind == attention.KindFix {
-		msg = keepDecisions(deref(pr.LastError), msg) // fix_decide.go
+		calls := e.fixerCalls(ctx, pr)
+		if keep := keepDecisions(deref(pr.LastError), msg, e.callsOpen(ctx, job, calls)); keep != msg {
+			msg, kept = keep, calls
+		}
 	}
 	switch {
 	case pr.State == store.PRReviewed || pr.State == store.PRNeedsAttention:
 		e.needsAttentionKeyed(ctx, rj, pr, []string{store.PRReviewed, store.PRNeedsAttention}, attention.KindFix, msg, nil,
 			fixAttentionKey(job), fixAttentionWindow)
+		e.recordFixCalls(ctx, pr.ID, msg, kept)
 	case slices.Contains(waitingStates, pr.State):
 		e.fixCallToast(job, msg)
 	}

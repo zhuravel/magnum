@@ -13,6 +13,9 @@ package engine
 // reply counts, never another reviewer's, a bot's or the fixer's own (its
 // replies carry the fix marker), and only after the fixer's call for that
 // same thread: a fix-marked reply of the fixer's after the call closes it.
+// The call is dated when its attention is raised (kvPRFixCalls), and a word
+// the fixer may have written (an unmarked one of magnum's logins, or yours
+// while a fix run was at work under a gh fixer: fixBusy) is no decision.
 // A person's decision never closes on the fixer's word alone: after the run,
 // a decision GitHub shows no reply of the fixer's in goes back under Needs
 // you (decisionsLeft); a loop that built every decision its attention asked
@@ -25,14 +28,18 @@ package engine
 // no start (callsDecided).
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -56,18 +63,72 @@ type FixDecision struct {
 const fixDecideBy = "magnum fix --decide"
 
 // decisionIn reads a thread in which the fixer made a call at at, from cs,
-// the reviewers' comments of it oldest first (externalOf's): the call is
-// open while no fix-marked reply of the fixer's (by the author, whom a gh
-// fixer posts as, or by one of magnum's logins) came after it, and the
-// thread holds the author's decision when the call is open and its last
-// comment is the author's own word (ownWord: no magnum marker), made after
-// the call.
-func decisionIn(cs []github.ThreadComment, at time.Time, byAuthor, isOwn func(login, typ string) bool) (open, decision bool) {
-	open = !slices.ContainsFunc(cs, func(c github.ThreadComment) bool {
+// the reviewers' comments of it oldest first (externalOf's): whether the
+// call is still open (callOpen), and the author's decision there, nil for
+// none: while the call is open, the last word in the thread that the fixer
+// cannot have written, when it is the author's own (ownWord: no magnum
+// marker) and came after the call. The fixer may have written a word of
+// one of magnum's logins that is not the author's, and, as busy says, one
+// of the author's made while a fix run of the PR was at work (a gh fixer
+// posts as the author, and a reply it posts without the fix marker cannot
+// be told from theirs; fixBusy): those are skipped, so a decision made
+// before them stands, and none of them is one.
+func decisionIn(cs []github.ThreadComment, at time.Time, byAuthor, isOwn func(login, typ string) bool, busy func(time.Time) bool) (bool, *github.ThreadComment) {
+	if !callOpen(cs, at, byAuthor, isOwn) {
+		return false, nil
+	}
+	for i := len(cs) - 1; i > 0; i-- { // the first comment is the reviewer's
+		c := cs[i]
+		author := byAuthor(c.AuthorLogin, c.AuthorType)
+		switch {
+		case !author && isOwn(c.AuthorLogin, c.AuthorType), author && busy(c.CreatedAt):
+			continue // the fixer's word, or maybe its
+		case author && ownWord(c.Body) && c.CreatedAt.After(at):
+			return true, &c
+		}
+		break
+	}
+	return true, nil
+}
+
+// callOpen reports whether the fixer's call made at at in a thread, cs its
+// comments oldest first, is still open: no fix-marked reply of the fixer's
+// (by the author, whom a gh fixer posts as, or by one of magnum's logins)
+// came after it.
+func callOpen(cs []github.ThreadComment, at time.Time, byAuthor, isOwn func(login, typ string) bool) bool {
+	return !slices.ContainsFunc(cs, func(c github.ThreadComment) bool {
 		return c.CreatedAt.After(at) && postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || isOwn(c.AuthorLogin, c.AuthorType))
 	})
-	last := cs[len(cs)-1]
-	return open, open && len(cs) > 1 && byAuthor(last.AuthorLogin, last.AuthorType) && ownWord(last.Body) && last.CreatedAt.After(at)
+}
+
+// fixBusy says whether a fix run of PR prID was at work at a time: after
+// the run was made and until it ended (the later of its end and its
+// verification), or at any time since it was made for one still at work.
+// Runs that cannot be read make every time busy: a word that the fixer may
+// have written is never a decision.
+func (e *Engine) fixBusy(ctx context.Context, prID int64) func(time.Time) bool {
+	runs, err := e.st.RunsByPR(ctx, prID)
+	if err != nil {
+		e.log.Warn("fix: the PR's fix runs, for the replies the fixer may have posted as the author", "pr", prID, "err", err)
+		return func(time.Time) bool { return true }
+	}
+	type span struct{ from, to time.Time } // to zero: still at work
+	var spans []span
+	for _, r := range runs {
+		if r.Kind != store.RunFix {
+			continue
+		}
+		s := span{from: r.CreatedAt}
+		for _, t := range []*time.Time{r.EndedAt, r.VerifiedAt} {
+			if t != nil && t.After(s.to) {
+				s.to = *t
+			}
+		}
+		spans = append(spans, s)
+	}
+	return func(at time.Time) bool {
+		return slices.ContainsFunc(spans, func(s span) bool { return at.After(s.from) && (s.to.IsZero() || !at.After(s.to)) })
+	}
 }
 
 // decisionCall reports whether c, a call of a fix job's message, asks the
@@ -77,59 +138,86 @@ func decisionCall(c attention.FixCall) bool {
 	return c.Thread != "" && (strings.HasPrefix(c.Action, "decide another reviewer's ") || strings.HasPrefix(c.Action, "decide a human's "))
 }
 
+// kvPRFixCalls holds when the fixer made each call that the PR's attention
+// of kind fix asks the author to decide (JSON: the id of each thread's
+// first comment, then the time), written with that attention
+// (fixAttention, recordFixCalls) and at the start of a loop over it
+// (startFix): the report the calls came from is one per head, so a later
+// run at the same head that fails after it wrote its own would otherwise
+// date them at its end, and make a decision made before it an answer.
+func kvPRFixCalls(prID int64) string { return fmt.Sprintf("pr.%d.fix_calls", prID) }
+
 // fixerCalls are the calls the fixer left the author in other reviewers'
-// threads that the loop's record still asks for, by the id of each
-// thread's first comment, with when each was made. The record is the PR's
-// attention of kind fix while it asks for the fixer's calls
-// (attention.FixAsks): each call it names that asks for a decision
-// (decisionCall; one magnum put back for a decision the fixer did not
-// build, decisionsLeft, or kept after a failure, keepDecisions, among
-// them), and each entry of its report's "## Needs you" that it still names
-// (FixNeedsAsked) and the fixer did not fix ("not fixed.", or neither
-// word) in a thread the external file beside the report lists. A call is
-// made when the settle reads the report: at the time of the fix run that
-// wrote it (verified, else ended). None while the PR needs nothing of the
-// kind, or when the report or its run cannot be read.
+// threads that the loop's record still asks for (decisionThreads), by the
+// id of each thread's first comment, with when each was made: as recorded
+// (kvPRFixCalls), else at the time of the fix run whose report the
+// attention names (an attention raised before the record). None while the
+// PR needs nothing of the kind.
 func (e *Engine) fixerCalls(ctx context.Context, pr store.PR) map[int64]time.Time {
+	threads, made := e.decisionThreads(ctx, pr)
+	if len(threads) == 0 {
+		return nil
+	}
+	recorded := e.fixCallTimes(ctx, pr.ID)
+	calls := map[int64]time.Time{}
+	for _, id := range threads {
+		switch at, ok := recorded[id]; {
+		case ok:
+			calls[id] = at
+		case !made.IsZero():
+			calls[id] = made
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	return calls
+}
+
+// decisionThreads are the threads, by the id of each one's first comment,
+// in which the PR's attention of kind fix, while it asks for the fixer's
+// calls (attention.FixAsks), asks the author to decide a call the fixer left
+// them: each call it names that asks for a decision (decisionCall; one
+// magnum put back for a decision the fixer did not build, decisionsLeft, or
+// kept after a failure, keepDecisions, among them), and each entry of its
+// report's "## Needs you" that it still names (FixNeedsAsked) and the fixer
+// did not fix ("not fixed.", or neither word) in a thread the external file
+// beside the report lists. made is the time of the fix run that wrote that
+// report (verified, else ended; zero when the report or its run cannot be
+// read): a call is made when the settle reads the report.
+func (e *Engine) decisionThreads(ctx context.Context, pr store.PR) (threads []int64, made time.Time) {
 	msg := deref(pr.LastError)
 	if pr.State != store.PRNeedsAttention || !attention.FixAsks(msg) {
-		return nil
+		return nil, time.Time{}
 	}
 	if kind, _ := e.getKV(ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
-		return nil
+		return nil, time.Time{}
 	}
-	report := attention.FixReport(msg)
-	if report == "" {
-		return nil
-	}
-	b, err := os.ReadFile(report)
-	if err != nil {
-		return nil
-	}
-	runID, _ := agents.ReportRun(b)
-	if runID == "" {
-		return nil
-	}
-	run, err := e.st.RunByID(ctx, runID)
-	if err != nil || run.PRID != pr.ID || run.Kind != store.RunFix {
-		return nil
-	}
-	at := run.VerifiedAt
-	if at == nil {
-		at = run.EndedAt
-	}
-	if at == nil {
-		return nil
-	}
-	calls := map[int64]time.Time{}
 	add := func(id string) {
-		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
-			calls[n] = *at
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil && !slices.Contains(threads, n) {
+			threads = append(threads, n)
 		}
 	}
 	for _, c := range attention.Explain(attention.KindFix, msg, "").NeedsYou {
 		if decisionCall(c) {
 			add(c.Thread)
+		}
+	}
+	report := attention.FixReport(msg)
+	if report == "" {
+		return threads, time.Time{}
+	}
+	b, err := os.ReadFile(report)
+	if err != nil {
+		return threads, time.Time{}
+	}
+	runID, _ := agents.ReportRun(b)
+	if runID == "" {
+		return threads, time.Time{}
+	}
+	if run, err := e.st.RunByID(ctx, runID); err == nil && run.PRID == pr.ID && run.Kind == store.RunFix {
+		if at := cmp.Or(run.VerifiedAt, run.EndedAt); at != nil {
+			made = *at
 		}
 	}
 	if rep, err := ParseFixReport(string(b), runID); err == nil {
@@ -144,10 +232,71 @@ func (e *Engine) fixerCalls(ctx context.Context, pr store.PR) map[int64]time.Tim
 			}
 		}
 	}
-	if len(calls) == 0 {
+	return threads, made
+}
+
+// fixCallTimes is the PR's record of when the fixer made its calls
+// (kvPRFixCalls); none when there is none or it cannot be read.
+func (e *Engine) fixCallTimes(ctx context.Context, prID int64) map[int64]time.Time {
+	raw, ok := e.getKV(ctx, kvPRFixCalls(prID))
+	if !ok {
 		return nil
 	}
+	var byID map[string]time.Time
+	if json.Unmarshal([]byte(raw), &byID) != nil {
+		return nil
+	}
+	calls := make(map[int64]time.Time, len(byID))
+	for id, at := range byID {
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
+			calls[n] = at
+		}
+	}
 	return calls
+}
+
+// setFixCallTimes records calls as the PR's record of when the fixer made
+// its calls (kvPRFixCalls), unless it holds them already; none removes it.
+func (e *Engine) setFixCallTimes(ctx context.Context, prID int64, calls map[int64]time.Time) {
+	if maps.EqualFunc(calls, e.fixCallTimes(ctx, prID), time.Time.Equal) {
+		return
+	}
+	if len(calls) == 0 {
+		e.delKV(ctx, kvPRFixCalls(prID))
+		return
+	}
+	byID := make(map[string]time.Time, len(calls))
+	for id, at := range calls {
+		byID[strconv.FormatInt(id, 10)] = at.UTC()
+	}
+	b, err := json.Marshal(byID)
+	if err != nil {
+		return
+	}
+	e.setKV(ctx, kvPRFixCalls(prID), string(b))
+}
+
+// recordFixCalls records when the fixer made each decision call of msg, the
+// attention a fix job just raised on PR prID (fixAttention): a call kept
+// from the attention it replaced (keepDecisions) at the time recorded for
+// it there (kept), any other at the time of the run whose report msg names.
+// A raise that did not take (the PR moved on) records nothing.
+func (e *Engine) recordFixCalls(ctx context.Context, prID int64, msg string, kept map[int64]time.Time) {
+	pr, err := e.st.PRByID(ctx, prID)
+	if err != nil || pr.State != store.PRNeedsAttention || deref(pr.LastError) != msg {
+		return
+	}
+	threads, made := e.decisionThreads(ctx, pr)
+	calls := map[int64]time.Time{}
+	for _, id := range threads {
+		switch at, ok := kept[id]; {
+		case ok:
+			calls[id] = at
+		case !made.IsZero():
+			calls[id] = made
+		}
+	}
+	e.setFixCallTimes(ctx, prID, calls)
 }
 
 // callsDecided reports whether msg, a PR's attention, asks for the fixer's
@@ -268,26 +417,28 @@ func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]b
 		e.log.Info("fix: the PR moved on before the lift of the decisions the fixer built", "subject", job.subject(), "err", err)
 		return
 	}
-	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
+	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRFixCalls(pr.ID))
 	e.event(ctx, "info", job.subject(), "fix.decisions_built", fmt.Sprintf("%s built every decision you made: the review of %s stands, with no new round",
 		job.role.Name, textx.ShortSHA(pr.HeadSHA)), job.eventData())
 }
 
 // keepDecisions is msg, the attention a fix job raises over old, the
 // PR's attention it replaces, with old's decision calls (decisionCall)
-// after msg's own words, when msg asks for no call of its own (a failed
-// run, the cap): a person's decision never closes on a failure, and the
-// next `magnum fix` finds those calls still open (fixerCalls) and builds
-// the decisions made on them. A message with calls of its own is the
-// fixer's last word on them (decisionsLeft put back the ones it did not
-// build), and stays as it is.
-func keepDecisions(old, msg string) string {
+// that open says are still open after msg's own words, when msg asks for no
+// call of its own (a failed run, the cap): a person's decision never closes
+// on a failure, and the next `magnum fix` finds those calls still open
+// (fixerCalls, at the time recorded for them: recordFixCalls) and builds
+// the decisions made on them. A call GitHub shows the fixer built (callsOpen)
+// is done and goes. A message with calls of its own is the fixer's last
+// word on them (decisionsLeft put back the ones it did not build), and
+// stays as it is.
+func keepDecisions(old, msg string, open func(thread string) bool) string {
 	if !attention.FixAsks(old) || attention.FixAsks(msg) {
 		return msg
 	}
 	var keep []attention.FixCall
 	for _, c := range attention.Explain(attention.KindFix, old, "").NeedsYou {
-		if decisionCall(c) {
+		if decisionCall(c) && open(c.Thread) {
 			keep = append(keep, c)
 		}
 	}
@@ -301,6 +452,40 @@ func keepDecisions(old, msg string) string {
 		first += "\n" + rest
 	}
 	return first
+}
+
+// callsOpen says whether the fixer's call in a thread (by its first
+// comment's id) is still open on GitHub (callOpen): no fix-marked reply of
+// the fixer's came there since it was made (calls; fixerCalls). The job's
+// PR's threads are read once, when first asked. A call magnum has no time
+// for, a thread the read does not list and a read that fails count as open:
+// a person's decision never closes on a guess.
+func (e *Engine) callsOpen(ctx context.Context, job *fixJob, calls map[int64]time.Time) func(thread string) bool {
+	read := e.threadsReader(ctx, job)
+	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
+	byAuthor := func(login, typ string) bool { return github.SameAccount(github.Account(login, typ), author) }
+	own := sync.OnceValue(func() []string { return e.fixLogins(ctx, job) })
+	isOwn := func(login, typ string) bool {
+		a := github.Account(login, typ)
+		return slices.ContainsFunc(own(), func(o string) bool { return github.SameAccount(o, a) })
+	}
+	return func(thread string) bool {
+		id, err := strconv.ParseInt(thread, 10, 64)
+		at, ok := calls[id]
+		if err != nil || !ok {
+			return true
+		}
+		threads, err := read()
+		if err != nil {
+			return true
+		}
+		for _, t := range threads {
+			if all := t.AllComments(); len(all) > 0 && all[0].ID == id {
+				return callOpen(all, at, byAuthor, isOwn)
+			}
+		}
+		return true
+	}
 }
 
 // threadReplier is what `magnum fix --decide` posts your reply with: a
@@ -406,8 +591,9 @@ func (e *Engine) decideCheck(ctx context.Context, repo store.Repo, pr store.PR, 
 			return decidePlan{}, fmt.Errorf("PR #%d: the fixer left you no call in thread %d (`magnum status %s` lists what it left); nothing was posted",
 				pr.Number, d.Thread, ref)
 		}
-		if t := read.items.Threads[i]; t.Decision && len(t.Comments) > 0 {
-			if body, _ := excerptOf(d.Text); t.Comments[len(t.Comments)-1].Body == body {
+		if t := read.items.Threads[i]; t.Decision {
+			body, _ := excerptOf(d.Text)
+			if slices.ContainsFunc(t.Comments, func(c externalComment) bool { return c.URL == t.DecisionURL && c.Body == body }) {
 				plan.posted[d.Thread] = t.DecisionURL // this very reply is your decision there already
 			}
 		}

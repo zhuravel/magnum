@@ -87,10 +87,11 @@ type externalItems struct {
 // and answered, and its comments, oldest first: in a long thread the first
 // and the newest GitHub lists (github.Thread.AllComments), Omitted
 // counting the ones between them that the file leaves out. Decision says
-// that its last comment is the author's decision on a call the fixer left
-// them there (fix_decide.go), at DecisionURL: not answered, the fixer
-// builds it. called (not in the file) says that the fixer's call there is
-// still open, which `magnum fix --decide` answers.
+// that the thread holds the author's decision on a call the fixer left them
+// there (fix_decide.go), at DecisionURL (its last comment but for any the
+// fixer may have written since): not answered, the fixer builds it. called
+// (not in the file) says that the fixer's call there is still open, which
+// `magnum fix --decide` answers.
 type externalThread struct {
 	CommentID   int64             `json:"comment_id"`
 	URL         string            `json:"url"`
@@ -225,6 +226,9 @@ type externalInput struct {
 	// fixer left the author a call that the loop's record still asks for,
 	// with when it made each (fixerCalls).
 	Calls map[int64]time.Time
+	// Busy says whether a fix run of the PR was at work at a time
+	// (fixBusy; nil: none ever was).
+	Busy func(time.Time) bool
 }
 
 // ownWord reports whether a review body or comment by the author is the
@@ -242,9 +246,10 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // github.Thread.AllComments), and it is answered when the latest of them is
 // the author's, the fixer's included, or carries the fixer's marker
 // (postreview.IsFixReply) and comes from one of magnum's logins (the marker
-// in anyone else's comment answers nothing), unless it is the author's
+// in anyone else's comment answers nothing), unless it holds the author's
 // decision (decisionIn): their own word after the fixer's call there
-// (in.Calls) while that call is open. A review body or conversation
+// (in.Calls) while that call is open, which no word the fixer may have
+// written since hides (in.Busy, under a gh fixer). A review body or conversation
 // comment is another reviewer's when a reviewer other than the author and
 // magnum's logins wrote it, it says something (the body of a review that
 // comments or requests changes: remarkState) and it came after the author's last own
@@ -265,6 +270,10 @@ func externalOf(in externalInput) (externalItems, int) {
 		return github.IsBot(typ, login) || trustedReplier(association) || byAuthor(login, typ) || isOwn(login, typ)
 	}
 	name := func(login, typ string) string { return cmp.Or(github.Account(login, typ), "ghost") }
+	busy := func(time.Time) bool { return false } // a fixer App never posts as the author
+	if !in.AppFixer && in.Busy != nil {
+		busy = in.Busy
+	}
 
 	x := externalItems{Author: in.Author, FixerLogins: append([]string{}, in.Own...), Threads: []externalThread{}, Conversation: []externalRemark{}}
 	outside := 0
@@ -285,9 +294,9 @@ func externalOf(in externalInput) (externalItems, int) {
 		et := externalThread{CommentID: root.ID, URL: root.URL, Path: t.Path, Line: cmp.Or(t.Line, t.OriginalLine), Outdated: t.Outdated,
 			Answered: answered, Comments: []externalComment{}, Omitted: max(t.CommentCount-len(all), 0)}
 		if at, ok := in.Calls[root.ID]; ok {
-			et.called, et.Decision = decisionIn(cs, at, byAuthor, isOwn)
-			if et.Decision {
-				et.Answered, et.DecisionURL = false, last.URL
+			var d *github.ThreadComment
+			if et.called, d = decisionIn(cs, at, byAuthor, isOwn, busy); d != nil {
+				et.Decision, et.Answered, et.DecisionURL = true, false, d.URL
 			}
 		}
 		for _, c := range cs {
@@ -453,7 +462,8 @@ func externalReadOf(in externalInput, head string) externalRead {
 // three lists GitHub cut short, and the look's part of it
 // (externalReadOf): magnum's logins resolving another reviewer's thread
 // never close it. The fixer's calls the PR's attention still asks for
-// (fixerCalls) make the author's later word in those threads a decision.
+// (fixerCalls) make the author's later word in those threads a decision,
+// unless a fix run was at work when it came (fixBusy).
 func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, error) {
 	ctx = github.WithOp(ctx, opFixExternal) // github_cost.go
 	gh, rd, ok := e.fixReader(job)
@@ -477,9 +487,14 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 		return externalRead{}, err
 	}
 	own := e.fixLogins(ctx, job)
+	var busy func(time.Time) bool
+	calls := e.fixerCalls(ctx, job.pr)
+	if len(calls) > 0 {
+		busy = e.fixBusy(ctx, job.pr.ID)
+	}
 	read := externalReadOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
 		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own, AppFixer: len(e.cfg.FixerLogins(&job.watch)) > 0,
-		Calls: e.fixerCalls(ctx, job.pr)}, job.pr.HeadSHA)
+		Calls: calls, Busy: busy}, job.pr.HeadSHA)
 	if !threadsComplete {
 		read.cut = append(read.cut, fmt.Sprintf("over %d review threads", github.MaxReviewThreads))
 	}

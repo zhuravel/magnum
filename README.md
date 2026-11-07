@@ -3111,7 +3111,7 @@ starts, Magnum writes `external-threads.json` beside its report and names the fi
 unresolved review thread that another reviewer started (neither one of Magnum's logins nor you), with each
 comment's id and link, marked answered when its latest comment is yours or the fixer's (for a thread longer
 than the 50 comments GitHub lists first, Magnum reads its newest ones too, so the latest is the real one),
-unless that latest comment is your decision on a call the fixer left you there (Your decisions, below), and
+unless the thread holds your decision on a call the fixer left you there (Your decisions, below), and
 the review bodies and conversation comments of others since your own last comment (one without a Magnum
 marker; Magnum pages back through the conversation until it finds it), each marked answered once a later reply
 of the fixer names it on the line under its quote. One its reviewer edited in place counts from the edit (its
@@ -3302,21 +3302,31 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   marks the thread `decision` with your reply's link, where it would otherwise read as answered (your comment
   is its last), and the fixer builds what you decided (the fix, or the won't-fix reply you chose) with a reply
   that ends "(decided at <link>)". Only your own word counts: never another reviewer's, a bot's or the
-  fixer's own (its replies carry the fix marker), and only after the fixer's call in that same thread.
+  fixer's own (its replies carry the fix marker), and only after the fixer's call in that same thread. A
+  fixer that posts as you (a gh fixer) could also post a reply without the fix marker, which reads as yours,
+  so a reply of yours made while a fix run of the PR was at work is no decision (reply again after the run,
+  or use `--decide`), and neither it nor an unmarked comment of Magnum's logins after your decision hides
+  that decision. Magnum records when the fixer made each call as it raises the attention that asks for it,
+  so a later run at the same head (one report per head) never makes the call newer than your decision.
   `magnum fix <ref> --decide <thread>="<your reply>"` (repeatable; the thread by its comment id or its link)
   does both in one step: it shows each reply and asks y/N (`--yes` does not), posts your reply in the thread
   as you (the gh identity the fix role uses, or the watch's operator identity when the fixer is an App), then
   starts the loop (a `fix.decided` event names the threads and the replies' links). The daemon refuses it,
   with nothing posted, for a thread the fixer made no open call in, a PR that is not yours, a loop that runs,
-  a fix held for later, a drain for a restart and every refusal of `magnum fix`. A person's decision never
+  a fix held for later, a drain for a restart, a GitHub budget below the floor and every refusal of `magnum
+  fix`: a pinned PR is unpinned and its slot's guard asked first, and a PR without a slot needs a free one,
+  as for `magnum fix`. What changes in the moment between those checks and the start (another PR takes the
+  free slot) can still refuse the start after the reply went out: the answer then names the reply, and
+  `--decide` with the same words posts it no second time. A person's decision never
   closes on the fixer's word alone: once the run ends, a decision GitHub shows no reply of the fixer's in
   goes back under `Needs you` with its call, the fixer's own report notwithstanding (a `fix.decisions` event
   counts what it built and what went back); a loop that built every decision its attention asked for, and
   left nothing, puts the PR back to reviewed (`fix.decisions_built`); and a run that fails, or the cap, keeps
-  the decision calls of the attention it replaces after its own words, so the next `magnum fix` still builds
+  the decision calls of the attention it replaces after its own words, made when they were (one GitHub shows
+  a fix-marked reply of the fixer's in since goes: it was built), so the next `magnum fix` still builds
   them. Under `autofix = "open"` a decision is new work for the look: the thread's key takes your reply, and
   an attention whose calls are all decisions you made stops no start, so the loop starts by itself once the PR
-  settled (below).
+  settled (below); one that asks anything else of you still needs you.
 - **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends
   quietly with a `fix.ended` event, and your push gets its own review.
 

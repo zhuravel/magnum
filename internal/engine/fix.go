@@ -306,10 +306,12 @@ func fixRunningSentence(st FixState) string {
 // back as carried: it runs every refusal again but reads GitHub no second
 // time at the same head. --decide (FixPayload.Decide) is refused as
 // decideCheck says, and under a drain, before anything is posted; it posts
-// your replies only once prepareFix found nothing to refuse (and never in a
-// dry run or before a whiteboard job's yield, whose pass after it posts
-// them), then starts the loop, which reads the other reviewers again so
-// that its fixer gets your replies as decisions.
+// your replies only once prepareFix found nothing to refuse with the start's
+// own pin (fixPinUnpins: a pinned PR is unpinned and its slot's guard asked,
+// and a PR without a slot needs a free one; a GitHub budget below the floor
+// refuses too), and never in a dry run or before a whiteboard job's yield,
+// whose pass after it posts them; then it starts the loop, which reads the
+// other reviewers again so that its fixer gets your replies as decisions.
 func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *externalRead) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -379,13 +381,25 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 		}
 		return "", heldByWhiteboard(repo, pr, carry)
 	case plan != nil: // every refusal first, then your replies, then the start, which reads them as decisions
-		if _, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried, false); err != nil {
+		// The start's own pin: a pinned PR is unpinned and its slot's guard
+		// asked, and a PR without a slot needs a free one, as for `magnum fix`.
+		var pre *fixJob
+		pre, err = e.prepareFix(ctx, pr, FixState{}, fixPinUnpins, carried, false)
+		switch {
+		case err != nil:
 			return "", fmt.Errorf("%w; nothing was posted", err)
+		case pre.budget != nil:
+			return "", fmt.Errorf("%s; nothing was posted: run it again once the budget recovers", pre.budget.text())
+		}
+		if pr, err = e.st.PRByID(ctx, pr.ID); err != nil { // its pin went
+			return "", err
 		}
 		if plan.note, err = e.decidePost(ctx, repo, pr, *plan); err != nil {
 			return "", err
 		}
-		job, err = e.startFix(ctx, pr, fixBy, FixState{}, nil)
+		if job, err = e.startFix(ctx, pr, fixBy, FixState{}, nil); job != nil { // the unpin's note, which the start no longer makes
+			job.notes = append(slices.DeleteFunc(slices.Clone(pre.notes), func(n string) bool { return slices.Contains(job.notes, n) }), job.notes...)
+		}
 	default:
 		job, err = e.startFix(ctx, pr, fixBy, FixState{}, carried)
 	}
@@ -787,6 +801,9 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	if err := e.claimFixRow(ctx, job, prev, st); err != nil {
 		e.unreserve(pr.ID)
 		return nil, err
+	}
+	if calls := e.fixerCalls(ctx, pr); len(calls) > 0 && !e.d.DryRun {
+		e.setFixCallTimes(ctx, pr.ID, calls) // fix_decide.go: dated before its run can rewrite the report they came from
 	}
 	e.noteLoopRan(pr.ID) // fix_open.go: its look reads the loop's events once it ended
 	started := *job

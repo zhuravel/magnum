@@ -10,7 +10,9 @@ import (
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/postreview"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -39,12 +41,28 @@ func fixerSays(th github.Thread, id int64, body string, at time.Time) github.Thr
 	return authorSays(th, id, body+"\n\n"+postreview.FixReplyMarker, at)
 }
 
+// leftDecision is the first fixer's "## Needs you" in fixLeftADecision:
+// rev-ann's thread, declined as a product choice.
+const leftDecision = "- 4322458360 lib/sandbox.rb:185: not fixed. keeping stderr is a product choice"
+
+// leftDescription is a "## Needs you" entry beside it that asks something
+// else of you: the description, which the attention names in the older
+// words.
+const leftDescription = "- 5808905525 description: not fixed. the title is the product's call"
+
 // fixLeftADecision runs one loop on PR #2, whose review found nothing while
 // rev-ann's thread waited: the fixer reads keeping stderr as a product
 // choice and leaves it to you, with no reply, as on a live own PR on
 // 2026-11-07. The PR needs attention with the call to decide it. next is
 // the fixer of each later run (nil: one that does nothing).
 func fixLeftADecision(t *testing.T, next func(h *harness, run store.Run) string, mods ...func(*harness)) (*harness, *fixGit) {
+	t.Helper()
+	return fixLeft(t, leftDecision, next, mods...)
+}
+
+// fixLeft is fixLeftADecision whose first fixer leaves needs (its report's
+// "## Needs you", rev-ann's thread among them).
+func fixLeft(t *testing.T, needs string, next func(h *harness, run store.Run) string, mods ...func(*harness)) (*harness, *fixGit) {
 	t.Helper()
 	h, git := fixHarness(t, mods...)
 	h.gh.clock = h.clock.Now // a reply --decide posts is made now
@@ -58,7 +76,7 @@ func fixLeftADecision(t *testing.T, next func(h *harness, run store.Run) string,
 		first := runs == 1
 		mu.Unlock()
 		if first {
-			return "", fixReport(run.ID, "nothing", noReplies, "- 4322458360 lib/sandbox.rb:185: not fixed. keeping stderr is a product choice")
+			return "", fixReport(run.ID, "nothing", noReplies, needs)
 		}
 		if next == nil {
 			return "", fixReport(run.ID, "nothing", noReplies, "none")
@@ -86,6 +104,13 @@ func (h *harness) decide(body string) github.Thread {
 	return th
 }
 
+// appSays is th with a comment of magnum's App, with no marker, at at.
+func appSays(th github.Thread, id int64, body string, at time.Time) github.Thread {
+	th.Comments = append(slices.Clone(th.Comments), github.ThreadComment{ID: id, AuthorLogin: "talkable", AuthorType: "Bot",
+		Body: body, URL: prPage + "#discussion_r" + itoa(id), CreatedAt: at})
+	return th
+}
+
 // The fixer's call in another reviewer's thread asks you to decide; your
 // reply there, the thread's last comment, made after the call while the
 // call is open, is that decision: the external file marks the thread
@@ -93,25 +118,35 @@ func (h *harness) decide(body string) github.Thread {
 // Only your own word counts: a reply of yours made before the call, one in
 // a thread the fixer made no call in, the fixer's own fix-marked reply (it
 // posts as you), another reviewer's reply after yours and a reply after the
-// fixer already answered since the call are no decision.
+// fixer already answered since the call are no decision. Nor is a reply of
+// yours made while a fix run of the PR was at work (Busy): a gh fixer posts
+// as you, and an unmarked reply of its own cannot be told from yours, so
+// your decision before it stands; nor an unmarked word of magnum's logins.
 func TestTheAuthorsReplyAfterTheFixersCallIsADecision(t *testing.T) {
 	call := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	root := func(id int64) github.Thread {
 		return extThread(id, "app/a.rb", 3, call.Add(-time.Hour), "Should this keep stderr?", "rev-ann")
 	}
 	threads := []github.Thread{
-		authorSays(root(100), 101, "Keep it, and fix the drop.", call.Add(time.Minute)),                               // the decision
-		authorSays(root(200), 201, "Keep it.", call.Add(-time.Minute)),                                                // before the call
-		authorSays(root(300), 301, "Keep it.", call.Add(time.Minute)),                                                 // no call there
-		fixerSays(root(400), 401, "Won't fix: as decided.", call.Add(time.Minute)),                                    // the fixer's own
-		authorSays(root(500), 501, "Keep it.", call.Add(time.Minute)),                                                 // then rev-ann again
-		fixerSays(authorSays(root(600), 601, "x", call.Add(-time.Hour)), 602, "Answer: ok", call.Add(30*time.Second)), // the fixer answered since the call
+		authorSays(root(100), 101, "Keep it, and fix the drop.", call.Add(time.Minute)),                                            // the decision
+		authorSays(root(200), 201, "Keep it.", call.Add(-time.Minute)),                                                             // before the call
+		authorSays(root(300), 301, "Keep it.", call.Add(time.Minute)),                                                              // no call there
+		fixerSays(root(400), 401, "Won't fix: as decided.", call.Add(time.Minute)),                                                 // the fixer's own
+		authorSays(root(500), 501, "Keep it.", call.Add(time.Minute)),                                                              // then rev-ann again
+		fixerSays(authorSays(root(600), 601, "x", call.Add(-time.Hour)), 602, "Answer: ok", call.Add(30*time.Second)),              // the fixer answered since the call
+		authorSays(authorSays(root(700), 701, "Fix the drop.", call.Add(time.Minute)), 702, "Won't fix.", call.Add(5*time.Minute)), // then an unmarked reply during a run
+		authorSays(root(800), 801, "Won't fix.", call.Add(5*time.Minute)),                                                          // only a reply during a run
+		appSays(authorSays(root(900), 901, "Fix the drop.", call.Add(time.Minute)), 902, "Won't fix.", call.Add(2*time.Minute)),    // then magnum's App, unmarked
 	}
 	threads[4].Comments = append(threads[4].Comments, github.ThreadComment{ID: 502, AuthorLogin: "rev-ann", AuthorType: "User",
 		AuthorAssociation: "MEMBER", Body: "Why?", CreatedAt: call.Add(2 * time.Minute)})
 	threads[5] = authorSays(threads[5], 603, "Keep it.", call.Add(time.Minute))
-	calls := map[int64]time.Time{100: call, 200: call, 400: call, 500: call, 600: call}
-	x, _ := externalOf(externalInput{Threads: threads, Author: "zhuravel", Own: []string{"talkable[bot]"}, Calls: calls})
+	calls := map[int64]time.Time{100: call, 200: call, 400: call, 500: call, 600: call, 700: call, 800: call, 900: call}
+	busy := func(at time.Time) bool {
+		return at.After(call.Add(4*time.Minute)) && at.Before(call.Add(6*time.Minute))
+	} // a fix run at work
+	in := externalInput{Threads: threads, Author: "zhuravel", Own: []string{"talkable[bot]"}, Calls: calls, Busy: busy}
+	x, _ := externalOf(in)
 	type got struct {
 		answered, decision, called bool
 		url                        string
@@ -123,6 +158,24 @@ func TestTheAuthorsReplyAfterTheFixersCallIsADecision(t *testing.T) {
 		400: {answered: true},
 		500: {called: true},
 		600: {answered: true},
+		700: {decision: true, called: true, url: prPage + "#discussion_r701"},
+		800: {answered: true, called: true},
+		900: {decision: true, called: true, url: prPage + "#discussion_r901"},
+	}
+	// A fixer App never posts as you: your replies during its runs are yours.
+	in.AppFixer = true
+	app, _ := externalOf(in)
+	for _, th := range app.Threads {
+		switch th.CommentID {
+		case 700:
+			if !th.Decision || th.DecisionURL != prPage+"#discussion_r702" {
+				t.Errorf("under a fixer App, thread 700: decision %v at %q, want your latest reply", th.Decision, th.DecisionURL)
+			}
+		case 800:
+			if !th.Decision || th.DecisionURL != prPage+"#discussion_r801" {
+				t.Errorf("under a fixer App, thread 800: decision %v at %q, want your reply", th.Decision, th.DecisionURL)
+			}
+		}
 	}
 	for _, th := range x.Threads {
 		g := got{answered: th.Answered, decision: th.Decision, called: th.called, url: th.DecisionURL}
@@ -134,8 +187,8 @@ func TestTheAuthorsReplyAfterTheFixersCallIsADecision(t *testing.T) {
 	if len(want) > 0 {
 		t.Errorf("threads missing from the file: %v", want)
 	}
-	if threads, _ := x.unanswered(); threads != 2 {
-		t.Errorf("unanswered threads = %d, want the decision and rev-ann's question", threads)
+	if threads, _ := x.unanswered(); threads != 4 {
+		t.Errorf("unanswered threads = %d, want the three decisions and rev-ann's question", threads)
 	}
 	b, err := json.Marshal(x.Threads[0])
 	if err != nil || !strings.Contains(string(b), `"decision":true,"decision_url":"`+prPage+`#discussion_r101"`) || strings.Contains(string(b), "called") {
@@ -212,6 +265,22 @@ func TestALoopThatBuiltEveryDecisionLiftsTheAttention(t *testing.T) {
 	}
 }
 
+// A fixer that leaves something else under Needs you, and neither builds
+// your decision nor leaves it there, has the new attention, which replaces
+// the one you decided on, name the decision's call beside its own entry.
+func TestADecisionTheFixerDidNotBuildGoesBackBesideWhatItLeft(t *testing.T) {
+	h, _ := fixLeftADecision(t, func(_ *harness, run store.Run) string {
+		return fixReport(run.ID, "nothing", noReplies, leftDescription)
+	})
+	h.decide("Keep stderr: fix the drop.")
+	h.fix(FixPayload{})
+	h.handle()
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if msg := deref(cur.LastError); !strings.Contains(msg, decideCall) || !strings.Contains(msg, "5808905525 description") {
+		t.Errorf("last_error = %q, want the call again beside the description", msg)
+	}
+}
+
 // A person's decision never closes on the fixer's word alone: a fixer that
 // neither builds it (no reply of its own on GitHub since it started) nor
 // leaves it under Needs you has it put back there by magnum, so the PR
@@ -243,25 +312,94 @@ func TestADecisionTheFixerDidNotBuildGoesBackToNeedsYou(t *testing.T) {
 	}
 }
 
+// readDecision is PR #2's other reviewers' items as a loop would read
+// them now: rev-ann's thread.
+func (h *harness) readDecision() externalThread {
+	h.t.Helper()
+	read, err := h.e.readExternal(h.ctx, &fixJob{repo: h.repo(), watch: h.cfg.Watches[0], pr: h.pr(2), login: "talkable[bot]"})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if len(read.items.Threads) != 1 {
+		h.t.Fatalf("threads = %+v, want rev-ann's", read.items.Threads)
+	}
+	return read.items.Threads[0]
+}
+
 // A fix run that fails over your decisions keeps them: the failure's
 // attention names their calls after its own words, so the next `magnum fix`
-// still builds them.
+// still builds them. The calls keep the time they were made: a failed run
+// that rewrote the report of the run that made them (one report per head),
+// as a failed push does, does not make your decision older than the call.
+// A call GitHub shows the failed run built (a fix-marked reply of the
+// fixer's after it) is done and goes. An attention raised before magnum
+// recorded when calls are made has them dated when a loop starts over it.
 func TestAFailedRunKeepsYourDecisions(t *testing.T) {
-	h, _ := fixLeftADecision(t, func(_ *harness, run store.Run) string { return "" }) // no report: the run fails
+	failedPush := func(_ *harness, run store.Run) string {
+		return fixReport(run.ID, "push failed: rejected", noReplies, leftDecision)
+	}
+	for _, tc := range []struct {
+		name   string
+		next   func(h *harness, run store.Run) string
+		before bool // the attention was raised before magnum recorded when calls are made
+		built  bool
+	}{
+		{name: "no report", next: func(*harness, store.Run) string { return "" }},
+		{name: "a failed push", next: failedPush},
+		{name: "a failed push over an attention raised before the record", next: failedPush, before: true},
+		{name: "a failed push after it built your decision", built: true, next: func(h *harness, run store.Run) string {
+			h.advance(time.Minute)
+			h.gh.mu.Lock()
+			h.gh.threads[2][0] = fixerSays(h.gh.threads[2][0], 4322459000, "Fixed in 1a2b3c4: the drop is gone (decided at "+prPage+"#discussion_r4322458999).",
+				h.clock.Now())
+			h.gh.mu.Unlock()
+			return fixReport(run.ID, "push failed: rejected", "1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := fixLeftADecision(t, tc.next)
+			if tc.before {
+				h.e.delKV(h.ctx, kvPRFixCalls(h.pr(2).ID))
+			}
+			h.decide("Keep stderr: fix the drop.")
+			h.fix(FixPayload{})
+			h.handle()
+			msg := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+			if !strings.HasPrefix(msg, "fix run failed: ") || strings.Contains(msg, decideCall) == tc.built {
+				t.Fatalf("last_error = %q, want the failure, and the call unless the run built it", msg)
+			}
+			if tc.built {
+				return
+			}
+			if th := h.readDecision(); !th.Decision || th.DecisionURL != prPage+"#discussion_r4322458999" {
+				t.Errorf("thread = %+v, want your decision still to build", th)
+			}
+		})
+	}
+}
+
+// A gh fixer posts as you, and a reply it posts without the fix marker (with
+// `gh api`, as on talkable#12112) reads as yours. One that a run posts while
+// it is at work is no decision, even when the run fails with no report and
+// leaves the report of the run that made the call on disk: your decision
+// before it is still the one the next fixer builds, and the call stays.
+func TestAnUnmarkedReplyOfAFixRunIsNoDecision(t *testing.T) {
+	h, _ := fixLeftADecision(t, func(h *harness, _ store.Run) string {
+		h.advance(time.Minute) // the fixer works a while
+		h.gh.mu.Lock()
+		h.gh.threads[2][0] = authorSays(h.gh.threads[2][0], 4322459111, "Won't fix: stderr stays dropped.", h.clock.Now())
+		h.gh.mu.Unlock()
+		return "" // no report: the run fails
+	})
 	h.decide("Keep stderr: fix the drop.")
 	h.fix(FixPayload{})
 	h.handle()
-	cur := h.wantState(2, store.PRNeedsAttention)
-	msg := deref(cur.LastError)
-	if !strings.HasPrefix(msg, "fix run failed: ") || !strings.Contains(msg, decideCall) {
-		t.Fatalf("last_error = %q, want the failure and the call", msg)
+	if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.Contains(msg, decideCall) {
+		t.Fatalf("last_error = %q, want the call kept", msg)
 	}
-	read, err := h.e.readExternal(h.ctx, &fixJob{repo: h.repo(), watch: h.cfg.Watches[0], pr: cur, login: "talkable[bot]"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if th := read.items.Threads; len(th) != 1 || !th[0].Decision {
-		t.Errorf("threads = %+v, want your decision still to build", th)
+	h.advance(10 * time.Minute)
+	if th := h.readDecision(); !th.Decision || th.DecisionURL != prPage+"#discussion_r4322458999" {
+		t.Errorf("thread = %+v, want your decision, not the fixer's unmarked reply", th)
 	}
 }
 
@@ -271,7 +409,12 @@ func TestAFailedRunKeepsYourDecisions(t *testing.T) {
 // and the reply, made as the run starts, is never named as an unmarked
 // reply of the fixer's.
 func TestFixDecidePostsYourReplyThenStartsTheLoop(t *testing.T) {
-	h, _ := fixLeftADecision(t, nil)
+	h, _ := fixLeftADecision(t, func(h *harness, run store.Run) string { // it builds your decision, so the settle looks for unmarked replies
+		h.gh.mu.Lock()
+		h.gh.threads[2][0] = fixerSays(h.gh.threads[2][0], 4322459000, "Fixed in 1a2b3c4: the drop is gone.", h.clock.Now())
+		h.gh.mu.Unlock()
+		return fixReport(run.ID, "nothing", "1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
 	decide := []FixDecision{{Thread: decideThread, Text: "Keep stderr: fix the drop."}}
 	dry := h.fix(FixPayload{Decide: decide, DryRun: true})
 	h.handle()
@@ -331,6 +474,32 @@ func TestFixDecideRefusals(t *testing.T) {
 			}
 		}, want: "fixing, cycle 1 of 3; `magnum abort` stops it"},
 		{name: "with --done", decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}, want: "magnum fix: --decide goes alone"},
+		{name: "the fixer answered since its call", decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}, mod: func(h *harness) {
+			h.gh.mu.Lock()
+			h.gh.threads[2][0] = fixerSays(h.gh.threads[2][0], 4322459000, "Won't fix: a product choice.", h.clock.Now())
+			h.gh.mu.Unlock()
+		}, want: "PR #2: the fixer left you no call in thread 4322458360"},
+		{name: "not as you", decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}, mod: func(h *harness) {
+			h.e.d.Identities["zhuravel"] = otherLogin{Source: h.e.d.Identities["zhuravel"], login: "alice"}
+		}, want: "no gh identity of zhuravel, the PR's author, to post your reply as"},
+		{name: "no free slot", decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}, mod: func(h *harness) {
+			rel := h.enqueue(ReqRelease, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+			h.handle()
+			if r := h.request(rel); r.State != store.RequestDone {
+				h.t.Fatalf("release: %s %q", r.State, deref(r.Result))
+			}
+			takeOnlySlot(h)
+		}, want: "no free talkable/talkable slot right now; run `magnum fix talkable/talkable#2` again shortly; nothing was posted"},
+		{name: "a person's agent in the pinned slot", decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}, mod: func(h *harness) {
+			pin := h.enqueue(ReqPin, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+			h.handle()
+			if r := h.request(pin); r.State != store.RequestDone {
+				h.t.Fatalf("pin: %s %q", r.State, deref(r.Result))
+			}
+			h.sl.mu.Lock()
+			h.sl.guardErr = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: `pane p9: claude agent "alice" is idle in /tmp/review1`}
+			h.sl.mu.Unlock()
+		}, want: `but slot review1 is held: foreign_agent: pane p9: claude agent "alice" is idle in /tmp/review1; nothing was posted`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := fixLeftADecision(t, nil)
@@ -360,6 +529,57 @@ func TestFixDecideRefusals(t *testing.T) {
 			t.Errorf("request = %s %q", r.State, deref(r.Result))
 		}
 	})
+}
+
+// otherLogin is an identity whose login is not the one configured.
+type otherLogin struct {
+	identity.Source
+	login string
+}
+
+func (o otherLogin) Login() string { return o.login }
+
+// Autofix starts no loop over an attention whose call you did not decide:
+// the other reviewers' items the start read show no decision of yours, so
+// the attention still asks you.
+func TestAutofixStartsNoLoopOverACallYouDidNotDecide(t *testing.T) {
+	h, _ := fixLeftADecision(t, nil)
+	if _, err := h.e.startFix(h.ctx, h.pr(2), autofixBy, FixState{}, nil); err == nil ||
+		!strings.Contains(err.Error(), "needs attention: autofix starts no loop over it") {
+		t.Errorf("autofix over an undecided call: %v, want a refusal", err)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("autofix started a loop over a call you did not decide")
+	}
+}
+
+// A loop that built your decision lifts only an attention of decision calls
+// alone: one that also asks something else of you (here the description,
+// in the older words) stays for the rest.
+func TestALoopThatBuiltYourDecisionKeepsAnAttentionThatAsksMore(t *testing.T) {
+	h, _ := fixLeft(t, leftDecision+"\n"+leftDescription, func(h *harness, run store.Run) string {
+		h.gh.mu.Lock()
+		h.gh.threads[2][0] = fixerSays(h.gh.threads[2][0], 4322459000, "Won't fix: stderr stays dropped (decided at "+prPage+"#discussion_r4322458999).",
+			h.clock.Now())
+		h.gh.mu.Unlock()
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 0 not a bug, 1 won't fix)", "none")
+	})
+	before := deref(h.pr(2).LastError)
+	if !strings.Contains(before, "1 more finding needs your call (5808905525 description)") {
+		t.Fatalf("last_error = %q, want the description beside the call", before)
+	}
+	h.decide("Drop it: reply won't fix.")
+	h.fix(FixPayload{})
+	h.handle()
+	if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); msg != before {
+		t.Errorf("last_error = %q, want the attention as it was", msg)
+	}
+	if ev, ok := h.fixEvent("fix.decisions"); !ok || !strings.Contains(ev.Message, "built your decision in 1 thread") {
+		t.Errorf("fix.decisions = %q, %v", ev.Message, ok)
+	}
+	if ev, ok := h.fixEvent("fix.decisions_built"); ok {
+		t.Errorf("fix.decisions_built = %q over an attention that asks more", ev.Message)
+	}
 }
 
 // Under autofix = "open" your decision is new work for the look: the

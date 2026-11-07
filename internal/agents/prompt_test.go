@@ -799,11 +799,14 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 // answered (the author's comment is its last). It never overrules the
 // decision, cites it in its reply, skips it only once a fix-marked reply
 // came after it, and puts it back under Needs you when it cannot build it.
+// The decision is the comment at decision_url, not an unmarked comment of
+// the author's after it, which may be a reply of an earlier run's.
 func TestTheFixSkillBuildsTheAuthorsDecision(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"A thread with `decision` set is one where you left the author a call under `## Needs you` in an earlier run, and the author answered it: " +
-			"its last comment, at `decision_url`, is the author's decision. It is not `answered`: it is an external item.",
+			"the comment at `decision_url` is the author's decision. It is not `answered`: it is an external item. " +
+			"A comment by `author` after it without the fix marker is not the decision: it may be a reply of an earlier run of yours.",
 		"- A thread with `decision` set gets no verdict of yours: the author decided it. Read the decision at `decision_url` and build it, never overrule it:",
 		"When you cannot build it (the decision is unclear, or its fix fails its specs and you cannot make them pass), do not reply: " +
 			"put it under `## Needs you` with `not fixed.` and why.",

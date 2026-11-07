@@ -97,9 +97,11 @@ func newFixCmd(c *Context) *cobra.Command {
 			"posts your reply there as you (the gh identity the fix role uses), then starts the loop in one step: its fixer reads "+
 			"your reply as your decision and builds it (the fix, or the won't-fix reply you chose), citing it, or leaves it to you "+
 			"again. It shows each reply and asks y/N; the daemon refuses, with nothing posted, a thread the fixer made no call in "+
-			"(or one it answered since), a PR that is not yours, a loop that runs and a fix held for later. A reply of yours typed "+
-			"on GitHub in such a thread is a decision too, for the next `magnum fix`, and under autofix = \"open\" for the loop "+
-			"that starts by itself once the PR settles. "+
+			"(or one it answered since), a PR that is not yours, a loop that runs, a fix held for later and every refusal of "+
+			"`magnum fix` (a pinned PR is unpinned first, as for `magnum fix`). A reply of yours typed on GitHub in such a "+
+			"thread, while no fix run of the PR is at work, is a decision too, for the next `magnum fix`; under autofix = "+
+			"\"open\" the loop starts by itself once the PR settles only when every call the fixer left is a decision you "+
+			"made: with anything else asked of you, run `magnum fix` or --decide. "+
 			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
