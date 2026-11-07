@@ -277,7 +277,7 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "fix is off (F)")
 			v.Open.Off = engine.OpenOffFixOff
 		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
-			tui.WaitsOn{Who: tui.WaitsOnYou, What: "fix is off for #4540 (F on the board turns it on)", Short: "fix is off for #4540", OnYou: true}},
+			tui.WaitsOn{Who: tui.WaitsOnYou, What: "fix is off for #4540 (F turns it on)", Short: "fix is off for #4540", OnYou: true}},
 		"a draft": {func(v *PRState) {
 			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "a draft")
 			v.Open.Off = engine.OpenOffDraft
@@ -546,10 +546,6 @@ func TestARowSaysMagnumsOutcomeAndWhomItWaitsOn(t *testing.T) {
 				if strings.Contains(move, "%d") {
 					move = fmt.Sprintf(move, n)
 				}
-				if key == "PR-12340" { // f works on your PR's row; a task's names the board's
-					what = strings.Replace(what, "· f fixes them", "· f on the board fixes them", 1)
-					move = strings.Replace(move, "f fixes them", "fix them, or f on the board", 1)
-				}
 				switch {
 				case strings.Contains(w.What, "reviewed "):
 					t.Errorf("%s says a bare reviewed: %q", key, w.What)
@@ -697,5 +693,53 @@ func TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild(t *testing.T) {
 	}
 	if row := rowOf(t, d, "PR-12340"); !strings.Contains(row.Help, "magnum's look has not decided #4540 since 06:05: magnum's daemon runs an old build") {
 		t.Errorf("the row's help %q: want the old build named as the cause", row.Help)
+	}
+}
+
+// A task's row whose PR magnum's registry has carries it (FactoryRow.PR),
+// so f, F and K act on it as on your PR's row: its reference, whether
+// magnum's fix loop runs, fix off, and why magnum's look leaves it alone.
+// A task without a PR, and one whose PR magnum has not read, carry none.
+// Its words name the screen's own keys, not the board's. Before, a task's
+// row never carried its PR, and f, F and x refused it.
+func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12340", 4540)
+	r.pr(4540, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, cycle 1 of 3")
+		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
+	})
+	r.publishedTask("PR-12341", 4541)
+	r.pr(4541, func(v *PRState) {
+		v.HasOpen, v.Open, v.FixOff = true, verdict(engine.OpenOff, "fix is off (F)"), true
+		v.Open.Off = engine.OpenOffFixOff
+	})
+	r.publishedTask("PR-12342", 4542)
+	r.pr(4542, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenOff, "a draft")
+		v.Open.Off = engine.OpenOffDraft
+	})
+	r.publishedTask("PR-12343", 4543) // magnum has not read it
+	r.pr(4543, func(v *PRState) { *v = PRState{DaemonUp: true, Watched: true} })
+	r.task("PR-12344", "bug", "Not pushed yet", registry.TaskActive, "coding", "", "")
+	d := r.data(time.Time{})
+	for key, want := range map[string]*tui.FactoryPR{
+		"PR-12340": {Ref: "example/talkable#4540", Fixing: true},
+		"PR-12341": {Ref: "example/talkable#4541", FixOff: true, Off: "fix is off for #4541 (F turns it on)"},
+		"PR-12342": {Ref: "example/talkable#4542", Off: "#4542 is a draft: mark it ready"},
+		"PR-12343": nil,
+		"PR-12344": nil,
+	} {
+		row := rowOf(t, d, key)
+		switch {
+		case want == nil && row.PR != nil:
+			t.Errorf("%s carries a PR %+v, want none", key, *row.PR)
+		case want != nil && (row.PR == nil || *row.PR != *want):
+			t.Errorf("%s carries %+v, want %+v", key, row.PR, *want)
+		}
+	}
+	if w := rowOf(t, d, "PR-12341").WaitsOn[0]; w.What != "fix is off for #4541 (F turns it on)" {
+		t.Errorf("a task's PR with fix off says %q, want the screen's F", w.What)
 	}
 }

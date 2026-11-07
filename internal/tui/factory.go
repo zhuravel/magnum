@@ -27,10 +27,12 @@ package tui
 // meaning: b and t open the PR and the issue (on home and the task card),
 // and r, p and x do nothing here, except x on the task card (drop, y/N) and
 // r there for a task that can go on (retry, y/N). A row of your own PR
-// (FactoryRow.PR) has no card: enter names its keys in the footer, b opens
-// the PR, o and t say they act on a task's row, and a walks past it; f, F
-// and x act there (y/N), through magnum's own request paths, and on a
-// task's row they say so and start nothing.
+// (FactoryRow.yourPR) has no card: enter names its keys in the footer, b
+// opens the PR, o and t say they act on a task's row, and a walks past it.
+// f, F and K act on a row whose PR magnum's registry has, yours or a
+// task's (FactoryRow.PR), y/N, through magnum's own request paths (x too on
+// your PR's row); on a task's row without one they say so and start
+// nothing.
 
 import (
 	"cmp"
@@ -1002,14 +1004,18 @@ func (m factoryModel) homeHints() []hint {
 	var hs []hint
 	r, ok := m.selectedRow()
 	switch {
-	case ok && r.PR != nil:
+	case ok && r.yourPR():
 		hs = append(hs, hint{"f", "fix"}, hint{"F", prFixOffVerb(*r.PR)})
 		if r.PR.Fixing {
-			hs = append(hs, hint{"x", "stop"})
+			hs = append(hs, hint{"K", "stop"})
 		}
 		hs = m.reportHints(append(hs, hint{"b", "PR"}), r.ID)
 	case ok:
-		hs = m.reportHints(append(hs, hint{"enter", m.openVerb(r)}), r.ID)
+		hs = append(hs, hint{"enter", m.openVerb(r)})
+		if r.PR != nil && r.PR.Fixing { // magnum's loop on the task's PR
+			hs = append(hs, hint{"K", "stop magnum"})
+		}
+		hs = m.reportHints(hs, r.ID)
 	}
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})
@@ -1029,7 +1035,7 @@ func (m factoryModel) homeHints() []hint {
 // itself; "" for a row with no pane to step into (a review by a person, a
 // queued or a done task): o is not offered there.
 func (m factoryModel) paneHint(r FactoryRow) string {
-	if r.PR != nil { // your PR: magnum's panes are the board's
+	if r.yourPR() { // your PR: magnum's panes are the board's
 		return ""
 	}
 	if r.Group == GroupNeedsYou && m.data.Cards[r.ID].Question != nil {

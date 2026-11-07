@@ -56,6 +56,9 @@ type prWait struct {
 	help, card      string
 	// cells are the PR's CI, FINDINGS and APPR cells (prCells).
 	cells prCells
+	// pr is the PR as the row's f, F and K act on it (screenPR); nil when
+	// magnum's registry has no open PR of it.
+	pr *tui.FactoryPR
 }
 
 // prCells are an open PR's cells on its row: its CI, magnum's findings and
@@ -171,7 +174,7 @@ func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
 		s.noteBuild(st)
 		w := s.prWaitOf(v, st, ok && err == nil, err)
 		if ok && err == nil {
-			w.cells = cellsOf(st)
+			w.cells, w.pr = cellsOf(st), screenPR(st)
 		}
 		v.pr = &w
 		v.group = w.group
@@ -309,7 +312,7 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, c prClock) prWait {
 		w.since = closed
 		return w
 	}
-	return magnumWait(st, n, false, c)
+	return magnumWait(st, n, c)
 }
 
 // magnumWait is the wait of open PR #n as magnum's registry tells it (st):
@@ -319,9 +322,7 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, c prClock) prWait {
 // a verdict the look owes (a stale one, or one still to come: magnum
 // looking at the PR, while that is true, lookOwed; past it what magnum's
 // row says, with the look named), else what magnum's row says (rowWait).
-// own says the row is your PR's, whose F and f work on the factory screen
-// too (offWait).
-func magnumWait(st PRState, n int, own bool, c prClock) prWait {
+func magnumWait(st PRState, n int, c prClock) prWait {
 	looking := fmt.Sprintf("looking at #%d", n)
 	switch {
 	case !st.DaemonUp:
@@ -337,7 +338,7 @@ func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 		// stale never hides it as "looking at".
 		return attentionWait(st, n)
 	case st.HasOpen && !st.Stale:
-		w := verdictWait(st, n, own, c)
+		w := verdictWait(st, n, c)
 		w.since = cmp.Or(st.Open.Since, st.Open.At)
 		return w
 	case st.State == store.PRNeedsAttention || st.Stalemate:
@@ -349,7 +350,7 @@ func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 			w.since = owed
 			return w
 		}
-		w := rowWait(st, n, own, c)
+		w := rowWait(st, n, c)
 		note := fmt.Sprintf("magnum's look has not decided #%d", n)
 		if !owed.IsZero() {
 			note += " since " + when(owed, c.now)
@@ -363,7 +364,7 @@ func magnumWait(st PRState, n int, own bool, c prClock) prWait {
 		}
 		return w
 	}
-	return rowWait(st, n, own, c)
+	return rowWait(st, n, c)
 }
 
 // lookLate is lookOwed's why for a look past its polls with magnum's
@@ -420,10 +421,10 @@ func when(t, now time.Time) string {
 // head to come, else magnum's outcome at the head (outcomeOf), never a bare
 // "reviewed", with what comes next and whom it waits on. Problems no loop
 // of magnum's takes (autofix is "never", or fix is off) wait on you, which
-// f fixes on your PR; ones magnum's fixer takes (autofix "own" or "open")
+// the row's f fixes; ones magnum's fixer takes (autofix "own" or "open")
 // wait on magnum; a head clean on magnum's side waits as nextWait says, on
-// the reviewers, CI or you, never on magnum. own as for magnumWait.
-func rowWait(st PRState, n int, own bool, c prClock) prWait {
+// the reviewers, CI or you, never on magnum.
+func rowWait(st PRState, n int, c prClock) prWait {
 	short := textx.ShortSHA(st.Head)
 	switch {
 	case st.State == store.PRBaseline || st.State == store.PRIneligible:
@@ -431,7 +432,7 @@ func rowWait(st PRState, n int, own bool, c prClock) prWait {
 		if st.State == store.PRBaseline {
 			why = engine.OpenOffBaseline
 		}
-		what := offWait(why, n, own)
+		what := offWait(why, n)
 		return youWait(what, clauseShort(what), "")
 	case slices.Contains(store.InFlightStates, st.State):
 		w := waitsWait(waitMagnum, "magnum reviews "+short+" now", "", "")
@@ -449,12 +450,9 @@ func rowWait(st PRState, n int, own bool, c prClock) prWait {
 	switch {
 	case problems && (st.Autofix == config.AutofixOwn || st.Autofix == config.AutofixOpen) && !st.FixOff:
 		w = waitsWait(waitMagnum, what+" · magnum's fixer takes them", count, "")
-	case problems && own:
+	case problems:
 		w = youWait(what+" · f fixes them", count, "")
 		w.move, w.moveShort = "f fixes them", "f"
-	case problems:
-		w = youWait(what+" · f on the board fixes them", count, "")
-		w.move, w.moveShort = "fix them, or f on the board", "fix them"
 	default:
 		w = nextWait(st, n, what, true, c)
 		if w.since.After(since) {
@@ -760,11 +758,11 @@ func fixingWait(st PRState, n int) prWait {
 // reopenMove is your move on a task whose PR closed without a merge.
 const reopenMove = "reopen it, or x drops the task"
 
-// verdictWait is the wait of a PR whose verdict st.Open tells its state;
-// own as for magnumWait. An idle one that no person approved waits as
+// verdictWait is the wait of a PR whose verdict st.Open tells its state.
+// An idle one that no person approved waits as
 // nextWait says, once magnum read GitHub's review gate: on the reviewers
 // asked, else on you to ask one.
-func verdictWait(st PRState, n int, own bool, c prClock) prWait {
+func verdictWait(st PRState, n int, c prClock) prWait {
 	waits, you := waitsWait, youWait
 	o := st.Open
 	short := clauseShort(o.Why)
@@ -791,7 +789,7 @@ func verdictWait(st PRState, n int, own bool, c prClock) prWait {
 		clean, _, _ := strings.Cut(o.Why, " · ")
 		return nextWait(st, n, clean, false, c)
 	case engine.OpenOff:
-		what := offWait(o.Off, n, own)
+		what := offWait(o.Off, n)
 		return you(what, clauseShort(what), "")
 	case engine.OpenWaits:
 		who := "magnum"
@@ -808,14 +806,11 @@ func verdictWait(st PRState, n int, own bool, c prClock) prWait {
 }
 
 // offWait is why magnum's look leaves PR #n alone (OpenVerdict.Off), as
-// your move on it; own says it is your PR's row, whose own F turns fix on.
-func offWait(off string, n int, own bool) string {
+// your move on it: the row's F turns fix on.
+func offWait(off string, n int) string {
 	switch off {
 	case engine.OpenOffFixOff:
-		if own {
-			return fmt.Sprintf("fix is off for #%d (F turns it on)", n)
-		}
-		return fmt.Sprintf("fix is off for #%d (F on the board turns it on)", n)
+		return fmt.Sprintf("fix is off for #%d (F turns it on)", n)
 	case engine.OpenOffDraft:
 		return fmt.Sprintf("#%d is a draft: mark it ready", n)
 	case engine.OpenOffFork:

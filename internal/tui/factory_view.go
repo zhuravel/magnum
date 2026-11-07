@@ -369,7 +369,7 @@ func (r FactoryRow) jiraKey() string {
 	switch {
 	case r.Jira != "":
 		return r.Jira
-	case r.PR != nil || r.Key == r.GitHub:
+	case r.yourPR() || r.Key == r.GitHub:
 		return ""
 	}
 	return r.Key
@@ -382,7 +382,7 @@ func (r FactoryRow) keyText(l factoryLayout) string {
 	switch {
 	case l.split:
 		return r.jiraKey()
-	case l.repoW > 0 && r.PR != nil && r.GitHub != "":
+	case l.repoW > 0 && r.yourPR() && r.GitHub != "":
 		return r.GitHub
 	}
 	return r.Key
@@ -438,7 +438,7 @@ func (p *factoryPainter) markSeg(r FactoryRow) seg {
 // tone is st, or Dim on a done row and on the row of your PR that magnum
 // leaves alone (it asks nothing).
 func (p *factoryPainter) tone(r FactoryRow, st lipgloss.Style) lipgloss.Style {
-	if r.Group == GroupDone || r.PR != nil && r.PR.Off != "" {
+	if r.Group == GroupDone || r.yourPR() && r.PR.Off != "" {
 		return p.st.Dim
 	}
 	return st
@@ -989,7 +989,7 @@ func (p *factoryPainter) chipLine() string {
 	for _, r := range p.rows {
 		switch r.Group {
 		case GroupNeedsYou:
-			if r.PR != nil {
+			if r.yourPR() {
 				prs++
 			} else {
 				tasks++

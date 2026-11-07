@@ -12,8 +12,9 @@ package factory
 // magnum's look leaves alone (a baseline, fix off), or without a verdict
 // one magnum does not review, is drawn dim with why in a group of its own
 // (tui.GroupYours), oldest first, and asks nothing. The rows are read
-// only: f, F and x on them go through magnum's own request paths, as the
-// board's keys do, never through the factory daemon.
+// only: f, F and x on them, as on a task's row with a PR (screenPR), go
+// through magnum's own request paths, as the board's keys do, never
+// through the factory daemon.
 
 import (
 	"cmp"
@@ -100,23 +101,16 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // baseline, include_own = false, a mute) is off too: no review comes.
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
-	w := magnumWait(st, n, true, s.clock())
+	w := magnumWait(st, n, s.clock())
 	fresh := st.HasOpen && !st.Stale
-	off := ""
+	off := offOf(st)
 	switch {
 	case st.Fixing:
 	case st.State == store.PRNeedsAttention || st.Stalemate:
 		if w.group != tui.GroupNeedsYou || fresh && st.Open.Verdict == engine.OpenOff {
 			w = attentionWait(st, n)
 		}
-	case fresh && st.Open.Verdict == engine.OpenOff:
-		off = w.on.What
-	case !fresh && (st.State == store.PRIneligible || st.State == store.PRBaseline):
-		why := engine.OpenOffIneligible
-		if st.State == store.PRBaseline {
-			why = engine.OpenOffBaseline
-		}
-		off = offWait(why, n, true)
+	case !fresh && off != "":
 		w = youWait(off, clauseShort(off), "")
 	}
 	key := s.ownKey(st.Ref)
@@ -125,8 +119,7 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	cellsOf(st).fill(&row)
 	trackers := s.cfg.TrackersFor(st.Ref.Repo)
 	row.Jira, _ = config.Issue(st.Title, trackers)
-	row.PR = &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff, Off: off,
-		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing}
+	row.PR = screenPR(st)
 	switch {
 	case off != "": // magnum leaves it alone: it asks nothing
 	case w.group == tui.GroupNeedsYou:
@@ -140,6 +133,40 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 		WaitingFor: cmp.Or(w.card, w.on.Who+": "+w.on.What), Links: w.links, FixNeeds: w.needs, FixReport: w.report}
 	card.Issue, card.IssueURL = config.Issue(st.Title, trackers)
 	return row, card
+}
+
+// screenPR is open PR st as a row's f, F and K act on it, your PR's or a
+// task's: its reference, whether magnum's fix loop runs on it, fix off, and
+// why magnum's look leaves it alone (offOf).
+func screenPR(st PRState) *tui.FactoryPR {
+	if !st.Found || st.GHState != store.GHOpen {
+		return nil
+	}
+	fresh := st.HasOpen && !st.Stale
+	return &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, st.Ref.Number), FixOff: st.FixOff, Off: offOf(st),
+		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing}
+}
+
+// offOf is why magnum's look leaves PR st alone, as its row says it: its
+// fresh verdict's off, or without one a PR magnum does not review (a
+// baseline, include_own = false, a mute); "" while a loop works on it, it
+// needs your attention or magnum stopped arguing there, and when the look
+// covers it.
+func offOf(st PRState) string {
+	fresh := st.HasOpen && !st.Stale
+	switch {
+	case st.Fixing, st.State == store.PRNeedsAttention, st.Stalemate:
+		return ""
+	case fresh && st.Open.Verdict == engine.OpenOff:
+		return offWait(st.Open.Off, st.Ref.Number)
+	case !fresh && (st.State == store.PRIneligible || st.State == store.PRBaseline):
+		why := engine.OpenOffIneligible
+		if st.State == store.PRBaseline {
+			why = engine.OpenOffBaseline
+		}
+		return offWait(why, st.Ref.Number)
+	}
+	return ""
 }
 
 // ownKey is the key of your PR's row: its number ("#4512") when the

@@ -31,11 +31,12 @@ func (r *screenRig) own(id int64, n int, edit func(*PRState)) {
 	r.magnum.own = append(r.magnum.own, v)
 }
 
-// prRows are the rows of your own PRs in d.
+// prRows are the rows of your own PRs in d (a task's row may carry its PR
+// too: its id is the task's).
 func prRows(d tui.FactoryData) []tui.FactoryRow {
 	var out []tui.FactoryRow
 	for _, r := range d.Rows {
-		if r.PR != nil {
+		if r.PR != nil && r.ID < 0 {
 			out = append(out, r)
 		}
 	}

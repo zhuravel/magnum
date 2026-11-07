@@ -96,15 +96,20 @@ type FactoryRow struct {
 	Findings  *FindingsInfo
 	Approvals *FactoryApprovals
 
-	// PR is set on a row of your own PR from magnum's registry, not a task
-	// (in any group but DONE TODAY); nil on a task's row. Such
-	// a row's ID is the negative of magnum's id of the PR, which no task's
-	// has.
+	// PR is the row's open PR in magnum's registry, which f, F and K act
+	// on: on a row of your own PR, not a task (in any group but DONE
+	// TODAY), whose ID is the negative of magnum's id of the PR, which no
+	// task's has (yourPR); and on a task's row whose PR magnum read. nil on
+	// a task's row without one.
 	PR *FactoryPR
 }
 
-// FactoryPR is your own PR on the factory screen, as magnum's registry
-// tells it: what the row's keys go by.
+// yourPR reports whether r is a row of your own PR, not a task's: it has a
+// PR and the negative of magnum's id of it.
+func (r FactoryRow) yourPR() bool { return r.PR != nil && r.ID < 0 }
+
+// FactoryPR is a row's open PR on the factory screen (your own PR's, or a
+// task's), as magnum's registry tells it: what the row's keys go by.
 type FactoryPR struct {
 	// Ref names it as magnum's commands do ("owner/name#4512").
 	Ref string

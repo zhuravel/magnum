@@ -736,10 +736,10 @@ func TestTheBoardsLettersKeepTheirMeaning(t *testing.T) {
 		}
 	}
 	still("home", "r", "p")
-	// x on a task's row on home is your PR's key (stop its fix loop): it
-	// starts nothing and says so.
+	// x on a task's row on home is no key there (it drops a task on its
+	// card, and K stops magnum's loop): it starts nothing and says so.
 	h.press("x")
-	mustContain(t, h.view(), "f, F and x act on your PRs")
+	mustContain(t, h.view(), "x drops a task, on its card")
 	if h.act.calls() != 0 || h.m.bar.asking != nil {
 		t.Error("home: x on a task's row asked or ran something")
 	}

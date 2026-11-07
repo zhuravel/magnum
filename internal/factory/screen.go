@@ -160,7 +160,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 	case o.DaemonDown: // nothing moves: no hold of the last daemon's is in force, and no agent works for it
 		d.Blocking, d.BlockingLong = []string{daemonDownShort}, []string{daemonDownLong}
 		for i := range d.Rows {
-			if d.Rows[i].Mark == tui.MarkWorking && d.Rows[i].PR == nil { // magnum's fixer on your PR is magnum's daemon's
+			if d.Rows[i].Mark == tui.MarkWorking && d.Rows[i].PR == nil { // magnum's fixer on a PR is magnum's daemon's
 				d.Rows[i].Mark = tui.MarkWaits
 			}
 		}
@@ -416,6 +416,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	if v.pr != nil {
 		row.Mark = v.pr.mark // magnum's fixer at work on the PR moves too
 		v.pr.cells.fill(&row)
+		row.PR = v.pr.pr
 	}
 	if t.State == registry.TaskQueued && t.WaitsWho == waitCopy {
 		row.Frees = s.frees(v)

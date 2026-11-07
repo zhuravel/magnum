@@ -241,7 +241,7 @@ func TestThePRRowsKeysOnHome(t *testing.T) {
 	if h.m.view != fvHome {
 		t.Fatalf("enter on a PR row opened view %v", h.m.view)
 	}
-	mustContain(t, h.view(), "your PR: f fix, F fix off, x stop the loop, b browser")
+	mustContain(t, h.view(), "your PR: f fix, F fix off, K stop the loop, b browser")
 	h.press("o")
 	mustContain(t, h.view(), "o and t act on a task's row: #4602 is your PR")
 	h.press("t")
@@ -352,20 +352,25 @@ func TestXOnAnOwnPRRowAsksAndStopsTheLoop(t *testing.T) {
 	}
 }
 
-// f, F and x on a task's row start nothing: they act on your PRs, and the
-// footer says so.
+// f, F and K on a task's row without a PR in magnum's registry start
+// nothing and say so; x is no key of home's task rows (it drops a task on
+// its card) and says K stops magnum's loop.
 func TestFOnATaskRowStartsNothing(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g")
 	h.selectRow("PR-12371")
-	for _, k := range []string{"f", "F", "x"} {
+	for _, k := range []string{"f", "F", "K"} {
 		h.press(k)
 		v := h.view()
-		mustContain(t, v, "f, F and x act on your PRs")
+		mustContain(t, v, "f, F and K act on a PR in magnum's registry: PR-12371 has none there")
 		mustNotContain(t, v, "y/N")
 	}
+	h.press("x")
+	v := h.view()
+	mustContain(t, v, "K stops magnum's loop on a row with a PR; x drops a task, on its card")
+	mustNotContain(t, v, "y/N")
 	if h.act.calls() != 0 || h.m.view != fvHome {
-		t.Errorf("f, F or x on a task's row did something: %d calls, view %v", h.act.calls(), h.m.view)
+		t.Errorf("f, F, K or x on a task's row did something: %d calls, view %v", h.act.calls(), h.m.view)
 	}
 }
 

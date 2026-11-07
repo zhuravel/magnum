@@ -212,7 +212,7 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 			if !ok {
 				return nil
 			}
-			if r.PR != nil {
+			if r.yourPR() {
 				return m.note(prRowTaskKeys(r))
 			}
 			task = r.ID
@@ -222,16 +222,22 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 	return nil
 }
 
-// prKey is f, F or x on home's row r: on your PR's row, magnum's fix of
+// prKey is f, F, K or x on home's row r: on a row whose open PR magnum's
+// registry has (FactoryRow.PR: your PR's, or a task's), magnum's fix of
 // what is open (f), its switch out of autofix or back in (F; a PR magnum
 // leaves alone for another reason says why and runs nothing) and the stop
-// of its fix loop (x; with no loop it says so), each behind y/N and
-// through magnum's own request paths; on a task's row nothing.
+// of its fix loop (K, and x on your PR's row; with no loop it says so),
+// each behind y/N and through magnum's own request paths; on a row without
+// one nothing. x on a task's row is no key of home's: it drops a task, on
+// its card.
 func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
-	if r.PR == nil {
-		return m.note("f, F and x act on your PRs: " + cleanText(r.Key) + " is a task")
+	switch {
+	case k == "x" && !r.yourPR():
+		return m.note("K stops magnum's loop on a row with a PR; x drops a task, on its card")
+	case r.PR == nil:
+		return m.note("f, F and K act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
 	}
-	pr, key, act := *r.PR, cleanText(r.Key), m.act
+	pr, key, act := *r.PR, prLabel(r), m.act
 	switch {
 	case k == "f":
 		return m.ask(nil, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
@@ -254,6 +260,17 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		func(ctx context.Context) (ActionResult, error) { return act.Abort(ctx, pr.Ref) })
 }
 
+// prLabel names row r's PR in a question or a note: your PR's key
+// ("#4602", "widget#12"), a task's key with its PR's number ("PR-12320's
+// #4530").
+func prLabel(r FactoryRow) string {
+	key := cleanText(r.Key)
+	if r.yourPR() || r.GitHub == "" {
+		return key
+	}
+	return key + "'s " + cleanText(r.GitHub)
+}
+
 // prFixOffVerb is what F does on your PR's row: fix off, or on again.
 func prFixOffVerb(pr FactoryPR) string {
 	if pr.FixOff {
@@ -264,7 +281,7 @@ func prFixOffVerb(pr FactoryPR) string {
 
 // prKeys is the footer of enter on your PR's row: its keys, since it has no
 // card.
-const prKeys = "your PR: f fix, F fix off, x stop the loop, b browser"
+const prKeys = "your PR: f fix, F fix off, K stop the loop, b browser"
 
 // prRowTaskKeys is the footer of o and t on your PR's row r: they act on a
 // task's.
@@ -276,7 +293,7 @@ func prRowTaskKeys(r FactoryRow) string {
 func (m factoryModel) prsNeedYou() int {
 	n := 0
 	for _, r := range m.data.Rows {
-		if r.Group == GroupNeedsYou && r.PR != nil {
+		if r.Group == GroupNeedsYou && r.yourPR() {
 			n++
 		}
 	}
@@ -323,7 +340,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "pgup", "ctrl+u":
 		m.moveTo(m.selIdx - page)
 	case "enter":
-		if r, ok := m.selectedRow(); ok && r.PR != nil {
+		if r, ok := m.selectedRow(); ok && r.yourPR() {
 			return m.note(prKeys), true
 		} else if ok {
 			m.openCard(r.ID)
@@ -345,12 +362,12 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "b", "t":
 		r, ok := m.selectedRow()
 		switch {
-		case ok && r.PR != nil && k == "t":
+		case ok && r.yourPR() && k == "t":
 			return m.note(prRowTaskKeys(r)), true
 		case ok:
 			return m.openPage(k, r.ID), true
 		}
-	case "f", "F", "x":
+	case "f", "F", "K", "x":
 		if r, ok := m.selectedRow(); ok {
 			return m.prKey(k, r), true
 		}

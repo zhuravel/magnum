@@ -112,7 +112,7 @@ func (m factoryModel) menuOwner() string {
 	if m.view == fvHome {
 		r, ok := m.selectedRow()
 		switch {
-		case ok && r.PR != nil:
+		case ok && r.yourPR():
 			return r.PR.Ref
 		case ok:
 			return m.taskKey(r.ID)
@@ -132,23 +132,28 @@ func (m factoryModel) menuItems() []menuItem {
 		sel, row := m.selectedRow()
 		_, decision := m.nextDecision()
 		c := m.data.Cards[sel.ID].Task
-		if row && sel.PR != nil { // your PR: no card, no pane of the factory's
-			pr := *sel.PR
-			return []menuItem{
-				{"fix what is open", "f", "f", acts}, {prFixOffVerb(pr), "F", "F", acts && (pr.FixOff || pr.Off == "")},
-				{"stop its fix loop", "x", "x", acts && pr.Fixing},
+		pr, hasPR := FactoryPR{}, row && sel.PR != nil
+		if hasPR {
+			pr = *sel.PR
+		}
+		fixKeys := []menuItem{
+			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
+			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
+		}
+		if row && sel.yourPR() { // your PR: no card, no pane of the factory's
+			return slices.Concat(fixKeys, []menuItem{
 				{"open its PR", "b", "b", acts && c.PRURL != ""}, m.reportItem(sel.ID), {"oldest decision", "a", "a", decision},
 				{"new task", "n", "n", acts},
 				{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
-			}
+			})
 		}
-		return []menuItem{
+		return slices.Concat([]menuItem{
 			{"open its card", "enter", "enter", row}, {"oldest decision", "a", "a", decision},
 			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""},
 			{"open its PR", "b", "b", row && acts && c.PRURL != ""}, {"open its Jira issue", "t", "t", row && acts && c.IssueURL != ""},
-			m.reportItem(sel.ID), {"new task", "n", "n", acts},
+			m.reportItem(sel.ID)}, fixKeys, []menuItem{{"new task", "n", "n", acts},
 			{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
-		}
+		})
 	case fvQuestion:
 		c, ok := m.questionCard()
 		if !ok || len(c.Questions) == 0 {
