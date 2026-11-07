@@ -15,10 +15,13 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // notesHarness is an act harness with talkable/talkable in the registry and
-// its notes on disk.
+// its notes on disk. Its registry is a file at Layout.DB(): the notes command
+// and its completion open it by path (notesOpenStore, completeQuery) and
+// report a failed open only in their output.
 type notesHarness struct {
 	*actHarness
 	repo store.Repo
@@ -27,7 +30,7 @@ type notesHarness struct {
 
 func newNotesHarness(t *testing.T) *notesHarness {
 	t.Helper()
-	h := newActHarness(t)
+	h := newActHarnessOn(t, storetest.OpenFile)
 	pr := h.seedPR("talkable/talkable", 11920, store.PRReviewed)
 	repo, err := h.st.RepoByID(h.ctx, pr.RepoID)
 	if err != nil {

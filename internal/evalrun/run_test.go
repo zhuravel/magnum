@@ -84,7 +84,7 @@ func TestACaseWhosePRIsFlaggedIsRefused(t *testing.T) {
 	if err := l.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, l.DB())
+	st := storetest.OpenFile(t, l.DB())
 	ctx := context.Background()
 	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_widgets", Owner: "example", Name: "widgets", Mode: store.RepoModePerPR})
 	if err != nil {

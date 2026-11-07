@@ -238,7 +238,7 @@ func TestTheFactoryScreenShowsAPublishedTasksPRVerdict(t *testing.T) {
 	}
 	reg.Close()
 
-	st := storetest.Open(t, l.DB())
+	st := storetest.OpenFile(t, l.DB())
 	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR})
 	if err != nil {
 		t.Fatal(err)

@@ -37,7 +37,7 @@ func TestOpenRevealsTheClientOfThePaneSession(t *testing.T) {
 	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: config.Defaults(),
 		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 	recorded := herdr.Session{Name: "reviews", Socket: filepath.Join(c.Layout.Home, "reviews.sock")}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	raw, _ := json.Marshal(recorded)
 	if err := st.SetKV(context.Background(), store.KVHerdrPanes, string(raw)); err != nil {
 		t.Fatal(err)

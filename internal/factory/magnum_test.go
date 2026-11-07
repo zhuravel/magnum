@@ -29,7 +29,7 @@ func magnumLayout(t *testing.T) (paths.Layout, *store.Store) {
 	if err := l.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, l.DB())
+	st := storetest.OpenFile(t, l.DB())
 	if err := fsx.WriteFileAtomic(l.Pid(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

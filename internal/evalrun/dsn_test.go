@@ -12,7 +12,7 @@ import (
 // temp tables in memory, as store.Open does.
 func TestTheReadOnlyDSNKeepsTempTablesInMemory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "magnum.db")
-	storetest.Open(t, path)
+	storetest.OpenFile(t, path)
 	db, err := sql.Open("sqlite", readOnlyDSN(path))
 	if err != nil {
 		t.Fatal(err)

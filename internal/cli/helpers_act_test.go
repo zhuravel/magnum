@@ -139,6 +139,14 @@ type actHarness struct {
 
 func newActHarness(t *testing.T) *actHarness {
 	t.Helper()
+	return newActHarnessOn(t, storetest.Open)
+}
+
+// newActHarnessOn is newActHarness with its registry from open: storetest.Open
+// keeps it in memory, storetest.OpenFile puts it at Layout.DB() for a command
+// that opens the registry by path (see newNotesHarness).
+func newActHarnessOn(t *testing.T, open func(testing.TB, string) *store.Store) *actHarness {
+	t.Helper()
 	t.Setenv("MAGNUM_CONFIG", "")
 	home := t.TempDir()
 	layout := paths.Layout{Home: home}
@@ -156,7 +164,7 @@ func newActHarness(t *testing.T) *actHarness {
 	}
 	cfg.Pools = []config.Pool{{Repo: "talkable/talkable", MainClone: filepath.Join(home, "talkable"), SlotName: "review{n}",
 		SlotPath: filepath.Join(home, "talkable.review{n}"), Base: "master"}}
-	st := storetest.Open(t, filepath.Join(home, "state", "magnum.db"))
+	st := open(t, filepath.Join(home, "state", "magnum.db"))
 	h := &actHarness{t: t, ctx: context.Background(), st: st, home: home, hd: &actFakeHerdr{},
 		gh: &actFakeGitHub{details: map[int]github.PRDetails{}}, run: &execx.Fake{}, tty: &execx.Fake{},
 		cleaner: &actFakeCleaner{}, env: map[string]string{},

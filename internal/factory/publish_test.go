@@ -718,7 +718,7 @@ func TestTheFactorySendsMagnumNoReviewRequest(t *testing.T) {
 	if got := r.published(task.ID); got.State != registry.TaskPublished {
 		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
 	}
-	st := storetest.Open(t, r.layout.DB())
+	st := storetest.OpenFile(t, r.layout.DB())
 	if qs, err := st.PendingRequests(r.ctx, 100); err != nil || len(qs) != 0 {
 		t.Fatalf("magnum's requests %+v (%v), want none", qs, err)
 	}

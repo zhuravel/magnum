@@ -13,7 +13,7 @@ import (
 // file to $TMPDIR on the internal disk.
 func TestTheRegistryDSNsKeepTempTablesInMemory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "magnum.db")
-	storetest.Open(t, path)
+	storetest.OpenFile(t, path)
 	for name, dsn := range map[string]string{"read-only": registryReadOnlyDSN(path), "write": registryWriteDSN(path)} {
 		db, err := sql.Open("sqlite", dsn)
 		if err != nil {

@@ -50,7 +50,7 @@ func appEngine(t *testing.T, panes *herdr.Session, opts app.Options, edit func(*
 	if edit != nil {
 		edit(cfg)
 	}
-	st := storetest.Open(t, layout.DB())
+	st := storetest.OpenFile(t, layout.DB())
 	if panes != nil {
 		b, _ := json.Marshal(panes)
 		if err := st.SetKV(context.Background(), store.KVHerdrPanes, string(b)); err != nil {

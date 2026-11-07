@@ -92,7 +92,7 @@ func TestTheDaemonsWorkInFlightRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-time.Minute)
 	b, _ := json.Marshal(engine.WorkMark{Work: []engine.WorkItem{

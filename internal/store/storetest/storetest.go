@@ -1,14 +1,15 @@
 // Package storetest gives tests a registry without migrating one for each of
-// them: the first call in a test binary migrates a template database, and
-// every call writes a copy of its bytes, which store.Open then finds current.
-// It also holds the settable clock the store's users share in their tests.
-// Only _test.go files import it.
+// them: the first call in a test binary migrates a template database in
+// memory, and every call starts from a copy of its bytes. Open keeps that
+// copy in memory, so the test writes no database file; OpenFile and Seed
+// write it to a file, which store.Open then finds current, for code under
+// test that opens the registry by path. It also holds the settable clock the
+// store's users share in their tests. Only _test.go files import it.
 package storetest
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,33 +17,86 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 var template = sync.OnceValues(migrate)
 
-// migrate opens a fresh database in a temporary directory, which applies
-// every migration, and returns its bytes once SQLite has checkpointed the
-// WAL into the main file and closed it.
+// migrate applies every migration to an in-memory database and returns its
+// image (sqlitetest.Image).
 func migrate() ([]byte, error) {
-	dir, err := os.MkdirTemp("", "magnum-storetest-")
+	db, err := sqlitetest.Open(nil, sqlitetest.Params)
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "magnum.db")
-	st, err := store.Open(path)
+	st, err := store.OpenDB(db, store.Options{})
 	if err != nil {
 		return nil, err
 	}
-	if _, err := st.DB().ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		st.Close()
-		return nil, fmt.Errorf("checkpoint: %w", err)
+	defer st.Close()
+	return sqlitetest.Image(context.Background(), st.DB())
+}
+
+// placeholder is what Open leaves at the path it is given: a file that
+// SQLite refuses ("file is not a database"), so code under test that opens
+// the path gets an error at once instead of migrating a registry of its own
+// beside the test's (Open says where that error fails no test).
+const placeholder = "storetest: this registry is in memory (storetest.Open); a test whose code opens it by path uses storetest.OpenFile\n"
+
+// Open gives the test a migrated registry in memory (Memory) and closes it
+// when the test ends. It creates path's directory (0700), as store.Open
+// would, and leaves a placeholder at path that SQLite refuses ("file is not
+// a database"), so code that opens the path gets an error instead of
+// finding or making a registry of its own there; a file already at path
+// fails the test. That error fails the test only where the code under test
+// passes it on: the cli's notes command (notesOpenStore), shell completion
+// (completeQuery) and daemon-restart's event writer (writeRestartEvent)
+// swallow it and go on without the registry, so a test can pass without
+// ever reaching it. A test whose code under test opens the registry by
+// path, or that checks the file (WAL, modes, a reopen, a second handle, a
+// read-only open), uses OpenFile.
+func Open(tb testing.TB, path string) *store.Store {
+	tb.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		tb.Fatalf("storetest: %v", err)
 	}
-	if err := st.Close(); err != nil {
-		return nil, err
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		tb.Fatalf("storetest.Open: %s exists: a registry file that is shared or reopened needs storetest.OpenFile", path)
 	}
-	return os.ReadFile(path)
+	if err != nil {
+		tb.Fatalf("storetest: %v", err)
+	}
+	if _, err := f.WriteString(placeholder); err != nil {
+		f.Close()
+		tb.Fatalf("storetest: write %s: %v", path, err)
+	}
+	if err := f.Close(); err != nil {
+		tb.Fatalf("storetest: %v", err)
+	}
+	return Memory(tb)
+}
+
+// Memory gives the test a migrated registry that lives in this process's
+// memory, private to it, and closes it when the test ends. Nothing but the
+// returned store reaches it.
+func Memory(tb testing.TB) *store.Store {
+	tb.Helper()
+	image, err := template()
+	if err != nil {
+		tb.Fatalf("storetest: migrate the template: %v", err)
+	}
+	db, err := sqlitetest.Open(image, sqlitetest.Params)
+	if err != nil {
+		tb.Fatalf("storetest: %v", err)
+	}
+	st, err := store.OpenDB(db, store.Options{})
+	if err != nil {
+		tb.Fatalf("store.OpenDB: %v", err)
+	}
+	tb.Cleanup(func() { st.Close() })
+	return st
 }
 
 // Seed writes a migrated database to path, creating its directory (0700),
@@ -50,7 +104,7 @@ func migrate() ([]byte, error) {
 // is left as it is.
 func Seed(t testing.TB, path string) {
 	t.Helper()
-	data, err := template()
+	image, err := template()
 	if err != nil {
 		t.Fatalf("storetest: migrate the template: %v", err)
 	}
@@ -64,7 +118,7 @@ func Seed(t testing.TB, path string) {
 	if err != nil {
 		t.Fatalf("storetest: %v", err)
 	}
-	if _, err := f.Write(data); err != nil {
+	if _, err := f.Write(sqlitetest.FileImage(image)); err != nil {
 		f.Close()
 		t.Fatalf("storetest: write %s: %v", path, err)
 	}
@@ -73,16 +127,17 @@ func Seed(t testing.TB, path string) {
 	}
 }
 
-// Open seeds path (see Seed) and opens it with store.Open; the store is
-// closed when the test ends.
-func Open(t testing.TB, path string) *store.Store {
-	t.Helper()
-	Seed(t, path)
+// OpenFile seeds path (see Seed) and opens it with store.Open; the store is
+// closed when the test ends. It is for a test whose code under test opens
+// the registry by path, or that checks the file.
+func OpenFile(tb testing.TB, path string) *store.Store {
+	tb.Helper()
+	Seed(tb, path)
 	st, err := store.Open(path)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		tb.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	tb.Cleanup(func() { st.Close() })
 	return st
 }
 

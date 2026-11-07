@@ -652,7 +652,7 @@ func TestStatsCountsManualFixStartsOnFactoryPRs(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg.Close()
-	st := storetest.Open(t, dt.ctx.Layout.DB())
+	st := storetest.OpenFile(t, dt.ctx.Layout.DB())
 	if _, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR}); err != nil {
 		t.Fatal(err)
 	}

@@ -25,7 +25,7 @@ func TestActiveRoundsReadsAnOddHome(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewing, nil)
 	inspSeedPR(t, st, "talkable/talkable", 8, store.PRReviewed, nil)
 	rounds, err := c.activeRounds(context.Background())
@@ -48,7 +48,7 @@ func TestARunningCurationOrRetroRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-3 * time.Minute)
 	mark, _ := json.Marshal(engine.CurateMark{Repo: "talkable/talkable", Trigger: "request", Started: started})
@@ -105,7 +105,7 @@ func TestARunningSkillEditRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-5 * time.Minute)
 	mark, _ := json.Marshal(engine.EditMark{Run: "20261009-070000", Trigger: "request", Started: started})
@@ -130,7 +130,7 @@ func TestARunningRevertRefusesAStopAndIsNamed(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-5 * time.Minute)
 	mark, _ := json.Marshal(engine.EditMark{Run: "20261009-070000", Trigger: "regression", Started: started, Revert: 3})
@@ -155,7 +155,7 @@ func TestARunningSkillGateRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-5 * time.Minute)
 	mark, _ := json.Marshal(engine.GateMark{Proposal: 3, Started: started})
@@ -182,7 +182,7 @@ func TestARunningFixRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-4 * time.Minute)
 	_, fixing := inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewed, nil)
@@ -223,7 +223,7 @@ func TestARunningWhiteboardRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	_, pr := inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewed, nil)
 	run, err := st.CreateRun(ctx, store.Run{ID: "r-wb", PRID: pr.ID, Round: 1, Role: "claude-whiteboard", Kind: store.RunWhiteboard,
@@ -260,7 +260,7 @@ func TestARunningCritiqueRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.Open(t, c.Layout.DB())
+	st := storetest.OpenFile(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-4 * time.Minute)
 	mark, _ := json.Marshal(engine.CriticMark{Repo: "talkable/talkable", Proposal: 3, Model: "fable", Started: started})

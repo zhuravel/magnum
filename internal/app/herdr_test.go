@@ -108,7 +108,7 @@ func herdrConfig(yours, review string) string {
 func recordPanes(s herdr.Session) func(t *testing.T, layout paths.Layout) {
 	return func(t *testing.T, layout paths.Layout) {
 		t.Helper()
-		st := storetest.Open(t, layout.DB())
+		st := storetest.OpenFile(t, layout.DB())
 		b, err := json.Marshal(s)
 		if err != nil {
 			t.Fatal(err)
@@ -170,7 +170,7 @@ func TestTheAppOpensPanesWhereTheRegistrysSessionsAre(t *testing.T) {
 func TestARecordOfNoHerdrSessionIsRefused(t *testing.T) {
 	home := t.TempDir()
 	layout := paths.Layout{Home: home}
-	st := storetest.Open(t, layout.DB())
+	st := storetest.OpenFile(t, layout.DB())
 	if err := st.SetKV(context.Background(), store.KVHerdrPanes, "reviews"); err != nil {
 		t.Fatal(err)
 	}

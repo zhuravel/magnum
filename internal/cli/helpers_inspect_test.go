@@ -128,7 +128,7 @@ func (f *inspFixture) store() *store.Store {
 	if err := f.Ctx.Layout.EnsureDirs(); err != nil {
 		f.t.Fatal(err)
 	}
-	return storetest.Open(f.t, f.Ctx.Layout.DB())
+	return storetest.OpenFile(f.t, f.Ctx.Layout.DB())
 }
 
 // tty makes stdin and stderr terminals: confirmations are asked on stderr
