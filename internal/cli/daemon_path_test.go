@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -199,8 +200,9 @@ func TestTheDaemonSetsAUTF8LocaleWhenLaunchdGivesNone(t *testing.T) {
 		if st.env["LANG"] != "en_US.UTF-8" {
 			t.Fatalf("shell_path %v: LANG = %q, want en_US.UTF-8", shellPath, st.env["LANG"])
 		}
-		if !strings.Contains(locale, "LANG=en_US.UTF-8") {
-			t.Fatalf("shell_path %v: the start says %q, want it to name LANG=en_US.UTF-8", shellPath, locale)
+		if !strings.Contains(locale.msg, "LANG=en_US.UTF-8") || !strings.Contains(locale.msg, "neither LANG nor LC_ALL") ||
+			locale.failed {
+			t.Fatalf("shell_path %v: the start says %+v, want it to name what it lacked and LANG=en_US.UTF-8", shellPath, locale)
 		}
 	}
 }
@@ -215,8 +217,30 @@ func TestTheDaemonKeepsALocaleAlreadySet(t *testing.T) {
 		if want := set["LANG"]; st.env["LANG"] != want {
 			t.Fatalf("%v: LANG = %q, want %q", set, st.env["LANG"], want)
 		}
-		if locale != "" {
-			t.Fatalf("%v: the start says %q, want nothing", set, locale)
+		if locale.msg != "" {
+			t.Fatalf("%v: the start says %+v, want nothing", set, locale)
 		}
+	}
+}
+
+// An LC_CTYPE alone (a user's own encoding) outranks LANG for the encoding
+// Ruby reads, so the LANG the start sets keeps it: LC_CTYPE stays as it was.
+func TestTheDaemonsLocaleKeepsAnLCCTYPE(t *testing.T) {
+	st := newShellPATHTest(t, "echo '"+launchdTestPATH+"'")
+	st.env["LC_CTYPE"] = "de_DE.UTF-8"
+	daemonEnv(context.Background(), st.cfg)
+	if st.env["LANG"] != "en_US.UTF-8" || st.env["LC_CTYPE"] != "de_DE.UTF-8" {
+		t.Fatalf("LANG = %q, LC_CTYPE = %q; want LANG set and LC_CTYPE kept", st.env["LANG"], st.env["LC_CTYPE"])
+	}
+}
+
+// A LANG the daemon cannot set is a warning, not a note: its commands run
+// without a locale.
+func TestALocaleTheDaemonCannotSetIsAWarning(t *testing.T) {
+	st := newShellPATHTest(t, "echo '"+launchdTestPATH+"'")
+	daemonSys.Setenv = func(string, string) error { return errors.New("setenv: invalid argument") }
+	locale, _ := daemonEnv(context.Background(), st.cfg)
+	if !locale.failed || !strings.Contains(locale.msg, "invalid argument") {
+		t.Fatalf("the start says %+v, want a failure naming why", locale)
 	}
 }

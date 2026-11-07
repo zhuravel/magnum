@@ -107,8 +107,8 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 func startFactoryDaemon(ctx context.Context, c *Context, lvl slog.Level) (*factoryDaemon, error) {
 	locale, s := daemonEnv(ctx, c.Config)
 	d, err := buildFactoryDaemon(c, lvl)
-	if err == nil && locale != "" {
-		d.Log.Info(locale)
+	if err == nil {
+		locale.log(d.Log)
 	}
 	if err != nil || s == nil {
 		return d, err

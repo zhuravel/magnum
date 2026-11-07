@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,32 +32,53 @@ const daemonDefaultLocale = "en_US.UTF-8"
 
 // daemonEnv readies the environment of a daemon's process before anything
 // runs, the review daemon's and the factory daemon's alike: a locale when
-// launchd gave none (daemonLocale), then the login shell's PATH
-// (daemonShellPATH). locale is what the first did, for the log ("" for
-// nothing).
-func daemonEnv(ctx context.Context, cfg *config.Config) (locale string, s *engine.ShellPATH) {
+// its environment names none (daemonLocale), then the login shell's PATH
+// (daemonShellPATH). locale is what the first did, for the log.
+func daemonEnv(ctx context.Context, cfg *config.Config) (locale localeSet, s *engine.ShellPATH) {
 	return daemonLocale(), daemonShellPATH(ctx, cfg)
 }
 
+// localeSet is what daemonLocale did: msg is its log line ("" for
+// nothing), a warning when failed (LANG could not be set: the daemon's
+// commands run without a locale).
+type localeSet struct {
+	msg    string
+	failed bool
+}
+
+// log writes l to log: a warning when it failed, a note otherwise, nothing
+// when nothing was done.
+func (l localeSet) log(log *slog.Logger) {
+	switch {
+	case l.msg == "" || log == nil:
+	case l.failed:
+		log.Warn(l.msg)
+	default:
+		log.Info(l.msg)
+	}
+}
+
 // daemonLocale sets LANG=en_US.UTF-8 in the daemon's own environment, which
-// every command it starts inherits, when it names no locale: launchd sets
-// neither LANG nor LC_ALL, and Ruby then reads every file as US-ASCII
-// (rubocop crashed on "invalid byte sequence in US-ASCII" in each copy).
-// A LANG or an LC_ALL already set is kept, and LANG ranks below every LC_
-// variable, so a locale already set is never overridden. It returns what
-// it did, "" for nothing.
-func daemonLocale() string {
+// every command it starts inherits, when it names no locale: launchd (and
+// a shell without one) sets neither LANG nor LC_ALL, and Ruby then reads
+// every file as US-ASCII (rubocop crashed on "invalid byte sequence in
+// US-ASCII" in each copy). A LANG or an LC_ALL already set is kept, and
+// LANG ranks below every LC_ variable (an LC_CTYPE of yours still decides
+// the encoding), so a locale already set is never overridden.
+func daemonLocale() localeSet {
 	if daemonSys.Getenv("LANG") != "" || daemonSys.Getenv("LC_ALL") != "" {
-		return ""
+		return localeSet{}
 	}
 	set := daemonSys.Setenv
 	if set == nil {
 		set = os.Setenv
 	}
 	if err := set("LANG", daemonDefaultLocale); err != nil {
-		return "no locale from launchd, and LANG could not be set: " + err.Error()
+		return localeSet{msg: "the daemon's environment names neither LANG nor LC_ALL, and LANG could not be set: " + err.Error(),
+			failed: true}
 	}
-	return "no locale from launchd: LANG=" + daemonDefaultLocale + " for every command the daemon runs"
+	return localeSet{msg: "the daemon's environment names neither LANG nor LC_ALL: LANG=" + daemonDefaultLocale +
+		" for every command it runs"}
 }
 
 // daemonShellPATH gives the daemon, with [daemon] shell_path on, the PATH
