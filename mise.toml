@@ -16,8 +16,8 @@ description = "Build bin/magnum"
 run = "go build -o bin/magnum ./cmd/magnum"
 
 [tasks.test]
-description = "Run the test suite with the race detector"
-run = "go test -race ./..."
+description = "Run the test suite with the race detector, under the machine's gate lock (make test-race)"
+run = "make test-race"
 
 [tasks.dev]
 description = "Rebuild and restart the daemon on save (unloads the launchd job; run `bin/magnum install` afterwards)"

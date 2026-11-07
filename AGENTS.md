@@ -58,7 +58,8 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
 ## Gate
 
 ```bash
-make test        # gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic)
+make test        # the gate, one at a time per machine (waits for the gate lock): gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic)
+make test-race PKGS="./internal/x ./internal/y"   # go test -count=1 -race on the packages you touched, under the same lock
 make build       # bin/magnum
 make api-doc     # regenerate docs/API.md after exported API changes (make api-doc-check diffs it)
 make lint        # golangci-lint (.golangci.yml; mise pins 2.15.0); make lint-fix applies only the safe fixes
@@ -69,10 +70,20 @@ make vuln        # govulncheck, after a dependency or Go update
 and fix what it reports in the lines you touched (CI fails a PR on new issues only), and never run a
 blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`).
 
-Run `go test -count=1 -race` on the packages you touched before `make test`; go test's 10-minute
+Run `make test-race PKGS=…` on the packages you touched before `make test`; go test's 10-minute
 default is enough (the whole suite takes about 3 minutes under `-race` at a load of 15-25, the engine
 the longest, and about 40 seconds without it: a test binary skips the file syncs of `fsx.WriteFileAtomic`). A change is done when the gate is green, the API doc is regenerated if exports changed,
 and the README or config comments describe any new key, command or key binding.
+
+**One gate at a time on this machine.** `make test` and `make test-race` take the lock file
+`/tmp/magnum-make-test.lock` (`lockf` on macOS, `flock` on Linux) and wait, saying so, while another
+checkout's gate holds it; after an hour they give up with exit 75. Never run `go test ./...`, `go vet ./...`
+or a `-race` run outside them, and never start a gate in the background or in a second pane while one
+runs. A single package without `-race` (`go test -count=1 -run TestX ./internal/x`) needs no lock. Do not
+wrap `make test` in `lockf` yourself: an old `lockf -k /tmp/magnum-gate.lock` wrapper still works (a
+different file) but only adds a wait. A script that already holds the gate lock and runs make again sets
+`MAGNUM_GATE_LOCKED=1`. A gate runs at most `TEST_P` test binaries at once (default 4, `go test -p`), which
+keeps its memory and CPU low on a laptop; `TEST_P=` uses Go's default of one per CPU.
 
 Tests open their registry with `storetest.Open` (`internal/store/storetest`: a copy of a database
 migrated once per test binary, never `store.Open` on a fresh file except to test migrations), and the

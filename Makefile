@@ -11,7 +11,28 @@ INSTALL_FLAGS ?= --plugin
 # one the build keeps Go's ad-hoc signature, which macOS treats as a new app at every build.
 SIGN_IDENTITY ?= magnum local signing
 
-.PHONY: build test check-private lint lint-fix vuln install api-doc api-doc-check release link unlink
+# GATE_LOCK: the lock every gate on this machine takes (make test, make test-race), so two checkouts never run
+# their tests at once. lockf(1) takes it where it exists (macOS), flock(1) elsewhere (Linux); with neither the gate
+# runs unlocked. A gate that finds it taken says so and waits up to an hour, then gives up with exit 75. It is in
+# /tmp, not $TMPDIR (agent shells get a TMPDIR of their own), and it is not /tmp/magnum-gate.lock, which older
+# `lockf -k /tmp/magnum-gate.lock make test` wrappers hold: the same lock taken again inside them would wait for its
+# own parent. MAGNUM_GATE_LOCKED=1 marks a process that already holds it.
+GATE_LOCK ?= /tmp/magnum-make-test.lock
+# TEST_P: how many test binaries one gate runs at once (go test -p); 4 keeps one gate's memory and CPU low on a
+# laptop; TEST_P= uses Go's default (one per CPU)
+TEST_P    ?= 4
+TEST_P_FLAG = $(if $(TEST_P),-p $(TEST_P))
+gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
+  elif command -v lockf >/dev/null 2>&1; then \
+    lockf -k -s -t 0 "$(GATE_LOCK)" true || echo "make: waiting for $(GATE_LOCK): another checkout's gate runs"; \
+    env MAGNUM_GATE_LOCKED=1 lockf -k -t 3600 "$(GATE_LOCK)" $(1); st=$$?; \
+    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (exit 75): is make test running inside lockf on it?"; fi; exit $$st; \
+  elif command -v flock >/dev/null 2>&1; then \
+    env MAGNUM_GATE_LOCKED=1 flock -w 3600 -E 75 "$(GATE_LOCK)" $(1); st=$$?; \
+    if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (exit 75)"; fi; exit $$st; \
+  else $(1); fi
+
+.PHONY: build test gate test-race check-private lint lint-fix vuln install api-doc api-doc-check release link unlink
 
 ## build: compile bin/magnum (the binary launchd and the herdr plugin run), signed with SIGN_IDENTITY when your
 ## keychain has it, and moved into place only then, so a daemon that restarts on a new binary never runs it unsigned
@@ -23,14 +44,25 @@ build:
 	fi
 	@mv -f $(BIN).new $(BIN)
 
-## test: gofmt check (every tracked .go file, and new ones git does not ignore), go.sum verified and go.mod tidy,
-## vet, the hermetic unit tests, and the private-name guard
-test: check-private
+## test: the gate (below) under GATE_LOCK: it waits while another checkout's gate runs
+test:
+	@$(call gate_locked,$(MAKE) --no-print-directory gate)
+
+## gate: gofmt check (every tracked .go file, and new ones git does not ignore), go.sum verified and go.mod tidy,
+## vet, the hermetic unit tests (TEST_P binaries at once), and the private-name guard; run it as make test, which
+## holds the machine's gate lock
+gate: check-private
 	@out="$$(git ls-files -z --cached --others --exclude-standard '*.go' | xargs -0 gofmt -l)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 	$(GO) vet ./...
-	$(GO) test ./...
+	$(GO) test $(TEST_P_FLAG) ./...
+
+## test-race: go test -count=1 -race on PKGS (the packages you touched; default ./...) under GATE_LOCK, TEST_P
+## binaries at once; TESTFLAGS adds flags (-run, -count=3 -cpu 1,3 -shuffle=on)
+PKGS ?= ./...
+test-race:
+	@$(call gate_locked,$(GO) test -count=1 -race $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
 
 ## check-private: this repo is public; fail when a tracked file mentions a name listed in MAGNUM_PRIVATE_PATTERNS
 ## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub

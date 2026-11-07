@@ -5700,7 +5700,9 @@ or import one with `security import <file>.p12 -T /usr/bin/codesign`. Without it
 signature.
 
 ```bash
-make test        # gofmt, check-private, go mod verify and tidy, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
+make test        # gofmt, check-private, go mod verify and tidy, go vet, hermetic tests (fakes for git, gh, herdr, MySQL),
+                 # one gate per machine at a time: it waits while another checkout's gate holds /tmp/magnum-make-test.lock
+make test-race PKGS="./internal/x"   # go test -race on the packages you touched, under the same lock
 make lint        # golangci-lint with .golangci.yml (mise pins 2.15.0); make lint-fix applies only the safe fixes
 make vuln        # govulncheck: known vulnerabilities the code reaches
 make api-doc     # regenerate docs/API.md; make api-doc-check fails when it differs from the exported API
