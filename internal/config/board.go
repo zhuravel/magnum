@@ -34,7 +34,24 @@ type Board struct {
 	// "✔ lift your ✗") while one is on screen; false keeps it still. A
 	// terminal without colors (NO_COLOR) shows it in reverse video either way.
 	Shimmer bool `toml:"shimmer"`
+	// OwnPRs says where your own open PRs are listed: OwnPRsBoard (the
+	// default) keeps them on the PR board, each marked with its autofix =
+	// "open" verdict; OwnPRsFactory lists them on the factory screen alone
+	// (its YOUR PRS) and the board leaves them out of its open PRs (a
+	// draft, which the factory screen does not list, and a closed one
+	// stay). "" is the default.
+	OwnPRs string `toml:"own_prs"`
 }
+
+// Where your own open PRs are listed ([board] own_prs).
+const (
+	OwnPRsBoard   = "board"
+	OwnPRsFactory = "factory"
+)
+
+// OwnPRsOnFactory reports whether your own open PRs are listed on the
+// factory screen and not on the board ([board] own_prs = "factory").
+func (c *Config) OwnPRsOnFactory() bool { return c != nil && c.Board.OwnPRs == OwnPRsFactory }
 
 // PlaceholderNum is the issue number in a [board] trackers template.
 const PlaceholderNum = "{num}"
@@ -145,7 +162,7 @@ func (b *BadgeSpec) UnmarshalTOML(v any) error {
 }
 
 // validate checks the badges (a label, a short text and a known color each),
-// the trackers and recent_closed.
+// the trackers, recent_closed and own_prs.
 func (b Board) validate() []string {
 	var out []string
 	for label, spec := range b.Badges {
@@ -162,6 +179,9 @@ func (b Board) validate() []string {
 	}
 	if b.RecentClosed.Duration < 0 {
 		out = append(out, "board.recent_closed must not be negative (0 turns the recently closed section off)")
+	}
+	if b.OwnPRs != "" && b.OwnPRs != OwnPRsBoard && b.OwnPRs != OwnPRsFactory {
+		out = append(out, fmt.Sprintf("board.own_prs must be %q or %q, got %q", OwnPRsBoard, OwnPRsFactory, b.OwnPRs))
 	}
 	return append(out, trackerProblems("board", b.Trackers)...)
 }

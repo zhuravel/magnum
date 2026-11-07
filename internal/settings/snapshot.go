@@ -590,6 +590,8 @@ func (s *Snapshot) effective(f Field, t Target, v Value) string {
 		return strconv.Itoa(d.MaxConcurrentReviews)
 	case "daemon.max_total_working_codex":
 		return strconv.Itoa(d.MaxTotalWorkingCodex)
+	case "board.own_prs":
+		return cmp.Or(c.Board.OwnPRs, config.OwnPRsBoard)
 	}
 	return v.Text
 }

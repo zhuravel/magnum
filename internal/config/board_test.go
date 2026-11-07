@@ -102,3 +102,32 @@ func TestBoardShimmer(t *testing.T) {
 		t.Fatal("shimmer = false left it on")
 	}
 }
+
+// [board] own_prs says where your own open PRs are listed: "board" (the
+// default, today's board) or "factory" (the factory screen's YOUR PRS, and
+// the board hides them); anything else is refused.
+func TestOwnPRsIsValidated(t *testing.T) {
+	user := filepath.Join(t.TempDir(), "config.toml")
+	load := func(body string) (*Config, error) {
+		t.Helper()
+		if err := os.WriteFile(user, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(paths.Layout{Home: t.TempDir(), UserConfig: user}, "")
+	}
+	if got := Defaults().Board.OwnPRs; got != OwnPRsBoard {
+		t.Fatalf("built-in own_prs = %q, want %q", got, OwnPRsBoard)
+	}
+	cfg, err := load("[board]\nown_prs = \"factory\"\n")
+	if err != nil || cfg.Board.OwnPRs != OwnPRsFactory {
+		t.Fatalf("own_prs = \"factory\": %+v, %v", cfg, err)
+	}
+	if !cfg.OwnPRsOnFactory() || Defaults().OwnPRsOnFactory() || (&Config{}).OwnPRsOnFactory() {
+		t.Error("OwnPRsOnFactory is true only for own_prs = \"factory\"")
+	}
+	for _, bad := range []string{"tui", "both", "Factory"} {
+		if _, err := load("[board]\nown_prs = \"" + bad + "\"\n"); err == nil || !strings.Contains(err.Error(), "board.own_prs must be \"board\" or \"factory\"") {
+			t.Errorf("own_prs = %q: %v, want refused", bad, err)
+		}
+	}
+}

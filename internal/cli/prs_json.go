@@ -116,6 +116,20 @@ type prsJSONRow struct {
 	// watch's auto_approve_as) and why it would be refused now; null when
 	// the PR does not need you or the watch names none.
 	ApproveAs *prsJSONApproveAs `json:"approve_as"`
+	// Open is autofix = "open"'s verdict on your own open PR; null on
+	// another's PR and on one without a verdict.
+	Open *prsJSONOpen `json:"open"`
+}
+
+// prsJSONOpen is autofix = "open"'s verdict on your own PR: fixing, waits,
+// needs_you, idle, unknown or off, why in magnum's words, the head it was
+// decided at, and whether it is stale (it no longer tells the PR's state:
+// magnum is looking at the PR, never idle).
+type prsJSONOpen struct {
+	Verdict string `json:"verdict"`
+	Why     string `json:"why"`
+	Head    string `json:"head"`
+	Stale   bool   `json:"stale"`
 }
 
 type prsJSONApproveAs struct {
@@ -333,6 +347,9 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		}),
 		ApproveAs: mapPtr(r.ApproveAs, func(a tui.ApproveAs) prsJSONApproveAs {
 			return prsJSONApproveAs{Identity: a.Identity, Login: a.Login, Refusal: a.Refusal}
+		}),
+		Open: mapPtr(r.Open, func(o tui.PROpen) prsJSONOpen {
+			return prsJSONOpen{Verdict: o.Verdict, Why: o.Why, Head: o.Head, Stale: o.Stale}
 		}),
 	}
 }

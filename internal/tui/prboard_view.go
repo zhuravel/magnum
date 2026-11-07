@@ -606,6 +606,9 @@ func (p *prbPainter) titleCell(r PRBoardRow) cell {
 	if r.FixOff {
 		c = append(c, seg{"fix off", p.pal.tag}, seg{" ", lipgloss.Style{}})
 	}
+	if tag, st, ok := p.openTag(r); ok {
+		c = append(c, seg{tag, st}, seg{" ", lipgloss.Style{}})
+	}
 	title := oneLine(r.Title)
 	if title == "" {
 		return append(c, seg{"(no title)", p.st.Dim})
@@ -614,6 +617,24 @@ func (p *prbPainter) titleCell(r PRBoardRow) cell {
 		return append(c, seg{title, lipgloss.NewStyle().Strikethrough(true)}) // greyed by the muted overlay
 	}
 	return append(c, seg{title, lipgloss.Style{}})
+}
+
+// openTag is the tag that marks your own PR with its autofix = "open"
+// verdict ("open: needs you" in yellow, "open: waits", "open: none" for
+// nothing open, "open: looking" for a stale one); none on another's PR,
+// on a PR GitHub merged or closed, while the fixer's cell shows (fixing),
+// or for fix off, which its own tag says.
+func (p *prbPainter) openTag(r PRBoardRow) (string, lipgloss.Style, bool) {
+	o := r.Open
+	switch {
+	case o == nil, mergedOnGitHub(r), closedUnmerged(r):
+		return "", lipgloss.Style{}, false
+	case !o.Stale && o.Verdict == "fixing" && fixingShown(r), !o.Stale && o.Verdict == "off" && r.FixOff:
+		return "", lipgloss.Style{}, false
+	case !o.Stale && o.Verdict == "needs_you":
+		return "open: " + o.word(), p.pal.yellow, true
+	}
+	return "open: " + o.word(), p.pal.tag, true
 }
 
 // pinStyle colors a pin that is a word or a monochrome icon; 📌 brings

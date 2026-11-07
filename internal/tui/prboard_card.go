@@ -266,6 +266,14 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if r.Muted && r.MuteReason != "" {
 		add(p.st.Dim.Render(truncate("muted: "+oneLine(r.MuteReason), inner)))
 	}
+	if o := r.Open; o != nil && !mergedOnGitHub(r) && !closedUnmerged(r) {
+		line := "verdict: " + o.word() + p.g.sep + oneLine(o.Why)
+		if o.Stale {
+			line = "verdict: looking" + p.g.sep + "magnum's last word (" + strings.ReplaceAll(oneLine(o.Verdict), "_", " ") +
+				") no longer tells the PR's state"
+		}
+		add(truncate(line, inner))
+	}
 	title := lipgloss.NewStyle().Bold(true).Width(inner).Render(orDim(oneLine(r.Title)))
 	tl := strings.Split(title, "\n")
 	if len(tl) > 3 {

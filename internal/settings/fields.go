@@ -257,6 +257,9 @@ func Fields() []Field {
 		{ID: "daemon.max_total_working_codex", Section: SectionReviews, Label: "working Codex agents", Key: "daemon.max_total_working_codex",
 			Type: TypeInt, Validate: validateInt(0, math.MaxInt32), DefaultText: "5",
 			Description: "working Codex agents at once, your own included (0 = no cap)"},
+		{ID: "board.own_prs", Section: SectionReviews, Label: "your open PRs on", Key: "board.own_prs", Type: TypeEnum,
+			Options: []string{config.OwnPRsBoard, config.OwnPRsFactory}, DefaultText: config.OwnPRsBoard, Applies: AppliesNow,
+			Description: "board: the PR board lists them with their verdict; factory: the factory screen's YOUR PRS alone (the next screen you open)"},
 	}
 }
 

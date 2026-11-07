@@ -310,6 +310,35 @@ type PRBoardRow struct {
 	// names none: A then refuses (only an approval by hand counts) and the
 	// card says so.
 	ApproveAs *ApproveAs
+	// Open is autofix = "open"'s verdict on your own open PR (the engine's
+	// pr.<id>.open); nil on another's PR and on one without a verdict. The
+	// title's tags mark the row with it ("open: needs you") and the card
+	// says it ("verdict: ...").
+	Open *PROpen
+}
+
+// PROpen is autofix = "open"'s verdict on your own PR as the board shows
+// it: fixing, waits, needs_you, idle, unknown or off, why in magnum's plain
+// words (never the PR's text), the head magnum decided at, and whether it
+// is stale (magnum's last tick long ago, another head, a PR row changed
+// since): magnum is then looking at the PR, never idle.
+type PROpen struct {
+	Verdict, Why, Head string
+	Stale              bool
+}
+
+// word is the verdict as the board says it: "looking" when stale or
+// unknown, "none" (nothing open) when idle.
+func (o PROpen) word() string {
+	switch {
+	case o.Stale, o.Verdict == "unknown":
+		return "looking"
+	case o.Verdict == "idle":
+		return "none"
+	case o.Verdict == "needs_you":
+		return "needs you"
+	}
+	return o.Verdict
 }
 
 // ApproveAs is the operator's own account A approves a row that needs them
@@ -750,6 +779,11 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
 	r.Fixing = cleanText(r.Fixing)
+	if r.Open != nil {
+		o := *r.Open
+		o.Verdict, o.Why, o.Head = cleanText(o.Verdict), cleanText(o.Why), cleanText(o.Head)
+		r.Open = &o
+	}
 	if r.Whiteboard != nil {
 		w := *r.Whiteboard
 		w.Session, w.Head = cleanText(w.Session), cleanText(w.Head)

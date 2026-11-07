@@ -3978,6 +3978,12 @@ Package config loads and validates config.toml (kept in the repository).
 CONSTANTS
 
 const (
+	OwnPRsBoard   = "board"
+	OwnPRsFactory = "factory"
+)
+    Where your own open PRs are listed ([board] own_prs).
+
+const (
 	DefaultCriticDeclines = 2
 	DefaultCriticPerDay   = 4
 )
@@ -4655,6 +4661,13 @@ type Board struct {
 	// "✔ lift your ✗") while one is on screen; false keeps it still. A
 	// terminal without colors (NO_COLOR) shows it in reverse video either way.
 	Shimmer bool `toml:"shimmer"`
+	// OwnPRs says where your own open PRs are listed: OwnPRsBoard (the
+	// default) keeps them on the PR board, each marked with its autofix =
+	// "open" verdict; OwnPRsFactory lists them on the factory screen alone
+	// (its YOUR PRS) and the board leaves them out of its open PRs (a
+	// draft, which the factory screen does not list, and a closed one
+	// stay). "" is the default.
+	OwnPRs string `toml:"own_prs"`
 }
     Board tunes the PR board ([board]).
 
@@ -4951,6 +4964,10 @@ func (c *Config) OperatorIdentity(w Watch) *Identity
 
 func (c *Config) OperatorLogin(w Watch) string
     OperatorLogin is OperatorIdentity's login, "" when none resolves.
+
+func (c *Config) OwnPRsOnFactory() bool
+    OwnPRsOnFactory reports whether your own open PRs are listed on the factory
+    screen and not on the board ([board] own_prs = "factory").
 
 func (c *Config) PoolFor(fullName string) *Pool
     PoolFor returns the pool for owner/name, or nil (per-PR worktree repos).
@@ -27413,6 +27430,11 @@ type PRBoardOptions struct {
 	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
 	// decides which rows show, and a starred PR shows first. 0 lists all.
 	Limit int
+	// OwnElsewhere, when set, counts your own open PRs the source left out
+	// because the factory screen lists them ([board] own_prs = "factory"),
+	// as of its last load: the status rule says so while it has nothing
+	// else to say.
+	OwnElsewhere func() int
 	// Settings, when set, lets `,` open the settings screen over the board;
 	// esc there comes back to the board as it was left.
 	Settings *SettingsScreen
@@ -27641,6 +27663,11 @@ type PRBoardRow struct {
 	// names none: A then refuses (only an approval by hand counts) and the
 	// card says so.
 	ApproveAs *ApproveAs
+	// Open is autofix = "open"'s verdict on your own open PR (the engine's
+	// pr.<id>.open); nil on another's PR and on one without a verdict. The
+	// title's tags mark the row with it ("open: needs you") and the card
+	// says it ("verdict: ...").
+	Open *PROpen
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -27673,6 +27700,16 @@ type PRBoardSourceFunc func(ctx context.Context) ([]PRBoardRow, error)
 
 func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error)
     Rows calls f.
+
+type PROpen struct {
+	Verdict, Why, Head string
+	Stale              bool
+}
+    PROpen is autofix = "open"'s verdict on your own PR as the board shows it:
+    fixing, waits, needs_you, idle, unknown or off, why in magnum's plain
+    words (never the PR's text), the head magnum decided at, and whether it is
+    stale (magnum's last tick long ago, another head, a PR row changed since):
+    magnum is then looking at the PR, never idle.
 
 type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string

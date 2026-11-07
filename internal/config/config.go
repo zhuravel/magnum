@@ -1056,7 +1056,7 @@ func Defaults() *Config {
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),
 		Notes:    DefaultNotes(),
-		Board:    Board{RecentClosed: Duration{24 * time.Hour}, Shimmer: true},
+		Board:    Board{RecentClosed: Duration{24 * time.Hour}, Shimmer: true, OwnPRs: OwnPRsBoard},
 		Webhooks: Webhooks{Mode: WebhooksOff, Wait: Duration{25 * time.Second}, StaleAfter: Duration{90 * time.Second}},
 		Factory:  DefaultFactory(),
 	}

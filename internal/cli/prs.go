@@ -16,6 +16,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,6 +69,10 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
 			"and \"✔ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
 			"first, the title counts them and --needs-me shows only them. "+
+			"Your own open PRs carry autofix = \"open\"'s verdict as a tag before the title (open: needs you, open: waits, "+
+			"open: none for nothing open, open: looking while the verdict no longer tells the PR's state) and on the card "+
+			"(verdict: ...; open in the JSON); with [board] own_prs = \"factory\" they are left out (your drafts and closed PRs "+
+			"stay), since the factory screen lists them, and the board's footer counts them. "+
 			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows once they are "+
 			"sorted (on the live board too, so a starred PR is never left out for its age). --sort picks the "+
 			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+
@@ -128,7 +133,7 @@ func (o prsOptions) filter() store.BoardFilter {
 // o.Desc and only then applies o.Limit, so `--sort changes --limit 1` is
 // the most changed PR.
 func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOptions, self []string, layout paths.Layout) ([]tui.PRBoardRow, error) {
-	rows, err := o.source(prsSource(st, cfg, o.filter(), self, layout))(ctx)
+	rows, err := ownPRsSource(cfg, o.source(prsSource(st, cfg, o.filter(), self, layout)), nil)(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +142,38 @@ func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOpti
 		rows = rows[:o.Limit]
 	}
 	return rows, nil
+}
+
+// ownPRsSource is src without your own open PRs when the factory screen
+// lists them ([board] own_prs = "factory": cfg.OwnPRsOnFactory): every row
+// GitHub has open, not a draft (the factory screen lists no drafts), whose
+// author is one of your logins (config.SelfMatch, the logins magnum's look
+// takes as yours) leaves; a closed or merged one stays in its section.
+// hidden, when set, keeps how many the last load left out, for the board's
+// footer. src itself otherwise.
+func ownPRsSource(cfg *config.Config, src tui.PRBoardSourceFunc, hidden *atomic.Int64) tui.PRBoardSourceFunc {
+	if !cfg.OwnPRsOnFactory() {
+		return src
+	}
+	self := cfg.SelfMatch()
+	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
+		rows, err := src(ctx)
+		if err != nil {
+			return rows, err
+		}
+		n := 0
+		rows = slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool {
+			own := !r.Draft && strings.EqualFold(r.GHState, store.GHOpen) && self(r.Author)
+			if own {
+				n++
+			}
+			return own
+		})
+		if hidden != nil {
+			hidden.Store(int64(n))
+		}
+		return rows, nil
+	}
 }
 
 // source is src narrowed to what o shows beyond the registry query: with
@@ -230,8 +267,11 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 			Icons: screenIcons(d.Config), NoMouse: !mouse, MouseToggled: toggled, Widths: widths, Log: log, Settings: settings,
 		})
 	}
-	src := po.source(prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout)) // one source: its timings cache survives tab
-	hide := false                                                                                  // h: kept in the registry, so the board opens the way it was left
+	// One source: its timings cache survives tab. ownHidden counts your
+	// open PRs it leaves to the factory screen (own_prs).
+	var ownHidden atomic.Int64
+	src := ownPRsSource(d.Config, po.source(prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout)), &ownHidden)
+	hide := false // h: kept in the registry, so the board opens the way it was left
 	if d.Store != nil {
 		if v, ok, err := d.Store.GetKV(ctx, kvBoardHideSkipped); err == nil && ok {
 			hide = v == "1"
@@ -244,6 +284,9 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		o.ViewChanged = func(v tui.PRView) { po.View = v }
 		o.OwnerChanged = func(owner string) { po.Owner = owner }
 		o.HideSkipped = hide
+		if d.Config.OwnPRsOnFactory() {
+			o.OwnElsewhere = func() int { return int(ownHidden.Load()) }
+		}
 		o.HideToggled = func(h bool) {
 			hide = h
 			if d.Store != nil {
@@ -408,6 +451,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 		}
 		prsOpenFacts(ctx, st, cfg, rows, out)
+		prsOpenVerdicts(ctx, st, cfg, rows, out, textx.MatchLogins(self))
 		sums, err := st.LastReviewSummaries(ctx, ids)
 		if err == nil {
 			for i := range out {
@@ -473,6 +517,42 @@ func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows
 			full := r.Owner + "/" + r.Name
 			out[i].OpenRestores = openWouldRestore(ss, openRoleOf(ctx, st, cfg, r.PRID, full, ss), openRestorable(cfg, full))
 		}
+	}
+}
+
+// prsOpenVerdicts marks your own open PRs (mine: their author is one of
+// your logins) with autofix = "open"'s verdict (engine.KVPROpen), stale
+// (OpenVerdict.Stale) when magnum's last tick is four poll intervals old,
+// the PR's head moved past it or its row changed after it. A registry that
+// cannot say leaves them unmarked rather than the board.
+func prsOpenVerdicts(ctx context.Context, st *store.Store, cfg *config.Config, rows []store.BoardRow, out []tui.PRBoardRow, mine func(string) bool) {
+	var lastTick time.Time
+	if s, ok, err := st.GetKV(ctx, store.KVDaemonLastTick); err == nil && ok {
+		lastTick, _ = store.ParseTime(s)
+	}
+	var poll time.Duration
+	if cfg != nil {
+		poll = cfg.Daemon.PollInterval.Duration
+	}
+	now := inspNow()
+	for i, r := range rows {
+		if r.GHState != store.GHOpen || !mine(r.Author) {
+			continue
+		}
+		s, ok, err := st.GetKV(ctx, engine.KVPROpen(r.PRID))
+		if err != nil || !ok {
+			continue
+		}
+		v, ok := engine.ParseOpenVerdict(s)
+		if !ok {
+			continue
+		}
+		pr, err := st.PRByID(ctx, r.PRID)
+		if err != nil {
+			continue
+		}
+		out[i].Open = &tui.PROpen{Verdict: v.Verdict, Why: v.Why, Head: v.Head,
+			Stale: v.Stale(pr.HeadSHA, pr.UpdatedAt, lastTick, now, poll)}
 	}
 }
 

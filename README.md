@@ -4330,6 +4330,19 @@ the slot only when the PR holds one that is not pinned (the daemon keeps a pinne
 what Magnum's review found, the earlier findings still open included ("magnum found no new findings; 3
 earlier findings still open").
 
+**Your own PRs and the factory screen.** Your own open PRs (their author is one of your logins: every watch's
+posting identity and every `gh` identity) carry autofix = `"open"`'s verdict: a tag before the title (`open:
+needs you` in yellow, `open: waits`, `open: fixing` when the fixer's cell does not already say so, `open: none`
+when nothing is open, `open: off`, and `open: looking` while the verdict no longer tells the PR's state: magnum's
+last tick four poll intervals ago, another head, a PR row that changed since), a `verdict: waits · settling until
+21:13` line under the card's header, and `"open": {"verdict", "why", "head", "stale"}` in `tui --json` (null on
+another's PR and on one without a verdict; every other key stays). `[board] own_prs` says where they are listed:
+`"board"` (the default) keeps them here as above; `"factory"` leaves your open PRs that are not drafts out of the
+board's open PRs, the live board and the printed rows alike, since the factory screen lists them in YOUR PRS
+(Factory, above), and the status rule says `3 of your PRs are on the factory screen (own_prs)`; a draft of yours,
+which the factory screen does not list, and your merged or closed PRs stay. The settings screen offers it
+(`your open PRs on`), and the next board or factory screen you open reads it.
+
 Star the PRs you must deliver, your own or a colleague's, so they stay on top. `*` stars the PR under the
 cursor, or unstars a starred one, at once: like `p`, `u`, `o`, `b` and `t` it asks nothing, since it starts
 and stops no work and the same key undoes it. It writes the registry itself (`magnum star`, no daemon

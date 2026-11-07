@@ -585,3 +585,19 @@ func TestTheSettingsOfferAutofixOpen(t *testing.T) {
 		t.Errorf("autofix field = %+v, want its description to say what open does", f)
 	}
 }
+
+// The settings screen offers [board] own_prs, board or factory, board by
+// default, applied at once (the next board reads it; no daemon restart).
+func TestTheSettingsOfferOwnPRs(t *testing.T) {
+	s := newSnapshot(t, "")
+	if got := s.Options(g("board.own_prs")); !slices.Equal(got, []string{"board", "factory"}) {
+		t.Errorf("own_prs options = %v, want board and factory", got)
+	}
+	f, ok := s.byID["board.own_prs"]
+	if !ok || f.Applies != AppliesNow || !strings.Contains(f.Description, "factory screen") {
+		t.Errorf("own_prs field = %+v", f)
+	}
+	if v := s.Value(g("board.own_prs")); v.Effective != "board" {
+		t.Errorf("own_prs by default = %+v, want board", v)
+	}
+}

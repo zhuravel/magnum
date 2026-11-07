@@ -79,6 +79,11 @@ type PRBoardOptions struct {
 	// sort (`magnum tui --limit`), as the printed rows are capped: the sort
 	// decides which rows show, and a starred PR shows first. 0 lists all.
 	Limit int
+	// OwnElsewhere, when set, counts your own open PRs the source left out
+	// because the factory screen lists them ([board] own_prs = "factory"),
+	// as of its last load: the status rule says so while it has nothing
+	// else to say.
+	OwnElsewhere func() int
 	// Settings, when set, lets `,` open the settings screen over the board;
 	// esc there comes back to the board as it was left.
 	Settings *SettingsScreen
@@ -110,6 +115,9 @@ type (
 		rows  []PRBoardRow
 		facts DaemonFacts
 		err   error
+		// ownElsewhere counts your own open PRs the load left out for the
+		// factory screen (PRBoardOptions.OwnElsewhere).
+		ownElsewhere int
 	}
 	prbTickMsg    struct{}
 	prbAnimMsg    struct{} // the next frame of the reviewing pills' spinner
@@ -212,6 +220,10 @@ type prBoardModel struct {
 	widths prbWidths   // dragged column widths
 	saver  *widthSaver // keeps them; nil without opts.Widths
 
+	// ownElsewhere counts your own open PRs the last load left out, which
+	// the factory screen lists ([board] own_prs = "factory").
+	ownElsewhere int
+
 	gen   int64     // stamps all and view; a new stamp on every rebuild
 	cache *prbCache // shared by every copy of the model
 }
@@ -279,6 +291,7 @@ type prbFrameKey struct {
 	menu                     ctxMenu
 	shimmer                  int // the shimmer's frame while a needs-you cell is on screen, else 0
 	anim                     int // the reviewing spinner's frame; 0 while nothing spins
+	ownElsewhere             int // your PRs the factory screen lists, said on the status rule
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
@@ -295,7 +308,7 @@ func (m prBoardModel) frameKey() prbFrameKey {
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), refreshedAt: m.refreshedAt.UnixNano(),
 		busy: m.busy, leaving: m.leaving, switching: m.switching,
 		flash: m.flash, flashErr: m.flashErr, flashInfo: m.flashInfo,
-		mouseOn: m.mouseOn, menu: m.menu, shimmer: m.shimmerFrame(), anim: m.animFrame(),
+		mouseOn: m.mouseOn, menu: m.menu, shimmer: m.shimmerFrame(), anim: m.animFrame(), ownElsewhere: m.ownElsewhere,
 	}
 	if m.loading || m.busy != "" || !m.haveData { // the spinner shows (drawing its frame costs)
 		k.spin = m.spin.View()
@@ -373,7 +386,7 @@ func (m prBoardModel) Init() tea.Cmd {
 }
 
 func (m prBoardModel) loadCmd() tea.Cmd {
-	ctx, src, facts := m.ctx, m.src, m.opts.Facts
+	ctx, src, facts, elsewhere := m.ctx, m.src, m.opts.Facts, m.opts.OwnElsewhere
 	return func() tea.Msg {
 		ctx, cancel := loadContext(ctx)
 		defer cancel()
@@ -381,6 +394,9 @@ func (m prBoardModel) loadCmd() tea.Cmd {
 		msg := prbDataMsg{rows: rows, err: err}
 		if facts != nil && err == nil {
 			msg.facts = facts(ctx)
+		}
+		if elsewhere != nil && err == nil {
+			msg.ownElsewhere = elsewhere()
 		}
 		return msg
 	}
@@ -492,6 +508,7 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 		}
 		m.loaded = scopeRows(msg.rows, m.opts.Repo)
 		m.haveData, m.loadErr, m.refreshedAt, m.facts = true, nil, m.opts.Now(), msg.facts
+		m.ownElsewhere = msg.ownElsewhere
 		var cmd tea.Cmd
 		if m.owner != "" && len(ownedBy(m.loaded, m.owner)) == 0 { // its last PR left: back to every owner
 			cmd = m.note("owner: all (" + m.owner + " has no pull requests now)")
@@ -1214,6 +1231,8 @@ func (m prBoardModel) statusRule(p *prbPainter, w, below int) string {
 			text += " (showing data from " + m.refreshedAt.Local().Format("15:04:05") + ")"
 		}
 		msg = m.st.Err.Render(m.g.fail + " " + text)
+	case m.ownElsewhere > 0:
+		msg = m.st.Dim.Render(fmt.Sprintf("%d of your PRs are on the factory screen (own_prs)", m.ownElsewhere))
 	}
 	return p.footerRule(w, msg, below)
 }
