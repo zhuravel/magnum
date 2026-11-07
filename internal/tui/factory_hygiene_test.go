@@ -37,3 +37,45 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 		}
 	}
 }
+
+// A title that starts with the issue key the row's key cell shows drops
+// it ("[PR-12400] Coupon rounding" beside PR-12400 reads "Coupon
+// rounding"), so the key is not said twice; where the key cell shows your
+// PR's number instead (below 120 columns), the title keeps it. A key that
+// only starts like the title's (PR-1234 before PR-12345) stays.
+func TestATitleDropsTheKeyItsKeyCellShows(t *testing.T) {
+	f := fixtureYours()
+	for i, r := range f.Rows {
+		switch r.Key {
+		case "#4602":
+			f.Rows[i].Title = "[PR-12400] Coupon rounding"
+		case "PR-12371":
+			f.Rows[i].Title = "PR-12371: Coupon CSV export times out"
+		case "PR-12345":
+			f.Rows[i].Title = "PR-123456 Credit expiry reminder email"
+		}
+	}
+	line := func(frame, key string) string {
+		for _, l := range strings.Split(ansi.Strip(frame), "\n") {
+			if strings.Contains(l, " "+key+" ") {
+				return l
+			}
+		}
+		t.Fatalf("no row %s in:\n%s", key, ansi.Strip(frame))
+		return ""
+	}
+	wide, _ := factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
+	if l := line(wide, "PR-12400"); strings.Contains(l, "[PR-12400]") || !strings.Contains(l, "Coupon rounding") {
+		t.Errorf("at 140 the row says its key twice: %q", l)
+	}
+	if l := line(wide, "PR-12371"); strings.Contains(l, "PR-12371:") || !strings.Contains(l, "Coupon CSV export times out") {
+		t.Errorf("at 140 the task's row says its key twice: %q", l)
+	}
+	if l := line(wide, "PR-12345"); !strings.Contains(l, "PR-123456 Credit expiry") {
+		t.Errorf("a longer key in the title was cut: %q", l)
+	}
+	narrow, _ := factoryFrameOf(f, 100, 22, true, IconsUnicode, factoryNow)
+	if l := line(narrow, "#4602"); !strings.Contains(l, "[PR-12400] Coupon") {
+		t.Errorf("at 100 the row of your PR keyed by its number lost its title's key: %q", l)
+	}
+}

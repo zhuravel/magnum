@@ -388,6 +388,27 @@ func (r FactoryRow) keyText(l factoryLayout) string {
 	return r.Key
 }
 
+// titleText is the row's title in layout l, without the issue key it
+// starts with ("[PR-12400] ", "PR-12400: ") when the row's key cell shows
+// that key: the row would say it twice. A title that is the key alone
+// keeps it.
+func (r FactoryRow) titleText(l factoryLayout) string {
+	k := r.keyText(l)
+	if k == "" || strings.Contains(k, "#") {
+		return r.Title
+	}
+	rest, ok := strings.CutPrefix(r.Title, "["+k+"]")
+	if !ok {
+		if rest, ok = strings.CutPrefix(r.Title, k); ok && rest != "" && !strings.ContainsAny(rest[:1], " :") {
+			return r.Title // a longer key: PR-123456 is not PR-12345
+		}
+	}
+	if rest = strings.TrimLeft(rest, " :"); !ok || rest == "" {
+		return r.Title
+	}
+	return rest
+}
+
 // glyphs and cells
 
 func (p *factoryPainter) ascii() bool { return p.g.mode == IconsASCII }
@@ -653,7 +674,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 			l.ghW = max(l.ghW, ansi.StringWidth(r.GitHub))
 		}
 		l.keyW = max(l.keyW, ansi.StringWidth(r.keyText(l)))
-		l.titleW = max(l.titleW, ansi.StringWidth(r.Title))
+		l.titleW = max(l.titleW, ansi.StringWidth(r.titleText(l)))
 		l.waitsW = max(l.waitsW, p.waitsCell(r, l.waits).width())
 		l.moveW = max(l.moveW, ansi.StringWidth(r.moveText(l.move)))
 		if r.CI != nil {
@@ -835,7 +856,7 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 		ps = append(ps, placed{x.gh, l.ghW, cell{{r.GitHub, p.tone(r, p.st.Accent)}}})
 	}
 	ps = append(ps,
-		placed{x.title, l.titleW, cell{{r.Title, p.tone(r, noStyle)}}},
+		placed{x.title, l.titleW, cell{{r.titleText(l), p.tone(r, noStyle)}}},
 		placed{x.waits, l.waitsW, p.waitsCell(r, l.waits)})
 	if l.ciW > 0 {
 		ps = append(ps, placed{x.ci, l.ciW, p.ciText(r, l.pr)})
