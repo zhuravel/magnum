@@ -1285,6 +1285,39 @@ func TestTheLookStartsNoMoreSlotLoopsInATickThanSlotsAreFree(t *testing.T) {
 	}
 }
 
+// The look's check against this tick's earlier starts runs only once one
+// of them took a slot: a PR without a slot in a full pool meets the fix
+// job's own refusals first, as before. Under a drain the verdict says the
+// drain, and nothing is evicted or provisioned for a loop that cannot start
+// before the restart.
+func TestAFullPoolLeavesTheFixJobsRefusalsFirst(t *testing.T) {
+	h, git := openOwnPRs(t, 2, 3)
+	colleagueFixer(h, git)
+	h.gh.mu.Lock()
+	h.gh.threads = map[int][]github.Thread{2: {h.colleagueThread(4322458360)}}
+	h.gh.mu.Unlock()
+	sl := h.slot("review1") // #3 holds the pool's one slot, evictable
+	if err := h.st.TransitionSlot(h.ctx, sl.ID, nil, store.SlotHeld, func(u *store.SlotUpdate) {
+		u.Set("pr_id", h.pr(3).ID)
+		u.Set("last_used_at", store.FormatTime(h.clock.Now().AddDate(0, 0, -3)))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.setKV(h.ctx, KVDaemonDraining, "1")
+	h.pastSettle()
+	h.tick()
+	if v, _ := h.openOf(2); v.Verdict != OpenWaits || !strings.Contains(v.Why, "the daemon is draining") {
+		t.Errorf("verdict = %s %q, want a wait for the drain", v.Verdict, v.Why)
+	}
+	for _, sub := range []string{"slot:review1", "pool:talkable/talkable"} {
+		for _, ev := range subjectEvents(t, h, sub) {
+			if ev.Kind == "slot.evict" || ev.Kind == "pool.provision" {
+				t.Errorf("%s: %s %q under the drain, want none", sub, ev.Kind, ev.Message)
+			}
+		}
+	}
+}
+
 // fixEventOf is PR #n's newest event of kind (ok false: none).
 func (h *harness) fixEventOf(n int, kind string) (store.Event, bool) {
 	h.t.Helper()

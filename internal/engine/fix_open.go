@@ -768,7 +768,10 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		pr = cur
 	}
 	pool := e.slotPoolOf(ctx, repo, pr) // nil: the PR has a slot, or its repository no pool
-	if pool != nil {
+	// Only once this tick's starts took slots of the pool: with none free at
+	// all, prepareFix's refusals (a drain, a paused kind, a snooze, the
+	// cooldown) come first, and its own look for a free slot after them.
+	if pool != nil && e.openSlotStarts[pool.Repo] > 0 {
 		if free, err := e.st.FreeSlots(ctx, pool.Repo, pr.ID); err == nil && len(free) <= e.openSlotStarts[pool.Repo] {
 			e.needSlot(ctx, *pool, subject) // the free ones went to this tick's other starts
 			return slotWait(v, work, pool.Repo)

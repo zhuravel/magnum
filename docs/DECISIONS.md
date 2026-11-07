@@ -3056,11 +3056,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   In a tick the look counts, by pool, the loops it started on PRs without a slot, and starts none past the
   pool's free slots: the PR waits ("... waits for a free talkable/talkable slot") and the pool is asked
   for one (`needSlot`), as it is when `prepareFix` finds none free, which now says the same words and is
-  asked again at the next look (a registry read) instead of 5 minutes later. A round that takes the slot
-  between the look and the claim can still end a loop unclaimed; its start no longer counts, and the next
-  look starts it again. Tests, failing first: TestAStartThatFoundNoSlotSpendsNoStart,
+  asked again at the next look (a registry read) instead of 5 minutes later. The look's own check runs
+  only once such a start took a slot in the tick: with none free at all, the fix job's refusals (a drain,
+  a paused kind, a snooze, the human cooldown) come first, as before, and its own look for a free slot
+  last, so a drain evicts no other PR's slot for a loop that cannot start before the restart. A round that
+  takes the slot between the look and the claim can still end a loop unclaimed; its start no longer
+  counts, and the next look starts it again. Tests, failing first: TestAStartThatFoundNoSlotSpendsNoStart,
   TestTheLookStartsNoMoreSlotLoopsInATickThanSlotsAreFree,
-  TestALaterCycleThatFoundNoSlotKeepsItsLoopsStart.
+  TestALaterCycleThatFoundNoSlotKeepsItsLoopsStart, TestAFullPoolLeavesTheFixJobsRefusalsFirst.
 
 - **A review body or comment edited in place is new work again** (2026-11-07, a read-only check before the
   operator's switch to "open"). A remark's key was its id, and it was answered once a fix-marked reply named
