@@ -15395,6 +15395,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheDaemonSetsAUTF8LocaleWhenLaunchdGivesNone, TestTheDaemonKeepsALocaleAlreadySet,
   TestTheDaemonsLocaleKeepsAnLCCTYPE, TestALocaleTheDaemonCannotSetIsAWarning and
   TestTheFactoryDaemonSetsAUTF8LocaleWhenLaunchdGivesNone.
+- **curl's connect failure is a network cause** (2026-11-07). A GitHub blip made a PR's fetch fail three
+  times with git's "unable to access '...': Failed to connect to github.com:443 after 75014 ms: Could not
+  connect to server". `github.NetworkCause` had no pattern for it, so the infrastructure pause did not take
+  it: each failure charged the PR an attempt, the PR needed attention for almost 14 hours, and its public
+  status comment said the review failed. curl's "Failed to connect to", its "Could not connect to server" and
+  the older "Couldn't connect to server" (git prints the bare text when curl gives no detail) now name
+  "server unreachable". They come last in the list, so a message that names the socket's own error
+  ("...port 443: Connection refused", "...: Operation timed out") keeps that cause. The factory's
+  infrastructure hold reads the same classifier (`engine.InfraCause`). Rejected: "GitHub unreachable" as the
+  cause (the classifier reads every remote and dependency step, not only GitHub's). Tests, failing first:
+  TestNetworkCauseNamesOnlyTheNetworksFailures, TestConnectionCause, TestInfraCauseClassifiesOutsideFailures.
 
 ## The factory (2026-11-03)
 

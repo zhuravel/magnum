@@ -14,7 +14,11 @@ import (
 type errPattern struct{ match, cause string }
 
 // networkPatterns are the infrastructure failures that are the network's
-// (DNS, timeouts, refusals, resets, TLS); ConnectionCause reads them too.
+// (DNS, timeouts, refusals, resets, TLS, a server curl could not reach);
+// ConnectionCause reads them too. The first pattern in the list wins, so
+// curl's connect failure comes last: one that names the socket's error
+// ("Failed to connect to github.com port 443: Connection refused") keeps
+// that cause.
 var networkPatterns = []errPattern{
 	{"could not resolve host", "DNS lookup failed"},
 	{"temporary failure in name resolution", "DNS lookup failed"},
@@ -31,6 +35,12 @@ var networkPatterns = []errPattern{
 	{"ssl_connect", "TLS failure"},
 	{"gnutls_handshake", "TLS failure"},
 	{"tls handshake", "TLS failure"},
+	// curl's CURLE_COULDNT_CONNECT, as git over HTTPS prints it: "Failed to
+	// connect to github.com:443 after 75014 ms: Could not connect to
+	// server", or the bare error text ("Couldn't" in older curls).
+	{"failed to connect to", "server unreachable"},
+	{"could not connect to server", "server unreachable"},
+	{"couldn't connect to server", "server unreachable"},
 }
 
 // githubPatterns are the connection-class failures of a GitHub API call that
@@ -86,7 +96,8 @@ func matchPattern(msg string, patterns []errPattern) string {
 
 // NetworkCause names the failure of the network itself that msg reports
 // ("" = none): DNS, a timeout, a refused or reset connection, an unreachable
-// network, TLS. What git and ssh print when a remote cannot be reached.
+// network or server, TLS. What git, ssh and curl print when a remote cannot
+// be reached.
 func NetworkCause(msg string) string {
 	return matchPattern(strings.ToLower(msg), networkPatterns)
 }

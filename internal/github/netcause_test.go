@@ -24,6 +24,7 @@ func TestConnectionCause(t *testing.T) {
 		{"GET /app: 503 Service Unavailable", "GitHub server error"},
 		{"gh api repos/talkable/talkable exited 1: gh: Server Error (HTTP 500)", "GitHub server error"},
 		{"gh: HTTP 504: Gateway Timeout (https://api.github.com/user)", "GitHub server error"},
+		{"git fetch exited 128: fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com:443 after 17412 ms: Could not connect to server", "server unreachable"},
 		// GraphQL's 10 s limit answers an empty body; gh reports it 11-12 s
 		// later, and so does a decode of the empty answer.
 		{"github radar talkable page 1: gh api graphql --input - exited 1: unexpected end of JSON input", "GitHub server error"},
@@ -67,6 +68,15 @@ func TestNetworkCauseNamesOnlyTheNetworksFailures(t *testing.T) {
 		{"ssh: connect to host github.com port 22: Operation timed out", "network timeout"},
 		{"ssh: connect to host github.com port 22: Connection refused", "connection refused"},
 		{"fatal: unable to access: SSL certificate problem: unable to get local issuer certificate", "TLS failure"},
+		// curl's connect failure (CURLE_COULDNT_CONNECT), as git over HTTPS
+		// prints it after its 75 s connect timeout; git prints curl's bare
+		// error text when curl gives no detail, and older curls spell it
+		// "Couldn't". One that names the socket's own error keeps its cause.
+		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com:443 after 75014 ms: Could not connect to server", "server unreachable"},
+		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com port 443 after 75004 ms: Couldn't connect to server", "server unreachable"},
+		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Could not connect to server", "server unreachable"},
+		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com port 443 after 75004 ms: Operation timed out", "network timeout"},
+		{"fatal: unable to access 'https://github.com/talkable/talkable.git/': Failed to connect to github.com port 443: Connection refused", "connection refused"},
 		{"error connecting to api.github.com", ""},
 		{"gh: HTTP 502: Bad Gateway", ""},
 		{"fatal: couldn't find remote ref refs/pull/7/head", ""},

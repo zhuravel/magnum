@@ -36,7 +36,7 @@ const (
 
 // infraCause names the infrastructure failure err reports ("" = none of the
 // known patterns: SSH key refused, then the network's: DNS, timeouts and
-// refusals, TLS, github.NetworkCause).
+// refusals, TLS, a server curl could not reach, github.NetworkCause).
 func infraCause(err error) string {
 	if err == nil {
 		return ""
@@ -259,6 +259,6 @@ func clipRunes(s string, n int) string {
 
 // InfraCause names the infrastructure failure err reports, "" for none of
 // the known patterns (an SSH key refused, then the network's: DNS, timeouts
-// and refusals, TLS): what pauses the review daemon's dispatch, for the
-// factory's infrastructure hold.
+// and refusals, TLS, a server curl could not reach): what pauses the review
+// daemon's dispatch, for the factory's infrastructure hold.
 func InfraCause(err error) string { return infraCause(err) }

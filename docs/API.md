@@ -8450,10 +8450,10 @@ func HeldReviewID(v string) (int64, bool)
     for a value that names none.
 
 func InfraCause(err error) string
-    InfraCause names the infrastructure failure err reports, "" for none of the
-    known patterns (an SSH key refused, then the network's: DNS, timeouts and
-    refusals, TLS): what pauses the review daemon's dispatch, for the factory's
-    infrastructure hold.
+    InfraCause names the infrastructure failure err reports, "" for none of
+    the known patterns (an SSH key refused, then the network's: DNS, timeouts
+    and refusals, TLS, a server curl could not reach): what pauses the review
+    daemon's dispatch, for the factory's infrastructure hold.
 
 func KVGitHubCost(identity string) string
     KVGitHubCost holds the cost record of one identity's GitHub calls
@@ -15169,7 +15169,8 @@ func IsBot(typename, login string) bool
 func NetworkCause(msg string) string
     NetworkCause names the failure of the network itself that msg reports (""
     = none): DNS, a timeout, a refused or reset connection, an unreachable
-    network, TLS. What git and ssh print when a remote cannot be reached.
+    network or server, TLS. What git, ssh and curl print when a remote cannot be
+    reached.
 
 func NormalizeLogin(s string) string
     NormalizeLogin strips a trailing "[bot]" so REST logins ("talkable[bot]")
