@@ -312,3 +312,33 @@ func TestAPersonsThreadResolvedByNoOneNamedStaysOpenUnderAnAppFixer(t *testing.T
 		t.Errorf("under a gh fixer: items = %v, want none", got)
 	}
 }
+
+// A person's approval asks for nothing: the fix skill gives it no verdict
+// and no reply, so its body ("No blocking items") is neither work nor a
+// leftover, in the look's items and in the fixer's file alike, and a clean
+// review with an approval beside it leaves nothing open. A comment review
+// and a changes request are items as before, and so is a bot's approval
+// body neither.
+func TestAnApprovalBodyIsNoItem(t *testing.T) {
+	review := func(id int64, state, login, typ, body string) github.Review {
+		return github.Review{DatabaseID: id, State: state, Body: body, URL: prPage + "#pullrequestreview-" + itoa(id), SubmittedAt: itemsAt.Add(time.Duration(id-900) * time.Minute),
+			AuthorLogin: login, AuthorType: typ, AuthorAssociation: "MEMBER"}
+	}
+	approval := review(901, "APPROVED", "rev-ann", "User", "Reviewed a1a1a1a. No blocking items; the specs pass.")
+	read := readFor(nil, []github.Review{approval}, nil, nil, nil)
+	if got := openItemsOf(itemsInput{read: read, sum: cleanSum(), head: fixHead}); len(got) != 0 {
+		t.Errorf("items = %+v, want none for an approval", got)
+	}
+	if _, conversation := read.items.unanswered(); conversation != 0 || len(read.items.Conversation) != 0 {
+		t.Errorf("the fixer's file lists %+v, want no approval", read.items.Conversation)
+	}
+	reviews := []github.Review{approval,
+		review(902, "COMMENTED", "rev-ann", "User", "Could this use the cache?"),
+		review(903, "CHANGES_REQUESTED", "bob-rev", "User", "Please split this method."),
+		review(904, "APPROVED", "review-bot", "Bot", "Automated review: approved, no issues found."),
+	}
+	read = readFor(nil, reviews, nil, nil, nil)
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: cleanSum(), head: fixHead})); !slices.Equal(got, []string{"remark:902", "remark:903"}) {
+		t.Errorf("items = %v, want the comment review and the changes request alone", got)
+	}
+}

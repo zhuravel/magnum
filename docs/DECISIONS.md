@@ -3000,6 +3000,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPausedLookStartsNothingUntilThePauseEnds, TestQuietHoursHoldTheLooksStartsUntilTheirEnd;
   TestFStartsALoopUnderThePause keeps `f`.
 
+- **An approval's body is no item, for the look or the fixer** (2026-11-07, a read-only check before the
+  operator's switch to "open"). `externalOf` listed every review body but a pending or dismissed one, so a
+  colleague's approval ("Reviewed a1b2c3d. No blocking items") on an own PR whose magnum review was clean
+  was a person's remark: the look started a loop for it, the fixer gave it no reply, as its skill says of an
+  approval, and pushed nothing, and the next read found the handed person's remark still open and raised
+  the PR to needs attention for an approval. The file now lists only the bodies of reviews that comment or
+  request changes (`remarkState`), so the look, `othersWaiting` (which a `magnum fix` on a clean review
+  asks) and the fixer read the same items, and the skill says the file lists no approval. Kept out of the
+  file too, not only out of the look: the fixer may not answer an approval, and an item in the file no loop
+  may answer is work that only ends in needs attention. A reviewer who wants a change comments or requests
+  changes, and both stay items; a nit inside an approval is the author's to read on GitHub. A bot's
+  approval goes the same way. Tests, failing first: TestAnApprovalBodyIsNoItem,
+  TestAnApprovalOnACleanReviewStartsNoLoop.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

@@ -3055,7 +3055,8 @@ than the 50 comments GitHub lists first, Magnum reads its newest ones too, so th
 the review bodies and conversation comments of others since your own last comment (one without a Magnum
 marker; Magnum pages back through the conversation until it finds it), each marked answered once a later reply
 of the fixer names it on the line under its quote. Magnum's own review bodies, its status comment and the
-fixer's replies are not in it, and neither is what someone outside the repository wrote: only its owners,
+fixer's replies are not in it, nor an approval's body (it asks for nothing, so the fixer would give it no
+reply), and neither is what someone outside the repository wrote: only its owners,
 members and collaborators and GitHub Apps count, as for a reply round, since in a public repository anyone may
 comment and the fixer acts on these items as you. The bodies are cut at 600 characters, as in a re-review's
 threads file, and reach the fixer only through the file, never the prompt, an event or a log; a `fix.external`
@@ -3287,7 +3288,8 @@ out, as the board's does.
 
 **Autofix on anything open.** `autofix = "open"` starts a loop on your own PR whenever something on it is
 open: Magnum's findings (simplifications and optional findings included), another reviewer's unanswered
-thread, review body or comment, or a conflict with the PR's own base. It starts only once the reviewers
+thread, review body (one that comments or requests changes: an approval asks for nothing) or comment, or a
+conflict with the PR's own base. It starts only once the reviewers
 settled on the head: Magnum reviewed it (waited for without a cap; `magnum_late_after` past the time its
 round was due, the PR needs you), nobody touched the PR for `settle_quiet`, and every `settle_checks` check
 at the head is done, these last two waited for at most `settle_max` after the head moved or, on an older head,

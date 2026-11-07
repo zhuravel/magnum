@@ -6,7 +6,8 @@ package engine
 // another reviewer started, neither magnum's logins nor the PR author
 // (people and bots alike: a colleague, another review tool, a code-review
 // bot), each "answered" when its latest comment is the PR author's or the
-// fixer's, and the review bodies and conversation comments of others since
+// fixer's, and the review bodies (an approval's never: it asks for
+// nothing) and conversation comments of others since
 // the PR author's last comment of their own, each "answered" when a later
 // comment of the fixer names it on its target line (replyTarget).
 // Only the repository's owners, members and collaborators and GitHub Apps
@@ -231,8 +232,8 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // (postreview.IsFixReply) and comes from one of magnum's logins (the marker
 // in anyone else's comment answers nothing). A review body or conversation
 // comment is another reviewer's when a reviewer other than the author and
-// magnum's logins wrote it, it says something (a review's body, not a
-// pending or dismissed review) and it came after the author's last own
+// magnum's logins wrote it, it says something (the body of a review that
+// comments or requests changes: remarkState) and it came after the author's last own
 // word (ownWord) among the reviews and the comments, or, when the comments
 // stop short of that word (CommentsComplete false), after the oldest comment
 // GitHub listed; it is answered when a later comment of the author or of
@@ -310,7 +311,7 @@ func externalOf(in externalInput) (externalItems, int) {
 		return true
 	}
 	for _, r := range in.Reviews {
-		if strings.TrimSpace(r.Body) == "" || r.State == "PENDING" || r.State == "DISMISSED" || !other(r.AuthorLogin, r.AuthorType, r.AuthorAssociation, r.SubmittedAt) {
+		if strings.TrimSpace(r.Body) == "" || !remarkState(r.State) || !other(r.AuthorLogin, r.AuthorType, r.AuthorAssociation, r.SubmittedAt) {
 			continue
 		}
 		er := externalRemark{Kind: remarkReview, ID: r.DatabaseID, URL: r.URL, Author: name(r.AuthorLogin, r.AuthorType), State: r.State,
@@ -336,6 +337,14 @@ func externalOf(in externalInput) (externalItems, int) {
 	}
 	return x, outside
 }
+
+// remarkState reports whether a review in state asks something of the
+// author: one that comments or requests changes. A pending review is not
+// posted, a dismissed one was taken back, and an approval asks for
+// nothing: the fix skill gives it no verdict and no reply, so listed it
+// was an item no loop could answer (a loop on a clean review that pushed
+// nothing, then a leftover that needed the operator).
+func remarkState(state string) bool { return state == "COMMENTED" || state == "CHANGES_REQUESTED" }
 
 // fixLogins are the logins whose threads and replies on the job's PR are
 // magnum's (Account form): ownLogins, the login that posted the review, and

@@ -1145,3 +1145,27 @@ func TestFStartsALoopUnderThePause(t *testing.T) {
 		t.Fatalf("fix runs = %d by %q under the pause, want the loop f asked for", n, h.fixStartBy())
 	}
 }
+
+// A colleague's approval of a PR whose magnum review is clean starts no
+// loop: before, its body ("No blocking items") was a person's remark, the
+// loop it started answered nothing, as the skill says, and the PR then
+// needed you for the approval. The PR is idle, its approval said.
+func TestAnApprovalOnACleanReviewStartsNoLoop(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	colleagueFixer(h, git)
+	h.tick() // reviewed clean
+	h.gh.mu.Lock()
+	if h.gh.allReviews == nil {
+		h.gh.allReviews = map[int][]github.Review{}
+	}
+	h.gh.allReviews[2] = append(h.gh.allReviews[2], github.Review{DatabaseID: 9100, State: "APPROVED", Body: "Reviewed a1a1a1a. No blocking items.",
+		URL: prPage + "#pullrequestreview-9100", SubmittedAt: h.clock.Now(), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"})
+	h.gh.mu.Unlock()
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("fix runs = %d for an approval, want none", n)
+	}
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+}
