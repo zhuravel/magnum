@@ -7,7 +7,7 @@ package factory
 // PR's state, a PR magnum has not read and a registry that cannot be read
 // are magnum looking at the PR, never idle. Without a verdict (the watch
 // does not run autofix = "open") the fix loop, the attention and magnum's
-// review still show. The row's WAITED counts from when the PR began to wait
+// review still show, and so does a stalemate. The row's WAITED counts from when the PR began to wait
 // as it does (the verdict's Since), so a PR that came to need you while you
 // were away is new for you. Without a Magnum the row keeps its words:
 // magnum reviews the PR.
@@ -177,10 +177,12 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 }
 
 // magnumWait is the wait of open PR #n as magnum's registry tells it (st):
-// its daemon down, the PR not read yet, its verdict (verdictWait; a stale
-// one is magnum looking), a verdict still to come, its fix loop, its
-// attention, else magnum's review. own says the row is your PR's, whose F
-// works on the factory screen too (offWait).
+// its daemon down, the PR not read yet, its fix loop (the loop's row, which
+// a start writes at once, before the look's next verdict says fixing), its
+// verdict (verdictWait; a stale one is magnum looking), a verdict still to
+// come, its attention or stalemate (attentionWait), magnum's review of the
+// head, else magnum's review to come. own says the row is your PR's, whose
+// F works on the factory screen too (offWait).
 func magnumWait(st PRState, n int, own bool) prWait {
 	looking := fmt.Sprintf("looking at #%d", n)
 	switch {
@@ -188,6 +190,10 @@ func magnumWait(st PRState, n int, own bool) prWait {
 		return waitsWait("magnum", "daemon down", "", fmt.Sprintf("magnum's daemon is down: nothing looks at #%d", n))
 	case !st.Found:
 		return waitsWait("magnum", looking, "", "")
+	case st.Fixing:
+		w := fixingWait(st, n)
+		w.since = st.Fix.StartedAt
+		return w
 	case st.HasOpen && st.Stale:
 		return waitsWait("magnum", looking, "", "")
 	case st.HasOpen:
@@ -196,17 +202,28 @@ func magnumWait(st PRState, n int, own bool) prWait {
 		return w
 	case st.OpenWatch: // its verdict is still to come
 		return waitsWait("magnum", looking, "", "")
-	case st.Fixing:
-		w := fixingWait(st, n)
-		w.since = st.Fix.StartedAt
-		return w
-	case st.State == store.PRNeedsAttention:
-		msg := cmp.Or(st.AttentionMsg, st.Attention, "needs attention")
-		w := youWait("magnum: "+msg, "magnum: "+firstClause(msg), "")
-		w.since = st.UpdatedAt
-		return w
+	case st.State == store.PRNeedsAttention || st.Stalemate:
+		return attentionWait(st, n)
+	case st.ReviewedSHA != "" && st.ReviewedSHA == st.Head && st.State == store.PRReviewed:
+		return waitsWait("magnum", "reviewed "+textx.ShortSHA(st.Head), "", "")
 	}
 	return waitsWait("magnum", fmt.Sprintf("review of #%d", n), "", "")
+}
+
+// attentionWait is the wait on you of PR #n that magnum's row (st) says
+// needs you: its attention, in magnum's words, else its stalemate (magnum
+// stopped arguing in a thread), since the row last changed.
+func attentionWait(st PRState, n int) prWait {
+	var w prWait
+	if st.State == store.PRNeedsAttention {
+		msg := cmp.Or(st.AttentionMsg, st.Attention, "needs attention")
+		w = youWait("magnum: "+msg, "magnum: "+firstClause(msg), "")
+	} else {
+		what := fmt.Sprintf("magnum stopped arguing on #%d: the thread is yours", n)
+		w = youWait(what, clauseShort(what), "")
+	}
+	w.since = st.UpdatedAt
+	return w
 }
 
 // waitsWait is a wait on others: who, and what in its three forms.

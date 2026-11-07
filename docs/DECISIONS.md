@@ -3750,6 +3750,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFactoryScreenWithoutARegistryListsYourPRs, TestYourPRsOfTwoFactoryRepositoriesNameTheirRepository,
   TestTheFactoryBarLogsNoRequestItDoesNotFollow; goldens yours-100, -140 and -200.
 
+- **Your PR that needs your attention is in NEEDS YOU whatever its verdict says, and a loop shows when it
+  starts** (2026-11-07, the review of the factory bridge; amends the entry above, which rejected NEEDS YOU for
+  an attention under a watch that is not "open"). Your own PR went to NEEDS YOU only on a fresh needs-you or
+  idle-and-approved verdict, so three PRs that need you sat in YOUR PRS, counted "at work" by the chip, while
+  `a` said nothing waits on you: one with fix off (F) whose loop by `f` ended with its own Needs you, since rule
+  1 (off) comes before rule 2 (attention) and the row read "fix is off"; one whose verdict was decided before
+  the attention (stale: "looking at"); and every one under `"own"` or `"never"`, which have no verdict. With
+  `own_prs = "factory"` the board hides them too, so the attention showed nowhere. Now an attention or a
+  stalemate puts the row in NEEDS YOU with its words (`you: magnum: <why>`) whatever the verdict says, unless a
+  fix loop works on the PR; a published task's row without a verdict shows a stalemate too. A loop `f` starts
+  writes magnum's fix row at once and the look writes `fixing` only at its next tick, so a fresh idle verdict
+  kept the row in NEEDS YOU as "merge #N on GitHub" while the fixer was about to push: the live fix row now
+  wins over the verdict, on a task's row and yours. Without a verdict, a PR magnum reviewed at its head says
+  `magnum: reviewed a1b2c3d` instead of "review of #N", and one magnum does not review (include_own = false, a
+  mute, a baseline) is dim with why, as one the look leaves alone; the chip's "at work" leaves the dim rows
+  out (a baseline open for weeks is not at work). Rule 1 stays first in the engine: the screen decides what
+  needs you from the PR's row, which it has with a verdict or without one.
+  Tests, failing first: TestAnOwnPRThatNeedsAttentionIsInNeedsYouWhateverItsVerdict,
+  TestAnOwnPRWithoutAVerdictSaysWhatMagnumDid, TestAnOwnPRWhoseLoopStartedAfterItsVerdictMoves,
+  TestAPublishedTasksRowFollowsItsPR (a stalemate, reviewed at the head, a loop after a fresh verdict),
+  TestTheChipCountsPRsThatNeedYou; goldens yours-100, -140 and -200.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

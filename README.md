@@ -4123,7 +4123,9 @@ magnum has not read yet and a registry that cannot be read say `magnum: looking 
 down says so: never idle. A PR in a repository no `[[watch]]` covers needs you (`magnum does not watch
 example/shop: merge or close #4530 yourself, then x drops the task`: nothing tells the task when you did, so x is
 its move). Without the verdict (the watch's autofix is not `"open"`) the row shows magnum's fix loop, its attention
-(`you: magnum: <why>`) or `magnum: review of #4530`. WAITED counts from when the PR began to wait as it does (the
+(`you: magnum: <why>`) or stalemate (`you: magnum stopped arguing on #4530: the thread is yours`), `magnum:
+reviewed a1b2c3d` once magnum reviewed the head, or `magnum: review of #4530`. A fix loop shows as soon as it
+starts (its row in magnum's registry), before the look's next verdict says `fixing`. WAITED counts from when the PR began to wait as it does (the
 verdict's `since`, a loop's start, the close), or from the publish or a reopen when that is later, so a PR that
 came to need you while you were away is "new for you" in the digest. A published task
 is never DONE TODAY on the day of its PR any more: its PR is open. Each tick follows the PRs, whether or not it
@@ -4143,14 +4145,18 @@ task which is neither done nor stopped has stays that task's row, so no PR is li
 needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`
 when the factory has one repository and the PR is of it; otherwise its repository names it, `shop#12`; the wide
 screen's JIRA column has the issue key of its title),
-with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); every other one waits in YOUR PRS, between
+with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); so is one that needs your attention or where
+magnum stopped arguing, whatever its verdict says (fix off hides no attention) and without one (`you: magnum:
+<why>`), unless a fix loop works on it. Every other one waits in YOUR PRS, between
 WAITS ON OTHERS and DONE TODAY, oldest wait first, in the words a published task's row has (`agent: magnum fixes
 #4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `magnum: looking at #4613`). A PR magnum's look leaves alone (a
-baseline, fix off, a watch whose `include_own` is false) waits there too, dim, with why (`#4606 is yours to
+baseline, fix off, a mute, a watch whose `include_own` is false; without a verdict, one magnum does not review)
+waits there too, dim, with why (`#4606 is yours to
 follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`), after
 the others, so a short screen folds it first: it asks nothing, so a baseline open for weeks never sits in NEEDS
 YOU. The chip counts both kinds that need you (`1 task
-and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`); the window title counts
+and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`, leaving out the dim
+ones magnum leaves alone); the window title counts
 every row in NEEDS YOU. A PR row has no card: `enter` names its keys in the footer, `b` opens the PR, and `o`
 and `t` say they act on a task's row. `a` walks the task cards only and skips PR rows; once no card is left, the
 footer says `2 of your PRs need you: f, F or b on their rows`. On a PR row, `f`, `F` and `x` run the board's own

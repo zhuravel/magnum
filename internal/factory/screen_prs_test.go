@@ -265,6 +265,15 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
 			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum: judge blocked: the slot's database is gone", Short: "magnum: judge blocked", OnYou: true}},
 		"no verdict": {func(v *PRState) { v.OpenWatch = false }, nil, tui.GroupWaits, tui.MarkWaits, tui.WaitsOn{Who: "magnum", What: "review of #4540"}},
+		"no verdict, reviewed at the head": {func(v *PRState) { v.OpenWatch, v.ReviewedSHA = false, prHead }, nil, tui.GroupWaits, tui.MarkWaits,
+			tui.WaitsOn{Who: "magnum", What: "reviewed a1b2c3d"}},
+		"no verdict, a stalemate": {func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.Stalemate = false, prHead, true }, nil, tui.GroupNeedsYou,
+			tui.MarkNeedsYou, tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum stopped arguing on #4540: the thread is yours",
+				Short: "magnum stopped arguing on #4540", OnYou: true}},
+		"a loop started after a fresh verdict": {func(v *PRState) {
+			v.HasOpen, v.Approved, v.Open = true, true, verdict(engine.OpenIdle, "nothing open at a1b2c3d · approved, merge is yours")
+			v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
+		}, nil, tui.GroupWaits, tui.MarkWorking, tui.WaitsOn{Who: "agent", What: "magnum fixes #4540 (cycle 1 of 3)", Short: "magnum fixes #4540"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newScreenRig(t)

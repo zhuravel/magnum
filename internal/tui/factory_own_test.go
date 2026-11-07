@@ -130,12 +130,13 @@ func TestFactoryFramesWithYourPRs(t *testing.T) {
 }
 
 // The chip counts the tasks and the PRs that need you apart ("1 task and
-// 2 PRs need you"), and your PRs at work in a dim part of their own; with
-// no task to decide it says "2 PRs need you".
+// 2 PRs need you"), and your PRs at work in a dim part of their own, never
+// one magnum leaves alone (a baseline asks nothing, and nothing works on
+// it); with no task to decide it says "2 PRs need you".
 func TestTheChipCountsPRsThatNeedYou(t *testing.T) {
 	frame, _ := factoryFrameOf(fixtureYours(), 140, 22, true, IconsUnicode, factoryNow)
 	chip := strings.Split(ansi.Strip(frame), "\n")[1]
-	mustContain(t, chip, "1 task and 2 PRs need you, 3 decisions", "1 waits on others", "3 of your PRs at work", "1 done today")
+	mustContain(t, chip, "1 task and 2 PRs need you, 3 decisions", "1 waits on others", "2 of your PRs at work", "1 done today")
 
 	f := fixtureYours()
 	f.Rows = f.Rows[1:] // the task with questions answered
@@ -145,9 +146,13 @@ func TestTheChipCountsPRsThatNeedYou(t *testing.T) {
 	mustContain(t, chip, "● 2 PRs need you ·")
 	mustNotContain(t, chip, "task")
 
-	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Group == GroupYours && r.Key != "#4611" })
+	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Group == GroupYours && r.Key != "#4611" && r.Key != "#4606" })
 	frame, _ = factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
 	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[1], "1 of your PRs at work")
+
+	f.Rows = slices.DeleteFunc(f.Rows, func(r FactoryRow) bool { return r.Key == "#4611" })
+	frame, _ = factoryFrameOf(f, 140, 22, true, IconsUnicode, factoryNow)
+	mustNotContain(t, strings.Split(ansi.Strip(frame), "\n")[1], "at work")
 }
 
 // A row of your PR that magnum leaves alone is drawn dim, its "you:" too:

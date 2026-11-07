@@ -322,3 +322,93 @@ func TestAMutedOwnPRSaysItIsMuted(t *testing.T) {
 		t.Errorf("a muted PR: %+v (%+v), want it dim in YOUR PRS with the way to unmute it", row, row.PR)
 	}
 }
+
+// An own PR that needs your attention, or where magnum stopped arguing, is
+// in NEEDS YOU with the attention's words whatever its verdict says or
+// whether it has one: fix off (F) does not hide an attention, a verdict
+// decided before the attention is stale, and a watch without autofix =
+// "open" has no verdict. A loop at work on it (f on a PR that needs
+// attention) moves, in YOUR PRS. Before, all of these sat in YOUR PRS and
+// the chip counted them at work.
+func TestAnOwnPRThatNeedsAttentionIsInNeedsYouWhateverItsVerdict(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	attn := func(v *PRState) {
+		v.State, v.Attention, v.AttentionMsg = store.PRNeedsAttention, "fix", "fix: 2 findings need you"
+	}
+	r.own(91, 4701, func(v *PRState) { v.OpenWatch = false; attn(v) })
+	r.own(92, 4702, func(v *PRState) {
+		attn(v)
+		v.FixOff, v.HasOpen, v.Open = true, true, verdict(engine.OpenOff, "fix is off (F)")
+		v.Open.Off = engine.OpenOffFixOff
+	})
+	r.own(93, 4703, func(v *PRState) {
+		attn(v)
+		v.HasOpen, v.Stale, v.Open = true, true, verdict(engine.OpenWaits, "settling until 09:20")
+	})
+	r.own(94, 4704, func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.Stalemate = false, prHead, true })
+	r.own(95, 4705, func(v *PRState) {
+		attn(v)
+		v.OpenWatch, v.Fixing, v.Fix = false, true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
+	})
+	d := r.data(time.Time{})
+	want := tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum: fix: 2 findings need you", Short: "magnum: fix", OnYou: true}
+	for _, key := range []string{"#4701", "#4702", "#4703"} {
+		row := rowOf(t, d, key)
+		if row.Group != tui.GroupNeedsYou || row.Mark != tui.MarkNeedsYou || row.WaitsOn[0] != want || row.Move == "" || row.PR.Off != "" {
+			t.Errorf("%s: %+v (%+v), want NEEDS YOU with %+v and a move", key, row, row.PR, want)
+		}
+	}
+	if !rowOf(t, d, "#4702").PR.FixOff {
+		t.Error("#4702 lost its fix off")
+	}
+	if row := rowOf(t, d, "#4704"); row.Group != tui.GroupNeedsYou || !strings.HasPrefix(row.WaitsOn[0].What, "magnum stopped arguing on #4704") {
+		t.Errorf("a stalemate: %+v, want NEEDS YOU", row)
+	}
+	if row := rowOf(t, d, "#4705"); row.Group != tui.GroupYours || row.Mark != tui.MarkWorking || !row.PR.Fixing {
+		t.Errorf("a loop at work on a PR that needs attention: %+v (%+v), want it moving in YOUR PRS", row, row.PR)
+	}
+}
+
+// Without a verdict (the watch's autofix is not "open") an own PR says
+// what magnum did: "reviewed a1b2c3d" once it reviewed the head, and one
+// magnum does not review (include_own = false, a mute, a baseline) is dim
+// with why, as one the look leaves alone is, and asks nothing. Before,
+// each said "review of #N".
+func TestAnOwnPRWithoutAVerdictSaysWhatMagnumDid(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.own(96, 4711, func(v *PRState) { v.OpenWatch, v.ReviewedSHA = false, prHead })
+	r.own(97, 4712, func(v *PRState) { v.OpenWatch, v.State = false, store.PRIneligible })
+	r.own(98, 4713, func(v *PRState) { v.OpenWatch, v.State = false, store.PRBaseline })
+	d := r.data(time.Time{})
+	if row := rowOf(t, d, "#4711"); row.Group != tui.GroupYours || row.PR.Off != "" ||
+		row.WaitsOn[0] != (tui.WaitsOn{Who: "magnum", What: "reviewed a1b2c3d"}) {
+		t.Errorf("an own PR magnum reviewed at its head: %+v (%+v)", row, row.PR)
+	}
+	for key, want := range map[string]string{"#4712": "#4712 is yours to follow: magnum does not review it",
+		"#4713": "#4713 is yours to follow: it was open before magnum first synced the repository"} {
+		row := rowOf(t, d, key)
+		if row.Group != tui.GroupYours || row.PR.Off != want || row.WaitsOn[0].What != want || row.Move != "" {
+			t.Errorf("%s: %+v (%+v), want it dim in YOUR PRS: %q", key, row, row.PR, want)
+		}
+	}
+}
+
+// A loop that f started writes magnum's fix row at once, and the look
+// writes fixing only at its next tick: until then the verdict is still
+// fresh. The row moves with the loop, never in NEEDS YOU as "merge #N on
+// GitHub", a merge that would race the fixer's push.
+func TestAnOwnPRWhoseLoopStartedAfterItsVerdictMoves(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.own(99, 4721, func(v *PRState) {
+		v.HasOpen, v.Approved, v.Open = true, true, verdict(engine.OpenIdle, "nothing open at a1b2c3d · approved, merge is yours")
+		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
+	})
+	row := rowOf(t, r.data(time.Time{}), "#4721")
+	if row.Group != tui.GroupYours || row.Mark != tui.MarkWorking || !row.PR.Fixing || row.Move != "" ||
+		row.WaitsOn[0].What != "magnum fixes #4721 (cycle 1 of 3)" {
+		t.Errorf("an own PR whose loop started after its idle verdict: %+v (%+v), want it moving in YOUR PRS", row, row.PR)
+	}
+}

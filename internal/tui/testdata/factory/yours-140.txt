@@ -1,5 +1,5 @@
  magnum factory · talkable                                                                                                          ↻ 14:09 
- ● 1 task and 2 PRs need you, 3 decisions · 1 waits on others · 3 of your PRs at work · 1 done today
+ ● 1 task and 2 PRs need you, 3 decisions · 1 waits on others · 2 of your PRs at work · 1 done today
 
  NEEDS YOU                     WAITS ON                                                                              YOUR MOVE        WAITED
 › ● PR-12345  Credit expiry…   you: 3 questions before coding                                                        answer them         41m

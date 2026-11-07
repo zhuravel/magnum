@@ -3,14 +3,15 @@ package factory
 // YOUR PRS on home: your own open PRs from magnum's registry
 // (Magnum.OwnPRs, read once per frame), one row each, whether the factory
 // wrote them or you did. A PR a task that is not done or stopped has stays
-// that task's row. A PR whose verdict needs you, or that is idle and
-// approved (your merge), is in NEEDS YOU; every other one waits in YOUR
-// PRS, oldest wait first, with the words a published task's row has
-// (magnumWait); one magnum's look leaves alone (a baseline, fix off) is
+// that task's row. A PR whose verdict needs you, that is idle and approved
+// (your merge), or that needs your attention or where magnum stopped
+// arguing (whatever its verdict says, and without one) is in NEEDS YOU;
+// every other one waits in YOUR PRS, oldest wait first, with the words a
+// published task's row has (magnumWait); one magnum's look leaves alone (a
+// baseline, fix off), or without a verdict one magnum does not review, is
 // drawn dim with why, after the others, and asks nothing. The rows are
-// read only: f, F and
-// x on them go through magnum's own request paths, as the board's keys
-// do, never through the factory daemon.
+// read only: f, F and x on them go through magnum's own request paths, as
+// the board's keys do, never through the factory daemon.
 
 import (
 	"cmp"
@@ -21,6 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
 )
@@ -82,24 +84,43 @@ func (s *screen) taskPRs() map[string]bool {
 // prKey is r as a key that ignores the case of the repository's name.
 func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo), r.Number) }
 
-// ownRow is your own PR st's row on home and its card (for b: its page).
+// ownRow is your own PR st's row on home and its card (for b: its page):
+// magnumWait's wait, in NEEDS YOU when it is on you, except for a PR
+// magnum's look leaves alone (off), which is dim in YOUR PRS. An attention
+// or a stalemate needs you whatever the verdict says (fix off does not
+// hide it, and a verdict decided before it is stale), unless a loop works
+// on the PR. Without a verdict, a PR magnum does not review (include_own =
+// false, a mute, a baseline) is off too.
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
 	w := magnumWait(st, n, true)
 	fresh := st.HasOpen && !st.Stale
+	off := ""
+	switch {
+	case st.Fixing:
+	case st.State == store.PRNeedsAttention || st.Stalemate:
+		if w.group != tui.GroupNeedsYou || fresh && st.Open.Verdict == engine.OpenOff {
+			w = attentionWait(st, n)
+		}
+	case fresh && st.Open.Verdict == engine.OpenOff:
+		off = w.on.What
+	case !st.HasOpen && !st.OpenWatch && (st.State == store.PRIneligible || st.State == store.PRBaseline):
+		why := engine.OpenOffIneligible
+		if st.State == store.PRBaseline {
+			why = engine.OpenOffBaseline
+		}
+		off = offWait(why, n, true)
+		w = youWait(off, clauseShort(off), "")
+	}
 	key := s.ownKey(st.Ref)
 	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: key, Title: st.Title, WaitsOn: []tui.WaitsOn{w.on},
 		Since: cmp.Or(w.since, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
 	trackers := s.cfg.TrackersFor(st.Ref.Repo)
 	row.Jira, _ = config.Issue(st.Title, trackers)
-	pr := &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff,
+	row.PR = &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, n), FixOff: st.FixOff, Off: off,
 		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing}
-	if fresh && st.Open.Verdict == engine.OpenOff {
-		pr.Off = w.on.What
-	}
-	row.PR = pr
 	switch {
-	case fresh && (st.Open.Verdict == engine.OpenNeedsYou || st.Open.Verdict == engine.OpenIdle && st.Approved):
+	case off == "" && w.group == tui.GroupNeedsYou:
 		row.Group, row.Mark = tui.GroupNeedsYou, tui.MarkNeedsYou
 		row.Move, row.MoveShort = cmp.Or(w.move, ownMove), cmp.Or(w.moveShort, ownMoveShort)
 	case w.mark == tui.MarkWorking:

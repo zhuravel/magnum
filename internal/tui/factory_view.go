@@ -721,7 +721,8 @@ func factoryPlural(n int, one, many string) string {
 
 // chipLine counts the rows by group: the tasks and your PRs that need you
 // apart ("1 task and 2 PRs need you"), the tasks that wait on others, your
-// PRs at work (YOUR PRS) and the tasks done today.
+// PRs at work (YOUR PRS, but for those magnum leaves alone: they ask
+// nothing, and nothing works on them) and the tasks done today.
 func (p *factoryPainter) chipLine() string {
 	st := p.st
 	var tasks, prs, waits, yours, done int
@@ -736,7 +737,9 @@ func (p *factoryPainter) chipLine() string {
 		case GroupWaits:
 			waits++
 		case GroupYours:
-			yours++
+			if r.PR == nil || r.PR.Off == "" {
+				yours++
+			}
 		default:
 			done++
 		}
