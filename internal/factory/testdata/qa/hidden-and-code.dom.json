@@ -1,0 +1,32 @@
+{
+  "url": "http://app.example.localhost:3001/help/templates",
+  "status": 200,
+  "title": "Templates · Example Shop",
+  "html": {"tag": "html", "children": [
+    {"tag": "head", "children": [
+      {"tag": "title", "children": ["Templates · Example Shop"]},
+      {"tag": "script", "children": ["window.flash = '<b>saved</b>'"]},
+      {"tag": "style", "children": [".x::after { content: '<i>' }"]}
+    ]},
+    {"tag": "body", "children": [
+      {"tag": "p", "children": ["Plain visible prose: press <Enter> to save."]},
+      {"tag": "div", "style": {"display": "none"}, "children": ["<b>hidden</b> &amp; gone"]},
+      {"tag": "span", "style": {"visibility": "hidden"}, "children": [
+        "<i class=\"x\">ghost</i>",
+        {"tag": "span", "style": {"visibility": "visible"}, "children": ["Visible inside hidden"]}
+      ]},
+      {"tag": "pre", "children": [{"tag": "code", "children": ["<span class=\"badge\">New</span>"]}]},
+      {"tag": "samp", "children": ["</div> &amp;"]},
+      {"tag": "textarea", "children": ["<p>draft</p>"]},
+      {"tag": "div", "attrs": {"contenteditable": "true"}, "children": ["<b>typed by alice</b>"]},
+      {"tag": "div", "attrs": {"class": "cm-editor"}, "children": [
+        {"tag": "div", "attrs": {"class": "cm-content", "contenteditable": "false"}, "children": ["<span class=\"tag\">{{ title }}</span>"]}
+      ]},
+      {"tag": "div", "attrs": {"class": "monaco-editor"}, "children": ["</span> &amp;"]},
+      {"tag": "div", "attrs": {"class": "ace_editor"}, "children": ["<div class=\"x\">"]},
+      {"tag": "template", "children": ["<b>tpl</b>"]},
+      {"tag": "noscript", "children": ["<p class=\"x\">enable JavaScript</p>"]},
+      {"tag": "x-card", "shadow": ["Shadow text that shows"]}
+    ]}
+  ]}
+}

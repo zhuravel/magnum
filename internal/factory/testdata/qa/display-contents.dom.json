@@ -1,0 +1,19 @@
+{
+  "url": "http://app.example.localhost:3001/settings/security",
+  "status": 200,
+  "title": "Security · Example Shop",
+  "html": {"tag": "html", "children": [
+    {"tag": "head", "children": [{"tag": "title", "children": ["Security · Example Shop"]}]},
+    {"tag": "body", "children": [
+      {"tag": "h1", "children": ["Security"]},
+      {"tag": "turbo-frame", "attrs": {"id": "passkeys", "class": "contents"}, "style": {"display": "contents"}, "children": [
+        {"tag": "table", "attrs": {"class": "table"}, "children": [{"tag": "tbody", "children": [{"tag": "tr", "children": [
+          {"tag": "td", "children": ["MacBook Touch ID"]},
+          {"tag": "td", "children": ["Added <span data-bs-toggle=\"tooltip\" data-bs-custom-class=\"tooltip-long\" title=\"Nov 07, 2026 10:15\">Nov 07, 2026</span>"]},
+          {"tag": "td", "children": ["never used"]}
+        ]}]}]}
+      ]},
+      {"tag": "div", "attrs": {"class": "contents"}, "style": {"display": "contents"}, "children": ["Shared with Tom &amp; Jerry"]}
+    ]}
+  ]}
+}

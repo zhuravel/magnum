@@ -13370,11 +13370,13 @@ type QAProbe struct {
 	Status    int    `json:"status"`
 	OverflowX bool   `json:"overflow_x"`
 	Truncated bool   `json:"truncated"`
+	Error     string `json:"error"`
 }
     QAProbe is what the factory's probe (qa_probe.js) returned in one page:
     the run's nonce, the page's URL, title, visible text and HTML, its HTTP
-    status (0 when unknown), whether it scrolls sideways, and whether the text
-    or the HTML was cut at its cap.
+    status (0 when unknown), whether it scrolls sideways, whether the text or
+    the HTML was cut at its cap, and the error that broke the probe in the page
+    ("" when none did).
 
 type QAVerdict struct {
 	Version  int          `json:"version"`

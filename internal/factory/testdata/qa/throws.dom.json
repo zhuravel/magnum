@@ -1,0 +1,7 @@
+{
+  "url": "http://app.example.localhost:3001/settings/security",
+  "status": 200,
+  "title": "Security",
+  "throw": true,
+  "html": {"tag": "html", "children": [{"tag": "body", "children": ["Security"]}]}
+}

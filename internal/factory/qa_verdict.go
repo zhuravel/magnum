@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"net/url"
@@ -134,8 +135,9 @@ type QANotShown struct {
 
 // QAProbe is what the factory's probe (qa_probe.js) returned in one page:
 // the run's nonce, the page's URL, title, visible text and HTML, its HTTP
-// status (0 when unknown), whether it scrolls sideways, and whether the
-// text or the HTML was cut at its cap.
+// status (0 when unknown), whether it scrolls sideways, whether the text or
+// the HTML was cut at its cap, and the error that broke the probe in the
+// page ("" when none did).
 type QAProbe struct {
 	Nonce     string `json:"nonce"`
 	URL       string `json:"url"`
@@ -145,6 +147,7 @@ type QAProbe struct {
 	Status    int    `json:"status"`
 	OverflowX bool   `json:"overflow_x"`
 	Truncated bool   `json:"truncated"`
+	Error     string `json:"error"`
 }
 
 // qaWant is what a verdict is checked against: the copy's head, the run's
@@ -181,8 +184,8 @@ var (
 )
 
 // qaPageClasses are the classes the factory's detectors judge a whole page
-// by: a walker's defect of one of them on a page path where the factory
-// found the same class is the factory's defect, counted once.
+// by: a walker's defect of one of them on a page where the factory found
+// the same class is the factory's defect, counted once.
 var qaPageClasses = []string{QAEscapedMarkup, QARawI18nKey, QAErrorPage, QAConsoleError}
 
 //go:embed qa_probe.js
@@ -199,21 +202,31 @@ func qaProbeScript(nonce string) []byte {
 }
 
 // htmlTags are the names of the elements whose tag, shown as text, the
-// escaped_markup detector finds.
-var htmlTags = []string{"a", "abbr", "b", "br", "button", "code", "del", "div", "em", "form", "h1", "h2", "h3", "h4", "h5",
-	"h6", "i", "img", "input", "ins", "label", "li", "mark", "ol", "option", "p", "pre", "s", "script", "section", "select",
-	"small", "span", "strong", "style", "sub", "sup", "svg", "table", "td", "textarea", "th", "time", "tr", "u", "ul"}
+// escaped_markup detector finds; qaCustomTag adds every custom element's
+// (a name with a hyphen: turbo-frame, sl-tooltip).
+var htmlTags = []string{"a", "abbr", "b", "br", "button", "code", "dd", "del", "details", "div", "dl", "dt", "em", "footer",
+	"form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "i", "img", "input", "ins", "label", "li", "mark", "nav", "ol",
+	"option", "p", "pre", "s", "script", "section", "select", "small", "span", "strong", "style", "sub", "summary", "sup", "svg",
+	"table", "tbody", "td", "textarea", "th", "thead", "time", "tr", "turbo-frame", "u", "ul"}
 
-// errorPageSigns are the words of the frameworks' error pages.
-var errorPageSigns = []string{
-	"Action Controller: Exception caught",
-	"We're sorry, but something went wrong",
-	"Internal Server Error",
-	"Traceback (most recent call last)",
-	"Application error: a client-side exception has occurred",
-	"Unhandled Runtime Error",
-	"ActionView::Template::Error",
-}
+// qaCustomTag is the name of a custom element: words joined by hyphens.
+const qaCustomTag = `[a-z][a-z0-9]*(?:-[a-z0-9]+)+`
+
+// errorPageSigns are the words of the frameworks' error pages, found in a
+// page's title or the text it shows, never its HTML, where a normal page
+// keeps them hidden (a toast, a data attribute); errorPageTitleSigns only
+// in its title, as a log page shows them as text.
+var (
+	errorPageSigns = []string{
+		"Action Controller: Exception caught",
+		"We're sorry, but something went wrong",
+		"Traceback (most recent call last)",
+		"Application error: a client-side exception has occurred",
+		"Unhandled Runtime Error",
+		"ActionView::Template::Error",
+	}
+	errorPageTitleSigns = []string{"Internal Server Error"}
+)
 
 // The detectors' patterns. A tag shown as text is a closing tag, an
 // opening tag with an attribute and its value, or a line break: a bare
@@ -221,13 +234,13 @@ var errorPageSigns = []string{
 // prose, and its closing tag finds the markup it opens.
 var (
 	qaTagPattern = func() *regexp.Regexp {
-		names := strings.Join(htmlTags, "|")
+		names := strings.Join(htmlTags, "|") + "|" + qaCustomTag
 		return regexp.MustCompile(`(?i)</(?:` + names + `)\s*>` +
 			`|<(?:` + names + `)\s+[a-z_:@][-\w:.@]*\s*=\s*(?:["']|[^\s"'<>=` + "`" + `]+[\s/>])` +
 			`|<br\s*/?>`)
 	}()
-	qaEntityPattern  = regexp.MustCompile(`&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});`)
-	qaI18nText       = regexp.MustCompile(`(?i)translation missing`)
+	qaEntityPattern  = regexp.MustCompile(`&(?:[A-Za-z][A-Za-z0-9]{1,31}|#\d{1,7}|#[xX][0-9A-Fa-f]{1,6});`)
+	qaI18nText       = regexp.MustCompile(`(?i)translation missing|\[missing "[^"\n]{1,200}" translation\]`)
 	qaI18nHTML       = regexp.MustCompile(`class\s*=\s*["'][^"']*\btranslation_missing\b`)
 	errQAOutside     = errors.New("is outside the run folder")
 	errQAProbeFormat = errors.New("is not the JSON the probe returns")
@@ -237,10 +250,11 @@ var (
 // factory finds in them, at most one defect of each class, on page:
 //   - escaped_markup (P2): markup or an entity in the text the page shows;
 //     never in its HTML, where attributes hold escaped markup legally;
-//   - raw_i18n_key (P2): "translation missing" in the text, or an element
-//     of class translation_missing in the HTML;
+//   - raw_i18n_key (P2): "translation missing" or i18n-js's
+//     `[missing "…" translation]` in the text, or an element of class
+//     translation_missing in the HTML;
 //   - error_page (P2): a status of 500 or more, or 404, or the words of an
-//     error page (errorPageSigns) in the title, the text or the HTML;
+//     error page in the title or the text (errorPageSigns);
 //   - console_error (P3): console lines that start with [error];
 //   - broken_layout (P3): a page that scrolls sideways.
 //
@@ -280,9 +294,16 @@ func detectQA(page QAPage, p QAProbe, console []string) []QADefect {
 	return ds
 }
 
-// escapedMarkup is where text shows a tag or an entity, in order.
+// escapedMarkup is where text shows a tag or an entity, in order: an
+// entity is one HTML decodes whole (&hellip;, &#39;), so "AT&T;" or
+// "&notit;" (&not and "it;") is none.
 func escapedMarkup(text string) [][]int {
-	locs := slices.Concat(qaTagPattern.FindAllStringIndex(text, -1), qaEntityPattern.FindAllStringIndex(text, -1))
+	ents := slices.DeleteFunc(qaEntityPattern.FindAllStringIndex(text, -1), func(loc []int) bool {
+		m := text[loc[0]:loc[1]]
+		u := html.UnescapeString(m)
+		return u == m || strings.HasSuffix(u, ";")
+	})
+	locs := slices.Concat(qaTagPattern.FindAllStringIndex(text, -1), ents)
 	slices.SortFunc(locs, func(a, b []int) int { return a[0] - b[0] })
 	return locs
 }
@@ -301,9 +322,14 @@ func errorPage(p QAProbe) string {
 	if p.Status >= 500 || p.Status == 404 {
 		return "status " + strconv.Itoa(p.Status)
 	}
-	in := []string{signText(p.Title), signText(p.Text), signText(p.HTML)}
+	title, text := signText(p.Title), signText(p.Text)
 	for _, sign := range errorPageSigns {
-		if slices.ContainsFunc(in, func(s string) bool { return strings.Contains(s, sign) }) {
+		if strings.Contains(title, sign) || strings.Contains(text, sign) {
+			return sign
+		}
+	}
+	for _, sign := range errorPageTitleSigns {
+		if strings.Contains(title, sign) {
 			return sign
 		}
 	}
@@ -360,8 +386,11 @@ func walkerDefect(d QADefect, pagePath string) QADefect {
 }
 
 // readQAProbe reads the probe's JSON at rel in the run's folder runPath: a
-// local path that stays inside the folder, a file at most 8 MiB. A text or
-// HTML longer than the probe's caps is cut, as the probe cuts them.
+// local path that stays inside the folder, a file at most 8 MiB. A browser
+// tool may print the probe's string quoted as JSON, or follow it with a
+// status line: the file's first JSON value is read, and a string is read
+// once more as the probe's JSON. A text or HTML longer than the probe's
+// caps is cut, as the probe cuts them.
 func readQAProbe(runPath, rel string) (QAProbe, error) {
 	f, err := openInRun(runPath, rel)
 	if err != nil {
@@ -375,8 +404,19 @@ func readQAProbe(runPath, rel string) (QAProbe, error) {
 	case len(b) > qaProbeFileCap:
 		return QAProbe{}, fmt.Errorf("%w (larger than %d bytes)", errQAProbeFormat, qaProbeFileCap)
 	}
+	var raw json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(b))).Decode(&raw); err != nil {
+		return QAProbe{}, fmt.Errorf("%w (%w)", errQAProbeFormat, err)
+	}
+	if raw[0] == '"' {
+		var inner string
+		if err := json.Unmarshal(raw, &inner); err != nil {
+			return QAProbe{}, fmt.Errorf("%w (%w)", errQAProbeFormat, err)
+		}
+		raw = json.RawMessage(strings.TrimSpace(inner))
+	}
 	var p QAProbe
-	if err := json.Unmarshal(b, &p); err != nil {
+	if err := json.Unmarshal(raw, &p); err != nil {
 		return QAProbe{}, fmt.Errorf("%w (%w)", errQAProbeFormat, err)
 	}
 	var cut bool
@@ -433,9 +473,9 @@ func qaFileWhy(rel string, err error) string {
 }
 
 // qaWord is a word of the walker's (an id, a file, a class) as a problem
-// quotes it: clipped and quoted, if it needs quotes.
+// quotes it: masked, clipped and quoted, if it needs quotes.
 func qaWord(s string) string {
-	s = textx.Clip(s, 64)
+	s = textx.Clip(execx.Redact(s), 64)
 	if s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r <= ' ' || r == '"' || r >= utf8.RuneSelf }) {
 		return s
 	}
@@ -535,9 +575,12 @@ func checkQAPage(runPath string, pg QAPage, want qaWant, seen map[string]string)
 	if err != nil {
 		return "probe " + qaFileWhy(pg.Probe, err)
 	}
-	if probe.Nonce != want.Nonce {
+	switch {
+	case probe.Nonce != want.Nonce:
 		return "probe " + qaWord(pg.Probe) + " is not the factory's probe of this run: evaluate the run's probe script in the page " +
 			"and save the JSON it returns, unchanged"
+	case probe.Error != "":
+		return "probe " + qaWord(pg.Probe) + " says the probe failed in the page: evaluate it again once the page has loaded"
 	}
 	if !qaOnServer(probe.URL, want.Port) {
 		return fmt.Sprintf("probe %s shows a page at %s, which is not on the copy's own server (port %d on this Mac): "+
@@ -639,13 +682,15 @@ func countQAShots(runPath string) (int, error) {
 // has no page; else defects when one blocks, clean when none does. A
 // defect blocks when its class is in qaBlockingClasses, whoever found it,
 // or it is P1 or P2; its pre_existing never unblocks it (slice 1 has no
-// before pass). A defect found twice counts once, the factory's copy
-// kept: two of one fingerprint, or the walker's of a class the factory
-// judges whole pages by (qaPageClasses) on a page path where the factory
-// found it; the copy kept takes the more severe severity and the other's
-// code paths. The walker's defects are its own, whatever source and
-// fingerprint they claim (walkerDefect). known are the defects that do
-// not block.
+// before pass). The walker's defect of a class the factory judges whole
+// pages by (qaPageClasses), on a page where the factory found that class,
+// is the factory's, found again: it counts once, the factory's copy kept
+// (mergeQADefect). Nothing else is folded: not the factory's finds on two
+// pages of one path, each with its own quote; not the walker's defects
+// into each other; not the walker's broken_layout or flow, which may be
+// another problem than the factory's. The walker's defects are its own,
+// whatever source and fingerprint they claim (walkerDefect). known are
+// the defects that do not block.
 func qaOutcome(v QAVerdict, found []QADefect) (outcome string, blocking, known []QADefect) {
 	if len(v.Pages) == 0 {
 		return QAOutcomeUnavailable, nil, nil
@@ -655,31 +700,22 @@ func qaOutcome(v QAVerdict, found []QADefect) (outcome string, blocking, known [
 		paths[pg.ID] = pg.Path
 	}
 	var all []QADefect
-	byPrint, byPage := map[string]int{}, map[string]int{}
-	add := func(d QADefect) {
-		i, ok := byPrint[d.Fingerprint]
-		if !ok && d.Source == qaSourceWalker && slices.Contains(qaPageClasses, d.Class) {
-			i, ok = byPage[d.Class+"|"+paths[d.Page]]
-		}
-		if ok {
-			mergeQADefect(&all[i], d)
-			return
-		}
-		byPrint[d.Fingerprint] = len(all)
-		if d.Source == qaSourceFactory {
-			byPage[d.Class+"|"+paths[d.Page]] = len(all)
-		}
-		all = append(all, d)
-	}
+	onPage := map[string]int{}
 	for _, d := range found {
 		d.Source = qaSourceFactory
 		if d.Fingerprint == "" {
 			d.Fingerprint = qaFingerprint(d, paths[d.Page])
 		}
-		add(d)
+		onPage[d.Class+"|"+d.Page] = len(all)
+		all = append(all, d)
 	}
 	for _, d := range v.Defects {
-		add(walkerDefect(d, paths[d.Page]))
+		d = walkerDefect(d, paths[d.Page])
+		if i, ok := onPage[d.Class+"|"+d.Page]; ok && slices.Contains(qaPageClasses, d.Class) {
+			mergeQADefect(&all[i], d)
+			continue
+		}
+		all = append(all, d)
 	}
 	for _, d := range all {
 		if slices.Contains(qaBlockingClasses, d.Class) || d.Severity == "P1" || d.Severity == "P2" {
@@ -694,13 +730,18 @@ func qaOutcome(v QAVerdict, found []QADefect) (outcome string, blocking, known [
 	return QAOutcomeClean, nil, known
 }
 
-// mergeQADefect counts src as dst, found again: dst takes the more severe
-// of the two severities and src's code paths it lacks, in a slice of its
-// own, so the caller's defect never changes.
+// mergeQADefect counts the walker's defect src as the factory's dst, found
+// again: dst keeps its quote (src's when it has none), adds src's title,
+// and takes the more severe of the two severities and src's code paths it
+// lacks, in a slice of its own, so the caller's defect never changes.
 func mergeQADefect(dst *QADefect, src QADefect) {
 	if qaRank(src.Severity) < qaRank(dst.Severity) {
 		dst.Severity = src.Severity
 	}
+	if src.Title != "" && src.Title != dst.Title {
+		dst.Title += "; the walker: " + src.Title
+	}
+	dst.Quote = cmp.Or(dst.Quote, src.Quote)
 	for _, p := range src.Paths {
 		if !slices.Contains(dst.Paths, p) {
 			dst.Paths = append(slices.Clip(dst.Paths), p)
