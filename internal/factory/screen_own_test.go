@@ -418,9 +418,9 @@ func TestAnOwnPRWhoseLoopStartedAfterItsVerdictMoves(t *testing.T) {
 }
 
 // Home names every repository the factory has, in its config's order, never
-// the first task's alone; and every row names its own: a task's, a
-// published task's by its PR, and your PR's, whose number is its GitHub
-// cell while its key keeps naming the repository for the y/N.
+// the first task's alone; and every row and its card name its own: a
+// task's, a published task's by its PR, and your PR's, whose number is its
+// GitHub cell while its key keeps naming the repository for the y/N.
 func TestScreenDataNamesTheRepositoryOfEveryRow(t *testing.T) {
 	r := newScreenRig(t)
 	r.cfg.Factory.Repos = append(r.cfg.Factory.Repos, config.FactoryRepo{Repo: "example/widget", Base: "main", MainClone: t.TempDir()})
@@ -445,6 +445,9 @@ func TestScreenDataNamesTheRepositoryOfEveryRow(t *testing.T) {
 		published.ID: "example/talkable", -91: "example/helm"} {
 		if row, ok := rowByID(d, id); !ok || row.Repo != want {
 			t.Errorf("row %d: %+v, want repository %q", id, row, want)
+		}
+		if got := d.Cards[id].Task.Repo; got != want {
+			t.Errorf("the card of row %d names repository %q, want %q", id, got, want)
 		}
 	}
 	if row, _ := rowByID(d, -91); row.Key != "helm#12" || row.GitHub != "#12" {

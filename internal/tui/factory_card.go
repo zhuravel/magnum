@@ -168,7 +168,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 }
 
 func cleanTaskCard(c TaskCard) TaskCard {
-	c.Key, c.Kind, c.Title, c.Branch = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch)
+	c.Key, c.Kind, c.Title, c.Branch, c.Repo = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch), cleanText(c.Repo)
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
 	c.Ask = cleanText(c.Ask)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)

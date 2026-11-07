@@ -362,6 +362,9 @@ type CardFile struct {
 // the task waits for, its stages, agents, report and lessons.
 type TaskCard struct {
 	Key, Kind, Title, Branch string
+	// Repo is the task's repository ("owner/name"), the first fact under
+	// the header with its PR's number.
+	Repo string
 	// Copy says which copy the task holds ("copy 2 of 3, server off").
 	Copy       string
 	Started    time.Time

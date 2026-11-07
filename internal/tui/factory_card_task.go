@@ -15,6 +15,9 @@ import (
 func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 	p.f.Spinner = c.Spinner
 	facts := []string{c.Branch, c.PR, c.Copy}
+	if c.Repo != "" { // the repository and its PR first: "example/talkable #4530"
+		facts = []string{strings.TrimSpace(c.Repo + " " + c.PR), c.Branch, c.Copy}
+	}
 	if !c.Started.IsZero() {
 		layout := "15:04"
 		if y, m, d := c.Started.In(p.now.Location()).Date(); y != p.now.Year() || m != p.now.Month() || d != p.now.Day() {

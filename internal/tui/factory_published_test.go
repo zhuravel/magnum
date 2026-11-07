@@ -200,3 +200,20 @@ func TestFactoryTheWideLayoutSqueezesALongTitle(t *testing.T) {
 		t.Errorf("the long title is not squeezed to at least 24 cells: %q", line)
 	}
 }
+
+// The task card's facts start with the repository and the PR's number
+// ("example/talkable #4530"), then the branch; without a PR yet, the
+// repository alone. Before, the card named no repository.
+func TestTaskCardNamesItsRepositoryFirst(t *testing.T) {
+	c := fixturePublishedCard(0)
+	c.Repo = "example/talkable"
+	facts := strings.Split(plainCard(drawTask(c, 0), 140), "\n")[1]
+	if !strings.HasPrefix(facts, " example/talkable #4530 · zhuravel-PR-12320-coupon-rounding · started") {
+		t.Errorf("the facts %q do not start with the repository and its PR", facts)
+	}
+	c.PR = ""
+	facts = strings.Split(plainCard(drawTask(c, 0), 140), "\n")[1]
+	if !strings.HasPrefix(facts, " example/talkable · zhuravel-PR-12320-coupon-rounding · started") {
+		t.Errorf("the facts %q of a card without a PR do not start with the repository", facts)
+	}
+}

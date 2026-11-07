@@ -297,7 +297,7 @@ func unreadable(t registry.Task, err error) (tui.FactoryRow, tui.FactoryCards) {
 	w := tui.WaitsOn{Who: waitsYou, What: what, Short: "the screen cannot read it", OnYou: true}
 	row := tui.FactoryRow{ID: t.ID, Key: TaskKey(t), Title: t.Title, Repo: t.Repo, Group: tui.GroupNeedsYou, Mark: tui.MarkNeedsYou,
 		WaitsOn: []tui.WaitsOn{w}, Since: t.Updated, Move: "see the task card", MoveShort: "task card", Help: waitsYou + ": " + what}
-	card := tui.TaskCard{Key: row.Key, Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
+	card := tui.TaskCard{Key: row.Key, Kind: t.Kind, Title: t.Title, Repo: t.Repo, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
 		Started: t.Created, WaitingFor: waitsYou + ": " + what}
 	return row, tui.FactoryCards{Task: card}
 }
@@ -662,7 +662,7 @@ func (s *screen) firstQueued() *registry.Task {
 // taskCard is task v's task card.
 func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	t := v.t
-	c := tui.TaskCard{Key: TaskKey(t), Kind: t.Kind, Title: t.Title, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
+	c := tui.TaskCard{Key: TaskKey(t), Kind: t.Kind, Title: t.Title, Repo: row.Repo, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
 		Started: t.Created, PR: row.GitHub, PRURL: prURL(t, v.link), Issue: t.JiraKey, IssueURL: s.issueURL(t), Retry: v.retry}
 	parts := make([]string, 0, len(row.WaitsOn)+len(v.letGo))
 	for _, w := range row.WaitsOn {

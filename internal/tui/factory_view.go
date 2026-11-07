@@ -210,17 +210,14 @@ func (p *factoryPainter) repoColumn() (column, owners bool) {
 	if len(p.f.Repos) == 1 {
 		one = p.f.Repos[0]
 	}
-	seen := map[string]bool{}
+	var repos []string
 	for _, r := range p.rows {
-		if r.Repo == "" {
-			continue
-		}
-		column = column || !strings.EqualFold(r.Repo, one)
-		if owner, _, ok := strings.Cut(r.Repo, "/"); ok {
-			seen[strings.ToLower(owner)] = true
+		if r.Repo != "" {
+			column = column || !strings.EqualFold(r.Repo, one)
+			repos = append(repos, r.Repo)
 		}
 	}
-	return column, len(seen) > 1
+	return column, manyOwners(repos)
 }
 
 // repoText is the row's REPO cell: the repository's name, with its owner
