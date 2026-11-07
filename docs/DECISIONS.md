@@ -17010,6 +17010,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   switched or its gems installed under it), and a second reading of runs and `human_active_at` in the copies
   (it missed a focused pane where you still compose a prompt). Test, failing first:
   TestATasksOwnIdleSessionDoesNotHoldItsOwnClaim.
+- **A watchdog step that fails partway leaves its role watched** (2026-11-07, the audit's R13). The hung-turn
+  ladder's resume and fresh steps abandoned the role's runs in flight before they quit the hung session, read
+  its resume id, started its replacement and sent it its prompt. When one of those failed, the role had no run
+  in flight and was no recovery (`recovering` is the lost-pane ladder's), so the watchdog never looked at it
+  again and its stage waited in silence, after a restart too. `restart` and `fromFiles` now note the role's
+  runs in flight first and abandon them only once the replacement's prompt may have left (`replaced`: `send`
+  gave back a run, delivered or of unknown fate). A step that fails before that (the quit, the resume id, the
+  start, a prompt herdr refused before it left) leaves the hung run in flight: the watchdog watches the role
+  through it, its next step comes `NoProgressAfter` later, and the ladder ends in `EventStuck` as one whose
+  steps do not help does. The run is the agents store's, so a restarted daemon's watchdog finds it and takes
+  the ladder over from it. A recovery's prompt of unknown fate that two reads then prove never arrived
+  (`EventUndelivered`) makes its role due a recovery again (`recoverAgain`, the lost-pane ladder's next step):
+  the runs it replaced are gone, and the stage, rebuilt from the ledger, sends nothing for them.
+  Rejected: `recovering` set before the climb's steps (a failed resume of a hung turn would take the lost
+  pane's ladder, with two more resumes and `EventLost` saying the pane was lost); a mark in memory of the step
+  under way (a restart forgets it, the hung run in the store does not); the failed step tried again at once (a
+  herdr that fails now fails ten seconds later too, and the ladder's pace is the retry). The resume id's read
+  fails only when the agents store does, so no fake injects it: the order of the steps covers it as it covers
+  the quit. Tests, failing first: TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched (the quit, the start
+  and the prompt fail: the hung run was abandoned), TestAWatchdogWhoseStepsAllFailEndsStuck (no event),
+  TestAFailedWatchdogStepStaysWatchedAcrossARestart (no step after the restart) and
+  TestARecoveryPromptThatNeverArrivedIsRecoveredAgain (no recovery after the proof).
 
 ## Learned rules
 

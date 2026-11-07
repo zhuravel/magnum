@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -538,5 +540,187 @@ func TestAContainedPanicIsRedacted(t *testing.T) {
 	}()
 	if err == nil || strings.Contains(err.Error(), token) || strings.Contains(logs.String(), token) {
 		t.Fatalf("err %v, log %q: want the panic contained and the token redacted", err, logs.String())
+	}
+}
+
+// ---- a failed step stays watched (R13)
+
+// hungTurn launches fx-repro on conversation sid-1, sends it first, and lets
+// its turn hang until the watchdog took its first step (the nudge): the
+// next pass NoProgressAfter later is due step 2, the resume. It returns the
+// hung run.
+func (g *rig) hungTurn(first string) string {
+	g.t.Helper()
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	id := g.send("fx-repro", first)
+	g.observe()
+	g.h.screen(g.agent("fx-repro"), "Bash(bin/rspec spec/models/user_spec.rb)\nrunning rspec\n")
+	g.clock.Add(g.role("fx-repro").Timeout.Duration - NoProgressAfter)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+	if p := g.h.promptTexts(); len(p) != 2 || !strings.Contains(p[1], "stuck") {
+		g.t.Fatalf("prompts %q, want the first and the watchdog's nudge", p)
+	}
+	return id
+}
+
+// watchedRun fails t unless run id is still in flight (submitted or working):
+// the watchdog watches it.
+func (g *rig) watchedRun(id, when string) {
+	g.t.Helper()
+	if r := g.storeRun(id); r.State != store.RunSubmitted && r.State != store.RunWorking {
+		g.t.Fatalf("%s the hung run is %s, want it still in flight, so the watchdog watches its role", when, r.State)
+	}
+}
+
+// The faults a watchdog step can meet partway, after it decided to restart
+// the role: the quit of the hung session, the start of its replacement, and
+// the replacement's prompt, which herdr refuses.
+var stepFaults = []struct {
+	name   string
+	inject func(g *rig)
+}{
+	{"the quit fails", func(g *rig) {
+		g.h.keysErr = func(string) error { return errors.New("herdr: connection reset by peer") }
+	}},
+	{"the start fails", func(g *rig) {
+		g.h.startErr = func(herdr.AgentStartOptions) error {
+			return &herdr.Error{Method: "agent.start", Code: "agent_start_failed", Message: "the agent did not come up"}
+		}
+	}},
+	{"the prompt never leaves", func(g *rig) {
+		g.h.promptErr = func(string) error {
+			return &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotFound, Message: "no such agent"}
+		}
+	}},
+}
+
+// A watchdog step that fails partway (its quit, its start, its prompt) gives
+// up nothing: the hung run stays in flight, so the role stays watched, and
+// the next step comes NoProgressAfter later; once it goes through, the hung
+// run is abandoned for the run that replaced it.
+func TestAWatchdogStepThatFailsPartwayKeepsTheRoleWatched(t *testing.T) {
+	for _, fault := range stepFaults {
+		t.Run(fault.name, func(t *testing.T) {
+			g := newRig(t)
+			first := "reproduce the bug"
+			hung := g.hungTurn(first)
+			starts := len(g.h.startCalls())
+			fault.inject(g)
+
+			g.clock.Add(NoProgressAfter)
+			if evs := g.watchdog(); len(evs) != 0 {
+				t.Fatalf("the failed step gave %+v, want nothing yet", evs)
+			}
+			g.watchedRun(hung, "after the failed resume")
+
+			g.h.keysErr, g.h.startErr, g.h.promptErr = nil, nil, nil
+			g.clock.Add(NoProgressAfter / 2)
+			g.watchdog()
+			if n := len(g.h.startCalls()); n > starts+1 {
+				t.Fatalf("%d starts 5 minutes after the failed step, want the next step to wait its 10 minutes", n-starts)
+			}
+			g.clock.Add(NoProgressAfter / 2)
+			g.watchdog()
+			s := g.h.startCalls()
+			if len(s) == starts || strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume") {
+				t.Fatalf("starts %+v after the failed step, want the next step's fresh session", s[starts:])
+			}
+			if p := g.h.promptTexts(); p[len(p)-1] != first {
+				t.Fatalf("the fresh session got %q, want the first prompt", p[len(p)-1])
+			}
+			if r := g.storeRun(hung); r.State != store.RunAbandoned {
+				t.Fatalf("the hung run is %s once a fresh session replaced it, want abandoned", r.State)
+			}
+		})
+	}
+}
+
+// Steps that all fail end where steps that do not help end: EventStuck, so
+// the task needs you, never a hung role nobody watches.
+func TestAWatchdogWhoseStepsAllFailEndsStuck(t *testing.T) {
+	for _, fault := range stepFaults {
+		t.Run(fault.name, func(t *testing.T) {
+			g := newRig(t)
+			hung := g.hungTurn("reproduce the bug")
+			fault.inject(g)
+			var evs []Event
+			for range 3 {
+				g.clock.Add(NoProgressAfter)
+				evs = append(evs, g.watchdog()...)
+			}
+			if stuck := only(evs, EventStuck); len(stuck) != 1 || stuck[0].Role != "fx-repro" || stuck[0].TaskID != g.task.ID {
+				t.Fatalf("events %+v after every step failed, want fx-repro stuck once", evs)
+			}
+			g.watchedRun(hung, "once it is stuck")
+		})
+	}
+}
+
+// A failed step survives a restart of the daemon: the hung run it left in
+// flight is in the agents store, and the fresh runtime's watchdog takes its
+// ladder over from it.
+func TestAFailedWatchdogStepStaysWatchedAcrossARestart(t *testing.T) {
+	g := newRig(t)
+	g.hungTurn("reproduce the bug")
+	stepFaults[0].inject(g)
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+	g.h.keysErr = nil
+	before := len(g.h.promptTexts())
+
+	g.restart()
+	for range 2 {
+		g.clock.Add(NoProgressAfter)
+		g.watchdog()
+	}
+	if p := g.h.promptTexts(); len(p) != before+1 || !strings.Contains(p[len(p)-1], "stuck") {
+		t.Fatalf("prompts after the restart %q, want the fresh runtime's nudge on the hung turn", p[before:])
+	}
+}
+
+// A recovery's prompt that herdr may have typed (its delivery unknown), and
+// that two reads of the transcript then prove never arrived, leaves no role
+// alone: the replaced run is gone, so the role's recovery is due again, and
+// the watchdog takes it NoProgressAfter later.
+func TestARecoveryPromptThatNeverArrivedIsRecoveredAgain(t *testing.T) {
+	g := newRig(t)
+	g.hungTurn("reproduce the bug")
+	g.h.promptErr = func(text string) error {
+		if text == resumeText {
+			return fmt.Errorf("herdr agent.prompt: connection closed without a response: %w", io.EOF)
+		}
+		return nil
+	}
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // step 2: resumed, and its prompt's fate unknown
+	g.h.promptErr = nil
+	es := g.ledger()
+	e := es[len(es)-1]
+	if e.Text != resumeText || e.Delivered != registry.DeliveredUnknown {
+		t.Fatalf("the last ledger entry %q is %s, want the resume prompt, unknown", e.Text, e.Delivered)
+	}
+	g.writeTranscript("sid-1", assistantLine(e.Sent.Add(30*time.Second), "the agent wrote after the prompt left"))
+	var evs []Event
+	for range 4 {
+		g.clock.Add(time.Minute)
+		evs = append(evs, g.observe()...)
+	}
+	if no := only(evs, EventUndelivered); len(no) != 1 || no[0].Role != "fx-repro" {
+		t.Fatalf("events %+v, want the resume prompt proven undelivered", evs)
+	}
+	starts := len(g.h.startCalls())
+
+	for range 2 {
+		g.clock.Add(NoProgressAfter)
+		g.watchdog()
+	}
+	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v after the resume prompt never arrived, want the role recovered again", s[starts:])
+	}
+	if p := g.h.promptTexts(); p[len(p)-1] != resumeText {
+		t.Fatalf("the recovered role got %q, want the resume prompt", p[len(p)-1])
 	}
 }

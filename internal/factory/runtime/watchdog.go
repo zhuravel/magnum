@@ -345,9 +345,13 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 }
 
 // restart starts role st again in attempt a, resumed from its stored
-// conversation when resume (and it has one), and tells it to go on: its
-// runs in flight are abandoned, a live session is quit hard first, and a
-// lost one gets a pane again.
+// conversation when resume (and it has one), and tells it to go on: a live
+// session is quit hard first, and a lost one gets a pane again. Its runs in
+// flight are abandoned only once the prompt of the run that replaces them
+// may have left (replaced): a restart that fails before (its quit, its
+// resume id, its start, a prompt herdr refused) leaves them in flight, so
+// the watchdog goes on watching the role through them, after a restart of
+// the daemon too, and its next step comes NoProgressAfter later.
 func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, resume bool, why string) error {
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err
@@ -356,7 +360,7 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 	if err != nil {
 		return err
 	}
-	r.abandonRuns(ctx, pr, st.role.Name, "recovery: "+why)
+	old := r.runsInFlight(ctx, pr, st.role.Name)
 	if s, ok := r.liveSession(ctx, st); ok {
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			return fmt.Errorf("quit %s: %w", st.role.Name, err)
@@ -373,7 +377,8 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 	if err := r.startIn(ctx, t, a, st, pr, id); err != nil {
 		return err
 	}
-	_, err = r.send(ctx, t, a, st.role, pr, resumeText, store.RunRecovery)
+	run, err := r.send(ctx, t, a, st.role, pr, resumeText, store.RunRecovery)
+	r.replaced(ctx, old, run, "recovery: "+why)
 	return err
 }
 
@@ -381,7 +386,8 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 // first prompt again, the task's files being its inputs, with then after
 // it (a caller's prompt the fresh session is to act on; "" for none); the
 // run's id comes back. A role that may not restart (mayRestart) is left as
-// it is, with that error.
+// it is, with that error. Its runs in flight are abandoned once that prompt
+// may have left (replaced), as restart's are.
 func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, why, then string) (string, error) {
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return "", err
@@ -394,7 +400,7 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 	if err != nil {
 		return "", err
 	}
-	r.abandonRuns(ctx, pr, st.role.Name, "a fresh session: "+why)
+	old := r.runsInFlight(ctx, pr, st.role.Name)
 	if s, ok := r.liveSession(ctx, st); ok {
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			return "", fmt.Errorf("quit %s: %w", st.role.Name, err)
@@ -412,7 +418,9 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 	if err := r.startIn(ctx, t, a, st, pr, ""); err != nil {
 		return "", err
 	}
-	return r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
+	run, err := r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
+	r.replaced(ctx, old, run, "a fresh session: "+why)
+	return run, err
 }
 
 // freshText is the prompt a fresh session starts with: the attempt's first
@@ -515,13 +523,38 @@ func (r *Runtime) newestSession(ctx context.Context, prID int64, role string) (s
 
 // abandonRuns abandons role's runs of owner row pr that are in flight.
 func (r *Runtime) abandonRuns(ctx context.Context, pr store.PR, role, why string) {
+	for _, id := range r.runsInFlight(ctx, pr, role) {
+		r.abandon(ctx, id, why)
+	}
+}
+
+// runsInFlight are the ids of role's runs of owner row pr that are in
+// flight (none when the store cannot say).
+func (r *Runtime) runsInFlight(ctx context.Context, pr store.PR, role string) []string {
 	runs, err := r.st.RunsByPR(ctx, pr.ID)
 	if err != nil {
-		return
+		return nil
 	}
+	var ids []string
 	for _, run := range runs {
 		if run.Role == role && inFlight(run) {
-			r.abandon(ctx, run.ID, why)
+			ids = append(ids, run.ID)
+		}
+	}
+	return ids
+}
+
+// replaced abandons the runs old once run, the recovery's run that replaces
+// them, may have taken its prompt (its id came back from send): from then
+// on that run, or its ledger entry, is what the role is watched by. A
+// recovery whose prompt never left (no run) abandons nothing.
+func (r *Runtime) replaced(ctx context.Context, old []string, run, why string) {
+	if run == "" {
+		return
+	}
+	for _, id := range old {
+		if id != run {
+			r.abandon(ctx, id, why)
 		}
 	}
 }

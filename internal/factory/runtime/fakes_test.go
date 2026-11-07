@@ -61,6 +61,11 @@ type fakeHerdr struct {
 	// the operator's terminal shows focused.
 	promptErr func(text string) error
 	focused   string
+	// keysErr, when set, is what a key to a pane or an agent answers for
+	// target, sending nothing (a quit fails); startErr what AgentStart
+	// answers, starting nothing.
+	keysErr  func(target string) error
+	startErr func(o herdr.AgentStartOptions) error
 
 	creates []herdr.WorkspaceCreateOptions
 	starts  []herdr.AgentStartOptions
@@ -239,6 +244,11 @@ func (f *fakeHerdr) keysLocked(target string, keys []string) {
 func (f *fakeHerdr) PaneSendKeys(_ context.Context, paneID string, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.keysErr != nil {
+		if err := f.keysErr(paneID); err != nil {
+			return err
+		}
+	}
 	f.keysLocked(paneID, keys)
 	return nil
 }
@@ -246,6 +256,11 @@ func (f *fakeHerdr) PaneSendKeys(_ context.Context, paneID string, keys ...strin
 func (f *fakeHerdr) AgentSendKeys(_ context.Context, target string, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.keysErr != nil {
+		if err := f.keysErr(target); err != nil {
+			return err
+		}
+	}
 	f.keysLocked(target, keys)
 	return nil
 }
@@ -284,6 +299,11 @@ func (f *fakeHerdr) WaitIdleShell(_ context.Context, paneID string, _ time.Durat
 func (f *fakeHerdr) AgentStart(_ context.Context, o herdr.AgentStartOptions) (herdr.AgentStarted, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.startErr != nil {
+		if err := f.startErr(o); err != nil {
+			return herdr.AgentStarted{}, err
+		}
+	}
 	f.starts = append(f.starts, o)
 	ws, tab := "", ""
 	for _, p := range f.panes {
