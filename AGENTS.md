@@ -116,7 +116,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles |
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |
 | `internal/notes` | repository notes: limits, states and snapshots, the lock, curation proposals and their checks |
-| `internal/store` | SQLite registry, migrations under `migrations/`, compare-and-set transitions |
+| `internal/store`, `sqlitetest` | SQLite registry, migrations under `migrations/`, compare-and-set transitions; tests' private in-memory SQLite databases, loaded from a migrated image (`storetest`'s registries and the store's own tests) |
 | `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge and fix skills |
 | `internal/learn`, `eval`, `evalrun` | the daily retro's candidates and answers and the learned corpus; scoring replays of seeded PRs; one case's replay, which the CLI and the daemon run |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |
