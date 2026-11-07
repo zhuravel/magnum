@@ -811,11 +811,12 @@ HOST = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|
 # REDACT, TOKENS and PAIRS run on the whole text, in the Go scrub's order, since a private key, an Authorization value
 # and a key's value (on the next line, or quoted over lines) cross a line break; EMAIL and HOST, which cannot, run on
 # each line kept. Python's engine, unlike Go's, backtracks for minutes on some long lines (a dotted run, an eyJ
-# repeated), so first a line longer than LINE_MAX keeps only its first and last LINE_MAX / 2 characters: the first
-# hold every character shown (400), the last a key that ends the line, whose value is on the next. And HOST runs on
-# each run of the characters a host name or an address is made of: a match never leaves such a run, and the
-# characters around a run are no word characters, so the matches are the same as on the whole line; a run longer than
-# a host name may be (253 characters) is masked whole.
+# repeated), so first a line longer than LINE_MAX keeps only its first and last LINE_MAX / 2 characters, each cut back
+# to a space or tab: no part of a word that crosses a cut is kept (masking shortens the head, so the end of a long
+# secret cut mid-word would show after the marker), and the last part keeps a key that ends the line, whose value is
+# on the next. And HOST runs on each run of the characters a host name or an address is made of: a match never leaves
+# such a run, and the characters around a run are no word characters, so the matches are the same as on the whole
+# line; a run longer than a host name may be (253 characters) is masked whole.
 LINE_MAX, HOST_MAX = 2000, 253
 HOST_RUN = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -835,7 +836,12 @@ def host(m):
 
 def bounded(line):
     half = LINE_MAX // 2
-    return line if len(line) <= LINE_MAX else line[:half] + " [...] " + line[-half:]
+    if len(line) <= LINE_MAX:
+        return line
+    head, tail = line[:half], line[-half:]
+    cut_h = max(head.rfind(" "), head.rfind("\t"))
+    cut_t = min((i for i in (tail.find(" "), tail.find("\t")) if i >= 0), default=len(tail))
+    return head[:max(cut_h, 0)] + " [...] " + tail[cut_t:]
 
 
 def scrub_lines(text, keep=0):

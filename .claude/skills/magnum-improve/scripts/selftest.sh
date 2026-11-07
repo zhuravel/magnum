@@ -30,7 +30,8 @@
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
 #     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
-#     600 KB of eyJ scrubbed in seconds, no notes read through a link, from a folder, an unreadable file, a file over
+#     600 KB of eyJ scrubbed in seconds, a long line cut at whitespace so no part of a secret that crosses the cut
+#     shows, no notes read through a link, from a folder, an unreadable file, a file over
 #     1 MiB or a foreign folder, notes that start as a left-out note does scrubbed all the same, lens 13's stats
 #     command with the local date of the factory's since,
 #     and a since that is no real time and wrong arguments refused.
@@ -657,6 +658,11 @@ printf '%s\n' '(notes.md is not a plain file: left out)' '- PREFIX password=PARE
 echo '- UNREADABLE-NOTE' >"$ev/factory-tasks/15/notes.md"
 chmod 000 "$ev/factory-tasks/15/notes.md"
 echo 'a task folder that is a file' >"$ev/factory-tasks/16"
+# Task 17's notes hold two secrets of one word each that cross the 1,000-character cut of a long line, each with a
+# marker where its tail would show after the [...] marker if the cut fell inside the word.
+mkdir -p "$ev/factory-tasks/17"
+python3 -c 'print("- Authorization: Bearer " + "T" * 1500 + "BEARER-END" + "U" * 900)
+print("- password: " + "P" * 1450 + "PASSWORD-END" + "Q" * 938)' >"$ev/factory-tasks/17/notes.md"
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
@@ -804,10 +810,11 @@ grep -A2 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | grep -Fxq '(1 ear
 ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
 
 # 19. A long dotted line and a long run of eyJ, which Python's regex engine (unlike Go's) backtracks on for minutes,
-#     are scrubbed in seconds: a long line keeps its first and last 1,000 characters.
+#     are scrubbed in seconds: a long line keeps its first and last 1,000 characters, each cut back to whitespace, so
+#     the dotted word that fills the line is dropped.
 [[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line and 600 KB of eyJ in the notes took ${run1_secs}s"
-grep -Fxq '> - <host> [...] <host>' "$ev/fout/evidence.md" ||
-    fail "the long dotted line is masked whole: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
+grep -Fxq '> - [...]' "$ev/fout/evidence.md" ||
+    fail "the long dotted line is cut away: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
 ok "evidence.sh scrubs a 20,000-character dotted line and 600 KB of eyJ in the notes in ${run1_secs}s"
 
 # 20. The notes are read only from a plain notes.md of 1 MiB at most, in a task folder that is no link and is named
@@ -855,6 +862,13 @@ for args in "--factory 3d $ev/bad" "3d $ev/bad extra" "--factory-since"; do
     [[ $rc != 0 ]] && has "usage: evidence.sh" && [[ ! -e $ev/bad ]] || fail "evidence.sh $args is refused with its usage (rc $rc)"
 done
 ok "evidence.sh refuses a since that is no real time and wrong arguments, and takes --factory-since anywhere"
+
+# 23. A long line is cut at whitespace: no part of a word that crosses a cut is kept, so a secret word longer than the
+#     cut's halves shows no part of its end after the [...] marker, while the value before the cut is masked.
+grep -Fxq '> - Authorization: <redacted>' "$f_md" && grep -Fxq '> - password: <redacted>' "$f_md" &&
+    ! grep -Eq 'BEARER-END|PASSWORD-END|TTTTTTTTTT|UUUUUUUUUU|PPPPPPPPPP|QQQQQQQQQQ' "$f_md" ||
+    fail "a secret that crosses the cut of a long line shows no part: $(grep -A3 -Fx '### Task 17 (task 17, -)' "$f_md" | cut -c1-200 | tr '\n' ';')"
+ok "evidence.sh cuts a long line at whitespace, so no part of a secret that crosses the cut is shown"
 
 
 echo "selftest: $checks checks passed"
