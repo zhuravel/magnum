@@ -279,9 +279,9 @@ func (e *Engine) pollBehind(ctx context.Context, w config.Watch, now time.Time) 
 }
 
 // openOff is why the look leaves pr alone ("" = it covers it): a draft, a
-// fork, a watch that reviews no own PRs, a baseline or ineligible PR, fix
-// switched off (an opt-out that cannot be read counts as one: never a loop
-// over it).
+// fork, a watch that reviews no own PRs, a muted PR (a mute stops every
+// automatic round), a baseline or ineligible PR, fix switched off (an
+// opt-out that cannot be read counts as one: never a loop over it).
 func (e *Engine) openOff(ctx context.Context, pr store.PR, w config.Watch) string {
 	switch {
 	case pr.IsDraft:
@@ -290,6 +290,8 @@ func (e *Engine) openOff(ctx context.Context, pr store.PR, w config.Watch) strin
 		return OpenOffFork
 	case !w.OwnIncluded():
 		return OpenOffIncludeOwn
+	case pr.Muted:
+		return OpenOffMuted
 	case pr.State == store.PRBaseline:
 		return OpenOffBaseline
 	case pr.State == store.PRIneligible:
@@ -674,7 +676,12 @@ func addFixerHead(heads []string, head string) []string {
 // not at every tick, since some refusals come after prepareFix read
 // GitHub; except "nothing to fix", where the look and prepareFix disagree:
 // that needs you, with the refusal, and is not tried again until the PR
-// changes (Refused). A dry run starts nothing.
+// changes (Refused). The PR's row is read again right before the start:
+// the look decided on the rows it listed at the start of its step, and a
+// loop's end on another goroutine may have moved the PR since (to needs
+// attention); a PR whose state, mute, reviewed head or fingerprint changed
+// waits for the next look, which decides on the new row. A dry run starts
+// nothing.
 func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, fp string) OpenVerdict {
 	subject := prSubject(repo, pr.Number)
 	if l.Refused != "" && l.Refused == fp {
@@ -688,6 +695,16 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	if now := e.now(); !l.WaitAt.IsZero() && now.Sub(l.WaitAt) < openReadRetry {
 		v.Verdict, v.Why, v.Until = OpenWaits, l.WaitWhy, l.WaitAt.Add(openReadRetry)
 		return v
+	}
+	switch cur, err := e.st.PRByID(ctx, pr.ID); {
+	case err != nil:
+		v.Verdict, v.Why = OpenWaits, "the PR's row could not be read again before the start; the next look tries again"
+		return v
+	case cur.State != pr.State || cur.Muted != pr.Muted || deref(cur.ReviewedSHA) != deref(pr.ReviewedSHA) || openPrint(cur) != fp:
+		v.Verdict, v.Why = OpenWaits, "the PR changed during the look; the next look decides on it"
+		return v
+	default:
+		pr = cur
 	}
 	var carried *externalRead
 	if r, ok := e.openReads[pr.ID]; ok {

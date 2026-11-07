@@ -2117,3 +2117,40 @@ func TestTheRoundEndAutofixStillIgnoresASimplificationOnlyReview(t *testing.T) {
 		t.Errorf("fix runs = %d, want none", n)
 	}
 }
+
+// Autofix never starts a loop on a muted PR (a mute stops every automatic
+// round) or over one that needs attention, whoever asks for it and from
+// whichever row: autofix = "own" after a forced round, a held autofix, the
+// look. `magnum fix` still runs on both, as a forced review runs on a muted
+// PR.
+func TestAutofixRefusesAMutedPROrOneThatNeedsAttention(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("muted", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.startFix(h.ctx, h.pr(2), autofixBy, FixState{}, nil); err == nil || !strings.Contains(err.Error(), "muted") {
+		t.Errorf("autofix on a muted PR: %v, want a refusal that names the mute", err)
+	}
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("muted", false) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", "fix: 1 finding needs you")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.startFix(h.ctx, h.pr(2), autofixBy, FixState{}, nil); err == nil || !strings.Contains(err.Error(), "needs attention") {
+		t.Errorf("autofix on a PR that needs attention: %v, want a refusal", err)
+	}
+	if n := len(h.fixRuns(pr.ID)); n != 0 {
+		t.Fatalf("fix runs = %d after the refusals", n)
+	}
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Errorf("fix runs = %d, want the loop `magnum fix` asked for", n)
+	}
+}

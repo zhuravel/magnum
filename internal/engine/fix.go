@@ -675,7 +675,10 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 // end cancels it). carried is prepareFix's (nil but for a `magnum fix`
 // answered after a whiteboard job yielded to it). It returns a copy of the
 // job as it started, for the caller's answer (the job's own goes on
-// changing).
+// changing). A new loop autofix asks for refuses a muted PR (a mute stops
+// every automatic round) and one that needs attention (an autofix loop
+// over it would end with its own words in place of the attention's); a
+// `magnum fix` runs on both.
 func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixState, carried *externalRead) (*fixJob, error) {
 	pin := fixPinRefuses
 	if by == fixBy && prev.Cycle == 0 {
@@ -683,6 +686,14 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	}
 	if e.draining(ctx) {
 		return nil, errFixDraining
+	}
+	if by == autofixBy && prev.Cycle == 0 {
+		switch {
+		case pr.Muted:
+			return nil, fmt.Errorf("PR #%d is muted: autofix starts no loop on it (`magnum unmute` lifts the mute)", pr.Number)
+		case pr.State == store.PRNeedsAttention:
+			return nil, fmt.Errorf("PR #%d needs attention: autofix starts no loop over it (`magnum fix` does)", pr.Number)
+		}
 	}
 	job, err := e.prepareFix(ctx, pr, prev, pin, carried, !e.d.DryRun)
 	if err != nil {

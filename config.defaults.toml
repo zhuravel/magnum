@@ -412,15 +412,16 @@ fix_cycles = 3                    # fix runs one fix loop may take (a fix, then 
                                   # the PR needs you; at least 1. [[watch]] may override
 autofix = "never"                 # never: a fix loop starts only when you ask for it (`magnum fix`, the board's f);
                                   # own: it also starts by itself after a review with findings on a PR one of
-                                  # your logins authored, unless `magnum fix --off` took the PR out. Start by
+                                  # your logins authored, unless `magnum fix --off` took the PR out, a mute
+                                  # stopped its automatic rounds or it needs attention. Start by
                                   # hand for a first week, then switch. Post the reviews as an App identity
                                   # with own: the fixer's replies must not look like the reviewer's.
                                   # open: own, and also after another reviewer's thread or comment, a review
                                   # with only simplifications or optional findings, or a conflict with the PR's
                                   # own base, once the reviewers settle (settle_* below): each look reads
                                   # GitHub only after the PR changed, and leaves a verdict per PR (fixing,
-                                  # waits, needs you, idle). A draft, a fork and a PR `magnum fix --off` took
-                                  # out are left alone. [[watch]] may override
+                                  # waits, needs you, idle). A draft, a fork, a muted PR and one `magnum fix
+                                  # --off` took out are left alone. [[watch]] may override
 settle_quiet = "3m"               # autofix = "open": the reviewers of a head settled once the PR saw no activity
                                   # for this long ...
 settle_max = "20m"                # ... and every settle_checks check at the head is done, both waited for at most

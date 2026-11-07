@@ -9,8 +9,8 @@ package engine
 // decideOpen is the decision, a pure function of the facts the look
 // gathered (openFacts). The first of these rules that applies wins:
 //
-//  1. a PR the look does not cover (a draft, a fork, fix off, a watch that
-//     leaves own PRs out, a baseline or ineligible PR) is off;
+//  1. a PR the look does not cover (a draft, a fork, fix off, a muted PR, a
+//     watch that leaves own PRs out, a baseline or ineligible PR) is off;
 //  2. a PR that needs attention needs you;
 //  3. a running fix loop is fixing; a held one waits; an unreadable one
 //     needs you (`magnum abort` clears it);
@@ -71,6 +71,7 @@ const (
 	OpenOffDraft      = "draft"       // a draft PR
 	OpenOffFork       = "fork"        // its head lives in a fork
 	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
+	OpenOffMuted      = "muted"       // `magnum mute`: a mute stops every automatic round
 	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
 	OpenOffIneligible = "ineligible"  // magnum does not review it
 )
@@ -472,6 +473,8 @@ func offWords(off string) string {
 		return "the head lives in a fork"
 	case OpenOffIncludeOwn:
 		return "its watch leaves your own PRs out (include_own)"
+	case OpenOffMuted:
+		return "muted: `magnum unmute` lets autofix work on it"
 	case OpenOffBaseline:
 		return "open before magnum first synced the repository"
 	}

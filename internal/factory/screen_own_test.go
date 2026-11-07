@@ -307,3 +307,18 @@ func TestWithoutMagnumNoPRsOfYoursShow(t *testing.T) {
 		t.Errorf("rows of your PRs without magnum: %+v", rows)
 	}
 }
+
+// A muted own PR, which magnum's look leaves alone, says so and how the
+// mute is lifted, not that magnum does not review it.
+func TestAMutedOwnPRSaysItIsMuted(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.own(78, 4608, func(v *PRState) {
+		v.HasOpen, v.Open = true, verdict(engine.OpenOff, "muted")
+		v.Open.Off = engine.OpenOffMuted
+	})
+	row := rowOf(t, r.data(time.Time{}), "#4608")
+	if row.Group != tui.GroupYours || row.PR.Off == "" || row.WaitsOn[0].What != "#4608 is muted: U on the board unmutes it" {
+		t.Errorf("a muted PR: %+v (%+v), want it dim in YOUR PRS with the way to unmute it", row, row.PR)
+	}
+}

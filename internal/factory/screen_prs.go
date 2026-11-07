@@ -294,6 +294,8 @@ func offWait(off string, n int, own bool) string {
 		return fmt.Sprintf("#%d's head lives in a fork: magnum fixes nothing there, so its feedback is yours", n)
 	case engine.OpenOffIncludeOwn:
 		return fmt.Sprintf("#%d is yours to follow: its watch leaves your own PRs out (include_own)", n)
+	case engine.OpenOffMuted:
+		return fmt.Sprintf("#%d is muted: U on the board unmutes it", n)
 	case engine.OpenOffBaseline:
 		return fmt.Sprintf("#%d is yours to follow: it was open before magnum first synced the repository", n)
 	}

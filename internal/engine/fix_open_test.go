@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -941,4 +942,70 @@ func TestAPushTheLookNeverSawIsStillTheFixers(t *testing.T) {
 		v, _ := h.openOf(2)
 		t.Errorf("fix runs = %d, the last by %q (verdict %s: %s); want autofix's loop with no hands-off wait", n, h.fixStartBy(), v.Verdict, v.Why)
 	}
+}
+
+// A mute stops every automatic round, autofix = "open"'s loops included:
+// the look leaves a muted own PR alone (off, muted) and starts no loop on
+// a colleague's thread there. Before, it started one, and each push of its
+// fixer forced a re-review of a PR the operator had switched off.
+func TestAutofixOpenLeavesAMutedPRAlone(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	if err := h.st.UpdatePR(h.ctx, h.pr(2).ID, func(u *store.PRUpdate) { u.Set("muted", true) }); err != nil {
+		t.Fatal(err)
+	}
+	h.pastSettle()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Errorf("fix runs = %d: autofix started a loop on a muted PR", n)
+	}
+	if v := h.wantOpen(OpenOff, "muted"); v.Off != OpenOffMuted {
+		t.Errorf("off = %q, want %q", v.Off, OpenOffMuted)
+	}
+}
+
+// The look decides on the PR rows it listed at the start of its step, and
+// a loop's end on another goroutine can move a PR to needs attention after
+// that: the start reads the PR again and waits for the next look when it
+// changed, so no autofix loop starts over the attention. Before, the stale
+// row started one, whose end later replaced the attention's message.
+func TestTheLookStartsNothingOnAPRThatChangedDuringIt(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	h.pastSettle()
+	var once sync.Once
+	h.gh.mu.Lock()
+	h.gh.onThreads = func() { // during the look's own read of GitHub, after it listed the PRs
+		once.Do(func() {
+			pr := h.pr(2)
+			if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+				u.Set("last_error", "fix: fix run failed: the push was refused")
+			}); err != nil {
+				t.Errorf("transition: %v", err)
+			}
+			h.e.setKV(h.ctx, KVPRAttention(pr.ID), attention.KindFix)
+		})
+	}
+	h.gh.mu.Unlock()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Errorf("fix runs = %d: autofix started a loop on a PR that needs attention", n)
+	}
+	if pr := h.pr(2); pr.State != store.PRNeedsAttention || deref(pr.LastError) != "fix: fix run failed: the push was refused" {
+		t.Errorf("state %s, last_error %q: want the attention as it was raised", pr.State, deref(pr.LastError))
+	}
+	h.gh.mu.Lock()
+	h.gh.onThreads = nil
+	h.gh.mu.Unlock()
+	h.advance(time.Minute)
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "needs your attention")
 }

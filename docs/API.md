@@ -7688,6 +7688,7 @@ const (
 	OpenOffDraft      = "draft"       // a draft PR
 	OpenOffFork       = "fork"        // its head lives in a fork
 	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
+	OpenOffMuted      = "muted"       // `magnum mute`: a mute stops every automatic round
 	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
 	OpenOffIneligible = "ineligible"  // magnum does not review it
 )

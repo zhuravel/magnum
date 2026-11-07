@@ -2916,6 +2916,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAutofixOpenNeverCapsTheWaitForMagnum, TestAFixOnASimplificationOnlyReviewFixesItsFindings, and the
   others of S1 in the commits.
 
+- **Autofix leaves a muted PR alone, and starts on the PR's row as it is now** (2026-11-07, the review of
+  the factory bridge). A mute stops every automatic round, but the look of `autofix = "open"` covered a muted
+  own PR (a mute keeps a reviewed PR reviewed) and started loops there, each push forcing a re-review of a PR
+  the operator had switched off. It is now off (`muted`), and startFix refuses a new autofix loop on a muted
+  PR and over one that needs attention whoever asks (the look, "own" after a forced round, a held autofix);
+  `magnum fix` runs on both, as a forced review runs on a muted PR. The look decides on the rows it listed at
+  the start of its step, and a loop's end on another goroutine can raise needs attention after that list
+  (its row goes first, then the attention): the start reads the PR's row again and waits for the next look
+  when its state, mute, reviewed head or fingerprint changed, so no autofix loop starts over that attention
+  and later replaces its message. Tests, failing first: TestAutofixOpenLeavesAMutedPRAlone,
+  TestTheLookStartsNothingOnAPRThatChangedDuringIt, TestAutofixRefusesAMutedPROrOneThatNeedsAttention,
+  TestAMutedOwnPRSaysItIsMuted.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
