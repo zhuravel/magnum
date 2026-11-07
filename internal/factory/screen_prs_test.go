@@ -709,6 +709,7 @@ func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
 	r.pr(4540, func(v *PRState) {
 		v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, cycle 1 of 3")
 		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 3, Phase: "fixing", Head: prHead}
+		v.OpenRestores, v.OpenHold = true, 30*time.Minute
 	})
 	r.publishedTask("PR-12341", 4541)
 	r.pr(4541, func(v *PRState) {
@@ -725,7 +726,7 @@ func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
 	r.task("PR-12344", "bug", "Not pushed yet", registry.TaskActive, "coding", "", "")
 	d := r.data(time.Time{})
 	for key, want := range map[string]*tui.FactoryPR{
-		"PR-12340": {Ref: "example/talkable#4540", Fixing: true},
+		"PR-12340": {Ref: "example/talkable#4540", Fixing: true, Restores: true, Hold: 30 * time.Minute},
 		"PR-12341": {Ref: "example/talkable#4541", FixOff: true, Off: "fix is off for #4541 (F turns it on)"},
 		"PR-12342": {Ref: "example/talkable#4542", Off: "#4542 is a draft: mark it ready"},
 		"PR-12343": nil,

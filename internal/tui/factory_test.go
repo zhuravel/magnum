@@ -113,6 +113,7 @@ type fakeFactoryActions struct {
 	fixes    []string        // the PRs Fix was asked for
 	fixOffs  []factoryFixOff // FixOff's calls
 	aborts   []string        // the PRs Abort was asked for
+	openPRs  []string        // the PRs OpenPR stepped into magnum's pane of
 
 	preview   func(text, repo string) (NewTaskForm, error)
 	answerErr error
@@ -233,6 +234,13 @@ func (a *fakeFactoryActions) Abort(_ context.Context, ref string) (ActionResult,
 	defer a.mu.Unlock()
 	a.aborts = append(a.aborts, ref)
 	return ActionResult{Text: "stopped " + ref}, nil
+}
+
+func (a *fakeFactoryActions) OpenPR(_ context.Context, ref string) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.openPRs = append(a.openPRs, ref)
+	return ActionResult{Text: "focused magnum's pane of " + ref}, nil
 }
 
 // calls counts the requests that change something (starts, answers,

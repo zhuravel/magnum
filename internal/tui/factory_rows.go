@@ -121,6 +121,12 @@ type FactoryPR struct {
 	// baseline, fix off, a watch that leaves your PRs out), in its words;
 	// "" when the look covers it. The row is drawn dim: it asks nothing.
 	Off string
+	// Restores says magnum's open of the PR (o) restores it in a slot,
+	// which claims the slot and holds the PR for Hold ([daemon] open_hold):
+	// o asks y/N first, as the board's does; false when it focuses a live
+	// pane, which asks nothing.
+	Restores bool
+	Hold     time.Duration
 }
 
 // FactoryApprovals is what the people's reviews of a PR say, as GitHub's

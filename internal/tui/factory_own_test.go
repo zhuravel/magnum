@@ -232,8 +232,9 @@ func TestTheWalkSkipsPRRows(t *testing.T) {
 	mustContain(t, h.view(), "2 of your PRs need you: f, F or b on their rows")
 }
 
-// enter on your PR's row opens no card: the footer names its keys; o and t
-// are a task's keys there and say so; b opens the PR's page.
+// enter on your PR's row opens no card: the footer names its keys; o
+// steps into magnum's pane of it, t opens the Jira issue its title names
+// (none here: it says so), b opens the PR's page.
 func TestThePRRowsKeysOnHome(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g", "j") // #4602
@@ -243,12 +244,11 @@ func TestThePRRowsKeysOnHome(t *testing.T) {
 	}
 	mustContain(t, h.view(), "your PR: f fix, F fix off, K stop the loop, b browser")
 	h.press("o")
-	mustContain(t, h.view(), "o and t act on a task's row: #4602 is your PR")
-	h.press("t")
-	mustContain(t, h.view(), "o and t act on a task's row: #4602 is your PR")
-	if n := len(h.act.opens); n != 0 {
-		t.Errorf("o on a PR row stepped into %d panes", n)
+	if len(h.act.opens) != 0 || len(h.act.openPRs) != 1 || h.act.openPRs[0] != "example/talkable#4602" {
+		t.Errorf("o on a PR row: factory panes %v, magnum's %q; want magnum's pane of #4602", h.act.opens, h.act.openPRs)
 	}
+	h.press("t")
+	mustContain(t, h.view(), "#4602 has no Jira issue: its title names no key of the trackers")
 	h.press("b")
 	if got := h.act.opened(); len(got) != 1 || got[0] != "https://github.com/example/talkable/pull/4602" {
 		t.Errorf("b on #4602 opened %q", got)

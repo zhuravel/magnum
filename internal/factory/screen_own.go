@@ -135,16 +135,17 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	return row, card
 }
 
-// screenPR is open PR st as a row's f, F and K act on it, your PR's or a
-// task's: its reference, whether magnum's fix loop runs on it, fix off, and
-// why magnum's look leaves it alone (offOf).
+// screenPR is open PR st as a row's f, F, K and o act on it, your PR's or
+// a task's: its reference, whether magnum's fix loop runs on it, fix off,
+// why magnum's look leaves it alone (offOf), and whether magnum's open of
+// it restores it in a slot.
 func screenPR(st PRState) *tui.FactoryPR {
 	if !st.Found || st.GHState != store.GHOpen {
 		return nil
 	}
 	fresh := st.HasOpen && !st.Stale
 	return &tui.FactoryPR{Ref: fmt.Sprintf("%s#%d", st.Ref.Repo, st.Ref.Number), FixOff: st.FixOff, Off: offOf(st),
-		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing}
+		Fixing: st.Fixing || fresh && st.Open.Verdict == engine.OpenFixing, Restores: st.OpenRestores, Hold: st.OpenHold}
 }
 
 // offOf is why magnum's look leaves PR st alone, as its row says it: its

@@ -142,7 +142,8 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		if row && sel.yourPR() { // your PR: no card, no pane of the factory's
 			return slices.Concat(fixKeys, []menuItem{
-				{"open its PR", "b", "b", acts && c.PRURL != ""}, m.reportItem(sel.ID), {"oldest decision", "a", "a", decision},
+				{"step into magnum's pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
+				{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(sel.ID), {"oldest decision", "a", "a", decision},
 				{"new task", "n", "n", acts},
 				{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
 			})

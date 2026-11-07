@@ -8,9 +8,10 @@ package cli
 // once, so the adapter records none. Stepping into a pane, the time you saw
 // home and the terminal's focus carry no words and no decision: they record
 // no input. The screen asks y/N before each action; the adapter confirms
-// nothing itself. f, F and x on your own PR's row are not the factory's:
-// they run the board's own code (screenActions: magnum's fix, fix off and
-// abort requests, in magnum's registry), never the factory daemon's.
+// nothing itself. f, F, K and o on a row with a PR (your own PR's, or a
+// task's) are not the factory's: they run the board's own code
+// (screenActions: magnum's fix, fix off and abort requests in magnum's
+// registry, and magnum's open), never the factory daemon's.
 
 import (
 	"cmp"
@@ -52,7 +53,7 @@ type factoryActions struct {
 	pid           int
 	focusPane     func(ctx context.Context, target string) error
 	revealSession func(ctx context.Context) (string, error)
-	// board runs f, F and x on your own PR's row: the PR board's actions.
+	// board runs f, F, K and o on a row with a PR: the PR board's actions.
 	board *screenActions
 }
 
@@ -283,7 +284,17 @@ func (a *factoryActions) Abort(ctx context.Context, ref string) (tui.ActionResul
 	return a.board.Abort(ctx, ref)
 }
 
-// errNoBoard is the refusal of a key on your PR's row by a screen built
+// OpenPR steps into magnum's pane of PR ref (the judge's, or the fixer's
+// while its loop works), as the board's o does (magnum open), restoring a
+// parked one in a slot; the screen asked y/N first then.
+func (a *factoryActions) OpenPR(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Open(ctx, ref)
+}
+
+// errNoBoard is the refusal of a key on a PR's row by a screen built
 // without the board's actions.
 var errNoBoard = errors.New("this screen cannot act on magnum's PRs")
 

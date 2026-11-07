@@ -177,6 +177,10 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     the PR out of autofix (off) or back in, and Abort stops what magnum
 //     runs on it (its fix loop, the re-review the loop forced). They never
 //     go through the factory daemon.
+//   - OpenPR steps into magnum's pane of PR ref, as the board's o does
+//     (magnum open): the judge's, or the fixer's while its loop works,
+//     restoring a parked one in a slot (the screen asked y/N first then,
+//     FactoryPR.Restores).
 type FactoryActions interface {
 	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
@@ -192,6 +196,7 @@ type FactoryActions interface {
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
+	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 }
 
 // FactoryOptions tune the factory screen.
@@ -1035,25 +1040,33 @@ func (m factoryModel) homeHints() []hint {
 // itself; "" for a row with no pane to step into (a review by a person, a
 // queued or a done task): o is not offered there.
 func (m factoryModel) paneHint(r FactoryRow) string {
-	if r.yourPR() { // your PR: magnum's panes are the board's
-		return ""
-	}
-	if r.Group == GroupNeedsYou && m.data.Cards[r.ID].Question != nil {
+	if r.Group == GroupNeedsYou && !r.yourPR() && m.data.Cards[r.ID].Question != nil {
 		return "pane that asked"
 	}
 	for _, w := range r.WaitsOn {
 		if who := strings.ToLower(cleanText(w.Who)); who == "agent" || who == "agents" {
 			what, _, _ := strings.Cut(cleanText(w.What), ",")
 			what, _, _ = strings.Cut(what, strings.TrimSpace(m.g.sep))
+			what, _, _ = strings.Cut(what, " (")
 			if what = strings.TrimSpace(what); what != "" {
 				return "pane " + what
 			}
 		}
 	}
-	if r.Group == GroupNeedsYou {
+	switch {
+	case magnumsPane(r):
+		return "magnum's pane"
+	case r.Group == GroupNeedsYou:
 		return "step in"
 	}
 	return ""
+}
+
+// magnumsPane reports whether o on row r steps into magnum's pane of its
+// PR rather than the factory's: your PR's row, and a task's whose PR
+// magnum's fixer works on (its row waits on "magnum fixes #N").
+func magnumsPane(r FactoryRow) bool {
+	return r.yourPR() || r.PR != nil && r.PR.Fixing
 }
 
 // unsent counts a task's answers: answered of total questions, when the

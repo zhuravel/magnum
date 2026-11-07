@@ -8650,6 +8650,46 @@ func OpenHolds(ctx context.Context, st *store.Store) (map[int64]OpenHold, error)
     cannot read is left out. A record of a PR no longer pinned holds nothing
     (the next tick drops it): callers read it beside the PR's pin.
 
+func OpenRestorable(cfg *config.Config, full string) func(string) bool
+    OpenRestorable reports whether a parked session of a role may stand in for
+    the judge's in `magnum open` of a PR of repository full (OpenRestoreRole):
+    the role is one the daemon's open restores, one the repository's watch
+    runs (config.Config.RolesFor). Park parks every session with a session id,
+    the fixer's, the whiteboard writer's and a judge's in reserve too, and the
+    daemon refuses those roles ("unknown role"). Without a config any role may.
+
+func OpenRestoreRole(all []store.Session, role string, restorable func(string) bool) string
+    OpenRestoreRole is the role `magnum open` without --role restores the
+    PR through when role, the one it would open, has nothing to open:
+    its newest session is lost or closed, none of its sessions is parked or up,
+    and no session of the PR is starting or live (a live pane is what the open
+    focuses). The newest parked session by started_at (the later one of two
+    that started together) of a role the daemon's open restores (restorable,
+    OpenRestorable) then stands in for it; with none, role stays and the open
+    refuses, as it did. A role named with --role is never replaced.
+
+func OpenRole(cfg *config.Config, full string, fix *FixState, all []store.Session) string
+    OpenRole is the role `magnum open` of a PR of repository full opens without
+    --role, as the CLI's open resolves it under cfg: the fixer's while a fix
+    loop's fixer works (fix: the PR's loop, nil for none), else the watch's
+    judge; the parked role that stands in for it when its session is gone
+    (OpenRestoreRole over all, the PR's sessions, among the roles the daemon's
+    open restores, OpenRestorable).
+
+func OpenSessions(all []store.Session, role string) (parked, latest *store.Session, starting bool)
+    OpenSessions is what the PR's sessions of role say an open of it does:
+    latest is the newest, parked the newest parked one, and starting says the
+    newest is starting or live (the open waits for its pane). An open restores
+    when one is parked and none is starting (OpenWouldRestore).
+
+func OpenWouldRestore(all []store.Session, role string, restorable func(string) bool) bool
+    OpenWouldRestore reports whether `magnum open` of role (as it opens
+    without --role) asks the daemon to restore the PR (claim a slot, resume
+    its sessions, hold it): no session of role is up (starting, or live with a
+    pane or an agent: the open focuses it), and one is parked, role's own or,
+    when role's session is gone, a restorable role's (OpenRestoreRole).
+    The screens' o asks first when it does.
+
 func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string
     OperatorApprovalRefusal says why the operator's own approval of pr cannot
     be posted as login (their auto_approve_as account) now, "" when it can:
@@ -12721,6 +12761,9 @@ type PRState struct {
 	Asked                     []ReviewAsk
 	LastTick                  time.Time
 	OldBuild                  *engine.Build
+	Replies                   []store.Reply
+	OpenRestores              bool
+	OpenHold                  time.Duration
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -12761,7 +12804,12 @@ type PRState struct {
     daemon down or none recorded), which tells whether its look still runs;
     OldBuild the build magnum's daemon runs when its binary on disk is newer
     (engine.SkewNote), nil when it runs what is on disk, when it is down or when
-    it recorded none.
+    it recorded none. Replies are the replies to magnum's reviews its judge
+    has not read yet (store.PR.PendingReplies), oldest first. OpenRestores
+    says magnum's open of the PR (the screens' o, `magnum open`) restores it
+    in a slot, which claims the slot and holds the PR for OpenHold ([daemon]
+    open_hold), as the board tells it (engine.OpenWouldRestore over the PR's
+    sessions); false when it focuses a live pane.
 
 type PRView struct {
 	Number                     int
@@ -27881,6 +27929,7 @@ type FactoryActions interface {
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
+	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
     command on the screen's context; the ones that change something return what
@@ -27912,6 +27961,10 @@ type FactoryActions interface {
         autofix (off) or back in, and Abort stops what magnum runs on it (its
         fix loop, the re-review the loop forced). They never go through the
         factory daemon.
+      - OpenPR steps into magnum's pane of PR ref, as the board's o does
+        (magnum open): the judge's, or the fixer's while its loop works,
+        restoring a parked one in a slot (the screen asked y/N first then,
+        FactoryPR.Restores).
 
 type FactoryAlert struct {
 	At   time.Time
@@ -28022,9 +28075,15 @@ type FactoryPR struct {
 	// baseline, fix off, a watch that leaves your PRs out), in its words;
 	// "" when the look covers it. The row is drawn dim: it asks nothing.
 	Off string
+	// Restores says magnum's open of the PR (o) restores it in a slot,
+	// which claims the slot and holds the PR for Hold ([daemon] open_hold):
+	// o asks y/N first, as the board's does; false when it focuses a live
+	// pane, which asks nothing.
+	Restores bool
+	Hold     time.Duration
 }
-    FactoryPR is your own PR on the factory screen, as magnum's registry tells
-    it: what the row's keys go by.
+    FactoryPR is a row's open PR on the factory screen (your own PR's, or a
+    task's), as magnum's registry tells it: what the row's keys go by.
 
 type FactoryRow struct {
 	ID int64
@@ -28066,10 +28125,11 @@ type FactoryRow struct {
 	Findings  *FindingsInfo
 	Approvals *FactoryApprovals
 
-	// PR is set on a row of your own PR from magnum's registry, not a task
-	// (in any group but DONE TODAY); nil on a task's row. Such
-	// a row's ID is the negative of magnum's id of the PR, which no task's
-	// has.
+	// PR is the row's open PR in magnum's registry, which f, F and K act
+	// on: on a row of your own PR, not a task (in any group but DONE
+	// TODAY), whose ID is the negative of magnum's id of the PR, which no
+	// task's has (yourPR); and on a task's row whose PR magnum read. nil on
+	// a task's row without one.
 	PR *FactoryPR
 }
     FactoryRow is one task on the home list, one line.

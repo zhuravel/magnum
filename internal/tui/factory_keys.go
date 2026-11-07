@@ -206,20 +206,34 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 	case reportKey:
 		return m.openReport()
 	case "o":
-		task := m.task
+		r, ok := m.row(m.task)
 		if m.view == fvHome {
-			r, ok := m.selectedRow()
-			if !ok {
+			if r, ok = m.selectedRow(); !ok {
 				return nil
 			}
-			if r.yourPR() {
-				return m.note(prRowTaskKeys(r))
-			}
-			task = r.ID
 		}
-		return m.stepIn(task)
+		if ok && magnumsPane(r) {
+			return m.openMagnum(r)
+		}
+		return m.stepIn(cmp.Or(r.ID, m.task))
 	}
 	return nil
+}
+
+// openMagnum steps into magnum's pane of row r's PR (the judge's, or the
+// fixer's while its loop works), as the board's o: at once for a live
+// pane; a parked one is restored in a slot, which claims it and holds the
+// PR, so o asks the board's y/N first.
+func (m *factoryModel) openMagnum(r FactoryRow) tea.Cmd {
+	if m.act == nil {
+		return m.note(noActions)
+	}
+	pr, key, act := *r.PR, prLabel(r), m.act
+	run := func(ctx context.Context) (ActionResult, error) { return act.OpenPR(ctx, pr.Ref) }
+	if pr.Restores {
+		return m.ask(nil, OpenRestoreQuestion(key, pr.Hold), run)
+	}
+	return m.bar.start("Open magnum's pane of "+key, run)
 }
 
 // prKey is f, F, K or x on home's row r: on a row whose open PR magnum's
@@ -282,12 +296,6 @@ func prFixOffVerb(pr FactoryPR) string {
 // prKeys is the footer of enter on your PR's row: its keys, since it has no
 // card.
 const prKeys = "your PR: f fix, F fix off, K stop the loop, b browser"
-
-// prRowTaskKeys is the footer of o and t on your PR's row r: they act on a
-// task's.
-func prRowTaskKeys(r FactoryRow) string {
-	return "o and t act on a task's row: " + cleanText(r.Key) + " is your PR (b opens it)"
-}
 
 // prsNeedYou counts the rows of your PRs that need you.
 func (m factoryModel) prsNeedYou() int {
@@ -360,11 +368,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		m.view = fvNew
 		return m.textChanged(), true
 	case "b", "t":
-		r, ok := m.selectedRow()
-		switch {
-		case ok && r.yourPR() && k == "t":
-			return m.note(prRowTaskKeys(r)), true
-		case ok:
+		if r, ok := m.selectedRow(); ok {
 			return m.openPage(k, r.ID), true
 		}
 	case "f", "F", "K", "x":
@@ -378,8 +382,9 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 }
 
 // openPage opens task's PR (b) or its Jira issue (t) in the browser, asking
-// nothing, as the board's b and t (spec 9.D); a task with nothing to open
-// says why in the footer.
+// nothing, as the board's b and t (spec 9.D): a task's, or your PR's (its
+// id below zero, the issue its title names); one with nothing to open says
+// why in the footer.
 func (m *factoryModel) openPage(k string, task int64) tea.Cmd {
 	if m.act == nil {
 		return m.note(noActions)
@@ -387,6 +392,8 @@ func (m *factoryModel) openPage(k string, task int64) tea.Cmd {
 	c, key := m.data.Cards[task].Task, m.taskKey(task)
 	name, url := cmp.Or(cleanText(c.PR), key), c.PRURL
 	switch {
+	case k == "t" && c.Issue == "" && task < 0: // your PR's row
+		return m.note(key + " has no Jira issue: its title names no key of the trackers")
 	case k == "t" && c.Issue == "":
 		return m.note(key + " has no Jira issue: it started from your words")
 	case k == "t" && c.IssueURL == "":

@@ -62,3 +62,25 @@ func TestFOnAnOwnPRRowAsksAndQueuesMagnumsFix(t *testing.T) {
 		t.Error("the screen's PR keys made the factory's registry")
 	}
 }
+
+// o on a PR's row of the factory screen steps into magnum's pane of it
+// through the board's own open (magnum open): herdr focuses the judge's
+// live pane, and the terminal on magnum's session comes to the front. It
+// never goes through the factory daemon.
+func TestOOnAPRRowOpensMagnumsPane(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
+	board := newScreenActions(h.c)
+	defer board.Close()
+	act := newFactoryActions(h.c, &factoryScreenSource{c: h.c, now: inspNow}, board)
+	if _, err := act.OpenPR(h.ctx, "talkable/talkable#5"); err != nil {
+		t.Fatalf("open: %v (%s)", err, h.errb.String())
+	}
+	if len(h.hd.focused) != 1 || h.hd.focused[0] != "mg-talkable-5-judge" || len(h.reveals) != 1 {
+		t.Errorf("focused %q with %d reveals, want the judge's pane and the terminal", h.hd.focused, len(h.reveals))
+	}
+	if fsx.Exists(h.c.Layout.FactoryDB()) {
+		t.Error("o on a PR's row made the factory's registry")
+	}
+}
