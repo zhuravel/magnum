@@ -3018,14 +3018,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   read-only check before the operator's switch to "open"). Rule 5's late clock ran from the later of the
   head's move and the PR's next eligible time, while `[daemon] quiet_hours` hold every full round: a push
   of the operator's at 02:50 under a 03:00-10:00 window waited for 10:00 and went late, with an urgent
-  toast, at 05:05, for a wait he configured. A due round whose time falls inside the window is now due at
-  its end, and while the window holds now no review is late (the wait says "magnum reviews ...", until the
-  window's end): no needs you and so no toast at night. One that was late before the window began is late
-  again at its end, toasted once per head if it was not yet. The look does not know whether the round will
-  be a judge-alone one that quiet hours let through; such a round ends the wait inside the window anyway, so
-  counting every due round as held errs toward no false alarm. Tests, failing first:
-  TestMagnumLateCountsFromTheEndOfQuietHours, TestMagnumIsNeverLateInsideQuietHours,
-  TestMagnumLateToastsAtTheEndOfQuietHoursNotInsideThem.
+  toast, at 05:05, for a wait he configured. While the window holds now no review is late (the wait says
+  "magnum reviews ...", until the window's end): no needs you and so no toast at night. The late clock then
+  counts from the end of every window that began before the review was late (`heldSince`, oldest window
+  first): a round due inside the window, and one due before it that had not started when it began (a push
+  at 02:43 that `push_quiet_period` set due at 02:48, a round queued behind a busy pool or a paused kind), get
+  `magnum_late_after` anew from 10:00, when the round the window held can start; at 10:00 itself, when the
+  look (before dispatch) would have toasted a round about to start, nothing is late. One that was late
+  before the window began is late again at its end, toasted once per head if it was not yet. The look does
+  not know whether the round will be a judge-alone one that quiet hours let through; such a round ends the
+  wait inside the window anyway, so counting every due round as held errs toward no false alarm. Tests,
+  failing first: TestMagnumLateCountsFromTheEndOfQuietHours,
+  TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate, TestMagnumIsNeverLateInsideQuietHours,
+  TestMagnumLateToastsNothingForQuietHoursThatHeldIt.
 
 - **A loop that found no slot spends no start, and one tick starts no more slot loops than slots are free**
   (2026-11-07, a read-only check before the operator's switch to "open"). A PR the pool took its slot from

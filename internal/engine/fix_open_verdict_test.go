@@ -591,17 +591,17 @@ func TestMagnumLateCountsFromTheEndOfQuietHours(t *testing.T) {
 	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 10:00")
 }
 
-// A review that was due before quiet hours began and is late inside them is
-// not late until they end: no needs you, so no toast, at night; at their
-// end, still late, it needs you.
+// A review that was already late when quiet hours began is not late
+// inside them: no needs you, so no toast, at night; at their end, still
+// late, it needs you, counted from its own due time.
 func TestMagnumIsNeverLateInsideQuietHours(t *testing.T) {
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 7, h, m, 0, 0, time.Local) }
 	f := idleFacts()
 	f.settle.quietHours = "03:00-10:00"
 	old := "0000000000000000000000000000000000000000"
 	f.pr.ReviewedSHA, f.pr.State = &old, store.PRRereviewPending
-	f.pr.HeadChangedAt = at(0, 50)
-	due := at(1, 0)
+	f.pr.HeadChangedAt = at(0, 20)
+	due := at(0, 30) // late at 02:30, before the window
 	f.pr.NextEligibleAt = &due
 	f.now = at(4, 0)
 	v, _, _ := decideOpen(f)
@@ -611,8 +611,44 @@ func TestMagnumIsNeverLateInsideQuietHours(t *testing.T) {
 	}
 	f.now = at(10, 0)
 	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 01:00")
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 00:30")
 	if !v.late {
 		t.Error("not late at the end of quiet hours")
+	}
+}
+
+// A review due before quiet hours began, and not late yet when they began,
+// waits for their end with the round they hold: magnum_late_after counts
+// from that end, so it is not late at 10:00, when the round can start at
+// last, but two hours later. A round due at 02:00 that waited for a busy
+// pool, and the operator's push at 02:43 that push_quiet_period set due at
+// 02:48, both went into the night that way.
+func TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 7, h, m, 0, 0, time.Local) }
+	two := at(2, 0)
+	for _, tc := range []struct {
+		name string
+		head time.Time
+		due  *time.Time
+	}{
+		{"due at 02:00", at(1, 50), &two},
+		{"pushed at 02:43", at(2, 43), nil},
+	} {
+		f := idleFacts()
+		f.settle.quietHours = "03:00-10:00"
+		old := "0000000000000000000000000000000000000000"
+		f.pr.ReviewedSHA, f.pr.State = &old, store.PRRereviewPending
+		f.pr.HeadChangedAt, f.pr.NextEligibleAt = tc.head, tc.due
+		for _, now := range []time.Time{at(4, 30), at(10, 0), at(11, 59)} {
+			f.now = now
+			if v, _, _ := decideOpen(f); v.Verdict != OpenWaits || v.late {
+				t.Errorf("%s, at %s: verdict %s %q (late %v), want a wait for magnum's review", tc.name, now.Format("15:04"), v.Verdict, v.Why, v.late)
+			}
+		}
+		f.now = at(12, 0)
+		v, _, _ := decideOpen(f)
+		if v.Verdict != OpenNeedsYou || !v.late || !strings.Contains(v.Why, "magnum has not reviewed a1a1a1a since 10:00") {
+			t.Errorf("%s, at 12:00: verdict %s %q (late %v), want late since the window's end", tc.name, v.Verdict, v.Why, v.late)
+		}
 	}
 }

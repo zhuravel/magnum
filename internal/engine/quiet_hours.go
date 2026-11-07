@@ -62,3 +62,27 @@ func quietHoursEnd(spec string, now time.Time) time.Time {
 	}
 	return at
 }
+
+// quietWindows are the windows of [daemon] quiet_hours (spec, local time)
+// that ended after from and at or before to, oldest first, at most
+// openHoldsBack before to; none when spec is empty or cannot be read.
+func quietWindows(spec string, from, to time.Time) []openHold {
+	w, ok, err := config.ParseQuietHours(spec)
+	if err != nil || !ok {
+		return nil
+	}
+	from = later(from, to.Add(-openHoldsBack))
+	var out []openHold
+	f := from.Local()
+	for d := time.Date(f.Year(), f.Month(), f.Day()-1, 0, 0, 0, 0, f.Location()); !d.After(to); d = d.AddDate(0, 0, 1) {
+		start := time.Date(d.Year(), d.Month(), d.Day(), w.Start/60, w.Start%60, 0, 0, d.Location())
+		end := time.Date(d.Year(), d.Month(), d.Day(), w.End/60, w.End%60, 0, 0, d.Location())
+		if !end.After(start) { // it crosses midnight
+			end = end.AddDate(0, 0, 1)
+		}
+		if end.After(from) && !end.After(to) {
+			out = append(out, openHold{from: start, to: end})
+		}
+	}
+	return out
+}

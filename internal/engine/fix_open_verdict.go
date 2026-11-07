@@ -16,9 +16,9 @@ package engine
 //     needs you (`magnum abort` clears it);
 //  4. a stalemate needs you;
 //  5. magnum's review of the head waits, without a cap, until
-//     magnum_late_after past the time its round was due (the end of
-//     [daemon] quiet_hours when they hold it, and never inside them), when
-//     it needs you;
+//     magnum_late_after past the time its round was due (counted from the
+//     end of each [daemon] quiet_hours window that began before it was
+//     late, and never late inside one), when it needs you;
 //  6. replies magnum has not re-decided wait;
 //  7. without a whole read of GitHub since the PR changed, or while the
 //     poll of its watch is behind (the PR's row may be old), it is unknown,
@@ -554,10 +554,12 @@ func offWords(off string) string {
 // is another, or a round is due or running): the wait's words, whether it
 // is late (needs_you) and when it ends where known. "" when magnum is done
 // at the head. The round is due at the later of the head's move and its
-// next eligible time, or at the end of [daemon] quiet_hours when they hold
-// it then; inside them it is never late (no needs you, so no toast at
-// night), and the late clock counts from their end at the earliest: a
-// review that was late before they began is late again at their end.
+// next eligible time; inside [daemon] quiet_hours it is never late (no
+// needs you, so no toast at night), and the late clock counts from the end
+// of every window that began before the review was late (heldSince): one
+// that held the round from starting gives it magnum_late_after anew from
+// its end, and a review late before a window began is late again at its
+// end.
 func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 	pr := f.pr
 	due, running := slices.Contains(store.DueStates, pr.State), slices.Contains(store.InFlightStates, pr.State)
@@ -572,19 +574,40 @@ func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 	if pr.NextEligibleAt != nil && pr.NextEligibleAt.After(f.now) {
 		until = *pr.NextEligibleAt
 	}
-	if due {
-		if end, held := quietHoursNow(f.settle.quietHours, since); held { // due inside them: reviewed at their end
-			since = end
-		}
-		if end, held := quietHoursNow(f.settle.quietHours, f.now); held { // never late inside them
-			since, until = later(since, end), later(until, end)
-		}
+	if !due {
+		return "magnum reviews " + short, false, until
 	}
-	if due && f.settle.late > 0 && !f.now.Before(since.Add(f.settle.late)) {
-		return fmt.Sprintf("magnum has not reviewed %s since %s", short, waitClock(since, f.now)), true, time.Time{}
+	if end, held := quietHoursNow(f.settle.quietHours, f.now); held { // never late inside them
+		return "magnum reviews " + short, false, later(until, end)
+	}
+	if late := f.settle.late; late > 0 {
+		if since = heldSince(since, late, quietWindows(f.settle.quietHours, since, f.now)); !f.now.Before(since.Add(late)) {
+			return fmt.Sprintf("magnum has not reviewed %s since %s", short, waitClock(since, f.now)), true, time.Time{}
+		}
 	}
 	return "magnum reviews " + short, false, until
 }
+
+// openHold is a span that held a round nobody forced: a window of [daemon]
+// quiet_hours.
+type openHold struct{ from, to time.Time }
+
+// heldSince is a due review's late clock, due at since, moved past holds
+// (oldest first, by from): each hold that began before the review was late
+// (since+late) and ended after since moves since to its end.
+func heldSince(since time.Time, late time.Duration, holds []openHold) time.Time {
+	for _, h := range holds {
+		if !h.from.Before(since.Add(late)) { // late before it began, and so before every later one
+			break
+		}
+		since = later(since, h.to)
+	}
+	return since
+}
+
+// openHoldsBack is how far back rule 5 looks for the holds of a due
+// review's round (heldSince).
+const openHoldsBack = 30 * 24 * time.Hour
 
 // later is the later of a and b.
 func later(a, b time.Time) time.Time {

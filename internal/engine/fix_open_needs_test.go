@@ -243,10 +243,13 @@ func TestMagnumLateToastsOncePerHead(t *testing.T) {
 	}
 }
 
-// No urgent toast of a late review goes out inside quiet hours: the review
-// due an hour before they began, late an hour into them, is toasted once
-// at their end, when it is still late.
-func TestMagnumLateToastsAtTheEndOfQuietHoursNotInsideThem(t *testing.T) {
+// No urgent toast of a late review goes out for quiet hours that held it:
+// the review due an hour before they began, which their hold kept from
+// starting, is late neither inside them nor at their end, when the round
+// they held can start at last (the look runs before dispatch); the late
+// clock counts from their end, and a review still not started
+// magnum_late_after after it is toasted, once.
+func TestMagnumLateToastsNothingForQuietHoursThatHeldIt(t *testing.T) {
 	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
 	h.tick()
 	pr := h.pr(2)
@@ -260,26 +263,33 @@ func TestMagnumLateToastsAtTheEndOfQuietHoursNotInsideThem(t *testing.T) {
 	}
 	start, end := now.Add(2*time.Hour).Truncate(time.Minute), now.Add(6*time.Hour).Truncate(time.Minute)
 	h.cfg.Daemon.QuietHours = start.Format("15:04") + "-" + end.Format("15:04")
-	look := func() {
+	look := func() int { // the fix.open_magnum_late events so far
 		t.Helper()
 		if err := h.e.autofixOpen(h.ctx); err != nil {
 			t.Fatal(err)
 		}
-		h.flush()
+		h.e.toastWG.Wait() // no tick: its dispatch would start the round
+		return len(h.fixEvents("fix.open_magnum_late"))
 	}
 	h.advance(3*time.Hour + time.Minute) // past due + magnum_late_after, inside quiet hours
 	look()
-	look()
-	if got := toastsWith(h, "magnum's review of a1a1a1a is late"); len(got) != 0 {
-		t.Errorf("toasts inside quiet hours = %v, want none", got)
-	}
-	if n := len(h.fixEvents("fix.open_magnum_late")); n != 0 {
-		t.Errorf("fix.open_magnum_late events inside quiet hours = %d, want none", n)
+	if n := look(); n != 0 {
+		t.Errorf("late reviews inside quiet hours = %d, want none", n)
 	}
 	h.clock.Set(end)
+	if n := look(); n != 0 {
+		t.Errorf("late reviews at the end of quiet hours = %d, want none: the clock counts from there", n)
+	}
+	h.clock.Set(end.Add(2*time.Hour - time.Minute))
+	if n := look(); n != 0 {
+		t.Errorf("late reviews a minute before magnum_late_after past the window's end = %d, want none", n)
+	}
+	h.clock.Set(end.Add(2 * time.Hour))
 	look()
-	look()
+	if n := look(); n != 1 {
+		t.Errorf("late reviews magnum_late_after past the window's end = %d, want one", n)
+	}
 	if got := toastsWith(h, "magnum's review of a1a1a1a is late"); len(got) != 1 {
-		t.Errorf("toasts at the end of quiet hours = %v, want one", h.nh.shown())
+		t.Errorf("toasts = %v, want one, magnum_late_after past the window's end", h.nh.shown())
 	}
 }
