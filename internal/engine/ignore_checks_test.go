@@ -193,13 +193,15 @@ func TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored(t *test
 // check but the ignored one, so a head whose only failure is ignored is
 // approved; and a list that names only the ignored check names a check
 // that ran on the head but that magnum does not see: the entry does not
-// count (seenRequired), so the rollup derived from the rest decides, where
-// an entry with no run at all would hold the approval as missing.
+// count (seenRequired), so the rollup derived from the rest decides, even
+// in a repository that sets ci_dispatch, where an entry with no run at all
+// would hold the approval as missing.
 func TestRequiredChecksCountOnlyTheChecksMagnumSees(t *testing.T) {
 	failed, passed := github.CheckFailed, github.CheckPassed
 	for _, tc := range []struct {
 		name     string
 		required []string
+		dispatch string
 		checks   []github.Check
 		note     string
 	}{
@@ -208,11 +210,14 @@ func TestRequiredChecksCountOnlyTheChecksMagnumSees(t *testing.T) {
 			note:   "ignored 1 failing check outside required_checks: Terraform scripts / lint"},
 		{name: "every check", required: []string{"*"}, checks: []github.Check{vendorCheck(failed), specsCheck(passed)}},
 		{name: "only the ignored check", required: []string{"Vendor Gates"}, checks: []github.Check{vendorCheck(failed), specsCheck(passed)}},
+		{name: "only the ignored check, with ci_dispatch", required: []string{"Vendor Gates"}, dispatch: "ci.yml",
+			checks: []github.Check{vendorCheck(failed), specsCheck(passed)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := &syncBuffer{}
 			h, _ := newAutoHarness(t, func(h *harness) {
-				h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", RequiredChecks: tc.required, IgnoreChecks: []string{"Vendor Gates"}})
+				h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", RequiredChecks: tc.required, IgnoreChecks: []string{"Vendor Gates"},
+					CIDispatch: tc.dispatch})
 				h.d.Logger = newTeeLogger(h.t, logs)
 			})
 			reviewedWithChecks(h, "FAILURE", tc.checks...)
@@ -233,5 +238,33 @@ func TestRequiredChecksCountOnlyTheChecksMagnumSees(t *testing.T) {
 				t.Fatalf("the daemon's log, want the note %q and never the ignored check:\n%s", tc.note, logs.String())
 			}
 		})
+	}
+}
+
+// The note of the failing checks outside required_checks reads the list
+// as the gate does: an entry that names only checks ignore_checks leaves
+// out ran at the head and does not count (seenRequired), even where the
+// repository's ci_dispatch makes an entry with no run count as missing, so
+// a list of only such entries decides nothing and the note names no
+// check; beside an entry that counts, the note names the failing one.
+func TestTheIgnoredChecksNoteReadsTheRequiredListAsTheGateDoes(t *testing.T) {
+	pr := store.PR{HeadSHA: "b1", CI: &store.CIStatus{SHA: "b1", Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+		{Name: "Vendor Gates", State: store.CheckPassed},
+		{Name: "pronto", Workflow: "Pronto", WorkflowFile: "pronto.yml", State: store.CheckPassed},
+		{Name: "lint", Workflow: "Terraform scripts", WorkflowFile: "terraform.yml", State: store.CheckFailed}}}}
+	for _, tc := range []struct {
+		required []string
+		want     string
+	}{
+		{[]string{"Vendor Gates"}, ""},
+		{[]string{"Vendor Gates", "pronto"}, "ignored 1 failing check outside required_checks: Terraform scripts / lint"},
+	} {
+		h := newHarness(t, func(h *harness) {
+			h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", RequiredChecks: tc.required,
+				IgnoreChecks: []string{"Vendor Gates"}, CIDispatch: "ci.yml"})
+		})
+		if got := h.e.ignoredChecksNote("talkable/talkable", pr); got != tc.want {
+			t.Errorf("note for %q = %q, want %q", tc.required, got, tc.want)
+		}
 	}
 }

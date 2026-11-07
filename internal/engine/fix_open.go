@@ -539,10 +539,17 @@ func (c openConflict) fixConflict(head string) fixConflict {
 // openCI is rule 11's CI of pr's head (openCIOf), with the checks the
 // configuration ignores left out, and the required entries that name only
 // such checks (seenRequired; none left: the rollup derived from the rest
-// decides, as without a list).
+// decides, as without a list); an entry with no run at the head is missing
+// where GitHub requires it on the PR's base (enforcedMissing, which reads
+// the checks as GitHub gave them: an ignored one ran) or the repository's
+// [[repo]] list names it and its ci_dispatch is set.
 func (e *Engine) openCI(ctx context.Context, repo store.Repo, pr store.PR) openCI {
 	full := repo.FullName()
 	required, err := e.st.RequiredChecks(ctx, full, e.cfg.RequiredChecks(full))
+	if err != nil {
+		return openCI{pending: true}
+	}
+	g, _, err := e.st.GitHubRequiredChecks(ctx, full)
 	if err != nil {
 		return openCI{pending: true}
 	}
@@ -552,7 +559,8 @@ func (e *Engine) openCI(ctx context.Context, repo store.Repo, pr store.PR) openC
 			required = store.RequiredChecks{}
 		}
 	}
-	return openCIOf(pr.IgnoringChecks(ignore), required)
+	strict := required.Source == store.RequiredFromConfig && e.cfg.CIDispatch(full) != ""
+	return openCIOf(pr.IgnoringChecks(ignore), required, strict, enforcedMissing(pr, g))
 }
 
 // commitLister lists the commits of to that from lacks (gitx.Client's

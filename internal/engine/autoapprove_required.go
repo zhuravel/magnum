@@ -12,13 +12,17 @@ package engine
 // fails goes to the base-tip comparison (failsLikeTheBase), one that runs
 // waits, and the checks outside the list neither refuse nor wait; the
 // approval's events and the daemon's log name the failing ones it ignored.
-// An entry that names no check on a head whose checks magnum read whole
+// A required check with no run on a head whose checks magnum read whole
 // holds it as a required run that has not finished (DECISIONS "A required
-// check that did not run at the head is never green"): the repository's CI
-// may run only when a PR opens, so a later push gets no run of it, and
-// GitHub will not merge that head. Where the stored checks cannot say (none
-// of the head's, a list GitHub cut at 100), and without the key, the rollup
-// decides as before.
+// check that did not run at the head is never green"), where something
+// makes it required there: GitHub's list for the branch the PR merges into
+// (enforcedMissing: GitHub will not merge that head), or the list of a
+// repository that sets ci_dispatch (its CI may run only when a PR opens, so
+// a later push gets no run of it). An entry of a list GitHub does not
+// enforce may name a workflow whose path filters skip the head: without
+// ci_dispatch it leaves the gate to the rollup, as do stored checks that
+// cannot say (none of the head's, a list GitHub cut at 100) and a
+// repository without the key.
 
 import (
 	"context"
@@ -44,22 +48,26 @@ type requiredCI struct {
 
 // requiredCIOf reads pr's stored checks against required, its repository's
 // required checks; ok is false when they cannot decide and the rollup does,
-// as without a list: no list, no checks stored for the head or not every
-// one (GitHub lists 100), or checks an earlier build kept by workflow name
-// (CIStatus.ByWorkflowFile: a PR's own workflow of the base's name, or a
-// status, may have replaced a run there). An entry that names no check on
-// the head is missing there (CIStatus: the checks list every one, so it has
-// no run on the head), never passed. A run two entries name counts once.
-func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
-	ci := pr.CI
-	if len(required) == 0 || ci == nil || ci.SHA != pr.HeadSHA || !ci.Complete || !ci.ByWorkflowFile {
+// as without a list: no list, checks not read whole at the head (headRead),
+// or an entry that names no check on the head where strict is false. An
+// entry with no run is missing there (CIStatus: the checks list every one),
+// never passed; strict says such an entry holds the head (the [[repo]] list
+// of a repository that sets ci_dispatch, whose CI may not run at a head),
+// else it may be a workflow the head's paths skip, and what it would be is
+// unknown. A run two entries name counts once.
+func requiredCIOf(pr store.PR, required []string, strict bool) (requiredCI, bool) {
+	if len(required) == 0 || !headRead(pr) {
 		return requiredCI{}, false
 	}
+	ci := pr.CI
 	var r requiredCI
 	counted := map[store.CheckKey]bool{} // the stored checks hold one run of each
 	for _, entry := range required {
 		runs := store.RequiredRuns(ci.Checks, entry)
 		if len(runs) == 0 {
+			if !strict {
+				return requiredCI{}, false
+			}
 			r.missing = append(r.missing, entry)
 			continue
 		}
@@ -83,6 +91,61 @@ func requiredCIOf(pr store.PR, required []string) (requiredCI, bool) {
 		}
 	}
 	return r, true
+}
+
+// headRead reports whether pr's stored checks are its head's, every one
+// (GitHub lists 100), kept by workflow file (CIStatus.ByWorkflowFile: in an
+// earlier build's read a PR's own workflow of the base's name, or a status,
+// may have replaced a run): only then does a check absent from them have no
+// run on the head.
+func headRead(pr store.PR) bool {
+	ci := pr.CI
+	return ci != nil && ci.SHA == pr.HeadSHA && ci.Complete && ci.ByWorkflowFile
+}
+
+// enforcedMissing are the checks g, GitHub's list of what its rulesets or
+// branch protection require on g.Branch, names that have no run at pr's
+// head, neither a check run nor a commit status of that name: GitHub will
+// not merge that head, whatever the other checks say. It reads pr's checks
+// as GitHub reported them, those ignore_checks names included (they ran;
+// magnum only does not count them), and each entry as the name GitHub
+// gives (a context, never a glob). nil where it cannot say or GitHub would
+// merge: a list GitHub would not give, a PR whose base is another branch
+// (the list is the default branch's, and a stacked PR's base may require
+// nothing), checks not read whole at the head (headRead).
+func enforcedMissing(pr store.PR, g store.GitHubRequiredChecks) []string {
+	if !g.Known || g.Branch == "" || deref(pr.BaseRef) != g.Branch || !headRead(pr) {
+		return nil
+	}
+	var out []string
+	for _, name := range g.Checks {
+		if !slices.Contains(out, name) && !slices.ContainsFunc(pr.CI.Checks, func(c store.CheckResult) bool { return c.Name == name }) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// enforcedMissingOf is enforcedMissing of pr, a PR of repository full
+// ("owner/name"), by the GitHub list the poller last read; nil when it
+// could not read it (logged).
+func (e *Engine) enforcedMissingOf(ctx context.Context, full string, pr store.PR) []string {
+	g, _, err := e.st.GitHubRequiredChecks(ctx, full)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "read the required checks GitHub enforces", "repo", full)
+		return nil
+	}
+	return enforcedMissing(pr, g)
+}
+
+// withMissing is missing with the entries of more it lacks added.
+func withMissing(missing, more []string) []string {
+	for _, m := range more {
+		if !slices.Contains(missing, m) {
+			missing = append(missing, m)
+		}
+	}
+	return missing
 }
 
 // requiredCIRefusal is the CI gate's answer (ciGateOf) for c by r, its
@@ -117,7 +180,7 @@ const ignoredChecksShown = 5
 // repository's ignore_checks names is no failing check here either, as the
 // gate reads them (seenPR): the note never names it.
 func (e *Engine) ignoredChecksNote(full string, pr store.PR) string {
-	r, ok := requiredCIOf(e.seenPR(full, pr), seenRequired(pr, e.cfg.RequiredChecks(full), e.cfg.IgnoreChecks(full)))
+	r, ok := requiredCIOf(e.seenPR(full, pr), seenRequired(pr, e.cfg.RequiredChecks(full), e.cfg.IgnoreChecks(full)), e.cfg.CIDispatch(full) != "")
 	if !ok || len(r.ignored) == 0 {
 		return ""
 	}

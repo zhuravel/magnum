@@ -1279,9 +1279,12 @@ stages = [
 #                                         # approval counts only these checks (a failing check outside the list
 #                                         # never holds it; without the key every check counts), one run per
 #                                         # workflow file and name, a commit status apart from a check run of its
-#                                         # name; one with no run on the head holds it (it did not run there:
-#                                         # magnum approves once it ran and passed), and autofix = "open" never
-#                                         # calls such a head green; it never approves a PR that changes
+#                                         # name; with ci_dispatch set, one with no run on the head holds it (it
+#                                         # did not run there: magnum approves once it ran and passed), and
+#                                         # autofix = "open" never calls such a head green; without it such an
+#                                         # entry leaves the decision to every check (a workflow its path
+#                                         # filters skip); a check GitHub requires on the PR's base with no run
+#                                         # holds it either way; it never approves a PR that changes
 #                                         # .github/workflows/ or .github/actions/ on its own
 # ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone: checks
 #                                         # magnum treats as absent wherever it reads their CI
@@ -1291,10 +1294,12 @@ stages = [
 #                                         # checks, for a CI that runs only when a PR opens: under autofix =
 #                                         # "open" magnum starts it (a workflow_dispatch run on the PR's branch, as
 #                                         # the watch's poll identity) once per head on an own PR whose required
-#                                         # check did not run at the head, past settle_max; never on a PR that
-#                                         # changes .github/workflows/ or .github/actions/; GitHub refuses a
-#                                         # workflow without a workflow_dispatch trigger; default: none (you start
-#                                         # it by hand)
+#                                         # check did not run at the head, once nothing runs there and past
+#                                         # settle_max; never on a PR that changes .github/workflows/ or
+#                                         # .github/actions/; GitHub refuses a workflow without a
+#                                         # workflow_dispatch trigger; it also makes a required_checks entry with
+#                                         # no run at the head count as not run; default: none (you start it by
+#                                         # hand)
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

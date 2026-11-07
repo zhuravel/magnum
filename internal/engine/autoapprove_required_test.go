@@ -6,6 +6,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // ciCheck is a check of workflow that finished (or started) before every
@@ -31,16 +32,32 @@ func (h *harness) approvedEvents() []string {
 	return out
 }
 
+// withRequiredDispatch sets talkable/talkable's [[repo]] required_checks
+// and ci_dispatch = "ci.yml": the operator says the repository's CI may not
+// run at a head, so an entry with no run there is missing.
+func withRequiredDispatch(checks ...string) func(*harness) {
+	return func(h *harness) {
+		h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", RequiredChecks: checks, CIDispatch: "ci.yml"})
+	}
+}
+
 // reviewedWithChecks opens PR #2 on head b1 with rollup ci and checks after
 // a first poll, and lets magnum's clean review of it post.
 func reviewedWithChecks(h *harness, ci string, checks ...github.Check) {
 	h.t.Helper()
+	reviewedSpec(h, prSpec{n: 2, head: "b1", ci: ci, checks: checks})
+}
+
+// reviewedSpec opens PR #2 as spec after a first poll, and lets magnum's
+// clean review of its head post.
+func reviewedSpec(h *harness, spec prSpec) {
+	h.t.Helper()
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick()
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", ci: ci, checks: checks})
+	h.open(prSpec{n: 1, head: "base1"}, spec)
 	h.tick()
-	h.reviewTo(2, "b1")
+	h.reviewTo(2, spec.head)
 	h.flush()
 	h.flush()
 }
@@ -159,34 +176,45 @@ func TestAFailingRequiredCheckStillHoldsTheApproval(t *testing.T) {
 // not run on.
 const ciMissingWords = "its head's required checks have not run (magnum approves it once they pass)"
 
-// A check required_checks names that has no run on a head whose checks
-// magnum read whole holds the approval as the operator, however the other
-// checks read: the repository's CI runs only when a PR opens, so a later
-// push gets no Completion, and GitHub will not merge the head. Before, such
-// an entry let the rollup decide, and the SUCCESS of the other checks
-// approved it (a failing check outside the list held it instead). The
-// refusal waits, as for checks that run: magnum approves once the check ran
-// and passed.
+// A required check with no run on a head whose checks magnum read whole
+// holds the approval as the operator, however the other checks read: the
+// repository's CI runs only when a PR opens, so a later push gets no
+// Completion, and GitHub will not merge the head. It holds where GitHub's
+// rulesets require it on the default branch the PR merges into (without
+// [[repo]] required_checks, where the rollup decides the rest), and where
+// required_checks names it in a repository that sets ci_dispatch. Before,
+// such an entry let the rollup decide, and the SUCCESS of the other checks
+// approved the head. The refusal waits, as for checks that run (magnum
+// approves once the check ran and passed), and a required check that
+// fails as on the base tip waits for it too, where it would go through.
 func TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval(t *testing.T) {
 	failed, passed := github.CheckFailed, github.CheckPassed
+	others := []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("", "Devin Review", passed)}
+	layout := []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}
+	redLikeTheBase := []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("CI", "rspec", failed)}
 	for _, tc := range []struct {
-		name     string
-		required []string
-		ci       string
-		checks   []github.Check
+		name   string
+		mod    func(*harness)
+		ci     string
+		checks []github.Check
+		want   string
 	}{
-		{name: "a named check", required: []string{"Completion"}, ci: "SUCCESS",
-			checks: []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("", "Devin Review", passed)}},
-		{name: "a workflow", required: []string{"workflow:CI"}, ci: "SUCCESS", checks: []github.Check{ciCheck("Pronto", "pronto", passed)}},
-		{name: "one of two, beside a failing unrequired check", required: []string{"workflow:CI", "Deploy preview"}, ci: "FAILURE",
-			checks: []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}},
+		{name: "GitHub's rulesets", mod: requiredCompletion, ci: "SUCCESS", checks: others, want: ciMissingWords},
+		{name: "a named check", mod: withRequiredDispatch("Completion"), ci: "SUCCESS", checks: others, want: ciMissingWords},
+		{name: "a workflow", mod: withRequiredDispatch("workflow:CI"), ci: "SUCCESS", checks: others[:1], want: ciMissingWords},
+		{name: "one of two, beside a failing unrequired check", mod: withRequiredDispatch("workflow:CI", "Deploy preview"), ci: "FAILURE",
+			checks: layout, want: ciMissingWords},
+		{name: "beside a required check that fails as on the base tip", mod: withRequiredDispatch("workflow:CI", "Completion"), ci: "FAILURE",
+			checks: redLikeTheBase, want: ciRunsWords},
+		{name: "GitHub's, beside a check that fails as on the base tip", mod: requiredCompletion, ci: "FAILURE",
+			checks: redLikeTheBase, want: ciRunsWords},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t, withRequiredChecks(tc.required...), withBaseChecks(ciCheck("CI", "rspec", passed)))
-			reviewedWithChecks(h, tc.ci, tc.checks...)
-			h.wantRefused(2, ciMissingWords)
-			if got := h.autoRefused(2); got != ciMissingWords {
-				t.Fatalf("held back for %q, want exactly %q", got, ciMissingWords)
+			h, _ := newAutoHarness(t, tc.mod, withBaseChecks(ciCheck("CI", "rspec", failed)))
+			reviewedSpec(h, prSpec{n: 2, head: "b1", base: "main", ci: tc.ci, checks: tc.checks})
+			h.wantRefused(2, tc.want)
+			if got := h.autoRefused(2); got != tc.want {
+				t.Fatalf("held back for %q, want exactly %q", got, tc.want)
 			}
 			if evs := h.approvedEvents(); len(evs) != 0 {
 				t.Fatalf("review.auto_approved events = %q", evs)
@@ -195,9 +223,82 @@ func TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval(t *testing.T) {
 	}
 }
 
+// A required check with no run at the head that nothing makes required
+// there leaves the gate to the rollup, as before: GitHub's list is the
+// default branch's, and a PR stacked on another branch merges without it;
+// a [[repo]] required_checks list GitHub does not enforce may name a
+// workflow whose path filters skip the head (an infra-only PR gets only its
+// plan checks), unless the repository sets ci_dispatch. The rollup then
+// approves a head whose other checks passed, and holds one where a check
+// outside the list fails.
+func TestARequiredCheckWithNoRunThatNothingEnforcesLeavesTheRollupToDecide(t *testing.T) {
+	failed, passed := github.CheckFailed, github.CheckPassed
+	for _, tc := range []struct {
+		name   string
+		mod    func(*harness)
+		base   string
+		ci     string
+		checks []github.Check
+		want   string // "" = approved
+	}{
+		{name: "a PR stacked on another branch", mod: requiredCompletion, base: "feature-a", ci: "SUCCESS",
+			checks: []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("", "Devin Review", passed)}},
+		{name: "a workflow its path filters skip", mod: withRequiredChecks("workflow:CI"), base: "main", ci: "SUCCESS",
+			checks: []github.Check{ciCheck("Infra", "infra-plan", passed)}},
+		{name: "beside a failing unrequired check", mod: withRequiredChecks("workflow:CI", "Deploy preview"), base: "main", ci: "FAILURE",
+			checks: []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)},
+			want:   ciFailsWords},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, tc.mod, withBaseChecks(ciCheck("CI", "rspec", passed)))
+			reviewedSpec(h, prSpec{n: 2, head: "b1", base: tc.base, ci: tc.ci, checks: tc.checks})
+			if tc.want != "" {
+				h.wantRefused(2, tc.want)
+				if got := h.autoRefused(2); got != tc.want {
+					t.Fatalf("held back for %q, want exactly %q", got, tc.want)
+				}
+				return
+			}
+			if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+				t.Fatalf("posted = %q, want the approval of b1 (held back for %q)", got, h.autoRefused(2))
+			}
+		})
+	}
+}
+
+// A required check with no run waits as checks that run do, in their
+// class: the status comment says that the approval waits for the head's
+// checks, magnum approves the head once the check ran there and passed,
+// and a standing approval of an earlier head is not withdrawn for it.
+func TestARequiredCheckWithNoRunWaitsAsChecksThatRun(t *testing.T) {
+	passed := github.CheckPassed
+	without := []github.Check{ciCheck("Pronto", "pronto", passed)}
+	with := []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("CI", "Completion", passed)}
+	h, _ := newAutoHarness(t, approvesAsAlice, withRequiredDispatch("Completion"))
+	h.reviewedFor(prSpec{head: "b1", ci: "SUCCESS", checks: without})
+	h.wantApprovalLine(aliceCIRuns)
+	h.moveTo(prSpec{head: "b1", ci: "SUCCESS", checks: with})
+	h.flush()
+	if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+		t.Fatalf("posted = %q, want the approval of b1 once Completion ran", got)
+	}
+
+	h.moveTo(prSpec{head: "b2", ci: "SUCCESS", checks: without})
+	h.reviewTo(2, "b2")
+	h.flush()
+	h.flush()
+	if d := h.ghCalls("dismiss:"); len(d) != 0 {
+		t.Fatalf("withdrawn while Completion has not run: %q", d)
+	}
+	if a := h.autoApproval(2); a.State != store.AutoStanding || a.HeadSHA != "b1" {
+		t.Fatalf("approval = %+v", a)
+	}
+}
+
 // Without [[repo]] required_checks every check counts as before, the list
-// GitHub's rulesets declare included (it does not change the gate): the
-// 12036 layout is held for the unrequired job, and a running one waits.
+// GitHub's rulesets declare included (it changes the gate only where one of
+// its checks has no run at the head): the 12036 layout is held for the
+// unrequired job, and a running one waits.
 func TestNoRequiredChecksKeepsEveryCheckCounting(t *testing.T) {
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	layout := []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}

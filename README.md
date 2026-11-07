@@ -1681,8 +1681,16 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   still runs is not waited for, and a required one that fails or runs holds the PR as above, the base
   tip's comparison included. A required check with no run on a head whose checks Magnum read whole holds
   the PR too, however the other checks read ("its head's required checks have not run (magnum approves it
-  once they pass)"): a CI workflow that runs only when a PR opens gives a later push no run of it, and
-  GitHub will not merge that head; Magnum approves once the check ran there and passed. A `workflow:<glob>` entry names every check of each workflow whose file
+  once they pass)"), where something makes it required there: a check GitHub's rulesets or branch
+  protection require on the default branch, for a PR into that branch (with or without the key; GitHub's
+  list names each check exactly, never as a glob), or a `required_checks` entry in a repository that sets
+  `ci_dispatch` (see Autofix on anything open). A CI workflow that runs only when a PR opens gives a later push no
+  run of it, and GitHub will not merge that head; Magnum approves once the check ran there and passed, and
+  an approval that stands on an earlier head waits as it does for checks that run. Without `ci_dispatch` a
+  `required_checks` entry with no run at the head leaves the gate to every check, as before: a workflow
+  whose path filters skip the head never runs there, and GitHub merges it where it does not hold the
+  repository to the list. A PR stacked on another branch is not held for GitHub's list either (the base
+  it merges into may require nothing). A `workflow:<glob>` entry names every check of each workflow whose file
   (`ci.yml`) or declared name (`CI`) it matches; the head's checks are kept one run per workflow file and
   check name, so a workflow of the same name in another file never replaces the runs of the CI workflow's
   file (its runs count beside them). A name glob counts the latest check run of each matching name and,
@@ -1690,7 +1698,7 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   posts, never stands for a check run, nor a check run for a status. When the head's stored checks cannot
   say (none read for the head, more than GitHub lists, checks a build before this rule stored, which the
   poller reads again at once) every check counts, as without the key; the list GitHub's rulesets declare
-  does not change the gate. A check `ignore_checks` names (Watches, pools and repos) is absent here as
+  changes the gate only for a check of it with no run at the head. A check `ignore_checks` names (Watches, pools and repos) is absent here as
   everywhere, before `required_checks` or the base tip's comparison reads the checks (a `required_checks`
   entry that names only such checks does not count): a head whose only failing check it names is approved
   once the others pass, its rollup decided from them, and one where another check still runs waits for it;
@@ -3389,20 +3397,26 @@ began (due inside them, or due before and kept from starting) counts `magnum_lat
 before they began is late again, and toasted once if not yet, at their end. Red required CI
 needs you; pending required CI waits (the required checks are `[[repo]] required_checks`, else GitHub's for
 the default branch; a branch that requires none leaves CI out). A required check with no run at a head whose
-checks Magnum read whole is never green: a CI workflow that runs only when a PR opens gives a later push,
-the fixer's included, no run of it, and GitHub blocks the merge whatever the other checks say. Until
-`settle_max` after the push the run may not have started yet ("CI at a1b2c3d: required check Completion has
-not started"); after that the PR needs you ("required check Completion did not run at a1b2c3d: run its
-workflow on the PR's branch, or push"). With `[[repo]] ci_dispatch = "ci.yml"`, the workflow file that
-produces the repository's required checks, Magnum starts it instead (a `workflow_dispatch` run on the PR's
-branch, as the watch's `poll_identity`, else its `identity`: the daemon's own client, never the fixer's
-pane), once per head, recorded before the call so that nothing starts it twice (`fix.open_ci_dispatch`), and
-waits `settle_max` for its run ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
+checks Magnum read whole is never green where GitHub requires it on the PR's base (its list is the default
+branch's: a PR stacked on another branch is left to the rollup) or where it is a `[[repo]] required_checks`
+entry of a repository that sets `ci_dispatch`: a CI workflow that runs only when a PR opens gives a later
+push, the fixer's included, no run of it, and GitHub blocks the merge whatever the other checks say. Without
+`ci_dispatch` a `required_checks` entry with no run leaves CI to the rollup, as before: a workflow whose path
+filters skip the head never runs there. While a check of the head still runs (a job that `needs:` others is
+created only when they end, so a required `Completion` has no run until the rest of CI finished, however
+long that takes) and until `settle_max` after the push, the look waits ("CI at a1b2c3d: required check
+Completion has not started"); after that, with nothing running at the head, the PR needs you ("required
+check Completion did not run at a1b2c3d: run its workflow on the PR's branch, or push"). With `[[repo]]
+ci_dispatch = "ci.yml"`, the workflow file that produces the repository's required checks, Magnum starts it
+instead (a `workflow_dispatch` run on the PR's branch, as the watch's `poll_identity`, else its `identity`:
+the daemon's own client, never the fixer's pane), once per head, recorded before the call so that nothing
+starts it twice (`fix.open_ci_dispatch`), and waits for its run while the head's checks run and for
+`settle_max` after the start ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
 did not run"); a run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
 without a `workflow_dispatch` trigger on the branch answers HTTP 422) and a PR it will not start
 (`fix.open_ci_dispatch_refused`: one that changes its own `.github/workflows/` or `.github/actions/`, which
-would run its own CI with the repository's secrets, or whose files GitHub did not list whole) need you as
-above. The start waits for the end of `magnum pause` and for the identity's GitHub budget, not for quiet
+would run its own CI with the repository's secrets, whose files GitHub did not list whole, or whose branch
+Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the identity's GitHub budget, not for quiet
 hours. The identity needs the right to run workflows (a gh login that can push to the repository, or an
 App with Actions: write). Without the key (the default) Magnum starts nothing.
 

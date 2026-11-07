@@ -3093,49 +3093,78 @@ skill versions); people add theirs to the sections before it, at the end of the 
   BLOCKED, and the look called the PR idle ("nothing open"), which the factory screen turns into "merge it"
   once a colleague approves; the operator started CI by hand six times in two days. The cause:
   `requiredCIOf` gave up (ok false) on an entry that names no check on the head, and every reader then fell
-  back to the rollup. The stored checks list every check of the head (`Complete`, read by workflow file),
-  so such an entry is missing there, never passed: `requiredCIOf` now reports it (`missing`) and decides.
-  Rule 11 of the look: a missing required check waits, as CI at the head, until `settle_max` after the
-  push ("CI at a1b2c3d: required check Completion has not started"; a run may not have started yet), and
-  then needs you, with the check, the head and how to start it ("required check Completion did not run at
-  a1b2c3d: run its workflow on the PR's branch, or push"; a `ci` need with the PR's link). A failing
+  back to the rollup; the approval's gate did not read GitHub's list at all, so a colleague's head in the
+  same repository was approved on the same SUCCESS. The stored checks list every check of the head
+  (`Complete`, read by workflow file), so such an entry is missing there, not passed; but missing is not
+  always "did not run where it must". What counts as required at a head: a check GitHub's list (its
+  rulesets or branch protection, read for the default branch) names, for a PR into that branch
+  (`enforcedMissing`: matched by its exact name, a check run or a status, as GitHub gave the checks, those
+  `ignore_checks` hides included, since they ran), which every reader now holds (the look's rule 11 and
+  the approval's CI gate, whose rollup or `required_checks` still decides the rest); and a `[[repo]]
+  required_checks` entry in a repository that sets `ci_dispatch`, the operator's word that its CI may not
+  run at a head (`requiredCIOf`'s strict). Anywhere else an entry with no run leaves the decision to the
+  rollup, as before: GitHub's list is the default branch's, and a PR stacked on another branch merges
+  without it; a `required_checks` list GitHub does not enforce (a private repository on the free plan) may
+  name a workflow whose path filters skip an infra-only head, which GitHub merges and which would
+  otherwise hold the approval, and need you, for good. Rule 11 of the look: a missing required check waits,
+  as CI at the head, while a check of the head has not finished and until `settle_max` after the push
+  ("CI at a1a1a1a: required check Completion has not started"), and then needs you, with the check, the
+  head and how to start it ("required check Completion did not run at a1a1a1a: run its workflow on the
+  PR's branch, or push"; a `ci` need with the PR's link). The running checks count because GitHub creates
+  a job's check run only once the jobs it `needs:` end: `Completion` appears four to seventeen minutes
+  into a run, and a run longer than `settle_max` would read as "did not run" while it ran. A failing
   required check still comes first. The automatic approval's CI gate (`ciGateOf`, which its standing
   re-gate and the judge's approval gate share) holds such a head with "its head's required checks have not
   run (magnum approves it once they pass)", a wait of the `ci_runs` class (so a standing approval stands,
-  the judge's approval goes through as for checks that run, and the status comment says the approval waits
-  for the checks); before, the rollup decided, and the SUCCESS of the other checks approved a head GitHub
-  would not merge. An entry that names only checks `ignore_checks` leaves out still does not count
-  (`seenRequired`): the check ran, magnum does not see it, and the rollup derived from the rest decides as
-  "ignore_checks makes magnum treat a named check as absent wherever it reads CI" said. The board already
-  showed such a check as "– Completion not run" (`requiredCheck`), and the factory screen shows the look's
-  verdict, so neither changed. Where the stored checks cannot say (another commit's, a list GitHub cut at
-  100, a read before checks were kept by workflow file) the rollup still decides. Rejected: a fixed grace
-  instead of `settle_max` (the settle already says when a head's reviewers and checks should have moved,
-  and it is the operator's key); reading the head's workflow runs to tell "not triggered" from "not started"
-  (one more read per head, and the answer is the same after the grace). Tests, failing first:
-  TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen, TestTheLookNeverCallsAHeadIdleWhoseRequiredCheckDidNotRun,
-  TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval (its third case was
-  TestNoRequiredChecksKeepsEveryCheckCounting's "required_checks names no check on the head", which wanted
-  the rollup's refusal).
+  the judge's approval goes through as for checks that run, the status comment says the approval waits
+  for the checks, and a required check that fails as on the base tip waits beside it); before, the rollup
+  decided, and the SUCCESS of the other checks approved a head GitHub would not merge. An entry that names
+  only checks `ignore_checks` leaves out still does not count (`seenRequired`): the check ran, magnum does
+  not see it, and the rollup derived from the rest decides as "ignore_checks makes magnum treat a named
+  check as absent wherever it reads CI" said. The board already showed such a check as "– Completion not
+  run" (`requiredCheck`), and the factory screen shows the look's verdict, so neither changed. Where the
+  stored checks cannot say (another commit's, a list GitHub cut at 100, a read before checks were kept by
+  workflow file) the rollup still decides. Rejected: a fixed grace instead of `settle_max` (the settle
+  already says when a head's reviewers and checks should have moved, and it is the operator's key); reading
+  the head's workflow runs to tell "not triggered" from "not started" (one more read per head, where a
+  check still running at the head already says a run is under way); counting only the running checks of
+  the `ci_dispatch` workflow (the check may come from another app's run, and waiting on a stuck check is
+  what the rollup did before); holding every missing `required_checks` entry (the path-filter case above);
+  matching GitHub's list as globs (a context may hold `[`, which `path.Match` reads as a class). Tests,
+  failing first: TestTheLookNeverCallsAHeadIdleWhoseRequiredCheckDidNotRun,
+  TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen, TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval
+  (its "beside a failing unrequired check" case was TestNoRequiredChecksKeepsEveryCheckCounting's
+  "required_checks names no check on the head"; without `ci_dispatch` that case keeps its old answer in
+  TestARequiredCheckWithNoRunThatNothingEnforcesLeavesTheRollupToDecide),
+  TestARequiredCheckWithNoRunThatNothingEnforcesLeavesTheLookToTheRollup,
+  TestTheLookLeavesTheRequiredChecksOfAStackedPRToTheRollup,
+  TestTheLookLeavesAConfiguredCheckWithNoRunToTheRollupWithoutCIDispatch,
+  TestAMissingRequiredCheckWaitsWhileTheHeadsChecksRun and TestTheLookWaitsForARequiredCheckWhileTheHeadsChecksRun;
+  TestARequiredCheckWithNoRunWaitsAsChecksThatRun, TestARequiredCheckIgnoreChecksNamesIsNotMissingWhereItRan,
+  TestTheIgnoredChecksNoteReadsTheRequiredListAsTheGateDoes and TestRequiredChecksCountOnlyTheChecksMagnumSees's
+  `ci_dispatch` case pin the wait's class, the standing approval and the ignored checks.
 
 - **The look starts the CI workflow a head's required check did not run in, where the repository names it**
   (2026-11-07, the same audit; off by default). What the operator did by hand six times, the look can do:
   `[[repo]] ci_dispatch = "ci.yml"` names the workflow file that produces the repository's required checks,
-  and where rule 11 finds a required check that did not run at an own PR's head (past `settle_max`, all else
-  idle), the look starts that workflow on the PR's branch (`github.Client.DispatchWorkflow`, a
-  `workflow_dispatch` run; the branch, the PR's text, goes on gh's stdin, never in argv or an event) and
-  waits `settle_max` for its run: "CI at a1b2c3d: magnum started ci.yml at 14:05, as required check
-  Completion did not run". The safe way, by its parts. Who: the daemon, as the watch's poll identity (else
-  its review identity), a client it already holds and the identity whose GitHub budget the look reads;
-  never the fixer's pane, which pushes as the fix identity and runs a model's commands. What runs: GitHub
-  runs the workflow as the branch has it and refuses (HTTP 422) one whose file there has no
-  `workflow_dispatch` trigger, so "the workflow allows a dispatch on the branch" is GitHub's own answer, not
-  a guess from a YAML read magnum would need a parser for; a PR whose files include `.github/workflows/` or
-  `.github/actions/` (`changesWorkflow`, the approval's own test), or whose files GitHub did not list whole,
-  is never started, since its CI would run its own workflow with the repository's secrets; a PR the look
-  does not cover (a draft, a fork, `F`, a mute) never reaches rule 11. How often: once per head, recorded
-  before the call (`pr.<id>.ci_dispatch`: the head, the workflow, the time, and how it ended), so a crash
-  between the record and the call starts nothing twice; a new head starts again. Recorded:
+  and where rule 11 finds a required check that did not run at an own PR's head (nothing runs at the head,
+  past `settle_max`, all else idle), the look starts that workflow on the PR's branch
+  (`github.Client.DispatchWorkflow`, a `workflow_dispatch` run; the branch, the PR's text, goes on gh's
+  stdin, never in argv or an event) and waits for its run while the head's checks run and for `settle_max`
+  after the start: "CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion did not
+  run". The safe way, by its parts. Who: the daemon, as the watch's poll identity (else its review
+  identity), a client it already holds and the identity whose GitHub budget the look reads; never the
+  fixer's pane, which pushes as the fix identity and runs a model's commands. What runs: GitHub runs the
+  workflow as the branch has it and refuses (HTTP 422) one whose file there has no `workflow_dispatch`
+  trigger, so "the workflow allows a dispatch on the branch" is GitHub's own answer, not a guess from a YAML
+  read magnum would need a parser for; a PR whose files at the head (the list of that head, never an older
+  one's) include `.github/workflows/` or `.github/actions/` (`changesWorkflow`, the approval's own test),
+  or whose files GitHub did not list whole, or whose branch magnum does not know, is never started, since
+  its CI would run its own workflow with the repository's secrets; a PR the look does not cover (a draft, a
+  fork, `F`, a mute) never reaches rule 11, and a PR stacked on another branch is no PR GitHub's list
+  holds. How often: once per head, recorded before the call (`pr.<id>.ci_dispatch`: the head, the
+  workflow, the time, and how it ended), so a crash between the record and the call starts nothing twice;
+  a new head starts again, the record of an older head being none of its own. Recorded:
   `fix.open_ci_dispatch` (info), `fix.open_ci_dispatch_failed` (warn, GitHub's status only: its message
   can name the branch) and `fix.open_ci_dispatch_refused` (info). A start GitHub refused, a refused PR and a
   run that never came within `settle_max` of the start need you as before, with the reason in the
@@ -3143,16 +3172,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   hold the look's other writes), not for `[daemon] quiet_hours` (a CI run is no agent's time). A dry run
   starts nothing. Rejected: starting CI as soon as the head moved (a PR that opens runs it by itself, and
   the grace keeps a double run off that head; rule 11 also means nothing else is left open, so a fix loop
-  that would push again has not started); starting it while magnum's review of the head still runs (it
-  would save the review's time, but a review with findings starts a loop that pushes a new head, and the
-  run would be spent); a fixed workflow file guessed from the base tip's checks (the base may not run CI on
-  push, and the operator's key is plain); dispatching as the fix identity (a dedicated fix App rarely has
-  Actions: write). Tests, failing first: TestTheLookStartsTheCIWorkflowOnceForAHeadWhoseRequiredCheckDidNotRun,
+  that would push again has not started); starting it while the head's checks run (a `needs:` job appears
+  only at the end of a run, and the second run would not cancel the first: their concurrency groups
+  differ); starting it while magnum's review of the head still runs (it would save the review's time, but
+  a review with findings starts a loop that pushes a new head, and the run would be spent); a fixed
+  workflow file guessed from the base tip's checks (the base may not run CI on push, and the operator's
+  key is plain); dispatching as the fix identity (a dedicated fix App rarely has Actions: write). Tests,
+  failing first: TestTheLookStartsTheCIWorkflowOnceForAHeadWhoseRequiredCheckDidNotRun,
   TestTheRunOfTheStartedCIWorkflowEndsTheWait, TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows,
   TestAFailedStartOfTheCIWorkflowNeedsYouAndIsNotRepeated, TestTheStartOfTheCIWorkflowWaitsForThePauseAndTheBudget,
   TestDispatchWorkflowPostsTheBranchOnStdin, TestDispatchWorkflowRefusals, TestCIDispatchIsOffUnlessARepoNamesItsWorkflow
   and TestABadCIDispatchFailsValidation; TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows pins the new
-  key in the pooled repository's texts.
+  key in the pooled repository's texts; TestTheLookStartsTheCIWorkflowOncePerHeadByThatHeadsFiles and
+  TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck pin the head's own file list and start record,
+  the cut file list and the unknown branch.
 
 ## Screens and commands
 

@@ -168,7 +168,7 @@ func TestChecksAnEarlierBuildStoredAreReadAgain(t *testing.T) {
 	if ci := h.pr(2).CI; ci == nil || ci.ByWorkflowFile {
 		t.Fatalf("an earlier build's checks = %+v", ci)
 	}
-	if _, ok := requiredCIOf(h.pr(2), []string{"workflow:CI"}); ok {
+	if _, ok := requiredCIOf(h.pr(2), []string{"workflow:CI"}, true); ok {
 		t.Fatal("the gate decides by an earlier build's checks")
 	}
 	before := len(h.ghCalls("details:"))

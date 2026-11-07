@@ -25,9 +25,9 @@ import (
 // whose every run on pr's stored head checks is one ignore names. Such an
 // entry ran on the head, and magnum does not see it (seenPR): it is
 // neither passed nor missing there, so it does not count; the entries that
-// name no run at all stay, and requiredCIOf reads them as missing. nil when
-// none is left: the rollup derived from the checks magnum sees decides, as
-// without a list.
+// name no run at all stay, and requiredCIOf reads them as missing where it
+// is strict. nil when none is left: the rollup derived from the checks
+// magnum sees decides, as without a list.
 func seenRequired(pr store.PR, required, ignore []string) []string {
 	if pr.CI == nil || len(ignore) == 0 {
 		return required

@@ -36,9 +36,11 @@ package engine
 //     operator's own push;
 //  10. a head the reviewers have not settled on waits;
 //  11. red required CI needs you, pending required CI waits; a required
-//     check with no run at a head whose checks magnum read whole waits
-//     until settle_max after the push and then needs you (it did not run:
-//     a workflow that runs only when the PR opens), never green; a merge
+//     check with no run at a head whose checks magnum read whole, where
+//     GitHub requires it on the PR's base or the repository sets
+//     ci_dispatch, waits while a check of the head runs and until
+//     settle_max after the push, and then needs you (it did not run: a
+//     workflow that runs only when the PR opens), never green; a merge
 //     with the base the look could not check is unknown;
 //  12. otherwise the PR is idle: nothing open at its head.
 //
@@ -296,41 +298,51 @@ type openSettle struct {
 
 // openCI is what the head's required checks say (openCIOf): what failed
 // ("required check rspec", "CI" for the rollup; "" for nothing), whether
-// one still runs or the rollup has not started, and the required entries
-// that name no run on the head (missing: whose checks magnum read whole,
-// openMissingCI).
+// one still runs or the rollup has not started, the required entries that
+// name no run on the head (missing: whose checks magnum read whole,
+// openMissingCI), and, beside those, whether a check of the head has not
+// finished (running: a job GitHub creates only once the jobs it needs end
+// has no run until then).
 type openCI struct {
 	failed  string
 	pending bool
 	missing []string
+	running bool
 }
 
 // openCIOf is rule 11's CI of pr's head by required, its repository's
 // required checks (store.Store.RequiredChecks: the [[repo]] block's, else
-// GitHub's for the default branch): a known empty list leaves CI out; the
-// head's stored checks decide where they can (requiredCIOf: an entry that
-// names no run there is missing, never green), and GitHub's rollup
-// otherwise, a required list with no rollup at all (no check has run)
-// waiting for it.
-func openCIOf(pr store.PR, required store.RequiredChecks) openCI {
+// GitHub's for the default branch), and enforced, the checks GitHub
+// requires on the PR's base with no run at the head (enforcedMissing): a
+// known empty list leaves CI out; the head's stored checks decide where
+// they can (requiredCIOf, where strict, the [[repo]] list of a repository
+// that sets ci_dispatch, makes an entry with no run missing, never green),
+// and GitHub's rollup otherwise, a required list with no rollup at all (no
+// check has run) waiting for it. An enforced check is missing either way.
+func openCIOf(pr store.PR, required store.RequiredChecks, strict bool, enforced []string) openCI {
 	if required.Source != "" && len(required.Checks) == 0 {
 		return openCI{}
 	}
-	if r, ok := requiredCIOf(pr, required.Checks); ok {
+	ci := openCI{missing: enforced}
+	if r, ok := requiredCIOf(pr, required.Checks, strict); ok {
 		if len(r.failed) > 0 {
 			return openCI{failed: "required check " + r.failed[0].Name}
 		}
-		return openCI{pending: r.running, missing: r.missing}
+		ci.pending, ci.missing = r.running, withMissing(r.missing, enforced)
+	} else {
+		switch deref(pr.CIState) {
+		case "FAILURE", "ERROR":
+			return openCI{failed: "CI"}
+		case "PENDING", "EXPECTED":
+			ci.pending = true
+		case "":
+			ci.pending = len(required.Checks) > 0
+		}
 	}
-	switch deref(pr.CIState) {
-	case "FAILURE", "ERROR":
-		return openCI{failed: "CI"}
-	case "PENDING", "EXPECTED":
-		return openCI{pending: true}
-	case "":
-		return openCI{pending: len(required.Checks) > 0}
+	if len(ci.missing) > 0 && pr.CI != nil {
+		ci.running = slices.ContainsFunc(pr.CI.Checks, func(c store.CheckResult) bool { return c.State == store.CheckPending })
 	}
-	return openCI{}
+	return ci
 }
 
 // openFacts are what decideOpen decides from, all gathered by the look:

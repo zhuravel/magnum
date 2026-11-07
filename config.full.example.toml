@@ -187,16 +187,20 @@ databases = [
 #                                         # matches; the board shows their state, and the automatic approval
 #                                         # counts only these checks (a failing check outside the list never holds
 #                                         # it; without the key every check counts), one run per workflow file and
-#                                         # name, a commit status apart from a check run of its name; one with no
-#                                         # run on the head holds it (magnum approves once it ran and passed), and
-#                                         # autofix = "open" never calls such a head green; it never approves a PR
-#                                         # that changes .github/workflows/ or .github/actions/ on its own
+#                                         # name, a commit status apart from a check run of its name; with
+#                                         # ci_dispatch set, one with no run on the head holds it (magnum approves
+#                                         # once it ran and passed), and autofix = "open" never calls such a head
+#                                         # green; without it such an entry leaves the decision to every check (a
+#                                         # workflow its path filters skip); it never approves a PR that changes
+#                                         # .github/workflows/ or .github/actions/ on its own
 # ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone
 # ci_dispatch = "ci.yml"                  # the workflow file that produces the required checks, for a CI that
 #                                         # runs only when a PR opens: under autofix = "open" magnum starts it on
 #                                         # the PR's branch, as the watch's poll identity, once per head on an own
-#                                         # PR whose required check did not run there (past settle_max), never on
-#                                         # a PR that changes its own workflows or actions; default: none
+#                                         # PR whose required check did not run there (once nothing runs there,
+#                                         # past settle_max), never on a PR that changes its own workflows or
+#                                         # actions; it also makes a required_checks entry with no run at the head
+#                                         # count as not run; default: none
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -17,12 +18,26 @@ func requiredCompletion(h *harness) {
 	h.gh.required = map[string][]string{"talkable/talkable": {"Completion"}}
 }
 
+// othersChecks are the checks of the other apps, passed: the rollup of a
+// head with no run of CI is SUCCESS.
+func othersChecks() []github.Check {
+	return []github.Check{ciCheck("Pronto", "pronto", github.CheckPassed), ciCheck("", "Devin Review", github.CheckPassed)}
+}
+
+// openOwn has GitHub list the operator's PR #2 as spec, into main (the
+// default branch, whose required checks GitHub's list is) unless spec
+// names its base, beside the baseline.
+func (h *harness) openOwn(spec prSpec) {
+	h.t.Helper()
+	spec.n, spec.author, spec.base = 2, "zhuravel", cmp.Or(spec.base, "main")
+	h.open(prSpec{n: 1, head: "base1"}, spec)
+}
+
 // othersPassed opens PR #2 at head with the checks of the other apps
 // passed and no run of CI: the rollup is SUCCESS.
 func (h *harness) othersPassed(head string) {
 	h.t.Helper()
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: head, author: "zhuravel", ci: "SUCCESS",
-		checks: []github.Check{ciCheck("Pronto", "pronto", github.CheckPassed), ciCheck("", "Devin Review", github.CheckPassed)}})
+	h.openOwn(prSpec{head: head, ci: "SUCCESS", checks: othersChecks()})
 }
 
 // The live case: an own PR whose repository requires Completion, and whose
@@ -46,14 +61,21 @@ func TestTheLookNeverCallsAHeadIdleWhoseRequiredCheckDidNotRun(t *testing.T) {
 
 // ciDispatched is a harness for the look's start of the CI workflow:
 // requiredCompletion, [[repo]] ci_dispatch = "ci.yml", and a head whose
-// files are paths (Details' list).
+// files are paths (Details' list), at which the other apps' checks passed.
 func ciDispatched(t *testing.T, paths ...string) *harness {
+	t.Helper()
+	return ciDispatchedAt(t, prSpec{head: fixHead, ci: "SUCCESS", checks: othersChecks()}, paths...)
+}
+
+// ciDispatchedAt is ciDispatched with the operator's PR #2 opened as spec
+// (openOwn), reviewed clean.
+func ciDispatchedAt(t *testing.T, spec prSpec, paths ...string) *harness {
 	t.Helper()
 	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion, func(h *harness) {
 		h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", CIDispatch: "ci.yml"})
 		h.gh.defaultFiles = paths
 	})
-	h.othersPassed(fixHead)
+	h.openOwn(spec)
 	h.tick() // reviewed clean
 	return h
 }
@@ -188,4 +210,169 @@ func TestTheStartOfTheCIWorkflowWaitsForThePauseAndTheBudget(t *testing.T) {
 	if v.dispatch {
 		t.Error("asked to start it below the GitHub floor")
 	}
+}
+
+// A required check its workflow creates only when the jobs it needs end
+// (Completion `needs:` the other CI jobs) has no run at the head while that
+// workflow runs, however long it takes: the look waits for it as CI at the
+// head, past settle_max too, never says that it did not run and starts
+// nothing; once it ran and passed the PR is idle.
+func TestTheLookWaitsForARequiredCheckWhileTheHeadsChecksRun(t *testing.T) {
+	passed, pending := github.CheckPassed, github.CheckPending
+	h := ciDispatched(t, "app/models/order.rb")
+	checks := append(othersChecks(), ciCheck("CI", "RSpec (3)", pending), ciCheck("CI", "Checks", passed))
+	h.openOwn(prSpec{head: fixHead, ci: "PENDING", checks: checks})
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+		t.Fatalf("dispatched %q while the head's CI ran", calls)
+	}
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: required check Completion has not started")
+	h.advance(30 * time.Minute) // a slow run
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: required check Completion has not started")
+
+	checks[2].State = passed
+	checks = append(checks, ciCheck("CI", "Completion", pending))
+	h.openOwn(prSpec{head: fixHead, ci: "PENDING", checks: checks})
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a")
+	checks[4].State = passed
+	h.openOwn(prSpec{head: fixHead, ci: "SUCCESS", checks: checks})
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+		t.Fatalf("dispatched %q", calls)
+	}
+}
+
+// GitHub's list is the default branch's: a PR stacked on another branch
+// merges without its checks, so one with no run at such a PR's head leaves
+// rule 11 to the rollup, as before, and magnum starts nothing for it.
+func TestTheLookLeavesTheRequiredChecksOfAStackedPRToTheRollup(t *testing.T) {
+	h := ciDispatchedAt(t, prSpec{head: fixHead, base: "feature-a", ci: "SUCCESS", checks: othersChecks()}, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+		t.Fatalf("dispatched %q for a stacked PR", calls)
+	}
+}
+
+// A [[repo]] required_checks list GitHub does not enforce may name a
+// workflow whose path filters skip a head (an infra-only PR gets only its
+// plan checks, and GitHub merges it): without ci_dispatch an entry with no
+// run at the head leaves rule 11 to the rollup, as before.
+func TestTheLookLeavesAConfiguredCheckWithNoRunToTheRollupWithoutCIDispatch(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), withRequiredChecks("workflow:CI"))
+	h.openOwn(prSpec{head: fixHead, ci: "SUCCESS", checks: []github.Check{ciCheck("Infra", "infra-plan", github.CheckPassed)}})
+	h.tick() // reviewed clean
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+}
+
+// A required check ignore_checks names ran at the head though magnum does
+// not count it: it is never missing, whether GitHub's rulesets require it
+// or a [[repo]] required_checks list of a repository that sets ci_dispatch
+// names it, and the PR is idle once the rest passed.
+func TestARequiredCheckIgnoreChecksNamesIsNotMissingWhereItRan(t *testing.T) {
+	for name, mod := range map[string]func(*harness){
+		"GitHub's rulesets": func(h *harness) { h.gh.required = map[string][]string{"talkable/talkable": {"Vendor Gates"}} },
+		"required_checks":   withRequiredDispatch("Vendor Gates"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), mod, func(h *harness) {
+				h.cfg.Watches[0].IgnoreChecks = []string{"Vendor Gates"}
+			})
+			h.openOwn(prSpec{head: fixHead, ci: "SUCCESS", checks: append(othersChecks(), vendorCheck(github.CheckPassed))})
+			h.tick() // reviewed clean
+			h.pastSettle()
+			h.tick()
+			h.tick()
+			h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+			if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+				t.Fatalf("dispatched %q for a check that ran", calls)
+			}
+		})
+	}
+}
+
+// The start reads the head's own file list: a stored list of an older head
+// (the poll has not listed the new head's yet, and that head may add a
+// workflow) starts nothing, and the look starts it once the head's list is
+// stored. A new head after a recorded start is started again, once: the
+// start of an older head is not this head's.
+func TestTheLookStartsTheCIWorkflowOncePerHeadByThatHeadsFiles(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want one for a1a1a1a", n)
+	}
+	pr := h.pr(2)
+	pr.HeadSHA = fixPushed // pushed, its files not listed yet
+	if s, ok := h.e.openStartCI(h.ctx, h.repo(), h.cfg.Watches[0], pr, "ci.yml", "required check Completion"); ok || s != (ciStart{}) {
+		t.Fatalf("start = %+v, %v with the files of the older head", s, ok)
+	}
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d with the files of the older head", n)
+	}
+
+	h.othersPassed(fixPushed)
+	h.tick() // reviewed clean
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	want := []string{"dispatch:talkable/talkable:ci.yml@feature", "dispatch:talkable/talkable:ci.yml@feature"}
+	if calls := h.ghCalls("dispatch:"); !slices.Equal(calls, want) {
+		t.Fatalf("dispatches = %q, want one for each head", calls)
+	}
+	h.wantOpen(OpenWaits, "CI at b2b2b2b: magnum started ci.yml at ")
+	h.tick()
+	if n := len(h.ghCalls("dispatch:")); n != 2 {
+		t.Fatalf("dispatches = %d, want one for each head", n)
+	}
+}
+
+// magnum starts the workflow only on a PR whose files GitHub listed whole
+// (a file past the list may change a workflow) and whose branch it knows:
+// it refuses any other once for the head (fix.open_ci_dispatch_refused),
+// and the PR needs you.
+func TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck(t *testing.T) {
+	t.Run("files GitHub did not list whole", func(t *testing.T) {
+		// a head of its own: the registry keeps the first list of a head
+		h := ciDispatchedAt(t, prSpec{head: fixPushed, ci: "SUCCESS", checks: othersChecks(), filesTruncated: true}, "app/models/order.rb")
+		h.pastSettle()
+		h.tick()
+		h.tick()
+		if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+			t.Fatalf("dispatched %q", calls)
+		}
+		h.wantOpen(OpenNeedsYou, "did not run at b2b2b2b: magnum does not start ci.yml (GitHub did not list every file of the PR)")
+		if evs := h.fixEvents("fix.open_ci_dispatch_refused"); len(evs) != 1 {
+			t.Fatalf("fix.open_ci_dispatch_refused events = %+v, want one", evs)
+		}
+	})
+	t.Run("a branch magnum does not know", func(t *testing.T) {
+		h := ciDispatched(t, "app/models/order.rb")
+		pr := h.pr(2)
+		pr.HeadRef = nil
+		s, ok := h.e.openStartCI(h.ctx, h.repo(), h.cfg.Watches[0], pr, "ci.yml", "required check Completion")
+		if !ok || s.Refused != "the PR's branch is not known" || !s.At.IsZero() {
+			t.Fatalf("start = %+v, %v; want refused", s, ok)
+		}
+		if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+			t.Fatalf("dispatched %q", calls)
+		}
+		if evs := h.fixEvents("fix.open_ci_dispatch_refused"); len(evs) != 1 {
+			t.Fatalf("fix.open_ci_dispatch_refused events = %+v, want one", evs)
+		}
+	})
 }

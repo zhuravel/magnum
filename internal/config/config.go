@@ -768,7 +768,10 @@ type Repo struct {
 	// store.RequiredNames). The board shows their state, and the automatic
 	// approval's CI gate counts only the checks they name (see
 	// Config.RequiredChecks), one run per workflow file and name, a commit
-	// status apart from a check run of its name.
+	// status apart from a check run of its name. An entry with no run at a
+	// head counts as not run there (never passed) only where CIDispatch is
+	// set; else it leaves the decision to every check, as a workflow whose
+	// path filters skip the head would.
 	RequiredChecks []string `toml:"required_checks"`
 
 	// IgnoreChecks adds checks to the covering watch's ignore_checks for
@@ -786,7 +789,8 @@ type Repo struct {
 	// that produces the repository's required checks, for a CI that runs
 	// only when a PR opens: under autofix = "open" magnum starts it, at most
 	// once per head, on an own PR whose required check did not run at its
-	// head (see Config.CIDispatch). "" (the default) starts nothing.
+	// head (see Config.CIDispatch), and a RequiredChecks entry with no run
+	// at a head counts as not run there. "" (the default) starts nothing.
 	CIDispatch string `toml:"ci_dispatch"`
 }
 

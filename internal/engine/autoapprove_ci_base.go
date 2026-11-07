@@ -27,8 +27,9 @@ import (
 )
 
 // The CI refusals of autoGateRefusal (the card's words). ciMissingRefusal
-// is a required check with no run on the head (requiredCIOf), which waits
-// as checks that run do, in the same class (publicCIRuns).
+// is a required check with no run on the head (requiredCIOf,
+// enforcedMissing), which waits as checks that run do, in the same class
+// (publicCIRuns).
 const (
 	ciFailsRefusal   = "its head's checks fail (magnum approves it once they pass)"
 	ciRunsRefusal    = "its head's checks have not finished (magnum approves it once they pass)"
@@ -101,29 +102,42 @@ func (a ciAnswer) refusal() autoRefusal {
 // rollup derived from the rest of the head's complete checks): where the
 // repository sets required_checks, the checks it names decide in place of
 // the rollup (requiredCIRefusal: one outside the list neither fails nor
-// runs, and one the list names with no run on the head waits; an entry
-// that names only ignored checks does not count, seenRequired); else a
-// rollup that fails goes to the base-tip comparison (failingCIRefusal), one
-// that runs waits (ciRunsRefusal), and any other (passed, none) lets it
-// through. A rollup the registry never read (a NULL
-// ci_state: the poll's CI read failed, or the PR was never fetched in
-// full) lets it through too, as pipeline.CIUnknown, so that the judge's
-// event can tell "never read" from "passed".
+// runs, and one the list names with no run on the head waits where the
+// repository sets ci_dispatch, else leaves the gate to the rollup; an
+// entry that names only ignored checks does not count, seenRequired); else
+// a rollup that fails goes to the base-tip comparison (failingCIRefusal),
+// one that runs waits (ciRunsRefusal), and any other (passed, none) lets
+// it through. Either way a check GitHub requires on the PR's base with no
+// run at the head (enforcedMissing) waits (ciMissingRefusal): GitHub will
+// not merge that head, though the list GitHub's rulesets declare decides
+// nothing else here. A rollup the registry never read (a NULL ci_state:
+// the poll's CI read failed, or the PR was never fetched in full) lets it
+// through too, as pipeline.CIUnknown, so that the judge's event can tell
+// "never read" from "passed".
 func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
+	enforced := e.enforcedMissingOf(ctx, c.Repo, c.PR)                                       // autoapprove_required.go
 	required := seenRequired(c.PR, e.cfg.RequiredChecks(c.Repo), e.cfg.IgnoreChecks(c.Repo)) // ignore_checks.go
 	c.PR = e.seenPR(c.Repo, c.PR)
 	pr := c.PR
-	if r, ok := requiredCIOf(pr, required); ok {
+	if r, ok := requiredCIOf(pr, required, e.cfg.CIDispatch(c.Repo) != ""); ok {
+		r.missing = withMissing(r.missing, enforced)
 		return e.requiredCIRefusal(ctx, c, r) // autoapprove_required.go: the rollup does not decide
 	}
+	missing := ciAnswer{why: ciMissingRefusal, waits: true, state: pipeline.CIRunning}
 	if pr.CIState == nil {
+		if len(enforced) > 0 {
+			return missing
+		}
 		return ciAnswer{state: pipeline.CIUnknown}
 	}
 	switch strings.ToUpper(*pr.CIState) {
 	case "FAILURE", "ERROR":
-		return e.failingCIRefusal(ctx, c)
+		return e.failingCIRefusal(ctx, c, len(enforced) > 0)
 	case "PENDING", "EXPECTED":
 		return ciAnswer{why: ciRunsRefusal, waits: true, state: pipeline.CIRunning}
+	}
+	if len(enforced) > 0 {
+		return missing
 	}
 	return ciAnswer{state: pipeline.CIGreen}
 }
@@ -131,16 +145,17 @@ func (e *Engine) ciGateOf(ctx context.Context, c store.RepoPR) ciAnswer {
 // failingCIRefusal is the CI gate's answer for c, whose head's rollup
 // fails: failsLikeTheBase for every check the head's stored checks (pr.CI,
 // read on the head, every one listed; those ignore_checks names left out
-// by ciGateOf) fail and whether any of them still
-// runs (GitHub's rollup fails as soon as one check fails); ciFailsRefusal
-// when it cannot tell (no checks stored for the head, or not every one).
-func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR) ciAnswer {
+// by ciGateOf) fail and whether any of them still runs (GitHub's rollup
+// fails as soon as one check fails) or a check GitHub requires has no run
+// (missing); ciFailsRefusal when it cannot tell (no checks stored for the
+// head, or not every one).
+func (e *Engine) failingCIRefusal(ctx context.Context, c store.RepoPR, missing bool) ciAnswer {
 	ci := c.PR.CI
 	if ci == nil || ci.SHA != c.PR.HeadSHA || !ci.Complete {
 		return ciAnswer{why: ciFailsRefusal, state: pipeline.CIRed}
 	}
 	var failed []store.CheckResult
-	running := false
+	running := missing
 	for _, ch := range ci.Checks {
 		switch ch.State {
 		case store.CheckFailed:

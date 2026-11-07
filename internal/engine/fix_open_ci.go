@@ -6,11 +6,13 @@ package engine
 // repository whose CI workflow runs only when a PR opens gives every later
 // push, the fixer's included, no run of the check GitHub requires, and the
 // operator started it by hand. Rule 11 of the look waits for such a check
-// until settle_max after the push, and then needs you, or, where the
-// repository's [[repo]] ci_dispatch names the workflow that produces its
-// required checks, starts that workflow on the PR's branch once for the
-// head (openStartCI) as the watch's poll identity, the daemon's own client
-// (never the fixer's pane), and waits settle_max for its run. GitHub runs
+// while a check of the head runs (a job that needs others is created only
+// when they end) and until settle_max after the push, and then needs you,
+// or, where the repository's [[repo]] ci_dispatch names the workflow that
+// produces its required checks, starts that workflow on the PR's branch
+// once for the head (openStartCI) as the watch's poll identity, the
+// daemon's own client (never the fixer's pane), and waits for its run
+// while the head's checks run and settle_max after the start. GitHub runs
 // the workflow as the branch has it and refuses one without a
 // workflow_dispatch trigger there; a PR that changes its own workflows or
 // actions is never started (its CI would run its own code with the
@@ -79,17 +81,23 @@ func (e *Engine) openCIStartOf(ctx context.Context, full string, pr store.PR, ci
 }
 
 // openMissingCI is rule 11's verdict v of f's head, at which the required
-// checks f.ci.missing names have no run (their words: missingWhat): a head
-// younger than settle_max waits for them to start (CI at the head, until
-// settle_max after its move); an older one did not run them, and needs you
-// with how to start them, unless the look starts the workflow ci_dispatch
-// names (f.ciWorkflow): it asks for the start (v.dispatch) when nothing
-// holds it, waits for the end of `magnum pause` and for the GitHub budget,
-// and waits settle_max for the run of a start it made (f.ciStart). A start
-// that failed, one magnum refused, and one whose run never came need you.
+// checks f.ci.missing names have no run (their words: missingWhat): while a
+// check of the head has not finished (f.ci.running: a job that needs others
+// is created only once they end, however long they run) and until
+// settle_max after the head moved, it waits for them to start (CI at the
+// head). After that they did not run, and it needs you with how to start
+// them, unless the look starts the workflow ci_dispatch names
+// (f.ciWorkflow): it asks for the start (v.dispatch) when nothing holds it,
+// waits for the end of `magnum pause` and for the GitHub budget, and waits
+// for the run of a start it made (f.ciStart) while the head's checks run
+// and until settle_max after the start. A start that failed, one magnum
+// refused, and one whose run never came need you.
 func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
 	waits := func(why string, until time.Time) OpenVerdict {
+		if !until.After(f.now) {
+			until = time.Time{} // unknown: until the head's checks end
+		}
 		v.Verdict, v.Why, v.Until = OpenWaits, "CI at "+short+": "+why, until
 		return v
 	}
@@ -98,10 +106,18 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		v.Verdict, v.Why = OpenNeedsYou, fmt.Sprintf("%s did not run at %s: %s", what, short, how)
 		return v
 	}
-	if due := f.pr.HeadChangedAt.Add(f.settle.max); f.now.Before(due) {
+	wf, s := f.ciWorkflow, f.ciStart
+	started := !s.At.IsZero() && s.Failed == ""
+	startedWhy := func() string {
+		return fmt.Sprintf("magnum started %s at %s, as %s did not run", wf, waitClock(s.At, f.now), what)
+	}
+	due := f.pr.HeadChangedAt.Add(f.settle.max)
+	switch {
+	case f.ci.running && started:
+		return waits(startedWhy(), s.At.Add(f.settle.max))
+	case f.ci.running || f.now.Before(due):
 		return waits(what+" has not started", due)
 	}
-	wf, s := f.ciWorkflow, f.ciStart
 	const byHand = "; run it on the PR's branch"
 	switch {
 	case wf == "":
@@ -110,16 +126,12 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return needsYou(fmt.Sprintf("magnum does not start %s (%s)%s", wf, s.Refused, byHand))
 	case s.Failed != "":
 		return needsYou(fmt.Sprintf("magnum's start of %s failed (%s)%s", wf, s.Failed, byHand))
-	case !s.At.IsZero() && f.now.Before(s.At.Add(f.settle.max)):
-		return waits(fmt.Sprintf("magnum started %s at %s, as %s did not run", wf, waitClock(s.At, f.now), what), s.At.Add(f.settle.max))
-	case !s.At.IsZero():
+	case started && f.now.Before(s.At.Add(f.settle.max)):
+		return waits(startedWhy(), s.At.Add(f.settle.max))
+	case started:
 		return needsYou(fmt.Sprintf("magnum started %s at %s and no run came%s", wf, waitClock(s.At, f.now), byHand))
 	case f.pause != "":
-		var until time.Time
-		if f.pauseUntil.After(f.now) {
-			until = f.pauseUntil
-		}
-		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the pause ends", what, wf), until)
+		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the pause ends", what, wf), f.pauseUntil)
 	case f.low:
 		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the GitHub budget allows", what, wf), time.Time{})
 	}
