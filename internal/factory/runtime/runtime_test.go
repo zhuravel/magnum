@@ -553,11 +553,11 @@ func TestAFallbackContinuationWithoutARunPausesTheRole(t *testing.T) {
 }
 
 // A continuation herdr may have typed (its delivery unknown) is the
-// ledger's to settle, as any prompt's: no event, and the stage holds the
-// role while it is unknown. Its limited run is settled as a pause all the
-// same: once the continuation is proven never to have arrived, its entry is
-// no and the stage, rebuilt, reads the role's last run as that pause and
-// sends the prompt to go on (lastRunEvent).
+// ledger's to settle, as any prompt's: no event, and its entry stays
+// unknown. Its limited run is settled as the agent's pause all the same:
+// the stored reason is what a stage, rebuilt once the continuation is
+// proven never to have arrived, reads as a pause (the stage's side is
+// lastRunEvent's, tested with the stage).
 func TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind(t *testing.T) {
 	g := newRig(t)
 	first := g.modelLimited(func(string) error {
