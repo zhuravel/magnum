@@ -277,11 +277,13 @@ type Engine struct {
 	// the drain's budget counts from it (drainLeft).
 	drainAt atomic.Int64
 
-	// Seams: the signal subscription, and the process table that names the
-	// daemon that holds the lock.
-	notify     func(c chan<- os.Signal, sig ...os.Signal)
-	stopNotify func(c chan<- os.Signal)
-	procs      engine.Processes
+	// Seams: the signal subscription, the process table that names the
+	// daemon that holds the lock, and whether the command that asked for a
+	// drain still runs (engine.DrainerAlive).
+	notify       func(c chan<- os.Signal, sig ...os.Signal)
+	stopNotify   func(c chan<- os.Signal)
+	procs        engine.Processes
+	drainerAlive func(pid int) bool
 
 	// What follows is the loop's own: Run's goroutine (or a test's) reads
 	// and writes it, except the heavy slots (heavyMu), which a stage's
@@ -427,6 +429,19 @@ type Engine struct {
 	alerts     alertDelivery
 	screenLive func(FocusPayload) bool
 
+	// The work a restart would cut (beginWork), by its sequence, and the
+	// record of it the daemon keeps for `magnum factory install`
+	// (work.json: workSaved is what it last wrote, workClosed that it stopped
+	// writing as the daemon stops), with drainHeld, the drain install asked
+	// for that the daemon holds ("" for none; takeDrain). workMu guards them:
+	// the work's goroutines end their own.
+	workMu     sync.Mutex
+	work       map[int]WorkItem
+	workSeq    int
+	workSaved  []byte
+	workClosed bool
+	drainHeld  string
+
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
 	// (stopBackground), so none of it outlives the daemon.
@@ -450,6 +465,7 @@ func New(d Deps) *Engine {
 		notify:       ossignal.Notify,
 		stopNotify:   ossignal.Stop,
 		procs:        engine.SystemProcesses(),
+		drainerAlive: engine.DrainerAlive,
 		panics:       map[int64]int{},
 		lastFail:     map[int64]*stageFails{},
 		publishFails: map[int64]publishFail{},
@@ -475,6 +491,7 @@ func New(d Deps) *Engine {
 		keptMem:      map[int64]keptUnwritten{},
 		lockPoll:     specsLockPoll,
 		reviews:      map[int64]*localRound{},
+		work:         map[int]WorkItem{},
 		magnumNotes:  map[int64]string{},
 		parkOwed:     map[int64]bool{},
 		roundCap:     localRoundCap,
@@ -580,6 +597,10 @@ func (e *Engine) Run(ctx context.Context) error {
 // drainBudget of the signal, and it returns nil, so launchd (KeepAlive on a
 // failed exit only) starts the daemon again only after a crash.
 func (e *Engine) RunLocked(ctx context.Context) error {
+	// The record of the work a restart would cut comes before the pidfile:
+	// install reads it for the daemon the pidfile names.
+	e.saveWork()
+	defer e.closeWork()
 	pidFile := e.d.Layout.FactoryPid()
 	if err := fsx.WriteFileAtomic(pidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		return fmt.Errorf("factory: pidfile: %w", err)
@@ -588,6 +609,7 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	// The work off the loop ends with the daemon: a claim's setup or install
 	// must not go on in a copy after it exits.
 	defer e.stopBackground()
+	e.endDrainAtStart(ctx)
 
 	stop := make(chan struct{})
 	sigs := make(chan os.Signal, 4)
@@ -678,6 +700,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.wake(now)
 	defer e.alive()
 	defer e.saveHolds() // the screen draws the holds in force
+	e.takeDrain(ctx)    // before anything starts in this tick
 	var errs []error
 
 	tasks, err := e.reg.Tasks(ctx)
@@ -1056,9 +1079,9 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 }
 
 // beginEffect is how a stage begins an external effect (a push, a PR):
-// never while the daemon drains.
+// never while the daemon drains (a stop's drain, or install's).
 func (e *Engine) beginEffect(ctx context.Context, key, kind string, taskID int64) (registry.Effect, bool, error) {
-	if e.draining.Load() {
+	if e.startsHeld() {
 		return registry.Effect{}, false, heldError{who: holdRestart, what: drainWhat}
 	}
 	return e.reg.BeginEffect(ctx, key, kind, taskID)

@@ -375,12 +375,12 @@ func loopCycles(cs []registry.Cycle) []registry.Cycle {
 
 // startRound starts round `round` of the loop in copy c, in cycle cy (a
 // round that runs again: a restart, a hang, a refusal) or in a new one,
-// once it may: not while the daemon drains, and after the waits of the
-// lowest priority (reviewWait) and a heavy slot. Its roles are the watch's
-// (reviewRoles), its case the change at the task's proven head
-// (localCase); the round runs off the loop (launchRound).
+// once it may: not while the daemon drains (a stop's drain, or install's),
+// and after the waits of the lowest priority (reviewWait) and a heavy slot.
+// Its roles are the watch's (reviewRoles), its case the change at the
+// task's proven head (localCase); the round runs off the loop (launchRound).
 func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *registry.Cycle, round int) error {
-	if e.draining.Load() {
+	if e.startsHeld() {
 		return nil
 	}
 	if r := e.roundOf(t.ID); r != nil {
@@ -646,22 +646,25 @@ func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHea
 
 // launchRound runs local round lc of cycle cy off the loop, holding the
 // heavy slot (release frees it), on the engine's context and within
-// roundCap, while the task waits saying the round runs. Its result goes to
-// the task's directory as local-review-<n>.json, however it ended: a round
-// over its cap as a timeout, one that could not run as an error, a panic
-// too. A drain, or the factory stopping it (sweepRounds), writes nothing:
-// the round runs again in its cycle.
+// roundCap, while the task waits saying the round runs and the record of
+// the work a restart would cut names it. Its result goes to the task's
+// directory as local-review-<n>.json, however it ended: a round over its
+// cap as a timeout, one that could not run as an error, a panic too. A
+// drain, or the factory stopping it (sweepRounds), writes nothing: the
+// round runs again in its cycle.
 func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.Cycle, lc evalrun.LocalCase, release func()) {
 	rctx, cancel := context.WithTimeout(e.bgCtx, e.roundCap)
 	r := &localRound{cycle: cy.ID, n: cy.N, round: lc.Round, done: make(chan struct{}), cancel: cancel}
 	e.reviewMu.Lock()
 	e.reviews[t.ID] = r
 	e.reviewMu.Unlock()
+	endWork := e.beginWork(WorkRound, t.ID, fmt.Sprintf("local review round %d of %s", lc.Round, TaskKey(t)))
 	e.waitOn(ctx, t, waitReview, fmt.Sprintf("round %d of the local review runs", lc.Round))
 	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("round %d (cycle %d) at %s: %s", lc.Round, cy.N, short(lc.HeadSHA),
 		strings.Join(lc.Roles, ", ")))
 	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewRoundFile(cy.N))
 	e.bg.Go(func() {
+		defer endWork()
 		defer close(r.done)
 		defer cancel()
 		defer release()

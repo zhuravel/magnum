@@ -16556,6 +16556,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFailedMergeMethodsReadLeavesThemOut; then TestTheMergeMethodsReadIsBoundedAndItsTimeoutKept, which a fake
   GitHub that does not answer drives through the bound (an engine seam shortens it), and which fails on a read
   with no deadline, on a timeout not kept and on a cut read kept; and TestAMergeMethodsReadThatKeepsFailingWarnsOnce.
+- **`magnum factory install` no longer cuts the work in flight: it refuses, `--drain` waits, `--now` cuts**
+  (2026-11-07, roadmap R39, approved by the operator). This reverses the entry of 2026-11-03 ("The factory
+  daemon heals its usual faults"), where install always drained the daemon at once: that drain ends the tick,
+  but it cuts the work the daemon runs off its loop. 14 installs after the first task cut 2 rounds of the
+  local review (18 and 12 minutes of 4 agents, each run again from its start) and a precheck. The design is
+  `magnum daemon-restart`'s and `magnum install`'s, in their words:
+  - The daemon keeps `factory/work.json`, the work a restart would cut, under its pid: a round of the local
+    review, a check of a head (the proof and the precheck), a claim of a copy and a talk with a liaison, each
+    with its task and its start. Each starts and ends its own entry. The record is written before the
+    pidfile and removed as the daemon stops. An agent's turn in a pane is not in it: it outlives the restart,
+    and the next daemon binds the pane again.
+  - Install reads the record only while a factory daemon runs. It refuses while anything runs, naming each
+    item and what the restart would do to it, unless `--now`. A record that is missing or another daemon's
+    fails closed, so a daemon of the build before this one needs `--now` once.
+  - `--drain` writes `factory/drain.json` (`engine.Drain`: since when, and the command's pid) and wakes the
+    daemon. The tick that takes it starts nothing new: no launch, effect, round, check, claim or talk, the
+    same gates as a stop's drain, while the loop goes on and collects what ends. The record then names the
+    drain, and install reloads the job only once it does and nothing runs. A tick that began before the
+    drain may still start a round, and only the record proves that none will.
+  - ctrl+c, the timeout (default 2h) or a failed install lifts the drain. The daemon lifts a drain whose
+    command is gone (`engine.DrainerAlive`), and the daemon that starts ends the drain it was waited for.
+    A daemon that started again during the wait ended the drain, so install writes it again.
+  Rejected: the CLI guessing the work in flight from the registry (open review cycles, check and claim
+  events with no end: a crash leaves them open and the cycle stays open through its fix); a `kv` table and a
+  migration for the drain (the factory CLI cannot migrate under the daemon it drains, and the other
+  migrations of this wave would race for its number); reusing `drainRounds`, which reads the review
+  registry and does not wait for the daemon to take the drain; and holding only the cut work during a
+  drain (the stop's drain already holds launches and effects, and one gate is simpler). Tests, failing
+  first: TestTheWorkRecordNamesTheClaimAndTheTalkThatRun, TestTheWorkRecordNamesTheCheckThatRuns,
+  TestTheWorkRecordNamesTheLocalRoundThatRuns, TestAnInstallDrainHoldsNewWorkUntilItIsLifted,
+  TestADrainWhoseCommandIsGoneIsLifted, TestTheRestartEndsTheInstallDrain,
+  TestFactoryInstallRefusesWhileTheFactoryRunsWork, TestFactoryInstallNowCutsTheWork,
+  TestFactoryInstallRefusesAFactoryDaemonThatKeepsNoRecord, TestFactoryInstallDrainWaitsForTheWorkThenReloads,
+  TestFactoryInstallDrainWaitsUntilTheDaemonHoldsTheDrain, TestFactoryInstallDrainGivesUpAndLiftsTheDrain,
+  TestFactoryInstallDrainInterruptedLiftsTheDrain, TestFactoryInstallDrainAsksAgainForADrainARestartEnded and
+  TestFactoryInstallFlagConflicts.
 
 ## Learned rules
 

@@ -37,8 +37,9 @@ const (
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
 	HoldMemory = "memory"
-	// holdRestart is the drain's reason in a heldError; it is no Hold and
-	// no task waits on it (the daemon exits).
+	// holdRestart is the drain's reason in a heldError (a stop's drain, or
+	// the one `magnum factory install --drain` asks for); it is no Hold and
+	// no task waits on it (the daemon exits, or install restarts it).
 	holdRestart = "restart"
 )
 
@@ -443,7 +444,7 @@ func (e *Engine) memoryPressure(ctx context.Context) string {
 // mayLaunch reports whether a launch may start now; who and what are the
 // hold that stops it, as the task's wait says it.
 func (e *Engine) mayLaunch() (who, what string, ok bool) {
-	if e.draining.Load() {
+	if e.startsHeld() {
 		return holdRestart, drainWhat, false
 	}
 	for _, kind := range []string{HoldHerdr, HoldInfra, HoldDisk, HoldMemory} {

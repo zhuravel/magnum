@@ -31,15 +31,17 @@ import (
 
 // talkRequest begins request q's talk off the loop. A task has one talk at
 // a time: a second request about it stays pending until the first ended
-// (it then finds the liaison the first started). A draining daemon starts
-// no agent, so its requests stay pending for the next daemon.
+// (it then finds the liaison the first started), and the record of the
+// work a restart would cut names it while it runs. A draining daemon (a
+// stop's drain, or install's) starts no agent, so its requests stay
+// pending for the next daemon, or until the drain is lifted.
 func (e *Engine) talkRequest(ctx context.Context, q registry.Request) {
 	var p TalkPayload
 	if err := decode(q, &p); err != nil {
 		e.complete(ctx, q, err, "")
 		return
 	}
-	if e.draining.Load() || !e.beginTalk(p.TaskID) {
+	if e.startsHeld() || !e.beginTalk(p.TaskID) {
 		return
 	}
 	// The pending requests were read at the start of the tick: the talk of
@@ -48,7 +50,13 @@ func (e *Engine) talkRequest(ctx context.Context, q registry.Request) {
 		e.endTalk(p.TaskID)
 		return
 	}
+	key := fmt.Sprintf("task %d", p.TaskID)
+	if t, err := e.reg.TaskByID(ctx, p.TaskID); err == nil {
+		key = TaskKey(t)
+	}
+	endWork := e.beginWork(WorkTalk, p.TaskID, "talk with the liaison of "+key)
 	e.bg.Go(func() {
+		defer endWork()
 		defer e.endTalk(p.TaskID) // after the request is answered: no tick sees it pending without the mark
 		e.runTalk(q, p)
 	})

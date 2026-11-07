@@ -11852,6 +11852,14 @@ const (
     Request kinds.
 
 const (
+	WorkRound = "round" // a round of the local review
+	WorkCheck = "check" // the factory's proof and precheck of a head
+	WorkClaim = "claim" // a claim of a copy
+	WorkTalk  = "talk"  // a talk with a task's liaison
+)
+    The kinds of WorkItem.
+
+const (
 	ChoicePush     = "push"
 	ChoiceSendBack = "send_back"
 	ChoiceDrop     = "drop"
@@ -12044,6 +12052,10 @@ func KickWith(l paths.Layout, procs engine.Processes) (int, error)
     KickWith is Kick with the processes it asks about given, so a test needs no
     real process.
 
+func LiftDrain(l paths.Layout, value string) error
+    LiftDrain removes the drain asked of the factory daemon of layout l when it
+    is value; a drain asked since by another command, or none, is left alone.
+
 func Lock(l paths.Layout) (unlock func(), err error)
     Lock takes the factory daemon's lock (Layout.FactoryLock), held for the
     daemon's whole life; another daemon holding it is ErrRunning, naming that
@@ -12074,12 +12086,9 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
-func QuestionKey(text string) string
-    QuestionKey is how a question is told from the questions the task asked,
-    here and in the CLI: its text, lowercased, without backticks and double
-    quotes, its runs of spaces made one and its end punctuation trimmed (an
-    agent's copy of a question changes those), so that a question two roles
-    raise in the same words is one question, whichever role raised it.
+func ReadDrain(l paths.Layout) (string, error)
+    ReadDrain is the drain asked of the factory daemon of layout l ("" for
+    none).
 
 func ReadSeen(l paths.Layout) (time.Time, error)
     ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
@@ -12106,6 +12115,11 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
     "task <id>".
+
+func WriteDrain(l paths.Layout, value string) error
+    WriteDrain asks the factory daemon of layout l for a drain: value is
+    engine.Drain.Value (since when, and the asking command's pid), and it
+    replaces any drain asked before.
 
 func WriteReviewCandidate(l paths.Layout) (string, error)
     WriteReviewCandidate writes the review candidate the factory's local rounds
@@ -12378,13 +12392,10 @@ type GitHub interface {
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
-	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
-    repo now (the account active in your gh config dir), and MergeMethods the
-    ways repo's settings let a PR merge, which the prompts of the roles that ask
-    you questions name.
+    repo now (the account active in your gh config dir).
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
@@ -12450,14 +12461,6 @@ type Magnum interface {
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
     factory's local review sees it (Magnum).
-
-type MergeMethods struct{ Merge, Squash, Rebase bool }
-    MergeMethods are the ways a repository's GitHub settings let a pull request
-    merge: a merge commit, a squash, a rebase.
-
-func (m MergeMethods) String() string
-    String is the methods m allows, as a prompt names them: "squash", "merge
-    commit or squash", "merge commit, squash or rebase"; "" for none.
 
 type MigrationFlag struct {
 	Path                                   string
@@ -12596,11 +12599,6 @@ type PromptData struct {
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
 	Tracker string
-	// MergeMethods are the ways Repo's GitHub settings let a pull request
-	// merge ("squash", "merge commit, squash or rebase": MergeMethods.String),
-	// which the prompts of the roles that ask the operator questions name;
-	// "" while no read of them went through.
-	MergeMethods string
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the
@@ -12918,6 +12916,29 @@ type TalkPayload struct {
 }
     TalkPayload is a ReqTalk: you want to talk with the liaison of task TaskID.
     Surface is where you asked, for the record.
+
+type WorkItem struct {
+	Kind  string    `json:"kind"`
+	Task  int64     `json:"task"`
+	What  string    `json:"what"`
+	Since time.Time `json:"since"`
+}
+    WorkItem is one piece of work a restart would cut: its kind (Work*),
+    its task, what it is in words ("local review round 2 of PR-12345") and since
+    when it runs.
+
+type WorkRecord struct {
+	PID   int        `json:"pid"`
+	Drain string     `json:"drain,omitempty"`
+	Work  []WorkItem `json:"work"`
+}
+    WorkRecord is work.json (paths.Layout.FactoryWork): the pid of the daemon
+    that wrote it, the drain it holds (drain.json's value it took; "" for none)
+    and the work it runs that a restart would cut, oldest first.
+
+func ReadWork(l paths.Layout) (WorkRecord, bool, error)
+    ReadWork reads the record the factory daemon of layout l keeps; ok is false
+    when there is none (no daemon of this build runs, or it stopped).
 
 ```
 
@@ -20165,6 +20186,11 @@ func (l Layout) FactoryDB() string
     FactoryDB is the factory's own registry (factory.db in the factory directory
     of the data directory), separate from the review registry.
 
+func (l Layout) FactoryDrain() string
+    FactoryDrain is drain.json, the drain `magnum factory install --drain`
+    asks of the factory daemon (when it started and the command's pid), beside
+    FactoryDB.
+
 func (l Layout) FactoryFocus() string
     FactoryFocus is focus.json, the factory screen's latest focus report as
     the factory daemon keeps it (its toasts hold while a screen that runs has
@@ -20199,6 +20225,11 @@ func (l Layout) FactoryTaskDir(id int64) string
 
 func (l Layout) FactoryTasks() string
     FactoryTasks is the root of the factory's task directories.
+
+func (l Layout) FactoryWork() string
+    FactoryWork is work.json, the work the factory daemon runs that a restart
+    would cut and the drain it holds, as the daemon last wrote them (`magnum
+    factory install` reads it first), beside FactoryDB.
 
 func (l Layout) GhConfigDir(id string) string
     GhConfigDir is identity id's gh config directory in GhRoot.

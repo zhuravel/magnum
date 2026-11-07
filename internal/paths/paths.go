@@ -289,6 +289,16 @@ func (l Layout) FactoryAlerts() string { return filepath.Join(l.factoryDir(), "a
 // factory daemon last saw them (the screen draws them), beside FactoryDB.
 func (l Layout) FactoryHolds() string { return filepath.Join(l.factoryDir(), "holds.json") }
 
+// FactoryWork is work.json, the work the factory daemon runs that a restart
+// would cut and the drain it holds, as the daemon last wrote them (`magnum
+// factory install` reads it first), beside FactoryDB.
+func (l Layout) FactoryWork() string { return filepath.Join(l.factoryDir(), "work.json") }
+
+// FactoryDrain is drain.json, the drain `magnum factory install --drain`
+// asks of the factory daemon (when it started and the command's pid),
+// beside FactoryDB.
+func (l Layout) FactoryDrain() string { return filepath.Join(l.factoryDir(), "drain.json") }
+
 // FactoryTasks is the root of the factory's task directories.
 func (l Layout) FactoryTasks() string { return filepath.Join(l.factoryDir(), "tasks") }
 

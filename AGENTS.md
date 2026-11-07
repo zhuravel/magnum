@@ -34,8 +34,9 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
   The factory daemon (`magnum factory daemon`, its own launchd job) does the same with the
   `prompts/factory-*.md` its roles name, and writes this build's review prompts and judge skill as its
   local review's candidate, once at its start: an edit or a new factory migration reaches it only after
-  `make build && bin/magnum factory install`, which drains it and starts it on the new build, and until
-  then the factory CLI refuses to migrate the factory registry under it.
+  `make build && bin/magnum factory install --drain`, which waits for the local review rounds, checks,
+  claims and talks in flight and starts it on the new build (plain `install` refuses while they run,
+  `--now` cuts them), and until then the factory CLI refuses to migrate the factory registry under it.
 - **Latest Go and latest dependencies.** Charm v2 (`charm.land/*`), never the v1 modules; `os.Root`
   for root-confined file writes; `slices`, `maps`, `min`, `max`. No new dependencies without a reason
   in the commit message.

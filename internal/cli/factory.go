@@ -22,7 +22,7 @@ import (
 
 const (
 	factoryUsage          = "factory <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
-	factoryInstallUsage   = "install [--dry-run]"
+	factoryInstallUsage   = "install [--now | --drain [--timeout D]] [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"
 )
@@ -57,26 +57,39 @@ func newFactoryCmd(c *Context) *cobra.Command {
 
 func newFactoryInstallCmd(c *Context) *cobra.Command {
 	var dry bool
+	var f restartFlags
 	cmd := newCommand("", factoryInstallUsage, "write and load the factory daemon's launchd agent",
 		"Create the state directories, write the factory daemon's launchd agent (~/Library/LaunchAgents/"+
 			factory.LaunchLabel+".plist, running `magnum factory daemon`, its launchd output in "+
 			"logs/factory-launchd.log) and load it: bootout, then bootstrap, once. A running factory daemon "+
 			"drains (it starts no new launch or effect and ends its tick) and launchd starts it again on this "+
 			"build. The binary launchd will run checks the configuration first (`<binary> config`); the install "+
-			"is refused when it fails. --dry-run prints the plist and the launchctl calls.",
-		func(pos []string) int { return runFactoryInstallCmd(c, dry, pos) })
+			"is refused when it fails. The restart cuts the work the factory daemon runs off its loop, so while a "+
+			"round of the local review, a check of a task's head (the proof and the precheck), a claim of a copy "+
+			"or a talk with a liaison runs the install is refused, naming them (they would run again from their "+
+			"start); --drain starts nothing new in the factory (no launch, effect, round, check, claim or talk), "+
+			"waits for those in flight and for the daemon to hold the drain (a line every 15s, at most --timeout, "+
+			"default 2h), then installs; --now installs at once. ctrl+c, or closing the terminal, stops the wait and "+
+			"lifts the drain, and the factory daemon lifts a drain whose command is gone. A factory daemon of an "+
+			"older build keeps no record of its work, so the install is refused for it unless --now. --dry-run "+
+			"prints the plist and the launchctl calls.",
+		func(pos []string) int { return runFactoryInstallCmd(c, dry, f, pos) })
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print what would be written and run; change nothing")
+	addRestartFlags(cmd, &f)
+	cmd.Flags().Lookup("now").Usage = "install even while the factory daemon runs a local review round, a check, a claim of a copy or a talk (they start over)"
+	cmd.Flags().Lookup("drain").Usage = "start nothing new in the factory, wait for the work in flight, then install"
 	return cmd
 }
 
-func runFactoryInstallCmd(c *Context, dry bool, pos []string) int {
-	if !daemonGroupNoArgs(c, "factory install", "factory "+factoryInstallUsage, pos) {
+func runFactoryInstallCmd(c *Context, dry bool, f restartFlags, pos []string) int {
+	if !daemonGroupNoArgs(c, "factory install", "factory "+factoryInstallUsage, pos) ||
+		!f.check(c, "factory install", "factory "+factoryInstallUsage) {
 		return 2
 	}
 	if !loadDaemonGroupConfig(c, "factory install") {
 		return 1
 	}
-	ctx, stop := signalContext()
+	ctx, stop := daemonSys.signals()
 	defer stop()
 	out := c.Stdout
 	run := daemonSys.runner(dry, out)
@@ -110,7 +123,14 @@ func runFactoryInstallCmd(c *Context, dry bool, pos []string) int {
 			uid, factory.LaunchLabel, uid, factory.LaunchLabel, uid, path)
 		return 0
 	}
+	// The restart cuts what the factory daemon runs off its loop: refused
+	// while anything runs, unless --now; --drain waits for it.
+	lift, ok := guardFactoryRestart(ctx, c, run, f)
+	if !ok {
+		return 1
+	}
 	if err := launchd.Install(ctx, run, uid, path, plist); err != nil {
+		lift()
 		return fail("%v\nfix: check `launchctl print gui/%d/%s`, %s and %s, then re-run magnum factory install",
 			err, uid, factory.LaunchLabel, c.Layout.FactoryLog(), factoryLaunchdLog(c.Layout))
 	}
@@ -262,16 +282,9 @@ func orDash(s string) string {
 // none: a pidfile whose process ps shows as something else is stale (its
 // pid was reused).
 func runningFactoryDaemon(c *Context) int {
-	pid, err := daemonSys.factoryPID(c.Layout)
+	pid, err := factoryDaemonPID(context.Background(), c, daemonSys.runner(false, nil))
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory status: warning: %v\n", err)
-		return 0
-	}
-	if pid == 0 {
-		return 0
-	}
-	comm, args, err := engine.ProcessCommand(context.Background(), daemonSys.runner(false, nil), pid)
-	if err == nil && !factory.LooksLikeFactoryDaemon(comm, args) {
 		return 0
 	}
 	return pid
@@ -302,7 +315,7 @@ func refuseWhileDaemonRuns(l paths.Layout) func(from, to int) error {
 			return nil
 		}
 		return fmt.Errorf("the factory registry is at schema %d and this build needs %d, but the factory daemon (pid %d) "+
-			"still runs on it; migrating now would break the daemon's queries\nfix: run `magnum factory install` (it "+
-			"restarts the factory daemon on this build, which migrates), then retry", from, to, pid)
+			"still runs on it; migrating now would break the daemon's queries\nfix: run `magnum factory install --drain` (it "+
+			"waits for the work in flight and restarts the factory daemon on this build, which migrates), then retry", from, to, pid)
 	}
 }

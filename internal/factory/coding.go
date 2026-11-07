@@ -295,7 +295,8 @@ func (e *Engine) forgetCheck(id int64, x *headCheck) {
 // files specs) of task t in copy c: the proof and the precheck (proof), or
 // the precheck alone. The first call for a head starts the check off the
 // loop, as the task's heavy work (a slot of heavy_stages: the task waits
-// "heavy: …" without one) and never while the daemon drains; every call
+// "heavy: …" without one), named in the record of the work a restart
+// would cut while it runs, and never while the daemon drains; every call
 // while it runs is not ready; the call after it ended has its result, kept
 // for that head. A check of another head (or other specs) is stopped, or,
 // ended, dropped, and the next call starts one for this head.
@@ -316,7 +317,7 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 		}
 		e.forgetCheck(t.ID, x)
 	}
-	if e.draining.Load() {
+	if e.startsHeld() {
 		return checkResult{}, false
 	}
 	release, ok := e.heavy(ctx, t, waitPrecheck)
@@ -325,16 +326,18 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 	}
 	cctx, cancel := context.WithCancel(e.bgCtx)
 	x = &headCheck{head: head, specs: specs, proof: proof, done: make(chan struct{}), cancel: cancel}
-	what := "the precheck"
+	what, work := "the precheck", "precheck of "
 	if proof {
-		what = "the proof and the precheck"
+		what, work = "the proof and the precheck", "proof and precheck of "
 	}
 	e.checksMu.Lock()
 	e.checks[t.ID] = x
 	e.checkNotes[t.ID] = waitPrecheck + ": starts " + what + " of " + short(head)
 	e.checksMu.Unlock()
+	endWork := e.beginWork(WorkCheck, t.ID, work+TaskKey(t))
 	e.event(ctx, t.ID, "check", registry.PhaseBegin, "checks "+short(head)+" off the loop: "+what)
 	e.bg.Go(func() {
+		defer endWork()
 		defer close(x.done)
 		defer cancel()
 		defer release()

@@ -142,7 +142,7 @@ func (e *Engine) claimCopy(ctx context.Context, t registry.Task) (Copy, error) {
 // wait w of the claim before it (nil for a first claim): at most [factory]
 // max_active claims run at once, as no more tasks are at work. The claim
 // runs on a context of its own under the engine's (a stop of the task or
-// a drain ends it).
+// a drain ends it), named in the record of the work a restart would cut.
 func (e *Engine) beginClaim(ctx context.Context, t registry.Task, w *claimWait) error {
 	if who, what, ok := e.mayLaunch(); !ok {
 		if who != holdRestart {
@@ -170,8 +170,10 @@ func (e *Engine) beginClaim(ctx context.Context, t registry.Task, w *claimWait) 
 	}
 	e.claims[t.ID] = run
 	e.claimMu.Unlock()
+	endWork := e.beginWork(WorkClaim, t.ID, "claim of a copy for "+TaskKey(t))
 	e.event(ctx, t.ID, "claim", registry.PhaseBegin, text)
 	e.bg.Go(func() {
+		defer endWork()
 		defer close(run.done)
 		defer cancel()
 		defer func() {
