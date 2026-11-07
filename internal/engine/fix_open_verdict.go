@@ -11,7 +11,9 @@ package engine
 //
 //  1. a PR the look does not cover (a draft, a fork, fix off, a muted PR, a
 //     watch that leaves own PRs out, a baseline or ineligible PR) is off;
-//  2. a PR that needs attention needs you;
+//  2. a PR that needs attention needs you, unless its attention is the
+//     fixer's decision calls alone and the whole read shows your decision
+//     in each one's thread (decided, fix_decide.go): the decisions are work;
 //  3. a running fix loop is fixing; a held one waits; an unreadable one
 //     needs you (`magnum abort` clears it);
 //  4. a stalemate needs you;
@@ -392,6 +394,10 @@ type openFacts struct {
 	// start of it at the head (zero: none; fix_open_ci.go).
 	ciWorkflow string
 	ciStart    ciStart
+	// decided: the attention is the fixer's decision calls alone, and the
+	// whole read shows your decision in each one's thread (callsDecided),
+	// so it stops no start (rule 2).
+	decided bool
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -449,7 +455,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	v.Open = len(work) + len(needs)
 	v.Needs = openNeeds(needs)
 	switch {
-	case f.attention != "":
+	case f.attention != "" && !f.decided:
 		return say(OpenNeedsYou, "needs your attention ("+f.attention+")"), nil, needs
 	case f.fixBad:
 		return say(OpenNeedsYou, fmt.Sprintf("the fix row of #%d cannot be read: `magnum abort` clears it", f.pr.Number)), nil, needs
@@ -594,6 +600,9 @@ func offWords(off string) string {
 func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 	pr := f.pr
 	due, running := slices.Contains(store.DueStates, pr.State), slices.Contains(store.InFlightStates, pr.State)
+	if f.decided { // needs attention for the fixer's calls alone, which you decided: no round is due (rule 2)
+		due = false
+	}
 	if deref(pr.ReviewedSHA) == pr.HeadSHA && !due && !running {
 		return "", false, time.Time{}
 	}

@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -53,14 +54,18 @@ const ReqFix = "fix"
 // you did what a loop left you (Done: the PR goes back to reviewed with no
 // round, fix_done.go; Seen is the attention you saw, the PR's last_error
 // when you asked, and a PR whose attention changed since is refused).
-// None of Off, On and Done starts a loop.
+// None of Off, On and Done starts a loop. Decide posts your replies in the
+// threads the fixer left you, as you, then starts the loop, whose fixer
+// builds them as your decisions (fix_decide.go); it goes without Off, On and
+// Done.
 type FixPayload struct {
 	PRTarget
-	DryRun bool   `json:"dry_run,omitempty"`
-	Off    bool   `json:"off,omitempty"`
-	On     bool   `json:"on,omitempty"`
-	Done   bool   `json:"done,omitempty"`
-	Seen   string `json:"seen,omitempty"`
+	DryRun bool          `json:"dry_run,omitempty"`
+	Off    bool          `json:"off,omitempty"`
+	On     bool          `json:"on,omitempty"`
+	Done   bool          `json:"done,omitempty"`
+	Seen   string        `json:"seen,omitempty"`
+	Decide []FixDecision `json:"decide,omitempty"`
 }
 
 const (
@@ -299,7 +304,12 @@ func fixRunningSentence(st FixState) string {
 // the request (answerYielding). That refusal carries the other reviewers'
 // items prepareFix read, and the request's pass after the yield gets them
 // back as carried: it runs every refusal again but reads GitHub no second
-// time at the same head.
+// time at the same head. --decide (FixPayload.Decide) is refused as
+// decideCheck says, and under a drain, before anything is posted; it posts
+// your replies only once prepareFix found nothing to refuse (and never in a
+// dry run or before a whiteboard job's yield, whose pass after it posts
+// them), then starts the loop, which reads the other reviewers again so
+// that its fixer gets your replies as decisions.
 func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *externalRead) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -307,6 +317,8 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	subject := prSubject(repo, pr.Number)
 	switch {
+	case len(p.Decide) > 0 && (p.Done || p.Off || p.On):
+		return "", errors.New("magnum fix: --decide goes alone, without --done, --off or --on")
 	case p.Done && (p.Off || p.On):
 		return "", errors.New("magnum fix: --done goes alone, without --off or --on")
 	case p.Done:
@@ -338,7 +350,17 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	var job *fixJob
 	dry := p.DryRun || e.d.DryRun
+	var plan *decidePlan // fix_decide.go: the replies --decide posts before the start
+	if len(p.Decide) > 0 {
+		pl, err := e.decideCheck(ctx, repo, pr, p.Decide)
+		if err != nil {
+			return "", err
+		}
+		plan, carried = &pl, &pl.read
+	}
 	switch {
+	case e.draining(ctx) && plan != nil: // a drain began since decideCheck asked
+		return "", errors.New("the daemon drains for a restart: run `magnum fix --decide` again after it; nothing was posted")
 	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
 		return e.holdFix(ctx, pr, dry, fixBy, fixHold{})
 	case dry:
@@ -352,19 +374,37 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 			return "", err
 		}
 		var carry any
-		if pre.others != nil {
+		if pre.others != nil && plan == nil { // a --decide's read lacks the replies it posts after the yield
 			carry = pre.others
 		}
 		return "", heldByWhiteboard(repo, pr, carry)
+	case plan != nil: // every refusal first, then your replies, then the start, which reads them as decisions
+		if _, err := e.prepareFix(ctx, pr, FixState{}, fixPinWouldUnpin, carried, false); err != nil {
+			return "", fmt.Errorf("%w; nothing was posted", err)
+		}
+		if plan.note, err = e.decidePost(ctx, repo, pr, *plan); err != nil {
+			return "", err
+		}
+		job, err = e.startFix(ctx, pr, fixBy, FixState{}, nil)
 	default:
 		job, err = e.startFix(ctx, pr, fixBy, FixState{}, carried)
+	}
+	posted := func(res string) string { // what the answer says of the replies --decide posted
+		if plan == nil || plan.note == "" {
+			return res
+		}
+		return res + "; " + plan.note
 	}
 	var budget *githubBudgetError
 	switch {
 	case errors.Is(err, errFixDraining): // a drain began since draining was asked
-		return e.holdFix(ctx, pr, false, fixBy, fixHold{})
+		res, err := e.holdFix(ctx, pr, false, fixBy, fixHold{})
+		return posted(res), err
 	case errors.As(err, &budget): // github_floor.go: held until the budget recovers
-		return e.holdFix(ctx, pr, false, fixBy, fixHold{low: &budget.low, job: budget.job})
+		res, err := e.holdFix(ctx, pr, false, fixBy, fixHold{low: &budget.low, job: budget.job})
+		return posted(res), err
+	case err != nil && plan != nil && plan.note != "":
+		return "", fmt.Errorf("%s, but no loop started: %w", plan.note, err)
 	case err != nil:
 		return "", err
 	}
@@ -373,10 +413,16 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	what := fmt.Sprintf("%s %s, cycle %d of %d", job.role.Name, job.fixes(), max(job.state.Cycle, 1), job.state.Cap)
 	res := fmt.Sprintf("fixing %s: %s; `magnum abort %s` stops it", job.label(), what, job.label())
-	if dry {
+	switch {
+	case dry && plan != nil:
+		e.rec.Record(ctx, subject, "fix", what)
+		res = fmt.Sprintf("dry run: would reply in %s as %s, then start fixing %s: %s, then a forced re-review of what it pushes",
+			textx.Count(len(plan.decide), "thread", "threads"), plan.login, job.label(), what)
+	case dry:
 		e.rec.Record(ctx, subject, "fix", what)
 		res = fmt.Sprintf("dry run: would start fixing %s: %s, then a forced re-review of what it pushes", job.label(), what)
 	}
+	res = posted(res)
 	notes := job.notes
 	if off {
 		notes = append(notes, "fix is off for this PR: this requested loop runs anyway")
@@ -687,8 +733,11 @@ func (e *Engine) reviewStood(ctx context.Context, pr store.PR, sum store.ReviewS
 // job as it started, for the caller's answer (the job's own goes on
 // changing). A new loop autofix asks for refuses a muted PR (a mute stops
 // every automatic round) and one that needs attention (an autofix loop
-// over it would end with its own words in place of the attention's); a
-// `magnum fix` runs on both.
+// over it would end with its own words in place of the attention's),
+// unless that attention is the fixer's decision calls alone and the other
+// reviewers' items prepareFix read show your decision in each one's thread
+// (callsDecided, fix_decide.go): nothing else is asked of you, and the
+// loop builds them; a `magnum fix` runs on both.
 func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixState, carried *externalRead) (*fixJob, error) {
 	pin := fixPinRefuses
 	if by == fixBy && prev.Cycle == 0 {
@@ -697,17 +746,23 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	if e.draining(ctx) {
 		return nil, errFixDraining
 	}
+	overAttention := false
 	if by == autofixBy && prev.Cycle == 0 {
 		switch {
 		case pr.Muted:
 			return nil, fmt.Errorf("PR #%d is muted: autofix starts no loop on it (`magnum unmute` lifts the mute)", pr.Number)
-		case pr.State == store.PRNeedsAttention:
+		case pr.State == store.PRNeedsAttention && !attention.FixAsks(deref(pr.LastError)):
 			return nil, fmt.Errorf("PR #%d needs attention: autofix starts no loop over it (`magnum fix` does)", pr.Number)
+		case pr.State == store.PRNeedsAttention:
+			overAttention = true // the fixer's calls: decided below, once the other reviewers' items are read
 		}
 	}
 	job, err := e.prepareFix(ctx, pr, prev, pin, carried, !e.d.DryRun)
 	if err != nil {
 		return nil, err
+	}
+	if overAttention && (job.others == nil || !callsDecided(deref(pr.LastError), job.others.decided)) {
+		return nil, fmt.Errorf("PR #%d needs attention: autofix starts no loop over it (`magnum fix` does)", pr.Number)
 	}
 	if job.budget != nil { // github_floor.go: prepared without reads; held until the budget recovers
 		return nil, &githubBudgetError{low: *job.budget, job: job}

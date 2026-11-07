@@ -749,7 +749,7 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"- Act only in magnum's threads (the reviewer login's), in the unanswered threads of other reviewers that the external file lists, " +
 			"and in one issue comment for each unanswered review body or comment it lists. " +
 			"Never resolve or minimize a thread someone else started: its reviewer resolves it. " +
-			"Never reply in another reviewer's thread whose last comment is already the author's. " +
+			"Never reply in another reviewer's thread whose last comment is already the author's, unless the external file marks it `decision` (section 2). " +
 			"Reply at most once to each item, and never edit, hide or delete anyone else's comment.",
 		"6. Read the external file, if the prompt names one.",
 		"An item with `answered` set has its answer already: leave it. Every other item is an external item.",
@@ -770,7 +770,7 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"Only `author` and `fixer_logins` (section 2) answer an item; a marker or a reply from anyone else answers nothing.",
 		"--jq '.[] | select(.id == <comment_id> or .in_reply_to_id == <comment_id>) | [.user.login, .user.type, .author_association, .body]'",
 		"Ignore an outsider's comment, as the file does: one whose `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` and whose author is no `Bot`, not `author` and none of `fixer_logins`.",
-		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker.",
+		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker; ",
 		// A body its reviewer edited counts from the edit, in the file and in the look before a reply.
 		"and `edited_at` when its reviewer edited it after posting it: its text is then the edited one, and only an answer after `edited_at` answers it.",
 		"list the comments and the reviews after its text, where `<since>` is its `edited_at` when it has one, else its `created_at`:",
@@ -789,6 +789,30 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"Reply nowhere else: no issue comment,", "a thread a human started"} {
 		if strings.Contains(skill, gone) {
 			t.Errorf("the fix skill still says %q", gone)
+		}
+	}
+}
+
+// The fixer left another reviewer's thread to the author, and the author
+// answered it there: the external file marks that thread `decision`, and
+// the skill builds what the author decided instead of leaving the thread as
+// answered (the author's comment is its last). It never overrules the
+// decision, cites it in its reply, skips it only once a fix-marked reply
+// came after it, and puts it back under Needs you when it cannot build it.
+func TestTheFixSkillBuildsTheAuthorsDecision(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"A thread with `decision` set is one where you left the author a call under `## Needs you` in an earlier run, and the author answered it: " +
+			"its last comment, at `decision_url`, is the author's decision. It is not `answered`: it is an external item.",
+		"- A thread with `decision` set gets no verdict of yours: the author decided it. Read the decision at `decision_url` and build it, never overrule it:",
+		"When you cannot build it (the decision is unclear, or its fix fails its specs and you cannot make them pass), do not reply: " +
+			"put it under `## Needs you` with `not fixed.` and why.",
+		"A reply that builds a decision ends with `(decided at <decision_url>)`.",
+		"for a thread with `decision` set, skip it only when a comment by `author` or one of `fixer_logins` that carries the fix marker " +
+			"came after the comment at `decision_url`: the decision was built meanwhile.",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
 		}
 	}
 }

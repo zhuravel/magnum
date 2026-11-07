@@ -7,8 +7,9 @@ package engine
 // can be a decision made elsewhere, and the look of autofix = "open" lifts
 // only its own raise (fix_open_needs.go). A person's item never closes on
 // the fixer's word, so it closes on yours: the lift takes only the fixer's
-// calls (attention.FixAsks; not its cap, a failed run, the look's raise or a
-// round's attention), and only when they are all there is (no line under
+// calls (attention.FixAsks, after "fix: "; not its cap or a failed run, even
+// one that kept your decision calls after its words, keepDecisions, nor the
+// look's raise or a round's attention), and only when they are all there is (no line under
 // them: a fixer that did not get the other reviewers' items, withUnread,
 // may have left more), only the attention you saw (FixPayload.Seen; one you
 // did not see, Seen "", is refused), only on the head magnum reviewed, and
@@ -48,7 +49,7 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 	}
 	_, under, _ := strings.Cut(msg, "\n")
 	switch reviewed := deref(pr.ReviewedSHA); {
-	case !attention.FixAsks(msg):
+	case !attention.FixAsks(msg) || !strings.HasPrefix(msg, attention.KindFix+": "): // a failure or the cap that kept your decision calls (keepDecisions) too
 		return "", fmt.Errorf("PR #%d's fix loop asks for something else than calls you can mark done (%s): %s",
 			pr.Number, oneLine(msg, 200), look)
 	case strings.TrimSpace(under) != "":

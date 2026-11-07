@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -454,6 +455,69 @@ func TestFixDoneShowsAsksAndSendsTheAttentionYouSaw(t *testing.T) {
 		{[]string{"5", "--done", "--off"}, "--done goes alone, without --off or --on"},
 		{[]string{"5", "--done", "--on"}, "--done goes alone, without --off or --on"},
 		{[]string{"5", "--done", "--wait"}, "--done starts no loop, so there is nothing for --wait to follow"},
+	} {
+		h.errb.Reset()
+		if code := h.cmd("fix", tc.args...); code != 2 {
+			t.Errorf("fix %v: exit %d, want 2", tc.args, code)
+		}
+		actContains(t, h.errb.String(), "magnum fix: "+tc.want, "usage: magnum fix ")
+	}
+	if got := len(h.requests()); got != 1 {
+		t.Errorf("a usage error queued %d requests", got-1)
+	}
+}
+
+// --decide <thread>="<text>" (repeatable) shows each reply it would post
+// as you, asks its own y/N (only y confirms; --yes does not ask), and sends
+// the replies as the payload's Decide, the thread given by its id or its
+// link; the text keeps its commas and equals signs. It goes without --done,
+// --off and --on, and a malformed value is a usage error: none queues
+// anything.
+func TestFixDecideShowsAsksAndSendsYourReplies(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRNeedsAttention)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	const answer = "fixing talkable/talkable#5: claude-fix answers ...; replied in 2 threads as zhuravel"
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, answer) }
+	args := []string{"5", "--decide", "4322458360=Keep stderr, fix the drop: a=b", "--decide",
+		"https://github.com/talkable/talkable/pull/5#discussion_r4322458400=Won't fix."}
+
+	h.stdin("n\n")
+	if code := h.cmd("fix", args...); code != 1 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "  reply in thread 4322458360: Keep stderr, fix the drop: a=b", "  reply in thread 4322458400: Won't fix.",
+		"Post these 2 replies as you in talkable#5 and fix it? [y/N]")
+	actContains(t, h.errb.String(), "nothing queued")
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("queued without a y: %+v", reqs)
+	}
+
+	h.stdin("y\n")
+	h.out.Reset()
+	if code := h.cmd("fix", args...); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), answer)
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqFix {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	want := []engine.FixDecision{{Thread: 4322458360, Text: "Keep stderr, fix the drop: a=b"}, {Thread: 4322458400, Text: "Won't fix."}}
+	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !slices.Equal(p.Decide, want) || p.Done || p.Off || p.On || p.Number != 5 {
+		t.Fatalf("payload = %+v", p)
+	}
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"5", "--decide", "4322458360=Keep it.", "--done"}, "--decide goes without --done, --off and --on"},
+		{[]string{"5", "--decide", "4322458360=Keep it.", "--off"}, "--decide goes without --done, --off and --on"},
+		{[]string{"5", "--decide", "Keep it."}, `--decide takes <thread id or link>="<your reply>", not "Keep it."`},
+		{[]string{"5", "--decide", "abc=Keep it."}, `--decide takes <thread id or link>="<your reply>", not "abc=Keep it."`},
+		{[]string{"5", "--decide", "4322458360=  "}, "--decide 4322458360: the reply is empty"},
 	} {
 		h.errb.Reset()
 		if code := h.cmd("fix", tc.args...); code != 2 {

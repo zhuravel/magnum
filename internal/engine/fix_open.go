@@ -251,6 +251,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		f.cut = l.Read.Cut
 		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
 		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA)...)
+		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
+			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
+		}
 	}
 	if c := l.Conflict; c.Unchecked && c.Head == pr.HeadSHA {
 		f.mergeUnchecked = c.Base

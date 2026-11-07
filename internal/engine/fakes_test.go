@@ -176,6 +176,8 @@ type fakeGH struct {
 	// dispatchErr fails DispatchWorkflow, whose calls record
 	// "dispatch:<owner>/<repo>:<workflow>@<ref>".
 	dispatchErr error
+	// replyErr fails ReplyToReviewComment.
+	replyErr error
 }
 
 func (g *fakeGH) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref string) error {
@@ -225,6 +227,31 @@ func (g *fakeGH) CreateIssueComment(_ context.Context, owner, repo string, numbe
 	id := 5000 + g.commentSeq
 	g.comments[id] = &fakeComment{id: id, repo: owner + "/" + repo, number: number, body: body}
 	return github.IssueComment{ID: id, URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", owner, repo, number, id)}, nil
+}
+
+// ReplyToReviewComment records "reply:<owner>/<repo>#<n>/<comment id>:<body>"
+// and, as GitHub would, adds the reply to the thread whose first comment is
+// commentID, as the operator's login (the only identity whose client the
+// fake serves), at the fake's clock; replyErr fails it.
+func (g *fakeGH) ReplyToReviewComment(_ context.Context, owner, repo string, number int, commentID int64, body string) (github.ReviewCommentReply, error) {
+	g.record(fmt.Sprintf("reply:%s/%s#%d/%d:%s", owner, repo, number, commentID, body))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.replyErr != nil {
+		return github.ReviewCommentReply{}, g.replyErr
+	}
+	g.commentSeq++
+	id := 7000 + g.commentSeq
+	url := fmt.Sprintf("https://github.com/%s/%s/pull/%d#discussion_r%d", owner, repo, number, id)
+	for i, t := range g.threads[number] {
+		if len(t.Comments) > 0 && t.Comments[0].ID == commentID {
+			t.Comments = append(slices.Clone(t.Comments), github.ThreadComment{ID: id, AuthorLogin: "zhuravel", AuthorType: "User",
+				AuthorAssociation: "OWNER", Body: body, URL: url, CreatedAt: g.now()})
+			g.threads[number] = slices.Clone(g.threads[number])
+			g.threads[number][i] = t
+		}
+	}
+	return github.ReviewCommentReply{ID: id, URL: url, CreatedAt: g.now()}, nil
 }
 
 func (g *fakeGH) EditIssueComment(_ context.Context, owner, repo string, commentID int64, body string) (github.IssueComment, error) {

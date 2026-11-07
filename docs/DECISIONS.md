@@ -3283,6 +3283,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFixersCallsNameFixDone, TestFixDoneShowsAsksAndSendsTheAttentionYouSaw, and after review
   TestFixDoneLosesToANewerAttention (the compare-and-set had no test).
 
+- **Your decision on the fixer's call is the fixer's work, not an answer** (2026-11-07, R51, approved by the
+  operator: "decisions flow into fixes with no delay"). On an own PR the fixer left another reviewer's thread
+  under `Needs you` ("decide another reviewer's …: reply won't fix at <link>, or `magnum fix` sends it back").
+  The operator decided, the decision went out as the PR author's reply in that thread, and `magnum fix` ran;
+  but the author's comment was now the thread's last, so the external file marked it `answered`, the skill
+  left it ("An item with answered set has its answer already"), and nothing built the decision; `magnum fix`
+  had no way to carry one either. Now, while the fixer's call is still open in the loop's record (the PR's
+  attention of kind fix names it: a decision call, or an entry of its report's `Needs you` it still names
+  that the fixer did not fix, in a thread the external file beside the report lists; made at the time of the
+  fix run that wrote that report, verified or ended; closed by a fix-marked reply of the fixer's after it),
+  the author's own word there after the call, the thread's last comment, is a decision (`decisionIn`): the
+  file marks the thread `decision` with `decision_url` and not `answered`, the skill builds it without a
+  verdict of its own (the fix, or the won't-fix or not-a-bug reply the author chose), never overrules it,
+  ends its reply with "(decided at <link>)", skips it only once a fix-marked reply came after it, and leaves
+  it under `Needs you` when it cannot build it. Only the author's word counts: not another reviewer's, a
+  bot's, or the fixer's own (fix-marked, which a gh fixer posts as the author), and only after the fixer's
+  call in that same thread, so a reply the author made before any call, or after the fixer answered since,
+  stays an answer. A person's decision never closes on the fixer's word alone: at the settle, a decision
+  GitHub shows no fix-marked reply of the fixer's in since its run started, and that its report does not
+  leave under `Needs you`, gets an entry of magnum's there (`decisionsLeft`, "not fixed.", so its call asks
+  again; a `fix.decisions` event counts what was built and what went back), whatever the report says; a loop
+  that pushed nothing and left nothing, over an attention of decision calls alone that it built every one of,
+  puts the PR back to reviewed in one compare-and-set as `--done` does (`liftDecided`,
+  `fix.decisions_built`); and a failed run or the cap that replaces such an attention keeps its decision calls
+  after its own words (`keepDecisions`), so the record survives for the next `magnum fix` (and `magnum fix --done`
+  still refuses it as a failure: only an attention of the fixer's calls after `fix: ` is yours to mark done). `magnum fix <ref>
+  --decide <thread>="<text>"` (repeatable, `FixPayload.Decide`) posts the author's reply in that thread as
+  the operator's gh identity the fix role uses (else the watch's operator identity when the fixer is an App;
+  refused when that login is not the PR author's) and starts the loop in one step: it checks first (a thread
+  with no open call of the fixer's, a PR that is not the operator's, a loop that runs, a held fix, a drain, the
+  budget floor, every refusal of `magnum fix` through a side-effect-free `prepareFix`), posts only then (no
+  reply twice: one already there is reused), and lets the start read the threads again so its fixer gets the
+  reply as a decision; a dry run and the pass before a whiteboard job's yield post nothing, and the CLI shows
+  each reply before its y/N. Under `autofix = "open"` a decision is new work for the look: its thread's key
+  takes the author's reply, and an attention whose calls are all decisions the whole read shows answered
+  (`callsDecided`, `attention.FixDecisionCalls`) neither needs you (rule 2) nor makes magnum's review due
+  (rule 5), so the loop starts by itself after the settle, `startFix` letting autofix over such an attention
+  only. The board and the factory screen get no new key. Rejected: a registry row of its own for the record
+  (the attention and the report already hold the calls, and a row would outlive a `--done` or a review that
+  answered them), counting any later author comment as a decision (a thanks after the fixer built it would
+  start a loop under "open"), posting the `--decide` reply with the fix marker (magnum would read it as the
+  fixer's, not the author's decision), and lifting the attention as soon as the look sees every call decided
+  (the lift would drop the record before the loop that builds them reads it). Tests, failing first:
+  TestTheAuthorsReplyAfterTheFixersCallIsADecision, TestMagnumFixHandsTheFixerYourDecision,
+  TestYourReplyWithNoOpenCallIsNoDecision, TestALoopThatBuiltEveryDecisionLiftsTheAttention,
+  TestADecisionTheFixerDidNotBuildGoesBackToNeedsYou, TestAFailedRunKeepsYourDecisions,
+  TestFixDecidePostsYourReplyThenStartsTheLoop, TestFixDecideRefusals,
+  TestTheLookStartsALoopOnYourDecisionAfterTheSettle, TestAnAttentionWithMoreThanDecisionsStillNeedsYou,
+  TestFixDecisionCallsAreTheFixersDecisionsAlone, TestFixDecideShowsAsksAndSendsYourReplies,
+  TestTheFixSkillBuildsTheAuthorsDecision, and a case of TestFixDoneRefusesWhatIsNotTheFixersCalls.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

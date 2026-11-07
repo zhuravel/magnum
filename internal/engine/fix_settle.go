@@ -121,6 +121,8 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	var answered map[string]bool
+	var built map[int64]bool
+	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read) // fix_decide.go: a decision it did not build goes back to you
 	if len(rep.NeedsYou) > 0 {
 		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou, read)                // fix_external.go
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
@@ -149,6 +151,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
+		e.liftDecided(ctx, job, built) // fix_decide.go: it built every decision the attention asked for
 		repliedTo := "the findings"
 		switch {
 		case job.alone && counted: // a review that found nothing: the fixer answered the other reviewers alone
@@ -505,7 +508,9 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // `magnum fix` or `magnum abort` as the next step). A reviewed PR goes to
 // needs_attention (needsAttention: its toast and attention key), and so
 // does one already there, a second loop's (`magnum fix` once the author
-// answered the first): its message replaces the first loop's. A PR waiting
+// answered the first): its message replaces the first loop's, and keeps the
+// first's decision calls when it asks for no call of its own
+// (keepDecisions: a failed run, the cap). A PR waiting
 // for a round keeps it, because a push came during the fix and that
 // re-review still runs: it gets the urgent toast alone. A PR elsewhere
 // (closed, ineligible) has the events only. The toast's dedupe key is the
@@ -519,6 +524,9 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	}
 	rj := job.asRound()
 	rj.pr = pr
+	if kind, _ := e.getKV(ctx, KVPRAttention(pr.ID)); pr.State == store.PRNeedsAttention && kind == attention.KindFix {
+		msg = keepDecisions(deref(pr.LastError), msg) // fix_decide.go
+	}
 	switch {
 	case pr.State == store.PRReviewed || pr.State == store.PRNeedsAttention:
 		e.needsAttentionKeyed(ctx, rj, pr, []string{store.PRReviewed, store.PRNeedsAttention}, attention.KindFix, msg, nil,

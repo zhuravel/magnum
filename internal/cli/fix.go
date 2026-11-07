@@ -4,7 +4,9 @@ package cli
 // (a fixer agent fixes magnum's findings, then the push is re-reviewed, up to
 // [pipeline] fix_cycles times; engine/fix.go), to leave the PR out of autofix
 // (--off) or to put it back (--on), or to say that the operator did what a
-// loop left them (--done: back to reviewed, no round). The daemon decides and answers with the
+// loop left them (--done: back to reviewed, no round). --decide posts the
+// operator's decision in a thread the fixer left them, as them, and starts
+// the loop that builds it (engine/fix_decide.go). The daemon decides and answers with the
 // sentence this prints, the refusals included; --wait follows the loop with
 // the review follower until the loop's row is gone and says how it ended.
 
@@ -17,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +31,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
+const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done | --decide <thread>=<reply>...] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
 
 // fixDefaultTimeout is how long --wait follows a loop by default.
 const fixDefaultTimeout = reviewDefaultTimeout
@@ -43,6 +47,10 @@ const fixEventWindow = 200
 type fixOpts struct {
 	off, on, done, wait, dryRun, json, yes bool
 	timeout                                time.Duration // --timeout: stop following after this long (0 = no limit)
+	// decide are the --decide values as typed, decisions what they say
+	// (parseDecide).
+	decide    []string
+	decisions []engine.FixDecision
 	// seenSum is, with done, the digest of the attention the operator saw
 	// where a screen asked (attentionSum of the board's row); nil = the PR's
 	// last_error, which the command shows before its y/N.
@@ -85,12 +93,20 @@ func newFixCmd(c *Context) *cobra.Command {
 			"The daemon refuses it for an attention that is not the fixer's calls (its cap, a failed run, a round's), one whose "+
 			"fixer did not get the other reviewers' items (`magnum fix` reads them again), one that changed since you looked, "+
 			"a head magnum has not reviewed, a loop that runs and a fix held for later. "+
+			"--decide <thread>=\"<reply>\" (repeatable; the thread is the id or the link of a thread the fixer left you a call in) "+
+			"posts your reply there as you (the gh identity the fix role uses), then starts the loop in one step: its fixer reads "+
+			"your reply as your decision and builds it (the fix, or the won't-fix reply you chose), citing it, or leaves it to you "+
+			"again. It shows each reply and asks y/N; the daemon refuses, with nothing posted, a thread the fixer made no call in "+
+			"(or one it answered since), a PR that is not yours, a loop that runs and a fix held for later. A reply of yours typed "+
+			"on GitHub in such a thread is a decision too, for the next `magnum fix`, and under autofix = \"open\" for the loop "+
+			"that starts by itself once the PR settles. "+
 			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.off, "off", false, "take the PR out of autofix: its findings stay yours (starts no loop)")
 	fs.BoolVar(&o.on, "on", false, "put the PR back into autofix (starts no loop)")
 	fs.BoolVar(&o.done, "done", false, "you did what the fix loop left you: back to reviewed with no review (starts no loop)")
+	fs.StringArrayVar(&o.decide, "decide", nil, "post your decision in a `thread=reply` the fixer left you, as you, then fix (repeatable)")
 	fs.BoolVar(&o.wait, "wait", false, "follow the loop until it ends: clean, needs you, pushed nothing, aborted or ended")
 	fs.DurationVar(&o.timeout, "timeout", fixDefaultTimeout, "with --wait: stop following after this `duration` (0 = no limit); the loop goes on")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "ask the daemon what would happen; nothing is started or changed")
@@ -114,6 +130,15 @@ func runFix(c *Context, o fixOpts, pos []string) int {
 		return actUsage(c, "fix", "--off and --on exclude each other", fixUsage)
 	case (o.off || o.on) && o.wait:
 		return actUsage(c, "fix", "--off and --on start no loop, so there is nothing for --wait to follow", fixUsage)
+	case len(o.decide) > 0 && (o.done || o.off || o.on):
+		return actUsage(c, "fix", "--decide goes without --done, --off and --on", fixUsage)
+	}
+	if len(o.decide) > 0 {
+		decisions, err := parseDecide(o.decide)
+		if err != nil {
+			return actUsage(c, "fix", err.Error(), fixUsage)
+		}
+		o.decisions = decisions
 	}
 	if code, refused := refuseInAgentPane(c, "fix"); refused {
 		return code
@@ -180,7 +205,12 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	if !o.json {
 		reviewDescribe(ctx, c.Stdout, d, t, label, false, o.dryRun)
 	}
-	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on}
+	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions}
+	if !o.json {
+		for _, d := range o.decisions { // what goes out as you, before the y/N
+			fmt.Fprintf(c.Stdout, "  reply in thread %d: %s\n", d.Thread, d.Text)
+		}
+	}
 	if o.done { // the attention you mark done: the daemon refuses one that changed since, and one you did not see
 		payload.Done, payload.Seen = true, store.Deref(t.PR.LastError)
 		if o.seenSum != nil && *o.seenSum != attentionSum(payload.Seen) { // the row was read before the attention changed
@@ -236,6 +266,34 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	return fixFollow(ctx, c, d, t, label, res, start, o, out)
 }
 
+// decideThreadRe reads the thread of a --decide value given by its link:
+// "…#discussion_r<id>".
+var decideThreadRe = regexp.MustCompile(`#discussion_r(\d{1,20})$`)
+
+// parseDecide reads the --decide values, each "<thread>=<reply>": the
+// thread by its first comment's id or its link (…#discussion_r<id>), the
+// reply everything after the first "=" (it keeps its own commas and equals
+// signs), never empty. The daemon checks the rest (engine.FixDecision).
+func parseDecide(values []string) ([]engine.FixDecision, error) {
+	out := make([]engine.FixDecision, 0, len(values))
+	for _, v := range values {
+		thread, text, ok := strings.Cut(v, "=")
+		thread = strings.TrimSpace(thread)
+		if m := decideThreadRe.FindStringSubmatch(thread); m != nil {
+			thread = m[1]
+		}
+		id, err := strconv.ParseInt(thread, 10, 64)
+		if !ok || err != nil || id <= 0 {
+			return nil, fmt.Errorf("--decide takes <thread id or link>=\"<your reply>\", not %q", v)
+		}
+		if strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("--decide %d: the reply is empty", id)
+		}
+		out = append(out, engine.FixDecision{Thread: id, Text: text})
+	}
+	return out, nil
+}
+
 // attentionSum is a digest of a PR's stored error (its last_error) that a
 // screen can carry through its sanitizers unchanged and never draws: the
 // board's d sends it back as the attention you saw (PRBoardRow.AttentionSum),
@@ -280,6 +338,10 @@ func fixConfirm(ctx context.Context, c *Context, d *actDeps, label string, o fix
 		question, declined = fmt.Sprintf("Autofix %s again?", label), "nothing changed"
 	case o.done:
 		question, declined = fmt.Sprintf("Mark what the fixer left on %s done (back to reviewed, no review)?", label), "nothing changed"
+	case len(o.decisions) == 1:
+		question = fmt.Sprintf("Post this reply as you in %s and fix it?", label)
+	case len(o.decisions) > 1:
+		question = fmt.Sprintf("Post these %d replies as you in %s and fix it?", len(o.decisions), label)
 	}
 	if o.json {
 		return actUsage(c, "fix", "--json needs --yes to apply (a terminal asks y/N first); "+declined, fixUsage), false

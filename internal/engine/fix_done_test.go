@@ -92,6 +92,9 @@ func TestFixDoneLiftsWhatTheFixerLeftWithoutAReview(t *testing.T) {
 // sends Seen "") all stay as they are.
 func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
 	const unread = "the other reviewers' threads and comments were not read (HTTP 502): `magnum fix talkable/talkable#2` reads them again"
+	// A failed run keeps the decision calls of the attention it replaced
+	// after its own words (keepDecisions): still a failure, not calls alone.
+	const kept = "fix run failed: the fixer's push failed: /state/claude-fix.md; " + decideCall + "; details: /state/claude-fix.md"
 	for _, tc := range []struct {
 		name  string
 		mod   func(h *harness, pr store.PR) string // returns the Seen to send ("" = the PR's last_error after mod)
@@ -119,6 +122,10 @@ func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
 			return ""
 		}, want: "PR #2's fix loop asks for something else than calls you can mark done (fix run failed: the fixer's push failed: " +
 			"/state/claude-fix.md): `magnum status talkable/talkable#2` says what"},
+		{name: "a failed run that kept your decisions", mod: func(h *harness, pr store.PR) string {
+			setLastError(h, pr, kept)
+			return ""
+		}, want: "PR #2's fix loop asks for something else than calls you can mark done (" + oneLine(kept, 200) + "): `magnum status talkable/talkable#2` says what"},
 		{name: "the cap", mod: func(h *harness, pr store.PR) string {
 			setLastError(h, pr, "3 fix cycles, 1 finding left: 1 new: /state/claude-fix.md")
 			return ""

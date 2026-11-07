@@ -3431,6 +3431,16 @@ func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCal
     reviewer's" in a thread another reviewer started, "a human's" in the older
     words; "finding" for one without a priority).
 
+func FixDecisionCalls(msg string) ([]FixCall, bool)
+    FixDecisionCalls are the calls of msg, a fix job's message, when it asks for
+    the fixer's calls alone (fixDoneFits: none of the loop's own words before
+    them and nothing under them), every one a DeclinedCall in another reviewer's
+    thread ("a human's" in the older words), with no finding in the older words
+    beside them; ok is false otherwise. Each asks the author to decide in that
+    thread, and an attention of these alone is answered once the author decided
+    each one there: the engine then lets a loop start over it and lifts it once
+    the fixer built every decision.
+
 func FixedCall(thread, url, sha string, magnums bool) FixCall
     FixedCall is the call of a finding the fixer fixed in commit sha but did
     not answer: when magnums, in one of magnum's threads whose reply failed,
@@ -9583,6 +9593,14 @@ type FixCommit struct {
 }
     FixCommit is a commit the fixer says it pushed.
 
+type FixDecision struct {
+	Thread int64  `json:"thread"`
+	Text   string `json:"text"`
+}
+    FixDecision is one reply of `magnum fix --decide`: the thread, by the id of
+    its first comment (attention.FixCall's Thread), and your words, which magnum
+    posts there as you; no event or log carries them.
+
 type FixOff struct {
 	Since time.Time `json:"since"`
 	By    string    `json:"by"`
@@ -9596,11 +9614,12 @@ func ParseFixOff(s string) (FixOff, bool)
 
 type FixPayload struct {
 	PRTarget
-	DryRun bool   `json:"dry_run,omitempty"`
-	Off    bool   `json:"off,omitempty"`
-	On     bool   `json:"on,omitempty"`
-	Done   bool   `json:"done,omitempty"`
-	Seen   string `json:"seen,omitempty"`
+	DryRun bool          `json:"dry_run,omitempty"`
+	Off    bool          `json:"off,omitempty"`
+	On     bool          `json:"on,omitempty"`
+	Done   bool          `json:"done,omitempty"`
+	Seen   string        `json:"seen,omitempty"`
+	Decide []FixDecision `json:"decide,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it
@@ -9608,7 +9627,9 @@ type FixPayload struct {
     did what a loop left you (Done: the PR goes back to reviewed with no round,
     fix_done.go; Seen is the attention you saw, the PR's last_error when you
     asked, and a PR whose attention changed since is refused). None of Off,
-    On and Done starts a loop.
+    On and Done starts a loop. Decide posts your replies in the threads the
+    fixer left you, as you, then starts the loop, whose fixer builds them as
+    your decisions (fix_decide.go); it goes without Off, On and Done.
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".

@@ -68,9 +68,11 @@ const (
 // openItem is one thing open on a PR: its ledger key, whose word it is, its
 // kind and link, and, for another reviewer's thread, how many fix-marked
 // replies the fixer gave in it (the thread's first and newest comments
-// only: a long thread can undercount, which errs toward work) and whether
+// only: a long thread can undercount, which errs toward work), whether
 // a fixer login resolved it (Resolved: the fixer's file leaves resolved
-// threads out, so it is never work).
+// threads out, so it is never work), and whether its last comment is your
+// decision on the fixer's call there (Decision, fix_decide.go: its key
+// takes your reply, so it is new work).
 type openItem struct {
 	Key          string `json:"key"`
 	Class        string `json:"class"`
@@ -78,6 +80,7 @@ type openItem struct {
 	URL          string `json:"url,omitempty"`
 	FixerReplies int    `json:"fixer_replies,omitempty"`
 	Resolved     bool   `json:"resolved,omitempty"`
+	Decision     bool   `json:"decision,omitempty"`
 }
 
 // quietRules are [pipeline] quiet_logins and quiet_markers: a review body
@@ -263,7 +266,8 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 		if t.Answered || len(t.Comments) == 0 {
 			continue
 		}
-		it := openItem{Key: threadKey(t.CommentID, t.Comments[len(t.Comments)-1].ID), Class: classOf(t.Comments[0].Author), Kind: itemThread, URL: t.URL}
+		it := openItem{Key: threadKey(t.CommentID, t.Comments[len(t.Comments)-1].ID), Class: classOf(t.Comments[0].Author), Kind: itemThread, URL: t.URL,
+			Decision: t.Decision}
 		for _, c := range t.Comments {
 			if c.Fix {
 				it.FixerReplies++
@@ -323,6 +327,13 @@ func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, c
 // threadKey is the key of another reviewer's thread: its first comment and
 // its latest.
 func threadKey(root, latest int64) string { return fmt.Sprintf("thread:%d@%d", root, latest) }
+
+// decisionOf reports whether items hold your decision in the thread whose
+// first comment is root (openItem.Decision).
+func decisionOf(items []openItem, root int64) bool {
+	prefix := fmt.Sprintf("thread:%d@", root)
+	return slices.ContainsFunc(items, func(it openItem) bool { return it.Decision && strings.HasPrefix(it.Key, prefix) })
+}
 
 // reviewKey is the key of magnum's review of run.
 func reviewKey(run string) string { return "review:" + run }

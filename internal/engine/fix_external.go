@@ -86,16 +86,23 @@ type externalItems struct {
 // where it is (its line, else its original line), whether it is outdated
 // and answered, and its comments, oldest first: in a long thread the first
 // and the newest GitHub lists (github.Thread.AllComments), Omitted
-// counting the ones between them that the file leaves out.
+// counting the ones between them that the file leaves out. Decision says
+// that its last comment is the author's decision on a call the fixer left
+// them there (fix_decide.go), at DecisionURL: not answered, the fixer
+// builds it. called (not in the file) says that the fixer's call there is
+// still open, which `magnum fix --decide` answers.
 type externalThread struct {
-	CommentID int64             `json:"comment_id"`
-	URL       string            `json:"url"`
-	Path      string            `json:"path"`
-	Line      int               `json:"line,omitempty"`
-	Outdated  bool              `json:"outdated"`
-	Answered  bool              `json:"answered"`
-	Comments  []externalComment `json:"comments"`
-	Omitted   int               `json:"omitted,omitempty"`
+	CommentID   int64             `json:"comment_id"`
+	URL         string            `json:"url"`
+	Path        string            `json:"path"`
+	Line        int               `json:"line,omitempty"`
+	Outdated    bool              `json:"outdated"`
+	Answered    bool              `json:"answered"`
+	Decision    bool              `json:"decision,omitempty"`
+	DecisionURL string            `json:"decision_url,omitempty"`
+	Comments    []externalComment `json:"comments"`
+	Omitted     int               `json:"omitted,omitempty"`
+	called      bool
 }
 
 // externalComment is one comment of an externalThread: its REST id and
@@ -214,6 +221,10 @@ type externalInput struct {
 	// resolution GitHub names no one for (a review thread's resolvedBy is
 	// a User): a person's thread resolved by no one named is the fixer's.
 	AppFixer bool
+	// Calls are the threads, by their first comment's id, in which the
+	// fixer left the author a call that the loop's record still asks for,
+	// with when it made each (fixerCalls).
+	Calls map[int64]time.Time
 }
 
 // ownWord reports whether a review body or comment by the author is the
@@ -231,7 +242,9 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // github.Thread.AllComments), and it is answered when the latest of them is
 // the author's, the fixer's included, or carries the fixer's marker
 // (postreview.IsFixReply) and comes from one of magnum's logins (the marker
-// in anyone else's comment answers nothing). A review body or conversation
+// in anyone else's comment answers nothing), unless it is the author's
+// decision (decisionIn): their own word after the fixer's call there
+// (in.Calls) while that call is open. A review body or conversation
 // comment is another reviewer's when a reviewer other than the author and
 // magnum's logins wrote it, it says something (the body of a review that
 // comments or requests changes: remarkState) and it came after the author's last own
@@ -271,6 +284,12 @@ func externalOf(in externalInput) (externalItems, int) {
 		answered := byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsFixReply(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
 		et := externalThread{CommentID: root.ID, URL: root.URL, Path: t.Path, Line: cmp.Or(t.Line, t.OriginalLine), Outdated: t.Outdated,
 			Answered: answered, Comments: []externalComment{}, Omitted: max(t.CommentCount-len(all), 0)}
+		if at, ok := in.Calls[root.ID]; ok {
+			et.called, et.Decision = decisionIn(cs, at, byAuthor, isOwn)
+			if et.Decision {
+				et.Answered, et.DecisionURL = false, last.URL
+			}
+		}
 		for _, c := range cs {
 			ec := externalComment{ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt), Fix: postreview.IsFixReply(c.Body)}
 			ec.Body, ec.Truncated = excerptOf(c.Body)
@@ -414,6 +433,12 @@ type externalRead struct {
 	resolved []resolvedThread
 }
 
+// decided reports whether the read shows the author's decision in the
+// thread whose first comment is thread (externalThread.Decision).
+func (r *externalRead) decided(thread int64) bool {
+	return slices.ContainsFunc(r.items.Threads, func(t externalThread) bool { return t.CommentID == thread && t.Decision })
+}
+
 // externalReadOf is the read of in at head: the file's content
 // (externalOf) and the look's part of it (fix_open_items.go), with no cut
 // list (readExternal adds it).
@@ -427,7 +452,8 @@ func externalReadOf(in externalInput, head string) externalRead {
 // (externalOf), with the count of items an outsider wrote and which of the
 // three lists GitHub cut short, and the look's part of it
 // (externalReadOf): magnum's logins resolving another reviewer's thread
-// never close it.
+// never close it. The fixer's calls the PR's attention still asks for
+// (fixerCalls) make the author's later word in those threads a decision.
 func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, error) {
 	ctx = github.WithOp(ctx, opFixExternal) // github_cost.go
 	gh, rd, ok := e.fixReader(job)
@@ -452,7 +478,8 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 	}
 	own := e.fixLogins(ctx, job)
 	read := externalReadOf(externalInput{Threads: threads, Reviews: reviews, Comments: comments, CommentsComplete: complete,
-		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own, AppFixer: len(e.cfg.FixerLogins(&job.watch)) > 0}, job.pr.HeadSHA)
+		Author: author, Own: own, Markers: e.cfg.Pipeline.QuietMarkers, Resolvers: own, AppFixer: len(e.cfg.FixerLogins(&job.watch)) > 0,
+		Calls: e.fixerCalls(ctx, job.pr)}, job.pr.HeadSHA)
 	if !threadsComplete {
 		read.cut = append(read.cut, fmt.Sprintf("over %d review threads", github.MaxReviewThreads))
 	}
@@ -786,10 +813,21 @@ func (e *Engine) sinceFixStart(ctx context.Context, job *fixJob) func(login, typ
 // never its text, and magnum edits no posted comment. The threads come from
 // read, the settle's one GitHub read of them (threadsReader); the
 // conversation from one read, newest first, back to the run's start
-// (usually one page). A read that fails names nothing of its part.
+// (usually one page). A read that fails names nothing of its part. The
+// author's decisions the job's external file hands the fixer are their own
+// word, not the fixer's: `magnum fix --decide` posts one right before the
+// run starts, which a clock a moment behind GitHub's would put after it.
 func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func() ([]github.Thread, error)) {
 	if job.started.IsZero() {
 		return
+	}
+	decisions := map[string]bool{}
+	if x, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath))); ok {
+		for _, t := range x.Threads {
+			if t.Decision {
+				decisions[t.DecisionURL] = true
+			}
+		}
 	}
 	asFixer := e.sinceFixStart(ctx, job)
 	var urls []string
@@ -798,7 +836,7 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 		for _, t := range threads {
 			all := t.AllComments()
 			for _, c := range all[min(1, len(all)):] { // replies only: the fixer starts no thread
-				if asFixer(c.AuthorLogin, c.AuthorType, c.CreatedAt) && ownWord(c.Body) {
+				if asFixer(c.AuthorLogin, c.AuthorType, c.CreatedAt) && ownWord(c.Body) && (c.URL == "" || !decisions[c.URL]) {
 					urls, inThreads = append(urls, cmp.Or(c.URL, fmt.Sprintf("review comment %d", c.ID))), append(inThreads, c.ID)
 				}
 			}
