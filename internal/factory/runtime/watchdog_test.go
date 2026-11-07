@@ -824,6 +824,44 @@ func TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork(t *testing.
 	}
 }
 
+// A recovery that quits a session whose conversation never took a prompt
+// (a fresh session whose first prompt herdr refused) closes that
+// conversation, so the resume after it takes the role's own conversation,
+// the one that holds the task, and never tells an empty one to continue
+// where it stopped.
+func TestARecoveryNeverResumesAConversationThatTookNoPrompt(t *testing.T) {
+	g := newRig(t)
+	g.hungTurn("reproduce the bug")
+	stepFaults[2].inject(g) // every prompt is refused
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // step 2: sid-1 resumed, its prompt refused
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // step 3: a fresh session, its first prompt refused
+	g.h.setSession(g.agent("fx-repro"), "sid-fresh")
+	g.observe()
+	var evs []Event
+	for range 2 {
+		g.clock.Add(NoProgressAfter)
+		evs = append(evs, g.watchdog()...)
+	}
+	if len(only(evs, EventStuck)) != 1 {
+		t.Fatalf("events %+v, want fx-repro stuck", evs)
+	}
+	g.h.promptErr = nil
+	starts, prompts := len(g.h.startCalls()), len(g.h.promptTexts())
+
+	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	s := g.h.startCalls()
+	if len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v after your retry, want the role's own conversation, sid-1, resumed", s[starts:])
+	}
+	if p := g.h.promptTexts(); len(p) != prompts+1 || p[len(p)-1] != resumeText {
+		t.Fatalf("prompts %q after your retry, want the resume prompt", p[prompts:])
+	}
+}
+
 // A recovery's prompt that herdr may have typed (its delivery unknown), and
 // that two reads of the transcript then prove never arrived, leaves no role
 // alone, across a restart too: the runs it replaced were abandoned for the

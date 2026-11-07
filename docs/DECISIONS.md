@@ -17060,7 +17060,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   stopped task whose pane was lost). The rebuild also reads the task's Codex-never mark into the quit of its
   Codex sessions, which only the loop's memory held: a refusal that came in the pass that sent the task to
   you was otherwise never quit after a retry or a restart (`QuitCodex` quits only the sessions that start or
-  run, so a second quit does nothing). A crash between a quit that worked and the
+  run, so a second quit does nothing). A restart that quits a session whose conversation never took a prompt
+  (a fresh session whose first prompt herdr refused) closes that conversation, so its resume takes the role's
+  own and never tells an empty one to continue where it stopped. A crash between a quit that worked and the
   hand-over leaves the hung run in flight on the quit session for a moment's work: the next daemon's watchdog
   takes it as any hung run, and its restart, finding no live session, hands it over.
   Rejected: the first cut, which kept the hung run in flight until the replacement's prompt left (it left an
@@ -17079,7 +17081,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARebuiltStageRecoversARoleARecoveryLeftWithoutATurn (no `RecoverLost`); in the second review's round,
   TestARetryAfterAStuckRoleWithNoTurnRecoversIt (no `RecoverLost` after the retry) and
   TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork (no start, stuck and lost); in the third,
-  TestARetryKeepsTheQuitOfATasksCodexSessions (no `QuitCodex`);
+  TestARetryKeepsTheQuitOfATasksCodexSessions (no `QuitCodex`) and
+  TestARecoveryNeverResumesAConversationThatTookNoPrompt (the empty conversation resumed);
   TestARecoveryPromptThatNeverArrivedIsRecoveredAgain holds the restart between the proof and the recovery.
 
 - **A continuation on the fallback model that never left pauses its role** (2026-11-07, the audit's R14). A run

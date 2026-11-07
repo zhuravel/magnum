@@ -420,6 +420,9 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			return fmt.Errorf("quit %s: %w", st.role.Name, err)
 		}
+		if r.emptyConversation(ctx, t, pr, s.ID) {
+			r.closeConversation(ctx, s) // the resume takes the role's own conversation, not one that never saw the task
+		}
 	}
 	r.handOver(ctx, st, old, why)
 	id, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(st.role.Name)) // after the quit: its own conversation is the newest
@@ -513,6 +516,45 @@ func freshText(first, then string) string {
 	}
 	return first + "\n\n---\n\nmagnum started this session afresh: the one before made no progress. Read the task's files as " +
 		"the prompt above says, then:\n\n" + then
+}
+
+// emptyConversation reports whether the conversation of session id (its
+// row as the quit left it) never took a prompt of task t: no run of any row
+// of owner row pr in that conversation has a ledger entry that may have
+// arrived (a fresh session whose first prompt herdr refused). A
+// conversation it cannot tell of, or a row with none, is not.
+func (r *Runtime) emptyConversation(ctx context.Context, t registry.Task, pr store.PR, id int64) bool {
+	s, err := r.st.SessionByID(ctx, id)
+	if err != nil || store.Deref(s.SessionID) == "" {
+		return false
+	}
+	sessions, err := r.st.SessionsByPR(ctx, pr.ID)
+	if err != nil {
+		return false
+	}
+	rows := map[int64]bool{}
+	for _, x := range sessions {
+		if store.Deref(x.SessionID) == store.Deref(s.SessionID) {
+			rows[x.ID] = true
+		}
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return false
+	}
+	ofIt := map[string]bool{}
+	for _, run := range runs {
+		if run.SessionID != nil && rows[*run.SessionID] {
+			ofIt[run.ID] = true
+		}
+	}
+	entries, err := r.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return false
+	}
+	return !slices.ContainsFunc(entries, func(e registry.LedgerEntry) bool {
+		return ofIt[e.RunID] && e.Delivered != registry.DeliveredNo
+	})
 }
 
 // closeConversation closes a quit session that is parked, so no later
