@@ -442,7 +442,7 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		if err != nil {
 			return nil, nil, cannotRun(role, err)
 		}
-		run.roles = append(run.roles, &stageRole{role: role, runAs: runAs, runs: map[string]bool{}})
+		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
@@ -640,6 +640,11 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 			e.verify(ctx, runID, ok, why)
 		}
 	}
+	void := func(why string) { // a turn that asked did what it was asked: no failure of it
+		if runID != r.settled {
+			e.void(ctx, runID, why)
+		}
+	}
 	if r.ok {
 		verify(true, "")
 		return ""
@@ -661,11 +666,11 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 		e.inbox[t.ID] = append(e.inbox[t.ID], runtime.Event{TaskID: t.ID, Role: r.runAs.Name, RunID: runID, Kind: runtime.EventEnded})
 		return ""
 	case asks == askWaits:
-		verify(false, "it asked questions: the stage waits for your answers")
+		void("it asked questions: the stage waits for your answers")
 		r.asking = true
 		return ""
 	case asks == askAnswered:
-		verify(false, "it asked questions, which you answered since")
+		void("it asked questions, which you answered since")
 		r.next = nextAnswers
 		return ""
 	}
@@ -800,6 +805,23 @@ func (e *Engine) verify(ctx context.Context, runID string, ok bool, why string) 
 	if err := e.d.Runtime.Verify(ctx, runID, ok, why); err != nil {
 		e.log.Warn("verify an ended run", "run", runID, "ok", ok, "err", err)
 	}
+}
+
+// void sets aside a run that ended asking questions (Runtime.Void): voided,
+// never failed. A failure is logged, as verify's.
+func (e *Engine) void(ctx context.Context, runID, why string) {
+	if err := e.d.Runtime.Void(ctx, runID, why); err != nil {
+		e.log.Warn("void an ended run", "run", runID, "err", err)
+	}
+}
+
+// asStageRuns is role as stage st runs it: with the stage's own prompt
+// when the stage names one (the PR body's, an amend's, a review's fix
+// turn), the prompt renderRole renders, so the runtime records the hash of
+// the prompt file the role's turns come from.
+func asStageRuns(st config.FactoryStage, role config.Role) config.Role {
+	role.Prompt = cmp.Or(st.Prompt, role.Prompt)
+	return role
 }
 
 // recheckFailed checks again the files of the roles that wrote none valid
@@ -954,6 +976,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			if rerr != nil {
 				return nil, cannotRun(r.role, rerr)
 			}
+			runAs = asStageRuns(st, runAs)
 			if lerr := e.launch(ctx, t, a, c, []config.Role{runAs}); lerr != nil {
 				if errors.Is(lerr, ErrHeld) {
 					held = cmpErr(held, lerr)

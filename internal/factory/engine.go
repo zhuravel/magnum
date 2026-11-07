@@ -54,7 +54,8 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // owner row of a task in the factory's agents store, the launch of a
 // stage's roles (recorded before any workspace exists), the prompts it
 // sends through its ledger, the panes it observes and the watchdog over
-// them, the verification of a run's end, parking a task's sessions, the
+// them, the verification of a run's end (or its setting aside, a turn that
+// asked questions: Void), parking a task's sessions, the
 // reconcile of a prompt of unknown delivery, the recovery of a lost pane,
 // the shift of every turn deadline after the Mac slept, the role that runs
 // for a role (its Claude fallback on a task Codex never works on), the quit
@@ -79,6 +80,7 @@ type Runtime interface {
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
+	Void(ctx context.Context, runID, why string) error
 	Park(ctx context.Context, t registry.Task) error
 	Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
 	Watchdog(ctx context.Context, now time.Time) ([]runtime.Event, error)

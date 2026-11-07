@@ -17052,6 +17052,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind (the run was abandoned as "its model's
   limit: continued on sonnet"); TestAnAgentsPauseGoesOnAtTheNextPass holds the stage's side.
 
+- **A role's record names the prompt its turns ran and holds no other stage's role, and a turn that asked is
+  voided** (2026-11-07, the audit's R18). The factory's registry is the evidence a prompt edit is measured by,
+  and three things in it were wrong.
+  - 92 of its 128 `attempt_roles` rows were the observe pass's: the live pane of an earlier stage's role, with no
+    run in flight, recorded its conversation on the attempt the owner row was at, a row with a session and
+    nothing else (`t1-judge-1` held fx-repro, fx-cause and fx-history). Every launched row had its prompt hash
+    (40 of 40); the "39 of 128" was these rows. `noteSession` now records a session with no run in flight only
+    on an attempt that launched its role (`launchedIn`: the role's record of the attempt, which its launch
+    writes first). The old rows stay: the registry keeps what happened.
+  - The prompt hash was of the role's own prompt file where the stage renders another: fx-judge's
+    `factory-judge.md` for the PR body's turn (`factory-pr-body.md`), the amend's and a review's fix turn too. An
+    edit to the PR body's prompt would never show, and one to the judge's would seem to change the PR body. The
+    stage now launches and prompts its roles as it runs them (`asStageRuns`: the stage's prompt when it names
+    one, the file `renderRole` renders), the launch records that file's hash, every prompt that may have left
+    records it again (`notePrompt`, so an attempt an older build launched gets it as well), and a recovery's
+    start, whose role a restarted runtime reads afresh from the configuration, keeps the hashes the launch
+    recorded. The config hash is of the role as the stage runs it too.
+  - A turn that ended asking questions was settled failed ("it asked questions: the stage waits for your
+    answers"): 4 of the factory's 10 failed runs on 2026-11-07. It did what it was asked, so it is now voided
+    (`Runtime.Void`): the agents store keeps the run failed, which a stage rebuilt after a restart takes the end
+    of again, with the outcome voided; its record is voided with why, and it is no failure of a loop without
+    progress.
+  The audit's own rows (C F12), three fx-judge "nudge" runs failed on `report.md: its first section must be ##
+  Architecture decisions`, are the turns your answers started, not the ones they ended: their ledger entries
+  begin with the answers' lead (the agents store calls every prompt after a role's first a nudge), they began
+  when the wait on your answers closed, ran two to five minutes, and ended on a report the end fact refused,
+  which the nudge after them fixed. They stay failed: three of three is a miss a learner should see.
+  `skill_hash` stays empty: no factory role runs a skill magnum ships (a `[[factory.role]]` may be no judge or
+  fix role, the only roles with `skill`), and the skills its prompts name (`error_skill`, `pr_body_skill`, a
+  chore's own) are the operator's, which magnum neither finds nor versions. It waits for the factory's own
+  skills; a local round's judge skill is its cycle's `skill_hash` already.
+  Rejected: voiding the answers' turns that failed (above); a hash of the names of the skills a prompt names
+  (it tells which skill, never which version, so it attributes no edit); the stage's prompt read from the
+  configuration by the runtime (the amend and a review's fix turn are stages the engine builds, which no
+  configuration names). Tests, failing first: TestObserveAddsNoRowForARoleOutsideTheStage (fx-repro's row in
+  the judge's attempt), TestTheRoleRunRecordsThePromptTheStageRuns (a prompt left an older build's hash, and a
+  recovery after a restart wrote the role's own), TestVoidSetsAsideATurnThatAskedQuestions (outcome failed),
+  TestATurnThatAskedIsVoidedNotFailed (no Void) and TestAStageRunsItsRoleWithItsOwnPrompt (the launch carried
+  `factory-judge.md`).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

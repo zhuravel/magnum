@@ -12897,6 +12897,7 @@ type Runtime interface {
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
+	Void(ctx context.Context, runID, why string) error
 	Park(ctx context.Context, t registry.Task) error
 	Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
 	Watchdog(ctx context.Context, now time.Time) ([]runtime.Event, error)
@@ -12916,28 +12917,28 @@ type Runtime interface {
 	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
 	Talk(ctx context.Context, t registry.Task, prompt string) (pane string, err error)
 }
-    Runtime is the factory's agent runtime (internal/factory/runtime):
-    the owner row of a task in the factory's agents store, the launch of
-    a stage's roles (recorded before any workspace exists), the prompts
-    it sends through its ledger, the panes it observes and the watchdog
-    over them, the verification of a run's end, parking a task's sessions,
-    the reconcile of a prompt of unknown delivery, the recovery of a lost pane,
-    the shift of every turn deadline after the Mac slept, the role that runs
-    for a role (its Claude fallback on a task Codex never works on), the quit
-    of such a task's Codex sessions, a run's state as the agents store keeps
-    it across a restart, who is at work in a task's copy now (a run in flight,
-    you in a pane: the factory's own commands that change the copy wait for
-    them), and who could have changed it since a time (the factory puts back
-    what its checks changed only when nobody else could have). After a restart
-    it binds a task's sessions to the panes herdr shows again (Recover) and
-    settles the workspaces a crash left that no row names (SettleWorkspaces:
-    kept for their attempt's launch to adopt, or closed). Proving says whether
-    the proof that a prompt of unknown delivery never arrived is under way (its
-    read after RedeliverAfter settles it). PaneFocus is what the observe passes
-    saw of you in the factory's panes, from the snapshot they read anyway,
-    and Workspaces the herdr workspaces of a task's live sessions: the alerts'
-    toasts hold while you are in a factory pane, and a task's sidebar token goes
-    on its workspaces (alerts.go).
+    Runtime is the factory's agent runtime (internal/factory/runtime): the owner
+    row of a task in the factory's agents store, the launch of a stage's roles
+    (recorded before any workspace exists), the prompts it sends through its
+    ledger, the panes it observes and the watchdog over them, the verification
+    of a run's end (or its setting aside, a turn that asked questions: Void),
+    parking a task's sessions, the reconcile of a prompt of unknown delivery,
+    the recovery of a lost pane, the shift of every turn deadline after
+    the Mac slept, the role that runs for a role (its Claude fallback on a
+    task Codex never works on), the quit of such a task's Codex sessions,
+    a run's state as the agents store keeps it across a restart, who is at work
+    in a task's copy now (a run in flight, you in a pane: the factory's own
+    commands that change the copy wait for them), and who could have changed it
+    since a time (the factory puts back what its checks changed only when nobody
+    else could have). After a restart it binds a task's sessions to the panes
+    herdr shows again (Recover) and settles the workspaces a crash left that
+    no row names (SettleWorkspaces: kept for their attempt's launch to adopt,
+    or closed). Proving says whether the proof that a prompt of unknown delivery
+    never arrived is under way (its read after RedeliverAfter settles it).
+    PaneFocus is what the observe passes saw of you in the factory's panes,
+    from the snapshot they read anyway, and Workspaces the herdr workspaces of
+    a task's live sessions: the alerts' toasts hold while you are in a factory
+    pane, and a task's sidebar token goes on its workspaces (alerts.go).
 
 type ScreenOptions struct {
 	Config *config.Config
@@ -14534,6 +14535,15 @@ func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string)
     the stage's end fact and why, the outcome, the nudges, the tokens by model
     and the active and idle seconds. A failure feeds the loop detector: the same
     why SameFailures times in a row is a loop without progress.
+
+func (r *Runtime) Void(ctx context.Context, runID, why string) error
+    Void settles an ended run whose turn did what it was asked and is set aside,
+    neither verified nor failed: it ended on questions, which wait for your
+    answers or got them since. The agents store keeps it failed with why and the
+    outcome voided, so a stage rebuilt after a restart takes its end again (a
+    failed run's), and nothing that counts failed turns counts it; its RoleRun
+    records its end as Verify's does, the outcome voided. It feeds the loop
+    detector nothing: it is no failure, and no progress either.
 
 func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err error)
     Watchdog checks the runs in flight at now (the engine's observe pass):

@@ -517,6 +517,21 @@ func TestThePRBodyTurnGetsTheTasksRepositorysSkill(t *testing.T) {
 	}
 }
 
+// A stage that names its own prompt (the PR body's) launches and prompts its
+// role as it runs it, with that prompt, so the runtime records the hash of
+// the prompt the turn came from, not the role's own.
+func TestAStageRunsItsRoleWithItsOwnPrompt(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12381", "feature", "pr_body")
+	h.startStage(task)
+	if got := h.rt.launchedPrompts(); len(got) != 1 || !slices.Equal(got[0], []string{"factory-pr-body.md"}) {
+		t.Fatalf("the launch's prompt files %v, want the PR body's", got)
+	}
+	if ps := h.rt.promptsTo("fx-judge"); len(ps) != 1 || ps[0].PromptFile != "factory-pr-body.md" {
+		t.Fatalf("the judge's prompts %+v, want one, sent as the PR body's turn", ps)
+	}
+}
+
 // liaisonPrompt is the prompt of the liaison, the agent that talks with you
 // about a task (fx-liaison): the one factory prompt that asks you questions
 // itself and works in the task's folder, never in its copy.

@@ -587,7 +587,7 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 		if err != nil {
 			return fmt.Errorf("launch %s: %w", a.ID, err)
 		}
-		if err := r.start(ctx, pr, a, role, ws.Panes[agents.Role(role.Name)], resume, levels[i] == engine.MemoryWarn); err != nil {
+		if err := r.start(ctx, pr, a, role, ws.Panes[agents.Role(role.Name)], resume, levels[i] == engine.MemoryWarn, true); err != nil {
 			return fmt.Errorf("launch %s: %w", a.ID, err)
 		}
 		r.track(t, a, role, c.Path, env)
@@ -868,8 +868,11 @@ func (r *Runtime) preflight(ctx context.Context, role config.Role) error {
 }
 
 // start starts role's agent in pane (resumed from resume when it is set),
-// Stagger after the last start when stagger, and records its RoleRun facts.
-func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, pane, resume string, stagger bool) error {
+// Stagger after the last start when stagger, and records its RoleRun facts,
+// with the hashes of its prompt and its configuration when launch (the
+// attempt's launch of the role, as the stage runs it; a recovery's start
+// keeps them).
+func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, pane, resume string, stagger, launch bool) error {
 	if stagger {
 		r.launchMu.Lock()
 		defer r.launchMu.Unlock()
@@ -889,20 +892,26 @@ func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, ro
 	r.mu.Lock()
 	r.lastStart = r.now()
 	r.mu.Unlock()
-	r.recordLaunch(ctx, pr, a, role, launched)
+	r.recordLaunch(ctx, pr, a, role, launched, launch)
 	return nil
 }
 
-// recordLaunch writes the RoleRun facts of role's launch in attempt a: the
-// CLI and its version, the model, magnum's build, the prompt's and the
-// role's hashes, the session id and the transcript path when known.
-// Failures are logged: the evidence is no reason to stop the launch.
-func (r *Runtime) recordLaunch(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, launched time.Time) {
+// recordLaunch writes the RoleRun facts of role's start in attempt a: the
+// CLI and its version, the model, magnum's build, the session id and the
+// transcript path when known, and, for the attempt's launch of the role
+// (launch), the hashes of its prompt and its configuration. role is the
+// role as the stage runs it (its prompt the stage's own when the stage
+// names one), which a recovery after a restart reads afresh from the
+// configuration: its start keeps the hashes the launch recorded. Failures
+// are logged: the evidence is no reason to stop the launch.
+func (r *Runtime) recordLaunch(ctx context.Context, pr store.PR, a registry.Attempt, role config.Role, launched time.Time, launch bool) {
 	model, _, _ := agents.LaunchModel(ctx, r.st, r.cfg, role, r.now())
 	rr := registry.RoleRun{AttemptID: a.ID, Role: role.Name, CLI: role.AgentKind(),
 		CLIVersion: r.cliVersion(ctx, role), Model: cmp.Or(model, r.cfg.RoleModel(role), agents.UnknownModel),
-		MagnumBuild: engine.CurrentBuild("", r.d.Layout.Binary()).Label(), PromptHash: r.promptHash(role),
-		ConfigHash: configHash(role), Launched: launched}
+		MagnumBuild: engine.CurrentBuild("", r.d.Layout.Binary()).Label(), Launched: launched}
+	if launch {
+		rr.PromptHash, rr.ConfigHash = r.promptHash(role), configHash(role)
+	}
 	if s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, role.Name); err == nil {
 		rr.SessionID = store.Deref(s.SessionID)
 		if rr.SessionID != "" {
@@ -1047,23 +1056,53 @@ func (r *Runtime) stateFor(ctx context.Context, attempt, role string) (*roleStat
 // and the active and idle seconds. A failure feeds the loop detector: the
 // same why SameFailures times in a row is a loop without progress.
 func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error {
+	outcome := outcomeFailed
+	if ok {
+		outcome = outcomeVerified
+	}
+	return r.settleRun(ctx, runID, outcome, why)
+}
+
+// Void settles an ended run whose turn did what it was asked and is set
+// aside, neither verified nor failed: it ended on questions, which wait for
+// your answers or got them since. The agents store keeps it failed with
+// why and the outcome voided, so a stage rebuilt after a restart takes its
+// end again (a failed run's), and nothing that counts failed turns counts
+// it; its RoleRun records its end as Verify's does, the outcome voided. It
+// feeds the loop detector nothing: it is no failure, and no progress
+// either.
+func (r *Runtime) Void(ctx context.Context, runID, why string) error {
+	return r.settleRun(ctx, runID, outcomeVoided, why)
+}
+
+// The outcomes settleRun gives a run that ended (store.Run.Outcome; a
+// RoleRun's failed one carries its cause).
+const (
+	outcomeVerified = "verified"
+	outcomeFailed   = "failed"
+	outcomeVoided   = "voided"
+)
+
+// settleRun is Verify and Void: run runID, ended, moves to verified (that
+// outcome) or failed (the others), and its RoleRun records the end.
+func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) error {
 	run, err := r.st.RunByID(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", runID, err)
 	}
 	now := r.now()
+	ok := outcome == outcomeVerified
 	to := store.RunVerified
 	if !ok {
 		to = store.RunFailed
 	}
 	why = execx.Redact(strings.TrimSpace(why))
 	if err := r.st.TransitionRun(ctx, runID, []string{store.RunEnded}, to, func(u *store.RunUpdate) {
+		u.Set("outcome", outcome)
 		if ok {
 			u.Set("verified_at", now)
-			u.Set("outcome", "verified")
 		} else {
 			u.Set("error", why)
-			u.Set("outcome", "failed")
 		}
 	}); err != nil {
 		return fmt.Errorf("verify %s: %w", runID, err)
@@ -1076,14 +1115,20 @@ func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string)
 	if run.EndedAt != nil {
 		rr.Ended = *run.EndedAt
 	}
-	if ok {
-		rr.Outcome, rr.Verified = "verified", now
-	} else {
+	switch outcome {
+	case outcomeVerified:
+		rr.Outcome, rr.Verified = outcomeVerified, now
+	case outcomeVoided:
+		rr.Outcome = outcomeVoided
+	default:
 		rr.Outcome = "failed:" + cmp.Or(textx.Clip(textx.FirstLine(why), 80), "unverified")
 	}
 	r.endFacts(ctx, &rr, run, st, now)
 	if err := r.reg.RecordRoleRun(ctx, rr); err != nil {
 		r.log.Warn("record a role's end", "run", runID, "err", err)
+	}
+	if outcome == outcomeVoided {
+		return nil
 	}
 	r.mu.Lock()
 	lk := loopKey{st.taskID, st.stage, run.Role}

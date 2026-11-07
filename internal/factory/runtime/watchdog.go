@@ -470,7 +470,7 @@ func (r *Runtime) startIn(ctx context.Context, t registry.Task, a registry.Attem
 		}
 		pane = ws.Panes[agents.Role(st.role.Name)]
 	}
-	return r.start(ctx, pr, a, st.role, pane, resume, false)
+	return r.start(ctx, pr, a, st.role, pane, resume, false, false)
 }
 
 // relaunch quits idle session s and resumes its conversation in a new

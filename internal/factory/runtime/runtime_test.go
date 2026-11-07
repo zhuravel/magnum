@@ -157,6 +157,105 @@ func TestLaunchRecordsTheRoleRunFacts(t *testing.T) {
 	}
 }
 
+// The observe pass records a session's conversation on the row of its
+// role in the attempt the owner row is at only for a role that attempt
+// launched: a pane an earlier stage's role left live adds no row to a
+// later stage's attempt, whose rows are its own roles'.
+func TestObserveAddsNoRowForARoleOutsideTheStage(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-repro")
+	g.send("fx-repro", "reproduce the bug")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	g.observeN(3) // its run ended: its live session has no run in flight
+
+	g.attempt = g.begin(g.task, "judge")
+	g.launch("fx-judge")
+	g.h.setSession(g.agent("fx-judge"), "sid-judge")
+	g.observeN(2)
+
+	runs, err := g.reg.RoleRuns(g.ctx, g.attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Role != "fx-judge" || runs[0].SessionID != "sid-judge" {
+		t.Fatalf("the judge attempt's rows %+v, want fx-judge's alone, with its conversation", runs)
+	}
+}
+
+// Every launch and every prompt records the hash of the prompt file the
+// role's turns come from, as the stage runs the role: a stage's own prompt
+// (the PR body's, the amend's, a review's fix turn) and not the role's.
+// A recovery's start after a restart (its role read afresh from the
+// configuration) keeps the hash the launch recorded.
+func TestTheRoleRunRecordsThePromptTheStageRuns(t *testing.T) {
+	g := newRig(t)
+	judge := g.role("fx-judge")
+	own := g.r.promptHash(judge)
+	staged := judge
+	staged.Prompt = "factory-pr-body.md"
+	want := g.r.promptHash(staged)
+	if own == "" || want == "" || own == want {
+		t.Fatalf("prompt hashes %q (the role's) and %q (the stage's), want two", own, want)
+	}
+
+	if err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), []config.Role{staged}); err != nil {
+		t.Fatal(err)
+	}
+	if rr := g.roleRun("fx-judge"); rr.PromptHash != want {
+		t.Fatalf("the launch recorded prompt hash %q, want the stage's %q", rr.PromptHash, want)
+	}
+	if err := g.reg.RecordRoleRun(g.ctx, registry.RoleRun{AttemptID: g.attempt.ID, Role: "fx-judge", PromptHash: "older-build"}); err != nil {
+		t.Fatal(err)
+	}
+	g.h.setSession(g.agent("fx-judge"), "sid-judge")
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, staged, "write the PR body"); err != nil {
+		t.Fatal(err)
+	}
+	if rr := g.roleRun("fx-judge"); rr.PromptHash != want {
+		t.Fatalf("after a prompt the record holds prompt hash %q, want the stage's %q", rr.PromptHash, want)
+	}
+
+	g.restart()
+	g.h.losePane(g.agent("fx-judge"))
+	g.observeN(3) // the lost pane's conversation is resumed
+	if s := g.h.startCalls(); len(s) != 2 {
+		t.Fatalf("starts %+v, want the lost pane recovered", s)
+	}
+	if rr := g.roleRun("fx-judge"); rr.PromptHash != want {
+		t.Fatalf("after a recovery the record holds prompt hash %q, want the launch's %q", rr.PromptHash, want)
+	}
+}
+
+// A turn that ended on questions is set aside, neither verified nor failed:
+// the agents store keeps its run failed (a stage rebuilt after a restart
+// takes its end again) with the outcome voided, its record says voided and
+// why, and it is no failure of a loop without progress.
+func TestVoidSetsAsideATurnThatAskedQuestions(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-judge")
+	why := "it asked questions: the stage waits for your answers"
+	for i := 1; i <= SameFailures; i++ {
+		id := g.send("fx-judge", "merge the findings, turn "+strconv.Itoa(i))
+		g.h.setStatus(g.agent("fx-judge"), herdr.StatusIdle)
+		g.observeN(2)
+		if err := g.r.Void(g.ctx, id, why); err != nil {
+			t.Fatal(err)
+		}
+		if r := g.storeRun(id); r.State != store.RunFailed || store.Deref(r.Outcome) != "voided" || store.Deref(r.Error) != why {
+			t.Fatalf("the voided run is %s, outcome %q, error %q; want failed, voided, %q", r.State, store.Deref(r.Outcome), store.Deref(r.Error), why)
+		}
+	}
+	if rr := g.roleRun("fx-judge"); rr.Outcome != "voided" || rr.EndWhy != why || rr.Ended.IsZero() {
+		t.Fatalf("role run %+v, want voided with why and its end", rr)
+	}
+
+	g.send("fx-judge", "the operator answered the questions")
+	if slices.ContainsFunc(g.h.runCalls(), func(r paneRunCall) bool { return r.Command == agents.CompactCommand }) {
+		t.Fatal("three turns that asked counted as the same failure three times: the session was compacted")
+	}
+}
+
 func TestObserveEndsARunAfterTwoIdleTicks(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro")

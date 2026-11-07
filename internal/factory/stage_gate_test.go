@@ -564,6 +564,31 @@ func TestAQuestionInCodingSuspendsTheStageAndResumesIt(t *testing.T) {
 	}
 }
 
+// A turn that ended on questions did what it was asked: its run is voided,
+// never failed, so nothing that counts failed turns (the stats, a learner
+// reading the runs) takes it for a prompt's fault.
+func TestATurnThatAskedIsVoidedNotFailed(t *testing.T) {
+	h := newHarness(t)
+	codingEndsOnFindings(h)
+	task := h.kindTask("PR-12382", "feature", "coding")
+	h.startStage(task)
+	asked := h.lastRun("fx-writer")
+	h.taskFile(task.ID, "questions-fx-writer.json", questionsJSON(t, fileQuestion("Reuse CreditMailer?", 0, "yes", "no")))
+	h.ended(task, "fx-writer")
+	h.tick()
+
+	want := verifyCall{RunID: asked, Why: "it asked questions: the stage waits for your answers"}
+	if vs := h.rt.voids(); !slices.Equal(vs, []verifyCall{want}) {
+		t.Fatalf("Void calls %+v, want the turn that asked voided", vs)
+	}
+	if slices.ContainsFunc(h.rt.verifies(), func(v verifyCall) bool { return v.RunID == asked }) {
+		t.Fatalf("Verify calls %+v: the turn that asked was settled as failed", h.rt.verifies())
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s, want needs_you for its question", got.State)
+	}
+}
+
 // A restart between your answers and the resumed role's prompt sends that
 // prompt once.
 func TestARestartBetweenTheAnswersAndTheResumeSendsTheAnswersOnce(t *testing.T) {

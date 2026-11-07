@@ -184,6 +184,13 @@ func (r *Runtime) first(key string) bool {
 	return true
 }
 
+// marked reports whether key is marked (first), marking nothing.
+func (r *Runtime) marked(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.once[key]
+}
+
 // forget unmarks key.
 func (r *Runtime) forget(key string) {
 	r.mu.Lock()
@@ -218,7 +225,10 @@ func (r *Runtime) onObservation(ctx context.Context, o agents.Observation) []Eve
 
 // noteSession records on the RoleRun of the session's current attempt what
 // the session tells first: its conversation id and transcript, and the
-// time it first worked.
+// time it first worked. A session with no run in flight is its role's in
+// the attempt the owner row is at only when that attempt launched the role
+// (launchedIn): a pane an earlier stage's role left live adds no row to a
+// later stage's attempt.
 func (r *Runtime) noteSession(ctx context.Context, o agents.Observation) {
 	pr, err := r.st.PRByID(ctx, o.PRID)
 	if err != nil {
@@ -228,7 +238,8 @@ func (r *Runtime) noteSession(ctx context.Context, o agents.Observation) {
 	if o.Run != nil {
 		attempt = o.Run.TargetSHA
 	}
-	if sid := store.Deref(o.Session.SessionID); sid != "" && r.first("sid:"+attempt+":"+role+":"+sid) {
+	if sid := store.Deref(o.Session.SessionID); sid != "" && !r.marked("sid:"+attempt+":"+role+":"+sid) &&
+		(o.Run != nil || r.launchedIn(ctx, attempt, role)) && r.first("sid:"+attempt+":"+role+":"+sid) {
 		rr := registry.RoleRun{AttemptID: attempt, Role: role, SessionID: sid}
 		rr.Transcript, _ = r.mgr.TranscriptPath(ctx, o.Session)
 		if rr.Transcript == "" {
@@ -239,6 +250,13 @@ func (r *Runtime) noteSession(ctx context.Context, o agents.Observation) {
 	if o.Status == herdr.StatusWorking && o.Run != nil && r.first("out:"+attempt+":"+role) {
 		r.record(ctx, registry.RoleRun{AttemptID: attempt, Role: role, FirstOutput: r.now()})
 	}
+}
+
+// launchedIn reports whether attempt launched role: the registry holds the
+// role's record of the attempt, which its launch writes first.
+func (r *Runtime) launchedIn(ctx context.Context, attempt, role string) bool {
+	runs, err := r.reg.RoleRuns(ctx, attempt)
+	return err == nil && slices.ContainsFunc(runs, func(rr registry.RoleRun) bool { return rr.Role == role })
 }
 
 // record writes rr, logging a failure (an attempt the registry does not

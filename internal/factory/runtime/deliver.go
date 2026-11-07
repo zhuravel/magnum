@@ -78,7 +78,9 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 	case err != nil:
 		return "", err
 	case step == loopFresh:
-		return r.fromFiles(ctx, t, a, st, "a loop without progress", text)
+		id, err := r.fromFiles(ctx, t, a, st, "a loop without progress", text)
+		r.notePrompt(ctx, a, role, id)
+		return id, err
 	}
 	kind := store.RunNudge
 	if !hasPrompt(entries, a.ID, role.Name) {
@@ -90,7 +92,18 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 		st.first = text
 		r.mu.Unlock()
 	}
+	r.notePrompt(ctx, a, role, id)
 	return id, err
+}
+
+// notePrompt records on role's RoleRun of attempt a the hash of the prompt
+// file its turns come from (role as the stage runs it) once run, a prompt's
+// run, may have taken it: every prompt says which prompt version the role
+// ran, so an attempt a build without it launched gets it too.
+func (r *Runtime) notePrompt(ctx context.Context, a registry.Attempt, role config.Role, run string) {
+	if hash := r.promptHash(role); run != "" && hash != "" {
+		r.record(ctx, registry.RoleRun{AttemptID: a.ID, Role: role.Name, PromptHash: hash})
+	}
 }
 
 // hasPrompt reports whether the ledger holds a prompt to role in attempt

@@ -57,12 +57,16 @@ type fakeRuntime struct {
 	cfg         *config.Config
 	reg         *registry.Registry
 	launchRoles [][]string
-	sent        []sentPrompt
-	verified    []verifyCall
-	runs        int
-	sendErr     error
-	quits       []int64
-	quitErr     error
+	// launchPrompts are the prompt files of the roles of each Launch, as
+	// the stage runs them; voided the Void calls.
+	launchPrompts [][]string
+	sent          []sentPrompt
+	verified      []verifyCall
+	voided        []verifyCall
+	runs          int
+	sendErr       error
+	quits         []int64
+	quitErr       error
 	// runState is each run's state as the agents store keeps it (RunState):
 	// Send makes a working run, Observe's events end, pause or refuse it as
 	// the runtime does, Verify settles it.
@@ -216,11 +220,13 @@ func (f *fakeRuntime) setVerdict(v string) {
 type runFact struct{ state, why string }
 
 // sentPrompt is a prompt Send took: the task, the attempt, the role (as it
-// runs), the text and the run it made.
+// runs), the text, the run it made and the prompt file of the role as the
+// stage runs it.
 type sentPrompt struct {
 	TaskID              int64
 	Attempt, Role, Text string
 	RunID               string
+	PromptFile          string
 }
 
 // verifyCall is a Verify the stage made.
@@ -237,11 +243,11 @@ func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { 
 func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, _ Copy, roles []config.Role) error {
 	f.mu.Lock()
 	f.launches = append(f.launches, t.ID)
-	names := make([]string, 0, len(roles))
+	names, prompts := make([]string, 0, len(roles)), make([]string, 0, len(roles))
 	for _, r := range roles {
-		names = append(names, r.Name)
+		names, prompts = append(names, r.Name), append(prompts, r.Prompt)
 	}
-	f.launchRoles = append(f.launchRoles, names)
+	f.launchRoles, f.launchPrompts = append(f.launchRoles, names), append(f.launchPrompts, prompts)
 	err, reg := f.launchErr, f.reg
 	f.mu.Unlock()
 	if err != nil || reg == nil || a.ID == "" {
@@ -282,7 +288,7 @@ func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Atte
 	f.mu.Lock()
 	f.runs++
 	id := "run-" + strconv.Itoa(f.runs)
-	f.sent = append(f.sent, sentPrompt{TaskID: t.ID, Attempt: a.ID, Role: role.Name, Text: text, RunID: id})
+	f.sent = append(f.sent, sentPrompt{TaskID: t.ID, Attempt: a.ID, Role: role.Name, Text: text, RunID: id, PromptFile: role.Prompt})
 	unknown := f.unknownNext[role.Name]
 	delete(f.unknownNext, role.Name)
 	if unknown {
@@ -340,6 +346,13 @@ func (f *fakeRuntime) launchedRoles() [][]string {
 	return slices.Clone(f.launchRoles)
 }
 
+// launchedPrompts are the prompt files of the roles of each Launch.
+func (f *fakeRuntime) launchedPrompts() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.launchPrompts)
+}
+
 // promptsTo are the prompts Send took for role, oldest first.
 func (f *fakeRuntime) promptsTo(role string) []sentPrompt {
 	f.mu.Lock()
@@ -363,6 +376,12 @@ func (f *fakeRuntime) verifies() []verifyCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.verified)
+}
+
+func (f *fakeRuntime) voids() []verifyCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.voided)
 }
 
 func (f *fakeRuntime) codexQuits() []int64 {
@@ -443,6 +462,29 @@ func (f *fakeRuntime) Verify(ctx context.Context, runID string, ok bool, why str
 		rr.Outcome, rr.Verified = "failed:unverified", time.Time{}
 	}
 	return reg.RecordRoleRun(ctx, rr)
+}
+
+// Void records the call and, as the runtime does, keeps the run failed with
+// why and its role's outcome voided.
+func (f *fakeRuntime) Void(ctx context.Context, runID, why string) error {
+	f.mu.Lock()
+	f.voided = append(f.voided, verifyCall{RunID: runID, Why: why})
+	if cur, known := f.runState[runID]; known && cur.state != store.RunEnded {
+		f.mu.Unlock()
+		return fmt.Errorf("void %s: %w: it is %s", runID, store.ErrConflict, cur.state) // the store moves only an ended run
+	}
+	f.setRunLocked(runID, store.RunFailed, why)
+	i := slices.IndexFunc(f.sent, func(p sentPrompt) bool { return p.RunID == runID })
+	reg := f.reg
+	var p sentPrompt
+	if i >= 0 {
+		p = f.sent[i]
+	}
+	f.mu.Unlock()
+	if reg == nil || i < 0 {
+		return nil
+	}
+	return reg.RecordRoleRun(ctx, registry.RoleRun{AttemptID: p.Attempt, Role: p.Role, Outcome: "voided", EndWhy: why})
 }
 
 // setAtWork has role's agent at work in the task's copy ("" for none).
