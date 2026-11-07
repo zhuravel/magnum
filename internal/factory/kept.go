@@ -216,13 +216,14 @@ func refusal(err error) (files []string, line string, ok bool) {
 
 // refusedWhat is the wait of a task whose copy (name) git refused to switch
 // over files it does not track (files, else git's line): yours, never
-// written over.
+// written over. A caller that sends the task to you ends it with the retry
+// (retryHint).
 func refusedWhat(name string, files []string, line string) string {
 	if len(files) == 0 {
-		return fmt.Sprintf("git refused to switch %s (%s): move or remove what is in the way, then let the task go on", name, line)
+		return fmt.Sprintf("git refused to switch %s (%s): move or remove what is in the way", name, line)
 	}
 	return fmt.Sprintf("git refused to switch %s: it would write over %s, which git does not track there (an untracked or "+
-		"ignored file of yours): move or remove it, then let the task go on", name, clipList(files))
+		"ignored file of yours): move or remove it", name, clipList(files))
 }
 
 // contentSum is the sha256 of the file at p in dir, "" when there is none.

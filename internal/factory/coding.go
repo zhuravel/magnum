@@ -86,7 +86,7 @@ func (e *Engine) startCoding(ctx context.Context, t *registry.Task, c Copy) erro
 	fail := func(err error) error {
 		e.event(ctx, t.ID, "branch", registry.PhaseFail, t.Branch+" in "+c.Name+": "+textx.Clip(textx.FirstLine(err.Error()), 300))
 		if files, line, ok := refusal(err); ok { // a file of yours in the way: never written over, and yours to move
-			return needsYou{refusedWhat(c.Name, files, line)}
+			return needsYou{refusedWhat(c.Name, files, line) + retryHint(*t)}
 		}
 		return err
 	}

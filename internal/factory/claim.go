@@ -246,7 +246,7 @@ func (e *Engine) claimed(ctx context.Context, t registry.Task, run *claimRun) (C
 func (e *Engine) claimFailed(ctx context.Context, t registry.Task, run *claimRun) error {
 	err := run.err
 	if files, line, ok := refusal(err); ok {
-		what := refusedWhat(cmpJoin(nonEmpty(t.Copy), "the copy it claimed"), files, line)
+		what := refusedWhat(cmpJoin(nonEmpty(t.Copy), "the copy it claimed"), files, line) + retryHint(t)
 		e.claimMu.Lock()
 		delete(e.claimWaits, t.ID)
 		e.claimMu.Unlock()

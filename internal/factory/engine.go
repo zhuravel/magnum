@@ -1327,8 +1327,9 @@ func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 		return
 	}
 	delete(e.lastFail, f.task.ID)
-	e.toOperator(ctx, f.task, fmt.Sprintf("the %s stage failed %d times in a row: %s", stageWhat(cmp.Or(f.task.Stage, "first")), sf.n, text),
-		"a stage that keeps failing")
+	e.toOperator(ctx, f.task, fmt.Sprintf("the %s stage failed %d times in a row: %s; fix its cause (a change of the configuration "+
+		"takes effect after `magnum factory install`, one of magnum's code after `make build && magnum factory install`)%s",
+		stageWhat(cmp.Or(f.task.Stage, "first")), sf.n, text, retryHint(f.task)), "a stage that keeps failing")
 }
 
 // stageWhat is a stage's name as a wait says it ("local_review": "local

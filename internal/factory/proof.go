@@ -977,7 +977,7 @@ func (e *Engine) keptDetached(ctx context.Context, t registry.Task, rec detached
 	switch {
 	case isLive(t):
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
-		e.toOperator(ctx, t, what, "a base run left changes the factory did not make")
+		e.toOperator(ctx, t, what+retryHint(t), "a base run left changes the factory did not make")
 	case begun || e.keptCopies[t.ID].what != what: // a task the loop does not advance: said once
 		e.event(ctx, t.ID, "proof", registry.PhaseFail, "restore after a base run: "+what)
 		if e.keptCopies[t.ID].what != what {
