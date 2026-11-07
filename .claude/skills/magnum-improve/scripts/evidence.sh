@@ -810,14 +810,17 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.ASCII)
 HOST = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b", re.ASCII)
 # REDACT, TOKENS and PAIRS run on the whole text, in the Go scrub's order, since a private key, an Authorization value
 # and a key's value (on the next line, or quoted over lines) cross a line break; EMAIL and HOST, which cannot, run on
-# each line kept. Python's engine, unlike Go's, backtracks for minutes on some long lines (a dotted run, an eyJ
-# repeated), so first a line longer than LINE_MAX keeps only its first and last LINE_MAX / 2 characters, each cut back
-# to a space or tab: no part of a word that crosses a cut is kept (masking shortens the head, so the end of a long
-# secret cut mid-word would show after the marker), and the last part keeps a key that ends the line, whose value is
-# on the next. And HOST runs on each run of the characters a host name or an address is made of: a match never leaves
-# such a run, and the characters around a run are no word characters, so the matches are the same as on the whole
-# line; a run longer than a host name may be (253 characters) is masked whole.
-LINE_MAX, HOST_MAX = 2000, 253
+# each line kept. Python's engine, unlike Go's, backtracks for minutes on some long words (a dotted run, an eyJ
+# repeated), so first a word (a run of characters without whitespace) longer than WORD_MAX becomes [...], and keeps
+# the key it ends with, whose value is the next word. No line is cut: what the Go scrub masks across words is masked
+# here (a cut before the masks parted keys from their values). The slowest text measured at the notes' 1 MiB cap,
+# one line of 253-character dotted words, takes 5 s. And HOST runs on each run of the characters a host name or an address is made of: a match never leaves such a
+# run, and the characters around a run are no word characters, so the matches are the same as on the whole line; a
+# run longer than a host name may be (253 characters) is masked whole.
+WORD_MAX, HOST_MAX = 2000, 253
+WORD = re.compile(r"\S+")
+# the key (and its separator) a long word ends with: the word's value is the next word, which must stay masked
+KEYEND = re.compile(r"""(?i)(?<![A-Za-z0-9_])(?:authorization|(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))[=:]["']?$""", re.ASCII)
 HOST_RUN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -834,19 +837,17 @@ def host(m):
     return "<host>" if len(run) > HOST_MAX else HOST.sub("<host>", run)
 
 
-def bounded(line):
-    half = LINE_MAX // 2
-    if len(line) <= LINE_MAX:
-        return line
-    head, tail = line[:half], line[-half:]
-    cut_h = max(head.rfind(" "), head.rfind("\t"))
-    cut_t = min((i for i in (tail.find(" "), tail.find("\t")) if i >= 0), default=len(tail))
-    return head[:max(cut_h, 0)] + " [...] " + tail[cut_t:]
+def capped(m):
+    w = m.group(0)
+    if len(w) <= WORD_MAX:
+        return w
+    k = KEYEND.search(w[-40:])
+    return "[...]" + (k.group(0) if k else "")
 
 
 def scrub_lines(text, keep=0):
     """The lines of text scrubbed, the last keep of them (0: all), and how many it left out."""
-    text = "\n".join(bounded(line) for line in (text or "").split("\n"))
+    text = WORD.sub(capped, text or "")
     text = PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", REDACT.sub(redacted, text)))
     lines = text.splitlines()
     left = max(0, len(lines) - keep) if keep else 0

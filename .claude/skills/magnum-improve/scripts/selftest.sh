@@ -30,8 +30,8 @@
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
 #     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
-#     600 KB of eyJ scrubbed in seconds, a long line cut at whitespace so no part of a secret that crosses the cut
-#     shows, no notes read through a link, from a folder, an unreadable file, a file over
+#     600 KB of eyJ scrubbed in seconds, a word over 2,000 characters dropped whole and no line cut, so no part of a
+#     long secret and no secret parted from its key shows, no notes read through a link, from a folder, an unreadable file, a file over
 #     1 MiB or a foreign folder, notes that start as a left-out note does scrubbed all the same, lens 13's stats
 #     command with the local date of the factory's since,
 #     and a since that is no real time and wrong arguments refused.
@@ -658,11 +658,29 @@ printf '%s\n' '(notes.md is not a plain file: left out)' '- PREFIX password=PARE
 echo '- UNREADABLE-NOTE' >"$ev/factory-tasks/15/notes.md"
 chmod 000 "$ev/factory-tasks/15/notes.md"
 echo 'a task folder that is a file' >"$ev/factory-tasks/16"
-# Task 17's notes hold two secrets of one word each that cross the 1,000-character cut of a long line, each with a
-# marker where its tail would show after the [...] marker if the cut fell inside the word.
+# Task 17's notes hold two secrets of one word each, over 2,000 characters, each with a marker where its end would
+# show after the [...] marker if a long line were cut inside the word.
 mkdir -p "$ev/factory-tasks/17"
 python3 -c 'print("- Authorization: Bearer " + "T" * 1500 + "BEARER-END" + "U" * 900)
 print("- password: " + "P" * 1450 + "PASSWORD-END" + "Q" * 938)' >"$ev/factory-tasks/17/notes.md"
+# Task 18's notes hold the secrets a cut of a long line parted from their keys: a key that ends a long line with no
+# whitespace in its last 1,000 characters, its value on the next line, and four lines that start with a word of 1,100
+# characters, whose last 1,000 characters start at the second character of a key (a value, a Bearer token, a quoted
+# value of two words, a one-line private key).
+mkdir -p "$ev/factory-tasks/18"
+python3 - >"$ev/factory-tasks/18/notes.md" <<'PYX'
+PRE = "- " + "H" * 1100 + " " + "mid " * 50
+def build(region, k=1):
+    pad = 1000 + k - len(region)
+    assert pad >= 0
+    return PRE + region + ("w " * (pad // 2 + 1))[:pad]
+print("- note " + "a-" * 1100 + "password:")
+print("NEXTLINE-SECRET-A")
+print(build("password: B1-SECRET "))
+print(build("Authorization: Bearer B2-SECRET "))
+print(build('password: "B3a-SECRET B3b-SECRET" '))
+print(build("-----BEGIN PRIVATE KEY----- B4a-SECRET B4b-SECRET -----END PRIVATE KEY-----  "))
+PYX
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
@@ -810,8 +828,8 @@ grep -A2 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | grep -Fxq '(1 ear
 ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
 
 # 19. A long dotted line and a long run of eyJ, which Python's regex engine (unlike Go's) backtracks on for minutes,
-#     are scrubbed in seconds: a long line keeps its first and last 1,000 characters, each cut back to whitespace, so
-#     the dotted word that fills the line is dropped.
+#     are scrubbed in seconds: a word over 2,000 characters becomes [...], so the dotted word that fills the line is
+#     dropped.
 [[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line and 600 KB of eyJ in the notes took ${run1_secs}s"
 grep -Fxq '> - [...]' "$ev/fout/evidence.md" ||
     fail "the long dotted line is cut away: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
@@ -863,12 +881,19 @@ for args in "--factory 3d $ev/bad" "3d $ev/bad extra" "--factory-since"; do
 done
 ok "evidence.sh refuses a since that is no real time and wrong arguments, and takes --factory-since anywhere"
 
-# 23. A long line is cut at whitespace: no part of a word that crosses a cut is kept, so a secret word longer than the
-#     cut's halves shows no part of its end after the [...] marker, while the value before the cut is masked.
+# 23. A word over 2,000 characters is dropped whole: a secret word that long shows no part of it after the [...]
+#     marker, and the key before it is masked with it.
 grep -Fxq '> - Authorization: <redacted>' "$f_md" && grep -Fxq '> - password: <redacted>' "$f_md" &&
     ! grep -Eq 'BEARER-END|PASSWORD-END|TTTTTTTTTT|UUUUUUUUUU|PPPPPPPPPP|QQQQQQQQQQ' "$f_md" ||
-    fail "a secret that crosses the cut of a long line shows no part: $(grep -A3 -Fx '### Task 17 (task 17, -)' "$f_md" | cut -c1-200 | tr '\n' ';')"
-ok "evidence.sh cuts a long line at whitespace, so no part of a secret that crosses the cut is shown"
+    fail "a secret word over 2,000 characters shows no part: $(grep -A3 -Fx '### Task 17 (task 17, -)' "$f_md" | cut -c1-200 | tr '\n' ';')"
+ok "evidence.sh drops a word over 2,000 characters whole, so no part of a long secret is shown"
+
+# 24. No line is cut before the masks run, so no secret is parted from its key: a value on the line after a key that
+#     ends a long line, and the value, token, quoted words or key body after a key that a 1,000-character window would
+#     have split, are all masked.
+! grep -Eq 'NEXTLINE-SECRET-A|B1-SECRET|B2-SECRET|B3a-SECRET|B3b-SECRET|B4a-SECRET|B4b-SECRET' "$f_md" ||
+    fail "a secret near the cut of a long line shows: $(grep -Eo '.{0,40}(NEXTLINE-SECRET-A|B[1-4][ab]?-SECRET).{0,10}' "$f_md" | tr '\n' ';')"
+ok "evidence.sh parts no secret from its key in a long line"
 
 
 echo "selftest: $checks checks passed"

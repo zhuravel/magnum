@@ -17152,14 +17152,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     in Go's order, before the cut to 80 lines, since a key's value can stand on the next line or in quotes over two;
     emails and hosts, which cannot cross a line, run per line. Python's engine backtracks where RE2 does not (a
     dotted line of 8,000 characters took 9 s in the host pattern, 240 KB of a repeated `eyJ` 11 s in the JWT one),
-    so a line over 2,000 characters first keeps only its first and last 1,000, each cut back to a space or tab (the
-    last keeps a key that ends the line), and the host pattern runs on each run of host characters, a run longer
-    than a host name (253) masked whole. Rejected: scrubbing each line apart (it showed a value on the line after
-    its key), cutting a long line to its first 2,000 characters (it dropped a key at the line's end), and cutting it
-    mid-word (masking shortened the head, and the end of a long secret showed after the marker). The agents write
-    the task folders, so a `notes.md` that is a link, a folder or anything but a plain file, unreadable, or over
-    1 MiB is named and not read, the text and the note kept apart, and a linked folder, a task "folder" that is a
-    file, or one not named with ASCII digits is skipped.
+    so a word (a run without whitespace) over 2,000 characters first becomes `[...]`, keeping a key it ends with
+    (its value is the next word), and the host pattern runs on each run of host characters, a run longer than a host
+    name (253) masked whole. No line is cut before the masks run; the slowest text measured at the 1 MiB cap, one
+    line of 253-character dotted words, takes 5 s. Rejected: scrubbing each line apart (it showed a value on the
+    line after its key), and cutting a long line anywhere before the masks, to its first 2,000 characters, to its
+    first and last 1,000, or to those cut back to whitespace: a cut parts a key from its value, and each showed a
+    secret the Go scrub masks. The `execx.exitError` entry records the same lesson for the Go side: mask first, cut
+    after. The agents write the task folders, so a `notes.md` that is a link, a folder or anything but a plain file,
+    unreadable, or over 1 MiB is named and not read, the text and the note kept apart, and a linked folder, a task
+    "folder" that is a file, or one not named with ASCII digits is skipped.
   - `--factory-since` is the loop's second cursor (spec 11.4): the factory's tables, notes and `factory-reports.txt`
     read from it, so a run whose lens 13 did not run leaves the factory's evidence to the next one; the run log's
     `factory since` line carries it, and the flag counts anywhere among the arguments. A since that is neither an
@@ -17178,9 +17180,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   directories since a UTC since in Asia/Tokyo; eight mutations of the new code each fail one of them. Then the
   scrub's patterns against the Go files with a sample of each (most from the Go tests), a 20,000-character dotted
   line, and the notes of a link, a linked folder, a file over 1 MiB and a folder named with a non-ASCII digit;
-  values across a line break and past the 80-line cut, 600 KB of `eyJ`, two secrets across a long line's cut, and
-  the notes of a folder, an unreadable file, a file that starts as a left-out note does and a task folder that is a
-  file; the stats command's date in America/New_York; the impossible sinces and the wrong arguments.
+  values across a line break and past the 80-line cut, 600 KB of `eyJ`, two secret words over 2,000 characters, the
+  secrets a cut would part from their keys, and the notes of a folder, an unreadable file, a file that starts as a
+  left-out note does and a task folder that is a file; the stats command's date in America/New_York; the impossible
+  sinces and the wrong arguments.
 
 ## Learned rules
 
