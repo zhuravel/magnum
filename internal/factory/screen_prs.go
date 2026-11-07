@@ -14,7 +14,9 @@ package factory
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,22 +45,62 @@ func prRef(v *taskView) PRRef {
 	return PRRef{Repo: cmp.Or(v.link.Repo, v.t.Repo), Number: cmp.Or(v.link.Number, v.t.PRNumber)}
 }
 
-// readPRs reads the PRs of the published views from magnum's registry,
-// once, and sets each one's wait and group (prWaitOf), and since when it
-// waits so: the later of the task's last span (its publish, a reopen) and
-// when its PR began to wait as it does; without a Magnum, or with no
-// published task, it reads nothing.
-func (s *screen) readPRs(m Magnum) {
+// readPRs reads, once, from magnum's registry the PRs of the published
+// views and of the tasks done today or since lastSeen (the digest's, when
+// there is one). It sets each published view's wait and group (prWaitOf),
+// and since when it waits so: the later of the task's last span (its
+// publish, a reopen) and when its PR began to wait as it does. A done
+// task's PR says when it merged (merged): the tick made the task done
+// when it saw the merge, maybe days later (the first tick after an
+// install), so home drops a done task whose PR merged before today. Without
+// a Magnum, or with no such task, it reads nothing; a read that fails
+// leaves the done tasks at the time the tick saw the merge.
+func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
+	if m == nil {
+		return nil
+	}
 	var refs []PRRef
+	views := map[int64]*taskView{}
 	for _, v := range s.views {
+		views[v.t.ID] = v
 		if v.t.State == registry.TaskPublished && prRef(v).Number > 0 {
 			refs = append(refs, prRef(v))
 		}
 	}
-	if m == nil || len(refs) == 0 {
-		return
+	done := map[int64]PRRef{}
+	for _, t := range s.tasks {
+		if t.State != registry.TaskDone || !sameDay(t.Updated, s.now) && !(s.away(lastSeen) && t.Updated.After(lastSeen)) {
+			continue
+		}
+		v, ok := views[t.ID]
+		if !ok {
+			l, err := s.reg.LinkedPR(s.ctx, t.ID)
+			if err != nil && !errors.Is(err, registry.ErrNotFound) {
+				return err
+			}
+			v = &taskView{t: t, link: l}
+		}
+		if ref := prRef(v); ref.Number > 0 {
+			done[t.ID] = ref
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		return nil
 	}
 	states, err := m.PRStates(s.ctx, refs)
+	if err == nil {
+		s.merged = map[int64]time.Time{}
+		for id, ref := range done {
+			if st := states[ref]; st.GHState == store.GHMerged && st.MergedAt != nil {
+				s.merged[id] = *st.MergedAt
+			}
+		}
+		s.views = slices.DeleteFunc(s.views, func(v *taskView) bool {
+			at, ok := s.merged[v.t.ID]
+			return ok && !sameDay(at, s.now)
+		})
+	}
 	for _, v := range s.views {
 		if v.t.State != registry.TaskPublished || prRef(v).Number <= 0 {
 			continue
@@ -71,6 +113,16 @@ func (s *screen) readPRs(m Magnum) {
 			v.since = w.since
 		}
 	}
+	return nil
+}
+
+// doneAt is when done task t's PR merged, as magnum's registry tells it
+// (readPRs), else when the tick saw the merge.
+func (s *screen) doneAt(t registry.Task) time.Time {
+	if at, ok := s.merged[t.ID]; ok {
+		return at
+	}
+	return t.Updated
 }
 
 // prWaitOf is the wait of published task v whose PR magnum's registry

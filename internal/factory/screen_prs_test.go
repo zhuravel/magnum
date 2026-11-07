@@ -281,7 +281,7 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 }
 
 // ScreenData reads magnum's registry once for all the published tasks of
-// a frame, and not at all when none is published.
+// a frame (and its tasks done today), and not at all when there is none.
 func TestScreenDataReadsMagnumOncePerFrame(t *testing.T) {
 	r := newScreenRig(t)
 	m := r.withMagnum()
@@ -367,5 +367,41 @@ func TestAPublishedRowWaitedSinceItsPRBeganToWaitSo(t *testing.T) {
 	d := r.data(screenNow.Add(-3 * time.Hour))
 	if d.Digest == nil || d.Digest.Chip != "away 3h: 1 done, 1 new for you" {
 		t.Errorf("the digest %+v, want the PR that came to need you counted new for you", d.Digest)
+	}
+}
+
+// A task done by the tick's follow of its merged PR says when the PR
+// merged, not when the tick saw it: its row and the digest name the
+// merge's time, and DONE TODAY and the digest keep it by that time, so a
+// PR merged last week whose task the first tick after an install made done
+// is neither done today nor news.
+func TestADoneTaskSaysWhenItsPRMerged(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.at(8 * 24 * time.Hour)
+	lastWeek := r.published(r.task("PR-12371", "chore", "Merged last week", registry.TaskActive, "publish", "", ""), 4571)
+	today := r.publishedTask("PR-12370", 4570)
+	mergedToday, mergedLastWeek := time.Date(2026, 11, 4, 8, 50, 0, 0, time.Local), screenNow.Add(-7*24*time.Hour)
+	r.pr(4570, func(v *PRState) { v.GHState, v.MergedAt, v.ClosedAt = store.GHMerged, &mergedToday, &mergedToday })
+	r.pr(4571, func(v *PRState) { v.GHState, v.MergedAt, v.ClosedAt = store.GHMerged, &mergedLastWeek, &mergedLastWeek })
+	r.at(time.Minute) // the tick follows both merges at 09:04
+	r.move(today, registry.TaskDone, "", "")
+	r.move(lastWeek, registry.TaskDone, "", "")
+
+	d := r.data(screenNow.Add(-3 * time.Hour))
+	want := tui.WaitsOn{Who: "nothing", What: "merged 08:50"}
+	if row := rowOf(t, d, "PR-12370"); row.Group != tui.GroupDone || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want {
+		t.Errorf("a task whose PR merged at 08:50: %+v, want DONE TODAY with %+v", row, want)
+	}
+	if hasRow(d, "PR-12371") {
+		t.Errorf("a task whose PR merged last week is DONE TODAY")
+	}
+	if d.Digest == nil || !slices.Equal(d.Digest.Done, []string{"PR-12370 PR-12370 title · merged 08:50"}) {
+		t.Errorf("the digest %+v, want only the merge of 08:50", d.Digest)
+	}
+
+	r.magnum.setPRErr(errors.New("magnum's registry is locked"))
+	if row := rowOf(t, r.data(time.Time{}), "PR-12370"); row.WaitsOn[0].What != "merged 09:04" {
+		t.Errorf("without magnum's registry: %+v, want the time the task was done", row.WaitsOn[0])
 	}
 }

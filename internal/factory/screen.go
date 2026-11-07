@@ -123,7 +123,9 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			s.views = append(s.views, v)
 		}
 	}
-	s.readPRs(o.Magnum)
+	if err := s.readPRs(o.Magnum, lastSeen); err != nil {
+		return d, err
+	}
 	for _, v := range s.views {
 		row, cards, decisions := s.task(v)
 		d.Rows = append(d.Rows, row)
@@ -176,6 +178,8 @@ type screen struct {
 	now    time.Time
 	tasks  []registry.Task
 	views  []*taskView
+	// merged is when the PRs of the done tasks it read merged (readPRs).
+	merged map[int64]time.Time
 }
 
 // taskView is what the screen read of a task on home.
@@ -207,7 +211,8 @@ type taskView struct {
 
 // read is what the screen shows of task t, nil for a task home leaves out
 // (stopped, or done before today; a published task stays, its group set by
-// its PR once readPRs read it).
+// its PR once readPRs read it, which also drops a task done today whose PR
+// merged before).
 func (s *screen) read(t registry.Task) (*taskView, error) {
 	if t.State == registry.TaskStopped || (t.State == registry.TaskDone && !sameDay(t.Updated, s.now)) {
 		return nil, nil
@@ -416,7 +421,7 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 	case v.pr != nil:
 		return []tui.WaitsOn{v.pr.on}
 	case t.State == registry.TaskDone:
-		return []tui.WaitsOn{{Who: "nothing", What: "merged " + clock(t.Updated)}}
+		return []tui.WaitsOn{{Who: "nothing", What: "merged " + clock(s.doneAt(t))}}
 	case t.State == registry.TaskPublished && waitsOnYou(t): // the tick's own wait on you (a close past the grace)
 		return []tui.WaitsOn{{Who: waitsYou, What: t.WaitsWhat, Short: clauseShort(t.WaitsWhat), OnYou: true}}
 	case t.State == registry.TaskPublished:
@@ -932,8 +937,7 @@ func (s *screen) failedChecks(t registry.Task, head string) []string {
 // newest first, and the chip with how long you were away and what came to
 // need you meanwhile (rows). nil when nothing finished.
 func (s *screen) digest(lastSeen time.Time, rows []tui.FactoryRow) (*tui.Digest, error) {
-	away := s.now.Sub(lastSeen)
-	if lastSeen.IsZero() || away <= awayAfter {
+	if !s.away(lastSeen) {
 		return nil, nil
 	}
 	type finished struct {
@@ -945,8 +949,8 @@ func (s *screen) digest(lastSeen time.Time, rows []tui.FactoryRow) (*tui.Digest,
 		name := strings.TrimSpace(TaskKey(t) + " " + t.Title)
 		switch t.State {
 		case registry.TaskDone:
-			if t.Updated.After(lastSeen) {
-				fs = append(fs, finished{t.Updated, name + " · merged " + clock(t.Updated)})
+			if at := s.doneAt(t); at.After(lastSeen) {
+				fs = append(fs, finished{at, name + " · merged " + clock(at)})
 			}
 		case registry.TaskPublished:
 			l, err := s.reg.LinkedPR(s.ctx, t.ID)
@@ -972,11 +976,17 @@ func (s *screen) digest(lastSeen time.Time, rows []tui.FactoryRow) (*tui.Digest,
 			fresh++
 		}
 	}
-	d.Chip = fmt.Sprintf("away %s: %d done", awayWords(away), len(fs))
+	d.Chip = fmt.Sprintf("away %s: %d done", awayWords(s.now.Sub(lastSeen)), len(fs))
 	if fresh > 0 {
 		d.Chip += fmt.Sprintf(", %d new for you", fresh)
 	}
 	return d, nil
+}
+
+// away reports whether you were away long enough for a digest: more than
+// awayAfter since lastSeen (zero: never seen, no digest).
+func (s *screen) away(lastSeen time.Time) bool {
+	return !lastSeen.IsZero() && s.now.Sub(lastSeen) > awayAfter
 }
 
 // next is what you do next when nothing waits on you: the next decision of
