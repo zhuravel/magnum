@@ -18,7 +18,7 @@ package tui
 //
 // The bar follows no request: it logs an action's text and error, never the
 // Requests an ActionResult names, which only the board's actionBar re-reads.
-// f, F and x on your PR's row run the board's own code, which names the
+// f, F, K and o on a PR's row run the board's own code, which names the
 // requests it queued; their text already says the daemon's answer, or how to
 // follow a request still pending, and a logged request nothing re-reads would
 // say "no answer yet" for good.

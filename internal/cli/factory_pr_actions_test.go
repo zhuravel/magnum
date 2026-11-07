@@ -10,7 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// f, F and x on your PR's row of the factory screen run the board's own
+// f, F and K on your PR's row of the factory screen run the board's own
 // code: magnum's fix request, its fix off and on, and its abort, queued in
 // magnum's registry and answered by magnum's daemon, as the board's f, F
 // and K do. They never go through the factory daemon: the factory's

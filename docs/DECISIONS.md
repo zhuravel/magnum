@@ -17744,6 +17744,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestATaskRowWithAPRCarriesItForTheFixKeys, TestTheFixKeysWorkOnATaskRowWithAPR, TestKOnAnOwnPRRowStopsTheLoop,
   TestTheMenuOfATaskRowListsTheFixKeys, TestFOnATaskRowStartsNothing, TestTheHelpListsOnlyWhatExists,
   TestWaitsOnOthersSortsByWait, TestATitleDropsTheKeyItsKeyCellShows.
+- **A PR's row has a card, `a` walks the PRs that need you, `o` and `t` work on PR rows, and `K`, not `x`, stops
+  magnum's loop** (2026-11-08, the 2026-11-07 audit's R40 with its A F4, A F5 and E #8, approved by the operator as
+  recommended; reverses "A PR row has no card" and "`o` and `t` stay a task's keys" of "Your PRs on the factory
+  screen", and the part of the `f`, `F` and `K` entry above that kept `x` on your PR's row). The operator: "As you
+  moved my PRs from magnum to magnum factory, I should not have less visibility and control over my work - instead,
+  I want full visibility". A PR row's only way forward was `b` and a hunt on GitHub: the screen drew none of the
+  verdict's links, the fixer's calls, the PR's CI, review, approvals or replies, `a` walked past it, `o` and `t`
+  refused it, and `x` stopped magnum's loop on home while `x` dropped a task on its card. The reason for no card
+  (keep milestone 1a small) no longer held.
+  - `enter` on your PR's row opens its card: the task card's view with WAITING FOR (the fixer's items, the links of
+    what needs you) and the PR's own lines alone (`tui.CardPR`, built by `cardPR` from the same pass over magnum's
+    registry: PR, CI, REVIEW, APPROVALS, THREADS, FIX LOOP, each only with its data; THREADS reads the replies
+    magnum's judge has not read, `store.PR.PendingReplies`, now in `PRState.Replies`). A published task's card
+    draws the same lines before its STAGES. Your PR's card takes the PR's keys (`f`, `F`, `K`, `o`, `b`, `t`, `e`,
+    `a`); `x` and `d` say they are a task's, and the card goes home, saying so, when the PR leaves home.
+  - `a` walks NEEDS YOU's cards oldest wait first: the decision cards and the cards of the PRs that need you,
+    yours and a published task's. On a PR's card `a` goes on (the footer offers `a next`), and so does an `f`,
+    `F` or `K` that went through (`followPR`); the footer's "2 of your PRs need you" is gone with its reason.
+  - `o` on your PR's row, and on a row whose PR magnum's fixer works on ("magnum fixes #N"), steps into magnum's
+    pane through the board's open (`FactoryActions.OpenPR`, `screenActions.Open`): at once for a live pane, after
+    the board's y/N when it restores a parked one in a slot (`FactoryPR.Restores`, from `PRState.OpenRestores`).
+    `magnum open`'s role and restore rules move from `internal/cli` to `internal/engine` (`OpenRole`,
+    `OpenWouldRestore`, `OpenRestoreRole`, `OpenRestorable`, `OpenSessions`) so the factory's pass reads them as
+    the board does. `t` on your PR's row opens the Jira issue its title names.
+  - `K` is the one key that stops magnum's loop, on home and on the cards, as on the board; `x` on home stops
+    nothing and says so, and on the task card it still drops the task.
+  Rejected: a card of its own for PRs (a second painter beside the task card, whose WAITING FOR, links and
+  fixer's items a PR's card needs anyway); `o` always asking y/N on a PR (a live pane asks nothing on the board);
+  `x` kept as a second stop on PR rows (one letter with two meanings by view is what confused); the walk's PRs
+  after every decision card (NEEDS YOU is drawn oldest first, and the walk follows it); reading the threads'
+  resolution from GitHub (the factory reads magnum's registry only). Tests, failing first:
+  TestPRStatesSayWhatMagnumsOpenDoes, TestThePRCardSaysWhatThePRIs, TestThePRCardDrawsThePRsLines,
+  TestEnterOpensYourPRsCard, TestYourPRsCardGoesWhenItsPRDoes, TestOAndTOnAPRRow, TestOOnAPRRowOpensMagnumsPane,
+  TestThePRRowsKeysOnHome, TestTheWalkVisitsThePRsThatNeedYou, TestXNoLongerStopsMagnumsLoop,
+  TestAClickStartsNothingWithoutY; goldens prcard-100, -120, -140 and -200.
 
 ## Learned rules
 

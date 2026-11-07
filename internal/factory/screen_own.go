@@ -12,7 +12,7 @@ package factory
 // magnum's look leaves alone (a baseline, fix off), or without a verdict
 // one magnum does not review, is drawn dim with why in a group of its own
 // (tui.GroupYours), oldest first, and asks nothing. The rows are read
-// only: f, F and x on them, as on a task's row with a PR (screenPR), go
+// only: f, F, K and o on them, as on a task's row with a PR (screenPR), go
 // through magnum's own request paths, as the board's keys do, never
 // through the factory daemon.
 
