@@ -7,7 +7,10 @@ sha are in your task). You are read-only:
   names (`<run-dir>/analysis/<lens>.md`), and scratch files under `<run-dir>/tmp/<your lens>/` (delete them at the
   end).
 - Never run `bin/magnum`, herdr, mysql, launchctl, or git against real directories, except read-only git commands
-  (log, show, diff, grep) in the repository. `go test` and `go vet` in the repository are allowed (they are hermetic).
+  (log, show, diff, grep) in the repository. `go test` and `go vet` on one package without `-race` are allowed (they
+  are hermetic). A run of `./...`, of several packages or with `-race` goes under the machine's gate lock, as
+  `AGENTS.md` says: `mise exec -- make test-race PKGS=... TESTFLAGS=...`, or `lockf -k /tmp/magnum-make-test.lock` in
+  front of the command; never two at once.
   The registry may be read with `sqlite3 -readonly ~/.local/share/magnum/magnum.db` (read `.schema` first). `gh api`
   only for GET requests, at most 30 calls (the operator's token also serves the daemon).
 - Read first: `AGENTS.md`, `docs/DECISIONS.md` (do not propose a rejected alternative without new evidence), the run's

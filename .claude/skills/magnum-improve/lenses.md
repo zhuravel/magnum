@@ -148,13 +148,16 @@ two weeks before against two weeks after. Magnum never posts it, comments it or 
 
 ## 10. Test-suite health
 
-How fast and how trustworthy the gate is. Measure per-package durations with and without `-race` (`go test -count=1
--json ./...`, parsed), the 30 slowest tests and why each is slow (real sleeps, timeouts waited out, polling with a real
-clock, large fixtures, a SQLite migration per test, serial tests that could call `t.Parallel`), flaky tests (the engine
-and pipeline packages three times with `-count=1 -shuffle=on`), tests that touch real directories, sockets or the
-network, and test helpers duplicated across packages. Propose speed-ups ranked by seconds saved, each with the file and
-line and the mechanism (an injected clock, a shared migrated template database, `t.Parallel`, shorter timeouts in
-tests), and say which change no behavior. It may start 2 read-only helpers.
+How fast and how trustworthy the gate is. Every run here goes under the machine's gate lock, one at a time, as
+`AGENTS.md` requires. Measure per-package durations with `-race` (`mise exec -- make test-race TESTFLAGS=-json`, the
+whole suite) and without it (`lockf -k /tmp/magnum-make-test.lock mise exec -- go test -count=1 -json ./...`), parsed,
+the 30 slowest tests and why each is slow (real sleeps, timeouts waited out, polling with a real clock, large fixtures,
+a SQLite migration per test, serial tests that could call `t.Parallel`), flaky tests (three runs, one after another, of
+`lockf -k /tmp/magnum-make-test.lock mise exec -- go test -count=1 -shuffle=on ./internal/engine ./internal/pipeline`,
+each with an order of its own), tests that touch real directories, sockets or the network, and test helpers duplicated
+across packages. Propose speed-ups ranked by seconds saved, each with the file and line and the mechanism (an injected
+clock, a shared migrated template database, `t.Parallel`, shorter timeouts in tests), and say which change no behavior.
+It may start 2 read-only helpers.
 
 ## 11. Skill and prompt economy
 
