@@ -85,3 +85,57 @@ func TestARoundThatDiesOnALaunchLineAnotherPRSharesChargesNoAttempt(t *testing.T
 		t.Fatalf("a line no other PR shares: attempts %d, want 1", pr.Attempts)
 	}
 }
+
+// launchesDie is a round script whose every round ends as launchDied, with
+// the judge's refused run that carries the line, as the pipeline records it.
+func launchesDie(h *harness, line string) func(pipeline.RoundInput) (pipeline.RoundResult, error) {
+	return func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		if err := refusedRun(h, in.PR.ID, max(in.Round, 1), "codex-judge", line); err != nil {
+			return failRound(h.t, err)
+		}
+		return launchDied(in, line), nil
+	}
+}
+
+// On 2026-11-05 the first PR's first round died on the bootstrap line two
+// minutes before the second PR's agent did, so it was charged: no other PR
+// shared the line yet. Once another PR's agent ends with the line, the
+// attempts that rounds ending on it charged go back, and a PR those
+// attempts parked in needs attention goes back in line at once, its
+// attention cleared, with one round.attempts_refunded info event each; its
+// next round on the line is shared and charges nothing.
+func TestASharedLaunchFailureGivesBackTheAttemptsItsLineCharged(t *testing.T) {
+	h := sharedLaunchHarness(t)
+	h.rd.script = launchesDie(h, bootstrapLine)
+	h.advance(5 * time.Minute)
+	h.tick()
+	if pr := h.wantState(2, store.PRQueued); pr.Attempts != 1 {
+		t.Fatalf("a line no other PR shares yet: attempts %d, want 1", pr.Attempts)
+	}
+	h.advance(time.Minute)
+	h.tick()
+	h.advance(2 * time.Minute)
+	h.tick()
+	reqWantRounds(t, h, 3)
+	h.wantState(2, store.PRNeedsAttention)
+
+	h.advance(time.Minute)
+	refusedPrompt(h, 3, "codex-judge", bootstrapLine)
+	h.tick()
+	reqWantRounds(t, h, 4) // back in line at once: the health check runs before dispatch
+	pr := h.wantState(2, store.PRQueued)
+	if pr.Attempts != 0 {
+		t.Fatalf("back in line: attempts %d, want 0", pr.Attempts)
+	}
+	if why, ok := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); ok {
+		t.Fatalf("the PR keeps its attention %q", why)
+	}
+	evs := h.events(eventAttemptsRefunded)
+	if len(evs) != 1 || evs[0].Level != "info" || !strings.Contains(evs[0].Message, "3 attempts") || !strings.Contains(evs[0].Message, "2 PRs") {
+		t.Fatalf("round.attempts_refunded events %+v, want one naming the 3 attempts and the 2 PRs", evs)
+	}
+	h.tick()
+	if evs := h.events(eventAttemptsRefunded); len(evs) != 1 {
+		t.Fatalf("the next health check gave the attempts back again: %+v", evs)
+	}
+}

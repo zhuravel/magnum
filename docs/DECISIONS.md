@@ -15684,9 +15684,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   refunded from the daily cap (`refund`, `RefundInfra`), the PR back in line after `backoff(n)` for its n-th
   shared failure on that line in a row (kv `pr.<id>.launch_failures`, deleted by a round that ends any other
   way), the last error saying so and one `round.launch_shared` info event per round, without the line.
-  Rejected: charging the first failure and refunding later only (the second PR's round is already shared
-  when it ends), and no wait at all (with the kind still failing, a PR would start a round every minute).
-  Test, failing first: TestARoundThatDiesOnALaunchLineAnotherPRSharesChargesNoAttempt.
+  The first PR's rounds on the line end before another PR's agent shows it, and are charged: the record
+  counts those attempts, and they go back once the line is shared, at the PR's next shared round or at the
+  health check that groups the line (`refundSharedAttempts`, one `round.attempts_refunded` info event), which
+  also puts a PR they parked in needs attention (`attention.KindFailed`) back in line at once. Rejected:
+  giving back only at the group's first naming (`agents.shared_failure` is said once a day, and a PR's
+  rounds settle between health checks), and no wait at all (with the kind still failing, a PR would start a
+  round every minute). Tests, failing first: TestARoundThatDiesOnALaunchLineAnotherPRSharesChargesNoAttempt,
+  TestASharedLaunchFailureGivesBackTheAttemptsItsLineCharged.
 
 ## The factory (2026-11-03)
 

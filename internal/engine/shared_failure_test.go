@@ -40,18 +40,24 @@ func appendPREvent(h *harness, n int, kind string, data map[string]any) {
 // because the agent was gone, with the pane's error line (agents.Prompt).
 func refusedPrompt(h *harness, n int, role, line string) {
 	h.t.Helper()
+	if err := refusedRun(h, h.pr(n).ID, 1, role, line); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// refusedRun is refusedPrompt for a round script: a run of role in round
+// of the PR prID, its error returned.
+func refusedRun(h *harness, prID int64, round int, role, line string) error {
 	now := h.clock.Now()
-	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: h.pr(n).ID, Round: 1, Role: role, Kind: store.RunInitial, TargetSHA: "a1",
+	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: prID, Round: round, Role: role, Kind: store.RunInitial, TargetSHA: "a1",
 		Identity: "talkable-app", ReviewerLogin: magnumApp, State: store.RunPending, PromptText: "go", CreatedAt: now})
 	if err != nil {
-		h.t.Fatal(err)
+		return err
 	}
-	if err := h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) {
+	return h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) {
 		u.Set("ended_at", now)
 		u.Set("error", "agents: prompt mg-"+role+": herdr agent.prompt: agent_not_found: agent target not found; the pane shows: "+line)
-	}); err != nil {
-		h.t.Fatal(err)
-	}
+	})
 }
 
 // On 2026-10-16 four PRs' codex-judge launches died with the same pane line
