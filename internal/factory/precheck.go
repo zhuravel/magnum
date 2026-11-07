@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -204,7 +205,12 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err := writeFile(filepath.Join(dir, precheckFile), p.report.String()); err != nil {
 		return p.res, err
 	}
-	if err := writeJSON(filepath.Join(dir, precheckRecordFile), precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why}); err != nil {
+	rec := precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why}
+	if p.res.ForYou {
+		rec.ForYou, rec.Line = true, p.line
+		rec.Commands, rec.Env = e.checksPrint(repo)
+	}
+	if err := writeJSON(filepath.Join(dir, precheckRecordFile), rec); err != nil {
 		return p.res, err
 	}
 	return p.res, crashed
@@ -215,11 +221,38 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 // read (precheckPassedAt) once the check's result in memory is gone.
 const precheckRecordFile = "precheck.json"
 
-// precheckRecord is precheck.json.
+// precheckRecord is precheck.json. A failure for you also records the line
+// its command printed (Line, for a lint that crashed), and what it ran
+// with (Commands, the repository's precheck commands, and Env, the
+// environment they ran in, both as checksPrint's hashes, never a value): a
+// retry that changed none of it, at the same head, says so (retryTask).
 type precheckRecord struct {
-	Head   string `json:"head_sha"`
-	Passed bool   `json:"passed"`
-	Why    string `json:"why,omitempty"`
+	Head     string `json:"head_sha"`
+	Passed   bool   `json:"passed"`
+	Why      string `json:"why,omitempty"`
+	ForYou   bool   `json:"for_you,omitempty"`
+	Line     string `json:"line,omitempty"`
+	Commands string `json:"commands,omitempty"`
+	Env      string `json:"env,omitempty"`
+}
+
+// checksPrint is what the precheck commands of repo run with, as two
+// hashes: commands, of its precheck commands as configured, and env, of
+// the environment they run in (the copies' env of the configuration, and
+// the daemon's locale and PATH, which every copy command inherits). They
+// change when you edit either and restart the daemon on it, or your shell's
+// PATH; never a value, only its hash, is kept.
+func (e *Engine) checksPrint(repo config.FactoryRepo) (commands, env string) {
+	pc := repo.Precheck
+	commands = sha256Hex([]byte(strings.Join(slices.Concat(pc.Lint, []string{pc.Specs, pc.Jest}, pc.Migrations), "\x00")))
+	var vars []string
+	for _, k := range slices.Sorted(maps.Keys(repo.Env)) {
+		vars = append(vars, k+"="+repo.Env[k])
+	}
+	for _, k := range []string{"LANG", "LC_ALL", "LC_CTYPE", "PATH"} {
+		vars = append(vars, "daemon "+k+"="+e.getenv(k))
+	}
+	return commands, sha256Hex([]byte(strings.Join(vars, "\x00")))
 }
 
 // precheckPassedAt reports whether the last precheck in task directory dir
@@ -262,8 +295,9 @@ type precheckRun struct {
 	// nothing back after that.
 	kept bool
 	// stderr is what the command it ran last wrote to stderr, as it wrote
-	// it (the lint's ask names its last line, redacted).
-	stderr string
+	// it (the lint's ask names its last line, redacted), and line that line
+	// of the lint whose failure for you is the precheck's (precheck.json).
+	stderr, line string
 }
 
 // restoreOwn puts back what the precheck's commands changed so far
@@ -488,10 +522,14 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 // its own, a hint at one.
 func (p *precheckRun) lintCrashWhy(cmd string, run ProofRun) string {
 	why := fmt.Sprintf("precheck.lint `%s` exited %d and names no offense by path:line", cmd, run.Exit)
-	if line := lastLine(p.stderr); line != "" {
+	line := lastLine(p.stderr)
+	if line != "" {
 		why += "; its stderr ends: " + line
-	} else if line := lastLine(run.Output); line != "" {
+	} else if line = lastLine(run.Output); line != "" {
 		why += "; its output ends: " + line
+	}
+	if !p.res.ForYou { // the failure for you the precheck says
+		p.line = line
 	}
 	if !formatRe.MatchString(cmd) {
 		why += "; fix: have it print them so (rubocop --format emacs, eslint --format unix) in precheck.lint, then `magnum factory install`"

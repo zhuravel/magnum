@@ -500,3 +500,58 @@ func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 		t.Fatalf("lint checks %q, want the last one passed", got)
 	}
 }
+
+// retryAnswer is the daemon's answer to your retry of task id.
+func (r *codingRig) retryAnswer(id int64) string {
+	r.t.Helper()
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqRetry, RetryPayload{TaskID: id, Surface: "cli"})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.e.handleRequests(r.ctx)
+	q, err := r.reg.RequestByID(r.ctx, qid)
+	if err != nil || q.State != registry.RequestDone {
+		r.t.Fatalf("your retry: %+v (%v)", q, err)
+	}
+	return q.Result
+}
+
+// Three retries of a lint crash ran the same command in the same
+// environment at the same head, each sure to fail: a retry that changes
+// nothing since the failure it retries says so, with the line the command
+// printed, and still lets the task go on; once the command or its
+// environment changed, it says nothing of it.
+func TestARetryThatChangedNothingSinceTheFailureSaysSo(t *testing.T) {
+	r := newCodingRig(t)
+	env := map[string]string{"PATH": "/usr/bin:/bin"}
+	r.e.getenv = func(k string) string { return env[k] }
+	task := r.codingTask("PR-12384", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.setLintCrash("Error: boom\n")
+	r.endTurns(task, 2)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q; want needs_you", got.State, got.WaitsWhat)
+	}
+
+	answer := r.retryAnswer(task.ID)
+	if !strings.Contains(answer, "goes on") || !strings.Contains(answer, "nothing changed since its last failure") ||
+		!strings.Contains(answer, "Error: boom") {
+		t.Fatalf("the retry answers %q, want it to go on and say nothing changed, naming the line", answer)
+	}
+
+	for i := 0; i < 6 && r.reload(task.ID).State != registry.TaskNeedsYou; i++ { // the same failure again
+		r.clock.Add(time.Minute)
+		r.tick()
+		r.e.waitBackground()
+		r.tick()
+	}
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q; want needs_you again", got.State, got.WaitsWhat)
+	}
+	r.e.waitBackground()
+	env["LANG"] = "en_US.UTF-8" // you fixed the environment
+	if answer := r.retryAnswer(task.ID); strings.Contains(answer, "nothing changed") {
+		t.Fatalf("the retry after the environment changed answers %q", answer)
+	}
+}

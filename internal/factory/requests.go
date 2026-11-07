@@ -494,6 +494,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	if err := retryRefusal(ctx, e.reg, e.d.Layout, t); err != nil {
 		return "", err
 	}
+	same := e.unchangedSince(ctx, t)
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")
 		u.Set("waits_what", "")
@@ -510,7 +511,40 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	e.checksMu.Lock()
 	delete(e.checkFails, t.ID)
 	e.checksMu.Unlock()
-	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")), nil
+	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")) + same, nil
+}
+
+// unchangedSince is what your retry of task t adds when the precheck's
+// failure for you it waits on (precheck.json) would only come again:
+// nothing changed since (the branch's head, the precheck commands and
+// their environment, checksPrint), with the line the command printed; ""
+// when something changed, or the task waits on you for another cause, or
+// any of it cannot be read. It refuses nothing: a cause of the moment may
+// be gone.
+func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
+	var rec precheckRecord
+	if b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), precheckRecordFile)); err != nil ||
+		json.Unmarshal(b, &rec) != nil {
+		return ""
+	}
+	if rec.Passed || !rec.ForYou || rec.Commands == "" || !strings.Contains(t.WaitsWhat, rec.Why) {
+		return ""
+	}
+	repo, ok := e.cfg.FactoryRepo(t.Repo)
+	if !ok || e.d.Git == nil || t.Branch == "" {
+		return ""
+	}
+	if head, err := e.d.Git.RevParse(ctx, repo.MainClone, "refs/heads/"+t.Branch); err != nil || head != rec.Head {
+		return ""
+	}
+	if commands, env := e.checksPrint(repo); commands != rec.Commands || env != rec.Env {
+		return ""
+	}
+	same := ", though nothing changed since its last failure (the same head, precheck commands and environment), so it will likely fail again"
+	if rec.Line != "" {
+		same += ": " + rec.Line
+	}
+	return same
 }
 
 // retryRefusal is the guard of a retry of task t, as retryTask and the

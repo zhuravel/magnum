@@ -292,6 +292,9 @@ type Engine struct {
 	drainerAlive func(d Drain) bool
 	procStart    func(pid int) (string, error)
 	workWrite    func(path string, b []byte) error
+	// getenv reads the daemon's environment (os.Getenv), which the copies'
+	// commands inherit (checksPrint).
+	getenv func(string) string
 
 	// What follows is the loop's own: Run's goroutine (or a test's) reads
 	// and writes it, except the heavy slots (heavyMu), which a stage's
@@ -490,6 +493,7 @@ func New(d Deps) *Engine {
 		runners:      map[string]stageRunner{},
 		kick:         make(chan struct{}, 1),
 		notify:       ossignal.Notify,
+		getenv:       os.Getenv,
 		stopNotify:   ossignal.Stop,
 		procs:        engine.SystemProcesses(),
 		panics:       map[int64]int{},
