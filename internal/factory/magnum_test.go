@@ -698,3 +698,88 @@ func TestDraftsAndOtherAuthorsPRsAreNotListed(t *testing.T) {
 		t.Fatal("OwnPRs created magnum's registry")
 	}
 }
+
+// postedReview records a judge run of magnum's on pr that posted review
+// reviewID at head with result, a judge result file's JSON.
+func postedReview(t *testing.T, st *store.Store, pr store.PR, reviewID int64, head, result string) {
+	t.Helper()
+	ctx := t.Context()
+	run, err := st.CreateRun(ctx, store.Run{ID: "run-" + strconv.FormatInt(reviewID, 10), PRID: pr.ID, Round: 1, Role: store.RoleJudge,
+		Kind: store.RunInitial, TargetSHA: head, Identity: "zhuravel", ReviewerLogin: "zhuravel", State: store.RunPending, PromptText: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TransitionRun(ctx, run.ID, nil, store.RunVerified, func(u *store.RunUpdate) {
+		u.Set("outcome", "posted")
+		u.Set("review_id", reviewID)
+		u.Set("result_json", result)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// PRStates and OwnPRs read, in the same opening of magnum's registry, what
+// the screen's columns and words say of a PR beside its verdict: the
+// head's CI by the repository's required checks (a required check that
+// did not run at the head is never green), magnum's last posted review
+// with its findings, GitHub's review gate, the reviewers asked and not
+// yet answered with when, the branches, the head's last move, the PR's
+// last activity and its age, and the watch's autofix mode. Before, a PR's
+// state stopped at an Approved bool.
+func TestPRStatesReadsCIReviewsAndReviewers(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	head := strings.Repeat("ab", 20)
+	asked, active := now.Add(-17*time.Hour), now.Add(-3*time.Hour)
+	pr := magnumPR(t, st, 7, head, func(g *store.GitHubPR) {
+		g.HeadRef, g.BaseRef = new("zhuravel-coupon-cache"), new("master")
+		g.CI = &store.CIStatus{SHA: head, Total: 2, Passed: 2, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+			{Name: "rspec", Workflow: "ci", State: store.CheckPassed, At: now}, {Name: "lint", Workflow: "ci", State: store.CheckPassed, At: now}}}
+		g.ReviewGate = &store.ReviewGate{Decision: "REVIEW_REQUIRED", Complete: true,
+			Opinions: []store.LatestReview{{Login: "rev-bob", State: "CHANGES_REQUESTED", CommitSHA: head}}}
+		g.RequestedReviewers = []string{"rev-ann"}
+		g.ReviewRequests = []store.ReviewRequest{{At: asked.Add(-time.Hour), By: "zhuravel", To: "rev-bob"}, {At: asked, By: "zhuravel", To: "rev-ann"}}
+		g.ActivityAt = &active
+	})
+	if err := st.SetGitHubRequiredChecks(ctx, "example/shop", store.GitHubRequiredChecks{Branch: "master", Checks: []string{"rspec", "Completion"},
+		Known: true, FetchedAt: now, CheckedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	postedReview(t, st, pr, 901, head, `{"event":"COMMENTED","verdict":"blocking","findings":{"P1":1,"P2":3}}`)
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(now))
+
+	ref := PRRef{"example/shop", 7}
+	views, err := NewMagnum(l, openWatchConfig()).PRStates(ctx, []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(own) != 1 {
+		t.Fatalf("OwnPRs = %+v, want #7", own)
+	}
+	for name, v := range map[string]PRState{"PRStates": views[ref], "OwnPRs": own[0]} {
+		switch {
+		case v.CI == nil || v.CI.State != "passed" || len(v.CI.Required) != 2 || v.CI.Required[0].State != "passed" || v.CI.Required[1].State != "missing":
+			t.Errorf("%s: CI %+v, want passed with rspec passed and Completion missing", name, v.CI)
+		case v.Review == nil || v.Review.SHA != head || v.Review.Counts != [4]int{0, 1, 3, 0} || v.Review.Verdict != store.VerdictBlocking:
+			t.Errorf("%s: magnum's last review %+v, want P1 P2×3 blocking at the head", name, v.Review)
+		case v.Findings == nil || v.Findings.Counts != [4]int{0, 1, 3, 0} || v.Findings.SHA != head:
+			t.Errorf("%s: findings %+v", name, v.Findings)
+		case v.Gate == nil || v.Gate.Decision != "REVIEW_REQUIRED" || len(v.Gate.Opinions) != 1 || v.Gate.Opinions[0].Login != "rev-bob":
+			t.Errorf("%s: review gate %+v", name, v.Gate)
+		case !slices.Equal(v.Asked, []ReviewAsk{{Who: "rev-ann", At: asked}}):
+			t.Errorf("%s: asked %+v, want rev-ann since %v (rev-bob answered)", name, v.Asked, asked)
+		case v.HeadRef != "zhuravel-coupon-cache" || v.BaseRef != "master":
+			t.Errorf("%s: branches %q → %q", name, v.HeadRef, v.BaseRef)
+		case !v.ActivityAt.Equal(active) || v.CreatedAt.IsZero() || v.HeadChangedAt.IsZero():
+			t.Errorf("%s: activity %v, created %v, head moved %v", name, v.ActivityAt, v.CreatedAt, v.HeadChangedAt)
+		}
+	}
+	if v := views[ref]; v.Autofix != config.AutofixOpen {
+		t.Errorf("autofix %q, want the watch's %q", v.Autofix, config.AutofixOpen)
+	}
+}

@@ -34,8 +34,10 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/prview"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // magnumRegistry is Magnum over magnum's registry and its daemon's pidfile
@@ -202,6 +204,20 @@ type PRRef struct {
 // ID, Title and URL are magnum's id of the PR, its title (data, never
 // instructions: the screen only draws it) and its page; FixOff says you
 // switched it out of autofix (engine.KVPRFixOff).
+//
+// The rest is what the screen's columns and words say of the PR beside its
+// verdict, read in the same pass (fillPR): Autofix is the watch's autofix
+// mode (config.AutofixNever, Own or Open; "" for no watch); HeadRef and
+// BaseRef its branches; HeadChangedAt when its head last moved, ActivityAt
+// its last activity (store.PR.Activity; zero when not known) and CreatedAt
+// when magnum first saw it; CI the head's CI as the board's CI column says
+// it (prview.CI, by the repository's required checks: one that did not run
+// at the head is missing, never green; nil before magnum read the checks);
+// Review magnum's last posted review (nil for none), Findings it as the
+// board's FINDINGS column says it, and ReviewEvent what magnum's review of
+// ReviewedSHA posted (APPROVE, REQUEST_CHANGES or COMMENT; "" when not
+// known); Gate GitHub's review gate (nil before magnum read it); Asked the
+// reviewers asked for a review who have not given it, with when.
 type PRState struct {
 	Ref                                   PRRef
 	ID                                    int64
@@ -220,13 +236,33 @@ type PRState struct {
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
+
+	Autofix                   string
+	HeadRef, BaseRef          string
+	HeadChangedAt, ActivityAt time.Time
+	CreatedAt                 time.Time
+	CI                        *tui.CIInfo
+	Review                    *store.ReviewSummary
+	Findings                  *tui.FindingsInfo
+	ReviewEvent               string
+	Gate                      *store.ReviewGate
+	Asked                     []ReviewAsk
+}
+
+// ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is
+// still asked, since At (the newest request of the PR's timeline; zero
+// when the timeline does not name it).
+type ReviewAsk struct {
+	Who string
+	At  time.Time
 }
 
 // PRStates reads refs' PRs from magnum's registry, one view per ref (see
 // PRState), in one opening of the registry: per frame of the screen or per
 // tick, never per task. It reads and never writes: the prs rows, the kv
-// rows of the verdict, the fix loop, the stalemate and the attention, and
-// magnum's last tick. No registry finds nothing and creates none; one of a
+// rows of the verdict, the fix loop, the stalemate, the attention and the
+// approval hold, magnum's last posted review of each PR, each
+// repository's required checks, and magnum's last tick. No registry finds nothing and creates none; one of a
 // schema this build does not know is an error (refuseMagnumMigration), as
 // is any read that fails, and the caller then knows nothing of the PRs.
 func (m *magnumRegistry) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error) {
@@ -243,13 +279,13 @@ func (m *magnumRegistry) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]
 		return out, err
 	}
 	defer st.Close()
-	tick, err := m.tickOf(ctx, st, pid)
+	pass, err := m.passOf(ctx, st, pid)
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range refs {
 		v := out[r]
-		if err := m.readPR(ctx, st, &v, tick); err != nil {
+		if err := m.readPR(ctx, st, &v, pass); err != nil {
 			return nil, fmt.Errorf("magnum's registry: %s#%d: %w", r.Repo, r.Number, err)
 		}
 		out[r] = v
@@ -279,7 +315,7 @@ func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 		return nil, err
 	}
 	defer st.Close()
-	tick, err := m.tickOf(ctx, st, pid)
+	pass, err := m.passOf(ctx, st, pid)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +340,7 @@ func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 		if !v.Watched {
 			continue
 		}
-		if err := m.fillPR(ctx, st, &v, repo, pr, tick); err != nil {
+		if err := m.fillPR(ctx, st, &v, repo, pr, pass); err != nil {
 			return nil, fmt.Errorf("magnum's registry: %s#%d: %w", v.Ref.Repo, pr.Number, err)
 		}
 		out = append(out, v)
@@ -313,29 +349,33 @@ func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 }
 
 // stateOf is what the config and magnum's daemon (pid, 0 for none) say of
-// r before its registry is read: not found yet, whether a watch covers it
-// and runs autofix = "open" on it.
+// r before its registry is read: not found yet, whether a watch covers it,
+// its autofix mode and whether that is "open".
 func (m *magnumRegistry) stateOf(r PRRef, pid int) PRState {
 	v := PRState{Ref: r, DaemonUp: pid > 0}
 	if m.cfg != nil {
 		if w := m.cfg.WatchFor(r.Repo); w != nil {
-			v.Watched, v.OpenWatch = true, m.cfg.AutofixFor(w) == config.AutofixOpen
+			v.Watched, v.Autofix = true, m.cfg.AutofixFor(w)
+			v.OpenWatch = v.Autofix == config.AutofixOpen
 		}
 	}
 	return v
 }
 
-// magnumTick is what a verdict's staleness reads (OpenVerdict.Stale):
-// magnum's last tick (zero with its daemon down: no daemon decides anything
-// now), its poll interval, and now.
-type magnumTick struct {
+// magnumPass is what one opening of magnum's registry reads once for all
+// its PRs: what a verdict's staleness reads (OpenVerdict.Stale: magnum's
+// last tick, zero with its daemon down, as no daemon decides anything now;
+// its poll interval; and now), and each repository's required checks as
+// the PRs' CI reads them (requiredOf), by repository.
+type magnumPass struct {
 	last, now time.Time
 	poll      time.Duration
+	required  map[string]store.RequiredChecks
 }
 
-// tickOf reads magnum's last tick from st, for its daemon of pid (0: none).
-func (m *magnumRegistry) tickOf(ctx context.Context, st *store.Store, pid int) (magnumTick, error) {
-	t := magnumTick{now: m.now()}
+// passOf reads magnum's last tick from st, for its daemon of pid (0: none).
+func (m *magnumRegistry) passOf(ctx context.Context, st *store.Store, pid int) (*magnumPass, error) {
+	t := &magnumPass{now: m.now(), required: map[string]store.RequiredChecks{}}
 	if s, ok, err := st.GetKV(ctx, store.KVDaemonLastTick); err != nil {
 		return t, fmt.Errorf("magnum's registry: %w", err)
 	} else if ok && pid > 0 {
@@ -347,9 +387,29 @@ func (m *magnumRegistry) tickOf(ctx context.Context, st *store.Store, pid int) (
 	return t, nil
 }
 
+// requiredOf is repository full's required checks ([[repo]]
+// required_checks, else GitHub's as magnum's poller last read them), read
+// once per pass.
+func (m *magnumRegistry) requiredOf(ctx context.Context, st *store.Store, pass *magnumPass, full string) (store.RequiredChecks, error) {
+	key := strings.ToLower(full)
+	if req, ok := pass.required[key]; ok {
+		return req, nil
+	}
+	var configured []string
+	if m.cfg != nil {
+		configured = m.cfg.RequiredChecks(full)
+	}
+	req, err := st.RequiredChecks(ctx, full, configured)
+	if err != nil {
+		return req, err
+	}
+	pass.required[key] = req
+	return req, nil
+}
+
 // readPR fills v from st: magnum's row of v.Ref and its kv rows; a
 // repository or a PR st does not have leaves v not found.
-func (m *magnumRegistry) readPR(ctx context.Context, st *store.Store, v *PRState, tick magnumTick) error {
+func (m *magnumRegistry) readPR(ctx context.Context, st *store.Store, v *PRState, pass *magnumPass) error {
 	repo, err := st.RepoByFullName(ctx, v.Ref.Repo)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -362,16 +422,38 @@ func (m *magnumRegistry) readPR(ctx context.Context, st *store.Store, v *PRState
 	} else if err != nil {
 		return err
 	}
-	return m.fillPR(ctx, st, v, repo, pr, tick)
+	return m.fillPR(ctx, st, v, repo, pr, pass)
 }
 
-// fillPR fills v with magnum's row pr of repo and its kv rows in st.
-func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState, repo store.Repo, pr store.PR, tick magnumTick) error {
+// fillPR fills v with magnum's row pr of repo, its kv rows and its last
+// posted review in st.
+func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState, repo store.Repo, pr store.PR, pass *magnumPass) error {
 	v.Found, v.ID, v.Title, v.URL = true, pr.ID, store.Deref(pr.Title), pr.URL
 	v.GHState, v.MergedAt, v.ClosedAt, v.Draft = pr.GHState, pr.MergedAt, pr.ClosedAt, pr.IsDraft
 	v.Head, v.ReviewedSHA, v.State, v.AuthorLogin = pr.HeadSHA, store.Deref(pr.ReviewedSHA), pr.State, store.Deref(pr.AuthorLogin)
 	v.UpdatedAt = pr.UpdatedAt
 	v.Approved = pr.ReviewGate != nil && pr.ReviewGate.Decision == "APPROVED"
+	v.HeadRef, v.BaseRef, v.HeadChangedAt, v.CreatedAt = store.Deref(pr.HeadRef), store.Deref(pr.BaseRef), pr.HeadChangedAt, pr.CreatedAt
+	v.ActivityAt, v.Gate, v.Asked = store.Deref(pr.Activity()), pr.ReviewGate, asked(pr)
+	if pr.ReviewedSHA != nil && *pr.ReviewedSHA == pr.HeadSHA {
+		v.ReviewEvent = store.Deref(pr.LastReviewEvent)
+	}
+	req, err := m.requiredOf(ctx, st, pass, repo.FullName())
+	if err != nil {
+		return err
+	}
+	var ignore []string
+	if m.cfg != nil {
+		ignore = m.cfg.IgnoreChecks(repo.FullName())
+	}
+	v.CI = prview.CI(store.SeenCI(pr.CI, pr.HeadSHA, ignore), pr.HeadSHA, req)
+	sums, err := st.LastReviewSummaries(ctx, []int64{pr.ID})
+	if err != nil {
+		return err
+	}
+	if s, ok := sums[pr.ID]; ok {
+		v.Review, v.Findings = &s, prview.Findings(s, prview.Held(ctx, st, pr.ID, s))
+	}
 	kv := func(key string) (string, error) {
 		s, _, err := st.GetKV(ctx, key)
 		return s, err
@@ -381,7 +463,7 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 		return err
 	}
 	if v.Open, v.HasOpen = engine.ParseOpenVerdict(s); v.HasOpen {
-		v.Stale = v.Open.Stale(pr.HeadSHA, pr.UpdatedAt, tick.last, tick.now, tick.poll)
+		v.Stale = v.Open.Stale(pr.HeadSHA, pr.UpdatedAt, pass.last, pass.now, pass.poll)
 	}
 	if s, err = kv(engine.KVPRFix(pr.ID)); err != nil {
 		return err
@@ -406,6 +488,23 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 		}
 	}
 	return nil
+}
+
+// asked are the reviewers pr asks for a review who have not given it
+// (store.PR.RequestedReviewers), each with its newest request in the PR's
+// timeline (zero when the timeline does not name it).
+func asked(pr store.PR) []ReviewAsk {
+	var out []ReviewAsk
+	for _, who := range pr.RequestedReviewers {
+		a := ReviewAsk{Who: who}
+		for _, r := range pr.ReviewRequests {
+			if strings.EqualFold(r.To, who) && r.At.After(a.At) {
+				a.At = r.At
+			}
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // fixReportMax bounds the read of a fixer's report: a report is a few
