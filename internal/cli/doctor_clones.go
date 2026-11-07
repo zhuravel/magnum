@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -120,4 +122,36 @@ func doctorMise(ctx context.Context, d doctorDeps) []doctorCheck {
 		return []doctorCheck{doctorOK(name, fmt.Sprintf("mise exec works in %s (%s)", sl.Name, textx.FirstLine(v)))}
 	}
 	return []doctorCheck{doctorWarned(name, "no provisioned slot to test `mise exec` in", "magnum slots provision")}
+}
+
+// doctorFixerPushURL checks, for each pool whose watch's fixer acts as a
+// dedicated App (config.Config.FixerLogins), that origin of the pool's main
+// clone has no pushurl (a read of the clone's config): git ignores
+// pushInsteadOf for a remote with one, so the fixer App pane's refusal of a
+// plain `git push` (the url.*.pushInsteadOf pairs of its env) would be off.
+// A gh fixer pushes with git push as before, and its pools are not read.
+func doctorFixerPushURL(ctx context.Context, d doctorDeps) []doctorCheck {
+	var out []doctorCheck
+	for _, p := range d.Config.Pools {
+		w := d.Config.WatchFor(p.Repo)
+		if w == nil || len(d.Config.FixerLogins(w)) == 0 {
+			continue
+		}
+		name := "push url " + p.Repo
+		env := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
+		got, err := doctorExecGit(ctx, d, 10*time.Second, env, "-C", p.MainClone, "config", "--get", "remote.origin.pushurl")
+		if ee, ok := errors.AsType[*execx.ExitError](err); err != nil && (!ok || ee.Code != 1) { // exit 1: no such key
+			out = append(out, doctorWarned(name, "could not read origin's pushurl of "+p.Repo+": "+err.Error(),
+				"git -C "+inspTilde(p.MainClone)+" config --get remote.origin.pushurl"))
+			continue
+		}
+		if strings.TrimSpace(got) == "" {
+			out = append(out, doctorOK(name, "origin of "+p.Repo+" has no pushurl: the fixer App's pane refuses a plain `git push`"))
+			continue
+		}
+		out = append(out, doctorWarned(name, "origin of "+p.Repo+" sets remote.origin.pushurl, and git ignores pushInsteadOf for it: "+
+			"the fixer App's pane can then `git push` past `magnum push`",
+			"git -C "+inspTilde(p.MainClone)+" config --unset remote.origin.pushurl"))
+	}
+	return out
 }

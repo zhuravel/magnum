@@ -112,3 +112,33 @@ func WatchedRepos(c *config.Config, name string) []string {
 	}
 	return out
 }
+
+// FixRepos returns the "owner/name" repositories the fixer pushes to as
+// identity name, in config order without duplicates: for each watch whose
+// fix role acts as it (config.Config.FixRoleFor: the watch's fix_identity,
+// else the role's identity), the identity's token_repositories under the
+// watch's owner. None for an identity no fixer acts as, or one that names
+// no token_repositories (a gh identity: magnum mints it no token). The App
+// check checks a fixer's profile against these (WithFixer).
+func FixRepos(c *config.Config, name string) []string {
+	id := c.IdentityByName(name)
+	if id == nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for i := range c.Watches {
+		w := &c.Watches[i]
+		if r, ok := c.FixRoleFor(w); !ok || r.Identity != name {
+			continue
+		}
+		for _, repo := range id.TokenRepositories {
+			full := w.Owner + "/" + repo
+			if !seen[strings.ToLower(full)] {
+				seen[strings.ToLower(full)] = true
+				out = append(out, full)
+			}
+		}
+	}
+	return out
+}

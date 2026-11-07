@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"encoding/json"
@@ -48,6 +49,7 @@ type App struct {
 	baseURL string
 	run     execx.Runner
 	repos   []string
+	fixer   []string // the "owner/name" repositories the fixer pushes to as the App (WithFixer)
 
 	mu         sync.Mutex
 	token      string
@@ -84,6 +86,14 @@ func WithRunner(run execx.Runner) AppOption { return func(a *App) { a.run = run 
 // installation (see WatchedRepos); the first one is probed with gh.
 func WithRepos(fullNames ...string) AppOption {
 	return func(a *App) { a.repos = append([]string(nil), fullNames...) }
+}
+
+// WithFixer makes Check check the App as a fixer of the "owner/name"
+// repositories fullNames (see FixRepos): contents write, its bot's user
+// id, the installation's account as each repository's owner and an HTTPS
+// probe of the first one. None = the App is no fixer.
+func WithFixer(fullNames ...string) AppOption {
+	return func(a *App) { a.fixer = append([]string(nil), fullNames...) }
 }
 
 // NewApp returns the App identity described by cfg. The PEM comes from the
@@ -300,7 +310,19 @@ func (a *App) privateKeyJWT() (string, error) {
 	return signJWT(key, a.issuer(), a.now())
 }
 
-// mint exchanges a fresh JWT for an installation token.
+// mintBody is the access_tokens request that narrows a token: the
+// repositories (names within the installation's account) and the
+// permissions it may use.
+type mintBody struct {
+	Repositories []string          `json:"repositories,omitempty"`
+	Permissions  map[string]string `json:"permissions,omitempty"`
+}
+
+// mint exchanges a fresh JWT for an installation token, narrowed to the
+// identity's token_repositories and token_permissions when it sets either
+// (config.Identity), so every token the daemon's refresh and the check
+// write to ConfigDir is that narrow; without them the request has no body
+// and the token the installation's whole access.
 func (a *App) mint(ctx context.Context) (string, time.Time, error) {
 	jwt, err := a.privateKeyJWT()
 	if err != nil {
@@ -310,8 +332,12 @@ func (a *App) mint(ctx context.Context) (string, time.Time, error) {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
+	var body any
+	if len(a.cfg.TokenRepositories) > 0 || len(a.cfg.TokenPermissions) > 0 {
+		body = mintBody{Repositories: a.cfg.TokenRepositories, Permissions: a.cfg.TokenPermissions}
+	}
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", a.cfg.InstallationID)
-	if err := a.call(ctx, http.MethodPost, path, jwt, &out); err != nil {
+	if err := a.call(ctx, http.MethodPost, path, jwt, body, &out); err != nil {
 		return "", time.Time{}, fmt.Errorf("identity %s: mint installation token: %w", a.cfg.Name, err)
 	}
 	if out.Token == "" || out.ExpiresAt.IsZero() {
@@ -331,13 +357,25 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, e.Message)
 }
 
-// call performs one REST request authenticated with bearer and decodes a 2xx
-// JSON body into out. Non-2xx answers return *apiError; anything else is a
-// transport error.
-func (a *App) call(ctx context.Context, method, path, bearer string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, nil)
+// call performs one REST request authenticated with bearer, with body
+// JSON-encoded as the request's (nil = none), and decodes a 2xx JSON body
+// into out. Non-2xx answers return *apiError; anything else is a transport
+// error.
+func (a *App) call(ctx context.Context, method, path, bearer string, body, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("%s %s: encode: %w", method, path, err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, rd)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -348,7 +386,7 @@ func (a *App) call(ctx context.Context, method, path, bearer string, out any) er
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	got, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return fmt.Errorf("%s %s: read body: %w", method, path, err)
 	}
@@ -356,14 +394,14 @@ func (a *App) call(ctx context.Context, method, path, bearer string, out any) er
 		var msg struct {
 			Message string `json:"message"`
 		}
-		_ = json.Unmarshal(body, &msg)
+		_ = json.Unmarshal(got, &msg)
 		if msg.Message == "" {
 			msg.Message = http.StatusText(resp.StatusCode)
 		}
 		return &apiError{Method: method, Path: path, Status: resp.StatusCode, Message: execx.Redact(msg.Message)}
 	}
 	if out != nil {
-		if err := json.Unmarshal(body, out); err != nil {
+		if err := json.Unmarshal(got, out); err != nil {
 			return fmt.Errorf("%s %s: decode: %w", method, path, err)
 		}
 	}

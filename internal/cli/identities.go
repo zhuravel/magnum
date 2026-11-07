@@ -48,7 +48,9 @@ func newIdentitiesCmd(c *Context) *cobra.Command {
 		"Verify every identity, or only the named one: a gh identity's token must belong to its login; a GitHub "+
 			"App needs its private key, pull_requests write permission, an installation token and every watched "+
 			"repository in the installation; an App without read access to Actions, Checks or Commit statuses "+
-			"passes with a WARN line, since the judge cannot read the PR's CI with it. "+
+			"passes with a WARN line, since the judge cannot read the PR's CI with it. An App the fixer acts as "+
+			"(a watch's fix_identity) also needs contents write, an installation on the owner of every repository it "+
+			"pushes to, a user_id that is its bot's, and git's HTTPS access to its first repository as the App. "+
 			"The verdict is recorded like the daemon's own check, so a pass "+
 			"unblocks the identity's PRs on the next tick.",
 		func(pos []string) int {

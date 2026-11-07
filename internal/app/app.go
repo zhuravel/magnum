@@ -230,8 +230,8 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	for _, id := range cfg.Identities {
 		switch id.Kind {
 		case "app":
-			app := identity.NewApp(id, layout, httpClient, opts.Getenv, nil,
-				identity.WithRunner(a.Runner), identity.WithRepos(identity.WatchedRepos(cfg, id.Name)...))
+			app := identity.NewApp(id, layout, httpClient, opts.Getenv, nil, identity.WithRunner(a.Runner),
+				identity.WithRepos(identity.WatchedRepos(cfg, id.Name)...), identity.WithFixer(identity.FixRepos(cfg, id.Name)...))
 			a.Identities[id.Name] = app
 			// A 401 means the installation token was revoked: mint a new
 			// one and retry the call once.

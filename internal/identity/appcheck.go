@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -38,8 +41,10 @@ type installationInfo struct {
 // installation and its permissions (pull_requests must be write; contents is
 // reported; actions, checks and statuses without read access warn), minting
 // a token, writing ConfigDir, the installation's repositories (every
-// WithRepos repo must be listed), and that `gh api repos/<first repo>` works
-// with GH_CONFIG_DIR. It keeps going after a
+// WithRepos and WithFixer repo must be listed), and that `gh api repos/<first
+// repo>` works with GH_CONFIG_DIR. For a fixer (WithFixer) it also needs
+// contents write, reports workflows, and checks the fixer's profile
+// (fixerProfile). It keeps going after a
 // failure where the next step can still run, so one pass shows every problem.
 //
 // Check proves minting works by minting a token itself; a failed mint leaves
@@ -48,7 +53,7 @@ type installationInfo struct {
 func (a *App) Check(ctx context.Context) (Report, error) {
 	c := &appCheck{a: a}
 	for _, step := range []func(context.Context) (stop bool, err error){
-		c.privateKey, c.appInfo, c.installation, c.permissions, c.token, c.configDir, c.repositories, c.ghProbe,
+		c.privateKey, c.appInfo, c.installation, c.permissions, c.token, c.configDir, c.repositories, c.ghProbe, c.fixerProfile,
 	} {
 		stop, err := step(ctx)
 		if err != nil {
@@ -116,7 +121,7 @@ func (c *appCheck) privateKey(context.Context) (bool, error) {
 
 func (c *appCheck) appInfo(ctx context.Context) (bool, error) {
 	a, r := c.a, &c.r
-	if err := a.call(ctx, http.MethodGet, "/app", c.jwt, &c.app); err != nil {
+	if err := a.call(ctx, http.MethodGet, "/app", c.jwt, nil, &c.app); err != nil {
 		ae, ok := isAPIError(err)
 		if !ok {
 			return c.transport("GET /app", err)
@@ -152,7 +157,7 @@ func (c *appCheck) appInfo(ctx context.Context) (bool, error) {
 
 func (c *appCheck) installation(ctx context.Context) (bool, error) {
 	a, r := c.a, &c.r
-	if err := a.call(ctx, http.MethodGet, fmt.Sprintf("/app/installations/%d", a.cfg.InstallationID), c.jwt, &c.inst); err != nil {
+	if err := a.call(ctx, http.MethodGet, fmt.Sprintf("/app/installations/%d", a.cfg.InstallationID), c.jwt, nil, &c.inst); err != nil {
 		ae, ok := isAPIError(err)
 		if !ok {
 			return c.transport("GET installation", err)
@@ -187,11 +192,28 @@ func (c *appCheck) permissions(context.Context) (bool, error) {
 			fmt.Sprintf(`open %s -> Repository permissions -> Pull requests: "Read and write" -> Save changes`, appPermissionsURL(c.app)),
 			fmt.Sprintf("then an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
 	}
-	switch contents := permission(inst.Permissions, "contents"); contents {
-	case "write":
+	switch contents := permission(inst.Permissions, "contents"); {
+	case len(a.fixer) > 0 && contents == "write":
+		r.pass("permission contents: write (the fixer pushes as the App)")
+	case len(a.fixer) > 0:
+		msg := fmt.Sprintf("permission contents: %s (need write: the fixer pushes as the App)", contents)
+		if permission(c.app.Permissions, "contents") == "write" {
+			r.fail(msg, fmt.Sprintf("the App already requests write; an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
+		} else {
+			r.fail(msg, fmt.Sprintf(`open %s -> Repository permissions -> Contents: "Read and write" -> Save changes`, appPermissionsURL(c.app)),
+				fmt.Sprintf("then an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
+		}
+	case contents == "write":
 		r.info("permission contents: write (read is enough)")
 	default:
 		r.info("permission contents: " + contents)
+	}
+	if len(a.fixer) > 0 {
+		if workflows := permission(inst.Permissions, "workflows"); workflows == "none" {
+			r.info("permission workflows: none (a push that changes .github/workflows needs you: magnum push refuses it)")
+		} else {
+			r.info("permission workflows: " + workflows + " (unused: magnum push refuses a change to .github/workflows)")
+		}
 	}
 	for _, p := range ciReadPermissions {
 		have := permission(inst.Permissions, p.name)
@@ -262,7 +284,7 @@ func (c *appCheck) repositories(ctx context.Context) (bool, error) {
 	c.repos = list
 	r.pass(fmt.Sprintf("installation repositories (%d): %s", list.Total, summarize(list.Names, list.Total, repoSummaryMax)))
 	installURL := installationSettingsURL(c.inst.Account, a.cfg.InstallationID)
-	for _, want := range a.repos {
+	for _, want := range slices.Concat(a.repos, a.fixer) {
 		switch {
 		case containsFold(list.Names, want):
 		case list.Complete:
@@ -284,9 +306,12 @@ func (c *appCheck) repositories(ctx context.Context) (bool, error) {
 func (c *appCheck) ghProbe(ctx context.Context) (bool, error) {
 	a, r := c.a, &c.r
 	probe := ""
-	if len(a.repos) > 0 {
+	switch {
+	case len(a.repos) > 0:
 		probe = a.repos[0]
-	} else if len(c.repos.Names) > 0 {
+	case len(a.fixer) > 0:
+		probe = a.fixer[0]
+	case len(c.repos.Names) > 0:
 		probe = c.repos.Names[0]
 	}
 	switch {
@@ -315,6 +340,106 @@ func (c *appCheck) ghProbe(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// fixerProfile checks what the fixer needs of an App it acts as
+// (WithFixer; nothing otherwise): the installation's account owns every
+// repository the fixer pushes to, the identity's user_id is the App's bot
+// user's id (GET /users/<login>, whose noreply email the fixer's commits
+// carry), and git reaches the first repository over HTTPS with gh as its
+// only credential helper and the App's gh config, as `magnum push` does.
+func (c *appCheck) fixerProfile(ctx context.Context) (bool, error) {
+	a, r := c.a, &c.r
+	if len(a.fixer) == 0 {
+		return false, nil
+	}
+	if account := c.inst.Account.Login; account != "" {
+		for _, repo := range a.fixer {
+			if !ownedBy(repo, account) {
+				owner, _, _ := strings.Cut(repo, "/")
+				r.fail(fmt.Sprintf("installation %d is on %s, but the fixer pushes to %s as it", a.cfg.InstallationID, account, repo),
+					fmt.Sprintf("give the watch of %s a fix_identity of the App's installation on %s (one [[identity]] block per installation)", owner, owner))
+			}
+		}
+	}
+	if stop, err := c.fixerUser(ctx); stop || err != nil {
+		return stop, err
+	}
+	return c.httpsProbe(ctx)
+}
+
+// fixerUser checks the identity's user_id against GitHub's id of its login.
+func (c *appCheck) fixerUser(ctx context.Context) (bool, error) {
+	a, r := c.a, &c.r
+	var user struct {
+		ID int64 `json:"id"`
+	}
+	path := "/users/" + url.PathEscape(a.cfg.Login)
+	if err := a.callInstallation(ctx, http.MethodGet, path, &user); err != nil {
+		if _, ok := isAPIError(err); !ok {
+			return c.transport("GET /users/"+a.cfg.Login, err)
+		}
+		r.fail(fmt.Sprintf("the fixer's bot user %s: %v", a.cfg.Login, err), "check login of identity "+a.cfg.Name+" in config.toml")
+		return false, nil
+	}
+	switch a.cfg.UserID {
+	case user.ID:
+		r.pass(fmt.Sprintf("%s is user %d (user_id): its commits' email is %d+%s@users.noreply.github.com", a.cfg.Login, user.ID, user.ID, a.cfg.Login))
+	case 0:
+		r.fail(fmt.Sprintf("user_id is not set, and GitHub says %s is user %d", a.cfg.Login, user.ID),
+			fmt.Sprintf("set user_id = %d for identity %s in config.toml", user.ID, a.cfg.Name))
+	default:
+		r.fail(fmt.Sprintf("user_id = %d, but GitHub says %s is user %d", a.cfg.UserID, a.cfg.Login, user.ID),
+			fmt.Sprintf("set user_id = %d for identity %s in config.toml", user.ID, a.cfg.Name))
+	}
+	return false, nil
+}
+
+// httpsProbe runs `git ls-remote https://github.com/<repo>.git HEAD` for the
+// fixer's first repository with the App's gh config and gh as the only
+// credential helper; a failure is git's first line, redacted.
+func (c *appCheck) httpsProbe(ctx context.Context) (bool, error) {
+	a, r := c.a, &c.r
+	owner, name, _ := strings.Cut(a.fixer[0], "/")
+	target := gitx.GitHubHTTPSURL(owner, name)
+	where := "git ls-remote " + target + " over HTTPS as the App"
+	switch {
+	case a.run == nil:
+		r.info("HTTPS probe skipped: no command runner configured")
+		return false, nil
+	case c.dir == "":
+		r.info("HTTPS probe skipped: no gh config dir")
+		return false, nil
+	}
+	env := gitx.Env(false)
+	maps.Copy(env, appEnv(c.dir))
+	args := []string{"-c", "credential.helper=", "-c", "credential.helper=" + gitx.GHCredentialHelper, "ls-remote", target, "HEAD"}
+	res, err := a.run.Run(ctx, execx.Cmd{Name: "git", Args: args, Env: env, Unset: gitx.ScrubbedEnv(), Timeout: callTimeout,
+		Label: "git ls-remote (identity check)"})
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return c.transport(where, ctx.Err())
+	case err != nil:
+		why := firstLine(string(res.Stderr))
+		if why == "" {
+			why = err.Error()
+		}
+		r.fail(where+": "+why, fmt.Sprintf("run `GH_CONFIG_DIR=%s git -c credential.helper= -c 'credential.helper=%s' ls-remote %s HEAD` to see the full error",
+			c.dir, gitx.GHCredentialHelper, target))
+	default:
+		r.pass(where)
+	}
+	return false, nil
+}
+
+// firstLine is the first line of s that is not blank, trimmed.
+func firstLine(s string) string {
+	for line := range strings.Lines(s) {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 // repoList is the installation's repositories as far as they were listed.
@@ -372,7 +497,7 @@ func (a *App) callInstallation(ctx context.Context, method, path string, out any
 		if err != nil {
 			return err
 		}
-		err = a.call(ctx, method, path, tok, out)
+		err = a.call(ctx, method, path, tok, nil, out)
 		if ae, ok := isAPIError(err); !ok || ae.Status != http.StatusUnauthorized || attempt > 0 {
 			return err
 		}

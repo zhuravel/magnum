@@ -76,3 +76,42 @@ func TestDoctorClonesSuggestsHTTPSAndSSHHintOnlyForSSHOrigins(t *testing.T) {
 		}
 	}
 }
+
+// Git ignores pushInsteadOf for a remote with an explicit pushurl, so a
+// pool's main clone whose origin has one turns off the fixer App pane's
+// refusal of a plain `git push`: the doctor warns about it (a read of the
+// clone's config), only for a pool whose watch's fixer is a dedicated App.
+func TestDoctorWarnsAboutAPushURLUnderAFixerApp(t *testing.T) {
+	home := t.TempDir()
+	clone := filepath.Join(home, "talkable")
+	if err := os.MkdirAll(filepath.Join(clone, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "me", Kind: "gh", Login: "zhuravel"}, {Name: "fixer-app", Kind: "app", Login: "fixer-app[bot]",
+		AppID: 7, ClientID: "Iv-fix", InstallationID: 8, PrivateKeyEnv: "FIX_KEY", TokenRepositories: []string{"talkable"},
+		TokenPermissions: map[string]string{"contents": "write", "pull_requests": "write"}, UserID: 4242}}
+	cfg.Watches = []config.Watch{{Owner: "talkable", Include: []string{"talkable"}, Identity: "me", PollIdentity: "me"}}
+	cfg.Pools = []config.Pool{{Repo: "talkable/talkable", MainClone: clone, Base: "master"}}
+	pushURL := []string{"git", "-C", clone, "config", "--get", "remote.origin.pushurl"}
+	check := func(cfg *config.Config, rules ...execx.Rule) (doctorCheck, bool, *execx.Fake) {
+		t.Helper()
+		f := &execx.Fake{Rules: append(rules, daemonRuleOK([]string{"git"}, ""))}
+		c, ok := doctorByName(doctorFixerPushURL(context.Background(), doctorDeps{Config: cfg, Run: f}))["push url talkable/talkable"]
+		return c, ok, f
+	}
+
+	// A gh fixer pushes with git push as before: nothing is read.
+	if c, ok, f := check(cfg); ok || len(f.Calls) != 0 {
+		t.Fatalf("gh fixer: %+v %v, calls %v", c, ok, f.Calls)
+	}
+	cfg.Watches[0].FixIdentity = "fixer-app"
+	c, ok, _ := check(cfg, daemonRuleOK(pushURL, "git@github.com:talkable/talkable.git\n"))
+	if !ok || c.Status != doctorWarn || !strings.Contains(c.Detail, "remote.origin.pushurl") || !strings.Contains(c.Detail, "pushInsteadOf") ||
+		!strings.Contains(c.Fix, "git -C "+clone+" config --unset remote.origin.pushurl") {
+		t.Fatalf("pushurl under a fixer App = %+v, %v", c, ok)
+	}
+	if c, ok, _ := check(cfg, daemonRuleExit(pushURL, 1, "")); !ok || c.Status != doctorPass {
+		t.Fatalf("no pushurl under a fixer App = %+v, %v", c, ok)
+	}
+}

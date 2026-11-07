@@ -17020,6 +17020,15 @@ var ErrPlaceholderKey = errors.New("identity: placeholder private key")
 
 FUNCTIONS
 
+func FixRepos(c *config.Config, name string) []string
+    FixRepos returns the "owner/name" repositories the fixer pushes to as
+    identity name, in config order without duplicates: for each watch whose
+    fix role acts as it (config.Config.FixRoleFor: the watch's fix_identity,
+    else the role's identity), the identity's token_repositories under the
+    watch's owner. None for an identity no fixer acts as, or one that names no
+    token_repositories (a gh identity: magnum mints it no token). The App check
+    checks a fixer's profile against these (WithFixer).
+
 func NewGhClient(run execx.Runner, env map[string]string) *http.Client
     NewGhClient returns an http.Client whose requests run through gh (see
     GhTransport), with the same 30 s timeout the direct client uses. A request
@@ -17045,12 +17054,14 @@ func NewApp(cfg config.Identity, layout paths.Layout, client *http.Client, geten
 
 func (a *App) Check(ctx context.Context) (Report, error)
     Check verifies, in order: the private key, the JWT (GET /app), the
-    installation and its permissions (pull_requests must be write; contents
-    is reported; actions, checks and statuses without read access warn),
-    minting a token, writing ConfigDir, the installation's repositories (every
-    WithRepos repo must be listed), and that `gh api repos/<first repo>` works
-    with GH_CONFIG_DIR. It keeps going after a failure where the next step can
-    still run, so one pass shows every problem.
+    installation and its permissions (pull_requests must be write; contents is
+    reported; actions, checks and statuses without read access warn), minting a
+    token, writing ConfigDir, the installation's repositories (every WithRepos
+    and WithFixer repo must be listed), and that `gh api repos/<first repo>`
+    works with GH_CONFIG_DIR. For a fixer (WithFixer) it also needs contents
+    write, reports workflows, and checks the fixer's profile (fixerProfile).
+    It keeps going after a failure where the next step can still run, so one
+    pass shows every problem.
 
     Check proves minting works by minting a token itself; a failed mint leaves
     the daemon's cached token alone, a successful one replaces it only when it
@@ -17106,6 +17117,12 @@ type AppOption func(*App)
 
 func WithBaseURL(u string) AppOption
     WithBaseURL points the REST calls at another API root (tests).
+
+func WithFixer(fullNames ...string) AppOption
+    WithFixer makes Check check the App as a fixer of the "owner/name"
+    repositories fullNames (see FixRepos): contents write, its bot's user id,
+    the installation's account as each repository's owner and an HTTPS probe of
+    the first one. None = the App is no fixer.
 
 func WithRepos(fullNames ...string) AppOption
     WithRepos sets the "owner/name" repositories Check expects in the

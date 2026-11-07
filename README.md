@@ -1386,6 +1386,16 @@ permissions, `read` or `write` by GitHub's permission name, that GitHub's token 
 token has the installation's whole access, as before. `user_id` (kind `app` only) is the App's bot user's
 numeric id. A fixer App must set all three, with `contents` and `pull_requests` write and nothing else
 (`metadata = "read"` may be added); validation refuses it otherwise, and refuses the keys on a `gh` identity.
+Every token in the App's gh config directory is then that narrow, since the daemon's refresh and the check
+mint the same way; GitHub refuses a mint that names a repository outside the installation or a permission it
+lacks, and the token refresh then fails as any other does. For an App a watch's fixer acts as, `magnum
+identities check` also wants `contents` write in the installation (a reviewing App needs read), says whether
+`workflows` is granted (unused: `magnum push` refuses a change to `.github/workflows`), checks that the
+installation's account owns every repository the fixer pushes to and that `user_id` is the bot user's id
+(GitHub's `GET /users/<login>`; it prints the line to set on a mismatch), and runs `git ls-remote` of the
+first repository over HTTPS with the App's gh config and gh as git's only credential helper. `magnum doctor`
+warns when such a watch's pool clone sets `remote.origin.pushurl`, for which git ignores the fixer pane's
+`pushInsteadOf` refusal of a plain `git push` (Fixing your own PRs).
 
 App tokens are minted from a short-lived JWT and refreshed before they expire; every GitHub call,
 including those, goes through `gh api` by default, so no extra firewall rules are needed (`[github] transport = "direct"` makes the JWT and token calls Go `net/http` requests, which an outbound firewall may block for a rebuilt, unsigned binary). The App needs the repository

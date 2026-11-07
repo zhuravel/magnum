@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -148,6 +150,10 @@ type fakeGitHub struct {
 	repoPages  int           // repository listing requests received
 	lastToken  string
 	ttl        time.Duration
+	mintBody   []byte           // the last mint request's body
+	mintType   string           // the last mint request's Content-Type
+	account    string           // the installation's account (default talkable)
+	users      map[string]int64 // GET /users/<login>: the user's id by login
 }
 
 func newFakeGitHub(t *testing.T, clock *fakeClock) *fakeGitHub {
@@ -272,11 +278,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.mu.Lock()
-		perms, sel := f.instPerms, f.selection
+		perms, sel, account := f.instPerms, f.selection, cmp.Or(f.account, "talkable")
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id": f.id.InstallationID, "app_id": f.id.AppID,
-			"account":              map[string]any{"login": "talkable", "type": "Organization"},
+			"account":              map[string]any{"login": account, "type": "Organization"},
 			"permissions":          perms,
 			"repository_selection": sel,
 			"suspended_at":         nil,
@@ -286,9 +292,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "bad jwt"})
 			return
 		}
+		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		gate, entered, status := f.gate, f.entered, f.mintStatus
 		f.attempts++
+		f.mintBody, f.mintType = body, r.Header.Get("Content-Type")
 		f.mu.Unlock()
 		if entered != nil {
 			entered <- struct{}{}
@@ -339,9 +347,25 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			list = append(list, map[string]string{"full_name": repos[i]})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"total_count": len(repos), "repositories": list})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/users/"):
+		f.mu.Lock()
+		id, ok := f.users[strings.TrimPrefix(r.URL.Path, "/users/")]
+		f.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"login": strings.TrimPrefix(r.URL.Path, "/users/"), "id": id, "type": "Bot"})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 	}
+}
+
+// lastMint is the body and Content-Type of the last mint request.
+func (f *fakeGitHub) lastMint() (body []byte, contentType string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mintBody, f.mintType
 }
 
 // newTestApp wires an App to the fake server with the shared key.
