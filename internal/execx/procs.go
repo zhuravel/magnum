@@ -77,11 +77,13 @@ func ProcessTable(ctx context.Context, r Runner) ([]Process, error) {
 }
 
 // ProcessStart is when process pid started, as ProcessTable reads it (ps's
-// lstart in the C locale, its words joined by one space): with the pid, the
-// process's lifetime identity. A pid no process has is an error.
+// lstart in the C locale and in UTC, its words joined by one space): with
+// the pid, the process's lifetime identity, the same text whatever TZ the
+// reader has (the install drain compares the command's read with the
+// daemon's). A pid no process has is an error.
 func ProcessStart(ctx context.Context, r Runner, pid int) (string, error) {
 	res, err := r.Run(ctx, Cmd{Name: "ps", Args: []string{"-p", strconv.Itoa(pid), "-o", "lstart="},
-		Env: map[string]string{"LC_ALL": "C"}, Timeout: processTableTimeout, Label: "ps process start", Quiet: true})
+		Env: map[string]string{"LC_ALL": "C", "TZ": "UTC0"}, Timeout: processTableTimeout, Label: "ps process start", Quiet: true})
 	if err != nil {
 		return "", fmt.Errorf("read the start of pid %d: %w", pid, err)
 	}

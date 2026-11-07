@@ -67,3 +67,18 @@ func TestAProcessIsItsIDAndStart(t *testing.T) {
 		t.Error("two processes without a start are the same")
 	}
 }
+
+// The install drain compares ProcessStart's text read by the command with
+// the one read by the daemon: ps prints lstart in the TZ of its environment,
+// so a command and a daemon with different TZ values would never agree.
+func TestProcessStartReadsTheStartInUTC(t *testing.T) {
+	f := &Fake{Rules: []Rule{{Prefix: []string{"ps"}, Fn: func(Cmd) (Result, error) {
+		return Result{Stdout: []byte("Sat Nov  7 15:38:15 2026\n")}, nil
+	}}}}
+	if _, err := ProcessStart(context.Background(), f, 42); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Calls) != 1 || f.Calls[0].Env["TZ"] != "UTC0" || f.Calls[0].Env["LC_ALL"] != "C" {
+		t.Fatalf("ps env = %v, want TZ=UTC0 and LC_ALL=C", f.Calls)
+	}
+}
