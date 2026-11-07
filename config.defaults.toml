@@ -436,8 +436,9 @@ settle_max = "20m"                # ... and every settle_checks check at the hea
                                   # at the head, e.g. ["pronto"]; one the head does not have is not waited for
 magnum_late_after = "2h"          # autofix = "open": a head magnum has not reviewed this long after its round was
                                   # due needs you, once per head with a toast ("0" = never; else at least 30m);
-                                  # inside [daemon] quiet_hours nothing is late (no toast at night), and a review
-                                  # not late yet when they began counts this long from their end
+                                  # inside [daemon] quiet_hours and under `magnum pause` nothing is late (no toast
+                                  # at night), and a review not late yet when they began counts this long from
+                                  # their end
 autofix_max_loops = 3             # autofix = "open": loops it starts on one PR in 24 hours, then the PR needs you
                                   # (1 to 20); a loop you start with f does not count, nor one that ended for
                                   # want of a free slot (no fixer ran)

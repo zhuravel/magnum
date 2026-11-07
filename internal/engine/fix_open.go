@@ -138,14 +138,40 @@ func (e *Engine) autofixOpen(ctx context.Context) error {
 		}
 	}
 	slices.SortStableFunc(cands, func(a, b openCand) int { return a.ledger.Read.At.Compare(b.ledger.Read.At) })
-	reads := 0
+	reads, pauses := 0, e.openPauses(ctx, e.now())
 	for i := range cands {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		e.lookOpen(ctx, &cands[i], &reads)
+		e.lookOpen(ctx, &cands[i], pauses, &reads)
 	}
 	return nil
+}
+
+// openPauses are the `magnum pause` spans that ended within openHoldsBack
+// of now, oldest first, read from the daemon.paused and daemon.resumed
+// events (an expiry writes one too): rule 5's late clock counts from the
+// end of one that held a review (magnumDue). A pause renewed while it ran
+// begins at its first event, and a resume with no pause before it (one that
+// lifted nothing, or an infrastructure pause alone) is no span.
+func (e *Engine) openPauses(ctx context.Context, now time.Time) []openHold {
+	evs, err := e.st.EventsOfKindsSince(ctx, now.Add(-openHoldsBack), "daemon.paused", "daemon.resumed")
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "autofix open: the pauses that ended")
+		return nil
+	}
+	var holds []openHold
+	var from time.Time
+	for _, ev := range evs { // in the order written
+		switch {
+		case ev.Kind == "daemon.paused" && from.IsZero():
+			from = ev.At
+		case ev.Kind == "daemon.resumed" && !from.IsZero():
+			holds = append(holds, openHold{from: from, to: ev.At})
+			from = time.Time{}
+		}
+	}
+	return holds
 }
 
 // openSettle are the configuration's keys of autofix = "open".
@@ -163,7 +189,8 @@ func (e *Engine) quietRules() quietRules {
 
 // lookOpen is the look at one PR: its facts, the loops that ended, the
 // read and the base check when due, the verdict, a start, and the rows.
-func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
+// pauses are openPauses'.
+func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, reads *int) {
 	pr, repo := c.pr, c.repo
 	now := e.now()
 	l := c.ledger
@@ -208,6 +235,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	if f.pause = e.userPause(ctx); f.pause != "" { // it holds the look's starts, as it held "own"'s rounds
 		f.pauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
 	}
+	f.pauses = pauses
 	fp := openPrint(pr)
 	_, f.low = e.githubLow(c.w.PollIdentity)
 	f.pollStale = e.pollBehind(ctx, *c.w, now)

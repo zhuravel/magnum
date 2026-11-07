@@ -17,8 +17,8 @@ package engine
 //  4. a stalemate needs you;
 //  5. magnum's review of the head waits, without a cap, until
 //     magnum_late_after past the time its round was due (counted from the
-//     end of each [daemon] quiet_hours window that began before it was
-//     late, and never late inside one), when it needs you;
+//     end of each `magnum pause` and [daemon] quiet_hours window that began
+//     before it was late, and never late inside one), when it needs you;
 //  6. replies magnum has not re-decided wait;
 //  7. without a whole read of GitHub since the PR changed, or while the
 //     poll of its watch is behind (the PR's row may be old), it is unknown,
@@ -361,9 +361,11 @@ type openFacts struct {
 	// check could not check ("" = checked, or not looked at this head).
 	mergeUnchecked string
 	// pause is `magnum pause`'s words ("" = none: userPause), and
-	// pauseUntil its end (zero: until `magnum resume`).
+	// pauseUntil its end (zero: until `magnum resume`); pauses are the
+	// pauses that ended (openPauses), oldest first.
 	pause      string
 	pauseUntil time.Time
+	pauses     []openHold
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -554,12 +556,13 @@ func offWords(off string) string {
 // is another, or a round is due or running): the wait's words, whether it
 // is late (needs_you) and when it ends where known. "" when magnum is done
 // at the head. The round is due at the later of the head's move and its
-// next eligible time; inside [daemon] quiet_hours it is never late (no
-// needs you, so no toast at night), and the late clock counts from the end
-// of every window that began before the review was late (heldSince): one
-// that held the round from starting gives it magnum_late_after anew from
-// its end, and a review late before a window began is late again at its
-// end.
+// next eligible time; under `magnum pause`, which holds every round nobody
+// forced, and inside [daemon] quiet_hours it is never late (no needs you,
+// so no toast at night or while you paused it), and the late clock counts
+// from the end of every pause and quiet window that began before the
+// review was late (heldSince): one that held the round from starting gives
+// it magnum_late_after anew from its end, and a review late before one
+// began is late again at its end.
 func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 	pr := f.pr
 	due, running := slices.Contains(store.DueStates, pr.State), slices.Contains(store.InFlightStates, pr.State)
@@ -577,19 +580,31 @@ func magnumDue(f openFacts) (why string, late bool, until time.Time) {
 	if !due {
 		return "magnum reviews " + short, false, until
 	}
-	if end, held := quietHoursNow(f.settle.quietHours, f.now); held { // never late inside them
-		return "magnum reviews " + short, false, later(until, end)
+	quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
+	if quiet {
+		until = later(until, quietEnd)
+	}
+	switch { // never late while either holds the round
+	case f.pause != "" && !pr.Forced && f.pauseUntil.After(f.now):
+		until = later(until, f.pauseUntil)
+		return fmt.Sprintf("%s: magnum's review of %s waits until %s", f.pause, short, waitClock(f.pauseUntil, f.now)), false, until
+	case f.pause != "" && !pr.Forced:
+		return f.pause + ": magnum's review of " + short + " waits for `magnum resume`", false, until
+	case quiet:
+		return "magnum reviews " + short, false, until
 	}
 	if late := f.settle.late; late > 0 {
-		if since = heldSince(since, late, quietWindows(f.settle.quietHours, since, f.now)); !f.now.Before(since.Add(late)) {
+		holds := append(slices.Clone(f.pauses), quietWindows(f.settle.quietHours, since, f.now)...)
+		slices.SortStableFunc(holds, func(a, b openHold) int { return a.from.Compare(b.from) })
+		if since = heldSince(since, late, holds); !f.now.Before(since.Add(late)) {
 			return fmt.Sprintf("magnum has not reviewed %s since %s", short, waitClock(since, f.now)), true, time.Time{}
 		}
 	}
 	return "magnum reviews " + short, false, until
 }
 
-// openHold is a span that held a round nobody forced: a window of [daemon]
-// quiet_hours.
+// openHold is a span that held a round nobody forced: a `magnum pause`
+// that ended, or a window of [daemon] quiet_hours.
 type openHold struct{ from, to time.Time }
 
 // heldSince is a due review's late clock, due at since, moved past holds

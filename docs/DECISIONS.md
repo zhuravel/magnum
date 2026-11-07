@@ -3014,23 +3014,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   approval goes the same way. Tests, failing first: TestAnApprovalBodyIsNoItem,
   TestAnApprovalOnACleanReviewStartsNoLoop.
 
-- **`magnum_late_after` counts from the end of quiet hours, and toasts nothing inside them** (2026-11-07, a
-  read-only check before the operator's switch to "open"). Rule 5's late clock ran from the later of the
-  head's move and the PR's next eligible time, while `[daemon] quiet_hours` hold every full round: a push
-  of the operator's at 02:50 under a 03:00-10:00 window waited for 10:00 and went late, with an urgent
-  toast, at 05:05, for a wait he configured. While the window holds now no review is late (the wait says
-  "magnum reviews ...", until the window's end): no needs you and so no toast at night. The late clock then
-  counts from the end of every window that began before the review was late (`heldSince`, oldest window
-  first): a round due inside the window, and one due before it that had not started when it began (a push
-  at 02:43 that `push_quiet_period` set due at 02:48, a round queued behind a busy pool or a paused kind), get
-  `magnum_late_after` anew from 10:00, when the round the window held can start; at 10:00 itself, when the
-  look (before dispatch) would have toasted a round about to start, nothing is late. One that was late
-  before the window began is late again at its end, toasted once per head if it was not yet. The look does
-  not know whether the round will be a judge-alone one that quiet hours let through; such a round ends the
-  wait inside the window anyway, so counting every due round as held errs toward no false alarm. Tests,
-  failing first: TestMagnumLateCountsFromTheEndOfQuietHours,
-  TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate, TestMagnumIsNeverLateInsideQuietHours,
-  TestMagnumLateToastsNothingForQuietHoursThatHeldIt.
+- **`magnum_late_after` counts from the end of quiet hours and of a pause, and toasts nothing inside
+  them** (2026-11-07, a read-only check before the operator's switch to "open"). Rule 5's late clock ran
+  from the later of the head's move and the PR's next eligible time, while `[daemon] quiet_hours` hold
+  every full round: a push of the operator's at 02:50 under a 03:00-10:00 window waited for 10:00 and went
+  late, with an urgent toast, at 05:05, for a wait he configured. While the window holds now no review is
+  late (the wait says "magnum reviews ...", until the window's end): no needs you and so no toast at
+  night. The late clock then counts from the end of every window that began before the review was late
+  (`heldSince`, oldest window first): a round due inside the window, and one due before it that had not
+  started when it began (a push at 02:43 that `push_quiet_period` set due at 02:48, a round queued behind
+  a busy pool or a paused kind), get `magnum_late_after` anew from 10:00, when the round the window held
+  can start; at 10:00 itself, when the look (before dispatch) would have toasted a round about to start,
+  nothing is late. One that was late before the window began is late again at its end, toasted once per
+  head if it was not yet. The look does not know whether the round will be a judge-alone one that quiet
+  hours let through; such a round ends the wait inside the window anyway, so counting every due round as
+  held errs toward no false alarm. `magnum pause` holds every round nobody forced (dispatch), and the
+  operator pauses at night by hand: a push just before a pause went late, with the urgent toast, while he
+  was paused. The pause now holds the late clock as quiet hours do: while it holds a round that was not
+  forced, the wait names it ("daemon paused: magnum's review of a1b2c3d waits for `magnum resume`", or
+  until the end `--for` or `--until` set) and nothing is late; afterwards the clock counts from its end.
+  The look reads the pauses that ended, once a tick, from the daemon.paused and daemon.resumed events of
+  the last 30 days (`openPauses`: an expiry writes daemon.resumed too; a resume that lifted no pause is no
+  span), so no new key and no change to `magnum resume`. A forced round runs under the pause, so its clock
+  does not stop. Tests, failing first: TestMagnumLateCountsFromTheEndOfQuietHours,
+  TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate,
+  TestMagnumIsNeverLateInsideQuietHours, TestMagnumLateToastsNothingForQuietHoursThatHeldIt,
+  TestMagnumIsNeverLateUnderThePauseAndCountsFromItsEnd, TestMagnumLateCountsFromTheEndOfAPause.
 
 - **A loop that found no slot spends no start, and one tick starts no more slot loops than slots are free**
   (2026-11-07, a read-only check before the operator's switch to "open"). A PR the pool took its slot from

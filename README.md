@@ -3361,10 +3361,12 @@ with such leftovers goes to needs attention (kind fix, "fix: 1 item the fixer le
 new reply can start a new loop. A loop's own Needs you (a failed push, a declined P1) is never rewritten or
 lifted by the look: you act on it as before (`f`, a push, `r`). Magnum's review of a head later than
 `magnum_late_after` past its due time is toasted once per head (`fix.open_magnum_late`). `[daemon]
-quiet_hours` move that clock, never the review's wait: inside them no review is late, so no toast goes out at
-night, and a review not late yet when they began (due inside them, or due before and kept from starting)
-counts `magnum_late_after` from their end, when the round they held can start; one that was late before they
-began is late again, and toasted once if not yet, at their end. Red required CI
+quiet_hours` and `magnum pause` (which holds every round you did not force) move that clock, never the review's
+wait: while they hold, no review is late, so no toast goes out at night or while you paused (the wait says
+"daemon paused: magnum's review of a1b2c3d waits for `magnum resume`"), and a review not late yet when they
+began (due inside them, or due before and kept from starting) counts `magnum_late_after` from their end
+(`magnum resume`, or the end `--for` or `--until` set), when the round they held can start; one that was late
+before they began is late again, and toasted once if not yet, at their end. Red required CI
 needs you; pending required CI waits (the required checks are `[[repo]] required_checks`, else GitHub's for
 the default branch; a branch that requires none leaves CI out).
 

@@ -652,3 +652,41 @@ func TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate(t *testi
 		}
 	}
 }
+
+// `magnum pause` holds every round nobody forced, so a review it holds is
+// not late while it lasts: the wait names the pause and its end, nothing
+// needs you, no toast. After the pause the late clock counts from its end,
+// for a review that was not late when it began; one late before it began
+// is late again at its end. A round you forced runs under the pause, so
+// its clock does not stop.
+func TestMagnumIsNeverLateUnderThePauseAndCountsFromItsEnd(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 7, h, m, 0, 0, time.Local) }
+	f := idleFacts()
+	old := "0000000000000000000000000000000000000000"
+	f.pr.ReviewedSHA, f.pr.State = &old, store.PRRereviewPending
+	f.pr.HeadChangedAt = at(14, 10)
+	f.pause, f.pauseUntil = "daemon paused", at(18, 0)
+	f.now = at(16, 15)
+	v, _, _ := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "daemon paused: magnum's review of a1a1a1a waits until 18:00")
+	if v.late || len(v.Needs) != 0 || !v.Until.Equal(at(18, 0)) {
+		t.Errorf("late %v, needs %+v, until %s; want a wait until the pause's end", v.late, v.Needs, v.Until)
+	}
+	f.pauseUntil = time.Time{}
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "daemon paused: magnum's review of a1a1a1a waits for `magnum resume`")
+	f.pause, f.pauses = "", []openHold{{from: at(14, 0), to: at(18, 0)}} // resumed at 18:00
+	f.now = at(19, 59)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "magnum reviews a1a1a1a")
+	f.now = at(20, 0)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 18:00")
+	f.pr.HeadChangedAt, f.now = at(11, 0), at(18, 0) // late at 13:00, before the pause
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 11:00")
+	f.pr.HeadChangedAt, f.pr.Forced, f.now = at(14, 10), true, at(16, 15)
+	f.pause, f.pauses = "daemon paused", nil
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 14:10")
+}

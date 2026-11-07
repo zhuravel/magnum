@@ -293,3 +293,51 @@ func TestMagnumLateToastsNothingForQuietHoursThatHeldIt(t *testing.T) {
 		t.Errorf("toasts = %v, want one, magnum_late_after past the window's end", h.nh.shown())
 	}
 }
+
+// The look reads when `magnum pause` ended from its events: a review the
+// pause held from starting is not late while it lasts, and the late clock
+// counts from `magnum resume`.
+func TestMagnumLateCountsFromTheEndOfAPause(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick()
+	pr := h.pr(2)
+	old := "0000000000000000000000000000000000000000"
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRRereviewPending, func(u *store.PRUpdate) {
+		u.Set("reviewed_sha", old)
+		u.Set("next_eligible_at", h.clock.Now().Add(time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pause := func(on bool) {
+		t.Helper()
+		if _, err := h.e.requestPause(h.ctx, PausePayload{}, on); err != nil {
+			t.Fatal(err)
+		}
+	}
+	look := func() int { // the fix.open_magnum_late events so far
+		t.Helper()
+		if err := h.e.autofixOpen(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.e.toastWG.Wait() // no tick: its dispatch would start the round once resumed
+		return len(h.fixEvents("fix.open_magnum_late"))
+	}
+	pause(true)
+	h.advance(3*time.Hour + time.Minute) // past due + magnum_late_after
+	if n := look(); n != 0 {
+		t.Errorf("late reviews under the pause = %d, want none", n)
+	}
+	h.wantOpen(OpenWaits, "daemon paused: magnum's review of a1a1a1a waits for `magnum resume`")
+	pause(false)
+	if n := look(); n != 0 {
+		t.Errorf("late reviews at `magnum resume` = %d, want none: the clock counts from there", n)
+	}
+	h.advance(2*time.Hour - time.Minute)
+	if n := look(); n != 0 {
+		t.Errorf("late reviews a minute before magnum_late_after past the resume = %d, want none", n)
+	}
+	h.advance(time.Minute)
+	if n := look(); n != 1 {
+		t.Errorf("late reviews magnum_late_after past the resume = %d, want one", n)
+	}
+}
