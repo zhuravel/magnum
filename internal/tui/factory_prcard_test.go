@@ -90,6 +90,7 @@ func TestEnterOpensYourPRsCard(t *testing.T) {
 	h.src.change(func(d *FactoryData) { *d = yoursCardData() })
 	h.press("ctrl+r", "g")
 	h.selectRow("#4602")
+	mustContain(t, h.view(), "enter PR card")
 	h.press("enter")
 	if h.m.view != fvTask || h.m.task != -72 {
 		t.Fatalf("enter on your PR's row opened view %v of %d, want its card", h.m.view, h.m.task)

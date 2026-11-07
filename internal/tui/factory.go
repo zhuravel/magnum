@@ -1013,13 +1013,13 @@ func (m factoryModel) homeFrame() factoryFrame {
 }
 
 // homeHints are home's key hints for the row under the cursor: on your
-// PR's row its own keys, which open no card.
+// PR's row its card and its PR's keys.
 func (m factoryModel) homeHints() []hint {
 	var hs []hint
 	r, ok := m.selectedRow()
 	switch {
 	case ok && r.yourPR():
-		hs = append(hs, hint{"f", "fix"}, hint{"F", prFixOffVerb(*r.PR)})
+		hs = append(hs, hint{"enter", "PR card"}, hint{"f", "fix"}, hint{"F", prFixOffVerb(*r.PR)})
 		if r.PR.Fixing {
 			hs = append(hs, hint{"K", "stop"})
 		}
