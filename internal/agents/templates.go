@@ -895,13 +895,18 @@ func FixSyncLine(magnum, checkout, from, branch, base string) string {
 // `magnum push` of the daemon's binary (else magnum on PATH) with the
 // fixer's checkout (the slot's path, so the line pushes from there wherever
 // the fixer's shell stands, as DBLockLine's does; "" leaves it out, and the
-// command takes the git work tree it runs in), each shell-quoted. The
+// command takes the git work tree it runs in) and the PR's base as the
+// cycle reads it (--base, which wins over the pane's MAGNUM_BASE_BRANCH, set
+// when the pane was made; "" leaves it out), each shell-quoted. The
 // command reads the PR's branch and repository from the pane's env and
 // pushes HEAD there alone, with a lease, as the App.
-func PushLine(magnum, checkout string) string {
+func PushLine(magnum, checkout, base string) string {
 	args := []string{cmp.Or(magnum, "magnum"), "push"}
 	if checkout != "" {
 		args = append(args, "--checkout", checkout)
+	}
+	if base != "" {
+		args = append(args, "--base", base)
 	}
 	return shellLine(args)
 }

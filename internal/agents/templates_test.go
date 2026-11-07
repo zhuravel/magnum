@@ -631,7 +631,7 @@ func TestRenderGolden(t *testing.T) {
 	// A fixer that acts as a GitHub App of its own: its login, and the
 	// `magnum push` line in place of git push.
 	fixApp := fixFixture()
-	fixApp.FixerLogin, fixApp.PushCommand = "example-fixer[bot]", PushLine(fixApp.Magnum, fixApp.Checkout)
+	fixApp.FixerLogin, fixApp.PushCommand = "example-fixer[bot]", PushLine(fixApp.Magnum, fixApp.Checkout, "master")
 
 	cases := []struct {
 		golden, name string

@@ -190,6 +190,52 @@ func TestPushRefusesAMergeOfABranchOtherThanTheBase(t *testing.T) {
 	}
 }
 
+// A PR retargeted while its fixer's pane stays live (a stacked PR whose
+// base merged) keeps the old base in the pane's MAGNUM_BASE_BRANCH, made
+// with the pane: the push line names the PR's base each cycle (--base),
+// which wins, so the fixer's merge of the new base goes. The pane's old
+// base stays a branch magnum push never pushes to, and a --base a shell
+// would read is refused (exit 2) before any git.
+func TestPushTakesTheBaseOfItsLineOverThePanes(t *testing.T) {
+	p := newPushRepo(t)
+	p.env["MAGNUM_BASE_BRANCH"] = "release" // the base when the pane was made
+	p.fix()
+	p.commit(p.origin, "docs/main.md", "main moves\n", "main moves on")
+	p.git(p.slot, "fetch", "--quiet", p.origin, "+refs/heads/main:refs/remotes/origin/main")
+	p.git(p.slot, "merge", "--quiet", "--no-edit", "origin/main")
+	head := p.git(p.slot, "rev-parse", "HEAD")
+	if code, o, _ := push(t, "--checkout", p.slot); code != pushRefused || !strings.Contains(o.Message, "merges a branch other than release") {
+		t.Fatalf("the pane's stale base: exit %d, %+v; want the merge of main refused", code, o)
+	}
+	if code, o, _ := push(t, "--checkout", p.slot, "--base", "main"); code != 0 || o.Status != pushStatusPushed {
+		t.Fatalf("--base main: exit %d, %+v", code, o)
+	}
+	if got := p.feature(); got != head {
+		t.Errorf("origin's feature = %s, want the merge %s", got, head)
+	}
+
+	for name, tc := range map[string]struct {
+		branch, base string
+	}{
+		"the pane's old base": {"release", "main"},
+		"the line's base":     {"next", "next"},
+		"an unsafe base":      {"feature", "main;rm -rf"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := paneEnv()
+			env["MAGNUM_BASE_BRANCH"], env["MAGNUM_PUSH_BRANCH"] = "release", tc.branch
+			f := &execx.Fake{}
+			withPane(t, env, f)
+			if code, o, _ := push(t, "--checkout", t.TempDir(), "--base", tc.base); code != pushRefused || o.Status != pushStatusRefused {
+				t.Errorf("exit %d, %+v; want refused", code, o)
+			}
+			if len(f.Calls) != 0 {
+				t.Errorf("git ran: %v", f.Calls)
+			}
+		})
+	}
+}
+
 // A fixer App has no workflows permission, and GitHub refuses its push of
 // a workflow change: magnum push refuses it first (exit 2), with the words
 // that send it under Needs you. Without MAGNUM_PUSH_NO_WORKFLOWS (a

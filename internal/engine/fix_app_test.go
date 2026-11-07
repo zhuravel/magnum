@@ -217,7 +217,7 @@ func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
 			in := h.fixInput()
 			wantPush := ""
 			if tc.push {
-				wantPush = agents.PushLine(h.layout.Binary(), h.slot("review1").Path)
+				wantPush = agents.PushLine(h.layout.Binary(), h.slot("review1").Path, "master")
 			}
 			if in.PushCommand != wantPush || in.FixerLogin != tc.login {
 				t.Errorf("push %q, login %q; want %q, %q", in.PushCommand, in.FixerLogin, wantPush, tc.login)
@@ -233,6 +233,36 @@ func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
 				t.Errorf("the external file's fixer = %q (%v), want %q", x.Fixer, err, tc.fix)
 			}
 		})
+	}
+}
+
+// A PR retargeted while its fixer App's pane stays live (a stacked PR
+// whose base merged) keeps the old base in the pane's MAGNUM_BASE_BRANCH,
+// made with the pane, which the cycle keeps (the same identity): its push
+// line names the PR's base as the cycle reads it, which magnum push takes
+// over the pane's, so the fixer's merge of the new base is pushed.
+func TestAnAppFixersPushLineNamesThePRsBaseOfTheCycle(t *testing.T) {
+	h, git := fixHarness(t, withFixerApp)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	role := *h.fixRole()
+	role.Identity = fixerAppName
+	made, err := h.ag.PaneEnv(map[string]string{"MAGNUM_PR_URL": pr.URL, "MAGNUM_BASE_BRANCH": "master"}, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixerSession(h, pr, made)
+	if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE prs SET base_ref = 'release' WHERE id = ?`, pr.ID); err != nil {
+		t.Fatal(err)
+	}
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	if i := h.callIndex("park_sessions:", 0); i >= 0 {
+		t.Errorf("calls %v: the App's own pane was parked", h.ag.all())
+	}
+	if want := agents.PushLine(h.layout.Binary(), h.slot("review1").Path, "release"); h.fixInput().PushCommand != want {
+		t.Errorf("push line %q, want %q", h.fixInput().PushCommand, want)
 	}
 }
 

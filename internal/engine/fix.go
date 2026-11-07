@@ -1202,11 +1202,17 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			e.log.Warn("fix: freeze the repository notes", "subject", job.subject(), "err", err)
 		}
 	}
-	// A fixer App (FixerLogins) pushes with `magnum push` as its own login;
-	// a gh fixer pushes with git push as the author.
+	// A fixer App (FixerLogins) pushes with `magnum push` as its own login,
+	// whose line names the PR's base as this cycle reads it (the pane's
+	// MAGNUM_BASE_BRANCH is the base when the pane was made); a gh fixer
+	// pushes with git push as the author.
 	push, login := "", ""
 	if logins := e.cfg.FixerLogins(&job.watch); len(logins) > 0 {
-		push, login = agents.PushLine(e.d.Layout.Binary(), job.slot.Path), logins[0]
+		base := cmp.Or(deref(pr.BaseRef), job.repo.DefaultBranch)
+		if !gitx.ShellSafeRef(base) {
+			base = ""
+		}
+		push, login = agents.PushLine(e.d.Layout.Binary(), job.slot.Path, base), logins[0]
 	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:         deref(pr.HeadRef),

@@ -37,7 +37,7 @@ func fixAppPrompt(t *testing.T, push, login string) string {
 // replies carry the App's login, not the author's: its prompt names the
 // login it works as and the `magnum push` line, never `git push`.
 func TestTheFixPromptNamesMagnumPushForAnAppFixer(t *testing.T) {
-	line := PushLine("/opt/magnum/bin/magnum", "/slots/talkable.review3")
+	line := PushLine("/opt/magnum/bin/magnum", "/slots/talkable.review3", "master")
 	got := fixAppPrompt(t, line, "fixer-app[bot]")
 	for _, want := range []string{
 		"You work for the author as `fixer-app[bot]`: your commits, your push and your replies carry that login.",

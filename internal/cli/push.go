@@ -27,7 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const pushUsage = "push [--checkout DIR]"
+const pushUsage = "push [--checkout DIR] [--base BRANCH]"
 
 // Exit statuses of push. 0: pushed, or the branch is at HEAD already.
 const (
@@ -80,15 +80,18 @@ type pushOutcome struct {
 }
 
 func newPushCmd(c *Context) *cobra.Command {
-	var checkout string
+	var checkout, base string
 	cmd := newCommand(groupAct, pushUsage, "push the fixer App's commits to its PR's branch, with a lease (for the fixer)",
 		"For a fixer App's pane, whose env refuses a plain `git push` to github.com: the fix prompt names the line. It "+
 			"pushes HEAD of the checkout (--checkout, default: the git work tree here) to the PR's branch alone "+
 			"(MAGNUM_PUSH_BRANCH; it takes no branch argument), over HTTPS to the repository of the pane's MAGNUM_PR_URL "+
 			"whatever form origin has, with gh as git's only credential helper (the pane's GH_CONFIG_DIR makes it the App), "+
-			"and with a lease on the head it read there: never --force.\n\n"+
+			"and with a lease on the head it read there: never --force. The PR's base is --base, which the push line "+
+			"names each cycle, else the pane's MAGNUM_BASE_BRANCH (set when the pane was made: a PR retargeted since "+
+			"has another).\n\n"+
 			"It refuses (exit 2, nothing run on the network) a branch that is master, main, the default branch "+
-			"(MAGNUM_DEFAULT_BRANCH) or the base (MAGNUM_BASE_BRANCH), an argument, a pane without the bot's "+
+			"(MAGNUM_DEFAULT_BRANCH), the base or the pane's MAGNUM_BASE_BRANCH, a --base that names no branch, an "+
+			"argument, a pane without the bot's "+
 			"GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL, and an origin of another repository; then (exit 2) a commit on "+
 			"the first-parent chain it would add that is not the bot's, a merge of anything but the base, and, with "+
 			"MAGNUM_PUSH_NO_WORKFLOWS=1, a change under .github/workflows (list it under Needs you). HEAD that does not "+
@@ -98,7 +101,7 @@ func newPushCmd(c *Context) *cobra.Command {
 			"stderr. Exit 0: pushed, or the branch is at HEAD already; 2: refused, fix the line or the commits and never "+
 			"run the same line again; 3: fetch first; 1: anything else, run it again. It runs no git hook, reads no config "+
 			"and no registry, never talks to the daemon and writes no git config.",
-		func(pos []string) int { return runPush(c, checkout, pos) })
+		func(pos []string) int { return runPush(c, checkout, base, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -106,6 +109,7 @@ func newPushCmd(c *Context) *cobra.Command {
 	})
 	cmd.Flags().StringVar(&checkout, "checkout", "", "the fixer's checkout (default: the git work tree here)")
 	_ = cmd.MarkFlagDirname("checkout")
+	cmd.Flags().StringVar(&base, "base", "", "the PR's base (default: the pane's MAGNUM_BASE_BRANCH)")
 	return cmd
 }
 
@@ -122,14 +126,16 @@ func pushPrint(c *Context, out pushOutcome, code int) int {
 	return code
 }
 
-func runPush(c *Context, checkout string, pos []string) int {
-	o, code := pushRun(checkout, pos)
+func runPush(c *Context, checkout, base string, pos []string) int {
+	o, code := pushRun(checkout, base, pos)
 	return pushPrint(c, o, code)
 }
 
 // pushRun is push's decision and its one push, as (5) of the fixer App's
-// design lays it out; its outcome and exit code.
-func pushRun(checkout string, pos []string) (pushOutcome, int) {
+// design lays it out; its outcome and exit code. base is --base, the PR's
+// base as the push line names it each cycle ("" = the pane's
+// MAGNUM_BASE_BRANCH, which the pane got when it was made).
+func pushRun(checkout, base string, pos []string) (pushOutcome, int) {
 	get := pushGetenv
 	branch := get("MAGNUM_PUSH_BRANCH")
 	refused := func(format string, a ...any) (pushOutcome, int) {
@@ -142,14 +148,18 @@ func pushRun(checkout string, pos []string) (pushOutcome, int) {
 	if err != nil {
 		return refused("MAGNUM_PR_URL names no pull request (%v): magnum push runs in the fixer's pane, which magnum starts with the PR's URL", err)
 	}
-	switch base, def := get("MAGNUM_BASE_BRANCH"), get("MAGNUM_DEFAULT_BRANCH"); {
+	paneBase, def := get("MAGNUM_BASE_BRANCH"), get("MAGNUM_DEFAULT_BRANCH")
+	switch {
 	case branch == "":
 		return refused("MAGNUM_PUSH_BRANCH is not set: magnum push pushes only to the PR's branch its pane names")
 	case !gitx.ShellSafeRef(branch):
 		return refused("MAGNUM_PUSH_BRANCH %q is no branch name magnum pushes to", branch)
-	case slices.ContainsFunc([]string{"master", "main", def, base}, func(b string) bool { return b != "" && strings.EqualFold(b, branch) }):
+	case base != "" && !gitx.ShellSafeRef(base):
+		return refused("--base %q is no branch name", base)
+	case slices.ContainsFunc([]string{"master", "main", def, paneBase, base}, func(b string) bool { return b != "" && strings.EqualFold(b, branch) }):
 		return refused("magnum push never pushes to %s (master, main, the default branch or the PR's base)", branch)
 	}
+	base = cmp.Or(base, paneBase)
 	email := get("GIT_AUTHOR_EMAIL")
 	if email == "" || !strings.EqualFold(get("GIT_COMMITTER_EMAIL"), email) {
 		return refused("GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL must both be the bot's: magnum push is a fixer App's command, whose pane sets them")
@@ -205,7 +215,7 @@ func pushRun(checkout string, pos []string) (pushOutcome, int) {
 	if ok, err := g.IsAncestor(ctx, dir, expect, sha); err != nil || !ok {
 		return rejected(fmt.Sprintf("HEAD %s does not descend from %s's head %s on GitHub", textx.ShortSHA(sha), branch, textx.ShortSHA(expect)))
 	}
-	if why, err := pushOwnCommits(ctx, g, dir, expect, sha, email, login, get("MAGNUM_BASE_BRANCH")); err != nil {
+	if why, err := pushOwnCommits(ctx, g, dir, expect, sha, email, login, base); err != nil {
 		return failed("could not read the commits to push: %v", err)
 	} else if why != "" {
 		return refuse("%s", why)
