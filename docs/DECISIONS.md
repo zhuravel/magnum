@@ -15959,7 +15959,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   parked again`: the park that came with the task's end found the Talk at work. One this park leaves as well
   (the first turn in flight), or whose task the read after the Talk could not tell (the log says so), an
   observe pass parks (`parkLeftLiaisons`). The lock is the task's own, so one task's Talk never makes another
-  task's park skip.
+  task's park skip. `Runtime.Recover` takes no talk lock: the startup's recovery runs before any talk, but its
+  retry (`retryRecovery`, on a tick herdr answers after a recovery that failed: rare, herdr down at startup)
+  can reconcile the liaison's row while an off-loop Talk starts it. The worst case is a row it marks lost
+  under the Talk, whose conversation the next talk resumes.
   The liaison's pane gets the daemon's `MAGNUM_HOME` and no `MAGNUM_CONFIG`. The commands it runs (`factory
   answer`, `decide`, `retry`) load no configuration: they open the factory registry through the layout and
   read the task's folder, and they never call `LoadConfig` (`start`, `stats` and `talk` do). A daemon
@@ -15969,7 +15972,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   later needs `MAGNUM_CONFIG` in `liaisonEnv` by the rule the LaunchAgent uses (`daemonConfigOverride`).
   After the daemon's answer the command steps into the liaison as the screen's `o` steps into a task's
   agent: herdr focuses the liaison's agent on the factory's session (the new `daemonSys.FocusAgent` seam,
-  `Runtime.LiaisonSession` for the agent, read from the factory's agents store), and `reveal.Reveal` brings the
+  `runtime.LiaisonSession` for the agent, read from the factory's agents store), and `reveal.Reveal` brings the
   terminal on that session to the front. A step that fails is said on stderr, the next still runs, and the
   command exits 0: the liaison talks all the same. It waits for the daemon up to three minutes (`start`
   waits thirty seconds), and a talk not answered by then goes on in the daemon while the command steps into
