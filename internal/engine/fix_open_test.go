@@ -706,3 +706,32 @@ func TestTheLookKeepsTheNewestFixerHeadsAndReviews(t *testing.T) {
 		t.Errorf("reviews = %v, want the newest %d with %s", l.Reviews, openReviewsMax, last)
 	}
 }
+
+// The look tracks a PR's loops from its first look at the PR: a loop that
+// ended before (an f while autofix was "never") hands nothing. The thread
+// its fixer left unanswered is then work for a loop of autofix's own, not
+// a leftover that needs you on the first tick after the switch.
+func TestALoopThatEndedBeforeTheLooksFirstLookHandsNothing(t *testing.T) {
+	h, git := autofixHarness(t, "zhuravel", findings(map[string]int{}, "COMMENTED"), func(h *harness) { h.cfg.Pipeline.Autofix = config.AutofixNever })
+	h.setThreads(h.colleagueThread(4322458360))
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id) // the fixer had the thread, and left it unanswered
+	h.advance(time.Minute)
+	h.cfg.Pipeline.Autofix = config.AutofixOpen
+	h.tick() // the look's first look
+	h.tick()
+	if l := h.ledgerOf(2); len(l.Handed) > 0 || len(l.Reviews) > 0 {
+		t.Errorf("ledger = %+v: a loop before the first look handed its keys", l)
+	}
+	h.wantState(2, store.PRReviewed)
+	h.pastSettle()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 2 || h.fixStartBy() != autofixBy {
+		t.Errorf("fix runs = %d, the last by %q; want autofix's loop for the thread", n, h.fixStartBy())
+	}
+}

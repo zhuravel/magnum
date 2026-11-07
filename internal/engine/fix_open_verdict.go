@@ -139,7 +139,9 @@ func (v OpenVerdict) sameAs(w OpenVerdict) bool {
 // the fixers of finished loops had (Handed, with when the look saw that
 // loop end), magnum's reviews a loop worked on (Reviews), the heads the
 // fixer pushed (FixerHeads, the last openFixerHeadsMax), the PR's last
-// event the look read for the loops that ended (Cursor), the last_error
+// event the look read for the loops that ended (Cursor), when the look
+// began to track its loops (Since: its first look at the PR, or the start
+// of the loop that ran then; a loop that started before hands nothing), the last_error
 // its own raise wrote (RaisedMsg) and the keys it raised (Raised), the
 // autofix starts of the last 24 hours (Starts), its last read of GitHub
 // (Read) and of the base (Conflict), the failed reads in a row
@@ -154,6 +156,7 @@ type openLedger struct {
 	Reviews     []string             `json:"reviews,omitempty"`
 	FixerHeads  []string             `json:"fixer_heads,omitempty"`
 	Cursor      int64                `json:"cursor,omitempty"`
+	Since       time.Time            `json:"since,omitzero"`
 	RaisedMsg   string               `json:"raised_msg,omitempty"`
 	Raised      []string             `json:"raised,omitempty"`
 	Starts      []time.Time          `json:"starts,omitempty"`

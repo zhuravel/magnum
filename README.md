@@ -3218,7 +3218,9 @@ the start waits and is tried again too. A dry-run
 daemon reads and decides, but writes nothing and starts nothing.
 
 What a loop was handed is remembered by key: the items of the `external-threads.json` its fixer got (never
-the look's own read), Magnum's review it worked on, Magnum's rebuttals and the conflict. A thread's key
+the look's own read), Magnum's review it worked on, Magnum's rebuttals and the conflict. The look tracks a
+PR's loops from its first look at the PR: a loop that ended before (an `f` while autofix was not `"open"`)
+hands nothing, so what it left open is work for a loop again rather than a leftover that needs you. A thread's key
 carries its latest comment, so a reviewer's new reply opens it again. A handed item that is still open after
 the loop needs you: a person's item never closes on the fixer's word alone (only a fix-marked reply, your
 reply, a resolution that is not the fixer's, or your later word on the conversation close it), and neither

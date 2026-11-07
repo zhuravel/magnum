@@ -2823,7 +2823,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`conflict:<head>`). A ledger per PR (`pr.<id>.fix_seen`), written by the look alone, keeps what loops were
   handed: the items of the external file each cycle's fixer got (never the look's own read, which the fixer
   did not always get), the review it worked on, read from the loop's `fix.start` and `fix.pushed` events
-  once it ended. A person's item never closes on the fixer's word alone, and neither does a bot's thread
+  once it ended, from the look's first look at the PR on (`Since`): the loops before it hand nothing, since
+  the design tracks only loops the look saw, and handing the history on the switch to "open" would raise
+  every own PR whose earlier `f` skipped an item to needs attention at once, instead of a loop for it. A person's item never closes on the fixer's word alone, and neither does a bot's thread
   (a finding): a handed one still open needs you, and the look raises a reviewed PR to needs attention
   (kind fix, links only) and lifts it when you answered every one; it never rewrites or lifts a loop's own
   Needs you. A bot's handed receipt or note drops out as seen. A magnum thread waits for an answer only after

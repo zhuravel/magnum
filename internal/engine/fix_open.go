@@ -161,6 +161,13 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 	l := c.ledger
 	f := openFacts{now: now, pr: pr, settle: e.openSettle(), off: e.openOff(ctx, pr, *c.w)}
 	st, _, hasRow, rowErr := e.fixRow(ctx, pr.ID)
+	first := l.Since.IsZero() // the look's first look at the PR: it tracks the loops from here on
+	if first {
+		l.Since = now
+		if hasRow && !st.StartedAt.IsZero() { // the loop that runs now counts whole
+			l.Since = st.StartedAt
+		}
+	}
 	switch {
 	case rowErr != nil:
 		f.fixBad = true
@@ -171,7 +178,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, reads *int) {
 		}
 	default:
 		if e.loopsToRead(pr.ID) {
-			e.openLoopsEnded(ctx, repo, pr, &l)
+			e.openLoopsEnded(ctx, repo, pr, &l, first)
 		}
 	}
 	if raw, ok := e.getKV(ctx, KVPRFixHeld(pr.ID)); ok {
@@ -527,7 +534,11 @@ func (e *Engine) openApproval(ctx context.Context, w config.Watch, pr store.PR, 
 // magnum's threads and the conflict of the look's last read are handed;
 // the review is one a loop worked on; the pushed heads are the fixer's.
 // Items that showed up during a loop and are in no file are not handed.
-func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger) {
+// A loop that started before the look tracked the PR (first, its first
+// look, or before Since: an f while autofix was not "open") hands
+// nothing: what it left open is work again, as for any loop the look did
+// not see; its pushed heads are still the fixer's.
+func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, first bool) {
 	evs, err := e.st.EventsBySubject(ctx, prSubject(repo, pr.Number), openEventsRead)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "autofix open: the PR's events", "pr", pr.ID)
@@ -558,6 +569,9 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		}
 		switch ev.Kind {
 		case "fix.start":
+			if first || ev.At.Before(l.Since) { // before the look tracked the PR
+				continue
+			}
 			loops++
 			if d.ReviewRun != "" {
 				hand(reviewKey(d.ReviewRun))
