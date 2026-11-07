@@ -562,3 +562,57 @@ func TestQuietHoursHoldTheLooksStartUntilTheyEnd(t *testing.T) {
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenFixing, "starts a fix loop")
 }
+
+// A head whose round falls inside [daemon] quiet_hours is reviewed at their
+// end, so magnum_late_after counts from there: a push at 02:50 due at 03:05
+// waits through the night and is late only at 12:00, two hours after the
+// window's end, never at 05:05.
+func TestMagnumLateCountsFromTheEndOfQuietHours(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 7, h, m, 0, 0, time.Local) }
+	f := idleFacts()
+	f.items = []openItem{personThread(4100)}
+	f.settle.quietHours = "03:00-10:00"
+	old := "0000000000000000000000000000000000000000"
+	f.pr.ReviewedSHA, f.pr.State = &old, store.PRRereviewPending
+	f.pr.HeadChangedAt = at(2, 50)
+	due := at(3, 5)
+	f.pr.NextEligibleAt = &due
+	f.now = at(5, 10)
+	v, _, _ := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "magnum reviews a1a1a1a")
+	if !v.Until.Equal(at(10, 0)) {
+		t.Errorf("until = %s, want the end of quiet hours", v.Until)
+	}
+	f.now = at(11, 59)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "magnum reviews a1a1a1a")
+	f.now = at(12, 0)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 10:00")
+}
+
+// A review that was due before quiet hours began and is late inside them is
+// not late until they end: no needs you, so no toast, at night; at their
+// end, still late, it needs you.
+func TestMagnumIsNeverLateInsideQuietHours(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 7, h, m, 0, 0, time.Local) }
+	f := idleFacts()
+	f.settle.quietHours = "03:00-10:00"
+	old := "0000000000000000000000000000000000000000"
+	f.pr.ReviewedSHA, f.pr.State = &old, store.PRRereviewPending
+	f.pr.HeadChangedAt = at(0, 50)
+	due := at(1, 0)
+	f.pr.NextEligibleAt = &due
+	f.now = at(4, 0)
+	v, _, _ := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "magnum reviews a1a1a1a")
+	if v.late || !v.Until.Equal(at(10, 0)) {
+		t.Errorf("late %v, until %s; want no late review inside quiet hours, a wait until their end", v.late, v.Until)
+	}
+	f.now = at(10, 0)
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 01:00")
+	if !v.late {
+		t.Error("not late at the end of quiet hours")
+	}
+}

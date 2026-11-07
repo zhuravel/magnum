@@ -242,3 +242,44 @@ func TestMagnumLateToastsOncePerHead(t *testing.T) {
 		t.Errorf("fix.open_magnum_late events = %d, want one for the head", n)
 	}
 }
+
+// No urgent toast of a late review goes out inside quiet hours: the review
+// due an hour before they began, late an hour into them, is toasted once
+// at their end, when it is still late.
+func TestMagnumLateToastsAtTheEndOfQuietHoursNotInsideThem(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.tick()
+	pr := h.pr(2)
+	old := "0000000000000000000000000000000000000000"
+	now := h.clock.Now()
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRRereviewPending, func(u *store.PRUpdate) {
+		u.Set("reviewed_sha", old)
+		u.Set("next_eligible_at", now.Add(time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start, end := now.Add(2*time.Hour).Truncate(time.Minute), now.Add(6*time.Hour).Truncate(time.Minute)
+	h.cfg.Daemon.QuietHours = start.Format("15:04") + "-" + end.Format("15:04")
+	look := func() {
+		t.Helper()
+		if err := h.e.autofixOpen(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.flush()
+	}
+	h.advance(3*time.Hour + time.Minute) // past due + magnum_late_after, inside quiet hours
+	look()
+	look()
+	if got := toastsWith(h, "magnum's review of a1a1a1a is late"); len(got) != 0 {
+		t.Errorf("toasts inside quiet hours = %v, want none", got)
+	}
+	if n := len(h.fixEvents("fix.open_magnum_late")); n != 0 {
+		t.Errorf("fix.open_magnum_late events inside quiet hours = %d, want none", n)
+	}
+	h.clock.Set(end)
+	look()
+	look()
+	if got := toastsWith(h, "magnum's review of a1a1a1a is late"); len(got) != 1 {
+		t.Errorf("toasts at the end of quiet hours = %v, want one", h.nh.shown())
+	}
+}
