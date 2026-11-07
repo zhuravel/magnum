@@ -13,25 +13,32 @@ import (
 )
 
 // heldRig is the harness with a log the test reads (INFO and up) and a task
-// at investigate whose stage returns wait: a held error while it is not "",
-// a pass that is not done otherwise.
+// at stage whose stage returns wait, as a stage does: it records the wait
+// (waitOn) and returns a held error of who while wait is not "", a pass
+// that is not done otherwise.
 type heldRig struct {
 	*harness
 	log  *syncBuffer
 	task registry.Task
+	who  string
 	wait string
 }
 
-func newHeldRig(t *testing.T) *heldRig {
+func newHeldRig(t *testing.T, stage ...string) *heldRig {
 	t.Helper()
 	log := &syncBuffer{}
 	h := newHarness(t, func(d *Deps) { d.Log = slog.New(slog.NewTextHandler(log, nil)) })
-	r := &heldRig{harness: h, log: log, task: h.task("PR-12400", registry.TaskActive, "investigate")}
-	h.stage(config.FactoryStageAgents, func(context.Context, registry.Task, config.FactoryStage) (bool, error) {
+	at := "investigate"
+	if len(stage) > 0 {
+		at = stage[0]
+	}
+	r := &heldRig{harness: h, log: log, task: h.task("PR-12400", registry.TaskActive, at), who: waitAgent}
+	h.stage(config.FactoryStageAgents, func(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
 		if r.wait == "" {
 			return false, nil
 		}
-		return false, heldError{who: waitAgent, what: r.wait}
+		h.e.waitOn(ctx, t, r.who, r.wait)
+		return false, heldError{who: r.who, what: r.wait}
 	})
 	return r
 }
@@ -61,7 +68,8 @@ func (r *heldRig) lines(level, msg string) []string {
 // and the wait; the ticks while it holds the same (a number that moves is
 // the same wait) log nothing more and return no error, so the daemon's
 // "factory tick" WARN never names it. Past heldWarnAfter it logs at WARN,
-// with how long it has held, and again each heldWarnAfter after that.
+// with how long it has held, and again after twice as long each time
+// (30 minutes, then 1 hour, then 2 hours later).
 func TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold(t *testing.T) {
 	r := newHeldRig(t)
 	r.wait = "the fx-critic agent works in the copy (turn 1m)"
@@ -87,8 +95,20 @@ func TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold(t *testing.T) {
 		t.Fatalf("WARN lines %q, want one past the threshold with how long the wait held:\n%s", warned, r.log.String())
 	}
 	r.tickAfter(heldWarnAfter)
-	if warned = r.lines("WARN", "a factory task still waits"); len(warned) != 2 || !strings.Contains(warned[1], "for=1h0m45s") {
-		t.Fatalf("WARN lines %q, want a second one a threshold later", warned)
+	if warned = r.lines("WARN", "a factory task still waits"); len(warned) != 1 {
+		t.Fatalf("WARN lines %q, want no second one a threshold later", warned)
+	}
+	r.tickAfter(heldWarnAfter)
+	if warned = r.lines("WARN", "a factory task still waits"); len(warned) != 2 || !strings.Contains(warned[1], "for=1h30m45s") {
+		t.Fatalf("WARN lines %q, want a second one twice the threshold after the first", warned)
+	}
+	r.tickAfter(heldWarnAfter + time.Hour)
+	if warned = r.lines("WARN", "a factory task still waits"); len(warned) != 2 {
+		t.Fatalf("WARN lines %q, want no third one 1h30m after the second", warned)
+	}
+	r.tickAfter(heldWarnAfter)
+	if warned = r.lines("WARN", "a factory task still waits"); len(warned) != 3 || !strings.Contains(warned[2], "for=3h30m45s") {
+		t.Fatalf("WARN lines %q, want a third one 2 hours after the second", warned)
 	}
 	if begun = r.lines("INFO", "a factory task waits"); len(begun) != 1 {
 		t.Fatalf("INFO lines %q, want still the one", begun)
@@ -126,5 +146,70 @@ func TestAHeldWaitsEndLogsHowLongItHeld(t *testing.T) {
 	r.tickAfter(3 * time.Minute)
 	if ended = r.lines("INFO", "a factory task's wait ended"); len(ended) != 3 || !strings.Contains(ended[2], "after=3m0s") {
 		t.Fatalf("ended lines %q, want the third wait's once its task left the live states", ended)
+	}
+}
+
+// A wait that held before a restart keeps its start: the daemon's memory of
+// its waits is gone, but the task's wait span in the registry says when it
+// began, so the wait logs at INFO once with that start and at WARN at once
+// when it has held past heldWarnAfter.
+func TestAHeldWaitKeepsItsStartAcrossARestart(t *testing.T) {
+	r := newHeldRig(t)
+	r.wait = "another heavy stage runs"
+	r.tickAfter(0)
+	r.e.helds = map[int64]*heldLog{} // a restart: the new daemon knows no wait
+	r.tickAfter(40 * time.Minute)
+	if begun := r.lines("INFO", "a factory task waits"); len(begun) != 2 || !strings.Contains(begun[1], "since=") {
+		t.Fatalf("INFO lines %q, want the wait again after the restart, with its start", begun)
+	}
+	if warned := r.lines("WARN", "a factory task still waits"); len(warned) != 1 || !strings.Contains(warned[0], "for=40m0s") {
+		t.Fatalf("WARN lines %q, want one at once: the wait began 40 minutes ago", warned)
+	}
+}
+
+// The memory hold's wait is one wait while it holds, whatever the names of
+// processes it gives (they change as the table is read again): no end and
+// no new beginning in the log, and no new wait span in the registry.
+func TestAMemoryHoldsWaitStaysOneWaitWhileItsNamesChange(t *testing.T) {
+	r := newHeldRig(t)
+	r.who = HoldMemory
+	r.wait = "swap 97% used, launches wait below 80%; largest: codex 2.5 GB (pid 90)"
+	r.tickAfter(0)
+	spans := func() int {
+		ss, err := r.reg.Spans(r.ctx, r.task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(ss)
+	}
+	before := spans()
+	r.wait = "swap 98% used, launches wait below 80%; largest: Slack 3.1 GB (pid 77); Codex app-server broker: pid 455 (3d)"
+	r.tickAfter(10 * time.Minute)
+	if ended := r.lines("INFO", "a factory task's wait ended"); len(ended) != 0 {
+		t.Errorf("ended lines %q, want none: the memory hold still holds", ended)
+	}
+	if begun := r.lines("INFO", "a factory task waits"); len(begun) != 1 {
+		t.Errorf("INFO lines %q, want the one", begun)
+	}
+	if n := spans(); n != before {
+		t.Errorf("%d spans after the names changed, want %d", n, before)
+	}
+	if got := r.reload(r.task.ID).WaitsWhat; !strings.Contains(got, "Slack") {
+		t.Errorf("waits_what %q, want the new names", got)
+	}
+}
+
+// A new task's first wait, whose stage advance records in the same pass,
+// is the same wait on the next tick: no end and no new beginning.
+func TestANewTasksFirstWaitIsOneWait(t *testing.T) {
+	r := newHeldRig(t, "")
+	r.wait = "the fx-repro agent cannot take its prompt yet"
+	r.tickAfter(0)
+	r.tickAfter(45 * time.Second)
+	if ended := r.lines("INFO", "a factory task's wait ended"); len(ended) != 0 {
+		t.Errorf("ended lines %q, want none", ended)
+	}
+	if begun := r.lines("INFO", "a factory task waits"); len(begun) != 1 {
+		t.Errorf("INFO lines %q, want one", begun)
 	}
 }

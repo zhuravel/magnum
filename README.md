@@ -3837,8 +3837,9 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 (`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`). A task's wait that costs
 it nothing (a hold, an agent at work in the copy, your pane, a review round of magnum's) logs once at INFO
 when it begins ("a factory task waits") and once when it ends, with how long it held, and at WARN only once
-it has held 30 minutes, then every 30 minutes ("a factory task still waits"), so a WARN `factory tick` line is
-a failure. Its agents run in a herdr session of their own, `herdr_session` (`factory`): a separate herdr server, whose socket is
+it has held 30 minutes, then 1 hour and 2 hours after that and so on ("a factory task still waits"); a wait
+that held before a restart keeps its start, from the task's wait record. A WARN `factory tick` line is a
+failure, a panic or herdr going down in a pass, never a wait. Its agents run in a herdr session of their own, `herdr_session` (`factory`): a separate herdr server, whose socket is
 `~/.config/herdr/sessions/<herdr_session>/herdr.sock` unless `herdr_socket` names another (herdr's default
 session, `default`, keeps herdr's own socket), so its panes open in a terminal window of their own, apart
 from yours and from magnum's review panes, which run in `[herdr] review_session`, your session by default

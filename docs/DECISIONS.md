@@ -16689,18 +16689,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   back every 45 seconds as a warning: on 11-06, 45 lines of "agent: you're in the fx-critic pane; ..." and 32
   of "magnum: a review round of magnum's runs; the local review yields to it", and a failure that needed the
   operator hid among them. Now a held wait is no error of the tick: `logHeld` logs "a factory task waits" at
-  INFO when it begins (the task, its stage, the wait), nothing while it holds the same (the same stage and
-  words; a number that moves is the same wait, `sameWords`), "a factory task still waits" at WARN once it has
-  held `heldWarnAfter` (30 minutes, the infrastructure hold's NEEDS YOU threshold) and every 30 minutes after,
-  with how long, and "a factory task's wait ended" at INFO with how long it held when the stage passes or
-  fails, the wait says other words (which begins the next one) or the task leaves the live states. A tick
+  INFO when it begins (the task, its stage, the wait), nothing while it holds the same (the same stage, whom it
+  waits on and words; a number that moves is the same wait, and so is any text of the memory hold, whose names
+  of processes change while it holds: `sameWait`, which `waitOn` uses too, so those changes write no span),
+  "a factory task still waits" at WARN once it has held `heldWarnAfter` (30 minutes, the infrastructure hold's
+  NEEDS YOU threshold) and then after twice as long each time (1 hour, 2 hours later: an agent's long turn, a
+  copy queue or a usage wait of hours is routine, and a WARN each 30 minutes for each would bury a failure
+  again), with how long, and "a factory task's wait ended" at INFO with how long it held when the stage passes
+  or fails, the wait differs (which begins the next one) or the task leaves the live states. A wait the
+  registry already records when the daemon first sees it (it held before a restart or an install) begins at the
+  task's last span (`waitBegan`), so a restart starts no clock again. A new task's first wait, whose stage
+  `advance` names on its own copy of the task, takes that stage on the next tick instead of ending. A tick
   that advances nothing (herdr down, the infrastructure hold) logs nothing for the waits: those holds log
-  their own lines. The registry's wait spans (`waitOn`) are unchanged, and `factory tick` at WARN is left to
-  failures, panics and herdr going down inside a pass. Rejected: dropping the waits from the log (their
+  their own lines. The registry's wait spans are as before, except that a change of the memory hold's names
+  writes none, and `factory tick` at WARN is left to failures, panics and herdr going down inside a pass. Rejected: dropping the waits from the log (their
   beginnings and ends are the evidence of where a task spent its time); a WARN when a wait begins (most
   waits are routine and short); a summary line per tick (a line every 45 seconds again); an event row per
-  wait (the spans record them). Tests, failing first: TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold and
-  TestAHeldWaitsEndLogsHowLongItHeld.
+  wait (the spans record them). Tests, failing first: TestAHeldWaitLogsAtInfoOnceAndAtWarnPastTheThreshold,
+  TestAHeldWaitsEndLogsHowLongItHeld, TestAHeldWaitKeepsItsStartAcrossARestart,
+  TestAMemoryHoldsWaitStaysOneWaitWhileItsNamesChange and TestANewTasksFirstWaitIsOneWait.
 - **The memory hold names the largest processes and the Codex brokers with their ages, and kills nothing**
   (2026-11-07, the factory audit's self-healing report, item 13). On 11-05 the factory held every launch for
   hours on "swap 97% used, launches wait below 80%", and the operator found the cause by hand: Codex

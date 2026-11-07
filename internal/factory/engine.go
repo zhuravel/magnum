@@ -701,41 +701,79 @@ func (e *Engine) signals(ctx context.Context, sigs <-chan os.Signal, stop chan<-
 // liveStates are the states of a task the loop advances.
 var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 
-// heldWarnAfter is how long a task's held wait logs at INFO alone: past it,
-// and each heldWarnAfter after, the wait logs at WARN (logHeld).
+// heldWarnAfter is how long a task's held wait logs at INFO alone: past it
+// the wait logs at WARN, and again after twice as long each time (logHeld).
 const heldWarnAfter = 30 * time.Minute
 
 // heldLog is a task's held wait as the log knows it: the stage it held,
-// what it says, since when it holds and when it last logged at WARN.
+// whom it waits on and for what (the held error's who and what, and its
+// whole text), since when it holds, when it next logs at WARN and the gap
+// after that.
 type heldLog struct {
-	stage, wait   string
-	since, warned time.Time
+	stage, who, what, wait string
+	since, warnAt          time.Time
+	gap                    time.Duration
 }
 
 // logHeld logs task t's held wait err (an ErrHeld, which costs the task
 // nothing and is no failure of the tick): at INFO when it begins, nothing
-// while it holds the same (at the same stage, in the same words: a number
-// that moves is the same wait, sameWords), and at WARN once it has held
-// heldWarnAfter, then each heldWarnAfter after. A wait in other words ends
-// the one before (endHeld) and begins.
-func (e *Engine) logHeld(t registry.Task, err error, now time.Time) {
-	wait := err.Error()
+// while it holds the same (at the same stage, sameWait), and at WARN once
+// it has held heldWarnAfter, then after twice as long each time (30
+// minutes, 1 hour, 2 hours later). A wait that differs ends the one before
+// (endHeld) and begins. A wait the registry already records (it held
+// before a restart) begins at its span (waitBegan). A first wait at no
+// stage takes the stage the pass recorded: advance names a new task's first
+// stage on its own copy of the task.
+func (e *Engine) logHeld(ctx context.Context, t registry.Task, err error, now time.Time) {
+	wait, who, what := err.Error(), "", err.Error()
+	if he, ok := errors.AsType[heldError](err); ok {
+		who, what = he.who, he.what
+	}
 	h := e.helds[t.ID]
-	if h != nil && (h.stage != t.Stage || !sameWords(h.wait, wait)) {
+	if h != nil && ((h.stage != "" && h.stage != t.Stage) || h.who != who || !sameWait(who, h.what, what)) {
 		e.endHeld(t.ID, now)
 		h = nil
 	}
 	if h == nil {
-		e.helds[t.ID] = &heldLog{stage: t.Stage, wait: wait, since: now}
-		e.log.Info("a factory task waits", "task", t.ID, "stage", t.Stage, "wait", wait)
-		return
+		since := e.waitBegan(ctx, t, who, what, now)
+		h = &heldLog{stage: t.Stage, who: who, since: since, warnAt: since.Add(heldWarnAfter), gap: heldWarnAfter}
+		e.helds[t.ID] = h
+		attrs := []any{"task", t.ID, "stage", t.Stage, "wait", wait}
+		if since.Before(now) {
+			attrs = append(attrs, "since", since)
+		}
+		e.log.Info("a factory task waits", attrs...)
 	}
-	h.wait = wait
-	if now.Sub(cmp.Or(h.warned, h.since)) >= heldWarnAfter {
-		h.warned = now
-		e.log.Warn("a factory task still waits", "task", t.ID, "stage", t.Stage, "wait", wait, "for", now.Sub(h.since).Round(time.Second))
+	h.stage, h.what, h.wait = cmp.Or(h.stage, t.Stage), what, wait
+	if !now.Before(h.warnAt) {
+		h.gap *= 2
+		h.warnAt = now.Add(h.gap)
+		e.log.Warn("a factory task still waits", "task", t.ID, "stage", h.stage, "wait", wait, "for", now.Sub(h.since).Round(time.Second))
 	}
 }
+
+// waitBegan is when task t's wait on who for what began: the task's last
+// span, when the registry records the task waiting so since it (the wait
+// held before this daemon started); else now.
+func (e *Engine) waitBegan(ctx context.Context, t registry.Task, who, what string, now time.Time) time.Time {
+	if who == "" || t.WaitsWho != who || !sameWait(who, t.WaitsWhat, what) {
+		return now
+	}
+	spans, err := e.reg.Spans(ctx, t.ID)
+	if err != nil || len(spans) == 0 {
+		return now
+	}
+	last := spans[len(spans)-1]
+	if last.WaitsWho != who || !sameWait(who, last.WaitsWhat, what) || last.At.After(now) {
+		return now
+	}
+	return last.At
+}
+
+// sameWait reports whether two texts of a wait on who are one wait: the same
+// words, numbers aside (sameWords), or any two of the memory hold's, whose
+// names of processes change while it holds (memoryCulprits).
+func sameWait(who, a, b string) bool { return who == HoldMemory || sameWords(a, b) }
 
 // endHeld logs the end of task id's held wait, when it has one, with how
 // long it held.
@@ -817,7 +855,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				delete(e.lastFail, t.ID)
 				e.endHeld(t.ID, now)
 			case errors.Is(err, ErrHeld):
-				e.logHeld(t, err, now) // a wait, logged by itself: no error of the tick, so no WARN each tick
+				e.logHeld(ctx, t, err, now) // a wait, logged by itself: no error of the tick, so no WARN each tick
 			case errors.Is(err, errPanicked), herdrDown(err), ctx.Err() != nil:
 				errs = append(errs, err) // herdr down inside the pass: herdr's hold covers it, no failure of the task
 			default:
@@ -1174,7 +1212,8 @@ func sameWords(a, b string) bool {
 var numbers = regexp.MustCompile(`[0-9]+(?:[.,][0-9]+)*`)
 
 // waitOn records who the task waits on and for what, when that changed: a
-// change of a number alone in the same wait writes no span (sameWords).
+// change of a number alone in the same wait, or of the memory hold's names
+// of processes, writes no span (sameWait).
 func (e *Engine) waitOn(ctx context.Context, t registry.Task, who, what string) {
 	if t.WaitsWho == who && t.WaitsWhat == what {
 		return
@@ -1182,7 +1221,7 @@ func (e *Engine) waitOn(ctx context.Context, t registry.Task, who, what string) 
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
 		u.Set("waits_who", who)
 		u.Set("waits_what", what)
-		if t.WaitsWho == who && sameWords(t.WaitsWhat, what) { // only a number moved: no span each tick
+		if t.WaitsWho == who && sameWait(who, t.WaitsWhat, what) { // only a number (or a held process) moved: no span each tick
 			u.Quiet()
 		}
 	}); err != nil {
