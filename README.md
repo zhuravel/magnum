@@ -4092,18 +4092,22 @@ commit). What a round left on that branch at that head (a reviewer's `bundle che
 `round-<n>-left.patch` (`git apply` puts them back; n is the cycle's number) and each new file, and each file
 the round took out of the index, regular files only, under `round-<n>-left/` at its path in the copy (at most
 1,000 files and 256 MiB, 64 MiB a file), then puts the copy back as the round found it and reads the result; an
-event names what it saved. A file of yours from before the round that the round staged (`git add -A`) goes back
-out of the index only and stays; a directory the removal empties goes too; a file git ignores stays, also when
-the round changed the ignore rules. It does so only while nobody else could have changed the
+event names what it saved. A file the round staged that HEAD lacks (`git add -A`, `git add -f`, `git add -N`)
+goes back out of the index only, and leaves the copy only when git lists it as a new file once the rest is back
+and the round's new ignore files are gone, so a file of yours stays, ignored or not (without the listing nothing
+leaves); one the round staged and then deleted stays staged, as the index holds its only copy, and the task
+needs you. A directory the removal empties goes too. It does so only while nobody else could have changed the
 copy: no agent of the task at work in it and no prompt to one, and none of your input in its panes, since the
 round's cycle began, asked before the save and again before the put-back. A round stopped before its end (a
 drain, an install) has the same done before it runs again in its cycle. When somebody else could have, or the
 save or the put-back fails (a symlink among the new files, too many of them), the task needs you, naming what the
 round left, why the factory left it, and the steps that put it back and go on:
-`git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone for your
-files the round staged), `rm -- <files>` and `magnum factory retry <task>`. Past ten paths a step reads exactly
-them from a file in the task's directory (`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`,
-NUL-separated: `--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy off the branch or at
+`git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone for the
+files the round staged), `rm -- <files>` and `magnum factory retry <task>`. No step removes a file the factory
+cannot prove the round's: none after the round changed an ignore file, never a file the round staged; the wait
+names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
+(`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`, NUL-separated:
+`--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy off the branch or at
 another head, which the factory never moves, needs you as before: put the copy back as the round found it, then
 let the task go on. The factory reads the result itself: a
 P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A round that

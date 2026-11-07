@@ -52,16 +52,40 @@ const leftStepPaths = 10
 // result from being read (roundLeft): tracked changes, the untracked files,
 // one by one, that the listing taken before the round lacks, and moved, the
 // copy off the task's branch or the branch at another head than the round
-// reviewed ("" for neither). Of the tracked changes, unstage are the copy's
-// untracked files from before the round that the round added to the index
-// (only the index goes back for them, never the file), and unindexed the
-// files the round took out of the index and left in the work tree (git's
-// patch of them is a deletion: their files are saved too).
+// reviewed ("" for neither). Of the tracked changes, unstage are the paths
+// HEAD lacks, which the round staged: a file of yours from before the round
+// may be among them (listed, or ignored), so only the index goes back for
+// them, and the file goes only when it is proven the round's (putBackLeft);
+// unindexed are the files the round took out of the index and left in the
+// work tree (git's patch of them is a deletion: their files are saved too).
+// before is the listing taken before the cycle's first run, nil without one
+// (nothing then tells a new file from yours, and no file is removed).
 type roundLeftovers struct {
 	tracked, added     []string
 	unstage, unindexed []string
 	moved              string
+	before             *beforeListing
 }
+
+// staged are the paths of left.unstage the listing before the round does
+// not name: files the round staged that may be its own, or files of yours
+// git ignores (all of them without a listing).
+func (l roundLeftovers) staged() []string {
+	return slices.DeleteFunc(slices.Clone(l.unstage), func(p string) bool { return l.before != nil && l.before.names(p) })
+}
+
+// fullRestore are the tracked paths that go back as HEAD has them, in the
+// index and the work tree: all but unstage.
+func (l roundLeftovers) fullRestore() []string {
+	return slices.DeleteFunc(slices.Clone(l.tracked), func(p string) bool {
+		_, found := slices.BinarySearch(l.unstage, p)
+		return found
+	})
+}
+
+// ignoreFile reports whether path p is a git ignore file, whose change shows
+// or hides other files.
+func ignoreFile(p string) bool { return path.Base(p) == ".gitignore" }
 
 // none reports whether the round left the copy as it found it.
 func (l roundLeftovers) none() bool { return len(l.tracked) == 0 && len(l.added) == 0 && l.moved == "" }
@@ -175,15 +199,19 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 // leftWait is the wait for you over what round `round` (cycle cy) left in
 // task t's copy c (left) that the factory did not put back, and why not:
 // the steps that put the copy back (the tracked paths restored as HEAD has
-// them, the index only for a file from before the round, and the new files
-// removed), then the retry. A step over more than leftStepPaths paths takes
+// them, the index only for a path HEAD lacks, and the new files removed),
+// then the retry. No step removes a file the factory cannot prove the
+// round's: none after a round that changed an ignore file (git's listing of
+// new files is then the round's rules'), never a file the round staged
+// (it may be a file of yours git ignores), and no step drops from the index
+// a file the round staged and then deleted (the index holds its only copy);
+// the wait says so instead. A step over more than leftStepPaths paths takes
 // them from a file in the task's directory that lists exactly them
 // (round-<n>-<step>.paths, NUL-separated: git's --pathspec-from-file, xargs
 // -0); one that cannot be written names leftStepPaths of them and how many
 // more. A copy off the task's branch or at another head is yours to put back
 // as the round found it.
-func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, why string) (string,
-	error) {
+func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, why string) (string, error) {
 	if left.moved != "" {
 		return fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; put the copy back as the round found it "+
 			"(%s at %s, no tracked change, no new untracked file), then let the task go on", round, left, t.Branch, short(cy.HeadBefore)), nil
@@ -192,7 +220,7 @@ func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int,
 	more := func(n int) string {
 		return fmt.Sprintf(" and %d more (`git -C %s status` names them)", n-leftStepPaths, execx.ShellQuote(c.Path))
 	}
-	var steps []string
+	var steps, notes []string
 	restore := func(opts string, paths []string, list string) {
 		cmd := "git -C " + execx.ShellQuote(c.Path) + " --literal-pathspecs restore " + opts
 		switch file, err := pathsFile(dir, cy.N, list, paths); {
@@ -205,10 +233,34 @@ func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int,
 			steps = append(steps, "`"+cmd+" -- "+shellArgs("", paths[:leftStepPaths])+"`"+more(len(paths)))
 		}
 	}
-	restore("--staged --worktree", slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return slices.Contains(left.unstage, p) }),
-		"restore")
-	restore("--staged", left.unstage, "unstage")
-	if n := len(left.added); n > 0 {
+	restore("--staged --worktree", left.fullRestore(), "restore")
+	var unstage, gone []string
+	for _, p := range left.unstage {
+		if _, err := os.Lstat(filepath.Join(c.Path, filepath.FromSlash(p))); err != nil {
+			gone = append(gone, p)
+		} else {
+			unstage = append(unstage, p)
+		}
+	}
+	if len(gone) > 0 {
+		notes = append(notes, fmt.Sprintf("the round staged and then deleted %s (%s): the index holds their only copy, so they stay "+
+			"staged (`git -C %s restore --worktree -- <path>` brings one back)", plural(len(gone), "file"), clipList(gone),
+			execx.ShellQuote(c.Path)))
+	}
+	restore("--staged", unstage, "unstage")
+	if staged := slices.DeleteFunc(left.staged(), func(p string) bool { return slices.Contains(gone, p) }); len(staged) > 0 {
+		notes = append(notes, fmt.Sprintf("the round staged %s the copy did not list before (%s): they stay in the copy once "+
+			"their index goes back, as they may be yours (git may ignore them); remove those the round made", plural(len(staged), "file"),
+			clipList(staged)))
+	}
+	n := len(left.added)
+	switch {
+	case n == 0:
+	case slices.ContainsFunc(slices.Concat(left.tracked, left.added), ignoreFile):
+		notes = append(notes, fmt.Sprintf("the round changed the ignore rules, so the factory names no file to remove: once the "+
+			"rest is back, `git -C %s ls-files --others --exclude-standard` lists the new files; remove those the round made",
+			execx.ShellQuote(c.Path)))
+	default:
 		rm := "rm --"
 		if slices.ContainsFunc(left.added, func(p string) bool { return strings.HasSuffix(p, "/") }) {
 			rm = "rm -r --" // a repository inside the copy
@@ -226,8 +278,12 @@ func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int,
 			steps = append(steps, "`"+rm+" "+shellArgs("", abs[:leftStepPaths])+"`"+more(n))
 		}
 	}
-	return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s): %s, then "+
-		"`magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch, short(cy.HeadBefore), strings.Join(steps, " and "), t.ID), nil
+	what := strings.Join(steps, " and ")
+	if len(notes) > 0 {
+		what += "; " + strings.Join(notes, "; ")
+	}
+	return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s): %s; then "+
+		"`magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch, short(cy.HeadBefore), what, t.ID), nil
 }
 
 // pathsFile writes paths, NUL-separated, to round-<n>-<list>.paths in the
@@ -363,49 +419,82 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 	return remove, nil
 }
 
-// putBackLeft puts the copy at copyDir back as a round found it (left): the
-// tracked paths as HEAD has them (gitx.RestoreTracked), but for the files
-// from before the round that the round added to the index, which go back
-// out of the index only (gitx.RestoreIndex). Then the new untracked files
-// that git still lists once the tracked files are back (a file git ignored
-// before the round that its change of the ignore rules showed stays) are
-// removed through an os.Root of the copy, with each of their directories
-// this empties, deepest first. A directory that still holds anything (a
-// file git ignores, a tracked file) stays.
+// putBackLeft puts the copy at copyDir back as a round found it (left):
+//  1. the tracked paths HEAD has, as HEAD has them (gitx.RestoreTracked),
+//     which brings back an ignore file the round changed;
+//  2. the paths HEAD lacks out of the index only (gitx.RestoreIndex), their
+//     files left in the work tree, but for a file the round staged and then
+//     deleted, whose only copy the index holds: it stays staged, and the
+//     look after the put-back finds it;
+//  3. with a listing before the round (none tells no new file from yours),
+//     the round's new ignore files, then the files git lists as untracked
+//     once the rest is back, of the new ones and of those the round staged
+//     that the listing does not name: a file of yours git ignores again is
+//     not listed, and stays.
+//
+// The files go through an os.Root of the copy, with each of their
+// directories this empties, deepest first; a directory that still holds
+// anything (a file git ignores, a tracked file) stays.
 func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left roundLeftovers) error {
-	if full := slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return slices.Contains(left.unstage, p) }); len(full) > 0 {
+	if full := left.fullRestore(); len(full) > 0 {
 		if err := git.RestoreTracked(ctx, copyDir, full...); err != nil {
 			return err
 		}
-	}
-	if len(left.unstage) > 0 {
-		if err := git.RestoreIndex(ctx, copyDir, left.unstage...); err != nil {
-			return err
-		}
-	}
-	if len(left.added) == 0 {
-		return nil
-	}
-	still, err := git.UntrackedFiles(ctx, copyDir)
-	if err != nil {
-		return err
 	}
 	root, err := os.OpenRoot(copyDir)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	dirs := map[string]bool{}
-	for _, f := range left.added {
-		if _, ok := slices.BinarySearch(still, f); !ok {
-			continue
-		}
-		if err := root.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	unstage := slices.DeleteFunc(slices.Clone(left.unstage), func(p string) bool {
+		_, err := root.Lstat(p)
+		return err != nil
+	})
+	if len(unstage) > 0 {
+		if err := git.RestoreIndex(ctx, copyDir, unstage...); err != nil {
 			return err
 		}
-		for d := path.Dir(f); d != "."; d = path.Dir(d) {
-			dirs[d] = true
+	}
+	if left.before == nil {
+		return nil
+	}
+	maybe := slices.Concat(left.added, slices.DeleteFunc(left.staged(), func(p string) bool {
+		_, ok := slices.BinarySearch(unstage, p)
+		return !ok
+	}))
+	if len(maybe) == 0 {
+		return nil
+	}
+	dirs := map[string]bool{}
+	// remove removes the files of maybe that which takes and git lists as
+	// untracked now, and says whether it removed any.
+	remove := func(which func(string) bool) (bool, error) {
+		still, err := git.UntrackedFiles(ctx, copyDir)
+		if err != nil {
+			return false, err
 		}
+		removed := false
+		for _, f := range maybe {
+			if _, listed := slices.BinarySearch(still, f); !listed || !which(f) {
+				continue
+			}
+			if err := root.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return removed, err
+			}
+			removed = true
+			for d := path.Dir(f); d != "."; d = path.Dir(d) {
+				dirs[d] = true
+			}
+		}
+		return removed, nil
+	}
+	// The round's new ignore files first: they may show files of yours that
+	// git ignored, which a listing taken with them in place would name.
+	if _, err := remove(ignoreFile); err != nil {
+		return err
+	}
+	if _, err := remove(func(p string) bool { return !ignoreFile(p) }); err != nil {
+		return err
 	}
 	for _, d := range slices.SortedFunc(maps.Keys(dirs), func(a, b string) int {
 		return cmp.Or(cmp.Compare(strings.Count(b, "/"), strings.Count(a, "/")), cmp.Compare(a, b))

@@ -474,10 +474,30 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 // build's names a wholly untracked directory once, ending in /).
 func untrackedBeforeFile(n int) string { return fmt.Sprintf("untracked-before-%d.json", n) }
 
-// listedBefore reports whether path p is in the listing before a round
-// (untrackedBeforeFile): named, or under a directory it names.
-func listedBefore(before []string, p string) bool {
-	return slices.ContainsFunc(before, func(b string) bool { return b == p || strings.HasSuffix(b, "/") && strings.HasPrefix(p, b) })
+// beforeListing is the listing taken before a cycle's first run
+// (untrackedBeforeFile) as a set: its files, and the directories an older
+// build's listing names (ending in /).
+type beforeListing struct {
+	files map[string]bool
+	dirs  []string
+}
+
+// newBeforeListing is the listing paths as a set.
+func newBeforeListing(paths []string) *beforeListing {
+	b := &beforeListing{files: make(map[string]bool, len(paths))}
+	for _, p := range paths {
+		b.files[p] = true
+		if strings.HasSuffix(p, "/") {
+			b.dirs = append(b.dirs, p)
+		}
+	}
+	return b
+}
+
+// names reports whether path p was in the copy before the round as an
+// untracked file git did not ignore: listed, or under a directory listed.
+func (b *beforeListing) names(p string) bool {
+	return b.files[p] || slices.ContainsFunc(b.dirs, func(d string) bool { return strings.HasPrefix(p, d) })
 }
 
 // reviewWait is what a local round waits for before it starts, "" for
@@ -785,18 +805,32 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 // cycle n (untrackedBeforeFile) does not have and that are no tracked
 // change's path (a file the round took out of the index goes back as
 // tracked: unindexed), which the writer's `git add -A` would commit. A
-// tracked change whose path the listing names was the copy's untracked file
-// that the round added to the index (unstage). Files are compared, never git
-// status's entries, which group a directory's files once and not once the
-// round stages one of them. Nothing of it is removed here.
+// tracked change of a path HEAD lacks (the round staged it) or that the
+// listing names may be a file of yours, ignored or not (unstage): only its
+// index goes back. Files are compared, never git status's entries, which
+// group a directory's files once and not once the round stages one of them.
+// Nothing of it is removed here.
 func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (roundLeftovers, error) {
 	var left roundLeftovers
 	git := e.d.Git
-	dirty, err := trackedChanges(ctx, git, c.Path)
+	entries, err := git.StatusPaths(ctx, c.Path)
 	if err != nil {
 		return left, err
 	}
-	left.tracked = dirty
+	headLacks := map[string]bool{}
+	for _, en := range entries {
+		if en.Untracked() {
+			continue
+		}
+		left.tracked = append(left.tracked, en.Path)
+		// A path the index got since HEAD (added, intent to add, a rename's
+		// or a copy's new name): it may be a file of yours the round staged.
+		if strings.ContainsRune("ARC", rune(en.X)) || en.Y == 'A' {
+			headLacks[en.Path] = true
+		}
+	}
+	slices.Sort(left.tracked)
+	left.tracked = slices.Compact(left.tracked)
 	cur, err := git.CurrentBranch(ctx, c.Path)
 	if err != nil {
 		return left, err
@@ -812,30 +846,40 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 			left.moved = fmt.Sprintf("%s at %s, not at %s, which it reviewed", t.Branch, short(now), short(head))
 		}
 	}
+	// Without a listing (a round an older build began) or with one that does
+	// not parse, nothing tells new files from yours: none is new, and every
+	// file the round staged goes back out of the index only.
+	var listed []string
 	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(n)))
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return left, nil // no listing (a round an older build began): nothing to tell new files by
-	case err != nil:
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return left, err
 	}
-	var before []string
-	if parsed := json.Unmarshal(b, &before) == nil; !parsed {
-		return left, nil // a listing that does not parse tells no new file either
+	if known := err == nil && json.Unmarshal(b, &listed) == nil; !known {
+		left.unstage = slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return !headLacks[p] })
+		return left, nil
 	}
+	left.before = newBeforeListing(listed)
 	untracked, err := git.UntrackedFiles(ctx, c.Path)
 	if err != nil {
 		return left, err
 	}
+	inTree := make(map[string]bool, len(untracked))
+	for _, p := range untracked {
+		inTree[p] = true
+	}
 	for _, p := range left.tracked {
 		switch {
-		case listedBefore(before, p): // the copy's untracked file, which the round only added to the index
+		case headLacks[p] || left.before.names(p): // HEAD lacks it: only the index goes back
 			left.unstage = append(left.unstage, p)
-		case slices.Contains(untracked, p): // out of the index, still in the work tree
+		case inTree[p]: // out of the index, still in the work tree
 			left.unindexed = append(left.unindexed, p)
 		}
 	}
-	left.added = slices.DeleteFunc(untracked, func(p string) bool { return listedBefore(before, p) || slices.Contains(left.tracked, p) })
+	tracked := make(map[string]bool, len(left.tracked))
+	for _, p := range left.tracked {
+		tracked[p] = true
+	}
+	left.added = slices.DeleteFunc(untracked, func(p string) bool { return left.before.names(p) || tracked[p] })
 	return left, nil
 }
 

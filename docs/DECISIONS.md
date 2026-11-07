@@ -16752,9 +16752,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     run, kept when the round runs again in its cycle; an older build's listing by git status entry covers what
     lies under a directory it names). git status groups a wholly untracked directory once and splits it once
     the round stages a file in it, so comparing its entries would have moved your files from before the round
-    and removed a tracked file the put-back had just restored. A tracked change's path is never a new file, and
-    a tracked change whose path the listing names is your untracked file that the round staged (`git add -A`,
-    `git add -N`): only the index goes back (`gitx.RestoreIndex`), never the file.
+    and removed a tracked file the put-back had just restored. A tracked change's path is never a new file.
+  - A tracked change of a path HEAD lacks (git status's `A`, `R`, `C`, or `A` in the work tree's column) is a
+    file the round staged, and may be yours: one the listing names (`git add -A`, `git add -N`), one git
+    ignores (`git add -f`, or `.gitignore` emptied and then `git add -A`), or any one without a listing. Only
+    its index goes back (`gitx.RestoreIndex`); the put-back restores the paths HEAD has first (an ignore file
+    the round changed comes back), removes the round's new ignore files, takes git's list of untracked files
+    again and removes only the new files and the staged ones the listing does not name that it lists. A file
+    of yours git ignores is not listed, and stays; without a listing nothing is removed. One the round staged
+    and then deleted stays staged (the index holds its only copy), and the task needs you.
   - A round stopped before its end (a drain, an install, the sweep) has its leftovers put back the same way
     before it runs again in its cycle; before, its tracked change stopped the run again ("commit them or undo
     them") and its new files counted as the copy's own. The guard sees only the task's panes, so the accepted
@@ -16764,10 +16770,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - A symlink or another file that is not regular, a save past its bounds or that fails (it removes what it
     wrote), a put-back that fails or leaves something, and somebody else in the copy send the task to you, now
     with why and the steps: `git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>`
-    (`--staged` alone for your staged files), `rm -- <files>` and `magnum factory retry <id>`. Past ten paths a
-    step reads exactly them from `round-<n>-<step>.paths` in the task's directory (NUL-separated), never `:/`
-    (which would take changes it does not name) nor an event of unbounded size. A copy off the branch or at
-    another head stays yours with the message as before: the factory moves no branch or HEAD here.
+    (`--staged` alone for the staged files), `rm -- <files>` and `magnum factory retry <id>`. No step removes a
+    file the factory cannot prove the round's: none after the round changed an ignore file (git's list of new
+    files is then the round's rules'), never a file the round staged; the wait names those for you. Past ten
+    paths a step reads exactly them from `round-<n>-<step>.paths` in the task's directory (NUL-separated),
+    never `:/` (which would take changes it does not name) nor an event of unbounded size. A copy off the
+    branch or at another head stays yours with the message as before: the factory moves no branch or HEAD here.
   This keeps to "No git step the factory runs in a copy discards a change it did not make": nothing goes back
   unsaved, and the guard rules out anybody else. Rejected: leaving every leftover to you, as before (one line of
   a lockfile cost a NEEDS YOU and a retry by hand); `git restore -- <paths>` alone in the steps (a staged change
@@ -16782,11 +16790,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPutBackNeverRemovesATrackedFileItRestored, TestARoundThatStagesAFileFromBeforeItLeavesTheFileInTheCopy,
   TestARoundsEditToAFileItTookOutOfTheIndexIsSavedFirst, TestAPutBackNeverRemovesAnIgnoredFileTheRoundUnignored,
   TestARoundStoppedMidwayHasItsLeftoversPutBackBeforeItRunsAgain, TestASecondSaveOfARoundKeepsTheFirst,
-  TestAPutBackThatGitCallsFailedButThatPutTheCopyBackGoesOn, TestTheWaitOverManyLeftoversNamesFilesThatListThem,
+  TestAPutBackThatGitCallsFailedButThatPutTheCopyBackGoesOn,
   TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt (its moved head with a tracked change and a new file),
   TestDiffHeadArgv, TestRealDiffHeadIsAPatchThatPutsTheChangesBack,
-  TestUntrackedFilesListsANewDirectoryFileByFile, TestRestoreIndexKeepsTheWorkTreesFile and
-  TestReadRegularInReadsOnlyARegularFileInsideTheRoot.
+  TestUntrackedFilesListsANewDirectoryFileByFile, TestRestoreIndexKeepsTheWorkTreesFile,
+  TestReadRegularInReadsOnlyARegularFileInsideTheRoot, TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten,
+  TestTheWaitsStepsNeverRemoveAFileNotProvenTheRounds, TestAnIgnoredFileTheRoundStagedStaysInTheCopy,
+  TestANewIgnoreFileOfTheRoundNeverShowsYourIgnoredFileForRemoval,
+  TestWithoutAListingNoFileTheRoundStagedLeavesTheCopy and TestAFileTheRoundStagedAndDeletedKeepsItsIndexCopy.
 
 ## Learned rules
 

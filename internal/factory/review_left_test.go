@@ -416,59 +416,218 @@ func TestAPutBackThatGitCallsFailedButThatPutTheCopyBackGoesOn(t *testing.T) {
 	}
 }
 
-// The wait for you over more than ten paths in a step names a file in the
-// task's directory that lists exactly them (NUL-separated): the round's
-// tracked changes for `git restore --pathspec-from-file`, the new files for
-// `xargs -0 rm`, never every tracked change of the copy nor an event that
-// lists them all. Its steps, run as they are written, put the copy back.
-func TestTheWaitOverManyLeftoversNamesFilesThatListThem(t *testing.T) {
-	r := leavingRig(t, func(r *reviewRig, dir string) {
-		for i := range 12 {
-			r.put(dir, fmt.Sprintf("spec/staged_%02d_spec.rb", i), "a staged probe\n")
-			r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n")
-		}
-		r.gitIn(dir, "add", "--", "spec")
-		for i := range 12 {
-			r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n") // the add took them; these are new again
-			r.gitIn(dir, "rm", "--quiet", "--cached", "--", fmt.Sprintf("spec/probe_%02d_spec.rb", i))
-		}
-		r.rt.setOperatorIn("fx-writer")
-	})
-	task, _ := r.reviewTask("PR-12399")
-	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
-	got := r.reload(task.ID)
-	dir := r.layout.FactoryTaskDir(task.ID)
-	restore, remove := filepath.Join(dir, "round-1-restore.paths"), filepath.Join(dir, "round-1-remove.paths")
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "--pathspec-from-file="+restore) ||
-		!strings.Contains(got.WaitsWhat, "xargs -0 rm -- < "+remove) || strings.Contains(got.WaitsWhat, ":/") {
-		t.Fatalf("task %s waits %q; want the steps over %s and %s", got.State, got.WaitsWhat, restore, remove)
-	}
-	var staged, probes []string
-	for i := range 12 {
-		staged = append(staged, fmt.Sprintf("spec/staged_%02d_spec.rb", i))
-		probes = append(probes, filepath.Join(r.copyDir, fmt.Sprintf("spec/probe_%02d_spec.rb", i)))
-	}
-	if b, _ := os.ReadFile(restore); string(b) != strings.Join(staged, "\x00")+"\x00" {
-		t.Fatalf("%s lists %q", restore, b)
-	}
-	if b, _ := os.ReadFile(remove); string(b) != strings.Join(probes, "\x00")+"\x00" {
-		t.Fatalf("%s lists %q", remove, b)
-	}
-	for _, ev := range r.events(task.ID, "review") {
-		if strings.Count(ev.Text, "_spec.rb") > 10 {
-			t.Fatalf("an event lists them all: %q", ev.Text)
-		}
-	}
-	for _, m := range regexp.MustCompile("`([^`]*)`").FindAllStringSubmatch(got.WaitsWhat, -1) {
+// runSteps runs the steps of a wait for you as they are written (each
+// command in backticks but the retry), through /bin/sh.
+func (r *reviewRig) runSteps(wait string) {
+	r.t.Helper()
+	for _, m := range regexp.MustCompile("`([^`]*)`").FindAllStringSubmatch(wait, -1) {
 		if strings.HasPrefix(m[1], "magnum ") {
 			continue
 		}
 		if _, err := r.real.Run(r.ctx, execx.Cmd{Name: "/bin/sh", Args: []string{"-c", m[1]}}); err != nil {
-			t.Fatalf("the step %q: %v", m[1], err)
+			r.t.Fatalf("the step %q: %v", m[1], err)
 		}
 	}
-	if st := r.git(r.copyDir, "status", "--porcelain"); st != "" {
-		t.Fatalf("status after the steps:\n%s", st)
+}
+
+// The wait for you names each step's paths on its line up to ten, and past
+// ten a file in the task's directory that lists exactly them
+// (NUL-separated): the paths for `git restore --pathspec-from-file`, the new
+// files for `xargs -0 rm`, never every tracked change of the copy nor an
+// event that lists them all. Its steps, run as they are written, put the
+// copy back: your files the round staged go back out of the index, with
+// their content, and the round's new files go.
+func TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten(t *testing.T) {
+	mine := func(n int) func(r *reviewRig) {
+		return func(r *reviewRig) {
+			for i := range n {
+				r.write(r.copyDir, fmt.Sprintf("mine/f%02d.rb", i), fmt.Sprintf("yours %d\n", i))
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		before func(r *reviewRig)
+		leave  func(r *reviewRig, dir string)
+		file   string // the .paths file a step reads ("" for none)
+		status string // git status once the steps ran
+	}{
+		{"two of your files staged", mine(2),
+			func(r *reviewRig, dir string) {
+				r.put(dir, "README", "a reviewer's mutant\n")
+				r.gitIn(dir, "add", "-A")
+			}, "", "?? mine/"},
+		{"twelve of your files staged", mine(12),
+			func(r *reviewRig, dir string) { r.gitIn(dir, "add", "-A") }, "round-1-unstage.paths", "?? mine/"},
+		{"twelve new files of the round", func(*reviewRig) {},
+			func(r *reviewRig, dir string) {
+				for i := range 12 {
+					r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n")
+				}
+			}, "round-1-remove.paths", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, func(r *reviewRig, dir string) {
+				tc.leave(r, dir)
+				r.rt.setOperatorIn("fx-writer")
+			})
+			task, _ := r.reviewTask("PR-12399")
+			tc.before(r)
+			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, ":/") ||
+				tc.file != "" && !strings.Contains(got.WaitsWhat, filepath.Join(r.layout.FactoryTaskDir(task.ID), tc.file)) {
+				t.Fatalf("task %s waits %q; want steps over %q", got.State, got.WaitsWhat, tc.file)
+			}
+			for _, ev := range r.events(task.ID, "review") {
+				if strings.Count(ev.Text, ".rb") > 10 {
+					t.Fatalf("an event lists them all: %q", ev.Text)
+				}
+			}
+			r.runSteps(got.WaitsWhat)
+			if st := r.git(r.copyDir, "status", "--porcelain"); st != tc.status {
+				t.Fatalf("status after the steps:\n%s\nwant:\n%s", st, tc.status)
+			}
+			for i := range 12 {
+				if rel := fmt.Sprintf("mine/f%02d.rb", i); r.inCopy(rel) && r.read(rel) != fmt.Sprintf("yours %d\n", i) {
+					t.Fatalf("%s is %q", rel, r.read(rel))
+				}
+			}
+		})
+	}
+}
+
+// The wait's steps never remove a file the factory cannot prove the
+// round's: after a round that changed the ignore rules no step removes a
+// new file (git's listing then is the round's rules', and a file of yours it
+// had ignored shows in it), and a file the round staged that the copy's
+// listing did not have (it may be a file of yours git ignores) goes back out
+// of the index only. The wait says so; your ignored file stays.
+func TestTheWaitsStepsNeverRemoveAFileNotProvenTheRounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, says string
+		leave      func(r *reviewRig, dir string)
+	}{
+		{"the round changed the ignore rules", "ls-files --others --exclude-standard",
+			func(r *reviewRig, dir string) { r.put(dir, ".gitignore", "") }},
+		{"the round staged an ignored file", "they stay in the copy",
+			func(r *reviewRig, dir string) { r.gitIn(dir, "add", "-f", "--", "tmp/cache.log") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, func(r *reviewRig, dir string) {
+				tc.leave(r, dir)
+				r.rt.setOperatorIn("fx-writer")
+			})
+			task, _ := r.reviewTask("PR-12403")
+			r.write(r.copyDir, "tmp/cache.log", "yours, ignored\n")
+			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, tc.says) || strings.Contains(got.WaitsWhat, "rm ") {
+				t.Fatalf("task %s waits %q; want no rm step and %q", got.State, got.WaitsWhat, tc.says)
+			}
+			r.runSteps(got.WaitsWhat)
+			if r.read("tmp/cache.log") != "yours, ignored\n" || r.read(".gitignore") != "tmp/\n" {
+				t.Fatal("the steps removed your ignored file or left the round's ignore rules")
+			}
+			if st := r.git(r.copyDir, "status", "--porcelain"); st != "" {
+				t.Fatalf("status after the steps:\n%s", st)
+			}
+		})
+	}
+}
+
+// A file of yours git ignores that the round staged stays in the copy,
+// with its content: a file HEAD lacks goes back out of the index only, and
+// is removed only when git lists it as a new file once the rest is back.
+func TestAnIgnoredFileTheRoundStagedStaysInTheCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leave func(r *reviewRig, dir string)
+	}{
+		{"git add -f", func(r *reviewRig, dir string) { r.gitIn(dir, "add", "-f", "--", "tmp/cache.log") }},
+		{"the ignore rules emptied, then git add -A", func(r *reviewRig, dir string) {
+			r.put(dir, ".gitignore", "")
+			r.gitIn(dir, "add", "-A")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, tc.leave)
+			task, _ := r.reviewTask("PR-12404")
+			r.write(r.copyDir, "tmp/cache.log", "yours, ignored\n")
+			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+				t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+			}
+			if r.read("tmp/cache.log") != "yours, ignored\n" || r.read(".gitignore") != "tmp/\n" {
+				t.Fatal("the put-back removed your ignored file or left the round's ignore rules")
+			}
+			if st := r.git(r.copyDir, "status", "--porcelain"); st != "" {
+				t.Fatalf("status after the put-back:\n%s", st)
+			}
+		})
+	}
+}
+
+// A new ignore file of the round's goes before the factory looks for new
+// files: a file of yours it showed (`!*.log` under a rule that ignores
+// logs) is not taken for the round's, and stays.
+func TestANewIgnoreFileOfTheRoundNeverShowsYourIgnoredFileForRemoval(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) { r.put(dir, "logs/.gitignore", "!*.log\n") })
+	task, _ := r.reviewTask("PR-12405")
+	exclude := filepath.Join(r.main, ".git", "info", "exclude")
+	r.write(filepath.Dir(exclude), "exclude", "*.log\n")
+	r.write(r.copyDir, "logs/app.log", "yours, ignored\n")
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+	}
+	if r.read("logs/app.log") != "yours, ignored\n" || r.inCopy("logs/.gitignore") {
+		t.Fatal("the put-back removed your ignored file, or left the round's ignore file")
+	}
+}
+
+// Without the listing before the round (a cycle an older build began, or
+// one that does not parse) nothing tells a file of yours from the round's:
+// a file the round staged goes back out of the index only, and stays.
+func TestWithoutAListingNoFileTheRoundStagedLeavesTheCopy(t *testing.T) {
+	var task registry.Task
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		if err := os.Remove(filepath.Join(r.layout.FactoryTaskDir(task.ID), untrackedBeforeFile(1))); err != nil {
+			r.t.Error(err)
+		}
+		r.gitIn(dir, "add", "-A")
+	})
+	task, _ = r.reviewTask("PR-12406")
+	r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+	}
+	if r.read("probe/old.rb") != "yours, from before the round\n" {
+		t.Fatal("the put-back removed your file")
+	}
+}
+
+// A file of yours the round staged and then deleted keeps its one copy in
+// the index: the factory leaves it staged and the task needs you, and no
+// step of the wait drops it from the index.
+func TestAFileTheRoundStagedAndDeletedKeepsItsIndexCopy(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.gitIn(dir, "add", "-A")
+		if err := os.Remove(filepath.Join(dir, "probe", "old.rb")); err != nil {
+			r.t.Error(err)
+		}
+	})
+	task, _ := r.reviewTask("PR-12407")
+	r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, "restore --staged -- probe/old.rb") ||
+		!strings.Contains(got.WaitsWhat, "probe/old.rb") {
+		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, got.WaitsWhat)
+	}
+	if got := r.git(r.copyDir, "show", ":probe/old.rb"); got != "yours, from before the round" {
+		t.Fatalf("the index holds %q", got)
 	}
 }
 
