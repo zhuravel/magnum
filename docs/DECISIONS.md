@@ -88,15 +88,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **The fixer can act as a dedicated App** (2026-11-07). The operator wants the fix loop to run on his own
   PRs with no hand on it, and the fixer's pane held his own gh login and, through the daemon's
   `SSH_AUTH_SOCK`, his SSH key: every permission of his account in an unattended agent's pane. A GitHub App of
-  the fixer's own now does that work with less power. It amends "The fixer acts as the watch's poll identity
-  unless its role names one" (2026-10-11), which refused every App, without rewriting it: an App may be the
-  fixer's identity when no watch reviews, polls or approves as it (`Config.DedicatedFixApp`), and the App
-  magnum reviews as stays refused, in the configuration, `magnum fix` and the doctor, because its replies
-  would read as magnum's own and its rebuttals would count as magnum's. The App's tokens are narrowed at
-  the mint: `token_repositories` and `token_permissions` (contents and pull_requests write, nothing else)
-  go into GitHub's `access_tokens` body, so every token the daemon's refresh writes to the App's gh config
-  is that narrow, and `user_id` gives its commits the bot's noreply email; `magnum identities check` checks
-  contents write, the installation's owner, the bot's id and an HTTPS ls-remote as the App.
+  the fixer's own now does that work: magnum's own push and reply paths (`magnum push`, `magnum fix-reply`,
+  the pane's `gh`) act as the App, with its narrowed token. That does not take the operator's credentials
+  out of the pane: his SSH agent stays (`magnum fix-sync`'s fetches need it), and so does his gh login, which
+  `gh` uses once the pane unsets `GH_CONFIG_DIR`; taking credentials out of panes is later work. It amends
+  "The fixer acts as the watch's poll identity unless its role names one" (2026-10-11), which refused every
+  App, without rewriting it: an App may be the fixer's identity when no watch reviews, polls or approves as
+  it (`Config.DedicatedFixApp`), by its name or through another App block of the same login (another
+  installation's block, or a copy of the App's), and the App magnum reviews as stays refused, in the
+  configuration, `magnum fix` and the doctor, because its replies would read as magnum's own and its
+  rebuttals would count as magnum's. The App's tokens are narrowed at the mint: `token_repositories` and
+  `token_permissions` (contents and pull_requests write, nothing else) go into GitHub's `access_tokens`
+  body, so every token the daemon's refresh writes to the App's gh config is that narrow, and `user_id`
+  gives its commits the bot's noreply email; `magnum identities check` checks contents write, the
+  installation's owner, the bot's id and an HTTPS ls-remote as the App. Since the tokens reach
+  `token_repositories` alone, `magnum fix` refuses a PR of any other repository of the watch before
+  anything starts (the mint would work, and the fixer's gh calls and push would fail only after its work),
+  and the doctor names the watch's known repositories the list leaves out.
   `[[watch]] fix_identity` picks the identity per watch, since one App on two organizations is two
   installations and so two `[[identity]]` blocks, while one fix role serves both. The bot identity is the
   pane's env alone: `GIT_AUTHOR_*` and `GIT_COMMITTER_*` as the bot, `GIT_CONFIG_*` pairs for
@@ -108,7 +116,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   hours uses one minted less than an hour ago. A cycle parks a live fixer pane made for another identity
   (`fix.pane_renewed`), since a pane keeps the env it was made with. The App pushes only through `magnum
   push`: HEAD to `MAGNUM_PUSH_BRANCH` alone (never master, main, the default branch or the base, never a
-  branch argument), over HTTPS to the PR's repository whatever form origin has, with gh as git's only
+  branch argument; the push line names the PR's base each cycle with `--base`, as the fix-sync line does,
+  over the pane's `MAGNUM_BASE_BRANCH`, which a PR retargeted since the pane was made no longer has), over HTTPS to the PR's repository whatever form origin has, with gh as git's only
   credential helper (an HTTPS origin would reach the operator's keychain login, an SSH one his key), with a
   lease on the head it read there and never a bare force, the bot's first-parent commits only, a merge of
   the base as the only merge, and no change under `.github/workflows` (the App has no workflows
@@ -122,10 +131,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   magnum's thread starts a reply round, though an App has no association with the repository); the retro's
   own logins and the stalemate rule needed no change, and `identity_leak` looks only at reviews with the
   run's marker. The `git push` refusal is a guard against a habit, not a boundary: `gh api` can still
-  write refs within the token's scope, another URL form is not rewritten, a remote with an explicit
-  `pushurl` skips `pushInsteadOf` (`magnum doctor` warns), and the pane can unset its env; the narrowed
-  token bounds what any of that can do. With no App identity configured the fixer behaves exactly as
-  before. Rejected: `git config` in the copies (they share one clone's config, and
+  write refs within the token's scope, another URL form is not rewritten (`ssh://git@github.com:22/...`
+  pushes with the operator's SSH key and his rights), a remote with an explicit `pushurl` skips
+  `pushInsteadOf` (`magnum doctor` warns), and the pane can unset its env and reach his gh login; the
+  narrowed token bounds only what the App's token can do. With no App identity configured the fixer
+  behaves exactly as before. Rejected: `git config` in the copies (they share one clone's config, and
   `extensions.worktreeConfig` is per worktree only with `--worktree`); a refusing `GIT_SSH_COMMAND` (it
   breaks every fetch over SSH, `magnum fix-sync`'s included); Verified commits made through the API (no
   merge commits through GraphQL); an on-demand mint in the pane (the key in a process the agent starts);

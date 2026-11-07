@@ -2956,13 +2956,20 @@ sign no commit (`commit.gpgsign=false`, over your global config) and rewrite eve
 plain `git push` fails before any network call with a path that names the command to push with. Fetches are
 not rewritten. Nothing is written to any checkout's git config: the pool's slots share one clone's config.
 The rewrite is a guard against a habit, not a boundary: `gh api` can still write refs within the token's
-scope, another URL form is not rewritten, and the pane can unset its env; and git ignores `pushInsteadOf` for
-a remote with an explicit `pushurl`, which `magnum doctor` warns about. A shell whose rc files export
+scope, another URL form is not rewritten (`ssh://git@github.com:22/...`, a URL with userinfo), and the pane
+can unset its env; and git ignores `pushInsteadOf` for a remote with an explicit `pushurl`, which `magnum
+doctor` warns about. Nor does the App take your own credentials out of the pane: it still has your SSH agent
+(the daemon's `SSH_AUTH_SOCK`, which `magnum fix-sync`'s fetches need), so a push to a URL form the rewrite
+misses goes as you, and your gh login, which `gh` uses once the pane unsets `GH_CONFIG_DIR`. The narrowed
+token bounds what the App's token does (Magnum's own push and reply paths), not those; taking credentials
+out of the panes is later work. A shell whose rc files export
 `GIT_AUTHOR_*` or `GIT_CONFIG_*` overrides the pane's env. A gh fixer's pane gets none of these variables and
 keeps your git setup. Every fixer pane also gets `MAGNUM_PUSH_BRANCH` (the PR's branch),
-`MAGNUM_DEFAULT_BRANCH` and `MAGNUM_BASE_BRANCH`. A fixer pane keeps the env it was made with, so when a
+`MAGNUM_DEFAULT_BRANCH` and `MAGNUM_BASE_BRANCH` (the base when the pane was made; the push line names the
+PR's base each cycle with `--base`, which wins, so a PR retargeted while its pane lives, a stacked PR whose
+base merged, pushes the merge of its new base). A fixer pane keeps the env it was made with, so when a
 cycle finds the PR's live fixer pane made for another identity (its `GH_CONFIG_DIR` or `GIT_AUTHOR_EMAIL`
-differ, after you moved the watch's fixer to an App or back), it parks that session first, with a
+differ, after you moved the watch's fixer to an App or back, or corrected the App's `user_id`), it parks that session first, with a
 `fix.pane_renewed` event, and the conversation resumes in a new pane with the new env; a park that fails
 fails the cycle rather than let the fixer act as the wrong identity.
 

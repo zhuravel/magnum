@@ -772,12 +772,15 @@ name = "claude-fix"                   # the fixer of the fix job (`fix_role` abo
 kind = "claude"                       # so a watch's roles do not list it. Its session is kept across fix runs like
 fix = true                            # a reviewer's until you park it; max_session_rounds is refused on a fix role,
                                       # since a fix job is no round and nothing counts rounds for it
-# identity = "me"                     # unset: the fixer acts as each watch's poll identity, your gh login in a
-                                      # `magnum init` config. Its pane gets that GitHub env, so it pushes to the
-                                      # PR's branch and answers the review's threads as you, not as the App that
-                                      # posted the review. Set it in a [[role]] block named claude-fix to act as
-                                      # another kind = "gh" [[identity]] (an App is refused; a poll identity that
-                                      # is an App makes the fix job refuse to start)
+# identity = "me"                     # unset: the fixer acts as each watch's fix_identity, else its poll identity,
+                                      # your gh login in a `magnum init` config. Its pane gets that GitHub env, so
+                                      # it pushes to the PR's branch and answers the review's threads as you, not
+                                      # as the App that posted the review. Set it in a [[role]] block named
+                                      # claude-fix (or a watch's fix_identity) to act as another kind = "gh"
+                                      # [[identity]] or as a dedicated, narrowed fixer App (token_repositories,
+                                      # token_permissions, user_id; see the [[identity]] examples below); the App a
+                                      # watch reviews, polls or approves as is refused, and a poll identity that is
+                                      # such an App makes the fix job refuse to start
 model = "opus"
 effort = "high"
 skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill, copied at startup and embedded in the binary like the
@@ -1073,6 +1076,25 @@ stages = [
 # dismiss_own_stale_change_requests = true  # the default for an app (see above); false leaves a stale change request
 #                                         # for a human to dismiss
 #
+# [[identity]]                            # a GitHub App of the fixer's own (README, Fixing your own PRs): the fixer
+# name = "fixer-app"                      # commits, pushes and replies as its bot instead of as you; no watch may
+# kind = "app"                            # review, poll or approve as it (nor as another block of its login), and a
+# login = "your-fixer[bot]"               # watch's fix_identity picks it, one block per installation
+# app_id = 234567
+# client_id = "Iv23liYYYYYYYYYYYYYY"
+# installation_id = 23456789
+# private_key_file = "~/.config/magnum/keys/fixer-app.pem"
+# token_repositories = ["your-app"]       # kind app only: every token magnum mints for it reaches these repositories
+#                                         # of the installation's account alone (names, no owner, at most 500);
+#                                         # `magnum fix` refuses a PR of any other, and `magnum doctor` names the
+#                                         # watch's repositories the list leaves out
+# token_permissions = { contents = "write", pull_requests = "write" }   # kind app only: and these permissions
+#                                         # alone ("read" or "write" by GitHub's name); a fixer App needs exactly
+#                                         # these two (metadata = "read" may be added). Unset (both keys) = the
+#                                         # installation's whole access, as a reviewing App has it
+# user_id = 123456789                     # kind app only: its bot user's id (`gh api users/your-fixer[bot] --jq .id`),
+#                                         # its commits' noreply email; `magnum identities check` checks it
+#
 # [[watch]]
 # owner = "your-org"
 # include = ["your-app"]                  # repository globs; ["*"] for the whole owner
@@ -1082,6 +1104,9 @@ stages = [
 #                                         # has a GitHub budget of its own; your login (review requests for you,
 #                                         # your own PRs, the footer's .RequestLogin) is the poll identity's when
 #                                         # it is a gh one, else auto_approve_as's, else the first gh identity's
+# fix_identity = "fixer-app"              # who fixes: the identity the fixer of the watch's PRs acts as (default: the
+#                                         # fix role's identity, else poll_identity): your gh identity, or a fixer
+#                                         # App above, the block of the watch owner's installation
 # clone_root = "~/Projects"
 # include_drafts = false                # a draft waits until ready for review, or until a review request for you, a
 #                                       # posting identity or a request_teams team (one round per request), and the
