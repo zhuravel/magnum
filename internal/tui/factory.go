@@ -26,7 +26,9 @@ package tui
 // and r, p and x do nothing here, except x on the task card (drop, y/N) and
 // r there for a task that can go on (retry, y/N). A row of your own PR
 // (FactoryRow.PR) has no card: enter names its keys in the footer, b opens
-// the PR, o and t say they act on a task's row, and a walks past it.
+// the PR, o and t say they act on a task's row, and a walks past it; f, F
+// and x act there (y/N), through magnum's own request paths, and on a
+// task's row they say so and start nothing.
 
 import (
 	"cmp"
@@ -163,6 +165,12 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //   - Diff is the pager on the task's diff, run with tea.ExecProcess; nil:
 //     there is no diff to show. It is called on the screen's own turn, so
 //     it only builds the command: it reads and waits for nothing.
+//   - Fix, FixOff and Abort act on your own PR ref ("owner/name#4512", a
+//     row's FactoryPR) through magnum's request paths, as the board's f, F
+//     and K do: Fix has magnum's fixer take what is open, FixOff switches
+//     the PR out of autofix (off) or back in, and Abort stops what magnum
+//     runs on it (its fix loop, the re-review the loop forced). They never
+//     go through the factory daemon.
 type FactoryActions interface {
 	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
@@ -175,6 +183,9 @@ type FactoryActions interface {
 	Seen(ctx context.Context, at time.Time) error
 	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
+	Fix(ctx context.Context, ref string) (ActionResult, error)
+	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	Abort(ctx context.Context, ref string) (ActionResult, error)
 }
 
 // FactoryOptions tune the factory screen.
@@ -987,6 +998,10 @@ func (m factoryModel) homeHints() []hint {
 	r, ok := m.selectedRow()
 	switch {
 	case ok && r.PR != nil:
+		hs = append(hs, hint{"f", "fix"}, hint{"F", prFixOffVerb(*r.PR)})
+		if r.PR.Fixing {
+			hs = append(hs, hint{"x", "stop"})
+		}
 		hs = append(hs, hint{"b", "PR"})
 	case ok:
 		hs = append(hs, hint{"enter", m.openVerb(r)})

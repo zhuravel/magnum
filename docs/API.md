@@ -27033,6 +27033,9 @@ type FactoryActions interface {
 	Seen(ctx context.Context, at time.Time) error
 	Focus(ctx context.Context, focused bool, at time.Time) error
 	Diff(taskID int64) *exec.Cmd
+	Fix(ctx context.Context, ref string) (ActionResult, error)
+	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	Abort(ctx context.Context, ref string) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
     command on the screen's context; the ones that change something return what
@@ -27058,6 +27061,12 @@ type FactoryActions interface {
       - Diff is the pager on the task's diff, run with tea.ExecProcess; nil:
         there is no diff to show. It is called on the screen's own turn,
         so it only builds the command: it reads and waits for nothing.
+      - Fix, FixOff and Abort act on your own PR ref ("owner/name#4512", a row's
+        FactoryPR) through magnum's request paths, as the board's f, F and K do:
+        Fix has magnum's fixer take what is open, FixOff switches the PR out of
+        autofix (off) or back in, and Abort stops what magnum runs on it (its
+        fix loop, the re-review the loop forced). They never go through the
+        factory daemon.
 
 type FactoryAlert struct {
 	At   time.Time

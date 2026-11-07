@@ -104,7 +104,9 @@ var factoryKeyHelp = []struct {
 }{
 	{"Home", []hint{{"j k g G", "move"}, {"enter", "the row's card: its decision when it needs you, else its task card"},
 		{"a", "the oldest decision card, then the next"}, {"o", "step into the pane the row waits on (asks nothing)"},
-		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"}, {"n", "new task"},
+		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
+		{"f F x", "on your PR's row: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
+		{"enter", "on your PR's row: its keys (it has no card)"}, {"n", "new task"},
 		{logKey, "the action log and the alerts"}, {"?", "this help"}, {settingsKey, "settings"},
 		{"m", "mouse on / off"}, {"ctrl+r", "refresh"}, {"q", "quit"}}},
 	{"Question card", []hint{{"j k", "move the mark"}, {"1-9", "answer and move on (nothing is sent yet)"},

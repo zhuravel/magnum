@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -245,4 +247,150 @@ func TestTheHelpGlossesYourPRs(t *testing.T) {
 	h := testFactory(t, 140, 50)
 	mustContain(t, ansi.Strip(strings.Join(h.m.helpContent(140), "\n")),
 		"YOUR PRS  your open PRs that no task has, from magnum's registry; one that needs you is in NEEDS YOU")
+}
+
+// withFixOff adds to the screen's data your PR #4607, switched out of
+// autofix, in YOUR PRS.
+func withFixOff(h *factoryHarness) {
+	h.src.change(func(d *FactoryData) {
+		off := "fix is off for #4607 (F turns it on)"
+		d.Rows = append(d.Rows, FactoryRow{ID: -77, Key: "#4607", GitHub: "#4607", Title: "Widget copy", Group: GroupYours,
+			Mark: MarkWaits, WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: off, OnYou: true}}, Since: factoryAgo(factoryNow, 30*time.Hour),
+			PR: &FactoryPR{Ref: "example/talkable#4607", FixOff: true, Off: off}})
+	})
+	h.press("ctrl+r")
+}
+
+// f on your PR's row asks y/N, and only y has magnum's fixer take what is
+// open (the board's own fix request); any other key cancels.
+func TestFOnAnOwnPRRowAsksAndQueuesMagnumsFix(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("#4602")
+	h.press("f")
+	mustContain(t, h.view(), "Fix #4602: magnum's fixer takes what is open now? y/N")
+	h.press("n")
+	if h.act.calls() != 0 {
+		t.Fatal("n ran the fix")
+	}
+	h.press("f", "y")
+	if len(h.act.fixes) != 1 || h.act.fixes[0] != "example/talkable#4602" {
+		t.Errorf("Fix calls %q, want example/talkable#4602", h.act.fixes)
+	}
+	if h.act.calls() != 1 {
+		t.Errorf("%d calls, want the fix alone", h.act.calls())
+	}
+}
+
+// F switches fix off for your PR, behind y/N, and on again for one you
+// switched off.
+func TestShiftFOnAnOwnPRRowSwitchesFixOff(t *testing.T) {
+	h := testYours(t, 140, 40)
+	withFixOff(h)
+	h.press("g")
+	h.selectRow("#4611")
+	h.press("F")
+	mustContain(t, h.view(), "Switch fix off for #4611: autofix leaves it to you? y/N")
+	h.press("y")
+	h.selectRow("#4607")
+	h.press("F")
+	mustContain(t, h.view(), "Switch fix on again for #4607? y/N")
+	h.press("y")
+	want := []factoryFixOff{{"example/talkable#4611", true}, {"example/talkable#4607", false}}
+	if len(h.act.fixOffs) != 2 || h.act.fixOffs[0] != want[0] || h.act.fixOffs[1] != want[1] {
+		t.Errorf("FixOff calls %+v, want %+v", h.act.fixOffs, want)
+	}
+}
+
+// F on a PR magnum leaves alone for another reason than fix off (a
+// baseline) says why and runs nothing: fix on would not change it.
+func TestShiftFOnABaselinePRRowSaysWhyAndRunsNothing(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("#4606")
+	h.press("F")
+	v := h.view()
+	mustContain(t, v, "#4606 is yours to follow: it was open before magnum first synced the repository")
+	mustNotContain(t, v, "y/N")
+	if h.act.calls() != 0 {
+		t.Error("F on a baseline PR ran something")
+	}
+}
+
+// x on your PR whose fix loop runs asks y/N and stops what magnum runs on
+// it (the board's K); on a PR with no loop it says so and runs nothing.
+func TestXOnAnOwnPRRowAsksAndStopsTheLoop(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("#4612")
+	h.press("x")
+	mustContain(t, h.view(), "Stop what magnum runs on #4612 (its fix loop and the re-review the loop forced)? y/N")
+	h.press("y")
+	if len(h.act.aborts) != 1 || h.act.aborts[0] != "example/talkable#4612" {
+		t.Errorf("Abort calls %q, want example/talkable#4612", h.act.aborts)
+	}
+	h.selectRow("#4611")
+	h.press("x")
+	v := h.view()
+	mustContain(t, v, "no fix loop runs on #4611")
+	mustNotContain(t, v, "y/N")
+	if h.act.calls() != 1 {
+		t.Errorf("%d calls, want the one abort", h.act.calls())
+	}
+}
+
+// f, F and x on a task's row start nothing: they act on your PRs, and the
+// footer says so.
+func TestFOnATaskRowStartsNothing(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("PR-12371")
+	for _, k := range []string{"f", "F", "x"} {
+		h.press(k)
+		v := h.view()
+		mustContain(t, v, "f, F and x act on your PRs")
+		mustNotContain(t, v, "y/N")
+	}
+	if h.act.calls() != 0 || h.m.view != fvHome {
+		t.Errorf("f, F or x on a task's row did something: %d calls, view %v", h.act.calls(), h.m.view)
+	}
+}
+
+// A click never starts an action on your PR's row: a double click is
+// enter (its keys in the footer), the menu's fix asks the same y/N as f,
+// and a click with the question up answers no.
+func TestAClickStartsNothingWithoutY(t *testing.T) {
+	h := testYours(t, 140, 40)
+	_, lines := renderFactory(h.m.homeFrame(), 140, 40, h.m.st, h.m.g, factoryNow)
+	y := lines[-72]
+	h.feed(tea.MouseClickMsg{X: 10, Y: y, Button: tea.MouseLeft}, tea.MouseClickMsg{X: 10, Y: y, Button: tea.MouseLeft})
+	if r, _ := h.m.selectedRow(); r.Key != "#4602" {
+		t.Fatalf("the click selected %q, want #4602", r.Key)
+	}
+	mustContain(t, h.view(), prKeys)
+	h.feed(tea.MouseClickMsg{X: 10, Y: y, Button: tea.MouseRight})
+	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.key == "f" })
+	if !h.m.menu.open || i < 0 {
+		t.Fatalf("no menu with f on your PR's row: %+v", h.m.menuItems())
+	}
+	for range i {
+		h.press("j")
+	}
+	h.press("enter")
+	mustContain(t, h.view(), "Fix #4602: magnum's fixer takes what is open now? y/N")
+	h.feed(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	mustNotContain(t, h.view(), "y/N")
+	if h.act.calls() != 0 {
+		t.Errorf("a click ran %d actions", h.act.calls())
+	}
+}
+
+// Without actions (act == nil) f says the screen runs none.
+func TestFWithoutActionsSaysTheScreenRunsNone(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.m.act = nil
+	h.press("g")
+	h.selectRow("#4602")
+	h.press("f")
+	mustContain(t, h.view(), noActions)
 }

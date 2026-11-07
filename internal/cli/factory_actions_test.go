@@ -51,7 +51,7 @@ func newScreenActionsTest(t *testing.T, pid int, answer func(registry.Request) (
 	}
 	at.src = &factoryScreenSource{c: at.ctx, now: func() time.Time { return screenActionsNow }}
 	t.Cleanup(at.src.close)
-	at.act = newFactoryActions(at.ctx, at.src)
+	at.act = newFactoryActions(at.ctx, at.src, nil)
 	return at
 }
 
@@ -263,7 +263,7 @@ func TestTheScreensFocusIsARequestWithItsPid(t *testing.T) {
 	bare := newDaemonGroupTest(t)
 	src := &factoryScreenSource{c: bare.ctx, now: func() time.Time { return screenActionsNow }}
 	defer src.close()
-	if err := newFactoryActions(bare.ctx, src).Focus(ctx, true, screenActionsNow); err != nil {
+	if err := newFactoryActions(bare.ctx, src, nil).Focus(ctx, true, screenActionsNow); err != nil {
 		t.Fatal(err)
 	}
 	if fileExists(bare.ctx.Layout.FactoryDB()) {
@@ -281,7 +281,7 @@ func TestSeenOnlyMovesForwardAcrossScreens(t *testing.T) {
 	if err := at.act.Seen(ctx, later); err != nil {
 		t.Fatal(err)
 	}
-	other := newFactoryActions(at.ctx, &factoryScreenSource{c: at.ctx, now: time.Now})
+	other := newFactoryActions(at.ctx, &factoryScreenSource{c: at.ctx, now: time.Now}, nil)
 	if err := other.Seen(ctx, earlier); err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestTheDigestCountsOnlyTheTimeYouWereAway(t *testing.T) {
 	now := night
 	src := &factoryScreenSource{c: dt.ctx, now: func() time.Time { return now }}
 	defer src.close()
-	act := newFactoryActions(dt.ctx, src)
+	act := newFactoryActions(dt.ctx, src, nil)
 	ctx := t.Context()
 	if err := act.Focus(ctx, true, night); err != nil { // at the screen, focused
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestOpenStepsIntoTheTasksPaneOnTheFactorySession(t *testing.T) {
 	st.Close()
 	var focused []string
 	var revealed int
-	at.act = newFactoryActions(at.ctx, at.src)
+	at.act = newFactoryActions(at.ctx, at.src, nil)
 	at.act.focusPane = func(_ context.Context, target string) error {
 		focused = append(focused, target)
 		return nil

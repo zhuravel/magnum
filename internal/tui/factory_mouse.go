@@ -133,7 +133,10 @@ func (m factoryModel) menuItems() []menuItem {
 		_, decision := m.nextDecision()
 		c := m.data.Cards[sel.ID].Task
 		if row && sel.PR != nil { // your PR: no card, no pane of the factory's
+			pr := *sel.PR
 			return []menuItem{
+				{"fix what is open", "f", "f", acts}, {prFixOffVerb(pr), "F", "F", acts && (pr.FixOff || pr.Off == "")},
+				{"stop its fix loop", "x", "x", acts && pr.Fixing},
 				{"open its PR", "b", "b", acts && c.PRURL != ""}, {"oldest decision", "a", "a", decision}, {"new task", "n", "n", acts},
 				{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
 			}

@@ -3819,7 +3819,7 @@ after `q` or `ctrl+c` starts nothing. Answers, stepping into a pane and opening 
 
 | Where | Keys |
 |---|---|
-| Home | `j k g G` move, `pgdn pgup` (or `space`, `ctrl+d`, `ctrl+u`) a page; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `b` the row's PR and `t` its Jira issue in the browser, as on the board (the issue's link is its key's by the trackers, `[board] trackers` or its `[[repo]]`'s or `[[watch]]`'s; a task with nothing to open says why in the footer, `no PR yet for PR-12345`); `n` new task; `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` (or `f5`) refresh; `q` quit. Every card takes `o` (the task's pane), `!`, `?`, `,`, `m`, `ctrl+r` and `q` too, except while you type a line in its footer |
+| Home | `j k g G` move, `pgdn pgup` (or `space`, `ctrl+d`, `ctrl+u`) a page; `enter` the row's card (its decision card when it needs you, else its task card); `a` the oldest decision card, then the next; `o` step into the pane the row waits on; `b` the row's PR and `t` its Jira issue in the browser, as on the board (the issue's link is its key's by the trackers, `[board] trackers` or its `[[repo]]`'s or `[[watch]]`'s; a task with nothing to open says why in the footer, `no PR yet for PR-12345`); `n` new task; on your PR's row (YOUR PRS, or NEEDS YOU) `f` has magnum's fixer take what is open, `F` switches it out of autofix or back in, and `x` stops what magnum runs on it (its fix loop and the re-review the loop forced), each y/N (on a task's row they say so and start nothing); `!` the action log and every alert with its time; `?` the keys and the words of the screen; `,` settings; `m` mouse; `ctrl+r` (or `f5`) refresh; `q` quit. Every card takes `o` (the task's pane), `!`, `?`, `,`, `m`, `ctrl+r` and `q` too, except while you type a line in its footer |
 | Question card | `j k` move the mark (it starts on the recommendation); `1-9` answer and move on; `enter` the marked one (with no recommendation, pick one first); `−` (or `-`) then a digit flags the question needless, with its reason (`1` the ticket answers it, `2` the code answers it, `3` any answer works, `4` you asked it before); `backspace` the previous question; `esc` back, the answers kept (home's line for the task then counts them, `2 answered, 1 to go`, and its rule
 says `you answered 2 of 3 · nothing sent yet`). "Type your own answer" takes a line typed in the footer, at
 whose end the cursor stays. Nothing is sent before the recap's `y`, which sends the batch, once; on the recap `1-9` changes an answer. A batch for questions that changed meanwhile is refused and nothing of it is kept: the recap says so, and `enter` shows the question open again. Each question of a ticket task offers "Ask <reporter> in Jira (the task waits)", the ticket's reporter (a question asked already keeps whom it asked); asking someone shows the Jira comment the factory drafts for them |
@@ -4136,7 +4136,14 @@ nothing, so a baseline open for weeks never sits in NEEDS YOU. The chip counts b
 and 2 PRs need you`, or `2 PRs need you`) and your PRs at work (`3 of your PRs at work`); the window title counts
 every row in NEEDS YOU. A PR row has no card: `enter` names its keys in the footer, `b` opens the PR, and `o`
 and `t` say they act on a task's row. `a` walks the task cards only and skips PR rows; once no card is left, the
-footer says `2 of your PRs need you: f, F or b on their rows`. A registry of magnum's that cannot be read leaves
+footer says `2 of your PRs need you: f, F or b on their rows`. On a PR row, `f`, `F` and `x` run the board's own
+code, each behind y/N (`Fix #4602: magnum's fixer takes what is open now?`): `f` queues magnum's fix request as
+the board's `f` does, `F` switches the PR out of autofix (`Switch fix off for #4611: autofix leaves it to you?`) or
+back in for one you switched off (`Switch fix on again for #4607?`), and on a PR magnum leaves alone for another
+reason (a baseline, a watch that leaves your PRs out) says why and runs nothing, and `x`, only while a fix loop
+runs, stops what magnum runs on the PR (`magnum abort`, the board's `K`; otherwise `no fix loop runs on #4611`).
+They go to magnum's registry and magnum's daemon, never through the factory daemon, which still never writes
+magnum's registry. The right-click menu of a PR row lists them, each asking the same y/N; a click never confirms. A registry of magnum's that cannot be read leaves
 your PRs out, and home's blocker line says `your PRs not read`, with why on a wide screen.
 
 Factory mode: no agent of the factory, and no skill an agent follows, pushes or opens a PR. Every factory prompt but

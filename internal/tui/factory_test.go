@@ -86,6 +86,11 @@ type (
 		text, kind, repo string
 		wordsOnly        bool
 	}
+	// factoryFixOff is a FixOff call: the PR, and off or on.
+	factoryFixOff struct {
+		ref string
+		off bool
+	}
 )
 
 // fakeFactoryActions records every request the screen makes.
@@ -105,6 +110,9 @@ type fakeFactoryActions struct {
 	focusAt  []time.Time
 	diffs    []int64
 	diffCmd  *exec.Cmd
+	fixes    []string        // the PRs Fix was asked for
+	fixOffs  []factoryFixOff // FixOff's calls
+	aborts   []string        // the PRs Abort was asked for
 
 	preview   func(text, repo string) (NewTaskForm, error)
 	answerErr error
@@ -206,12 +214,33 @@ func (a *fakeFactoryActions) Diff(task int64) *exec.Cmd {
 	return a.diffCmd
 }
 
+func (a *fakeFactoryActions) Fix(_ context.Context, ref string) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.fixes = append(a.fixes, ref)
+	return ActionResult{Text: "fix queued for " + ref}, nil
+}
+
+func (a *fakeFactoryActions) FixOff(_ context.Context, ref string, off bool) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.fixOffs = append(a.fixOffs, factoryFixOff{ref, off})
+	return ActionResult{Text: "fix switched for " + ref}, nil
+}
+
+func (a *fakeFactoryActions) Abort(_ context.Context, ref string) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.aborts = append(a.aborts, ref)
+	return ActionResult{Text: "stopped " + ref}, nil
+}
+
 // calls counts the requests that change something (starts, answers,
-// decisions, stops, retries).
+// decisions, stops, retries, and magnum's fix, fix off and abort).
 func (a *fakeFactoryActions) calls() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries)
+	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.fixes) + len(a.fixOffs) + len(a.aborts)
 }
 
 // testClock is the screen's clock in tests: fixed until a test moves it.
@@ -693,10 +722,10 @@ func TestTheFirstClickAfterTheDigestHitsWhatTheFrameDrew(t *testing.T) {
 
 func TestTheBoardsLettersKeepTheirMeaning(t *testing.T) {
 	h := testFactory(t, 100, 40)
-	still := func(where string) {
+	still := func(where string, keys ...string) {
 		t.Helper()
 		before := h.view()
-		for _, k := range []string{"r", "p", "x"} {
+		for _, k := range keys {
 			h.press(k)
 			if v := h.view(); v != before {
 				t.Errorf("%s: %s changed the screen:\n%s", where, k, v)
@@ -706,12 +735,19 @@ func TestTheBoardsLettersKeepTheirMeaning(t *testing.T) {
 			t.Errorf("%s: a board letter asked or ran something", where)
 		}
 	}
-	still("home")
+	still("home", "r", "p")
+	// x on a task's row on home is your PR's key (stop its fix loop): it
+	// starts nothing and says so.
+	h.press("x")
+	mustContain(t, h.view(), "f, F and x act on your PRs")
+	if h.act.calls() != 0 || h.m.bar.asking != nil {
+		t.Error("home: x on a task's row asked or ran something")
+	}
 	h.open("PR-12345")
-	still("the question card")
+	still("the question card", "r", "p", "x")
 	h.press("esc")
 	h.open("PR-12360")
-	still("the ready card")
+	still("the ready card", "r", "p", "x")
 	h.press("esc")
 	h.open("PR-12330")
 	h.press("r", "p") // no retry on this task card

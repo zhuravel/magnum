@@ -40,11 +40,11 @@ func runFactoryScreen(c *Context) int {
 	defer stop()
 	src := &factoryScreenSource{c: c, now: inspNow, magnum: factory.NewMagnum(c.Layout, c.Config)}
 	defer src.close()
-	acts := newScreenActions(c) // the settings screen's, as the board's
+	acts := newScreenActions(c) // the settings screen's and your PRs' keys, as the board's
 	defer acts.Close()
 	opts := tui.FactoryOptions{Icons: screenIcons(c.Config), NoMouse: !c.Config.Terminal.Mouse, Now: inspNow,
 		Settings: &tui.SettingsScreen{Source: newSettingsSource(c, acts), Runtime: screenRuntime{acts}}}
-	err := tuiFactory(ctx, src, newFactoryActions(c, src), opts)
+	err := tuiFactory(ctx, src, newFactoryActions(c, src, acts), opts)
 	if fsx.Exists(c.Layout.FactoryDB()) { // a factory with no task has nothing you saw
 		if serr := factory.SaveSeen(c.Layout, inspNow()); serr != nil {
 			fmt.Fprintf(c.Stderr, "magnum factory: keep the time you saw home: %v\n", serr)

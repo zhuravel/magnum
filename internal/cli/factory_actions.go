@@ -8,7 +8,9 @@ package cli
 // once, so the adapter records none. Stepping into a pane, the time you saw
 // home and the terminal's focus carry no words and no decision: they record
 // no input. The screen asks y/N before each action; the adapter confirms
-// nothing itself.
+// nothing itself. f, F and x on your own PR's row are not the factory's:
+// they run the board's own code (screenActions: magnum's fix, fix off and
+// abort requests, in magnum's registry), never the factory daemon's.
 
 import (
 	"cmp"
@@ -50,6 +52,8 @@ type factoryActions struct {
 	pid           int
 	focusPane     func(ctx context.Context, target string) error
 	revealSession func(ctx context.Context) (string, error)
+	// board runs f, F and x on your own PR's row: the PR board's actions.
+	board *screenActions
 }
 
 var _ tui.FactoryActions = (*factoryActions)(nil)
@@ -57,9 +61,9 @@ var _ tui.FactoryActions = (*factoryActions)(nil)
 // newFactoryActions are the actions of the factory screen of c over src:
 // herdr is the factory's own session ([factory] herdr_session, its socket),
 // and the reveal brings the configured terminal on that session to the
-// front.
-func newFactoryActions(c *Context, src *factoryScreenSource) *factoryActions {
-	a := &factoryActions{c: c, src: src, pid: os.Getpid()}
+// front; board, the PR board's actions, runs the keys on your own PRs.
+func newFactoryActions(c *Context, src *factoryScreenSource, board *screenActions) *factoryActions {
+	a := &factoryActions{c: c, src: src, pid: os.Getpid(), board: board}
 	a.focusPane = func(ctx context.Context, target string) error {
 		return (&herdr.Client{Socket: c.Config.FactoryHerdr().Socket}).AgentFocus(ctx, target)
 	}
@@ -248,6 +252,38 @@ func paneToOpen(ss []store.Session) (store.Session, bool) {
 	}
 	return best, rank >= 0
 }
+
+// Fix has magnum's fixer take what is open on your PR ref, as the board's f
+// does (magnum fix: magnum's fix request); the screen asked first.
+func (a *factoryActions) Fix(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Fix(ctx, ref)
+}
+
+// FixOff switches your PR ref out of autofix (off) or back in, as the
+// board's F does; the screen asked first.
+func (a *factoryActions) FixOff(ctx context.Context, ref string, off bool) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.FixOff(ctx, ref, off)
+}
+
+// Abort stops what magnum runs on your PR ref (its fix loop, the re-review
+// the loop forced), as the board's K does (magnum abort); the screen asked
+// first.
+func (a *factoryActions) Abort(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Abort(ctx, ref)
+}
+
+// errNoBoard is the refusal of a key on your PR's row by a screen built
+// without the board's actions.
+var errNoBoard = errors.New("this screen cannot act on magnum's PRs")
 
 // Seen keeps that you saw home at at (factory.SaveSeen): it survives a
 // restart of the screen and of the daemon, and only moves forward.

@@ -220,6 +220,46 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 	return nil
 }
 
+// prKey is f, F or x on home's row r: on your PR's row, magnum's fix of
+// what is open (f), its switch out of autofix or back in (F; a PR magnum
+// leaves alone for another reason says why and runs nothing) and the stop
+// of its fix loop (x; with no loop it says so), each behind y/N and
+// through magnum's own request paths; on a task's row nothing.
+func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
+	if r.PR == nil {
+		return m.note("f, F and x act on your PRs: " + cleanText(r.Key) + " is a task")
+	}
+	pr, key, act := *r.PR, cleanText(r.Key), m.act
+	switch {
+	case k == "f":
+		return m.ask(nil, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
+			return act.Fix(ctx, pr.Ref)
+		})
+	case k == "F" && pr.FixOff:
+		return m.ask(nil, "Switch fix on again for "+key+"?", func(ctx context.Context) (ActionResult, error) {
+			return act.FixOff(ctx, pr.Ref, false)
+		})
+	case k == "F" && pr.Off != "":
+		return m.note(cleanText(pr.Off))
+	case k == "F":
+		return m.ask(nil, "Switch fix off for "+key+": autofix leaves it to you?", func(ctx context.Context) (ActionResult, error) {
+			return act.FixOff(ctx, pr.Ref, true)
+		})
+	case !pr.Fixing:
+		return m.note("no fix loop runs on " + key)
+	}
+	return m.ask(nil, "Stop what magnum runs on "+key+" (its fix loop and the re-review the loop forced)?",
+		func(ctx context.Context) (ActionResult, error) { return act.Abort(ctx, pr.Ref) })
+}
+
+// prFixOffVerb is what F does on your PR's row: fix off, or on again.
+func prFixOffVerb(pr FactoryPR) string {
+	if pr.FixOff {
+		return "fix on"
+	}
+	return "fix off"
+}
+
 // prKeys is the footer of enter on your PR's row: its keys, since it has no
 // card.
 const prKeys = "your PR: f fix, F fix off, x stop the loop, b browser"
@@ -307,6 +347,10 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 			return m.note(prRowTaskKeys(r)), true
 		case ok:
 			return m.openPage(k, r.ID), true
+		}
+	case "f", "F", "x":
+		if r, ok := m.selectedRow(); ok {
+			return m.prKey(k, r), true
 		}
 	default:
 		return nil, false
