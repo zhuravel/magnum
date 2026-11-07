@@ -17779,6 +17779,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestEnterOpensYourPRsCard, TestYourPRsCardGoesWhenItsPRDoes, TestOAndTOnAPRRow, TestOOnAPRRowOpensMagnumsPane,
   TestThePRRowsKeysOnHome, TestTheWalkVisitsThePRsThatNeedYou, TestXNoLongerStopsMagnumsLoop,
   TestAClickStartsNothingWithoutY; goldens prcard-100, -120, -140 and -200.
+- **A PR's CI line links its failed jobs and says why GitHub blocks the merge** (2026-11-08, the 2026-11-07 audit's
+  R8, D #5). A failing job had a name and no link, so the operator hunted it on GitHub, and GitHub's own
+  `mergeStateStatus` was never read: a PR showed approved and green while GitHub refused its merge. The CI fix
+  ("A required check that did not run at the head is never green") stays as it is; this entry adds words, never a
+  green.
+  - The poll reads, at no cost (GitHub prices connections, not fields), each check's page (`detailsUrl` of a check
+    run, else its check run page `url`, and a commit status's `targetUrl`: `github.Check.URL`) and the PR's merge
+    state (`PRDetails.MergeState`). `ci_json` keeps them (`store.CheckResult.URL`, `store.CIStatus.Merge`, both
+    `omitempty`, no migration), and a read whose only news is either writes `ci_json`, so the first poll after an
+    upgrade fills them in. The judge's `failing-checks.json` leaves the page out: whoever posts a check sets it.
+  - `prview.CI` keeps the failed checks' pages (`tui.CIInfo.Links`) and says why GitHub blocks the merge
+    (`tui.CIInfo.Blocked`), by GitHub's merge state of the checks' read and the PR's draft flag and review decision
+    (`prview.Merge`): `it conflicts with its base` (DIRTY), `its branch is behind its base` (BEHIND), and for
+    BLOCKED (or DRAFT) what magnum knows: a draft, the required checks that failed, did not run or have not
+    finished, `a required approval is missing` (REVIEW_REQUIRED), `changes are requested`; a block none of those
+    explains is `a rule magnum does not read`. An older commit's read, UNKNOWN (not computed yet), CLEAN, UNSTABLE
+    and HAS_HOOKS say nothing, and GitHub's word never changes a check's state.
+  - The factory's PR card draws the block beside the CI cell, or under it when the line is too narrow, and each
+    failed job's page under that (at most three, then `+N more failed`; a page too long keeps its end). The board's
+    card lists the pages under its Failed line (at most five) and the block after the required checks. `magnum prs
+    --json` gives `ci.links` and `ci.blocked`. `cleanCI` drops a page that is no http or https address.
+  Rejected: reading `mergeable` (UNKNOWN while computed, and conflicts are DIRTY already); the block on home's row
+  or its move (rows stay one line, and "merge it" waits on the reviewers' and the CI's own words); the job's page in
+  the judge's file (a link a check's poster sets, which the judge never needed); a key that opens the failed job
+  (`b` opens the PR, whose checks tab links it; a new key asks its own y/N). Tests, failing first:
+  TestDetailsReadEachChecksPageAndGitHubsMergeState, TestUpsertPRCIWritesACheckPageAndTheMergeState,
+  TestTheStoredChecksKeepTheirPagesAndGitHubsMergeState, TestFailingChecksLeaveOutACheckPage,
+  TestCILinksEachFailedCheckToItsPage, TestCISaysWhyGitHubBlocksTheMerge,
+  TestPRStatesLinkTheFailedJobsAndSayWhyGitHubBlocksTheMerge,
+  TestTheBoardsCILinksTheFailedJobAndSaysWhyGitHubBlocksTheMerge, TestPRBoardSanitizesTheCIsLinksAndBlock,
+  TestPRBoardCardLinksTheFailedJobsAndSaysWhyGitHubBlocksTheMerge, TestThePRCardDrawsThePRsLines,
+  TestThePRCardsCILinksAreFewAndKeepTheirEnd; goldens prcard-100, -120, -140 and -200.
 
 ## Learned rules
 

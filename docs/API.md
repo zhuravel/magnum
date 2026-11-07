@@ -15461,6 +15461,11 @@ type Check struct {
 	// At is when the check finished, else started (a check run), or was
 	// posted (a commit status); zero for a check run not started yet.
 	At time.Time
+	// URL is the page of the run: a check run's detailsUrl (a GitHub
+	// Actions job's page), else its check run page on GitHub, a commit
+	// status's targetUrl; "" for a status that posted none. Whoever posts
+	// the check sets it: a link to show, never one to follow.
+	URL string
 }
     Check is one check run or commit status of a CIRollup.
 
@@ -15905,6 +15910,10 @@ type PRDetails struct {
 	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
 	// GitHub returned no reviewDecision or latestOpinionatedReviews.
 	ReviewGate *ReviewGate
+	// MergeState is GitHub's mergeStateStatus of the pull request: BEHIND,
+	// BLOCKED, CLEAN, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN (GitHub is still
+	// computing it) or UNSTABLE; "" when GitHub did not say.
+	MergeState string
 	// Remarks are the submitted reviews and issue comments among the
 	// activity timeline's last ten items, as it lists them (oldest first);
 	// nil when GitHub returned no timeline. A reply in a review thread is a
@@ -22545,14 +22554,16 @@ internal/tui's.
 
 FUNCTIONS
 
-func CI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInfo
+func CI(ci *store.CIStatus, head string, req store.RequiredChecks, m Merge) *tui.CIInfo
     CI is a PR's CIInfo at head, by its repository's required checks req
     (store.Store.RequiredChecks): ci is the head's checks as magnum's readers
     see them (store.SeenCI, the checks ignore_checks names left out); nil when
     magnum has no checks for the PR yet. A required check is matched by name
     across workflows (store.RequiredRuns), one that never ran on the head is
     "missing", and the checks of an older commit than head leave every required
-    check that did not fail pending.
+    check that did not fail pending. The failed checks keep their pages (Links),
+    and GitHub's merge state of the read says, with m, why it blocks the merge
+    (Blocked, mergeBlock); it never makes a check green.
 
 func CheckLabel(pattern string) string
     CheckLabel is a required check's short name on the screens: without the
@@ -22572,6 +22583,19 @@ func Held(ctx context.Context, st *store.Store, prID int64, s store.ReviewSummar
     Only a clean verdict holds, so no other reads the record; a clean comment
     without one is a comment-only repository's. A registry that cannot say holds
     nothing.
+
+
+TYPES
+
+type Merge struct {
+	Draft    bool
+	Decision string
+}
+    Merge is what CI reads of a PR beside its checks to say why GitHub blocks
+    its merge (tui.CIInfo.Blocked): whether it is a draft, and GitHub's
+    review decision (store.ReviewGate.Decision: APPROVED, CHANGES_REQUESTED or
+    REVIEW_REQUIRED; "" when its base requires no review or magnum has not read
+    the gate).
 
 ```
 
@@ -25041,6 +25065,11 @@ type CIStatus struct {
 	// when the cheap rollup read counts other failed or pending ones. A zero
 	// Total is unknown (a read before the counts existed, or none given).
 	Rollup CheckCounts `json:"rollup,omitzero"`
+	// Merge is GitHub's merge state of the PR when Checks were read
+	// (github.PRDetails.MergeState: BLOCKED, BEHIND, DIRTY, CLEAN, UNSTABLE,
+	// HAS_HOOKS, DRAFT or UNKNOWN while GitHub computes it); "" in a read of
+	// an earlier build. It is SHA's, as the checks are.
+	Merge string `json:"merge,omitempty"`
 }
     CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
     trail prs.ci_state, which the radar refreshes, until the next Details fetch.
@@ -25108,6 +25137,10 @@ type CheckResult struct {
 	// At is when the check finished, else started, or the status was
 	// posted; zero for a check run not started yet (the newest run).
 	At time.Time `json:"at,omitzero"`
+	// URL is the run's page (github.Check.URL: a GitHub Actions job's, a
+	// check run's on GitHub, a status's target); "" for none, and in a read
+	// of an earlier build. Whoever posts the check sets it.
+	URL string `json:"url,omitempty"`
 }
     CheckResult is one check run or commit status of a CIStatus.
 
@@ -27606,6 +27639,14 @@ type CIInfo struct {
 	// rulesets) or "config" ([[repo]] required_checks overrides them).
 	RequiredSource string
 	Stale          bool // describes an older commit than the PR's head
+	// Links are the failed checks' pages, in Failing's order and named as
+	// it names them; a failed check that posted no page has none. Whoever
+	// posts a check sets its page: cleanCI keeps only an http or https one.
+	Links []CheckLink
+	// Blocked is why GitHub blocks the merge, in words ("GitHub blocks
+	// the merge: Completion failed"); "" when GitHub does not, has not said
+	// or said it of an older commit than the head.
+	Blocked string
 }
     CIInfo is the head commit's CI as the board shows it.
 
@@ -27698,6 +27739,10 @@ type CardStage struct {
     CardStage is one stage of a task. State is one of "done", "skipped",
     "waiting", "working", "failed" or "todo". Proof says what makes the stage
     done, in words.
+
+type CheckLink struct{ Name, URL string }
+    CheckLink is a check's page: Name as CIInfo.Failing names the check, URL its
+    run's page.
 
 type CheckState struct {
 	Name, Label, State string
