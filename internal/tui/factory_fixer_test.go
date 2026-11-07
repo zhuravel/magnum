@@ -120,6 +120,24 @@ func TestTaskCardListsWhatTheFixerLeft(t *testing.T) {
 	}
 }
 
+// The fixer's items are its own words, which can repeat the PR's text: the
+// task card draws them with no control sequence of theirs left (a clipboard
+// write, a screen erase, a cursor move, a bell), whatever the factory's
+// side left in them, and their words stay.
+func TestTaskCardCleansTheFixersItems(t *testing.T) {
+	c := fixtureFixerCard(2)
+	c.FixNeeds = []string{"description: change \x1b]52;c;cm0gLXJmIH4=\x07the total line",
+		"P1 app/a.rb:1: not fixed.\x1b[2J\x1b[H which side\x00 wins?"}
+	frame := drawTask(c, 0)(120, 0, true, IconsUnicode)
+	for _, bad := range []string{"\x1b]52", "\x1b[2J", "\x1b[H", "\x07", "\x00"} {
+		if strings.Contains(frame, bad) {
+			t.Errorf("a control sequence of the fixer's items reached the card: %q", bad)
+		}
+	}
+	plain := ansi.Strip(frame)
+	mustContain(t, plain, "the total line", "which side")
+}
+
 // testFixer is the screen over yoursData with the fixer's report on your
 // PR #4602's card and on the task card of PR-12371, the pager swapped for
 // one that records what it opens.

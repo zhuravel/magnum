@@ -702,7 +702,7 @@ func TestTheFixSkillFixesTheSameDefectInThePRsOwnLines(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"- Change only what a finding or an external item names, or the same defect in the PR's own lines: " +
-			"the code, or the PR description when a finding or an external item names it, or when one of your fixes makes a line of it untrue (section 5).",
+			"the code, or the PR description when a finding or an external item names it (section 5).",
 		"2. Before you run the specs, look for the same defect in the rest of this PR's own lines (`gh pr diff {number}`): " +
 			"the other members of the set the finding's code belongs to that the PR adds beside it",
 		"(sibling rules, call sites, branches, parallel copies and untested guards of the same kind).",

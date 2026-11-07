@@ -248,12 +248,13 @@ func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.A
 }
 
 // FixDone says that the operator did what the PR's fix loop left them
-// (magnum fix --done, with the attention the registry holds as the one
-// they saw): the PR goes back to reviewed with no review; the screen asked
+// (magnum fix --done, with seen, the digest of the attention the row showed,
+// PRBoardRow.AttentionSum, as the one they saw: one that changed since is
+// refused): the PR goes back to reviewed with no review; the screen asked
 // first.
-func (s *screenActions) FixDone(ctx context.Context, ref string) (tui.ActionResult, error) {
+func (s *screenActions) FixDone(ctx context.Context, ref, seen string) (tui.ActionResult, error) {
 	return s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
-		return fixMain(ctx, c, d, ref, fixOpts{yes: true, done: true})
+		return fixMain(ctx, c, d, ref, fixOpts{yes: true, done: true, seenSum: &seen})
 	})
 }
 

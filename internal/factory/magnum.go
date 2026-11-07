@@ -21,8 +21,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
@@ -415,10 +417,13 @@ const fixNeedMax = 300
 // that directory, so no link leads out of it; "" otherwise), and, when the
 // message asks for what the fixer left (attention.FixAsks: not a cap's or a
 // failed run's), the entries of its "## Needs you" (engine.ParseFixReport,
-// none for a report that does not parse), each clipped and with
-// token-shaped text masked. The entries are the fixer's own words about the
-// PR: the screen only draws them, never as instructions, and nothing writes
-// them to a log, an event or a message.
+// none for a report that does not parse) that the message still asks for
+// (engine.FixNeedsAsked: not one whose thread was resolved or answered
+// before magnum wrote it; none when a count does not say which), each with
+// its control characters as spaces, clipped and with token-shaped text
+// masked. The entries are the fixer's own words about the PR: the screen
+// only draws them, never as instructions, and nothing writes them to a
+// log, an event or a message.
 func (m *magnumRegistry) fixerReport(msg string) (string, []string) {
 	path := attention.FixReport(msg)
 	rel, err := filepath.Rel(m.l.Reviews(), path)
@@ -444,14 +449,30 @@ func (m *magnumRegistry) fixerReport(msg string) (string, []string) {
 	}
 	run, _ := agents.ReportRun(b)
 	rep, err := engine.ParseFixReport(string(b), run)
-	if err != nil || len(rep.NeedsYou) == 0 {
+	if err != nil {
 		return path, nil
 	}
-	needs := make([]string, len(rep.NeedsYou))
-	for i, e := range rep.NeedsYou {
-		needs[i] = textx.Clip(execx.Redact(e), fixNeedMax)
+	asked := engine.FixNeedsAsked(msg, rep.NeedsYou)
+	if len(asked) == 0 {
+		return path, nil
+	}
+	needs := make([]string, len(asked))
+	for i, e := range asked {
+		needs[i] = textx.Clip(execx.Redact(fixerText(e)), fixNeedMax)
 	}
 	return path, needs
+}
+
+// fixerText is s, the fixer's words, with each control character a space,
+// so no escape sequence it copied from the PR's text reaches the screen
+// (whose own cleaning is the last line of defence, not the first).
+func fixerText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // FixLoops counts the fix loops magnum started on a PR: by hand (`magnum

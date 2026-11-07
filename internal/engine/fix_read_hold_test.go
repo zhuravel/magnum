@@ -264,8 +264,12 @@ func TestALoopWhoseOthersWereNotReadSaysSoAtItsEnd(t *testing.T) {
 		msg := deref(pr.LastError)
 		first, _, _ := strings.Cut(msg, "\n")
 		why, alone := attention.Explain(attention.KindFix, msg, "talkable#2"), attention.Explain(attention.KindFix, first, "talkable#2")
-		if why.Cause != alone.Cause || why.Fix != alone.Fix || !slices.Equal(why.NeedsYou, alone.NeedsYou) || !strings.Contains(why.Fix, "magnum fix talkable#2") {
-			t.Errorf("attention = %+v, want the reason of its first line %+v: the unread line must change neither cause nor remedy", why, alone)
+		// The unread line changes the remedy in one step only: `magnum fix --done`, which refuses an
+		// attention with items nobody read, is not offered; `magnum fix` reads them again.
+		const done = "`magnum fix --done talkable#2` once you did all it left (back to reviewed, no review runs); "
+		if why.Cause != alone.Cause || why.Fix != strings.Replace(alone.Fix, done, "", 1) || !strings.Contains(alone.Fix, done) ||
+			!slices.Equal(why.NeedsYou, alone.NeedsYou) || !strings.Contains(why.Fix, "magnum fix talkable#2") {
+			t.Errorf("attention = %+v, want the reason of its first line %+v without --done: the unread line must change neither cause nor the rest of the remedy", why, alone)
 		}
 		if !slices.Contains(why.Tail, unread) {
 			t.Errorf("the attention's detail = %q, want %q", why.Tail, unread)

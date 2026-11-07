@@ -158,6 +158,11 @@ type PRBoardRow struct {
 	LastError   string
 	ErrorFix    string
 	ErrorDetail []string
+	// AttentionSum is a digest of the PR's stored error as the engine wrote
+	// it (its last_error, which LastError explains; "" for none), never
+	// drawn: the board's d sends it as the attention you saw, so `magnum fix
+	// --done` lifts no attention that changed since the row was read.
+	AttentionSum string
 	// AttentionKind is why the engine parked a PR in needs_attention, the
 	// reason kind it recorded (attention.Kind*: failed, overloaded, blocked,
 	// needs_attention, identity_error, identity_leak, fix; inferred from the
@@ -778,7 +783,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
-	r.Fixing = cleanText(r.Fixing)
+	r.Fixing, r.AttentionSum = cleanText(r.Fixing), cleanText(r.AttentionSum)
 	if r.Open != nil {
 		o := *r.Open
 		o.Verdict, o.Why, o.Head = cleanText(o.Verdict), cleanText(o.Why), cleanText(o.Head)

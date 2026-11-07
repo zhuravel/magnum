@@ -67,6 +67,8 @@ type fakeActions struct {
 	queued  []Request
 	answers map[int64]Request
 	asked   [][]int64
+	// seen is the attention the last FixDone sent as the one you saw.
+	seen string
 }
 
 func (f *fakeActions) record(s string) (ActionResult, error) {
@@ -136,7 +138,10 @@ func (f *fakeActions) FixOff(_ context.Context, ref string, off bool) (ActionRes
 	}
 	return f.record("fix --on " + ref)
 }
-func (f *fakeActions) FixDone(_ context.Context, ref string) (ActionResult, error) {
+func (f *fakeActions) FixDone(_ context.Context, ref, seen string) (ActionResult, error) {
+	f.mu.Lock()
+	f.seen = seen
+	f.mu.Unlock()
 	return f.record("fix --done " + ref)
 }
 func (f *fakeActions) OpenWhiteboard(_ context.Context, ref string) (ActionResult, error) {

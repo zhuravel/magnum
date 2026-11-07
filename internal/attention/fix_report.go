@@ -8,6 +8,7 @@ package attention
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -47,4 +48,24 @@ func FixAsks(msg string) bool {
 		return true
 	}
 	return fixYourCallRe.MatchString(line)
+}
+
+// fixDoneFits reports whether `magnum fix --done` (engine fixDone) can lift
+// a fix job's message whose first line is line, with rest under it: line
+// asks for the fixer's calls alone (FixAsks, with none of the loop's own
+// words before them: a re-review that did not post leaves the fixer's
+// pushed head unreviewed, which --done refuses), and nothing is under it
+// (the line that the fixer did not get the other reviewers' items, which
+// --done refuses too, since the fixer may have left more). line may start
+// with the kind ("fix: ") or not, as Explain reads it.
+func fixDoneFits(line, rest string) bool {
+	if strings.TrimSpace(rest) != "" || !FixAsks(line) {
+		return false
+	}
+	line = strings.TrimPrefix(line, KindFix+": ")
+	if prefix, _, _, ok := fixCalls(line); ok {
+		return prefix == ""
+	}
+	loc := fixYourCallRe.FindStringIndex(line)
+	return loc != nil && loc[0] == 0
 }

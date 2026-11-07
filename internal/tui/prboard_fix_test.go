@@ -215,12 +215,17 @@ func TestShiftFTogglesFixOff(t *testing.T) {
 
 // d says you did what a fix loop left you (`magnum fix --done`): on a row
 // that needs attention for the fixer's calls it asks y/N, naming the head
-// whose review stands, and only y sends it; on a row that needs nothing of
-// you, or attention of another kind, it is refused before anything is
-// asked. The card offers it only where it runs, and the help names it.
+// whose review stands, and only y sends it, with the attention the row
+// showed (the digest of its stored error) as the one you saw, so an
+// attention that changed while the question was up is refused; on a row that needs
+// nothing of you, or attention of another kind, it is refused before
+// anything is asked. The card offers it only where it runs, and the help
+// names it.
 func TestDMarksWhatTheFixerLeftDone(t *testing.T) {
+	const sum = "4f1c2a9b7e3d5a60"
 	needs := func(r *PRBoardRow) {
 		r.State, r.AttentionKind, r.LastError = "needs_attention", "fix", "fix: 1 finding needs your call"
+		r.AttentionSum = sum
 	}
 	const ask = "Mark what the fixer left on talkable#5 done: back to reviewed at abcdef1, no review runs?"
 	m, act := fixBoard(t, needs)
@@ -239,6 +244,19 @@ func TestDMarksWhatTheFixerLeftDone(t *testing.T) {
 	}
 	if _, follow := boardAct(t, m, "y"); !slices.Equal(act.calls, []string{"fix --done talkable/talkable#5"}) || !hasMsg[prbDataMsg](follow) {
 		t.Errorf("y called %v, want the --done of the row's ref", act.calls)
+	}
+	if act.seen != sum {
+		t.Errorf("y sent %q as the attention you saw, want the row's %q", act.seen, sum)
+	}
+	// The question stays as it was asked: data read while it is up does not change what y sends.
+	m, later := fixBoard(t, needs)
+	m, _ = send(t, m, keyMsg("d"))
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{actPR(func(r *PRBoardRow) { needs(r); r.AttentionSum = "0000000000000000" })}})
+	if m.confirm == nil {
+		t.Fatal("new data took the question down")
+	}
+	if boardAct(t, m, "y"); later.seen != sum {
+		t.Errorf("y after new data sent %q, want the %q the question was asked on", later.seen, sum)
 	}
 
 	for _, c := range []struct {

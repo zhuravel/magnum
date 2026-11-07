@@ -983,8 +983,11 @@ func TestScreenFixAndFixOff(t *testing.T) {
 
 // The board's d sends `magnum fix --done` as the command does, without
 // asking again (the screen asked): the payload's Done with the attention
-// the registry holds as Seen, and the daemon's answer goes back to the
-// screen.
+// the row showed as Seen (the digest the row carries matches the PR's
+// attention), and the daemon's answer goes back to the screen. When the
+// PR's attention is no longer the one the row showed (a loop that ended
+// while the question was up left new calls you never saw), d is refused and
+// nothing is queued.
 func TestScreenFixDone(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
@@ -997,7 +1000,16 @@ func TestScreenFixDone(t *testing.T) {
 	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, answer) }
 	acts := newScreenActions(h.c)
 	defer acts.Close()
-	res, err := acts.FixDone(context.Background(), "talkable#5")
+	const older = "fix: 1 finding needs your call: /state/reviews/talkable/talkable/5/abc1234def56/claude-fix.md"
+	_, err := acts.FixDone(context.Background(), "talkable#5", attentionSum(older))
+	if err == nil || err.Error() != "PR #5 needs you for something else since you looked: `magnum status talkable#5` says what; nothing changed" {
+		t.Errorf("d on a row read before the attention changed returned %v", err)
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("a changed attention queued %+v", reqs)
+	}
+	rows := boardRowsOf(t, h)
+	res, err := acts.FixDone(context.Background(), "talkable#5", rows[5].AttentionSum)
 	if err != nil || !strings.Contains(res.Text, answer) {
 		t.Fatalf("fix --done returned %q, %v (%s)", res.Text, err, h.errb.String())
 	}
@@ -1006,6 +1018,6 @@ func TestScreenFixDone(t *testing.T) {
 		t.Fatalf("requests = %+v", reqs)
 	}
 	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !p.Done || p.Seen != msg || p.Off || p.On || p.Number != 5 {
-		t.Errorf("payload = %+v", p)
+		t.Errorf("payload = %+v, want Seen the attention the row showed", p)
 	}
 }

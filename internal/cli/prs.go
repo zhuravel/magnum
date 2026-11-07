@@ -407,6 +407,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 			if r.LastError != "" {
+				row.AttentionSum = attentionSum(r.LastError) // the attention the board's d says you saw (fix.go)
 				pr := store.PR{ID: r.PRID, State: r.State, LastError: &r.LastError}
 				extra := strings.TrimPrefix(row.LastError, r.LastError) // "; compare since the last review: …"
 				if why, ok := prAttention(ctx, st, pr, actRefLabel(defaultRepo(cfg), full, r.Number)); ok {

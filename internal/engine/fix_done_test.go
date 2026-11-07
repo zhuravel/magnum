@@ -85,13 +85,18 @@ func TestFixDoneLiftsWhatTheFixerLeftWithoutAReview(t *testing.T) {
 
 // --done is your word about what the fixer left you, and only about that:
 // a PR that needs nothing, an attention of another kind (a round's failure),
-// a fix job's that asks for something else (its cap, a failed run), and one
-// that changed since you looked (Seen) all stay as they are.
+// a fix job's that asks for something else (its cap, a failed run), one
+// whose fixer did not get the other reviewers' items (what it left may not
+// be all: the line under its calls says so), one that changed since you
+// looked (Seen), and one you never saw (a command that showed no attention
+// sends Seen "") all stay as they are.
 func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
+	const unread = "the other reviewers' threads and comments were not read (HTTP 502): `magnum fix talkable/talkable#2` reads them again"
 	for _, tc := range []struct {
-		name string
-		mod  func(h *harness, pr store.PR) string // returns the Seen to send ("" = the PR's last_error)
-		want string
+		name  string
+		mod   func(h *harness, pr store.PR) string // returns the Seen to send ("" = the PR's last_error after mod)
+		blind bool                                 // send Seen "" whatever mod returns: the command showed no attention
+		want  string
 	}{
 		{name: "reviewed", mod: func(h *harness, pr store.PR) string {
 			if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRNeedsAttention}, store.PRReviewed, func(u *store.PRUpdate) {
@@ -119,14 +124,23 @@ func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
 			return ""
 		}, want: "PR #2's fix loop asks for something else than calls you can mark done (3 fix cycles, 1 finding left: 1 new: " +
 			"/state/claude-fix.md): `magnum status talkable/talkable#2` says what"},
+		{name: "the other reviewers' items unread", mod: func(h *harness, pr store.PR) string {
+			setLastError(h, pr, deref(pr.LastError)+"\n"+unread)
+			return ""
+		}, want: "PR #2's fixer did not get every item it had to read, so what it left may not be all: " + unread + "; nothing changed"},
 		{name: "changed since you looked", mod: func(_ *harness, _ store.PR) string {
 			return "fix: 2 findings need your call: /state/older/claude-fix.md"
 		}, want: "PR #2 needs you for something else since you looked: `magnum status talkable/talkable#2` says what; nothing changed"},
+		{name: "never seen", mod: func(_ *harness, _ store.PR) string { return "" }, blind: true,
+			want: "PR #2 needs you for something you did not see: `magnum status talkable/talkable#2` says what; nothing changed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, pr := fixLeftADescription(t)
 			seen := tc.mod(h, pr)
 			before := h.pr(2)
+			if seen == "" && !tc.blind {
+				seen = deref(before.LastError)
+			}
 			id := h.fix(FixPayload{Done: true, Seen: seen})
 			h.handle()
 			if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != tc.want {
@@ -177,13 +191,38 @@ func TestFixDoneRefusesWhileSomethingIsUnknown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, pr := fixLeftADescription(t)
 			tc.mod(h, pr)
-			id := h.fix(FixPayload{Done: true})
+			id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
 			h.handle()
 			if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != tc.want {
 				t.Errorf("%s %q\nwant failed %q", r.State, deref(r.Result), tc.want)
 			}
 			h.wantState(2, store.PRNeedsAttention)
 		})
+	}
+}
+
+// The lift's compare-and-set holds the attention's words it read: a loop's
+// end that writes new calls between fixDone's read and its write (the
+// settle's fixAttention on the same PR) wins, the lift answers that the PR
+// moved on, and nothing of the newer attention changes.
+func TestFixDoneLosesToANewerAttention(t *testing.T) {
+	h, pr := fixLeftADescription(t)
+	msg := deref(pr.LastError)
+	const newer = "fix: 2 findings need your call: /state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+	setLastError(h, pr, newer)
+	_, err := h.e.fixDone(h.ctx, h.repo(), pr, msg, false) // pr is the read before the newer attention
+	if err == nil || err.Error() != "PR #2 moved on while you answered: `magnum status talkable/talkable#2` says what; nothing changed" {
+		t.Fatalf("a lift that read an older attention: %v", err)
+	}
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if deref(cur.LastError) != newer {
+		t.Errorf("last_error = %q, want the newer attention kept", deref(cur.LastError))
+	}
+	if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
+		t.Errorf("the attention's kind = %q, want it kept", kind)
+	}
+	if _, ok := h.fixEvent("fix.acknowledged"); ok {
+		t.Error("the lost lift wrote fix.acknowledged")
 	}
 }
 

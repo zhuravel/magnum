@@ -74,6 +74,13 @@ func TestTheBoardRowCarriesTheAttentionKind(t *testing.T) {
 			t.Errorf("#%d: AttentionKind = %q, want %q", n, got, want)
 		}
 	}
+	// The board's d sends the attention the row showed: a digest of the stored error, none without one.
+	if got, want := rows[12501].AttentionSum, attentionSum("fix: 2 findings need your call: /tmp/fix/claude-fix.md"); got != want || len(got) != 16 {
+		t.Errorf("#12501: AttentionSum = %q, want %q", got, want)
+	}
+	if got := rows[12503].AttentionSum; got != "" {
+		t.Errorf("#12503 has no stored error, AttentionSum = %q", got)
+	}
 	for n, want := range map[int]string{12501: "attention · fix", 12502: "attention · failed"} {
 		if line := boardLine(t, rows, n); !strings.Contains(line, want) {
 			t.Errorf("#%d: board line %q lacks %q", n, line, want)

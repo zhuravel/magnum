@@ -226,8 +226,10 @@ type DashboardActions interface {
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
-	// --done); the board's d, which asked first.
-	FixDone(ctx context.Context, ref string) (ActionResult, error)
+	// --done); the board's d, which asked first. seen is the digest of the
+	// attention the row showed (PRBoardRow.AttentionSum): one that changed
+	// since is refused, not lifted.
+	FixDone(ctx context.Context, ref, seen string) (ActionResult, error)
 	// OpenWhiteboard opens the PR's whiteboard, the Whiteboard session its
 	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
 	// board's w, which refuses a row without one before asking.

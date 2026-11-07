@@ -167,15 +167,22 @@ func TestExplainNamesTheFixerItsReportAndTheRemedies(t *testing.T) {
 // `magnum fix --done` for once you did them all: the PR goes back to
 // reviewed with no review, where a review of the same head only to clear
 // the attention would cost a round. One that asks for something else (a
-// failed run, the cap) does not: nothing there is yours to mark done.
+// failed run, the cap) does not: nothing there is yours to mark done. Nor
+// does one --done refuses: calls after a re-review that did not post (the
+// fixer pushed a head magnum has not reviewed), and calls with the line
+// that the fixer did not get the other reviewers' items under them.
 func TestTheFixersCallsNameFixDone(t *testing.T) {
 	const report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
 	const done = "`magnum fix --done talkable#2` once you did all it left (back to reviewed, no review runs)"
+	const unread = "\nthe other reviewers' threads and comments were not read (HTTP 502): `magnum fix talkable/talkable#2` reads them again"
 	for msg, want := range map[string]bool{
 		"fix: 2 findings need your call: " + report:                                                                 true,
 		"fix: 1 finding needs your call (5808905525 description): " + report:                                        true,
 		"fix run failed: the fixer's push failed: " + report:                                                        false,
 		"5 fix cycles (14 on this PR), 3 findings left: 1 new, 0 missed earlier, 2 fallout of the fixes: " + report: false,
+		"fix loop ended: the re-review did not post (timeout); 2 findings need your call (2101 P1 app/a.rb:42, 2102 P2 app/b.rb:7): " +
+			report: false,
+		"fix: 2 findings need your call: " + report + unread: false,
 	} {
 		if fix := Explain(KindFix, msg, "talkable#2").Fix; strings.Contains(fix, done) != want {
 			t.Errorf("%q\n fix %q\n names --done: %v, want %v", msg, fix, !want, want)

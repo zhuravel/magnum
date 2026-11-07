@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -251,6 +252,83 @@ func needsYouText(entries []string, answered map[string]bool, report, prURL, ref
 		return needsYourCall(entries, report)
 	}
 	return needYourCall(entries) + ": " + report
+}
+
+// fixCountRe reads the count of a fix job's message that only counts what
+// the fixer left the author (needYourCall, the settle's "2 findings need
+// your call: <report>"): findings or conflicts (group 1), and the conflicts
+// after findings (group 2). A message that names them has "(" after "your
+// call", and the older words after calls say "N more", so neither matches.
+var fixCountRe = regexp.MustCompile(`\b(\d+) (?:findings?|conflicts?)(?: and (\d+) conflicts?)? needs? your call: `)
+
+// FixNeedsAsked keeps of entries, the "## Needs you" of the fixer's report
+// that msg (a fix job's message, a PR's last_error) names, those that msg
+// still asks the author for. The settle and the loop's end leave out the
+// entries whose magnum thread is resolved or that the fixer answered
+// (freshNeedsYou, dropFixerAnswered) before they write the message, and its
+// first line names each one left: by its call's link or its comment id in
+// the older words (needsYouNames), a conflict by its paths, and the entries
+// magnum cannot read by their count, whatever the loop's own words before
+// them. A message that only counts them keeps all of entries when it counts
+// them all and none otherwise, since it cannot say which went; one that
+// asks for no call keeps none. The factory screen draws what it keeps.
+func FixNeedsAsked(msg string, entries []string) []string {
+	line := textx.FirstLine(msg)
+	if !attention.FixAsks(line) {
+		return nil
+	}
+	if m := fixCountRe.FindStringSubmatch(line); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		k, _ := strconv.Atoi(cmp.Or(m[2], "0"))
+		if n+k != len(entries) {
+			return nil
+		}
+		return slices.Clone(entries)
+	}
+	var kept []string
+	for _, entry := range entries {
+		n, ok := readNeedsYouEntry(entry)
+		var named bool
+		switch {
+		case !ok:
+			named = strings.Contains(line, " magnum could not read")
+		case n.place == conflictPlace:
+			named = strings.Contains(line, "conflict in "+strings.Join(n.paths[:min(len(n.paths), maxNamedConflictPaths)], ", "))
+		default:
+			named = namesNeedsYouID(line, n.id)
+		}
+		if named {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+// maxNamedConflictPaths is how many paths of a conflict both its call
+// (attention.ConflictCall) and the older words name at least.
+const maxNamedConflictPaths = 20
+
+// namesNeedsYouID reports whether line, a fix job's message, names the
+// entry whose comment id is id: in a call's link ("#discussion_r<id>", not
+// followed by a digit) or in the older words, where an entry's name starts
+// a list or follows a comma ("(<id> P1 …", ", <id> description").
+func namesNeedsYouID(line, id string) bool {
+	for _, before := range []string{"#discussion_r", "(", ", "} {
+		for rest := line; ; {
+			i := strings.Index(rest, before+id)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(before)+len(id):]
+			switch {
+			case before == "#discussion_r" && (rest == "" || rest[0] < '0' || rest[0] > '9'):
+				return true
+			case before != "#discussion_r" && strings.HasPrefix(rest, " "):
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FixCalls are the calls of the findings the fixer of the loop st left to

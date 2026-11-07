@@ -337,7 +337,7 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 	case KindIdentityLeak:
 		return textx.FirstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
 	case KindFix:
-		return fixCause(textx.FirstLine(chain)), fixRemedy(chain, ref)
+		return fixCause(textx.FirstLine(chain)), fixRemedy(chain, output, ref)
 	}
 
 	all := chain + "\n" + output
@@ -453,17 +453,19 @@ func fixCause(line string) string {
 // fixRemedy is the next step of a fix job's attention: the fixer's report
 // when chain names one, with the fixer named by the report's file name (a
 // role's report is <role>.md unless the role sets another output), else
-// the fixer's pane; then, when chain counts the calls the fixer left
-// (FixAsks), `magnum fix --done` for once the author did them all; then
-// `magnum fix` for another loop once the author answered what it left,
-// and `magnum abort` for a loop still running.
-func fixRemedy(chain, ref string) string {
+// the fixer's pane; then, when chain counts the calls the fixer left and
+// --done would take them (fixDoneFits: no loop's words before them, and
+// nothing in output, the lines under chain), `magnum fix --done` for once
+// the author did them all; then `magnum fix` for another loop once the
+// author answered what it left, and `magnum abort` for a loop still
+// running.
+func fixRemedy(chain, output, ref string) string {
 	who, report := "the fixer", lastReport(chain)
 	if report != "" {
 		who = strings.TrimSuffix(filepath.Base(report), ".md")
 	}
 	again := "`magnum fix " + ref + "` runs " + who + " again once you answered what it left; `magnum abort " + ref + "` stops a loop still running"
-	if FixAsks(chain) {
+	if fixDoneFits(chain, output) {
 		again = "`magnum fix --done " + ref + "` once you did all it left (back to reviewed, no review runs); " + again
 	}
 	if report == "" {

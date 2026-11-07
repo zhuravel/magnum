@@ -3187,8 +3187,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck pin the head's own file list and start record,
   the cut file list and the unknown branch.
 
-- **The fixer edits an own PR's description when an item names it or its own fix made a line untrue**
-  (2026-11-07, approved by the operator). An own PR's fix loop ended with one `Needs you` entry that asked the
+- **The fixer edits an own PR's description when a finding or an item names it** (2026-11-07, approved by
+  the operator). An own PR's fix loop ended with one `Needs you` entry that asked the
   operator to change a phrase of the PR body, and the operator edited it on GitHub by hand: the fixer's fix of
   a P3 finding had made that line of the description untrue, but the skill let it edit the description only
   "when a finding names it", so it left the line alone; and the review body's `Description: ✗` finding, which
@@ -3199,21 +3199,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   review markers only, and the factory writes a PR's body once, when it opens the PR. Now the fix prompt says
   that the PR is the operator's own (`FixPromptInput.OwnPR`, from the job's own `ownPR` check, which refuses
   every other PR; a factory PR counts, since the factory opens it as the operator), and only then does the
-  skill edit the description, never the title: for a finding or another reviewer's item that names it (fix
-  when right and unscored, as a simplification, since it changes no code and the bar of 3 would decline every
-  one; one that needs what only the author knows stays the author's) and for a line one of its fixes made
-  untrue. It makes one edit after the push (none when the push failed) on a copy saved beside the report,
+  skill edit the description, never the title, and only for a finding or another reviewer's item that names it
+  (fix when right and unscored, as a simplification, since it changes no code and the bar of 3 would decline
+  every one; one that needs what only the author knows stays the author's). A line one of its fixes made
+  untrue, which nothing names, stays the author's under `Needs you`, as before, which `magnum fix --done`
+  clears once the author changed it. It makes one edit after the push (none when the push failed) on a copy saved beside the report,
   checks with `diff` that only those lines changed, never touches a hidden `<!-- … -->` marker or the block it
   marks (the factory's Known list) nor a template checklist line, and reads the body again right before the
   write: an edit meanwhile starts it over once, then leaves the item to the author, so a hand edit is never
-  reverted. Its reply says what changed ("Fixed: the description now …", or "; the description now …" after
-  the "Fixed in" of the fix that made the line untrue); a fixed `Description: ✗` finding is answered by the
-  report's `description:` line and is no longer under `Needs you`. The skill also says that the PR description
-  is not "anyone else's comment" to a fixer App. Rejected: a REST `PATCH` of the body in place of `gh pr edit`
+  reverted. Its reply says what changed ("Fixed: the description now …"); a fixed `Description: ✗` finding is
+  answered by the report's `description:` line and is no longer under `Needs you`. The skill also says that the
+  PR description is not "anyone else's comment" to a fixer App. A `fix.md` of the operator's own in
+  `prompts_dir` opts in with `{{if .OwnPR}}…{{end}}`, as with `.NotesParts`; one copied before this change has
+  its fixer leave every description item under `Needs you` (the skill before edited it whenever a finding named
+  it), which prompts/README.md and the README say. Rejected: a REST `PATCH` of the body in place of `gh pr edit`
   (it already works for both identities, and the skill and the 2026-10-12 entry name it), an issue comment
   that answers the `Description: ✗` line (the skill posts no summary comment; the report and the
-  `fix.description` event say what changed), and leaving lines a fix made untrue to the re-review (at best it
-  raises them as a new `Description: ✗` finding: one more cycle for a sentence). Tests, failing first:
+  `fix.description` event say what changed), and letting the fixer also change a line its own fix made untrue
+  when no finding or item names it (written first, then dropped after review: it is the fixer acting on its own
+  reading of the PR's text, beyond the rule the operator approved; the operator can still approve it, and until
+  then such a line is the author's, and the re-review may raise it as a `Description: ✗` finding). Tests,
+  failing first:
   TestTheFixPromptOfAnOwnPRLetsTheFixerEditItsDescription,
   TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt,
   TestTheFixJobTellsTheFixerThatThePRIsTheOperatorsOwn.
@@ -3231,17 +3237,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and a `fix.acknowledged` event names the head whose review stands; no round runs and nothing is read from
   GitHub. A person's item never closes on the fixer's word alone, so it closes on yours, and only when what
   you mark done is all there is: an attention that counts the fixer's calls (`attention.FixAsks`; not the cap,
-  a failed run, the look's raise or a round's attention, which ask for something else), the one you saw
-  (`FixPayload.Seen`, the PR's `last_error` when the command asked: a loop that ended meanwhile with new calls
-  is refused), on the head Magnum reviewed, with no loop running and no fix held for later. The attention's
-  next step names it after the report (`fixRemedy`), and the CLI shows the attention before its y/N.
+  a failed run, the look's raise or a round's attention, which ask for something else) with nothing under them
+  (a fixer that did not get the other reviewers' items, whose line `withUnread` puts under the calls, may have
+  left more: `magnum fix <ref>` reads them again first), the one you saw (`FixPayload.Seen`, the PR's
+  `last_error` when the command asked, the row's on the board: a loop that ended meanwhile with new calls is
+  refused, and so is a Seen of "", an attention nobody showed you), on the head Magnum reviewed, with no loop
+  running and no fix held for later; the compare-and-set on the attention's words loses to a loop's end that
+  wrote between the read and the write. The next step of an attention that counts or names the calls names
+  it after the report (`fixRemedy`), only where it can work (no loop's words before the calls: a re-review that
+  did not post leaves the pushed head unreviewed; nothing under them); one with a call per thread lists those
+  calls as its steps instead, and --done takes it all the same. The CLI shows the attention before its y/N.
   Rejected: lifting it when the look sees the named items closed (a description entry or a decision is never
   readable, so the case at hand would still need your word, and the look's ledger holds only its own items'
   keys), a judge-alone review as the intended way (a round, and possibly a posted review, to clear a word
   the operator can give), and making restarts or `autofix = "open"` lift it (both would close calls nobody
   answered). Tests, failing first: TestFixDoneLiftsWhatTheFixerLeftWithoutAReview,
   TestFixDoneRefusesWhatIsNotTheFixersCalls, TestFixDoneRefusesWhileSomethingIsUnknown, TestFixDoneGoesAlone,
-  TestTheFixersCallsNameFixDone, TestFixDoneShowsAsksAndSendsTheAttentionYouSaw.
+  TestTheFixersCallsNameFixDone, TestFixDoneShowsAsksAndSendsTheAttentionYouSaw, and after review
+  TestFixDoneLosesToANewerAttention (the compare-and-set had no test).
 
 ## Screens and commands
 
@@ -4042,13 +4055,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **The board's `d` is `magnum fix --done`** (2026-11-07, asked by the operator). The operator acts on a loop's
   Needs you from the PR board (`f`, `r`), so the word that the fixer's calls are done is a key there too:
   `d` ("fixer's calls done") asks "Mark what the fixer left on talkable#5 done: back to reviewed at a1b2c3d,
-  no review runs?" and sends `magnum fix --done` with the attention the registry holds as the one seen
-  (`DashboardActions.FixDone`). The board refuses it before asking on a row that needs nothing of you or needs
+  no review runs?" and sends `magnum fix --done` with the attention its row showed as the one seen
+  (`DashboardActions.FixDone`'s seen: `PRBoardRow.AttentionSum`, a digest of the stored `last_error` the row's
+  words explain, `attention_sum` in `magnum tui --json`), so an attention that changed while the question was
+  up is refused, not lifted unseen: the CLI compares the digest with the PR's attention before it sends the
+  request, whose Seen then guards the rest. A digest, not the text: the board's sanitizers clean every string
+  a row carries, which would change a stored error with a newline in it, and the row never draws it. The board refuses it before asking on a row that needs nothing of you or needs
   attention of another kind (`actRow.attentionKind`, from `PRBoardRow.AttentionKind`); the daemon decides the
   rest, as for the command. The menu and the card list it, the help says it in one line (the overlay test's
   board is one line taller), and it is not in the key hints, as `F` is not. The status dashboard does not
   offer it: its rows do not know the attention's kind. Tests, failing first: TestDMarksWhatTheFixerLeftDone,
-  TestScreenFixDone.
+  TestScreenFixDone, TestTheBoardRowCarriesTheAttentionKind (the digest).
 
 ## Operations
 
@@ -17263,7 +17280,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     as the remedy names it), read only under magnum's reviews directory through an `os.Root` (a path elsewhere,
     a link out of it, a missing file: none), and, when the message asks for what the fixer left
     (`attention.FixAsks`: the calls, or the findings and conflicts named or counted, after a loop's own words
-    too), the report's `## Needs you` entries (`engine.ParseFixReport`), clipped and with token shapes masked.
+    too), the report's `## Needs you` entries (`engine.ParseFixReport`) that the message still names
+    (`engine.FixNeedsAsked`: the settle and the loop's end leave out an entry whose magnum thread is resolved,
+    or that the fixer answered, before they write it, and name the rest by link, comment id, a conflict's paths
+    or the count of those magnum cannot read; a message that only counts them keeps them all when the count
+    matches and none otherwise), their control characters spaces, clipped and with token shapes masked.
     A cap's or a failed run's message asks for something else: its report's entries are not what the attention
     is about (a failed push lists every committed finding there), so those rows keep magnum's words, and e still
     opens the report.
@@ -17283,9 +17304,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The fixer's entries are its words about the PR, which the engine never reads into a message, an event or a
     toast (`needsYouEntryRe`), and still does not: the screen only draws them (cleaned of escapes and control
     characters, as a PR title), as data, never instructions.
-  Rejected: the entries in magnum's attention message (a message carries no fixer or PR text); dropping the
-  entries magnum found answered since (the settle's counted form names none, so the screen cannot tell which;
-  the report is what the fixer left, and the attention's calls still name each thread); opening the report in
+  Rejected: the entries in magnum's attention message (a message carries no fixer or PR text); drawing every
+  entry of the report (written first: an entry whose thread was resolved before the attention was written then
+  led the row and the count was wrong, so the screen keeps what the message names); opening the report in
   the operator's editor (it is magnum's record of the run: a pager reads it and changes nothing); a card for
   your PR's row (its keys would act on a task that is not there). Tests, failing first:
   TestFixReportIsTheReportAFixMessageNames and TestFixAsksOnlyForWhatTheFixerLeft (neither existed),
@@ -17293,7 +17314,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPublishedTasksFixAttentionSaysWhatTheFixerLeft and TestAnOwnPRsFixAttentionSaysWhatTheFixerLeft (the
   rows said "magnum: fix"), TestAFixAttentionOfACapKeepsMagnumsWordsAndItsReport, TestEOpensTheFixersReportInThePager,
   TestTheHelpAndTheMenuNameTheFixersReport, TestThePagerIsYoursElseLess and TestTaskCardListsWhatTheFixerLeft (no
-  key opened the report, no card listed the items), and the goldens `fixer-100/140/200` and `task-fixer-100/140`.
+  key opened the report, no card listed the items), and the goldens `fixer-100/140/200` and `task-fixer-100/140`;
+  after review, TestFixNeedsAskedKeepsWhatTheAttentionStillAsks and TestTaskCardCleansTheFixersItems (no test
+  held the card's scrub of the items).
 
 ## Learned rules
 

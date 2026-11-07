@@ -186,6 +186,10 @@ type actRow struct {
 	// does), which d checks: only the fixer's calls (kind fix) are yours to
 	// mark done, and the daemon decides the rest.
 	attentionKind string
+	// seen is the digest of the PR's stored error as the screen read it
+	// (PRBoardRow.AttentionSum; "" when it has none, or the screen does not
+	// know), which d sends as the attention you saw.
+	seen string
 	// whiteboard is the head the PR's whiteboard describes
 	// (PRBoardRow.Whiteboard; "" when it has none, or the screen does not
 	// know: only the board offers w), which w's question names.
@@ -713,7 +717,10 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 	case actWhiteboard:
 		return what, on(DashboardActions.OpenWhiteboard)
 	case actFixDone:
-		return what, on(DashboardActions.FixDone)
+		seen := r.seen
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.FixDone(ctx, target, seen)
+		}
 	case actStar:
 		star := !r.starred
 		if !star {
@@ -878,7 +885,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		hold: r.SlotHold, holdSlot: r.Slot, inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != "",
-		attentionKind: r.AttentionKind}
+		attentionKind: r.AttentionKind, seen: r.AttentionSum}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

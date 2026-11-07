@@ -11,6 +11,8 @@ package cli
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +43,10 @@ const fixEventWindow = 200
 type fixOpts struct {
 	off, on, done, wait, dryRun, json, yes bool
 	timeout                                time.Duration // --timeout: stop following after this long (0 = no limit)
+	// seenSum is, with done, the digest of the attention the operator saw
+	// where a screen asked (attentionSum of the board's row); nil = the PR's
+	// last_error, which the command shows before its y/N.
+	seenSum *string
 }
 
 func newFixCmd(c *Context) *cobra.Command {
@@ -76,8 +82,9 @@ func newFixCmd(c *Context) *cobra.Command {
 			"with a note), and --on puts it back; both ask y/N and start no loop. --done says you did what a loop left you "+
 			"(its Needs you, such as a change to the PR's description you made on GitHub): it shows that attention, asks y/N, "+
 			"and the PR goes back from needs attention to reviewed at the head magnum reviewed, with no review and no loop. "+
-			"The daemon refuses it for an attention that is not the fixer's calls (its cap, a failed run, a round's), one that "+
-			"changed since you looked, a head magnum has not reviewed, a loop that runs and a fix held for later. "+
+			"The daemon refuses it for an attention that is not the fixer's calls (its cap, a failed run, a round's), one whose "+
+			"fixer did not get the other reviewers' items (`magnum fix` reads them again), one that changed since you looked, "+
+			"a head magnum has not reviewed, a loop that runs and a fix held for later. "+
 			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
@@ -174,8 +181,12 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		reviewDescribe(ctx, c.Stdout, d, t, label, false, o.dryRun)
 	}
 	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on}
-	if o.done { // the attention you mark done: the daemon refuses one that changed since
+	if o.done { // the attention you mark done: the daemon refuses one that changed since, and one you did not see
 		payload.Done, payload.Seen = true, store.Deref(t.PR.LastError)
+		if o.seenSum != nil && *o.seenSum != attentionSum(payload.Seen) { // the row was read before the attention changed
+			return fixFail(c, o, out, fmt.Errorf("PR #%d needs you for something else since you looked: `magnum status %s` says what; nothing changed",
+				t.PR.Number, label))
+		}
 		if !o.json && payload.Seen != "" {
 			fmt.Fprintln(c.Stdout, "  needs you: "+payload.Seen)
 		}
@@ -223,6 +234,19 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		return 0
 	}
 	return fixFollow(ctx, c, d, t, label, res, start, o, out)
+}
+
+// attentionSum is a digest of a PR's stored error (its last_error) that a
+// screen can carry through its sanitizers unchanged and never draws: the
+// board's d sends it back as the attention you saw (PRBoardRow.AttentionSum),
+// and fixMain refuses --done when the PR's attention no longer has it. ""
+// for none.
+func attentionSum(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(msg))
+	return hex.EncodeToString(sum[:8])
 }
 
 // fixHeldForRestart reports whether the daemon held the fix, through a drain

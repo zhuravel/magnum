@@ -55,6 +55,7 @@ type prsJSONRow struct {
 	ErrorFix         string            `json:"error_fix"`
 	ErrorDetail      []string          `json:"error_detail"`
 	AttentionKind    string            `json:"attention_kind"` // why it needs attention: failed, overloaded, blocked, needs_attention, identity_error, identity_leak, fix; "" otherwise
+	AttentionSum     string            `json:"attention_sum"`  // a digest of the stored error, which the board's d sends to `magnum fix --done`; "" for none
 	RoundsToday      int               `json:"rounds_today"`
 	LastRound        *prsJSONRound     `json:"last_round"`
 	RoundWhy         *prsJSONRoundWhy  `json:"round_why"` // which roles the last round ran and why
@@ -331,7 +332,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Findings: mapPtr(r.Findings, prsJSONFindingsOf), CI: mapPtr(r.CI, prsJSONCIOf),
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
 		Slot: r.Slot, SlotHold: r.SlotHold, Pinned: r.Pinned, Starred: r.Starred, StarredAt: r.StarredAt, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
-		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), AttentionKind: r.AttentionKind, RoundsToday: r.RoundsToday,
+		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), AttentionKind: r.AttentionKind, AttentionSum: r.AttentionSum, RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
 		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, HeldUntil: r.HeldUntil,

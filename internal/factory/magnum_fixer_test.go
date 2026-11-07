@@ -60,7 +60,11 @@ func reportOf(l paths.Layout, n int) string {
 // masked. A cap's report is read for its path alone; a report outside
 // magnum's reviews directory, behind a link that leads out of it, missing,
 // or named by another kind of attention is not read at all; one that does
-// not parse has no entries.
+// not parse has no entries. The entries are those the attention still asks
+// for (engine.FixNeedsAsked): one whose thread the operator resolved while
+// the re-review ran is no longer named, and a count that does not match the
+// report keeps magnum's words (no entries, the report still there). A
+// control character the fixer copied from the PR's text is a space.
 func TestPRStatesReadsTheFixersNeedsYouFromItsReport(t *testing.T) {
 	l, st := magnumLayout(t)
 	ctx := t.Context()
@@ -93,8 +97,15 @@ func TestPRStatesReadsTheFixersNeedsYouFromItsReport(t *testing.T) {
 	writeReport(t, reportOf(l, 15), "the fixer ran out of time\n")
 	fixAttention(t, st, 15, "fix", "fix: 1 finding needs your call: "+reportOf(l, 15))
 
+	resolved := "2102 P2 app/b.rb:7: not fixed. keep the old rate?\x1b]52;c;cm0gLXJmIH4=\x07 or drop it"
+	writeReport(t, reportOf(l, 16), reportText("r-16", needs[1], resolved))
+	fixAttention(t, st, 16, "fix", "fix: 1 finding needs your call (2102 P2 app/b.rb:7): "+reportOf(l, 16))
+
+	writeReport(t, reportOf(l, 17), reportText("r-17", needs...))
+	fixAttention(t, st, 17, "fix", "fix: 1 finding needs your call: "+reportOf(l, 17))
+
 	var refs []PRRef
-	for n := 9; n <= 15; n++ {
+	for n := 9; n <= 17; n++ {
 		refs = append(refs, PRRef{"example/shop", n})
 	}
 	views, err := NewMagnum(l, selfConfig()).PRStates(ctx, refs)
@@ -115,6 +126,14 @@ func TestPRStatesReadsTheFixersNeedsYouFromItsReport(t *testing.T) {
 	}
 	if v := views[refs[6]]; v.FixReport != reportOf(l, 15) || v.FixNeeds != nil {
 		t.Errorf("#15, a report that does not parse: report %q, needs %q, want the report alone", v.FixReport, v.FixNeeds)
+	}
+
+	if v := views[refs[7]]; v.FixReport != reportOf(l, 16) ||
+		!slices.Equal(v.FixNeeds, []string{"2102 P2 app/b.rb:7: not fixed. keep the old rate? ]52;c;cm0gLXJmIH4=  or drop it"}) {
+		t.Errorf("#16, 2101 resolved since: report %q, needs %q, want 2102 alone, its control characters spaces", v.FixReport, v.FixNeeds)
+	}
+	if v := views[refs[8]]; v.FixReport != reportOf(l, 17) || v.FixNeeds != nil {
+		t.Errorf("#17, 1 of 2 counted: report %q, needs %q, want the report alone", v.FixReport, v.FixNeeds)
 	}
 
 	own, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)

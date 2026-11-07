@@ -8,15 +8,19 @@ package engine
 // only its own raise (fix_open_needs.go). A person's item never closes on
 // the fixer's word, so it closes on yours: the lift takes only the fixer's
 // calls (attention.FixAsks; not its cap, a failed run, the look's raise or a
-// round's attention), only the attention you saw (FixPayload.Seen), only on
-// the head magnum reviewed, and never while a loop runs or a fix is held,
-// whose end could leave you something new.
+// round's attention), and only when they are all there is (no line under
+// them: a fixer that did not get the other reviewers' items, withUnread,
+// may have left more), only the attention you saw (FixPayload.Seen; one you
+// did not see, Seen "", is refused), only on the head magnum reviewed, and
+// never while a loop runs or a fix is held, whose end could leave you
+// something new.
 
 import (
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/store"
@@ -30,8 +34,8 @@ const fixDoneBy = "magnum fix --done"
 // needs_attention back to reviewed under the refusals above, with one
 // compare-and-set on the head, the reviewed head and the attention's words
 // it read, and drops the attention's rows. seen is the attention the
-// operator saw ("" = whatever the PR's is now); a dry run answers what it
-// would do.
+// operator saw, which must be the PR's now ("" = they saw none); a dry run
+// answers what it would do.
 func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen string, dry bool) (string, error) {
 	ref, msg := repo.FullName()+"#"+fmt.Sprint(pr.Number), deref(pr.LastError)
 	look := "`magnum status " + ref + "` says what"
@@ -42,11 +46,17 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 		return "", fmt.Errorf("PR #%d needs attention for %s, not for what the fixer left you: %s",
 			pr.Number, cmp.Or(kind, "a reason magnum did not record"), look)
 	}
+	_, under, _ := strings.Cut(msg, "\n")
 	switch reviewed := deref(pr.ReviewedSHA); {
 	case !attention.FixAsks(msg):
 		return "", fmt.Errorf("PR #%d's fix loop asks for something else than calls you can mark done (%s): %s",
 			pr.Number, oneLine(msg, 200), look)
-	case seen != "" && seen != msg:
+	case strings.TrimSpace(under) != "":
+		return "", fmt.Errorf("PR #%d's fixer did not get every item it had to read, so what it left may not be all: %s; nothing changed",
+			pr.Number, oneLine(under, 300))
+	case seen == "":
+		return "", fmt.Errorf("PR #%d needs you for something you did not see: %s; nothing changed", pr.Number, look)
+	case seen != msg:
 		return "", fmt.Errorf("PR #%d needs you for something else since you looked: %s; nothing changed", pr.Number, look)
 	case reviewed != pr.HeadSHA:
 		return "", fmt.Errorf("PR #%d's head %s is not the one magnum reviewed (%s): its review comes first; nothing changed",

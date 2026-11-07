@@ -8418,6 +8418,19 @@ func FixCalls(st FixState, prURL, ref string) []attention.FixCall
     only for the resolution, as the settle's toast said: no thread is read again
     here. None for entries magnum cannot read so.
 
+func FixNeedsAsked(msg string, entries []string) []string
+    FixNeedsAsked keeps of entries, the "## Needs you" of the fixer's report
+    that msg (a fix job's message, a PR's last_error) names, those that
+    msg still asks the author for. The settle and the loop's end leave out
+    the entries whose magnum thread is resolved or that the fixer answered
+    (freshNeedsYou, dropFixerAnswered) before they write the message, and its
+    first line names each one left: by its call's link or its comment id in the
+    older words (needsYouNames), a conflict by its paths, and the entries magnum
+    cannot read by their count, whatever the loop's own words before them.
+    A message that only counts them keeps all of entries when it counts them
+    all and none otherwise, since it cannot say which went; one that asks for no
+    call keeps none. The factory screen draws what it keeps.
+
 func GitHubOpWords(op string) string
     GitHubOpWords is op in the words `magnum status` shows: an engine label
     in plain words ("round.setup": "round setup"), a call's own kind as it is
@@ -27544,8 +27557,10 @@ type DashboardActions interface {
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
-	// --done); the board's d, which asked first.
-	FixDone(ctx context.Context, ref string) (ActionResult, error)
+	// --done); the board's d, which asked first. seen is the digest of the
+	// attention the row showed (PRBoardRow.AttentionSum): one that changed
+	// since is refused, not lifted.
+	FixDone(ctx context.Context, ref, seen string) (ActionResult, error)
 	// OpenWhiteboard opens the PR's whiteboard, the Whiteboard session its
 	// record names, in Whiteboard Desktop (magnum whiteboard --open); the
 	// board's w, which refuses a row without one before asking.
@@ -28095,6 +28110,11 @@ type PRBoardRow struct {
 	LastError   string
 	ErrorFix    string
 	ErrorDetail []string
+	// AttentionSum is a digest of the PR's stored error as the engine wrote
+	// it (its last_error, which LastError explains; "" for none), never
+	// drawn: the board's d sends it as the attention you saw, so `magnum fix
+	// --done` lifts no attention that changed since the row was read.
+	AttentionSum string
 	// AttentionKind is why the engine parked a PR in needs_attention, the
 	// reason kind it recorded (attention.Kind*: failed, overloaded, blocked,
 	// needs_attention, identity_error, identity_leak, fix; inferred from the
