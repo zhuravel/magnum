@@ -535,7 +535,7 @@ func TestRolesPrintsADashForTheRunsOfAFixRole(t *testing.T) {
 		t.Fatal("the built-in defaults have no fix role")
 	}
 	var buf bytes.Buffer
-	rolesRender(&buf, cfg, []rolesGroup{{Roles: []config.Role{fix}}})
+	rolesRender(&buf, cfg, []rolesGroup{{Roles: []config.Role{fix}}}, false)
 	for line := range strings.SplitSeq(buf.String(), "\n") {
 		if f := strings.Fields(line); len(f) > 3 && f[0] == fix.Name {
 			if f[2] != "-" {
@@ -545,4 +545,119 @@ func TestRolesPrintsADashForTheRunsOfAFixRole(t *testing.T) {
 		}
 	}
 	t.Fatalf("no row for %s:\n%s", fix.Name, buf.String())
+}
+
+// rolesRows maps the first word of each line of out to the line's words,
+// joined by one space.
+func rolesRows(out string) map[string]string {
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if fs := strings.Fields(line); len(fs) > 0 {
+			rows[fs[0]] = strings.Join(fs, " ")
+		}
+	}
+	return rows
+}
+
+// The factory's roles take the spend level as the review roles do, and
+// `magnum roles` shows them after the watches' roles, under the same spend
+// line: the level's notch on the built-in efforts and its table's model. A
+// --repo selects one watch's review roles and leaves them out; --factory
+// prints them alone, and with --json keyed like config.toml.
+func TestRolesPrintsTheFactoryRolesAtTheirSpendLevel(t *testing.T) {
+	f := newRolesFixture(t)
+	path := filepath.Join(f.Home, "config.toml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(b), "[pipeline]\n", "[pipeline]\nspend = \"high\"\n", 1) +
+		"\n[spend.high]\nfx-judge = { model = \"fable\" }\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("roles"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	out := f.Out.String()
+	if n := strings.Count(out, "spend: "); n != 1 {
+		t.Errorf("spend named %d times, want once:\n%s", n, out)
+	}
+	groups := rolesGroups(out)
+	names := groups[rolesFactoryHeader]
+	if len(names) != len(config.DefaultFactoryRoles()) || !slices.Contains(names, "fx-judge") || slices.Contains(names, "codex-judge") {
+		t.Fatalf("factory group = %v, want the %d factory roles alone:\n%s", names, len(config.DefaultFactoryRoles()), out)
+	}
+	if strings.Index(out, rolesFactoryHeader) < strings.LastIndex(out, "  fallback judge: ") {
+		t.Errorf("the factory group is not after the watches:\n%s", out)
+	}
+	rows := rolesRows(out)
+	for role, want := range map[string]string{
+		"fx-judge":   "fx-judge claude fable xhigh factory-judge.md (embedded) weighing the findings",
+		"fx-history": "fx-history claude - xhigh factory-history.md (embedded) reading the history",
+		"fx-critic":  "fx-critic codex - xhigh factory-critic.md (embedded) criticizing the plan",
+		"fx-writer":  "fx-writer claude opus xhigh factory-writer.md (embedded) writing the change",
+	} {
+		if rows[role] != want {
+			t.Errorf("%s row = %q, want %q", role, rows[role], want)
+		}
+	}
+
+	if code := f.run("roles", "--repo", "talkable/talkable"); code != 0 {
+		t.Fatalf("--repo exit %d: %s", code, f.Err.String())
+	}
+	if strings.Contains(f.Out.String(), "fx-judge") {
+		t.Errorf("--repo printed the factory roles:\n%s", f.Out.String())
+	}
+
+	if code := f.run("roles", "--factory"); code != 0 {
+		t.Fatalf("--factory exit %d: %s", code, f.Err.String())
+	}
+	out = f.Out.String()
+	actContains(t, out, "prompts_dir: "+f.Home+"/prompts; spend: high\n", rolesFactoryHeader+"\n")
+	if strings.Contains(out, "\nwatch ") || strings.Contains(out, "codex-judge") {
+		t.Errorf("--factory printed the watches' roles:\n%s", out)
+	}
+
+	if code := f.run("roles", "--factory", "--json"); code != 0 {
+		t.Fatalf("--factory --json exit %d: %s", code, f.Err.String())
+	}
+	var roles []map[string]any
+	if err := json.Unmarshal(f.Out.Bytes(), &roles); err != nil {
+		t.Fatalf("%v\n%s", err, f.Out.String())
+	}
+	byName := map[string]map[string]any{}
+	for _, r := range roles {
+		byName[r["name"].(string)] = r
+	}
+	if j := byName["fx-judge"]; len(roles) != len(config.DefaultFactoryRoles()) || j["model"] != "fable" || j["effort"] != "xhigh" ||
+		j["doing"] != "weighing the findings" || j["prompt_source"] != "embedded" {
+		t.Errorf("--factory --json: %d roles, fx-judge = %v", len(roles), j)
+	}
+
+	for _, args := range [][]string{{"roles", "--factory", "--repo", "talkable/talkable"}, {"roles", "--factory", "--kinds"}} {
+		if code := f.run(args[0], args[1:]...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+}
+
+// `magnum config` names the spend level the review and the factory roles
+// run at, each kind whose own level differs too, and where to see the
+// models it gives them.
+func TestConfigNamesTheSpendLevelOfTheReviewAndFactoryRoles(t *testing.T) {
+	f := newRolesFixture(t)
+	path := filepath.Join(f.Home, "config.toml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(b), "[pipeline]\n", "[pipeline]\nspend = \"high\"\n", 1) + "\n[kinds.codex]\nspend = \"low\"\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("config"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	actContains(t, f.Out.String(), "spend:   high (codex: low) for the review and the factory roles; `magnum roles` shows their models and efforts\n")
 }

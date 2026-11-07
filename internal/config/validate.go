@@ -870,11 +870,11 @@ func (c *Config) judgeFallbackErrs(where, name string, w *Watch) []error {
 }
 
 // validateSpend checks [pipeline] spend and the [spend.<level>] tables: a
-// level's name is short and lower case, a table names only built-in roles
-// and declared [[role]]s (by name; the loader's unknown-key refusal covers
-// the keys), and spend, [pipeline]'s and each kind's, names a built-in level
-// or a declared one. A table for a level no spend names is checked too: it is
-// declared for later.
+// level's name is short and lower case, a table names only built-in roles,
+// declared [[role]]s and the factory's roles (by name; the loader's
+// unknown-key refusal covers the keys), and spend, [pipeline]'s and each
+// kind's, names a built-in level or a declared one. A table for a level no
+// spend names is checked too: it is declared for later.
 func (c *Config) validateSpend() []error {
 	var errs []error
 	builtins := DefaultRoles()
@@ -888,8 +888,8 @@ func (c *Config) validateSpend() []error {
 		}
 		for _, name := range slices.Sorted(maps.Keys(c.SpendLevels[level])) {
 			named := func(r Role) bool { return r.Name == name }
-			if !slices.ContainsFunc(c.roles(), named) && !slices.ContainsFunc(builtins, named) {
-				errs = append(errs, fmt.Errorf("spend.%s: unknown role %q (name a built-in role or a declared [[role]])", level, name))
+			if !slices.ContainsFunc(c.roles(), named) && !slices.ContainsFunc(builtins, named) && !slices.ContainsFunc(c.Factory.Roles, named) {
+				errs = append(errs, fmt.Errorf("spend.%s: unknown role %q (name a built-in role, a declared [[role]] or a [[factory.role]])", level, name))
 			}
 		}
 	}

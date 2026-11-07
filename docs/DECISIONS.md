@@ -16647,6 +16647,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestPathRefusesWhatIsNotAGitHubRepoOrAPRNumber, TestWriteKeepsTheFileAndItsFoldersPrivate,
   TestReadOfAMissingFileIsAbsent, TestAStagingNameThatIsNotASlugIsWrittenWithoutAName and the others; the
   package did not exist).
+- **The factory's roles take the spend level as the review roles do** (2026-11-07, the factory audit's
+  self-learning report, item F6; amends "A spend level can set models and efforts per role, and levels can be
+  the operator's own"). `applySpend` ran over `Config.Roles` only, so whatever level the operator set, the
+  factory's agents ran on their built-in efforts and five of them on the CLI's default model: the operator's
+  level `high` moved claude-review to opus (its table) and left fx-repro, fx-history, fx-points, fx-scope and
+  fx-liaison where they were. Now `buildPipeline` applies each factory role's level (its kind's, else
+  `[pipeline] spend`: `Config.SpendLevel`) to `Factory.Roles` with the same `applySpend`, the built-in factory
+  roles (`DefaultFactoryRoles`) being the ones the notch reaches, and the keys the operator's
+  `[[factory.role]]` blocks set (`Config.factorySet`, marked by `mergeFactory` for every layer but the
+  embedded defaults) winning over it. A `[spend.<level>]` table may name a factory role
+  (`fx-judge = { model = "fable" }`); validation takes any name of `Factory.Roles` beside the review roles.
+  This is the mechanism only: no built-in level gains an entry for a factory role, so under `medium`, and
+  under any level whose table names none, every factory role runs the model it ran before (opus for fx-judge
+  and fx-writer, the CLI's default for the rest); which entries the built-in levels get is the operator's
+  decision. Under `high` the notch now raises the factory's built-in efforts to `xhigh`, as it does the review
+  roles'; a `[[factory.role]]` block's `effort` keeps one where it is. `magnum roles` lists the factory's roles
+  after the watches' (name, kind, model, effort, prompt, doing; `--repo` leaves them out, `--factory` prints
+  them alone, `--factory --json` keyed like config.toml; the watch groups' JSON is unchanged), and `magnum
+  config`, which showed no role at all, names the level they run at and points at `magnum roles`
+  (`spend:   high (codex: low) for the review and the factory roles; ...`). Rejected: a `[factory] spend` level of its own (a third place to look, and the kinds'
+  levels already say "Codex low, Claude high" for both daemons); applying the tables only, without the notch
+  (two meanings of one level); the factory roles in the settings screen's spend grid (its own change, with
+  its plan and commit code). Tests, failing first: TestTheSpendLevelsNotchReachesTheFactoryRoles,
+  TestASpendLevelTableSetsAFactoryRolesModel, TestRolesPrintsTheFactoryRolesAtTheirSpendLevel and
+  TestConfigNamesTheSpendLevelOfTheReviewAndFactoryRoles; TestTheDefaultConfigKeepsEveryFactoryRolesModel
+  holds every factory role's model and effort under the default config, before and after.
 
 ## Learned rules
 

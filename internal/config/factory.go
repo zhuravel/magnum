@@ -75,7 +75,10 @@ type Factory struct {
 	// of that watch.
 	Repos []FactoryRepo `toml:"repo"`
 	// Roles are the factory's agents ([[factory.role]]): session roles that
-	// each carry a why and a doing (Role.Why, Role.Doing).
+	// each carry a why and a doing (Role.Why, Role.Doing). After Load they
+	// hold the spend level of their kind as the review roles do: its notch
+	// on the built-in roles' efforts and its [spend.<level>] table
+	// (applySpend).
 	Roles []Role `toml:"role"`
 	// CodexFallback maps a factory role that runs on Codex to the factory
 	// role of the Claude kind that takes its work after a Codex refusal. The
@@ -433,12 +436,20 @@ func (r FactoryRepo) Pool() Pool {
 // tables as written) in c.Factory, whole; prev is c.Factory as it was. The
 // repositories are appended, the roles override by name key by key, the kinds
 // of task by name, the three tables entry by entry, and [factory.local_review]
-// key by key. See Factory.
-func (c *Config) mergeFactory(md toml.MetaData, prev, src Factory, rawRoles []map[string]any) {
+// key by key. See Factory. The keys a role block of a layer that is not the
+// embedded defaults (builtin) sets are the operator's (factorySet): the
+// spend level's notch leaves them alone (buildPipeline).
+func (c *Config) mergeFactory(md toml.MetaData, prev, src Factory, rawRoles []map[string]any, builtin bool) {
 	f := &c.Factory
 	f.Repos = append(slices.Clone(prev.Repos), src.Repos...)
 	roles := prev.Roles
 	for i, r := range src.Roles {
+		if !builtin && i < len(rawRoles) {
+			if c.factorySet == nil {
+				c.factorySet = map[string]map[string]bool{}
+			}
+			markKeys(c.factorySet, r.Name, rawRoles[i])
+		}
 		if j := slices.IndexFunc(roles, func(x Role) bool { return x.Name == r.Name }); j >= 0 {
 			roles[j] = mergeRole(roles[j], r, rawRoles, i)
 		} else {

@@ -829,7 +829,9 @@ func readLayerData(file string, data []byte, builtin bool, md toml.MetaData, kin
 // each role's spend level (its kind's spend, else [pipeline] spend:
 // SpendLevel): its notch mapping to the efforts of the built-in roles that
 // no block of the operator's set, and its [spend.<level>] table over them
-// (applySpend).
+// (applySpend). The factory's roles (Factory.Roles, merged by
+// overlayFactory) take their spend level the same way, the built-in factory
+// roles being theirs.
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
 	builtins := DefaultRoles()
@@ -839,12 +841,7 @@ func (c *Config) buildPipeline(base, over *layer) {
 		if l.builtin || i >= len(l.raw) {
 			return
 		}
-		if set[name] == nil {
-			set[name] = map[string]bool{}
-		}
-		for k := range l.raw[i] {
-			set[name][k] = true
-		}
+		markKeys(set, name, l.raw[i])
 	}
 	for _, l := range []*layer{base, over} {
 		if l == nil {
@@ -881,6 +878,18 @@ func (c *Config) buildPipeline(base, over *layer) {
 	c.Kinds = kinds
 	c.unspent, c.spendSet = slices.Clone(roles), set
 	c.Roles = applySpend(c.SpendLevel, c.SpendLevels, roles, builtins, set)
+	c.Factory.Roles = applySpend(c.SpendLevel, c.SpendLevels, c.Factory.Roles, DefaultFactoryRoles(), c.factorySet)
+}
+
+// markKeys records in set the keys raw, a [[role]] or [[factory.role]] table
+// as written, sets on the role name.
+func markKeys(set map[string]map[string]bool, name string, raw map[string]any) {
+	if set[name] == nil {
+		set[name] = map[string]bool{}
+	}
+	for k := range raw {
+		set[name][k] = true
+	}
 }
 
 // BaseRole is the role named name as the layers set it (the built-in role,

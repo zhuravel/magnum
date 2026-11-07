@@ -4699,10 +4699,11 @@ type Config struct {
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 	// SpendLevels are the [spend.<level>] tables, by level name, then role
-	// name: the keys a level of [pipeline] spend sets on a role. A level that
-	// is not low, medium or high is the operator's own. Load merges the user
-	// config's tables into the base's level by level, role by role and key
-	// by key, and Roles already holds the active level's keys (applySpend).
+	// name: the keys a level of [pipeline] spend sets on a role, a review
+	// [[role]] or a [[factory.role]]. A level that is not low, medium or
+	// high is the operator's own. Load merges the user config's tables into
+	// the base's level by level, role by role and key by key, and Roles and
+	// Factory.Roles already hold the active level's keys (applySpend).
 	SpendLevels map[string]map[string]SpendRole `toml:"spend"`
 
 	// Layout is filled by Load; it is not part of the file.
@@ -5389,7 +5390,10 @@ type Factory struct {
 	// of that watch.
 	Repos []FactoryRepo `toml:"repo"`
 	// Roles are the factory's agents ([[factory.role]]): session roles that
-	// each carry a why and a doing (Role.Why, Role.Doing).
+	// each carry a why and a doing (Role.Why, Role.Doing). After Load they
+	// hold the spend level of their kind as the review roles do: its notch
+	// on the built-in roles' efforts and its [spend.<level>] table
+	// (applySpend).
 	Roles []Role `toml:"role"`
 	// CodexFallback maps a factory role that runs on Codex to the factory
 	// role of the Claude kind that takes its work after a Codex refusal. The

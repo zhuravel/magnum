@@ -233,7 +233,8 @@ func newConfigCmd(c *Context) *cobra.Command {
 	return newCommand(groupInspect, "config", "validate config.toml and render every prompt file; print the resolved paths",
 		"Validate the configuration (the built-in defaults with your ~/.config/magnum/config.toml over them), render every prompt file the "+
 			"roles name with this binary's template data, and print the resolved checkout, config, data, state and "+
-			"judge skill paths with the number of watches, identities and pools. Fix whatever it reports before installing "+
+			"judge skill paths with the number of watches, identities and pools, and the spend level of the review and the "+
+			"factory roles (`magnum roles` shows each one's model and effort). Fix whatever it reports before installing "+
 			"or restarting the daemon: `magnum daemon-restart` and `magnum install` run this command with the binary "+
 			"that will run (bin/magnum) and refuse when it fails, and the daemon refuses to start on the same errors.",
 		func([]string) int {
@@ -249,6 +250,7 @@ func newConfigCmd(c *Context) *cobra.Command {
 			skill := config.SkillPath(c.Config.JudgeFor(nil).Skill, c.Layout)
 			fmt.Fprintf(c.Stdout, "checkout: %s\nconfig:   %s\ndata:     %s\nstate:    %s\nskill:    %s\nwatches: %d  identities: %d  pools: %d\nprompts: %d renders ok\n",
 				checkout, configSources(c.Config, configFileInUse(c), c.Layout), c.Layout.Data(), c.Layout.State(), skill, len(c.Config.Watches), len(c.Config.Identities), len(c.Config.Pools), n)
+			fmt.Fprintf(c.Stdout, "spend:   %s for the review and the factory roles; `magnum roles` shows their models and efforts\n", rolesSpend(c.Config))
 			for _, w := range c.Config.Warnings() {
 				fmt.Fprintln(c.Stderr, "warning:", w)
 			}

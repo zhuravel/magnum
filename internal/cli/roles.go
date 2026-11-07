@@ -18,11 +18,14 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const rolesUsage = "[--repo owner/name] [--kinds] [--json]"
+const rolesUsage = "[--repo owner/name] [--kinds] [--factory] [--json]"
+
+// rolesFactoryHeader is the line above the factory's roles.
+const rolesFactoryHeader = "factory: the agents of `magnum factory` ([[factory.role]])"
 
 type rolesOpts struct {
-	repo        string
-	kinds, json bool
+	repo                 string
+	kinds, factory, json bool
 }
 
 func newRolesCmd(c *Context) *cobra.Command {
@@ -32,14 +35,17 @@ func newRolesCmd(c *Context) *cobra.Command {
 			"runs, model, effort, the rounds one session serves (max_session_rounds), capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
 			"provides it), the roles it runs after, the judge and the aliases --role accepts, then the fallback judge that takes over a PR "+
 			"the judge's kind refuses ([pipeline] judge_fallback as it resolves for the watch); the first line names prompts_dir and "+
-			"the spend level, with each kind whose own [kinds.<name>] spend differs. --repo shows the roles "+
-			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
-			"login check, the resume, model, effort, subagents, MCP-off and name args, the session source and the command line each "+
-			"role starts with. --json prints the resolved roles (or kinds) as JSON keyed like config.toml.",
+			"the spend level, with each kind whose own [kinds.<name>] spend differs. The factory's roles ([[factory.role]]) follow "+
+			"the watches, at the same spend levels: name, kind, model, effort, prompt and what the agent does. --repo shows "+
+			"the review roles of the watch covering one repository, --factory the factory's roles alone. --kinds prints the "+
+			"[kinds.<name>] specs instead: wrapper mode, login check, the resume, model, effort, subagents, MCP-off and name "+
+			"args, the session source and the command line each role starts with. --json prints the resolved roles (or kinds, "+
+			"or with --factory the factory's roles) as JSON keyed like config.toml.",
 		func(pos []string) int { return runRoles(c, o, pos) })
 	fs := cmd.Flags()
 	fs.StringVar(&o.repo, "repo", "", "only the watch covering this repository (owner/name or name)")
 	fs.BoolVar(&o.kinds, "kinds", false, "print the agent kinds ([kinds.<name>]) instead of the roles")
+	fs.BoolVar(&o.factory, "factory", false, "print the factory's roles ([[factory.role]]) alone")
 	fs.BoolVar(&o.json, "json", false, "print JSON")
 	_ = cmd.RegisterFlagCompletionFunc("repo", completeFlag(c.completeRepos))
 	return cmd
@@ -61,8 +67,18 @@ func runRoles(c *Context, o rolesOpts, pos []string) int {
 		return 1
 	}
 	cfg := c.Config
+	if o.factory && (o.kinds || o.repo != "") {
+		return inspUsage(c, "roles", "--factory prints the factory's roles; it takes neither --repo nor --kinds", rolesUsage)
+	}
 	if o.kinds {
 		return rolesKinds(c, cfg, o)
+	}
+	if o.factory {
+		if o.json {
+			return rolesFactoryJSON(c, cfg)
+		}
+		rolesRender(c.Stdout, cfg, nil, true)
+		return 0
 	}
 	var groups []rolesGroup
 	switch {
@@ -84,7 +100,7 @@ func runRoles(c *Context, o rolesOpts, pos []string) int {
 	if o.json {
 		return rolesJSON(c, cfg, groups)
 	}
-	rolesRender(c.Stdout, cfg, groups)
+	rolesRender(c.Stdout, cfg, groups, o.repo == "")
 	return 0
 }
 
@@ -179,7 +195,9 @@ func rolesSpend(cfg *config.Config) string {
 	return spend + " (" + strings.Join(own, ", ") + ")"
 }
 
-func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
+// rolesRender prints the header line, each group's review roles and, when
+// factory, the factory's roles last.
+func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup, factory bool) {
 	// The header: where the prompts come from and the spend level the roles'
 	// models and efforts follow (the MODEL and EFFORT columns show the result).
 	dir, prompts := cfg.Pipeline.PromptsDir, ""
@@ -230,6 +248,45 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 		}
 		fmt.Fprintln(w, rolesFallbackLine(cfg, g.Watch))
 	}
+	if factory {
+		rolesFactoryRender(w, cfg)
+	}
+}
+
+// rolesFactoryRender prints the factory's roles as their spend level
+// resolves them (config.Config.Factory.Roles): what the agent runs on and
+// what it does.
+func rolesFactoryRender(w io.Writer, cfg *config.Config) {
+	fmt.Fprintf(w, "\n%s\n", rolesFactoryHeader)
+	if len(cfg.Factory.Roles) == 0 {
+		fmt.Fprintln(w, "  no roles")
+		return
+	}
+	tw := inspTable(w)
+	fmt.Fprintln(tw, "  NAME\tKIND\tMODEL\tEFFORT\tPROMPT\tDOING")
+	for _, r := range cfg.Factory.Roles {
+		prompt, src := rolesPrompt(cfg, r)
+		if src != "" {
+			prompt += " (" + src + ")"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", r.Name, r.Kind, inspOrDash(r.Model), inspOrDash(r.Effort), prompt, inspOrDash(r.Doing))
+	}
+	tw.Flush()
+}
+
+// rolesFactoryJSON prints the factory's roles as JSON keyed like
+// config.toml, each with its prompt's source.
+func rolesFactoryJSON(c *Context, cfg *config.Config) int {
+	out := make([]json.RawMessage, 0, len(cfg.Factory.Roles))
+	for _, r := range cfg.Factory.Roles {
+		_, src := rolesPrompt(cfg, r)
+		out = append(out, tomlJSON(r, "prompt_source", src))
+	}
+	if err := writeJSON(c.Stdout, out); err != nil {
+		fmt.Fprintln(c.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 // rolesFallbackLine names the judge that takes over a PR of watch w (nil: a

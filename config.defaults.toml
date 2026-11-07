@@ -485,9 +485,12 @@ spend = "medium"                  # the spend level: how hard, and on which mode
                                   #   [spend.low]
                                   #   claude-review = { model = "sonnet", effort = "medium" }
                                   # A kind's own spend (spend in [kinds.codex] below, or any kind's) takes this
-                                  # one's place for that kind's roles.
-                                  # Read at startup: `magnum daemon-restart --drain` applies a change; `magnum
-                                  # roles` shows the models and efforts
+                                  # one's place for that kind's roles. The factory's roles ([[factory.role]]
+                                  # below) take their level the same way: the notch on the built-in ones and the
+                                  # level's table, which may name them (fx-judge = { model = "fable" }).
+                                  # Read at startup: `magnum daemon-restart --drain` applies a change (`magnum
+                                  # factory install` for the factory's roles); `magnum roles` shows the models
+                                  # and efforts
 status_comment = false            # true: one comment on each PR magnum means to review, posted as the PR's
                                   # posting identity (the one the reviews use) and edited in place: a checklist
                                   # (Review queued for the head and why it waits, In progress, Posted) that
@@ -872,6 +875,9 @@ chore = ["upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"
 #   on_permission_prompt = "wait"   # deny | wait, over the kind's: an agent that asks you questions itself
 #                                   # (Claude Code's AskUserQuestion shows a Yes/No question as a permission
 #                                   # prompt) is never answered No by magnum; "" = the kind's
+# The roles take the spend level of their kind as the review roles do ([pipeline] spend above): its notch on the
+# efforts below that your own [[factory.role]] block does not set, and its [spend.<level>] table, which may name
+# a factory role. `magnum roles` shows the models and efforts they run with.
 
 [[factory.role]]
 name = "fx-repro"

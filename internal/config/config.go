@@ -87,10 +87,11 @@ type Config struct {
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 	// SpendLevels are the [spend.<level>] tables, by level name, then role
-	// name: the keys a level of [pipeline] spend sets on a role. A level that
-	// is not low, medium or high is the operator's own. Load merges the user
-	// config's tables into the base's level by level, role by role and key
-	// by key, and Roles already holds the active level's keys (applySpend).
+	// name: the keys a level of [pipeline] spend sets on a role, a review
+	// [[role]] or a [[factory.role]]. A level that is not low, medium or
+	// high is the operator's own. Load merges the user config's tables into
+	// the base's level by level, role by role and key by key, and Roles and
+	// Factory.Roles already hold the active level's keys (applySpend).
 	SpendLevels map[string]map[string]SpendRole `toml:"spend"`
 
 	// Layout is filled by Load; it is not part of the file.
@@ -116,6 +117,10 @@ type Config struct {
 	// with which RolesAtLevel applies another level (buildPipeline).
 	unspent  []Role
 	spendSet map[string]map[string]bool
+	// factorySet is the keys the operator's [[factory.role]] blocks set, by
+	// role name (mergeFactory; never the embedded defaults' blocks): an
+	// explicit key wins over the spend level's notch there too.
+	factorySet map[string]map[string]bool
 	// judgeFallbackSet: a file Load read (a base file or the user layer,
 	// not the built-in defaults) writes [pipeline] judge_fallback, so its
 	// value is validated as written; without it the built-in default
@@ -888,7 +893,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	}
 	decoded := cfg.Factory
 	cfg.Factory = DefaultFactory()
-	cfg.overlayFactory(md, decoded, fxRoles)
+	cfg.overlayFactory(md, decoded, fxRoles, data != nil)
 	cfg.Sources = []string{name}
 	var over *layer
 	if user := layout.UserConfig; user != "" && (opts.UserData != nil || fsx.Exists(user)) && !opts.NoOverlay {
@@ -961,18 +966,19 @@ func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
 	}
-	c.overlayFactory(md, o.Factory, fxRoles)
+	c.overlayFactory(md, o.Factory, fxRoles, false)
 	return l, nil
 }
 
 // overlayFactory lays one layer's [factory] (src, decoded from the layer
-// whose metadata is md; rawRoles are its [[factory.role]] tables as written)
-// over c.Factory: every key the layer defines replaces the value
+// whose metadata is md; rawRoles are its [[factory.role]] tables as written;
+// builtin says the layer is the embedded config.defaults.toml) over
+// c.Factory: every key the layer defines replaces the value
 // (overlaySection), and mergeFactory then puts back what merges instead.
-func (c *Config) overlayFactory(md toml.MetaData, src Factory, rawRoles []map[string]any) {
+func (c *Config) overlayFactory(md toml.MetaData, src Factory, rawRoles []map[string]any, builtin bool) {
 	prev := c.Factory
 	overlaySection(md, "factory", &c.Factory, &src)
-	c.mergeFactory(md, prev, src, rawRoles)
+	c.mergeFactory(md, prev, src, rawRoles, builtin)
 }
 
 // UserSum is the SHA-256 of the user layer's bytes as Load read them (the
