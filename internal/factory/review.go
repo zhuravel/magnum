@@ -784,10 +784,11 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 // reviewed, and untracked files, one by one, that the listing taken before
 // cycle n (untrackedBeforeFile) does not have and that are no tracked
 // change's path (a file the round took out of the index goes back as
-// tracked), which the writer's `git add -A` would commit. Files are
-// compared, never git status's entries, which group a directory's files
-// once and not once the round stages one of them. Nothing of it is removed
-// here.
+// tracked: unindexed), which the writer's `git add -A` would commit. A
+// tracked change whose path the listing names was the copy's untracked file
+// that the round added to the index (unstage). Files are compared, never git
+// status's entries, which group a directory's files once and not once the
+// round stages one of them. Nothing of it is removed here.
 func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (roundLeftovers, error) {
 	var left roundLeftovers
 	git := e.d.Git
@@ -825,6 +826,14 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	untracked, err := git.UntrackedFiles(ctx, c.Path)
 	if err != nil {
 		return left, err
+	}
+	for _, p := range left.tracked {
+		switch {
+		case listedBefore(before, p): // the copy's untracked file, which the round only added to the index
+			left.unstage = append(left.unstage, p)
+		case slices.Contains(untracked, p): // out of the index, still in the work tree
+			left.unindexed = append(left.unindexed, p)
+		}
 	}
 	left.added = slices.DeleteFunc(untracked, func(p string) bool { return listedBefore(before, p) || slices.Contains(left.tracked, p) })
 	return left, nil

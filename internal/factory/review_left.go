@@ -52,10 +52,15 @@ const leftStepPaths = 10
 // result from being read (roundLeft): tracked changes, the untracked files,
 // one by one, that the listing taken before the round lacks, and moved, the
 // copy off the task's branch or the branch at another head than the round
-// reviewed ("" for neither).
+// reviewed ("" for neither). Of the tracked changes, unstage are the copy's
+// untracked files from before the round that the round added to the index
+// (only the index goes back for them, never the file), and unindexed the
+// files the round took out of the index and left in the work tree (git's
+// patch of them is a deletion: their files are saved too).
 type roundLeftovers struct {
-	tracked, added []string
-	moved          string
+	tracked, added     []string
+	unstage, unindexed []string
+	moved              string
 }
 
 // none reports whether the round left the copy as it found it.
@@ -95,7 +100,8 @@ func roundName(round, n int) string {
 // a cycle with no start fails the guard), asked before the save and again
 // before the put-back. Each is saved first in the task's directory
 // (saveLeft: round-<n>-left.patch, round-<n>-left/), then the tracked paths
-// go back as HEAD has them and the new files are removed (putBackLeft), with
+// go back as HEAD has them (the index only, for a file from before the
+// round) and the new files are removed (putBackLeft), with
 // begin, ok and fail events that name the counts and the saved files, and
 // the copy is looked at again (roundLeft): back as the round found it,
 // whatever git answered, an info event says so. A save that fails, or a
@@ -105,7 +111,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	error) {
 	ctx = context.WithoutCancel(ctx)
 	if left.moved != "" {
-		return e.leftWait(ctx, t, c, cy, round, left, "")
+		return e.leftWait(t, c, cy, round, left, "")
 	}
 	name := roundName(round, cy.N)
 	guard := func() string {
@@ -116,7 +122,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	}
 	if who := guard(); who != "" {
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(ctx, t, c, cy, round, left, "the factory put none of it back: "+who)
+		return e.leftWait(t, c, cy, round, left, "the factory put none of it back: "+who)
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	base := leftName(dir, cy.N)
@@ -134,12 +140,12 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	if err != nil {
 		line := clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240)
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
-		return e.leftWait(ctx, t, c, cy, round, left, "the factory could not save it, so it put none of it back: "+line)
+		return e.leftWait(t, c, cy, round, left, "the factory could not save it, so it put none of it back: "+line)
 	}
 	if who := guard(); who != "" {
 		undo() // the copy still has all of it
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(ctx, t, c, cy, round, left, "the factory put none of it back: "+who)
+		return e.leftWait(t, c, cy, round, left, "the factory put none of it back: "+who)
 	}
 	perr := putBackLeft(ctx, e.d.Git, c.Path, left)
 	line := ""
@@ -150,14 +156,14 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
 	switch {
 	case err != nil && perr != nil:
-		return e.leftWait(ctx, t, c, cy, round, left, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.leftWait(t, c, cy, round, left, "the factory saved it to "+saved+" but could not put it back: "+line)
 	case err != nil:
 		return "", err
 	case !now.none() && perr != nil:
-		return e.leftWait(ctx, t, c, cy, round, now, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.leftWait(t, c, cy, round, now, "the factory saved it to "+saved+" but could not put it back: "+line)
 	case !now.none():
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("after the put-back of what %s left, %s still has %s", name, c.Name, now))
-		return e.leftWait(ctx, t, c, cy, round, now, "the factory saved what it found to "+saved+" and put it back, and the copy still has this")
+		return e.leftWait(t, c, cy, round, now, "the factory saved what it found to "+saved+" and put it back, and the copy still has this")
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("put back what %s left in %s as the round found it, saved to %s", name,
 		c.Name, saved))
@@ -169,40 +175,71 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 // leftWait is the wait for you over what round `round` (cycle cy) left in
 // task t's copy c (left) that the factory did not put back, and why not:
 // the steps that put the copy back (the tracked paths restored as HEAD has
-// them, every tracked change of the copy past leftStepPaths, and the new
-// files removed), then the retry. A step names at most leftStepPaths new
-// files and how many more; an event of the review then names them all. A
-// copy off the task's branch or at another head is yours to put back as the
-// round found it.
-func (e *Engine) leftWait(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, why string) (string,
+// them, the index only for a file from before the round, and the new files
+// removed), then the retry. A step over more than leftStepPaths paths takes
+// them from a file in the task's directory that lists exactly them
+// (round-<n>-<step>.paths, NUL-separated: git's --pathspec-from-file, xargs
+// -0); one that cannot be written names leftStepPaths of them and how many
+// more. A copy off the task's branch or at another head is yours to put back
+// as the round found it.
+func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, why string) (string,
 	error) {
 	if left.moved != "" {
 		return fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; put the copy back as the round found it "+
 			"(%s at %s, no tracked change, no new untracked file), then let the task go on", round, left, t.Branch, short(cy.HeadBefore)), nil
 	}
-	var steps []string
-	if n := len(left.tracked); n > 0 {
-		paths := shellArgs("", left.tracked)
-		if n > leftStepPaths {
-			paths = ":/" // every tracked change in the copy is one the round left
-		}
-		steps = append(steps, "`git -C "+execx.ShellQuote(c.Path)+" restore --staged --worktree -- "+paths+"`")
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	more := func(n int) string {
+		return fmt.Sprintf(" and %d more (`git -C %s status` names them)", n-leftStepPaths, execx.ShellQuote(c.Path))
 	}
+	var steps []string
+	restore := func(opts string, paths []string, list string) {
+		cmd := "git -C " + execx.ShellQuote(c.Path) + " --literal-pathspecs restore " + opts
+		switch file, err := pathsFile(dir, cy.N, list, paths); {
+		case len(paths) == 0:
+		case len(paths) <= leftStepPaths:
+			steps = append(steps, "`"+cmd+" -- "+shellArgs("", paths)+"`")
+		case err == nil:
+			steps = append(steps, "`"+cmd+" --pathspec-from-file="+execx.ShellQuote(file)+" --pathspec-file-nul`")
+		default:
+			steps = append(steps, "`"+cmd+" -- "+shellArgs("", paths[:leftStepPaths])+"`"+more(len(paths)))
+		}
+	}
+	restore("--staged --worktree", slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return slices.Contains(left.unstage, p) }),
+		"restore")
+	restore("--staged", left.unstage, "unstage")
 	if n := len(left.added); n > 0 {
 		rm := "rm --"
 		if slices.ContainsFunc(left.added, func(p string) bool { return strings.HasSuffix(p, "/") }) {
 			rm = "rm -r --" // a repository inside the copy
 		}
-		step := "`" + rm + " " + shellArgs(c.Path, left.added[:min(n, leftStepPaths)]) + "`"
-		if n > leftStepPaths {
-			step += fmt.Sprintf(" and %d more (the review's events name them all)", n-leftStepPaths)
-			e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("the %s %s left in %s: %s", plural(n, "new untracked file"),
-				roundName(round, cy.N), c.Name, strings.Join(left.added, ", ")))
+		abs := make([]string, n)
+		for i, p := range left.added {
+			abs[i] = filepath.Join(c.Path, filepath.FromSlash(p))
 		}
-		steps = append(steps, step)
+		switch file, err := pathsFile(dir, cy.N, "remove", abs); {
+		case n <= leftStepPaths:
+			steps = append(steps, "`"+rm+" "+shellArgs("", abs)+"`")
+		case err == nil:
+			steps = append(steps, "`xargs -0 "+rm+" < "+execx.ShellQuote(file)+"`")
+		default:
+			steps = append(steps, "`"+rm+" "+shellArgs("", abs[:leftStepPaths])+"`"+more(n))
+		}
 	}
 	return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s): %s, then "+
 		"`magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch, short(cy.HeadBefore), strings.Join(steps, " and "), t.ID), nil
+}
+
+// pathsFile writes paths, NUL-separated, to round-<n>-<list>.paths in the
+// task's directory dir when there are more than leftStepPaths of them (a
+// step of the wait then reads them from it), and returns its path; "" for
+// fewer.
+func pathsFile(dir string, n int, list string, paths []string) (string, error) {
+	if len(paths) <= leftStepPaths {
+		return "", nil
+	}
+	file := filepath.Join(dir, fmt.Sprintf("round-%d-%s.paths", n, list))
+	return file, fsx.WriteFileAtomic(file, []byte(strings.Join(paths, "\x00")+"\x00"), 0o600)
 }
 
 // shellArgs is paths under dir ("" for as they are), each quoted for a
@@ -242,7 +279,7 @@ func savedAs(base string, left roundLeftovers) string {
 	if len(left.tracked) > 0 {
 		out = append(out, base+".patch")
 	}
-	if len(left.added) > 0 {
+	if len(left.added)+len(left.unindexed) > 0 {
 		out = append(out, base+"/")
 	}
 	return strings.Join(out, " and ")
@@ -251,8 +288,9 @@ func savedAs(base string, left roundLeftovers) string {
 // saveLeft saves what a round left in the copy at copyDir (left) before it
 // goes back, in the task's directory dir: the tracked paths' changes as one
 // patch against HEAD (gitx.DiffHead) in <base>.patch, and each new untracked
-// file, a regular file only (fsx.ReadRegularIn: read through an os.Root of
-// the copy), at its path under <base>/, within leftFileLimit,
+// file and each file the round took out of the index, a regular file only
+// (fsx.ReadRegularIn: read through an os.Root of the copy), at its path
+// under <base>/, within leftFileLimit,
 // leftMaxFiles and leftMaxBytes. Every write is atomic. undo removes what it
 // wrote, and a save that fails removes it itself: the copy still has all of
 // it.
@@ -271,8 +309,9 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 			remove()
 		}
 	}()
-	if len(left.added) > leftMaxFiles {
-		return nil, fmt.Errorf("%d new files, more than the %d the factory saves", len(left.added), leftMaxFiles)
+	files := slices.Concat(left.added, left.unindexed)
+	if len(files) > leftMaxFiles {
+		return nil, fmt.Errorf("%d new files, more than the %d the factory saves", len(files), leftMaxFiles)
 	}
 	if len(left.tracked) > 0 {
 		patch, err := git.DiffHead(ctx, copyDir, left.tracked...)
@@ -284,7 +323,7 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 		}
 		madePatch = true
 	}
-	if len(left.added) == 0 {
+	if len(files) == 0 {
 		return remove, nil
 	}
 	src, err := os.OpenRoot(copyDir)
@@ -302,7 +341,7 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 	}
 	defer dst.Close()
 	var total int64
-	for _, f := range left.added {
+	for _, f := range files {
 		limit := min(leftFileLimit, leftMaxBytes-total)
 		b, err := fsx.ReadRegularIn(src, f, limit)
 		switch {
@@ -325,18 +364,31 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 }
 
 // putBackLeft puts the copy at copyDir back as a round found it (left): the
-// tracked paths as HEAD has them (gitx.RestoreTracked), then the new
-// untracked files removed through an os.Root of the copy, with each of their
-// directories this empties, deepest first. A directory that still holds
-// anything (a file git ignores, a tracked file) stays.
+// tracked paths as HEAD has them (gitx.RestoreTracked), but for the files
+// from before the round that the round added to the index, which go back
+// out of the index only (gitx.RestoreIndex). Then the new untracked files
+// that git still lists once the tracked files are back (a file git ignored
+// before the round that its change of the ignore rules showed stays) are
+// removed through an os.Root of the copy, with each of their directories
+// this empties, deepest first. A directory that still holds anything (a
+// file git ignores, a tracked file) stays.
 func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left roundLeftovers) error {
-	if len(left.tracked) > 0 {
-		if err := git.RestoreTracked(ctx, copyDir, left.tracked...); err != nil {
+	if full := slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return slices.Contains(left.unstage, p) }); len(full) > 0 {
+		if err := git.RestoreTracked(ctx, copyDir, full...); err != nil {
+			return err
+		}
+	}
+	if len(left.unstage) > 0 {
+		if err := git.RestoreIndex(ctx, copyDir, left.unstage...); err != nil {
 			return err
 		}
 	}
 	if len(left.added) == 0 {
 		return nil
+	}
+	still, err := git.UntrackedFiles(ctx, copyDir)
+	if err != nil {
+		return err
 	}
 	root, err := os.OpenRoot(copyDir)
 	if err != nil {
@@ -345,6 +397,9 @@ func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left rou
 	defer root.Close()
 	dirs := map[string]bool{}
 	for _, f := range left.added {
+		if _, ok := slices.BinarySearch(still, f); !ok {
+			continue
+		}
 		if err := root.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}

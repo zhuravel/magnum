@@ -100,3 +100,35 @@ func TestUntrackedFilesListsANewDirectoryFileByFile(t *testing.T) {
 		t.Fatal("an empty path was taken")
 	}
 }
+
+// RestoreIndex puts the index back as HEAD has it for the paths and leaves
+// the work tree: a file the index got only now (`git add`, `git add -N`)
+// is untracked again with its content, and no path is refused.
+func TestRestoreIndexKeepsTheWorkTreesFile(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(okRule("git", "-C", slot, "restore"))
+	if err := c.RestoreIndex(ctx, slot, "probe/old.rb"); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, f, 0, true, "git", "-C", slot, "restore", "--source=HEAD", "--staged", "--", ":(top,literal)probe/old.rb")
+	if err := c.RestoreIndex(ctx, slot); err == nil {
+		t.Fatal("a restore of no path was taken")
+	}
+
+	fx := newFixture(t)
+	fx.write(fx.clone, "probe/old.rb", "yours\n")
+	fx.write(fx.clone, "notes.txt", "yours too\n")
+	fx.git(fx.clone, "add", "--", "probe/old.rb")
+	fx.git(fx.clone, "add", "-N", "--", "notes.txt")
+	if err := fx.c.RestoreIndex(ctx, fx.clone, "probe/old.rb", "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if st := fx.git(fx.clone, "status", "--porcelain"); st != "?? notes.txt\n?? probe/" && st != "?? notes.txt\n?? probe/\n" {
+		t.Fatalf("status after RestoreIndex:\n%s", st)
+	}
+	for rel, want := range map[string]string{"probe/old.rb": "yours\n", "notes.txt": "yours too\n"} {
+		if b, _ := os.ReadFile(filepath.Join(fx.clone, rel)); string(b) != want {
+			t.Fatalf("%s = %q, want %q", rel, b, want)
+		}
+	}
+}

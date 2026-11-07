@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -172,7 +173,7 @@ func TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem(t *testing.
 			task, _ := r.reviewTask("PR-12392")
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
-			restore := "git -C " + r.copyDir + " restore --staged --worktree -- README"
+			restore := "git -C " + r.copyDir + " --literal-pathspecs restore --staged --worktree -- README"
 			rm := "rm -- " + filepath.Join(r.copyDir, "spec/probe_spec.rb")
 			retry := fmt.Sprintf("magnum factory retry %d", task.ID)
 			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
@@ -261,14 +262,16 @@ func TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou(t *testing.T) {
 // the directory before the round and as itself once the round stages a new
 // file beside it, stays in the copy, unsaved and unnamed, while the staged
 // file goes back. A listing an older build took by git status entry (the
-// directory) keeps it too.
+// directory) keeps it too, and cannot tell the staged file from the copy's
+// own either: it goes back out of the index only, and stays.
 func TestAFileFromBeforeTheRoundSurvivesThePutBack(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		listing string // the listing before the round as an older build wrote it ("" for this build's)
+		stays   bool   // the round's staged file stays in the copy, untracked
 	}{
-		{"this build's listing, file by file", ""},
-		{"an older build's listing, by git status entry", `["probe/"]`},
+		{"this build's listing, file by file", "", false},
+		{"an older build's listing, by git status entry", `["probe/"]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var task registry.Task
@@ -288,8 +291,11 @@ func TestAFileFromBeforeTheRoundSurvivesThePutBack(t *testing.T) {
 			if got := r.read("probe/old.rb"); got != "yours, from before the round\n" {
 				t.Fatalf("probe/old.rb is %q", got)
 			}
-			if r.inCopy("probe/new_spec.rb") || !strings.Contains(r.readTask(task.ID, "round-1-left.patch"), "probe/new_spec.rb") {
-				t.Fatal("the staged probe is not put back and saved")
+			if r.inCopy("probe/new_spec.rb") != tc.stays || !strings.Contains(r.readTask(task.ID, "round-1-left.patch"), "probe/new_spec.rb") {
+				t.Fatalf("the staged probe in the copy: %v, want %v; or it is not saved", r.inCopy("probe/new_spec.rb"), tc.stays)
+			}
+			if st := r.git(r.copyDir, "status", "--porcelain"); st != "?? probe/" {
+				t.Fatalf("status after the put-back:\n%s", st)
 			}
 			if r.saved(task.ID, "round-1-left") {
 				t.Fatal("the factory saved a file from before the round")
@@ -321,8 +327,8 @@ func TestAPutBackNeverRemovesATrackedFileItRestored(t *testing.T) {
 	if st := r.git(r.copyDir, "status", "--porcelain"); st != "?? app/old_probe.rb" {
 		t.Fatalf("status after the put-back:\n%s", st)
 	}
-	if r.saved(task.ID, "round-1-left") {
-		t.Fatal("the factory saved a tracked file or a file from before the round as new")
+	if r.saved(task.ID, "round-1-left/app/old_probe.rb") {
+		t.Fatal("the factory saved a file from before the round")
 	}
 }
 
@@ -410,27 +416,129 @@ func TestAPutBackThatGitCallsFailedButThatPutTheCopyBackGoesOn(t *testing.T) {
 	}
 }
 
-// The wait for you names at most ten paths in each step and how many more
-// there are; the review's event names them all.
-func TestTheWaitOverManyLeftoversNamesAFewAndTheEventAll(t *testing.T) {
+// The wait for you over more than ten paths in a step names a file in the
+// task's directory that lists exactly them (NUL-separated): the round's
+// tracked changes for `git restore --pathspec-from-file`, the new files for
+// `xargs -0 rm`, never every tracked change of the copy nor an event that
+// lists them all. Its steps, run as they are written, put the copy back.
+func TestTheWaitOverManyLeftoversNamesFilesThatListThem(t *testing.T) {
 	r := leavingRig(t, func(r *reviewRig, dir string) {
 		for i := range 12 {
+			r.put(dir, fmt.Sprintf("spec/staged_%02d_spec.rb", i), "a staged probe\n")
 			r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n")
+		}
+		r.gitIn(dir, "add", "--", "spec")
+		for i := range 12 {
+			r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n") // the add took them; these are new again
+			r.gitIn(dir, "rm", "--quiet", "--cached", "--", fmt.Sprintf("spec/probe_%02d_spec.rb", i))
 		}
 		r.rt.setOperatorIn("fx-writer")
 	})
 	task, _ := r.reviewTask("PR-12399")
 	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "spec/probe_09_spec.rb") ||
-		strings.Contains(got.WaitsWhat, "spec/probe_10_spec.rb") || !strings.Contains(got.WaitsWhat, "and 2 more") {
-		t.Fatalf("task %s waits %q; want ten probes named and 2 more", got.State, got.WaitsWhat)
+	dir := r.layout.FactoryTaskDir(task.ID)
+	restore, remove := filepath.Join(dir, "round-1-restore.paths"), filepath.Join(dir, "round-1-remove.paths")
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "--pathspec-from-file="+restore) ||
+		!strings.Contains(got.WaitsWhat, "xargs -0 rm -- < "+remove) || strings.Contains(got.WaitsWhat, ":/") {
+		t.Fatalf("task %s waits %q; want the steps over %s and %s", got.State, got.WaitsWhat, restore, remove)
 	}
-	var all bool
+	var staged, probes []string
+	for i := range 12 {
+		staged = append(staged, fmt.Sprintf("spec/staged_%02d_spec.rb", i))
+		probes = append(probes, filepath.Join(r.copyDir, fmt.Sprintf("spec/probe_%02d_spec.rb", i)))
+	}
+	if b, _ := os.ReadFile(restore); string(b) != strings.Join(staged, "\x00")+"\x00" {
+		t.Fatalf("%s lists %q", restore, b)
+	}
+	if b, _ := os.ReadFile(remove); string(b) != strings.Join(probes, "\x00")+"\x00" {
+		t.Fatalf("%s lists %q", remove, b)
+	}
 	for _, ev := range r.events(task.ID, "review") {
-		all = all || strings.Contains(ev.Text, "spec/probe_00_spec.rb") && strings.Contains(ev.Text, "spec/probe_11_spec.rb")
+		if strings.Count(ev.Text, "_spec.rb") > 10 {
+			t.Fatalf("an event lists them all: %q", ev.Text)
+		}
 	}
-	if !all {
-		t.Fatal("no review event names every path")
+	for _, m := range regexp.MustCompile("`([^`]*)`").FindAllStringSubmatch(got.WaitsWhat, -1) {
+		if strings.HasPrefix(m[1], "magnum ") {
+			continue
+		}
+		if _, err := r.real.Run(r.ctx, execx.Cmd{Name: "/bin/sh", Args: []string{"-c", m[1]}}); err != nil {
+			t.Fatalf("the step %q: %v", m[1], err)
+		}
+	}
+	if st := r.git(r.copyDir, "status", "--porcelain"); st != "" {
+		t.Fatalf("status after the steps:\n%s", st)
+	}
+}
+
+// A file from before the round that the round staged (`git add -A`, `git
+// add -N`) goes back to untracked with its content: only the index is put
+// back for it, never the file, though it is a tracked change now. The
+// task goes on.
+func TestARoundThatStagesAFileFromBeforeItLeavesTheFileInTheCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		add  []string
+	}{
+		{"git add -A", []string{"add", "-A"}},
+		{"git add -N", []string{"add", "-N", "--", "probe/old.rb"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, func(r *reviewRig, dir string) { r.gitIn(dir, tc.add...) })
+			task, _ := r.reviewTask("PR-12400")
+			r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
+			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+				t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+			}
+			if got := r.read("probe/old.rb"); got != "yours, from before the round\n" {
+				t.Fatalf("probe/old.rb is %q", got)
+			}
+			if st := r.git(r.copyDir, "status", "--porcelain"); st != "?? probe/" {
+				t.Fatalf("status after the put-back:\n%s", st)
+			}
+		})
+	}
+}
+
+// A file the round took out of the index and then changed has the round's
+// change saved under round-<n>-left/ before the branch's file goes back:
+// git's patch of it is only a deletion.
+func TestARoundsEditToAFileItTookOutOfTheIndexIsSavedFirst(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.gitIn(dir, "rm", "--quiet", "--cached", "--", "app/credit.rb")
+		r.put(dir, "app/credit.rb", "a reviewer's mutant\n")
+	})
+	task, _ := r.reviewTask("PR-12401")
+	credit := r.read("app/credit.rb")
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+	}
+	if got := r.read("app/credit.rb"); got != credit {
+		t.Fatalf("app/credit.rb is %q, want the branch's", got)
+	}
+	if got := r.readTask(task.ID, "round-1-left/app/credit.rb"); got != "a reviewer's mutant\n" {
+		t.Fatalf("the round's change saved as %q", got)
+	}
+}
+
+// A file git ignored before the round stays when the round changed the
+// ignore rules: the put-back removes only the new files git still lists
+// once the tracked files are back.
+func TestAPutBackNeverRemovesAnIgnoredFileTheRoundUnignored(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) { r.put(dir, ".gitignore", "") })
+	task, _ := r.reviewTask("PR-12402")
+	r.write(r.copyDir, "tmp/cache.log", "yours, ignored\n")
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
+	}
+	if got := r.read("tmp/cache.log"); got != "yours, ignored\n" {
+		t.Fatalf("tmp/cache.log is %q", got)
+	}
+	if got := r.read(".gitignore"); got != "tmp/\n" {
+		t.Fatalf(".gitignore is %q", got)
 	}
 }

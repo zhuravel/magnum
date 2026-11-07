@@ -155,6 +155,20 @@ func (c *Client) RestoreTracked(ctx context.Context, dir string, paths ...string
 	return err
 }
 
+// RestoreIndex puts paths back in the index of the work tree at dir as HEAD
+// has them (`git restore --source=HEAD --staged`), and leaves their files in
+// the work tree as they are: a file the index got only since HEAD (`git
+// add`, `git add -N`) is untracked again, with its content.
+func (c *Client) RestoreIndex(ctx context.Context, dir string, paths ...string) error {
+	specs, err := literal(paths)
+	if err != nil {
+		return fmt.Errorf("gitx: restore --staged: %w", err)
+	}
+	_, err = c.git(ctx, dir, call{label: "restore --source HEAD --staged", mutates: true, timeout: commitTimeout},
+		append([]string{"restore", "--source=HEAD", "--staged", "--"}, specs...)...)
+	return err
+}
+
 // BranchesUnder lists the local branches of repo under prefix, one or more
 // path segments ending in "/" ("learn/"), by their short names, sorted: the
 // skill editor's orphan cleanup finds the branches no proposal holds.

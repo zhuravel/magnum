@@ -16482,6 +16482,12 @@ func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...stri
     files as the commit before it had them. At least one path; nothing else in
     the work tree changes.
 
+func (c *Client) RestoreIndex(ctx context.Context, dir string, paths ...string) error
+    RestoreIndex puts paths back in the index of the work tree at dir as HEAD
+    has them (`git restore --source=HEAD --staged`), and leaves their files in
+    the work tree as they are: a file the index got only since HEAD (`git add`,
+    `git add -N`) is untracked again, with its content.
+
 func (c *Client) RestoreTracked(ctx context.Context, dir string, paths ...string) error
     RestoreTracked puts paths (relative to the top of the work tree at dir) back
     as HEAD has them, in the index and the work tree (`git restore --source=HEAD
