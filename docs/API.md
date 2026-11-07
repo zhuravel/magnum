@@ -1153,6 +1153,13 @@ type Deps struct {
 	// in place of the posting identity's (see paneEnv); nil = no identities,
 	// so such a pane keeps the env it was given.
 	IdentityEnv func(name string) (env map[string]string, ok bool)
+	// FixerEnv is the git environment a fix role's pane gets beside its
+	// identity's (identity.FixerGitEnv, laid over by paneEnv): for a
+	// dedicated fixer App, its bot as the commits' author and committer,
+	// commits unsigned and a plain `git push` to github.com refused, all as
+	// process env and never as a git config write; nil for a gh identity,
+	// whose pane keeps the operator's git setup. nil = none.
+	FixerEnv func(identity string) map[string]string
 	// Toast shows the operator a toast (key dedupes it, title and body say
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
@@ -1968,6 +1975,11 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
         started or became live too close to capturedAt (LostGrace).
+
+func (m *Manager) PaneEnv(env map[string]string, role config.Role) (map[string]string, error)
+    PaneEnv is the env role's pane gets from env (paneEnv): the fix job compares
+    it with the env its live fixer pane was made with, to renew a pane made for
+    another identity.
 
 func (m *Manager) Park(ctx context.Context, pr store.PR) error
     Park releases a PR's panes while keeping its conversations resumable. It
@@ -8684,6 +8696,10 @@ type Agents interface {
 	// never parks hard, and returns the sessions it parked beside the
 	// failures of the others.
 	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
+	// PaneEnv is the env a pane of role gets from env: the fix job compares
+	// it with the env of a live fixer pane, made for another identity
+	// (fixRenewPane).
+	PaneEnv(env map[string]string, role config.Role) (map[string]string, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
 	// and lost sessions that no starting or live session of the PR or of
 	// another PR records, after every park that worked and a session
@@ -15703,6 +15719,15 @@ func Env(mutates bool) map[string]string
     that does not mutate, no optional locks. Code that runs git outside gitx
     should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
 
+func EnvConfig(environ []string, key string) (string, bool)
+    EnvConfig is the value environ's GIT_CONFIG_COUNT pairs give key,
+    as git reads them (the first GIT_CONFIG_COUNT pairs of GIT_CONFIG_KEY_<n>
+    and GIT_CONFIG_VALUE_<n>, the last pair of the key winning, the key compared
+    without case, as git compares a key without a subsection); ok is false
+    when no pair sets it. gitx replaces the pairs with its own (hooksOff),
+    so a command that must keep one of the caller's, as `magnum fix-sync` keeps
+    a fixer App pane's commit.gpgsign, reads it here and passes it with -c.
+
 func GitHubHTTPSURL(owner, repo string) string
     GitHubHTTPSURL is the https clone URL of github.com/<owner>/<repo>.
 
@@ -16081,16 +16106,18 @@ func (c *Client) ReplayConflicts(ctx context.Context, dir, onto, rev string) ([]
     conflict leaves nothing to abort. An error for a commit with no parent,
     for revisions git does not know and for an answer it cannot read.
 
-func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string) ([]string, error)
+func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string, config ...string) ([]string, error)
     ReplayOnto replays the commits from..HEAD of the checkout at dir (a detached
     HEAD, or a branch, which then moves) onto onto (`git rebase --onto onto
     from`): only those, as RebaseOnto, and no other branch moves with them
     (--no-update-refs). Unlike RebaseOnto's, the commits are signed as the
-    repository's config says: the fixer, whose commits these are, made them
-    with that config (`magnum fix-sync`). A replay that stops (a conflict) is
-    aborted, so HEAD, the index and the work tree are as they were; the error
-    is then ErrRebaseConflict, with the paths that conflicted in the commit it
-    stopped at, sorted.
+    repository's config says, with config laid over it ("key=value" settings
+    passed as `git -c`, which no file keeps): the fixer, whose commits these
+    are, made them with that config (`magnum fix-sync`, which passes a fixer App
+    pane's commit.gpgsign=false). A replay that stops (a conflict) is aborted,
+    so HEAD, the index and the work tree are as they were; the error is then
+    ErrRebaseConflict, with the paths that conflicted in the commit it stopped
+    at, sorted.
 
 func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string) error
     ResetPlaceholder points the slot's placeholder branch at origin/<base>
@@ -17009,6 +17036,13 @@ CONSTANTS
 const DefaultBaseURL = "https://api.github.com"
     DefaultBaseURL is the GitHub REST API root.
 
+const RefusedPushBase = "/use-magnum-push-not-git-push/"
+    RefusedPushBase is where a fixer App pane's env sends every push to
+    github.com (url.<it>.pushInsteadOf): a path that names the command
+    to push with, so `git push` fails before any network call with
+    "'/use-magnum-push-not-git-push/<owner>/<repo>.git' does not appear to be a
+    git repository". Fetches are not rewritten.
+
 
 VARIABLES
 
@@ -17028,6 +17062,25 @@ func FixRepos(c *config.Config, name string) []string
     watch's owner. None for an identity no fixer acts as, or one that names no
     token_repositories (a gh identity: magnum mints it no token). The App check
     checks a fixer's profile against these (WithFixer).
+
+func FixerEnv(c *config.Config) func(name string) map[string]string
+    FixerEnv is agents.Deps.FixerEnv over c: the git environment of the
+    fixer's pane by its identity's name, FixerGitEnv of a dedicated fixer App
+    (config.Config.DedicatedFixApp) and nil for any other identity, whose pane
+    keeps the operator's git setup.
+
+func FixerGitEnv(id config.Identity) map[string]string
+    FixerGitEnv is the git environment of a pane whose fixer acts as App id (a
+    dedicated fixer App, config.Config.DedicatedFixApp), nil for a gh identity
+    or an App without its bot's user id: the bot as the commits' author and
+    committer (its login, and <user_id>+<login>@users.noreply.github.com,
+    which GitHub links to the bot), commits unsigned (commit.gpgsign=false,
+    over the operator's global config), every push URL of github.com rewritten
+    to RefusedPushBase so a plain `git push` fails and the fixer pushes with
+    `magnum push`, and MAGNUM_PUSH_NO_WORKFLOWS=1 (the App has no workflows
+    permission: magnum push refuses a workflow change). All of it is process
+    env, as `git -c` ranks it, so no checkout's git config is written: the
+    copies share one clone's config. It carries no secret.
 
 func NewGhClient(run execx.Runner, env map[string]string) *http.Client
     NewGhClient returns an http.Client whose requests run through gh (see

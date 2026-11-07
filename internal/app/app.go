@@ -325,7 +325,7 @@ func (a *App) wire() {
 	}
 	a.Agents = agents.New(agents.Deps{
 		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Config: cfg, Layout: a.Layout, Tag: a.AgentTag,
-		IdentityEnv: a.identityEnv, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
+		IdentityEnv: a.identityEnv, FixerEnv: identity.FixerEnv(cfg), Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
 		Toast:        a.toastAsync,
 		Signal:       syscall.Kill, // StopShell's, for a command it proved its own
 		SkipGoneDirs: true,
@@ -415,8 +415,10 @@ func (a *App) toastAsync(ctx context.Context, key, title, body string) {
 
 // identityEnv implements agents.Deps.IdentityEnv: the GitHub env of the
 // configured identity name, false for an identity that is not declared or
-// whose env cannot be made. A role's identity is a gh one (config validation
-// refuses an App for the fix role), whose env needs no token and no network.
+// whose env cannot be made. A role's identity is a gh one, whose env needs
+// no token and no network, or a dedicated fixer App (config validation
+// refuses any other App for the fix role), whose env is its gh config dir:
+// a path, the token kept fresh in it by the daemon's refresh.
 func (a *App) identityEnv(name string) (map[string]string, bool) {
 	src, ok := a.Identities[name]
 	if !ok {

@@ -930,3 +930,30 @@ func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error) 
 	}
 	return n, nil
 }
+
+// EnvConfig is the value environ's GIT_CONFIG_COUNT pairs give key, as git
+// reads them (the first GIT_CONFIG_COUNT pairs of GIT_CONFIG_KEY_<n> and
+// GIT_CONFIG_VALUE_<n>, the last pair of the key winning, the key compared
+// without case, as git compares a key without a subsection); ok is false
+// when no pair sets it. gitx replaces the pairs with its own (hooksOff), so
+// a command that must keep one of the caller's, as `magnum fix-sync` keeps
+// a fixer App pane's commit.gpgsign, reads it here and passes it with -c.
+func EnvConfig(environ []string, key string) (string, bool) {
+	vars := map[string]string{}
+	for _, kv := range environ {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "GIT_CONFIG_") {
+			vars[k] = v
+		}
+	}
+	n, err := strconv.Atoi(vars["GIT_CONFIG_COUNT"])
+	if err != nil || n <= 0 {
+		return "", false
+	}
+	value, found := "", false
+	for i := range n {
+		if k, ok := vars["GIT_CONFIG_KEY_"+strconv.Itoa(i)]; ok && strings.EqualFold(k, key) {
+			value, found = vars["GIT_CONFIG_VALUE_"+strconv.Itoa(i)], true
+		}
+	}
+	return value, found
+}

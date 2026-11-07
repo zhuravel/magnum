@@ -118,6 +118,10 @@ type Agents interface {
 	// never parks hard, and returns the sessions it parked beside the
 	// failures of the others.
 	ParkSessions(ctx context.Context, pr store.PR, ids []int64) ([]store.Session, error)
+	// PaneEnv is the env a pane of role gets from env: the fix job compares
+	// it with the env of a live fixer pane, made for another identity
+	// (fixRenewPane).
+	PaneEnv(env map[string]string, role config.Role) (map[string]string, error)
 	// CloseRetiredPanes closes the idle panes of the PR's parked, closed
 	// and lost sessions that no starting or live session of the PR or of
 	// another PR records, after every park that worked and a session

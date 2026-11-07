@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -230,5 +232,87 @@ func TestFixReposListsTheFixersRepositoriesPerWatch(t *testing.T) {
 	}
 	if got := FixRepos(cfg, "me"); len(got) != 0 {
 		t.Errorf("FixRepos(me) = %v, want none: a gh identity mints no token", got)
+	}
+}
+
+// A fixer App's pane holds no secret in its env: its gh selection is a
+// path (the token is in hosts.yml, which the daemon keeps fresh) and its
+// git env is names, emails and settings. FixerGitEnv is nil for a gh
+// identity and for an App that does not say its bot's user id.
+func TestThePaneEnvCarriesNoToken(t *testing.T) {
+	clock := newClock()
+	f := newFakeGitHub(t, clock)
+	f.id = fixerIdentity()
+	app, layout := newTestApp(t, f, clock)
+	env, err := app.Env(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	maps.Copy(env, FixerGitEnv(f.id))
+	if env["GIT_AUTHOR_EMAIL"] != "4242+talkable[bot]@users.noreply.github.com" {
+		t.Fatalf("env = %v, want the fixer's git env", env)
+	}
+	for k, v := range env {
+		for _, secret := range []string{"ghs_", "ghp_", "gho_", "-----BEGIN"} {
+			if strings.Contains(v, secret) {
+				t.Errorf("env %s holds %q", k, secret)
+			}
+		}
+	}
+	hosts, err := os.ReadFile(filepath.Join(layout.GhConfigDir(f.id.Name), "hosts.yml"))
+	if err != nil || !strings.Contains(string(hosts), "ghs_test") {
+		t.Errorf("hosts.yml = %q, %v; want the token there, not in the env", hosts, err)
+	}
+	if got := FixerGitEnv(config.Identity{Name: "me", Kind: "gh", Login: "zhuravel", UserID: 1}); got != nil {
+		t.Errorf("FixerGitEnv(gh) = %v, want nil", got)
+	}
+	noID := fixerIdentity()
+	noID.UserID = 0
+	if got := FixerGitEnv(noID); got != nil {
+		t.Errorf("FixerGitEnv(no user_id) = %v, want nil", got)
+	}
+}
+
+// The fixer App pane's env rewrites every push URL to github.com, in its
+// three usual forms, to a local path that names magnum push: `git push`
+// fails before any network call, while a fetch is not rewritten
+// (pushInsteadOf rewrites push URLs only). Real git, hermetic: no user or
+// system config, a throwaway repository.
+func TestTheFixersEnvRefusesAGitPushToGitHub(t *testing.T) {
+	t.Parallel()
+	base := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"LC_ALL=C", "GIT_TERMINAL_PROMPT=0"}
+	for k, v := range FixerGitEnv(fixerIdentity()) {
+		base = append(base, k+"="+v)
+	}
+	r := &execx.Real{BaseEnv: base}
+	ctx := context.Background()
+	git := func(dir string, args ...string) (execx.Result, error) {
+		return r.Run(ctx, execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)})
+	}
+	if _, err := r.Run(ctx, execx.Cmd{Name: "git", Args: []string{"--version"}}); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	root := t.TempDir()
+	origin, clone := filepath.Join(root, "origin"), filepath.Join(root, "clone")
+	for _, step := range [][]string{{root, "init", "--quiet", "-b", "main", origin}, {origin, "commit", "--quiet", "--allow-empty", "-m", "base"}} {
+		if _, err := git(step[0], step[1:]...); err != nil {
+			t.Fatalf("git %v: %v", step[1:], err)
+		}
+	}
+	if _, err := git(root, "clone", "--quiet", origin, clone); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := git(clone, "log", "-1", "--format=%an <%ae> %G?"); err != nil || res.Out() != "talkable[bot] <4242+talkable[bot]@users.noreply.github.com> N" {
+		t.Fatalf("the clone's commit = %q, %v; want the bot's, unsigned", res.Out(), err)
+	}
+	for _, url := range []string{"https://github.com/example/repo.git", "git@github.com:example/repo.git", "ssh://git@github.com/example/repo.git"} {
+		res, err := git(clone, "push", url, "HEAD:refs/heads/fix")
+		if err == nil || !strings.Contains(string(res.Stderr), "/use-magnum-push-not-git-push/example/repo.git") {
+			t.Errorf("git push %s = %v, stderr %q; want it refused with the path that names magnum push", url, err, res.Stderr)
+		}
+	}
+	if _, err := git(clone, "fetch", "--quiet", origin); err != nil {
+		t.Errorf("git fetch from a local path: %v", err)
 	}
 }

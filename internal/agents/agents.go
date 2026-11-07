@@ -209,6 +209,13 @@ type Deps struct {
 	// in place of the posting identity's (see paneEnv); nil = no identities,
 	// so such a pane keeps the env it was given.
 	IdentityEnv func(name string) (env map[string]string, ok bool)
+	// FixerEnv is the git environment a fix role's pane gets beside its
+	// identity's (identity.FixerGitEnv, laid over by paneEnv): for a
+	// dedicated fixer App, its bot as the commits' author and committer,
+	// commits unsigned and a plain `git push` to github.com refused, all as
+	// process env and never as a git config write; nil for a gh identity,
+	// whose pane keeps the operator's git setup. nil = none.
+	FixerEnv func(identity string) map[string]string
 	// Toast shows the operator a toast (key dedupes it, title and body say
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.

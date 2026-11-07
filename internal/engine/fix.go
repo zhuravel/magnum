@@ -1127,6 +1127,14 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if err != nil {
 		return err
 	}
+	// `magnum push` (a fixer App's push) reads the branch it pushes to and
+	// the two it refuses from the pane: harmless for a gh fixer.
+	env["MAGNUM_PUSH_BRANCH"] = deref(pr.HeadRef)
+	env["MAGNUM_DEFAULT_BRANCH"] = job.repo.DefaultBranch
+	env["MAGNUM_BASE_BRANCH"] = cmp.Or(deref(pr.BaseRef), job.repo.DefaultBranch)
+	if err := e.fixRenewPane(ctx, job, env); err != nil {
+		return err
+	}
 	// Only the fixer's pane: a pane laid out for a round role nobody starts
 	// leaves a "starting" session row that `magnum open` would try to focus.
 	// The round's roles stay parked, or get their panes from the next
@@ -1237,6 +1245,45 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		data["conflict_base"], data["conflict_sha"], data["conflict_files"] = c.base, c.sha, len(c.paths)
 	}
 	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
+	return nil
+}
+
+// fixRenewKeys are the pane env keys that tell which identity a fixer pane
+// acts as: its gh selection and its commits' author. The MAGNUM_* keys do
+// not count: rows written before magnum set MAGNUM_PUSH_BRANCH lack them,
+// and a PR's head branch never changes.
+var fixRenewKeys = []string{"GH_CONFIG_DIR", "GIT_AUTHOR_EMAIL"}
+
+// fixRenewPane parks the PR's live fixer session when its pane was made
+// for another identity than the one the cycle's pane acts as (the stored
+// env against Agents.PaneEnv of env, on fixRenewKeys, a missing key
+// counting as ""): a pane keeps the env it was made with, so after the
+// watch's fixer moved from the operator's gh login to a fixer App (or back)
+// it would push and reply as the old one. The conversation resumes in a new
+// pane with the new env, and a fix.pane_renewed event names the identity,
+// never the env. A park that fails fails the cycle: the fixer must not run
+// as the wrong identity.
+func (e *Engine) fixRenewPane(ctx context.Context, job *fixJob, env map[string]string) error {
+	live, err := e.st.LiveSessionByPRRole(ctx, job.pr.ID, job.role.Name)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil // no live fixer: its pane is made new
+	case err != nil:
+		return err
+	}
+	want, err := e.d.Agents.PaneEnv(env, job.role)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(fixRenewKeys, func(k string) bool { return live.Env[k] != want[k] }) {
+		return nil
+	}
+	if _, err := e.d.Agents.ParkSessions(ctx, job.pr, []int64{live.ID}); err != nil {
+		return fmt.Errorf("the %s pane acts as another identity than %s and could not be parked: %w", job.role.Name, job.role.Identity, err)
+	}
+	e.event(ctx, "info", job.subject(), "fix.pane_renewed", fmt.Sprintf("%s's pane acted as another identity: parked it, and the cycle "+
+		"resumes the fixer in a new pane as %s", job.role.Name, job.role.Identity),
+		map[string]any{"session": live.ID, "role": job.role.Name, "identity": job.role.Identity})
 	return nil
 }
 

@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -388,5 +390,136 @@ func TestFixSyncChecksItsFlags(t *testing.T) {
 		if !strings.HasPrefix(errb.String(), "fix-sync: ") {
 			t.Errorf("%v: stderr = %q", args, errb)
 		}
+	}
+}
+
+// appPane makes s's fix-sync run as in a fixer App's pane: the operator's
+// global git config signs every commit with a signing program that fails
+// (signed: the replay cannot sign), and the pane's env pairs say
+// commit.gpgsign=false and refuse a plain push, as identity.FixerGitEnv
+// sets them. It returns the global config's path.
+func (s *syncRepo) appPane(t *testing.T, paneUnsigned bool) {
+	t.Helper()
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i, kv := range s.r.BaseEnv {
+		if kv == "GIT_CONFIG_GLOBAL=/dev/null" {
+			s.r.BaseEnv[i] = "GIT_CONFIG_GLOBAL=" + global
+		}
+	}
+	pane := []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=false",
+		"GIT_CONFIG_KEY_1=url./use-magnum-push-not-git-push/.pushInsteadOf", "GIT_CONFIG_VALUE_1=https://github.com/"}
+	if !paneUnsigned {
+		pane = nil
+	}
+	prev := fixSyncEnviron
+	fixSyncEnviron = func() []string { return slices.Concat(s.r.BaseEnv, pane) }
+	t.Cleanup(func() { fixSyncEnviron = prev })
+}
+
+// In a fixer App's pane the fixer commits unsigned through the pane's env
+// pair (commit.gpgsign=false), but gitx runs git with pairs of its own,
+// which drop the pane's: the replay would sign the bot's commits with the
+// operator's key, or stop at the signing prompt. fix-sync passes the pane's
+// commit.gpgsign to its replay with -c, so the replayed commits carry no
+// signature; a pane without the pair (a gh fixer's) signs as before.
+func TestFixSyncReplaysUnsignedInAnAppPane(t *testing.T) {
+	storetest.Serial(t)
+	s := newSyncRepo(t)
+	s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "H\n", 1), "Fix the last line")
+	merge := s.updateBranch("docs/main.md", "main moves\n")
+	s.appPane(t, true)
+
+	code, out, errb := s.fixSync(t)
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	if got := s.git(s.slot, "rev-parse", "HEAD~1"); got != merge {
+		t.Fatalf("HEAD~1 = %s, want the merge %s", got, merge)
+	}
+	if got := s.git(s.slot, "cat-file", "commit", "HEAD"); strings.Contains(got, "gpgsig") {
+		t.Errorf("the replayed commit carries a signature:\n%s", got)
+	}
+}
+
+// Without the pane's pair the replay signs as the operator's config says,
+// which this signing program refuses: the replay stops and is aborted, and
+// fix-sync changes nothing, as for a gh fixer today.
+func TestFixSyncWithoutThePanesPairSignsAsBefore(t *testing.T) {
+	storetest.Serial(t)
+	s := newSyncRepo(t)
+	head := s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "H\n", 1), "Fix the last line")
+	s.updateBranch("docs/main.md", "main moves\n")
+	s.appPane(t, false)
+
+	code, out, _ := s.fixSync(t)
+	if code != fixSyncRefused || !strings.HasPrefix(out, "refused: replaying your 1 commit onto") {
+		t.Fatalf("exit %d, stdout %q; want the replay refused at signing", code, out)
+	}
+	s.wantUnchanged(t, head)
+}
+
+// recordingRunner records the argv of every command it runs.
+type recordingRunner struct {
+	execx.Runner
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (r *recordingRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, append([]string{c.Name}, c.Args...))
+	r.mu.Unlock()
+	return r.Runner.Run(ctx, c)
+}
+
+// configWrites are the git config calls of calls that write: any `git
+// config` whose next word is not a read (--get, --get-all, --get-regexp,
+// --list).
+func configWrites(calls [][]string) [][]string {
+	var out [][]string
+	for _, argv := range calls {
+		i := slices.Index(argv, "config")
+		if argv[0] != "git" || i < 0 {
+			continue
+		}
+		if i+1 >= len(argv) || !slices.Contains([]string{"--get", "--get-all", "--get-regexp", "--list"}, argv[i+1]) {
+			out = append(out, argv)
+		}
+	}
+	return out
+}
+
+// The checkouts share one clone's config, so the fixer App's identity,
+// signing and push refusal are the pane's env and never a config write:
+// fix-sync in an App pane runs no `git config` that writes, and the clone's
+// config is byte for byte the same after its replay.
+func TestFixSyncInAnAppPaneWritesNoGitConfig(t *testing.T) {
+	storetest.Serial(t)
+	s := newSyncRepo(t)
+	s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "H\n", 1), "Fix the last line")
+	s.updateBranch("docs/main.md", "main moves\n")
+	s.appPane(t, true)
+	rec := &recordingRunner{Runner: s.r}
+	fixSyncRunner = func() execx.Runner { return rec }
+	cfgPath := filepath.Join(s.git(s.slot, "rev-parse", "--absolute-git-dir"), "config")
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, out, errb := s.fixSync(t); code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	if w := configWrites(rec.calls); len(w) != 0 {
+		t.Errorf("fix-sync wrote git config: %q", w)
+	}
+	if after, err := os.ReadFile(cfgPath); err != nil || string(after) != string(before) {
+		t.Errorf("the clone's config changed:\nbefore %q\nafter  %q (%v)", before, after, err)
+	}
+	if len(rec.calls) == 0 {
+		t.Fatal("no git command was recorded")
 	}
 }

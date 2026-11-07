@@ -21,6 +21,8 @@ package identity
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -141,4 +143,58 @@ func FixRepos(c *config.Config, name string) []string {
 		}
 	}
 	return out
+}
+
+// RefusedPushBase is where a fixer App pane's env sends every push to
+// github.com (url.<it>.pushInsteadOf): a path that names the command to
+// push with, so `git push` fails before any network call with
+// "'/use-magnum-push-not-git-push/<owner>/<repo>.git' does not appear to
+// be a git repository". Fetches are not rewritten.
+const RefusedPushBase = "/use-magnum-push-not-git-push/"
+
+// refusedPushURLs are the URL forms of github.com a push is refused for:
+// HTTPS, scp-like SSH and ssh://.
+var refusedPushURLs = []string{"https://github.com/", "git@github.com:", "ssh://git@github.com/"}
+
+// FixerGitEnv is the git environment of a pane whose fixer acts as App id
+// (a dedicated fixer App, config.Config.DedicatedFixApp), nil for a gh
+// identity or an App without its bot's user id: the bot as the commits'
+// author and committer (its login, and <user_id>+<login>@users.noreply.github.com,
+// which GitHub links to the bot), commits unsigned (commit.gpgsign=false,
+// over the operator's global config), every push URL of github.com
+// rewritten to RefusedPushBase so a plain `git push` fails and the fixer
+// pushes with `magnum push`, and MAGNUM_PUSH_NO_WORKFLOWS=1 (the App has no
+// workflows permission: magnum push refuses a workflow change). All of it
+// is process env, as `git -c` ranks it, so no checkout's git config is
+// written: the copies share one clone's config. It carries no secret.
+func FixerGitEnv(id config.Identity) map[string]string {
+	if id.Kind != "app" || id.UserID <= 0 || id.Login == "" {
+		return nil
+	}
+	email := fmt.Sprintf("%d+%s@users.noreply.github.com", id.UserID, id.Login)
+	env := map[string]string{
+		"GIT_AUTHOR_NAME": id.Login, "GIT_COMMITTER_NAME": id.Login,
+		"GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_EMAIL": email,
+		"GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "false",
+		"MAGNUM_PUSH_NO_WORKFLOWS": "1",
+	}
+	for i, url := range refusedPushURLs {
+		env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i+1)] = "url." + RefusedPushBase + ".pushInsteadOf"
+		env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i+1)] = url
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(len(refusedPushURLs) + 1)
+	return env
+}
+
+// FixerEnv is agents.Deps.FixerEnv over c: the git environment of the
+// fixer's pane by its identity's name, FixerGitEnv of a dedicated fixer App
+// (config.Config.DedicatedFixApp) and nil for any other identity, whose
+// pane keeps the operator's git setup.
+func FixerEnv(c *config.Config) func(name string) map[string]string {
+	return func(name string) map[string]string {
+		if !c.DedicatedFixApp(name) {
+			return nil
+		}
+		return FixerGitEnv(*c.IdentityByName(name))
+	}
 }

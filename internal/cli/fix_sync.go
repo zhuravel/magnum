@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -38,8 +39,12 @@ const (
 // maxSyncPaths bounds the conflicting paths a refusal names.
 const maxSyncPaths = 10
 
-// fixSyncRunner runs git for fix-sync; tests replace it.
-var fixSyncRunner = func() execx.Runner { return &execx.Real{} }
+// fixSyncRunner runs git for fix-sync, and fixSyncEnviron is the pane's
+// environment it reads the fixer's git settings from; tests replace both.
+var (
+	fixSyncRunner  = func() execx.Runner { return &execx.Real{} }
+	fixSyncEnviron = os.Environ
+)
 
 type fixSyncOpts struct {
 	checkout, from, branch, base string
@@ -59,7 +64,9 @@ func newFixSyncCmd(c *Context) *cobra.Command {
 			"the specs of the changed files again and pushes, never with force. Anything else changes nothing and prints "+
 			"\"refused: <reason>\": a commit that is not a merge (someone works on the branch), a merge that changed the PR's "+
 			"own diff, a rewritten branch, a merge among the fixer's own commits, uncommitted changes to tracked files, an "+
-			"operation in progress. A replay that conflicts is aborted, and the checkout is as it was. A replay that "+
+			"operation in progress. The replay signs as your git config says, except in a fixer App's pane, whose "+
+			"commit.gpgsign=false (one of its GIT_CONFIG_* pairs) it passes on with -c, so the bot's commits stay unsigned. "+
+			"A replay that conflicts is aborted, and the checkout is as it was. A replay that "+
 			"cannot be undone (its abort failed) or confirmed (HEAD cannot be read after it) prints \"failed: <reason>\" "+
 			"with what is in the way: the checkout changed, and the fixer pushes nothing.\n\n"+
 			"Exit statuses: 0 replayed; 1 refused, nothing changed; 2 wrong flags, nothing run; 3 failed, the checkout "+
@@ -158,7 +165,14 @@ func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string
 	if why := fixSyncGained(ctx, g, dir, from, head, tip, base); why != "" {
 		return why + still, fixSyncRefused
 	}
-	paths, err := g.ReplayOnto(ctx, dir, tip, from)
+	// A fixer App's pane commits unsigned through its env (commit.gpgsign=false
+	// in its GIT_CONFIG_* pairs, identity.FixerGitEnv), which gitx replaces
+	// with its own: the replay gets it back with -c, never as a config write.
+	var config []string
+	if v, ok := gitx.EnvConfig(fixSyncEnviron(), "commit.gpgsign"); ok {
+		config = append(config, "commit.gpgsign="+v)
+	}
+	paths, err := g.ReplayOnto(ctx, dir, tip, from, config...)
 	if err != nil {
 		what := fmt.Sprintf("replaying your %s onto %s", textx.Count(len(own), "commit", "commits"), textx.ShortSHA(tip))
 		switch {

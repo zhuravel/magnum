@@ -333,13 +333,22 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
 // detached HEAD, or a branch, which then moves) onto onto (`git rebase
 // --onto onto from`): only those, as RebaseOnto, and no other branch moves
 // with them (--no-update-refs). Unlike RebaseOnto's, the commits are signed
-// as the repository's config says: the fixer, whose commits these are,
-// made them with that config (`magnum fix-sync`). A replay that stops (a
+// as the repository's config says, with config laid over it ("key=value"
+// settings passed as `git -c`, which no file keeps): the fixer, whose
+// commits these are, made them with that config (`magnum fix-sync`, which
+// passes a fixer App pane's commit.gpgsign=false). A replay that stops (a
 // conflict) is aborted, so HEAD, the index and the work tree are as they
 // were; the error is then ErrRebaseConflict, with the paths that conflicted
 // in the commit it stopped at, sorted.
-func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string) ([]string, error) {
-	return c.rebase(ctx, dir, onto, from, nil, []string{"--no-update-refs"})
+func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string, config ...string) ([]string, error) {
+	var args []string
+	for _, kv := range config {
+		if k, _, ok := strings.Cut(kv, "="); !ok || k == "" || strings.HasPrefix(kv, "-") || strings.ContainsAny(kv, "\n\r\x00") {
+			return nil, fmt.Errorf("gitx: replay: %q is no key=value setting", kv)
+		}
+		args = append(args, "-c", kv)
+	}
+	return c.rebase(ctx, dir, onto, from, args, []string{"--no-update-refs"})
 }
 
 // rebase is `git <config> rebase --quiet --no-autostash <opts> --onto onto

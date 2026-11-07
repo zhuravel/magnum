@@ -281,7 +281,9 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 // that identity, not as the one env was made for: the posting identity's gh
 // selection (GH_CONFIG_DIR, GH_TOKEN, GITHUB_TOKEN) is dropped from env and
 // the identity's own env (Deps.IdentityEnv) laid over it first, so the
-// slot's and MAGNUM_* variables stay. A fix role whose identity does not
+// slot's and MAGNUM_* variables stay; a fix role's also gets its
+// identity's git env (Deps.FixerEnv: a fixer App's bot, unsigned, a plain
+// push refused). A fix role whose identity does not
 // resolve (none, or one Deps.IdentityEnv cannot make) is an error: its pane
 // would keep the posting identity's env and push and reply as the App
 // rather than as the operator. Another role's unresolved identity leaves
@@ -300,6 +302,9 @@ func (m *Manager) paneEnv(env map[string]string, role config.Role) (map[string]s
 			delete(out, k)
 		}
 		maps.Copy(out, idEnv)
+		if role.Fix && m.d.FixerEnv != nil {
+			maps.Copy(out, m.d.FixerEnv(role.Identity))
+		}
 		maps.Copy(out, extra)
 		return out, nil
 	case role.Fix && role.Identity == "":
@@ -313,6 +318,13 @@ func (m *Manager) paneEnv(env map[string]string, role config.Role) (map[string]s
 	maps.Copy(out, env)
 	maps.Copy(out, extra)
 	return out, nil
+}
+
+// PaneEnv is the env role's pane gets from env (paneEnv): the fix job
+// compares it with the env its live fixer pane was made with, to renew a
+// pane made for another identity.
+func (m *Manager) PaneEnv(env map[string]string, role config.Role) (map[string]string, error) {
+	return m.paneEnv(env, role)
 }
 
 // ghSelection are the variables that choose which account gh acts as: an

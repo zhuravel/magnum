@@ -917,7 +917,9 @@ type fakeAgents struct {
 	// identity's gh selection, as agents.Manager.paneEnv lays it; paneEnvs
 	// records each role's pane env as EnsureWorkspace and EnsurePane gave it.
 	identityEnv func(name string) (map[string]string, bool)
-	paneEnvs    map[string]map[string]string
+	// fixerEnv is the git env of a fix role's identity (agents.Deps.FixerEnv).
+	fixerEnv func(identity string) map[string]string
+	paneEnvs map[string]map[string]string
 	// onSubmit, when set, runs once Submit sent a run's prompt (the run is
 	// working then), with that run: a test's fake fixer writes its report
 	// and ends the run there. submitErr, when set, is what Submit refuses
@@ -1012,6 +1014,20 @@ func (f *fakeAgents) EnsureWorkspace(_ context.Context, pr store.PR, slotPath st
 // resolves acts as that identity, without the posting identity's gh
 // selection.
 func (f *fakeAgents) notePaneEnv(env map[string]string, role config.Role) {
+	out := f.layPaneEnv(env, role)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.paneEnvs == nil {
+		f.paneEnvs = map[string]map[string]string{}
+	}
+	f.paneEnvs[role.Name] = out
+}
+
+// layPaneEnv is the env role's pane gets from env, as
+// agents.Manager.paneEnv lays it: a role whose identity identityEnv
+// resolves acts as that identity, without the posting identity's gh
+// selection, and a fix role's gets its identity's fixerEnv too.
+func (f *fakeAgents) layPaneEnv(env map[string]string, role config.Role) map[string]string {
 	out := maps.Clone(env)
 	if out == nil {
 		out = map[string]string{}
@@ -1022,14 +1038,17 @@ func (f *fakeAgents) notePaneEnv(env map[string]string, role config.Role) {
 				delete(out, k)
 			}
 			maps.Copy(out, idEnv)
+			if role.Fix && f.fixerEnv != nil {
+				maps.Copy(out, f.fixerEnv(role.Identity))
+			}
 		}
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.paneEnvs == nil {
-		f.paneEnvs = map[string]map[string]string{}
-	}
-	f.paneEnvs[role.Name] = out
+	return out
+}
+
+// PaneEnv implements Agents: the env layPaneEnv lays.
+func (f *fakeAgents) PaneEnv(env map[string]string, role config.Role) (map[string]string, error) {
+	return f.layPaneEnv(env, role), nil
 }
 
 // paneEnv is the env role's pane got last (nil when it got none).
@@ -1073,7 +1092,8 @@ func (f *fakeAgents) StartAgent(ctx context.Context, pr store.PR, role config.Ro
 	}
 	name := fmt.Sprintf("mg-t-%d-%s", pr.Number, role.Name)
 	_, err := f.st.CreateSession(ctx, store.Session{PRID: pr.ID, Role: role.Name, AgentName: &name,
-		AgentKind: new(role.AgentKind()), HerdrPaneID: &paneID, HerdrWorkspaceID: new("w1"), State: store.SessionLive})
+		AgentKind: new(role.AgentKind()), HerdrPaneID: &paneID, HerdrWorkspaceID: new("w1"), State: store.SessionLive,
+		Env: f.paneEnv(role.Name)}) // the env its pane got, as agents stores it
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		return err
 	}
@@ -2271,6 +2291,8 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		env, err := src.Env(context.Background())
 		return env, err == nil
 	}
+
+	h.ag.fixerEnv = identity.FixerEnv(cfg) // app.App's
 
 	notifier := &notify.Notifier{Herdr: h.nh, Store: st, Enabled: true}
 	planner := &cleanup.Planner{Store: st, Slots: h.sl, Inventory: h.inv, Config: cfg, Clock: clock.Now, Park: h.ag.Park}
