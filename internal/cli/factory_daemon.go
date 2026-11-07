@@ -97,14 +97,19 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 	return 0
 }
 
-// startFactoryDaemon takes the login shell's PATH ([daemon] shell_path, as
-// the review daemon does) before the factory daemon is built, because the
-// copies' setup, reset and precheck commands run in the daemon's own
-// environment and need what only the shell's exports name (DBngin's
-// redis-server). The factory log then says what the shell added.
+// startFactoryDaemon readies the daemon's environment as the review daemon
+// does (daemonEnv: a locale when launchd gave none, and the login shell's
+// PATH with [daemon] shell_path) before the factory daemon is built,
+// because the copies' setup, reset and precheck commands run in the
+// daemon's own environment and need what only the shell's exports name
+// (DBngin's redis-server) and a UTF-8 locale (rubocop). The factory log then
+// says what it set and what the shell added.
 func startFactoryDaemon(ctx context.Context, c *Context, lvl slog.Level) (*factoryDaemon, error) {
-	s := daemonShellPATH(ctx, c.Config)
+	locale, s := daemonEnv(ctx, c.Config)
 	d, err := buildFactoryDaemon(c, lvl)
+	if err == nil && locale != "" {
+		d.Log.Info(locale)
+	}
 	if err != nil || s == nil {
 		return d, err
 	}

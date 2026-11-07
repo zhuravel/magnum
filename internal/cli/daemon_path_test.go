@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,5 +184,39 @@ func TestTheShellPATHKeyOffRunsNoShell(t *testing.T) {
 	}
 	if !config.Defaults().Daemon.ShellPath {
 		t.Fatal("shell_path is off by default")
+	}
+}
+
+// launchd gives the daemon no locale, and Ruby then reads every file as
+// US-ASCII (rubocop crashed on "invalid byte sequence in US-ASCII"): the
+// daemon's start sets LANG=en_US.UTF-8, which every command it runs
+// inherits, whether [daemon] shell_path is on or off.
+func TestTheDaemonSetsAUTF8LocaleWhenLaunchdGivesNone(t *testing.T) {
+	for _, shellPath := range []bool{true, false} {
+		st := newShellPATHTest(t, "echo '"+launchdTestPATH+"'")
+		st.cfg.Daemon.ShellPath = shellPath
+		locale, _ := daemonEnv(context.Background(), st.cfg)
+		if st.env["LANG"] != "en_US.UTF-8" {
+			t.Fatalf("shell_path %v: LANG = %q, want en_US.UTF-8", shellPath, st.env["LANG"])
+		}
+		if !strings.Contains(locale, "LANG=en_US.UTF-8") {
+			t.Fatalf("shell_path %v: the start says %q, want it to name LANG=en_US.UTF-8", shellPath, locale)
+		}
+	}
+}
+
+// A locale the daemon's environment names already (LANG, or LC_ALL, which
+// outranks it) is never overridden, and the start says nothing of it.
+func TestTheDaemonKeepsALocaleAlreadySet(t *testing.T) {
+	for _, set := range []map[string]string{{"LANG": "de_DE.UTF-8"}, {"LC_ALL": "C"}} {
+		st := newShellPATHTest(t, "echo '"+launchdTestPATH+"'")
+		maps.Copy(st.env, set)
+		locale, _ := daemonEnv(context.Background(), st.cfg)
+		if want := set["LANG"]; st.env["LANG"] != want {
+			t.Fatalf("%v: LANG = %q, want %q", set, st.env["LANG"], want)
+		}
+		if locale != "" {
+			t.Fatalf("%v: the start says %q, want nothing", set, locale)
+		}
 	}
 }

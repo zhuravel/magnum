@@ -40,3 +40,31 @@ func TestTheFactoryDaemonTakesItsPATHFromTheLoginShell(t *testing.T) {
 		t.Fatalf("factory.log does not say what the shell added:\n%s", log)
 	}
 }
+
+// The factory daemon runs rubocop in its copies, which crashes on
+// "invalid byte sequence in US-ASCII" without a locale: under launchd's
+// environment, which names none, it sets LANG=en_US.UTF-8 and says so.
+func TestTheFactoryDaemonSetsAUTF8LocaleWhenLaunchdGivesNone(t *testing.T) {
+	st := newShellPATHTest(t, "echo '/usr/bin:/bin'")
+	st.cfg.Daemon.ShellPath = false
+	c := &Context{Version: "test", Layout: paths.Layout{Home: t.TempDir()}, Config: st.cfg, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	storetest.Seed(t, c.Layout.FactoryAgentsDB())
+	registrytest.Seed(t, c.Layout.FactoryDB())
+
+	d, err := startFactoryDaemon(context.Background(), c, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("the factory daemon does not start: %v", err)
+	}
+	d.Close()
+
+	if st.env["LANG"] != "en_US.UTF-8" {
+		t.Fatalf("LANG = %q, want en_US.UTF-8", st.env["LANG"])
+	}
+	log, err := os.ReadFile(c.Layout.FactoryLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "LANG=en_US.UTF-8") {
+		t.Fatalf("factory.log does not say it set the locale:\n%s", log)
+	}
+}

@@ -151,16 +151,21 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	// once instead of the process dying with "killed by signal").
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	// [daemon] shell_path: the login shell's PATH joins the daemon's own
-	// before anything runs; the engine records it at its start.
+	// A locale when launchd gave none, and with [daemon] shell_path the login
+	// shell's PATH, join the daemon's environment before anything runs; the
+	// engine records the PATH at its start.
 	eo := o.Engine
 	eo.Once = o.Once
-	eo.ShellPATH = daemonShellPATH(ctx, c.Config)
+	locale, shellPATH := daemonEnv(ctx, c.Config)
+	eo.ShellPATH = shellPATH
 	a, err := app.New(c.Config, c.Layout, daemonAppOptions(c, o))
 	if err != nil {
 		return daemonDryRunReport{}, err
 	}
 	defer a.Close() // before anything else can return: the registry, the log and the clients
+	if locale != "" && a.Logger != nil {
+		a.Logger.Info(locale)
+	}
 	// An installed binary's herdr plugin copy follows the binary: an upgrade
 	// brings new actions to a plugin `magnum install --plugin` wrote.
 	if dir := pluginDir(c.Layout); !o.DryRun && dir != c.Layout.Home && fsx.Exists(filepath.Join(dir, "herdr-plugin.toml")) {

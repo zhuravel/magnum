@@ -25,6 +25,40 @@ var shellPATHTimeout = 20 * time.Second
 // bash login shell answers too.
 const shellPATHScript = `printf '%s\n' "$PATH"`
 
+// daemonDefaultLocale is the locale a daemon whose environment names none
+// takes (daemonLocale).
+const daemonDefaultLocale = "en_US.UTF-8"
+
+// daemonEnv readies the environment of a daemon's process before anything
+// runs, the review daemon's and the factory daemon's alike: a locale when
+// launchd gave none (daemonLocale), then the login shell's PATH
+// (daemonShellPATH). locale is what the first did, for the log ("" for
+// nothing).
+func daemonEnv(ctx context.Context, cfg *config.Config) (locale string, s *engine.ShellPATH) {
+	return daemonLocale(), daemonShellPATH(ctx, cfg)
+}
+
+// daemonLocale sets LANG=en_US.UTF-8 in the daemon's own environment, which
+// every command it starts inherits, when it names no locale: launchd sets
+// neither LANG nor LC_ALL, and Ruby then reads every file as US-ASCII
+// (rubocop crashed on "invalid byte sequence in US-ASCII" in each copy).
+// A LANG or an LC_ALL already set is kept, and LANG ranks below every LC_
+// variable, so a locale already set is never overridden. It returns what
+// it did, "" for nothing.
+func daemonLocale() string {
+	if daemonSys.Getenv("LANG") != "" || daemonSys.Getenv("LC_ALL") != "" {
+		return ""
+	}
+	set := daemonSys.Setenv
+	if set == nil {
+		set = os.Setenv
+	}
+	if err := set("LANG", daemonDefaultLocale); err != nil {
+		return "no locale from launchd, and LANG could not be set: " + err.Error()
+	}
+	return "no locale from launchd: LANG=" + daemonDefaultLocale + " for every command the daemon runs"
+}
+
 // daemonShellPATH gives the daemon, with [daemon] shell_path on, the PATH
 // directories of the operator's login shell that its own PATH lacks: it asks
 // `$SHELL -ilc` (zsh when SHELL is unset; interactive and login, so the
