@@ -1,6 +1,6 @@
 // Package fsx holds the file helpers several packages share: an atomic file
 // write, plain or confined to an os.Root, a replacement without disk syncs,
-// a size-limited read of a regular file, the check of a file holding a
+// a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a
 // secret, an existence check and a canonical path. It imports only the
 // standard library.
 package fsx
@@ -181,6 +181,44 @@ func ReadRegular(path string, limit int64) ([]byte, error) {
 		return nil, tooLarge
 	}
 	return buf.Bytes(), nil
+}
+
+// ReadRegularIn is ReadRegular for the file name inside root, for a file
+// whose directory something untrusted wrote (a curator's scratch, a review
+// round's leftovers in a copy): a symbolic link (even to a file inside
+// root), a directory or a special file is ErrNotRegular and nothing it
+// points to is read, a file past limit is ErrTooLarge and none of it is
+// read, and root keeps every path inside it. The open does not wait for a
+// FIFO put in the file's place since the Lstat (O_NONBLOCK; SameFile then
+// refuses it). The errors are bare (no path): the caller names the file.
+func ReadRegularIn(root *os.Root, name string, limit int64) ([]byte, error) {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	tooLarge := fmt.Errorf("%w: over %d bytes", ErrTooLarge, limit)
+	switch {
+	case !fi.Mode().IsRegular():
+		return nil, ErrNotRegular
+	case fi.Size() > limit:
+		return nil, tooLarge
+	}
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !os.SameFile(fi, st) {
+		return nil, ErrNotRegular // replaced since it was checked
+	}
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, tooLarge
+	}
+	return b, nil
 }
 
 // CheckPrivate checks a file that holds a secret (a token): a regular file,

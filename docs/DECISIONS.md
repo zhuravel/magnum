@@ -16739,27 +16739,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   restored the file and retried by hand. Now, when the round left only tracked changes and new untracked
   files, on the task's branch at the head it reviewed, and nobody else could have made them (`othersIn` since
   the cycle's start: no agent of the task at work in the copy, and no prompt to one and none of your input in
-  its panes since; a cycle with no start fails the guard), the factory saves them first in the task's
-  directory: the tracked changes as `round-<n>-left.patch` (`git diff --binary HEAD`, `gitx.DiffHead`), and each
-  new file under `round-<n>-left/` (a new directory's files one by one, `gitx.UntrackedFiles`, so a file git
-  ignores in it is neither saved nor removed; regular files only, read through an `os.Root` of the copy, at most
-  64 MiB each). Then it restores the tracked paths, removes the new files and the directories that this
-  empties, looks again and reads the result. Begin, ok and fail events and one info event name the counts and
-  the saved files, never their content. A symlink or another file that is not regular, a save that fails
-  (which removes what it wrote), a put-back that fails or leaves something, and somebody else in the copy send
-  the task to you as before, now with why and the steps: `git -C <copy> restore --staged --worktree -- <paths>`,
-  `rm -- <files>` and `magnum factory retry <id>`. A copy off the branch or at another head stays yours: the
-  factory moves no branch or HEAD here. This keeps to "No git step the factory runs in a copy discards a change
-  it did not make": nothing goes back unsaved, and the guard rules out anybody else. Rejected: leaving every
-  leftover to you, as before (one line of a lockfile cost a NEEDS YOU and a retry by hand);
+  its panes since; a cycle with no start fails the guard; asked before the save and again before the
+  put-back), the factory saves them first in the task's directory: the tracked changes as
+  `round-<n>-left.patch` (`git diff --binary HEAD`, `gitx.DiffHead`), and each new file under `round-<n>-left/`
+  (regular files only, `fsx.ReadRegularIn` through an `os.Root` of the copy, at most 1,000 files, 256 MiB, 64
+  MiB a file; n is the cycle's number, and a taken name gets `-<k>`). Then it restores the tracked paths,
+  removes the new files and the directories that this empties, looks again and reads the result. Begin, ok
+  and fail events and one info event name the counts and the saved files, never their content. New files are
+  told file by file on both sides (`gitx.UntrackedFiles`; the listing before the cycle's first run, kept when
+  the round runs again in its cycle; an older build's listing by git status entry covers what lies under a
+  directory it names), and a tracked change's path is never one of them. git status groups a wholly
+  untracked directory once and splits it once the round stages a file in it, so comparing its entries would
+  have moved your files from before the round and removed a tracked file the put-back had just restored. A
+  round stopped before its end (a drain, an install, the sweep) has its leftovers put back the same way before
+  it runs again in its cycle; before, its tracked change stopped the run again ("commit them or undo them")
+  and its new files counted as the copy's own. A symlink or another file that is not regular, a save past its
+  bounds or that fails (it removes what it wrote), a put-back that fails or leaves something, and somebody else
+  in the copy send the task to you, now with why and the steps:
+  `git -C <copy> restore --staged --worktree -- <paths>` (`:/` past ten paths), `rm -- <files>` (ten, and how
+  many more; an event names them all) and `magnum factory retry <id>`. A copy off the branch or at another head
+  stays yours with the message as before: the factory moves no branch or HEAD here. This keeps to "No git step the factory runs in a copy discards a
+  change it did not make": nothing goes back unsaved, and the guard rules out anybody else. Rejected: leaving
+  every leftover to you, as before (one line of a lockfile cost a NEEDS YOU and a retry by hand);
   `git restore -- <paths>` alone in the steps (a staged change stays); removing a new directory whole (an
-  ignored file in it may be older than the round). Tests, failing first:
+  ignored file in it may be older than the round); comparing git status's entries (above). Gotcha: an empty
+  directory from before the round that only the round's files filled goes with them. Tests, failing first:
   TestARoundsTrackedChangeIsSavedAndPutBackWhenNobodyElseCouldHaveMadeIt,
   TestARoundsNewUntrackedFilesAreSavedAndRemovedWhenNobodyElseCouldHaveMadeThem,
   TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem,
-  TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou, TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt
+  TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou, TestAFileFromBeforeTheRoundSurvivesThePutBack,
+  TestAPutBackNeverRemovesATrackedFileItRestored, TestARoundStoppedMidwayHasItsLeftoversPutBackBeforeItRunsAgain,
+  TestASecondSaveOfARoundKeepsTheFirst, TestAPutBackThatGitCallsFailedButThatPutTheCopyBackGoesOn,
+  TestTheWaitOverManyLeftoversNamesAFewAndTheEventAll, TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt
   (its moved head with a tracked change and a new file), TestDiffHeadArgv,
-  TestRealDiffHeadIsAPatchThatPutsTheChangesBack and TestUntrackedFilesListsANewDirectoryFileByFile.
+  TestRealDiffHeadIsAPatchThatPutsTheChangesBack, TestUntrackedFilesListsANewDirectoryFileByFile and
+  TestReadRegularInReadsOnlyARegularFileInsideTheRoot.
 
 ## Learned rules
 

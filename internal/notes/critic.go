@@ -144,7 +144,7 @@ type Decision struct {
 }
 
 // ReadDecision reads the critic's decision.json in run: a regular file of
-// the run directory (readRegular: what an agent leaves is not trusted), one
+// the run directory (fsx.ReadRegularIn: what an agent leaves is not trusted), one
 // JSON value, no unknown fields. Problems are worded for a nudge (the file's
 // name and the parse error, never its content); missing reports that the
 // file was not written.
@@ -154,7 +154,7 @@ func ReadDecision(run CriticRun) (d Decision, missing bool, problems []string) {
 		return d, false, []string{"the critique's directory cannot be read: " + err.Error()}
 	}
 	defer root.Close()
-	b, err := readRegular(root, criticDecision, maxDecisionBytes)
+	b, err := fsx.ReadRegularIn(root, criticDecision, maxDecisionBytes)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return d, true, []string{criticDecision + " was not written"}

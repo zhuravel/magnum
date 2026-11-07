@@ -98,16 +98,20 @@ func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error) {
 	return out, nil
 }
 
-// UntrackedFiles lists the untracked files at or under paths of the work
-// tree at dir that git does not ignore (`git ls-files --others
-// --exclude-standard`, each path taken literally from the top), one by one:
-// a wholly untracked directory, which StatusPaths names once, as each of
-// its files. Relative to the top, sorted. It is read-only and does not take
-// the index lock.
+// UntrackedFiles lists the untracked files of the work tree at dir that git
+// does not ignore (`git ls-files --others --exclude-standard`), those at or
+// under paths (each taken literally from the top; none: the whole tree), one
+// by one: a wholly untracked directory, which StatusPaths names once, as each
+// of its files (a repository inside the work tree stays one entry, ending in
+// /). Relative to the top, sorted. It is read-only and does not take the
+// index lock.
 func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error) {
-	specs, err := literal(paths)
-	if err != nil {
-		return nil, fmt.Errorf("gitx: ls-files --others: %w", err)
+	var specs []string
+	if len(paths) > 0 {
+		var err error
+		if specs, err = literal(paths); err != nil {
+			return nil, fmt.Errorf("gitx: ls-files --others: %w", err)
+		}
 	}
 	res, err := c.git(ctx, dir, call{label: "ls-files --others --exclude-standard"},
 		append([]string{"ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--"}, specs...)...)

@@ -116,3 +116,40 @@ func TestReadRegularKeepsAMissingFilesError(t *testing.T) {
 		t.Errorf("below a file: %v, want ENOTDIR", err)
 	}
 }
+
+// ReadRegularIn reads a regular file inside an os.Root, at most limit
+// bytes: a symlink (even to a file inside the root), a directory or a FIFO
+// is ErrNotRegular, a file past limit ErrTooLarge, and none of either is
+// read.
+func TestReadRegularInReadsOnlyARegularFileInsideTheRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "notes.md"), "12345")
+	if err := os.Symlink("notes.md", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if b, err := ReadRegularIn(root, "notes.md", 5); err != nil || string(b) != "12345" {
+		t.Fatalf("notes.md: %q, %v", b, err)
+	}
+	if b, err := ReadRegularIn(root, "notes.md", 4); !errors.Is(err, ErrTooLarge) || b != nil {
+		t.Fatalf("notes.md over 4 bytes: %q, %v; want ErrTooLarge", b, err)
+	}
+	for _, name := range []string{"link", "sub", "fifo"} {
+		if b, err := ReadRegularIn(root, name, 1<<20); !errors.Is(err, ErrNotRegular) || b != nil {
+			t.Errorf("%s: %q, %v; want ErrNotRegular", name, b, err)
+		}
+	}
+	if _, err := ReadRegularIn(root, "../outside", 1<<20); err == nil {
+		t.Fatal("a name outside the root was read")
+	}
+}

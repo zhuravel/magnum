@@ -73,8 +73,9 @@ func TestRealDiffHeadIsAPatchThatPutsTheChangesBack(t *testing.T) {
 }
 
 // UntrackedFiles lists the untracked files git does not ignore under each
-// path one by one: a wholly untracked directory, which git status names
-// once, as each of its files, and an ignored file in it not at all.
+// path, or in the whole tree, one by one: a wholly untracked directory,
+// which git status names once, as each of its files, and an ignored file in
+// it not at all.
 func TestUntrackedFilesListsANewDirectoryFileByFile(t *testing.T) {
 	fx := newFixture(t)
 	ctx := context.Background()
@@ -91,7 +92,11 @@ func TestUntrackedFilesListsANewDirectoryFileByFile(t *testing.T) {
 	if got, err := fx.c.UntrackedFiles(ctx, fx.clone, "README.md"); err != nil || len(got) != 0 {
 		t.Fatalf("UntrackedFiles of a tracked file = %q, %v; want none", got, err)
 	}
-	if _, err := fx.c.UntrackedFiles(ctx, fx.clone); err == nil {
-		t.Fatal("a listing of no path was taken")
+	got, err = fx.c.UntrackedFiles(ctx, fx.clone)
+	if want := []string{"c.txt", "other.txt", "probe/a_spec.rb", "probe/deep/b spec.rb"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("UntrackedFiles of the whole tree = %q, %v; want %q", got, err, want)
+	}
+	if _, err := fx.c.UntrackedFiles(ctx, fx.clone, ""); err == nil {
+		t.Fatal("an empty path was taken")
 	}
 }

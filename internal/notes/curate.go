@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -161,7 +159,7 @@ type Proposal struct {
 }
 
 // ReadProposal reads what the curator wrote in s, regular files of its
-// directory only (readRegular). Problems name what is missing or
+// directory only (fsx.ReadRegularIn). Problems name what is missing or
 // unreadable, in words fit for a nudge (paths, never content).
 func ReadProposal(s Scratch) (Proposal, []string) {
 	var p Proposal
@@ -171,7 +169,7 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	}
 	defer root.Close()
 	var problems []string
-	text, err := readRegular(root, scratchProposal, MaxFileBytes)
+	text, err := fsx.ReadRegularIn(root, scratchProposal, MaxFileBytes)
 	switch {
 	case err != nil:
 		problems = append(problems, readProblem(scratchProposal, err))
@@ -183,7 +181,7 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	files, bad := readTree(s.Harness(), len(text))
 	problems = append(problems, bad...)
 	p.State.Files = files
-	b, err := readRegular(root, scratchChanges, MaxFileBytes)
+	b, err := fsx.ReadRegularIn(root, scratchChanges, MaxFileBytes)
 	switch {
 	case err != nil:
 		problems = append(problems, readProblem(scratchChanges, err))
@@ -199,7 +197,7 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	return p, problems
 }
 
-// readProblem words readRegular's error about the scratch file name for a
+// readProblem words fsx.ReadRegularIn's error about the scratch file name for a
 // nudge.
 func readProblem(name string, err error) string {
 	switch {
@@ -211,44 +209,6 @@ func readProblem(name string, err error) string {
 		return fmt.Sprintf("%s is larger than %d bytes", name, MaxFileBytes)
 	}
 	return name + " cannot be read: " + err.Error()
-}
-
-// readRegular reads name, a regular file of root's directory of at most limit
-// bytes. The curator reads misses that quote other people's comments, so
-// what it leaves is not trusted: a symbolic link (even to a file inside the
-// directory) or a special file is fsx.ErrNotRegular and nothing it points to
-// is read, a file past limit is fsx.ErrTooLarge and none of it is read, and
-// root keeps every path inside the directory. The open does not wait for a
-// FIFO put in the file's place since the Lstat (O_NONBLOCK; SameFile then
-// refuses it).
-func readRegular(root *os.Root, name string, limit int64) ([]byte, error) {
-	fi, err := root.Lstat(name)
-	if err != nil {
-		return nil, err
-	}
-	tooLarge := fmt.Errorf("%w: over %d bytes", fsx.ErrTooLarge, limit)
-	switch {
-	case !fi.Mode().IsRegular():
-		return nil, fsx.ErrNotRegular
-	case fi.Size() > limit:
-		return nil, tooLarge
-	}
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if st, err := f.Stat(); err != nil || !os.SameFile(fi, st) {
-		return nil, fsx.ErrNotRegular // replaced since it was checked
-	}
-	b, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) > limit {
-		return nil, tooLarge
-	}
-	return b, nil
 }
 
 // readTree reads every file under dir as harness blobs; symbolic links and
@@ -283,7 +243,7 @@ func readTree(dir string, total int) ([]Blob, []string) {
 		if len(out) >= maxListed {
 			return ErrTooLarge
 		}
-		body, err := readRegular(root, p, int64(min(MaxFileBytes, MaxStateBytes-total)))
+		body, err := fsx.ReadRegularIn(root, p, int64(min(MaxFileBytes, MaxStateBytes-total)))
 		if errors.Is(err, fsx.ErrTooLarge) {
 			return ErrTooLarge
 		}

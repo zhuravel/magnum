@@ -4086,17 +4086,22 @@ terminal window, at most twice an hour, never your own session), and for a heavy
 slot; the factory reads magnum's registry and never migrates it (a registry of another schema waits, saying to
 restart magnum's daemon first). A round's roles work in the copy itself: before its result is read, the copy
 must be as the round found it (the task's branch, at the head it reviewed, no tracked change, no untracked file
-the copy did not have before the round: a reviewer's probe file the writer's `git add -A` would commit). What a
-round left on that branch at that head (a reviewer's `bundle check` adds a line to `Gemfile.lock`, a probe file)
-the factory saves in the task's directory, the tracked changes as `round-<n>-left.patch` (`git apply` puts them
-back) and each new file, regular files only, under `round-<n>-left/` at its path in the copy, then puts the copy
-back as the round found it (a directory the removal empties goes too; a file git ignores stays) and reads the
-result; an event names what it saved. It does so only while nobody else could have changed the copy: no agent
-of the task at work in it and no prompt to one, and none of your input in its panes, since the round began.
-Otherwise (somebody else, a symlink, a save or a put-back that fails), and for a copy off the branch or at another
-head, which the factory never moves, the task needs you, naming what the round left, why the factory left it,
-and the `git -C <copy> restore --staged --worktree -- <paths>`, the `rm -- <files>` and the
-`magnum factory retry <task>` that put it back and go on. The factory reads the result itself: a
+the copy did not have before the round, file by file: a reviewer's probe file the writer's `git add -A` would
+commit). What a round left on that branch at that head (a reviewer's `bundle check` adds a line to
+`Gemfile.lock`, a probe file) the factory saves in the task's directory, the tracked changes as
+`round-<n>-left.patch` (`git apply` puts them back; n is the cycle's number) and each new file, regular files
+only, under `round-<n>-left/` at its path in the copy (at most 1,000 files and 256 MiB, 64 MiB a file), then
+puts the copy back as the round found it (a directory the removal empties goes too; a file git ignores stays)
+and reads the result; an event names what it saved. It does so only while nobody else could have changed the
+copy: no agent of the task at work in it and no prompt to one, and none of your input in its panes, since the
+round's cycle began, asked before the save and again before the put-back. A round stopped before its end (a
+drain, an install) has the same done before it runs again in its cycle. When somebody else could have, or the
+save or the put-back fails (a symlink among the new files, too many of them), the task needs you, naming what the
+round left, why the factory left it, and the steps that put it back and go on:
+`git -C <copy> restore --staged --worktree -- <paths>` (`-- :/` past ten paths), `rm -- <files>` (ten of them,
+and how many more an event of the review names) and `magnum factory retry <task>`. A copy off the branch or at
+another head, which the factory never moves, needs you as before: put the copy back as the round found it, then
+let the task go on. The factory reads the result itself: a
 P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A round that
 ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose result does not parse, is "review
 unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>): <the round's error>`),

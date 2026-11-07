@@ -49,7 +49,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which registry.Open then finds current. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test). |
-| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, the check of a file holding a secret, an existence check and a canonical path. |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
@@ -14872,8 +14872,9 @@ package fsx // import "github.com/zhuravel/magnum/internal/fsx"
 
 Package fsx holds the file helpers several packages share: an atomic file
 write, plain or confined to an os.Root, a replacement without disk syncs,
-a size-limited read of a regular file, the check of a file holding a secret,
-an existence check and a canonical path. It imports only the standard library.
+a size-limited read of a regular file, plain or inside an os.Root, the check
+of a file holding a secret, an existence check and a canonical path. It imports
+only the standard library.
 
 VARIABLES
 
@@ -14916,6 +14917,16 @@ func ReadRegular(path string, limit int64) ([]byte, error)
     over limit bytes, by its size or by what the read finds (it may grow),
     is ErrTooLarge, and none of it is returned. A missing file is the error
     os.Lstat returns, unwrapped (errors.Is fs.ErrNotExist).
+
+func ReadRegularIn(root *os.Root, name string, limit int64) ([]byte, error)
+    ReadRegularIn is ReadRegular for the file name inside root, for a file
+    whose directory something untrusted wrote (a curator's scratch, a review
+    round's leftovers in a copy): a symbolic link (even to a file inside root),
+    a directory or a special file is ErrNotRegular and nothing it points
+    to is read, a file past limit is ErrTooLarge and none of it is read,
+    and root keeps every path inside it. The open does not wait for a FIFO put
+    in the file's place since the Lstat (O_NONBLOCK; SameFile then refuses it).
+    The errors are bare (no path): the caller names the file.
 
 func ReplaceFile(path string, data []byte, perm fs.FileMode) error
     ReplaceFile is WriteFileAtomic without the file sync and the directory sync:
@@ -16544,11 +16555,13 @@ func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error)
     remote-tracking ref and no refs/magnum/* ref. Read-only.
 
 func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error)
-    UntrackedFiles lists the untracked files at or under paths of the work tree
-    at dir that git does not ignore (`git ls-files --others --exclude-standard`,
-    each path taken literally from the top), one by one: a wholly untracked
-    directory, which StatusPaths names once, as each of its files. Relative to
-    the top, sorted. It is read-only and does not take the index lock.
+    UntrackedFiles lists the untracked files of the work tree at dir that git
+    does not ignore (`git ls-files --others --exclude-standard`), those at or
+    under paths (each taken literally from the top; none: the whole tree),
+    one by one: a wholly untracked directory, which StatusPaths names once,
+    as each of its files (a repository inside the work tree stays one entry,
+    ending in /). Relative to the top, sorted. It is read-only and does not take
+    the index lock.
 
 func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) error
     UpdateRefDelete deletes a ref under refs/magnum/ (for example PRRef(n)).
@@ -19610,10 +19623,10 @@ type Decision struct {
 
 func ReadDecision(run CriticRun) (d Decision, missing bool, problems []string)
     ReadDecision reads the critic's decision.json in run: a regular file of the
-    run directory (readRegular: what an agent leaves is not trusted), one JSON
-    value, no unknown fields. Problems are worded for a nudge (the file's name
-    and the parse error, never its content); missing reports that the file was
-    not written.
+    run directory (fsx.ReadRegularIn: what an agent leaves is not trusted),
+    one JSON value, no unknown fields. Problems are worded for a nudge (the
+    file's name and the parse error, never its content); missing reports that
+    the file was not written.
 
 type DecisionCheck struct {
 	// Target is the fingerprint the prompt gave: the state the critic
@@ -19712,8 +19725,8 @@ type Proposal struct {
 
 func ReadProposal(s Scratch) (Proposal, []string)
     ReadProposal reads what the curator wrote in s, regular files of its
-    directory only (readRegular). Problems name what is missing or unreadable,
-    in words fit for a nudge (paths, never content).
+    directory only (fsx.ReadRegularIn). Problems name what is missing or
+    unreadable, in words fit for a nudge (paths, never content).
 
 type Recovery struct {
 	Lines  int             `json:"lines"`    // lines recovered

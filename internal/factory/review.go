@@ -46,7 +46,6 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
-	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -415,6 +414,20 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	} else if p != nil {
 		return e.stageFailed(ctx, t, needsYou{p.why})
 	}
+	again := cy != nil
+	if again { // a run again in its cycle: what a stopped run left goes back first, as at a round's end
+		left, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
+		if err != nil {
+			return err
+		}
+		if !left.none() && left.moved == "" {
+			if why, err := e.putBackRound(ctx, t, c, *cy, round, left); err != nil {
+				return err
+			} else if why != "" {
+				return e.stageFailed(ctx, t, needsYou{why})
+			}
+		}
+	}
 	bh, err := e.branchHead(ctx, t, c, repo)
 	switch {
 	case err != nil:
@@ -437,40 +450,34 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 		}
 		cy = &begun
 	}
-	// The untracked files the copy has before the round: what the round
-	// leaves beyond them is named (roundLeft), never committed by the
-	// writer's `git add -A` nor removed.
-	if untracked, err := untrackedPaths(ctx, e.d.Git, c.Path); err != nil {
-		release()
-		return err
-	} else if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(cy.N)), untracked); err != nil {
-		release()
-		return err
+	// The untracked files the copy has before the cycle's first run, file by
+	// file: what a round leaves beyond them is the round's (roundLeft), never
+	// committed by the writer's `git add -A`. A run again in its cycle keeps
+	// the cycle's listing, so nothing a stopped run left counts as the copy's.
+	listing := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), untrackedBeforeFile(cy.N))
+	if _, err := os.Stat(listing); !again || err != nil {
+		untracked, err := e.d.Git.UntrackedFiles(ctx, c.Path)
+		if err == nil {
+			err = writeJSON(listing, append([]string{}, untracked...))
+		}
+		if err != nil {
+			release()
+			return err
+		}
 	}
 	e.launchRound(ctx, t, *cy, lc, release)
 	return nil
 }
 
 // untrackedBeforeFile is the listing of the copy's untracked files taken
-// before round n of a cycle ran.
+// before cycle n's first run (gitx.UntrackedFiles: file by file; an older
+// build's names a wholly untracked directory once, ending in /).
 func untrackedBeforeFile(n int) string { return fmt.Sprintf("untracked-before-%d.json", n) }
 
-// untrackedPaths are the paths of the work tree at dir that git does not
-// track and does not ignore (a directory of them once, as git status names
-// it), sorted.
-func untrackedPaths(ctx context.Context, git *gitx.Client, dir string) ([]string, error) {
-	entries, err := git.StatusPaths(ctx, dir)
-	if err != nil {
-		return nil, err
-	}
-	out := []string{}
-	for _, en := range entries {
-		if en.Untracked() {
-			out = append(out, en.Path)
-		}
-	}
-	slices.Sort(out)
-	return slices.Compact(out), nil
+// listedBefore reports whether path p is in the listing before a round
+// (untrackedBeforeFile): named, or under a directory it names.
+func listedBefore(before []string, p string) bool {
+	return slices.ContainsFunc(before, func(b string) bool { return b == p || strings.HasSuffix(b, "/") && strings.HasPrefix(p, b) })
 }
 
 // reviewWait is what a local round waits for before it starts, "" for
@@ -774,9 +781,13 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 // roundLeft is what a round left in task t's copy c that keeps its result
 // from being read (roundLeftovers): tracked changes, the copy off the
 // task's branch or the branch at another head than head, the one the round
-// reviewed, and untracked paths the listing taken before round n
-// (untrackedBeforeFile) does not have, which the writer's `git add -A`
-// would commit. Nothing of it is removed here.
+// reviewed, and untracked files, one by one, that the listing taken before
+// cycle n (untrackedBeforeFile) does not have and that are no tracked
+// change's path (a file the round took out of the index goes back as
+// tracked), which the writer's `git add -A` would commit. Files are
+// compared, never git status's entries, which group a directory's files
+// once and not once the round stages one of them. Nothing of it is removed
+// here.
 func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (roundLeftovers, error) {
 	var left roundLeftovers
 	git := e.d.Git
@@ -811,11 +822,11 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	if parsed := json.Unmarshal(b, &before) == nil; !parsed {
 		return left, nil // a listing that does not parse tells no new file either
 	}
-	untracked, err := untrackedPaths(ctx, git, c.Path)
+	untracked, err := git.UntrackedFiles(ctx, c.Path)
 	if err != nil {
 		return left, err
 	}
-	left.added = slices.DeleteFunc(untracked, func(p string) bool { return slices.Contains(before, p) })
+	left.added = slices.DeleteFunc(untracked, func(p string) bool { return listedBefore(before, p) || slices.Contains(left.tracked, p) })
 	return left, nil
 }
 
