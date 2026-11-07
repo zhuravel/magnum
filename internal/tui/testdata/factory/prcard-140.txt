@@ -1,0 +1,16 @@
+ magnum factory · widget#4602 · Coupon rounding                                                                                     ↻ 14:09 
+ example/widget #4602
+
+ WAITING FOR  you: claude-fix left you 1 item: e opens its report
+              – P2 app/models/coupon.rb:42: round half up or to even? the ticket does not say
+              github.com/example/widget/pull/4602#discussion_r101
+
+ PR           open · head a1b2c3d · alice-PR-12400-coupon-rounding → master · last activity 13:17
+ CI           ✗ Completion
+ REVIEW       ✗ P2 P3×2 · magnum commented at a1b2c3d, 13:02 · earlier findings: 1 fixed, 1 open
+ APPROVALS    ✔ 1 · approved by rev-bob · asked rev-ann 2h ago
+ THREADS      2 replies magnum's judge has not read: rev-ann (in magnum's thread) and alice
+ FIX LOOP     on: magnum's fixer takes its findings (autofix "open") · F turns it off
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ f fix · F fix off · o magnum's pane · b PR · esc back · ? more

@@ -400,8 +400,11 @@ type factoryModel struct {
 	under  factoryView // where the help and the log go back to
 	scroll int         // the help's and the log's
 	task   int64       // the task whose card shows
-	walk   bool        // a: a decision leads to the next oldest
-	walked map[int64]bool
+	// cardName is the key of the row whose card was opened last, for the
+	// note when it leaves home (your PR merged).
+	cardName string
+	walk     bool // a: a decision leads to the next oldest
+	walked   map[int64]bool
 
 	batches map[int64]*factoryBatch
 	readies map[int64]*factoryReady
@@ -681,6 +684,11 @@ func (m *factoryModel) cardGone() tea.Cmd {
 		gone = (!ok || cards.Question == nil) && m.q.changed == nil
 	case fvReady:
 		gone = !ok || cards.Ready == nil
+	case fvTask:
+		if _, onHome := m.row(m.task); m.task < 0 && !onHome { // your PR merged or closed: no card is left
+			m.goHome()
+			return m.bar.show(m.cardName+" is no longer open", factoryFlashNote)
+		}
 	}
 	if !gone {
 		return nil

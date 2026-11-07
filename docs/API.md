@@ -27642,6 +27642,25 @@ type CardOption struct {
 }
     CardOption is one choice and what it means for the question's example.
 
+type CardPR struct {
+	State     string
+	CI        *CIInfo
+	Review    string
+	Findings  *FindingsInfo
+	Approvals *FactoryApprovals
+	Reviewers string
+	Threads   string
+	FixLoop   string
+}
+    CardPR is what a PR is, on its card (your PR's, or a published task's),
+    as magnum's registry tells it: each line is drawn only when it has its data,
+    under its label in WAITING FOR's column. State is the PR line (its state,
+    head, branches, last activity); CI is drawn as the board's CI cell;
+    Review is magnum's last posted review in words, after its findings' cell
+    (Findings); Reviewers are the people's reviews and whom the PR asks,
+    after the APPR cell (Approvals); Threads are the replies magnum's judge has
+    not read; FixLoop is magnum's fix loop on it.
+
 type CardQuestion struct {
 	Text    string
 	Context string // one line of why it is asked
@@ -29410,8 +29429,12 @@ type TaskCard struct {
 	// magnum keeps, "" for none.
 	FixNeeds  []string
 	FixReport string
-	Stages    []CardStage
-	Agents    []CardAgent
+	// PRInfo is the PR's own lines (CardPR), drawn first in the card's
+	// body: on your PR's card and on a published task's once magnum read
+	// its PR; nil before.
+	PRInfo *CardPR
+	Stages []CardStage
+	Agents []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

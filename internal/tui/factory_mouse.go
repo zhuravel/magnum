@@ -175,11 +175,26 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 	case fvTask:
 		c := m.taskCard()
-		return []menuItem{
+		r, _ := m.row(m.task)
+		pr, hasPR := FactoryPR{}, r.PR != nil
+		if hasPR {
+			pr = *r.PR
+		}
+		fixKeys := []menuItem{
+			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
+			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
+		}
+		if r.yourPR() { // your PR's card: no task to retry, diff or drop
+			return slices.Concat(fixKeys, []menuItem{
+				{"step into magnum's pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
+				{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task), {"back", "esc", "esc", true},
+			})
+		}
+		return slices.Concat([]menuItem{
 			{"retry", "r", "r", acts && c.Retry}, {"diff", "d", "d", acts}, {"drop", "x", "x", acts},
 			{"step into its pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
-			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task), {"back", "esc", "esc", true},
-		}
+			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task)}, fixKeys,
+			[]menuItem{{"back", "esc", "esc", true}})
 	}
 	return nil
 }

@@ -671,7 +671,7 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	}
 	c.WaitingFor = strings.Join(parts, " · ")
 	if v.pr != nil {
-		c.Links, c.FixNeeds, c.FixReport = v.pr.links, v.pr.needs, v.pr.report
+		c.Links, c.FixNeeds, c.FixReport, c.PRInfo = v.pr.links, v.pr.needs, v.pr.report, v.pr.info
 		if v.pr.card != "" { // who left you how many items; the card lists them
 			c.WaitingFor = strings.Join(append([]string{v.pr.card}, parts[1:]...), " · ")
 		}

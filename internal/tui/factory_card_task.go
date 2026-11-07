@@ -1,8 +1,9 @@
 package tui
 
 // The factory's task card (spec 9.C, "Task card at 140"), cut to the sections
-// of milestone 1a: the header, WAITING FOR, STAGES, AGENTS, REPORT and
-// LEARNED. See factory_card.go for the painter it shares with the other cards.
+// of milestone 1a: the header, WAITING FOR, the PR's own lines (on a
+// published task's card and on your PR's, which has nothing else),
+// STAGES, AGENTS, REPORT and LEARNED. See factory_card.go for the painter it shares with the other cards.
 
 import (
 	"fmt"
@@ -55,8 +56,12 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 }
 
 // taskHints are the task card's own key hints. A task a retry can go on
-// for offers r: retry, which goes on at its stage (spec 9.D).
+// for offers r: retry, which goes on at its stage (spec 9.D); your PR's
+// card (no stages, its PR's lines) offers its PR's keys.
 func (p *cardPainter) taskHints(c TaskCard) []hint {
+	if len(c.Stages) == 0 && c.PRInfo != nil { // your PR's card: its PR's keys
+		return []hint{{"f", "fix"}, {"F", "fix off"}, {"o", "magnum's pane"}, {"b", "PR"}, {"esc", "back"}, {"?", "more"}}
+	}
 	hs := []hint{{"j k", "move"}, {"enter", "open the line"}}
 	if c.Retry {
 		hs = append(hs, hint{"r", "retry"})
@@ -155,7 +160,10 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 		lines = append(lines, line)
 	}
 	add := func(l string) { lines = append(lines, l) }
-	p.stageRows(c, stop, add)
+	lines = append(lines, p.prSection(c.PRInfo)...)
+	if len(c.Stages) > 0 || c.PRInfo == nil { // your PR's card is no task's: it has none
+		p.stageRows(c, stop, add)
+	}
 	if len(c.Agents) > 0 || c.AgentsNote != "" {
 		add("")
 		p.agentRows(c, stop, add)
@@ -193,6 +201,43 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 		}
 	}
 	return lines, cursor
+}
+
+// prSection is the PR's own lines (CardPR) at the top of the card's body:
+// PR, CI, REVIEW, APPROVALS, THREADS and FIX LOOP, each under its label in
+// WAITING FOR's column and only when it has its data, cut at the edge; the
+// CI, findings and approvals in the board's cells, as home's columns draw
+// them; a blank line after them.
+func (p *cardPainter) prSection(c *CardPR) []string {
+	if c == nil {
+		return nil
+	}
+	const x = 1 + len("WAITING FOR") + 2
+	var out []string
+	row := func(label string, cl cell) {
+		if cl.width() > 0 {
+			out = append(out, p.line(at(1, x-1, seg{label, p.st.Section}), placed{x, max(p.width-1-x, 1), cl}))
+		}
+	}
+	words := func(cl cell, text string) cell {
+		switch {
+		case text == "":
+			return cl
+		case cl.width() > 0:
+			cl = append(cl, p.sepSeg())
+		}
+		return append(cl, seg{text, noStyle})
+	}
+	row("PR", words(nil, c.State))
+	row("CI", p.ciText(FactoryRow{CI: c.CI}, formLong))
+	row("REVIEW", words(p.findingsText(FactoryRow{Findings: c.Findings}, formLong), c.Review))
+	row("APPROVALS", words(p.apprText(FactoryRow{Approvals: c.Approvals}, formLong), c.Reviewers))
+	row("THREADS", words(nil, c.Threads))
+	row("FIX LOOP", words(nil, c.FixLoop))
+	if len(out) > 0 {
+		out = append(out, "")
+	}
+	return out
 }
 
 // keyedCells are wrapped lines of text whose end names a key: the " (L)" of

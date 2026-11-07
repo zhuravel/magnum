@@ -173,6 +173,18 @@ func cleanTaskCard(c TaskCard) TaskCard {
 	c.Ask = cleanText(c.Ask)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
 	c.Links, c.FixNeeds = cleanAll(c.Links), cleanAll(c.FixNeeds) // FixReport is a path the pager opens, never drawn whole
+	if c.PRInfo != nil {
+		pr := *c.PRInfo
+		pr.State, pr.Review, pr.Reviewers, pr.Threads, pr.FixLoop = cleanText(pr.State), cleanText(pr.Review),
+			cleanText(pr.Reviewers), cleanText(pr.Threads), cleanText(pr.FixLoop)
+		pr.CI = cleanCI(pr.CI)
+		if pr.Findings != nil {
+			f := *pr.Findings
+			f.Verdict, f.Posted, f.SHA = cleanText(f.Verdict), cleanText(f.Posted), cleanText(f.SHA)
+			pr.Findings = &f
+		}
+		c.PRInfo = &pr
+	}
 	c.Stages = slices.Clone(c.Stages)
 	for i, s := range c.Stages {
 		c.Stages[i].Name, c.Stages[i].State, c.Stages[i].Proof = cleanText(s.Name), cleanText(s.State), cleanText(s.Proof)

@@ -293,10 +293,6 @@ func prFixOffVerb(pr FactoryPR) string {
 	return "fix off"
 }
 
-// prKeys is the footer of enter on your PR's row: its keys, since it has no
-// card.
-const prKeys = "your PR: f fix, F fix off, K stop the loop, b browser"
-
 // prsNeedYou counts the rows of your PRs that need you.
 func (m factoryModel) prsNeedYou() int {
 	n := 0
@@ -348,9 +344,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "pgup", "ctrl+u":
 		m.moveTo(m.selIdx - page)
 	case "enter":
-		if r, ok := m.selectedRow(); ok && r.yourPR() {
-			return m.note(prKeys), true
-		} else if ok {
+		if r, ok := m.selectedRow(); ok {
 			m.openCard(r.ID)
 		}
 	case "a":
@@ -412,13 +406,14 @@ func (m *factoryModel) openPage(k string, task int64) tea.Cmd {
 	})
 }
 
-// openCard opens a task's card: the decision card a task that needs the
-// operator waits on, else its task card. A row of your PR (its id below
-// zero) has no card: nothing opens.
+// openCard opens a row's card: the decision card a task that needs the
+// operator waits on, else its task card; your PR's row (its id below zero)
+// opens its PR's card, the task card's view with its PR's lines alone.
 func (m *factoryModel) openCard(id int64) {
-	if id <= 0 {
+	if id == 0 {
 		return
 	}
+	m.cardName = m.taskKey(id)
 	cards := m.data.Cards[id]
 	r, _ := m.row(id)
 	m.selID = id
@@ -1084,11 +1079,38 @@ func (m factoryModel) taskCard() TaskCard {
 	c.Ask = m.bar.question()
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
+	r, _ := m.row(m.task)
+	if r.yourPR() {
+		c.Hints = m.reportHints(m.prCardHints(r, c), m.task, "b", "t")
+		return c
+	}
 	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c), m.task, "d", "b", "t")
 	if what := m.waitingDecision(m.task); what != "" && len(c.Hints) > 0 {
 		c.Hints = slices.Insert(c.Hints, 1, hint{"enter", what}) // after j k
 	}
+	if r.PR != nil && r.PR.Fixing { // magnum's loop on the task's PR
+		c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), hint{"K", "stop magnum"})
+	}
 	return c
+}
+
+// prCardHints are the hints of your PR's card c, of row r: the fix keys,
+// magnum's pane, and the pages it has.
+func (m factoryModel) prCardHints(r FactoryRow, c TaskCard) []hint {
+	hs := []hint{{"f", "fix"}, {"F", prFixOffVerb(*r.PR)}}
+	if r.PR.Fixing {
+		hs = append(hs, hint{"K", "stop"})
+	}
+	if m.act != nil {
+		hs = append(hs, hint{"o", "magnum's pane"})
+	}
+	if c.PRURL != "" {
+		hs = append(hs, hint{"b", "PR"})
+	}
+	if c.IssueURL != "" {
+		hs = append(hs, hint{"t", "Jira"})
+	}
+	return append(hs, hint{"esc", "back"}, hint{"?", "more"})
 }
 
 // waitingDecision is what enter opens on task id's card: "answer" for the
@@ -1152,6 +1174,18 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 	c := m.taskCard()
 	n, cur := taskStops(c), c.Cursor
 	task, act := m.task, m.act
+	r, _ := m.row(task)
+	switch {
+	case k == "f" || k == "F" || k == "K":
+		if r.ID == 0 {
+			return m.note("f, F and K act on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true
+		}
+		return m.prKey(k, r), true
+	case r.yourPR() && k == "x":
+		return m.note("x drops a task: " + m.taskKey(task) + " is your PR (K stops magnum's loop)"), true
+	case r.yourPR() && k == "d":
+		return m.note("no diff of the factory's for " + m.taskKey(task) + ": b opens the PR"), true
+	}
 	switch k {
 	case "j", "down":
 		m.cursors[task] = min(cur+1, max(n-1, 0))

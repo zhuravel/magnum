@@ -543,3 +543,67 @@ func TestABaselineWithoutAFreshVerdictIsLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// Your PR's card, and a published task's, says what the PR is (CardPR):
+// its state, head, branches and last activity; its CI; magnum's last review
+// with what it kept open of the earlier findings; the people's reviews,
+// whom it asks and how long ago; the replies magnum's judge has not read;
+// and magnum's fix loop. Before, your PR's row had no card, and a task's
+// card said none of it.
+func TestThePRCardSaysWhatThePRIs(t *testing.T) {
+	r := newScreenRig(t)
+	r.withMagnum()
+	edit := func(v *PRState) {
+		prData(v)
+		v.HeadRef, v.BaseRef, v.ActivityAt = "zhuravel-coupon-rounding", "master", screenNow.Add(-50*time.Minute)
+		v.Review.At, v.Review.Fixed, v.Review.Open = screenNow.Add(-40*time.Minute), 1, 2
+		v.Asked = []ReviewAsk{{Who: "rev-eve", At: screenNow.Add(-2 * time.Hour)}}
+		v.Replies = []store.Reply{{By: "rev-ann", Thread: true, At: screenNow.Add(-5 * time.Minute)}, {By: "alice", At: screenNow.Add(-time.Minute)}}
+		v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, cycle 1 of 5")
+		v.Fixing, v.Fix = true, engine.FixState{Cycle: 1, Cap: 5, Phase: engine.FixPhaseFixing, Role: "claude-fix", Head: prHead,
+			StartedAt: screenNow.Add(-10 * time.Minute)}
+	}
+	r.own(72, 4602, edit)
+	task := r.publishedTask("PR-12320", 4530)
+	r.pr(4530, edit)
+	d := r.data(time.Time{})
+	want := tui.CardPR{
+		State:     "open · head a1b2c3d · zhuravel-coupon-rounding → master · last activity 08:15",
+		Review:    "magnum commented at a1b2c3d, 08:25 · earlier findings: 1 fixed, 2 open",
+		Reviewers: "approved by rev-ann and rev-bob (an older commit) · changes asked by rev-cid · asked rev-eve 2h ago",
+		Threads:   "2 replies magnum's judge has not read: rev-ann (in magnum's thread) and alice",
+		FixLoop:   "cycle 1 of 5 by claude-fix since 08:55 · K stops it",
+	}
+	for name, c := range map[string]tui.TaskCard{"your PR": d.Cards[-72].Task, "a published task": d.Cards[task.ID].Task} {
+		got := c.PRInfo
+		switch {
+		case got == nil:
+			t.Errorf("%s's card has no PR lines", name)
+		case got.CI == nil || got.CI.Total != 3 || got.Findings == nil || got.Findings.Counts != [4]int{0, 1, 3, 0}:
+			t.Errorf("%s's card: CI %+v, findings %+v", name, got.CI, got.Findings)
+		case got.Approvals == nil || got.Approvals.Approved != 2 || got.Approvals.Changes != 1:
+			t.Errorf("%s's card: approvals %+v", name, got.Approvals)
+		default:
+			g := *got
+			g.CI, g.Findings, g.Approvals = nil, nil, nil
+			if g != want {
+				t.Errorf("%s's card says\n%+v\nwant\n%+v", name, g, want)
+			}
+		}
+	}
+	r.own(73, 4603, nil) // nothing read yet but the PR: its line alone
+	if c := rowCard(t, r.data(time.Time{}), -73); c.PRInfo == nil || c.PRInfo.State != "open · head a1b2c3d" || c.PRInfo.Review != "" ||
+		c.PRInfo.Reviewers != "" || c.PRInfo.Threads != "" {
+		t.Errorf("a PR with nothing read but its head: %+v", c.PRInfo)
+	}
+}
+
+// rowCard is the task card of row id in d.
+func rowCard(t *testing.T, d tui.FactoryData, id int64) tui.TaskCard {
+	t.Helper()
+	c, ok := d.Cards[id]
+	if !ok {
+		t.Fatalf("no card %d", id)
+	}
+	return c.Task
+}

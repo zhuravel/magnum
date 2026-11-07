@@ -56,9 +56,11 @@ type prWait struct {
 	help, card      string
 	// cells are the PR's CI, FINDINGS and APPR cells (prCells).
 	cells prCells
-	// pr is the PR as the row's f, F and K act on it (screenPR); nil when
-	// magnum's registry has no open PR of it.
-	pr *tui.FactoryPR
+	// pr is the PR as the row's f, F and K act on it (screenPR), and info
+	// its lines on the task's card (cardPR); nil when magnum's registry has
+	// no open PR of it.
+	pr   *tui.FactoryPR
+	info *tui.CardPR
 }
 
 // prCells are an open PR's cells on its row: its CI, magnum's findings and
@@ -174,7 +176,7 @@ func (s *screen) readPRs(m Magnum, lastSeen time.Time) error {
 		s.noteBuild(st)
 		w := s.prWaitOf(v, st, ok && err == nil, err)
 		if ok && err == nil {
-			w.cells, w.pr = cellsOf(st), screenPR(st)
+			w.cells, w.pr, w.info = cellsOf(st), screenPR(st), cardPR(st, s.clock())
 		}
 		v.pr = &w
 		v.group = w.group

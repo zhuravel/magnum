@@ -232,18 +232,17 @@ func TestTheWalkSkipsPRRows(t *testing.T) {
 	mustContain(t, h.view(), "2 of your PRs need you: f, F or b on their rows")
 }
 
-// enter on your PR's row opens no card: the footer names its keys; o
-// steps into magnum's pane of it, t opens the Jira issue its title names
-// (none here: it says so), b opens the PR's page.
+// enter on your PR's row opens its card; on home o steps into magnum's
+// pane of it, t opens the Jira issue its title names (none here: it says
+// so), b opens the PR's page.
 func TestThePRRowsKeysOnHome(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g", "j") // #4602
 	h.press("enter")
-	if h.m.view != fvHome {
-		t.Fatalf("enter on a PR row opened view %v", h.m.view)
+	if h.m.view != fvTask || h.m.task != -72 {
+		t.Fatalf("enter on a PR row opened view %v of %d, want its card", h.m.view, h.m.task)
 	}
-	mustContain(t, h.view(), "your PR: f fix, F fix off, K stop the loop, b browser")
-	h.press("o")
+	h.press("esc", "o")
 	if len(h.act.opens) != 0 || len(h.act.openPRs) != 1 || h.act.openPRs[0] != "example/talkable#4602" {
 		t.Errorf("o on a PR row: factory panes %v, magnum's %q; want magnum's pane of #4602", h.act.opens, h.act.openPRs)
 	}
@@ -375,8 +374,8 @@ func TestFOnATaskRowStartsNothing(t *testing.T) {
 }
 
 // A click never starts an action on your PR's row: a double click is
-// enter (its keys in the footer), the menu's fix asks the same y/N as f,
-// and a click with the question up answers no.
+// enter (its card), the card's menu's fix asks the same y/N as f, and a
+// click with the question up answers no.
 func TestAClickStartsNothingWithoutY(t *testing.T) {
 	h := testYours(t, 140, 40)
 	_, lines := renderFactory(h.m.homeFrame(), 140, 40, h.m.st, h.m.g, factoryNow)
@@ -385,11 +384,13 @@ func TestAClickStartsNothingWithoutY(t *testing.T) {
 	if r, _ := h.m.selectedRow(); r.Key != "#4602" {
 		t.Fatalf("the click selected %q, want #4602", r.Key)
 	}
-	mustContain(t, h.view(), prKeys)
+	if h.m.view != fvTask || h.m.task != -72 {
+		t.Fatalf("a double click on #4602 opened view %v of %d, want its card", h.m.view, h.m.task)
+	}
 	h.feed(tea.MouseClickMsg{X: 10, Y: y, Button: tea.MouseRight})
 	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.key == "f" })
 	if !h.m.menu.open || i < 0 {
-		t.Fatalf("no menu with f on your PR's row: %+v", h.m.menuItems())
+		t.Fatalf("no menu with f on your PR's card: %+v", h.m.menuItems())
 	}
 	for range i {
 		h.press("j")
