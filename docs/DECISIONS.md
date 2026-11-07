@@ -15673,6 +15673,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   suffix). Rejected: refusing every `/Volumes/` path (a PR's script can name a disk this machine lacks);
   passing the slot's root to post-review (it reads no config, and a scratch worktree of the judge's on the
   same disk would still pass). Test, failing first: TestParseRefusesAVolumesPathOnlyWhenItIsHere.
+- **A round that dies on a launch failure other PRs share charges no attempt** (2026-11-07, the self-healing
+  audit's R30). On 2026-11-05 from 18:21 to 20:43Z every codex-judge launch died at its TUI bootstrap with
+  one pane line ("account/read failed during TUI bootstrap: … invalid data"), which no PR caused: two PRs
+  spent their three attempts four times over, parked in needs attention five times, and the operator forced
+  eight reviews, while `agents.shared_failure` had named the line at 18:22. Now a round whose error carries
+  a pane line (`agents.PaneErrorOf`: the judge's prompt herdr refused because its agent was gone) that
+  another PR's agent ended with within `sharedFailureWindow` (30 minutes; the lines `noteSharedFailures`
+  groups) is settled by `sharedLaunchFailed` as a shared overload is: no attempt charged, the round
+  refunded from the daily cap (`refund`, `RefundInfra`), the PR back in line after `backoff(n)` for its n-th
+  shared failure on that line in a row (kv `pr.<id>.launch_failures`, deleted by a round that ends any other
+  way), the last error saying so and one `round.launch_shared` info event per round, without the line.
+  Rejected: charging the first failure and refunding later only (the second PR's round is already shared
+  when it ends), and no wait at all (with the kind still failing, a PR would start a round every minute).
+  Test, failing first: TestARoundThatDiesOnALaunchLineAnotherPRSharesChargesNoAttempt.
 
 ## The factory (2026-11-03)
 

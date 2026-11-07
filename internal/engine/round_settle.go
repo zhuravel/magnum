@@ -248,6 +248,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if outcome != pipeline.OutcomeOverloaded {
 		e.delKV(ctx, kvPROverloadShared(pr.ID)) // only shared overloads in a row lengthen the wait (sharedOverload)
 	}
+	if (outcome != pipeline.OutcomeError && outcome != pipeline.OutcomeTimeout) || agents.PaneErrorOf(msg) == "" {
+		e.delKV(ctx, kvPRLaunchFailures(pr.ID)) // only rounds that end on a pane line in a row keep it (sharedLaunchFailed)
+	}
 
 	from := []string{store.PRReviewing, store.PRClaiming}
 	now := e.now()
@@ -325,6 +328,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 			// not the PR's doing. The next round's setup, a minute later,
 			// clears the slot's shell panes first, or holds (clearShells).
 			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, now.Add(busyRetry))
+			break
+		}
+		if e.sharedLaunchFailed(ctx, job, pr, from, res.Round, outcome, msg) { // shared_failure.go: other PRs' launches end the same way, no attempt charged
 			break
 		}
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)

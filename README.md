@@ -940,6 +940,14 @@ each such retry is one `round.overload_shared` info event under the PR naming ho
 overload no other PR shares is charged as before, and a PR an overload already parked stays parked until
 `magnum review`.
 
+A launch failure other PRs share is not the PR's either. A round whose error carries a pane line (a
+judge's prompt herdr refused because its launch died, "the pane shows: Error: …") that another PR's agent
+ended with within the last 30 minutes (the lines `agents.shared_failure` groups) charges no attempt and
+does not count against the daily cap: the PR goes back in line and retries after a wait that doubles from 1
+minute up to 30 minutes while its rounds keep ending on that line. Its error says so (`error: the launch
+fails the same way on 2 PRs (no attempt charged; retry 1 in 1m): …`), and each such round is one
+`round.launch_shared` info event under the PR. A line no other PR shares is charged as before.
+
 A fetch, clone, checkout or dependency step that fails for a reason outside the PR (an SSH key the
 agent lost, DNS, a network timeout or refusal, a server curl could not connect to, TLS, or the same
 dependency error on two PRs within ten minutes) pauses dispatch for everything once, with one toast,

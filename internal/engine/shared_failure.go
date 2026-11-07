@@ -221,6 +221,89 @@ func (e *Engine) sayShared(ctx context.Context, line string, group []launchLine)
 		sharedFailureQuiet)
 }
 
+// Launch failures shared across PRs charge no attempt (DECISIONS "A round
+// that dies on a launch failure other PRs share charges no attempt"): on
+// 2026-11-05 every codex-judge launch died at the TUI bootstrap with one
+// pane line for two hours, and two PRs spent their three attempts four
+// times over between the operator's forced reviews, for a cause neither
+// had.
+
+// eventRoundLaunchShared is recorded (info) under the PR for each round
+// that charged no attempt because its error carries a pane line other PRs'
+// agents ended with (sharedLaunchFailed): how many PRs share it, the retry
+// and its wait (data prs, retry, wait); never the pane line, which
+// agents.shared_failure names.
+const eventRoundLaunchShared = "round.launch_shared"
+
+// kvPRLaunchFailures holds the PR's rounds that ended on one pane line
+// (launchFailures, JSON). A round of the PR that ends any other way
+// deletes it (finish).
+func kvPRLaunchFailures(prID int64) string { return fmt.Sprintf("pr.%d.launch_failures", prID) }
+
+// launchFailures is the PR's record of its rounds that ended on one pane
+// line: the line and its shared failures in a row (Shared), whose next
+// retry waits backoff of it.
+type launchFailures struct {
+	Line   string `json:"line"`
+	Shared int    `json:"shared,omitempty"`
+}
+
+// launchFailuresOf is the PR's record (the zero record: none, or
+// unreadable).
+func (e *Engine) launchFailuresOf(ctx context.Context, prID int64) launchFailures {
+	rec, _, _ := readKVJSON[launchFailures](ctx, e, kvPRLaunchFailures(prID), "launch failures")
+	return rec
+}
+
+// sharedLaunchFailed settles a failed round without charging the PR an
+// attempt when its error carries a pane line (agents.PaneErrorOf) that
+// another PR's agent ended with within sharedFailureWindow (launchLines,
+// the lines noteSharedFailures groups): the round does not count against
+// the daily cap (refund, RefundInfra), the PR goes back in line, its
+// attempts untouched, and retries after backoff(n), n its shared failures
+// on that line in a row (launchFailures.Shared), so the wait doubles from
+// a minute up to retryMax; its last_error says the launch fails the same
+// way on the PRs, and one round.launch_shared info event under the PR names
+// how many. It reports false, and the caller charges the attempt, for a
+// round whose error carries no pane line or one no other PR shares.
+func (e *Engine) sharedLaunchFailed(ctx context.Context, job *roundJob, pr store.PR, from []string, round int, outcome, msg string) bool {
+	line := agents.PaneErrorOf(msg)
+	if line == "" {
+		return false
+	}
+	subject := prSubject(job.repo, pr.Number)
+	self, label, _ := prOfSubject(subject)
+	group := onePerPR(e.launchLines(ctx, e.now().Add(-sharedFailureWindow)), func(l launchLine) bool { return l.pr != self && l.line == line })
+	if len(group) == 0 {
+		e.delKV(ctx, kvPRLaunchFailures(pr.ID))
+		return false
+	}
+	group = append(group, launchLine{pr: self, label: label})
+	sortByPR(group)
+	labels := make([]string, 0, len(group))
+	for _, g := range group {
+		labels = append(labels, g.label)
+	}
+	rec := e.launchFailuresOf(ctx, pr.ID)
+	if rec.Line != line {
+		rec = launchFailures{Line: line}
+	}
+	rec.Shared++
+	if err := writeKVJSON(ctx, e, kvPRLaunchFailures(pr.ID), "launch failures", rec); err != nil {
+		e.log.Warn("record the PR's launch failures", "pr", pr.ID, "err", err)
+	}
+	wait := backoff(rec.Shared)
+	e.refund(ctx, job, round, RefundInfra, outcome)
+	// The shared part first: a screen's one-line summary clips the end.
+	e.retryOrAttention(ctx, job, pr, from, claimableState(pr), fmt.Sprintf("%s: the launch fails the same way on %d PRs (no attempt charged; retry %d in %s): %s",
+		outcome, len(group), rec.Shared, humanDuration(wait), msg), false, e.now().Add(wait))
+	e.event(ctx, "info", subject, eventRoundLaunchShared,
+		fmt.Sprintf("the round's launch fails the same way on %d PRs within %s (%s): no attempt charged; retry %d in %s (doubling up to %s)",
+			len(group), humanDuration(sharedFailureWindow), strings.Join(labels, ", "), rec.Shared, humanDuration(wait), humanDuration(retryMax)),
+		map[string]any{"prs": len(group), "retry": rec.Shared, "wait": humanDuration(wait)})
+	return true
+}
+
 // sortByPR orders ls by repository, then by number.
 func sortByPR(ls []launchLine) {
 	slices.SortFunc(ls, func(a, b launchLine) int {
