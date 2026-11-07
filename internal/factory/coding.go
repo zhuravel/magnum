@@ -375,7 +375,11 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 // endCheckEvent writes the end of check x of task t.
 func (e *Engine) endCheckEvent(t registry.Task, x *headCheck) {
 	ctx := context.Background()
+	_, crashed := errors.AsType[envCrash](x.res.Err)
 	switch r := x.res; {
+	case crashed:
+		e.event(ctx, t.ID, "check", registry.PhaseFail, short(x.head)+": "+textx.Clip(r.Err.Error(), 300)+
+			"; the infrastructure hold runs the checks again")
 	case r.Err != nil:
 		e.event(ctx, t.ID, "check", registry.PhaseFail, short(x.head)+": did not run to its end: "+textx.Clip(textx.FirstLine(r.Err.Error()), 300))
 	case r.passed():
@@ -451,6 +455,7 @@ func (r checkResult) why() string {
 // is the head that passed. err is a failure to read the branch.
 func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *endProblem, head string, pending bool, err error) {
 	if e.checkRuns(t.ID) {
+		e.holdTryRuns(t.ID)
 		e.precheckWait(ctx, t)
 		return nil, "", true, nil
 	}
@@ -460,6 +465,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 	// to NEEDS YOU, and once it goes on its head is checked afresh, after
 	// what the check kept is settled (settleKept).
 	if res, ok := e.endedResult(t.ID); ok && res.Err == nil && res.forYou() {
+		delete(e.envCrashed, t.ID)
 		e.clearPrecheckWait(ctx, t)
 		e.dropCheck(t.ID)
 		return operatorProblem(*t, precheckFile, res.why()), "", false, nil
@@ -483,7 +489,12 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		return fp, "", false, nil
 	}
 	res, ready := e.checkHead(ctx, *t, c, bh.Head, strings.Join(pf.Specs, "\x00"), true)
+	crash, crashed := errors.AsType[envCrash](res.Err)
+	if ready && !crashed {
+		delete(e.envCrashed, t.ID) // a check ran past the environment: no try of the hold any more
+	}
 	if !ready {
+		e.holdTryRuns(t.ID)
 		if e.checkRuns(t.ID) {
 			e.precheckWait(ctx, t)
 		} else if fresh, rerr := e.reg.TaskByID(ctx, t.ID); rerr == nil { // a heavy slot's wait, or the drain
@@ -498,6 +509,18 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		w, _ := errors.AsType[heldError](res.Err)
 		e.waitOn(ctx, *t, w.who, w.what)
 		t.WaitsWho, t.WaitsWhat = w.who, w.what
+		return nil, "", true, nil
+	case crashed:
+		// The environment's: the infrastructure hold weighs it with the
+		// tick's other failures (Tick), at no cost to the task, and the next
+		// check, at the hold's try, is the try (holdTryRuns).
+		e.dropCheck(t.ID)
+		e.checkRanToItsEnd(t.ID)
+		e.envCrashed[t.ID] = true
+		e.envFails = append(e.envFails, taskFailure{task: *t, err: crash})
+		what := crash.Error() + "; the infrastructure hold runs the checks again"
+		e.waitOn(ctx, *t, waitPrecheck, what)
+		t.WaitsWho, t.WaitsWhat = waitPrecheck, what
 		return nil, "", true, nil
 	case res.Err != nil:
 		if n := e.countFailedCheck(t.ID); n >= checkTries {
@@ -524,6 +547,16 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		return &endProblem{file: file, why: res.why(), change: true}, "", false, nil
 	}
 	return nil, bh.Head, false, nil
+}
+
+// holdTryRuns notes that the checks of task id, whose last check crashed
+// on the environment (envCrashed), run or wait to run: they are the
+// infrastructure hold's try, which neither lifts the hold nor fails until
+// they end (hold).
+func (e *Engine) holdTryRuns(id int64) {
+	if e.envCrashed[id] {
+		e.holdTry = true
+	}
 }
 
 // operatorProblem is an end problem of task t's checks that needs you
@@ -643,6 +676,11 @@ func (e *Engine) sweepChecks(tasks []registry.Task) {
 	for _, t := range tasks {
 		if isLive(t) {
 			live[t.ID] = true
+		}
+	}
+	for id := range e.envCrashed {
+		if !live[id] {
+			delete(e.envCrashed, id)
 		}
 	}
 	var swept []*headCheck

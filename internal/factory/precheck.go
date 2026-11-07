@@ -66,7 +66,9 @@ var errOverCap = errors.New("the precheck's cap")
 // precheck runs task t's precheck in copy c at its head (see the file's
 // comment). A precheck that does not pass is a result with Why, nil error;
 // the error is a wait (somebody at work in the copy), the caller's context
-// ending, or a failure to run (git). It started on a clean tree (branchHead),
+// ending, a failure to run (git), or a command that crashed on its
+// environment (envCrash: its report is written, and the infrastructure hold
+// runs the checks again). It started on a clean tree (branchHead),
 // and looks at it again after its wait for the spec lock (afterWait: no
 // command runs over a change made while it waited), so whatever its commands
 // changed in tracked files (Rails dumps db/schema.rb after a migration) is
@@ -173,7 +175,8 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if overCap {
 		p.say("\n**Stopped: over its cap of %s.**\n", capText(limit))
 	}
-	switch {
+	var crashed error // a crash of the environment: its report is written, and it is the precheck's error
+	switch crash, isCrash := errors.AsType[envCrash](p.err); {
 	case ctx.Err() != nil:
 		return p.res, ctx.Err()
 	case leftDetached && p.err != nil:
@@ -184,6 +187,8 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	case p.res.ForYou:
 	case overCap:
 		p.res.Passed, p.res.Why = false, "precheck: over "+capText(limit)
+	case isCrash:
+		p.res.Passed, p.res.Why, crashed = false, "precheck: "+crash.Error(), crash
 	case p.err != nil:
 		return p.res, p.err
 	}
@@ -202,7 +207,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err := writeJSON(filepath.Join(dir, precheckRecordFile), precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why}); err != nil {
 		return p.res, err
 	}
-	return p.res, nil
+	return p.res, crashed
 }
 
 // precheckRecordFile is precheck.json: the end of the task's last precheck
@@ -461,6 +466,14 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 		case named == 0:
 			check.Result, check.Cause = registry.CheckFail, "unknown"
 			p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
+			if crash, ok := crashOf("precheck.lint", cmd, p.c.Path, p.stderr, run.Output); ok {
+				// The environment's, not the change's nor yours to retry: the
+				// infrastructure hold runs the checks again (provenHead).
+				check.Cause = "env"
+				p.say("\nIt crashed for lack of %s: the infrastructure hold runs the checks again at its next try.\n", crash.sig.lacks)
+				p.err = crash
+				break
+			}
 			p.failForYou(p.lintCrashWhy(cmd, run))
 		default:
 			p.say("\n- `%s`: %s, none on a changed line\n", script, plural(named, "offense"))

@@ -422,3 +422,81 @@ func TestANeedsYouForTheChecksNamesTheFixAndTheRetry(t *testing.T) {
 		})
 	}
 }
+
+// setLintCrash makes bin/lint crash with stderr, or, "", run as it does.
+func (r *codingRig) setLintCrash(stderr string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lintCrash = nil
+	if stderr != "" {
+		r.lintCrash = func([]string) string { return stderr }
+	}
+}
+
+// A lint that crashed on its environment (rubocop without a UTF-8 locale)
+// is neither the writer's to fix nor yours to retry: the infrastructure
+// hold takes it, at no cost to the task, and runs the checks again at each
+// of its tries; a crash that lasts 30 minutes needs you once, naming the
+// line and the fix, and the first try after the fix lifts the hold.
+func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12383", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.setLintCrash("invalid byte sequence in US-ASCII\n/gems/rubocop/lib/rubocop/cop/team.rb:12:in 'match?'\n")
+	r.ended(task, "fx-writer")
+	r.tick() // the end: the checks start off the loop
+	r.e.waitBackground()
+	r.tick() // their crash
+
+	hd, held := r.e.holds[HoldInfra]
+	if !held || !strings.Contains(hd.Reason, "invalid byte sequence in US-ASCII") || !strings.Contains(hd.Reason, "LANG") {
+		t.Fatalf("hold %+v (%v), want an infrastructure hold naming the crash and the fix", hd, held)
+	}
+	attempt := r.reload(task.ID).Attempt
+	if got := r.reload(task.ID); got.State != registry.TaskActive || !strings.Contains(got.WaitsWhat, "a UTF-8 locale") {
+		t.Fatalf("task %s waits %q; want active, waiting on the hold", got.State, got.WaitsWhat)
+	}
+	if got := r.checksOf(task.ID, "lint"); !slices.Contains(got, "fail/env") {
+		t.Fatalf("lint checks %q, want one failed on the environment", got)
+	}
+
+	for range 31 { // its tries at 2, 6, 14 and 30 minutes crash again
+		r.clock.Add(time.Minute)
+		r.tick()
+		r.e.waitBackground()
+		r.tick()
+	}
+	hd, held = r.e.holds[HoldInfra]
+	if !held || hd.Tries < 3 {
+		t.Fatalf("hold %+v (%v) after 31 minutes, want held with its tries failed", hd, held)
+	}
+	if got := r.e.Blocking(); len(got) != 1 || !strings.Contains(got[0], "invalid byte sequence in US-ASCII") ||
+		!strings.Contains(got[0], "magnum factory install") {
+		t.Fatalf("blocking %q, want the crash and its fix", got)
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskActive || got.Attempt != attempt {
+		t.Fatalf("the hold cost the task: %s, attempt %d", got.State, got.Attempt)
+	}
+	if n := len(r.rt.promptsTo("fx-writer")); n != 1 {
+		t.Fatalf("the writer got %d prompts, want no fix turn for the environment's crash", n)
+	}
+
+	r.setLintCrash("") // the locale is fixed
+	for i := 0; i < 40; i++ {
+		if _, held := r.e.holds[HoldInfra]; !held {
+			break
+		}
+		r.clock.Add(time.Minute)
+		r.tick()
+		r.e.waitBackground()
+		r.tick()
+	}
+	if hd, held := r.e.holds[HoldInfra]; held {
+		t.Fatalf("hold %+v outlived a try whose checks passed", hd)
+	}
+	if got := r.checksOf(task.ID, "lint"); got[len(got)-1] != "pass" {
+		t.Fatalf("lint checks %q, want the last one passed", got)
+	}
+}

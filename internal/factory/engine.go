@@ -312,10 +312,19 @@ type Engine struct {
 	// publishFails counts the failed tries of each task's publish effect.
 	publishFails map[int64]publishFail
 	readFails    []error
-	inbox        map[int64][]runtime.Event
-	holds        map[string]*Hold
-	blockers     map[string]string
-	recent       map[string]recentFailure
+	// envFails are the crashes of the environment the tasks' checks met
+	// in this tick (envCrash), which the infrastructure hold weighs with
+	// its other failures; envCrashed names the tasks whose last check
+	// crashed so, whose next check is the hold's try, and holdTry says that
+	// such a check runs or waits to run in this tick: the hold neither lifts
+	// nor counts a failed try before it ends.
+	envFails   []error
+	envCrashed map[int64]bool
+	holdTry    bool
+	inbox      map[int64][]runtime.Event
+	holds      map[string]*Hold
+	blockers   map[string]string
+	recent     map[string]recentFailure
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte
@@ -505,6 +514,7 @@ func New(d Deps) *Engine {
 		checks:       map[int64]*headCheck{},
 		checkNotes:   map[int64]string{},
 		checkFails:   map[int64]int{},
+		envCrashed:   map[int64]bool{},
 		keptCopies:   map[int64]keptCopy{},
 		keptMem:      map[int64]keptUnwritten{},
 		lockPoll:     specsLockPoll,
@@ -801,6 +811,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
 	e.ticks++
+	e.holdTry = false
 	e.jiraLeft = jiraTriesPerTick
 	e.wake(now)
 	defer e.alive()
@@ -869,8 +880,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 			}
 		}
 	}
+	failures = append(failures, e.envFails...)
 	failures = append(failures, e.readFails...)
-	e.readFails = nil
+	e.envFails, e.readFails = nil, nil
 	if e.uncounted {
 		if len(failures) > 0 {
 			e.log.Info("failures on the first tick after a wake count none", "failures", errors.Join(failures...))

@@ -118,7 +118,8 @@ const (
 // that advanced the tasks (Tick's tried) is a try: another infrastructure
 // failure doubles the wait (up to 30 minutes), none lifts the hold. Failures
 // between tries, and a tick that tried nothing (herdr down, the first tick
-// after a wake), change nothing.
+// after a wake), change nothing. A try whose checks run again after they
+// crashed on the environment (holdTry) ends with them.
 func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	now := e.tickAt
 	if now.IsZero() {
@@ -155,6 +156,8 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 		h.Next = now.Add(infraBackoff(h.Tries))
 		e.event(ctx, 0, "hold", registry.PhaseInfo, fmt.Sprintf("infra: try %d failed (%s); tries again at %s",
 			h.Tries, cause, h.Next.Local().Format("15:04")))
+		return *h, true
+	case e.holdTry: // checks that crashed on the environment run again as its try: it ends with them
 		return *h, true
 	}
 	e.lift(ctx, HoldInfra, now)

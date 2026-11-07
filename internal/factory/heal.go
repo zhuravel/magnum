@@ -156,6 +156,9 @@ func infraCause(err error) string {
 	if err == nil || herdrDown(err) {
 		return ""
 	}
+	if c, ok := errors.AsType[envCrash](err); ok {
+		return c.holdCause()
+	}
 	if _, ok := errors.AsType[mysqlFailure](err); ok {
 		return "MySQL does not answer"
 	}
