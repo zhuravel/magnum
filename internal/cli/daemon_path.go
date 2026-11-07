@@ -29,26 +29,39 @@ const shellPATHScript = `printf '%s\n' "$PATH"`
 // directories of the operator's login shell that its own PATH lacks: it asks
 // `$SHELL -ilc` (zsh when SHELL is unset; interactive and login, so the
 // shell's .zshrc exports count too, detached from any terminal, without
-// stdin, for shellPATHTimeout at most), appends them in the shell's order
-// and sets the result in the daemon's own environment, which every command
-// it starts inherits. launchd's PATH keeps its order and stays first, so
-// mise's shims still win. It runs once, before app.New, so nothing the
-// daemon runs precedes it. A shell that fails, hangs or prints no PATH
-// leaves the PATH as it was. The result is what the engine records at its
-// start (engine.ShellPATH); nil with the key off, when no shell runs.
+// stdin, for shellPATHTimeout at most, and once more for twice that when it
+// answered nothing in time), appends them in the shell's order and sets the
+// result in the daemon's own environment, which every command it starts
+// inherits. launchd's PATH keeps its order and stays first, so mise's shims
+// still win. It runs before app.New, so nothing the daemon runs precedes
+// it. A shell that fails, hangs or prints no PATH leaves the PATH as it was.
+// The result is what the engine records at its start (engine.ShellPATH);
+// nil with the key off, when no shell runs.
 func daemonShellPATH(ctx context.Context, cfg *config.Config) *engine.ShellPATH {
 	if cfg == nil || !cfg.Daemon.ShellPath {
 		return nil
 	}
 	shell := cmp.Or(daemonSys.Getenv("SHELL"), "zsh")
-	s := &engine.ShellPATH{Shell: filepath.Base(shell)}
-	res, err := daemonSys.runner(false, io.Discard).Run(ctx, execx.Cmd{
-		Name: shell, Args: []string{"-ilc", shellPATHScript},
-		Timeout: shellPATHTimeout, NoTTY: true, Label: "login shell PATH",
-	})
+	s := &engine.ShellPATH{Shell: filepath.Base(shell), Tries: 1}
+	ask := func(wait time.Duration) (execx.Result, error) {
+		return daemonSys.runner(false, io.Discard).Run(ctx, execx.Cmd{
+			Name: shell, Args: []string{"-ilc", shellPATHScript},
+			Timeout: wait, NoTTY: true, Label: "login shell PATH",
+		})
+	}
+	res, err := ask(shellPATHTimeout)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		// A cold start of the shell's startup files can outlast the wait
+		// (10 of 80 daemon starts by 2026-11-07), and a daemon without the
+		// PATH cannot run the tools only the shell's exports find.
+		s.Tries = 2
+		res, err = ask(2 * shellPATHTimeout)
+	}
 	// The reasons are fixed words: the shell's output and stderr may name
 	// anything its startup files print.
 	switch {
+	case errors.Is(err, context.DeadlineExceeded) && s.Tries > 1:
+		s.Failed = "answered nothing in " + shellPATHTimeout.String() + ", nor in " + (2 * shellPATHTimeout).String() + " on a second try"
 	case errors.Is(err, context.DeadlineExceeded):
 		s.Failed = "answered nothing in " + shellPATHTimeout.String()
 	case errors.Is(err, context.Canceled):

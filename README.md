@@ -287,13 +287,15 @@ shims, Homebrew's and the system directories), and every command it runs inherit
 readiness commands, `mise exec`, gh and the agent CLIs. A tool only your shell's exports put on `PATH`, such
 as DBngin's `mysql`, `psql` or `redis-server` in versioned directories, is missing there (every schema load
 then fails). So the daemon asks your login shell for its `PATH` once at its start, before it runs anything (`$SHELL -ilc`, `zsh`
-when `SHELL` is unset, 20 s at most, no terminal and no stdin), and appends the directories its own `PATH`
+when `SHELL` is unset, 20 s at most, no terminal and no stdin; a shell that answers nothing in 20 s is asked
+once more, for 40 s, because a cold start of its startup files can outlast the first wait), and appends the directories its own `PATH`
 lacks, in the shell's order. launchd's `PATH` stays first, so mise's shims still win. Banners and hook
 output are skipped: the last line that reads as a `PATH` (colon-separated absolute directories) counts. The
 `daemon.shell_path` event says how many directories were added ("PATH from zsh: 4 directories added"),
 and `magnum status` shows the count on its daemon line. The debug log names the directories, the event
-never does. A shell that fails, prints no `PATH` or answers nothing in 20 s leaves launchd's `PATH`
-alone, with a warning event ("the login shell (zsh) answered nothing in 20s. The launchd PATH stays"). A
+never does; a `PATH` from the second ask adds "on a second try". A shell that fails, prints no `PATH` or
+answers nothing in either wait leaves launchd's `PATH` alone, with a warning event ("the login shell (zsh)
+answered nothing in 20s, nor in 40s on a second try. The launchd PATH stays"). A
 change of your shell's `PATH` (a DBngin upgrade) takes effect at the next `magnum daemon-restart`, as a
 config change does. The CLI keeps the environment of the terminal it runs in. `false` keeps launchd's
 `PATH` alone and runs no shell. The factory daemon (`magnum factory daemon`) takes the same `PATH` at its start, because it runs its copies'

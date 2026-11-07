@@ -15080,6 +15080,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   would do nothing until then anyway). Test, failing first:
   TestAMoveByADaemonLaunchdDoesNotRunSaysToStartItAgainByHand.
 
+- **A login shell that answers nothing in 20 s is asked once more, for 40 s** (2026-11-07). By this date
+  10 of about 80 daemon starts (the review daemon and the factory daemon) logged "the login shell (zsh)
+  answered nothing in 20s", and each such daemon ran without the shell's PATH until its next restart: on
+  2026-11-06 a factory daemon without it could not start `redis-server`, and every factory copy broke. A
+  cold start of the shell's startup files is the likely cause, and a second ask finds them warm. Only a
+  timeout is asked again (an exit, no PATH line or a shell that does not start would answer the same), and
+  not when the daemon is stopping. The second wait is twice the first, so a start waits 60 s at most. The
+  event says "PATH from zsh: 4 directories added on a second try", or "answered nothing in 20s, nor in 40s
+  on a second try", and engine.ShellPATH.Tries (kv `daemon.shell_path`) counts the asks. Rejected: a
+  longer single wait (every slow start would wait the whole of it) and a retry in the background after the
+  start (the commands the daemon already ran would have had the launchd PATH). Test, failing first:
+  TestAShellThatHangsOnceIsAskedAgain.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

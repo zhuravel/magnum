@@ -38,15 +38,23 @@ type ShellPATH struct {
 	// "exited with status 1", "printed no PATH", "could not start"); "" when
 	// it gave one. The daemon's PATH is then launchd's alone.
 	Failed string `json:"failed,omitempty"`
+	// Tries is how many times the shell was asked: 2 when it answered
+	// nothing in time at first and was asked once more.
+	Tries int `json:"tries,omitempty"`
 }
 
 // Message is the daemon.shell_path event's text: "PATH from zsh: 4
-// directories added", or why the launchd PATH stays.
+// directories added" (with " on a second try" when the first ask answered
+// nothing in time), or why the launchd PATH stays.
 func (s ShellPATH) Message() string {
 	if s.Failed != "" {
 		return "the login shell (" + s.Shell + ") " + s.Failed + ". The launchd PATH stays"
 	}
-	return "PATH from " + s.Shell + ": " + textx.Count(s.Count, "directory", "directories") + " added"
+	again := ""
+	if s.Tries > 1 {
+		again = " on a second try"
+	}
+	return "PATH from " + s.Shell + ": " + textx.Count(s.Count, "directory", "directories") + " added" + again
 }
 
 // ReadShellPATH is what the running daemon took from the login shell's PATH

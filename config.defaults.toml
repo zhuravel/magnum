@@ -95,8 +95,9 @@ restart_on_new_build = false      # true: once a new bin/magnum on disk passes i
                                   # notes curation or retro running (it exits for launchd to start the new build;
                                   # dispatch never stops for it; needs launchd)
 shell_path = true                 # at its start the daemon asks your login shell for its PATH ($SHELL -ilc, 20s at
-                                  # most) and appends the directories its own PATH lacks (launchd's stays first,
-                                  # mise's shims still win), so its hooks and commands find what only your shell's
+                                  # most, once more for 40s when it answered nothing) and appends the directories
+                                  # its own PATH lacks (launchd's stays first, mise's shims still win), so its
+                                  # hooks and commands find what only your shell's
                                   # exports name (DBngin's mysql, psql, redis-server); false keeps launchd's PATH;
                                   # a change of your shell's PATH takes effect at the next daemon-restart; event
                                   # daemon.shell_path, `magnum status` shows the count; the CLI keeps its own PATH;

@@ -82,10 +82,32 @@ func TestAShellThatHangsLeavesTheLaunchdPATH(t *testing.T) {
 	if st.env["PATH"] != launchdTestPATH {
 		t.Fatalf("PATH changed: %s", st.env["PATH"])
 	}
-	if got == nil || got.Failed != "answered nothing in 200ms" || got.Count != 0 {
+	if got == nil || got.Failed != "answered nothing in 200ms, nor in 400ms on a second try" || got.Count != 0 || got.Tries != 2 {
 		t.Fatalf("result = %+v", got)
 	}
-	if msg := got.Message(); msg != "the login shell (zsh) answered nothing in 200ms. The launchd PATH stays" {
+	if msg := got.Message(); msg != "the login shell (zsh) answered nothing in 200ms, nor in 400ms on a second try. The launchd PATH stays" {
+		t.Fatalf("event message = %q", msg)
+	}
+}
+
+// A login shell that answers nothing in time once (a cold start of its
+// startup files, 10 of 80 daemon starts by 2026-11-07) is asked once more,
+// with twice the wait, and its PATH counts.
+func TestAShellThatHangsOnceIsAskedAgain(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "asked")
+	st := newShellPATHTest(t, "if [ -e '"+mark+"' ]; then echo '"+launchdTestPATH+":/Applications/DBngin.app/redis-7.2.4/bin'; "+
+		"else : > '"+mark+"'; exec sleep 30; fi")
+	// Seconds, not milliseconds: the second ask of a fresh script took over
+	// 400ms in a quiet run, and the gate runs at a load of 15 to 25.
+	shellPATHTimeout = 2 * time.Second
+	got := daemonShellPATH(context.Background(), st.cfg)
+	if got == nil || got.Failed != "" || got.Count != 1 || got.Tries != 2 {
+		t.Fatalf("result = %+v", got)
+	}
+	if st.env["PATH"] != launchdTestPATH+":/Applications/DBngin.app/redis-7.2.4/bin" {
+		t.Fatalf("PATH = %s", st.env["PATH"])
+	}
+	if msg := got.Message(); msg != "PATH from zsh: 1 directory added on a second try" {
 		t.Fatalf("event message = %q", msg)
 	}
 }
@@ -133,7 +155,8 @@ func TestAShellThatFailsLeavesTheLaunchdPATH(t *testing.T) {
 		if st.env["PATH"] != launchdTestPATH {
 			t.Errorf("%q: PATH changed: %s", tc.script, st.env["PATH"])
 		}
-		if got == nil || got.Failed != tc.failed || strings.Contains(got.Message(), "/opt/x") {
+		// Only a shell that answers nothing in time is asked again.
+		if got == nil || got.Failed != tc.failed || got.Tries != 1 || strings.Contains(got.Message(), "/opt/x") {
 			t.Errorf("%q: result = %+v", tc.script, got)
 		}
 	}
