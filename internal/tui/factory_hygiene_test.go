@@ -16,7 +16,7 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 	h := testFactory(t, 140, 50)
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
 	words := map[string]bool{}
-	for _, l := range strings.Split(help, "\n") {
+	for l := range strings.SplitSeq(help, "\n") {
 		if w, _, ok := strings.Cut(strings.TrimSpace(l), "  "); ok {
 			words[w] = true
 		}
@@ -56,7 +56,7 @@ func TestATitleDropsTheKeyItsKeyCellShows(t *testing.T) {
 		}
 	}
 	line := func(frame, key string) string {
-		for _, l := range strings.Split(ansi.Strip(frame), "\n") {
+		for l := range strings.SplitSeq(ansi.Strip(frame), "\n") {
 			if strings.Contains(l, " "+key+" ") {
 				return l
 			}
