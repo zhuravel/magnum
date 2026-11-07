@@ -643,11 +643,12 @@ func addFixerHead(heads []string, head string) []string {
 // itself in the ledger and an autofix.open event; a refusal makes the
 // verdict wait with its sentence (a budget below the floor, a paused kind,
 // a busy or pinned PR, no free slot, the human cooldown, a read of GitHub
-// that failed) and is tried again openReadRetry later, not at every tick,
-// since some refusals come after prepareFix read GitHub; except "nothing
-// to fix", where the look and prepareFix disagree: that needs you, with the
-// refusal, and is not tried again until the PR changes (Refused). A dry run
-// starts nothing.
+// that failed, a look at the base that failed: mergeUncheckedError, whose
+// conflict is unknown, not gone) and is tried again openReadRetry later,
+// not at every tick, since some refusals come after prepareFix read
+// GitHub; except "nothing to fix", where the look and prepareFix disagree:
+// that needs you, with the refusal, and is not tried again until the PR
+// changes (Refused). A dry run starts nothing.
 func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, fp string) OpenVerdict {
 	subject := prSubject(repo, pr.Number)
 	if l.Refused != "" && l.Refused == fp {
@@ -668,6 +669,7 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	}
 	_, err := e.startFix(ctx, pr, autofixBy, FixState{}, carried)
 	var budget *githubBudgetError
+	var unchecked *mergeUncheckedError
 	switch {
 	case err == nil:
 		now := e.now()
@@ -683,6 +685,10 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	case errors.As(err, &budget):
 		v.Verdict, v.Why = OpenWaits, "GitHub budget: the loop waits for it"
 		l.WaitAt, l.WaitWhy = e.now(), v.Why
+	case errors.As(err, &unchecked): // the conflict is unknown, not gone: asked again, as a failed read is
+		v.Verdict, v.Why = OpenWaits, oneLine(unchecked.cause.Error(), 300)
+		l.WaitAt, l.WaitWhy = e.now(), v.Why
+		e.log.Info("autofix open: no fix loop started", "subject", subject, "why", v.Why)
 	case strings.HasPrefix(err.Error(), "nothing to fix"):
 		why := oneLine(err.Error(), 300)
 		e.log.Warn("autofix open: the look found work that the fix job refuses", "subject", subject, "why", why)

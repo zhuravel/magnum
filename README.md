@@ -3212,7 +3212,9 @@ stacked PR's own base) every 30 minutes, with one fetch of that base per clone i
 read to the fix job, which reads GitHub no second time. While the poll of the watch is behind (its last good
 poll is over two poll intervals old) the PR's row may be old: the verdict is `unknown` and nothing starts. A
 start the fix job refuses waits with the refusal's words and is tried again 5 minutes later; "nothing to
-fix" (the look and the job disagree) needs you, and is not tried again until the PR changes. A dry-run
+fix" (the look and the job disagree) needs you, and is not tried again until the PR changes, unless the job
+could not check the PR's merge with its base (a failed fetch): the conflict is then unknown, not gone, and
+the start waits and is tried again too. A dry-run
 daemon reads and decides, but writes nothing and starts nothing.
 
 What a loop was handed is remembered by key: the items of the `external-threads.json` its fixer got (never

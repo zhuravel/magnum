@@ -431,7 +431,8 @@ func (e *Engine) readExternal(ctx context.Context, job *fixJob) (externalRead, e
 // (prepareFix's look, spec 5.6): a conflict is work enough, and the read,
 // whole, cut short or none when it failed, goes to the job, whose start
 // reads a failed one again; a look that failed ends the refusal with why
-// ("; its merge with master could not be checked: …"). A read GitHub
+// ("; its merge with master could not be checked: …", a
+// mergeUncheckedError when it says nothing to fix). A read GitHub
 // refused for the rate limit asks nothing: the floor may hold the job, and
 // the held fix looks at the base when it starts.
 func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, carried *externalRead, merges func() (bool, error)) (*externalRead, error) {
@@ -468,8 +469,21 @@ func (e *Engine) othersWaiting(ctx context.Context, probe *fixJob, on string, ca
 		return nil, fmt.Errorf("%s: the review on %s found nothing, and the other reviewers' threads and comments could not all be read (%s); answer them by hand%s",
 			probe.label(), on, strings.Join(read.cut, ", "), why)
 	}
-	return nil, fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer%s", on, why)
+	refusal := fmt.Errorf("nothing to fix: the review on %s found nothing and no other reviewer's thread or comment waits for an answer%s", on, why)
+	if unchecked != nil {
+		return nil, &mergeUncheckedError{refusal: refusal, cause: unchecked}
+	}
+	return nil, refusal
 }
+
+// mergeUncheckedError is othersWaiting's "nothing to fix" whose look at
+// the PR's base failed (cause: "its merge with master could not be
+// checked: …"): nothing else waits, but a conflict may, so the refusal is
+// not final. It says what the refusal says; autofix = "open" waits on it
+// and asks again (openStart), where a plain "nothing to fix" needs you.
+type mergeUncheckedError struct{ refusal, cause error }
+
+func (e *mergeUncheckedError) Error() string { return e.refusal.Error() }
 
 // othersBeforeStart reads the other reviewers' items of probe's PR (its
 // repo, watch, pr and login) before a fix cycle starts, or takes carried,

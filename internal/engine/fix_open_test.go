@@ -643,3 +643,36 @@ func TestARefusedStartIsTriedAgainAfterFiveMinutes(t *testing.T) {
 		t.Errorf("fix runs = %d five minutes later, want the loop", n)
 	}
 }
+
+// A start whose own look at the base failed (its fetch failed once) is no
+// disagreement between the look and the fix job: the conflict the look
+// found is unknown to the job, not gone. The verdict waits with why, and
+// the look asks again 5 minutes later, when the loop starts for the
+// conflict; it never needs you until someone touches the PR.
+func TestAConflictStartWhoseBaseFetchFailedOnceIsAskedAgain(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	git.conflict("app/models/offer.rb")
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", "0 threads", "none") })
+	h.tick() // reviewed
+	h.tick() // the look checks the base and finds the conflict; hands off still
+	if l := h.ledgerOf(2); len(l.Conflict.Paths) == 0 {
+		t.Fatalf("conflict = %+v, want the look's check to find it", l.Conflict)
+	}
+	h.advance(26 * time.Minute) // past the hands-off time, before the look's next base check
+	git.mu.Lock()
+	git.fetchErr = errors.New("gitx: fetch master: exit 128: fatal: unable to access the remote")
+	git.mu.Unlock()
+	h.tick() // the job fetches the base itself, and fails
+	h.wantOpen(OpenWaits, "its merge with master could not be checked")
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("fix runs = %d after the failed fetch", n)
+	}
+	git.mu.Lock()
+	git.fetchErr = nil
+	git.mu.Unlock()
+	h.advance(5 * time.Minute)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Errorf("fix runs = %d five minutes later, want the loop for the conflict", n)
+	}
+}
