@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -24,7 +25,8 @@ func factoryInstallTest(t *testing.T) (dt *daemonGroupTest, kicks *int) {
 	t.Helper()
 	storetest.Serial(t) // newDaemonGroupTest swaps daemonSys
 	comm, args := daemonRulePS("/opt/bin/magnum", "/opt/bin/magnum factory daemon")
-	dt = newDaemonGroupTest(t, append([]execx.Rule{comm, args}, installRules(herdrPluginListEmpty)...)...)
+	start := daemonRuleOK([]string{"ps", "-p", strconv.Itoa(os.Getpid()), "-o", "lstart="}, "Sat Nov  7 15:04:05 2026\n")
+	dt = newDaemonGroupTest(t, append([]execx.Rule{comm, args, start}, installRules(herdrPluginListEmpty)...)...)
 	dt.writeBinary(t)
 	daemonSys.FactoryPID = func(paths.Layout) (int, error) { return 250, nil }
 	kicks = new(int)
@@ -34,6 +36,10 @@ func factoryInstallTest(t *testing.T) (dt *daemonGroupTest, kicks *int) {
 	}
 	return dt, kicks
 }
+
+// commandStart is when ps says the command started (its lstart, which
+// pads the day; the drain keeps its words joined by one space).
+const commandStart = "Sat Nov 7 15:04:05 2026"
 
 // writeFactoryWork writes the record the factory daemon keeps.
 func writeFactoryWork(t *testing.T, l paths.Layout, rec factory.WorkRecord) {
@@ -162,8 +168,8 @@ func TestFactoryInstallDrainWaitsForTheWorkThenReloads(t *testing.T) {
 	daemonSys.Sleep = func(context.Context, time.Duration) error {
 		sleeps++
 		v, err := factory.ReadDrain(l)
-		if dr, ok := engine.ParseDrain(v); err != nil || !ok || dr.PID != os.Getpid() {
-			t.Errorf("sleep %d: drain %q (%v) is not owned by this process", sleeps, v, err)
+		if dr, ok := factory.ParseDrain(v); err != nil || !ok || dr.PID != os.Getpid() || dr.Start != commandStart {
+			t.Errorf("sleep %d: drain %q (%v) does not name this process by its pid and start", sleeps, v, err)
 		}
 		value = v
 		switch sleeps {
@@ -182,7 +188,7 @@ func TestFactoryInstallDrainWaitsForTheWorkThenReloads(t *testing.T) {
 		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
 	}
 	actContains(t, dt.stdout.String(),
-		fmt.Sprintf("draining (pid %d): nothing new starts in the factory; waiting for 1 local review round(s) in flight (at most 2h0m0s): "+
+		fmt.Sprintf("draining (pid %d): nothing new starts in the factory; waiting for 1 local review round(s) in flight (at most 3h30m0s): "+
 			"local review round 2 of PR-12340", os.Getpid()),
 		"draining: 1 local review round(s) in flight after 15s", "drained after 20s: nothing in flight",
 		"launchd: loaded zhuravel.magnum.factory")
@@ -314,4 +320,108 @@ func TestFactoryInstallFlagConflicts(t *testing.T) {
 	}
 	actContains(t, dt.stderr.String(), "magnum factory install: use either --now or --drain",
 		"usage: magnum factory install [--now | --drain [--timeout D]] [--dry-run]")
+}
+
+// --drain reloads only once the daemon holds its own drain: a record that
+// names another command's drain (one this command replaced, or a stale
+// record) proves nothing about this one.
+func TestFactoryInstallDrainWaitsForItsOwnDrain(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	other := factory.Drain{Since: time.Now().Add(-time.Hour), PID: 4100}.Value()
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: other, Work: []factory.WorkItem{}})
+	sleeps := 0
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
+		sleeps++
+		if sleeps == 3 {
+			v, _ := factory.ReadDrain(l)
+			writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{}})
+		} else if reloads(dt) != 0 {
+			t.Errorf("sleep %d: the job was reloaded on another command's drain", sleeps)
+		}
+		return nil
+	}
+
+	if code := dt.run("factory", "install", "--drain"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if sleeps != 3 || reloads(dt) != 1 {
+		t.Fatalf("%d sleeps, %d bootstraps: want the reload once the daemon held this command's drain", sleeps, reloads(dt))
+	}
+}
+
+// The build is checked again after the drain's wait, which can last hours
+// while the checkout is rebuilt: a build that now rejects the configuration
+// is refused, and the drain is lifted.
+func TestFactoryInstallDrainChecksTheBuildAgainAfterTheWait(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	checks := 0
+	dt.fake.Rules = append([]execx.Rule{{Prefix: []string{l.Binary(), "config"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+		checks++
+		if checks == 1 {
+			return execx.Result{}, nil
+		}
+		res := execx.Result{Code: 1, Stderr: []byte("config: unknown keys: [factory.no_such_key]\n")}
+		return res, &execx.ExitError{Cmd: c, Code: 1, Stderr: string(res.Stderr)}
+	}}}, dt.fake.Rules...)
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{}})
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
+		v, _ := factory.ReadDrain(l)
+		writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{}})
+		return nil
+	}
+
+	if code := dt.run("factory", "install", "--drain"); code != 1 {
+		t.Fatalf("exit %d, want 1; stdout %s stderr %s", code, dt.stdout, dt.stderr)
+	}
+	actContains(t, dt.stderr.String(), "rejects the configuration", "factory.no_such_key")
+	if checks != 2 || reloads(dt) != 0 {
+		t.Fatalf("%d build checks, %d bootstraps: want the build checked again after the wait, and nothing reloaded", checks, reloads(dt))
+	}
+	if v, err := factory.ReadDrain(l); err != nil || v != "" {
+		t.Fatalf("drain.json holds %q (%v), want it lifted", v, err)
+	}
+}
+
+// `magnum factory status` shows the holds of the running factory daemon,
+// the install drain among them, and the work a restart would cut.
+func TestFactoryStatusShowsTheDrainAndTheWorkInFlight(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: "x", Work: []factory.WorkItem{factoryRound}})
+	since := time.Now().Add(-10 * time.Minute)
+	b, err := json.Marshal([]factory.Hold{{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4242): nothing new starts until the restart",
+		Since: since}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsx.WriteFileAtomic(l.FactoryHolds(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := dt.run("factory", "status"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	actContains(t, dt.stdout.String(), "factory daemon: running (pid 250)",
+		"held: drain: `magnum factory install --drain` (pid 4242): nothing new starts until the restart (since "+inspClock(time.Now(), since)+")",
+		"in flight: local review round 2 of PR-12340 (since "+inspClock(time.Now(), factoryRound.Since)+")")
+
+	dt.stdout.Reset()
+	if code := dt.run("factory", "status", "--json"); code != 0 {
+		t.Fatalf("--json: exit %d, stderr %s", code, dt.stderr)
+	}
+	var got struct {
+		Daemon struct {
+			Holds []struct{ Kind, Reason string } `json:"holds"`
+			Work  []struct{ Kind, What string }   `json:"work"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(dt.stdout.Bytes(), &got); err != nil {
+		t.Fatalf("%v: %s", err, dt.stdout)
+	}
+	if len(got.Daemon.Holds) != 1 || got.Daemon.Holds[0].Kind != "drain" || len(got.Daemon.Work) != 1 ||
+		!strings.HasPrefix(got.Daemon.Work[0].What, "local review round 2") {
+		t.Fatalf("daemon %+v, want the drain's hold and the round", got.Daemon)
+	}
 }

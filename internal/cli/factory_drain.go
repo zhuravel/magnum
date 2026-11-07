@@ -26,6 +26,10 @@ import (
 // factoryRounds counts the local review rounds in flight (inFlight.count).
 const factoryRounds = "local review round(s)"
 
+// factoryDrainTimeout is factory install's default --timeout: longer than a
+// round of the local review may run (factory.LocalRoundCap).
+const factoryDrainTimeout = factory.LocalRoundCap + 30*time.Minute
+
 // errNoFactoryRecord is a factory daemon that keeps no record of its work:
 // a build before the record, or one that could not write it.
 var errNoFactoryRecord = errors.New("no record of the factory daemon's work")
@@ -100,7 +104,7 @@ func factoryCannotTell(c *Context, pid int, err error) {
 	const cut = "stopping it now may cut a local review round, a check, a claim of a copy or a talk short"
 	if errors.Is(err, errNoFactoryRecord) {
 		fmt.Fprintf(c.Stderr, "magnum factory install: cannot tell what the factory daemon (pid %d) runs: it keeps no record of its work in %s "+
-			"(a build before this one keeps none, and takes no drain)\n%s\n"+
+			"(a build before this one keeps none and takes no drain; one that could not write it removed it)\n%s\n"+
 			"fix: `magnum factory status` shows what each task waits on (a round of the local review, a precheck, a copy being prepared), "+
 			"then pass --now to restart it anyway\n", pid, inspTilde(c.Layout.FactoryWork()), cut)
 		return
@@ -145,10 +149,11 @@ func guardFactoryRestart(ctx context.Context, c *Context, run execx.Runner, f re
 	return noLift, false
 }
 
-// drainFactory asks the factory daemon pid for a drain (its pid in it) and
-// wakes it: the tick that takes the drain starts nothing new (no launch,
-// effect, round, check, claim or talk) and says so in the record. It waits
-// until the record says the daemon holds the drain and nothing runs,
+// drainFactory asks the factory daemon pid for a drain (this command's pid
+// and start in it) and wakes it: the tick that takes the drain starts
+// nothing new (no launch, effect, round, check, claim or talk) and says so
+// in the record. It waits until the record says the daemon holds this
+// drain and nothing runs,
 // printing a progress line every drainProgressEvery, for at most timeout,
 // and asks again for a drain a restarted daemon ended meanwhile; a daemon
 // that stopped has nothing left to cut. It returns the drain's lift, and
@@ -161,7 +166,9 @@ func drainFactory(ctx context.Context, c *Context, run execx.Runner, pid int, ti
 		factoryCannotTell(c, pid, err)
 		return noLift, false
 	}
-	value := engine.Drain{Since: time.Now(), PID: os.Getpid()}.Value()
+	// The start tells this command from a later process that gets its pid.
+	start, _ := execx.ProcessStart(ctx, run, os.Getpid())
+	value := factory.Drain{Since: time.Now(), PID: os.Getpid(), Start: start}.Value()
 	if err := factory.WriteDrain(c.Layout, value); err != nil {
 		fmt.Fprintf(c.Stderr, "magnum factory install: cannot start the drain (writing %s: %v)\nfix: retry, or pass --now to restart anyway\n",
 			inspTilde(c.Layout.FactoryDrain()), err)
@@ -229,7 +236,7 @@ func drainFactory(ctx context.Context, c *Context, run execx.Runner, pid int, ti
 			continue // a record being replaced, or not yet written: the next poll
 		}
 		running = r
-		if rec.Drain != "" && running.none() {
+		if rec.Drain == value && running.none() {
 			fmt.Fprintf(out, "drained after %s: nothing in flight\n", waited)
 			return lift, true
 		}

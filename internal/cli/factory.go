@@ -68,16 +68,20 @@ func newFactoryInstallCmd(c *Context) *cobra.Command {
 			"round of the local review, a check of a task's head (the proof and the precheck), a claim of a copy "+
 			"or a talk with a liaison runs the install is refused, naming them (they would run again from their "+
 			"start); --drain starts nothing new in the factory (no launch, effect, round, check, claim or talk), "+
-			"waits for those in flight and for the daemon to hold the drain (a line every 15s, at most --timeout, "+
-			"default 2h), then installs; --now installs at once. ctrl+c, or closing the terminal, stops the wait and "+
-			"lifts the drain, and the factory daemon lifts a drain whose command is gone. A factory daemon of an "+
-			"older build keeps no record of its work, so the install is refused for it unless --now. --dry-run "+
-			"prints the plist and the launchctl calls.",
+			"waits for those in flight and for the daemon to hold this drain (a line every 15s, at most --timeout, "+
+			"default "+factoryDrainTimeout.String()+", past the "+factory.LocalRoundCap.String()+" a round of the local review "+
+			"may run), checks the build again, then installs; --now installs at once. While the drain holds, "+
+			"`magnum factory status` and the factory's screen show it as a hold. ctrl+c, or closing the terminal, stops "+
+			"the wait and lifts the drain, and the factory daemon lifts a drain whose command is gone (its pid and start "+
+			"name it). A factory daemon of an older build keeps no record of its work, so the install is refused for it "+
+			"unless --now. --dry-run prints the plist and the launchctl calls.",
 		func(pos []string) int { return runFactoryInstallCmd(c, dry, f, pos) })
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print what would be written and run; change nothing")
 	addRestartFlags(cmd, &f)
 	cmd.Flags().Lookup("now").Usage = "install even while the factory daemon runs a local review round, a check, a claim of a copy or a talk (they start over)"
 	cmd.Flags().Lookup("drain").Usage = "start nothing new in the factory, wait for the work in flight, then install"
+	timeout := cmd.Flags().Lookup("timeout")
+	f.timeout, timeout.DefValue = factoryDrainTimeout, factoryDrainTimeout.String()
 	return cmd
 }
 
@@ -127,6 +131,12 @@ func runFactoryInstallCmd(c *Context, dry bool, f restartFlags, pos []string) in
 	// while anything runs, unless --now; --drain waits for it.
 	lift, ok := guardFactoryRestart(ctx, c, run, f)
 	if !ok {
+		return 1
+	}
+	// A drain can wait hours, while the checkout is rebuilt: the build
+	// launchd starts is checked again.
+	if f.drain && !verifyBuild(ctx, c, run, "factory install") {
+		lift()
 		return 1
 	}
 	if err := launchd.Install(ctx, run, uid, path, plist); err != nil {
@@ -180,7 +190,9 @@ func runFactoryUninstallCmd(c *Context, dry bool, pos []string) int {
 func newFactoryStatusCmd(c *Context) *cobra.Command {
 	var asJSON bool
 	cmd := newCommand("", factoryStatusUsage, "the factory daemon and its tasks",
-		"Print whether the factory daemon runs and list the factory's tasks: each one's key (its Jira key, or "+
+		"Print whether the factory daemon runs, the holds of the machine it keeps (herdr or infra down, the disk, the "+
+			"memory, a drain of `magnum factory install --drain`) and the work it runs that a restart would cut, and list "+
+			"the factory's tasks: each one's key (its Jira key, or "+
 			"`task <id>` for a free prompt), kind, state, stage and what it waits on. --json prints the same as "+
 			"JSON. It never creates the factory's registry, and it refuses to migrate one while a factory daemon "+
 			"of an older build runs on it.",
@@ -196,8 +208,44 @@ type factoryStatusJSON struct {
 }
 
 type factoryDaemonJSON struct {
-	Running bool `json:"running"`
-	PID     int  `json:"pid,omitempty"`
+	Running bool              `json:"running"`
+	PID     int               `json:"pid,omitempty"`
+	Holds   []factoryHoldJSON `json:"holds,omitempty"`
+	Work    []factoryWorkJSON `json:"work,omitempty"`
+}
+
+// factoryHoldJSON is a hold of the machine the running factory daemon keeps.
+type factoryHoldJSON struct {
+	Kind   string    `json:"kind"`
+	Reason string    `json:"reason"`
+	Since  time.Time `json:"since"`
+}
+
+// factoryWorkJSON is work the running factory daemon runs that a restart
+// would cut.
+type factoryWorkJSON struct {
+	Kind  string    `json:"kind"`
+	Task  int64     `json:"task"`
+	What  string    `json:"what"`
+	Since time.Time `json:"since"`
+}
+
+// factoryDaemonState reads the holds and the work of the running factory
+// daemon pid (holds.json, and work.json when it is pid's); what it cannot
+// read is a warning on stderr, and the status goes on.
+func factoryDaemonState(c *Context, pid int) ([]factory.Hold, []factory.WorkItem) {
+	hs, err := factory.ReadHolds(c.Layout)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum factory status: warning: %v\n", err)
+	}
+	rec, ok, err := factory.ReadWork(c.Layout)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum factory status: warning: %v\n", err)
+	}
+	if !ok || rec.PID != pid {
+		return hs, nil
+	}
+	return hs, rec.Work
 }
 
 type factoryTaskJSON struct {
@@ -222,6 +270,11 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 		return 2
 	}
 	pid := runningFactoryDaemon(c)
+	var holds []factory.Hold
+	var work []factory.WorkItem
+	if pid > 0 {
+		holds, work = factoryDaemonState(c, pid)
+	}
 	var tasks []registry.Task
 	if fsx.Exists(c.Layout.FactoryDB()) {
 		reg, err := openFactoryRegistry(c.Layout)
@@ -238,6 +291,12 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 	}
 	if asJSON {
 		out := factoryStatusJSON{Daemon: factoryDaemonJSON{Running: pid > 0, PID: pid}, Tasks: []factoryTaskJSON{}}
+		for _, h := range holds {
+			out.Daemon.Holds = append(out.Daemon.Holds, factoryHoldJSON{Kind: h.Kind, Reason: h.Reason, Since: h.Since})
+		}
+		for _, w := range work {
+			out.Daemon.Work = append(out.Daemon.Work, factoryWorkJSON{Kind: w.Kind, Task: w.Task, What: w.What, Since: w.Since})
+		}
 		for _, t := range tasks {
 			out.Tasks = append(out.Tasks, factoryTaskJSON{ID: t.ID, Key: factory.TaskKey(t), JiraKey: t.JiraKey, Kind: t.Kind,
 				Repo: t.Repo, Title: t.Title, State: t.State, Stage: t.Stage, WaitsWho: t.WaitsWho, WaitsWhat: t.WaitsWhat,
@@ -251,6 +310,13 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 	}
 	if pid > 0 {
 		fmt.Fprintf(c.Stdout, "factory daemon: running (pid %d)\n", pid)
+		now := time.Now()
+		for _, h := range holds {
+			fmt.Fprintf(c.Stdout, "held: %s: %s (since %s)\n", h.Kind, h.Reason, inspClock(now, h.Since))
+		}
+		for _, w := range work {
+			fmt.Fprintf(c.Stdout, "in flight: %s (since %s)\n", w.What, inspClock(now, w.Since))
+		}
 	} else {
 		fmt.Fprintln(c.Stdout, "factory daemon: not running (`magnum factory install` loads it)")
 	}

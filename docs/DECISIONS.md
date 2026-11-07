@@ -16564,20 +16564,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `magnum daemon-restart`'s and `magnum install`'s, in their words:
   - The daemon keeps `factory/work.json`, the work a restart would cut, under its pid: a round of the local
     review, a check of a head (the proof and the precheck), a claim of a copy and a talk with a liaison, each
-    with its task and its start. Each starts and ends its own entry. The record is written before the
-    pidfile and removed as the daemon stops. An agent's turn in a pane is not in it: it outlives the restart,
-    and the next daemon binds the pane again.
+    with its task and its start. Each starts and ends its own entry; a check's entry ends only once a tick
+    took its result, which lives only in memory, and its end wakes the loop for that. The record is written
+    before the pidfile (without disk syncs: a lost one is no record), removed as the daemon stops, and
+    removed when a write fails. An agent's turn in a pane is not in it: it outlives the restart, and the
+    next daemon binds the pane again.
   - Install reads the record only while a factory daemon runs. It refuses while anything runs, naming each
     item and what the restart would do to it, unless `--now`. A record that is missing or another daemon's
     fails closed, so a daemon of the build before this one needs `--now` once.
-  - `--drain` writes `factory/drain.json` (`engine.Drain`: since when, and the command's pid) and wakes the
+  - `--drain` writes `factory/drain.json` (since when, and the command's pid and start) and wakes the
     daemon. The tick that takes it starts nothing new: no launch, effect, round, check, claim or talk, the
-    same gates as a stop's drain, while the loop goes on and collects what ends. The record then names the
-    drain, and install reloads the job only once it does and nothing runs. A tick that began before the
-    drain may still start a round, and only the record proves that none will.
-  - ctrl+c, the timeout (default 2h) or a failed install lifts the drain. The daemon lifts a drain whose
-    command is gone (`engine.DrainerAlive`), and the daemon that starts ends the drain it was waited for.
-    A daemon that started again during the wait ended the drain, so install writes it again.
+    same gates as a stop's drain, while the loop goes on and collects what ends. It shows the drain as a
+    hold of the machine (`holds.json`: `magnum factory status` and the screen's blocker line), since it can
+    hold every task for hours. The record then names the drain, and install reloads the job only once it
+    names this command's drain and nothing runs, after it checked the build again. A tick that began before
+    the drain may still start a round, and only the record proves that none will.
+  - ctrl+c, the timeout (default 3h30m, past the local round's 3h cap) or a failed install lifts the drain.
+    The daemon lifts a drain whose command is gone: its pid holds no process, or one with another start (the
+    factory's agents run `magnum` too, so a magnum process at the pid proves nothing). It ignores a
+    `drain.json` it cannot read, with one warning, and the daemon that starts ends the drain it was waited
+    for. A daemon that started again during the wait ended the drain, so install writes it again.
   Rejected: the CLI guessing the work in flight from the registry (open review cycles, check and claim
   events with no end: a crash leaves them open and the cycle stays open through its fix); a `kv` table and a
   migration for the drain (the factory CLI cannot migrate under the daemon it drains, and the other
@@ -16590,8 +16596,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFactoryInstallRefusesWhileTheFactoryRunsWork, TestFactoryInstallNowCutsTheWork,
   TestFactoryInstallRefusesAFactoryDaemonThatKeepsNoRecord, TestFactoryInstallDrainWaitsForTheWorkThenReloads,
   TestFactoryInstallDrainWaitsUntilTheDaemonHoldsTheDrain, TestFactoryInstallDrainGivesUpAndLiftsTheDrain,
-  TestFactoryInstallDrainInterruptedLiftsTheDrain, TestFactoryInstallDrainAsksAgainForADrainARestartEnded and
-  TestFactoryInstallFlagConflicts.
+  TestFactoryInstallDrainInterruptedLiftsTheDrain, TestFactoryInstallDrainAsksAgainForADrainARestartEnded,
+  TestFactoryInstallFlagConflicts, TestADrainWaitsForTheCheckUntilATickTakesItsResult,
+  TestAnInstallDrainIsAHoldTheScreenDraws, TestAnUnreadableDrainIsIgnoredWithOneWarning,
+  TestADrainWhosePidWasReusedIsLifted, TestAFailedWriteOfTheRecordRemovesIt,
+  TestFactoryInstallDrainWaitsForItsOwnDrain, TestFactoryInstallDrainChecksTheBuildAgainAfterTheWait and
+  TestFactoryStatusShowsTheDrainAndTheWorkInFlight.
 
 ## Learned rules
 
