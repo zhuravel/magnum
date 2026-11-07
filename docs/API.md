@@ -27847,7 +27847,9 @@ type FactoryCards struct {
     it waits on, if any: its questions or its ready card.
 
 type FactoryData struct {
-	Repo     string
+	// Repos are the factory's repositories ("owner/name"), in its config's
+	// order: the title line names them, or counts them when they do not fit.
+	Repos    []string
 	Rows     []FactoryRow
 	Blocking []string // the machine facts that stop work ("memory full: new tasks wait")
 	RuleChip string   // "1 rule to approve (L)"
@@ -27933,13 +27935,17 @@ type FactoryRow struct {
 	// number ("#4512") for a PR the operator wrote by hand. GitHub is the
 	// PR's number, shown beside the Jira key on a wide screen.
 	Key, GitHub, Title string
-	Group              FactoryGroup
-	Mark               FactoryMark
-	WaitsOn            []WaitsOn
-	Move               string // the step the factory recommends; NeedsYou rows only
-	Stagings           []StagingCell
-	Since              time.Time // when the task began to wait on this; zero = not shown
-	Help               string    // the line under the rule while the row is selected
+	// Repo is the repository the row is of ("owner/name"): the task's, or
+	// your PR's. The painter draws it in a column of its own, unless the
+	// title names one repository and every row is of it.
+	Repo     string
+	Group    FactoryGroup
+	Mark     FactoryMark
+	WaitsOn  []WaitsOn
+	Move     string // the step the factory recommends; NeedsYou rows only
+	Stagings []StagingCell
+	Since    time.Time // when the task began to wait on this; zero = not shown
+	Help     string    // the line under the rule while the row is selected
 
 	// Jira is the Jira key of a task keyed by its GitHub number, for the wide
 	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.
@@ -29221,6 +29227,9 @@ type StatusData struct {
 
 type TaskCard struct {
 	Key, Kind, Title, Branch string
+	// Repo is the task's repository ("owner/name"), the first fact under
+	// the header with its PR's number.
+	Repo string
 	// Copy says which copy the task holds ("copy 2 of 3, server off").
 	Copy       string
 	Started    time.Time

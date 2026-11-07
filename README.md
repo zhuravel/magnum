@@ -4011,7 +4011,16 @@ factory never migrates magnum's registry, which it only reads for the local revi
 
 **The factory's screen.** `magnum factory` with no command, in a terminal, shows one line per task, grouped
 by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY), and one per open PR of yours that no task has
-(YOUR PRS, below): what it waits on and, when it needs you, your move. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
+(YOUR PRS, below): what it waits on and, when it needs you, your move. When home shows more than one
+repository, or your PR of a repository the factory does not have, each row names its own first, in a column of its own: the name without the owner the rows share
+(`owner/name` when they span several owners, as the board's REPO does), cut to 11 cells on a narrow screen and to
+6 once the staging cells go short, whole when the title keeps 24 cells; a factory of one repository whose rows
+are all of it draws no such column. From 120 columns a row with a PR shows its number in a column of its own
+after the key, which is then the Jira key (`PR-12320  #4530`); below 120 the key alone stays. The title line
+names the factory's repositories (`magnum factory · talkable, widget`, the configured ones in their order), or
+counts them (`4 repos`) when they do not fit beside the blocker line. A wide screen draws the long forms (the
+whole blockers, the staging cells' ages) with the title cut down to 24 cells rather than giving them up. The task
+card's facts start with the repository and the PR's number (`example/talkable #4530`), then the branch. When the rows do not fit, the last group folds first, from its end, into a line such as `+2 more:
 PR-12345, PR-12346`; NEEDS YOU and the selected row never fold, and when folding is not enough the list
 scrolls. The window title counts the tasks that need you (`factory · 3 need you`, `factory · nothing waits on
 you`), and the screen tells the factory when its terminal gains or loses focus. Home only opens cards
@@ -4393,8 +4402,9 @@ polls no other, so a PR there would read open after its merge), read once per fr
 screen opens magnum's registry read only), even before the factory's first task. A PR that a
 task which is neither done nor stopped has stays that task's row, so no PR is listed twice. A PR whose verdict
 needs you, or that is idle with a person's approval (your merge), is in NEEDS YOU, keyed by its number (`#4602`
-when the factory has one repository and the PR is of it; otherwise its repository names it, `shop#12`; the wide
-screen's JIRA column has the issue key of its title),
+when the factory has one repository and the PR is of it; otherwise its repository names it in the y/N and a more
+line, `shop#12`, while the row draws the repository in its own column and `#12`; beside the PR column, from 120
+columns, the key cell has the issue key of its title),
 with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); so is one that needs your attention or where
 magnum stopped arguing, whatever its verdict says (fix off hides no attention) and without one (`you: magnum:
 <why>`, or the first item its fixer left you, as a published task's row says it, with every item on the help

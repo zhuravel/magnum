@@ -17621,6 +17621,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the tick has not marked), TestTheProofAndTheReviewInTheStatusFile,
   TestAnUnreadableFixRecordKeepsTheStatusFile, TestThePublishedPRsStatusFileCountsTheCommitsOfItsCard (the
   ready card's count, through a real publish) and TestFixRecordsFoldTheFixEventsOfAPR.
+- **The factory home names each row's repository, and a row keeps its PR number from 120 columns** (2026-11-07,
+  the 2026-11-07 audit's R2 and R3; the operator: "currently it's not even clear which repos the tasks belong
+  to"). The title named one repository, the only configured one or else the first task's, so a factory of three
+  repositories said "talkable" while two tasks were in another, and no row said whose it was. A task's PR number
+  showed only in the wide layout, which needed every column at its natural width with the whole title: about 210
+  columns with a 93-cell title, so below that the PR was only in "magnum: looking at #N".
+  - Every row carries its repository (`FactoryRow.Repo`: a task's, its PR link's once published, your PR's),
+    drawn in a column before the key: the name without the owner the rows share, `owner/name` when they span
+    several (as the board's REPO), cut to 11 cells on a narrow screen and to 6 once the staging cells go short,
+    and whole again when the title keeps 24 cells. A home of one repository that every row is of draws no such
+    column: the title names it.
+  - The title names every configured repository (`FactoryData.Repos`, in place of `Repo`, in the config's order;
+    the tasks' when none is configured), or counts them ("4 repos") before the blocker line gives anything up.
+  - Your PR's row draws the number alone in its GitHub cell and the repository in its column; its key keeps the
+    repository (`widget#12`) for the y/N, the more line and a double click. This amends "Your PRs on the factory
+    screen", whose rows read `shop#12` on home.
+  - From 120 columns every step of the layout splits the key: the Jira key, and the PR number in a column of its
+    own (`factoryLayout.split`, apart from `wide`). The wide layout squeezes the title down to 24 cells, as the
+    narrow steps do down to 14, and draws no PR column when no row has a PR. At 140 the PR column costs the
+    spec's home mockup the long form of YOUR MOVE.
+  - The task card's facts start with the repository and the PR's number (`example/talkable #4530`).
+  Rejected: a repository column on every home (one repository is named by the title already); dropping the
+  repository from your PR's key (the y/N and the more line would read alike for two repositories' PRs); the
+  whole title as the wide layout's condition (a long title cost the PR number at every width); headers for the
+  repository and PR columns (the group's name stands where they would be, and the cells read as what they
+  are). Tests, failing first: TestFactoryRowsNameTheirRepository, TestFactoryRowsOfSeveralOwnersNameTheOwner,
+  TestFactoryTitleNamesEveryRepositoryOrCountsThem, TestFactoryOneRepositoryDrawsNoRepoColumn,
+  TestScreenDataNamesTheRepositoryOfEveryRow, TestFactoryRowsKeepTheirPRNumberFrom120Columns,
+  TestFactoryTheWideLayoutSqueezesALongTitle, TestTaskCardNamesItsRepositoryFirst; goldens repos-100, -120,
+  -140 and -200, and the 140-column goldens with the PR column.
 
 ## Learned rules
 
