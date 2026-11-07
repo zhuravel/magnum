@@ -221,13 +221,12 @@ type FactoryQA struct {
 }
 
 // PageURL is the page at path of the copy whose server listens on port: URL
-// with {port} rendered, then path, one slash between them.
+// with {port} rendered, then path, one slash between them whether path
+// starts with one or not (so a path never runs into the port, where "@x"
+// would make x the host).
 func (q FactoryQA) PageURL(port int, path string) string {
 	base := strings.ReplaceAll(q.URL, "{port}", strconv.Itoa(port))
-	if strings.HasPrefix(path, "/") {
-		base = strings.TrimSuffix(base, "/")
-	}
-	return base + path
+	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
 // LocalHost reports whether host (a URL's hostname, without brackets or a
@@ -819,9 +818,10 @@ func (c *Config) validateFactoryKinds() []error {
 				where, k.Proof, FactoryProofRed, FactoryProofGreen))
 		}
 		seen := map[string]bool{}
-		decided := false  // a ready_push decision stage came before
-		reviewed := false // a review stage came before
-		qa := ""          // the kind's qa stage, once one came
+		decided := false   // a ready_push decision stage came before
+		reviewed := false  // a review stage came before
+		published := false // a publish effect stage came before
+		qa := ""           // the kind's qa stage, once one came
 		for _, st := range k.Stages {
 			bad := func(format string, a ...any) {
 				errs = append(errs, fmt.Errorf("%s: stage %q: "+format, append([]any{where, st.Name}, a...)...))
@@ -846,11 +846,17 @@ func (c *Config) validateFactoryKinds() []error {
 					bad("a kind has at most one qa stage, and %q is one already", qa)
 				case !reviewed:
 					bad("a qa stage must come after a review stage (QA looks at a change the review passed)")
+				case decided || published:
+					bad("a qa stage must come before the %s decision and the %s effect (the ready card needs QA at its head)",
+						FactoryDecisionReadyPush, FactoryEffectPublish)
 				}
 				qa = st.Name
 			}
 			if st.Type == FactoryStageReview {
 				reviewed = true
+			}
+			if st.Type == FactoryStageEffect && st.Effect == FactoryEffectPublish {
+				published = true
 			}
 		}
 	}
@@ -907,8 +913,11 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 		bad("end is for agents, review, effect and qa stages")
 	}
 	if st.Type == FactoryStageAgents || st.Type == FactoryStageQA {
-		if len(st.Roles) == 0 {
+		switch {
+		case len(st.Roles) == 0:
 			bad("needs roles")
+		case st.Type == FactoryStageQA && len(st.Roles) > 1:
+			bad("a qa stage names exactly one role (one walker drives the one browser tab and writes the one verdict), got %d", len(st.Roles))
 		}
 		for _, r := range st.Roles {
 			if _, ok := roles[r]; !ok {
@@ -1163,8 +1172,33 @@ func validateFactoryQA(where string, r FactoryRepo) []error {
 	}
 	if strings.TrimSpace(r.Env["PORT"]) == "" {
 		bad(`qa needs the copy's port: env must name PORT (such as PORT = "31{n}0")`)
+	} else if err := validateCopyPorts(r); err != nil {
+		errs = append(errs, fmt.Errorf("%s: %w", where, err))
 	}
 	return errs
+}
+
+// validateCopyPorts checks that the repository's env PORT renders, for each
+// of its copies, a port from 1024 to 65535 that no other copy has: QA walks
+// the copy's server on it, and a port that does not parse is no port at all
+// (the copy's Port is then 0). It renders as the factory renders a copy's
+// env: {copy} or {slot} the copy's name, {n} its number, {n*16} n × 16.
+func validateCopyPorts(r FactoryRepo) error {
+	tmpl := r.Env["PORT"]
+	pool := r.Pool()
+	seen := map[int]int{}
+	for n := 1; n <= min(r.MaxCopies, maxCheckedSlots); n++ {
+		v := strings.NewReplacer("{copy}", pool.Slot(n), "{slot}", pool.Slot(n), "{n*16}", strconv.Itoa(n*16), "{n}", strconv.Itoa(n)).Replace(tmpl)
+		port, err := strconv.Atoi(v)
+		switch {
+		case err != nil || port < 1024 || port > 65535:
+			return fmt.Errorf("env PORT %q renders %q for copy %d: qa needs a port from 1024 to 65535", tmpl, v, n)
+		case seen[port] != 0:
+			return fmt.Errorf("env PORT %q renders %d for copies %d and %d: each copy's server needs a port of its own (use {n})", tmpl, port, seen[port], n)
+		}
+		seen[port] = n
+	}
+	return nil
 }
 
 // validateFactoryStaging checks a repository's staging environments: a

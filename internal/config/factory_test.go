@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -1056,15 +1057,22 @@ func TestTheQABlockTakesItsDefaults(t *testing.T) {
 }
 
 // PageURL is the url with the copy's port in place of {port}, then the
-// path, with one slash between them.
+// path, with one slash between them: a path without its leading slash stays
+// a path on the copy's host, never a login or a host of its own.
 func TestQAPageURLRendersThePortThenThePath(t *testing.T) {
 	for _, tc := range []struct{ url, path, want string }{
 		{"http://app.example.localhost:{port}", "/settings/security", "http://app.example.localhost:3120/settings/security"},
 		{"http://127.0.0.1:{port}/", "/", "http://127.0.0.1:3120/"},
 		{"https://app.example.localhost:{port}/shop", "/cart", "https://app.example.localhost:3120/shop/cart"},
+		{"http://localhost:{port}", "settings", "http://localhost:3120/settings"},
+		{"http://localhost:{port}", "@evil.example.com", "http://localhost:3120/@evil.example.com"},
 	} {
-		if got := (FactoryQA{URL: tc.url}).PageURL(3120, tc.path); got != tc.want {
+		got := (FactoryQA{URL: tc.url}).PageURL(3120, tc.path)
+		if got != tc.want {
 			t.Errorf("PageURL(%q, %q) = %q, want %q", tc.url, tc.path, got, tc.want)
+		}
+		if u, err := url.Parse(got); err != nil || !LocalHost(u.Hostname()) || u.Port() != "3120" {
+			t.Errorf("PageURL(%q, %q) = %q is not on the copy's host and port", tc.url, tc.path, got)
 		}
 	}
 }
@@ -1098,6 +1106,10 @@ func TestTheQABlockIsValidated(t *testing.T) {
 		"no fixes":           {func(r *FactoryRepo) { r.QA.Fixes = 0 }, "qa.fixes"},
 		"6 fixes":            {func(r *FactoryRepo) { r.QA.Fixes = 6 }, "qa.fixes"},
 		"env without PORT":   {func(r *FactoryRepo) { r.Env = map[string]string{"WT_BRANCH": "{copy}"} }, "PORT"},
+		"PORT not a number":  {func(r *FactoryRepo) { r.Env["PORT"] = "31{n}O" }, `PORT "31{n}O"`},
+		"PORT below 1024":    {func(r *FactoryRepo) { r.Env["PORT"] = "8{n}" }, `PORT "8{n}"`},
+		"PORT over 65535":    {func(r *FactoryRepo) { r.Env["PORT"] = "70{n}00" }, `PORT "70{n}00"`},
+		"one PORT for all":   {func(r *FactoryRepo) { r.Env["PORT"] = "3000" }, `PORT "3000"`},
 		"no server":          {func(r *FactoryRepo) { r.Server = "" }, "server"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1141,6 +1153,9 @@ func TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt(t *testing.T) {
 		"no end":            {qa("pr_body", func(st *FactoryStage) { st.End = "" }), []string{`stage "qa"`, `end "" must be qa`}},
 		"a prompt":          {qa("pr_body", func(st *FactoryStage) { st.Prompt = "factory-qa.md" }), []string{`stage "qa"`, "prompt is for agents stages only"}},
 		"when wide":         {qa("pr_body", func(st *FactoryStage) { st.When = FactoryWhenWide }), []string{`stage "qa"`, "when"}},
+		"two roles": {qa("pr_body", func(st *FactoryStage) { st.Roles = []string{"fx-qa", "fx-writer"} }),
+			[]string{`stage "qa"`, "names exactly one role"}},
+		"after the ready card": {qa("publish"), []string{`stage "qa"`, "must come before the " + FactoryDecisionReadyPush + " decision"}},
 		"two qa stages": {func(s []FactoryStage) []FactoryStage {
 			s = qa("pr_body")(s)
 			return qa("pr_body", func(st *FactoryStage) { st.Name = "qa_again" })(s)

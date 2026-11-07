@@ -5649,7 +5649,9 @@ type FactoryQA struct {
 
 func (q FactoryQA) PageURL(port int, path string) string
     PageURL is the page at path of the copy whose server listens on port:
-    URL with {port} rendered, then path, one slash between them.
+    URL with {port} rendered, then path, one slash between them whether path
+    starts with one or not (so a path never runs into the port, where "@x" would
+    make x the host).
 
 type FactoryRepo struct {
 	Repo string `toml:"repo"` // owner/name

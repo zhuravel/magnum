@@ -1250,11 +1250,14 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	}
 	d := PromptData{TaskID: t.ID, Key: t.JiraKey, Kind: t.Kind, Repo: t.Repo, Branch: t.Branch, Copy: c.Path, TaskDir: dir,
 		Ticket: present(ticketFile), Guidance: present("guidance.md"), Prompt: present("prompt.md"), Answers: present(answersFile),
-		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile), Questions: in(questionsFileOf(st, role.Name)),
+		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile),
 		Acceptance: in(acceptanceFile), Proof: in("proof.json"), FactoryProof: in(factoryProofFile), ReviewSummary: in(reviewSummaryFile),
 		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port,
 		Magnum: execx.ShellQuote(cmp.Or(e.d.Layout.Binary(), "magnum"))}
+	if name := questionsFileOf(st, role.Name); name != "" {
+		d.Questions = in(name)
+	}
 	d.Base, d.RedRun = config.DefaultFactoryBase, e.cfg.Factory.Kinds[t.Kind].RedRun()
 	if tr, ok := e.otherTracker(t.Repo, t.JiraKey); ok && t.JiraKey != "" {
 		d.Tracker = trackerName(tr)
@@ -1350,10 +1353,15 @@ func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
 
 // questionsFileOf is the questions file role (as the stage names it) writes
 // in stage st: questions.json in a stage that ends on the judge's report,
-// questions-<role>.json in any other.
+// none in a qa stage (its walker asks no one: what it cannot reach goes into
+// its verdict's blocked list, and a file it left would reach the operator
+// with a later role's questions), questions-<role>.json in any other.
 func questionsFileOf(st config.FactoryStage, role string) string {
-	if st.End == config.FactoryEndReport {
+	switch st.End {
+	case config.FactoryEndReport:
 		return questionsFile
+	case config.FactoryEndQA:
+		return ""
 	}
 	return roleQuestionsFile(role)
 }

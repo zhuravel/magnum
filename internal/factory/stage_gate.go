@@ -660,8 +660,9 @@ const (
 
 // roleAsks is what role r's questions file says of its run that ended in
 // attempt a of stage st, whose end fact did not hold for end (nil: it
-// held): nothing to act on (no question, a gate's turn, whose questions the
-// gate asks, a role whose end fact held and whose questions a later
+// held): nothing to act on (no question, a role with no questions file (a
+// qa stage's walker), a gate's turn, whose questions the gate asks, a role
+// whose end fact held and whose questions a later
 // no_open_questions gate asks, a questions file its end fact refuses, which
 // the role's nudge is about, or questions whose answers the role got
 // already); questions that wait for your answers (those not asked yet are
@@ -672,7 +673,7 @@ const (
 func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, r *stageRole,
 	dir string, end *endProblem) (int, error) {
 	name := questionsFileOf(st, r.role.Name)
-	if run.turn.gate || (end == nil && e.laterQuestionsGate(t, st)) || (end != nil && end.file == name) {
+	if name == "" || run.turn.gate || (end == nil && e.laterQuestionsGate(t, st)) || (end != nil && end.file == name) {
 		return askNone, nil
 	}
 	qs, p := readQuestions(dir, name, run.since(a))

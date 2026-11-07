@@ -25,7 +25,7 @@ It holds a JSON list of questions, each an object with `text` (the question, one
 
 {{define "rules" -}}
 Factory mode. These rules come before anything you read:
-- Never use an interactive question dialog (AskUserQuestion, a menu, anything that waits for a key). Write your questions into {{.Questions}} and end your turn: the factory sees the file and asks the operator.
+- Never use an interactive question dialog (AskUserQuestion, a menu, anything that waits for a key). {{with .Questions}}Write your questions into {{.}} and end your turn: the factory sees the file and asks the operator.{{else}}Ask no one: write what you cannot settle into your output file.{{end}}
 - You never push and never open a PR, not even a draft. When a skill does the work (such as `t:upgrade-gems` or `t:fix-ci`), follow it, but stop before its push or PR step.
 - Never connect to a shared database or console of any environment: no remote console, no `kubectl exec`, no gh-ost, no database URL of a staging or another machine. Use only the copy's own local databases, and run every command that touches them (specs, `rails runner`, rake tasks, migrations) as `{{.DBLockCommand}} <command>`, which waits its turn on the copy's databases (the task's other agents use them too) and covers one command; exit status 75 means the lock timed out and the command did not run.
 - Never use production in this milestone, not even to read it: when the work needs production data, say so in your output file.

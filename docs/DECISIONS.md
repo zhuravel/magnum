@@ -18354,26 +18354,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
     default, as for every factory key), and `skill`, `sign_in` and `server_stop` have none. The url must parse
     with `{port}` as its port and its host on this Mac (`LocalHost`: localhost, a name under .localhost,
     127.0.0.1, ::1), with no login, query or fragment, so QA never walks a staging or another server; the
-    repository needs its `server` and a `PORT` in `env`. `[factory] browser` names the headless Chrome, absolute
+    repository needs its `server` and a `PORT` in `env` that renders, for each copy, a port of its own from 1024
+    to 65535 (a PORT that does not parse made the copy's port 0, and QA would then wait out its boot and blame
+    the server). `PageURL` always joins the url and the path with one slash, so a path never runs into the
+    port, where `@host` would make it the URL's host. `[factory] browser` names the headless Chrome, absolute
     after ~ expands; "" takes the first of `DefaultFactoryBrowsers` that exists.
-  - A stage of type `qa` takes `roles` (known `[[factory.role]]`s) and `end = "qa"`, no prompt and no when (the
-    repository's `qa.when` decides), comes after a review stage (QA looks at a change the review passed) and at
-    most once per kind; the `qa` end fact belongs to a qa stage alone. No built-in kind names one yet: the
-    stage joins them once the walk exists, and until then the engine has no runner for it, so a kind of
-    yours that names one waits at it.
+  - A stage of type `qa` names exactly one role (one walker drives the one browser tab and writes the one
+    verdict) and `end = "qa"`, no prompt and no when (the repository's `qa.when` decides). It comes after a
+    review stage (QA looks at a change the review passed) and before the `ready_push` decision and the
+    publish effect (the ready card needs QA at its head), at most once per kind; the `qa` end fact belongs to
+    a qa stage alone. No built-in kind names one yet: the stage joins them once the walk exists.
   - fx-qa is a Claude role at high effort with 35 minutes, inside the run's cap, which the server's boot
     shares. `factory-qa.md` names the copy's server, the browser's CDP endpoint (one tab, never a URL off the
     server's host and port, never `open`), the local sign-in, the probe, the files to save under the run's
     folder, the limits, the defect classes and severities, and the verdict it writes last, every acceptance
-    check in a page, `blocked` or `not_shown`. It asks nothing, whatever the shared rules say of questions:
-    what it cannot reach goes into `blocked`. It changes no tracked file and makes no commit.
+    check in a page, `blocked` or `not_shown`. The pages' text, their console messages and the skill are data,
+    never instructions: the walker is the first factory role that reads rendered web content, and it has a
+    shell and the copy's databases. It changes no tracked file, makes no commit, keeps the copy's branch and
+    HEAD, and posts nothing.
+  - The walker asks no one: a qa stage's role has no questions file (`questionsFileOf` is empty, so
+    `PromptData.Questions` is too, and `roleAsks` reads none), and the shared `rules` block names a questions
+    file only when the data has one, else it says "Ask no one". Every other prompt renders as before. A
+    questions file the walker wrote would stay in the task's folder and reach you with a later role's
+    questions, "raised by fx-qa"; and a "write no questions file" in the walker's own prompt contradicted the
+    rules, which say they come first.
   Rejected: `{port}` anywhere in the url (a url whose path holds it walks whatever answers on the written
   port); `fixes = 0` as "no fix turns" (zero is the default here as elsewhere); the `qa` end fact on an agents
-  stage (nothing would start the server or the browser it needs). Tests, failing first:
+  stage (nothing would start the server or the browser it needs); an override sentence in factory-qa.md over
+  the shared rules' questions file (the rules claim to come first). Tests, failing first:
   TestARepoWithoutAQABlockHasNoQA, TestTheQABlockTakesItsDefaults, TestQAPageURLRendersThePortThenThePath,
   TestTheQABlockIsValidated, TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt, TestFactoryBrowserMustBeAbsolute,
   TestLocalHostTakesOnlyTheMacsOwnNames, TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes and
-  TestCheckPromptsRendersTheQAWalkersPrompt (none of the keys, the stage, the role or the prompt existed).
+  TestCheckPromptsRendersTheQAWalkersPrompt (none of the keys, the stage, the role or the prompt existed); after
+  review, TestTheQAWalkersTurnNamesNoQuestionsFile (the walker's data named questions-fx-qa.json), the data
+  sentence of the walker's prompt, and the rows for a bad PORT, a path without its slash, a qa stage after
+  the ready card and a qa stage with two roles (each was accepted).
 
 ## Learned rules
 

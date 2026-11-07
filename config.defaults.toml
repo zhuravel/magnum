@@ -1023,10 +1023,10 @@ doing = "talking with you"
 #   review    magnum's review loop on the change ([factory.local_review]); ends when a round is clean
 #   decision  waits for you: ready_push shows the ready card, and your y binds to the head it shows
 #   effect    publish pushes the approved head and opens the PR, ready for review, under your login
-#   qa        starts the copy's server (the repository's [factory.repo.qa]), has `roles` (fx-qa) walk the changed
-#             pages in the factory's headless browser, and checks the saved pages itself; ends on `end = "qa"`. At
-#             most one per kind, after a review stage; no prompt and no when (a repository without
-#             [factory.repo.qa] skips it)
+#   qa        starts the copy's server (the repository's [factory.repo.qa]), has its one role (fx-qa) walk the
+#             changed pages in the factory's headless browser, and checks the saved pages itself; ends on
+#             `end = "qa"`. At most one per kind, after a review stage and before the ready_push decision; no
+#             prompt and no when (a repository without [factory.repo.qa] skips it)
 # `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security. A publish effect
 # must come after a ready_push decision: nothing leaves the Mac without your y.
 
