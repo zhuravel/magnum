@@ -17707,6 +17707,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     --drain` on a wide screen.
   - The chip counts the rows that wait on others with those an agent or magnum's fixer works on now ("5 wait on
     others, 2 at work") and the PRs left alone apart ("4 left alone"), and gives up "at work" before it is cut.
+  - A published PR's status file says whom the PR waits on as its row does (`publishedWait`, shared with
+    `nowOf`): the waits read the time and magnum's poll interval from a `prClock` (`clockOf`), the screen's or
+    the tick's, so the tick's file follows the outcome and "looking at" past its polls as the screen does. The
+    never-picked-up wait stays the screen's: magnum posts no status comment on a PR it has not read.
   Rejected: needs-you for every row whose look is late (one old daemon would fill NEEDS YOU with one cause, which
   the title line says once); the verdict's last words for a stale verdict (an idle "merge is yours" would outlive
   a new head); a YOUR PRS group beside WAITS ON OTHERS (the same state in two groups); the CI's state for a head
