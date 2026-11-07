@@ -16159,6 +16159,52 @@ skill versions); people add theirs to the sections before it, at the end of the 
   once an observe pass marked the row lost; it fails with a second first prompt when `firstPromptDue` reads the
   live row alone).
 
+- **A published task shows its PR's verdict, and a merge makes it done** (2026-11-07, Phase A's third slice
+  of the factory feedback bridge). Every published task said "magnum: review of #N" whatever its PR did, one
+  published today sat in DONE TODAY, and nothing wrote `TaskDone`: a merged task kept its Jira key, its PR link
+  and its liaison. The factory now reads its PRs from magnum's registry (`Magnum.PRStates`, one opening per
+  frame or tick, never per task): magnum's row, the `autofix = "open"` verdict (`engine.KVPROpen`), the fix
+  loop, the stalemate and the attention. It opens the registry as `Busy` does, every migration refused, so a
+  schema behind or ahead of the build is an error and its file stays byte for byte as it was; it never writes
+  it and never creates it. The verdict is magnum's contract with the factory: Phase B moves the look into the
+  factory and keeps the row.
+  - The screen draws a published task by its PR: merged is DONE TODAY; closed waits for a reopen within
+    `[daemon] close_grace`, then needs you; `fixing` is an agent at work, "magnum fixes #N (cycle 2 of 5)";
+    `waits` waits on magnum, CI or the reviewers in the verdict's words; `needs_you` needs you, with the needs
+    as links on the card; `off` needs you with why ("fix is off for #N (F on the board turns it on)"); a PR in
+    a repository no `[[watch]]` covers needs you to merge or close it yourself. Without a verdict (autofix is
+    not "open") the fix loop, the attention and magnum's review still show, and without a reader the row keeps
+    "magnum: review of #N". A published task is no longer DONE TODAY on its PR's day: its PR is open.
+  - Stale is never idle. A verdict whose head is not the PR's, decided before the PR's row last changed, or
+    with magnum's last tick more than four poll intervals old (`OpenVerdict.Stale`), and magnum's daemon down,
+    show "magnum: looking at #N", as do a PR magnum has not read yet and a registry that cannot be read.
+  - An idle PR that a person approved needs you, to merge (the merge stays yours, and the row says how many
+    commits came after the approval); an idle one without an approval waits on its reviewers.
+  - `followPRs`, a step of every tick whether or not the pass advances (it needs neither herdr nor MySQL), is
+    the first writer of `TaskDone`: a merged PR moves its task published -> done, compare-and-set from
+    published so a stop the same tick wins, and the task ends as a stop ends it, through the `closeTask` that
+    `endTask` now shares (its agents parked, its open attempts failed, its heavy slot freed, its copy released;
+    only a stop records your input). The park needs herdr: while herdr is held it is owed to the next tick
+    with herdr up, for a stop too. The liaison of a done task is parked by the observe pass, as any ended
+    task's.
+  - A PR closed without a merge keeps its task published, with `waits_who = you` and "PR #N closed without a
+    merge: reopen it, or x drops the task", alerted once; a reopen clears it. Not `needs_you`: that is a live
+    stage's state, which the answer, retry and ready paths act on (a retry would send the task back to a
+    stage it has finished), and `waitsOnYou` already reads `waits_who`, so the screen, the chip and the alerts
+    count it. Unknown moves nothing: an unreadable registry, a PR magnum lacks, magnum's daemon down.
+  - `magnum factory stats` counts per task the fix loops on its PR, by hand apart from autofix (the cycle-1
+    `fix.start` events of the PR's whole history, which magnum keeps for `keep_events`), and the total started
+    by hand, the "no manual start" measure the operator watches.
+  Rejected: `needs_you` for a closed PR (the live-stage paths above); writing done from the screen (a reader
+  only reads); reading magnum's registry per task (a frame opens it once); a cut event read for the stats (a
+  busy PR has hundreds of events, and a cut list undercounts the hand starts); real-painter frames from the live
+  registries in the commit (titles and Jira keys are private: the frames come from the test fixtures).
+  Tests, failing first: TestPRStateRefusesAMagnumRegistryOfAnotherSchema, TestAPublishedTaskShowsItsPRsFixLoop
+  and the other screen tests of `screen_prs_test.go` (every row said "magnum: review of #N"),
+  TestAMergedPRMovesItsTaskToDone, TestAClosedPRNeedsYouAfterTheGrace, TestAMergedTasksAgentsAreParkedAndItsCopyReleased
+  (nothing followed the PRs), TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem and
+  TestStatsCountsManualFixStartsOnFactoryPRs (no count existed).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
