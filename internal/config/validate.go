@@ -51,8 +51,10 @@ func (c *Config) Warnings() []string {
 // role (a [[role]] list of the operator's own replaces the built-in
 // claude-fix), so autofix never starts the job (fix_role = "" switches it
 // off on purpose and says nothing); the fix role's own identity is not declared, or the
-// poll identity it takes when it names none is an App, so the job cannot
-// run (an explicit identity of another kind is Validate's error); and the
+// poll identity it takes when it names none (and the watch sets no
+// fix_identity) is an App that is not dedicated to the fixer
+// (DedicatedFixApp), so the job cannot run (an explicit App a watch
+// reviews as, or one not narrowed, is Validate's error); and the
 // watch posts as the login the fixer acts as, so the fixer could not tell
 // magnum's review threads from its own replies. Nothing is said while no
 // identity is declared: "no [[identity]] configured" already is.
@@ -81,6 +83,7 @@ func (c *Config) fixRoleWarnings() []string {
 		raw, _ := c.roleNamed(r.Name)
 		fixer := c.IdentityByName(r.Identity)
 		switch {
+		case w.FixIdentity != "": // Validate checks it
 		case raw.Identity != "" && fixer == nil:
 			if !seen[r.Name] {
 				out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so autofix = %q cannot start the fix job "+
@@ -89,10 +92,11 @@ func (c *Config) fixRoleWarnings() []string {
 			}
 			seen[r.Name] = true
 			continue
-		case raw.Identity == "" && fixer != nil && fixer.Kind != "gh":
-			out = append(out, fmt.Sprintf("fix role %s takes watch %s's poll identity %q, an App, as the account it pushes and replies "+
-				"as, so the fix job refuses to start; poll as your gh identity (poll_identity), or set identity in a [[role]] named %s",
-				r.Name, w.Owner, r.Identity, r.Name))
+		case raw.Identity == "" && fixer != nil && fixer.Kind != "gh" && !c.DedicatedFixApp(fixer.Name):
+			out = append(out, fmt.Sprintf("fix role %s takes watch %s's poll identity %q, an App that is not dedicated to the fixer (a "+
+				"watch reviews or polls as it), as the account it pushes and replies as, so the fix job refuses to start; set "+
+				"fix_identity to your gh identity or a dedicated App, poll as your gh identity (poll_identity), or set identity in "+
+				"a [[role]] named %s", r.Name, w.Owner, r.Identity, r.Name))
 			continue
 		}
 		if post := c.IdentityByName(w.Identity); post != nil && fixer != nil && github.SameAccount(post.Login, fixer.Login) {
@@ -121,6 +125,9 @@ func (c *Config) Validate() error {
 		}
 		switch id.Kind {
 		case "gh":
+			for _, key := range id.tokenKeysSet() {
+				errs = append(errs, fmt.Errorf("identity %s: %s is for kind app (magnum mints no token for your own gh login)", id.Name, key))
+			}
 		case "app":
 			if id.AppID == 0 || id.InstallationID == 0 || (id.PrivateKeyEnv == "" && id.PrivateKeyFile == "") {
 				errs = append(errs, fmt.Errorf("identity %s: app needs app_id, installation_id and private_key_file (or private_key_env)", id.Name))
@@ -128,6 +135,7 @@ func (c *Config) Validate() error {
 			if id.ClientID == "" {
 				errs = append(errs, fmt.Errorf("identity %s: app needs client_id (JWT iss)", id.Name))
 			}
+			errs = append(errs, id.validateTokenKeys()...)
 		default:
 			errs = append(errs, fmt.Errorf("identity %s: kind must be gh or app", id.Name))
 		}
@@ -149,6 +157,13 @@ func (c *Config) Validate() error {
 		}
 		if _, ok := ids[w.PollIdentity]; !ok {
 			errs = append(errs, fmt.Errorf("watch %s: unknown poll_identity %q", w.Owner, w.PollIdentity))
+		}
+		if w.FixIdentity != "" {
+			if id, ok := ids[w.FixIdentity]; !ok {
+				errs = append(errs, fmt.Errorf("watch %s: unknown fix_identity %q", w.Owner, w.FixIdentity))
+			} else if msg := c.fixerAppProblem(id); msg != "" {
+				errs = append(errs, fmt.Errorf("watch %s: fix_identity: %s", w.Owner, msg))
+			}
 		}
 		for _, list := range []struct {
 			key   string
@@ -1213,12 +1228,15 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 // validateFixRole checks what makes a fix role fit the fix job: an agent
 // session that is no judge and takes no after, own_pass or
 // max_session_rounds (it is not part of a round, so nothing counts rounds
-// for its session, which persists until the operator parks it), acting as a gh identity when it names one: the operator's own
-// account, which pushes to the PR's branch and answers its review threads.
-// A role that names none takes each watch's poll identity (FixRoleFor); an
+// for its session, which persists until the operator parks it), acting,
+// when it names an identity, as a gh one (the operator's own account,
+// which pushes to the PR's branch and answers its review threads) or as a
+// dedicated, narrowed App of the fixer's own (fixerAppProblem; a watch's
+// fix_identity is checked the same way). A role that names none takes
+// each watch's fix_identity, else its poll identity (FixRoleFor); an
 // identity the configuration does not declare, or a poll identity that is
-// an App, is no error here (Config.Warnings says it where autofix = "own",
-// and the fix job refuses it).
+// a review App, is no error here (Config.Warnings says it where autofix
+// starts the job, and the fix job refuses it).
 func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	if r.Judge {
 		bad("a fix role cannot also be a judge")
@@ -1235,10 +1253,93 @@ func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	if r.MaxSessionRounds > 0 {
 		bad("a fix role takes no max_session_rounds (a fix job is no round: its session persists until you park it)")
 	}
-	if id := c.IdentityByName(r.Identity); id != nil && id.Kind != "gh" {
-		bad("identity %s must be a gh identity (your own account), not kind %q: the fixer pushes to the PR's branch and "+
-			"answers its threads as you, which an App cannot", id.Name, id.Kind)
+	if id := c.IdentityByName(r.Identity); id != nil {
+		if msg := c.fixerAppProblem(*id); msg != "" {
+			bad("%s", msg)
+		}
 	}
+}
+
+// fixerAppProblem is why identity id cannot be the fixer's, "" when it
+// can: a gh identity always can (the operator's own account); an App only
+// when it is a dedicated one (DedicatedFixApp: never the App a watch
+// reviews, polls or approves as) whose tokens are narrowed to named
+// repositories, with contents and pull_requests write and nothing else
+// (metadata read is GitHub's own), and that says its bot's user id.
+func (c *Config) fixerAppProblem(id Identity) string {
+	if id.Kind != "app" {
+		return ""
+	}
+	if use := c.reviewAppUse(id.Name); use != "" {
+		return fmt.Sprintf("identity %s is the App %s: the fixer's replies then read as magnum's own, and its rebuttals "+
+			"count as magnum's. Give the fixer a gh identity or an App of its own", id.Name, use)
+	}
+	narrow := len(id.TokenRepositories) > 0 && id.UserID > 0 &&
+		id.TokenPermissions["contents"] == "write" && id.TokenPermissions["pull_requests"] == "write"
+	for k, v := range id.TokenPermissions {
+		if k != "contents" && k != "pull_requests" && (k != "metadata" || v != "read") {
+			narrow = false
+		}
+	}
+	if !narrow {
+		return fmt.Sprintf("identity %s: a fixer App needs token_repositories, token_permissions (contents and pull_requests "+
+			"write, nothing else) and user_id", id.Name)
+	}
+	return ""
+}
+
+// tokenKeysSet names the token keys id sets (token_repositories,
+// token_permissions, user_id): an App's only.
+func (id Identity) tokenKeysSet() []string {
+	var out []string
+	if len(id.TokenRepositories) > 0 {
+		out = append(out, "token_repositories")
+	}
+	if len(id.TokenPermissions) > 0 {
+		out = append(out, "token_permissions")
+	}
+	if id.UserID != 0 {
+		out = append(out, "user_id")
+	}
+	return out
+}
+
+const (
+	// maxTokenRepositories is the most repositories GitHub's access_tokens
+	// call takes.
+	maxTokenRepositories = 500
+)
+
+var (
+	tokenRepositoryRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+	tokenPermissionRe = regexp.MustCompile(`^[a-z_]{1,50}$`)
+)
+
+// validateTokenKeys checks an App's token keys: repository names within
+// the installation's account (no owner, at most 500), permission names
+// with read or write, and a user id of at least 1 when set.
+func (id Identity) validateTokenKeys() []error {
+	var errs []error
+	if n := len(id.TokenRepositories); n > maxTokenRepositories {
+		errs = append(errs, fmt.Errorf("identity %s: token_repositories names %d repositories, at most %d", id.Name, n, maxTokenRepositories))
+	}
+	for _, r := range id.TokenRepositories {
+		if !tokenRepositoryRe.MatchString(r) {
+			errs = append(errs, fmt.Errorf("identity %s: token_repositories entry %q must be a repository name of the installation's account (no owner)", id.Name, r))
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(id.TokenPermissions)) {
+		switch v := id.TokenPermissions[k]; {
+		case !tokenPermissionRe.MatchString(k):
+			errs = append(errs, fmt.Errorf("identity %s: token_permissions key %q must be a permission name (pull_requests, contents)", id.Name, k))
+		case v != "read" && v != "write":
+			errs = append(errs, fmt.Errorf("identity %s: token_permissions %s must be read or write, got %q", id.Name, k, v))
+		}
+	}
+	if id.UserID < 0 {
+		errs = append(errs, fmt.Errorf("identity %s: user_id must be at least 1 (the App's bot user's id)", id.Name))
+	}
+	return errs
 }
 
 // validateWhiteboardRole checks what makes a whiteboard role fit the

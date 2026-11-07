@@ -69,6 +69,24 @@ no_findings_event = "COMMENT"
 blocking_event = "REQUEST_CHANGES"
 # dismiss_own_stale_change_requests = true  # the default for an app: false leaves a stale change request for a human to dismiss
 
+# A GitHub App of the fixer's own (README, Fixing your own PRs): the fixer commits, pushes and replies as its bot
+# instead of as you. No watch may review, poll or approve as it, and its tokens must be narrowed. One block per
+# installation; a watch's fix_identity picks it.
+# [[identity]]
+# name = "example-fixer"
+# kind = "app"
+# login = "example-fixer[bot]"
+# app_id = 1234567
+# client_id = "Iv23liExampleFixer00"
+# installation_id = 12345678
+# private_key_file = "~/.config/magnum/keys/example-fixer.pem"
+# token_repositories = ["talkable"]     # every token magnum mints for it reaches these repositories of the
+#                                       # installation's account only (names, no owner)
+# token_permissions = { contents = "write", pull_requests = "write" }   # and these permissions only: a fixer App
+#                                       # needs exactly these two (metadata = "read" may be added)
+# user_id = 123456789                   # its bot user's id (`gh api users/example-fixer[bot] --jq .id`): its commits'
+#                                       # noreply email; `magnum identities check` checks it
+
 [[watch]]
 owner = "talkable"
 include = ["talkable"]
@@ -96,6 +114,8 @@ skip_authors = ["dependabot"]
 # autofix = "open"                      # [pipeline]'s "never": "own" starts a fix loop on your own PR after a review with
 #                                       # findings; "open" on anything open on it once reviewers settle ([pipeline] settle_*,
 #                                       # quiet_logins, quiet_markers; README, Fixing your own PRs)
+# fix_identity = "example-fixer"        # the identity the fixer of this watch's PRs acts as (default: the fix role's,
+#                                       # else poll_identity): your gh identity, or an App of the fixer's own above
 
 [[pool]]
 repo = "talkable/talkable"

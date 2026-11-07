@@ -508,7 +508,7 @@ func TestFixRefusals(t *testing.T) {
 		}, want: "no identity me for the fix role"},
 		{name: "a poll identity that is an App", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, _ store.PR) {
 			h.cfg.Watches[0].PollIdentity = "talkable-app"
-		}, want: "the fix role's identity talkable-app is an App; name a gh identity"},
+		}, want: "the fix role's identity talkable-app is the App magnum reviews as. Set fix_identity to your gh identity or a dedicated App"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, git := fixHarness(t)

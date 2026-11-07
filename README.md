@@ -1366,7 +1366,26 @@ client_id = "Iv23liXXXXXXXXXXXXXX"
 installation_id = 12345678
 private_key_file = "~/.config/magnum/keys/reviewer-app.pem"
 no_findings_event = "COMMENT"      # never let a bot approval unlock a merge by accident
+
+[[identity]]
+name = "fixer-app"
+kind = "app"                       # an App of the fixer's own (Fixing your own PRs): no watch reviews, polls or approves as it
+login = "your-fixer[bot]"
+app_id = 234567
+client_id = "Iv23liYYYYYYYYYYYYYY"
+installation_id = 23456789
+private_key_file = "~/.config/magnum/keys/fixer-app.pem"
+token_repositories = ["talkable"]  # every token magnum mints for it reaches these repositories only
+token_permissions = { contents = "write", pull_requests = "write" }   # with these permissions only
+user_id = 123456789                # its bot user's id, which its commits' noreply email carries
 ```
+
+`token_repositories` and `token_permissions` (kind `app` only) narrow every installation token Magnum mints
+for the App: the repositories, by name within the installation's account (no owner, at most 500), and the
+permissions, `read` or `write` by GitHub's permission name, that GitHub's token call takes. Without them a
+token has the installation's whole access, as before. `user_id` (kind `app` only) is the App's bot user's
+numeric id. A fixer App must set all three, with `contents` and `pull_requests` write and nothing else
+(`metadata = "read"` may be added); validation refuses it otherwise, and refuses the keys on a `gh` identity.
 
 App tokens are minted from a short-lived JWT and refreshed before they expire; every GitHub call,
 including those, goes through `gh api` by default, so no extra firewall rules are needed (`[github] transport = "direct"` makes the JWT and token calls Go `net/http` requests, which an outbound firewall may block for a rebuilt, unsigned binary). The App needs the repository
@@ -1882,7 +1901,9 @@ with findings on your own PRs (`"own"`), or whenever something is open on them o
 `quiet_logins` and `quiet_markers` keys). `fix_compact_at` (default 70) is the context percent at which a resumed fixer is
 compacted; a watch cannot override it. A watch's `roles` list may not name a fix role, and `magnum roles` leaves it out.
 Validation refuses a `fix_role` that names no role, a judge, a shell role or a role without `fix = true`, and
-a fix role whose declared identity is not a `gh` one. A fix role that names none acts as the watch's poll identity.
+a fix role whose declared identity is an App a watch reviews, polls or approves as, or an App not narrowed as a
+fixer App must be. A watch's `fix_identity` names the identity its PRs' fixer acts as, over the fix role's own;
+a fix role that names none, on a watch that sets none, acts as the watch's poll identity.
 
 A fourth kind of role takes part in no round either: the whiteboard role (`whiteboard = true`). The built-in
 `claude-whiteboard` (kind claude, model opus, effort medium, the prompt `whiteboard.md`, no skill, `timeout`
@@ -2894,14 +2915,20 @@ only after a figure was read in between): check that your status line shows the 
 
 **Who the fixer is.** The fixer's pane acts as one GitHub identity. The built-in `claude-fix` names none, so
 it acts as the watch's poll identity, which is your own gh login in the config `magnum init` writes. A
-freshly initialised config therefore runs `magnum fix` without renaming anything. That identity must be a
-`gh` one, your own account, since an App cannot push to your branch as you. A watch that polls as an App
-makes `magnum fix` refuse ("the fix role's identity ... is an App; name a gh identity"), and under `autofix =
-"own"` or `"open"` the configuration warns about it. So `gh` and `git` in the fixer's pane act as your gh login, with your
-git config and your SSH agent (the daemon's `SSH_AUTH_SOCK`), and the pushes and replies show in the PR's
-history as yours. To act as another account, set `identity` in a `[[role]]` block named `claude-fix` to a
-`gh` identity; the configuration refuses an App there. An identity it names but nobody declared makes
-`magnum fix` refuse ("no identity me for the fix role"), and `magnum doctor` says the same.
+freshly initialised config therefore runs `magnum fix` without renaming anything. So `gh` and `git` in the
+fixer's pane act as your gh login, with your git config and your SSH agent (the daemon's `SSH_AUTH_SOCK`), and
+the pushes and replies show in the PR's history as yours. To act as another account, set the watch's
+`fix_identity` (or `identity` in a `[[role]]` block named `claude-fix`) to another `gh` identity, or to a
+GitHub App of the fixer's own: an App no watch reviews, polls or approves as, whose tokens are narrowed to the
+repositories it fixes and to `contents` and `pull_requests` write (`token_repositories`, `token_permissions`,
+`user_id`; see Identities: who posts). One fix role serves several watches, and `fix_identity` picks the
+identity per watch, so an App installed on two owners is two `[[identity]]` blocks, one per watch. The App
+Magnum reviews as is never the fixer: its replies would read as Magnum's own and its rebuttals would count as
+Magnum's. The configuration refuses it as an explicit identity, and a watch that polls as an App makes
+`magnum fix` refuse ("the fix role's identity ... is the App magnum reviews as. Set fix_identity to your gh
+identity or a dedicated App"); under `autofix = "own"` or `"open"` the configuration warns about it and `magnum
+doctor` fails it. An identity it names but nobody declared makes `magnum fix` refuse ("no identity me for the
+fix role"), and `magnum doctor` says the same.
 
 A watch that posts as your own login cannot tell the fixer's replies from its own. The re-review then does
 not read them as the author's answers, and `magnum fix` says so in a note. Post the reviews as an App

@@ -4689,6 +4689,10 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     [[watch]], [[pool]] and [[repo]], and overrides keys (see applyOverlay).
     cfg.Sources lists what was read.
 
+func (c *Config) AllFixerLogins() []string
+    AllFixerLogins is the union of every watch's FixerLogins, each login once
+    (any case, with or without "[bot]").
+
 func (c *Config) AllRoles() []Role
     AllRoles returns every declared role in [[role]] order, the judges held
     in reserve and the fix and whiteboard roles included (RolesFor leaves them
@@ -4770,6 +4774,13 @@ func (c *Config) CriticRole() Role
     critic_kind in session mode with its model, effort, args, prompt, timeout
     and fallback models, normalized like a configured role.
 
+func (c *Config) DedicatedFixApp(name string) bool
+    DedicatedFixApp reports whether the identity named name is a GitHub App
+    the fixer may act as: kind app, and no watch reviews as it (identity),
+    polls as it (poll_identity) or approves as it (auto_approve_as). The App
+    magnum reviews as never is: the fixer's replies would read as magnum's own
+    and its rebuttals would count as magnum's.
+
 func (c *Config) EditorRole() Role
     EditorRole is the role the skill editor runs as: EditorRoleName, the
     [learn] editor_kind in session mode with its editor_model, editor_effort,
@@ -4796,12 +4807,13 @@ func (c *Config) FixCyclesFor(w *Watch) int
 func (c *Config) FixRoleFor(w *Watch) (Role, bool)
     FixRoleFor is the fix role of watch w: the watch's fix_role when it sets
     one (an empty one switches the fix job off for the watch), else [pipeline]
-    fix_role, found among every declared role (not only the watch's).
-    ok is false when none is set or the name matches no fix role; Validate
-    reports the latter. A fix role that names no identity acts as w's poll
-    identity (its identity when it has no poll_identity, as Normalize sets it):
-    the operator's own gh login in a `magnum init` config, which polls as it.
-    Without a watch the identity stays empty.
+    fix_role, found among every declared role (not only the watch's). ok is
+    false when none is set or the name matches no fix role; Validate reports the
+    latter. The role acts as w's fix_identity when the watch sets one; else a
+    fix role that names no identity acts as w's poll identity (its identity when
+    it has no poll_identity, as Normalize sets it): the operator's own gh login
+    in a `magnum init` config, which polls as it. Without a watch the identity
+    stays the role's.
 
 func (c *Config) FixRoleName(w *Watch) string
     FixRoleName is the fix_role that applies to w: the watch's when it sets one,
@@ -4811,6 +4823,12 @@ func (c *Config) FixRoles() []Role
     FixRoles returns every declared fix role in [[role]] order: the built-in
     claude-fix, and the fix roles a configuration adds for the watches whose
     fix_role names them (FixRoleFor).
+
+func (c *Config) FixerLogins(w *Watch) []string
+    FixerLogins are the logins the fixer of w's PRs posts as that are not the
+    PR author's: the login of a dedicated App (DedicatedFixApp) the fix role
+    acts as (FixRoleFor), none for a gh fixer, which acts as the operator,
+    the author of the PRs it fixes, or for a watch without a fix job.
 
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
@@ -5617,6 +5635,18 @@ type Identity struct {
 	// identity's reviews, for the PR's author (nil = DefaultReviewFooter,
 	// "" = none); see Footer and FooterData.
 	ReviewFooter *string `toml:"review_footer"`
+	// TokenRepositories and TokenPermissions narrow every installation
+	// token magnum mints for an App identity (kind app only): the
+	// repositories, by name within the installation's account, and the
+	// permissions ("read" or "write" by GitHub's permission name) GitHub's
+	// access_tokens call takes. Unset = the installation's whole access, as
+	// before. A fixer App (Config.DedicatedFixApp) must set both, with
+	// contents and pull_requests write and nothing else.
+	TokenRepositories []string          `toml:"token_repositories"`
+	TokenPermissions  map[string]string `toml:"token_permissions"`
+	// UserID is an App's bot user's numeric GitHub id (kind app only; 0 =
+	// unset): a fixer App's commits carry <user_id>+<login>@users.noreply.github.com.
+	UserID int64 `toml:"user_id"`
 }
 
 func (i Identity) DismissStale() bool
@@ -7026,6 +7056,12 @@ type Watch struct {
 	FixRole   *string `toml:"fix_role"`
 	FixCycles *int    `toml:"fix_cycles"`
 	Autofix   string  `toml:"autofix"`
+	// FixIdentity names the [[identity]] the fixer of this watch's PRs acts
+	// as, over the fix role's own identity ("" = the role's, else the poll
+	// identity; see Config.FixRoleFor): the operator's gh identity, or a
+	// GitHub App of the fixer's own (Config.DedicatedFixApp), one per
+	// installation.
+	FixIdentity string `toml:"fix_identity"`
 	// Whiteboard and WhiteboardRole override [pipeline] whiteboard and
 	// whiteboard_role for this watch's PRs: unset keeps the pipeline's, a
 	// whiteboard of false switches the automatic job off for the watch, a

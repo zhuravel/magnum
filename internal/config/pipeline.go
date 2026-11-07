@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/zhuravel/magnum/internal/github"
 )
 
 // The review pipeline is configuration, "a Procfile of agents": [kinds.<name>]
@@ -267,10 +269,11 @@ func (c *Config) JudgeFallbackName(w *Watch) string {
 // one (an empty one switches the fix job off for the watch), else [pipeline]
 // fix_role, found among every declared role (not only the watch's). ok is
 // false when none is set or the name matches no fix role; Validate reports
-// the latter. A fix role that names no identity acts as w's poll identity
-// (its identity when it has no poll_identity, as Normalize sets it): the
+// the latter. The role acts as w's fix_identity when the watch sets one;
+// else a fix role that names no identity acts as w's poll identity (its
+// identity when it has no poll_identity, as Normalize sets it): the
 // operator's own gh login in a `magnum init` config, which polls as it.
-// Without a watch the identity stays empty.
+// Without a watch the identity stays the role's.
 func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
 	name := c.FixRoleName(w)
 	if strings.TrimSpace(name) == "" {
@@ -280,10 +283,68 @@ func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
 	if !ok || !r.Fix {
 		return Role{}, false
 	}
-	if r.Identity == "" && w != nil {
+	switch {
+	case w == nil:
+	case w.FixIdentity != "":
+		r.Identity = w.FixIdentity
+	case r.Identity == "":
 		r.Identity = cmp.Or(w.PollIdentity, w.Identity)
 	}
 	return r, true
+}
+
+// DedicatedFixApp reports whether the identity named name is a GitHub App
+// the fixer may act as: kind app, and no watch reviews as it (identity),
+// polls as it (poll_identity) or approves as it (auto_approve_as). The
+// App magnum reviews as never is: the fixer's replies would read as
+// magnum's own and its rebuttals would count as magnum's.
+func (c *Config) DedicatedFixApp(name string) bool {
+	id := c.IdentityByName(name)
+	return id != nil && id.Kind == "app" && c.reviewAppUse(name) == ""
+}
+
+// reviewAppUse is how a watch uses the identity named name for its
+// reviews, "" when none does: "watch X posts its reviews as", "watch X
+// polls as" or "watch X approves as".
+func (c *Config) reviewAppUse(name string) string {
+	for _, w := range c.Watches {
+		switch name {
+		case w.Identity:
+			return "watch " + w.Owner + " posts its reviews as"
+		case w.PollIdentity:
+			return "watch " + w.Owner + " polls as"
+		case w.AutoApproveAs:
+			return "watch " + w.Owner + " approves as"
+		}
+	}
+	return ""
+}
+
+// FixerLogins are the logins the fixer of w's PRs posts as that are not
+// the PR author's: the login of a dedicated App (DedicatedFixApp) the fix
+// role acts as (FixRoleFor), none for a gh fixer, which acts as the
+// operator, the author of the PRs it fixes, or for a watch without a fix
+// job.
+func (c *Config) FixerLogins(w *Watch) []string {
+	r, ok := c.FixRoleFor(w)
+	if !ok || !c.DedicatedFixApp(r.Identity) {
+		return nil
+	}
+	return []string{c.IdentityByName(r.Identity).Login}
+}
+
+// AllFixerLogins is the union of every watch's FixerLogins, each login
+// once (any case, with or without "[bot]").
+func (c *Config) AllFixerLogins() []string {
+	var out []string
+	for i := range c.Watches {
+		for _, l := range c.FixerLogins(&c.Watches[i]) {
+			if !slices.ContainsFunc(out, func(o string) bool { return github.SameAccount(o, l) }) {
+				out = append(out, l)
+			}
+		}
+	}
+	return out
 }
 
 // FixRoleName is the fix_role that applies to w: the watch's when it sets

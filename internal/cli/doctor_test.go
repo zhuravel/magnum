@@ -905,6 +905,33 @@ func TestDoctorChecksTheFixJobUnderAutofixOpen(t *testing.T) {
 	}
 }
 
+// A fixer App of its own (a watch's fix_identity, no watch reviewing, polling
+// or approving as it) is an identity the fix job runs as: the doctor checks
+// it as it checks a gh fixer, by its last identity check, and never says an
+// App cannot fix.
+func TestDoctorAcceptsADedicatedFixerApp(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	app := doctorWithFixSkill(t, d, "pass")
+	app.Config.Identities = append(app.Config.Identities, config.Identity{Name: "fixer-app", Kind: "app", Login: "fixer-app[bot]",
+		AppID: 7, ClientID: "Iv-fix", InstallationID: 8, PrivateKeyEnv: "FIX_KEY", TokenRepositories: []string{"talkable"},
+		TokenPermissions: map[string]string{"contents": "write", "pull_requests": "write"}, UserID: 4242})
+	app.Config.Watches = app.Config.Watches[:1]
+	app.Config.Watches[0].FixIdentity = "fixer-app"
+	app.Config.Watches[0].Autofix = config.AutofixOpen
+	if err := app.Store.SetKV(context.Background(), store.KVIdentityCheck("fixer-app"), "pass"); err != nil {
+		t.Fatal(err)
+	}
+	var found []doctorCheck
+	for _, c := range doctorRun(context.Background(), app) {
+		if c.Name == "fix role" {
+			found = append(found, c)
+		}
+	}
+	if len(found) != 1 || found[0].Status != doctorPass || !strings.Contains(found[0].Detail, "identity fixer-app (app, fixer-app[bot]): last check passed") {
+		t.Fatalf("fix role checks = %+v, want one pass for the fixer App", found)
+	}
+}
+
 // The whiteboard line says whether the whiteboard job can run: skipped, with
 // nothing run, while no watch has whiteboards on; with them on, the
 // `whiteboard` CLI must be on PATH (a failure: the job cannot run at all)

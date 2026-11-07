@@ -349,6 +349,18 @@ type Identity struct {
 	// identity's reviews, for the PR's author (nil = DefaultReviewFooter,
 	// "" = none); see Footer and FooterData.
 	ReviewFooter *string `toml:"review_footer"`
+	// TokenRepositories and TokenPermissions narrow every installation
+	// token magnum mints for an App identity (kind app only): the
+	// repositories, by name within the installation's account, and the
+	// permissions ("read" or "write" by GitHub's permission name) GitHub's
+	// access_tokens call takes. Unset = the installation's whole access, as
+	// before. A fixer App (Config.DedicatedFixApp) must set both, with
+	// contents and pull_requests write and nothing else.
+	TokenRepositories []string          `toml:"token_repositories"`
+	TokenPermissions  map[string]string `toml:"token_permissions"`
+	// UserID is an App's bot user's numeric GitHub id (kind app only; 0 =
+	// unset): a fixer App's commits carry <user_id>+<login>@users.noreply.github.com.
+	UserID int64 `toml:"user_id"`
 }
 
 // DismissStale reports whether the identity dismisses its own stale CHANGES_REQUESTED.
@@ -445,6 +457,12 @@ type Watch struct {
 	FixRole   *string `toml:"fix_role"`
 	FixCycles *int    `toml:"fix_cycles"`
 	Autofix   string  `toml:"autofix"`
+	// FixIdentity names the [[identity]] the fixer of this watch's PRs acts
+	// as, over the fix role's own identity ("" = the role's, else the poll
+	// identity; see Config.FixRoleFor): the operator's gh identity, or a
+	// GitHub App of the fixer's own (Config.DedicatedFixApp), one per
+	// installation.
+	FixIdentity string `toml:"fix_identity"`
 	// Whiteboard and WhiteboardRole override [pipeline] whiteboard and
 	// whiteboard_role for this watch's PRs: unset keeps the pipeline's, a
 	// whiteboard of false switches the automatic job off for the watch, a

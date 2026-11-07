@@ -129,7 +129,8 @@ func TestFixKeysResolvePerWatch(t *testing.T) {
 
 // Validation refuses a fix_role that names no role, a judge, a shell role or
 // a role that is not a fix role, a fix role a watch's roles list, a fix role
-// that is not an agent session of a gh identity, and fix keys out of range.
+// that is not an agent session of a gh identity or of a dedicated, narrowed
+// App (fix_app_test.go), and fix keys out of range.
 // A fix role's skill file missing is no error (the snapshot warns, as for a
 // judge), and an identity not declared is a warning (Config.Warnings).
 func TestValidateFixRole(t *testing.T) {
@@ -159,10 +160,10 @@ func TestValidateFixRole(t *testing.T) {
 		"fix role in the watch's roles": {func(c *Config) {
 			c.Watches[0].Roles = []string{"codex-judge", "claude-review", "claude-fix"}
 		}, "watch acme: role claude-fix is a fix role"},
-		"fix role of an App identity": {func(c *Config) {
+		"fix role of an App that is not narrowed": {func(c *Config) {
 			c.Identities = append(c.Identities, app)
 			role(c, RoleClaudeFix).Identity = "app"
-		}, "role claude-fix: identity app must be a gh identity"},
+		}, "role claude-fix: identity app: a fixer App needs token_repositories"},
 		"fix role runs always":        {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsAlways }, "role claude-fix: a fix role has no runs"},
 		"fix role runs first":         {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsFirst }, "role claude-fix: a fix role has no runs"},
 		"fix role after":              {func(c *Config) { role(c, RoleClaudeFix).After = []string{"claude-review"} }, "role claude-fix: a fix role takes no after"},

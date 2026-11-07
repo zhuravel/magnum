@@ -470,8 +470,9 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 // watch's poll identity when the role names none) and prints one "fix role"
 // line per role and identity that says whether the fix job can run: its
 // skill resolves (the checkout's files, else the binary's own copy), and its
-// identity is a gh identity whose login check passes, since the fixer pushes
-// and replies as the operator's own account. A watch whose autofix = "own"
+// identity is a gh identity, or a dedicated App (config.DedicatedFixApp: a
+// watch's fix_identity), whose login check passes, since the fixer pushes
+// and replies as the operator's own account or as that App. A watch whose autofix = "own"
 // or "open" (config.AutofixStarts) cannot start the job by itself fails: its
 // fix_role names no declared fix role (a [[role]] list of the operator's own
 // replaces the built-in claude-fix), or the poll identity its fix role takes
@@ -557,7 +558,8 @@ func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofi
 		}
 		return []doctorCheck{doctorSkipped(name, why+"; `magnum fix` is refused until it is declared")}
 	}
-	if id.Kind != "gh" && !autofix { // a poll identity the role took: polling as an App is a valid config
+	app := id.Kind != "gh" && !d.Config.DedicatedFixApp(id.Name) // the App a watch reviews or polls as
+	if app && !autofix {                                         // a poll identity the role took: polling as an App is a valid config
 		return []doctorCheck{doctorSkipped(name, fmt.Sprintf("%s: `magnum fix` refuses: %s %s as an App (identity %s), the account the fixer would act as",
 			head, textx.Plural(len(owners), "watch", "watches")+" "+strings.Join(owners, ", "), textx.Plural(len(owners), "polls", "poll"), id.Name))}
 	}
@@ -591,9 +593,9 @@ func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofi
 		return v
 	}
 	switch {
-	case id.Kind != "gh":
-		out = append(out, doctorFailed(name, fmt.Sprintf(`%s: identity %s is an %s identity: the fixer pushes and replies as your own account, and autofix (own or open) would start it`, head, id.Name, id.Kind),
-			"poll as a gh [[identity]] for your account (the watch's poll_identity, which the fix role takes), or set identity in the [[role]] named "+r.Name))
+	case app:
+		out = append(out, doctorFailed(name, fmt.Sprintf(`%s: identity %s is an %s identity a watch reviews or polls as: the fixer pushes and replies as your own account or as an App of its own, and autofix (own or open) would start it`, head, id.Name, id.Kind),
+			"set the watch's fix_identity to your gh [[identity]] or a dedicated App, poll as a gh [[identity]] for your account (the watch's poll_identity, which the fix role takes), or set identity in the [[role]] named "+r.Name))
 	case kv(store.KVIdentityCheck(id.Name)) == "pass":
 		ok = append(ok, who+": last check passed")
 	case kv(store.KVIdentityCheck(id.Name)) == "fail":
