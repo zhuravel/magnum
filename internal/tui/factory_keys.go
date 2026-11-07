@@ -236,17 +236,17 @@ func (m *factoryModel) openMagnum(r FactoryRow) tea.Cmd {
 	return m.bar.start("Open magnum's pane of "+key, run)
 }
 
-// prKey is f, F, K or x on home's row r: on a row whose open PR magnum's
-// registry has (FactoryRow.PR: your PR's, or a task's), magnum's fix of
-// what is open (f), its switch out of autofix or back in (F; a PR magnum
-// leaves alone for another reason says why and runs nothing) and the stop
-// of its fix loop (K, and x on your PR's row; with no loop it says so),
-// each behind y/N and through magnum's own request paths; on a row without
-// one nothing. x on a task's row is no key of home's: it drops a task, on
-// its card.
+// prKey is f, F, K or x on row r (home's, or the card's): on a row whose
+// open PR magnum's registry has (FactoryRow.PR: your PR's, or a task's),
+// magnum's fix of what is open (f), its switch out of autofix or back in
+// (F; a PR magnum leaves alone for another reason says why and runs
+// nothing) and the stop of its fix loop (K; with no loop it says so), each
+// behind y/N and through magnum's own request paths; on a row without one
+// nothing. x is no key of home's: it drops a task, on its card, and says
+// that K stops magnum's loop.
 func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 	switch {
-	case k == "x" && !r.yourPR():
+	case k == "x":
 		return m.note("K stops magnum's loop on a row with a PR; x drops a task, on its card")
 	case r.PR == nil:
 		return m.note("f, F and K act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")

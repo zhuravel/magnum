@@ -17,22 +17,22 @@ package tui
 // page in the browser asks nothing.
 //
 // The keys of spec 9.D for milestone 1a: on home j k g G move, enter opens
-// the row's card, a walks the decisions oldest first, o steps into the
-// row's pane, b and t open its PR and its Jira issue in the browser, e the
-// report of magnum's fixer in the pager (a row or a task card whose fix
-// loop left you items: factory_report.go), n
-// starts a new task, ! is the action log with the alerts, ? the help and
-// its words, `,` settings, m the mouse, ctrl+r a refresh and q quits; the
-// cards' keys are in factory_keys.go. The board's letters keep their
-// meaning: b and t open the PR and the issue (on home and the task card),
-// and r, p and x do nothing here, except x on the task card (drop, y/N) and
-// r there for a task that can go on (retry, y/N). A row of your own PR
-// (FactoryRow.yourPR) has no card: enter names its keys in the footer, b
-// opens the PR, o and t say they act on a task's row, and a walks past it.
-// f, F and K act on a row whose PR magnum's registry has, yours or a
-// task's (FactoryRow.PR), y/N, through magnum's own request paths (x too on
-// your PR's row); on a task's row without one they say so and start
-// nothing.
+// the row's card, a walks what needs you oldest first (the decision cards
+// and the cards of the PRs that need you), o steps into the row's pane
+// (magnum's, on your PR's row and while magnum's fixer works on the PR), b
+// and t open its PR and its Jira issue in the browser, e the report of
+// magnum's fixer in the pager (a row or a task card whose fix loop left you
+// items: factory_report.go), n starts a new task, ! is the action log with
+// the alerts, ? the help and its words, `,` settings, m the mouse, ctrl+r a
+// refresh and q quits; the cards' keys are in factory_keys.go. The board's
+// letters keep their meaning: b and t open the PR and the issue (on home
+// and the cards), K stops magnum's loop, and r, p and x do nothing here,
+// except x on the task card (drop, y/N) and r there for a task that can go
+// on (retry, y/N). A row of your own PR (FactoryRow.yourPR) opens its PR's
+// card: the task card's view with the PR's lines alone (CardPR) and the
+// PR's keys. f, F and K act on a row or a card whose PR magnum's registry
+// has, yours or a task's (FactoryRow.PR), y/N, through magnum's own request
+// paths; on a task's without one they say so and start nothing.
 
 import (
 	"cmp"

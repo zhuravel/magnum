@@ -356,25 +356,22 @@ func TestShiftFOnABaselinePRRowSaysWhyAndRunsNothing(t *testing.T) {
 	}
 }
 
-// x on your PR whose fix loop runs asks y/N and stops what magnum runs on
-// it (the board's K); on a PR with no loop it says so and runs nothing.
-func TestXOnAnOwnPRRowAsksAndStopsTheLoop(t *testing.T) {
+// K, not x, stops magnum's loop: x on your PR's row, whose loop runs,
+// asks nothing and says K does, as on a task's row (x drops a task, on its
+// card). Before, x stopped the loop there, while x on the task card
+// dropped the task.
+func TestXNoLongerStopsMagnumsLoop(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g")
 	h.selectRow("#4612")
 	h.press("x")
-	mustContain(t, h.view(), "Stop what magnum runs on #4612 (its fix loop and the re-review the loop forced)? y/N")
-	h.press("y")
-	if len(h.act.aborts) != 1 || h.act.aborts[0] != "example/talkable#4612" {
-		t.Errorf("Abort calls %q, want example/talkable#4612", h.act.aborts)
-	}
-	h.selectRow("#4611")
-	h.press("x")
 	v := h.view()
-	mustContain(t, v, "no fix loop runs on #4611")
+	mustContain(t, v, "K stops magnum's loop on a row with a PR; x drops a task, on its card")
 	mustNotContain(t, v, "y/N")
-	if h.act.calls() != 1 {
-		t.Errorf("%d calls, want the one abort", h.act.calls())
+	h.press("enter", "x")
+	mustContain(t, h.view(), "x drops a task: #4612 is your PR (K stops magnum's loop)")
+	if h.act.calls() != 0 {
+		t.Errorf("x ran %d actions", h.act.calls())
 	}
 }
 

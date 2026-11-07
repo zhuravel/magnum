@@ -79,7 +79,6 @@ var factoryKeyHelp = []struct {
 		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one)"},
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
-		{"x", "on your PR's row: stop magnum's fix loop, as K (y/N)"},
 		{reportKey, "the report of magnum's fixer (claude-fix.md) in the pager, on a row whose fix loop left you items (asks nothing)"},
 		{"n", "new task"},
 		{logKey, "the action log and the alerts"}, {"?", "this help"}, {settingsKey, "settings"},
