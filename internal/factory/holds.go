@@ -303,7 +303,7 @@ func (e *Engine) checkHerdr(ctx context.Context, now time.Time) bool {
 // YOU blocker.
 func (e *Engine) pressure(ctx context.Context, now time.Time, tasks []registry.Task) {
 	disk, half := e.diskPressure()
-	mem := e.memoryPressure(ctx)
+	mem := e.memoryPressure(ctx, now)
 	e.setHold(ctx, HoldDisk, disk, now)
 	e.setHold(ctx, HoldMemory, mem, now)
 	if half != "" {
@@ -427,21 +427,26 @@ func existingDir(dir string) string {
 
 // memoryPressure is the memory hold's reason ("" for none): the kernel's
 // pressure level at critical, or the swap at [factory] memory_gate_swap
-// percent or more. The warn level only staggers launches (the runtime's).
-func (e *Engine) memoryPressure(ctx context.Context) string {
-	if e.d.Memory == nil {
-		return ""
-	}
-	s := e.d.Memory(ctx)
-	if s.Level == engine.MemoryCritical {
-		return "critical pressure, " + s.SwapText()
-	}
-	if gate := e.cfg.Factory.MemoryGateSwap; gate > 0 && s.Swap != nil && s.Swap.TotalBytes > 0 {
-		if pct := int(s.Swap.UsedBytes * 100 / s.Swap.TotalBytes); pct >= gate {
-			return fmt.Sprintf("swap %d%% used, launches wait below %d%%", pct, gate)
+// percent or more, then the largest processes and the orphaned Codex
+// brokers (memoryCulprits). The warn level only staggers launches (the
+// runtime's).
+func (e *Engine) memoryPressure(ctx context.Context, now time.Time) string {
+	reason := ""
+	if e.d.Memory != nil {
+		s := e.d.Memory(ctx)
+		if s.Level == engine.MemoryCritical {
+			reason = "critical pressure, " + s.SwapText()
+		} else if gate := e.cfg.Factory.MemoryGateSwap; gate > 0 && s.Swap != nil && s.Swap.TotalBytes > 0 {
+			if pct := int(s.Swap.UsedBytes * 100 / s.Swap.TotalBytes); pct >= gate {
+				reason = fmt.Sprintf("swap %d%% used, launches wait below %d%%", pct, gate)
+			}
 		}
 	}
-	return ""
+	if reason == "" {
+		e.culprits, e.culpritsAt = "", time.Time{} // the next hold reads the table afresh
+		return ""
+	}
+	return reason + e.memoryCulprits(ctx, now)
 }
 
 // mayLaunch reports whether a launch may start now; who and what are the

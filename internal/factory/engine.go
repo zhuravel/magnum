@@ -224,9 +224,12 @@ type Deps struct {
 	// guarded runner.
 	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
-	// bytes of the filesystem that holds path.
-	Memory func(ctx context.Context) engine.MemorySample
-	Disk   func(path string) (free uint64, err error)
+	// bytes of the filesystem that holds path; MemProcs the process table
+	// (ReadMemProcs), whose largest processes and orphaned Codex brokers the
+	// memory hold names (nil names none).
+	Memory   func(ctx context.Context) engine.MemorySample
+	Disk     func(path string) (free uint64, err error)
+	MemProcs func(ctx context.Context) ([]MemProc, error)
 	// MySQL pings the copies' database server; HerdrUp asks the factory's
 	// herdr session whether it answers; Reveal opens a terminal on it
 	// (`herdr --session <herdr_session>`, internal/reveal).
@@ -302,6 +305,10 @@ type Engine struct {
 	lastFail  map[int64]*stageFails
 	// helds are the live tasks' held waits as the log knows them (logHeld).
 	helds map[int64]*heldLog
+	// culprits is what the memory hold names after its reason, read at
+	// culpritsAt (memoryCulprits); both are zero without a memory hold.
+	culprits   string
+	culpritsAt time.Time
 	// publishFails counts the failed tries of each task's publish effect.
 	publishFails map[int64]publishFail
 	readFails    []error

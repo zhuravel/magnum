@@ -64,7 +64,6 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
-| [prstatus](#prstatus) | Package prstatus is the contract of the factory part of a PR's status comment: one JSON file per PR a factory task published, <factory dir>/pr-status/<owner>/<repo>/<number>.json (Path, which takes GitHub names only, in lower case, and a positive number). |
 | [relay](#relay) | Package relay is magnum-relay, the small service that receives a GitHub App's webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT and cannot receive them itself. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
@@ -11591,13 +11590,6 @@ func MergeEnv(base []string, env map[string]string, unset []string) []string
     it is what Run gives every subprocess and what other runners (the CLI's TTY
     runner) use to honour Cmd.Env and Cmd.Unset the same way.
 
-func ProcessStart(ctx context.Context, r Runner, pid int) (string, error)
-    ProcessStart is when process pid started, as ProcessTable reads it (ps's
-    lstart in the C locale and in UTC, its words joined by one space): with the
-    pid, the process's lifetime identity, the same text whatever TZ the reader
-    has (the install drain compares the command's read with the daemon's).
-    A pid no process has is an error.
-
 func Redact(s string) string
     Redact masks GitHub tokens, JWTs, Authorization header values and PEM
     private keys in free text. An Authorization header keeps its name.
@@ -11850,9 +11842,6 @@ const (
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
 	HoldMemory = "memory"
-	// HoldDrain is the drain `magnum factory install --drain` asks for:
-	// nothing new starts until the restart.
-	HoldDrain = "drain"
 )
     The kinds of Hold.
 
@@ -11868,14 +11857,6 @@ const (
 	ReqTalk    = "talk"
 )
     Request kinds.
-
-const (
-	WorkRound = "round" // a round of the local review
-	WorkCheck = "check" // the factory's proof and precheck of a head
-	WorkClaim = "claim" // a claim of a copy
-	WorkTalk  = "talk"  // a talk with a task's liaison
-)
-    The kinds of WorkItem.
 
 const (
 	ChoicePush     = "push"
@@ -11902,11 +11883,6 @@ const LaunchLabel = "zhuravel.magnum.factory"
     LaunchLabel is the launchd label of the factory daemon's LaunchAgent,
     apart from the review daemon's (launchd.DefaultLabel), so either restarts
     without the other.
-
-const LocalRoundCap = 3 * time.Hour
-    LocalRoundCap ends a round of the local review that runs this long (a hang):
-    a round takes 39 minutes at the median, its roles' own timeouts end within
-    the hour. `magnum factory install --drain` waits longer.
 
 const RedisDBsPerCopy = 16
     RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
@@ -12075,10 +12051,6 @@ func KickWith(l paths.Layout, procs engine.Processes) (int, error)
     KickWith is Kick with the processes it asks about given, so a test needs no
     real process.
 
-func LiftDrain(l paths.Layout, value string) error
-    LiftDrain removes the drain asked of the factory daemon of layout l when it
-    is value; a drain asked since by another command, or none, is left alone.
-
 func Lock(l paths.Layout) (unlock func(), err error)
     Lock takes the factory daemon's lock (Layout.FactoryLock), held for the
     daemon's whole life; another daemon holding it is ErrRunning, naming that
@@ -12109,17 +12081,6 @@ func PromptNames(cfg *config.Config) []string
     (of each prompt kind), each agents stage's own, and the amend turn's,
     once each; the daemon loads them at startup (config.SnapshotPrompts).
 
-func QuestionKey(text string) string
-    QuestionKey is how a question is told from the questions the task asked,
-    here and in the CLI: its text, lowercased, without backticks and double
-    quotes, its runs of spaces made one and its end punctuation trimmed (an
-    agent's copy of a question changes those), so that a question two roles
-    raise in the same words is one question, whichever role raised it.
-
-func ReadDrain(l paths.Layout) (string, error)
-    ReadDrain is the drain asked of the factory daemon of layout l ("" for
-    none).
-
 func ReadSeen(l paths.Layout) (time.Time, error)
     ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
     in layout l; the zero time before the first.
@@ -12145,11 +12106,6 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
     "task <id>".
-
-func WriteDrain(l paths.Layout, value string) error
-    WriteDrain asks the factory daemon of layout l for a drain: value is
-    Drain.Value (since when, and the asking command's pid and start), and it
-    replaces any drain asked before.
 
 func WriteReviewCandidate(l paths.Layout) (string, error)
     WriteReviewCandidate writes the review candidate the factory's local rounds
@@ -12280,9 +12236,12 @@ type Deps struct {
 	// guarded runner.
 	Run execx.Runner
 	// Memory reads the machine's memory (engine.ReadMemory); Disk the free
-	// bytes of the filesystem that holds path.
-	Memory func(ctx context.Context) engine.MemorySample
-	Disk   func(path string) (free uint64, err error)
+	// bytes of the filesystem that holds path; MemProcs the process table
+	// (ReadMemProcs), whose largest processes and orphaned Codex brokers the
+	// memory hold names (nil names none).
+	Memory   func(ctx context.Context) engine.MemorySample
+	Disk     func(path string) (free uint64, err error)
+	MemProcs func(ctx context.Context) ([]MemProc, error)
 	// MySQL pings the copies' database server; HerdrUp asks the factory's
 	// herdr session whether it answers; Reveal opens a terminal on it
 	// (`herdr --session <herdr_session>`, internal/reveal).
@@ -12315,21 +12274,6 @@ type Deps struct {
     required; any other may be nil, and what needs it waits (a collaborator a
     build does not wire yet) or is skipped (a function field: no memory read,
     no disk check, no MySQL ping, herdr taken as up, no reveal).
-
-type Drain struct {
-	Since time.Time
-	PID   int
-	Start string
-}
-    Drain is a drain install asks for (drain.json): when it started, and the pid
-    and the start (ps's lstart: a pid another process took since has another) of
-    the command that asks.
-
-func ParseDrain(v string) (Drain, bool)
-    ParseDrain reads a drain.json value (Drain.Value); false for anything else.
-
-func (d Drain) Value() string
-    Value is d as drain.json holds it.
 
 type Engine struct {
 	// Has unexported fields.
@@ -12438,13 +12382,10 @@ type GitHub interface {
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
-	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
-    repo now (the account active in your gh config dir), and MergeMethods the
-    ways repo's settings let a PR merge, which the prompts of the roles that ask
-    you questions name.
+    repo now (the account active in your gh config dir).
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
@@ -12511,13 +12452,22 @@ func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
     factory's local review sees it (Magnum).
 
-type MergeMethods struct{ Merge, Squash, Rebase bool }
-    MergeMethods are the ways a repository's GitHub settings let a pull request
-    merge: a merge commit, a squash, a rebase.
+type MemProc struct {
+	PID, PPID int
+	RSS       int64
+	Name      string
+	Broker    bool
+}
+    MemProc is a process as the memory hold names it: its id, its parent's, its
+    resident memory in bytes, its executable's base name (never its arguments)
+    and whether it is a Codex app-server broker.
 
-func (m MergeMethods) String() string
-    String is the methods m allows, as a prompt names them: "squash", "merge
-    commit or squash", "merge commit, squash or rebase"; "" for none.
+func ReadMemProcs(ctx context.Context, r execx.Runner) ([]MemProc, error)
+    ReadMemProcs reads the process table through r for the memory hold: `ps -A
+    -o pid=,ppid=,rss=,comm=` for the ids, the resident memory and the names,
+    then `ps -A -o pid=,args=` to tell the brokers, both in the C locale.
+    The arguments stay here: only whether they name a broker leaves. It runs
+    nothing else. A line it cannot read is skipped.
 
 type MigrationFlag struct {
 	Path                                   string
@@ -12656,11 +12606,6 @@ type PromptData struct {
 	// the prompts call the key the issue of that tracker, never a Jira
 	// issue. Empty for a Jira key, and for a task of a free prompt.
 	Tracker string
-	// MergeMethods are the ways Repo's GitHub settings let a pull request
-	// merge ("squash", "merge commit, squash or rebase": MergeMethods.String),
-	// which the prompts of the roles that ask the operator questions name;
-	// "" while no read of them went through.
-	MergeMethods string
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
     factory-shared.md) renders with: paths, keys and commands, never the
@@ -12978,29 +12923,6 @@ type TalkPayload struct {
 }
     TalkPayload is a ReqTalk: you want to talk with the liaison of task TaskID.
     Surface is where you asked, for the record.
-
-type WorkItem struct {
-	Kind  string    `json:"kind"`
-	Task  int64     `json:"task"`
-	What  string    `json:"what"`
-	Since time.Time `json:"since"`
-}
-    WorkItem is one piece of work a restart would cut: its kind (Work*),
-    its task, what it is in words ("local review round 2 of PR-12345") and since
-    when it runs.
-
-type WorkRecord struct {
-	PID   int        `json:"pid"`
-	Drain string     `json:"drain,omitempty"`
-	Work  []WorkItem `json:"work"`
-}
-    WorkRecord is work.json (paths.Layout.FactoryWork): the pid of the daemon
-    that wrote it, the drain it holds (drain.json's value it took; "" for none)
-    and the work it runs that a restart would cut, oldest first.
-
-func ReadWork(l paths.Layout) (WorkRecord, bool, error)
-    ReadWork reads the record the factory daemon of layout l keeps; ok is false
-    when there is none (no daemon of this build runs, or it stopped).
 
 ```
 
@@ -20248,11 +20170,6 @@ func (l Layout) FactoryDB() string
     FactoryDB is the factory's own registry (factory.db in the factory directory
     of the data directory), separate from the review registry.
 
-func (l Layout) FactoryDrain() string
-    FactoryDrain is drain.json, the drain `magnum factory install --drain`
-    asks of the factory daemon (when it started and the command's pid), beside
-    FactoryDB.
-
 func (l Layout) FactoryFocus() string
     FactoryFocus is focus.json, the factory screen's latest focus report as
     the factory daemon keeps it (its toasts hold while a screen that runs has
@@ -20268,11 +20185,6 @@ func (l Layout) FactoryLock() string
 
 func (l Layout) FactoryLog() string
     FactoryLog is the factory daemon's log file in Logs.
-
-func (l Layout) FactoryPRStatus() string
-    FactoryPRStatus is the root of the status files the factory daemon writes
-    for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
-    (internal/prstatus names one and holds its contract), beside FactoryDB.
 
 func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
@@ -20292,11 +20204,6 @@ func (l Layout) FactoryTaskDir(id int64) string
 
 func (l Layout) FactoryTasks() string
     FactoryTasks is the root of the factory's task directories.
-
-func (l Layout) FactoryWork() string
-    FactoryWork is work.json, the work the factory daemon runs that a restart
-    would cut and the drain it holds, as the daemon last wrote them (`magnum
-    factory install` reads it first), beside FactoryDB.
 
 func (l Layout) GhConfigDir(id string) string
     GhConfigDir is identity id's gh config directory in GhRoot.
@@ -21924,299 +21831,6 @@ type SkippedReply struct {
     the reviewer's: another reviewer or the author started it, so it is theirs
     and never answered inline (DECISIONS "An author's own inline threads are not
     replies").
-
-```
-
-## prstatus
-
-```text
-package prstatus // import "github.com/zhuravel/magnum/internal/prstatus"
-
-Package prstatus is the contract of the factory part of a PR's status
-comment: one JSON file per PR a factory task published, <factory
-dir>/pr-status/<owner>/<repo>/<number>.json (Path, which takes GitHub names
-only, in lower case, and a positive number).
-
-  - Who writes: the factory daemon (Write), from the publish on, and only when
-    the content changes: no file exists before the PR is published.
-  - Who reads: magnum's review daemon, read-only (Read), to render it in the
-    status comment it already keeps on the PR. A missing file is no factory
-    part; a file Read refuses counts as missing.
-  - Fixed words only: counts, enums, times, the task id, the Jira key and the
-    staging environment's slug, never free text from a PR, a ticket, a question
-    or an agent. Every enum is a string type whose Valid lists its words,
-    and Read refuses any other word.
-  - Version rule: v is Version, and Read refuses any other. A field that changes
-    its meaning or its type, or goes away, bumps it. A new field or a new
-    word of an enum keeps it: a reader ignores the fields it does not know,
-    and refuses only a file that holds a word it does not know.
-  - Digest rule: digest is the hex sha256 of the canonical JSON of every field
-    but updated_at and digest, the fields a reader does not know included:
-    encoding/json's encoding of the object decoded as a map (keys sorted at
-    every level, no spaces, numbers as written). Neither the order of the keys
-    nor the update time changes it. Read refuses a file whose digest does not
-    match; Write writes nothing when the file already has the digest, so an
-    unchanged status costs no write and no edit of the comment.
-
-It imports only the standard library, internal/paths and internal/fsx (the
-atomic write and the capped read; a leaf internal/paths already imports),
-so either daemon imports it without the other.
-
-CONSTANTS
-
-const MaxSize = 64 << 10
-    MaxSize is the most bytes Read reads: a bigger file is refused.
-
-const Version = 1
-    Version is the schema version Write writes and Read accepts.
-
-
-VARIABLES
-
-var (
-	ErrTooBig   = errors.New("over 64 KiB")
-	ErrCutShort = errors.New("cut short")
-	ErrNotJSON  = errors.New("not a JSON object")
-	ErrVersion  = errors.New("unknown schema version")
-	ErrInvalid  = errors.New("invalid field")
-	ErrDigest   = errors.New("digest does not match the content")
-)
-    Read's refusals, each wrapped with the file's path (and, for ErrInvalid,
-    the field's name, never its value).
-
-
-FUNCTIONS
-
-func Path(l paths.Layout, owner, repo string, number int) (string, error)
-    Path is the status file of PR number of owner/repo in l's factory directory:
-    paths.Layout.FactoryPRStatus, then owner, repo and <number>.json. owner and
-    repo must be GitHub names (no "." or "..", no slash, not empty) and number
-    positive, or Path refuses them. The names are lower-cased: GitHub ignores
-    their case, so the writer's spelling and the reader's name one file.
-
-func StagingEnv(name string) string
-    StagingEnv is the Env of the configured staging environment name: the name
-    when it is a slug, else "" (the row then has the state without a name),
-    so a name such as "Alpha" or "qa env" never makes Write refuse the status.
-
-func Write(path string, s Status) (bool, error)
-    Write writes s to path when its content differs from the file's, and reports
-    whether it wrote. It sets V and Digest, keeps the times in UTC to the second
-    (a zero UpdatedAt is the time of the write) and refuses a status Read would
-    refuse (ErrInvalid), writing nothing. When the file on disk has the same
-    digest it writes nothing and returns false, so the file keeps the UpdatedAt
-    of the last change. The write is atomic and durable: a temporary file in
-    the same folder, synced, renamed over the file, then the folder synced;
-    the file is 0600, the folders it makes 0700.
-
-
-TYPES
-
-type Code struct {
-	Commits int   `json:"commits"`
-	Proof   Proof `json:"proof"`
-	Specs   int   `json:"specs"`
-}
-    Code is the change: its commits, its proof and its specs.
-
-type FixLoop struct {
-	State           FixState `json:"state"`
-	Cycle           int      `json:"cycle"`
-	Pushes          int      `json:"pushes"`
-	ThreadsAnswered int      `json:"threads_answered"`
-}
-    FixLoop is magnum's fix loop on the PR: its state, its cycle, its pushes and
-    the review threads it answered.
-
-type FixState string
-    FixState is the fix loop's state: none yet, running, needing you, done,
-    or off for the PR.
-
-const (
-	FixNone     FixState = "none"
-	FixRunning  FixState = "running"
-	FixNeedsYou FixState = "needs_you"
-	FixDone     FixState = "done"
-	FixOff      FixState = "off"
-)
-    The fix loop's states.
-
-func (s FixState) Valid() bool
-    Valid reports whether s is one of the fix loop's states.
-
-type Jira struct {
-	Key    string     `json:"key"`
-	Status JiraStatus `json:"status"`
-}
-    Jira is the task's Jira issue: its key (ABC-123) and status. Both are "" for
-    a task without an issue.
-
-type JiraStatus string
-    JiraStatus is the issue's status, in the factory's words.
-
-const (
-	JiraToDo          JiraStatus = "to_do"
-	JiraInDevelopment JiraStatus = "in_development"
-	JiraInCodeReview  JiraStatus = "in_code_review"
-	JiraDone          JiraStatus = "done"
-	JiraOther         JiraStatus = "other"
-	JiraUnknown       JiraStatus = "unknown"
-)
-    The Jira statuses.
-
-func (s JiraStatus) Valid() bool
-    Valid reports whether s is one of the Jira statuses.
-
-type LocalReview struct {
-	Rounds    int     `json:"rounds"`
-	Verdict   Verdict `json:"verdict"`
-	NotesOpen int     `json:"notes_open"`
-}
-    LocalReview is the local review's rounds, its last verdict and the notes it
-    left open.
-
-type Now struct {
-	Who   Who   `json:"who"`
-	Stage Stage `json:"stage"`
-}
-    Now is who the PR waits on and the task's stage.
-
-type Plan struct {
-	QuestionsAsked    int `json:"questions_asked"`
-	QuestionsAnswered int `json:"questions_answered"`
-}
-    Plan counts the questions the task asked you and the ones you answered.
-
-type Proof string
-    Proof is what the coding stage proved: nothing yet, the spec red on the
-    base, red on the base and green at the head, or (a kind whose proof is
-    green) the specs green at the head.
-
-const (
-	ProofNone       Proof = "none"
-	ProofRed        Proof = "red"
-	ProofRedToGreen Proof = "red_to_green"
-	ProofGreen      Proof = "green"
-)
-    The proofs.
-
-func (p Proof) Valid() bool
-    Valid reports whether p is one of the proofs.
-
-type Stage string
-    Stage is the task's stage, in fixed words: the phase its kind's configured
-    stage falls in (a kind names its own stages; these words do not change with
-    it), then the task's state once it is published.
-
-const (
-	StagePlan      Stage = "plan"      // investigate, judge, critic and the questions and reproduction gates
-	StageCode      Stage = "code"      // the writer's stage, up to its proof
-	StageReview    Stage = "review"    // the local review loop
-	StageReady     Stage = "ready"     // the PR body and the ready card
-	StagePublished Stage = "published" // the PR is open
-	StageDone      Stage = "done"      // the PR merged
-	StageStopped   Stage = "stopped"   // you stopped the task
-	StageFailed    Stage = "failed"    // the task failed
-)
-    The stages.
-
-func (s Stage) Valid() bool
-    Valid reports whether s is one of the stages.
-
-type Staging struct {
-	Env   string       `json:"env"`
-	State StagingState `json:"state"`
-}
-    Staging is the deploy of the change: Env is the configured staging
-    environment's name when it is a short slug ([a-z0-9-]{1,32}), else "".
-    The config takes any name that is not blank, and Write refuses a whole
-    status whose Env is not a slug, so the writer sets Env with StagingEnv.
-
-type StagingState string
-    StagingState is the staging deploy's state.
-
-const (
-	StagingNone      StagingState = "none"
-	StagingDeploying StagingState = "deploying"
-	StagingDeployed  StagingState = "deployed"
-	StagingFailed    StagingState = "failed"
-)
-    The staging deploy's states.
-
-func (s StagingState) Valid() bool
-    Valid reports whether s is one of the staging deploy's states.
-
-type Status struct {
-	// V is the schema version, Version.
-	V int `json:"v"`
-	// Digest is the hex sha256 of the content (the package doc's digest
-	// rule); Write sets it.
-	Digest string `json:"digest"`
-	// UpdatedAt is when the content last changed, in UTC to the second
-	// (Write keeps the file, and its time, while the content stays the same);
-	// never zero. It is outside the digest, so Read checks it on its own.
-	UpdatedAt time.Time `json:"updated_at"`
-	// TaskID is the factory task that published the PR, positive.
-	TaskID int64 `json:"task_id"`
-	// Jira is the task's issue; the zero Jira says it has none.
-	Jira Jira `json:"jira"`
-	// Plan counts the task's questions.
-	Plan Plan `json:"plan"`
-	// Code is the change's commits, proof and specs.
-	Code Code `json:"code"`
-	// LocalReview is the factory's review of the change before the publish.
-	LocalReview LocalReview `json:"local_review"`
-	// PublishedAt is when the PR was published, in UTC to the second; never
-	// zero, since the file begins at the publish.
-	PublishedAt time.Time `json:"published_at"`
-	// FixLoop is magnum's fix loop on the PR.
-	FixLoop FixLoop `json:"fix_loop"`
-	// Staging is the change's deploy to a staging environment.
-	Staging Staging `json:"staging"`
-	// Now is who the PR waits on, and the task's stage.
-	Now Now `json:"now"`
-}
-    Status is one PR's factory part. Every count is 0 or more, every enum one of
-    its words and both times set; Write refuses, and Read refuses, any other.
-
-func Read(path string) (Status, bool, error)
-    Read reads the status file at path, a regular file of at most MaxSize bytes
-    (a symbolic link is refused, not followed). A missing file is no status:
-    (zero, false, nil). A file Read refuses is the zero Status and an error
-    that says why (errors.Is ErrTooBig, ErrCutShort, ErrNotJSON, ErrVersion,
-    ErrInvalid or ErrDigest), in fixed words and the field's name, never the
-    file's content; the caller treats it as missing. Fields Read does not know
-    are ignored, and the digest covers them.
-
-type Verdict string
-    Verdict is the local review's last verdict.
-
-const (
-	VerdictNone     Verdict = "none"
-	VerdictClean    Verdict = "clean"
-	VerdictFindings Verdict = "findings"
-	VerdictFailed   Verdict = "failed"
-)
-    The verdicts.
-
-func (v Verdict) Valid() bool
-    Valid reports whether v is one of the verdicts.
-
-type Who string
-    Who is who the PR waits on.
-
-const (
-	WhoYou       Who = "you"
-	WhoMagnum    Who = "magnum"
-	WhoReviewers Who = "reviewers"
-	WhoCI        Who = "ci"
-	WhoFactory   Who = "factory"
-	WhoNone      Who = "none"
-)
-    Who the PR can wait on.
-
-func (w Who) Valid() bool
-    Valid reports whether w is one of who a PR waits on.
 
 ```
 

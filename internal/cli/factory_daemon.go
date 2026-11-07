@@ -265,10 +265,12 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	deps := factory.Deps{
 		Config: cfg, Layout: l, Registry: d.Registry, Runtime: d.Runtime, Git: git, Run: run, Log: d.Log,
-		Memory:  memory,
-		Disk:    inspDiskFree,
-		HerdrUp: d.Runtime.HerdrUp,
-		Reveal:  factoryReveal(cfg, run),
+		Memory: memory,
+		// The memory hold names what holds the memory: two ps reads, never a kill.
+		MemProcs: func(ctx context.Context) ([]factory.MemProc, error) { return factory.ReadMemProcs(ctx, quiet) },
+		Disk:     inspDiskFree,
+		HerdrUp:  d.Runtime.HerdrUp,
+		Reveal:   factoryReveal(cfg, run),
 	}
 	// The tickets of intake: the [jira] site's client, reading with curl
 	// (the token on stdin, never in a pane).
