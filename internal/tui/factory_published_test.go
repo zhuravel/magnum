@@ -137,3 +137,16 @@ func TestFactoryPublishedFramesNeverOverflow(t *testing.T) {
 		}
 	}
 }
+
+// The help's words gloss what a published task's row says: DONE TODAY is
+// a merge of today (a push is not done any more), magnum: is magnum at the
+// PR in any way (a review, a look, a wait for its daemon or a reopen), and
+// reviewers: has its own gloss.
+func TestTheHelpGlossesThePublishedRowsWords(t *testing.T) {
+	h := testFactory(t, 140, 50)
+	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
+	mustContain(t, help, "done today  its PR merged today",
+		"magnum:  magnum reviews or reads the PR, or waits for its daemon or a reopen",
+		"reviewers:  the PR's reviewers must review, approve or settle")
+	mustNotContain(t, help, "pushed today", "a magnum review round is running")
+}
