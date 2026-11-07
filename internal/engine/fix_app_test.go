@@ -159,6 +159,41 @@ func TestAFixerPaneOfAnotherIdentityIsParkedBeforeTheCycle(t *testing.T) {
 	}
 }
 
+// The commits' author tells the identity too: a pane made as the same App
+// before the operator corrected its user_id has the same gh config but
+// another GIT_AUTHOR_EMAIL, and would keep committing with the wrong
+// noreply email (which magnum push then refuses), so the cycle parks it
+// and the fixer resumes in a pane with the right one.
+func TestAFixerPaneOfAnotherCommitEmailIsParkedBeforeTheCycle(t *testing.T) {
+	h, git := fixHarness(t, withFixerApp)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	role := *h.fixRole()
+	role.Identity = fixerAppName
+	made, err := h.ag.PaneEnv(map[string]string{"MAGNUM_PR_URL": pr.URL}, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right := made["GIT_AUTHOR_EMAIL"]
+	made["GIT_AUTHOR_EMAIL"] = "1+" + fixerAppLogin + "@users.noreply.github.com" // the user_id before the fix
+	if right == "" || made["GH_CONFIG_DIR"] != "/state/gh/"+fixerAppName {
+		t.Fatalf("the App's pane env = %v", made)
+	}
+	old := fixerSession(h, pr, made)
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	if s := h.sessionState(old.ID); s != store.SessionParked {
+		t.Errorf("the old fixer session is %s, want parked", s)
+	}
+	if evs := h.fixEvents("fix.pane_renewed"); len(evs) != 1 {
+		t.Errorf("fix.pane_renewed = %+v, want one", evs)
+	}
+	if env := h.ag.paneEnv("claude-fix"); env["GIT_AUTHOR_EMAIL"] != right {
+		t.Errorf("the new pane's GIT_AUTHOR_EMAIL = %q, want %q", env["GIT_AUTHOR_EMAIL"], right)
+	}
+}
+
 // A gh fixer's pane made before magnum set MAGNUM_PUSH_BRANCH and the
 // other branch variables is the same identity: a missing MAGNUM_* key
 // renews nothing, and the cycle resumes the fixer in its pane. The pane

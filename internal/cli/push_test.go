@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -147,6 +148,29 @@ func TestPushRefusesACommitNotByTheFixer(t *testing.T) {
 	p.fix()
 	p.git(p.slot, "-c", "user.name=alice", "-c", "user.email=alice@example.com", "commit", "--quiet", "--allow-empty",
 		"--author=alice <alice@example.com>", "-m", "not the bot's")
+	code, o, _ := push(t, "--checkout", p.slot)
+	if code != pushRefused || o.Status != pushStatusRefused || !strings.Contains(o.Message, "is not by "+botName) {
+		t.Fatalf("exit %d, %+v", code, o)
+	}
+	if got := p.feature(); got != p.start {
+		t.Errorf("origin's feature moved to %s", got)
+	}
+}
+
+// The committer counts as the author does: a commit the bot authored but
+// someone else committed (a cherry-pick or an amend after the pane's
+// GIT_COMMITTER_* were unset) is not the fixer's alone, so it is refused
+// (exit 2), never pushed as the App's.
+func TestPushRefusesACommitTheBotAuthoredButAnotherCommitted(t *testing.T) {
+	p := newPushRepo(t)
+	p.fix()
+	if _, err := p.r.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"-C", p.slot, "commit", "--quiet", "--allow-empty", "-m", "committed by alice"},
+		Env: map[string]string{"GIT_COMMITTER_NAME": "alice", "GIT_COMMITTER_EMAIL": "alice@example.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.git(p.slot, "log", "-1", "--format=%ae %ce"); got != botEmail+" alice@example.com" {
+		t.Fatalf("the commit's author and committer = %q", got)
+	}
 	code, o, _ := push(t, "--checkout", p.slot)
 	if code != pushRefused || o.Status != pushStatusRefused || !strings.Contains(o.Message, "is not by "+botName) {
 		t.Fatalf("exit %d, %+v", code, o)
