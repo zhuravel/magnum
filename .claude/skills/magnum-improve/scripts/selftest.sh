@@ -23,7 +23,12 @@
 #     test-gap class per repository (its words matched in any case, a title's "(in the fix for" part not
 #     read, the latest answer of each finding, the rounds of test gaps only), and the fixer trial line (the
 #     replies to a fix run's own commits, those naming "also at", and the next round's tagged findings on the
-#     answered round's paths, read from the round's first run when its nudge twin is the later one).
+#     answered round's paths, read from the round's first run when its nudge twin is the later one); against a
+#     factory registry with only the columns it reads, its holds and alerts by their real kinds and phases, the time
+#     per stage (after the publish left out), the waits on you by cause (a wait of several spans once), the take
+#     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
+#     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
+#     refused, and the report directories since a UTC since in any time zone.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -543,17 +548,68 @@ create table pr_links (task_id integer, repo text, number integer, opened_head t
 create table review_cycles (task_id integer, n integer, exit text, head_after text, tokens integer, started_at text);
 create table review_findings (task_id integer, priority text, class text, verdict text, outcome text, blocking integer,
   first_cycle integer);
-create table events (at text, kind text, phase text);
+create table events (id integer primary key, at text, task_id integer, kind text, phase text, text text);
 create table operator_inputs (at text, kind text, surface text);
-insert into tasks values (7, 'PR-12345', 'example/app', 'bug', 'published', 'publish', 4512, '2026-10-11T09:00:00Z', '2026-10-11T12:00:00Z');
+create table task_spans (id integer primary key, task_id integer, to_state text, stage text, waits_who text, waits_what text,
+  on_you integer, at text);
+create table questions (id integer primary key, task_id integer, raised_by text, state text, recommended integer,
+  took_recommendation integer, flag text, asked_at text, answered_at text);
+create table decisions (id integer primary key, task_id integer, kind text, choice text, recommendation_shown integer,
+  recommendation_followed integer, at text);
+insert into tasks values (7, 'PR-12345', 'example/app', 'bug', 'published', 'publish', 4512, '2026-10-11T09:00:00Z', '2026-10-11T12:00:00Z'),
+  (8, '', 'example/app', 'feature', 'needs_you', 'local_review', 0, '2026-10-11T08:00:00Z', '2026-10-11T09:45:00Z');
 insert into pr_links values (7, 'example/app', 4512, 'abc123abc123abc1', '2026-10-11T11:00:00Z');
 insert into review_cycles values (7, 1, 'clean', 'abc123abc123abc1', 0, '2026-10-11T10:00:00Z');
 insert into review_findings values (7, 'P3', 'simplification', 'posted', 'open', 0, 1);
-insert into events values ('2026-10-11T09:30:00Z', 'claim', 'fail');
+insert into events (at, task_id, kind, phase, text) values
+  ('2026-10-11T09:30:00Z', 7, 'claim', 'fail', 'the copy is busy'),
+  ('2026-10-11T09:51:00Z', null, 'hold', 'begin', 'infra: MySQL does not answer; every stage holds; tries again at 10:05'),
+  ('2026-10-11T09:52:00Z', 8, 'alert', 'info', 'task 8: you: 3 questions before judge goes on'),
+  ('2026-10-11T09:53:00Z', 8, 'alert_held', 'info', 'task 8 questions: held, you are on the screen'),
+  ('2026-10-11T09:54:00Z', null, 'intake', 'info', 'an info event of another kind'),
+  ('2026-10-11T09:55:00Z', null, 'hold', 'ok', 'infra: lifted after 4 minutes (MySQL does not answer)');
 insert into operator_inputs values ('2026-10-11T09:40:00Z', 'answer', 'screen');
+-- Task 7 went from intake through coding (a precheck wait, then one on you) to its ready card and the publish; task 8
+-- waited on you twice at its questions (one wait in two spans), at the judge's questions, and waits on you now.
+insert into task_spans (task_id, to_state, stage, waits_who, waits_what, on_you, at) values
+  (7, 'active', '', '', '', 0, '2026-10-11T09:00:00Z'),
+  (7, 'active', 'coding', '', '', 0, '2026-10-11T09:10:00Z'),
+  (7, 'active', 'coding', 'precheck', 'precheck: specs', 0, '2026-10-11T09:30:00Z'),
+  (7, 'needs_you', 'coding', 'you', 'precheck: precheck.lint `bin/lint` exited 1', 1, '2026-10-11T09:40:00Z'),
+  (7, 'active', 'coding', '', '', 0, '2026-10-11T09:50:00Z'),
+  (7, 'needs_you', 'ready', 'you', 'ready to push (card 1): PR-12345 a title', 1, '2026-10-11T10:00:00Z'),
+  (7, 'active', 'publish', '', '', 0, '2026-10-11T10:30:00Z'),
+  (7, 'published', 'publish', '', '', 0, '2026-10-11T11:00:00Z'),
+  (8, 'active', '', '', '', 0, '2026-10-11T08:00:00Z'),
+  (8, 'needs_you', 'questions', 'you', '2 questions before coding', 1, '2026-10-11T08:20:00Z'),
+  (8, 'needs_you', 'questions', 'you', '1 question before coding', 1, '2026-10-11T08:50:00Z'),
+  (8, 'active', 'judge', '', '', 0, '2026-10-11T09:00:00Z'),
+  (8, 'needs_you', 'judge', 'you', '3 questions before judge goes on', 1, '2026-10-11T09:20:00Z'),
+  (8, 'active', 'local_review', '', '', 0, '2026-10-11T09:35:00Z'),
+  (8, 'needs_you', 'local_review', 'you', 'round 1 of the local review left 1 tracked change in the copy (Gemfile.lock)', 1,
+   '2026-10-11T09:45:00Z');
+insert into questions (task_id, raised_by, state, recommended, took_recommendation, flag, asked_at, answered_at) values
+  (7, 'fx-judge', 'answered', 0, 1, '', '2026-10-11T09:20:00Z', '2026-10-11T09:25:00Z'),
+  (7, 'fx-judge', 'answered', 1, 1, '', '2026-10-11T09:20:00Z', '2026-10-11T09:25:00Z'),
+  (7, 'fx-judge', 'answered', 0, 0, '', '2026-10-11T09:20:00Z', '2026-10-11T10:05:00Z'),
+  (7, 'fx-judge', 'answered', -1, 0, '', '2026-10-11T09:20:00Z', '2026-10-11T09:25:00Z'),
+  (7, 'fx-judge', 'voided', 0, 0, '', '2026-10-11T09:20:00Z', null),
+  (8, 'fx-points', 'answered', 2, 1, 'needless', '2026-10-11T08:20:00Z', '2026-10-11T08:40:00Z');
+insert into decisions (task_id, kind, choice, recommendation_shown, recommendation_followed, at) values
+  (7, 'ready_push', 'push', 0, 0, '2026-10-11T10:29:00Z');
 SQL
 round=$ev/factory-tasks/7/local-review/1-local-aaa/reviews/example/app/900071/abc123abc123
-mkdir -p "$round"
+mkdir -p "$round" "$ev/factory-tasks/8"
+TZ=UTC touch -t 202610111000 "$round"
+# Task 7's liaison notes: 85 lines, the last three with a secret, a password and an email; task 8's are older.
+{
+    for i in $(seq 1 82); do echo "- 2026-10-11 10:05 filler note $i"; done
+    echo '- 2026-10-11 10:10 the operator asked back what "precheck" means (report.md)'
+    echo '- 2026-10-11 10:11 a token ghp_abcdefghijklmnopqrstuvwxyz0123456789 and password=hunter2 in precheck.md'
+    echo '- 2026-10-11 10:12 mail alice@example.com about it'
+} >"$ev/factory-tasks/7/notes.md"
+echo '- 2026-10-11 09:00 an older note' >"$ev/factory-tasks/8/notes.md"
+TZ=UTC touch -t 202610110900 "$ev/factory-tasks/8/notes.md"
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
 [[ $rc == 0 ]] || fail "evidence.sh runs against a factory registry with only the columns it reads (rc $rc)"
@@ -564,5 +620,100 @@ MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$ev/none.db
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/nout"
 [[ $rc == 0 ]] && ! grep -q '^## Factory' "$ev/nout/evidence.md" || fail "without a factory registry there is no factory section (rc $rc)"
 ok "evidence.sh lists the factory's tasks, the PRs they published and their local review rounds' reports"
+
+# 11. The factory's holds and alerts are events of kind hold and alert* (phases begin, ok, info): they show beside the
+#     failures, and an info event of another kind does not.
+frows=$(tr -s ' ' <"$ev/fout/evidence.md")
+fsect() { sed -n "/^## $1/,/^## /p" "$2" | tr -s ' ' | tr '\n' ';'; }
+grep -Fxq '| hold | begin | 1 | 2026-10-11T09:51 |' <<<"$frows" && grep -Fxq '| hold | ok | 1 | 2026-10-11T09:55 |' <<<"$frows" &&
+    grep -Fxq '| alert | info | 1 | 2026-10-11T09:52 |' <<<"$frows" && grep -Fxq '| alert_held | info | 1 | 2026-10-11T09:53 |' <<<"$frows" &&
+    grep -Fxq '| claim | fail | 1 | 2026-10-11T09:30 |' <<<"$frows" && ! grep -q '^| intake | info ' <<<"$frows" ||
+    fail "the factory's waits and failures list its holds, alerts and failures: $(fsect 'Factory waits and failures' "$ev/fout/evidence.md")"
+grep -Fxq '| 2026-10-11T09:51 | begin | infra: MySQL does not answer; every stage holds; tries again at 10:05 |' <<<"$frows" &&
+    grep -Fxq '| 2026-10-11T09:55 | ok | infra: lifted after 4 minutes (MySQL does not answer) |' <<<"$frows" ||
+    fail "the factory's holds are listed with their words: $(fsect 'Factory holds' "$ev/fout/evidence.md")"
+ok "evidence.sh shows the factory's holds and alerts with the registry's own kinds and phases"
+
+# 12. The time per stage: each span runs to the next span of its task, the spans after the publish are left out, and the
+#     time splits into at work, on you and on others (named with their minutes).
+grep -Fxq '| - | 2 | 30.0 | 30.0 | 0.0 | 0.0 | - |' <<<"$frows" &&
+    grep -Fxq '| questions | 1 | 40.0 | 0.0 | 40.0 | 0.0 | - |' <<<"$frows" &&
+    grep -Fxq '| judge | 1 | 35.0 | 20.0 | 15.0 | 0.0 | - |' <<<"$frows" &&
+    grep -Fxq '| coding | 1 | 50.0 | 30.0 | 10.0 | 10.0 | precheck 10.0 |' <<<"$frows" &&
+    grep -Fxq '| ready | 1 | 30.0 | 0.0 | 30.0 | 0.0 | - |' <<<"$frows" &&
+    grep -Fxq '| publish | 1 | 30.0 | 30.0 | 0.0 | 0.0 | - |' <<<"$frows" && grep -q '^| local_review | 1 | ' <<<"$frows" ||
+    fail "the factory's time per stage: $(fsect 'Factory time per stage' "$ev/fout/evidence.md")"
+ok "evidence.sh sums the factory's time per stage: at work, on you and on others by who"
+
+# 13. The waits on you by cause: one task's consecutive spans of one cause and stage are one wait, the cause is the
+#     wait's words as the alerts shorten them (numbers as N), and a wait that still runs is open.
+grep -Fxq '| questions | questions, judge | 2 | 1 | 55.0 | 40.0 | 0 |' <<<"$frows" &&
+    grep -Fxq '| ready to push | ready | 1 | 1 | 30.0 | 30.0 | 0 |' <<<"$frows" &&
+    grep -Fxq '| precheck | coding | 1 | 1 | 10.0 | 10.0 | 0 |' <<<"$frows" &&
+    grep -q '^| round N of the local review left N tracked change in the copy | local_review | 1 | 1 | .* | 1 |$' <<<"$frows" ||
+    fail "the factory's waits on you by cause: $(fsect 'Factory waits on you' "$ev/fout/evidence.md")"
+ok "evidence.sh counts the factory's waits on you by cause, a wait of several spans once"
+
+# 14. The take rate of recommended answers by role, of the questions asked or answered in the window, and the cards'.
+grep -Fxq '| fx-judge | 5 | 4 | 3 | 2 | 67% | 1 | 0 |' <<<"$frows" &&
+    grep -Fxq '| fx-points | 1 | 1 | 1 | 1 | 100% | 0 | 1 |' <<<"$frows" && grep -Fxq '| all | 6 | 5 | 4 | 3 | 75% | 1 | 1 |' <<<"$frows" ||
+    fail "the take rate by role: $(fsect 'Factory questions' "$ev/fout/evidence.md")"
+grep -Fq 'Card decisions: 1 (ready_push push 1); a recommendation was shown on 0 and followed on 0.' "$ev/fout/evidence.md" ||
+    fail "the card decisions' line: $(fsect 'Factory questions' "$ev/fout/evidence.md")"
+ok "evidence.sh gives the take rate of the recommended answers by the role that raised the question"
+
+# 15. The liaison's notes of each task folder changed in the window, scrubbed as the factory scrubs what it keeps, the
+#     last 80 lines of each.
+f_md=$ev/fout/evidence.md
+grep -Fxq '### Task 7 (PR-12345, example/app)' "$f_md" && grep -Fxq '### Task 8 (task 8, example/app)' "$f_md" &&
+    grep -Fxq '> - 2026-10-11 10:10 the operator asked back what "precheck" means (report.md)' "$f_md" &&
+    grep -Fxq '> - 2026-10-11 10:11 a token <redacted> and password=<redacted> in precheck.md' "$f_md" &&
+    grep -Fxq '> - 2026-10-11 10:12 mail <email> about it' "$f_md" && grep -Fq '(5 earlier lines left out)' "$f_md" &&
+    ! grep -Fxq '> - 2026-10-11 10:05 filler note 5' "$f_md" && grep -Fxq '> - 2026-10-11 10:05 filler note 6' "$f_md" ||
+    fail "the liaison's notes: $(fsect 'Factory liaison notes' "$f_md")"
+! grep -Eq 'ghp_|hunter2|alice@' "$f_md" || fail "evidence.md holds no secret, password or email of the notes"
+ok "evidence.sh prints the liaison's notes, scrubbed and cut to their last lines"
+
+# 16. The factory has a since of its own (--factory-since): its tables and factory-reports.txt read from it, clipped to
+#     it, while the review's tables read from the review's since; a since that is no time is refused.
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
+    run "$scripts/evidence.sh" --factory-since 2026-10-11T09:45:00Z 2026-11-01T00:00:00Z "$ev/f2out"
+[[ $rc == 0 ]] || fail "evidence.sh --factory-since runs (rc $rc)"
+f2=$ev/f2out/evidence.md
+f2rows=$(tr -s ' ' <"$f2")
+grep -q '^# magnum since 2026-11-01T00:00:00Z' "$f2" && grep -q '^## Factory tasks (updated since 2026-10-11T09:45:00Z)' "$f2" ||
+    fail "the review's tables read from its since, the factory's from --factory-since: $(grep '^#' "$f2" | tr '\n' ';')"
+[[ $(cat "$ev/f2out/factory-reports.txt") == "$round" ]] ||
+    fail "factory-reports.txt reads from the factory's since"
+grep -Fxq '| coding | 1 | 15.0 | 10.0 | 5.0 | 0.0 | - |' <<<"$f2rows" && grep -Fxq '| precheck | coding | 1 | 1 | 5.0 | 5.0 | 0 |' <<<"$f2rows" &&
+    ! grep -q '^| questions |' <<<"$f2rows" ||
+    fail "the stage times and waits are clipped to the factory's since: $(fsect 'Factory time per stage' "$f2")"
+grep -Fxq '| fx-judge | 1 | 1 | 1 | 0 | 0% | 0 | 0 |' <<<"$f2rows" && grep -Fxq '| all | 1 | 1 | 1 | 0 | 0% | 0 | 0 |' <<<"$f2rows" ||
+    fail "the take rate counts the questions answered since the factory's since: $(fsect 'Factory questions' "$f2")"
+grep -Fxq '### Task 7 (PR-12345, example/app)' "$f2" && ! grep -q '^### Task 8 ' "$f2" ||
+    fail "only the notes changed since the factory's since are listed: $(fsect 'Factory liaison notes' "$f2")"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
+    run "$scripts/evidence.sh" --factory-since 3d 2026-10-01T00:00:00Z "$ev/f3out"
+[[ $rc == 0 ]] && grep -Eq '^## Factory tasks \(updated since [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\)' "$ev/f3out/evidence.md" ||
+    fail "--factory-since 3d is three days ago (rc $rc)"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" --factory-since yesterday 2026-10-01T00:00:00Z "$ev/f4out"
+[[ $rc == 2 ]] && has "is not a since" && [[ ! -e $ev/f4out ]] || fail "a factory since that is no time is refused (rc $rc)"
+MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" "2026-10-01'" "$ev/f5out"
+[[ $rc == 2 ]] && has "is not a since" || fail "a since that is no time is refused (rc $rc)"
+ok "evidence.sh reads the factory from a since of its own, --factory-since, and refuses a since that is no time"
+
+# 17. A since is UTC in any time zone: on a machine nine hours east of UTC a report directory or a local review round
+#     45 minutes older than the since is not listed, and one 15 minutes newer is.
+early=$ev/factory-tasks/8/local-review/1-local-bbb/reviews/example/app/900081/def456def456
+mkdir -p "$early"
+TZ=UTC touch -t 202610110900 "$early"
+for d in "$ev"/reviews/example/app/*/*; do TZ=UTC touch -t 202610110900 "$d"; done
+TZ=UTC touch -t 202610111000 "$ev/reviews/example/app/2/bbb222bbb222"
+TZ=Asia/Tokyo MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
+    run "$scripts/evidence.sh" --factory-since 2026-10-11T09:45:00Z 2026-10-11T09:45:00Z "$ev/f6out"
+[[ $rc == 0 && $(cat "$ev/f6out/reports.txt") == "$ev/reviews/example/app/2/bbb222bbb222" &&
+    $(cat "$ev/f6out/factory-reports.txt") == "$round" ]] ||
+    fail "the report directories since a UTC since, in Asia/Tokyo: $(tr '\n' ';' <"$ev/f6out/reports.txt") / $(tr '\n' ';' <"$ev/f6out/factory-reports.txt")"
+ok "evidence.sh lists the report directories since its UTC since in any time zone"
 
 echo "selftest: $checks checks passed"

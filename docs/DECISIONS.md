@@ -17130,6 +17130,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (each prompt rewrote the hash). A voided run stays failed in the agents store: what counts failed turns
   there filters on `outcome`.
 
+- **The improvement loop's evidence reads the factory's holds, stage times, waits on you, take rates and liaison
+  notes, from a since of its own** (2026-11-07, the audit's self-learning lens, F10). `evidence.sh` filtered the
+  factory's events on `phase in ('fail', 'held')`, but the registry's phases are begin, ok, fail and info
+  (`registry/migrations/0001_init.sql`): the holds (kind `hold`) and the alerts (`alert`, `alert_held`,
+  `alert_dropped`, `alert_toast`) never showed, and of the evidence the factory records the loop read only counts.
+  - The waits and failures table takes `phase = 'fail' or kind = 'hold' or kind glob 'alert*'`, and a new table
+    lists the holds' own words (scrubbed), the newest 20.
+  - The time per stage sums `task_spans`: a span lasts until its task's next span, the last one to now or, for a
+    done or stopped task, to its last change (as `magnum factory stats` measures its waits), clipped to the window;
+    the spans after the publish are left out. Each stage splits into at work, on you, and on others by `waits_who`.
+  - The waits on you by cause: a task's spans of one cause and stage in a row are one wait, and the cause is the
+    wait's words as the alerts shorten them (`questions`, `ready to push`, else the words before the first `(` or
+    `:`), numbers as N.
+  - The take rate by the role that raised the question: the answered questions with a recommendation and those
+    whose answer took it (`took_recommendation`), with the voided and the needless ones, and a line of the card
+    decisions and whether a recommendation was shown and followed.
+  - Each task folder's `notes.md` changed in the window, the liaison's notes, through a port of the factory's own
+    scrub (`runtime.Scrub` after `execx.Redact`), the last 80 lines.
+  - `--factory-since` is the loop's second cursor (spec 11.4): the factory's tables, notes and
+    `factory-reports.txt` read from it, so a run whose lens 13 did not run leaves the factory's evidence to the next
+    one; the run log's `factory since` line carries it. A since that is neither an RFC 3339 UTC time nor `<n>d` is
+    refused before anything is written, since it goes into SQL as it is, and `touch -t` runs in UTC: it read the
+    UTC fields in the local zone, so the report directories reached back by the zone's offset.
+  Rejected: a separate `factory-evidence.sh` (spec 11.4 names one; the loop runs one script, whose factory part
+  stays small, and the cursor is a flag); the escapes and the CI rows of F10 (F1 and F11 record them first:
+  `checks` holds no GitHub row yet); the notes' lines filtered by their own dates (the liaison writes its times in free form, so a
+  file changed in the window is printed whole, up to its last 80 lines). Tests (selftest.sh, failing first): the
+  holds and alerts by their kinds and phases, the time per stage, the waits on you by cause, the take rate by role,
+  the notes scrubbed and cut, the factory's own since with a since that is no time refused, and the report
+  directories since a UTC since in Asia/Tokyo; eight mutations of the new code each fail one of them.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

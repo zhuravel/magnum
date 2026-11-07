@@ -14,21 +14,27 @@ PR" and "never a second CODEX_HOME".
 
 ## The run
 
-1. **Preflight.** Read `~/.local/share/magnum/improve/runs.md`; the last entry gives `since` (default: 3 days ago) and
-   the items it left pending. Make sure that the checkout is clean on `master`, that `magnum status` shows a running
-   daemon, and that usage leaves room: Claude (`npx -y ccusage@latest blocks --active --json`) and Codex (the
-   `codex:` line). Stop and say so when either window is at or above 90%.
+1. **Preflight.** Read `~/.local/share/magnum/improve/runs.md`; the last entry gives `since` (default: 3 days ago),
+   `factory since` (the factory's own cursor: the `next:` of its `factory since` line, the start of the last run whose
+   lens 13 read the factory's tables; default: `since`) and the items it left pending. Make sure that the checkout is
+   clean on `master`, that `magnum status` shows a running daemon, and that usage leaves room: Claude
+   (`npx -y ccusage@latest blocks --active --json`) and Codex (the `codex:` line). Stop and say so when either window
+   is at or above 90%.
 2. **Evidence.** First run `magnum retro --lookback <days since>` and wait for `magnum logs` to show it done, so
    other reviewers' comments on recently closed PRs are classified. PRs closed less than 24 hours ago wait for the
-   next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
+   next run, so that late reviews can arrive. Then
+   `scripts/evidence.sh --factory-since <factory since> <since> <run-dir>` writes `evidence.md`, a list of review report
    directories, the git log since, and `claude-review-origin.txt` (which rejected findings of claude-review alone
    are bullets of its own Rejected list, a title match behind the `self` columns). Its last table, "Rules applied",
    counts the reports that hold each review rule's phrase (`rules.txt`, one `<rule> | <pattern>` line per rule; a
    new rule is one line); a rule at 0 for three runs is a cut candidate when the review skill is at its byte cap.
-   With a factory registry it ends with the factory's tables (tasks, the PRs they published, their local review
-   cycles and findings, waits, failures, operator inputs), and `factory-reports.txt` lists the local review rounds'
-   report directories. A factory PR's comments by people are misses of its local review (lens 0), and the factory's
-   costs are lens 13's.
+   With a factory registry it ends with the factory's tables, read from `factory since` (tasks, the PRs they
+   published, their local review cycles and findings, failures, holds and alerts, operator inputs, the time per stage,
+   the waits on you by cause, the take rate of the recommended answers by the role that raised the question, and each
+   task's `notes.md`, the liaison's notes, scrubbed), and `factory-reports.txt` lists the local review rounds' report
+   directories since then. A factory PR's comments by people are misses of its local review (lens 0), and the
+   factory's costs are lens 13's. A run whose lens 13 did not run leaves `factory since` where it was, so the next
+   run reads the factory's evidence this one left.
    Read the summary yourself; it is the shared input of every analyst. Lens 13 runs whenever the factory's tables
    list a task.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its

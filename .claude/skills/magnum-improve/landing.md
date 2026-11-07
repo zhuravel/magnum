@@ -65,6 +65,7 @@ Append one entry to `~/.local/share/magnum/improve/runs.md` per run:
 ## <run id, e.g. 2026-10-07T08:30>
 
 - since: <the since this run used>
+- factory since: <the factory since this run used>; next: <this run's start when its lens 13 read the factory's tables, else the same>
 - evidence: <rounds, posted reviews, misses, warn/error kinds: the headline numbers>
 - measures: <PASS@1, 5+, the missed-earlier share and MAGNUM ONLY over the run's window, and the last run's>
 - landed: <sha: one line each>
