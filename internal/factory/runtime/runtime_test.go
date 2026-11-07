@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -644,6 +645,30 @@ func TestTasksOfTwoRepositoriesOfOneNameEachGetAnOwnerRow(t *testing.T) {
 	}
 	if a.ID == b.ID || b.Number != int(other.ID) {
 		t.Fatalf("owner rows %d and %d (#%d), want one per task", a.ID, b.ID, b.Number)
+	}
+}
+
+// An agent's start compares the checkout's project config with the merge
+// base of HEAD and origin/<the row's base>: a repository whose base is main
+// has no origin/master, and its sessions lost the project config.
+func TestAnOwnerRowCarriesItsRepositorysBase(t *testing.T) {
+	g := newRig(t)
+	g.cfg.Factory.Repos = append(g.cfg.Factory.Repos, config.FactoryRepo{Repo: "example/app", Base: "main"})
+	g.restart()
+	other, err := g.reg.CreateTask(g.ctx, registry.Task{JiraKey: "PR-12347", Kind: "bug", Repo: "Example/App", State: registry.TaskActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := store.Deref(g.owner().BaseRef); got != config.DefaultFactoryBase {
+		t.Fatalf("owner row base %q for a repository without base, want %q", got, config.DefaultFactoryBase)
+	}
+	b, err := g.r.Owner(g.ctx, other)
+	if err != nil {
+		t.Fatalf("Owner of a task of example/app: %v", err)
+	}
+	if got := store.Deref(b.BaseRef); got != "main" {
+		t.Fatalf("owner row base %q, want the repository's main", got)
 	}
 }
 

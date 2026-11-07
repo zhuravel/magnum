@@ -10,12 +10,14 @@ package runtime
 // liaison hangs on a row of its own (liaisonRow), never the task's.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -98,8 +100,13 @@ func (r *Runtime) owner(ctx context.Context, t registry.Task, head string) (stor
 	if t.Title != "" {
 		title += ": " + t.Title
 	}
+	// The task's base: an agent's start compares the copy's project config
+	// with origin/<base>, and a repository whose base is main has no
+	// origin/master (the row's repository has the store's default).
+	fr, _ := r.cfg.FactoryRepo(t.Repo)
+	base := cmp.Or(fr.Base, config.DefaultFactoryBase)
 	up, err := r.st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: ownerNode(t.ID), Number: int(t.ID),
-		URL: "file://" + r.d.Layout.FactoryTaskDir(t.ID), HeadSHA: head, Title: &title, GHState: store.GHOpen,
+		URL: "file://" + r.d.Layout.FactoryTaskDir(t.ID), HeadSHA: head, Title: &title, BaseRef: &base, GHState: store.GHOpen,
 		InitialState: store.PRClaiming, Identity: ownerIdentity})
 	if err != nil {
 		return store.PR{}, fmt.Errorf("owner of %s: %w", taskKey(t), err)
