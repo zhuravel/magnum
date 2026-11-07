@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 )
 
 var t0 = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
@@ -27,31 +29,48 @@ func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return 
 func (c *clock) Set(t time.Time)     { c.mu.Lock(); c.now = t; c.mu.Unlock() }
 func (c *clock) Add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
 
-// migratedImage is a database migrated once per test binary; newStore writes
-// a copy of it, which Open finds current. storetest does the same for the
-// other packages (this one cannot import it).
+// migratedImage is a database migrated once per test binary, in memory;
+// newStore loads a copy of it and newFileStore writes one, which Open finds
+// current. storetest does the same for the other packages (this one cannot
+// import it).
 var migratedImage = sync.OnceValues(func() ([]byte, error) {
-	dir, err := os.MkdirTemp("", "magnum-store-test-")
+	db, err := sqlitetest.Open(nil, sqlitetest.Params)
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "magnum.db")
-	st, err := Open(path)
+	st, err := OpenDB(db, Options{})
 	if err != nil {
 		return nil, err
 	}
-	if _, err := st.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		st.Close()
-		return nil, err
-	}
-	if err := st.Close(); err != nil {
-		return nil, err
-	}
-	return os.ReadFile(path)
+	defer st.Close()
+	return sqlitetest.Image(context.Background(), st.db)
 })
 
+// newStore gives the test a migrated registry in memory, which writes
+// nothing to disk.
 func newStore(t *testing.T) (*Store, *clock) {
+	t.Helper()
+	image, err := migratedImage()
+	if err != nil {
+		t.Fatalf("migrate the template: %v", err)
+	}
+	db, err := sqlitetest.Open(image, sqlitetest.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := OpenDB(db, Options{})
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	c := &clock{now: t0}
+	st.Clock = c.Now
+	return st, c
+}
+
+// newFileStore is newStore on a file opened with Open, for a test of what
+// only a file has: WAL, a second handle on the path.
+func newFileStore(t *testing.T) (*Store, *clock) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state", "magnum.db")
 	image, err := migratedImage()
@@ -61,7 +80,7 @@ func newStore(t *testing.T) (*Store, *clock) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, image, 0o600); err != nil {
+	if err := os.WriteFile(path, sqlitetest.FileImage(image), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	st, err := Open(path)
@@ -147,7 +166,7 @@ func TestOpenAppliesMigrationsOnceAndIsIdempotent(t *testing.T) {
 }
 
 func TestOpenPragmas(t *testing.T) {
-	st, _ := newStore(t)
+	st, _ := newFileStore(t)
 	ctx := context.Background()
 	var mode string
 	if err := st.DB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
@@ -226,7 +245,7 @@ func TestBeforeMigrateRefusalLeavesTheFileAlone(t *testing.T) {
 // registry, and every write through it fails, so it never changes the
 // registry of the program that owns it.
 func TestQueryOnlyRefusesEveryWrite(t *testing.T) {
-	st, _ := newStore(t)
+	st, _ := newFileStore(t)
 	ctx := context.Background()
 	if err := st.SetKV(ctx, "probe", "1"); err != nil {
 		t.Fatal(err)

@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"modernc.org/sqlite" // registers the "sqlite" database/sql driver
@@ -131,6 +132,44 @@ func OpenWith(path string, opts Options) (*Store, error) {
 			return nil, fmt.Errorf("store: chmod %s: %w", p, err)
 		}
 	}
+	return s, nil
+}
+
+// OpenDB is OpenWith for a database the caller opened: the in-memory
+// registries of tests (storetest, sqlitetest.Open). Production opens files
+// with Open and OpenWith, and OpenDB refuses to run outside a test binary
+// (testing.Testing). It pins db to the one connection OpenWith keeps,
+// applies pending migrations after opts.BeforeMigrate agrees and refuses a
+// schema newer than this binary, as OpenWith does. It refuses
+// opts.QueryOnly, a setting of a connection's DSN. It closes db when it
+// fails.
+func OpenDB(db *sql.DB, opts Options) (*Store, error) { return openDB(db, opts, testing.Testing()) }
+
+// openDB is OpenDB; inTest says whether this is a test binary, so a test can
+// see the refusal a production binary gets.
+func openDB(db *sql.DB, opts Options, inTest bool) (*Store, error) {
+	if !inTest {
+		db.Close()
+		return nil, errors.New("store: OpenDB is for tests; open the registry file with OpenWith")
+	}
+	if opts.QueryOnly {
+		db.Close()
+		return nil, errors.New("store: OpenDB cannot make a handle query-only (a setting of the DSN); open the file with OpenWith")
+	}
+	db.SetMaxOpenConns(1)
+	db.SetConnMaxLifetime(0)
+	s := &Store{db: db}
+	ctx := context.Background()
+	if _, _, err := ApplyMigrations(ctx, db, migrations, opts.BeforeMigrate); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.openVersion = v
 	return s, nil
 }
 

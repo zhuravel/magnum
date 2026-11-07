@@ -4,22 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 )
 
 // openRawDB opens a bare database the way OpenWith does (one connection,
-// BEGIN IMMEDIATE), without running any migration.
+// BEGIN IMMEDIATE), in memory, without running any migration.
 func openRawDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "raw.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_txlock=immediate"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sqlitetest.Open(nil, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	return db
 }
