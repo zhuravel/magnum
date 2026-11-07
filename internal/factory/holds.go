@@ -498,16 +498,25 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 	return nil
 }
 
-// stopServer stops a server startServer started and frees its heavy use.
+// stopServer stops a server startServer started and frees its heavy use. A
+// stop that found the copy's port held by a process outside the copy
+// (portHeld) stopped and forgot the factory's server all the same: it
+// counts as stopped, and its event names the holder.
 func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why string) {
-	if err := e.d.Copies.StopServer(ctx, s.copy); err != nil {
+	err := e.d.Copies.StopServer(ctx, s.copy)
+	held, isHeld := errors.AsType[portHeld](err)
+	if err != nil && !isHeld {
 		e.log.Warn("stop a server", "task", t.ID, "copy", s.copy.Name, "err", err)
 		e.event(ctx, t.ID, "server", registry.PhaseFail, "stop "+s.copy.Name+": "+err.Error())
 		return
 	}
 	delete(e.servers, t.ID)
 	s.release()
-	e.event(ctx, t.ID, "server", registry.PhaseOK, "stopped "+s.copy.Name+"'s server: "+why)
+	text := "stopped " + s.copy.Name + "'s server: " + why
+	if isHeld {
+		text += "; " + held.Error()
+	}
+	e.event(ctx, t.ID, "server", registry.PhaseOK, text)
 }
 
 // heavySlot is a task's hold on the heavy stages: its key and the use the

@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // A copy's server runs the repository's server command in the copy with the
@@ -558,5 +559,366 @@ func TestInDirTakesTheCopyAndBelowOnly(t *testing.T) {
 		if got := inDir(dir, "/copies/factory1"); got != want {
 			t.Errorf("inDir(%q) = %v, want %v", dir, got, want)
 		}
+	}
+}
+
+// A server start that fails leaves no pidfile behind: a later task in the
+// same copy that starts no server has nothing of its own stopped or killed
+// at the next daemon start, not even a listener on the copy's port, and the
+// repository's server_stop never runs in its copy.
+func TestAFailedServerStartLeavesNothingThatStopsALaterTask(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	r.qaRepo("bin/overmind-kill")
+	first := r.task("PR-1")
+	c := r.claim(first)
+	r.endAtOnce = true
+	if err := r.c.StartServer(r.ctx, c); err == nil || !strings.Contains(err.Error(), "ended at once") {
+		t.Fatalf("StartServer = %v, want the server ended at once", err)
+	}
+	if _, err := os.Stat(r.c.serverPidFile(c.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a failed start left its pidfile: %v", err)
+	}
+	r.release(first)
+	later := r.task("PR-2")
+	c = r.claim(later)
+	r.listen(listener{PID: 777, Port: c.Port, Command: "ruby", Cwd: c.Path}, 0) // the later task's own test server
+	r.mu.Lock()
+	r.order = nil
+	r.mu.Unlock()
+
+	r.c = r.newCopies()
+	if err := r.c.Reconcile(r.ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := r.stopOrder(); len(got) != 0 {
+		t.Fatalf("the restart ran %v in a copy whose task started no server, want nothing", got)
+	}
+}
+
+// A start whose process table cannot be read stops the server it spawned and
+// leaves no pidfile either.
+func TestAServerStartThatCannotReadTheTableStopsItsServer(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	r.failTable = 1
+	if err := r.c.StartServer(r.ctx, c); err == nil {
+		t.Fatal("StartServer = nil with no process table")
+	}
+	if want := []string{strconv.Itoa(r.spawned[0].PID) + " terminated"}; !slices.Equal(r.kills, want) {
+		t.Fatalf("kills %v, want %v", r.kills, want)
+	}
+	if _, err := os.Stat(r.c.serverPidFile(c.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the start left its pidfile: %v", err)
+	}
+}
+
+// A pidfile whose server no longer runs (an older build left it, or its
+// server ended) names no process of the factory's: the restart stops
+// nothing for it and forgets it. A stop with no record forgets one too.
+func TestAPidfileWhoseServerIsGoneStopsNothing(t *testing.T) {
+	r := newCopiesRig(t, 2)
+	r.qaRepo("bin/overmind-kill")
+	one, two := r.claim(r.task("PR-1")), r.claim(r.task("PR-2"))
+	for _, c := range []Copy{one, two} {
+		r.write(r.c.serverPidFile(c.Name), "4100\n")
+	}
+	r.listen(listener{PID: 777, Port: one.Port, Command: "ruby", Cwd: one.Path}, 0)
+	if err := r.c.StopServer(r.ctx, two); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.c.serverPidFile(two.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a stop with no record kept the pidfile: %v", err)
+	}
+	r.mu.Lock()
+	r.order = nil
+	r.mu.Unlock()
+
+	r.c = r.newCopies()
+	if err := r.c.Reconcile(r.ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := r.stopOrder(); len(got) != 0 {
+		t.Fatalf("the restart ran %v for a pidfile whose server is gone, want nothing", got)
+	}
+	if _, err := os.Stat(r.c.serverPidFile(one.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stale pidfile is still there: %v", err)
+	}
+}
+
+// A server spawned just before a crash, never recorded, still runs: the
+// restart runs the whole stop for it, server_stop, its group and the listener
+// it left in the copy on its port.
+func TestReconcileStopsAnUnrecordedServerAndWhatItLeftInTheCopy(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	r.qaRepo("bin/overmind-kill")
+	c := r.claim(r.task("PR-1"))
+	pid, err := r.c.spawn(r.ctx, c.Path, nil, "bin/worktree-run", r.c.serverLog(c.Name), r.c.serverPidFile(c.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.listen(listener{PID: 777, Port: c.Port, Command: "ruby", Cwd: c.Path}, 0)
+	r.mu.Lock()
+	r.order = nil
+	r.mu.Unlock()
+
+	r.c = r.newCopies()
+	if err := r.c.Reconcile(r.ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	want := []string{"mise bin/overmind-kill", fmt.Sprintf("kill %d terminated", pid), "signal 777 terminated"}
+	if got := r.stopOrder(); !slices.Equal(got, want) {
+		t.Fatalf("the restart ran %v, want %v", got, want)
+	}
+}
+
+// A stop runs on its own bound, whatever the context it is given: one that
+// is cancelled or past its deadline (QA's cap, the daemon stopping) still
+// ends the server's group and the browser's, and forgets them. So does a
+// reconcile.
+func TestAStopOnAnEndedContextStillEndsTheServerAndTheBrowser(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
+	defer stop()
+	for name, ctx := range map[string]context.Context{"cancelled": cancelled, "expired": expired} {
+		t.Run(name, func(t *testing.T) {
+			r := newCopiesRig(t, 2)
+			tk := r.task("PR-1")
+			c := r.claim(tk)
+			if err := r.c.StartServer(r.ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.c.StartBrowser(r.ctx, c, r.runDir(tk.ID)); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.c.StopServer(ctx, c); err != nil {
+				t.Fatalf("StopServer: %v", err)
+			}
+			if err := r.c.StopBrowser(ctx, c); err != nil {
+				t.Fatalf("StopBrowser: %v", err)
+			}
+			want := []string{strconv.Itoa(r.spawned[0].PID) + " terminated", strconv.Itoa(r.browsers[0].PID) + " terminated"}
+			if !slices.Equal(r.kills, want) {
+				t.Fatalf("kills %v, want %v", r.kills, want)
+			}
+			if _, err := os.Stat(filepath.Join(r.runDir(tk.ID), "chrome")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the profile is still there: %v", err)
+			}
+
+			other := r.task("PR-2")
+			c2 := r.claim(other)
+			if err := r.c.StartServer(r.ctx, c2); err != nil {
+				t.Fatal(err)
+			}
+			r.c = r.newCopies()
+			if err := r.c.Reconcile(ctx); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if got := r.kills[len(r.kills)-1]; got != strconv.Itoa(r.spawned[1].PID)+" terminated" {
+				t.Fatalf("kills %v, want the stray ended last", r.kills)
+			}
+			for _, cp := range []Copy{c, c2} {
+				if _, ok, _ := r.c.serverOf(r.ctx, cp.Name); ok {
+					t.Errorf("%s's server is still recorded", cp.Name)
+				}
+			}
+		})
+	}
+}
+
+// A helper of the factory's own agents in the copy (a test server, a debugger)
+// that listens on another port than the copy's server is not the server's:
+// it survives the stop, and the stop is no failure.
+func TestAServerStopLeavesAnAgentsHelperInTheCopyAlone(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	r.listen(listener{PID: 778, Port: 9229, Command: "node", Cwd: c.Path}, 0)
+	if err := r.c.StopServer(r.ctx, c); err != nil {
+		t.Fatalf("StopServer: %v", err)
+	}
+	if got := r.signalled(); len(got) != 0 {
+		t.Fatalf("signals %v, want none: the helper is no part of the server", got)
+	}
+	r.mu.Lock()
+	alive := r.alive(778)
+	r.mu.Unlock()
+	if !alive {
+		t.Fatal("the agent's helper is gone")
+	}
+}
+
+// A record whose pid another process took since (another start), and that
+// process listens on the copy's port from outside the copy: it is never
+// signalled, and the stop says the port is held.
+func TestAStopOfAStaleRecordWhosePidListensOnThePortSignalsNothing(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	pid := r.spawned[0].PID
+	r.mu.Lock()
+	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool { return p.PID == pid })
+	r.mu.Unlock()
+	r.clock.Add(time.Hour)
+	r.listen(listener{PID: pid, Port: c.Port, Command: "node", Cwd: "/Users/alice/shop"}, 0)
+
+	err := r.c.StopServer(r.ctx, c)
+	if _, held := errors.AsType[portHeld](err); !held {
+		t.Fatalf("StopServer = %v, want the port held", err)
+	}
+	if len(r.kills) != 0 || len(r.signalled()) != 0 {
+		t.Fatalf("kills %v, signals %v; want none", r.kills, r.signalled())
+	}
+}
+
+// A record whose leader is gone while what it left still listens in the copy
+// on its port (overmind's tmux pane) is stopped before a new server starts,
+// so the new one can bind the port.
+func TestAStartAfterADeadLeaderStopsWhatItLeftFirst(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	pid := r.spawned[0].PID
+	r.mu.Lock()
+	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool { return p.PID == pid })
+	r.order = nil
+	r.mu.Unlock()
+	r.listen(listener{PID: 779, Port: c.Port, Command: "ruby", Cwd: c.Path}, 0)
+
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"signal 779 terminated", fmt.Sprintf("spawn %d", r.spawned[1].PID)}
+	if got := r.stopOrder(); !slices.Equal(got, want) {
+		t.Fatalf("the start ran %v, want %v", got, want)
+	}
+}
+
+// A server group that outlives SIGKILL stays recorded and fails the stop, so
+// the next stop or a restart tries again.
+func TestAServerGroupThatOutlivesSIGKILLStaysRecorded(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.unkillable = map[int]bool{r.spawned[0].PID: true}
+	r.mu.Unlock()
+	if err := r.c.StopServer(r.ctx, c); err == nil || !strings.Contains(err.Error(), "outlived SIGKILL") {
+		t.Fatalf("StopServer = %v, want the group that outlived SIGKILL", err)
+	}
+	if _, ok, _ := r.c.serverOf(r.ctx, c.Name); !ok {
+		t.Fatal("a server that still runs is forgotten")
+	}
+}
+
+// The copy's checkout may be reached by a link: lsof shows the target as a
+// process's cwd, and that is in the copy too.
+func TestInCopyTakesTheTargetOfALinkedCopy(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "volume", "factory1")
+	if err := os.MkdirAll(filepath.Join(target, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "factory1")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cwd, want := range map[string]bool{
+		filepath.Join(resolved, "tmp"): true, link: true, filepath.Join(filepath.Dir(resolved), "factory10"): false, root: false,
+	} {
+		if got := inCopy(cwd, link); got != want {
+			t.Errorf("inCopy(%q, %q) = %v, want %v", cwd, link, got, want)
+		}
+	}
+}
+
+// lsof runs twice, the listeners and then their working directories. Its
+// exit 1 with nothing but warnings on stderr is "none found"; with an error
+// on stderr it fails the listing.
+func TestLsofListenersReadsTheListenersAndTheirDirectories(t *testing.T) {
+	cases := []struct {
+		name           string
+		listen, cwd    execx.Result
+		want           []listener
+		wantErr        bool
+		wantSecondCall bool
+	}{
+		{name: "two", listen: execx.Result{Stdout: []byte("p777\ncruby\nf9\nn*:3010\np888\ncnode\nf3\nn*:9999\n")},
+			cwd:            execx.Result{Stdout: []byte("p777\nfcwd\nn/copies/factory1\np888\nfcwd\nn/elsewhere\n")},
+			want:           []listener{{PID: 777, Port: 3010, Command: "ruby", Cwd: "/copies/factory1"}, {PID: 888, Port: 9999, Command: "node", Cwd: "/elsewhere"}},
+			wantSecondCall: true},
+		{name: "none", listen: execx.Result{Code: 1}},
+		{name: "a warning", listen: execx.Result{Code: 1, Stderr: []byte("lsof: WARNING: can't stat() smbfs file system /Volumes/x\n")}},
+		{name: "an error", listen: execx.Result{Code: 1, Stderr: []byte("lsof: unknown option: -Z\n")}, wantErr: true},
+		{name: "a pid gone", listen: execx.Result{Stdout: []byte("p777\ncruby\nf9\nn*:3010\n")},
+			cwd: execx.Result{Code: 1}, want: []listener{{PID: 777, Port: 3010, Command: "ruby"}}, wantSecondCall: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &execx.Fake{Rules: []execx.Rule{
+				{Prefix: []string{"lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"}, Result: tc.listen},
+				{Prefix: []string{"lsof", "-a", "-d", "cwd", "-p", "777,888", "-Fpn"}, Result: tc.cwd},
+				{Prefix: []string{"lsof", "-a", "-d", "cwd", "-p", "777", "-Fpn"}, Result: tc.cwd},
+			}}
+			c := &copySet{run: fake}
+			got, err := c.lsofListeners(t.Context())
+			if (err != nil) != tc.wantErr || !slices.Equal(got, tc.want) {
+				t.Fatalf("lsofListeners = %+v, %v; want %+v (error %v)", got, err, tc.want, tc.wantErr)
+			}
+			if second := len(fake.Calls) == 2; second != tc.wantSecondCall {
+				t.Fatalf("lsof ran %d times: %+v", len(fake.Calls), fake.Calls)
+			}
+		})
+	}
+}
+
+// The real spawn starts the server with the factory's shims first on its
+// PATH, BROWSER=true and none of the variables the copies never inherit.
+func TestSpawnServerGivesTheServerTheShimsAndNoSecrets(t *testing.T) {
+	storetest.Serial(t)
+	bin := t.TempDir()
+	out := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(filepath.Join(bin, "mise"), []byte("#!/bin/sh\nenv > '"+out+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := bin + ":" + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	t.Setenv("GH_TOKEN", "gho_secret")
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if err := os.MkdirAll(r.cfg.Layout.Logs(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.spawnServer(r.ctx, c.Path, c.Env, "bin/worktree-run", r.c.serverLog(c.Name), r.c.serverPidFile(c.Name)); err != nil {
+		t.Fatal(err)
+	}
+	var env []byte
+	for range 200 {
+		if b, err := os.ReadFile(out); err == nil && strings.Contains(string(b), "PATH=") {
+			env = b
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	lines := strings.Split(string(env), "\n")
+	for _, want := range []string{"PATH=" + r.cfg.Layout.FactoryShims() + ":" + path, "BROWSER=true"} {
+		if !slices.Contains(lines, want) {
+			t.Errorf("the server's env has no %s:\n%s", want, env)
+		}
+	}
+	if strings.Contains(string(env), "GH_TOKEN") {
+		t.Errorf("the server's env has GH_TOKEN:\n%s", env)
 	}
 }

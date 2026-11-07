@@ -722,6 +722,8 @@ type fakeCopies struct {
 	// of a server or a browser, in order.
 	startedBrowsers, stoppedBrowsers []string
 	stopCtxErr                       []error
+	// stopErr is what each StopServer returns.
+	stopErr error
 }
 
 func (f *fakeCopies) Claim(ctx context.Context, t registry.Task) (Copy, error) {
@@ -828,7 +830,7 @@ func (f *fakeCopies) StopServer(ctx context.Context, c Copy) error {
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, c.Name)
 	f.stopCtxErr = append(f.stopCtxErr, ctx.Err())
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeCopies) StartBrowser(_ context.Context, c Copy, _ string) (string, error) {

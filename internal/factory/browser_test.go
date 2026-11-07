@@ -234,3 +234,44 @@ func TestReconcileKillsAStrayBrowserOnlyWhenPidAndStartMatch(t *testing.T) {
 		}
 	}
 }
+
+// A browser whose group outlives SIGKILL stays recorded with its profile, and
+// the stop fails, so the next stop or a restart tries again.
+func TestStopBrowserKeepsABrowserThatOutlivesSIGKILL(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	tk := r.task("PR-1")
+	c := r.claim(tk)
+	if _, err := r.c.StartBrowser(r.ctx, c, r.runDir(tk.ID)); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.unkillable = map[int]bool{r.browsers[0].PID: true}
+	r.mu.Unlock()
+	if err := r.c.StopBrowser(r.ctx, c); err == nil || !strings.Contains(err.Error(), "outlived SIGKILL") {
+		t.Fatalf("StopBrowser = %v, want the group that outlived SIGKILL", err)
+	}
+	if _, ok, _ := r.c.recordOf(r.ctx, browserKeyPrefix+c.Name); !ok {
+		t.Fatal("a browser that still runs is forgotten")
+	}
+	if _, err := os.Stat(filepath.Join(r.runDir(tk.ID), "chrome")); err != nil {
+		t.Fatalf("the profile of a browser that still runs is gone: %v", err)
+	}
+}
+
+// A browser start that cannot read the process table stops the browser it
+// spawned and deletes its profile.
+func TestStartBrowserThatCannotReadTheTableStopsItsBrowser(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	tk := r.task("PR-1")
+	c := r.claim(tk)
+	r.failTable = 1
+	if _, err := r.c.StartBrowser(r.ctx, c, r.runDir(tk.ID)); err == nil {
+		t.Fatal("StartBrowser = nil with no process table")
+	}
+	if want := []string{strconv.Itoa(r.browsers[0].PID) + " terminated"}; !slices.Equal(r.kills, want) {
+		t.Fatalf("kills %v, want %v", r.kills, want)
+	}
+	if _, err := os.Stat(filepath.Join(r.runDir(tk.ID), "chrome")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the profile is still there: %v", err)
+	}
+}

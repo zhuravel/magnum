@@ -18479,17 +18479,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   headless Chrome** (2026-11-08, R55 slice 1, its third step). A QA run must leave the Mac as it found it, and a
   stop only signalled the server's group: overmind's tmux panes leave the group and kept listening.
   - A stop kills only what the factory started: the server's group, while its leader's pid and start match the
-    record, and a TCP listener whose working directory is in the copy (lsof), one process at a time, only while
-    its pid and start match the process table. Before that, the repository's `server_stop` runs in the copy for at
-    most 30 s; its failure is an event and the stop goes on. Then `proveStopped` looks again, over IPv4 and IPv6. A
-    listener of the copy that is still running fails the stop by its pid, command and port, and the record stays, so
-    the next stop or a restart's reconcile tries again. A process outside the copy is never signalled, whatever
-    port it holds. If it holds the copy's port, `StopServer` fails with "port N is held by a process outside the
-    copy" (`portHeld`), so QA never walks it. A release and a reconcile go on and only record it (in handoff.md and
-    the stop's fail event). A copy with no record never had a server the factory started: nothing runs, nothing is
-    signalled and nothing is proven. A pidfile with no record (a crash before the record) still counts as a server
-    the factory started. Every step writes begin, ok and fail events (`factory.server_start`, `_stop`,
-    `_stop_command`, `_stray`, `factory.browser_start`, `_stop`).
+    record, and a TCP listener on the copy's port whose working directory is in the copy (lsof), one process at a
+    time, only while its pid and start match the process table. A helper of the factory's own agents in the copy
+    on another port (a test server, a debugger) is never signalled. Before that, the repository's `server_stop`
+    runs in the copy for at most 30 s; its failure is an event and the stop goes on. Then `proveStopped` looks
+    again, over IPv4 and IPv6. A listener of the copy still on the port fails the stop by its pid, command and
+    port, and the record stays, so the next stop or a restart's reconcile tries again. So does a group that
+    outlives SIGKILL, a browser's too (its profile stays). A process outside the copy is never signalled, whatever
+    port it holds. If it holds the copy's port, `StopServer` returns "port N is held by a process outside the
+    copy" (`portHeld`) alone, so QA never walks it. The server is stopped and forgotten all the same: the engine's
+    stop counts it stopped and frees its heavy use, and a release and a reconcile go on and only record it (in
+    handoff.md and the stop's fail event). Every stop runs on `context.WithoutCancel` with its own 2-minute bound,
+    so QA's cap or the daemon's shutdown still stops the server and the browser.
+  - A copy with no record never had a server the factory started: nothing runs, nothing is signalled and nothing
+    is proven. A start that fails after its spawn ends what it spawned and removes its pidfile, and a stop with no
+    record removes a stale one, so a later task in the copy is never taken for a server the factory started. At a
+    daemon start, a pidfile with no record counts only while its server still runs (a crash before the record): its
+    stop then runs the server_stop and the proof too. A pidfile whose server is gone stops nothing. A record whose
+    leader is gone is stopped (the server_stop and the proof) before a new server starts. lsof's exit 1 means "none
+    found" only while its stderr holds warnings alone. Every step writes begin, ok and fail events
+    (`factory.server_start`, `_stop`, `_stop_command`, `_stray`, `factory.browser_start`, `_stop`).
   - A server starts with `BROWSER=true` in its env and with `<state>/factory-shims` first on its PATH. That
     folder holds an `open` that writes what it refused to stderr and exits 0. A server that runs /usr/bin/open
     by its full path gets past the shim.
@@ -18507,8 +18516,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     another copy's server or a review slot's server. The port alone never names a process the factory started.
   - Running the proof without a record (the plan's "leader-gone" case). A record whose leader is gone still gets
     its proof. No record means no server the factory started, and so nothing to kill.
-  - Signalling a cwd-matched listener's group. Its group may hold processes outside the copy, such as your shell's
+  - Signalling a cwd-matched listener's group. Its group can hold processes outside the copy, such as your shell's
     job.
+  - Ending every listener whose working directory is in the copy (this step's first version). The factory's own
+    agents work in the copy, and their helpers must outlive a QA stop.
+  - Running the proof for a pidfile whose server is gone (this step's first version). A start that failed left
+    one, and the restart then ended a later task's listener in the copy.
+  - Finding a Chrome spawned just before a crash, before its record, by its profile's `SingletonLock`. The window
+    is one process-table read and one registry write; such a Chrome is headless, on loopback, with its own profile;
+    and the lock's format is Chrome's to change.
   - Failing a release on a foreign holder of the port. The process is not the copy's, and the release would stay
     stuck until it ended.
 
@@ -18525,7 +18541,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStartBrowserThatNeverListensIsStoppedAndForgotten, TestStopBrowserEndsItsGroupAndDeletesTheProfile and
   TestReconcileKillsAStrayBrowserOnlyWhenPidAndStartMatch. The tests of a foreign listener, of a stop with no
   server and of a group member each failed against a mutant that killed by port, proved without a record, or
-  skipped the group kill.
+  skipped the group kill. After review, failing first: TestAFailedServerStartLeavesNothingThatStopsALaterTask,
+  TestAServerStartThatCannotReadTheTableStopsItsServer, TestAPidfileWhoseServerIsGoneStopsNothing,
+  TestAStopOnAnEndedContextStillEndsTheServerAndTheBrowser, TestAServerStopLeavesAnAgentsHelperInTheCopyAlone,
+  TestAStartAfterADeadLeaderStopsWhatItLeftFirst, TestAServerGroupThatOutlivesSIGKILLStaysRecorded,
+  TestStopBrowserKeepsABrowserThatOutlivesSIGKILL, TestStartBrowserThatCannotReadTheTableStopsItsBrowser,
+  TestAServerStopThatFindsThePortHeldElsewhereFreesItsHeavyUse and the error row of
+  TestLsofListenersReadsTheListenersAndTheirDirectories; and for the gaps it named,
+  TestReconcileStopsAnUnrecordedServerAndWhatItLeftInTheCopy, TestAStopOfAStaleRecordWhosePidListensOnThePortSignalsNothing,
+  TestInCopyTakesTheTargetOfALinkedCopy and TestSpawnServerGivesTheServerTheShimsAndNoSecrets.
 
 ## Learned rules
 

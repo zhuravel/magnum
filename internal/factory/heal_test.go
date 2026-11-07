@@ -846,6 +846,38 @@ func diskHarness(t *testing.T, free *atomic.Uint64) (*harness, string) {
 
 const gb = 1 << 30
 
+// A stop whose proof found the copy's port held by a process outside the
+// copy stopped the factory's server all the same (its record is gone): the
+// engine counts it stopped, frees its heavy use and names the holder in its
+// event, so no later call reads the port as free without a proof.
+func TestAServerStopThatFindsThePortHeldElsewhereFreesItsHeavyUse(t *testing.T) {
+	h := newHarness(t)
+	tk := h.task("PR-12330", registry.TaskActive, "investigate")
+	if err := h.e.startServer(h.ctx, h.reload(tk.ID), Copy{Name: "factory1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.copies.mu.Lock()
+	h.copies.stopErr = portHeld{port: 3010, pid: 889, command: "node"}
+	h.copies.mu.Unlock()
+
+	h.e.stopServer(h.ctx, h.reload(tk.ID), h.e.servers[tk.ID], "it was idle")
+	if _, ok := h.e.servers[tk.ID]; ok {
+		t.Fatal("the engine still counts the stopped server as running")
+	}
+	h.e.heavyMu.Lock()
+	_, heavy := h.e.heavyHeld[tk.ID]
+	h.e.heavyMu.Unlock()
+	if heavy {
+		t.Fatal("the stopped server still holds its heavy use")
+	}
+	evs := h.events(tk.ID, "server")
+	if !slices.ContainsFunc(evs, func(e registry.Event) bool {
+		return e.Phase == registry.PhaseOK && strings.Contains(e.Text, "port 3010 is held by a process outside the copy")
+	}) {
+		t.Fatalf("server events %+v, want the stop ok with the holder named", evs)
+	}
+}
+
 func TestLowDiskHoldsLaunchesAndParksIdleAgentsThatWaitOnYou(t *testing.T) {
 	var free atomic.Uint64
 	free.Store(9 * gb)

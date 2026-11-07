@@ -13,13 +13,16 @@ package factory
 // waits for every member of the group, not the leader only.
 //
 // A stop proves the copy's port free (proveStopped), and kills only what the
-// factory started: the server's group, and a listener whose working
-// directory is in the copy (overmind's tmux panes leave the group). A
-// process outside the copy is never signalled, whatever port it holds: one
-// on the copy's port fails the stop (portHeld). A copy whose server the
-// factory never started has nothing stopped or proven. A server starts with
-// BROWSER=true and the factory's `open` first on its PATH, so it opens no
-// tab in your browser.
+// factory started: the server's group, and a listener on the copy's port
+// whose working directory is in the copy (overmind's tmux panes leave the
+// group). A process outside the copy is never signalled, whatever port it
+// holds: one on the copy's port fails the stop (portHeld); neither is a
+// helper of the factory's agents in the copy on another port. A copy whose
+// server the factory never started has nothing stopped or proven, and a
+// start that failed leaves no pidfile that a later stop would read so. A
+// stop runs on its own bound (stopContext), whatever its caller's context.
+// A server starts with BROWSER=true and the factory's `open` first on its
+// PATH, so it opens no tab in your browser.
 
 import (
 	"cmp"
@@ -71,7 +74,17 @@ const (
 	serverPoll      = 250 * time.Millisecond
 	serverStopCap   = 30 * time.Second
 	lsofTimeout     = 15 * time.Second
+	// stopBound bounds one stop of a server or a browser: its server_stop,
+	// two graces and two lsof runs, with room.
+	stopBound = 2 * time.Minute
 )
+
+// stopContext is the context a stop runs on: ctx's values without its
+// cancellation or its deadline (QA's cap and the daemon's shutdown end the
+// caller's context, and the stop must still run), bounded by stopBound.
+func stopContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), stopBound)
+}
 
 // The kinds of the begin, ok and fail events of the servers' and the
 // browsers' steps, in the agents store (copySet.phase).
@@ -131,8 +144,13 @@ func (c *copySet) StartServer(ctx context.Context, cp Copy) error {
 		if _, alive, err := c.running(ctx, rec); err != nil || alive {
 			return err
 		}
-		if err := c.st.DeleteKV(ctx, serverKey(cp.Name)); err != nil {
-			return err
+		// Its leader is gone, but what it left in the copy may still hold the
+		// port (overmind's tmux panes): the whole stop runs first.
+		sctx, cancel := stopContext(ctx)
+		_, _, _, err := c.stopServer(sctx, cp.Name, "its leader is gone, and a new server starts")
+		cancel()
+		if err != nil {
+			return fmt.Errorf("start the server of %s: %w", cp.Name, err)
 		}
 	}
 	if err := ensureOpenShim(c.cfg.Layout.FactoryShims()); err != nil {
@@ -151,39 +169,59 @@ func (c *copySet) StartServer(ctx context.Context, cp Copy) error {
 	}
 	env["BROWSER"] = "true" // what opens a page by $BROWSER runs true (serverEnv)
 	c.phase(ctx, cp.Name, kindServerStart, store.PhaseBegin, fmt.Sprintf("start the server of %s: %s", cp.Name, repo.Server))
-	fail := func(err error) error {
+	// fail records a start that failed after the spawn: the group it
+	// spawned is ended (rec, the pid alone when the table could not be
+	// read), and its pidfile goes, so no later stop takes it for a server
+	// the factory started.
+	fail := func(err error, rec serverRecord) error {
+		if rec.PID > 0 {
+			sctx, cancel := stopContext(ctx)
+			if serr := c.end(sctx, rec); serr != nil {
+				err = errors.Join(err, fmt.Errorf("and its stop failed: %w", serr))
+			}
+			cancel()
+		}
+		if rerr := os.Remove(c.serverPidFile(cp.Name)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
 		c.phase(ctx, cp.Name, kindServerStart, store.PhaseFail, err.Error())
 		return err
 	}
 	pid, err := c.spawn(ctx, cp.Path, env, repo.Server, log, c.serverPidFile(cp.Name))
 	if err != nil {
-		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err))
+		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err), serverRecord{})
 	}
 	table, err := c.processes(ctx)
 	if err != nil {
-		_ = c.kill(pid, syscall.SIGTERM) // a server no record names would never be stopped
-		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err))
+		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err), serverRecord{PID: pid})
 	}
 	i := slices.IndexFunc(table, func(p execx.Process) bool { return p.PID == pid && !p.Zombie && p.Start != "" })
 	if i < 0 {
-		return fail(fmt.Errorf("the server of %s (pid %d) ended at once; its log is %s", cp.Name, pid, log))
+		return fail(fmt.Errorf("the server of %s (pid %d) ended at once; its log is %s", cp.Name, pid, log), serverRecord{})
 	}
-	if err := c.setRecord(ctx, serverKey(cp.Name), serverRecord{PID: pid, Start: table[i].Start, Path: cp.Path, Since: c.now()}); err != nil {
-		_ = c.kill(pid, syscall.SIGTERM)
-		return fail(fmt.Errorf("record the server of %s: %w", cp.Name, err))
+	rec := serverRecord{PID: pid, Start: table[i].Start, Path: cp.Path, Since: c.now()}
+	if err := c.setRecord(ctx, serverKey(cp.Name), rec); err != nil {
+		return fail(fmt.Errorf("record the server of %s: %w", cp.Name, err), rec)
 	}
 	c.phase(ctx, cp.Name, kindServerStart, store.PhaseOK, fmt.Sprintf("the server of %s runs as pid %d; its log is %s", cp.Name, pid, log))
 	return nil
 }
 
 // StopServer stops copy cp's server, if the factory started one, and
-// forgets it (stopServer). A process outside the copy that holds the copy's
-// port is a portHeld error, left alone.
+// forgets it (stopServer), on its own bound (stopContext). A stop that
+// succeeded while a process outside the copy holds the copy's port returns
+// that portHeld alone: the server is stopped and forgotten, the holder left
+// alone.
 func (c *copySet) StopServer(ctx context.Context, cp Copy) error {
+	ctx, cancel := stopContext(ctx)
+	defer cancel()
 	c.srv.Lock()
 	defer c.srv.Unlock()
 	_, _, held, err := c.stopServer(ctx, cp.Name, "stopped")
-	return errors.Join(err, held)
+	if err != nil {
+		return err
+	}
+	return held
 }
 
 // Reconcile ends the servers a stopped daemon left. After a restart no stage
@@ -196,11 +234,13 @@ func (c *copySet) StopServer(ctx context.Context, cp Copy) error {
 // no failure of the reconcile: its stop event says so. Every recorded
 // browser is a stray too, ended the same way (reconcileBrowsers).
 func (c *copySet) Reconcile(ctx context.Context) error {
+	ctx = context.WithoutCancel(ctx) // each stop has its own bound
 	errs := c.reconcileServers(ctx)
 	return errors.Join(append(errs, c.reconcileBrowsers(ctx)...)...)
 }
 
-// reconcileServers is Reconcile's part for the servers.
+// reconcileServers is Reconcile's part for the servers, each stop on its own
+// bound.
 func (c *copySet) reconcileServers(ctx context.Context) []error {
 	c.srv.Lock()
 	defer c.srv.Unlock()
@@ -210,9 +250,11 @@ func (c *copySet) reconcileServers(ctx context.Context) []error {
 	}
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(recs)) {
-		if _, _, _, err := c.stopServer(ctx, strings.TrimPrefix(key, serverKeyPrefix), "a stray the last daemon left"); err != nil {
+		sctx, cancel := stopContext(ctx)
+		if _, _, _, err := c.stopServer(sctx, strings.TrimPrefix(key, serverKeyPrefix), "a stray the last daemon left"); err != nil {
 			errs = append(errs, err)
 		}
+		cancel()
 	}
 	return append(errs, c.strayServers(ctx)...)
 }
@@ -226,10 +268,13 @@ const lstartLayout = "Mon Jan _2 15:04:05 2006"
 // runs with a start the pidfile's time matches (the server's shell writes
 // it first thing: pidStartSlack), names that server, and its group is
 // ended; a pid another process took since has another start and is never
-// killed. The pidfile says the factory started a server in the copy, so its
-// stop runs the rest of halt too: the repository's server_stop and the
-// proof, which ends a listener the server left in the copy. Every such
-// pidfile is forgotten once its stop succeeds. The caller holds c.srv.
+// killed. A server the pidfile names that still runs is the factory's, so
+// its stop runs the rest of halt too: the repository's server_stop and the
+// proof, which ends a listener it left in the copy on its port. A pidfile
+// whose server no longer runs names nothing of the factory's (a start that
+// failed under an older build left it, and a later task in the copy started
+// nothing): it stops nothing and is forgotten. Every such pidfile is
+// forgotten once its stop succeeds. The caller holds c.srv.
 func (c *copySet) strayServers(ctx context.Context) []error {
 	files, err := filepath.Glob(filepath.Join(c.cfg.Layout.Logs(), serverFilePrefix+"*"+serverPidSuffix))
 	if err != nil || len(files) == 0 {
@@ -245,13 +290,15 @@ func (c *copySet) strayServers(ctx context.Context) []error {
 		if _, recorded, err := c.serverOf(ctx, name); err != nil || recorded {
 			continue // a record names it: stopServer's
 		}
-		var rec serverRecord
 		if p, ok := pidfileServer(f, table); ok {
-			rec = serverRecord{PID: p.PID, Start: p.Start}
-		}
-		if _, _, err := c.halt(ctx, name, rec, "started just before the last daemon stopped, it was never recorded"); err != nil {
-			errs = append(errs, fmt.Errorf("stop the server of %s, which no record names: %w", name, err))
-			continue
+			sctx, cancel := stopContext(ctx)
+			_, _, err := c.halt(sctx, name, serverRecord{PID: p.PID, Start: p.Start},
+				"started just before the last daemon stopped, it was never recorded")
+			cancel()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("stop the server of %s (pid %d), which no record names: %w", name, p.PID, err))
+				continue
+			}
 		}
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
@@ -289,6 +336,8 @@ func pidfileServer(path string, table []execx.Process) (execx.Process, bool) {
 // did, for handoff.md. A process outside the copy on its port does not hold
 // the release up (it is not the copy's to hand back): handoff.md names it.
 func (c *copySet) stopForRelease(ctx context.Context, cp Copy) (string, error) {
+	ctx, cancel := stopContext(ctx)
+	defer cancel()
 	c.srv.Lock()
 	defer c.srv.Unlock()
 	rec, ran, held, err := c.stopServer(ctx, cp.Name, "its task left the copy")
@@ -312,11 +361,19 @@ func (c *copySet) stopForRelease(ctx context.Context, cp Copy) (string, error) {
 // failed, or that left a listener of the copy running, keeps the record, so
 // the next stop, or a restart's reconcile, ends it. A copy no record names
 // had no server the factory started: nothing is stopped, signalled or
-// proven. The caller holds c.srv.
+// proven, and a pidfile left there is forgotten (the reconcile at the
+// daemon's start already read the pidfiles: one now is stale). The caller
+// holds c.srv.
 func (c *copySet) stopServer(ctx context.Context, name, why string) (rec serverRecord, ran bool, held, err error) {
 	rec, ok, err := c.serverOf(ctx, name)
-	if err != nil || !ok {
+	if err != nil {
 		return rec, false, nil, err
+	}
+	if !ok {
+		if err := os.Remove(c.serverPidFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return rec, false, nil, err
+		}
+		return rec, false, nil, nil
 	}
 	ran, held, err = c.halt(ctx, name, rec, why)
 	if err != nil {
@@ -407,8 +464,8 @@ func (c *copySet) copyNamed(name, path string) (Copy, config.FactoryRepo, bool) 
 // to end once more. The caller found the group's leader to be the server
 // (its pid and its start): a group outlives its leader while a member runs,
 // and no other process takes its id meanwhile, so a member that ignores
-// SIGTERM is not left behind. A group that outlives SIGKILL is no error
-// here: the proof names what of it still listens.
+// SIGTERM is not left behind. A group that outlives SIGKILL is an error:
+// its record stays.
 func (c *copySet) end(ctx context.Context, rec serverRecord) error {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
 		if err := c.kill(rec.PID, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -420,7 +477,7 @@ func (c *copySet) end(ctx context.Context, rec serverRecord) error {
 			return err
 		}
 	}
-	return nil
+	return fmt.Errorf("its process group %d outlived SIGKILL", rec.PID)
 }
 
 // waitGone looks at the process table every serverPoll, for at most
@@ -466,22 +523,29 @@ func (e portHeld) Error() string {
 	return fmt.Sprintf("port %d is held by a process outside the copy (pid %d, %s); the factory leaves it alone", e.port, e.pid, e.command)
 }
 
-// proveStopped proves, after the server's group ended, that nothing of copy
-// cp still listens and that its port is free. A listener whose working
-// directory is the copy or below it is the server's, left outside its group
-// (overmind's tmux panes): it is stopped while its pid and its start match
-// the process table (endListener), never by its pid alone. A process
-// outside the copy is never signalled, whatever port it listens on. Then it
-// looks again: a listener of the copy still there is the error that names
-// it; else one outside the copy on the copy's port, or anything lsof does
-// not show that answers there (IPv4 or IPv6), is a portHeld, returned bare.
+// proveStopped proves, after the server's group ended, that the copy's
+// port is free. A listener on the copy's port whose working directory is
+// the copy or below it is the server's, left outside its group (overmind's
+// tmux panes): it is stopped while its pid and its start match the process
+// table (endListener), never by its pid alone. Nothing else is signalled: a
+// process outside the copy, whatever port it listens on, and a listener in
+// the copy on another port (a helper of the factory's own agents, a test
+// server or a debugger, which a QA stop must not end). Then it looks again:
+// a listener of the copy still on the port is the error that names it;
+// else one outside the copy on the port, or anything lsof does not show
+// that answers there (IPv4 or IPv6), is a portHeld, returned bare. A copy
+// with no port has nothing to prove.
 func (c *copySet) proveStopped(ctx context.Context, cp Copy) error {
+	if cp.Port <= 0 {
+		return nil
+	}
+	server := func(l listener) bool { return l.Port == cp.Port && inCopy(l.Cwd, cp.Path) }
 	ls, err := c.listening(ctx)
 	if err != nil {
 		return fmt.Errorf("prove the server of %s stopped: %w", cp.Name, err)
 	}
 	for _, l := range ls {
-		if inCopy(l.Cwd, cp.Path) && l.Start != "" {
+		if server(l) && l.Start != "" {
 			c.endListener(ctx, cp, l)
 		}
 	}
@@ -490,11 +554,11 @@ func (c *copySet) proveStopped(ctx context.Context, cp Copy) error {
 	}
 	var left []error
 	for _, l := range ls {
-		if inCopy(l.Cwd, cp.Path) {
+		if server(l) {
 			left = append(left, fmt.Errorf("the server of %s left pid %d (%s) listening on :%d", cp.Name, l.PID, l.Command, l.Port))
 		}
 	}
-	if len(left) > 0 || cp.Port <= 0 {
+	if len(left) > 0 {
 		return errors.Join(left...)
 	}
 	if i := slices.IndexFunc(ls, func(l listener) bool { return l.Port == cp.Port }); i >= 0 {
@@ -586,13 +650,14 @@ func inDir(dir, root string) bool {
 
 // lsofListeners is every TCP listener on the Mac with its working directory:
 // `lsof -nP -iTCP -sTCP:LISTEN -Fpcn`, then `lsof -a -d cwd -p <pids> -Fpn`.
-// lsof exits 1 when it finds nothing, or a pid it was given has ended; what
-// it printed is still read.
+// lsof exits 1 when it finds nothing, or a pid it was given has ended, and
+// says nothing but warnings then; what it printed is still read. An exit 1
+// with an error on stderr fails the listing.
 func (c *copySet) lsofListeners(ctx context.Context) ([]listener, error) {
 	lsof := func(label string, args ...string) ([]byte, error) {
 		res, err := c.run.Run(ctx, execx.Cmd{Name: "lsof", Args: args, Env: map[string]string{"LC_ALL": "C"}, Timeout: lsofTimeout,
 			Label: label, Probe: true})
-		if e, ok := errors.AsType[*execx.ExitError](err); ok && e.Code == 1 {
+		if e, ok := errors.AsType[*execx.ExitError](err); ok && e.Code == 1 && onlyWarnings(res.Stderr) {
 			err = nil
 		}
 		return res.Stdout, err
@@ -619,6 +684,17 @@ func (c *copySet) lsofListeners(ctx context.Context) ([]listener, error) {
 		ls[i].Cwd = cwd[ls[i].PID]
 	}
 	return ls, nil
+}
+
+// onlyWarnings reports whether lsof's stderr holds nothing but its
+// warnings ("lsof: WARNING: can't stat() …").
+func onlyWarnings(stderr []byte) bool {
+	for line := range strings.SplitSeq(string(stderr), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "lsof: WARNING") {
+			return false
+		}
+	}
+	return true
 }
 
 // parseLsofListeners reads lsof's -Fpcn output of the listening sockets: a

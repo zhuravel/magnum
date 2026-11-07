@@ -96,6 +96,10 @@ type copiesRig struct {
 	browsers    []browserCall
 	devTools    string
 	browserBins map[string]bool
+	// endAtOnce makes a spawned server end before the process table shows
+	// it; failTable fails that many reads of the process table.
+	endAtOnce bool
+	failTable int
 }
 
 // fakeHerdrView is one herdr session as the copies' guard reads it.
@@ -512,6 +516,10 @@ func (r *copiesRig) redis(c execx.Cmd) (execx.Result, error) {
 func (r *copiesRig) processTable(context.Context) ([]execx.Process, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failTable > 0 {
+		r.failTable--
+		return nil, errors.New("read the process table: ps failed")
+	}
 	return slices.Clone(r.table), nil
 }
 
@@ -621,7 +629,10 @@ func (r *copiesRig) spawn(_ context.Context, dir string, env map[string]string, 
 	pid := r.nextPID
 	r.nextPID++
 	r.spawned = append(r.spawned, spawnCall{Dir: dir, Command: command, Env: env, PID: pid})
-	r.table = append(r.table, execx.Process{PID: pid, PPID: 1, PGID: pid, Start: lstart(r.clock.Now()), Name: "ruby"})
+	r.order = append(r.order, fmt.Sprintf("spawn %d", pid))
+	if !r.endAtOnce {
+		r.table = append(r.table, execx.Process{PID: pid, PPID: 1, PGID: pid, Start: lstart(r.clock.Now()), Name: "ruby"})
+	}
 	r.mu.Unlock()
 	r.write(pidfile, strconv.Itoa(pid)+"\n")
 	if err := os.Chtimes(pidfile, r.clock.Now(), r.clock.Now()); err != nil {

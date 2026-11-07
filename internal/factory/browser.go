@@ -89,36 +89,41 @@ func (c *copySet) StartBrowser(ctx context.Context, cp Copy, dir string) (string
 	log := c.browserLog(cp.Name)
 	c.phase(ctx, cp.Name, kindBrowserStart, store.PhaseBegin, fmt.Sprintf("start the factory's headless Chrome for %s (%s), its profile in %s",
 		cp.Name, bin, profile))
-	fail := func(err error) (string, error) {
+	// fail records a start that failed after the spawn: the browser's
+	// group is ended (rec; the pid alone when the table could not be read)
+	// on its own bound, the context may be the one that ended the wait, and
+	// its profile and record go (endBrowser).
+	fail := func(err error, rec serverRecord) (string, error) {
+		if rec.PID > 0 {
+			sctx, cancel := stopContext(ctx)
+			if _, serr := c.endBrowser(sctx, cp.Name, rec); serr != nil {
+				err = errors.Join(err, fmt.Errorf("and its stop failed: %w", serr))
+			}
+			cancel()
+		}
 		c.phase(ctx, cp.Name, kindBrowserStart, store.PhaseFail, err.Error())
 		return "", err
 	}
 	pid, err := c.spawnBrowser(ctx, bin, browserArgs(profile), log)
 	if err != nil {
-		return fail(fmt.Errorf("start the factory's Chrome for %s: %w", cp.Name, err))
+		return fail(fmt.Errorf("start the factory's Chrome for %s: %w", cp.Name, err), serverRecord{})
 	}
 	table, err := c.processes(ctx)
 	if err != nil {
-		_ = c.kill(pid, syscall.SIGTERM) // a browser no record names would never be stopped
-		return fail(fmt.Errorf("start the factory's Chrome for %s: %w", cp.Name, err))
+		return fail(fmt.Errorf("start the factory's Chrome for %s: %w", cp.Name, err), serverRecord{PID: pid, Path: dir})
 	}
 	i := slices.IndexFunc(table, func(p execx.Process) bool { return p.PID == pid && !p.Zombie && p.Start != "" })
 	if i < 0 {
-		return fail(fmt.Errorf("the factory's Chrome for %s (pid %d) ended at once; its log is %s", cp.Name, pid, log))
+		return fail(fmt.Errorf("the factory's Chrome for %s (pid %d) ended at once; its log is %s", cp.Name, pid, log),
+			serverRecord{})
 	}
 	rec := serverRecord{PID: pid, Start: table[i].Start, Path: dir, Since: c.now()}
 	if err := c.setRecord(ctx, browserKey(cp.Name), rec); err != nil {
-		_ = c.kill(pid, syscall.SIGTERM)
-		return fail(fmt.Errorf("record the factory's Chrome for %s: %w", cp.Name, err))
+		return fail(fmt.Errorf("record the factory's Chrome for %s: %w", cp.Name, err), rec)
 	}
 	port, err := c.devToolsPort(ctx, profile)
 	if err != nil {
-		// The context may be the one that ended the wait: the browser is
-		// stopped all the same.
-		if _, serr := c.endBrowser(context.WithoutCancel(ctx), cp.Name, rec); serr != nil {
-			err = errors.Join(err, fmt.Errorf("and its stop failed: %w", serr))
-		}
-		return fail(fmt.Errorf("the factory's Chrome for %s (pid %d) %w; its log is %s", cp.Name, pid, err, log))
+		return fail(fmt.Errorf("the factory's Chrome for %s (pid %d) %w; its log is %s", cp.Name, pid, err, log), rec)
 	}
 	cdp := "http://127.0.0.1:" + strconv.Itoa(port)
 	c.phase(ctx, cp.Name, kindBrowserStart, store.PhaseOK, fmt.Sprintf("the factory's Chrome for %s runs as pid %d, its DevTools on %s; its log is %s",
@@ -153,8 +158,10 @@ func (c *copySet) devToolsPort(ctx context.Context, profile string) (int, error)
 
 // StopBrowser stops copy cp's browser, if the factory started one: its
 // process group, while its leader is the recorded one, then its profile,
-// then its record.
+// then its record, on its own bound (stopContext).
 func (c *copySet) StopBrowser(ctx context.Context, cp Copy) error {
+	ctx, cancel := stopContext(ctx)
+	defer cancel()
 	c.brw.Lock()
 	defer c.brw.Unlock()
 	return c.stopBrowser(ctx, cp.Name, "its QA run ended")
@@ -185,10 +192,15 @@ func (c *copySet) stopBrowser(ctx context.Context, name, why string) error {
 
 // endBrowser ends browser rec of copy name while its leader is the
 // recorded one (end), deletes its profile and forgets it; ran says it was
-// running.
+// running. A rec with no start is a browser just spawned whose start the
+// table could not show: its group is ended by the pid alone. A group that
+// outlives SIGKILL keeps its profile and its record.
 func (c *copySet) endBrowser(ctx context.Context, name string, rec serverRecord) (ran bool, err error) {
-	if _, ran, err = c.running(ctx, rec); err != nil {
-		return false, err
+	ran = rec.Start == "" && rec.PID > 0
+	if !ran {
+		if _, ran, err = c.running(ctx, rec); err != nil {
+			return false, err
+		}
 	}
 	if ran {
 		if err := c.end(ctx, rec); err != nil {
@@ -205,7 +217,7 @@ func (c *copySet) endBrowser(ctx context.Context, name string, rec serverRecord)
 
 // reconcileBrowsers ends the browsers a stopped daemon left: each is a
 // stray, ended only while its pid and its start match its record, and
-// forgotten with its profile.
+// forgotten with its profile, each on its own bound.
 func (c *copySet) reconcileBrowsers(ctx context.Context) []error {
 	c.brw.Lock()
 	defer c.brw.Unlock()
@@ -215,9 +227,11 @@ func (c *copySet) reconcileBrowsers(ctx context.Context) []error {
 	}
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(recs)) {
-		if err := c.stopBrowser(ctx, strings.TrimPrefix(key, browserKeyPrefix), "a stray the last daemon left"); err != nil {
+		sctx, cancel := stopContext(ctx)
+		if err := c.stopBrowser(sctx, strings.TrimPrefix(key, browserKeyPrefix), "a stray the last daemon left"); err != nil {
 			errs = append(errs, err)
 		}
+		cancel()
 	}
 	return errs
 }
