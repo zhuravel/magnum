@@ -793,5 +793,13 @@ f_md=$ev/fout/evidence.md
     fail "the notes skip links, files over 1 MiB and foreign folders: $(fsect 'Factory liaison notes' "$f_md" | cut -c1-600)"
 ok "evidence.sh reads no notes.md that is a link or over 1 MiB, nor one in a linked or foreign folder"
 
+# 21. evidence.sh prints lens 13's stats command for the factory's since, whose --since takes a date and no time: the
+#     local date of the factory's since, so it starts at or before it, west of UTC too.
+TZ=America/New_York MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb \
+    MAGNUM_FACTORY_TASKS=$ev/factory-tasks run "$scripts/evidence.sh" --factory-since 2026-10-11T02:00:00Z 2026-10-11T02:00:00Z "$ev/f7out"
+[[ $rc == 0 ]] && grep -Fq '`magnum factory stats --since 2026-10-10 --markdown`' "$ev/f7out/evidence.md" ||
+    fail "the stats command names the factory since's local date: $(grep -F 'factory stats' "$ev/f7out/evidence.md" || echo none)"
+ok "evidence.sh prints lens 13's stats command with the local date of the factory's since"
+
 
 echo "selftest: $checks checks passed"

@@ -720,12 +720,15 @@ PY
 # input (lens 13). Every factory table reads from the factory's own since (fsince, --factory-since).
 if [[ -f $fdb ]]; then
 	fq() { sqlite3 -readonly -header -markdown "$fdb" "$1"; }
+	# magnum factory stats --since takes no time of day: its local date starts at or before the factory's since.
+	fdate=$(date -r "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$fsince" +%s)" +%Y-%m-%d)
 	{
 		echo
 		echo "## Factory tasks (updated since $fsince)"
 		echo
 		echo "The factory's tables read from the factory's own since (--factory-since, runs.md's \"factory since\"), the"
-		echo "tables above from $since."
+		echo "tables above from $since. Lens 13's stats of the tasks started since then (--since takes a date and no time,"
+		echo "so they may add the tasks started earlier that day): \`magnum factory stats --since $fdate --markdown\`"
 		echo
 		fq "select id, coalesce(jira_key, '-') as key, repo, kind, state, stage, coalesce(pr_number, '-') as pr,
 		          substr(created_at, 1, 16) as created, substr(updated_at, 1, 16) as updated

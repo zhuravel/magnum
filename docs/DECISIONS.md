@@ -17157,7 +17157,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `factory-reports.txt` read from it, so a run whose lens 13 did not run leaves the factory's evidence to the next
     one; the run log's `factory since` line carries it. A since that is neither an RFC 3339 UTC time nor `<n>d` is
     refused before anything is written, since it goes into SQL as it is, and `touch -t` runs in UTC: it read the
-    UTC fields in the local zone, so the report directories reached back by the zone's offset.
+    UTC fields in the local zone, so the report directories reached back by the zone's offset. The run log keeps both
+    cursors in that form, and evidence.md prints lens 13's `magnum factory stats --since <date> --markdown` with the
+    cursor's local date, since that `--since` takes no time of day (a UTC date would start after the cursor west of
+    UTC).
   Rejected: a separate `factory-evidence.sh` (spec 11.4 names one; the loop runs one script, whose factory part
   stays small, and the cursor is a flag); the escapes and the CI rows of F10 (F1 and F11 record them first:
   `checks` holds no GitHub row yet); the notes' lines filtered by their own dates (the liaison writes its times in free form, so a
@@ -17166,7 +17169,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the notes scrubbed and cut, the factory's own since with a since that is no time refused, and the report
   directories since a UTC since in Asia/Tokyo; eight mutations of the new code each fail one of them. Then the scrub's
   patterns against the Go files with a sample of each (most from the Go tests), a 20,000-character dotted line, and
-  the notes of a link, a linked folder, a file over 1 MiB and a folder named with a non-ASCII digit.
+  the notes of a link, a linked folder, a file over 1 MiB and a folder named with a non-ASCII digit; the stats
+  command's date in America/New_York.
 
 ## Learned rules
 
