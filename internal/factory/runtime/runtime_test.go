@@ -504,14 +504,46 @@ func TestAFallbackContinuationThatNeverLeftPausesTheRole(t *testing.T) {
 	if w := g.r.paused(agents.KindClaude); w != nil {
 		t.Fatalf("Claude pauses (%v): a prompt herdr refused is no limit of the kind", w)
 	}
+	g.restart()
+	if state, after, err := g.r.RunState(g.ctx, first); err != nil || state != store.RunAbandoned || after != why {
+		t.Fatalf("after a restart RunState of the limited run = %q, %q, %v; want the pause the rebuilt stage reads, %q", state, after, err, why)
+	}
 	g.h.promptErr = nil
 	g.send("fx-judge", "Your turn stopped, and that is over now. Go on.")
 }
 
+// A continuation whose run cannot even be made (the agents store refuses
+// it) is a continuation that never left: the role pauses for the agent as
+// when herdr refused the prompt.
+func TestAFallbackContinuationWithoutARunPausesTheRole(t *testing.T) {
+	g := newRig(t)
+	first := g.modelLimited(func(string) error { return nil })
+	if _, err := g.st.DB().ExecContext(g.ctx, `CREATE TRIGGER no_continuation BEFORE INSERT ON runs WHEN NEW.kind = 'continue'
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	evs := g.observeN(2)
+
+	if len(evs) != 1 || evs[0].Kind != EventPaused || evs[0].RunID != first || !strings.HasPrefix(evs[0].Reason, pauseAgent+": ") {
+		t.Fatalf("events %+v, want fx-judge's limited run paused for the agent", evs)
+	}
+	for _, p := range g.h.promptTexts() {
+		if strings.Contains(p, "switched this session to sonnet") {
+			t.Fatalf("prompts %q: a continuation went without its run", g.h.promptTexts())
+		}
+	}
+	if _, why, err := g.r.RunState(g.ctx, first); err != nil || why != PausedPrefix+evs[0].Reason {
+		t.Fatalf("RunState of the limited run = %q, %v; want %s%s", why, err, PausedPrefix, evs[0].Reason)
+	}
+}
+
 // A continuation herdr may have typed (its delivery unknown) is the
-// ledger's to settle, as any prompt's: no event. Its limited run is settled
-// as a pause all the same, so a stage rebuilt once the continuation is
-// proven never to have arrived sends the prompt to go on.
+// ledger's to settle, as any prompt's: no event, and the stage holds the
+// role while it is unknown. Its limited run is settled as a pause all the
+// same: once the continuation is proven never to have arrived, its entry is
+// no and the stage, rebuilt, reads the role's last run as that pause and
+// sends the prompt to go on (lastRunEvent).
 func TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind(t *testing.T) {
 	g := newRig(t)
 	first := g.modelLimited(func(string) error {

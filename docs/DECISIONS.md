@@ -17074,18 +17074,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in flight, so the stage waited for an end that never came, and after a restart it read the abandoned run as
   nothing to act on. The limited run is now settled as the agent's pause before the continuation goes
   (abandoned with `PausedPrefix` and "agent: its turn hit <model>'s limit; the session runs on <fallback>
-  now"), so a stage rebuilt while the continuation's fate is unknown, or once it is proven never to have
-  arrived, sends the role its prompt to go on (`lastRunEvent`'s pause). A continuation that never left (herdr
-  refused it before it was sent, or no run was made for it) comes back as `EventPaused` with that reason and a
-  paused record: the stage takes it as any pause and sends the prompt to go on once `Send` may, and the wait it
-  shows is the agent's (`pauseAgent`), which the stage clears once the prompt goes, never a hold of the kind.
+  now"). While the continuation's delivery is unknown the stage holds the role, as for any such prompt; a
+  stage rebuilt once it is proven never to have arrived (its entry no), or after a crash before its ledger
+  entry, reads the role's last run as that pause and sends the prompt to go on (`lastRunEvent`). A
+  continuation that never left (herdr refused it before it was sent, or no run was made for it) comes back as
+  `EventPaused` with that reason and a paused record: the stage takes it as any pause and sends the prompt to
+  go on once `Send` may, and the wait it shows is the agent's (`pauseAgent`), which the stage clears once the
+  prompt goes, never a hold of the kind.
   One of unknown delivery stays the ledger's to settle (no event).
   Rejected: the usage pause of the kind the switch failure falls back to (one prompt that did not go would
   hold every role of the kind for an hour); the continuation sent again by the runtime (Send's refusals, you in
   the pane or a delivery of unknown fate, are the stage's to wait on); a failed run (a turn its model's limit
   stopped did not fail). Tests, failing first: TestAFallbackContinuationThatNeverLeftPausesTheRole (no event)
   and TestAFallbackContinuationOfUnknownDeliveryLeavesAPauseBehind (the run was abandoned as "its model's
-  limit: continued on sonnet"); TestAnAgentsPauseGoesOnAtTheNextPass holds the stage's side.
+  limit: continued on sonnet"); TestAFallbackContinuationWithoutARunPausesTheRole (the agents store refuses
+  the continuation's run, a trigger in the test's database) and TestAnAgentsPauseGoesOnAtTheNextPass hold the
+  failure before the run and the stage's side.
 
 - **A role's record names the prompt its turns ran and holds no other stage's role, and a turn that asked is
   voided** (2026-11-07, the audit's R18). The factory's registry is the evidence a prompt edit is measured by,
