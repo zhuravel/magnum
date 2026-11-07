@@ -2938,8 +2938,9 @@ GitHub App of the fixer's own: an App no watch reviews, polls or approves as, wh
 repositories it fixes and to `contents` and `pull_requests` write (`token_repositories`, `token_permissions`,
 `user_id`; see Identities: who posts). One fix role serves several watches, and `fix_identity` picks the
 identity per watch, so an App installed on two owners is two `[[identity]]` blocks, one per watch. The App
-Magnum reviews as is never the fixer: its replies would read as Magnum's own and its rebuttals would count as
-Magnum's. The configuration refuses it as an explicit identity, and a watch that polls as an App makes
+Magnum reviews as is never the fixer, by its login, not only its block's name (another installation's block
+or a copy of the App's block is the same App): its replies would read as Magnum's own and its rebuttals would
+count as Magnum's. The configuration refuses it as an explicit identity, and a watch that polls as an App makes
 `magnum fix` refuse ("the fix role's identity ... is the App magnum reviews as. Set fix_identity to your gh
 identity or a dedicated App"); under `autofix = "own"` or `"open"` the configuration warns about it and `magnum
 doctor` fails it. An identity it names but nobody declared makes `magnum fix` refuse ("no identity me for the

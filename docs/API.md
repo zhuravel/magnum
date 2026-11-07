@@ -4807,9 +4807,10 @@ func (c *Config) CriticRole() Role
 func (c *Config) DedicatedFixApp(name string) bool
     DedicatedFixApp reports whether the identity named name is a GitHub App
     the fixer may act as: kind app, and no watch reviews as it (identity),
-    polls as it (poll_identity) or approves as it (auto_approve_as). The App
-    magnum reviews as never is: the fixer's replies would read as magnum's own
-    and its rebuttals would count as magnum's.
+    polls as it (poll_identity) or approves as it (auto_approve_as), by its name
+    or through another App block of the same login. The App magnum reviews as
+    never is: the fixer's replies would read as magnum's own and its rebuttals
+    would count as magnum's.
 
 func (c *Config) EditorRole() Role
     EditorRole is the role the skill editor runs as: EditorRoleName, the

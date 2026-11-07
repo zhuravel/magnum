@@ -107,6 +107,45 @@ func TestValidateFixRoleRefusesTheReviewApp(t *testing.T) {
 	}
 }
 
+// The review App is refused for its login, not for its block's name: a
+// second [[identity]] block of the same App (another installation's, or a
+// narrowed copy no watch names) posts as the login a watch reviews as, so
+// its replies would read as magnum's own all the same. Any case, with or
+// without "[bot]". Another App's block on the same owner is no review App.
+func TestValidateFixRoleRefusesAnotherBlockOfTheReviewApp(t *testing.T) {
+	for name, login := range map[string]string{"the same login": "review-app[bot]", "another case, no [bot]": "Review-App"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validPipelineConfig()
+			copyOf := fixerApp("review-app-fix")
+			copyOf.Login = login
+			cfg.Identities = append(cfg.Identities, reviewApp(), copyOf)
+			cfg.Watches[0].Identity = "review-app"
+			cfg.Watches[0].FixIdentity = "review-app-fix"
+			cfg.Normalize()
+			wantError(t, cfg.Validate(), "identity review-app-fix is the App watch acme posts its reviews as (identity review-app, the same login)",
+				"Give the fixer a gh identity or an App of its own")
+			if cfg.DedicatedFixApp("review-app-fix") {
+				t.Error("DedicatedFixApp(review-app-fix) = true for a block of the review App")
+			}
+			if got := cfg.FixerLogins(&cfg.Watches[0]); len(got) != 0 {
+				t.Errorf("FixerLogins = %v, want none: the review App's login is magnum's own", got)
+			}
+		})
+	}
+	// A gh identity's login that matches the App's slug is another account.
+	cfg := validPipelineConfig()
+	cfg.Identities = append(cfg.Identities, fixerApp("fixer"))
+	cfg.Identities[0].Login = "fixer"
+	cfg.Watches[0].FixIdentity = "fixer"
+	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate = %v", err)
+	}
+	if !cfg.DedicatedFixApp("fixer") {
+		t.Error("DedicatedFixApp(fixer) = false: the user fixer is not the App fixer[bot]")
+	}
+}
+
 // A fixer App's token is narrowed at its mint: it must name the
 // repositories it pushes to and ask for contents and pull_requests write
 // and nothing else (metadata read is GitHub's own), and say its bot's user

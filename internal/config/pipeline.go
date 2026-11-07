@@ -295,9 +295,10 @@ func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
 
 // DedicatedFixApp reports whether the identity named name is a GitHub App
 // the fixer may act as: kind app, and no watch reviews as it (identity),
-// polls as it (poll_identity) or approves as it (auto_approve_as). The
-// App magnum reviews as never is: the fixer's replies would read as
-// magnum's own and its rebuttals would count as magnum's.
+// polls as it (poll_identity) or approves as it (auto_approve_as), by its
+// name or through another App block of the same login. The App magnum
+// reviews as never is: the fixer's replies would read as magnum's own and
+// its rebuttals would count as magnum's.
 func (c *Config) DedicatedFixApp(name string) bool {
 	id := c.IdentityByName(name)
 	return id != nil && id.Kind == "app" && c.reviewAppUse(name) == ""
@@ -305,16 +306,29 @@ func (c *Config) DedicatedFixApp(name string) bool {
 
 // reviewAppUse is how a watch uses the identity named name for its
 // reviews, "" when none does: "watch X posts its reviews as", "watch X
-// polls as" or "watch X approves as".
+// polls as" or "watch X approves as", followed by "(identity Y, the same
+// login)" when the watch names another App block Y whose login is name's
+// (another installation of the App, or a copy of its block): the login is
+// what GitHub shows, and what magnum takes as its own.
 func (c *Config) reviewAppUse(name string) string {
+	id := c.IdentityByName(name)
+	is := func(other string) (string, bool) {
+		if other == name {
+			return "", true
+		}
+		o := c.IdentityByName(other)
+		if id != nil && o != nil && id.Kind == "app" && o.Kind == "app" && github.SameLogin(o.Login, id.Login) {
+			return " (identity " + other + ", the same login)", true
+		}
+		return "", false
+	}
 	for _, w := range c.Watches {
-		switch name {
-		case w.Identity:
-			return "watch " + w.Owner + " posts its reviews as"
-		case w.PollIdentity:
-			return "watch " + w.Owner + " polls as"
-		case w.AutoApproveAs:
-			return "watch " + w.Owner + " approves as"
+		for _, use := range []struct{ name, how string }{
+			{w.Identity, "posts its reviews as"}, {w.PollIdentity, "polls as"}, {w.AutoApproveAs, "approves as"},
+		} {
+			if why, ok := is(use.name); ok && use.name != "" {
+				return "watch " + w.Owner + " " + use.how + why
+			}
 		}
 	}
 	return ""
