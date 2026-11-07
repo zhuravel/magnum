@@ -789,7 +789,8 @@ last round `audit pass`.
 
 Replies get that round on their own, without a push. The poll reads, for a PR whose activity moved, its
 reviews and comments with their authors and their association with the repository (no text): a reply in
-one of Magnum's threads by the PR's author or by an owner, member or collaborator of the repository, or a
+one of Magnum's threads by the PR's author, by an owner, member or collaborator of the repository or by the
+watch's fixer App (an App has no association with the repository, and it answers for the author), or a
 comment by the PR's author or a review of theirs with no inline comments (a body alone answers the review
 as a whole; the author's agent's "(Claude)" replies are the author's), never one by Magnum's own logins.
 A review of the author's whose inline comments start threads of their own (the findings of their own

@@ -101,13 +101,20 @@ func (e *Engine) ownLogins(ctx context.Context, w config.Watch, pr store.PR) []s
 // the two the timeline resolves (AnswersKnown false) counts as before. Other
 // replies start nothing; the judge still reads them in the threads file.
 // "(Claude)" replies an author's agent posts as the author are the author's.
+// A reply in one of own's threads by one of fixers (the watch's fixer
+// App, config.Config.FixerLogins) counts as the author's would: it answers
+// magnum for the author, though GitHub gives an App no association with
+// the repository; its remark anywhere else counts for nothing.
 // Nil when the Details carry no timeline.
-func repliesOf(d github.PRDetails, own []string) []store.Reply {
+func repliesOf(d github.PRDetails, own, fixers []string) []store.Reply {
 	if d.Remarks == nil {
 		return nil
 	}
 	isOwn := func(login string) bool {
 		return slices.ContainsFunc(own, func(l string) bool { return github.SameAccount(l, login) })
+	}
+	isFixer := func(login string) bool {
+		return slices.ContainsFunc(fixers, func(l string) bool { return github.SameAccount(l, login) })
 	}
 	author := github.Account(d.AuthorLogin, d.AuthorType)
 	authorBot := github.IsBot(d.AuthorType, d.AuthorLogin)
@@ -119,7 +126,7 @@ func repliesOf(d github.PRDetails, own []string) []store.Reply {
 		byAuthor := github.SameAccount(r.Author, author)
 		thread := r.Review && slices.ContainsFunc(r.Answers, isOwn)
 		elsewhere := r.Review && r.AnswersKnown && r.Comments > 0 && !thread
-		if (thread && (byAuthor || trustedReplier(r.Association))) || (!authorBot && !r.Bot && byAuthor && !elsewhere) {
+		if (thread && (byAuthor || trustedReplier(r.Association) || isFixer(r.Author))) || (!authorBot && !r.Bot && byAuthor && !elsewhere) {
 			out = append(out, store.Reply{At: r.At.UTC(), By: r.Author, Thread: thread})
 		}
 	}

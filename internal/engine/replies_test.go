@@ -349,7 +349,7 @@ func TestAnAuthorsOwnInlineThreadsAreNotReplies(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := github.PRDetails{AuthorLogin: "alice", AuthorType: "User", Remarks: c.remarks}
-			if got := repliesOf(d, []string{magnumApp}); !slices.EqualFunc(got, c.want, store.Reply.Equal) {
+			if got := repliesOf(d, []string{magnumApp}, nil); !slices.EqualFunc(got, c.want, store.Reply.Equal) {
 				t.Fatalf("replies = %+v, want %+v", got, c.want)
 			}
 		})

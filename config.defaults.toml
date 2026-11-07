@@ -49,8 +49,8 @@ request_debounce = "1m"           # a review request for the operator's own logi
                                   # this long after it (and the last push), skipping the timing rules above and
                                   # the cap
 reply_debounce = "3m"             # a reply on magnum's latest review (the PR author's review or comment, or a reply in
-                                  # one of magnum's threads by the author or a repository owner, member or
-                                  # collaborator; magnum's own logins never count) with no push
+                                  # one of magnum's threads by the author, a repository owner, member or
+                                  # collaborator, or the fixer's App; magnum's own logins never count) with no push
                                   # since the review starts a judge-only round this long after the last one: the
                                   # judge re-decides the threads and answers there, or posts a new review when its
                                   # verdict changes ("0" = replies start nothing; a push meanwhile wins: its

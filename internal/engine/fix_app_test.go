@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -190,5 +194,129 @@ func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
 				t.Errorf("the external file's fixer = %q (%v), want %q", x.Fixer, err, tc.fix)
 			}
 		})
+	}
+}
+
+// appFixJob is a fix job of PR pr on the talkable watch, whose review the
+// posting App left.
+func appFixJob(h *harness, pr store.PR) *fixJob {
+	h.t.Helper()
+	repo, err := h.st.RepoByID(h.ctx, pr.RepoID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return &fixJob{repo: repo, watch: h.cfg.Watches[0], pr: pr, login: magnumApp, started: h.clock.Now().Add(-time.Hour)}
+}
+
+// appReply is a fix-marked reply of the fixer App in an external thread.
+func appReply(id int64, at time.Time) github.ThreadComment {
+	return github.ThreadComment{ID: id, AuthorLogin: "fixer-app", AuthorType: "Bot", AuthorAssociation: "NONE",
+		Body: "Fixed in abc1234: the guard\n\n" + postreview.FixReplyMarker, URL: prPage + "#discussion_r" + itoa(id), CreatedAt: at}
+}
+
+// The fixer App's fix-marked reply answers another reviewer's thread, as
+// the author's reply or a gh fixer's does: fixLogins, the logins whose
+// marked replies answer an item, carry the App's, and the external file
+// lists it among fixer_logins. Before, a thread the App answered stayed
+// open for the next cycle's fixer.
+func TestTheAppFixersRepliesAnswerExternalItems(t *testing.T) {
+	h := newHarness(t, withFixerApp)
+	pr := h.reviewedPR(2, "b1")
+	own := h.e.fixLogins(h.ctx, appFixJob(h, pr))
+	if !slices.Contains(own, fixerAppLogin) {
+		t.Fatalf("fixLogins = %v, want the fixer App's login", own)
+	}
+	at := time.Date(2026, 10, 20, 7, 0, 0, 0, time.UTC)
+	th := extThread(100, "a.rb", 1, at, "Is this nil-safe?", "rev-ann")
+	th.Comments = append(th.Comments, appReply(101, at.Add(time.Minute)))
+	x, _ := externalOf(externalInput{Threads: []github.Thread{th}, CommentsComplete: true, Author: "alice", Own: own})
+	if len(x.Threads) != 1 || !x.Threads[0].Answered || !slices.Contains(x.FixerLogins, fixerAppLogin) {
+		t.Errorf("external file = %+v, want the thread answered by the App and its login among fixer_logins", x)
+	}
+	// The magnum's own logins of a reply round never take the App: its
+	// replies are the fixer's, not magnum's.
+	if slices.Contains(h.e.ownLogins(h.ctx, h.cfg.Watches[0], pr), fixerAppLogin) {
+		t.Error("ownLogins lists the fixer App")
+	}
+}
+
+// Under a fixer App the fixer never posts as the author, so the author's
+// own replies during a run are theirs, not unmarked replies of the fixer's;
+// the App's are the fixer's. Under a gh fixer the author still counts.
+func TestUnderAnAppFixerTheAuthorsHandRepliesAreNotUnmarked(t *testing.T) {
+	h := newHarness(t, withFixerApp)
+	pr := h.reviewedPR(2, "b1")
+	job := appFixJob(h, pr)
+	asFixer := h.e.sinceFixStart(h.ctx, job)
+	now := h.clock.Now()
+	if asFixer("alice", "User", now) {
+		t.Error("under a fixer App the author's reply counts as the fixer's")
+	}
+	if !asFixer("fixer-app", "Bot", now) {
+		t.Error("the fixer App's reply does not count as the fixer's")
+	}
+	if asFixer("fixer-app", "Bot", job.started.Add(-time.Minute)) {
+		t.Error("a reply before the run started counts as the fixer's")
+	}
+
+	gh := newHarness(t)
+	ghPR := gh.reviewedPR(2, "b1")
+	if !gh.e.sinceFixStart(gh.ctx, appFixJob(gh, ghPR))("alice", "User", gh.clock.Now()) {
+		t.Error("under a gh fixer the author's reply no longer counts as the fixer's")
+	}
+}
+
+// The fixer App's reply in one of magnum's threads answers magnum as the
+// author's own would, though GitHub gives an App no association with the
+// repository: the poll counts it as a reply, and a reply round decides on
+// it. Its remark anywhere else (a conversation comment, a review in
+// another reviewer's thread) starts nothing.
+func TestAnAppFixersReplyInMagnumsThreadStartsAReplyRound(t *testing.T) {
+	inThread := func(h *harness) github.Remark {
+		r := threadReply(h, fixerAppLogin)
+		r.Bot, r.Association = true, "NONE"
+		return r
+	}
+	for name, c := range map[string]struct {
+		remark func(h *harness) github.Remark
+		starts bool
+	}{
+		"in magnum's thread": {inThread, true},
+		"a conversation comment": {func(h *harness) github.Remark {
+			return github.Remark{At: h.clock.Now(), Author: fixerAppLogin, Bot: true, Association: "NONE"}
+		}, false},
+		"in another reviewer's thread": {func(h *harness) github.Remark {
+			return github.Remark{Review: true, At: h.clock.Now(), Author: fixerAppLogin, Bot: true, Association: "NONE",
+				Answers: []string{"rev-ann"}, AnswersKnown: true, Comments: 1}
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, withFixerApp)
+			h.reviewedPR(2, "b1")
+			h.advance(10 * time.Minute)
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{c.remark(h)}})
+			want := store.PRReviewed
+			if c.starts {
+				want = store.PRRereviewPending
+			}
+			h.wantState(2, want)
+		})
+	}
+	// Without a fixer App the same remark is a bot's without association: nothing.
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	h.advance(10 * time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{inThread(h)}})
+	h.wantState(2, store.PRReviewed)
+}
+
+// The retro tells the fixer's replies from the author's by its marker and
+// by the logins it takes as magnum's own (retroOwnLogins), which list every
+// declared identity's: the fixer App's too. A pin: it held before.
+func TestTheRetroTagsTheFixerAppsRepliesAsTheFixers(t *testing.T) {
+	h := newHarness(t, withFixerApp)
+	pr := h.reviewedPR(2, "b1")
+	if got := h.e.retroOwnLogins(pr, nil); !slices.Contains(got, fixerAppLogin) {
+		t.Errorf("retroOwnLogins = %v, want the fixer App's login", got)
 	}
 }

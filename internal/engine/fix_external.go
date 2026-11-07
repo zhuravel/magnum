@@ -334,11 +334,16 @@ func externalOf(in externalInput) (externalItems, int) {
 }
 
 // fixLogins are the logins whose threads and replies on the job's PR are
-// magnum's (Account form): ownLogins and the login that posted the review.
+// magnum's (Account form): ownLogins, the login that posted the review, and
+// the watch's fixer App's (config.Config.FixerLogins), whose fix-marked
+// replies answer an item as a gh fixer's do and whose resolution of
+// another reviewer's thread does not close it.
 func (e *Engine) fixLogins(ctx context.Context, job *fixJob) []string {
 	own := e.ownLogins(ctx, job.watch, job.pr)
-	if job.login != "" && !slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, job.login) }) {
-		own = append(own, job.login)
+	for _, l := range append([]string{job.login}, e.cfg.FixerLogins(&job.watch)...) {
+		if l != "" && !slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, l) }) {
+			own = append(own, l)
+		}
 	}
 	return own
 }
@@ -712,15 +717,18 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 
 // sinceFixStart reports whether a comment (its author's login and
 // __typename, and when it was made) is one the fixer could have posted in
-// the job's run: made since the run started, by the PR author (whom the
-// fixer posts as) or one of magnum's logins.
+// the job's run: made since the run started, by one of magnum's logins
+// (fixLogins), or by the PR author, whom a gh fixer posts as. A fixer App
+// never posts as the author, so under one the author's own replies during
+// the run are theirs.
 func (e *Engine) sinceFixStart(ctx context.Context, job *fixJob) func(login, typ string, at time.Time) bool {
 	own := e.fixLogins(ctx, job)
 	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
+	app := len(e.cfg.FixerLogins(&job.watch)) > 0
 	return func(login, typ string, at time.Time) bool {
 		a := github.Account(login, typ)
 		return !at.Before(job.started) &&
-			(github.SameAccount(a, author) || slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, a) }))
+			((!app && github.SameAccount(a, author)) || slices.ContainsFunc(own, func(o string) bool { return github.SameAccount(o, a) }))
 	}
 }
 

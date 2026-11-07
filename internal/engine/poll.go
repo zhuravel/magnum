@@ -386,7 +386,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		if hasD {
 			fillDetails(&in, d, selfLogins, now)
-			in.Replies = repliesOf(d, e.ownLogins(ctx, w, cur))
+			in.Replies = repliesOf(d, e.ownLogins(ctx, w, cur), e.cfg.FixerLogins(&w))
 			e.noteTruncatedLabels(ctx, w, repo, d)
 		}
 		if !exists {
