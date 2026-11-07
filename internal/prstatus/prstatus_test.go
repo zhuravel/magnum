@@ -429,6 +429,11 @@ func TestReadRefusesAWordOutsideItsEnum(t *testing.T) {
 		{"code.commits", func(m map[string]any) { sub(m, "code")["commits"] = word }},
 		{"task_id", func(m map[string]any) { m["task_id"] = json.Number("0") }},
 		{"published_at", func(m map[string]any) { m["published_at"] = "0001-01-01T00:00:00Z" }},
+		// updated_at is outside the digest, so only validate can refuse a file
+		// without it, which would say "updated 00:00 UTC" of year 1.
+		{"updated_at", func(m map[string]any) { delete(m, "updated_at") }},
+		{"updated_at", func(m map[string]any) { m["updated_at"] = nil }},
+		{"updated_at", func(m map[string]any) { m["updated_at"] = "0001-01-01T00:00:00Z" }},
 	} {
 		path := statusPath(t)
 		mustWrite(t, path, sample())

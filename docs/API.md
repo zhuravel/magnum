@@ -22138,7 +22138,8 @@ type Status struct {
 	// rule); Write sets it.
 	Digest string `json:"digest"`
 	// UpdatedAt is when the content last changed, in UTC to the second
-	// (Write keeps the file, and its time, while the content stays the same).
+	// (Write keeps the file, and its time, while the content stays the same);
+	// never zero. It is outside the digest, so Read checks it on its own.
 	UpdatedAt time.Time `json:"updated_at"`
 	// TaskID is the factory task that published the PR, positive.
 	TaskID int64 `json:"task_id"`
@@ -22160,8 +22161,8 @@ type Status struct {
 	// Now is who the PR waits on, and the task's stage.
 	Now Now `json:"now"`
 }
-    Status is one PR's factory part. Every count is 0 or more and every enum one
-    of its words; Write refuses, and Read refuses, any other.
+    Status is one PR's factory part. Every count is 0 or more, every enum one of
+    its words and both times set; Write refuses, and Read refuses, any other.
 
 func Read(path string) (Status, bool, error)
     Read reads the status file at path, a regular file of at most MaxSize bytes

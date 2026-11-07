@@ -16626,8 +16626,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     keeps the time of its last change; otherwise it writes atomically (a temporary file, synced and renamed,
     the folder synced), 0600 in folders 0700, and refuses a status `Read` would refuse.
   - `Read` caps the file at 64 KiB; a missing file is no factory part, and a file too big, cut short, not a
-    JSON object, of another v, with a word outside its enum or a digest that does not match is an error that
-    says which (the field's name, never its value), which the reader treats as missing.
+    JSON object, of another v, with a word outside its enum, a count below 0, no `published_at` or no
+    `updated_at`, or a digest that does not match is an error that says which (the field's name, never its
+    value), which the reader treats as missing. `updated_at` is outside the digest, so only this check stops
+    a file without it from saying "updated 00:00 UTC" of year 1.
   The renderer in `internal/engine/status_comment.go` and the factory's writer come later, each in its own
   slice. Rejected: a second comment, the factory's own (one comment per PR is what the operator chose); free
   text such as the PR's title, the ticket's or a question (the comment says only fixed words, as magnum's

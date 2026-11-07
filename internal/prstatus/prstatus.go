@@ -68,8 +68,9 @@ var (
 	ErrDigest   = errors.New("digest does not match the content")
 )
 
-// Status is one PR's factory part. Every count is 0 or more and every enum
-// one of its words; Write refuses, and Read refuses, any other.
+// Status is one PR's factory part. Every count is 0 or more, every enum one
+// of its words and both times set; Write refuses, and Read refuses, any
+// other.
 type Status struct {
 	// V is the schema version, Version.
 	V int `json:"v"`
@@ -77,7 +78,8 @@ type Status struct {
 	// rule); Write sets it.
 	Digest string `json:"digest"`
 	// UpdatedAt is when the content last changed, in UTC to the second
-	// (Write keeps the file, and its time, while the content stays the same).
+	// (Write keeps the file, and its time, while the content stays the same);
+	// never zero. It is outside the digest, so Read checks it on its own.
 	UpdatedAt time.Time `json:"updated_at"`
 	// TaskID is the factory task that published the PR, positive.
 	TaskID int64 `json:"task_id"`
@@ -449,6 +451,7 @@ func (s Status) validate() error {
 		ok    bool
 		field string
 	}{
+		{!s.UpdatedAt.IsZero(), "updated_at"},
 		{s.TaskID > 0, "task_id"},
 		{jiraNone || jiraKeyRe.MatchString(s.Jira.Key), "jira.key"},
 		{jiraNone && s.Jira.Status == "" || !jiraNone && s.Jira.Status.Valid(), "jira.status"},
