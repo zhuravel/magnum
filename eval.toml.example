@@ -51,3 +51,22 @@ expect = "absent"
 paths = ["app/controllers/**/callbacks_controller.rb"]
 lines = [80, 84]
 match = ["nil", "guard"]
+
+# A rendering defect users see is at least P2 (the review skill's section 4):
+# a review that finds it but calls it optional (P3) scores it found at the
+# wrong severity. Here the PR wraps each date of a settings page in a tooltip
+# <span> inside a translation whose key lacks the _html suffix, so the page
+# shows the markup as text.
+[[case]]
+name = "settings-dates-escaped-markup"
+pr = "example/example#12"
+head = "89abcdef0123456789abcdef0123456789abcdef"
+why = "a local review ranked the escaped date markup P3 and the PR shipped with it"
+
+[[case.defect]]
+id = "date-markup-escaped"
+title = "The settings page shows each date as escaped <span> markup"
+severity = "P2"
+paths = ["app/views/settings/**", "config/locales/*.yml"]
+match = ["escap", "<span", "as text", "html_safe", "_html"]
+body = true

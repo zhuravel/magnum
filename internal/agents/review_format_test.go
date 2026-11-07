@@ -624,6 +624,12 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // operator decided: its "Local round" section, read only with `local:
 // true` (no gh call, the title and description from description_file, a
 // product question marked in the provenance).
+// Then still 39,194 (2026-11-07): the operator's rule that a rendering
+// defect users see is at least P2 (124 bytes) came from unpinned wording
+// (131): section 0's `phase` and lock-command glosses (27), the readiness
+// sentence (34), the instruction files' base copy (8), the body-only finding
+// (11), the `suggestion` block (22), magnum's re-review line (6), the
+// re-post sentence (5) and the verdict's count (18); 7 bytes are left.
 // Every rule added must replace or shorten text.
 const skillMaxBytes = 39194
 
@@ -755,6 +761,22 @@ func TestSkillFindingsProveFiveFactsAndRankByReachability(t *testing.T) {
 		"real use or an attacker reaches, with harm beyond the triggering request",
 		"a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request",
 	}, []string{"four facts"})
+}
+
+// A visible rendering defect is at least P2 in every review, never optional:
+// a factory local round rated a settings page's raw `<span data-bs-…>`
+// tooltip markup P3, the factory listed it as Known, and the PR shipped with
+// it (2026-11-07). The rule is in section 4, which every round reads, not in
+// the Local round section, so magnum's GitHub reviews and its eval replays
+// rank it the same way.
+func TestAVisibleRenderingDefectIsAtLeastP2InEveryReview(t *testing.T) {
+	const rule = "A rendering defect users see (markup shown as text, a raw translation key, an error page, a broken layout) is at least P2."
+	skillSays(t, []string{rule}, nil)
+	_, sec4, _ := strings.Cut(string(magnum.Skill), "## 4. Prove each finding")
+	sec4, _, _ = strings.Cut(sec4, "\n## ")
+	if !strings.Contains(sec4, rule) {
+		t.Error("the rendering-defect rule is not in section 4, which every review reads")
+	}
 }
 
 // Simplifications must remove something, stay out of sensitive code, keep to

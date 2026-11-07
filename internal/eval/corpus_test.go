@@ -2,6 +2,7 @@ package eval
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -474,5 +475,36 @@ func TestTheExampleCorpusLoads(t *testing.T) {
 	}
 	if len(c.Cases) == 0 || len(c.Cases[0].Defects) == 0 || c.Cases[0].Owner != "talkable" {
 		t.Fatalf("example corpus %+v", c)
+	}
+}
+
+// The example corpus describes a visible rendering defect the way the review
+// skill ranks it (section 4: at least P2): a review that found a settings
+// page's dates rendered as escaped `<span>` markup but called it optional
+// (P3) found it at the wrong severity, as the factory's local round that let
+// such a PR ship did (2026-11-07).
+func TestTheExampleCorpusWantsEscapedMarkupOnAPageAtP2(t *testing.T) {
+	c, err := LoadCorpus(filepath.Join("..", "..", "eval.toml.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(c.Cases, func(k Case) bool { return k.Name == "settings-dates-escaped-markup" })
+	if i < 0 {
+		t.Fatal("the example corpus has no settings-dates-escaped-markup case")
+	}
+	k := c.Cases[i]
+	if k.Owner != "example" || len(k.Defects) != 1 || k.Defects[0].Severity != "P2" {
+		t.Fatalf("case %+v: want one P2 defect in an example repository", k)
+	}
+	const body = "**[%s] The settings page shows each date as escaped `<span data-bs-toggle=\"tooltip\">` text**"
+	for _, tc := range []struct {
+		severity string
+		ok       bool
+	}{{"P3", false}, {"P2", true}, {"P1", true}} {
+		f := Finding{Path: "app/views/settings/show.html.erb", Line: 14, Severity: tc.severity, Body: fmt.Sprintf(body, tc.severity)}
+		s := ScoreCase(k, Result{Findings: []Finding{f}})
+		if s.Found != 1 || s.Noise != 0 || (s.SeverityOK() == 1) != tc.ok {
+			t.Errorf("a %s finding: found %d, noise %d, at the wanted severity %d; want found 1, noise 0, at it %v", tc.severity, s.Found, s.Noise, s.SeverityOK(), tc.ok)
+		}
 	}
 }

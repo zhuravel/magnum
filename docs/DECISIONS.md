@@ -146,6 +146,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   with none, a line the doctor never printed before the fixer App. It now returns at once when no watch's
   fixer is an App (`AllFixerLogins` empty). Test, failing first:
   TestDoctorFixerReposReadsNothingWithoutAFixerApp.
+- **A rendering defect users see is at least P2, in every review** (2026-11-07, the operator's rule). A
+  factory local round found a settings page's dates shown as raw `<span data-bs-…>` tooltip markup and
+  ranked it P3, so the factory listed it as Known and the PR shipped with it. Section 4 of the review
+  skill now says, after the paragraph on developers' time: "A rendering defect users see (markup shown as
+  text, a raw translation key, an error page, a broken layout) is at least P2." A P2 blocks the factory's
+  publish and counts in a GitHub review's `Fix N problem(s) before merging.`. The skill stays within its
+  cap of 39,194 bytes (now 39,187): the rule's 124 bytes come from unpinned wording, and no rule went:
+  section 0's `phase` and lock-command glosses, the readiness sentence, the instruction files' base copy,
+  the body-only finding, the `suggestion` block, magnum's re-review line, the re-post sentence and the
+  verdict's count (131 bytes). None of the trims touches the lines a held skill-editor proposal changes,
+  so it still applies. `eval.toml.example` gains a generic case of the miss
+  (`settings-dates-escaped-markup`, wanted at P2: a P3 finding on it scores found at the wrong severity).
+  Rejected: the rule in the "Local round" section only (smaller, but magnum's GitHub reviews would keep
+  calling such a defect optional, and an eval replay, which runs as a GitHub round, could not measure it);
+  a raise of the cap (the trims paid for it); and leaving it to a visual QA stage (it may not run, and the
+  review would still call what it found optional). Tests, failing first:
+  TestAVisibleRenderingDefectIsAtLeastP2InEveryReview and TestTheExampleCorpusWantsEscapedMarkupOnAPageAtP2.
 
 ## Checkouts and pools
 
