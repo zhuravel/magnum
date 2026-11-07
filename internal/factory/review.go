@@ -817,7 +817,7 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	if err != nil {
 		return left, err
 	}
-	headLacks := map[string]bool{}
+	headLacks, keep := map[string]bool{}, map[string]bool{}
 	for _, en := range entries {
 		if en.Untracked() {
 			continue
@@ -825,12 +825,16 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 		left.tracked = append(left.tracked, en.Path)
 		// A path the index got since HEAD (added, intent to add, a rename's
 		// or a copy's new name): it may be a file of yours the round staged.
-		if strings.ContainsRune("ARC", rune(en.X)) || en.Y == 'A' {
+		// When the work tree changed or deleted it since, the index holds the
+		// only copy of what was staged: it stays staged.
+		if strings.ContainsRune("ARC", rune(en.X)) || strings.ContainsRune("ARC", rune(en.Y)) {
 			headLacks[en.Path] = true
+			keep[en.Path] = strings.ContainsRune("MTD", rune(en.Y))
 		}
 	}
 	slices.Sort(left.tracked)
 	left.tracked = slices.Compact(left.tracked)
+	left.keepStaged = slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return !keep[p] })
 	cur, err := git.CurrentBranch(ctx, c.Path)
 	if err != nil {
 		return left, err

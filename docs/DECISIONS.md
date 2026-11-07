@@ -16753,14 +16753,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     lies under a directory it names). git status groups a wholly untracked directory once and splits it once
     the round stages a file in it, so comparing its entries would have moved your files from before the round
     and removed a tracked file the put-back had just restored. A tracked change's path is never a new file.
-  - A tracked change of a path HEAD lacks (git status's `A`, `R`, `C`, or `A` in the work tree's column) is a
-    file the round staged, and may be yours: one the listing names (`git add -A`, `git add -N`), one git
-    ignores (`git add -f`, or `.gitignore` emptied and then `git add -A`), or any one without a listing. Only
-    its index goes back (`gitx.RestoreIndex`); the put-back restores the paths HEAD has first (an ignore file
-    the round changed comes back), removes the round's new ignore files, takes git's list of untracked files
-    again and removes only the new files and the staged ones the listing does not name that it lists. A file
-    of yours git ignores is not listed, and stays; without a listing nothing is removed. One the round staged
-    and then deleted stays staged (the index holds its only copy), and the task needs you.
+  - A tracked change of a path HEAD lacks (git status's `A`, `R` or `C` in either column) is a file the round
+    staged, and may be yours: one the listing names (`git add -A`, `git add -N`), one git ignores
+    (`git add -f`, or `.gitignore` emptied and then `git add -A`), or any one without a listing. Only its index
+    goes back (`gitx.RestoreIndex`); the put-back restores the paths HEAD has first (an ignore file the round
+    changed comes back), removes the round's new ignore files, takes git's list of untracked files again and
+    removes only the new files and the staged ones the listing does not name that it lists and that are not
+    older than the round (a rule the factory does not see, `.git/info/exclude`, your global ignore file, a
+    `.gitignore` that ignores itself, may show a file of yours). A file of yours git ignores is not listed, or
+    is older than the round, and stays; without a listing nothing is removed. One the round staged and then
+    changed or deleted (`AM`, `AT`, `AD`) stays staged, as the index holds the only copy of what was staged
+    (git's patch has the work tree's), and the task needs you.
   - A round stopped before its end (a drain, an install, the sweep) has its leftovers put back the same way
     before it runs again in its cycle; before, its tracked change stopped the run again ("commit them or undo
     them") and its new files counted as the copy's own. The guard sees only the task's panes, so the accepted
@@ -16771,8 +16774,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     wrote), a put-back that fails or leaves something, and somebody else in the copy send the task to you, now
     with why and the steps: `git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>`
     (`--staged` alone for the staged files), `rm -- <files>` and `magnum factory retry <id>`. No step removes a
-    file the factory cannot prove the round's: none after the round changed an ignore file (git's list of new
-    files is then the round's rules'), never a file the round staged; the wait names those for you. Past ten
+    file the factory cannot prove the round's or did not save: the rm step names only new files saved in the
+    task's directory that are not older than the round (none when somebody else was in the copy, as nothing is
+    saved then), none after the round changed an ignore file (git's list of new files is then the round's
+    rules'), and never a file the round staged; the wait names those for you. Past ten
     paths a step reads exactly them from `round-<n>-<step>.paths` in the task's directory (NUL-separated),
     never `:/` (which would take changes it does not name) nor an event of unbounded size. A copy off the
     branch or at another head stays yours with the message as before: the factory moves no branch or HEAD here.
@@ -16797,7 +16802,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestReadRegularInReadsOnlyARegularFileInsideTheRoot, TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten,
   TestTheWaitsStepsNeverRemoveAFileNotProvenTheRounds, TestAnIgnoredFileTheRoundStagedStaysInTheCopy,
   TestANewIgnoreFileOfTheRoundNeverShowsYourIgnoredFileForRemoval,
-  TestWithoutAListingNoFileTheRoundStagedLeavesTheCopy and TestAFileTheRoundStagedAndDeletedKeepsItsIndexCopy.
+  TestWithoutAListingNoFileTheRoundStagedLeavesTheCopy, TestAFileTheRoundStagedAndDeletedKeepsItsIndexCopy,
+  TestAFileTheRoundStagedAndEditedKeepsItsIndexCopy, TestAnIntentToAddRenameOfYourIgnoredFileStays,
+  TestAPutBackNeverRemovesAFileOlderThanTheRound and TestTheWaitsRmStepNamesOnlyTheRoundsSavedFiles.
 
 ## Learned rules
 

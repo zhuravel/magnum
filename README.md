@@ -4094,9 +4094,10 @@ the round took out of the index, regular files only, under `round-<n>-left/` at 
 1,000 files and 256 MiB, 64 MiB a file), then puts the copy back as the round found it and reads the result; an
 event names what it saved. A file the round staged that HEAD lacks (`git add -A`, `git add -f`, `git add -N`)
 goes back out of the index only, and leaves the copy only when git lists it as a new file once the rest is back
-and the round's new ignore files are gone, so a file of yours stays, ignored or not (without the listing nothing
-leaves); one the round staged and then deleted stays staged, as the index holds its only copy, and the task
-needs you. A directory the removal empties goes too. It does so only while nobody else could have changed the
+and the round's new ignore files are gone, and it is not older than the round, so a file of yours stays, ignored
+or not (without the listing nothing leaves); one the round staged and then changed or deleted stays staged, as
+the index holds the only copy of what was staged, and the task needs you. A directory the removal empties goes
+too. It does so only while nobody else could have changed the
 copy: no agent of the task at work in it and no prompt to one, and none of your input in its panes, since the
 round's cycle began, asked before the save and again before the put-back. A round stopped before its end (a
 drain, an install) has the same done before it runs again in its cycle. When somebody else could have, or the
@@ -4104,8 +4105,9 @@ save or the put-back fails (a symlink among the new files, too many of them), th
 round left, why the factory left it, and the steps that put it back and go on:
 `git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone for the
 files the round staged), `rm -- <files>` and `magnum factory retry <task>`. No step removes a file the factory
-cannot prove the round's: none after the round changed an ignore file, never a file the round staged; the wait
-names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
+cannot prove the round's or did not save: the rm step names only new files saved in the task's directory (none
+when you or an agent were in the copy, as nothing is saved then) that are not older than the round, none after
+the round changed an ignore file, and never a file the round staged; the wait names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
 (`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`, NUL-separated:
 `--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy off the branch or at
 another head, which the factory never moves, needs you as before: put the copy back as the round found it, then

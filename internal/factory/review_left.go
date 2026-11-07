@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -58,13 +59,26 @@ const leftStepPaths = 10
 // them, and the file goes only when it is proven the round's (putBackLeft);
 // unindexed are the files the round took out of the index and left in the
 // work tree (git's patch of them is a deletion: their files are saved too).
-// before is the listing taken before the cycle's first run, nil without one
-// (nothing then tells a new file from yours, and no file is removed).
+// keepStaged are the paths of unstage the work tree changed or deleted
+// since the round staged them: the index holds the only copy of what was
+// staged (git's patch has the work tree's), so they stay staged. before is
+// the listing taken before the cycle's first run, nil without one (nothing
+// then tells a new file from yours, and no file is removed).
 type roundLeftovers struct {
 	tracked, added     []string
 	unstage, unindexed []string
+	keepStaged         []string
 	moved              string
 	before             *beforeListing
+}
+
+// unstaged are the paths of unstage whose index goes back: all but
+// keepStaged.
+func (l roundLeftovers) unstaged() []string {
+	return slices.DeleteFunc(slices.Clone(l.unstage), func(p string) bool {
+		_, keep := slices.BinarySearch(l.keepStaged, p)
+		return keep
+	})
 }
 
 // staged are the paths of left.unstage the listing before the round does
@@ -135,7 +149,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	error) {
 	ctx = context.WithoutCancel(ctx)
 	if left.moved != "" {
-		return e.leftWait(t, c, cy, round, left, "")
+		return e.leftWait(t, c, cy, round, left, "", "")
 	}
 	name := roundName(round, cy.N)
 	guard := func() string {
@@ -146,7 +160,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	}
 	if who := guard(); who != "" {
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(t, c, cy, round, left, "the factory put none of it back: "+who)
+		return e.leftWait(t, c, cy, round, left, "", "the factory put none of it back: "+who)
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	base := leftName(dir, cy.N)
@@ -164,14 +178,14 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	if err != nil {
 		line := clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240)
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
-		return e.leftWait(t, c, cy, round, left, "the factory could not save it, so it put none of it back: "+line)
+		return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
 	}
 	if who := guard(); who != "" {
 		undo() // the copy still has all of it
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(t, c, cy, round, left, "the factory put none of it back: "+who)
+		return e.leftWait(t, c, cy, round, left, "", "the factory put none of it back: "+who)
 	}
-	perr := putBackLeft(ctx, e.d.Git, c.Path, left)
+	perr := putBackLeft(ctx, e.d.Git, c.Path, left, cy.Started)
 	line := ""
 	if perr != nil {
 		line = clipEnd(textx.FirstLine(execx.Redact(perr.Error())), 240)
@@ -180,14 +194,14 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
 	switch {
 	case err != nil && perr != nil:
-		return e.leftWait(t, c, cy, round, left, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.leftWait(t, c, cy, round, left, base, "the factory saved it to "+saved+" but could not put it back: "+line)
 	case err != nil:
 		return "", err
 	case !now.none() && perr != nil:
-		return e.leftWait(t, c, cy, round, now, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.leftWait(t, c, cy, round, now, base, "the factory saved it to "+saved+" but could not put it back: "+line)
 	case !now.none():
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("after the put-back of what %s left, %s still has %s", name, c.Name, now))
-		return e.leftWait(t, c, cy, round, now, "the factory saved what it found to "+saved+" and put it back, and the copy still has this")
+		return e.leftWait(t, c, cy, round, now, base, "the factory saved what it found to "+saved+" and put it back, and the copy still has this")
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("put back what %s left in %s as the round found it, saved to %s", name,
 		c.Name, saved))
@@ -200,29 +214,31 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 // task t's copy c (left) that the factory did not put back, and why not:
 // the steps that put the copy back (the tracked paths restored as HEAD has
 // them, the index only for a path HEAD lacks, and the new files removed),
-// then the retry. No step removes a file the factory cannot prove the
-// round's: none after a round that changed an ignore file (git's listing of
-// new files is then the round's rules'), never a file the round staged
-// (it may be a file of yours git ignores), and no step drops from the index
-// a file the round staged and then deleted (the index holds its only copy);
-// the wait says so instead. A step over more than leftStepPaths paths takes
+// then the retry. No step drops from the index a version the work tree
+// lacks (keepStaged), and the rm step names only the new files saved in
+// the task's directory under saved ("" for nothing saved) that are not
+// older than the round, and none after a round that changed an ignore file
+// (git's listing of new files is then the round's rules'); a file the round
+// staged is never in it (it may be yours, git may ignore it). The wait
+// names what it leaves out. A step over more than leftStepPaths paths takes
 // them from a file in the task's directory that lists exactly them
 // (round-<n>-<step>.paths, NUL-separated: git's --pathspec-from-file, xargs
 // -0); one that cannot be written names leftStepPaths of them and how many
 // more. A copy off the task's branch or at another head is yours to put back
 // as the round found it.
-func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, why string) (string, error) {
+func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, saved, why string) (string, error) {
 	if left.moved != "" {
 		return fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; put the copy back as the round found it "+
 			"(%s at %s, no tracked change, no new untracked file), then let the task go on", round, left, t.Branch, short(cy.HeadBefore)), nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	quoted := execx.ShellQuote(c.Path)
 	more := func(n int) string {
-		return fmt.Sprintf(" and %d more (`git -C %s status` names them)", n-leftStepPaths, execx.ShellQuote(c.Path))
+		return fmt.Sprintf(" and %d more (`git -C %s status` names them)", n-leftStepPaths, quoted)
 	}
 	var steps, notes []string
 	restore := func(opts string, paths []string, list string) {
-		cmd := "git -C " + execx.ShellQuote(c.Path) + " --literal-pathspecs restore " + opts
+		cmd := "git -C " + quoted + " --literal-pathspecs restore " + opts
 		switch file, err := pathsFile(dir, cy.N, list, paths); {
 		case len(paths) == 0:
 		case len(paths) <= leftStepPaths:
@@ -234,54 +250,54 @@ func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int,
 		}
 	}
 	restore("--staged --worktree", left.fullRestore(), "restore")
-	var unstage, gone []string
-	for _, p := range left.unstage {
-		if _, err := os.Lstat(filepath.Join(c.Path, filepath.FromSlash(p))); err != nil {
-			gone = append(gone, p)
-		} else {
-			unstage = append(unstage, p)
-		}
+	if n := len(left.keepStaged); n > 0 {
+		notes = append(notes, fmt.Sprintf("the round staged and then changed or deleted %s (%s): the index holds a version the work "+
+			"tree does not, so they stay staged (`git -C %s restore --worktree -- <path>` writes that version back to the file, "+
+			"`git -C %s restore --staged -- <path>` then drops it from the index)", plural(n, "file"), clipList(left.keepStaged), quoted, quoted))
 	}
-	if len(gone) > 0 {
-		notes = append(notes, fmt.Sprintf("the round staged and then deleted %s (%s): the index holds their only copy, so they stay "+
-			"staged (`git -C %s restore --worktree -- <path>` brings one back)", plural(len(gone), "file"), clipList(gone),
-			execx.ShellQuote(c.Path)))
-	}
+	unstage := left.unstaged()
 	restore("--staged", unstage, "unstage")
-	if staged := slices.DeleteFunc(left.staged(), func(p string) bool { return slices.Contains(gone, p) }); len(staged) > 0 {
+	if staged := slices.DeleteFunc(left.staged(), func(p string) bool {
+		_, keep := slices.BinarySearch(left.keepStaged, p)
+		return keep
+	}); len(staged) > 0 {
 		notes = append(notes, fmt.Sprintf("the round staged %s the copy did not list before (%s): they stay in the copy once "+
 			"their index goes back, as they may be yours (git may ignore them); remove those the round made", plural(len(staged), "file"),
 			clipList(staged)))
 	}
-	n := len(left.added)
 	switch {
-	case n == 0:
+	case len(left.added) == 0:
 	case slices.ContainsFunc(slices.Concat(left.tracked, left.added), ignoreFile):
 		notes = append(notes, fmt.Sprintf("the round changed the ignore rules, so the factory names no file to remove: once the "+
-			"rest is back, `git -C %s ls-files --others --exclude-standard` lists the new files; remove those the round made",
-			execx.ShellQuote(c.Path)))
+			"rest is back, `git -C %s ls-files --others --exclude-standard` lists the new files; remove those the round made", quoted))
 	default:
+		var abs, out []string
+		for _, p := range left.added {
+			fi, err := os.Lstat(filepath.Join(dir, saved, filepath.FromSlash(p)))
+			mine, merr := os.Lstat(filepath.Join(c.Path, filepath.FromSlash(p)))
+			if saved == "" || err != nil || !fi.Mode().IsRegular() || merr != nil || mine.ModTime().Before(cy.Started) {
+				out = append(out, p)
+				continue
+			}
+			abs = append(abs, filepath.Join(c.Path, filepath.FromSlash(p)))
+		}
+		if len(out) > 0 {
+			notes = append(notes, fmt.Sprintf("no step removes the new files the factory did not save or that are older than the round "+
+				"(%s), as they may be yours: remove those the round made", clipList(out)))
+		}
 		rm := "rm --"
-		if slices.ContainsFunc(left.added, func(p string) bool { return strings.HasSuffix(p, "/") }) {
-			rm = "rm -r --" // a repository inside the copy
-		}
-		abs := make([]string, n)
-		for i, p := range left.added {
-			abs[i] = filepath.Join(c.Path, filepath.FromSlash(p))
-		}
 		switch file, err := pathsFile(dir, cy.N, "remove", abs); {
-		case n <= leftStepPaths:
+		case len(abs) == 0:
+		case len(abs) <= leftStepPaths:
 			steps = append(steps, "`"+rm+" "+shellArgs("", abs)+"`")
 		case err == nil:
 			steps = append(steps, "`xargs -0 "+rm+" < "+execx.ShellQuote(file)+"`")
 		default:
-			steps = append(steps, "`"+rm+" "+shellArgs("", abs[:leftStepPaths])+"`"+more(n))
+			steps = append(steps, "`"+rm+" "+shellArgs("", abs[:leftStepPaths])+"`"+more(len(abs)))
 		}
 	}
-	what := strings.Join(steps, " and ")
-	if len(notes) > 0 {
-		what += "; " + strings.Join(notes, "; ")
-	}
+	what := strings.Join(slices.Concat([]string{strings.Join(steps, " and ")}, notes), "; ")
+	what = strings.TrimPrefix(what, "; ")
 	return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s): %s; then "+
 		"`magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch, short(cy.HeadBefore), what, t.ID), nil
 }
@@ -423,19 +439,20 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 //  1. the tracked paths HEAD has, as HEAD has them (gitx.RestoreTracked),
 //     which brings back an ignore file the round changed;
 //  2. the paths HEAD lacks out of the index only (gitx.RestoreIndex), their
-//     files left in the work tree, but for a file the round staged and then
-//     deleted, whose only copy the index holds: it stays staged, and the
-//     look after the put-back finds it;
+//     files left in the work tree, but for keepStaged, whose staged version
+//     only the index holds: they stay staged, and the look after the
+//     put-back finds them;
 //  3. with a listing before the round (none tells no new file from yours),
 //     the round's new ignore files, then the files git lists as untracked
 //     once the rest is back, of the new ones and of those the round staged
 //     that the listing does not name: a file of yours git ignores again is
-//     not listed, and stays.
+//     not listed, and stays. A file older than since, the round's start, is
+//     never the round's, and stays too, whatever ignore rule showed it.
 //
 // The files go through an os.Root of the copy, with each of their
 // directories this empties, deepest first; a directory that still holds
 // anything (a file git ignores, a tracked file) stays.
-func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left roundLeftovers) error {
+func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left roundLeftovers, since time.Time) error {
 	if full := left.fullRestore(); len(full) > 0 {
 		if err := git.RestoreTracked(ctx, copyDir, full...); err != nil {
 			return err
@@ -446,10 +463,7 @@ func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left rou
 		return err
 	}
 	defer root.Close()
-	unstage := slices.DeleteFunc(slices.Clone(left.unstage), func(p string) bool {
-		_, err := root.Lstat(p)
-		return err != nil
-	})
+	unstage := left.unstaged()
 	if len(unstage) > 0 {
 		if err := git.RestoreIndex(ctx, copyDir, unstage...); err != nil {
 			return err
@@ -477,6 +491,9 @@ func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left rou
 		for _, f := range maybe {
 			if _, listed := slices.BinarySearch(still, f); !listed || !which(f) {
 				continue
+			}
+			if fi, err := root.Lstat(f); err != nil || fi.ModTime().Before(since) {
+				continue // older than the round: not the round's
 			}
 			if err := root.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return removed, err

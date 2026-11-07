@@ -136,8 +136,9 @@ func TestARoundsNewUntrackedFilesAreSavedAndRemovedWhenNobodyElseCouldHaveMadeTh
 // stays as it is: you typed into one of the task's panes since the round
 // began, or an agent of the task works in the copy. Nothing is saved or put
 // back, and the task needs you with why and the steps: the git restore of
-// the tracked changes, the rm of the new files and the retry. Once you take
-// them, the round's result is read.
+// the tracked changes and the retry, and the new files named but never in
+// an rm step, as the factory saved none of them. Once you take the steps,
+// the round's result is read.
 func TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem(t *testing.T) {
 	for _, tc := range []struct {
 		name, why string
@@ -174,12 +175,12 @@ func TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem(t *testing.
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
 			restore := "git -C " + r.copyDir + " --literal-pathspecs restore --staged --worktree -- README"
-			rm := "rm -- " + filepath.Join(r.copyDir, "spec/probe_spec.rb")
+			unsaved := "did not save or that are older than the round (spec/probe_spec.rb)"
 			retry := fmt.Sprintf("magnum factory retry %d", task.ID)
 			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
 				!strings.Contains(got.WaitsWhat, tc.why) || !strings.Contains(got.WaitsWhat, restore) ||
-				!strings.Contains(got.WaitsWhat, rm) || !strings.Contains(got.WaitsWhat, retry) {
-				t.Fatalf("task %s waits %q; want you, with %q, %q, %q and %q", got.State, got.WaitsWhat, tc.why, restore, rm, retry)
+				!strings.Contains(got.WaitsWhat, unsaved) || strings.Contains(got.WaitsWhat, "rm ") || !strings.Contains(got.WaitsWhat, retry) {
+				t.Fatalf("task %s waits %q; want you, with %q, %q, %q and no rm", got.State, got.WaitsWhat, tc.why, restore, unsaved)
 			}
 			if r.read("README") != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb") {
 				t.Fatal("the factory changed what the round left")
@@ -459,17 +460,22 @@ func TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten(t *testing.T) {
 			}, "", "?? mine/"},
 		{"twelve of your files staged", mine(12),
 			func(r *reviewRig, dir string) { r.gitIn(dir, "add", "-A") }, "round-1-unstage.paths", "?? mine/"},
-		{"twelve new files of the round", func(*reviewRig) {},
+		// Saved, as the put-back failed after the save: an rm step names them.
+		{"twelve new files of the round, saved", func(*reviewRig) {},
 			func(r *reviewRig, dir string) {
+				r.put(dir, "README", "a reviewer's mutant\n")
 				for i := range 12 {
 					r.put(dir, fmt.Sprintf("spec/probe_%02d_spec.rb", i), "a probe\n")
 				}
+				r.failRestores(true)
 			}, "round-1-remove.paths", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := leavingRig(t, func(r *reviewRig, dir string) {
 				tc.leave(r, dir)
-				r.rt.setOperatorIn("fx-writer")
+				if !strings.HasSuffix(tc.name, "saved") {
+					r.rt.setOperatorIn("fx-writer")
+				}
 			})
 			task, _ := r.reviewTask("PR-12399")
 			tc.before(r)
@@ -699,5 +705,123 @@ func TestAPutBackNeverRemovesAnIgnoredFileTheRoundUnignored(t *testing.T) {
 	}
 	if got := r.read(".gitignore"); got != "tmp/\n" {
 		t.Fatalf(".gitignore is %q", got)
+	}
+}
+
+// A file of yours the round staged and then changed keeps the version the
+// index holds of it, its only copy (git's patch holds the round's): the
+// factory leaves it staged and the task needs you, and no step of the wait
+// drops it from the index.
+func TestAFileTheRoundStagedAndEditedKeepsItsIndexCopy(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.gitIn(dir, "add", "-A")
+		r.put(dir, "probe/old.rb", "the round's edit\n")
+	})
+	task, _ := r.reviewTask("PR-12408")
+	r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, "restore --staged -- probe/old.rb") ||
+		!strings.Contains(got.WaitsWhat, "probe/old.rb") {
+		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, got.WaitsWhat)
+	}
+	if got := r.git(r.copyDir, "show", ":probe/old.rb"); got != "yours, from before the round" {
+		t.Fatalf("the index holds %q", got)
+	}
+}
+
+// An intent-to-add rename (git status ` R`: your ignored file added with
+// -N -f, a file HEAD has of like content deleted) is a path HEAD lacks:
+// only its index goes back, and your file stays.
+func TestAnIntentToAddRenameOfYourIgnoredFileStays(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.gitIn(dir, "add", "-N", "-f", "--", "tmp/cache.log")
+		if err := os.Remove(filepath.Join(dir, "app", "credit.rb")); err != nil {
+			r.t.Error(err)
+		}
+	})
+	task, _ := r.reviewTask("PR-12409")
+	yours := r.read("app/credit.rb") + "# yours\n"
+	r.write(r.copyDir, "tmp/cache.log", yours)
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if !r.inCopy("tmp/cache.log") || r.read("tmp/cache.log") != yours {
+		t.Fatal("the put-back removed your ignored file")
+	}
+}
+
+// older dates a file of yours in the copy before the cycle began (t0): a
+// file the round makes is never older than the round.
+func (r *reviewRig) older(rel string) {
+	r.t.Helper()
+	if err := os.Chtimes(filepath.Join(r.copyDir, rel), t0.Add(-time.Hour), t0.Add(-time.Hour)); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// A file older than the round is never removed by the put-back, whatever
+// showed it as new: the round emptied .git/info/exclude, or left a
+// .gitignore that ignores itself and shows your logs. It stays, and the
+// look after the put-back sends the task to you.
+func TestAPutBackNeverRemovesAFileOlderThanTheRound(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leave func(r *reviewRig, dir string)
+	}{
+		{"info/exclude emptied", func(r *reviewRig, _ string) {
+			r.put(filepath.Join(r.main, ".git", "info"), "exclude", "")
+		}},
+		{"a new ignore file that ignores itself", func(r *reviewRig, dir string) { r.put(dir, "logs/.gitignore", "*\n!*.log\n") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, tc.leave)
+			task, _ := r.reviewTask("PR-12410")
+			r.write(filepath.Join(r.main, ".git", "info"), "exclude", "*.log\n")
+			r.write(r.copyDir, "logs/app.log", "yours, ignored\n")
+			r.older("logs/app.log")
+			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if !r.inCopy("logs/app.log") || r.read("logs/app.log") != "yours, ignored\n" {
+				t.Fatal("the put-back removed your ignored file")
+			}
+		})
+	}
+}
+
+// The wait's rm step names only new files saved in the task's directory
+// that are not older than the round: with nothing saved (you in a pane) it
+// names none, and a file of yours that the round's change of
+// .git/info/exclude showed is never in it, saved or not. The wait names the
+// files it leaves out.
+func TestTheWaitsRmStepNamesOnlyTheRoundsSavedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		leave    func(r *reviewRig, dir string)
+		rm, left string // a path the rm step names ("" for no rm step), one the wait names as left out
+	}{
+		{"nothing saved", func(r *reviewRig, dir string) {
+			r.put(filepath.Join(r.main, ".git", "info"), "exclude", "")
+			r.put(dir, "spec/probe_spec.rb", "a reviewer's probe\n")
+			r.rt.setOperatorIn("fx-writer")
+		}, "", "logs/app.log"},
+		{"saved, as the put-back failed", func(r *reviewRig, dir string) {
+			r.put(filepath.Join(r.main, ".git", "info"), "exclude", "")
+			r.put(dir, "README", "a reviewer's mutant\n")
+			r.put(dir, "spec/probe_spec.rb", "a reviewer's probe\n")
+			r.failRestores(false)
+		}, "spec/probe_spec.rb", "logs/app.log"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := leavingRig(t, tc.leave)
+			task, _ := r.reviewTask("PR-12411")
+			r.write(filepath.Join(r.main, ".git", "info"), "exclude", "*.log\n")
+			r.write(r.copyDir, "logs/app.log", "yours, ignored\n")
+			r.older("logs/app.log")
+			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+			got := r.reload(task.ID)
+			rm := regexp.MustCompile("`rm [^`]*`").FindString(got.WaitsWhat)
+			if got.State != registry.TaskNeedsYou || strings.Contains(rm, "logs/app.log") ||
+				(tc.rm == "") != (rm == "") || !strings.Contains(rm, tc.rm) || !strings.Contains(got.WaitsWhat, tc.left) {
+				t.Fatalf("task %s waits %q; want an rm step of %q, and %q named as left out", got.State, got.WaitsWhat, tc.rm, tc.left)
+			}
+		})
 	}
 }

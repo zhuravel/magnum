@@ -16190,12 +16190,13 @@ func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
     detached (a rebase in progress included).
 
 func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]byte, error)
-    DiffHead is the binary patch of paths of the work tree at dir against HEAD
-    (`git diff --binary HEAD`, each path taken literally from the top): their
-    staged and unstaged changes as one, which `git apply` puts back in a work
-    tree as HEAD has them. Its prefixes are a/ and b/ whatever the config says,
-    and it runs no external diff or textconv. A patch over execx.MaxOutput is an
-    error, never part of one. It is read-only and does not take the index lock.
+    DiffHead is the binary patch of paths of the work tree at dir against
+    HEAD (`git diff --binary HEAD`, each path taken literally from the top):
+    each path as the work tree has it, which `git apply` puts back in a work
+    tree as HEAD has them. A version staged and then changed in the work tree
+    is not in it. Its prefixes are a/ and b/ whatever the config says, and it
+    runs no external diff or textconv. A patch over execx.MaxOutput is an error,
+    never part of one. It is read-only and does not take the index lock.
 
 func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
     DiffLines is the diff head made relative to its merge base with base,
