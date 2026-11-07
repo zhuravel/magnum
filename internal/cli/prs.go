@@ -368,8 +368,13 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				ignored[full] = ignore
 			}
 			// A check ignore_checks names is absent, as the approval's gates
-			// read the checks.
-			row.CI = prview.CI(store.SeenCI(r.CI, r.HeadSHA, ignore), r.HeadSHA, req)
+			// read the checks; GitHub's block of the merge reads the review
+			// gate of the same Details read.
+			merge := prview.Merge{Draft: r.Draft}
+			if r.ReviewGate != nil {
+				merge.Decision = r.ReviewGate.Decision
+			}
+			row.CI = prview.CI(store.SeenCI(r.CI, r.HeadSHA, ignore), r.HeadSHA, req, merge)
 			if cfg != nil {
 				row.Badges = prsBadges(r.Labels, cfg.Board.Badges)
 			}

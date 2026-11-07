@@ -265,6 +265,15 @@ type PRState struct {
 	OpenHold                  time.Duration
 }
 
+// decision is GitHub's review decision of v as magnum last read it (its
+// review gate's); "" before magnum read the gate.
+func (v PRState) decision() string {
+	if v.Gate == nil {
+		return ""
+	}
+	return v.Gate.Decision
+}
+
 // ReviewAsk is a review asked of Who ("rev-ann", "team:<slug>") that is
 // still asked, since At (the newest request of the PR's timeline; zero
 // when the timeline does not name it).
@@ -468,7 +477,7 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	if m.cfg != nil {
 		ignore = m.cfg.IgnoreChecks(repo.FullName())
 	}
-	v.CI = prview.CI(store.SeenCI(pr.CI, pr.HeadSHA, ignore), pr.HeadSHA, req)
+	v.CI = prview.CI(store.SeenCI(pr.CI, pr.HeadSHA, ignore), pr.HeadSHA, req, prview.Merge{Draft: pr.IsDraft, Decision: v.decision()})
 	sums, err := st.LastReviewSummaries(ctx, []int64{pr.ID})
 	if err != nil {
 		return err

@@ -195,6 +195,13 @@ type prsJSONCI struct {
 	Required       []prsJSONCheck    `json:"required"`
 	RequiredSource string            `json:"required_source"` // github or config
 	Stale          bool              `json:"stale"`
+	Links          []prsJSONLink     `json:"links"`   // the failed checks' pages
+	Blocked        string            `json:"blocked"` // why GitHub blocks the merge; "" when it does not
+}
+
+type prsJSONLink struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 type prsJSONWorkflow struct {
@@ -390,8 +397,10 @@ func prsJSONFindingsOf(f tui.FindingsInfo) prsJSONFindings {
 func prsJSONCIOf(c tui.CIInfo) prsJSONCI {
 	return prsJSONCI{State: c.State, Total: c.Total, Passed: c.Passed, Failed: c.Failed, Pending: c.Pending, Skipped: c.Skipped,
 		Failing: listOf(c.Failing), Workflows: mapList(c.Workflows, prsJSONWorkflowOf), Required: mapList(c.Required, prsJSONCheckOf),
-		RequiredSource: c.RequiredSource, Stale: c.Stale}
+		RequiredSource: c.RequiredSource, Stale: c.Stale, Links: mapList(c.Links, prsJSONLinkOf), Blocked: c.Blocked}
 }
+
+func prsJSONLinkOf(l tui.CheckLink) prsJSONLink { return prsJSONLink{Name: l.Name, URL: l.URL} }
 
 func prsJSONWorkflowOf(w tui.WorkflowCI) prsJSONWorkflow {
 	return prsJSONWorkflow{Name: w.Name, State: w.State, Passed: w.Passed, Failed: w.Failed, Pending: w.Pending, Total: w.Total}

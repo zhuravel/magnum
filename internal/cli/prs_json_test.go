@@ -269,6 +269,7 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.CIInfo{}, prsJSONCI{}},
 		{tui.WorkflowCI{}, prsJSONWorkflow{}},
 		{tui.CheckState{}, prsJSONCheck{}},
+		{tui.CheckLink{}, prsJSONLink{}},
 		{tui.ReviewerInfo{}, prsJSONReviewer{}},
 		{tui.ReviewDelta{}, prsJSONDelta{}},
 		{tui.RoundTimings{}, prsJSONRound{}},

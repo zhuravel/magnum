@@ -1,6 +1,7 @@
 package prview
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestCIMatchesRequiredChecksAcrossWorkflows(t *testing.T) {
 		{Name: "pronto", State: store.CheckPassed, Workflow: "Pronto", At: t0},
 	}}
 	req := store.RequiredChecks{Checks: []string{"Completion", "workflow:ci", "build", "rspec*"}, Source: store.RequiredFromGitHub}
-	got := CI(ci, "h1", req)
+	got := CI(ci, "h1", req, Merge{})
 	want := []tui.CheckState{{Name: "Completion", Label: "Completion", State: "passed", Done: 1, Total: 1},
 		{Name: "workflow:ci", Label: "ci", State: "failed", Done: 3, Total: 3},
 		{Name: "build", Label: "build", State: "missing"}, {Name: "rspec*", Label: "rspec", State: "failed", Done: 1, Total: 1}}
@@ -43,20 +44,20 @@ func TestCIMatchesRequiredChecksAcrossWorkflows(t *testing.T) {
 	}
 
 	skipped := &store.CIStatus{SHA: "h1", Total: 1, Skipped: 1, Checks: []store.CheckResult{{Name: "Completion", State: store.CheckSkipped, At: t0}}}
-	if s := CI(skipped, "h1", store.RequiredChecks{Checks: []string{"Completion"}}).Required[0].State; s != "skipped" {
+	if s := CI(skipped, "h1", store.RequiredChecks{Checks: []string{"Completion"}}, Merge{}).Required[0].State; s != "skipped" {
 		t.Fatalf("skipped required = %q", s)
 	}
 	allSkipped := &store.CIStatus{SHA: "h1", Total: 2, Skipped: 2, AllSkipped: true,
 		Checks: []store.CheckResult{{Name: "a", State: store.CheckSkipped}, {Name: "b", State: store.CheckSkipped}}}
-	if s := CI(allSkipped, "h1", store.RequiredChecks{}).State; s != "skipped" {
+	if s := CI(allSkipped, "h1", store.RequiredChecks{}, Merge{}).State; s != "skipped" {
 		t.Fatalf("a draft whose checks all skipped = %q", s)
 	}
 	stale := CI(&store.CIStatus{SHA: "old", Total: 1, Passed: 1, Checks: []store.CheckResult{{Name: "build", State: store.CheckPassed}}},
-		"new", store.RequiredChecks{Checks: []string{"build"}})
+		"new", store.RequiredChecks{Checks: []string{"build"}}, Merge{})
 	if !stale.Stale || stale.Required[0].State != "pending" || stale.Required[0].Total != 0 {
 		t.Fatalf("an older commit's checks: %+v", stale)
 	}
-	if CI(nil, "h1", req) != nil {
+	if CI(nil, "h1", req, Merge{}) != nil {
 		t.Fatal("unknown CI is not nil")
 	}
 }
@@ -70,5 +71,92 @@ func TestCheckLabelDropsTheGlob(t *testing.T) {
 		if got := CheckLabel(pattern); got != want {
 			t.Errorf("CheckLabel(%q) = %q, want %q", pattern, got, want)
 		}
+	}
+}
+
+// The failed checks keep their pages, named as Failing names them, for the
+// card's CI line to link each failing job: a failed check that posted no
+// page has none, and a passed one's page is not a failing job's.
+func TestCILinksEachFailedCheckToItsPage(t *testing.T) {
+	job := "https://github.com/example/widget/actions/runs/7001/job/9001"
+	ci := &store.CIStatus{SHA: "h1", Total: 4, Failed: 3, Passed: 1, Checks: []store.CheckResult{
+		{Name: "rspec (3)", State: store.CheckFailed, Workflow: "CI", URL: job},
+		{Name: "coverage", State: store.CheckFailed, Status: true, URL: "https://ci.example.com/coverage/42"},
+		{Name: "jest", State: store.CheckFailed, Workflow: "CI"},
+		{Name: "lint", State: store.CheckPassed, Workflow: "CI", URL: job + "0"},
+	}}
+	got := CI(ci, "h1", store.RequiredChecks{}, Merge{})
+	want := []tui.CheckLink{{Name: "CI / rspec (3)", URL: job}, {Name: "coverage", URL: "https://ci.example.com/coverage/42"}}
+	if !slices.Equal(got.Links, want) {
+		t.Errorf("links = %+v, want %+v", got.Links, want)
+	}
+}
+
+// Why GitHub blocks the merge (its mergeStateStatus, read with the head's
+// checks) says what magnum knows of it: the required checks that failed,
+// did not run or have not finished, a draft, the reviews GitHub's gate
+// still wants; a block none of those explains is a rule magnum does not
+// read; a conflict or a branch behind its base is said as GitHub says it.
+// GitHub's word on an older commit, a merge it does not block and one it
+// has not computed say nothing, and GitHub's CLEAN never makes a required
+// check that did not run green.
+func TestCISaysWhyGitHubBlocksTheMerge(t *testing.T) {
+	req := store.RequiredChecks{Checks: []string{"Completion", "build"}, Source: store.RequiredFromGitHub}
+	checks := func(completion, build string) []store.CheckResult {
+		var out []store.CheckResult
+		for _, c := range [][2]string{{"Completion", completion}, {"build", build}} {
+			if c[1] != "" {
+				out = append(out, store.CheckResult{Name: c[0], State: c[1], Workflow: "CI"})
+			}
+		}
+		return out
+	}
+	passed := checks(store.CheckPassed, store.CheckPassed)
+	cases := []struct {
+		name, merge string
+		checks      []store.CheckResult
+		sha         string
+		m           Merge
+		want        string
+	}{
+		{"a required check failed", "BLOCKED", checks(store.CheckFailed, store.CheckPassed), "h1", Merge{Decision: "APPROVED"},
+			"GitHub blocks the merge: Completion failed"},
+		{"a required check did not run", "BLOCKED", checks(store.CheckPassed, ""), "h1", Merge{Decision: "APPROVED"},
+			"GitHub blocks the merge: build did not run"},
+		{"required checks still run", "BLOCKED", checks(store.CheckPending, store.CheckPending), "h1", Merge{},
+			"GitHub blocks the merge: Completion and build have not finished"},
+		{"an approval is missing", "BLOCKED", passed, "h1", Merge{Decision: "REVIEW_REQUIRED"},
+			"GitHub blocks the merge: a required approval is missing"},
+		{"changes are requested", "BLOCKED", passed, "h1", Merge{Decision: "CHANGES_REQUESTED"},
+			"GitHub blocks the merge: changes are requested"},
+		{"a check and the reviews", "BLOCKED", checks(store.CheckFailed, ""), "h1", Merge{Decision: "REVIEW_REQUIRED"},
+			"GitHub blocks the merge: Completion failed, build did not run, a required approval is missing"},
+		{"a draft", "BLOCKED", passed, "h1", Merge{Draft: true}, "GitHub blocks the merge: a draft"},
+		{"GitHub's own draft word", "DRAFT", passed, "h1", Merge{}, "GitHub blocks the merge: a draft"},
+		{"nothing magnum knows explains it", "BLOCKED", passed, "h1", Merge{Decision: "APPROVED"},
+			"GitHub blocks the merge: a rule magnum does not read"},
+		{"a conflict", "DIRTY", passed, "h1", Merge{Decision: "APPROVED"}, "GitHub blocks the merge: it conflicts with its base"},
+		{"a branch behind its base", "BEHIND", passed, "h1", Merge{Decision: "APPROVED"},
+			"GitHub blocks the merge: its branch is behind its base"},
+		{"an older commit's word", "BLOCKED", checks(store.CheckFailed, ""), "h0", Merge{}, ""},
+		{"clean", "CLEAN", passed, "h1", Merge{}, ""},
+		{"a failing check GitHub does not require", "UNSTABLE", passed, "h1", Merge{}, ""},
+		{"hooks", "HAS_HOOKS", passed, "h1", Merge{}, ""},
+		{"not computed yet", "UNKNOWN", checks(store.CheckFailed, ""), "h1", Merge{}, ""},
+		{"an earlier build's read", "", checks(store.CheckFailed, ""), "h1", Merge{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ci := &store.CIStatus{SHA: tc.sha, Merge: tc.merge, Total: len(tc.checks), Checks: tc.checks}
+			ci.Tally()
+			if got := CI(ci, "h1", req, tc.m).Blocked; got != tc.want {
+				t.Errorf("Blocked = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	clean := &store.CIStatus{SHA: "h1", Merge: "CLEAN", Total: 1, Checks: checks(store.CheckPassed, "")}
+	clean.Tally()
+	if got := CI(clean, "h1", req, Merge{Decision: "APPROVED"}); got.Required[1].State != "missing" || got.Blocked != "" {
+		t.Errorf("GitHub's CLEAN with a required check that did not run: %+v, Blocked %q", got.Required, got.Blocked)
 	}
 }

@@ -59,7 +59,19 @@ type CIInfo struct {
 	// rulesets) or "config" ([[repo]] required_checks overrides them).
 	RequiredSource string
 	Stale          bool // describes an older commit than the PR's head
+	// Links are the failed checks' pages, in Failing's order and named as
+	// it names them; a failed check that posted no page has none. Whoever
+	// posts a check sets its page: cleanCI keeps only an http or https one.
+	Links []CheckLink
+	// Blocked is why GitHub blocks the merge, in words ("GitHub blocks
+	// the merge: Completion failed"); "" when GitHub does not, has not said
+	// or said it of an older commit than the head.
+	Blocked string
 }
+
+// CheckLink is a check's page: Name as CIInfo.Failing names the check,
+// URL its run's page.
+type CheckLink struct{ Name, URL string }
 
 // WorkflowCI is one workflow's checks on the head commit.
 type WorkflowCI struct {

@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // magnumLayout is a layout whose magnum daemon runs (its pidfile names
@@ -781,6 +782,39 @@ func TestPRStatesReadsCIReviewsAndReviewers(t *testing.T) {
 	}
 	if v := views[ref]; v.Autofix != config.AutofixOpen {
 		t.Errorf("autofix %q, want the watch's %q", v.Autofix, config.AutofixOpen)
+	}
+}
+
+// PRStates and OwnPRs link the head's failed jobs to their pages and say
+// why GitHub blocks the merge, from the checks' read and magnum's row (its
+// review gate), for the card's CI line. Before, a failed job had a name and
+// no link, and GitHub's block went unread.
+func TestPRStatesLinkTheFailedJobsAndSayWhyGitHubBlocksTheMerge(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	head := strings.Repeat("cd", 20)
+	job := "https://github.com/example/shop/actions/runs/7001/job/9001"
+	magnumPR(t, st, 8, head, func(g *store.GitHubPR) {
+		g.CI = &store.CIStatus{SHA: head, Total: 1, Failed: 1, Complete: true, ByWorkflowFile: true, Merge: "BLOCKED",
+			Checks: []store.CheckResult{{Name: "rspec", Workflow: "ci", State: store.CheckFailed, At: now, URL: job}}}
+		g.ReviewGate = &store.ReviewGate{Decision: "REVIEW_REQUIRED", Complete: true}
+	})
+	if err := st.SetGitHubRequiredChecks(ctx, "example/shop", store.GitHubRequiredChecks{Branch: "master", Checks: []string{"rspec"},
+		Known: true, FetchedAt: now, CheckedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	ref := PRRef{"example/shop", 8}
+	views, err := NewMagnum(l, openWatchConfig()).PRStates(ctx, []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := views[ref].CI
+	if ci == nil || !slices.Equal(ci.Links, []tui.CheckLink{{Name: "ci / rspec", URL: job}}) {
+		t.Fatalf("CI %+v, want ci / rspec linked to its job", ci)
+	}
+	if want := "GitHub blocks the merge: rspec failed, a required approval is missing"; ci.Blocked != want {
+		t.Errorf("CI says %q, want %q", ci.Blocked, want)
 	}
 }
 

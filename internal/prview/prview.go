@@ -6,12 +6,14 @@
 package prview
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -21,8 +23,11 @@ import (
 // when magnum has no checks for the PR yet. A required check is matched by
 // name across workflows (store.RequiredRuns), one that never ran on the
 // head is "missing", and the checks of an older commit than head leave
-// every required check that did not fail pending.
-func CI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInfo {
+// every required check that did not fail pending. The failed checks keep
+// their pages (Links), and GitHub's merge state of the read says, with m,
+// why it blocks the merge (Blocked, mergeBlock); it never makes a check
+// green.
+func CI(ci *store.CIStatus, head string, req store.RequiredChecks, m Merge) *tui.CIInfo {
 	if ci == nil {
 		return nil
 	}
@@ -38,6 +43,9 @@ func CI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInfo {
 				name = c.Workflow + " / " + c.Name
 			}
 			out.Failing = append(out.Failing, name)
+			if c.URL != "" {
+				out.Links = append(out.Links, tui.CheckLink{Name: name, URL: c.URL})
+			}
 		}
 		w, ok := byWorkflow[c.Workflow]
 		if !ok {
@@ -69,7 +77,79 @@ func CI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInfo {
 		}
 		out.Required = append(out.Required, c)
 	}
+	out.Blocked = mergeBlock(ci.Merge, out, m)
 	return out
+}
+
+// mergeBlock is why GitHub blocks the merge, in words, as GitHub's merge
+// state (store.CIStatus.Merge) of out's read says it: a conflict, a branch
+// behind its base, or a block (BLOCKED, DRAFT) that magnum's facts explain
+// as far as they go (a draft, the required checks that failed, did not
+// run or have not finished, the reviews GitHub's gate still wants), else
+// a rule magnum does not read (conversations to resolve, a deployment,
+// signed commits: what the PR's merge box lists); "" for a merge GitHub
+// does not block or has not computed (UNKNOWN), and for an older commit's
+// read.
+func mergeBlock(state string, out *tui.CIInfo, m Merge) string {
+	if out.Stale {
+		return ""
+	}
+	var why []string
+	switch strings.ToUpper(state) {
+	case "DIRTY":
+		why = []string{"it conflicts with its base"}
+	case "BEHIND":
+		why = []string{"its branch is behind its base"}
+	case "BLOCKED", "DRAFT":
+		if m.Draft || strings.EqualFold(state, "DRAFT") {
+			why = append(why, "a draft")
+		}
+		for _, s := range []struct{ state, one, many string }{
+			{store.CheckFailed, "failed", "failed"},
+			{"missing", "did not run", "did not run"},
+			{store.CheckPending, "has not finished", "have not finished"},
+		} {
+			var names []string
+			for _, r := range out.Required {
+				if r.State == s.state {
+					names = append(names, cmp.Or(r.Label, r.Name))
+				}
+			}
+			if len(names) > 0 {
+				why = append(why, andList(names)+" "+textx.Plural(len(names), s.one, s.many))
+			}
+		}
+		switch m.Decision {
+		case "REVIEW_REQUIRED":
+			why = append(why, "a required approval is missing")
+		case "CHANGES_REQUESTED":
+			why = append(why, "changes are requested")
+		}
+		if len(why) == 0 {
+			why = []string{"a rule magnum does not read"}
+		}
+	default:
+		return ""
+	}
+	return "GitHub blocks the merge: " + strings.Join(why, ", ")
+}
+
+// andList joins names as a sentence does: "a", "a and b", "a, b and c".
+func andList(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// Merge is what CI reads of a PR beside its checks to say why GitHub
+// blocks its merge (tui.CIInfo.Blocked): whether it is a draft, and
+// GitHub's review decision (store.ReviewGate.Decision: APPROVED,
+// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when its base requires no
+// review or magnum has not read the gate).
+type Merge struct {
+	Draft    bool
+	Decision string
 }
 
 // ciState folds counts into a board state: a failure wins, then anything
