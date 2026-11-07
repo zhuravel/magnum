@@ -527,6 +527,7 @@ func TestALocaleCrashThatStaysOnTheSameHeadNeedsYouAndLiftsTheHold(t *testing.T)
 // installsRig is the coding rig whose repository installs its gems
 // (`bundle install` when Gemfile.lock changes), which a heal runs.
 func installsRig(t *testing.T) *codingRig {
+	t.Helper()
 	r := newCodingRig(t)
 	r.cfg.Factory.Repos[0].Installs = []config.FactoryInstall{{Lock: "Gemfile.lock", Run: "bundle install"}}
 	return r
@@ -540,14 +541,14 @@ func TestALintCrashTheBranchCausedGoesToTheWriterNotAHold(t *testing.T) {
 	cases := []struct {
 		name   string
 		files  map[string]string
-		stderr func(copy string) string
+		stderr func(dir string) string
 	}{
 		{"a plugin in .rubocop.yml", map[string]string{".rubocop.yml": "plugins:\n  - rubocop-points\n"}, func(string) string {
 			return "/usr/lib/ruby/3.4.0/rubygems.rb:136:in 'require': cannot load such file -- rubocop-points (LoadError)\n" +
 				"\tfrom /gems/rubocop/lib/rubocop/plugin/loader.rb:20:in 'load'\n"
 		}},
-		{"a require in a custom cop", map[string]string{"lib/cops/points_cop.rb": "require_relative 'helprs'\n"}, func(copy string) string {
-			return copy + "/lib/cops/points_cop.rb:1:in 'require_relative': cannot load such file -- " + copy +
+		{"a require in a custom cop", map[string]string{"lib/cops/points_cop.rb": "require_relative 'helprs'\n"}, func(dir string) string {
+			return dir + "/lib/cops/points_cop.rb:1:in 'require_relative': cannot load such file -- " + dir +
 				"/lib/cops/helprs (LoadError)\n"
 		}},
 	}
