@@ -324,6 +324,15 @@ func (l Layout) FactoryLock() string { return filepath.Join(l.State(), "factory.
 // proof holds (flock) while it runs specs: one at a time on the machine.
 func (l Layout) FactorySpecsLock() string { return filepath.Join(l.State(), "factory-specs.lock") }
 
+// FactoryQALock is the lock file under State that a factory QA run holds
+// (flock) while it runs: one at a time on the machine.
+func (l Layout) FactoryQALock() string { return filepath.Join(l.State(), "factory-qa.lock") }
+
+// FactoryShims is the directory under State that a factory copy's server
+// finds first on its PATH: it holds the factory's `open`, which opens
+// nothing.
+func (l Layout) FactoryShims() string { return filepath.Join(l.State(), "factory-shims") }
+
 // FactoryLog is the factory daemon's log file in Logs.
 func (l Layout) FactoryLog() string { return filepath.Join(l.Logs(), "factory.log") }
 

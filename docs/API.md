@@ -12692,12 +12692,16 @@ type Copies interface {
 	Reserved(ctx context.Context) ([]Reservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
+	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
+	StopBrowser(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
 }
     Copies are the repositories' copies the tasks work in (copies.go): a claim
     for a task (the copy it used last first), its release, how many are free,
-    the copies reserved and for which task, the copy's local server, and the
-    reconcile of the servers after a restart.
+    the copies reserved and for which task, the copy's local server, the
+    factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
+    cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
+    the servers and the browsers after a restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
@@ -21196,10 +21200,18 @@ func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
     daemon's: the two daemons can run at once.
 
+func (l Layout) FactoryQALock() string
+    FactoryQALock is the lock file under State that a factory QA run holds
+    (flock) while it runs: one at a time on the machine.
+
 func (l Layout) FactorySeen() string
     FactorySeen is seen.json, when you last saw the factory screen's home
     (the digest of what finished while you were away counts from it), beside
     FactoryDB.
+
+func (l Layout) FactoryShims() string
+    FactoryShims is the directory under State that a factory copy's server finds
+    first on its PATH: it holds the factory's `open`, which opens nothing.
 
 func (l Layout) FactorySpecsLock() string
     FactorySpecsLock is the lock file under State that a factory precheck or

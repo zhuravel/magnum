@@ -114,7 +114,9 @@ type Copy = runtime.Copy
 // Copies are the repositories' copies the tasks work in (copies.go): a
 // claim for a task (the copy it used last first), its release, how many are
 // free, the copies reserved and for which task, the copy's local server,
-// and the reconcile of the servers after a restart.
+// the factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
+// cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
+// the servers and the browsers after a restart.
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
 	Release(ctx context.Context, t registry.Task, reason string) error
@@ -122,6 +124,8 @@ type Copies interface {
 	Reserved(ctx context.Context) ([]Reservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
+	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
+	StopBrowser(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
 }
 

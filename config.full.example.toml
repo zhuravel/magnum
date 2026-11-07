@@ -288,7 +288,9 @@ databases = [
 #                                          # data and page conventions only (default none)
 #   sign_in = "visit /dev/sign-in?as=qa@example.com"   # one line: how the walker signs in locally; never a
 #                                          # password, name the env var that holds one (default none)
-#   server_stop = "overmind kill"          # runs in the copy before the server's process group is killed (default none)
+#   server_stop = "overmind kill"          # runs in the copy, at most 30s, before the server's process group is killed
+#                                          # (default none); a stop then ends what the copy still listens on, never a
+#                                          # process outside it: one on the copy's port fails the QA run
 #   boot = "5m"                            # the server must answer ready within this (default 5m)
 #   cap = "50m"                            # one run in all, the boot included (default 50m, at most 3h): keep it
 #                                          # above boot plus the walker's timeout (fx-qa: 35m)

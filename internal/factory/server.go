@@ -11,13 +11,24 @@ package factory
 // found too: by that pid and a start the pidfile's time matches. A stop
 // signals the server's process group once its leader is the server, and
 // waits for every member of the group, not the leader only.
+//
+// A stop proves the copy's port free (proveStopped), and kills only what the
+// factory started: the server's group, and a listener whose working
+// directory is in the copy (overmind's tmux panes leave the group). A
+// process outside the copy is never signalled, whatever port it holds: one
+// on the copy's port fails the stop (portHeld). A copy whose server the
+// factory never started has nothing stopped or proven. A server starts with
+// BROWSER=true and the factory's `open` first on its PATH, so it opens no
+// tab in your browser.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,8 +38,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // serverRecord is a copy's server as StartServer recorded it (serverKey):
@@ -50,10 +64,24 @@ const serverKeyPrefix = "factory.server."
 func serverKey(name string) string { return serverKeyPrefix + name }
 
 // A stop sends the server's group SIGTERM, looks every serverPoll whether
-// it ended, and sends SIGKILL after serverStopGrace.
+// it ended, and sends SIGKILL after serverStopGrace. The repository's
+// server_stop runs at most serverStopCap, and one lsof at most lsofTimeout.
 const (
 	serverStopGrace = 10 * time.Second
 	serverPoll      = 250 * time.Millisecond
+	serverStopCap   = 30 * time.Second
+	lsofTimeout     = 15 * time.Second
+)
+
+// The kinds of the begin, ok and fail events of the servers' and the
+// browsers' steps, in the agents store (copySet.phase).
+const (
+	kindServerStart       = "factory.server_start"
+	kindServerStop        = "factory.server_stop"
+	kindServerStopCommand = "factory.server_stop_command"
+	kindServerStray       = "factory.server_stray"
+	kindBrowserStart      = "factory.browser_start"
+	kindBrowserStop       = "factory.browser_stop"
 )
 
 // serverLog is the log a copy's server writes to, in the logs directory.
@@ -107,6 +135,9 @@ func (c *copySet) StartServer(ctx context.Context, cp Copy) error {
 			return err
 		}
 	}
+	if err := ensureOpenShim(c.cfg.Layout.FactoryShims()); err != nil {
+		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
+	}
 	if err := os.MkdirAll(c.cfg.Layout.Logs(), 0o700); err != nil {
 		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
 	}
@@ -114,38 +145,45 @@ func (c *copySet) StartServer(ctx context.Context, cp Copy) error {
 		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
 	}
 	log := c.serverLog(cp.Name)
-	pid, err := c.spawn(ctx, cp.Path, cp.Env, repo.Server, log, c.serverPidFile(cp.Name))
+	env := maps.Clone(cp.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	env["BROWSER"] = "true" // what opens a page by $BROWSER runs true (serverEnv)
+	c.phase(ctx, cp.Name, kindServerStart, store.PhaseBegin, fmt.Sprintf("start the server of %s: %s", cp.Name, repo.Server))
+	fail := func(err error) error {
+		c.phase(ctx, cp.Name, kindServerStart, store.PhaseFail, err.Error())
+		return err
+	}
+	pid, err := c.spawn(ctx, cp.Path, env, repo.Server, log, c.serverPidFile(cp.Name))
 	if err != nil {
-		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
+		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err))
 	}
 	table, err := c.processes(ctx)
 	if err != nil {
 		_ = c.kill(pid, syscall.SIGTERM) // a server no record names would never be stopped
-		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
+		return fail(fmt.Errorf("start the server of %s: %w", cp.Name, err))
 	}
 	i := slices.IndexFunc(table, func(p execx.Process) bool { return p.PID == pid && !p.Zombie && p.Start != "" })
 	if i < 0 {
-		return fmt.Errorf("the server of %s (pid %d) ended at once; its log is %s", cp.Name, pid, log)
+		return fail(fmt.Errorf("the server of %s (pid %d) ended at once; its log is %s", cp.Name, pid, log))
 	}
-	b, err := json.Marshal(serverRecord{PID: pid, Start: table[i].Start, Path: cp.Path, Since: c.now()})
-	if err == nil {
-		err = c.st.SetKV(ctx, serverKey(cp.Name), string(b))
-	}
-	if err != nil {
+	if err := c.setRecord(ctx, serverKey(cp.Name), serverRecord{PID: pid, Start: table[i].Start, Path: cp.Path, Since: c.now()}); err != nil {
 		_ = c.kill(pid, syscall.SIGTERM)
-		return fmt.Errorf("record the server of %s: %w", cp.Name, err)
+		return fail(fmt.Errorf("record the server of %s: %w", cp.Name, err))
 	}
-	c.event(ctx, cp.Name, "info", "factory.server_started", fmt.Sprintf("the server of %s runs as pid %d; its log is %s", cp.Name, pid, log))
+	c.phase(ctx, cp.Name, kindServerStart, store.PhaseOK, fmt.Sprintf("the server of %s runs as pid %d; its log is %s", cp.Name, pid, log))
 	return nil
 }
 
-// StopServer stops copy cp's server, if one is recorded and still runs, and
-// forgets it.
+// StopServer stops copy cp's server, if the factory started one, and
+// forgets it (stopServer). A process outside the copy that holds the copy's
+// port is a portHeld error, left alone.
 func (c *copySet) StopServer(ctx context.Context, cp Copy) error {
 	c.srv.Lock()
 	defer c.srv.Unlock()
-	_, _, err := c.stopServer(ctx, cp.Name, "stopped")
-	return err
+	_, _, held, err := c.stopServer(ctx, cp.Name, "stopped")
+	return errors.Join(err, held)
 }
 
 // Reconcile ends the servers a stopped daemon left. After a restart no stage
@@ -154,21 +192,29 @@ func (c *copySet) StopServer(ctx context.Context, cp Copy) error {
 // the start its record names, never by its pid alone (that pid may be
 // another process's now), and every record is forgotten; one the daemon
 // spawned just before it crashed, which no record names, is found by its
-// pidfile (strayServers).
+// pidfile (strayServers). A process outside a copy that holds its port is
+// no failure of the reconcile: its stop event says so. Every recorded
+// browser is a stray too, ended the same way (reconcileBrowsers).
 func (c *copySet) Reconcile(ctx context.Context) error {
+	errs := c.reconcileServers(ctx)
+	return errors.Join(append(errs, c.reconcileBrowsers(ctx)...)...)
+}
+
+// reconcileServers is Reconcile's part for the servers.
+func (c *copySet) reconcileServers(ctx context.Context) []error {
 	c.srv.Lock()
 	defer c.srv.Unlock()
 	recs, err := c.st.KVValues(ctx, serverKeyPrefix+"*")
 	if err != nil {
-		return err
+		return []error{err}
 	}
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(recs)) {
-		if _, _, err := c.stopServer(ctx, strings.TrimPrefix(key, serverKeyPrefix), "a stray the last daemon left"); err != nil {
+		if _, _, _, err := c.stopServer(ctx, strings.TrimPrefix(key, serverKeyPrefix), "a stray the last daemon left"); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(append(errs, c.strayServers(ctx)...)...)
+	return append(errs, c.strayServers(ctx)...)
 }
 
 // lstartLayout is a process's start as ps prints it (lstart, the local
@@ -180,7 +226,10 @@ const lstartLayout = "Mon Jan _2 15:04:05 2006"
 // runs with a start the pidfile's time matches (the server's shell writes
 // it first thing: pidStartSlack), names that server, and its group is
 // ended; a pid another process took since has another start and is never
-// killed. Every such pidfile is forgotten. The caller holds c.srv.
+// killed. The pidfile says the factory started a server in the copy, so its
+// stop runs the rest of halt too: the repository's server_stop and the
+// proof, which ends a listener the server left in the copy. Every such
+// pidfile is forgotten once its stop succeeds. The caller holds c.srv.
 func (c *copySet) strayServers(ctx context.Context) []error {
 	files, err := filepath.Glob(filepath.Join(c.cfg.Layout.Logs(), serverFilePrefix+"*"+serverPidSuffix))
 	if err != nil || len(files) == 0 {
@@ -196,13 +245,13 @@ func (c *copySet) strayServers(ctx context.Context) []error {
 		if _, recorded, err := c.serverOf(ctx, name); err != nil || recorded {
 			continue // a record names it: stopServer's
 		}
+		var rec serverRecord
 		if p, ok := pidfileServer(f, table); ok {
-			if err := c.end(ctx, serverRecord{PID: p.PID, Start: p.Start}); err != nil {
-				errs = append(errs, fmt.Errorf("stop the server of %s (pid %d), which no record names: %w", name, p.PID, err))
-				continue
-			}
-			c.event(ctx, name, "info", "factory.server_stopped", fmt.Sprintf("stopped the server of %s (pid %d): started just "+
-				"before the last daemon stopped, it was never recorded", name, p.PID))
+			rec = serverRecord{PID: p.PID, Start: p.Start}
+		}
+		if _, _, err := c.halt(ctx, name, rec, "started just before the last daemon stopped, it was never recorded"); err != nil {
+			errs = append(errs, fmt.Errorf("stop the server of %s, which no record names: %w", name, err))
+			continue
 		}
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
@@ -237,87 +286,434 @@ func pidfileServer(path string, table []execx.Process) (execx.Process, bool) {
 }
 
 // stopForRelease stops copy cp's server before its release and says what it
-// did, for handoff.md.
+// did, for handoff.md. A process outside the copy on its port does not hold
+// the release up (it is not the copy's to hand back): handoff.md names it.
 func (c *copySet) stopForRelease(ctx context.Context, cp Copy) (string, error) {
 	c.srv.Lock()
 	defer c.srv.Unlock()
-	rec, ran, err := c.stopServer(ctx, cp.Name, "its task left the copy")
-	if err != nil || !ran {
+	rec, ran, held, err := c.stopServer(ctx, cp.Name, "its task left the copy")
+	if err != nil {
 		return "not running", err
 	}
-	return fmt.Sprintf("stopped at the release (it ran as pid %d since %s)", rec.PID, rec.Since.UTC().Format(time.RFC3339)), nil
+	note := ""
+	if held != nil {
+		note = "; " + held.Error()
+	}
+	if !ran {
+		return "not running" + note, nil
+	}
+	return fmt.Sprintf("stopped at the release (it ran as pid %d since %s)%s", rec.PID, rec.Since.UTC().Format(time.RFC3339), note), nil
 }
 
-// stopServer ends copy name's recorded server while it still runs (end) and
-// forgets it; ran says it was running. The caller holds c.srv.
-func (c *copySet) stopServer(ctx context.Context, name, why string) (rec serverRecord, ran bool, err error) {
+// stopServer ends copy name's recorded server (halt) and forgets it once
+// nothing of it is left; ran says its leader was running, held is the
+// portHeld of a process outside the copy that holds its port (the server is
+// forgotten all the same: that process is not the server's). A stop that
+// failed, or that left a listener of the copy running, keeps the record, so
+// the next stop, or a restart's reconcile, ends it. A copy no record names
+// had no server the factory started: nothing is stopped, signalled or
+// proven. The caller holds c.srv.
+func (c *copySet) stopServer(ctx context.Context, name, why string) (rec serverRecord, ran bool, held, err error) {
 	rec, ok, err := c.serverOf(ctx, name)
 	if err != nil || !ok {
-		return rec, false, err
+		return rec, false, nil, err
 	}
-	_, ran, err = c.running(ctx, rec)
+	ran, held, err = c.halt(ctx, name, rec, why)
 	if err != nil {
-		return rec, false, err
-	}
-	if ran {
-		if err := c.end(ctx, rec); err != nil {
-			return rec, true, fmt.Errorf("stop the server of %s (pid %d): %w", name, rec.PID, err)
-		}
-		c.event(ctx, name, "info", "factory.server_stopped", fmt.Sprintf("stopped the server of %s (pid %d): %s", name, rec.PID, why))
+		return rec, ran, held, err
 	}
 	if err := os.Remove(c.serverPidFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return rec, ran, err
+		return rec, ran, held, err
 	}
-	return rec, ran, c.st.DeleteKV(ctx, serverKey(name))
+	return rec, ran, held, c.st.DeleteKV(ctx, serverKey(name))
+}
+
+// halt ends what the factory started as copy name's server, each step even
+// when one before it failed (errors.Join): the repository's server_stop in
+// the copy, bounded by serverStopCap (overmind's tmux server leaves the
+// group: its own stop ends it), then the server's process group while its
+// leader is rec (its pid and its start; a zero rec has none), then the
+// proof (proveStopped). ran says the leader was running; held is the
+// proof's portHeld, apart from the failures. Its begin, ok and fail events
+// are factory.server_stop's. The caller holds c.srv.
+func (c *copySet) halt(ctx context.Context, name string, rec serverRecord, why string) (ran bool, held, err error) {
+	cp, repo, known := c.copyNamed(name, rec.Path)
+	c.phase(ctx, name, kindServerStop, store.PhaseBegin, fmt.Sprintf("stop the server of %s: %s", name, why))
+	var errs []error
+	if known && repo.QA != nil && strings.TrimSpace(repo.QA.ServerStop) != "" {
+		c.serverStop(ctx, cp, repo.QA.ServerStop)
+	}
+	if rec.PID > 0 {
+		var err error
+		if _, ran, err = c.running(ctx, rec); err != nil {
+			errs = append(errs, err)
+		} else if ran {
+			if err := c.end(ctx, rec); err != nil {
+				errs = append(errs, fmt.Errorf("stop the server of %s (pid %d): %w", name, rec.PID, err))
+			} else {
+				c.event(ctx, name, "info", "factory.server_stopped", fmt.Sprintf("stopped the server of %s (pid %d): %s", name, rec.PID, why))
+			}
+		}
+	}
+	if known {
+		proof := c.proveStopped(ctx, cp)
+		if _, ok := errors.AsType[portHeld](proof); ok {
+			held = proof
+		} else if proof != nil {
+			errs = append(errs, proof)
+		}
+	}
+	err = errors.Join(errs...)
+	switch {
+	case err != nil:
+		c.phase(ctx, name, kindServerStop, store.PhaseFail, errors.Join(err, held).Error())
+	case held != nil:
+		c.phase(ctx, name, kindServerStop, store.PhaseFail, fmt.Sprintf("stopped the server of %s, but %s", name, held))
+	case !known:
+		c.phase(ctx, name, kindServerStop, store.PhaseOK, fmt.Sprintf("stopped the server of %s; no [[factory.repo]] has the copy now, "+
+			"so nothing of it was proven free", name))
+	default:
+		c.phase(ctx, name, kindServerStop, store.PhaseOK, fmt.Sprintf("stopped the server of %s; nothing of the copy listens, and its port is free", name))
+	}
+	return ran, held, err
+}
+
+// serverStop runs the repository's server_stop command in copy cp, bounded
+// by serverStopCap. A failure is its event, and the stop goes on.
+func (c *copySet) serverStop(ctx context.Context, cp Copy, command string) {
+	c.phase(ctx, cp.Name, kindServerStopCommand, store.PhaseBegin, fmt.Sprintf("run %s in %s before its server's group is killed", command, cp.Name))
+	if err := c.script(ctx, cp, command, serverStopCap); err != nil {
+		c.phase(ctx, cp.Name, kindServerStopCommand, store.PhaseFail, err.Error()+"; the stop goes on")
+		return
+	}
+	c.phase(ctx, cp.Name, kindServerStopCommand, store.PhaseOK, fmt.Sprintf("ran %s in %s", command, cp.Name))
+}
+
+// copyNamed is copy name as its repository renders it: its checkout (path,
+// a record's, when set), its number, its port and its env, and the
+// repository; false when no [[factory.repo]] has the copy any more.
+func (c *copySet) copyNamed(name, path string) (Copy, config.FactoryRepo, bool) {
+	repo, n, ok := c.repoOf(name)
+	if !ok {
+		return Copy{}, repo, false
+	}
+	env := copyEnv(repo, n)
+	port, _ := strconv.Atoi(env["PORT"])
+	return Copy{Name: name, Path: cmp.Or(path, repo.Pool().Path(n)), Number: n, Port: port, Env: env}, repo, true
 }
 
 // end sends the server's process group SIGTERM and, when a member of the
-// group still runs after serverStopGrace, SIGKILL. The caller found the
-// group's leader to be the server (its pid and its start): a group outlives
-// its leader while a member runs, and no other process takes its id
-// meanwhile, so a member that ignores SIGTERM is not left behind.
+// group still runs after serverStopGrace, SIGKILL, and waits for the group
+// to end once more. The caller found the group's leader to be the server
+// (its pid and its start): a group outlives its leader while a member runs,
+// and no other process takes its id meanwhile, so a member that ignores
+// SIGTERM is not left behind. A group that outlives SIGKILL is no error
+// here: the proof names what of it still listens.
 func (c *copySet) end(ctx context.Context, rec serverRecord) error {
-	if err := c.kill(rec.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	for range int(serverStopGrace / serverPoll) {
-		if alive, err := c.groupRuns(ctx, rec.PID); err != nil || !alive {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if err := c.kill(rec.PID, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return err
 		}
-		if err := c.sleep(ctx, serverPoll); err != nil {
+		if gone, err := c.waitGone(ctx, func(table []execx.Process) bool {
+			return !slices.ContainsFunc(table, func(p execx.Process) bool { return p.PGID == rec.PID && !p.Zombie })
+		}); err != nil || gone {
 			return err
 		}
-	}
-	if alive, err := c.groupRuns(ctx, rec.PID); err != nil || !alive {
-		return err
-	}
-	if err := c.kill(rec.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
 	}
 	return nil
 }
 
-// groupRuns reports whether a process of process group pgid still runs.
-func (c *copySet) groupRuns(ctx context.Context, pgid int) (bool, error) {
+// waitGone looks at the process table every serverPoll, for at most
+// serverStopGrace, until gone says what it waits for has ended.
+func (c *copySet) waitGone(ctx context.Context, gone func([]execx.Process) bool) (bool, error) {
+	for i := 0; ; i++ {
+		table, err := c.processes(ctx)
+		if err != nil || gone(table) {
+			return err == nil, err
+		}
+		if i >= int(serverStopGrace/serverPoll) {
+			return false, nil
+		}
+		if err := c.sleep(ctx, serverPoll); err != nil {
+			return false, err
+		}
+	}
+}
+
+// listener is a process listening on a TCP port as lsof shows it: its pid,
+// its port, its command (lsof cuts it to 9 characters) and its working
+// directory, and its start as the process table showed it just before
+// (listening).
+type listener struct {
+	PID, Port           int
+	Start, Command, Cwd string
+}
+
+// portHeld is a stop's proof that found the copy's port held by a process
+// outside the copy, after the factory's own were gone: that process is
+// never signalled, and QA never walks it. pid is 0 when lsof shows no
+// process on the port that answers there.
+type portHeld struct {
+	port, pid int
+	command   string
+}
+
+func (e portHeld) Error() string {
+	if e.pid <= 0 {
+		return fmt.Sprintf("port %d is held by a process outside the copy (it answers there, and lsof shows no process of yours on it); "+
+			"the factory leaves it alone", e.port)
+	}
+	return fmt.Sprintf("port %d is held by a process outside the copy (pid %d, %s); the factory leaves it alone", e.port, e.pid, e.command)
+}
+
+// proveStopped proves, after the server's group ended, that nothing of copy
+// cp still listens and that its port is free. A listener whose working
+// directory is the copy or below it is the server's, left outside its group
+// (overmind's tmux panes): it is stopped while its pid and its start match
+// the process table (endListener), never by its pid alone. A process
+// outside the copy is never signalled, whatever port it listens on. Then it
+// looks again: a listener of the copy still there is the error that names
+// it; else one outside the copy on the copy's port, or anything lsof does
+// not show that answers there (IPv4 or IPv6), is a portHeld, returned bare.
+func (c *copySet) proveStopped(ctx context.Context, cp Copy) error {
+	ls, err := c.listening(ctx)
+	if err != nil {
+		return fmt.Errorf("prove the server of %s stopped: %w", cp.Name, err)
+	}
+	for _, l := range ls {
+		if inCopy(l.Cwd, cp.Path) && l.Start != "" {
+			c.endListener(ctx, cp, l)
+		}
+	}
+	if ls, err = c.listening(ctx); err != nil {
+		return fmt.Errorf("prove the server of %s stopped: %w", cp.Name, err)
+	}
+	var left []error
+	for _, l := range ls {
+		if inCopy(l.Cwd, cp.Path) {
+			left = append(left, fmt.Errorf("the server of %s left pid %d (%s) listening on :%d", cp.Name, l.PID, l.Command, l.Port))
+		}
+	}
+	if len(left) > 0 || cp.Port <= 0 {
+		return errors.Join(left...)
+	}
+	if i := slices.IndexFunc(ls, func(l listener) bool { return l.Port == cp.Port }); i >= 0 {
+		return portHeld{port: cp.Port, pid: ls[i].PID, command: ls[i].Command}
+	}
+	port := strconv.Itoa(cp.Port)
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		if c.dial(ctx, net.JoinHostPort(host, port)) == nil {
+			return portHeld{port: cp.Port}
+		}
+	}
+	return nil
+}
+
+// listening is every TCP listener (c.listeners) with its start: the process
+// table is read first, so a pid a later process takes after it never gets
+// the earlier one's start, and a listener the table does not show has none
+// (it is never signalled).
+func (c *copySet) listening(ctx context.Context) ([]listener, error) {
 	table, err := c.processes(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return slices.ContainsFunc(table, func(p execx.Process) bool { return p.PGID == pgid && !p.Zombie }), nil
+	ls, err := c.listeners(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i, l := range ls {
+		if j := slices.IndexFunc(table, func(p execx.Process) bool { return p.PID == l.PID && !p.Zombie }); j >= 0 {
+			ls[i].Start = table[j].Start
+		}
+	}
+	return ls, nil
+}
+
+// endListener stops l, a listener the server's group left in copy cp: that
+// one process, never its group, SIGTERM then SIGKILL after serverStopGrace,
+// each only while its pid and its start match the process table. Its begin,
+// ok and fail events are factory.server_stray's; one that outlives SIGKILL
+// is the proof's error.
+func (c *copySet) endListener(ctx context.Context, cp Copy, l listener) {
+	what := fmt.Sprintf("pid %d (%s), a listener the group left in %s on :%d", l.PID, l.Command, cp.Name, l.Port)
+	c.phase(ctx, cp.Name, kindServerStray, store.PhaseBegin, "stop "+what)
+	p := execx.Process{PID: l.PID, Start: l.Start}
+	gone := func(table []execx.Process) bool { _, runs := execx.Find(table, p); return !runs }
+	table, err := c.processes(ctx)
+	if err == nil && gone(table) {
+		c.phase(ctx, cp.Name, kindServerStray, store.PhaseOK, what+": it had ended")
+		return
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if err == nil {
+			err = c.signal(l.PID, sig) // the table showed it with its start just now
+		}
+		ended := false
+		if err == nil || errors.Is(err, syscall.ESRCH) {
+			ended, err = c.waitGone(ctx, gone)
+		}
+		if err != nil {
+			c.phase(ctx, cp.Name, kindServerStray, store.PhaseFail, "stop "+what+": "+err.Error())
+			return
+		}
+		if ended {
+			c.phase(ctx, cp.Name, kindServerStray, store.PhaseOK, "stopped "+what)
+			return
+		}
+	}
+	c.phase(ctx, cp.Name, kindServerStray, store.PhaseFail, "stop "+what+": it outlived SIGKILL")
+}
+
+// inCopy reports whether cwd is the copy's checkout at path or below it, by
+// the path or by its target when it is a link (lsof shows the target).
+func inCopy(cwd, path string) bool {
+	if inDir(cwd, path) {
+		return true
+	}
+	target, err := filepath.EvalSymlinks(path)
+	return err == nil && target != path && inDir(cwd, target)
+}
+
+// inDir reports whether dir is root or below it; an empty one is neither.
+func inDir(dir, root string) bool {
+	if dir == "" || root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, dir)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
+}
+
+// lsofListeners is every TCP listener on the Mac with its working directory:
+// `lsof -nP -iTCP -sTCP:LISTEN -Fpcn`, then `lsof -a -d cwd -p <pids> -Fpn`.
+// lsof exits 1 when it finds nothing, or a pid it was given has ended; what
+// it printed is still read.
+func (c *copySet) lsofListeners(ctx context.Context) ([]listener, error) {
+	lsof := func(label string, args ...string) ([]byte, error) {
+		res, err := c.run.Run(ctx, execx.Cmd{Name: "lsof", Args: args, Env: map[string]string{"LC_ALL": "C"}, Timeout: lsofTimeout,
+			Label: label, Probe: true})
+		if e, ok := errors.AsType[*execx.ExitError](err); ok && e.Code == 1 {
+			err = nil
+		}
+		return res.Stdout, err
+	}
+	out, err := lsof("lsof TCP listeners", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn")
+	if err != nil {
+		return nil, fmt.Errorf("list the TCP listeners: %w", err)
+	}
+	ls := parseLsofListeners(out)
+	if len(ls) == 0 {
+		return nil, nil
+	}
+	var pids []string
+	for _, l := range ls {
+		if p := strconv.Itoa(l.PID); !slices.Contains(pids, p) {
+			pids = append(pids, p)
+		}
+	}
+	if out, err = lsof("lsof listeners' cwd", "-a", "-d", "cwd", "-p", strings.Join(pids, ","), "-Fpn"); err != nil {
+		return nil, fmt.Errorf("read the TCP listeners' working directories: %w", err)
+	}
+	cwd := parseLsofCwd(out)
+	for i := range ls {
+		ls[i].Cwd = cwd[ls[i].PID]
+	}
+	return ls, nil
+}
+
+// parseLsofListeners reads lsof's -Fpcn output of the listening sockets: a
+// p line starts a process, a c line is its command, an n line one socket
+// (*:3110, 127.0.0.1:3110, [::1]:3110); a process's port is listed once
+// however many sockets it has on it.
+func parseLsofListeners(out []byte) []listener {
+	var ls []listener
+	pid, command := 0, ""
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		v := line[1:]
+		switch line[0] {
+		case 'p':
+			pid, _ = strconv.Atoi(v)
+			command = ""
+		case 'c':
+			command = v
+		case 'n':
+			i := strings.LastIndexByte(v, ':')
+			if i < 0 || pid <= 0 {
+				continue
+			}
+			port, err := strconv.Atoi(v[i+1:])
+			if l := (listener{PID: pid, Port: port, Command: command}); err == nil && port > 0 && !slices.Contains(ls, l) {
+				ls = append(ls, l)
+			}
+		}
+	}
+	return ls
+}
+
+// parseLsofCwd reads lsof's -Fpn output of the processes' cwd: each pid's
+// working directory.
+func parseLsofCwd(out []byte) map[int]string {
+	cwd := map[int]string{}
+	pid := 0
+	for line := range strings.SplitSeq(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "p"):
+			pid, _ = strconv.Atoi(line[1:])
+		case strings.HasPrefix(line, "n") && pid > 0:
+			if _, ok := cwd[pid]; !ok {
+				cwd[pid] = line[1:]
+			}
+		}
+	}
+	return cwd
+}
+
+// dialTCP connects to addr and hangs up: nil says something answers there.
+func dialTCP(ctx context.Context, addr string) error {
+	d := net.Dialer{Timeout: time.Second}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
+// isFile reports whether path is a file (not a directory) that exists.
+func isFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }
 
 // serverOf is copy name's recorded server.
 func (c *copySet) serverOf(ctx context.Context, name string) (serverRecord, bool, error) {
-	v, ok, err := c.st.GetKV(ctx, serverKey(name))
+	return c.recordOf(ctx, serverKey(name))
+}
+
+// recordOf is the server or browser record under kv key.
+func (c *copySet) recordOf(ctx context.Context, key string) (serverRecord, bool, error) {
+	v, ok, err := c.st.GetKV(ctx, key)
 	if err != nil || !ok {
 		return serverRecord{}, false, err
 	}
 	var rec serverRecord
 	if err := json.Unmarshal([]byte(v), &rec); err != nil || rec.PID <= 0 || rec.Start == "" {
 		// A record that names no process kills nothing: forget it.
-		return serverRecord{}, false, c.st.DeleteKV(ctx, serverKey(name))
+		return serverRecord{}, false, c.st.DeleteKV(ctx, key)
 	}
 	return rec, true, nil
+}
+
+// setRecord records rec under kv key.
+func (c *copySet) setRecord(ctx context.Context, key string, rec serverRecord) error {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return c.st.SetKV(ctx, key, string(b))
 }
 
 // running is the process a server record names while it runs: the same pid
@@ -340,7 +736,8 @@ const serverShell = `printf '%s\n' "$$" > "$1" || exit 1; shift; exec "$@"`
 // spawnServer starts command in the copy at dir as a pool script runs
 // (`mise -C <dir> exec -- env <env> /bin/sh -c <command>`), with the
 // daemon's environment less what the copies' commands never inherit
-// (unset), in a process group it leads, so a stop ends the processes it
+// (unset), the factory's shims first on its PATH and BROWSER=true
+// (serverEnv), in a process group it leads, so a stop ends the processes it
 // starts too; its shell writes the group leader's pid to pidfile first
 // (serverShell). Its output goes to log. It does not wait for the server,
 // which outlives the call and its context; a goroutine reaps it when it
@@ -353,11 +750,7 @@ func (c *copySet) spawnServer(ctx context.Context, dir string, env map[string]st
 	args := append([]string{"-c", serverShell, "sh", pidfile, "mise"}, slots.MiseExecArgs(dir, env, command)...)
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), "/bin/sh", args...)
 	cmd.Dir = dir
-	unset := c.unset()
-	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
-		k, _, _ := strings.Cut(kv, "=")
-		return slices.Contains(unset, k)
-	})
+	cmd.Env = serverEnv(os.Environ(), c.cfg.Layout.FactoryShims(), c.unset())
 	cmd.Stdout, cmd.Stderr = f, f
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -369,4 +762,39 @@ func (c *copySet) spawnServer(ctx context.Context, dir string, env map[string]st
 		_ = f.Close()
 	}()
 	return cmd.Process.Pid, nil
+}
+
+// serverEnv is the environment a copy's server starts with: base less the
+// variables the copies never inherit (unset), with the factory's shims
+// first on its PATH (their `open` opens nothing: openShim) and BROWSER=true
+// (what opens a page by $BROWSER runs `true`), so a server that opens a
+// page at its start opens no tab in your browser.
+func serverEnv(base []string, shims string, unset []string) []string {
+	path := ""
+	env := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		switch k, v, _ := strings.Cut(kv, "="); {
+		case k == "PATH":
+			path = v
+		case k == "BROWSER", slices.Contains(unset, k):
+		default:
+			env = append(env, kv)
+		}
+	}
+	if path != "" {
+		shims += ":" + path
+	}
+	return append(env, "PATH="+shims, "BROWSER=true")
+}
+
+// openShim is the factory's `open` in FactoryShims: it says on stderr what
+// it refused and exits 0, so a server whose start opens a page goes on.
+const openShim = "#!/bin/sh\nprintf 'magnum factory: refused `open %s`: a copy'\\''s server opens no browser tab\\n' \"$*\" >&2; exit 0\n"
+
+// ensureOpenShim writes the factory's `open` (openShim) to dir, executable.
+func ensureOpenShim(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return fsx.WriteFileAtomic(filepath.Join(dir, "open"), []byte(openShim), 0o755)
 }

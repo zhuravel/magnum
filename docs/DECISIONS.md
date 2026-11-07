@@ -18475,6 +18475,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestTheProbeRunsAsAFunctionBody (it returned undefined) and TestTheProbeReportsItsOwnFailure (a page that
     broke it left no file).
   - New phrases in TestCheckPromptsRendersTheQAWalkersPrompt.
+- **A copy's server stops with proof that its port is free and opens no browser tab, and the factory runs its own
+  headless Chrome** (2026-11-08, R55 slice 1, its third step). A QA run must leave the Mac as it found it, and a
+  stop only signalled the server's group: overmind's tmux panes leave the group and kept listening.
+  - A stop kills only what the factory started: the server's group, while its leader's pid and start match the
+    record, and a TCP listener whose working directory is in the copy (lsof), one process at a time, only while
+    its pid and start match the process table. Before that, the repository's `server_stop` runs in the copy for at
+    most 30 s; its failure is an event and the stop goes on. Then `proveStopped` looks again, over IPv4 and IPv6. A
+    listener of the copy that is still running fails the stop by its pid, command and port, and the record stays, so
+    the next stop or a restart's reconcile tries again. A process outside the copy is never signalled, whatever
+    port it holds. If it holds the copy's port, `StopServer` fails with "port N is held by a process outside the
+    copy" (`portHeld`), so QA never walks it. A release and a reconcile go on and only record it (in handoff.md and
+    the stop's fail event). A copy with no record never had a server the factory started: nothing runs, nothing is
+    signalled and nothing is proven. A pidfile with no record (a crash before the record) still counts as a server
+    the factory started. Every step writes begin, ok and fail events (`factory.server_start`, `_stop`,
+    `_stop_command`, `_stray`, `factory.browser_start`, `_stop`).
+  - A server starts with `BROWSER=true` in its env and with `<state>/factory-shims` first on its PATH. That
+    folder holds an `open` that writes what it refused to stderr and exits 0. A server that runs /usr/bin/open
+    by its full path gets past the shim.
+  - `StartBrowser` starts `[factory] browser`, or the first default that exists (else an error that names the key).
+    It runs with the pinned headless flags and a profile of its own in `<dir>/chrome`, and `dir` must be a folder
+    under the factory's tasks directory. So it never uses your profile, and it never attaches to your running
+    Chrome. It is a process group of its own, recorded like a server under `factory.browser.<copy>`. It reads the
+    DevTools port from a fresh `DevToolsActivePort` (an earlier run's copy is deleted first) for up to 30 s. A
+    browser that never writes it is stopped and forgotten. `StopBrowser` and `Reconcile` end its group only while
+    the pid and start match. They delete the profile and forget the record.
+  - `FactoryQALock` (`<state>/factory-qa.lock`) is added for the QA run of step 4.
+
+  Rejected:
+  - The plan's proof, which killed every listener on the copy's port. That listener can be your own dev server,
+    another copy's server or a review slot's server. The port alone never names a process the factory started.
+  - Running the proof without a record (the plan's "leader-gone" case). A record whose leader is gone still gets
+    its proof. No record means no server the factory started, and so nothing to kill.
+  - Signalling a cwd-matched listener's group. Its group may hold processes outside the copy, such as your shell's
+    job.
+  - Failing a release on a foreign holder of the port. The process is not the copy's, and the release would stay
+    stuck until it ended.
+
+  Tests, failing first (none of it existed): TestTheServersPathFindsTheOpenShimFirst,
+  TestAServerStartsWithNoWayToOpenABrowserTab, TestAServerStopRunsServerStopBeforeTheGroupKill,
+  TestAFailingServerStopStillKillsTheGroup, TestAServerStopKillsAListenerLeftInTheCopy,
+  TestAServerStopNeverSignalsAPidAnotherProcessTook, TestAServerStopLeavesAListenerOutsideTheCopyAlone,
+  TestAServerStopLeavesAForeignListenerOnTheCopysPortAlone, TestAServerStopNamesAnUnseenHolderOfThePort,
+  TestAStopOfACopyWhoseRunStartedNoServerKillsNothing, TestAServerStopEndsAListenerInItsGroup,
+  TestAServerStopThatCannotFreeThePortFails, TestAReleaseGoesOnWhenAProcessOutsideTheCopyHoldsItsPort,
+  TestParseLsofListenersAndCwd, TestInDirTakesTheCopyAndBelowOnly, TestStartBrowserRecordsChromeAndReadsItsDevToolsPort,
+  TestStartBrowserNeverReadsAnEarlierRunsPort, TestStartBrowserWithNoChromeNamesTheKey,
+  TestStartBrowserStartsTheConfiguredBrowser, TestStartBrowserRefusesAProfileOutsideTheTasksFolders,
+  TestStartBrowserThatNeverListensIsStoppedAndForgotten, TestStopBrowserEndsItsGroupAndDeletesTheProfile and
+  TestReconcileKillsAStrayBrowserOnlyWhenPidAndStartMatch. The tests of a foreign listener, of a stop with no
+  server and of a group member each failed against a mutant that killed by port, proved without a record, or
+  skipped the group kill.
 
 ## Learned rules
 

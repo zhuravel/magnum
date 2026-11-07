@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,10 +77,25 @@ type copiesRig struct {
 	redisAt []string // where each flush went, "<host>:<port>"
 	table   []execx.Process
 	kills   []string // "<pid> <signal>"
-	// ignoreTerm are the processes a SIGTERM does not end.
-	ignoreTerm map[int]bool
-	spawned    []spawnCall
-	nextPID    int
+	// ignoreTerm are the processes a SIGTERM does not end, unkillable
+	// those no signal ends.
+	ignoreTerm, unkillable map[int]bool
+	spawned                []spawnCall
+	nextPID                int
+	// signals are the signals sent to one process, "<pid> <signal>"; order
+	// is every mise script, group kill and signal as they came: "mise
+	// <script>", "kill <pgid> <signal>", "signal <pid> <signal>".
+	signals, order []string
+	// listening are the TCP listeners lsof shows while their pid runs;
+	// answers the addresses something answers on that lsof does not show.
+	listening []listener
+	answers   map[string]bool
+	// browsers are the browsers spawned; devTools is what one writes to its
+	// profile's DevToolsActivePort ("" = it never listens); browserBins are
+	// the binaries that exist.
+	browsers    []browserCall
+	devTools    string
+	browserBins map[string]bool
 }
 
 // fakeHerdrView is one herdr session as the copies' guard reads it.
@@ -135,10 +151,19 @@ func (f *fakeHerdrView) clear() {
 	f.snap, f.procs = herdr.Snapshot{}, nil
 }
 
-// miseCall is one `mise -C <dir> exec -- env K=V… /bin/sh -c <script>`.
+// miseCall is one `mise -C <dir> exec -- env K=V… /bin/sh -c <script>`
+// and its timeout.
 type miseCall struct {
 	Dir, Script string
 	Env         map[string]string
+	Timeout     time.Duration
+}
+
+// browserCall is one browser the copies started.
+type browserCall struct {
+	Bin, Log string
+	Args     []string
+	PID      int
 }
 
 // spawnCall is one server the copies started.
@@ -160,7 +185,8 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 	}
 	r := &copiesRig{t: t, ctx: t.Context(), root: root, clock: storetest.NewClock(t0), dbs: &copyDBs{version: map[string]string{}},
 		failSetup: map[string]int{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
-		factoryHerdr: &fakeHerdrView{}, yourHerdr: &fakeHerdrView{}}
+		factoryHerdr: &fakeHerdrView{}, yourHerdr: &fakeHerdrView{},
+		devTools: "9333\n/devtools/browser/x\n", browserBins: map[string]bool{config.DefaultFactoryBrowsers[0]: true}}
 	r.real = &execx.Real{BaseEnv: []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
@@ -227,6 +253,11 @@ func (r *copiesRig) newCopies() *copySet {
 	c.processes = r.processTable
 	c.kill = r.killGroup
 	c.spawn = r.spawn
+	c.signal = r.signal
+	c.listeners = r.listeners
+	c.dial = r.dial
+	c.spawnBrowser = r.spawnBrowser
+	c.exists = r.exists
 	c.sleep = func(context.Context, time.Duration) error { return nil }
 	c.now = r.clock.Now
 	return c
@@ -415,7 +446,7 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	if len(a) < 7 || a[0] != "-C" || a[2] != "exec" || a[3] != "--" || a[4] != "env" {
 		return execx.Result{}, fmt.Errorf("unexpected mise call %v", a)
 	}
-	mc := miseCall{Dir: a[1], Env: map[string]string{}}
+	mc := miseCall{Dir: a[1], Env: map[string]string{}, Timeout: c.Timeout}
 	i := 5
 	for ; i < len(a) && strings.Contains(a[i], "=") && !strings.HasPrefix(a[i], "/"); i++ {
 		k, v, _ := strings.Cut(a[i], "=")
@@ -427,6 +458,7 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	mc.Script = a[i+2]
 	r.mu.Lock()
 	r.scripts = append(r.scripts, mc)
+	r.order = append(r.order, "mise "+mc.Script)
 	slot := mc.Env["WT_BRANCH"]
 	fail := mc.Script == "bin/worktree-setup" && r.failSetup[slot] > 0
 	if fail {
@@ -484,15 +516,102 @@ func (r *copiesRig) processTable(context.Context) ([]execx.Process, error) {
 }
 
 // killGroup records the signal; a SIGTERM or SIGKILL ends the group's
-// processes in the table, but those ignoreTerm names survive a SIGTERM.
+// processes in the table, but those ignoreTerm names survive a SIGTERM,
+// and those unkillable names survive both.
 func (r *copiesRig) killGroup(pgid int, sig syscall.Signal) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.kills = append(r.kills, fmt.Sprintf("%d %s", pgid, sig))
+	r.order = append(r.order, fmt.Sprintf("kill %d %s", pgid, sig))
 	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool {
-		return p.PGID == pgid && (sig == syscall.SIGKILL || !r.ignoreTerm[p.PID])
+		return p.PGID == pgid && r.ends(p.PID, sig)
 	})
 	return nil
+}
+
+// signal records a signal to one process and ends it as killGroup does.
+func (r *copiesRig) signal(pid int, sig syscall.Signal) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.signals = append(r.signals, fmt.Sprintf("%d %s", pid, sig))
+	r.order = append(r.order, fmt.Sprintf("signal %d %s", pid, sig))
+	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool { return p.PID == pid && r.ends(pid, sig) })
+	return nil
+}
+
+// ends reports whether sig ends process pid. The caller holds r.mu.
+func (r *copiesRig) ends(pid int, sig syscall.Signal) bool {
+	return !r.unkillable[pid] && (sig == syscall.SIGKILL || !r.ignoreTerm[pid])
+}
+
+// listen starts process l in group pgid (its own when 0), started now,
+// listening on l.Port with l.Cwd as its working directory.
+func (r *copiesRig) listen(l listener, pgid int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.table = append(r.table, execx.Process{PID: l.PID, PPID: 1, PGID: cmp.Or(pgid, l.PID), Start: lstart(r.clock.Now()), Name: l.Command})
+	r.listening = append(r.listening, l)
+}
+
+// alive reports whether pid runs. The caller holds r.mu.
+func (r *copiesRig) alive(pid int) bool {
+	return slices.ContainsFunc(r.table, func(p execx.Process) bool { return p.PID == pid && !p.Zombie })
+}
+
+// listeners is what lsof shows: the listeners whose pid runs, without
+// their start (the process table has it).
+func (r *copiesRig) listeners(context.Context) ([]listener, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []listener
+	for _, l := range r.listening {
+		if r.alive(l.PID) {
+			out = append(out, listener{PID: l.PID, Port: l.Port, Command: l.Command, Cwd: l.Cwd})
+		}
+	}
+	return out, nil
+}
+
+// dial answers on an address answers names, and on the port of a listener
+// that runs.
+func (r *copiesRig) dial(_ context.Context, addr string) error {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	port, _ := strconv.Atoi(p)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.answers[addr] || slices.ContainsFunc(r.listening, func(l listener) bool { return l.Port == port && r.alive(l.PID) }) {
+		return nil
+	}
+	return errors.New("connection refused")
+}
+
+// spawnBrowser starts a fake browser: a new pid in the table, leading its
+// group, started now, which writes devTools to its profile's
+// DevToolsActivePort when it is set.
+func (r *copiesRig) spawnBrowser(_ context.Context, bin string, args []string, log string) (int, error) {
+	r.mu.Lock()
+	pid := r.nextPID
+	r.nextPID++
+	r.browsers = append(r.browsers, browserCall{Bin: bin, Log: log, Args: args, PID: pid})
+	r.table = append(r.table, execx.Process{PID: pid, PPID: 1, PGID: pid, Start: lstart(r.clock.Now()), Name: "Google Chrome"})
+	devTools := r.devTools
+	r.mu.Unlock()
+	for _, a := range args {
+		if dir, ok := strings.CutPrefix(a, "--user-data-dir="); ok && devTools != "" {
+			r.write(filepath.Join(dir, "DevToolsActivePort"), devTools)
+		}
+	}
+	return pid, nil
+}
+
+// exists reports whether path is one of the browsers the rig has.
+func (r *copiesRig) exists(path string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.browserBins[path]
 }
 
 // spawn starts a fake server: a new pid in the table, started now, which

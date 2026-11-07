@@ -860,7 +860,8 @@ herdr_session = "factory"         # the herdr session of the factory's panes (`h
                                   # the same diff, in the card's file order
 # browser = ""                    # the headless Chrome a qa stage starts for its walker: "" = the first of
                                   # /Applications/Google Chrome.app and /Applications/Chromium.app that exists; else
-                                  # the absolute path of its binary (~ expands)
+                                  # the absolute path of its binary (~ expands). It runs with a profile of its own in
+                                  # the QA run's folder, never yours, and never attaches to your running Chrome
 observe = "10s"                   # how often the factory reads its panes; must be positive
 poll = "45s"                      # how often its main tick runs: the holds, your requests, the published PRs as
                                   # magnum's registry has them, then a step of each task (a request kicks a tick at

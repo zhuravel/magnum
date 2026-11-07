@@ -717,6 +717,11 @@ type fakeCopies struct {
 	ended, cancelled int
 	// onReconcile runs at each Reconcile.
 	onReconcile func()
+	// startedBrowsers and stoppedBrowsers name the copies whose browser
+	// started and stopped; stopCtxErr is the context's error at each stop
+	// of a server or a browser, in order.
+	startedBrowsers, stoppedBrowsers []string
+	stopCtxErr                       []error
 }
 
 func (f *fakeCopies) Claim(ctx context.Context, t registry.Task) (Copy, error) {
@@ -818,10 +823,26 @@ func (f *fakeCopies) StartServer(_ context.Context, c Copy) error {
 	return nil
 }
 
-func (f *fakeCopies) StopServer(_ context.Context, c Copy) error {
+func (f *fakeCopies) StopServer(ctx context.Context, c Copy) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, c.Name)
+	f.stopCtxErr = append(f.stopCtxErr, ctx.Err())
+	return nil
+}
+
+func (f *fakeCopies) StartBrowser(_ context.Context, c Copy, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startedBrowsers = append(f.startedBrowsers, c.Name)
+	return "http://127.0.0.1:9333", nil
+}
+
+func (f *fakeCopies) StopBrowser(ctx context.Context, c Copy) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stoppedBrowsers = append(f.stoppedBrowsers, c.Name)
+	f.stopCtxErr = append(f.stopCtxErr, ctx.Err())
 	return nil
 }
 

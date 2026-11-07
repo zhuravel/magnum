@@ -92,20 +92,27 @@ type copySet struct {
 	// claims add now (their setup runs without mu), and locks are the
 	// copies' own locks (lockCopy). tried names the broken copies this
 	// daemon start broke or repaired once (repairable). srv guards the
-	// servers' records.
-	mu, srv sync.Mutex
-	adding  map[string]bool
-	tried   map[string]bool
-	locks   map[string]*sync.Mutex
+	// servers' records, brw the browsers'.
+	mu, srv, brw sync.Mutex
+	adding       map[string]bool
+	tried        map[string]bool
+	locks        map[string]*sync.Mutex
 
 	// Seams the tests replace: the process table, the signal to a server's
-	// process group, the start of a server, the wait between a stop's looks
-	// and the clock.
-	processes func(ctx context.Context) ([]execx.Process, error)
-	kill      func(pgid int, sig syscall.Signal) error
-	spawn     func(ctx context.Context, dir string, env map[string]string, command, log, pidfile string) (int, error)
-	sleep     func(ctx context.Context, d time.Duration) error
-	now       func() time.Time
+	// process group and to one process, the start of a server, the TCP
+	// listeners (lsof) and a connection to an address (nil: something
+	// answers), the start of a browser and whether a file exists, the wait
+	// between a stop's looks and the clock.
+	processes    func(ctx context.Context) ([]execx.Process, error)
+	kill         func(pgid int, sig syscall.Signal) error
+	signal       func(pid int, sig syscall.Signal) error
+	spawn        func(ctx context.Context, dir string, env map[string]string, command, log, pidfile string) (int, error)
+	listeners    func(ctx context.Context) ([]listener, error)
+	dial         func(ctx context.Context, addr string) error
+	spawnBrowser func(ctx context.Context, bin string, args []string, log string) (pid int, err error)
+	exists       func(path string) bool
+	sleep        func(ctx context.Context, d time.Duration) error
+	now          func() time.Time
 }
 
 // The copies the daemon wires are the engine's.
@@ -127,10 +134,13 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 	atWork func(context.Context, registry.Task) (role string, you bool, err error)) Copies {
 	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner, atWork: atWork,
 		adding: map[string]bool{}, tried: map[string]bool{}, locks: map[string]*sync.Mutex{},
-		kill: func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
-		now:  time.Now}
+		kill:   func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
+		signal: syscall.Kill, exists: isFile, dial: dialTCP,
+		now: time.Now}
 	c.processes = func(ctx context.Context) ([]execx.Process, error) { return execx.ProcessTable(ctx, run) }
 	c.spawn = c.spawnServer
+	c.listeners = c.lsofListeners
+	c.spawnBrowser = c.spawnChrome
 	c.sleep = func(ctx context.Context, d time.Duration) error {
 		t := time.NewTimer(d)
 		defer t.Stop()
@@ -1144,5 +1154,18 @@ func (c *copySet) repoOf(name string) (config.FactoryRepo, int, bool) {
 func (c *copySet) event(ctx context.Context, name, level, kind, msg string) {
 	subject := "slot:" + name
 	_, _ = c.st.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject, Kind: kind,
+		Message: execx.Redact(msg)})
+}
+
+// phase records the begin, ok or fail event of a destructive step of copy
+// name (a server's or a browser's start and stop) as event does; a failure
+// is a warning.
+func (c *copySet) phase(ctx context.Context, name, kind, phase, msg string) {
+	level := "info"
+	if phase == store.PhaseFail {
+		level = "warn"
+	}
+	subject := "slot:" + name
+	_, _ = c.st.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject, Kind: kind, Phase: &phase,
 		Message: execx.Redact(msg)})
 }
