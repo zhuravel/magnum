@@ -54,6 +54,8 @@ type fakeHerdr struct {
 	onPrompt func(f *fakeHerdr, target, text string)
 	onRun    func(f *fakeHerdr, pane, command string)
 	snapErr  error
+	// closeErr, when set, is what WorkspaceClose answers, closing nothing.
+	closeErr error
 	// promptErr, when set, is what AgentPrompt answers for text, after it
 	// recorded the prompt (herdr may have typed it); focused is the pane
 	// the operator's terminal shows focused.
@@ -134,6 +136,9 @@ func (f *fakeHerdr) WorkspaceCreate(_ context.Context, o herdr.WorkspaceCreateOp
 func (f *fakeHerdr) WorkspaceClose(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
 	f.workspaces = slices.DeleteFunc(f.workspaces, func(w herdr.Workspace) bool { return w.ID == id })
 	f.panes = slices.DeleteFunc(f.panes, func(p herdr.Pane) bool { return p.WorkspaceID == id })
 	f.agents = slices.DeleteFunc(f.agents, func(a herdr.AgentInfo) bool { return a.WorkspaceID == id })

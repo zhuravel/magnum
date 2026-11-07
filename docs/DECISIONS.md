@@ -15998,37 +15998,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `LoadConfig` put in `retry` makes it fail), TestParkOfATaskGoesThroughWhileAnotherTasksLiaisonStarts (it
   keeps the lock per task) and TestTalkOfAnUnknownTaskFails.
 
-- The liaison of a task that ended, or that was published while it was live, parks once you left it
-  (2026-11-07, the factory liaison's first slice, after its whole-branch review). A push or a drop you ask the
-  liaison for in its chat comes with the task's park: `endTask` parks in the tick that answers the decide,
-  `finishPublish` a tick or more later. That park finds you in the liaison's pane (you typed "drop it" within
-  `human_cooldown`) or its turn in flight (it runs the decide), so `parkLiaison` leaves it, and the engine
-  parks such a task no more: `pressure` parks only the tasks that wait on you, `talkTask` only after a talk,
-  and a liaison's turn that ends is settled without a park. The liaison stayed live for good. Now every
-  observe pass ends with `parkLeftLiaisons`: for each live `fx-liaison` session it reads the task, and parks
-  (`parkLiaison`, with its talk lock, its cooldown and its `ErrBusy`) the liaison of a task that is done,
-  stopped or failed, and of a published task the one that started before the task moved into published (its
-  spans, `registry.Spans`). It tries on every pass, so a liaison whose last turn ended within the cooldown is
-  parked by the first pass after the cooldown, and one whose turn ends after it by the pass that sees the
-  turn end. It runs after `typed`, and it logs the parks it makes, never a liaison it leaves, as a pass comes
-  every ten seconds: `parkLiaison` now returns why it left one, and `Park` logs that as before. You still
-  talk with a published task's liaison (its folder stays), so a liaison a talk started after the publish is
-  no park the publish owed, and it stays, as an active task's does: the idle liaison that parks by itself is
-  still to come.
-  The re-park after a talk (`talkTask`) now reads the task, parks and writes its event on a context the drain
-  does not cancel: a drain that cut the Talk lost the event of a park that failed. A read of the task that
-  fails there is logged, and the observe pass parks the liaison then.
-  Rejected: the park in `completed` alone, where the review put it (you asked for the decide within the
-  cooldown, so the turn ends inside it and a later pass must try anyway, and the pass after the observations
-  covers a turn that ends in it); every published task's liaison (a talk after the push would park ten
-  seconds after the first turn ended, while you read it); a mark in memory of the parks left (a restart
-  within the cooldown loses it, while the states and the spans are the registry's).
+- The liaison of a task that ended, or that was published while it was live, parks once it has been idle and
+  you left it for the human cooldown (2026-11-07, the factory liaison's first slice, after its whole-branch
+  review and its re-review). A push or a drop you ask the liaison for in its chat comes with the task's park:
+  `endTask` parks in the tick that answers the decide, `finishPublish` a tick or more later. That park finds
+  you in the liaison's pane (you typed "drop it" within `human_cooldown`) or its turn in flight (it runs the
+  decide), so `parkLiaison` leaves it, and the engine parks such a task no more: `pressure` parks only the
+  tasks that wait on you, `talkTask` only after a talk, and a liaison's turn that ends is settled without a
+  park. The liaison stayed live for good. Now every observe pass ends with `parkLeftLiaisons`. For each live
+  `fx-liaison` session it reads the task, and a liaison is owed the park when its task is done, stopped or
+  failed, or when its task is published and it started before the task moved into published (its spans,
+  `registry.Spans`). An owed liaison is parked only once it has been idle for `human_cooldown`
+  (`liaisonIdleSince`): since the later of the time its agent's status last changed while herdr shows it
+  neither at work nor blocked (`agent_status_at`) and the end of the row's newest run, or, when neither tells,
+  since the pass that first saw it so (kept in memory), so it waits a whole cooldown from then. Then
+  `parkLiaison`'s own guards hold: a talk at work on it (the talk lock), you in its pane (`operatorOn`), its
+  agent at work (`ErrBusy`). The idle rule is what keeps your chat: the liaison asks with AskUserQuestion
+  inside the turn the talk's prompt started, so your pick, the words you type into that dialog and the decide
+  it runs all come while that run is in flight, and `ObsHumanActive` needs no run in flight. Nothing set the
+  row's `human_active_at`, and the pass that settled the turn parked the liaison ten to twenty seconds after
+  its last message, while you read it. A talk that sends no first prompt (it found the liaison live, or
+  resumed a parked one whose conversation had its prompt) now sets the liaison row's `human_active_at`: it took
+  you into that pane, which may have idled for long, so a park leaves it for the cooldown, as after your typing.
+  A talk that sends the prompt starts a turn, whose end the idle rule counts from; one whose first prompt failed
+  records nothing, since the agents manager refuses a prompt within the cooldown and the next talk sends it.
+  The pass runs after `typed` and logs the parks it makes, never a liaison it leaves, since a pass comes every
+  ten seconds: `parkLiaison` returns why it left one, and `Park` logs that as before. A park that fails for
+  another reason than `ErrBusy` is logged once per liaison per daemon start. You still talk with a published
+  task's liaison (its folder stays), and a liaison a talk started after the publish is no park the publish
+  owed: in this milestone nothing moves a published task on but your stop (no merge makes it done), so such a
+  liaison stays until you exit it, or until you stop the task and the pass parks it as any ended task's.
+  The re-park after a talk (`talkTask`) reads the task, parks and writes its event on a context the drain does
+  not cancel: a drain that cut the Talk lost the event of a park that failed. A read of the task that fails
+  there is logged, and the observe pass parks the liaison then.
+  Rejected: the park in `completed` alone, where the review put it (the turn ends while you read it, so a later
+  pass must try anyway); every published task's liaison (a talk after the push would park its liaison once it
+  idled, though nothing about the task changed); a mark in memory of the parks left, or of the talks (a restart
+  within the cooldown loses it, while the states, the spans, the runs, the sessions and `human_active_at` are
+  the stores'); a talk's `human_active_at` after a prompt that went out as well (the engine's own parks, a drop
+  on the screen or a Mac short on memory, would then leave every liaison for the cooldown after its talk, and
+  the turn's end already starts the idle time); `ObsHumanActive` within a run (an agents-wide change, where a
+  run's own work would count as you).
   Tests, failing first: TestALiaisonThatPushedOrDroppedItsTaskParksOnceYouLeft (drop and push: the liaison
-  stayed live past the cooldown), TestALiaisonAtWorkWhenItsTaskEndedParksOnceItsTurnEnds (live after its turn
-  ended) and TestAFailedParkAfterADrainedTalkIsLogged (no park event). Guards:
-  TestATalkAfterThePushKeepsItsLiaison (it fails when every published task's liaison owes the park) and
-  TestTalkAfterTheLiaisonsRowWasMarkedLostResumesItsConversation (the exit race once an observe pass marked
-  the row lost; it fails with a second first prompt when `firstPromptDue` reads the live row alone).
+  stayed live past the cooldown) and TestAFailedParkAfterADrainedTalkIsLogged (no park event); then, after the
+  re-review, TestALiaisonAtWorkWhenItsTaskEndedParksACooldownAfterItsTurnEnds and
+  TestALiaisonYouPickedADropInParksACooldownAfterItsTurnEnds (the pass that settled the turn parked it),
+  TestATalkIntoAPublishedTasksLiveLiaisonKeepsItForTheCooldown (parked minutes after the talk; it fails as
+  well with the idle rule and no presence) and TestAParkOfALeftLiaisonThatKeepsFailingIsLoggedOnce (logged on
+  each of four passes). Guards: TestATalkAfterThePushKeepsItsLiaison (it fails when every published task's
+  liaison owes the park) and TestTalkAfterTheLiaisonsRowWasMarkedLostResumesItsConversation (the exit race
+  once an observe pass marked the row lost; it fails with a second first prompt when `firstPromptDue` reads the
+  live row alone).
 
 ## Learned rules
 

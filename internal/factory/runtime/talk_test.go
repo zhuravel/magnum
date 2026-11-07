@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -781,9 +782,11 @@ func TestALiaisonThatPushedOrDroppedItsTaskParksOnceYouLeft(t *testing.T) {
 	}
 }
 
-// The liaison's turn may still be in flight when the cooldown is over: the
-// observe pass that sees it end parks the liaison of the task that ended.
-func TestALiaisonAtWorkWhenItsTaskEndedParksOnceItsTurnEnds(t *testing.T) {
+// The liaison's turn may still be in flight when its task ends (it runs the
+// decide that drops the task): once that turn ends you read its last
+// message, so it stays live, and the observe passes park it once it has been
+// idle for the human cooldown since.
+func TestALiaisonAtWorkWhenItsTaskEndedParksACooldownAfterItsTurnEnds(t *testing.T) {
 	g := newRig(t)
 	g.talk() // its turn in flight: the liaison runs the decide that drops the task
 	g.endTask(registry.TaskStopped)
@@ -795,9 +798,133 @@ func TestALiaisonAtWorkWhenItsTaskEndedParksOnceItsTurnEnds(t *testing.T) {
 	}
 
 	g.endLiaisonTurn()
+	if !g.liaisonLive() {
+		t.Fatal("the pass that saw the liaison's turn end parked it while you read its last message")
+	}
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration - time.Minute)
+	g.observe()
+	if !g.liaisonLive() {
+		t.Fatal("an observe pass parked the liaison within the human cooldown after its turn ended")
+	}
+
+	g.clock.Add(time.Minute)
+	g.observe()
 
 	if g.liaisonLive() {
-		t.Fatal("the liaison of a stopped task is live after its turn ended")
+		t.Fatal("the liaison of a stopped task is live a human cooldown after its turn ended")
+	}
+}
+
+// You answer the liaison's question with a pick in its AskUserQuestion
+// dialog, inside the turn the talk's prompt started: herdr shows its agent
+// blocked, then at work, while that run is in flight, so nothing notes you
+// in its pane. Your pick is a drop, the liaison runs the decide, and its
+// turn ends: it stays live while you read its last message, and parks once
+// it has been idle for the human cooldown.
+func TestALiaisonYouPickedADropInParksACooldownAfterItsTurnEnds(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.h.setSession(g.liaisonAgent(), "sid-liaison")
+	name := g.liaisonAgent()
+	g.observe() // at work on the talk's prompt
+	g.h.screen(name, "Drop PR-12345?\n❯ 1. Drop it (Recommended)\n  2. Keep it\nEnter to select · Esc to cancel\n")
+	g.h.setStatus(name, herdr.StatusBlocked)
+	g.observeN(2)
+	g.clock.Add(2 * time.Minute) // you read the question
+	g.h.focus(name)
+	g.h.screen(name, "")
+	g.h.setStatus(name, herdr.StatusWorking) // your pick: the liaison runs the decide
+	g.observe()
+	if at := g.liaisonRowOf().HumanActiveAt; at != nil {
+		t.Fatalf("the liaison's row human_active_at = %v during the talk's run, want none", at)
+	}
+	g.endTask(registry.TaskStopped)
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+
+	g.h.setStatus(name, herdr.StatusIdle) // its turn ends with its last message
+	g.observeN(2)
+	g.h.focus("")
+	g.observeN(3)
+	if !g.liaisonLive() {
+		t.Fatal("an observe pass parked the liaison right after the turn you picked the drop in")
+	}
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration - time.Minute)
+	g.observe()
+	if !g.liaisonLive() {
+		t.Fatal("an observe pass parked the liaison within the human cooldown after its turn ended")
+	}
+
+	g.clock.Add(time.Minute)
+	g.observe()
+
+	if g.liaisonLive() {
+		t.Fatal("the liaison of a stopped task is live a human cooldown after its turn ended")
+	}
+}
+
+// A talk that takes you into the live liaison of a published task (left
+// live by the push's park, you were with it) is you in its pane: no observe
+// pass parks it within the human cooldown after that talk, though your
+// typing's cooldown and its idle time ran out meanwhile. Once that talk's
+// cooldown is over too, it parks.
+func TestATalkIntoAPublishedTasksLiveLiaisonKeepsItForTheCooldown(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.h.setSession(g.liaisonAgent(), "sid-liaison")
+	g.endLiaisonTurn()
+	g.youTypeIntoTheLiaison()
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusIdle)
+	g.h.focus("")
+	g.observeN(2)
+	g.endTask(registry.TaskPublished)
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	if !g.liaisonLive() {
+		t.Fatal("the push's park parked the liaison you typed into a moment ago")
+	}
+	cooldown := g.cfg.Factory.HumanCooldown.Duration
+	g.clock.Add(cooldown - 2*time.Minute)
+	pane := store.Deref(g.liaisonSession().HerdrPaneID)
+
+	if again := g.talk(); again != pane {
+		t.Fatalf("the talk named pane %s, want the live liaison's %s", again, pane)
+	}
+	g.clock.Add(5 * time.Minute) // your typing's cooldown and the liaison's idle cooldown are over
+	g.observeN(2)
+	if !g.liaisonLive() {
+		t.Fatal("an observe pass parked the liaison a talk took you into minutes ago")
+	}
+
+	g.clock.Add(cooldown)
+	g.observe()
+
+	if g.liaisonLive() {
+		t.Fatal("the liaison of a published task is live a human cooldown after your talk")
+	}
+}
+
+// A park of a left liaison that keeps failing (herdr refuses to close its
+// workspace) is logged once, not on every observe pass.
+func TestAParkOfALeftLiaisonThatKeepsFailingIsLoggedOnce(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.endLiaisonTurn()
+	g.endTask(registry.TaskStopped)
+	g.h.mu.Lock()
+	g.h.closeErr = &herdr.Error{Method: "workspace.close", Code: "internal", Message: "herdr could not close it"}
+	g.h.mu.Unlock()
+
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration)
+	g.observeN(4)
+
+	if !g.liaisonLive() {
+		t.Fatal("the liaison is parked though herdr refused to close its workspace")
+	}
+	if n := strings.Count(g.logs.String(), "park a liaison its task's park left live"); n != 1 {
+		t.Fatalf("the failed park was logged %d times over four passes, want once:\n%s", n, g.logs.String())
 	}
 }
 

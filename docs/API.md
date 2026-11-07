@@ -14072,14 +14072,15 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
     lost conversation (ResumeID). Either way the conversation gets prompt,
     once, as its first (store.RunInitial), while no prompt of it ever went
     out (firstPromptDue): a fresh one, or one whose first prompt was refused
-    or rejected before it was sent; a conversation that had one gets nothing.
-    When that prompt fails, the liaison is live in its pane all the same:
-    Talk returns the pane with the error (you may step in; agents.ErrHumanActive
-    while you typed into it), and the next Talk sends the prompt. Talks take
-    turns, so two never start two liaisons, and a park of the task that comes
-    meanwhile leaves its liaison alone (parkLiaison; the engine parks it again
-    when the task ended while Talk ran, and an observe pass once it may:
-    parkLeftLiaisons).
+    or rejected before it was sent; a conversation that had one gets nothing,
+    and the talk is you in the liaison's pane (its row's human_active_at,
+    which operatorOn reads: a park leaves it for the human cooldown). When that
+    prompt fails, the liaison is live in its pane all the same: Talk returns the
+    pane with the error (you may step in; agents.ErrHumanActive while you typed
+    into it), and the next Talk sends the prompt. Talks take turns, so two never
+    start two liaisons, and a park of the task that comes meanwhile leaves its
+    liaison alone (parkLiaison; the engine parks it again when the task ended
+    while Talk ran, and an observe pass once it may: parkLeftLiaisons).
 
 func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
     TouchedSince names who could have changed task t's copy since the time

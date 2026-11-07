@@ -173,6 +173,7 @@ type Runtime struct {
 	checked    map[int64]time.Time      // Codex session -> when TookNoPrompt last read it
 	pending    []Event                  // events found outside Observe
 	refused    map[int64]bool           // task -> a Codex refusal: its Codex roles never run again
+	idleSeen   map[int64]time.Time      // liaison session -> the pass that first saw it idle with no time to tell (liaisonIdleSince)
 	loginFP    string
 	loginRead  time.Time
 	reconciled time.Time
@@ -288,8 +289,8 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
-		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, commands: agents.MagnumCommands(&cfg),
-		drained: make(chan struct{})}
+		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{},
+		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{})}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true})
@@ -615,7 +616,9 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 // Either way the conversation gets prompt, once, as its first
 // (store.RunInitial), while no prompt of it ever went out (firstPromptDue):
 // a fresh one, or one whose first prompt was refused or rejected before it
-// was sent; a conversation that had one gets nothing. When that prompt
+// was sent; a conversation that had one gets nothing, and the talk is you
+// in the liaison's pane (its row's human_active_at, which operatorOn reads:
+// a park leaves it for the human cooldown). When that prompt
 // fails, the liaison is live in its pane all the same: Talk returns the
 // pane with the error (you may step in; agents.ErrHumanActive while you
 // typed into it), and the next Talk sends the prompt. Talks take turns, so
@@ -664,6 +667,12 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
 		if _, err := r.mgr.Prompt(ctx, pr, agents.Role(role.Name), store.RunInitial, prompt); err != nil {
 			return pane, fmt.Errorf("the liaison of %s: its first prompt: %w", taskKey(t), err)
 		}
+		return pane, nil
+	}
+	// No prompt went out, so no turn starts: the talk takes you into a pane
+	// that may have idled for long, and it is you in it, as your typing is.
+	if err := r.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("human_active_at", r.now()) }); err != nil {
+		r.log.Warn("note you in a task's liaison after a talk", "task", t.ID, "err", err)
 	}
 	return pane, nil
 }
@@ -1218,20 +1227,30 @@ func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) (left string
 // (liaisonOwesPark). The decide you ask the liaison for in its chat (push
 // it, drop it) comes with that park while you are in its pane and its turn
 // is in flight, so the park leaves it, and the engine parks such a task no
-// more. Each pass tries again, until the liaison's turn ended and you left
-// its pane for the human cooldown; it logs the parks, never a liaison it
-// leaves (Park's log says why the first time).
+// more. A pass parks such a liaison only once it has been idle for the
+// human cooldown (liaisonIdleSince): your pick in its AskUserQuestion
+// dialog and the decide it runs come within the turn the talk's prompt
+// started, so nothing notes you in its pane, and you read its last message
+// after that turn ended. Then parkLiaison's own guards hold: a talk at work,
+// you in its pane (you typed into it, or a talk took you into it, within
+// the cooldown), its agent at work. Each pass tries again; it logs the parks
+// it makes, never a liaison it leaves (Park's log says why the first time),
+// and a park that fails once per liaison per daemon start.
 func (r *Runtime) parkLeftLiaisons(ctx context.Context) {
 	live, err := r.st.LiveSessions(ctx)
 	if err != nil {
-		r.log.Warn("park the liaisons their tasks' parks left live", "err", err)
+		if r.first("liaisons-park") {
+			r.log.Warn("park the liaisons their tasks' parks left live", "err", err)
+		}
 		return
 	}
-	tried := map[int64]bool{}
+	now := r.now()
+	tried, seen := map[int64]bool{}, map[int64]bool{}
 	for _, s := range live {
 		if s.Role != LiaisonRole {
 			continue
 		}
+		seen[s.ID] = true
 		pr, err := r.st.PRByID(ctx, s.PRID)
 		if err != nil {
 			continue
@@ -1246,20 +1265,76 @@ func (r *Runtime) parkLeftLiaisons(ctx context.Context) {
 			continue
 		}
 		owed, err := r.liaisonOwesPark(ctx, t, s)
+		var since time.Time
+		idle := false
+		if err == nil && owed {
+			since, idle, err = r.liaisonIdleSince(ctx, pr, s, now)
+		}
 		if err != nil {
-			r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)
+			r.parkFailed(t, err)
 			continue
 		}
-		if !owed {
+		if !owed || !idle || now.Before(r.cfg.Daemon.CooldownUntil(&since)) {
 			continue
 		}
 		switch left, err := r.parkLiaison(ctx, t); {
 		case err != nil:
-			r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)
+			r.parkFailed(t, err)
 		case left == "":
 			r.log.Info("parked the liaison its task's park left live", "task", t.ID, "state", t.State)
 		}
 	}
+	r.mu.Lock()
+	maps.DeleteFunc(r.idleSeen, func(id int64, _ time.Time) bool { return !seen[id] })
+	r.mu.Unlock()
+}
+
+// parkFailed logs that the park of task t's left liaison failed with err,
+// once per liaison per daemon start: the pass tries again every ten seconds.
+func (r *Runtime) parkFailed(t registry.Task, err error) {
+	if r.first(fmt.Sprintf("liaison-park:%d", t.ID)) {
+		r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)
+	}
+}
+
+// liaisonIdleSince is when s, the live session of a liaison on row pr, went
+// idle: the later of the time its agent's status last changed, while herdr
+// shows it neither at work nor blocked on a dialog (agent_status_at), and
+// the end of the row's newest run that ended. Not idle (false) while its
+// agent works or waits on a dialog. A time neither tells is the pass that
+// first saw it so (now, kept until its session is live no more or works
+// again), so it waits a whole cooldown from then.
+func (r *Runtime) liaisonIdleSince(ctx context.Context, pr store.PR, s store.Session, now time.Time) (time.Time, bool, error) {
+	if st := herdr.Status(store.Deref(s.AgentStatus)); st == herdr.StatusWorking || st == herdr.StatusBlocked {
+		r.mu.Lock()
+		delete(r.idleSeen, s.ID)
+		r.mu.Unlock()
+		return time.Time{}, false, nil
+	}
+	var since time.Time
+	if s.AgentStatusAt != nil {
+		since = *s.AgentStatusAt
+	}
+	runs, err := r.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for _, run := range runs {
+		if run.EndedAt != nil && run.EndedAt.After(since) {
+			since = *run.EndedAt
+		}
+	}
+	if since.IsZero() {
+		r.mu.Lock()
+		at, ok := r.idleSeen[s.ID]
+		if !ok {
+			at = now
+			r.idleSeen[s.ID] = at
+		}
+		r.mu.Unlock()
+		since = at
+	}
+	return since, true, nil
 }
 
 // liaisonOwesPark reports whether s, task t's live liaison, is owed the
