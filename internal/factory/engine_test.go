@@ -41,6 +41,8 @@ type fakeRuntime struct {
 	launchErr    error
 	observePanic any
 	watched      int
+	// parkErr is what Park answers once it recorded the park.
+	parkErr error
 	// letGo records the LetGo calls, "<task key>/<role>"; drained is
 	// whether BeginDrain was called.
 	letGo   []string
@@ -490,7 +492,7 @@ func (f *fakeRuntime) Park(_ context.Context, t registry.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.parks = append(f.parks, t.ID)
-	return nil
+	return f.parkErr
 }
 
 // setPaneFocus is what the observe passes saw of you in the factory's

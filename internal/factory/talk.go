@@ -108,7 +108,9 @@ func talkEnded(t registry.Task) bool {
 // human cooldown, or herdr refused the prompt), and the next talk sends it.
 // A task that ended while Talk ran has its liaison parked again, since the
 // park that came with its end found the Talk at work and left the liaison
-// (Runtime.Park).
+// (Runtime.Park). A liaison this park leaves as well (its first turn in
+// flight), or whose task the read after Talk could not tell, an observe
+// pass parks once it may (Runtime.Observe).
 func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -127,9 +129,16 @@ func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 	}
 	e.log.Info("a task's liaison is asked for", "task", t.ID, "surface", p.Surface)
 	pane, talkErr := e.d.Runtime.Talk(ctx, t, prompt)
-	if now, err := e.reg.TaskByID(context.WithoutCancel(ctx), t.ID); err == nil && talkEnded(now) {
-		if err := e.d.Runtime.Park(context.WithoutCancel(ctx), now); err != nil {
-			e.event(ctx, t.ID, "park", registry.PhaseFail, "the liaison of a task that ended while it started: "+err.Error())
+	// A drain may have cut the Talk: the re-read, the park and its event
+	// still run.
+	bg := context.WithoutCancel(ctx)
+	now, err := e.reg.TaskByID(bg, t.ID)
+	switch {
+	case err != nil:
+		e.log.Warn("read a task again after its talk; an observe pass parks its liaison if the task ended", "task", t.ID, "err", err)
+	case talkEnded(now):
+		if err := e.d.Runtime.Park(bg, now); err != nil {
+			e.event(bg, t.ID, "park", registry.PhaseFail, "the liaison of a task that ended while it started: "+err.Error())
 		}
 		return "", fmt.Errorf("%s is %s now: its liaison is parked again", key, now.State)
 	}

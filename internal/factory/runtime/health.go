@@ -104,6 +104,7 @@ func (r *Runtime) lift(kind, why string, whos ...string) {
 // dialog left to the operator (EventBlocked, EventHooksTrust), a lost pane
 // whose recoveries ran out (EventLost) and a loop without progress
 // (EventNoProgress), and the turns typed into its panes (EventTyped, typed).
+// It parks the liaisons their task's park left live (parkLeftLiaisons).
 // A pass reads the user turns of an agent's transcript once, for the turns
 // typed and the delivery of a prompt alike. A panic is contained: it comes
 // back as the error.
@@ -125,6 +126,7 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 	reads := turnReads{}
 	r.reconcileUnknown(ctx, reads)
 	evs = append(evs, r.typed(ctx, reads)...)
+	r.parkLeftLiaisons(ctx) // after typed: what you typed into a liaison is read before it parks
 	if oerr != nil {
 		oerr = fmt.Errorf("observe: %w", oerr)
 	}

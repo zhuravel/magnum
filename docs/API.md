@@ -13941,9 +13941,10 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     a dialog left to the operator (EventBlocked, EventHooksTrust), a lost
     pane whose recoveries ran out (EventLost) and a loop without progress
     (EventNoProgress), and the turns typed into its panes (EventTyped, typed).
-    A pass reads the user turns of an agent's transcript once, for the turns
-    typed and the delivery of a prompt alike. A panic is contained: it comes
-    back as the error.
+    It parks the liaisons their task's park left live (parkLeftLiaisons). A pass
+    reads the user turns of an agent's transcript once, for the turns typed and
+    the delivery of a prompt alike. A panic is contained: it comes back as the
+    error.
 
 func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
     Owner upserts task t's owner row: repository factory/<repo name>, number the
@@ -14076,8 +14077,9 @@ func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (str
     Talk returns the pane with the error (you may step in; agents.ErrHumanActive
     while you typed into it), and the next Talk sends the prompt. Talks take
     turns, so two never start two liaisons, and a park of the task that comes
-    meanwhile leaves its liaison alone (parkLiaison; the engine parks it itself
-    when the task ended while Talk ran).
+    meanwhile leaves its liaison alone (parkLiaison; the engine parks it again
+    when the task ended while Talk ran, and an observe pass once it may:
+    parkLeftLiaisons).
 
 func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.Time) (string, error)
     TouchedSince names who could have changed task t's copy since the time

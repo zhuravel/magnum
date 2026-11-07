@@ -620,8 +620,9 @@ func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attemp
 // pane with the error (you may step in; agents.ErrHumanActive while you
 // typed into it), and the next Talk sends the prompt. Talks take turns, so
 // two never start two liaisons, and a park of the task that comes meanwhile
-// leaves its liaison alone (parkLiaison; the engine parks it itself when the
-// task ended while Talk ran).
+// leaves its liaison alone (parkLiaison; the engine parks it again when the
+// task ended while Talk ran, and an observe pass once it may:
+// parkLeftLiaisons).
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error) {
 	r.talkMu.Lock()
 	defer r.talkMu.Unlock()
@@ -1167,7 +1168,11 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 			errs = append(errs, err)
 		}
 	}
-	if err := r.parkLiaison(ctx, t); err != nil {
+	left, err := r.parkLiaison(ctx, t)
+	if left != "" {
+		r.log.Info("left a task's liaison live: "+left, "task", t.ID)
+	}
+	if err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -1178,33 +1183,110 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 // turn in flight or its agent at work (agents.ErrBusy: it may be running
 // the decide that parks the task), and one a Talk of the task works on
 // right now (talkLock: Park does not wait for a Talk, which can take
-// minutes; the engine parks the liaison again when the task has ended by
-// then). Such a liaison stays live, which the log says; the next park, or
-// you, ends it. A task you never talked about has no liaison to park.
-func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) error {
+// minutes). Such a liaison stays live, and left says why; the liaison of a
+// task that ended, or that was published while it was live, is parked by
+// a later observe pass once it may be (parkLeftLiaisons), and any other
+// one by the next park, or you. A task you never talked about has no
+// liaison to park.
+func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) (left string, err error) {
 	tl := r.talkLock(t.ID)
 	if !tl.TryLock() {
-		r.log.Info("left a task's liaison live: a talk is starting it", "task", t.ID)
-		return nil
+		return "a talk is starting it", nil
 	}
 	defer tl.Unlock()
 	pr, err := liaisonRowIn(ctx, r.st, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if r.operatorOn(ctx, pr, LiaisonRole) {
-		r.log.Info("left a task's liaison live: you are in its pane", "task", t.ID)
-		return nil
+		return "you are in its pane", nil
 	}
 	err = r.mgr.Park(ctx, pr)
 	if errors.Is(err, agents.ErrBusy) {
-		r.log.Info("left a task's liaison live: it is at work", "task", t.ID, "err", err)
-		return nil
+		return "it is at work (" + err.Error() + ")", nil
 	}
-	return err
+	return "", err
+}
+
+// parkLeftLiaisons is the observe pass's park of the liaisons their task's
+// park left live (parkLiaison) and nothing else would park: a live liaison
+// of a task that ended (done, stopped, failed), which no talk starts again,
+// and of a published task the liaison that was live before the publish
+// (liaisonOwesPark). The decide you ask the liaison for in its chat (push
+// it, drop it) comes with that park while you are in its pane and its turn
+// is in flight, so the park leaves it, and the engine parks such a task no
+// more. Each pass tries again, until the liaison's turn ended and you left
+// its pane for the human cooldown; it logs the parks, never a liaison it
+// leaves (Park's log says why the first time).
+func (r *Runtime) parkLeftLiaisons(ctx context.Context) {
+	live, err := r.st.LiveSessions(ctx)
+	if err != nil {
+		r.log.Warn("park the liaisons their tasks' parks left live", "err", err)
+		return
+	}
+	tried := map[int64]bool{}
+	for _, s := range live {
+		if s.Role != LiaisonRole {
+			continue
+		}
+		pr, err := r.st.PRByID(ctx, s.PRID)
+		if err != nil {
+			continue
+		}
+		id, ok := LiaisonTask(pr.NodeID)
+		if !ok || tried[id] {
+			continue
+		}
+		tried[id] = true
+		t, err := r.reg.TaskByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		owed, err := r.liaisonOwesPark(ctx, t, s)
+		if err != nil {
+			r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)
+			continue
+		}
+		if !owed {
+			continue
+		}
+		switch left, err := r.parkLiaison(ctx, t); {
+		case err != nil:
+			r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)
+		case left == "":
+			r.log.Info("parked the liaison its task's park left live", "task", t.ID, "state", t.State)
+		}
+	}
+}
+
+// liaisonOwesPark reports whether s, task t's live liaison, is owed the
+// park its task's end or publish came with: any of a task that ended
+// (done, stopped, failed: a talk refuses such a task, so its liaison was
+// live before the end, or a talk the end raced started it), and of a
+// published task one that started before the task was published, never
+// one a talk started since (you talk with a published task's liaison, and
+// it does not park by itself).
+func (r *Runtime) liaisonOwesPark(ctx context.Context, t registry.Task, s store.Session) (bool, error) {
+	switch t.State {
+	case registry.TaskDone, registry.TaskStopped, registry.TaskFailed:
+		return true, nil
+	case registry.TaskPublished:
+	default:
+		return false, nil
+	}
+	spans, err := r.reg.Spans(ctx, t.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, sp := range slices.Backward(spans) {
+		if sp.To == registry.TaskPublished && sp.From != registry.TaskPublished {
+			return s.StartedAt.Before(sp.At), nil // the move into published
+		}
+	}
+	return false, nil
 }
 
 // RunState is run id as the agents store keeps it: its state (store.Run*:

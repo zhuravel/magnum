@@ -668,3 +668,127 @@ func TestLiaisonSessionIsTheLiveLiaisonInTheTalksPane(t *testing.T) {
 		t.Fatalf("LiaisonSession of a parked liaison: %v, want ErrNotFound", err)
 	}
 }
+
+// youTypeIntoTheLiaison is you typing into the liaison's pane ("drop it",
+// "push it"): herdr shows its agent at work with no prompt of the
+// factory's, so the liaison's row notes you, and the agent stays at work.
+func (g *rig) youTypeIntoTheLiaison() {
+	g.t.Helper()
+	g.clock.Add(2 * time.Minute) // past a start's grace: herdr showing the agent at work is you
+	g.h.focus(g.liaisonAgent())
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusWorking)
+	g.observe()
+	if at := g.liaisonRowOf().HumanActiveAt; at == nil || !at.Equal(g.clock.Now()) {
+		g.t.Fatalf("herdr did not show you in the liaison's pane: human_active_at %v", at)
+	}
+}
+
+// endTask moves the rig's task to state, as the engine's drop (stopped) or
+// push (published) does before it parks the task.
+func (g *rig) endTask(state string) {
+	g.t.Helper()
+	if err := g.reg.TransitionTask(g.ctx, g.task.ID, nil, state, nil); err != nil {
+		g.t.Fatal(err)
+	}
+	task, err := g.reg.TaskByID(g.ctx, g.task.ID)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	g.task = task
+}
+
+// A push or a drop you ask the liaison for in its chat comes with the
+// task's park (the engine parks the task in the tick that answers the
+// decide, and again when the push is published), which finds you in the
+// liaison's pane and its agent at work, and leaves it live. Once its turn
+// ended and you left its pane for the human cooldown, an observe pass parks
+// it: nothing else ever parks the liaison of a task that ended, or that was
+// published while the liaison was live.
+func TestALiaisonThatPushedOrDroppedItsTaskParksOnceYouLeft(t *testing.T) {
+	for _, tc := range []struct{ name, state string }{
+		{"drop", registry.TaskStopped},
+		{"push", registry.TaskPublished},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRig(t)
+			g.talk()
+			g.h.setSession(g.liaisonAgent(), "sid-liaison")
+			g.endLiaisonTurn()
+			g.youTypeIntoTheLiaison()
+			g.endTask(tc.state)
+			if err := g.r.Park(g.ctx, g.task); err != nil {
+				t.Fatalf("Park: %v", err)
+			}
+			if !g.liaisonLive() {
+				t.Fatal("the task's park parked the liaison you typed into a moment ago")
+			}
+
+			g.h.setStatus(g.liaisonAgent(), herdr.StatusIdle) // its turn ends
+			g.h.focus("")
+			g.observeN(2)
+			if !g.liaisonLive() {
+				t.Fatal("an observe pass parked the liaison within the human cooldown after you typed into it")
+			}
+
+			g.clock.Add(g.cfg.Factory.HumanCooldown.Duration)
+			g.observe()
+
+			if g.liaisonLive() {
+				t.Fatalf("the liaison of a %s task is live after you left its pane for the human cooldown", tc.state)
+			}
+			g.h.mu.Lock()
+			_, running := g.h.agentLocked(g.liaisonAgent())
+			g.h.mu.Unlock()
+			if running {
+				t.Fatal("herdr still runs the liaison")
+			}
+		})
+	}
+}
+
+// The liaison's turn may still be in flight when the cooldown is over: the
+// observe pass that sees it end parks the liaison of the task that ended.
+func TestALiaisonAtWorkWhenItsTaskEndedParksOnceItsTurnEnds(t *testing.T) {
+	g := newRig(t)
+	g.talk() // its turn in flight: the liaison runs the decide that drops the task
+	g.endTask(registry.TaskStopped)
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	if !g.liaisonLive() {
+		t.Fatal("the task's park parked the liaison at work")
+	}
+
+	g.endLiaisonTurn()
+
+	if g.liaisonLive() {
+		t.Fatal("the liaison of a stopped task is live after its turn ended")
+	}
+}
+
+// The push parks the liaison that was live then. You talk with a published
+// task's liaison (its folder stays): a talk after the push starts it again,
+// and no observe pass parks it for its task's publish.
+func TestATalkAfterThePushKeepsItsLiaison(t *testing.T) {
+	g := newRig(t)
+	g.talk()
+	g.h.setSession(g.liaisonAgent(), "sid-liaison")
+	g.endLiaisonTurn()
+	g.endTask(registry.TaskPublished)
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	if g.liaisonLive() {
+		t.Fatal("the push's park left the idle liaison live")
+	}
+	g.clock.Add(time.Minute)
+
+	g.talk()
+	g.endLiaisonTurn()
+	g.clock.Add(g.cfg.Factory.HumanCooldown.Duration)
+	g.observeN(2)
+
+	if !g.liaisonLive() {
+		t.Fatal("an observe pass parked the liaison a talk started after the push")
+	}
+}

@@ -311,6 +311,35 @@ func TestAStopDuringATalkParksTheLiaisonAfterIt(t *testing.T) {
 	}
 }
 
+// A task stopped while its Talk ran, and a drain then cut the Talk: the park
+// after it runs all the same, and its failure is in the task's event log,
+// though the drain cancelled the talk's context.
+func TestAFailedParkAfterADrainedTalkIsLogged(t *testing.T) {
+	h := newHarness(t)
+	task := h.task("PR-12311", registry.TaskNeedsYou, "report")
+	started, _ := h.blockedTalk()
+	h.askTalk(task.ID)
+	h.tickEnds(20 * time.Second)
+	started()
+	if _, err := h.reg.EnqueueRequest(h.ctx, ReqStop, StopPayload{TaskID: task.ID, Surface: "cli"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tickEnds(20 * time.Second)
+	h.rt.mu.Lock()
+	h.rt.parkErr = errors.New("herdr: the liaison is at work")
+	h.rt.mu.Unlock()
+
+	h.e.stopBackground()
+
+	if parked := h.rt.parked(); !slices.Equal(parked, []int64{task.ID, task.ID}) {
+		t.Fatalf("parks %v, want the stop's and the one after the drained Talk", parked)
+	}
+	want := "the liaison of a task that ended while it started: herdr: the liaison is at work"
+	if got := h.eventTexts(task.ID, "park"); !slices.Contains(got, want) {
+		t.Fatalf("the task's park events %q, want %q", got, want)
+	}
+}
+
 // A drain ends a Talk that is running (its context is the engine's), and
 // leaves its request pending: the next daemon talks again, and Talk finds the
 // liaison the cancelled one started, or starts it.
