@@ -109,15 +109,15 @@ func (c envCrash) holdCause() string {
 		strings.ReplaceAll(c.sig.fix, "{copy}", c.copy))
 }
 
-// crashOf is the envCrash of command cmd of key that ran in copy and
-// failed with stderr and stdout, when one of their lines tells a known
-// crash of the environment (envSignatures).
-func crashOf(key, cmd, copy, stderr, stdout string) (envCrash, bool) {
+// crashOf is the envCrash of command cmd of key that ran in the copy at
+// dir and failed with stderr and stdout, when one of their lines tells a
+// known crash of the environment (envSignatures).
+func crashOf(key, cmd, dir, stderr, stdout string) (envCrash, bool) {
 	lines := slices.Concat(meaningfulLines(stderr), meaningfulLines(stdout))
 	for _, sig := range envSignatures {
 		for _, line := range lines {
 			if strings.Contains(strings.ToLower(line), sig.match) {
-				return envCrash{key: key, cmd: cmd, line: cleanLine(line), copy: copy, sig: sig}, true
+				return envCrash{key: key, cmd: cmd, line: cleanLine(line), copy: dir, sig: sig}, true
 			}
 		}
 	}

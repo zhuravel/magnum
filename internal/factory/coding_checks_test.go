@@ -484,7 +484,7 @@ func TestALintCrashOfTheEnvironmentGoesToTheInfraHold(t *testing.T) {
 	}
 
 	r.setLintCrash("") // the locale is fixed
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		if _, held := r.e.holds[HoldInfra]; !held {
 			break
 		}
