@@ -289,33 +289,48 @@ func (e *Engine) stopTask(ctx context.Context, p StopPayload) (string, error) {
 	return "stopped " + TaskKey(t), nil
 }
 
-// endTask stops task t for good, because: its state moves to stopped and
-// your input in is recorded, then its agents are parked, its open attempts
-// end failed, its heavy slot is freed and its copy released (the branch
-// stays): the copy it holds or a claim of it reserved, a claim that runs
-// cancelled.
+// endTask stops task t for good, because, with your input in recorded
+// (closeTask): the branch stays.
 func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, in registry.Input) error {
-	if err := e.reg.TransitionTask(ctx, t.ID, stoppable, registry.TaskStopped, func(u *registry.TaskUpdate) {
+	return e.closeTask(ctx, t, taskEnd{from: stoppable, to: registry.TaskStopped, because: because, in: &in})
+}
+
+// taskEnd is how a task ends (closeTask): from one of the states from, to
+// stopped (you stopped or dropped it) or done (its PR merged), because,
+// with your input that ended it (nil: you did not, as for a merge).
+type taskEnd struct {
+	from    []string
+	to      string
+	because string
+	in      *registry.Input
+}
+
+// closeTask ends task t as end says: its state moves (compare-and-set from
+// end.from) with its wait cleared and your input recorded when you ended
+// it, then its agents are parked (parkEnded), its open attempts end failed,
+// its heavy slot is freed and its copy released (the branch stays): the
+// copy it holds or a claim of it reserved, a claim that runs cancelled. A
+// stop and a merge share it.
+func (e *Engine) closeTask(ctx context.Context, t registry.Task, end taskEnd) error {
+	if err := e.reg.TransitionTask(ctx, t.ID, end.from, end.to, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")
 		u.Set("waits_what", "")
-		u.Because(because)
+		u.Because(end.because)
 	}); err != nil {
 		return err
 	}
-	if _, err := e.recordInput(ctx, in); err != nil {
-		e.log.Warn("record why a task stopped", "task", t.ID, "kind", in.Kind, "err", err)
-	}
-	if e.d.Runtime != nil {
-		if err := e.d.Runtime.Park(ctx, t); err != nil {
-			e.event(ctx, t.ID, "park", registry.PhaseFail, err.Error())
+	if end.in != nil {
+		if _, err := e.recordInput(ctx, *end.in); err != nil {
+			e.log.Warn("record why a task ended", "task", t.ID, "kind", end.in.Kind, "err", err)
 		}
 	}
-	e.failOpenAttempts(ctx, t, because)
-	e.freeHeavy(ctx, t, "its task stopped")
+	e.parkEnded(ctx, t)
+	e.failOpenAttempts(ctx, t, end.because)
+	e.freeHeavy(ctx, t, "its task "+end.to)
 	// Whether or not the task names a copy: a claim that waited or failed
 	// keeps the copy it reserved, and one that runs is cancelled and its copy
 	// released once it ended (sweepClaims).
-	e.releaseCopy(ctx, t, "stopped")
+	e.releaseCopy(ctx, t, end.to)
 	delete(e.jiraTries, t.ID)
 	delete(e.panics, t.ID)
 	delete(e.lastFail, t.ID)
@@ -323,6 +338,43 @@ func (e *Engine) endTask(ctx context.Context, t registry.Task, because string, i
 	delete(e.inbox, t.ID)
 	delete(e.agentRuns, t.ID)
 	return nil
+}
+
+// parkEnded parks the agents of task t, which ended; while herdr is held
+// (down) the park is owed to the next tick with herdr up (payParkDebts),
+// so a merge the tick follows without herdr still parks them. A park that
+// fails is an event of the task.
+func (e *Engine) parkEnded(ctx context.Context, t registry.Task) {
+	if e.d.Runtime == nil {
+		return
+	}
+	if _, down := e.holds[HoldHerdr]; down {
+		e.parkOwed[t.ID] = true
+		return
+	}
+	if err := e.d.Runtime.Park(ctx, t); err != nil {
+		e.event(ctx, t.ID, "park", registry.PhaseFail, err.Error())
+	}
+}
+
+// payParkDebts parks, once herdr is up, the agents of the tasks that ended
+// while it was down (parkEnded): one try each, a failure an event of the
+// task, as a stop's own park.
+func (e *Engine) payParkDebts(ctx context.Context) {
+	if e.d.Runtime == nil {
+		return
+	}
+	for id := range e.parkOwed {
+		delete(e.parkOwed, id)
+		t, err := e.reg.TaskByID(ctx, id)
+		if err != nil {
+			e.log.Warn("park an ended task's agents now herdr is up: read the task", "task", id, "err", err)
+			continue
+		}
+		if err := e.d.Runtime.Park(ctx, t); err != nil {
+			e.event(ctx, t.ID, "park", registry.PhaseFail, err.Error())
+		}
+	}
 }
 
 // startRequest answers a ReqStart (start): the task it made, or the task

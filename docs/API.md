@@ -12262,11 +12262,12 @@ func (e *Engine) RunLocked(ctx context.Context) error
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
     then the infrastructure hold and a MySQL ping before a pass that advances),
-    the requests, then each live task's advance under its own panic guard
-    (safely). During an infrastructure or a herdr hold no task advances except
-    on the hold's tries, and while herdr does not answer no copy a base run
-    left detached is swept (sweepDetached, each under safely too); a failure
-    that a hold covers costs its task nothing. Last, the alerts are delivered
+    the requests, the published tasks' PRs (followPRs, whether or not the pass
+    advances), then each live task's advance under its own panic guard (safely).
+    During an infrastructure or a herdr hold no task advances except on the
+    hold's tries, and while herdr does not answer no copy a base run left
+    detached is swept (sweepDetached, each under safely too); a failure that
+    a hold covers costs its task nothing. Last, the alerts are delivered
     (deliverAlerts). The returned error joins what failed, for the log; each
     step records its own.
 

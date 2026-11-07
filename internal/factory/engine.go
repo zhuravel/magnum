@@ -374,6 +374,13 @@ type Engine struct {
 	// magnumNotes is what Magnum.Busy last said of each task's wait while
 	// not busy (said once, as an event): the loop's own.
 	magnumNotes map[int64]string
+	// followErr is the failed read of magnum's registry followPRs last
+	// logged ("" after a read that worked): logged once while it stays.
+	// parkOwed are the tasks that ended while herdr was down, whose agents
+	// a tick with herdr up parks (parkEnded, payParkDebts). Both the loop's
+	// own.
+	followErr string
+	parkOwed  map[int64]bool
 	// beforeStop runs between the end of a loop's cycle that needs you
 	// (unavailable, the cap) and the task's move to you; an error stops
 	// there (a test's seam: the daemon stopping in between). nil in a
@@ -435,6 +442,7 @@ func New(d Deps) *Engine {
 		lockPoll:     specsLockPoll,
 		reviews:      map[int64]*localRound{},
 		magnumNotes:  map[int64]string{},
+		parkOwed:     map[int64]bool{},
 		roundCap:     localRoundCap,
 	}
 	e.runners[config.FactoryStageAgents] = e.runAgents
@@ -620,7 +628,8 @@ var liveStates = []string{registry.TaskActive, registry.TaskWaiting}
 
 // Tick runs one pass of the loop: the holds (herdr, disk and memory, then
 // the infrastructure hold and a MySQL ping before a pass that advances),
-// the requests, then each live task's advance under its own panic guard
+// the requests, the published tasks' PRs (followPRs, whether or not the
+// pass advances), then each live task's advance under its own panic guard
 // (safely). During an infrastructure or a herdr hold no task advances
 // except on the hold's tries, and while herdr does not answer no copy a
 // base run left detached is swept (sweepDetached, each under safely too); a
@@ -650,6 +659,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if herdrUp { // herdr says who is in a copy: without it no copy is touched
 		e.retryRecovery(ctx, tasks)
 		e.sweepDetached(ctx, tasks)
+		e.payParkDebts(ctx)
 	}
 	e.pressure(ctx, now, tasks)
 	infra, held := e.holds[HoldInfra]
@@ -666,6 +676,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.handleRequests(ctx)
 	e.pruneScreenRequests(ctx, now)
 	e.admit(ctx)
+	e.followPRs(ctx, tasks) // its moves are compare-and-set from published: a request's stop since wins
 
 	if advance {
 		if tasks, err = e.reg.Tasks(ctx); err != nil { // the requests may have moved some
