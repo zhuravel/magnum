@@ -6,8 +6,8 @@
 // opened read only (mode=ro, never created, so nothing writes its file or
 // its WAL), with a busy timeout, and closed after each read; a task's files
 // are read inside an os.Root of its directory. It knows the factory's
-// schema only as far as these reads need (pr_links, review_findings) and
-// never migrates it: internal/factory/registry owns it.
+// schema only as far as these reads need (pr_links, review_findings,
+// review_cycles) and never migrates it: internal/factory/registry owns it.
 package factoryread
 
 import (
@@ -42,8 +42,10 @@ type Task struct {
 	ApprovedHead string
 	// Findings are the local review's findings, first seen first, each
 	// escapes.SourceLocal with Ref "<task id>/<finding id>", Round its last
-	// cycle (where the registry took its place from) and Head the task's
-	// Head.
+	// cycle (where the registry took its place from) and Head the head
+	// that cycle reviewed (review_cycles.head_before), which a later
+	// cycle's fix may have moved on from; the task's Head when the
+	// registry holds no head for that cycle.
 	Findings []escapes.Finding
 }
 
@@ -78,8 +80,10 @@ func Published(ctx context.Context, path, repo string, number int) ([]Task, erro
 	db.SetMaxOpenConns(1)
 	// One statement, so one snapshot of the registry the factory writes.
 	rows, err := db.QueryContext(ctx, `
-SELECT l.task_id, l.opened_head, l.approved_head, f.id, f.path, f.start_line, f.end_line, f.priority, f.title_hash, f.last_cycle
+SELECT l.task_id, l.opened_head, l.approved_head, f.id, f.path, f.start_line, f.end_line, f.priority, f.title_hash, f.last_cycle,
+  c.head_before
 FROM pr_links l LEFT JOIN review_findings f ON f.task_id = l.task_id
+  LEFT JOIN review_cycles c ON c.task_id = f.task_id AND c.n = f.last_cycle
 WHERE l.repo = ? COLLATE NOCASE AND l.number = ?
 ORDER BY l.task_id DESC, f.id`, repo, number)
 	if err != nil {
@@ -90,8 +94,9 @@ ORDER BY l.task_id DESC, f.id`, repo, number)
 	for rows.Next() {
 		var t Task
 		var id, start, end, cycle sql.NullInt64
-		var path, priority, titleHash sql.NullString
-		if err := rows.Scan(&t.ID, &t.OpenedHead, &t.ApprovedHead, &id, &path, &start, &end, &priority, &titleHash, &cycle); err != nil {
+		var path, priority, titleHash, cycleHead sql.NullString
+		if err := rows.Scan(&t.ID, &t.OpenedHead, &t.ApprovedHead, &id, &path, &start, &end, &priority, &titleHash, &cycle,
+			&cycleHead); err != nil {
 			return nil, fmt.Errorf("read the factory's registry: %w", err)
 		}
 		if n := len(out); n == 0 || out[n-1].ID != t.ID {
@@ -104,7 +109,7 @@ ORDER BY l.task_id DESC, f.id`, repo, number)
 		last.Findings = append(last.Findings, escapes.Finding{Source: escapes.SourceLocal,
 			Ref:  strconv.FormatInt(t.ID, 10) + "/" + strconv.FormatInt(id.Int64, 10),
 			Path: path.String, StartLine: int(start.Int64), EndLine: int(end.Int64), Priority: priority.String,
-			TitleHash: titleHash.String, Round: int(cycle.Int64), Head: last.Head()})
+			TitleHash: titleHash.String, Round: int(cycle.Int64), Head: cmp.Or(cycleHead.String, last.Head())})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read the factory's registry: %w", err)
