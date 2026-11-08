@@ -3393,6 +3393,59 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (it fails when the check reads the status code alone);
   TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows holds the new key in the pooled repository's texts.
 
+- **The review daemon observes the turns in flight on its own clock, and a run's end wakes its waiter**
+  (2026-11-08, roadmap R50 slice 1). Measured on the registry against the agents' own
+  transcripts and rollouts (2026-11-07): an agent stopped and the review daemon ended its run 72 s later,
+  median (n=1247 Claude turns, p90 92 s, and the same for Codex's own passes, n=387), and the next stage
+  waited another 0 to 10 s for the pipeline's poll (`ended_at` to `verified_at` 5.2 s median, p90 9.2 s,
+  n about 1580; the last reviewer's end to the judge's `submitted_at` 7.6 s median, n=890). About 90% of
+  the lag was the cadence: observation ran inside the tick, after the GitHub poll, whose timer restarts
+  after each tick (one tick every ~47 s, not the configured 30 s), and two idle readings in a row meant
+  the first tick that saw idle (~24 s on average) plus a whole tick more (~47 s). Now `Run` starts an
+  observe clock beside the ticks (`observe_clock.go`): every `[daemon] observe_interval` (default `"5s"`;
+  `"0"` turns it off, otherwise 2 s to `poll_interval`) it takes one herdr snapshot and feeds
+  `agents.ObserveSnapshotAt` with it, handling the observations as the tick does. The two-reading rule
+  stays, but the second reading must come `agents.CompletionGap` (3 s) after the streak's first, a time gap
+  rather than "one tick later", so the faster clock does not weaken the flicker guard (the Manager keeps
+  when each session's streak began; a streak a restart cut starts at the row's idle `agent_status_at`, so
+  a fresh Manager ends a turn on its first reading as before), and the observation names when that
+  reading is due (`SecondReadingAt`), which the clock waits for instead of a whole interval. The rollout and
+  transcript vetoes are unchanged; readings 10 s or more apart (the factory's own clock, a replay's, the
+  retro's, the tick's) meet the gap on the second reading, so the factory's behaviour does not change. The
+  tick keeps its own pass, so it works with the clock off or slow; both take the observe lock
+  (`lockObserve`), so one snapshot is applied at a time, in the order taken (a snapshot read before another
+  and applied after it would record an older status), and the pass that waits says so at debug level. A
+  pass with no run submitted or at work reads nothing, so an idle daemon makes no socket call for it; each
+  pass logs its duration at debug level, and one slower than the interval warns, at most once a minute.
+  The clock is off in a dry run (it observes nothing), in `--once` (`observeUntilIdle`, as before) and
+  without herdr or agents. The end then wakes what waits for it: `agents.Manager.Ended` hands out a channel
+  the observe pass closes when it next ends a run or marks a session lost (then a new one), which
+  `pipeline.Runner.Ended` passes to the turn's wait; the wait takes it before each read of its run and
+  sleeps its 10 s poll only until it closes, so an end between the read and the sleep is not lost, and
+  another run's end only has it read again. Expected: stop to `ended_at` about 8 to 12 s (from 72; up to 5 s
+  to the first idle reading, 3 s to the second, herdr's own 1 to 4 s), and the next stage's prompt within a
+  second or two of that. Measure it with the same transcript-against-registry query as the research: the
+  stop to `ended_at` span and the `ended_at` to next `submitted_at` span. Rejected: a 1 s clock (a snapshot a
+  second on a loaded machine for 2 s gained), keeping "one reading later" on a faster clock (two readings
+  a second apart would end a turn on a flicker), the tick reading the clock's last snapshot instead of its
+  own (a stale snapshot for dispatch and the Codex cap, and nothing left when the clock is off), a send per
+  run (an unbuffered send to a waiter not yet listening is lost) or a channel per run (one for every run
+  that never ends by observation, kept forever), and herdr's `events.subscribe` or the agents' own hooks
+  first (slices 3 and 2: a streaming reader or an install; this clock is also the "look at that pane now"
+  path the hooks' wake will call). The fix job's and the whiteboard's own run waits (`waitAgentRun`) still
+  poll every 10 s. Tests, failing first: TestASecondIdleReadingCloserThanTheGapDoesNotEndTheTurn,
+  TestAWorkingReadingBeginsTheIdleGapAgain, TestARunEndClosesTheChannelTakenBeforeIt,
+  TestALostSessionClosesTheChannelTakenBeforeIt, TestAWaiterReturnsOnTheRunEndWithoutWaitingForItsPoll,
+  TestAnEndBeforeTheWaiterSleepsIsNotLost, TestAnotherRunsEndHasTheWaiterLookAgain,
+  TestTheRoundsWaitOnTheObservePassesRunEnds, TestObserveIntervalIsOffOrBetweenTwoSecondsAndThePollInterval,
+  TestLoadReadsObserveInterval, TestTheObserveClockEndsARunOneIntervalAndTheGapAfterTheStop,
+  TestNoObservePassRunsWithNoRunInFlight, TestTheDaemonObservesBetweenItsTicks,
+  TestTheObserveClockIsOffWhereNothingIsObserved, TestTheTickAndTheObserveClockNeverObserveAtOnce (it
+  fails with the lock taken out) and TestASlowObservePassWarnsAtMostOnceAMinute; for guards no test held,
+  TestAnIdleStreakFromBeforeARestartKeepsItsFirstReading, TestReadingsFartherApartThanTheGapEndATurnOnTheSecond,
+  TestReadingsThatEndNothingCloseNothing and TestTheTickObservesAloneWithTheClockOff. Two permission tests
+  took both idle readings at the same instant and now move the clock by the gap between them.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

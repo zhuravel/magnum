@@ -356,6 +356,14 @@ const CompactCommand = "/compact"
     CompactCommand is what Compact types into the agent's pane: Claude Code's
     /compact, which replaces the conversation so far with its summary.
 
+const CompletionGap = 3 * time.Second
+    CompletionGap is how long after the first idle|done reading of a streak
+    the reading that ends the turn may come at the earliest: the review daemon
+    observes every few seconds (its observe clock), and two readings a second
+    apart would let a status that flickers idle for a moment end the turn.
+    Readings farther apart (the tick's, the factory's at 10 s) meet it on the
+    second, as before.
+
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
     turn. The pipeline ends a judge's turn sooner, once its result file holds a
@@ -1774,6 +1782,13 @@ func (m *Manager) ContextUsed(ctx context.Context, s store.Session) (percent int
     false when the kind has no pattern, the pane cannot be read, or no line
     shows a figure.
 
+func (m *Manager) Ended() <-chan struct{}
+    Ended returns a channel that is closed when an observe pass next ends a run
+    (ObsCompleted) or marks a session lost (ObsLost); a call after that returns
+    a new one. A waiter takes it before it reads its run's row and selects on it
+    beside its poll, so an end that comes between the read and the wait is not
+    lost.
+
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error)
     EnsurePane adds a pane for role to ws unless a live session of the role
     already has a pane in that workspace (e.g. claude-simplify, which runs on
@@ -1941,7 +1956,8 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error)
     Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
     it was taken. The daemon calls ObserveSnapshotAt itself, once per tick,
-    with the snapshot that tick also counts working agents from (polling is the
+    with the snapshot that tick also counts working agents from, and on its
+    observe clock between the ticks while a run is in flight (polling is the
     completion signal).
 
 func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]Observation, error)
@@ -1955,53 +1971,57 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 
       - agent found (by name, else by pane): status/status_at stored; idle|done
         increments idle_ticks, working|blocked resets it; a newly reported
-        agent_session.value becomes session_id; a starting session becomes live.
-        working + a submitted run -> run working (working_seen_at). idle_ticks
-        >= CompletionIdleTicks + a submitted/working run -> run ended,
-        ObsCompleted. working with no pending/submitted/working run (outside
-        a short grace after start/prompt) -> ObsHumanActive (CooldownUntil set
-        when it begins the PR's cooldown), unless the agent is a claude agent
-        whose transcript shows no prompt typed into the pane after magnum's
-        last prompt to it (magnum's turn going on after esc cut it short, a
-        turn a task notification began; see humanTurn), a judge still finishing
-        the turn of a run the round settled on its result file (see turnTail),
-        or a session compacting on magnum's /compact (see Compact). blocked
-        -> ObsBlocked, or ObsPromptDenied when a pending/submitted/working
-        run is in flight, the role's, else the kind's, on_permission_prompt
-        is "deny" and the screen shows a permission prompt, which is answered
-        No (see answerPermission; never without a run in flight, where the
-        human may be driving the agent, so an agent that resumes working after
-        a deny is never human_active). idle after such a deny, with that run
-        still in flight and the agent not seen working since -> the kind's
-        after_deny_prompt is sent (see continueAfterDeny), ObsDenyContinued,
-        and the run does not end. A claude agent working after a deny has not
-        resumed: Claude Code ends its turn on a No, and only its background
-        work (a forked /code-review) or the turn that work's notification begins
-        keeps it working, so its deny stays pending, and the message is sent
-        as soon as its transcript shows the turn cut by the rejection and the
-        composer is free (see denyPending); any other kind, and a claude agent
-        without a transcript to read, carried on by itself. A claude agent
-        idle with a submitted/working run whose transcript shows background
-        work started during the run still running, or a task notification not
-        answered yet, counts as working for completion (idle_ticks 0, Background
-        set; see backgroundWait), until the pipeline tells it (Tell) to stop
-        waiting for that work. A codex agent idle with a submitted/working run
-        whose rollout has no task_complete (or turn_aborted) since the run and
-        grew within RolloutGrowth counts as working too (see codexTurnGoing).
-        An agent of a kind named by a rename command (codex), working on a
-        submitted/working run, whose terminal title lacks Title gets that
-        command (`/rename <Title>`) typed into its pane (at most once per call,
-        TitleAttempts per session row; see nameAgent). A codex agent that
-        herdr still reports without a session id, and whose row has none,
-        RecoverIDAfter after its start, gets the id of its Codex rollout,
-        when exactly one matches (see recoverSessionID); herdr's id, when
-        it comes, wins. An agent that ends a turn magnum prompted (working,
-        then idle) while neither herdr nor its rollout gave a session id records
-        EventSessionIDMissing, once per kind and Manager (see sessionIDMissing).
+        agent_session.value becomes session_id; a starting session becomes
+        live. working + a submitted run -> run working (working_seen_at).
+        idle_ticks >= CompletionIdleTicks, this reading CompletionGap or more
+        after the streak's first (see idleStreak), + a submitted/working run ->
+        run ended, ObsCompleted, and Ended's channel closed; short of the gap,
+        SecondReadingAt says when the reading that may end it is due.
+        working with no pending/submitted/working run (outside a short grace
+        after start/prompt) -> ObsHumanActive (CooldownUntil set when it begins
+        the PR's cooldown), unless the agent is a claude agent whose transcript
+        shows no prompt typed into the pane after magnum's last prompt to
+        it (magnum's turn going on after esc cut it short, a turn a task
+        notification began; see humanTurn), a judge still finishing the turn of
+        a run the round settled on its result file (see turnTail), or a session
+        compacting on magnum's /compact (see Compact). blocked -> ObsBlocked, or
+        ObsPromptDenied when a pending/submitted/working run is in flight, the
+        role's, else the kind's, on_permission_prompt is "deny" and the screen
+        shows a permission prompt, which is answered No (see answerPermission;
+        never without a run in flight, where the human may be driving the agent,
+        so an agent that resumes working after a deny is never human_active).
+        idle after such a deny, with that run still in flight and the agent
+        not seen working since -> the kind's after_deny_prompt is sent (see
+        continueAfterDeny), ObsDenyContinued, and the run does not end. A claude
+        agent working after a deny has not resumed: Claude Code ends its turn
+        on a No, and only its background work (a forked /code-review) or the
+        turn that work's notification begins keeps it working, so its deny stays
+        pending, and the message is sent as soon as its transcript shows the
+        turn cut by the rejection and the composer is free (see denyPending);
+        any other kind, and a claude agent without a transcript to read,
+        carried on by itself. A claude agent idle with a submitted/working run
+        whose transcript shows background work started during the run still
+        running, or a task notification not answered yet, counts as working for
+        completion (idle_ticks 0, Background set; see backgroundWait), until the
+        pipeline tells it (Tell) to stop waiting for that work. A codex agent
+        idle with a submitted/working run whose rollout has no task_complete
+        (or turn_aborted) since the run and grew within RolloutGrowth counts as
+        working too (see codexTurnGoing). An agent of a kind named by a rename
+        command (codex), working on a submitted/working run, whose terminal
+        title lacks Title gets that command (`/rename <Title>`) typed into
+        its pane (at most once per call, TitleAttempts per session row; see
+        nameAgent). A codex agent that herdr still reports without a session id,
+        and whose row has none, RecoverIDAfter after its start, gets the id of
+        its Codex rollout, when exactly one matches (see recoverSessionID);
+        herdr's id, when it comes, wins. An agent that ends a turn magnum
+        prompted (working, then idle) while neither herdr nor its rollout gave a
+        session id records EventSessionIDMissing, once per kind and Manager (see
+        sessionIDMissing).
       - live agent session without its agent, or any session whose pane is gone
-        -> session lost, ObsLost. A starting session (agent not started yet)
-        with its pane still present is left alone, and so is a session that
-        started or became live too close to capturedAt (LostGrace).
+        -> session lost, ObsLost, and Ended's channel closed. A starting session
+        (agent not started yet) with its pane still present is left alone,
+        and so is a session that started or became live too close to capturedAt
+        (LostGrace).
 
 func (m *Manager) PaneEnv(env map[string]string, role config.Role) (map[string]string, error)
     PaneEnv is the env role's pane gets from env (paneEnv): the fix job compares
@@ -2513,6 +2533,11 @@ type Observation struct {
 	// since), when that cooldown ends; zero when the tick only extended a
 	// cooldown already running, and when human_cooldown is 0 (none).
 	CooldownUntil time.Time
+	// SecondReadingAt is, for an idle session whose run in flight this
+	// reading did not end, the earliest time a reading may end it (the
+	// streak's first idle reading plus CompletionGap); zero otherwise. The
+	// review daemon's observe clock takes its next reading then.
+	SecondReadingAt time.Time
 }
     Observation is the result of one tick for one starting/live session.
 
@@ -4454,6 +4479,9 @@ const MaxSimplificationsMax = 10
     one PR got 20 simplifications, next to 5 findings, before the cap of
     2026-10-05.
 
+const MinObserveInterval = 2 * time.Second
+    MinObserveInterval is the shortest [daemon] observe_interval.
+
 const NotesRoleName = "notes"
     NotesRoleName is the name of the role the curator runs as (NotesRole).
 
@@ -5264,7 +5292,11 @@ func (c *CurateTriggers) UnmarshalTOML(v any) error
     Values are checked by Validate.
 
 type Daemon struct {
-	PollInterval             Duration `toml:"poll_interval"`
+	PollInterval Duration `toml:"poll_interval"`
+	// ObserveInterval is the review daemon's observe clock: how often it
+	// reads herdr for the turns of the runs in flight, between the ticks
+	// (0 = off: the tick observes alone).
+	ObserveInterval          Duration `toml:"observe_interval"`
 	MaxConcurrentReviews     int      `toml:"max_concurrent_reviews"`
 	MaxTotalWorkingCodex     int      `toml:"max_total_working_codex"`
 	PushQuietPeriod          Duration `toml:"push_quiet_period"`
@@ -7656,12 +7688,14 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
 ```text
 package engine // import "github.com/zhuravel/magnum/internal/engine"
 
-Package engine is magnum's daemon: one tick loop that polls GitHub, observes
-herdr, applies health pauses, consumes CLI requests, dispatches review rounds
-into slots (each round in its own goroutine), releases closed PRs after their
-grace and reconciles the registry with disk, MySQL and herdr. Slow slot work
-(provisioning, eviction, cleanup, reconcile) runs one job at a time on a
-background heavy worker that reports only through store rows.
+Package engine is magnum's daemon: one tick loop that polls GitHub,
+observes herdr, applies health pauses, consumes CLI requests, dispatches
+review rounds into slots (each round in its own goroutine), releases closed
+PRs after their grace and reconciles the registry with disk, MySQL and herdr.
+Between the ticks an observe clock ([daemon] observe_interval) reads herdr
+for the turns of the runs in flight, so a turn's end is seen within seconds.
+Slow slot work (provisioning, eviction, cleanup, reconcile) runs one job at a
+time on a background heavy worker that reports only through store rows.
 
 The engine owns the PR state machine on top of the store's compare-and-set
 transitions; eligibility.Throttle is the single source of truth for re-review
@@ -9321,6 +9355,9 @@ type Deps struct {
 	// timer). Tests replace both.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
+	// ObserveSleep is the observe clock's wait between its passes
+	// (observe_clock.go; nil = a timer honouring ctx). Tests step it.
+	ObserveSleep func(ctx context.Context, d time.Duration) error
 	// DryRun: every decision is made (against the store the caller passes,
 	// which app.New makes a private copy) but nothing outside the store is
 	// changed: no herdr calls besides the snapshot, no agents, no rounds, no
@@ -10017,7 +10054,8 @@ type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
 }
     Herdr is the part of *herdr.Client the tick reads: one snapshot per tick
-    (agent statuses for completion, the working-Codex gate, liveness).
+    (agent statuses for completion, the working-Codex gate, liveness), and one
+    per pass of the observe clock while a run is in flight (observe_clock.go).
 
 type IdentityVerdictPayload struct {
 	Name   string `json:"name"`
@@ -20784,12 +20822,14 @@ It records every transition on the round's run rows and appends audit events
 (subject "pr:<owner>/<name>#<N>"), but never changes the PR's state: the engine
 maps RoundResult.Outcome onto the PR state machine.
 
-Completion of an agent turn is read from the store: the engine's per-tick
-agents.Observe moves a run to ended after two idle ticks, and this package polls
-the run rows (every PollInterval) until then, or until the role's timeout. The
-judge's turn also ends as soon as its result file holds a final status (its last
-step; the agent may still print its final message, which agents counts as the
-run's), and when a file with another status has been present for ResultSettle.
+Completion of an agent turn is read from the store: the engine's observe pass
+(agents.ObserveSnapshotAt) moves a run to ended after two idle readings,
+and this package polls the run rows (every PollInterval) until then, or until
+the role's timeout; the pass's run-ended broadcast (Runner.Ended) cuts a poll's
+sleep short. The judge's turn also ends as soon as its result file holds a final
+status (its last step; the agent may still print its final message, which agents
+counts as the run's), and when a file with another status has been present for
+ResultSettle.
 
 CONSTANTS
 
@@ -21914,6 +21954,12 @@ type Runner struct {
 	Sleep        func(ctx context.Context, d time.Duration) error // nil = a timer honouring ctx
 	PollInterval time.Duration                                    // 0 = DefaultPollInterval
 	Logger       execx.Logger                                     // optional
+	// Ended hands out the observe pass's run-ended broadcast
+	// (agents.Manager.Ended): a channel closed when the pass next ends a
+	// run or loses a session. A turn's wait selects on it beside its poll,
+	// so the next stage starts as soon as the run ended. nil = the poll
+	// alone.
+	Ended func() <-chan struct{}
 	// AgentTag is agents.Deps.Tag of the agents this runner prompts ("eval"
 	// for magnum eval); it leads the shell roles' pane titles too.
 	AgentTag string

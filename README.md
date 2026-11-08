@@ -353,9 +353,10 @@ The daemon prunes audit events older than `[daemon] keep_events` (default `"30d"
 requests older than `keep_requests` (default `"7d"`) on every reconcile; `"0"` keeps them forever. The
 step rows a checkout resumes from after a crash are the one exception, and only while their subject (a
 checkout, named with the head's sha) has had an event inside the window: a subject quiet for `keep_events`
-loses them with the rest. `poll_interval` and `reconcile_interval` must be positive, the other waits and
-quiet periods (`close_grace`, `push_quiet_period`, ...) and `min_free_disk_gb` not negative, and
-`default_repo`, when set, `owner/name`; the config is refused otherwise. Two `[[pool]]` blocks may not
+loses them with the rest. `poll_interval` and `reconcile_interval` must be positive, `observe_interval`
+`"0"` or between 2 seconds and `poll_interval`, the other waits and quiet periods (`close_grace`,
+`push_quiet_period`, ...) and `min_free_disk_gb` not negative, and `default_repo`, when set,
+`owner/name`; the config is refused otherwise. Two `[[pool]]` blocks may not
 render the same `slot_name` or `slot_path`.
 
 A push that lands while a round's reviewers still run restarts them on the new head, up to
@@ -2210,13 +2211,21 @@ it as `failing_checks`. The review's Checks then say for each one whether the PR
 check `ignore_checks` names is left out of the file, so a head whose only failed checks it names gets
 none, and its review says nothing of them. A blind replay never gets the file.
 
-A session role's turn ends when herdr shows its agent idle on two ticks in a row. The judge's ends as soon
+A session role's turn ends when herdr shows its agent idle on two readings in a row, the second at least 3
+seconds after the first (a status that flickers idle for a moment ends nothing). Besides each tick, which
+reads herdr after the GitHub poll, the daemon reads it every `[daemon] observe_interval` (default `"5s"`)
+while a run is submitted or at work, one herdr snapshot each time and none while no run is in flight, and
+takes the second reading as soon as it may end the turn: a turn's end is seen about 5 to 10 seconds after
+the agent stopped instead of a minute or more, and the round's next stage starts as soon as it is (its
+wait wakes on the run's end instead of its next 10-second look). A pass slower than the interval is a
+warning in the daemon's log, at most once a minute; `observe_interval = "0"` leaves the reading to the
+ticks, as before. The judge's ends as soon
 as its result file (`codex-judge.json`, the last thing its skill writes) parses with a final status
 (`posted`, `replied`, `dry_run`, `blocked`, `identity_error`, `closed`, `stopped` or `error`), and Magnum
 checks GitHub at once instead of a minute or two later. The agent may still be printing its last message
 then: that work is the turn's, never taken for someone typing into the pane, and Magnum sends the judge
 nothing new until herdr shows it idle (it refuses the prompt as busy after 2 minutes). A result file that
-does not parse, or holds another status, ends the turn as before: two idle ticks, or 2 minutes after the
+does not parse, or holds another status, ends the turn as before: two idle readings, or 2 minutes after the
 file appeared while the agent still shows working. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by
 its timeout, an asynchronous subagent, a skill forked into the background such as `/code-review`) and
@@ -2228,7 +2237,7 @@ script as a Codex session's id, so herdr's idle alone does not end a Codex turn 
 an id and its rollout under its Codex home holds no `task_complete` (or `turn_aborted`) since the prompt and
 was written within the last 90 seconds, the turn is still working, and Magnum keeps waiting and logs that
 once per run. A turn whose rollout has ended it, or whose rollout stopped growing, ends on the two idle
-ticks as before, and so does one with no id or no rollout to read. The role's `timeout`, which its prompt names
+readings as before, and so does one with no id or no rollout to read. The role's `timeout`, which its prompt names
 as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop its background
 tasks (TaskStop), write its report with what it found and list the checks it stopped as pending
 (`round.time_up`), and waits 5 more minutes before it interrupts the agent and counts the report as
