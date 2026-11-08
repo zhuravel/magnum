@@ -4151,10 +4151,12 @@ to 20 s after the last one stopped, from 81 s: an estimate until it is measured 
 `magnum factory install --drain` puts this build on the factory daemon. Its agents' own hooks, once installed, wake
 it at once: it listens on its hook socket, `run/factory-hooks.sock` under the state directory, every pane it starts
 names that socket, and an agent's Stop, StopFailure or permission prompt has it look at that pane and run an observe
-pass right away, so the next stage starts a second or two after the agent stopped instead of on the next `observe`; a
-StopFailure whose screen shows a usage limit, a lost login or an overload pauses that agent kind at once. Without a
-usable socket (a path of 104 bytes or more under a deep `MAGNUM_HOME`, a listener that fails) it says so once in its
-log and polls as before ([Agent hooks](#agent-hooks)). A task's wait that costs
+pass right away (at most one such pass a second, beside the `observe` clock, which keeps its pace). So the next stage
+usually starts a second or two after the agent stopped: when the pane lags the hook, the looks again a second and two
+seconds later move the task on as soon as they see the turn's end, and only a turn they cannot prove waits for the
+`observe` clock. A StopFailure only makes the pass come sooner: the pass decides any pause, from the screen after the
+prompt, as without hooks. Without a usable socket (a path of 104 bytes or more under a deep `MAGNUM_HOME`, a listener
+that fails) it says so once in its log and polls as before ([Agent hooks](#agent-hooks)). A task's wait that costs
 it nothing (a hold, an agent at work in the copy, your pane, a review round of magnum's) logs once at INFO
 when it begins ("a factory task waits") and once when it ends, with how long it held, and at WARN only once
 it has held 30 minutes, then 1 hour and 2 hours after that and so on ("a factory task still waits"); a wait
@@ -6159,10 +6161,20 @@ within a second or two instead of on the next observe pass. The pieces:
   pane, the registry, the role and the run), never the payload; the look the event starts may add its own
   lines, and a ping or a name the listener does not know logs only `hook datagram dropped`. At shutdown the
   listener stops first, then the daemon waits for the looks the events started.
+- **The factory daemon's listener.** `magnum factory daemon` opens `run/factory-hooks.sock` under its lock and
+  before its startup, so every pane it starts names it, and serves it once the startup is done (events sent
+  meanwhile wait in the socket). Each event has it look at that pane and run an observe pass at once (at most one
+  such pass a second, beside its `observe` clock, which keeps its pace), and a run's end that the looks again a
+  second and two seconds later find moves the task on at once too. A StopFailure only makes that pass come
+  sooner: the pass decides any pause, from the screen after the run's prompt, as without hooks. When the path is
+  too long or the listener cannot start, the factory starts anyway, says so once in `factory.log` and polls as
+  before. The doctor's `ping` wakes nothing. At shutdown the listener stops first, then the daemon waits for the
+  looks, within the drain's budget ([Factory](#factory-writing-code-from-a-jira-key-or-a-prompt)).
 
-`magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`), its doctor
-checks and the factory daemon's listener come in later releases; until the install, nothing runs the script
-and the review daemon's listener hears nothing.
+`magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`) and its doctor
+checks come in later releases; until the install, nothing runs the script and the daemons' listeners hear nothing.
+Each daemon listens on its own socket (the review daemon on `Layout.HookSocket`, the factory on
+`Layout.FactoryHookSocket`) and falls back to polling.
 
 ## Webhooks relay
 

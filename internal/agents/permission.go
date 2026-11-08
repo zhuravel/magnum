@@ -35,6 +35,13 @@ const MaxPromptDenies = 10
 // denyKeyDelay is the pause before re-reading a prompt after a key press.
 const denyKeyDelay = 300 * time.Millisecond
 
+// denyCatchUp is how long after its deny the same prompt still on screen is
+// taken for a screen that has not caught up with the keys, and not denied
+// again (answerPermission). It is timed by the clock, not by the observe
+// passes: a pass that a hook's event asks for right after a look's deny
+// must not shorten it.
+const denyCatchUp = 10 * time.Second
+
 // permOption is one numbered option of a permission prompt.
 type permOption struct {
 	num      string // "1".."9"
@@ -246,8 +253,8 @@ func (m *Manager) permissionPolicy(s store.Session, spec config.Kind) string {
 // run, and returns the observation kind: ObsPromptDenied when the visible
 // screen shows a permission prompt (detectPermissionPrompt; never the
 // first-launch trust dialog, which AnswerTrustDialog handles) that magnum
-// denied this tick or denied on the previous tick and still sees (the screen
-// may lag; one tick is waited before the same prompt is denied again), else
+// denied this tick or denied less than denyCatchUp ago and still sees (the
+// screen may lag; the same prompt is denied again only after that), else
 // ObsBlocked (policy "wait", an unknown kind, no prompt recognised,
 // MaxPromptDenies reached for run, or the keys could not be sent). At most
 // one deny per session per tick. Each deny records EventPromptDenied;
@@ -278,7 +285,7 @@ func (m *Manager) answerPermission(ctx context.Context, s store.Session, run sto
 		m.denies[s.ID] = st
 	}
 	switch {
-	case st.count > 0 && (st.tick == m.tick || (st.key == p.key && st.tick+1 == m.tick)):
+	case st.count > 0 && (st.tick == m.tick || (st.key == p.key && m.now().Sub(st.at) < denyCatchUp)):
 		m.mu.Unlock()
 		return ObsPromptDenied // denied this tick, or just denied and the screen has not caught up
 	case st.count >= MaxPromptDenies:

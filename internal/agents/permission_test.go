@@ -401,11 +401,13 @@ func TestObserveSamePromptWaitsOneTick(t *testing.T) {
 	if o := e.observe()[RoleClaude]; o.Kind != ObsPromptDenied || !slices.Equal(e.keysSent(), want) {
 		t.Fatalf("tick 1 = %+v, keys %q", o, e.keysSent())
 	}
-	// Still on screen right after the deny: wait a tick.
+	// Still on screen a tick (5 s) after the deny: wait for the screen.
+	e.clock.Add(5 * time.Second)
 	if o := e.observe()[RoleClaude]; o.Kind != ObsPromptDenied || len(e.keysSent()) != 2 {
 		t.Fatalf("tick 2 = %+v, keys %q", o, e.keysSent())
 	}
-	// Still there a tick later: deny again.
+	// Still there a tick later, denyCatchUp after the deny: deny again.
+	e.clock.Add(5 * time.Second)
 	if o := e.observe()[RoleClaude]; o.Kind != ObsPromptDenied || len(e.keysSent()) != 4 {
 		t.Fatalf("tick 3 = %+v, keys %q", o, e.keysSent())
 	}

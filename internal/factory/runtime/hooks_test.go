@@ -3,6 +3,7 @@ package runtime
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,9 +110,11 @@ func stopFailure(pane, errText string) agenthooks.Event {
 }
 
 // The agents manager runs the runtime's callbacks inside Wake: a look at a
-// working Codex agent names it through ownerName, and a StopFailure its
-// screen shows pauses the kind through hookFailure, both under r.mu. Wake
-// itself never takes r.mu, or each of these would deadlock.
+// working Codex agent names it through ownerName, which takes r.mu, so
+// Wake itself never takes r.mu, or that look would deadlock; and the loop's
+// pass and a hook's look run on two goroutines at once without either
+// waiting for the other for good (the manager's observe lock, then r.mu,
+// never the other way round).
 func TestWakeNeverRunsUnderTheRuntimesLock(t *testing.T) {
 	t.Run("a look that names the agent", func(t *testing.T) {
 		g := newRig(t)
@@ -127,40 +130,57 @@ func TestWakeNeverRunsUnderTheRuntimesLock(t *testing.T) {
 			t.Fatalf("the look named no agent (pane runs %+v): the test reached no callback that takes r.mu", g.h.runCalls()[before:])
 		}
 	})
-	t.Run("a StopFailure that pauses", func(t *testing.T) {
+	t.Run("a pass and a look on two goroutines", func(t *testing.T) {
 		g := newRig(t)
-		pane := g.claudeFailing(claudeSID, "Reading spec/models/user_spec.rb\nYou've hit your limit · resets 4pm (UTC)\n")
-
-		wakeWithin(t, g, stopFailure(pane, string(agents.StopFailureRateLimit)))
-
-		if g.r.paused(agents.KindClaude) == nil {
-			t.Fatal("the StopFailure paused nothing: the test reached no callback that takes r.mu")
+		g.launch("fx-cause", "fx-repro")
+		g.send("fx-cause", "find the cause")
+		g.send("fx-repro", "reproduce the bug")
+		g.restart() // the namer has no titles: the looks and the passes both name the agents (ownerName)
+		cause, repro := store.Deref(g.session("fx-cause").HerdrPaneID), store.Deref(g.session("fx-repro").HerdrPaneID)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				for range 40 {
+					if _, err := g.r.Observe(g.ctx); err != nil {
+						t.Errorf("Observe: %v", err)
+						return
+					}
+				}
+			})
+			wg.Go(func() {
+				for i := range 40 {
+					ev := agenthooks.Event{V: agenthooks.Version, Agent: agenthooks.AgentCodex, Name: agenthooks.NameStop, Pane: cause}
+					if i%2 == 1 {
+						ev.Agent, ev.Pane = agenthooks.AgentClaude, repro
+					}
+					g.r.Wake(g.ctx, ev)
+				}
+			})
+			wg.Wait()
+			g.r.WaitWakes()
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the passes and the looks did not end: a lock order between them deadlocks")
 		}
 	})
 }
 
-// A StopFailure of a Claude turn whose screen, read again, shows it pauses
-// the kind at once, as the pass that ends the turn would on that screen: a
-// usage limit until its reset, a lost login until a login, an overload for
-// its backoff, whatever the class the hook named (the screen decides, as on
-// the pass). A model's own limit is the pass's (it moves the session to a
-// fallback model), and a screen that shows no such failure pauses nothing.
-// Each Wake returns at once: the listener never waits on the loop.
-func TestAStopFailureHookPausesTheKindAsItsScreenSays(t *testing.T) {
+// A StopFailure decides no pause on its own: it asks the loop for an
+// observe pass now (ObserveSoon), without blocking, and the pass applies its
+// own rule to the screen after the run's prompt. Whatever the class and the
+// screen, the hook pauses no kind; a second request while one is pending is
+// absorbed, and the hook still returns at once.
+func TestAStopFailureAsksTheLoopForAPassAndDecidesNoPause(t *testing.T) {
 	limit := "Reading spec/models/user_spec.rb\nYou've hit your limit · resets 4pm (UTC)\n"
-	for _, tc := range []struct {
-		name, errText, screen, want string
-	}{
-		{"rate_limit on a usage limit", string(agents.StopFailureRateLimit), limit, "usage: claude limit until 16:00"},
-		{"billing_error on a usage limit", string(agents.StopFailureBilling), limit, "usage: claude limit until 16:00"},
-		{"another class on a usage limit", "server_error", limit, "usage: claude limit until 16:00"},
-		{"authentication_failed on a login", string(agents.StopFailureAuthentication), "API Error: 401 · Please run /login\n",
-			"login: claude is logged out"},
+	for _, tc := range []struct{ name, errText, screen string }{
+		{"rate_limit on a usage limit", string(agents.StopFailureRateLimit), limit},
+		{"authentication_failed on a login", string(agents.StopFailureAuthentication), "API Error: 401 · Please run /login\n"},
 		{"overloaded on an overload", string(agents.StopFailureOverloaded),
-			`  ⎿  API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}` + "\n",
-			"overload: claude is overloaded"},
-		{"rate_limit on a model's own limit", string(agents.StopFailureRateLimit), "You've hit your Opus limit · resets 3:45pm\n", ""},
-		{"a screen that shows nothing", string(agents.StopFailureOverloaded), "Reading spec/models/user_spec.rb\n", ""},
+			`  ⎿  API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}` + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newRig(t)
@@ -168,18 +188,25 @@ func TestAStopFailureHookPausesTheKindAsItsScreenSays(t *testing.T) {
 
 			wakeWithin(t, g, stopFailure(pane, tc.errText))
 
-			w := g.r.paused(agents.KindClaude)
-			switch {
-			case tc.want == "" && w != nil:
-				t.Fatalf("the StopFailure paused claude (%v); the pass decides on this screen", w)
-			case tc.want != "" && (w == nil || !strings.HasPrefix(w.Error(), tc.want)):
-				t.Fatalf("after the StopFailure claude's pause is %v, want %q", w, tc.want)
+			if w := g.r.paused(agents.KindClaude); w != nil {
+				t.Fatalf("the StopFailure hook paused claude (%v): the pass decides", w)
 			}
-			if tc.want == "" {
-				return
+			select {
+			case <-g.r.ObserveSoon():
+			default:
+				t.Fatal("the StopFailure asked the loop for no observe pass")
 			}
-			if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "go on"); err == nil || !strings.HasPrefix(err.Error(), tc.want) {
-				t.Fatalf("a prompt to claude after the StopFailure = %v, want the wait %q", err, tc.want)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				s := g.session("fx-repro")
+				g.r.hookFailure(s, agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit})
+				g.r.hookFailure(s, agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit}) // one pending: absorbed
+			}()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("a StopFailure waited on the loop")
 			}
 			if log := g.logs.String(); strings.Contains(log, "spec/models") || strings.Contains(log, "API Error") {
 				t.Fatalf("the log carries the screen's text:\n%s", log)
@@ -188,10 +215,8 @@ func TestAStopFailureHookPausesTheKindAsItsScreenSays(t *testing.T) {
 	}
 }
 
-// The pause the hook set is the pass's own: the run the StopFailure ended
-// still ends on the pass, which pauses it as before (EventPaused, the run
-// abandoned as paused), and the hook's pause does not keep the session from
-// being observed.
+// The pass that ends the run a StopFailure ended pauses the kind as it does
+// without hooks, from the screen after the run's prompt.
 func TestTheRunAStopFailureEndedStillEndsOnThePass(t *testing.T) {
 	g := newRig(t)
 	pane := g.claudeFailing(claudeSID, "Reading spec/models/user_spec.rb\nYou've hit your limit · resets 4pm (UTC)\n")
@@ -207,14 +232,54 @@ func TestTheRunAStopFailureEndedStillEndsOnThePass(t *testing.T) {
 	}
 }
 
-// A liaison talks with you about a task and is no role of its attempts: as
-// on the pass, what its screen shows pauses no kind.
-func TestALiaisonsStopFailurePausesNothing(t *testing.T) {
+// The review's probe: a usage limit an earlier turn hit is still on screen
+// above the run's prompt (the stage told the session to go on once it
+// lifted), and the new turn fails on an error no pattern knows. The screen
+// read whole shows a limit, but the pass reads it after the prompt and sees
+// none: the run ends, no kind pauses, and the role's next prompt goes out.
+func TestAStopFailureOnAStaleLimitLineEndsTheRunWithNoPause(t *testing.T) {
 	g := newRig(t)
-	reset := t0.Add(7 * time.Hour)
-	g.r.hookFailure(store.Session{ID: 1, Role: LiaisonRole, AgentKind: new(agents.KindClaude)}, agents.StopFailureRateLimit,
-		agents.Health{Kind: agents.HealthUsageLimit, ResetAt: &reset})
+	screen := "You've hit your limit · resets 4pm (UTC)\n> reproduce the bug\n  ⎿  API Error: 400 " +
+		`{"type":"error","error":{"type":"invalid_request_error","message":"messages.3: unexpected tool_use_id"}}` + "\n"
+	pane := g.claudeFailing(claudeSID, screen)
+
+	wakeWithin(t, g, stopFailure(pane, "invalid_request"))
 	if w := g.r.paused(agents.KindClaude); w != nil {
-		t.Fatalf("a liaison's StopFailure paused claude: %v", w)
+		t.Fatalf("after the hook claude is paused: %v", w)
+	}
+
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	evs := g.observeN(2)
+	if p := only(evs, EventPaused); len(p) != 0 {
+		t.Fatalf("the pass paused on the stale line: %+v", p)
+	}
+	if e := only(evs, EventEnded); len(e) != 1 {
+		t.Fatalf("the pass gave %+v, want the run's end", evs)
+	}
+	if w := g.r.paused(agents.KindClaude); w != nil {
+		t.Fatalf("after the pass claude is paused: %v", w)
+	}
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "go on"); err != nil {
+		t.Fatalf("the role's next prompt = %v, want it sent", err)
+	}
+}
+
+// Ended is the agents manager's: it closes when a pass (or a hook's look)
+// ends a run, so the loop can take a turn's end that a look after the
+// event's own found at once.
+func TestEndedClosesWhenARunEnds(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.send("fx-repro", "reproduce the bug")
+	g.observe()
+	ended := g.r.Ended()
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	if e := only(g.observeN(2), EventEnded); len(e) != 1 {
+		t.Fatalf("no run ended: %+v", e)
+	}
+	select {
+	case <-ended:
+	default:
+		t.Fatal("Ended did not close when the run ended")
 	}
 }

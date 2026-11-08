@@ -109,6 +109,8 @@ type Runtime interface {
 	UseHookSocket(path string)
 	Wake(ctx context.Context, ev agenthooks.Event)
 	WaitWakes()
+	Ended() <-chan struct{}
+	ObserveSoon() <-chan struct{}
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -300,7 +302,10 @@ type Engine struct {
 	drainAt atomic.Int64
 	// observeNow asks the loop for an observe pass now (requestObserve: an
 	// agent's hook event); one pending absorbs the others, as a kick does.
+	// hookGap is the least time between two such passes (hookPassGap; a
+	// test's seam).
 	observeNow chan struct{}
+	hookGap    time.Duration
 
 	// Seams: the signal subscription, the process table that names the
 	// daemon that holds the lock, whether the command that asked for a
@@ -531,6 +536,7 @@ func New(d Deps) *Engine {
 		runners:      map[string]stageRunner{},
 		kick:         make(chan struct{}, 1),
 		observeNow:   make(chan struct{}, 1),
+		hookGap:      hookPassGap,
 		notify:       ossignal.Notify,
 		getenv:       os.Getenv,
 		stopNotify:   ossignal.Stop,
@@ -667,9 +673,10 @@ func (e *Engine) Run(ctx context.Context) error {
 // SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, opens its
 // hook socket (listenHooks), runs startup, serves the socket (serveHooks),
 // then runs a tick at once, every [factory] poll and on SIGUSR1, and an
-// observe pass every [factory] observe and at once after an agent's hook
-// event (one that saw an event a stage acts on kicks a tick right after
-// it). A stop signal drains: no new launch or effect starts (a launch that
+// observe pass every [factory] observe and, at most once a second, at once
+// when the agents' hooks ask for one (hookPasses; one that saw an event a
+// stage acts on kicks a tick right after it), none once the stop signal
+// came. A stop signal drains: no new launch or effect starts (a launch that
 // waits for the stagger is cut), the tick in progress ends with the task it
 // advances (the others, and the alerts, wait for the next daemon), the
 // waits for the hooks' looks and for the work off the loop end within
@@ -722,7 +729,10 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	defer tick.Stop()
 	observe := time.NewTimer(e.observeEvery())
 	defer observe.Stop()
+	asked := e.newHookPasses()
+	defer asked.floor.Stop()
 	for {
+		hook := false // the hooks ask for a pass (hookPasses)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -730,16 +740,34 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 			e.log.Info("magnum factory daemon stopped")
 			return nil
 		case <-observe.C:
-			e.observe(ctx)
+			if e.draining.Load() { // the stop signal came: it ends the loop, not a pass
+				e.log.Info("magnum factory daemon stopped")
+				return nil
+			}
+			e.observePass(ctx, asked, false)
 			observe.Reset(e.observeEvery())
 			continue
-		case <-e.observeNow: // an agent's hook: the pass now, and its clock starts over
-			e.observe(ctx)
-			observe.Reset(e.observeEvery())
-			continue
+		case <-e.observeNow:
+			hook = true
+		case <-asked.asked:
+			hook = true
+		case <-asked.ended:
+			asked.ended, hook = nil, true // closed: the pass takes a fresh one
+		case <-asked.floor.C:
+			asked.armed, hook = false, true
 		case <-tick.C:
 		case <-e.kick:
 			tick.Stop()
+		}
+		if hook {
+			if e.draining.Load() {
+				e.log.Info("magnum factory daemon stopped")
+				return nil
+			}
+			if asked.due(time.Now()) {
+				e.observePass(ctx, asked, true) // the clock keeps its pace
+			}
+			continue
 		}
 		if err := e.Tick(ctx); err != nil && ctx.Err() == nil {
 			e.log.Warn("factory tick", "err", err)

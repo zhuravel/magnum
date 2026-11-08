@@ -131,6 +131,10 @@ type fakeRuntime struct {
 	onWake      func(ev agenthooks.Event)
 	onObserve   func()
 	onWaitWakes func()
+	// endedCh is what Ended hands out until endTurn closes it, as the agents
+	// manager's; soonCh is ObserveSoon's (askSoon sends on it).
+	endedCh chan struct{}
+	soonCh  chan struct{}
 }
 
 // talkCall is a Talk the engine made: the task and the prompt it rendered.

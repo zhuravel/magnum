@@ -3947,6 +3947,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFromAppMakesThePaneAgentsOnTheEnginesHookRouter, TestThePaneAgentsHookFailuresGoToTheAppsQueue,
   TestARemovedPaneAgentWaitsForItsWakeInFlight, TestTheAppsAgentsHandTheirHookFailuresToTheEnginesQueue
   and TestTheDaemonsClaimGoesToRunAndItsSocketToThePanes.
+- **The deny waits for the screen by the clock, not by the passes** (2026-11-08, R50 slice 2, from the review of
+  the factory's hook receiver; amends "An agent's own hook is a hint to look at its pane now"). The same
+  permission prompt still on screen after its deny was skipped for one observe tick (`st.tick+1 == m.tick`): about
+  10 s at the 5 s observe clocks. A hook's pass right after a look's deny is a tick of its own, so the next clock
+  pass, 5 s after the deny, found the guard spent and could deny a prompt whose screen had not caught up with the
+  keys again. Now the same prompt is not denied again within `denyCatchUp` (10 s) of its deny's keys, however
+  many passes come between; one deny per session per tick stays. By clock: from 5 s to under 10 s it denies on
+  the second tick, as before; from 2 s to under 5 s it waits the 10 s (up to five ticks), where it waited two;
+  from 10 s on (and the retro's and the notes' panes, at 10 s) it denies on the first tick, where it waited for
+  the second. The review daemon's hook looks shortened its guard the same way, and this covers them too. Rejected: counting a hook's pass as no tick (the core's
+  ticks pace the namer and the deny's count too) and keeping the tick with a time floor beside it (two rules for
+  one wait). Tests: TestTheSamePromptIsDeniedAgainOnlyTenSecondsAfterItsDeny (passes 1, 3, 5 and 7 s after the
+  deny leave it, the one 10 s after denies again; it failed first on the tick rule), and
+  TestObserveSamePromptWaitsOneTick now moves the clock 5 s between its ticks.
 
 ## Screens and commands
 
@@ -19856,49 +19870,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   daemon holds `factory.lock` and before its startup touches an agent (`listenHooks`: `paths.CheckSocketPath`,
   then `agenthooks.Listen`), and has the runtime name it in every pane from then on (`Runtime.UseHookSocket`,
   through the new `agents.Manager.SetHookSocket`: the manager is built before the listener is up, so the setter
-  sets `Deps.HookSocket` under the Manager's own lock, which the pane env reads it under, and an empty path leaves
-  the panes made after it without the hook env; a pane already made keeps its env). A path of 104 bytes or more or a listener that fails costs only the hooks: one WARN
-  line ("the factory listens for no agent hooks: it polls its panes"), no pane names a socket, and the observe
-  passes go on at their clock. The socket is served from the end of the startup (events sent meanwhile wait in
-  it), and each event goes, on the listener's goroutine, to `Runtime.Wake` (`agents.Manager.Wake`) on the daemon's
-  context, which the later looks run on and which ends as the daemon stops, then asks the loop for an observe pass
-  at once (`observeNow`, a channel of one beside `kick`: a pending request absorbs the others, so a burst costs one
-  pass, and the pass resets the observe clock); the pass returns what the look saw and kicks the tick on a stage
-  event, as slice 1's passes do. A `ping` (the doctor's) wakes nothing. No lock is held around Wake: the manager
-  runs the runtime's callbacks inside it (`ownerName` names a working agent through `Runtime.mu`, and
-  `hookFailure` pauses under it), and no runtime code holds `Runtime.mu` around a call into the manager.
-  `agents.Deps.HookFailure` is `Runtime.hookFailure`: a usage limit (until its reset), a lost login and an overload
-  that the StopFailure's screen shows pause the session's kind at once with the pass's own pause (`pauseOf`, now
-  shared with `completed` and `blocked`), whatever the class (the screen decides, as on the pass), so the kind's
-  launches and prompts wait from the hook on; the run still ends on the pass, which pauses again with the same
-  reset, abandons the run as paused and brings the stage its EventPaused. A model's own limit (the move to a
-  fallback model types into the pane) and any other screen stay the pass's, a liaison's pauses nothing (as on the
-  pass), and a pause of the same kind in force is left alone. It reads nothing and never waits on the loop: it
-  takes `Runtime.mu` for the pause alone, and its log line names the class and the screen's kind, never its text.
-  As the daemon stops, the hooks stop first: their context ends, Serve returns (its socket closes, so a hook that
-  sends then fails at once), then `Runtime.WaitWakes`, both within what is left of the drain's wait
-  (`drainWaitNow`, which `stopBackground` now shares), so a drain or `install --drain` stays as fast as before.
-  Rejected: wiring the listener in the CLI's daemon builder before `runtime.New` (the lock, the listener and its
-  stop belong with `RunLocked`; the builder runs in the CLI's tests too); building the factory's agents manager anew with
-  the socket (code that held the old manager would lose its state without a word); serving before the startup (a
-  look would race the recovery's rebinding of the panes); routing a StopFailure through the loop (the pause would
-  wait for a pass, and a failure read a second later, on the manager's goroutine, would wait for the next one);
-  emitting an EventPaused from the hook (the stage would take a pause for a run still in flight); pausing on a
-  model limit (the pass moves the session to a fallback model instead); an observe pass per event (a burst would
-  queue passes behind each other). Tests, failing first against stubs: TestTheDaemonListensForHooksUnderItsLockBeforeItsStartup
-  (the panes name the socket before the startup's recovery; a second daemon, refused by the lock, leaves the first's
-  socket listening), TestWithoutAUsableHookSocketTheDaemonPollsAndSaysSoOnce (a path too long; a file that is no
-  socket, left alone), TestAHookEventWakesThePaneThenObservesThenTicks (through a real socket: Wake, the pass, the
-  tick, in that order, on a context that outlives the event and ends with the daemon),
-  TestABurstOfHookEventsMergesIntoOneObservePass (five events during a pass give one more), TestAHookPingIsDropped,
-  TestShutdownWaitsForTheHookLooksWithinTheDrain (after the listener closed; cut once the budget is spent),
-  TestEveryPaneNamesTheHookSocketOnceTheDaemonListens, TestWithoutAHookSocketNoPaneNamesOne,
-  TestSetHookSocketNamesTheSocketInThePanesMadeAfterIt (and none after `SetHookSocket("")`),
-  TestSetHookSocketIsSafeBesideAPaneStart (it fails under `-race` with the setter's lock taken out),
-  TestWakeNeverRunsUnderTheRuntimesLock (a look that names a Codex agent and a StopFailure that pauses, each under a
-  ten-second bound; both deadlock with `Runtime.Wake` taking `Runtime.mu`, tried once),
-  TestAStopFailureHookPausesTheKindAsItsScreenSays (every class, a model limit and a screen that shows nothing),
-  TestTheRunAStopFailureEndedStillEndsOnThePass and TestALiaisonsStopFailurePausesNothing.
+  sets `Deps.HookSocket` under the Manager's own lock, which the pane env reads it under; an empty path leaves the
+  panes made after it without the hook env, and a pane already made keeps its env). A path of 104 bytes or more
+  or a listener that fails costs only the hooks: one WARN line ("the factory listens for no agent hooks: it polls
+  its panes"), no pane names a socket, and the observe passes go on at their clock. The socket is served from the
+  end of the startup (events sent meanwhile wait in it). Each event goes, on the listener's goroutine, to
+  `Runtime.Wake` (`agents.Manager.Wake`) on the daemon's context, which the later looks run on and which ends as
+  the daemon stops, and then asks the loop for an observe pass at once (`observeNow`, a channel of one beside
+  `kick`). Two more sources ask for one: a StopFailure its screen proves (`Runtime.ObserveSoon`), and a run's end
+  that the core's looks again at +1 s and +2 s find (`Runtime.Ended`, the manager's channel, which each pass takes
+  fresh before it runs and which closes on any end after that, the pass's own included, so a pass that ends a run
+  is followed by one more). Hook passes come at most once a second (`hookPassGap`: a floor timer holds the
+  requests that come sooner, and they make one pass), none once the stop signal came (it ends the loop, the
+  clock's pass included), and each pass takes the requests made before it began. The observe clock keeps its pace:
+  a hook pass does not reset it, since a turn the looks again could not prove is the clock's, which must not be a
+  whole interval away, and the clock's pass costs one snapshot even when it comes right after a hook's; resetting
+  it to the lesser of the interval and 2 s was the other choice, a second rule for the same floor. A pass that
+  sees a stage event kicks the tick, as slice 1's do. A `ping` (the doctor's) wakes nothing: the listener drops it,
+  and `hookEvent` drops it too should a later listener hand it on. No lock is held around Wake: the manager runs
+  the runtime's `ownerName` inside it, which takes `Runtime.mu`, and no runtime code holds `Runtime.mu` around a
+  call into the manager. `agents.Deps.HookFailure` is `Runtime.hookFailure`, which decides no pause: it only asks
+  for the pass, without blocking, and that pass applies the factory's rule as without hooks (`completed`: the
+  screen after the run's prompt), so a limit, login or overload line an earlier turn left above the prompt pauses
+  nothing (the review's probe paused every Claude role on such a line); its debug line names the class and the
+  screen's kind, never the screen's text. Looks now run beside the loop's Tick, its sends and its recoveries
+  (`retryRecovery`, `lostPane`, the watchdog's restarts), as the review daemon's observe clock has always run
+  beside its rounds' prompts: a look observes only through `observeOne` under the manager's observe lock, which
+  every pass holds too, its writes are the passes' compare-and-set transitions, a session a recovery just
+  started is not judged lost within `LostGrace`, and a Stop counts only past the run's prompt. The startup is
+  served after only because waiting costs nothing there (the events wait in the socket) and keeps its one-time
+  recovery as it was. As the daemon stops, the hooks stop first: their context ends, Serve returns (its socket
+  closes, so a hook that sends then fails at once), then `Runtime.WaitWakes`, both within what is left of the
+  drain's wait (`drainWaitNow`, which `stopBackground` now shares), so a drain or `install --drain` stays as fast
+  as before. Rejected: wiring the listener in the CLI's daemon builder before `runtime.New` (the lock, the listener
+  and its stop belong with `RunLocked`; the builder runs in the CLI's tests too); building the factory's agents
+  manager anew with the socket (the first commit; code that held the old manager would lose its state without a
+  word); serving before the startup (no gain, the events wait anyway); the hook pausing the kind from its own read
+  of the screen (it reads the whole screen, the pass only what follows the prompt); emitting an EventPaused from
+  the hook (the stage would take a pause for a run still in flight); a pass per event, or with no floor (a burst
+  or a flood would queue passes); resetting the clock on a hook pass (a pending look again would wait a whole
+  interval). Tests, each failing first against a stub or with its guard taken out:
+  TestTheDaemonListensForHooksUnderItsLockBeforeItsStartup (the panes name the socket before the startup's
+  recovery; a second daemon, refused by the lock, leaves the first's socket listening),
+  TestWithoutAUsableHookSocketTheDaemonPollsAndSaysSoOnce (a path too long; a file that is no socket, left alone),
+  TestAHookEventWakesThePaneThenObservesThenTicks (through a real socket: Wake, the pass, the tick, on a context
+  that outlives the event and ends with the daemon), TestABurstOfHookEventsMergesIntoOneObservePass,
+  TestAHookPingIsDropped, TestATurnALaterLookEndsReachesTheLoopAtOnce (its tick within a second of the look),
+  TestAStopFailuresRequestRunsAPassAtOnce, TestNoHookPassOnceTheDaemonStops (ten rounds with an event, a
+  StopFailure and an end pending at the stop), TestHookPassesComeAtMostOncePerSecond,
+  TestAHookPassLeavesTheObserveClockAtItsPace, TestShutdownWaitsForTheHookLooksWithinTheDrain (after the listener
+  closed; cut once the budget is spent), TestEveryPaneNamesTheHookSocketOnceTheDaemonListens,
+  TestWithoutAHookSocketNoPaneNamesOne, TestSetHookSocketNamesTheSocketInThePanesMadeAfterIt (and none after
+  `SetHookSocket("")`), TestSetHookSocketIsSafeBesideAPaneStart (a data race under `-race` with the setter's lock
+  taken out), TestWakeNeverRunsUnderTheRuntimesLock (a look that names a Codex agent, which deadlocks with
+  `Runtime.Wake` taking `Runtime.mu`; passes and looks on two goroutines, which deadlock with a pass holding
+  `Runtime.mu` around its call into the manager), TestAStopFailureAsksTheLoopForAPassAndDecidesNoPause,
+  TestAStopFailureOnAStaleLimitLineEndsTheRunWithNoPause (the review's probe), TestEndedClosesWhenARunEnds and
+  TestTheRunAStopFailureEndedStillEndsOnThePass.
 
 ## Learned rules
 

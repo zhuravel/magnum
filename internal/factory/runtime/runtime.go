@@ -164,6 +164,9 @@ type Runtime struct {
 	// waits for the stagger then starts nothing.
 	drained   chan struct{}
 	drainOnce sync.Once
+	// soon asks the daemon's loop for an observe pass now (ObserveSoon):
+	// one slot, a pending request absorbs the others.
+	soon chan struct{}
 
 	mu         sync.Mutex
 	lastStart  time.Time
@@ -300,7 +303,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
 		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{},
-		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{})}
+		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{}), soon: make(chan struct{}, 1)}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
 		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true, HookFailure: r.hookFailure})

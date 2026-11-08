@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,6 +52,48 @@ func (f *fakeRuntime) WaitWakes() {
 	f.mu.Unlock()
 	if on != nil {
 		on()
+	}
+}
+
+// Ended hands out the channel endTurn closes, as the agents manager's.
+func (f *fakeRuntime) Ended() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endedCh == nil {
+		f.endedCh = make(chan struct{})
+	}
+	return f.endedCh
+}
+
+// endTurn closes the channel Ended handed out: a look ended a run.
+func (f *fakeRuntime) endTurn() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endedCh != nil {
+		close(f.endedCh)
+		f.endedCh = nil
+	}
+}
+
+// ObserveSoon is the channel askSoon sends on.
+func (f *fakeRuntime) ObserveSoon() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.soonCh == nil {
+		f.soonCh = make(chan struct{}, 1)
+	}
+	return f.soonCh
+}
+
+// askSoon asks for an observe pass, as the runtime's StopFailure hook does.
+func (f *fakeRuntime) askSoon() {
+	f.ObserveSoon()
+	f.mu.Lock()
+	ch := f.soonCh
+	f.mu.Unlock()
+	select {
+	case ch <- struct{}{}:
+	default:
 	}
 }
 
@@ -345,8 +389,10 @@ func TestABurstOfHookEventsMergesIntoOneObservePass(t *testing.T) {
 }
 
 // `magnum doctor` pings the socket to see that it listens: a ping wakes no
-// pane and asks for no observe pass, whether the listener drops it (it
-// knows no ping) or hands it on.
+// pane and asks for no observe pass. Through the socket the listener drops
+// it (it knows no ping, and the doctor's names no agent and no pane); the
+// factory's own drop (hookEvent's guard, for a listener that hands a ping
+// on) is reached by the direct call.
 func TestAHookPingIsDropped(t *testing.T) {
 	h, _ := hookHarness(t)
 	h.e.hookEvent(h.ctx, agenthooks.Event{V: agenthooks.Version, Agent: agenthooks.AgentClaude, Name: hookPing, Pane: "w1:p1"})
@@ -431,4 +477,168 @@ func TestShutdownWaitsForTheHookLooksWithinTheDrain(t *testing.T) {
 			t.Fatalf("the log does not say the hook looks were cut:\n%s", log.String())
 		}
 	})
+}
+
+// passTimes records when each observe pass began.
+type passTimes struct {
+	mu sync.Mutex
+	at []time.Time
+}
+
+func (p *passTimes) list() []time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.at)
+}
+
+// recordPasses has the fake record the start of each observe pass from now
+// on.
+func (h *harness) recordPasses() *passTimes {
+	p := &passTimes{}
+	h.rt.mu.Lock()
+	h.rt.onObserve = func() {
+		p.mu.Lock()
+		p.at = append(p.at, time.Now())
+		p.mu.Unlock()
+	}
+	h.rt.mu.Unlock()
+	return p
+}
+
+// The first look after a Stop can find nothing yet (herdr's status or the
+// transcript lags the hook), and the core looks again at +1 s and +2 s on
+// its own goroutine. A run's end that such a look finds closes the
+// manager's Ended, and the loop takes it at once: its pass and the tick come
+// within a second of that look, not at the next clock pass.
+func TestATurnALaterLookEndsReachesTheLoopAtOnce(t *testing.T) {
+	h, _ := hookHarness(t)
+	task := h.task("PR-12607", registry.TaskActive, "investigate")
+	ticks := h.passes(task)
+	h.runDaemon()
+	waitPass(t, ticks, "Run never ticked")
+	passes := h.recordPasses()
+	if err := agenthooks.Send(h.layout.FactoryHookSocket(), hookStop); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the event's observe pass", func() bool { return len(passes.list()) == 1 })
+
+	time.Sleep(time.Second) // the core's look at +1 s ends the turn
+	h.rt.setEvents([]runtime.Event{{TaskID: task.ID, Role: "fx-repro", RunID: "r1", Kind: runtime.EventEnded}})
+	endedAt := time.Now()
+	h.rt.endTurn()
+	waitPass(t, ticks, "the later look's end led to no tick")
+	if took := time.Since(endedAt); took > time.Second {
+		t.Fatalf("the tick came %s after the later look ended the turn, want it within a second", took)
+	}
+}
+
+// A StopFailure the screen proves asks the loop for a pass
+// (Runtime.ObserveSoon), which comes at once, not at the clock.
+func TestAStopFailuresRequestRunsAPassAtOnce(t *testing.T) {
+	h, _ := hookHarness(t)
+	task := h.task("PR-12608", registry.TaskActive, "investigate")
+	ticks := h.passes(task)
+	h.runDaemon()
+	waitPass(t, ticks, "Run never ticked")
+	passes := h.recordPasses()
+
+	h.rt.askSoon()
+	waitFor(t, "an observe pass for the StopFailure", func() bool { return len(passes.list()) == 1 })
+}
+
+// Once the stop signal came, a pass the hooks asked for (an event, a
+// StopFailure, a later look's end) no longer runs: the daemon stops, as on
+// the stop itself. Each round has all three pending when the pass in flight
+// ends, with no floor between hook passes, so a loop that picked one of them
+// would run a second pass.
+func TestNoHookPassOnceTheDaemonStops(t *testing.T) {
+	for i := range 10 {
+		h, _ := hookHarness(t)
+		h.e.hookGap = 0
+		sigs := h.captureSignals()
+		task := h.task(fmt.Sprintf("PR-%d", 12610+i), registry.TaskActive, "investigate")
+		ticks := h.passes(task)
+		stop := h.runDaemon()
+		waitPass(t, ticks, "Run never ticked")
+		entered, release := make(chan struct{}, 1), make(chan struct{})
+		var first atomic.Bool
+		h.rt.mu.Lock()
+		h.rt.onObserve = func() {
+			if first.CompareAndSwap(false, true) {
+				entered <- struct{}{}
+				<-release
+			}
+		}
+		h.rt.mu.Unlock()
+		h.e.hookEvent(h.ctx, hookStop)
+		<-entered
+		(<-sigs) <- syscall.SIGTERM
+		waitFor(t, "the drain", h.e.draining.Load)
+		h.e.hookEvent(h.ctx, hookStop)
+		h.rt.askSoon()
+		h.rt.endTurn()
+		close(release)
+		if err := stop(); err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		if n := h.rt.observeCount(); n != 1 {
+			t.Fatalf("round %d: %d observe passes, want only the one in flight at the stop signal", i, n)
+		}
+	}
+}
+
+// Hook passes come at most once a second (hookPassGap): requests that come
+// sooner after one are held by the floor and then make a single pass, so a
+// flood of events (forged ones, a turn's many subagents) costs the loop at
+// most a pass a second beside the clock's.
+func TestHookPassesComeAtMostOncePerSecond(t *testing.T) {
+	h, _ := hookHarness(t)
+	task := h.task("PR-12620", registry.TaskActive, "investigate")
+	ticks := h.passes(task)
+	h.runDaemon()
+	waitPass(t, ticks, "Run never ticked")
+	passes := h.recordPasses()
+
+	h.e.hookEvent(h.ctx, hookStop)
+	waitFor(t, "the first hook pass", func() bool { return len(passes.list()) == 1 })
+	time.Sleep(100 * time.Millisecond)
+	second := hookStop
+	second.Pane = "w1:p2"
+	h.e.hookEvent(h.ctx, second)
+	h.rt.askSoon()
+	h.rt.endTurn()
+	waitFor(t, "the held hook pass", func() bool { return len(passes.list()) == 2 })
+	got := passes.list()
+	if gap := got[1].Sub(got[0]); gap < 900*time.Millisecond {
+		t.Fatalf("two hook passes %s apart, want at least %s", gap, hookPassGap)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := len(passes.list()); n != 2 {
+		t.Fatalf("%d passes, want the held requests to make one", n)
+	}
+}
+
+// A hook pass leaves the observe clock at its pace: the next clock pass
+// comes when it was due, neither pushed a whole interval past the hook pass
+// (a re-look pending would wait that long) nor added right after it.
+func TestAHookPassLeavesTheObserveClockAtItsPace(t *testing.T) {
+	h, _ := hookHarness(t)
+	h.cfg.Factory.Observe = config.Duration{Duration: 2 * time.Second}
+	task := h.task("PR-12621", registry.TaskActive, "investigate")
+	ticks := h.passes(task)
+	h.runDaemon()
+	waitPass(t, ticks, "Run never ticked")
+	passes := h.recordPasses()
+	waitFor(t, "the first clock pass", func() bool { return len(passes.list()) == 1 })
+	clock := passes.list()[0]
+
+	time.Sleep(time.Until(clock.Add(time.Second)))
+	h.e.hookEvent(h.ctx, hookStop)
+	waitFor(t, "the hook pass and the next clock pass", func() bool { return len(passes.list()) == 3 })
+	got := passes.list()
+	hook, next := got[1], got[2]
+	if d := next.Sub(hook); d < 500*time.Millisecond || d > 1500*time.Millisecond {
+		t.Fatalf("the clock pass came %s after the hook pass (%s after the last clock pass), want about 1 s: when it was due",
+			d, next.Sub(clock))
+	}
 }

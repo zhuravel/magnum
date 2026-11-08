@@ -13393,8 +13393,9 @@ func (e *Engine) RunLocked(ctx context.Context) error
     or SIGINT, or until ctx ends: it writes the pidfile, opens its hook socket
     (listenHooks), runs startup, serves the socket (serveHooks), then runs a
     tick at once, every factory poll and on SIGUSR1, and an observe pass every
-    factory observe and at once after an agent's hook event (one that saw an
-    event a stage acts on kicks a tick right after it). A stop signal drains:
+    factory observe and, at most once a second, at once when the agents' hooks
+    ask for one (hookPasses; one that saw an event a stage acts on kicks a tick
+    right after it), none once the stop signal came. A stop signal drains:
     no new launch or effect starts (a launch that waits for the stagger is cut),
     the tick in progress ends with the task it advances (the others, and the
     alerts, wait for the next daemon), the waits for the hooks' looks and for
@@ -14192,6 +14193,8 @@ type Runtime interface {
 	UseHookSocket(path string)
 	Wake(ctx context.Context, ev agenthooks.Event)
 	WaitWakes()
+	Ended() <-chan struct{}
+	ObserveSoon() <-chan struct{}
 }
     Runtime is the factory's agent runtime (internal/factory/runtime): the owner
     row of a task in the factory's agents store, the launch of a stage's roles
@@ -15654,6 +15657,12 @@ func (r *Runtime) DBLockCommand(copyPath string, role config.Role) string
     --`, the prompts' .DBLockCommand): the roles of a task take turns on the
     copy's databases.
 
+func (r *Runtime) Ended() <-chan struct{}
+    Ended is the agents manager's Ended: a channel that closes once a pass,
+    or a hook's look, ends a run or loses a session after it was taken, so the
+    loop takes a turn's end that a later look of Wake's found at once (each pass
+    takes a fresh one).
+
 func (r *Runtime) HerdrUp(ctx context.Context) error
     HerdrUp asks the factory's herdr session whether it answers (a snapshot):
     the engine's herdr hold.
@@ -15690,6 +15699,11 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     (parkLeftLiaisons). A pass reads the user turns of an agent's transcript
     once, for the turns typed and the delivery of a prompt alike. A panic is
     contained: it comes back as the error.
+
+func (r *Runtime) ObserveSoon() <-chan struct{}
+    ObserveSoon is where the runtime asks the daemon's loop for an observe pass
+    now (a StopFailure hook its screen proves: hookFailure); one request pending
+    absorbs the others.
 
 func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
     Owner upserts task t's owner row: repository factory/<repo name>, number the

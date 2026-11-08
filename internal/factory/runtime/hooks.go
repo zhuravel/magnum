@@ -4,14 +4,14 @@ package runtime
 // hook socket (Layout.FactoryHookSocket), every pane the runtime makes from
 // then on names it (UseHookSocket), and the engine hands each event an
 // agent's hook sends there to Wake, which looks at that pane now. A
-// StopFailure whose screen shows a usage limit, a lost login or an overload
-// pauses the agent's kind at once (hookFailure). An event is a hint, never
-// the source of truth: the observe passes still end the runs and the
-// stages still take their events.
+// StopFailure its screen proves asks the loop for an observe pass now
+// (hookFailure, ObserveSoon), and a run's end a later look found closes
+// Ended. An event is a hint, never the source of truth: the observe passes
+// still end the runs, decide the pauses, and the stages still take their
+// events.
 
 import (
 	"context"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
@@ -40,35 +40,32 @@ func (r *Runtime) Wake(ctx context.Context, ev agenthooks.Event) { r.mgr.Wake(ct
 // and the last Wake returned.
 func (r *Runtime) WaitWakes() { r.mgr.WaitWakes() }
 
-// hookFailure is the agents manager's HookFailure: the class of API error
-// a Claude turn of session s ended on, as its own StopFailure hook named it
-// and its screen, read again, shows it (h). A usage limit (until its reset),
-// a lost login and an overload pause the session's kind now, as the pass
-// that ends the turn pauses it on that screen (completed: pauseOf), so the
-// kind's launches and prompts wait from the hook on, not from that pass,
-// whatever the class (the screen decides, as on the pass). The run itself
-// still ends on that pass, which pauses the kind again with the same reset,
-// abandons the run as paused and brings the stage its EventPaused. A
-// model's own limit (the session moves to a fallback model) and any other
-// screen are the pass's alone, and a liaison's screen, no role of the
-// task's, pauses nothing, as on the pass. A pause of the same kind in force
-// is left as it is. It runs on the listener's goroutine or the manager's,
-// never waits on the loop and reads nothing: it takes r.mu for the pause
-// alone. Its log names the class and the screen's kind, never the screen's
-// text.
+// hookFailure is the agents manager's HookFailure: a Claude turn of session
+// s ended on an API error of class failure, as its own StopFailure hook
+// named it and its screen, read again, shows it (h). It decides no pause:
+// it asks the daemon's loop for an observe pass now (ObserveSoon), without
+// blocking (a request pending absorbs it), and that pass applies its own
+// rule to the screen after the run's prompt (completed, health's prompt
+// anchor), as without hooks, so a limit line an earlier turn left above
+// the prompt pauses nothing. It runs on the listener's goroutine or the
+// manager's, takes no lock and never waits on the loop. Its debug line
+// names the class and the screen's kind, never the screen's text.
 func (r *Runtime) hookFailure(s store.Session, failure agents.StopFailure, h agents.Health) {
-	who, kind := pauseOf[h.Kind], store.Deref(s.AgentKind)
-	if who == "" || kind == "" || s.Role == LiaisonRole {
-		return
-	}
-	if w := r.paused(kind); w != nil && w.Who == who {
-		return
-	}
-	var until time.Time
-	if h.ResetAt != nil {
-		until = *h.ResetAt
-	}
-	r.log.Info("an agent's StopFailure hook pauses its kind now", "kind", kind, "role", s.Role, "session", s.ID,
+	r.log.Debug("an agent's StopFailure hook: the observe pass reads its screen now", "role", s.Role, "session", s.ID,
 		"failure", string(failure), "screen", string(h.Kind))
-	_ = r.pause(context.Background(), kind, who, until) // its wait is what the kind's launches and prompts answer
+	select {
+	case r.soon <- struct{}{}:
+	default:
+	}
 }
+
+// ObserveSoon is where the runtime asks the daemon's loop for an observe
+// pass now (a StopFailure hook its screen proves: hookFailure); one request
+// pending absorbs the others.
+func (r *Runtime) ObserveSoon() <-chan struct{} { return r.soon }
+
+// Ended is the agents manager's Ended: a channel that closes once a pass,
+// or a hook's look, ends a run or loses a session after it was taken, so
+// the loop takes a turn's end that a later look of Wake's found at once
+// (each pass takes a fresh one).
+func (r *Runtime) Ended() <-chan struct{} { return r.mgr.Ended() }
