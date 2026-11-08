@@ -376,8 +376,8 @@ func TestXNoLongerStopsMagnumsLoop(t *testing.T) {
 }
 
 // f, F and K on a task's row without a PR in magnum's registry start
-// nothing and say so; x is no key of home's task rows (it drops a task on
-// its card) and says K stops magnum's loop.
+// nothing and say so, with home's P beside them; x is no key of home's
+// task rows (it drops a task on its card) and says K stops magnum's loop.
 func TestFOnATaskRowStartsNothing(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g")
@@ -385,7 +385,7 @@ func TestFOnATaskRowStartsNothing(t *testing.T) {
 	for _, k := range []string{"f", "F", "K"} {
 		h.press(k)
 		v := h.view()
-		mustContain(t, v, "f, F and K act on a PR in magnum's registry: PR-12371 has none there")
+		mustContain(t, v, "f, F, K and P act on a PR in magnum's registry: PR-12371 has none there")
 		mustNotContain(t, v, "y/N")
 	}
 	h.press("x")

@@ -3,7 +3,10 @@ package tui
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // mergePlanAsk is what the fake MergeParent's dry run asks: the daemon's
@@ -130,4 +133,22 @@ func TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan(t *testing.T) {
 	if !slices.Equal(merges, []string{"example/talkable#4602"}) {
 		t.Errorf("merges %v, want the row's PR", merges)
 	}
+}
+
+// Home's help names P beside f F K, and P on a row without a PR in
+// magnum's registry starts nothing and says which keys act on one there.
+func TestFactoryHomeNamesPInItsHelpAndOnARowWithoutAPR(t *testing.T) {
+	h := testYours(t, 140, 40)
+	home := helpSection(t, ansi.Strip(strings.Join(h.m.helpContent(240), "\n")), "Home")
+	if !slices.ContainsFunc(home, func(l string) bool {
+		return strings.HasPrefix(l, "f F K P ") && strings.Contains(l, "merge its parent") && strings.Contains(l, "y/N")
+	}) {
+		t.Errorf("the help's Home lacks f F K P with the merge of the parent:\n%s", strings.Join(home, "\n"))
+	}
+	h.press("g")
+	h.selectRow("PR-12371")
+	h.press("P")
+	v := h.view()
+	mustContain(t, v, "f, F, K and P act on a PR in magnum's registry: PR-12371 has none there")
+	mustNotContain(t, v, "y/N")
 }

@@ -83,7 +83,8 @@ var factoryKeyHelp = []struct {
 		{"a", "the oldest card that needs you, then the next: a task's decision, a PR's card (a on a card goes on)"},
 		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one)"},
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
-		{"f F K", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
+		{"f F K P", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop, " +
+			"merge its parent as the fixer App's bot (the daemon's plan first; y/N)"},
 		{"r R", "on a row with a PR: magnum reviews it now, or afresh in new agent sessions, as the board's r and R (y/N)"},
 		{"z", "on a row with a PR: snooze its automatic reviews for 2h, or lift the snooze (y/N)"},
 		{"M U", "on a row with a PR: mute its automatic reviews, unmute them (y/N); a task's PR's question says what it does to its fix loop"},

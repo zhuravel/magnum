@@ -245,12 +245,15 @@ func (m *factoryModel) openMagnum(r FactoryRow) tea.Cmd {
 // nothing), the stop of its fix loop (K; with no loop it says so) and the
 // merge of its parent (P, home's rows: the daemon's plan first, a dry run,
 // then its sentence as the y/N), each behind y/N and through magnum's own
-// request paths; on a row without one nothing. x is no key of home's: it drops a task, on its card, and says
-// that K stops magnum's loop.
+// request paths; on a row without one nothing but a note of the keys that
+// act on one (home's P among them). x is no key of home's: it drops a
+// task, on its card, and says that K stops magnum's loop.
 func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 	switch {
 	case k == "x":
 		return m.note("K stops magnum's loop on a row with a PR; x drops a task, on its card")
+	case r.PR == nil && m.view == fvHome:
+		return m.note("f, F, K and P act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
 	case r.PR == nil:
 		return m.note("f, F and K act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
 	}
