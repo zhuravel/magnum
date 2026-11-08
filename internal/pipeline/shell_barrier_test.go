@@ -264,7 +264,7 @@ func TestARestartGoesOnInTheReplacementPane(t *testing.T) {
 		e.keys.run(pane, 0)
 		return nil
 	}
-	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang()), writeReport("## P2 on the new head\n")}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{atTheCommandsPush(e, head2), writeReport("## P2 on the new head\n")}
 	post := e.judgePosts(906, "COMMENTED", "COMMENT")
 	post.commit = head2
 	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(t)}
