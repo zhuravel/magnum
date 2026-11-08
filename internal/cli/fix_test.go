@@ -855,7 +855,7 @@ func TestFixWaitOnARefusedRequestEndsAtOnce(t *testing.T) {
 	h.pid = 1
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	h.onSleep = func(h *actHarness) {
-		h.completePending(store.RequestFailed, "PR #5 is alice's, not yours; the fixer pushes and replies as you")
+		h.completePending(store.RequestFailed, "PR #5 is alice's, not yours; the fixer pushes and replies as zhuravel")
 	}
 	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 1 {
 		t.Fatalf("exit %d", code)

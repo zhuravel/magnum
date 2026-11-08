@@ -451,15 +451,18 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool) (strin
 	return fmt.Sprintf("merging the parent of %s: %s; `magnum abort %s` stops it", job.label(), what, job.label()), nil
 }
 
-// mergeWords says who merges what in a merge of the parent, as the request
-// sees it, as login: "magnum merges master at c0c0c0c as fixer-app[bot],
-// with no conflict" or "claude-fix merges master at c0c0c0c (2 conflicting
-// files) as fixer-app[bot]".
+// mergeWords says who merges what into which branch in a merge of the
+// parent, as the request sees it, as login (the y/N of `magnum
+// merge-parent` and the screens' P puts it): "magnum merges master at
+// c0c0c0c into feature as fixer-app[bot], with no conflict" or "claude-fix
+// merges master at c0c0c0c (2 conflicting files) into feature as
+// fixer-app[bot]".
 func (j *fixJob) mergeWords(login string) string {
+	branch := deref(j.pr.HeadRef)
 	if c := j.conflict; c.sha != "" {
-		return fmt.Sprintf("%s %s as %s", j.role.Name, c.words(), login)
+		return fmt.Sprintf("%s %s into %s as %s", j.role.Name, c.words(), branch, login)
 	}
-	return fmt.Sprintf("magnum merges %s at %s as %s, with no conflict", j.behind.base, textx.ShortSHA(j.behind.sha), login)
+	return fmt.Sprintf("magnum merges %s at %s into %s as %s, with no conflict", j.behind.base, textx.ShortSHA(j.behind.sha), branch, login)
 }
 
 // prepareMerge decides whether a merge of pr's parent may start, as

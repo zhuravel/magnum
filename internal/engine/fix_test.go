@@ -489,7 +489,7 @@ func TestFixRefusals(t *testing.T) {
 		{name: "no review", author: "zhuravel", want: "nothing to fix: no review on a1a1a1a"},
 		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: othersOnly},
 		{name: "another author", author: "alice", findings: map[string]int{"P1": 1},
-			want: "PR #2 is alice's, not yours; the fixer pushes and replies as you"},
+			want: "PR #2 is alice's, not yours; the fixer pushes and replies as zhuravel"},
 		{name: "fork", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, pr store.PR) {
 			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("is_cross_repo", true) }); err != nil {
 				h.t.Fatal(err)

@@ -607,9 +607,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	}
 	switch author := deref(pr.AuthorLogin); {
 	case author == "":
-		return nil, fmt.Errorf("PR #%d's author is not known yet (no details from GitHub); the fixer pushes and replies as you", pr.Number)
+		return nil, fmt.Errorf("PR #%d's author is not known yet (no details from GitHub); the fixer pushes and replies as %s", pr.Number, cmp.Or(fixer.Login, "you"))
 	case !e.ownPR(pr):
-		return nil, fmt.Errorf("PR #%d is %s's, not yours; the fixer pushes and replies as you", pr.Number, author)
+		return nil, fmt.Errorf("PR #%d is %s's, not yours; the fixer pushes and replies as %s", pr.Number, author, cmp.Or(fixer.Login, "you"))
 	}
 	if pr.IsCrossRepo {
 		return nil, errors.New("the head lives in a fork magnum cannot push to")

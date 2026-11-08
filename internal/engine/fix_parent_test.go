@@ -223,7 +223,7 @@ func TestAMergeOfACleanParentIsTheDaemonsAndStartsNoFixer(t *testing.T) {
 	mg.behind = true
 	dry := h.fix(FixPayload{Mode: FixModeMerge, DryRun: true})
 	h.handle()
-	const what = "magnum merges master at c0c0c0c as " + fixerAppLogin + ", with no conflict"
+	const what = "magnum merges master at c0c0c0c into feature as " + fixerAppLogin + ", with no conflict"
 	if res := h.wantDone(dry); res != "dry run: would merge the parent of talkable/talkable#2: "+what {
 		t.Errorf("dry run = %q", res)
 	}
@@ -266,7 +266,7 @@ func TestAMergeOfAConflictingParentGoesToTheFixerAlone(t *testing.T) {
 	})
 	id := h.fix(FixPayload{Mode: FixModeMerge})
 	h.handle()
-	const what = "claude-fix merges master at c0c0c0c (2 conflicting files) as " + fixerAppLogin
+	const what = "claude-fix merges master at c0c0c0c (2 conflicting files) into feature as " + fixerAppLogin
 	if res := h.wantDone(id); !strings.Contains(res, what) {
 		t.Errorf("answer = %q, want it to say %q", res, what)
 	}
