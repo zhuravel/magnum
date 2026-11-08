@@ -160,6 +160,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 	c.Doubts, c.Flags, c.Leftovers = cleanAll(c.Doubts), cleanAll(c.Flags), cleanAll(c.Leftovers)
 	c.Unread, c.Reasons, c.Hints = cleanAll(c.Unread), cleanAll(c.Reasons), cleanHints(c.Hints)
 	c.Copy, c.NoPush, c.Failed = cleanText(c.Copy), cleanText(c.NoPush), cleanAll(c.Failed)
+	c.QA = cleanText(c.QA) // QAReport is a path the pager opens, never drawn
 	c.Files = slices.Clone(c.Files)
 	for i := range c.Files {
 		c.Files[i].Path = cleanText(c.Files[i].Path)
@@ -170,7 +171,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 func cleanTaskCard(c TaskCard) TaskCard {
 	c.Key, c.Kind, c.Title, c.Branch, c.Repo = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch), cleanText(c.Repo)
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
-	c.Ask = cleanText(c.Ask)
+	c.Ask, c.AcceptQA = cleanText(c.Ask), cleanText(c.AcceptQA)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
 	c.Links, c.FixNeeds = cleanAll(c.Links), cleanAll(c.FixNeeds) // FixReport is a path the pager opens, never drawn whole
 	if c.PRInfo != nil {

@@ -189,6 +189,13 @@ func (a *factoryActions) Retry(ctx context.Context, taskID int64) (tui.ActionRes
 	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface})
 }
 
+// AcceptQA lets a task that waits on you go on at its stage with the QA
+// defects the writer declined accepted at its head, as `magnum factory
+// retry --accept-qa`.
+func (a *factoryActions) AcceptQA(ctx context.Context, taskID int64) (tui.ActionResult, error) {
+	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface, AcceptQA: true})
+}
+
 // Open steps into the task's pane: herdr focuses its agent on the
 // factory's session (the one that waits on you, else the one at work, else
 // the newest live one), and the terminal on that session comes to the

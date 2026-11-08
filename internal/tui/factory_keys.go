@@ -1121,7 +1121,7 @@ func (m factoryModel) readyCard() (ReadyCard, bool) {
 		c.input = &cardInput{label: "Your note to the writer · enter asks y/N · esc drops it", text: m.input.Value()}
 	}
 	c.rule = m.rule()
-	c.Hints = dropHints(newCardPainter(m.viewWidth(), m.st, m.g, m.now()).readyHints(c), "e")
+	c.Hints = newCardPainter(m.viewWidth(), m.st, m.g, m.now()).readyHints(c)
 	return c, true
 }
 
@@ -1435,6 +1435,8 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 	case "x":
 		return m.ask(&factoryFollow{kind: followStop, task: task}, "Drop "+c.Key+": stop its agents, free its copy, keep the branch?",
 			func(ctx context.Context) (ActionResult, error) { return act.Stop(ctx, task) }), true
+	case acceptQAKey:
+		return m.askAcceptQA(c), true
 	case "esc":
 		m.goHome()
 	default:

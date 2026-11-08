@@ -95,25 +95,26 @@ type (
 
 // fakeFactoryActions records every request the screen makes.
 type fakeFactoryActions struct {
-	mu       sync.Mutex
-	starts   []factoryStartCall
-	previews []string
-	repos    []string // the repository of each preview
-	answers  []factoryAnswerCall
-	decides  []factoryDecideCall
-	stops    []int64
-	retries  []int64
-	opens    []int64
-	browsed  []string // the URLs OpenBrowser opened
-	seen     []time.Time
-	focus    []bool
-	focusAt  []time.Time
-	diffs    []int64
-	diffCmd  *exec.Cmd
-	fixes    []string        // the PRs Fix was asked for
-	fixOffs  []factoryFixOff // FixOff's calls
-	aborts   []string        // the PRs Abort was asked for
-	openPRs  []string        // the PRs OpenPR stepped into magnum's pane of
+	mu        sync.Mutex
+	starts    []factoryStartCall
+	previews  []string
+	repos     []string // the repository of each preview
+	answers   []factoryAnswerCall
+	decides   []factoryDecideCall
+	stops     []int64
+	retries   []int64
+	opens     []int64
+	browsed   []string // the URLs OpenBrowser opened
+	seen      []time.Time
+	focus     []bool
+	focusAt   []time.Time
+	diffs     []int64
+	diffCmd   *exec.Cmd
+	fixes     []string        // the PRs Fix was asked for
+	fixOffs   []factoryFixOff // FixOff's calls
+	aborts    []string        // the PRs Abort was asked for
+	openPRs   []string        // the PRs OpenPR stepped into magnum's pane of
+	acceptsQA []int64         // the tasks AcceptQA was asked for
 	// prActs are the board's row actions the screen ran on PRs, as
 	// "<call> <ref>" ("review owner/name#12", "fresh owner/name#12",
 	// "snooze 2h0m0s owner/name#12", "unsnooze", "mute", "unmute").
@@ -288,14 +289,21 @@ func (a *fakeFactoryActions) prCalls() []string {
 	return slices.Clone(a.prActs)
 }
 
+func (a *fakeFactoryActions) AcceptQA(_ context.Context, task int64) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.acceptsQA = append(a.acceptsQA, task)
+	return ActionResult{Text: "it goes on; QA lets 1 defect the writer declined pass"}, nil
+}
+
 // calls counts the requests that change something (starts, answers,
-// decisions, stops, retries, magnum's fix, fix off and abort, and the
-// board's row actions on PRs).
+// decisions, stops, retries, QA's accepts, magnum's fix, fix off and abort,
+// and the board's row actions on PRs).
 func (a *fakeFactoryActions) calls() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.fixes) + len(a.fixOffs) + len(a.aborts) +
-		len(a.prActs)
+	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.acceptsQA) + len(a.fixes) +
+		len(a.fixOffs) + len(a.aborts) + len(a.prActs)
 }
 
 // testClock is the screen's clock in tests: fixed until a test moves it.

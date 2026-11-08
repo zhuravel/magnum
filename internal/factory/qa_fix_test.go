@@ -351,6 +351,9 @@ func TestAPartialDeclineReachesYouAndYourAcceptPassesItAtItsHead(t *testing.T) {
 		slices.ContainsFunc(sum.Known, func(d QADefect) bool { return d.Class == QAFlow }) {
 		t.Fatalf("qa-summary.json %+v (%v), want clean at %s with the flow accepted by you, not known", sum, ok, fix)
 	}
+	if len(sum.Fixed) != 1 || sum.Fixed[0].Class != QAEscapedMarkup || sum.Fixed[0].Run != 1 {
+		t.Errorf("the summary's fixed %+v, want the markup alone: the flow you accepted QA still finds", sum.Fixed)
+	}
 }
 
 // What you accept is exactly the declined defects at their head: another
@@ -627,5 +630,29 @@ func TestNewestQADefectsIsTheNewestRunsFile(t *testing.T) {
 	}
 	if k, head := newestQADefects(dir); k != 2 || head != "def5678" {
 		t.Fatalf("newestQADefects = %d, %q, want run 2 at def5678", k, head)
+	}
+}
+
+// The summary of the run that passed names what QA found in an earlier run
+// and the writer fixed: its class, severity, page and state, and the run
+// that found it, for the PR body.
+func TestTheQASummaryNamesWhatTheWriterFixed(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12457")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), nil)
+	fix := r.toQAAt(task, 1)
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID))
+	want := []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "signed_in"}}
+	if !ok || sum.Run != 2 || sum.Head != fix || !slices.Equal(sum.Fixed, want) {
+		t.Fatalf("qa-summary.json %+v (%v), want run 2 at %s naming %+v", sum, ok, fix, want)
+	}
+	if len(sum.Walk) != 1 || sum.Walk[0].Path != "/settings/security" || sum.Walk[0].State != "signed_in" {
+		t.Errorf("the summary's pages %+v", sum.Walk)
 	}
 }

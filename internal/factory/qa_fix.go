@@ -506,15 +506,9 @@ func (e *Engine) qaToldOfFixStop(ctx context.Context, t registry.Task, stop qaFi
 // puts the file back as it was (the retry's move failed).
 func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, undo func(), err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	run, ok := readQARun(dir)
-	stop, stopped := readQAFixStop(dir, run)
-	switch {
-	case !ok || !stopped || run.Head != t.HeadSHA:
-		return "", nil, fmt.Errorf("%s does not wait on QA's fix loop at its head: --accept-qa accepts only the QA defects the writer "+
-			"declined with its risk, and a plain `magnum factory retry %d` lets it go on", TaskKey(t), t.ID)
-	case len(stop.Declined) == 0:
-		return "", nil, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has none to accept; "+
-			"a plain `magnum factory retry %d` walks QA again", TaskKey(t), run.N, t.ID)
+	run, stop, err := qaAcceptable(dir, t)
+	if err != nil {
+		return "", nil, err
 	}
 	path := filepath.Join(dir, qaAcceptedFile)
 	before, readErr := os.ReadFile(path)
@@ -543,6 +537,43 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 		textx.ShortSHA(run.Head), run.N))
 	return fmt.Sprintf("; QA lets %s the writer declined pass at %s, and the PR body names %s as accepted by you", plural(n, "defect"),
 		textx.ShortSHA(run.Head), map[bool]string{true: "it", false: "them"}[n == 1]), undo, nil
+}
+
+// qaAcceptable is what --accept-qa accepts of task t (its task directory
+// dir): the newest run and its fix loop's stop at the task's head, which
+// names the defects the writer declined; an error that says why it accepts
+// nothing (no such stop at the head, or one that names no decline). The
+// screen's A is offered exactly when it holds.
+func qaAcceptable(dir string, t registry.Task) (qaRun, qaFixStop, error) {
+	run, ok := readQARun(dir)
+	stop, stopped := readQAFixStop(dir, run)
+	switch {
+	case !ok || !stopped || run.Head != t.HeadSHA:
+		return qaRun{}, qaFixStop{}, fmt.Errorf("%s does not wait on QA's fix loop at its head: --accept-qa accepts only the QA defects "+
+			"the writer declined with its risk, and a plain `magnum factory retry %d` lets it go on", TaskKey(t), t.ID)
+	case len(stop.Declined) == 0:
+		return qaRun{}, qaFixStop{}, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has "+
+			"none to accept; a plain `magnum factory retry %d` walks QA again", TaskKey(t), run.N, t.ID)
+	}
+	return run, stop, nil
+}
+
+// qaAcceptWhat is what --accept-qa accepts at run's stop, as the task
+// card's A names it: "1 QA defect the writer declined at abc1234 (flow on
+// /settings/security)", the classes on their pages from the run's result
+// (none named when it does not read).
+func qaAcceptWhat(dir string, run qaRun, stop qaFixStop) string {
+	fps := map[string]bool{}
+	for _, d := range stop.Declined {
+		fps[d.Fingerprint] = true
+	}
+	s := fmt.Sprintf("%s the writer declined at %s", plural(len(fps), "QA defect"), textx.ShortSHA(run.Head))
+	res, _ := readQAResult(dir, run)
+	ds := slices.DeleteFunc(slices.Clone(res.Blocking), func(d QADefect) bool { return !fps[d.Fingerprint] })
+	if len(ds) > 0 {
+		s += " (" + qaClassesAndPaths(ds, slices.Collect(maps.Values(qaVerdictPages(dir, run)))) + ")"
+	}
+	return s
 }
 
 // qaApplyAccepted moves the defects of res that block and that you accepted

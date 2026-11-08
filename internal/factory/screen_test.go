@@ -124,14 +124,14 @@ func question(text string, options ...string) registry.Question {
 	return q
 }
 
-// file writes a file of task id's directory.
+// file writes a file of task id's directory, its folders made.
 func (r *screenRig) file(id int64, name, text string) {
 	r.t.Helper()
-	dir := r.layout.FactoryTaskDir(id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	p := filepath.Join(r.layout.FactoryTaskDir(id), name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		r.t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -1105,5 +1105,181 @@ func TestWaitsOnOthersSortsByWait(t *testing.T) {
 	}
 	if want := []string{"PR-12372", "#4611", "PR-12371"}; !slices.Equal(keys, want) {
 		t.Errorf("WAITS ON OTHERS lists %q, want the oldest wait first %q", keys, want)
+	}
+}
+
+// qaCard is a ready card of task id at head whose QA run passed with res,
+// and that run's report in its folder.
+func (r *screenRig) qaCard(id int64, head string, res QAResult) {
+	r.t.Helper()
+	r.card(id, ReadyCardFile{Revision: 1, Head: head, Base: "base2222", Copy: "talkable.factory3",
+		Review: ReviewSummary{Exit: registry.ExitClean, Rounds: 1}, QA: &res})
+	if res.Dir != "" {
+		r.file(id, filepath.Join(res.Dir, qaReportFile), "# QA run\n")
+	}
+}
+
+// The ready card says what QA found: its line (clean, its pages, head and
+// notes), the after side's shots with e for the run's report, QA's notes
+// and what you accepted under KNOWN, and a recommendation that names QA.
+func TestScreenDataShowsWhatQAFoundOnTheReadyCard(t *testing.T) {
+	r := newScreenRig(t)
+	head := strings.Repeat("a", 40)
+	ready := r.task("PR-12460", "bug", "Passkey dates", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12460")
+	res := qaFound(head)
+	res.Accepted, res.Blocked = nil, nil
+	r.qaCard(ready.ID, head, res)
+	c := r.data(screenNow).Cards[ready.ID].Ready
+	if c == nil {
+		t.Fatal("no ready card")
+	}
+	if c.QA != "clean: 3 pages walked at aaaaaaa, 1 note" || c.Screenshots != 3 ||
+		c.ScreenshotsNote != "the after side, from the copy's own server; e opens the QA report" {
+		t.Errorf("QA %q, screenshots %d (%q)", c.QA, c.Screenshots, c.ScreenshotsNote)
+	}
+	if want := filepath.Join(r.layout.FactoryTaskDir(ready.ID), "qa", "2-aaaaaaa", "summary.md"); c.QAReport != want {
+		t.Errorf("QA report %q, want %q", c.QAReport, want)
+	}
+	if !slices.Contains(c.Leftovers, "qa: P3 broken_layout: the table scrolls sideways") {
+		t.Errorf("leftovers %q, want QA's note", c.Leftovers)
+	}
+	if !strings.HasSuffix(c.Why, " and QA found nothing that blocks") || c.Recommended != 0 {
+		t.Errorf("recommended %d: %q, want push and QA named", c.Recommended, c.Why)
+	}
+
+	// What you accepted is yours, and a state not reached is on the line.
+	accepted := r.task("PR-12461", "bug", "Passkey tooltip", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12461")
+	r.qaCard(accepted.ID, head, qaFound(head))
+	c = r.data(screenNow).Cards[accepted.ID].Ready
+	if c.QA != "passed with 1 defect accepted by you and 1 state not reached: 3 pages walked at aaaaaaa, 1 note" {
+		t.Errorf("QA %q", c.QA)
+	}
+	if !slices.Contains(c.Leftovers, "qa: accepted by you: P2 flow: the <span>date</span> opens no tooltip") {
+		t.Errorf("leftovers %q, want the defect you accepted", c.Leftovers)
+	}
+	if strings.Contains(c.Why, "QA found nothing that blocks") && !strings.Contains(c.Why, "you accepted") {
+		t.Errorf("why %q names no acceptance", c.Why)
+	}
+
+	// A card without QA has no QA line, no shots and no report.
+	bare := r.task("PR-12462", "bug", "No QA", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12462")
+	r.card(bare.ID, ReadyCardFile{Revision: 1, Head: head, Review: ReviewSummary{Exit: registry.ExitClean}})
+	if c := r.data(screenNow).Cards[bare.ID].Ready; c.QA != "" || c.Screenshots != 0 || c.QAReport != "" ||
+		strings.Contains(c.Why, "QA") {
+		t.Errorf("a card without QA: QA %q, shots %d, report %q, why %q", c.QA, c.Screenshots, c.QAReport, c.Why)
+	}
+}
+
+// A change with no user-facing file says so on its card, with no shots.
+func TestTheReadyCardSaysQAWasNotNeeded(t *testing.T) {
+	r := newScreenRig(t)
+	head := strings.Repeat("c", 40)
+	ready := r.task("PR-12463", "chore", "Bump a gem", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12463")
+	r.qaCard(ready.ID, head, QAResult{Version: qaResultVersion, Run: 1, Dir: qaRunDir(1, head), Head: head, Outcome: QAOutcomeNotNeeded,
+		Why: "the user-facing check `bin/user-facing` printed none of the 1 changed file"})
+	c := r.data(screenNow).Cards[ready.ID].Ready
+	if c.QA != "not needed: no user-facing file changed" || c.Screenshots != 0 || c.ScreenshotsNote != "" {
+		t.Errorf("QA %q, screenshots %d (%q)", c.QA, c.Screenshots, c.ScreenshotsNote)
+	}
+	none := r.task("PR-12464", "chore", "No QA block", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12464")
+	r.qaCard(none.ID, head, QAResult{Version: qaResultVersion, Head: head, Outcome: QAOutcomeNotNeeded, Why: qaNoBlockWhy})
+	if c := r.data(screenNow).Cards[none.ID].Ready; c.QA != "" {
+		t.Errorf("a repository without [factory.repo.qa]: QA %q, want no line", c.QA)
+	}
+}
+
+// The qa stage is visual QA on the screen: magnum's own step while no
+// agent works, "QA found nothing that blocks" once it passed, and skipped
+// for a repository without visual QA (no summary).
+func TestTheQAStageSaysWhatItDoes(t *testing.T) {
+	r := newScreenRig(t)
+	booting := r.task("PR-12465", "bug", "Booting", registry.TaskActive, "qa", "", "")
+	s := &screen{cfg: r.cfg, l: r.layout}
+	if w := s.stageBlocker(booting); w.Who != "magnum" || w.What != "visual QA" {
+		t.Errorf("the blocker at a qa stage %+v, want magnum: visual QA", w)
+	}
+	qa := config.FactoryStage{Name: "qa", Type: config.FactoryStageQA, Roles: []string{"fx-qa"}, End: config.FactoryEndQA}
+	if got := stageProof(qa); got != "QA found nothing that blocks" {
+		t.Errorf("the qa stage's proof %q", got)
+	}
+	stageOf := func(t2 registry.Task) tui.CardStage {
+		t.Helper()
+		for _, st := range r.data(screenNow).Cards[t2.ID].Task.Stages {
+			if st.Name == "qa" {
+				return st
+			}
+		}
+		t.Fatalf("no qa stage on %s's card", TaskKey(t2))
+		return tui.CardStage{}
+	}
+	walked := r.task("PR-12466", "bug", "Walked", registry.TaskActive, "pr_body", "", "")
+	b, err := json.Marshal(qaFound(strings.Repeat("d", 40)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.file(walked.ID, qaSummaryFile, string(b))
+	if st := stageOf(walked); st.State != "done" || st.Proof != "QA found nothing that blocks" {
+		t.Errorf("a qa stage that walked %+v", st)
+	}
+	skipped := r.task("PR-12467", "bug", "No QA", registry.TaskActive, "pr_body", "", "")
+	if st := stageOf(skipped); st.State != "skipped" || st.Proof != "skipped: the repository has no [factory.repo.qa]" {
+		t.Errorf("a qa stage with no summary %+v", st)
+	}
+}
+
+// A takes the stop's declines as yours: the task card offers it only
+// to a task whose QA fix loop stopped for you at its head on defects the
+// writer declined, naming them, exactly when --accept-qa would accept them.
+func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
+	r := newScreenRig(t)
+	head := strings.Repeat("e", 40)
+	stopAt := func(key string, declined bool, taskHead string) registry.Task {
+		t.Helper()
+		task := r.task(key, "bug", "Passkeys", registry.TaskActive, "qa", "", "")
+		task = r.move(task, registry.TaskNeedsYou, waitsYou, "the writer declined QA's 1 defect that blocks", func(u *registry.TaskUpdate) {
+			u.Set("head_sha", taskHead)
+		})
+		run := qaRun{N: 1, Head: head, Dir: qaRunDir(1, head)}
+		for name, v := range map[string]any{
+			qaRunFile: run,
+			filepath.Join(run.Dir, qaResultFile): QAResult{Version: qaResultVersion, Run: 1, Dir: run.Dir, Head: head, Outcome: QAOutcomeDefects,
+				Blocking: []QADefect{{ID: "D1", Class: QAFlow, Severity: "P2", Page: "P1", Fingerprint: "fp-flow"}}},
+			filepath.Join(run.Dir, qaVerdictFile): QAVerdict{Version: QAVerdictVersion, Head: head,
+				Pages: []QAPage{{ID: "P1", Path: "/settings/security"}}},
+		} {
+			b, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.file(task.ID, name, string(b))
+		}
+		stop := qaFixStop{Why: "the writer declined", At: screenNow}
+		if declined {
+			stop.Declined = []qaDeclined{{Fingerprint: "fp-flow", Run: 1}}
+		}
+		b, err := json.Marshal(stop)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.file(task.ID, filepath.Join(run.Dir, qaFixStopFile), string(b))
+		return task
+	}
+	declined := stopAt("PR-12468", true, head)
+	atCap := stopAt("PR-12469", false, head)
+	moved := stopAt("PR-12470", true, strings.Repeat("f", 40))
+	working := r.task("PR-12471", "bug", "Working", registry.TaskActive, "qa", "", "")
+	d := r.data(screenNow)
+	for _, tc := range []struct {
+		task registry.Task
+		want string
+	}{
+		{declined, "1 QA defect the writer declined at eeeeeee (flow on /settings/security)"},
+		{atCap, ""}, {moved, ""}, {working, ""},
+	} {
+		got := d.Cards[tc.task.ID].Task.AcceptQA
+		_, _, guard := qaAcceptable(r.layout.FactoryTaskDir(tc.task.ID), tc.task)
+		if got != tc.want || (got != "") != (guard == nil) {
+			t.Errorf("%s: accept %q (the accept's guard: %v), want %q", TaskKey(tc.task), got, guard, tc.want)
+		}
 	}
 }

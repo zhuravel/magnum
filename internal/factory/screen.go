@@ -37,6 +37,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -544,7 +545,8 @@ func (s *screen) agentBlocker(v *taskView, workingOnly bool) (tui.WaitsOn, bool)
 }
 
 // stageBlocker is what an active task without a wait of its own waits on:
-// the factory's own step at its stage (magnum's local review, the push).
+// the factory's own step at its stage (magnum's local review, visual QA's
+// server and browser, the push).
 func (s *screen) stageBlocker(t registry.Task) tui.WaitsOn {
 	st, ok := s.stage(t)
 	what := cmp.Or(stageWhat(t.Stage), "starting")
@@ -552,6 +554,8 @@ func (s *screen) stageBlocker(t registry.Task) tui.WaitsOn {
 		switch st.Type {
 		case config.FactoryStageReview:
 			what = "local review"
+		case config.FactoryStageQA:
+			what = "visual QA"
 		case config.FactoryStageEffect:
 			what = "pushing the branch and opening the PR"
 		case config.FactoryStageDecision:
@@ -676,6 +680,12 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 			c.WaitingFor = strings.Join(append([]string{v.pr.card}, parts[1:]...), " · ")
 		}
 	}
+	if v.retry {
+		dir := s.l.FactoryTaskDir(t.ID)
+		if run, stop, err := qaAcceptable(dir, t); err == nil {
+			c.AcceptQA = qaAcceptWhat(dir, run, stop)
+		}
+	}
 	c.Stages = s.stages(v, row)
 	for _, x := range v.agents {
 		c.Agents = append(c.Agents, s.cardAgent(x))
@@ -765,6 +775,14 @@ func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 					cs.Proof = "skipped: the plan is narrow"
 				}
 			}
+			if st.Type == config.FactoryStageQA {
+				switch res, ok := readQASummary(s.l.FactoryTaskDir(t.ID)); {
+				case !ok || qaCardLine(res) == "":
+					cs.State, cs.Proof, cs.Finished = "skipped", "skipped: "+qaNoBlockWhy, time.Time{}
+				case res.Outcome == QAOutcomeNotNeeded:
+					cs.Proof = qaCardLine(res)
+				}
+			}
 			if !in.IsZero() && !out2.IsZero() {
 				cs.Took = out2.Sub(in)
 			}
@@ -814,6 +832,8 @@ func stageProof(st config.FactoryStage) string {
 		return "the change and the factory's proof hold"
 	case config.FactoryEndClean:
 		return "the local review ended clean"
+	case config.FactoryEndQA:
+		return "QA found nothing that blocks"
 	case config.FactoryEndPRBody:
 		return "the PR body is drafted"
 	case config.FactoryEndPR:
@@ -890,7 +910,10 @@ func (s *screen) comment(t registry.Task, q registry.Question, a ask) string {
 	return strings.TrimRight(draftComment(t, q, a.Login), "\n")
 }
 
-// readyCard is the ready card of task v as the factory drew it.
+// readyCard is the ready card of task v as the factory drew it: with the
+// QA run that passed at its head, its QA line, the after side's shots and
+// the run's report (summary.md, which e opens) of a walk, and QA's notes
+// and what you accepted under KNOWN.
 func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	t, card := v.t, v.card
 	c := &tui.ReadyCard{TaskKey: TaskKey(t), Title: t.Title, Kind: t.Kind, Branch: cmp.Or(card.Remote, card.Branch, t.Branch),
@@ -916,6 +939,16 @@ func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 			c.Frees += "; " + next + " starts in it"
 		}
 	}
+	if q := card.QA; q != nil {
+		c.QA = qaCardLine(*q)
+		if q.Walked && q.Pages > 0 {
+			c.Screenshots, c.ScreenshotsNote = q.Shots, qaShotsNote
+			if p := filepath.Join(dir, filepath.FromSlash(q.Dir), qaReportFile); q.Dir == qaRunDir(q.Run, q.Head) && fsx.Exists(p) {
+				c.QAReport = p
+			}
+		}
+		c.Leftovers = append(c.Leftovers, qaKnownLines(*q)...)
+	}
 	c.Failed = s.failedChecks(t, card.Head)
 	for _, f := range card.Flags {
 		if strings.HasPrefix(f, conflictsFlag) {
@@ -931,8 +964,8 @@ func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	case rev.Exit == registry.ExitOscillation:
 		c.Recommended, c.Why = 0, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", plural(rev.Rounds, "round"))
 	default:
-		c.Recommended, c.Why = 0, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s",
-			plural(max(rev.Rounds, 1), "round"), short(card.Head))
+		c.Recommended, c.Why = 0, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
+			plural(max(rev.Rounds, 1), "round"), short(card.Head), qaWhy(card.QA))
 	}
 	return c
 }

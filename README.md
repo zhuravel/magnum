@@ -4157,8 +4157,8 @@ filter and its `O` owner scope ask nothing.
 | Question card | `j k` move the mark (it starts on the recommendation); `1-9` answer and move on; `enter` the marked one (with no recommendation, pick one first); `−` (or `-`) then a digit flags the question needless, with its reason (`1` the ticket answers it, `2` the code answers it, `3` any answer works, `4` you asked it before); `backspace` the previous question; `esc` back, the answers kept (home's line for the task then counts them, `2 answered, 1 to go`, and its rule
 says `you answered 2 of 3 · nothing sent yet`). "Type your own answer" takes a line typed in the footer, at
 whose end the cursor stays. Nothing is sent before the recap's `y`, which sends the batch, once; on the recap `1-9` changes an answer. A batch for questions that changed meanwhile is refused and nothing of it is kept: the recap says so, and `enter` shows the question open again. Each question of a ticket task offers "Ask <reporter> in Jira (the task waits)", the ticket's reporter (a question asked already keeps whom it asked); asking someone shows the Jira comment the factory drafts for them |
-| Ready card | `d` the diff in the pager (the recommendation shows after it); `j k` move the mark (none until you move it or read the diff); `1` push + PR (y/N: "Push without reading the diff?" before `d`; the question names the copy the push frees and the queued task that then starts); `2` send back (a reason's digit, `1` wrong cause or fix, `2` changed too much, `3` missed what I said, `4` tests too thin, then a one-line note, then y/N; a note answered `n` comes back with its reason); `3` drop (y/N); `enter` the marked one. A card whose conflict sent the task back offers no push. The decision carries when the card was shown, when the diff was first read and for how long; a card the factory draws again for a new head is unread again |
-| Task card | `j k g G` move; `enter` the decision card the task waits on, its questions or its ready card, as on home (a card left open while its task came to need you; the footer offers it then); `d` the diff; `r` retry, only for a task a retry lets go on (y/N; the hints say `r retry`), and on a card that offers no retry the review of its PR, as on home; `R`, `z`, `M` and `U` on its PR, as on home (on a card with a retry, `R` is its review); `x` drop: stop its agents, free its copy, keep the branch (y/N); `o` step into its pane (magnum's while its fixer works on the task's PR); `b` its PR and `t` its Jira issue in the browser, as on home (the footer offers each when there is one); `e` the report of magnum's fixer in the pager, as on home; `f`, `F` and `K` on its PR, as on home; `a` the next card that needs you; `esc` back. A published task's card draws its PR's lines first (PR, CI, REVIEW, APPROVALS, THREADS, FIX LOOP: below) |
+| Ready card | `d` the diff in the pager (the recommendation shows after it); `j k` move the mark (none until you move it or read the diff); `1` push + PR (y/N: "Push without reading the diff?" before `d`; the question names the copy the push frees and the queued task that then starts); `2` send back (a reason's digit, `1` wrong cause or fix, `2` changed too much, `3` missed what I said, `4` tests too thin, then a one-line note, then y/N; a note answered `n` comes back with its reason); `3` drop (y/N); `enter` the marked one; `e` the QA run's report (`summary.md`) in the pager, asking nothing, on a card whose change visual QA walked (`e QA shots`; it is no read of the diff). A card whose conflict sent the task back offers no push. The decision carries when the card was shown, when the diff was first read and for how long; a card the factory draws again for a new head is unread again |
+| Task card | `j k g G` move; `enter` the decision card the task waits on, its questions or its ready card, as on home (a card left open while its task came to need you; the footer offers it then); `d` the diff; `r` retry, only for a task a retry lets go on (y/N; the hints say `r retry`), and on a card that offers no retry the review of its PR, as on home; `R`, `z`, `M` and `U` on its PR, as on home (on a card with a retry, `R` is its review); `A` accept the QA defects the writer declined, as `magnum factory retry --accept-qa`, only for a task whose QA fix loop stopped on them at its head (y/N, naming them); `x` drop: stop its agents, free its copy, keep the branch (y/N); `o` step into its pane (magnum's while its fixer works on the task's PR); `b` its PR and `t` its Jira issue in the browser, as on home (the footer offers each when there is one); `e` the report of magnum's fixer in the pager, as on home; `f`, `F` and `K` on its PR, as on home; `a` the next card that needs you; `esc` back. A published task's card draws its PR's lines first (PR, CI, REVIEW, APPROVALS, THREADS, FIX LOOP: below) |
 | Your PR's card | the task card's view of your PR: WAITING FOR, then the PR's lines alone (no stages, agents or report). `f`, `F`, `K`, `r`, `R`, `z`, `M` and `U` (y/N), `o` magnum's pane, `b` the PR, `t` the Jira issue its title names, `e` the fixer's report, `a` the next card that needs you, `esc` back; `x` and `d`, a task's drop and diff, say so and run nothing. It goes home, saying so, once the PR leaves home (merged or closed) |
 | New task | your Jira key, link or words; `enter` start (y/N, naming the kind, the task and its agents, or when a queued task starts, and the repository when there are several); `ctrl+j` a new line; `ctrl+g` your editor (`$VISUAL`, else `$EDITOR`); `tab` the kind; `shift+tab` the repository, when the factory has several (the next one, `your pick`, which the preview is read again for; it asks nothing and starts nothing); `esc` back, the draft kept. With two or more `[[factory.repo]]` the REPO row, first, names the repository and why: `from the EX tracker` (a key of that repository's tracker), `from the link` (a GitHub link of it) or `your pick`, as `magnum factory start` tells it; while no repository is chosen the row says `none: no link or key of your text names one`, nothing else is drawn, and `enter` refuses (`cannot start: which repository? shift+tab picks one`). With one repository there is no row. Repository names too long for the row leave out its list of repositories (the footer names the key), and a `shift+tab` before the text's first preview is kept until it lands. A key of a tracker that is not Jira is said on the JIRA row (`EX-12's tracker is not Jira, so the agents work from your words`), never read, and the form never says the daemon reads Jira for it once a preview said so. A key Jira does not know is said first (`PR-12399 is not in Jira`), and `enter` then asks "Start from your words only?": the whole text becomes the task, the key kept as words. A question is asked only for the text `enter` was pressed on, and only while the form is open: a preview that comes after `esc` asks nothing. Every view draws the question it holds (the question card and the help and log boxes too). Above the question, what the factory read: the ticket, your guidance, the links (a Jira link is its key; a PR link's adoption and a run link's CI task come in milestones 2 and 3) and what else touches the work (OVERLAP) |
 
@@ -4708,6 +4708,85 @@ after it. Two cases lose a pane's last read, as the panes of a task are read onl
 is done, stopped or failed: when the daemon stops shortly after a task's end and is back only after those 10 minutes,
 and when a last read keeps failing past them. What you typed into its panes after their last read is then not
 recorded.
+
+#### Visual QA before the ready card
+
+A repository can have the factory look at the pages a change shows before the ready card. It declares
+`[factory.repo.qa]`; a repository without it has no QA, and its tasks move from the local review to the PR body
+as before.
+
+```toml
+[factory]
+browser = ""                                   # the headless Chrome; "" = Google Chrome, else Chromium, in /Applications
+
+[[factory.repo]]
+repo = "example/shop"
+main_clone = "~/Projects/shop"
+copies = "~/Projects/shop.factory{n}"
+server = "bin/dev"                             # starts the copy's server
+env = { PORT = "31{n}0" }                      # a port of its own for each copy, 1024 to 65535
+
+[factory.repo.qa]
+when = "bin/user-facing"                       # reads the changed files on stdin, prints the user-facing ones
+url = "http://app.example.localhost:{port}"    # the copy's server, on this Mac, {port} as its port
+ready = "/up"                                  # a 2xx or 3xx answer here says the server is up (default /)
+sign_in = "visit /dev/sign-in?as=qa@example.com"   # one line: how the walker signs in locally (no password)
+skill = "example:qa"                           # the repository's QA skill, read for sign-in and test data only
+server_stop = "overmind kill"                  # runs in the copy before the server's process group is killed
+boot = "5m"                                    # the server must answer ready within this (default 5m)
+cap = "50m"                                    # one run in all, the boot included (default 50m, at most 3h)
+max_pages = 12                                 # pages the walker captures at most (default 12, at most 30)
+fixes = 2                                      # the writer's turns for QA's defects, per task (default 2, 1 to 5)
+```
+
+- **The stage.** The built-in kinds run a `qa` stage (`type = "qa"`, `end = "qa"`) after `local_review`, with
+  one role, `fx-qa` (Claude at high effort, 35 minutes, launched with `--no-chrome` and
+  `--disallowedTools=mcp__*`). `when` runs first, at most 30 seconds: no file printed passes the stage as not
+  needed, and a command that fails waits on you, never skips QA. Then the factory starts the copy's server
+  alone (a port that answers before the server started is another app's, and QA refuses it), waits for
+  `ready`, starts its own headless Chrome (a profile of its own in the run's folder, never your browser), and
+  runs one walker turn. The walker attaches to that Chrome only, walks the changed pages in the states the
+  acceptance checks name, saves each page's shot, the factory's probe of it and its console log under the
+  run's folder (`qa/<n>-<sha7>` in the task's directory), and writes `verdict.json` last. The factory then
+  stops the browser and the server, proves the port is free, and checks every saved page itself; the
+  walker's "looks fine" proves nothing.
+- **One at a time.** One QA runs on the Mac at a time (`factory-qa.lock` in the state directory); a QA run holds
+  the task's heavy slot, and another task's QA waits ("another QA runs on this Mac"). The copy's server runs
+  with `BROWSER=true` and the factory's shims first on its `PATH` (`factory-shims/` in the state directory),
+  whose `open` opens nothing, so no tab opens in your browser.
+- **What blocks.** Any defect of class `escaped_markup` (HTML shown as text), `raw_i18n_key` (a missing
+  translation) or `error_page`, whoever found it, any P1 or P2, and a verdict the factory cannot trust (a page
+  off the copy's own server, another head, more pages than `max_pages`). The review's severities decide nothing
+  here, and a review never clears a QA defect. `console_error` and `broken_layout` are P3 notes.
+- **The fix loop.** QA's defects that block go to the writer for one fix turn (`defects-<n>.json` in the run's
+  folder, `factory-qa-fix.md`): it fixes them test first and commits, the task goes back through the local
+  review and QA, at most `fixes` times per task. A defect that comes back after its fix still blocks, and no
+  QA defect becomes a known note. The writer's decline (with its risk) stops the task for you: only you accept
+  a defect QA finds.
+- **When QA needs you.** The task waits on you with what happened and `magnum factory retry <id>`: the server
+  did not answer within `boot` (after one more boot), the port answered before the server started, `when`
+  failed, the run went over its `cap`, the Mac's memory stopped it twice, the walker wrote no valid
+  `verdict.json` after one nudge, it reached no page, or it could not reach a state of the change (a second
+  such walk at the same head goes on with the state flagged). After the writer's decline or at the cap,
+  `magnum factory retry <id> --accept-qa` accepts the declined defects at the task's head (a new head blocks
+  them again), and a plain retry walks QA again. Each wait names classes, page paths and files, never page
+  text.
+- **The ready card.** Its QA row says how the run that passed at its head ended: `clean: 3 pages walked at
+  abc1234, 1 note`, `passed with 1 defect accepted by you and 1 state not reached: ...`, or `not needed: no
+  user-facing file changed`. A state the walker could not reach is a FLAGS line (`QA did not reach: ...`), QA's
+  notes and what you accepted are under KNOWN (`qa: accepted by you: ...`), and SCREENSHOTS counts the run's
+  shots. `e` (`e QA shots` in the footer) opens the run's report, `summary.md` in its folder, in the pager: the
+  run, its head and URL, each page with its state and its shot's absolute path, the notes and the states not
+  reached. On the task card of a task whose QA fix loop stopped on the writer's declines, `A` accepts them, as
+  `--accept-qa` does (y/N).
+- **The PR body.** After the Known list the factory appends a folded `## Visual QA` section (after
+  `<!-- magnum factory: visual QA -->`) in its own words: the result, the pages walked with their states, the
+  defects QA found and the writer fixed, those you accepted (accepted by you), the notes and the states not
+  reached, flagged. It never carries a title or a quote of the walker's: the classes, paths and states only.
+  A change with no user-facing file says so; a repository without `[factory.repo.qa]` gets no section.
+
+Slice 1 captures the after side only: the before pass and the PR attachments come later. An edit of the prompts
+or a factory update reaches the daemon only after `make build && bin/magnum factory install`.
 
 ## Daily use
 

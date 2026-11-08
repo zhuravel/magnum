@@ -1136,3 +1136,151 @@ func TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA(t *testing.T) {
 		})
 	}
 }
+
+// qaFound is a QA run that passed at head: run 1, three pages walked and
+// shot, the walker's P3 note of the orders' table (its title and quote
+// with markup of the page's), a defect you accepted, one the writer fixed
+// in an earlier run, and a state the walker could not reach.
+func qaFound(head string) QAResult {
+	return QAResult{Version: qaResultVersion, Run: 2, Pages: 3, Shots: 3, Dir: qaRunDir(2, head), Head: head, Outcome: QAOutcomeClean,
+		Walked: true, Why: "3 pages walked, nothing blocks (1 note; 1 accepted by you)",
+		Walk: []QAPage{
+			{ID: "P1", Path: "/settings/security", State: "with the authenticator app on", Shot: "pages/01-p1-after.png"},
+			{ID: "P2", Path: "/orders", State: "signed_in", Shot: "pages/02-p2-after.png"},
+			{ID: "P3", Path: "/cart", Shot: "pages/03-p3-after.png"},
+		},
+		Known: []QADefect{{ID: "D1", Class: QABrokenLayout, Severity: "P3", Page: "P2", Title: "the table scrolls sideways",
+			Quote: `<span class="badge">wide</span>`, Source: qaSourceWalker, Fingerprint: "fp-layout"}},
+		Accepted: []QADefect{{ID: "D2", Class: QAFlow, Severity: "P2", Page: "P1", Title: "the <span>date</span> opens no tooltip",
+			Quote: "Added <span>Nov 07</span>", Source: qaSourceWalker, Fingerprint: "fp-flow"}},
+		Fixed:   []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "with the authenticator app on"}},
+		Blocked: []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}},
+	}
+}
+
+// toCardWithQA is toCard with QA's summary sum(head) at the fix's head
+// before the PR body and the card.
+func (r *readyRig) toCardWithQA(key string, sum func(head string) QAResult) (registry.Task, string) {
+	r.t.Helper()
+	task := r.codingTask(key, "bug")
+	r.taskFile(task.ID, reportFile, planReport("app/credit.rb", "spec/models/"))
+	r.taskFile(task.ID, acceptanceFile, acceptanceJSON)
+	r.startStage(task)
+	head := r.fix(task)
+	b, err := json.Marshal(sum(head))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.taskFile(task.ID, qaSummaryFile, string(b))
+	r.ended(task, "fx-writer")
+	r.toBody(task)
+	return r.reload(task.ID), head
+}
+
+// The ready card carries the QA run that passed at its head, its quotes
+// left out (they stay in the run's folder), and a FLAGS line for each
+// state the walker could not reach; a summary of another head is none of
+// the card's, nor of the PR body's.
+func TestTheReadyCardSaysWhatQAFound(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCardWithQA("PR-12450", qaFound)
+	card := r.card(task.ID)
+	if card.QA == nil || card.QA.Pages != 3 || card.QA.Head != head || len(card.QA.Known) != 1 || len(card.QA.Accepted) != 1 {
+		t.Fatalf("the card's QA %+v, want the summary at %s", card.QA, head)
+	}
+	if q := card.QA; q.Known[0].Quote != "" || q.Accepted[0].Quote != "" {
+		t.Errorf("the card's QA keeps the pages' quotes %q, %q", q.Known[0].Quote, q.Accepted[0].Quote)
+	}
+	const flag = "QA did not reach: the passkey autofill list (headless Chrome draws no autofill)"
+	if !slices.Contains(card.Flags, flag) {
+		t.Errorf("flags %q, want %q", card.Flags, flag)
+	}
+	if evs := r.events(task.ID, "ready"); !slices.ContainsFunc(evs, func(ev registry.Event) bool { return strings.Contains(ev.Text, flag) }) {
+		t.Errorf("ready events %+v, want the card's event to name the flag", evs)
+	}
+
+	other := newReadyRig(t)
+	task, _ = other.toCardWithQA("PR-12451", func(string) QAResult { return qaFound(strings.Repeat("b", 40)) })
+	if card := other.card(task.ID); card.QA != nil || slices.ContainsFunc(card.Flags, func(f string) bool { return strings.HasPrefix(f, qaBlockedFlag) }) {
+		t.Errorf("a card drew another head's QA: %+v, flags %q", card.QA, card.Flags)
+	}
+	if body := other.readTask(task.ID, prBodyFile); strings.Contains(body, qaMarker) {
+		t.Errorf("the PR body names another head's QA:\n%s", body)
+	}
+}
+
+// The PR body has a Visual QA section after the Known list, folded as it
+// is, in the factory's own words: the result, the pages walked (path and
+// state), what QA found and the writer fixed, what you accepted (accepted
+// by you), the notes and the states not reached, flagged; never a quote or
+// a title of the walker's. A second append rewrites it once, with the Known
+// list.
+func TestThePRBodyNotesTheQAResult(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCardWithQA("PR-12452", qaFound)
+	body := r.readTask(task.ID, prBodyFile)
+	check := func(body string) {
+		t.Helper()
+		for _, one := range []string{knownMarker, qaMarker, "## Known", "## Visual QA"} {
+			if n := strings.Count(body, one); n != 1 {
+				t.Errorf("pr-body.md holds %q %d times, want once:\n%s", one, n, body)
+			}
+		}
+		if strings.Index(body, qaMarker) < strings.Index(body, knownMarker) {
+			t.Errorf("the Visual QA section comes before the Known list:\n%s", body)
+		}
+		_, qa, _ := strings.Cut(body, qaMarker)
+		for _, want := range []string{
+			"<summary>passed with 1 defect accepted by you and 1 state not reached: 3 pages walked at " + head[:7] + ", 1 note</summary>",
+			"3 pages", "`/settings/security`", "`with the authenticator app on`", "`/orders`", "`/cart`",
+			"P2 escaped_markup on `/settings/security`", "QA run 1",
+			"Accepted by you", "P2 flow on `/settings/security`",
+			"P3 broken_layout on `/orders`",
+			"`the passkey autofill list`", "`headless Chrome draws no autofill`",
+			"</details>\n",
+		} {
+			if !strings.Contains(qa, want) {
+				t.Errorf("the Visual QA section lacks %q:\n%s", want, qa)
+			}
+		}
+		for _, never := range []string{"<span", "the table scrolls sideways", "opens no tooltip", "wide", "Nov 07"} {
+			if strings.Contains(qa, never) {
+				t.Errorf("the Visual QA section carries the walker's page text %q:\n%s", never, qa)
+			}
+		}
+	}
+	check(body)
+	if err := r.e.appendKnown(r.ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	check(r.readTask(task.ID, prBodyFile))
+}
+
+// A repository without visual QA gets no Visual QA section: no summary, or
+// the stage's own "no [factory.repo.qa]"; a change with no user-facing file
+// says so in its section.
+func TestThePRBodyHasNoQASectionForARepoWithoutQA(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCard("PR-12453")
+	if body := r.readTask(task.ID, prBodyFile); strings.Contains(body, qaMarker) || strings.Contains(body, "Visual QA") {
+		t.Errorf("a task without QA has a Visual QA section:\n%s", body)
+	}
+	task, _ = r.toCardWithQA("PR-12454", func(head string) QAResult {
+		return QAResult{Version: qaResultVersion, Head: head, Outcome: QAOutcomeNotNeeded, Why: qaNoBlockWhy}
+	})
+	if body := r.readTask(task.ID, prBodyFile); strings.Contains(body, qaMarker) || strings.Contains(body, "Visual QA") {
+		t.Errorf("a repository without [factory.repo.qa] has a Visual QA section:\n%s", body)
+	}
+	task, _ = r.toCardWithQA("PR-12455", func(head string) QAResult {
+		return QAResult{Version: qaResultVersion, Run: 1, Dir: qaRunDir(1, head), Head: head, Outcome: QAOutcomeNotNeeded,
+			Why: "the user-facing check `bin/user-facing` printed none of the 2 changed files"}
+	})
+	body := r.readTask(task.ID, prBodyFile)
+	if !strings.Contains(body, qaMarker+"\n## Visual QA\n\n<details>\n<summary>not needed: no user-facing file changed</summary>\n\n"+
+		"No user-facing file changed: no visual QA ran.\n\n</details>\n") {
+		t.Errorf("a change with no user-facing file:\n%s", body)
+	}
+	if card := r.card(task.ID); card.QA == nil || card.QA.Outcome != QAOutcomeNotNeeded {
+		t.Errorf("the card's QA %+v, want not needed", card.QA)
+	}
+}

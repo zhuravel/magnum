@@ -116,6 +116,9 @@ func TestTheFactoryScreensActionsAreFactoryRequests(t *testing.T) {
 			factory.StopPayload{TaskID: 7, Surface: "screen"}, func(q registry.Request) any { return payloadOf[factory.StopPayload](t, q) }},
 		{"retry", func() (tui.ActionResult, error) { return at.act.Retry(ctx, 7) }, factory.ReqRetry,
 			factory.RetryPayload{TaskID: 7, Surface: "screen"}, func(q registry.Request) any { return payloadOf[factory.RetryPayload](t, q) }},
+		{"accept QA", func() (tui.ActionResult, error) { return at.act.AcceptQA(ctx, 7) }, factory.ReqRetry,
+			factory.RetryPayload{TaskID: 7, Surface: "screen", AcceptQA: true},
+			func(q registry.Request) any { return payloadOf[factory.RetryPayload](t, q) }},
 	} {
 		kicks, n := at.kicks, len(at.seen)
 		res, err := tc.do()

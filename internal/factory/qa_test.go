@@ -1554,3 +1554,49 @@ func TestAWalkWhoseEndDidNotLandRecordsItsTime(t *testing.T) {
 		t.Fatalf("qa checks %+v, want a pass that took the run's time", cs)
 	}
 }
+
+// Each QA result writes the run's report, summary.md in its folder, which
+// the ready card's e opens: the run, its head and the copy's URL, each page
+// with its path, its state and its shot's absolute path, the notes, and the
+// states not reached. A walk that passes with its states flagged writes it
+// again, as passed.
+func TestAQARunsReportNamesItsPagesShotsAndStates(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12456")
+	v := QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/settings/security", "A1"), qaPage(2, "P2", "/orders")},
+		Defects: []QADefect{{ID: "D1", Class: QABrokenLayout, Severity: "P3", Page: "P2", Title: "the table scrolls sideways"}},
+		Blocked: []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}}
+	probes := map[string]string{"P1": "clean-tooltip.json", "P2": "clean-tooltip.json"}
+	r.toWalker(task)
+	r.walk(task, v, probes)
+	r.toYou(task)
+	report := func(k int) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(r.runDir(task.ID, k, head), qaReportFile))
+		if err != nil {
+			t.Fatalf("run %d's report: %v", k, err)
+		}
+		return string(b)
+	}
+	first := report(1)
+	shot := filepath.Join(r.runDir(task.ID, 1, head), "pages", "01-p1-signed_in-after.png")
+	for _, want := range []string{"run 1", head, "http://app.example.localhost:3001", "/settings/security", "signed_in", shot,
+		"/orders", "P3 broken_layout on /orders: the table scrolls sideways", "the passkey autofill list", "headless Chrome draws no autofill",
+		"unavailable"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("run 1's report lacks %q:\n%s", want, first)
+		}
+	}
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, v, probes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	second := report(2)
+	if !strings.Contains(second, "passed with 1 state not reached: 2 pages walked at "+head[:7]+", 1 note") ||
+		!strings.Contains(second, filepath.Join(r.runDir(task.ID, 2, head), "pages", "02-p2-signed_in-after.png")) {
+		t.Errorf("run 2's report, which passed with its state flagged:\n%s", second)
+	}
+	if fi, err := os.Stat(filepath.Join(r.runDir(task.ID, 2, head), qaReportFile)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the report's mode %v (%v), want 0600", fi.Mode(), err)
+	}
+}

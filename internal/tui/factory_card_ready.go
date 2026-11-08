@@ -2,10 +2,11 @@ package tui
 
 // The factory's ready card (spec 9.C, "Ready card", with the refinements of
 // revision 1): a finished task for the operator's decision. The FLAGS line
-// comes first, then the cause, the fix and the proof, the files (the flagged
-// ones first), the doubts, what the local review left open (KNOWN) and the
-// screenshots; then the three options, numbered, and the files not read in
-// the diff. The recommendation shows only once the diff was opened.
+// comes first, then the cause, the fix and the proof, what visual QA found
+// (QA), the files (the flagged ones first), the doubts, what the local
+// review and QA left open (KNOWN) and the screenshots; then the three
+// options, numbered, and the files not read in the diff. The
+// recommendation shows only once the diff was opened.
 //
 // On a short screen the options, the mark, the recommendation, the unread
 // files and the question stay in view: the lists above them give way (see
@@ -222,6 +223,7 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 		}
 		body = append(body, p.labelRows(label, cardReadyX, cells)...)
 	}
+	field("QA", c.QA, false)
 	body = append(body, p.fileRows(c.Files, f.files)...)
 	list("DOUBTS", c.Doubts, len(c.Doubts), f.doubtsOne, "none", noStyle, nil)
 	list("KNOWN", c.Leftovers, f.known, f.knownOne, "none: the local review left nothing open", noStyle, func(n, shown int) string {
@@ -241,11 +243,12 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 	return append(body, p.labelRows("SCREENSHOTS", cardReadyX, []cell{shots})...)
 }
 
-// readyHints are the ready card's own key hints.
+// readyHints are the ready card's own key hints: e for the QA run's shots
+// (its report) only when the card has one.
 func (p *cardPainter) readyHints(c ReadyCard) []hint {
 	hs := []hint{{"d", "read the diff"}}
-	if c.Screenshots > 0 {
-		hs = append(hs, hint{"e", "screenshots"})
+	if c.QAReport != "" {
+		hs = append(hs, hint{reportKey, "QA shots"})
 	}
 	return append(hs, hint{"1-3", "pick"}, hint{"j k", "move"}, hint{"enter", "do it"}, hint{"esc", "back"})
 }

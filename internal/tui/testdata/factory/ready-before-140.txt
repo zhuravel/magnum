@@ -27,4 +27,4 @@
  unread: app/services/campaign_copier.rb, spec/factories/reward_rules.rb, spec/services/campaign_copier_spec.rb · the recommendation
          shows after d
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- d read the diff · e screenshots · 1-3 pick · j k move · enter do it · esc back
+ d read the diff · 1-3 pick · j k move · enter do it · esc back

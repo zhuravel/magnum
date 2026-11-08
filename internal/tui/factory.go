@@ -216,6 +216,10 @@ type FactoryActions interface {
 	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	// AcceptQA lets a task whose QA fix loop stopped on defects the writer
+	// declined go on with them accepted by you, at its head (the task
+	// card's A, as `magnum factory retry --accept-qa`).
+	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
 }
 
 // FactoryOptions tune the factory screen.

@@ -173,7 +173,8 @@ func (m factoryModel) menuItems() []menuItem {
 		c, _ := m.readyCard()
 		return []menuItem{
 			{"read the diff", "d", "d", acts}, {"push + PR", "1", "1", acts && c.NoPush == ""},
-			{"send back", "2", "2", acts}, {"drop", "3", "3", acts}, {"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
+			{"send back", "2", "2", acts}, {"drop", "3", "3", acts}, {"read the QA report", reportKey, reportKey, c.QAReport != ""},
+			{"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
 		}
 	case fvTask:
 		c := m.taskCard()
@@ -194,7 +195,8 @@ func (m factoryModel) menuItems() []menuItem {
 			})
 		}
 		return slices.Concat([]menuItem{
-			{"retry", "r", "r", acts && c.Retry}, {"diff", "d", "d", acts}, {"drop", "x", "x", acts},
+			{"retry", "r", "r", acts && c.Retry}, {"accept QA's declines", acceptQAKey, acceptQAKey, acts && c.AcceptQA != ""},
+			{"diff", "d", "d", acts}, {"drop", "x", "x", acts},
 			{"step into its pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
 			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task)}, fixKeys,
 			[]menuItem{{"back", "esc", "esc", true}})

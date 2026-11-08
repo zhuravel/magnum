@@ -94,9 +94,10 @@ type DecidePayload struct {
 // older build drew; the PR's status file counts them), the hash of
 // report.md and pr-body.md as shown and the hash of the diff (the patch id
 // of base...head), the branch, the PR's title, the copy a push frees (its
-// directory's name) and its path, the FLAGS lines (Flags.Lines), the local
-// review's end and the changed files, the flagged ones first
-// (cardFilesOf).
+// directory's name) and its path, the FLAGS lines (Flags.Lines, then a line
+// for each state QA did not reach), the local review's end and the changed
+// files, the flagged ones first (cardFilesOf), and the QA run that passed
+// at the head (qa-summary.json, its quotes left out), nil for none.
 type ReadyCardFile struct {
 	Revision   int           `json:"revision"`
 	Drawn      time.Time     `json:"drawn"`
@@ -113,6 +114,7 @@ type ReadyCardFile struct {
 	Flags      []string      `json:"flags"`
 	Review     ReviewSummary `json:"review"`
 	Files      []CardFile    `json:"files"`
+	QA         *QAResult     `json:"qa,omitempty"`
 }
 
 // CardFile is one file the change of a ready card changes: its path, the
@@ -643,9 +645,9 @@ func (e *Engine) pushApproved(ctx context.Context, t registry.Task, now cardStat
 	return d.HeadSHA == now.head && d.ReportHash == now.reportHash && d.DiffHash == now.diffHash, nil
 }
 
-// drawCard writes task t's card of its change now in copy c, with flags f
-// and the review's end sum: the card as it was when nothing it shows
-// changed, else a new revision, with an event.
+// drawCard writes task t's card of its change now in copy c, with flags f,
+// the review's end sum and the QA run that passed at its head: the card as
+// it was when nothing it shows changed, else a new revision, with an event.
 func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now cardState, f Flags, sum ReviewSummary) (ReadyCardFile, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	files, err := e.cardFiles(ctx, c.Path, now, f)
@@ -655,6 +657,10 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 	card := ReadyCardFile{Head: now.head, Base: now.base, Commits: now.commits, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
 		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum,
 		Files: files}
+	if res, ok := readQASummary(dir); ok && res.Head == now.head {
+		card.QA = qaForCard(res)
+		card.Flags = append(card.Flags, qaBlockedFlags(res.Blocked)...)
+	}
 	old, err := readCard(dir)
 	if err == nil && sameCard(old, card) {
 		return old, nil
@@ -951,9 +957,10 @@ func (e *Engine) redraw(ctx context.Context, t registry.Task, why string) {
 const knownMarker = "<!-- magnum factory: the Known list -->"
 
 // appendKnown appends to task t's pr-body.md the "Known" list of what the
-// local review left open (knownList, from review-summary.json), in place of
-// the one an earlier append wrote, and records the body as the pr_body
-// artifact.
+// local review left open (knownList, from review-summary.json), then the
+// Visual QA section of the QA run that passed at the task's head (qaMarker,
+// qaSection; none without QA), in place of those an earlier append wrote,
+// and records the body as the pr_body artifact.
 func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	b, err := os.ReadFile(filepath.Join(dir, prBodyFile))
@@ -966,6 +973,11 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 		_ = json.Unmarshal(b, &sum) // none: the list says the review left nothing open
 	}
 	text := strings.TrimRight(body, "\n") + "\n\n" + knownMarker + "\n" + knownList(sum)
+	if res, ok := readQASummary(dir); ok && res.Head == t.HeadSHA {
+		if qa := qaSection(res); qa != "" {
+			text += "\n" + qaMarker + "\n" + qa
+		}
+	}
 	return e.saveArtifact(ctx, t, "pr_body", prBodyFile, []byte(text))
 }
 

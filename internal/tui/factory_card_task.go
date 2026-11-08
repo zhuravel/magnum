@@ -67,6 +67,9 @@ func (p *cardPainter) taskHints(c TaskCard) []hint {
 	if c.Retry {
 		hs = append(hs, hint{"r", "retry"})
 	}
+	if c.AcceptQA != "" {
+		hs = append(hs, hint{acceptQAKey, "accept QA"})
+	}
 	return append(hs, hint{"d", "diff"}, hint{"l", "log"}, hint{"+ " + p.minus(), "rate"}, hint{"esc", "back"}, hint{"?", "more"})
 }
 

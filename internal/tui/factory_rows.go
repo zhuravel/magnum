@@ -407,6 +407,12 @@ type ReadyCard struct {
 	// Failed are the checks that failed ("rubocop: 2 offenses"), drawn under
 	// PROOF behind a red ✗; the recommendation is then send back.
 	Failed []string
+	// QA is the QA row, after PROOF: what the change's visual QA found
+	// ("clean: 3 pages walked at abc1234, 1 note", "not needed: no
+	// user-facing file changed"); empty: no row. QAReport is the QA run's
+	// report (summary.md, absolute), which e opens in the pager: "" for
+	// none, and no e then.
+	QA, QAReport string
 
 	// The screen's own state: the note on the rule (styled) and the line
 	// typed in the footer.
@@ -480,6 +486,11 @@ type TaskCard struct {
 	// a stage that checks again what stopped it (magnum factory retry), not
 	// for its questions. The card's hints then offer r.
 	Retry bool
+	// AcceptQA is what A accepts: the QA defects the writer declined at the
+	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
+	// declined at abc1234 (flow on /settings/security)", magnum factory
+	// retry --accept-qa); "" for none, and no A then.
+	AcceptQA string
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
 	// Ask is the y/N question being asked (a retry, a drop); empty: the key

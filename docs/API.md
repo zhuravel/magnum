@@ -13360,6 +13360,17 @@ type QADefect struct {
     before the change (read, never trusted in slice 1), and the fingerprint the
     factory follows it by (qaFingerprint).
 
+type QAFixed struct {
+	Run      int    `json:"run"`
+	Class    string `json:"class"`
+	Severity string `json:"severity"`
+	Path     string `json:"path"`
+	State    string `json:"state,omitempty"`
+}
+    QAFixed is a defect an earlier QA run of the task handed the writer that
+    the run no longer finds: the run that found it, its class and severity,
+    and the path and state of its page there.
+
 type QANotShown struct {
 	Check string `json:"check"`
 	Why   string `json:"why"`
@@ -13415,6 +13426,8 @@ type QAResult struct {
 	Known    []QADefect  `json:"known"`
 	Accepted []QADefect  `json:"accepted,omitempty"`
 	Blocked  []QABlocked `json:"blocked"`
+	Walk     []QAPage    `json:"walk,omitempty"`
+	Fixed    []QAFixed   `json:"fixed,omitempty"`
 	Started  time.Time   `json:"started"`
 	Ended    time.Time   `json:"ended"`
 }
@@ -13426,7 +13439,10 @@ type QAResult struct {
     the factory's checks of the pages it saved), the defects that block and
     those that do not (Known), the defects that would block but you accepted at
     the run's head (Accepted, `magnum factory retry --accept-qa`), the states
-    the walker could not reach, and when it started and ended.
+    the walker could not reach, the pages it walked (Walk: each one's id, path,
+    state and shot, as its verdict has them, the words clipped), what an earlier
+    run found that the writer fixed (Fixed, in the result that passed the
+    stage), and when it started and ended.
 
 type QAVerdict struct {
 	Version  int          `json:"version"`
@@ -13477,6 +13493,7 @@ type ReadyCardFile struct {
 	Flags      []string      `json:"flags"`
 	Review     ReviewSummary `json:"review"`
 	Files      []CardFile    `json:"files"`
+	QA         *QAResult     `json:"qa,omitempty"`
 }
     ReadyCardFile is ready-card.json, the ready card as the factory drew it:
     its revision (a new one each time what it shows changed) and when it was
@@ -13485,8 +13502,10 @@ type ReadyCardFile struct {
     the PR's status file counts them), the hash of report.md and pr-body.md as
     shown and the hash of the diff (the patch id of base...head), the branch,
     the PR's title, the copy a push frees (its directory's name) and its path,
-    the FLAGS lines (Flags.Lines), the local review's end and the changed files,
-    the flagged ones first (cardFilesOf).
+    the FLAGS lines (Flags.Lines, then a line for each state QA did not reach),
+    the local review's end and the changed files, the flagged ones first
+    (cardFilesOf), and the QA run that passed at the head (qa-summary.json,
+    its quotes left out), nil for none.
 
 func ReadReadyCard(l paths.Layout, id int64) (ReadyCardFile, error)
     ReadReadyCard reads the ready card of task id in layout l.
@@ -28723,6 +28742,10 @@ type FactoryActions interface {
 	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	// AcceptQA lets a task whose QA fix loop stopped on defects the writer
+	// declined go on with them accepted by you, at its head (the task
+	// card's A, as `magnum factory retry --accept-qa`).
+	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
     command on the screen's context; the ones that change something return what
@@ -29738,6 +29761,12 @@ type ReadyCard struct {
 	// Failed are the checks that failed ("rubocop: 2 offenses"), drawn under
 	// PROOF behind a red ✗; the recommendation is then send back.
 	Failed []string
+	// QA is the QA row, after PROOF: what the change's visual QA found
+	// ("clean: 3 pages walked at abc1234, 1 note", "not needed: no
+	// user-facing file changed"); empty: no row. QAReport is the QA run's
+	// report (summary.md, absolute), which e opens in the pager: "" for
+	// none, and no e then.
+	QA, QAReport string
 
 	// Has unexported fields.
 }
@@ -30294,6 +30323,11 @@ type TaskCard struct {
 	// a stage that checks again what stopped it (magnum factory retry), not
 	// for its questions. The card's hints then offer r.
 	Retry bool
+	// AcceptQA is what A accepts: the QA defects the writer declined at the
+	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
+	// declined at abc1234 (flow on /settings/security)", magnum factory
+	// retry --accept-qa); "" for none, and no A then.
+	AcceptQA string
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
 	// Ask is the y/N question being asked (a retry, a drop); empty: the key

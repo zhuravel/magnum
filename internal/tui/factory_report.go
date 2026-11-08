@@ -1,11 +1,13 @@
 package tui
 
-// The report of magnum's fixer on the factory screen: e opens it in the
-// pager, asking nothing (spec 9.D: opening asks nothing), on home's row of
-// a published task or of your PR whose fix loop left you items, and on the
-// task card. The card's FixReport names it (factory.ScreenData sets it
-// only for a report under magnum's reviews directory), and the task card
-// lists the items it left you under WAITING FOR (fixNeedRows).
+// The reports e opens in the pager, asking nothing (spec 9.D: opening asks
+// nothing): magnum's fixer's on home's row of a published task or of your
+// PR whose fix loop left you items, and on the task card; the QA run's
+// (summary.md) on the ready card of a change visual QA walked. The task
+// card's FixReport names the fixer's (factory.ScreenData sets it only for a
+// report under magnum's reviews directory), and the task card lists the
+// items it left you under WAITING FOR (fixNeedRows); the ready card's
+// QAReport names the QA run's.
 
 import (
 	"cmp"
@@ -20,7 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// reportKey opens the fixer's report.
+// reportKey opens the fixer's report, or on the ready card the QA run's.
 const reportKey = "e"
 
 // defaultPager is $PAGER (its words split, as defaultEditor splits
@@ -34,38 +36,50 @@ func defaultPager(ctx context.Context, path string) *exec.Cmd {
 	return cmd
 }
 
-// reportOf is the fixer's report of the row or task id ("" for none) and
-// its name ("claude-fix.md").
+// reportOf is the report e opens on the row or task id ("" for none) and
+// its name: on the ready card the QA run's (summary.md), elsewhere the
+// fixer's ("claude-fix.md").
 func (m factoryModel) reportOf(id int64) (path, name string) {
-	path = m.data.Cards[id].Task.FixReport
+	cards := m.data.Cards[id]
+	path = cards.Task.FixReport
+	if m.view == fvReady {
+		path = ""
+		if cards.Ready != nil {
+			path = cards.Ready.QAReport
+		}
+	}
 	if path == "" {
 		return "", ""
 	}
 	return path, cleanText(filepath.Base(path))
 }
 
-// reportTarget is what e acts on: home's row, the task card's task; false
-// on any other view.
+// reportTarget is what e acts on: home's row, the task card's task, the
+// ready card's; false on any other view.
 func (m factoryModel) reportTarget() (int64, bool) {
 	switch m.view {
 	case fvHome:
 		r, ok := m.selectedRow()
 		return r.ID, ok
-	case fvTask:
+	case fvTask, fvReady:
 		return m.task, true
 	}
 	return 0, false
 }
 
-// openReport runs the pager on the fixer's report of e's row or task card
-// (asks nothing); one without a report says so in the footer.
+// openReport runs the pager on the report of e's row or card (reportOf;
+// asks nothing, and on the ready card it is no read of the diff); one
+// without a report says so in the footer.
 func (m *factoryModel) openReport() tea.Cmd {
 	id, ok := m.reportTarget()
 	if !ok {
 		return nil
 	}
 	path, _ := m.reportOf(id)
-	if path == "" || !filepath.IsAbs(path) {
+	switch {
+	case m.view == fvReady && (path == "" || !filepath.IsAbs(path)):
+		return m.note(fmt.Sprintf("no QA report for %s: e opens one when visual QA walked the change", m.taskKey(id)))
+	case path == "" || !filepath.IsAbs(path):
 		return m.note(fmt.Sprintf("no report of magnum's fixer for %s: e opens one when its fix loop left you items", m.taskKey(id)))
 	}
 	return tea.ExecProcess(m.pager(m.ctx, path), func(err error) tea.Msg { return factoryPagerMsg{task: id, err: err} })
