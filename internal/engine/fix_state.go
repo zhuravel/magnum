@@ -78,23 +78,23 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // which the cycle's fixer goes on without and the loop's end puts under
 // Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
 type FixState struct {
-	Cycle        int        `json:"cycle"`
-	Cap          int        `json:"cap"`
-	Phase        string     `json:"phase"`
-	Since        string     `json:"since"`
-	Head         string     `json:"head"`
-	By           string     `json:"by"`
-	Report       string     `json:"report"`
-	StartedAt    time.Time  `json:"started_at"`
-	NeedsYou     []string   `json:"needs_you,omitempty"`
-	Answered     []string   `json:"answered,omitempty"`
-	Role         string     `json:"role,omitempty"`
-	ForcedAt     time.Time  `json:"forced_at,omitzero"`
-	Held         bool       `json:"held,omitempty"`
-	Context      string     `json:"context,omitempty"`
-	OthersUnread string     `json:"others_unread,omitempty"`
-	Carried      []FixCarry `json:"carried,omitempty"`
-	Waits        []string   `json:"waits,omitempty"`
+	Cycle         int        `json:"cycle"`
+	Cap           int        `json:"cap"`
+	Phase         string     `json:"phase"`
+	Since         string     `json:"since"`
+	Head          string     `json:"head"`
+	By            string     `json:"by"`
+	Report        string     `json:"report"`
+	StartedAt     time.Time  `json:"started_at"`
+	NeedsYou      []string   `json:"needs_you,omitempty"`
+	Answered      []string   `json:"answered,omitempty"`
+	Role          string     `json:"role,omitempty"`
+	ForcedAt      time.Time  `json:"forced_at,omitzero"`
+	Held          bool       `json:"held,omitempty"`
+	Context       string     `json:"context,omitempty"`
+	OthersUnread  string     `json:"others_unread,omitempty"`
+	Carried       []FixCarry `json:"carried,omitempty"`
+	Waits         []string   `json:"waits,omitempty"`
 	Mode          string     `json:"mode,omitempty"`
 	ParentRefused string     `json:"parent_refused,omitempty"`
 }

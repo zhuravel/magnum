@@ -164,7 +164,7 @@ type fakeGH struct {
 	// baseOid is the base's tip Details reports for every PR ("" =
 	// fakeBaseOid).
 	baseOid string
-	calls        []string
+	calls   []string
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
 	onRadar, onCIStates func()

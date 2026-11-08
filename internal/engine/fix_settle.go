@@ -183,7 +183,8 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
 		e.liftDecided(ctx, job, built) // fix_decide.go: it built every decision the attention asked for
-		if note := job.parentRefusedNote(); note != "" { // fix_parent.go: the parent the first cycle did not merge is yours
+		// fix_parent.go: the parent the first cycle did not merge is yours
+		if note := job.parentRefusedNote(); note != "" {
 			e.event(ctx, "warn", subject, "fix.needs_you", "fix: "+note, data)
 			e.fixAttention(ctx, job, withUnread("fix: "+note, unread))
 			return
