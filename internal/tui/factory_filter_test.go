@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -50,9 +51,10 @@ func testRepos(t *testing.T) *factoryHarness {
 // / filters home's rows as you type: each word must be in a row's key,
 // title, repository or PR number, in any case. The title line says the
 // filter and how many rows it hides, the line under the rule shows what you
-// type; enter keeps the filter and gives the keys back, and esc clears it.
-// The selection stays on its row while it shows, else goes to the nearest
-// one. Nothing is asked or run.
+// type; enter (or a click) keeps the filter and gives the keys back, and
+// esc clears it. The selection stays on its row while it shows, else goes
+// to the nearest one in home's order. A NEEDS YOU the filter empties says
+// nothing of what it hides. Nothing is asked or run.
 func TestSlashFiltersHomesRows(t *testing.T) {
 	h := testRepos(t)
 	h.press("g")
@@ -107,10 +109,34 @@ func TestSlashFiltersHomesRows(t *testing.T) {
 	if got := h.shownKeys(); !slices.Equal(got, []string{"#4612", "#4611"}) {
 		t.Errorf("filter widget shows %v, want the rows of example/widget", got)
 	}
+	// Rows none of which needs you leave NEEDS YOU empty, but a filter may
+	// hide what does: no "Nothing waits on you." over them.
+	mustNotContain(t, h.view(), "Nothing waits on you.")
 	h.press("enter", "esc") // esc on home clears a filter kept
 	if h.m.filter.Value() != "" || len(h.shownKeys()) != 8 {
 		t.Errorf("esc on home kept the filter %q", h.m.filter.Value())
 	}
+
+	// The nearest shown row is the nearest in home's order, the next first:
+	// from #4603 (NEEDS YOU) it is #4606 (LEFT ALONE), four rows down, not
+	// the row at the cursor's old place among the two shown.
+	h.press("g")
+	h.selectRow("#4603")
+	h.press("/")
+	h.typeText("sync")
+	if got := h.shownKeys(); !slices.Equal(got, []string{"#4606", "PR-12302"}) {
+		t.Fatalf("filter sync shows %v", got)
+	}
+	if r, _ := h.m.selectedRow(); r.Key != "#4606" {
+		t.Errorf("the cursor is on %s, want #4606, the shown row nearest #4603", r.Key)
+	}
+	// A click hands the keys back from the filter, which it keeps.
+	h.feed(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	h.press("q")
+	if !h.quit || h.m.filter.Value() != "sync" {
+		t.Errorf("q after a click: quit %v, filter %q; want the keys back and the filter kept", h.quit, h.m.filter.Value())
+	}
+	h.quit = false
 	if h.act.calls() != 0 || h.m.bar.asking != nil {
 		t.Error("the filter asked or ran something")
 	}

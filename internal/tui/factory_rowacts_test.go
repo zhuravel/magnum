@@ -211,8 +211,9 @@ func TestAPRKeyThatWentThroughMovesTheWalkOn(t *testing.T) {
 }
 
 // On a task card that offers a retry, r stays the retry and its hints say
-// "r retry"; R is the fresh review there as anywhere. On a card that
-// offers none, r is the review of the task's PR.
+// "r retry"; R is the fresh review there as anywhere, and z's question
+// names no key for the review. On a card that offers none, r is the review
+// of the task's PR.
 func TestROnATaskCardRetriesWhereItCanElseReviews(t *testing.T) {
 	h := testPublished(t, 140, 40)
 	h.src.change(func(d *FactoryData) {
@@ -225,6 +226,8 @@ func TestROnATaskCardRetriesWhereItCanElseReviews(t *testing.T) {
 	mustContain(t, h.view(), "r retry")
 	h.press("r")
 	mustContain(t, h.view(), "Retry PR-12320: it goes on at its stage, which checks again what stopped it? y/N")
+	h.press("n", "z") // r retries here: z names no key for the review
+	mustContain(t, h.view(), "(a review and review requests still run)? y/N")
 	h.press("n", "R")
 	mustContain(t, h.view(), "Fresh review of PR-12320's #4530 in new agent sessions? y/N")
 	h.press("y", "esc")
