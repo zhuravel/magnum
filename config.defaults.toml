@@ -502,10 +502,12 @@ status_comment = false            # true: one comment on each PR magnum means to
                                   # one line when magnum will not review the head or its own failure stopped
                                   # the review, one that answers a review request on a muted or filtered-out
                                   # PR, and a last line when the PR is closed, merged or turned into a draft
-                                  # before its review posted. Never posted on post-merge reviews or dry runs,
-                                  # nor on a draft nobody asked to review; edited at most once every 2 minutes
-                                  # (a last line at once). [[watch]] may override (status_comment = false there
-                                  # keeps a watch quiet)
+                                  # before its review posted; on a PR a factory task published, the factory part
+                                  # below (a table of the factory's steps, from the status file the factory
+                                  # daemon writes; a change of it edits the comment too). Never posted on
+                                  # post-merge reviews or dry runs, nor on a draft nobody asked to review;
+                                  # edited at most once every 2 minutes (a last line at once). [[watch]] may
+                                  # override (status_comment = false there keeps a watch quiet)
 status_comment_note = ""          # a line of yours under the status comment while a review is queued, under way
                                   # or held (not under the posted line nor a last line), e.g. "Reviews by the
                                   # team's magnum."; "" = none

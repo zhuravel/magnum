@@ -17838,6 +17838,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheBoardsCILinksTheFailedJobAndSaysWhyGitHubBlocksTheMerge, TestPRBoardSanitizesTheCIsLinksAndBlock,
   TestPRBoardCardLinksTheFailedJobsAndSaysWhyGitHubBlocksTheMerge, TestThePRCardDrawsThePRsLines,
   TestThePRCardsCILinksAreFewAndKeepTheirEnd; goldens prcard-100, -120, -140 and -200.
+- **The status comment renders the factory part** (2026-11-08, roadmap R48, the renderer's slice of "One status comment
+  per factory PR: the factory part's file and its contract", after "The factory writes each published PR's status
+  file"). On a PR a factory task published, magnum's status comment carries the factory part below magnum's lines
+  (internal/engine/status_comment_factory.go): `writeStatus` reads the PR's file read-only (`prstatus.Path`,
+  `prstatus.Read`) each time it looks at a comment it may write, and `factoryText` renders it.
+  - The words: a heading, `**Magnum factory**` (with `· Jira ABC-12: in code review` when the file names an issue), the
+    operator's approved table (`| Step | State |`: Plan, Code, Local review, Published, Fix loop, Staging), then
+    `Now: <who it waits on> · updated HH:MM UTC`, a blank line around the table so GitHub draws it and does not read
+    the Now line as a row. Every word comes from a word map over the contract's enums (one per enum type,
+    `TestEveryFactoryEnumWordHasItsWords` holds them to the contract's words), a count or a time; the env's slug
+    (`prstatus.StagingEnv` again) and the Jira key (capitals, digits, `_` and `-` only) are the two strings that
+    post, each checked again though `Read` checked them, and a word outside its map reads "not known". "You" in the
+    factory's words is "the operator" here, as in magnum's lines: the comment is read by the PR's people.
+  - A row with nothing to say reads `none` (no code counted, no local review, no fix loop yet, no staging deploy);
+    the plan without questions reads "no questions", a fact of the plan rather than nothing. A count of 0 is left out
+    of its row: a ready card an older build drew counts no commits, so "0 commits" would be false. The publish time
+    always has its day; the Now line's time has it once it is not the edit's UTC day (`statusClock`, as the
+    comment's other times), which covers "older than a day". The Now line adds the task's stage when it is not the
+    published PR's, and an end that waits on nobody reads as the end alone ("merged", "the task stopped").
+  - Change detection is the digest, not the text: kv `pr.<id>.factory_status` holds the digest of the file whose
+    part the comment last carried, written with the comment's record after a write GitHub took. A new digest, or a
+    file gone or refused after one (the part drops), passes the comment's same-text check and waits for its
+    2-minute spacing like a change of magnum's lines; the same digest edits nothing, though the part's text moves
+    with now. `statusRecord.Sum` is magnum's body's alone, so the records written before need no migration and a
+    PR without a file edits as it did. The file is read only after the checks that decide whether the comment may be
+    written at all, so a file never opens a comment where magnum would post none (a draft nobody asked about, a
+    watch with the comment off, a second deletion), and a comment that ended (a close, a merge, a draft) keeps its
+    last edit, factory part included, until it resumes, as magnum's lines do. So the factory's last write after a
+    merge, which follows magnum's last edit by a tick of each daemon, does not reach the comment.
+  - A file `Read` refuses counts as missing and is logged once while its refusal stays the same (the error's words:
+    the reason and the field, never the content; `Engine.changed`), and a good read or a missing file makes the
+    next refusal new. The header's time and the `pr.status_comment` events stay magnum's.
+  Rejected: the part in the comment's sum (its "updated" time gains its day at the UTC day's turn, an edit a day per
+  factory PR for nothing new; the date then shows only at an edit made for another change); a re-render, or an edit,
+  when the Now line turns a day old (the same edit for nothing new); one bulk kv read per tick (the per-PR read of
+  the comment's record is already there, and the point read costs as little); a row for the Jira issue (the
+  approved table has six rows) and the task id (the factory's number, not the PR's people's); the factory's last
+  write after the close reaching the comment (the comment ends once, as for magnum's lines). Tests, failing first:
+  TestTheFactoryPartIsATableOfTheStepsAndANowLine, TestEachFactoryRowSaysItsStepInFixedWords,
+  TestTheFactoryNowLineSaysWhoThePRWaitsOn, TestTheFactoryHeadingNamesTheJiraIssue,
+  TestEveryFactoryEnumWordHasItsWords, TestNoFactoryStatusStringReachesTheCommentUnmapped,
+  TestAFactoryPRsStatusCommentCarriesTheFactoryPart, TestAnUnchangedFactoryStatusMakesNoEdit,
+  TestAChangedFactoryStatusEditsOnceUnderTheRateLimit, TestAFactoryStatusFileThatGoesAwayDropsThePart,
+  TestARefusedFactoryStatusFileIsNoPartAndOneLog, TestAClosedFactoryPRsCommentEndsWithItsFactoryPart; a guard that
+  held before: TestAFactoryStatusFileNeverOpensAComment.
 
 ## Learned rules
 

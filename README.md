@@ -1339,6 +1339,48 @@ link that turned up, your note) leaves it. The first line says where the review 
   unmute, or a filter change that queues the PR, hands the comment back to its review, and a mute or unmute
   drops the request (kv `pr.<id>.request_declined`).
 
+**The factory part.** On a PR a [factory](#factory-writing-code-from-a-jira-key-or-a-prompt) task published, the
+comment carries a factory part below Magnum's lines, rendered from the PR's status file that the factory daemon writes
+(`<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`, described under Factory as "The PR's status file"),
+which the review daemon only reads:
+
+```
+**Magnum factory** · Jira ABC-12: in code review
+
+| Step | State |
+|---|---|
+| Plan | 3 questions, 2 answered |
+| Code | 6 commits, 3 specs: red on the base, green at the head |
+| Local review | 2 rounds, clean, 2 notes left open |
+| Published | 4 Oct, 16:05 UTC |
+| Fix loop | running, cycle 2, 3 pushes, 7 threads answered |
+| Staging | deployed to `beta` |
+
+Now: waits on the reviewers · updated 09:41 UTC
+```
+
+Every word of it is the comment's own, mapped from the file's fixed words, a count or a time, never a string of the
+file passed on: the plan's questions asked and answered ("no questions"); the code's commits and spec files (a count
+of 0 is left out, since a ready card an older build drew counts no commits) and its proof ("red on the base, green at
+the head", "green at the head", "red on the base, not green at the head" or "no proof"); the local review's rounds,
+verdict ("clean", "findings left", "did not finish", "no verdict") and the notes it left open; the publish time, with
+its day; the fix loop's state ("running", "left to the operator", "done", "off"), cycle, pushes and threads answered;
+the staging deploy ("deploying", "deployed" or "failed", with the env's name only when it is a slug). A row with nothing
+to say reads `none` (no code counted, no local review, no fix loop yet, no staging deploy). The heading names the Jira
+issue only when the file has one (its key and its status: "to do", "in development", "in code review", "done",
+"another status", "status not known"). The Now line says who the PR waits on ("waits on the operator", "on Magnum",
+"on the reviewers", "on CI", "on the factory", "on nobody"), the task's end when it ended ("merged", "the task
+stopped", "the task failed"), and when the file last changed, with its day once that is not the day of the edit.
+
+The part never opens a comment where Magnum would post none, never changes Magnum's lines or the header's time, and
+follows the comment's own end: a PR closed or merged gets the part as the file says it at the last edit, and nothing
+after. Each tick that looks at the comment reads the file and compares its digest with the one the comment last
+carried (kv `pr.<id>.factory_status`): a new digest edits the comment as a change of Magnum's lines does, under the
+same 2-minute spacing; the same digest edits nothing, whatever the factory rewrites (so the "updated" time gains its
+day only at an edit made for another change). A file that goes away drops the part at the next edit. A file the reader
+refuses (over 64 KiB, cut short, another schema version, a word it does not know, a digest that does not match) counts
+as missing and is logged once while its refusal stays the same.
+
 Every comment ends on a true line, written at once (the 2-minute spacing below does not hold it) and only
 once: "Closed before the review of `54fc258` posted." for a PR closed without a merge, "Merged before the
 review of `54fc258` posted." for one GitHub merged first, the posted line for one merged or closed after its
@@ -4422,7 +4464,7 @@ or x drops the task`, alerted once), and a reopen clears that wait. A task whose
 stages: a retry refuses it.
 
 **The PR's status file.** Each tick also writes, for every PR a task published, the file that magnum's status comment
-on the PR renders as its factory part: `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`
+on the PR renders as its factory part (see [Review status comment](#review-status-comment)): `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`
 (`internal/prstatus` holds its contract). It holds counts, fixed words and times, never the text of a PR, a ticket, a
 question or an agent: the task's id; the plan (the questions it asked you that stand, and the ones you answered); the
 code (the branch's commits after the base, as the ready card you pushed counted them; the factory's proof, `none`,
