@@ -1,12 +1,20 @@
 package engine
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"maps"
 	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/prstatus"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -47,7 +55,7 @@ func TestTheFactoryPartIsATableOfTheStepsAndANowLine(t *testing.T) {
 		"| Staging | deployed to `beta` |\n" +
 		"\n" +
 		"Now: waits on the reviewers · updated 09:41 UTC"
-	if got := factoryText(s, factoryNow); got != want {
+	if got := factoryText(s, "", factoryNow); got != want {
 		t.Fatalf("factory part:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -122,7 +130,7 @@ func TestEachFactoryRowSaysItsStepInFixedWords(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := factoryStatus()
 			c.set(&s)
-			got := factoryText(s, factoryNow)
+			got := factoryText(s, "", factoryNow)
 			if row := "\n| " + c.step + " | " + c.want + " |\n"; !strings.Contains(got, row) {
 				t.Fatalf("factory part:\n%s\nwant the row %q", got, strings.TrimSpace(row))
 			}
@@ -160,9 +168,44 @@ func TestTheFactoryNowLineSaysWhoThePRWaitsOn(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := factoryStatus()
 			s.Now, s.UpdatedAt = c.now, s.UpdatedAt.Add(-c.ago)
-			got := factoryText(s, factoryNow)
+			got := factoryText(s, "", factoryNow)
 			if !strings.HasSuffix(got, "\n\nNow: "+c.want) {
 				t.Fatalf("factory part:\n%s\nwant it to end with:\nNow: %s", got, c.want)
+			}
+		})
+	}
+}
+
+// On the comment's last edit the Now line says the end in magnum's words
+// while the file still says the PR is open (the factory writes its own end
+// after magnum's last edit), without the file's time, which is from before
+// the end (the header has the end's); a file that says the task's own end
+// keeps its words. The rows stay as the file says them.
+func TestAnEndedFactoryPartsNowLineSaysTheEnd(t *testing.T) {
+	at := " · updated 09:41 UTC"
+	for _, c := range []struct {
+		name, end string
+		now       prstatus.Now
+		want      string
+	}{
+		{"merged, the file still open", "merged", prstatus.Now{Who: prstatus.WhoReviewers, Stage: prstatus.StagePublished}, "merged"},
+		{"closed, the file waits on magnum", "closed", prstatus.Now{Who: prstatus.WhoMagnum, Stage: prstatus.StagePublished}, "closed"},
+		{"a draft", "a draft", prstatus.Now{Who: prstatus.WhoYou, Stage: prstatus.StagePublished}, "a draft"},
+		{"merged, the file says so", "merged", prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageDone}, "merged" + at},
+		{"closed, the task stopped", "closed", prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageStopped}, "the task stopped" + at},
+		{"closed, the task failed", "closed", prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageFailed}, "the task failed" + at},
+		{"goes on", "", prstatus.Now{Who: prstatus.WhoReviewers, Stage: prstatus.StagePublished}, "waits on the reviewers" + at},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := factoryStatus()
+			s.Now = c.now
+			got := factoryText(s, c.end, factoryNow)
+			if !strings.HasSuffix(got, "\n\nNow: "+c.want) {
+				t.Fatalf("factory part:\n%s\nwant it to end with:\nNow: %s", got, c.want)
+			}
+			open, _, _ := strings.Cut(factoryText(s, "", factoryNow), "\n\nNow: ")
+			if table, _, _ := strings.Cut(got, "\n\nNow: "); table != open {
+				t.Fatalf("the ended part's rows:\n%s\nwant:\n%s", table, open)
 			}
 		})
 	}
@@ -185,49 +228,52 @@ func TestTheFactoryHeadingNamesTheJiraIssue(t *testing.T) {
 	} {
 		s := factoryStatus()
 		s.Jira = c.jira
-		if got, _, _ := strings.Cut(factoryText(s, factoryNow), "\n"); got != c.want {
+		if got, _, _ := strings.Cut(factoryText(s, "", factoryNow), "\n"); got != c.want {
 			t.Errorf("%+v: heading %q, want %q", c.jira, got, c.want)
 		}
 	}
 }
 
-// Every enum word the contract has gets its own fixed words, so a new word
-// in prstatus fails here until the comment can say it.
+// Every enum word the contract declares gets its own fixed words, and no
+// map holds a word the contract lacks: the words come from internal/
+// prstatus's source (contractWords), so a word the contract gains fails
+// here until the comment can say it, instead of posting "not known".
 func TestEveryFactoryEnumWordHasItsWords(t *testing.T) {
-	check := func(name string, n int, words []string) {
+	words := contractWords(t)
+	mapped := map[string]bool{}
+	check := func(typ string, m map[string]string, valid func(string) bool) {
 		t.Helper()
-		if len(words) != n {
-			t.Errorf("%s: %d words mapped, want %d", name, len(words), n)
+		mapped[typ] = true
+		want := words[typ]
+		if len(want) == 0 {
+			t.Errorf("the contract declares no word of %s", typ)
+		}
+		for _, w := range want {
+			if !valid(w) {
+				t.Errorf("%s %q, read from the contract's source, is not Valid", typ, w)
+			}
+		}
+		if got := slices.Sorted(maps.Keys(m)); !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+			t.Errorf("%s: the word map has %q, the contract %q", typ, got, want)
 		}
 		seen := map[string]bool{}
-		for _, w := range words {
-			if w == "" || seen[w] {
-				t.Errorf("%s: words %q are empty or not distinct", name, words)
+		for w, says := range m {
+			if (says == "" && !(typ == "Stage" && w == string(prstatus.StagePublished))) || seen[says] {
+				t.Errorf("%s %q says %q: empty or not distinct", typ, w, says)
 			}
-			seen[w] = true
+			seen[says] = true
 		}
 	}
-	proofs := []prstatus.Proof{prstatus.ProofNone, prstatus.ProofRed, prstatus.ProofRedToGreen, prstatus.ProofGreen}
-	verdicts := []prstatus.Verdict{prstatus.VerdictNone, prstatus.VerdictClean, prstatus.VerdictFindings, prstatus.VerdictFailed}
-	fixes := []prstatus.FixState{prstatus.FixNone, prstatus.FixRunning, prstatus.FixNeedsYou, prstatus.FixDone, prstatus.FixOff}
-	stagings := []prstatus.StagingState{prstatus.StagingNone, prstatus.StagingDeploying, prstatus.StagingDeployed, prstatus.StagingFailed}
-	whos := []prstatus.Who{prstatus.WhoYou, prstatus.WhoMagnum, prstatus.WhoReviewers, prstatus.WhoCI, prstatus.WhoFactory, prstatus.WhoNone}
-	jiras := []prstatus.JiraStatus{prstatus.JiraToDo, prstatus.JiraInDevelopment, prstatus.JiraInCodeReview, prstatus.JiraDone,
-		prstatus.JiraOther, prstatus.JiraUnknown}
-	stages := []prstatus.Stage{prstatus.StagePlan, prstatus.StageCode, prstatus.StageReview, prstatus.StageReady,
-		prstatus.StageDone, prstatus.StageStopped, prstatus.StageFailed}
-	check("proofs", len(proofs), mapWords(factoryProofWords, proofs))
-	check("verdicts", len(verdicts), mapWords(factoryVerdictWords, verdicts))
-	check("fix states", len(fixes), mapWords(factoryFixWords, fixes))
-	check("staging states", len(stagings), mapWords(factoryStagingWords, stagings))
-	check("who", len(whos), mapWords(factoryWhoWords, whos))
-	check("jira statuses", len(jiras), mapWords(factoryJiraWords, jiras))
-	check("stages", len(stages), mapWords(factoryStageWords, stages))
-	for _, m := range []int{len(factoryProofWords) - len(proofs), len(factoryVerdictWords) - len(verdicts),
-		len(factoryFixWords) - len(fixes), len(factoryStagingWords) - len(stagings), len(factoryWhoWords) - len(whos),
-		len(factoryJiraWords) - len(jiras), len(factoryStageWords) - len(stages) - 1} {
-		if m != 0 {
-			t.Errorf("a word map holds %d words this test does not list", m)
+	check("Proof", stringKeys(factoryProofWords), func(w string) bool { return prstatus.Proof(w).Valid() })
+	check("Verdict", stringKeys(factoryVerdictWords), func(w string) bool { return prstatus.Verdict(w).Valid() })
+	check("FixState", stringKeys(factoryFixWords), func(w string) bool { return prstatus.FixState(w).Valid() })
+	check("StagingState", stringKeys(factoryStagingWords), func(w string) bool { return prstatus.StagingState(w).Valid() })
+	check("Who", stringKeys(factoryWhoWords), func(w string) bool { return prstatus.Who(w).Valid() })
+	check("JiraStatus", stringKeys(factoryJiraWords), func(w string) bool { return prstatus.JiraStatus(w).Valid() })
+	check("Stage", stringKeys(factoryStageWords), func(w string) bool { return prstatus.Stage(w).Valid() })
+	for typ := range words {
+		if !mapped[typ] {
+			t.Errorf("the contract's %s has no word map", typ)
 		}
 	}
 	if w, ok := factoryStageWords[prstatus.StagePublished]; !ok || w != "" {
@@ -235,11 +281,60 @@ func TestEveryFactoryEnumWordHasItsWords(t *testing.T) {
 	}
 }
 
-// mapWords is the words m gives each of keys ("" for one it lacks).
-func mapWords[K comparable](m map[K]string, keys []K) []string {
-	out := make([]string, len(keys))
-	for i, k := range keys {
-		out[i] = m[k]
+// stringKeys is m with its keys as plain strings.
+func stringKeys[K ~string](m map[K]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[string(k)] = v
+	}
+	return out
+}
+
+// contractWords is every enum word internal/prstatus declares, by its
+// type's name, read from the package's source files: the string constants
+// of each const block, a constant without a type of its own counted as the
+// block's type (Valid would take it as one).
+func contractWords(t *testing.T) map[string][]string {
+	t.Helper()
+	dir := filepath.Join("..", "prstatus")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	out := map[string][]string{}
+	for _, ent := range ents {
+		if name := ent.Name(); !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, ent.Name()), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			g, ok := d.(*ast.GenDecl)
+			if !ok || g.Tok != token.CONST {
+				continue
+			}
+			typ := ""
+			for _, sp := range g.Specs {
+				vs := sp.(*ast.ValueSpec)
+				if id, ok := vs.Type.(*ast.Ident); ok {
+					typ = id.Name
+				}
+				for _, v := range vs.Values {
+					lit, ok := v.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING || typ == "" {
+						continue
+					}
+					w, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					out[typ] = append(out[typ], w)
+				}
+			}
+		}
 	}
 	return out
 }
@@ -258,7 +353,7 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 		s.FixLoop.State = prstatus.FixState(h)
 		s.Staging = prstatus.Staging{Env: h, State: prstatus.StagingState(h)}
 		s.Now = prstatus.Now{Who: prstatus.Who(h), Stage: prstatus.Stage(h)}
-		got := factoryText(s, factoryNow)
+		got := factoryText(s, "", factoryNow)
 		if got == "" {
 			t.Fatalf("%q: no factory part", h)
 		}
@@ -274,7 +369,7 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 	s := factoryStatus()
 	s.Jira = prstatus.Jira{Key: "ABC-12", Status: prstatus.JiraDone}
 	s.Staging.Env = "Beta Env"
-	if got := factoryText(s, factoryNow); !strings.Contains(got, "\n| Staging | deployed |\n") || !strings.Contains(got, "Jira ABC-12: done") {
+	if got := factoryText(s, "", factoryNow); !strings.Contains(got, "\n| Staging | deployed |\n") || !strings.Contains(got, "Jira ABC-12: done") {
 		t.Errorf("an env that is no slug, or a key that is one:\n%s", got)
 	}
 }
@@ -355,9 +450,9 @@ func (h *harness) widgetEdits() int {
 	return h.gh.count("edit_issue_comment:" + widgetRepo + ":")
 }
 
-// factoryDigest is the digest kvPRFactoryStatus holds for the PR ("" =
-// none).
-func (h *harness) factoryDigest(prID int64) string {
+// factoryShown is what kvPRFactoryStatus holds for the PR: the sum of the
+// factory part its comment carries ("" = none).
+func (h *harness) factoryShown(prID int64) string {
 	h.t.Helper()
 	v, _ := h.e.getKV(h.ctx, kvPRFactoryStatus(prID))
 	return v
@@ -378,11 +473,11 @@ func TestAFactoryPRsStatusCommentCarriesTheFactoryPart(t *testing.T) {
 		!strings.HasSuffix(magnums, "\n- [ ] In progress\n- [ ] Posted\n\n"+statusSelf+"\n"+statusMerge) {
 		t.Fatalf("status comment:\n%s", c.body)
 	}
-	if want := factoryText(s, h.clock.Now()); "**Magnum factory**"+part != want {
+	if want := factoryText(s, "", h.clock.Now()); "**Magnum factory**"+part != want {
 		t.Fatalf("factory part:\n%s\nwant:\n%s", "**Magnum factory**"+part, want)
 	}
-	if got := h.factoryDigest(pr.ID); got != s.Digest {
-		t.Fatalf("%s = %q, want the file's digest %q", kvPRFactoryStatus(pr.ID), got, s.Digest)
+	if got, want := h.factoryShown(pr.ID), statusSum(factoryText(s, "", h.clock.Now())); got != want {
+		t.Fatalf("%s = %q, want the part's sum %q", kvPRFactoryStatus(pr.ID), got, want)
 	}
 
 	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: start}, prSpec{n: 12, head: statusHead, updated: start},
@@ -392,14 +487,51 @@ func TestAFactoryPRsStatusCommentCarriesTheFactoryPart(t *testing.T) {
 	if strings.Contains(other.body, "Magnum factory") || !strings.HasSuffix(other.body, "\n"+statusMerge) {
 		t.Fatalf("a PR without a status file:\n%s", other.body)
 	}
-	if got := h.factoryDigest(h.widgetPR(13).ID); got != "" {
-		t.Fatalf("a PR without a status file keeps the digest %q", got)
+	if got := h.factoryShown(h.widgetPR(13).ID); got != "" {
+		t.Fatalf("a PR without a status file keeps the part sum %q", got)
 	}
 }
 
 // A status file never opens a comment where magnum would post none: on a
-// draft nobody asked to review, and on a watch with the comment off.
+// draft nobody asked to review, whether the watch skips drafts or queues
+// them, on a watch with the comment off, and on a PR reviewed before the
+// watch switched the comment on (its posted line only edits a comment).
 func TestAFactoryStatusFileNeverOpensAComment(t *testing.T) {
+	t.Run("a draft the watch queues", func(t *testing.T) {
+		h := widgetHarness(t, func(h *harness) { h.cfg.Watches[len(h.cfg.Watches)-1].IncludeDrafts = new(true) })
+		h.writeWidgetStatus(12, factoryStatus())
+		h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()})
+		h.startup()
+		h.tick()
+		h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()}, prSpec{n: 12, head: statusHead, draft: true, updated: h.clock.Now()})
+		h.tick()
+		if pr := h.widgetPR(12); pr.State != store.PRQueued {
+			t.Fatalf("state = %s, want queued", pr.State)
+		}
+		h.advance(3 * time.Minute)
+		h.tick()
+		if cs := h.gh.commentsOn(12); len(cs) != 0 {
+			t.Fatalf("a draft nobody asked about got %+v", cs)
+		}
+	})
+	t.Run("reviewed before the comment was on", func(t *testing.T) {
+		h := newHarness(t, statusOn, withExampleWatch, func(h *harness) { h.cfg.Watches[len(h.cfg.Watches)-1].StatusComment = new(false) })
+		h.widgetQueued()
+		h.advance(5 * time.Minute)
+		h.tick() // the round runs and posts
+		if pr := h.widgetPR(12); pr.State != store.PRReviewed {
+			t.Fatalf("state = %s, want reviewed", pr.State)
+		}
+		h.writeWidgetStatus(12, factoryStatus())
+		h.cfg.Watches[len(h.cfg.Watches)-1].StatusComment = new(true)
+		for range 2 {
+			h.advance(3 * time.Minute)
+			h.tick()
+		}
+		if cs := h.gh.commentsOn(12); len(cs) != 0 {
+			t.Fatalf("a PR reviewed before the comment was on got %+v", cs)
+		}
+	})
 	t.Run("a draft", func(t *testing.T) {
 		h := widgetHarness(t)
 		h.writeWidgetStatus(12, factoryStatus())
@@ -426,26 +558,43 @@ func TestAFactoryStatusFileNeverOpensAComment(t *testing.T) {
 	})
 }
 
-// An unchanged status file costs no edit, whatever the factory rewrites
-// and however long it stays: the next day's tick leaves the "updated" time
-// as it was written.
-func TestAnUnchangedFactoryStatusMakesNoEdit(t *testing.T) {
+// An unchanged status file costs no edit, whatever the factory rewrites,
+// but the one that dates its time: the first tick of the next UTC day
+// that the comment's spacing allows gives the "updated" time its day, as
+// magnum's own times get theirs, once, and later ticks edit nothing.
+func TestAnUnchangedFactoryStatusEditsOnlyToDateItsTime(t *testing.T) {
 	h := widgetHarness(t)
 	s := h.writeWidgetStatus(12, factoryStatus())
-	h.widgetQueued()
+	pr := h.widgetQueued()
 	posted := h.statusComment(12)
 	for range 4 {
 		h.advance(3 * time.Minute)
 		h.writeWidgetStatus(12, factoryStatus()) // the same content: Write writes nothing
 		h.tick()
 	}
-	h.advance(24 * time.Hour)
-	h.tick()
 	if n := h.widgetEdits(); n != 0 {
 		t.Fatalf("an unchanged status file edited the comment %d times:\n%s", n, h.statusComment(12).body)
 	}
-	if c := h.statusComment(12); c.body != posted.body || !strings.Contains(c.body, "Now: waits on the reviewers · updated "+utcClock(s.UpdatedAt)) {
+	if c := h.statusComment(12); c.body != posted.body || !strings.Contains(c.body, "\n\nNow: waits on the reviewers · updated "+utcClock(s.UpdatedAt)) {
 		t.Fatalf("status comment:\n%s", c.body)
+	}
+
+	h.advance(24 * time.Hour)
+	h.tick()
+	for range 3 {
+		h.advance(3 * time.Minute)
+		h.tick()
+	}
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("the next day: %d edits, want 1:\n%s", n, h.statusComment(12).body)
+	}
+	magnums, _, _ := strings.Cut(posted.body, "\n\n**Magnum factory**")
+	dated := factoryText(s, "", h.clock.Now())
+	if c := h.statusComment(12); c.body != magnums+"\n\n"+dated || !strings.HasSuffix(c.body, "\nNow: waits on the reviewers · updated "+statusDay(s.UpdatedAt)) {
+		t.Fatalf("the next day's comment:\n%s", c.body)
+	}
+	if got := h.factoryShown(pr.ID); got != statusSum(dated) {
+		t.Fatalf("%s = %q, want the dated part's sum", kvPRFactoryStatus(pr.ID), got)
 	}
 }
 
@@ -466,7 +615,7 @@ func TestAChangedFactoryStatusEditsOnceUnderTheRateLimit(t *testing.T) {
 	}
 	h.advance(90 * time.Second)
 	h.tick()
-	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, "", h.clock.Now()))
 	if n := h.widgetEdits(); n != 1 {
 		t.Fatalf("edits = %d, want 1", n)
 	}
@@ -489,12 +638,12 @@ func TestAChangedFactoryStatusEditsOnceUnderTheRateLimit(t *testing.T) {
 	h.tick()
 	h.advance(time.Minute)
 	h.tick()
-	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, "", h.clock.Now()))
 	if n := h.widgetEdits(); n != 2 {
 		t.Fatalf("edits = %d, want 2", n)
 	}
-	if got := h.factoryDigest(pr.ID); got != s.Digest {
-		t.Fatalf("%s = %q, want %q", kvPRFactoryStatus(pr.ID), got, s.Digest)
+	if got, want := h.factoryShown(pr.ID), statusSum(factoryText(s, "", h.clock.Now())); got != want {
+		t.Fatalf("%s = %q, want %q", kvPRFactoryStatus(pr.ID), got, want)
 	}
 	var stages []string
 	for _, ev := range h.events("pr.status_comment") {
@@ -507,7 +656,7 @@ func TestAChangedFactoryStatusEditsOnceUnderTheRateLimit(t *testing.T) {
 }
 
 // A status file that goes away drops the factory part at the next edit,
-// and the PR keeps no digest.
+// and the PR keeps no part sum.
 func TestAFactoryStatusFileThatGoesAwayDropsThePart(t *testing.T) {
 	h := widgetHarness(t)
 	start := h.clock.Now()
@@ -521,7 +670,7 @@ func TestAFactoryStatusFileThatGoesAwayDropsThePart(t *testing.T) {
 	h.advance(2 * time.Minute)
 	h.tick()
 	h.wantStatusSince(h.statusComment(12), start, magnums)
-	if got := h.factoryDigest(pr.ID); got != "" {
+	if got := h.factoryShown(pr.ID); got != "" {
 		t.Fatalf("%s = %q after the file went", kvPRFactoryStatus(pr.ID), got)
 	}
 	h.advance(2 * time.Minute)
@@ -567,7 +716,7 @@ func TestARefusedFactoryStatusFileIsNoPartAndOneLog(t *testing.T) {
 	if !strings.Contains(logs.String(), "digest does not match") || strings.Contains(logs.String(), `"questions_asked"`) {
 		t.Fatalf("the warning says why in fixed words only:\n%s", logs.String())
 	}
-	if got := h.factoryDigest(pr.ID); got != "" {
+	if got := h.factoryShown(pr.ID); got != "" {
 		t.Fatalf("%s = %q for a refused file", kvPRFactoryStatus(pr.ID), got)
 	}
 
@@ -585,7 +734,7 @@ func TestARefusedFactoryStatusFileIsNoPartAndOneLog(t *testing.T) {
 	s := h.writeWidgetStatus(12, factoryStatus())
 	h.advance(2 * time.Minute)
 	h.tick()
-	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, "", h.clock.Now()))
 	if err := os.WriteFile(path, []byte(`{"v": 2}`), 0o600); err != nil { // the refusal logged last
 		t.Fatal(err)
 	}
@@ -597,40 +746,187 @@ func TestARefusedFactoryStatusFileIsNoPartAndOneLog(t *testing.T) {
 	h.wantStatusSince(h.statusComment(12), start, magnums)
 }
 
-// A PR closed before its review gets its last edit with the factory part
-// as the file says it then, and nothing after: a later change of the file
-// edits nothing, as a later change of magnum's own lines would not.
-func TestAClosedFactoryPRsCommentEndsWithItsFactoryPart(t *testing.T) {
-	h := widgetHarness(t)
-	h.writeWidgetStatus(12, factoryStatus())
-	h.widgetQueued()
-	h.advance(time.Minute)
-	next := factoryStatus()
-	next.Now.Who = prstatus.WhoMagnum
-	s := h.writeWidgetStatus(12, next)
+// widgetEnds closes example/widget#12 on GitHub (state CLOSED or MERGED)
+// and ticks until magnum has it closed.
+func (h *harness) widgetEnds(state string) {
+	h.t.Helper()
 	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()})
-	h.gh.closed[12] = "CLOSED"
+	h.gh.closed[12] = state
 	h.tick()
 	h.advance(30 * time.Second)
 	h.tick()
 	h.advance(30 * time.Second)
 	h.tick()
 	if pr := h.widgetPR(12); pr.State != store.PRClosed {
-		t.Fatalf("state = %s, want closed", pr.State)
+		h.t.Fatalf("state = %s, want closed", pr.State)
 	}
-	ended := h.statusComment(12)
-	if !strings.HasSuffix(ended.body, ")\nClosed before the review of `a1b2c3d` posted.\n\n"+factoryText(s, h.clock.Now())) {
-		t.Fatalf("the last edit:\n%s", ended.body)
+}
+
+// A factory PR's comment ends on a true Now line: the last edit, at once,
+// says the end in magnum's words while the file still says the PR is open,
+// even where magnum's own lines stand as they were (merged after its
+// review), and nothing after it: the factory's own end, written a tick
+// later, edits nothing, as a later change of magnum's lines would not.
+func TestAnEndedFactoryPRsCommentEndsOnATrueNowLine(t *testing.T) {
+	wantEnded := func(t *testing.T, h *harness, ended fakeComment) {
+		t.Helper()
+		last := factoryStatus()
+		last.Now = prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageDone}
+		h.writeWidgetStatus(12, last)
+		for range 3 {
+			h.advance(5 * time.Minute)
+			h.tick()
+		}
+		if c := h.statusComment(12); c.edits != ended.edits || c.body != ended.body {
+			t.Fatalf("the ended comment was edited again (%d edits, %d before):\n%s", c.edits, ended.edits, c.body)
+		}
 	}
 
-	last := factoryStatus()
-	last.Now = prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageStopped}
-	h.writeWidgetStatus(12, last)
-	for range 3 {
+	t.Run("closed before the review", func(t *testing.T) {
+		h := widgetHarness(t)
+		h.writeWidgetStatus(12, factoryStatus())
+		h.widgetQueued()
+		h.advance(time.Minute)
+		next := factoryStatus()
+		next.Now.Who = prstatus.WhoMagnum
+		s := h.writeWidgetStatus(12, next)
+		h.widgetEnds("CLOSED")
+		ended := h.statusComment(12)
+		if !strings.HasSuffix(ended.body, ")\nClosed before the review of `a1b2c3d` posted.\n\n"+factoryText(s, "closed", h.clock.Now())) ||
+			!strings.HasSuffix(ended.body, "\n\nNow: closed") {
+			t.Fatalf("the last edit:\n%s", ended.body)
+		}
+		wantEnded(t, h, ended)
+	})
+
+	t.Run("merged after the review", func(t *testing.T) {
+		h := newHarness(t, statusOn, withExampleWatch)
+		s := h.writeWidgetStatus(12, factoryStatus())
+		h.widgetQueued()
 		h.advance(5 * time.Minute)
+		h.tick() // the round runs and posts
+		h.advance(2 * time.Minute)
 		h.tick()
+		pr := h.widgetPR(12)
+		if pr.State != store.PRReviewed {
+			t.Fatalf("state = %s, want reviewed", pr.State)
+		}
+		posted := h.statusComment(12)
+		line := "\nReview of `a1b2c3d` posted " + utcClock(*pr.ReviewedAt)
+		if !strings.Contains(posted.body, line) || !strings.HasSuffix(posted.body, "\n\n"+factoryText(s, "", h.clock.Now())) {
+			t.Fatalf("after the review:\n%s", posted.body)
+		}
+
+		h.widgetEnds("MERGED")
+		ended := h.statusComment(12)
+		magnums, _, _ := strings.Cut(posted.body, "\n\n**Magnum factory**")
+		if ended.edits != posted.edits+1 || ended.body != magnums+"\n\n"+factoryText(s, "merged", h.clock.Now()) ||
+			!strings.HasSuffix(ended.body, "\n\nNow: merged") {
+			t.Fatalf("the last edit (%d edits, %d before):\n%s", ended.edits, posted.edits, ended.body)
+		}
+		wantEnded(t, h, ended)
+	})
+
+	t.Run("the task's own end", func(t *testing.T) {
+		h := widgetHarness(t)
+		h.writeWidgetStatus(12, factoryStatus())
+		h.widgetQueued()
+		h.advance(time.Minute)
+		stopped := factoryStatus()
+		stopped.Now = prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageStopped}
+		s := h.writeWidgetStatus(12, stopped)
+		h.widgetEnds("CLOSED")
+		if c := h.statusComment(12); !strings.HasSuffix(c.body, "\n\nNow: the task stopped · updated "+utcClock(s.UpdatedAt)) {
+			t.Fatalf("the last edit:\n%s", c.body)
+		}
+	})
+}
+
+// A comment a person deleted is no comment the factory part alone posts
+// again: an edit only the part asked for finds it gone and posts nothing,
+// whatever the factory writes after; magnum's next change of its own lines
+// (here a mute's line, which opens no comment) posts it once more, part
+// included, as its edit would have without the file, and a close then
+// posts nothing, as a last edit of a deleted comment does not.
+func TestADeletedCommentIsPostedOnceMoreOnlyForMagnumsChange(t *testing.T) {
+	// deleted posts #12's comment with its factory part, has a person
+	// delete it and the factory write three changes, and returns the last.
+	deleted := func(t *testing.T, h *harness) prstatus.Status {
+		t.Helper()
+		h.writeWidgetStatus(12, factoryStatus())
+		h.widgetQueued()
+		h.gh.deleteComment(h.statusComment(12).id)
+		var s prstatus.Status
+		for _, who := range []prstatus.Who{prstatus.WhoYou, prstatus.WhoCI, prstatus.WhoMagnum} {
+			next := factoryStatus()
+			next.Now.Who = who
+			s = h.writeWidgetStatus(12, next)
+			h.advance(2 * time.Minute)
+			h.tick()
+		}
+		if cs := h.gh.commentsOn(12); len(cs) != 0 || h.gh.count("issue_comment:"+widgetRepo) != 1 || h.widgetEdits() != 1 {
+			t.Fatalf("the factory part alone: %d posts, %d edits, comments %+v", h.gh.count("issue_comment:"+widgetRepo), h.widgetEdits(), cs)
+		}
+		return s
 	}
-	if c := h.statusComment(12); c.edits != ended.edits || c.body != ended.body {
-		t.Fatalf("the ended comment was edited again (%d edits, %d before):\n%s", c.edits, ended.edits, c.body)
+
+	t.Run("magnum's change", func(t *testing.T) {
+		h := widgetHarness(t)
+		s := deleted(t, h)
+		id := h.enqueue(ReqMute, TargetPayload{PRTarget: PRTarget{Ref: widgetRepo + "#12"}})
+		h.tick()
+		if r := h.request(id); r.State != store.RequestDone {
+			t.Fatalf("mute: %s %q", r.State, deref(r.Result))
+		}
+		h.wantStatus(h.statusComment(12), "Magnum will not review this head. The operator was told.\n\n"+factoryText(s, "", h.clock.Now()))
+	})
+
+	t.Run("a close", func(t *testing.T) {
+		h := widgetHarness(t)
+		deleted(t, h)
+		h.widgetEnds("CLOSED")
+		for range 3 {
+			h.advance(5 * time.Minute)
+			h.tick()
+		}
+		if cs := h.gh.commentsOn(12); len(cs) != 0 || h.gh.count("issue_comment:"+widgetRepo) != 1 {
+			t.Fatalf("a close after the deletion: %d posts, comments %+v", h.gh.count("issue_comment:"+widgetRepo), cs)
+		}
+		if rec := h.e.statusRecordOf(h.ctx, h.widgetPR(12).ID); rec.End == "" || rec.Repost {
+			t.Fatalf("the record does not end: %+v", rec)
+		}
+	})
+}
+
+// A factory part's change that GitHub refused is written at the next try:
+// the comment keeps nothing of it, and pr.<id>.factory_status keeps the
+// part the comment carries, until GitHub takes the edit.
+func TestARefusedFactoryEditIsWrittenAtTheNextTry(t *testing.T) {
+	h := widgetHarness(t)
+	h.writeWidgetStatus(12, factoryStatus())
+	pr := h.widgetQueued()
+	shown := h.factoryShown(pr.ID)
+	posted := h.statusComment(12)
+
+	h.advance(2 * time.Minute)
+	next := factoryStatus()
+	next.FixLoop = prstatus.FixLoop{State: prstatus.FixDone, Cycle: 2, Pushes: 4, ThreadsAnswered: 8}
+	s := h.writeWidgetStatus(12, next)
+	h.gh.commentErr = &github.APIError{Op: "comment", Status: 502, Message: "Bad Gateway"}
+	h.tick()
+	if h.widgetEdits() != 1 || h.statusComment(12).body != posted.body || h.factoryShown(pr.ID) != shown {
+		t.Fatalf("a refused edit: %d attempts, %s = %q (was %q):\n%s", h.widgetEdits(), kvPRFactoryStatus(pr.ID),
+			h.factoryShown(pr.ID), shown, h.statusComment(12).body)
+	}
+
+	h.gh.commentErr = nil
+	h.advance(2 * time.Minute)
+	h.tick()
+	magnums, _, _ := strings.Cut(posted.body, "\n\n**Magnum factory**")
+	if c := h.statusComment(12); c.body != magnums+"\n\n"+factoryText(s, "", h.clock.Now()) {
+		t.Fatalf("the next try:\n%s", c.body)
+	}
+	if got, want := h.factoryShown(pr.ID), statusSum(factoryText(s, "", h.clock.Now())); got != want {
+		t.Fatalf("%s = %q, want %q", kvPRFactoryStatus(pr.ID), got, want)
 	}
 }

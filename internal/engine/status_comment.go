@@ -129,6 +129,11 @@ type statusRecord struct {
 	Failed   bool      `json:"failed,omitempty"`   // the last attempt failed
 	Warned   time.Time `json:"warned,omitzero"`    // the last pr.status_comment_failed
 	Gone     int       `json:"gone,omitempty"`     // times a person deleted it
+	// Repost: a person deleted the comment, found by an edit only its
+	// factory part asked for (ID 0, Sum still magnum's body last written):
+	// the next change of magnum's lines posts it once more, as an edit of
+	// it would have, and a status file alone never does.
+	Repost bool `json:"repost,omitempty"`
 	// Off is the head a second deletion came on: no comment until another
 	// head, since someone does not want one.
 	Off string `json:"off,omitempty"`
@@ -421,9 +426,9 @@ func (e *Engine) statusCommentsOn() bool {
 // noteStatusComments brings the status comment of every PR whose watch has
 // it on in line with the registry (statusFor), once per tick after
 // noteWaits recorded the waits: a PR without one gets it once its review is
-// queued or under way, one with one has it edited when its text or its
-// factory part's status file changed, at most once every statusEvery (a
-// last edit at once), and a tick writes at most statusWritesPerTick. Never
+// queued or under way, one with one has it edited when its text changed,
+// its factory part's included, at most once every statusEvery (a last edit
+// at once), and a tick writes at most statusWritesPerTick. Never
 // in a dry run nor on a scratch registry (an eval replay). A failure is the
 // PR's alone: the tick and the rounds go on. A baseline PR is read only
 // when a review request on it was declined (declinedRequests): that comment
@@ -808,14 +813,16 @@ func (e *Engine) statusResumes(ctx context.Context, pr store.PR, rec statusRecor
 }
 
 // writeStatus posts or edits pr's status comment (reads: what the tick read
-// for it) when what it says changed, magnum's lines or the digest of the
-// PR's factory status file (factoryPart), and its last write is statusEvery
-// old (a last edit goes at once, unless its attempt just failed), and reports
-// whether it called GitHub. A comment that ended is left alone until
-// statusResumes. A draft's comment opens only for a review someone asked
-// for. An edit that finds the comment gone posts it once more, the first
-// time a person deleted it (a last edit posts nothing); after a second
-// deletion the PR gets no comment until another head.
+// for it) when what it says changed, magnum's lines or its factory part
+// (factoryPart), and its last write is statusEvery old (a last edit goes at
+// once, unless its attempt just failed), and reports whether it called
+// GitHub. A comment that ended is left alone until statusResumes. A draft's
+// comment opens only for a review someone asked for. An edit that finds the
+// comment gone posts it once more, the first time a person deleted it (a
+// last edit posts nothing, and an edit only the factory part asked for
+// leaves the post to the next change of magnum's lines: statusRecord.
+// Repost); after a second deletion the PR gets no comment until another
+// head.
 func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, reads statusReads, now time.Time) bool {
 	ctx = github.WithOp(ctx, opStatusComment) // github_cost.go
 	rec := e.statusRecordOf(ctx, pr.ID)
@@ -835,7 +842,7 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 		}
 		rec.Off = "" // a new head: someone may want it now
 	}
-	if rec.ID == 0 && (!v.opens() || (pr.IsDraft && !v.asked)) {
+	if rec.ID == 0 && !rec.Repost && (!v.opens() || (pr.IsDraft && !v.asked)) {
 		return false
 	}
 	if v.stage == statusPosted && rec.Head == v.head && rec.Kind != "" {
@@ -843,12 +850,20 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 	}
 	body := v.body(e.cfg.Pipeline.StatusCommentNote, now)
 	sum := statusSum(body)
+	if rec.Repost && (sum == rec.Sum || v.ends) {
+		if v.ends { // a last edit of a comment someone deleted: nothing to post
+			rec.Repost, rec.Sum = false, ""
+			endStatus(&rec, pr, now)
+			e.saveStatus(ctx, pr.ID, rec)
+		}
+		return false
+	}
 	// The factory part (status_comment_factory.go) is kept apart: a new
-	// digest edits the comment as a new body does, and an unchanged one,
-	// whose text may still move with now, edits nothing.
+	// sum of it edits the comment as a new body does, an unchanged one
+	// edits nothing.
 	shown, _ := e.getKV(ctx, kvPRFactoryStatus(pr.ID))
-	digest, part := e.factoryPart(repo, pr, now)
-	if rec.ID != 0 && sum == rec.Sum && digest == shown {
+	part, partSum := e.factoryPart(repo, pr, factoryEnd(pr, v), now)
+	if rec.ID != 0 && sum == rec.Sum && partSum == shown {
 		if v.ends { // the comment says it already: it ends as it stands
 			endStatus(&rec, pr, now)
 			e.saveStatus(ctx, pr.ID, rec)
@@ -883,6 +898,7 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 	})
 	posted := rec.ID == 0
 	if rec.ID != 0 && errors.Is(err, github.ErrNotFound) {
+		partOnly := sum == rec.Sum
 		rec.Gone++
 		rec.ID, rec.Sum, rec.Stage, rec.Failed = 0, "", "", false
 		switch {
@@ -895,6 +911,11 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 			rec.Off = pr.HeadSHA
 			e.saveStatus(ctx, pr.ID, rec)
 			e.log.Info("status comment deleted again: none until the next push", "pr", pr.ID, "head", textx.ShortSHA(pr.HeadSHA))
+			return true
+		case partOnly: // a status file never posts a comment: magnum's next change does
+			rec.Repost, rec.Sum = true, sum
+			e.saveStatus(ctx, pr.ID, rec)
+			e.log.Info("status comment deleted: posting it once more at magnum's next change", "pr", pr.ID)
 			return true
 		}
 		e.log.Info("status comment deleted: posting it once more", "pr", pr.ID)
@@ -917,12 +938,12 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 		rec.ID = c.ID
 	}
 	rec.Identity, rec.Sum, rec.Stage, rec.Head, rec.Kind = ident, sum, v.stage, v.head, v.kind
-	rec.Failed, rec.State, rec.Changed = false, state, changed
+	rec.Failed, rec.Repost, rec.State, rec.Changed = false, false, state, changed
 	if v.ends {
 		endStatus(&rec, pr, now)
 	}
 	e.saveStatus(ctx, pr.ID, rec)
-	e.saveFactoryDigest(ctx, pr.ID, shown, digest)
+	e.saveFactoryShown(ctx, pr.ID, shown, partSum)
 	verb := "updated"
 	if posted {
 		verb = "posted"

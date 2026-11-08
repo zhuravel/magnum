@@ -7,16 +7,21 @@ package engine
 // table of the factory's steps and a Now line. Every word it posts comes
 // from the word maps below, a number or a time; the two strings the file
 // may carry, the env's slug and the Jira key, are checked again before they
-// post. A row with nothing to say reads "none".
+// post. A row with nothing to say reads "none". The comment's last edit
+// (a close, a merge, a draft) says the end in the Now line while the file
+// still says the PR is open: the factory writes its own end after
+// magnum's last edit, which nothing follows.
 //
 // Change detection: writeStatus reads the file each time it looks at a
 // comment it may write (no more often than the tick already looks at the
-// PR) and compares the file's digest with the one the comment last carried
-// (kvPRFactoryStatus). A new digest, or a file gone or refused after one,
-// edits the comment as a change of magnum's lines does, under the same
-// spacing and only while the comment goes on (a comment that ended stays as
-// its last edit wrote it); the same digest edits nothing, though the part's
-// "updated" time would gain its day at the next edit.
+// PR) and compares the sum of the part it renders with the one the comment
+// last carried (kvPRFactoryStatus). The part changes with the file's
+// content (its digest), when its "updated" time gains its day at the next
+// UTC day (once per status) and at the comment's end; a new sum, or a file
+// gone or refused after one, edits the comment as a change of magnum's
+// lines does, under the same spacing and only while the comment goes on (a
+// comment that ended stays as its last edit wrote it); the same sum edits
+// nothing, whatever the factory rewrites.
 
 import (
 	"context"
@@ -105,11 +110,43 @@ func factoryWord[K ~string](m map[K]string, w K) string {
 	return factoryUnknown
 }
 
+// The words of the Now line on the comment's last edit while the file
+// says the PR is open (factoryEnd).
+const (
+	factoryEndMerged = "merged"
+	factoryEndClosed = "closed"
+	factoryEndDraft  = "a draft"
+)
+
+// factoryEnd is the end the factory part's Now line says on v, pr's
+// comment's last edit, in magnum's words: merged or closed as GitHub has
+// it, else (a PR turned into a draft) a draft; "" while the comment goes on.
+func factoryEnd(pr store.PR, v statusView) string {
+	switch {
+	case !v.ends:
+		return ""
+	case postMerge(pr):
+		return factoryEndMerged
+	case pr.GHState == store.GHClosed:
+		return factoryEndClosed
+	}
+	return factoryEndDraft
+}
+
+// factoryEnded reports whether stage is the task's own end, which the Now
+// line says as the file does.
+func factoryEnded(stage prstatus.Stage) bool {
+	return stage == prstatus.StageDone || stage == prstatus.StageStopped || stage == prstatus.StageFailed
+}
+
 // factoryText is the factory part of a status comment for s at now: the
 // heading (with the Jira issue when s has one), the table of the steps and
 // the Now line, whose time has its day once it is not now's UTC day
-// (statusClock), as the comment's other times.
-func factoryText(s prstatus.Status, now time.Time) string {
+// (statusClock), as the comment's other times. On the comment's last edit
+// (end, factoryEnd's words; "" while it goes on) the Now line is the end
+// alone unless s says the task's own end: the file's time is from before
+// the end, and the header has the end's.
+func factoryText(s prstatus.Status, end string, now time.Time) string {
 	head := "**Magnum factory**"
 	if key := s.Jira.Key; factoryKeyOK(key) {
 		head += " · Jira " + key + ": " + factoryWord(factoryJiraWords, s.Jira.Status)
@@ -125,7 +162,11 @@ func factoryText(s prstatus.Status, now time.Time) string {
 	} {
 		lines = append(lines, "| "+r[0]+" | "+r[1]+" |")
 	}
-	return strings.Join(append(lines, "", "Now: "+factoryNowWords(s.Now)+" · updated "+statusClock(s.UpdatedAt, now)), "\n")
+	nowLine := "Now: " + factoryNowWords(s.Now) + " · updated " + statusClock(s.UpdatedAt, now)
+	if end != "" && !factoryEnded(s.Now.Stage) {
+		nowLine = "Now: " + end
+	}
+	return strings.Join(append(lines, "", nowLine), "\n")
 }
 
 // factoryPlan is the Plan row: the questions the task asked and the ones
@@ -236,18 +277,17 @@ func factoryKeyOK(key string) bool {
 	return true
 }
 
-// kvPRFactoryStatus holds the digest of the status file (prstatus's
-// digest) whose factory part the PR's status comment last carried; absent:
-// none.
+// kvPRFactoryStatus holds the sum (statusSum) of the factory part the PR's
+// status comment last carried, as rendered; absent: none.
 func kvPRFactoryStatus(prID int64) string { return fmt.Sprintf("pr.%d.factory_status", prID) }
 
-// factoryPart is pr's factory part at now: the digest of its status file
-// and the part's text, both "" when there is none (no file, or one Read
-// refuses, which counts as missing). It reads the file, read-only, each
-// time writeStatus looks at a comment that may be written, and logs a
-// refusal once while it stays the same (a refusal names the reason and
-// the field, never the file's content).
-func (e *Engine) factoryPart(repo store.Repo, pr store.PR, now time.Time) (digest, text string) {
+// factoryPart is pr's factory part at now (end: factoryEnd's words) and its
+// sum, both "" when there is none (no file, or one Read refuses, which
+// counts as missing). It reads the file, read-only, each time writeStatus
+// looks at a comment that may be written, and logs a refusal once while it
+// stays the same (a refusal names the reason and the field, never the
+// file's content).
+func (e *Engine) factoryPart(repo store.Repo, pr store.PR, end string, now time.Time) (text, sum string) {
 	key := fmt.Sprintf("factory_status:%d", pr.ID)
 	path, err := prstatus.Path(e.d.Layout, repo.Owner, repo.Name, pr.Number)
 	var s prstatus.Status
@@ -265,17 +305,18 @@ func (e *Engine) factoryPart(repo store.Repo, pr store.PR, now time.Time) (diges
 	if !ok {
 		return "", ""
 	}
-	return s.Digest, factoryText(s, now)
+	text = factoryText(s, end, now)
+	return text, statusSum(text)
 }
 
-// saveFactoryDigest records digest as the one the PR's comment now
+// saveFactoryShown records sum as the factory part's the PR's comment now
 // carries, when it is not the one recorded (was).
-func (e *Engine) saveFactoryDigest(ctx context.Context, prID int64, was, digest string) {
-	switch digest {
+func (e *Engine) saveFactoryShown(ctx context.Context, prID int64, was, sum string) {
+	switch sum {
 	case was:
 	case "":
 		e.delKV(ctx, kvPRFactoryStatus(prID))
 	default:
-		e.setKV(ctx, kvPRFactoryStatus(prID), digest)
+		e.setKV(ctx, kvPRFactoryStatus(prID), sum)
 	}
 }
