@@ -3353,6 +3353,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADecisionTheFixerDidNotBuildGoesBackBesideWhatItLeft, the replying fixer of
   TestFixDecidePostsYourReplyThenStartsTheLoop and the answered-call and identity cases of TestFixDecideRefusals.
 
+- **The look starts the CI workflow as `[[repo]] ci_dispatch_as`, where the poll identity cannot** (2026-11-08,
+  the operator's main repository). `ci_dispatch` started the workflow as the watch's poll identity, the
+  client the look already held; on the repository it was built for, that identity is a GitHub App
+  installation with Actions: read only, so GitHub answered HTTP 403 and the PR needed you with no more than
+  "GitHub answered HTTP 403". `ci_dispatch_as = "<identity>"` names the `[[identity]]` that starts it
+  (`Config.CIDispatchAs`), through the same client-per-identity path (`e.gh`, every configured identity has
+  one and its token is kept fresh); unset keeps the poll identity, else the watch's identity. It applies to
+  a pooled repository as `ci_dispatch` does, and validation refuses a name no `[[identity]]` defines and the
+  key without `ci_dispatch` (it names who starts that workflow, and without one magnum starts none). The start
+  waits for that identity's GitHub budget too (`openFacts.ciLow`, beside the poll identity's: the look still
+  reads with it), so the floor that holds the poll identity's writes holds this one. The three events carry
+  the identity in their data (`fix.open_ci_dispatch_refused` the one it would start as), and the start's and
+  the failure's message name it. A 403 that is no rate limit (`github.ErrForbidden`) adds magnum's own words
+  to the recorded failure, so the event and the verdict say that the identity cannot start workflows, what
+  one of its kind needs and that `ci_dispatch_as` names one that can ("GitHub answered HTTP 403: talkable-app
+  cannot start workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity that
+  can"); GitHub's message stays out, as before. What a failed start does to the PR is unchanged: it needs
+  you (a `ci` need, no end), its head is not started again. A gh login's need is push access and the `repo`
+  scope, which GitHub's REST docs name for this endpoint (the `workflow` scope is for writing workflow files,
+  not for starting them). Rejected: starting as the fix identity (a dedicated fix App rarely has Actions:
+  write, and its pane runs a model's commands), trying the poll identity first and the other on a 403 (two
+  calls, and a start that runs as whichever answered is harder to read in the events), a per-watch key (the
+  workflow and who may start it are the repository's), and checking the identity's permission ahead of the
+  call (GitHub's 403 is the answer, as its 422 is for the trigger). Tests, failing first:
+  TestCIDispatchAsNamesTheIdentityThatStartsTheWorkflow, TestABadCIDispatchAsFailsValidation,
+  TestTheLookStartsTheCIWorkflowAsCIDispatchAs, TestTheStartOfTheCIWorkflowWaitsForTheBudgetOfCIDispatchAs,
+  TestAStartGitHubForbidsSaysTheIdentityCannotStartWorkflows and the identity of
+  TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows's refused event;
+  TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows holds the new key in the pooled repository's texts.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

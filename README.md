@@ -3538,17 +3538,26 @@ long that takes) and until `settle_max` after the push, the look waits ("CI at a
 Completion has not started"); after that, with nothing running at the head, the PR needs you ("required
 check Completion did not run at a1b2c3d: run its workflow on the PR's branch, or push"). With `[[repo]]
 ci_dispatch = "ci.yml"`, the workflow file that produces the repository's required checks, Magnum starts it
-instead (a `workflow_dispatch` run on the PR's branch, as the watch's `poll_identity`, else its `identity`:
-the daemon's own client, never the fixer's pane), once per head, recorded before the call so that nothing
+instead (a `workflow_dispatch` run on the PR's branch, as `[[repo]] ci_dispatch_as` when it names an
+`[[identity]]`, else as the watch's `poll_identity`, else its `identity`: the daemon's own client of that
+identity, never the fixer's pane), once per head, recorded before the call so that nothing
 starts it twice (`fix.open_ci_dispatch`), and waits for its run while the head's checks run and for
 `settle_max` after the start ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
 did not run"); a run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
 without a `workflow_dispatch` trigger on the branch answers HTTP 422) and a PR it will not start
 (`fix.open_ci_dispatch_refused`: one that changes its own `.github/workflows/` or `.github/actions/`, which
 would run its own CI with the repository's secrets, whose files GitHub did not list whole, or whose branch
-Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the identity's GitHub budget, not for quiet
-hours. The identity needs the right to run workflows (a gh login that can push to the repository, or an
-App with Actions: write). Without the key (the default) Magnum starts nothing.
+Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the GitHub
+budget of the poll identity and of the identity it starts as, not for quiet hours. That identity needs the
+right to run workflows: an App with Actions: write (and `actions = "write"` in its `token_permissions` where
+it sets them), or a gh login that can push to the repository with the `repo` scope. A poll identity that
+is an App installation with Actions: read only cannot, and GitHub answers HTTP 403: set `ci_dispatch_as =
+"me"` (an `[[identity]]` name; it needs `ci_dispatch`, and validation refuses a name no `[[identity]]`
+defines) to start it as one that can. A 403 that is no rate limit says so in `fix.open_ci_dispatch_failed`
+and in the verdict ("magnum's start of ci.yml failed (GitHub answered HTTP 403: talkable-app cannot start
+workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity that can)"); the PR needs
+you as for any start GitHub refuses, and the head is not started again. The three events name the identity
+in their data, the first two in their message. Without `ci_dispatch` (the default) Magnum starts nothing.
 
 **What you see.**
 
