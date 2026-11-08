@@ -13,11 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -188,7 +192,8 @@ func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) 
 // PRs and your own open PRs from magnum's registry, and keeps the ready
 // cards it drew. Without the factory's registry (no task was ever started)
 // home lists your PRs alone, and creates nothing: with [board] own_prs =
-// "factory" the board leaves them out. An agents store it cannot open is a
+// "factory" the board leaves them out. The rows' PRs carry what r, R, z, M
+// and U go by (prFacts). An agents store it cannot open is a
 // blocker line of home, with why, and the rest is drawn. A factory daemon
 // that is down (daemonDown) is home's blocker line.
 func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error) {
@@ -204,9 +209,67 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 		return d, err
 	}
 	s.cards.Store(&cards)
+	s.prFacts(ctx, d.Rows)
 	if aerr != nil {
 		d.Blocking = append(slices.Clone(d.Blocking), "agents not read")
 		d.BlockingLong = append(slices.Clone(d.BlockingLong), "agents not read ("+textx.Clip(textx.FirstLine(aerr.Error()), 200)+")")
 	}
 	return d, nil
+}
+
+// prFacts gives the rows' PRs what r, R, z, M and U go by
+// (tui.FactoryPRFacts, the board's predicate's facts): magnum's row of each
+// PR, its snooze while it holds and its Codex flag, read from magnum's
+// registry in one opening per frame, read only and never migrated (a
+// registry of another schema than this build's is not read), and whether
+// its watch runs autofix. A PR the registry has no row of, and a registry
+// that is not there or cannot be read, leave its facts unread: the keys
+// then refuse only on what the rest of the row tells, and magnum's daemon
+// decides the rest.
+func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow) {
+	if !slices.ContainsFunc(rows, func(r tui.FactoryRow) bool { return r.PR != nil }) || !fsx.Exists(s.c.Layout.DB()) {
+		return
+	}
+	st, err := store.OpenWith(s.c.Layout.DB(), store.Options{QueryOnly: true, BeforeMigrate: func(from, to int) error {
+		return fmt.Errorf("magnum's registry is at schema %d and this build reads %d", from, to)
+	}})
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	now := s.now()
+	for i, r := range rows {
+		if r.PR == nil {
+			continue
+		}
+		full, num, _ := strings.Cut(r.PR.Ref, "#")
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			continue
+		}
+		repo, err := st.RepoByFullName(ctx, full)
+		if err != nil {
+			continue
+		}
+		pr, err := st.PRByRepoNumber(ctx, repo.ID, n)
+		if err != nil {
+			continue
+		}
+		f := &tui.FactoryPRFacts{State: pr.State, GHState: pr.GHState, Head: pr.HeadSHA, Reviewed: store.Deref(pr.ReviewedSHA),
+			Muted: pr.Muted, MergedUnreviewed: pr.MergedUnreviewed(), FlagDismissed: pr.FlagDismissed()}
+		if v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(pr.ID)); err == nil && ok {
+			if z, ok := engine.ParseSnooze(v); ok && z.Active(now) {
+				f.SnoozedUntil = z.Until
+			}
+		}
+		if flag, ok := codexFlagOf(ctx, st, pr.ID); ok { // codex_flag.go, as the board reads it
+			f.CodexFlag = flag.Short()
+		}
+		if w := s.c.Config.WatchFor(repo.FullName()); w != nil {
+			f.Autofix = config.AutofixStarts(s.c.Config.AutofixFor(w))
+		}
+		withFacts := *r.PR
+		withFacts.Facts = f
+		rows[i].PR = &withFacts
+	}
 }

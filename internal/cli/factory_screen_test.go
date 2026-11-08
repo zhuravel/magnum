@@ -292,3 +292,124 @@ func TestTheFactoryScreenShowsAPublishedTasksPRVerdict(t *testing.T) {
 		t.Errorf("its card's links %q, want %q", card.Links, link)
 	}
 }
+
+// statesMagnum is magnum's registry as the factory reads it, with your
+// open PRs own and the published tasks' PRs states.
+type statesMagnum struct {
+	ownOnlyMagnum
+	states map[factory.PRRef]factory.PRState
+}
+
+func (m statesMagnum) PRStates(context.Context, []factory.PRRef) (map[factory.PRRef]factory.PRState, error) {
+	return m.states, nil
+}
+
+// The rows' PRs carry what r, R, z, M and U go by (tui.FactoryPRFacts),
+// read from magnum's registry, read only: magnum's state and GitHub's,
+// the head and the reviewed head, the mute, a snooze that holds, the
+// Codex flag, and whether the PR's watch runs autofix; for your PR's row
+// and for a published task's alike. A PR the registry has no row of, and
+// a snooze that has ended, give nothing. Before, the screen read none of
+// it, and had no key that needed it.
+func TestTheFactoryScreenReadsWhatThePRKeysGoBy(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	cfg := *dt.ctx.Config
+	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"shop"}, Identity: "zhuravel", Autofix: config.AutofixOpen},
+		{Owner: "example", Include: []string{"widget"}, Identity: "zhuravel"}}
+	dt.ctx.Config = &cfg
+	l := dt.ctx.Layout
+	ctx := context.Background()
+	registrytest.Seed(t, l.FactoryDB())
+	reg, err := registry.Open(l.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := reg.CreateTask(ctx, registry.Task{JiraKey: "PR-12341", Kind: "bug", Repo: "example/shop", Title: "Coupon rounding",
+		State: registry.TaskActive, Stage: "publish", Branch: "zhuravel-PR-12341"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.TransitionTask(ctx, task.ID, nil, registry.TaskPublished, func(u *registry.TaskUpdate) { u.Set("pr_number", 4530) }); err != nil {
+		t.Fatal(err)
+	}
+	reg.Close()
+
+	st := storetest.OpenFile(t, l.DB())
+	pr := func(owner, name string, n int, head string) store.PR {
+		t.Helper()
+		repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_" + name, Owner: owner, Name: name, Mode: store.RepoModePerPR})
+		if err != nil {
+			t.Fatal(err)
+		}
+		up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: fmt.Sprintf("PR_%d", n), Number: n,
+			URL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, name, n), HeadSHA: head, GHState: store.GHOpen,
+			InitialState: store.PRReviewed, Identity: "zhuravel"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return up.PR
+	}
+	headTask, headOwn := strings.Repeat("a1", 20), strings.Repeat("b2", 20)
+	taskPR, own, gone := pr("example", "shop", 4530, headTask), pr("example", "widget", 12, headOwn), pr("example", "widget", 13, headOwn)
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if err := st.UpdatePR(ctx, taskPR.ID, func(u *store.PRUpdate) { u.Set("muted", true); u.Set("reviewed_sha", headTask) }); err != nil {
+		t.Fatal(err)
+	}
+	for key, v := range map[string]string{
+		engine.KVPRSnooze(taskPR.ID):   fmt.Sprintf(`{"until":%q,"at":%q,"by":"the board"}`, until.Format(time.RFC3339), until.Format(time.RFC3339)),
+		store.KVPRCodexFlag(own.ID):    `{"kind":"codex","at":"2026-11-01T10:00:00Z"}`,
+		engine.KVPRSnooze(gone.ID):     `{"until":"2020-01-01T00:00:00Z","at":"2020-01-01T00:00:00Z"}`,
+		engine.KVPRSnooze(own.ID + 99): `{"until":"2099-01-01T00:00:00Z","at":"2020-01-01T00:00:00Z"}`,
+	} {
+		if err := st.SetKV(ctx, key, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := func(repo string, n int, id int64) factory.PRState {
+		return factory.PRState{Ref: factory.PRRef{Repo: repo, Number: n}, ID: id, Title: "a PR", Found: true, DaemonUp: true, Watched: true,
+			GHState: store.GHOpen, State: store.PRReviewed, AuthorLogin: "zhuravel"}
+	}
+	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: statesMagnum{
+		ownOnlyMagnum: ownOnlyMagnum{own: []factory.PRState{state("example/widget", 12, own.ID), state("example/widget", 13, gone.ID),
+			state("example/widget", 14, own.ID+99)}},
+		states: map[factory.PRRef]factory.PRState{{Repo: "example/shop", Number: 4530}: state("example/shop", 4530, taskPR.ID)}}}
+	defer src.close()
+	d, err := src.Frame(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := map[string]*tui.FactoryPRFacts{}
+	for _, r := range d.Rows {
+		if r.PR != nil {
+			facts[r.PR.Ref] = r.PR.Facts
+		}
+	}
+	want := map[string]*tui.FactoryPRFacts{
+		"example/shop#4530": {State: store.PRReviewed, GHState: store.GHOpen, Head: headTask, Reviewed: headTask, Muted: true,
+			SnoozedUntil: until, Autofix: true},
+		"example/widget#12": {State: store.PRReviewed, GHState: store.GHOpen, Head: headOwn, CodexFlag: "Codex flagged · never reviewed again"},
+		"example/widget#13": {State: store.PRReviewed, GHState: store.GHOpen, Head: headOwn},
+		"example/widget#14": nil, // no row of it in magnum's registry
+	}
+	if len(facts) != len(want) {
+		t.Fatalf("rows with a PR %v, want %d", facts, len(want))
+	}
+	for ref, w := range want {
+		got, ok := facts[ref]
+		switch {
+		case !ok:
+			t.Errorf("no row of %s", ref)
+		case w == nil && got != nil:
+			t.Errorf("%s: facts %+v, want none", ref, *got)
+		case w != nil && (got == nil || !got.SnoozedUntil.Equal(w.SnoozedUntil)):
+			t.Errorf("%s: facts %+v, want %+v", ref, got, *w)
+		case w != nil:
+			g := *got
+			g.SnoozedUntil = w.SnoozedUntil
+			if g != *w {
+				t.Errorf("%s: facts %+v, want %+v", ref, g, *w)
+			}
+		}
+	}
+}

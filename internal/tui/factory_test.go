@@ -114,6 +114,10 @@ type fakeFactoryActions struct {
 	fixOffs  []factoryFixOff // FixOff's calls
 	aborts   []string        // the PRs Abort was asked for
 	openPRs  []string        // the PRs OpenPR stepped into magnum's pane of
+	// prActs are the board's row actions the screen ran on PRs, as
+	// "<call> <ref>" ("review owner/name#12", "fresh owner/name#12",
+	// "snooze 2h0m0s owner/name#12", "unsnooze", "mute", "unmute").
+	prActs []string
 
 	preview   func(text, repo string) (NewTaskForm, error)
 	answerErr error
@@ -243,12 +247,55 @@ func (a *fakeFactoryActions) OpenPR(_ context.Context, ref string) (ActionResult
 	return ActionResult{Text: "focused magnum's pane of " + ref}, nil
 }
 
+func (a *fakeFactoryActions) prAct(call string) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.prActs = append(a.prActs, call)
+	return ActionResult{Text: call + ": done"}, nil
+}
+
+func (a *fakeFactoryActions) Review(_ context.Context, ref string, o ReviewOpts) (ActionResult, error) {
+	call := "review "
+	switch {
+	case o.Fresh:
+		call = "fresh "
+	case o.Replies:
+		call = "replies "
+	}
+	return a.prAct(call + ref)
+}
+
+func (a *fakeFactoryActions) Snooze(_ context.Context, ref string, d time.Duration) (ActionResult, error) {
+	return a.prAct("snooze " + d.String() + " " + ref)
+}
+
+func (a *fakeFactoryActions) Unsnooze(_ context.Context, ref string) (ActionResult, error) {
+	return a.prAct("unsnooze " + ref)
+}
+
+func (a *fakeFactoryActions) Mute(_ context.Context, ref string) (ActionResult, error) {
+	return a.prAct("mute " + ref)
+}
+
+func (a *fakeFactoryActions) Unmute(_ context.Context, ref string) (ActionResult, error) {
+	return a.prAct("unmute " + ref)
+}
+
+// prCalls are the board's row actions the screen ran, in order.
+func (a *fakeFactoryActions) prCalls() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.prActs)
+}
+
 // calls counts the requests that change something (starts, answers,
-// decisions, stops, retries, and magnum's fix, fix off and abort).
+// decisions, stops, retries, magnum's fix, fix off and abort, and the
+// board's row actions on PRs).
 func (a *fakeFactoryActions) calls() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.fixes) + len(a.fixOffs) + len(a.aborts)
+	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.fixes) + len(a.fixOffs) + len(a.aborts) +
+		len(a.prActs)
 }
 
 // testClock is the screen's clock in tests: fixed until a test moves it.
@@ -750,7 +797,14 @@ func TestTheBoardsLettersKeepTheirMeaning(t *testing.T) {
 			t.Errorf("%s: a board letter asked or ran something", where)
 		}
 	}
-	still("home", "r", "p")
+	still("home", "p")
+	// r on home is the board's review: on a task's row with no PR in
+	// magnum's registry it says why and asks nothing.
+	h.press("r")
+	mustContain(t, h.view(), "r, R, z, M and U act on a PR in magnum's registry")
+	if h.act.calls() != 0 || h.m.bar.asking != nil {
+		t.Error("home: r on a row without a PR asked or ran something")
+	}
 	// x on a task's row on home is no key there (it drops a task on its
 	// card, and K stops magnum's loop): it starts nothing and says so.
 	h.press("x")

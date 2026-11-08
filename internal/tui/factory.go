@@ -26,13 +26,17 @@ package tui
 // the alerts, ? the help and its words, `,` settings, m the mouse, ctrl+r a
 // refresh and q quits; the cards' keys are in factory_keys.go. The board's
 // letters keep their meaning: b and t open the PR and the issue (on home
-// and the cards), K stops magnum's loop, and r, p and x do nothing here,
-// except x on the task card (drop, y/N) and r there for a task that can go
-// on (retry, y/N). A row of your own PR (FactoryRow.yourPR) opens its PR's
-// card: the task card's view with the PR's lines alone (CardPR) and the
-// PR's keys. f, F and K act on a row or a card whose PR magnum's registry
-// has, yours or a task's (FactoryRow.PR), y/N, through magnum's own request
-// paths; on a task's without one they say so and start nothing.
+// and the cards), K stops magnum's loop, r and R review the PR, z snoozes
+// it or lifts its snooze, M and U mute and unmute it, and p and x do
+// nothing here, except x on the task card (drop, y/N); r on a task card
+// that offers a retry is the retry (y/N), and R the review there. A row of
+// your own PR (FactoryRow.yourPR) opens its PR's card: the task card's view
+// with the PR's lines alone (CardPR) and the PR's keys. f, F, K, r, R, z, M
+// and U act on a row or a card whose PR magnum's registry has, yours or a
+// task's (FactoryRow.PR), y/N, through magnum's own request paths; on a
+// task's without one they say so and start nothing. r, R, z, M and U are
+// the board's row actions (rowacts.go): the board's refusals and questions
+// over the facts magnum's registry has of the PR (FactoryPR.Facts).
 
 import (
 	"cmp"
@@ -181,6 +185,11 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     (magnum open): the judge's, or the fixer's while its loop works,
 //     restoring a parked one in a slot (the screen asked y/N first then,
 //     FactoryPR.Restores).
+//   - Review, Snooze, Unsnooze, Mute and Unmute act on PR ref as the
+//     board's r and R (a review, fresh with o.Fresh), z (a snooze of d, or
+//     its lift) and M and U do, through the same calls (DashboardActions):
+//     magnum's own request paths, never the factory daemon. The screen
+//     asked y/N first, in the board's words.
 type FactoryActions interface {
 	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
@@ -197,6 +206,11 @@ type FactoryActions interface {
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
 	OpenPR(ctx context.Context, ref string) (ActionResult, error)
+	Review(ctx context.Context, ref string, o ReviewOpts) (ActionResult, error)
+	Snooze(ctx context.Context, ref string, d time.Duration) (ActionResult, error)
+	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
+	Mute(ctx context.Context, ref string) (ActionResult, error)
+	Unmute(ctx context.Context, ref string) (ActionResult, error)
 }
 
 // FactoryOptions tune the factory screen.

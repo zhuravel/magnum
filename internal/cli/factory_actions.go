@@ -8,10 +8,11 @@ package cli
 // once, so the adapter records none. Stepping into a pane, the time you saw
 // home and the terminal's focus carry no words and no decision: they record
 // no input. The screen asks y/N before each action; the adapter confirms
-// nothing itself. f, F, K and o on a row with a PR (your own PR's, or a
-// task's) are not the factory's: they run the board's own code
-// (screenActions: magnum's fix, fix off and abort requests in magnum's
-// registry, and magnum's open), never the factory daemon's.
+// nothing itself. f, F, K, o, r, R, z, M and U on a row with a PR (your
+// own PR's, or a task's) are not the factory's: they run the board's own
+// code (screenActions: magnum's fix, fix off, abort, review, snooze, mute
+// and unmute requests in magnum's registry, and magnum's open), never the
+// factory daemon's.
 
 import (
 	"cmp"
@@ -53,7 +54,8 @@ type factoryActions struct {
 	pid           int
 	focusPane     func(ctx context.Context, target string) error
 	revealSession func(ctx context.Context) (string, error)
-	// board runs f, F, K and o on a row with a PR: the PR board's actions.
+	// board runs f, F, K, o, r, R, z, M and U on a row with a PR: the PR
+	// board's actions.
 	board *screenActions
 }
 
@@ -292,6 +294,51 @@ func (a *factoryActions) OpenPR(ctx context.Context, ref string) (tui.ActionResu
 		return tui.ActionResult{}, errNoBoard
 	}
 	return a.board.Open(ctx, ref)
+}
+
+// Review reviews PR ref now, as the board's r and R do (magnum review; a
+// fresh one with o.Fresh); the screen asked first.
+func (a *factoryActions) Review(ctx context.Context, ref string, o tui.ReviewOpts) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Review(ctx, ref, o)
+}
+
+// Snooze holds PR ref's automatic reviews for d, as the board's z does
+// (magnum snooze, by "the board"); the screen asked first.
+func (a *factoryActions) Snooze(ctx context.Context, ref string, d time.Duration) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Snooze(ctx, ref, d)
+}
+
+// Unsnooze lifts PR ref's snooze, as the board's z on a snoozed PR does;
+// the screen asked first.
+func (a *factoryActions) Unsnooze(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Unsnooze(ctx, ref)
+}
+
+// Mute mutes PR ref, as the board's M does (magnum mute); the screen asked
+// first.
+func (a *factoryActions) Mute(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Mute(ctx, ref)
+}
+
+// Unmute unmutes PR ref, as the board's U does (magnum unmute); the screen
+// asked first.
+func (a *factoryActions) Unmute(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.Unmute(ctx, ref)
 }
 
 // errNoBoard is the refusal of a key on a PR's row by a screen built

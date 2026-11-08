@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // f, F and K on your PR's row of the factory screen run the board's own
@@ -82,5 +86,74 @@ func TestOOnAPRRowOpensMagnumsPane(t *testing.T) {
 	}
 	if fsx.Exists(h.c.Layout.FactoryDB()) {
 		t.Error("o on a PR's row made the factory's registry")
+	}
+}
+
+// r, R, z, M and U on a PR's row of the factory screen run the board's own
+// calls (screenActions.Review, Snooze, Unsnooze, Mute, Unmute): magnum's
+// review, snooze (as "the board", for 2h, or its lift), mute and unmute
+// requests, queued in magnum's registry and answered by magnum's daemon,
+// as the board's keys do. They never go through the factory daemon, and a
+// screen built without the board's actions refuses each.
+func TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests(t *testing.T) {
+	h := newActHarness(t)
+	h.pid, h.held = 4242, true // a review is queued only while a daemon answers
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, "ok") }
+	board := newScreenActions(h.c)
+	defer board.Close()
+	src := &factoryScreenSource{c: h.c, now: inspNow}
+	act := newFactoryActions(h.c, src, board)
+	ctx := context.Background()
+	const ref = "talkable/talkable#5"
+	start := h.now // the review's waits move the clock
+	calls := []func(tui.FactoryActions) (tui.ActionResult, error){
+		func(a tui.FactoryActions) (tui.ActionResult, error) { return a.Review(ctx, ref, tui.ReviewOpts{}) },
+		func(a tui.FactoryActions) (tui.ActionResult, error) {
+			return a.Review(ctx, ref, tui.ReviewOpts{Fresh: true})
+		},
+		func(a tui.FactoryActions) (tui.ActionResult, error) { return a.Snooze(ctx, ref, 2*time.Hour) },
+		func(a tui.FactoryActions) (tui.ActionResult, error) { return a.Unsnooze(ctx, ref) },
+		func(a tui.FactoryActions) (tui.ActionResult, error) { return a.Mute(ctx, ref) },
+		func(a tui.FactoryActions) (tui.ActionResult, error) { return a.Unmute(ctx, ref) },
+	}
+	for i, call := range calls {
+		if _, err := call(act); err != nil {
+			t.Fatalf("call %d: %v (%s)", i, err, h.errb.String())
+		}
+	}
+	reqs := h.requests()
+	var kinds []string
+	for _, r := range reqs {
+		kinds = append(kinds, r.Kind)
+	}
+	if want := []string{engine.ReqReview, engine.ReqReview, engine.ReqSnooze, engine.ReqSnooze, engine.ReqMute, engine.ReqUnmute}; !slices.Equal(kinds, want) {
+		t.Fatalf("requests %v in magnum's registry, want %v", kinds, want)
+	}
+	if p := actDecode[engine.ReviewPayload](t, reqs[0].Payload); p.Fresh || p.Number != 5 {
+		t.Errorf("r's review %+v, want a review of #5", p)
+	}
+	if p := actDecode[engine.ReviewPayload](t, reqs[1].Payload); !p.Fresh {
+		t.Errorf("R's review %+v, want a fresh one", p)
+	}
+	if p := actDecode[engine.SnoozePayload](t, reqs[2].Payload); p.Until.Sub(start) < 2*time.Hour || p.Until.Sub(start) > 2*time.Hour+time.Minute ||
+		p.By != "the board" || p.Off {
+		t.Errorf("z's snooze %+v, want 2h as the board", p)
+	}
+	if p := actDecode[engine.SnoozePayload](t, reqs[3].Payload); !p.Off {
+		t.Errorf("z's lift %+v, want off", p)
+	}
+	if fsx.Exists(h.c.Layout.FactoryDB()) {
+		t.Error("the screen's PR keys made the factory's registry")
+	}
+
+	bare := newFactoryActions(h.c, src, nil)
+	for i, call := range calls {
+		if _, err := call(bare); !errors.Is(err, errNoBoard) {
+			t.Errorf("call %d without the board's actions: %v, want %v", i, err, errNoBoard)
+		}
+	}
+	if n := len(h.requests()); n != len(reqs) {
+		t.Errorf("%d requests after the refusals, want %d", n, len(reqs))
 	}
 }

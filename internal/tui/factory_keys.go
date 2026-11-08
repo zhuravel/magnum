@@ -275,6 +275,153 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		func(ctx context.Context) (ActionResult, error) { return act.Abort(ctx, pr.Ref) })
 }
 
+// factoryPRActs are the board's row actions the factory screen offers on a
+// row with a PR (rowacts.go): review (r), fresh review (R), snooze or its
+// lift (z), mute (M) and unmute (U).
+var factoryPRActs = []rowAct{actReview, actFresh, actSnooze, actMute, actUnmute}
+
+// prActKey is r, R, z, M or U on row r (home's, or the card's), as the
+// board's: on a row whose open PR magnum's registry has (FactoryRow.PR),
+// the board's refusal when its predicate refuses the PR, else its y/N
+// question (on a task's PR with what y does to the factory's own loop,
+// factoryLoopEffect) and, on y, the board's call through magnum's own
+// request paths; on a row without one it says why. reviewOnR is false on a
+// task card that offers a retry, whose r is the retry: the questions then
+// name no key for the review.
+func (m *factoryModel) prActKey(k string, r FactoryRow, reviewOnR bool) tea.Cmd {
+	a, ok := rowActFor(factoryPRActs, k)
+	switch {
+	case !ok:
+		return nil
+	case r.PR == nil:
+		return m.note("r, R, z, M and U act on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
+	}
+	row := m.prActRow(r, reviewOnR)
+	if why := actionRefusal(a, row); why != "" {
+		return m.note(why)
+	}
+	q := actionQuestion(a, row)
+	if r.ID > 0 { // a task's PR: what y does to the factory's own loop
+		if e := factoryLoopEffect(a, row, *r.PR); e != "" {
+			q = strings.TrimSuffix(q, "?") + "; " + e + "?"
+		}
+	}
+	return m.ask(&factoryFollow{kind: followPR, task: r.ID}, q, m.prActRun(a, row))
+}
+
+// prActRow is what the board's row actions know of row r's PR: its
+// reference, the row's name for it, its fix loop and fix off, and the facts
+// magnum's registry has of it (FactoryPR.Facts; none read: each unknown, so
+// the predicate refuses only on what it knows). keys are the screen's own
+// (factoryActKeys), which the board's refusals and questions name.
+func (m factoryModel) prActRow(r FactoryRow, reviewOnR bool) actRow {
+	pr := *r.PR
+	row := actRow{ok: true, ref: pr.Ref, label: prLabel(r), now: m.now(), fixOff: pr.FixOff, fixLoop: pr.Fixing,
+		keys: factoryActKeys(reviewOnR)}
+	f := pr.Facts
+	if f == nil {
+		return row
+	}
+	row.state, row.ghState = normState(cleanText(f.State)), strings.ToUpper(strings.TrimSpace(cleanText(f.GHState)))
+	row.head, row.reviewed = cleanText(f.Head), cleanText(f.Reviewed)
+	row.muted, row.mutedKnown = f.Muted || row.state == "ignored", true
+	row.snoozedUntil, row.flag = f.SnoozedUntil, cleanText(f.CodexFlag)
+	row.mergedUnreviewed, row.flagDismissed = f.MergedUnreviewed, f.FlagDismissed
+	row.facts = reviewFacts(row.state, "", &ReviewFacts{HeadSHA: row.head, ReviewedSHA: row.reviewed}, row.now)
+	return row
+}
+
+// factoryActKeys are the factory screen's keys of the board's row actions
+// its refusals and questions name ("U unmutes it", "K kills it"): r only
+// where r is the review (reviewOnR).
+func factoryActKeys(reviewOnR bool) map[rowAct]string {
+	keys := map[rowAct]string{actFresh: "R", actSnooze: "z", actMute: "M", actUnmute: "U", actAbort: "K",
+		actFix: "f", actFixOff: "F", actBrowser: "b"}
+	if reviewOnR {
+		keys[actReview] = "r"
+	}
+	return keys
+}
+
+// prActRun is the board's call of a on row's PR, through FactoryActions
+// (magnum's own request paths, as the board's actionRun): the review's
+// variant (reviewOptsFor), the snooze of boardSnooze or its lift, the mute,
+// or the unmute (M too, on a merged PR whose flag a mute dismissed).
+func (m factoryModel) prActRun(a rowAct, row actRow) factoryAction {
+	act, ref := m.act, row.ref
+	switch a {
+	case actReview, actFresh:
+		o := reviewOptsFor(a, row)
+		return func(ctx context.Context) (ActionResult, error) { return act.Review(ctx, ref, o) }
+	case actSnooze:
+		if row.snoozed() {
+			return func(ctx context.Context) (ActionResult, error) { return act.Unsnooze(ctx, ref) }
+		}
+		return func(ctx context.Context) (ActionResult, error) { return act.Snooze(ctx, ref, boardSnooze) }
+	case actMute:
+		if what, _ := muteActFor(row.ghState, row.mergedUnreviewed, row.flagDismissed); what != muteRestore {
+			return func(ctx context.Context) (ActionResult, error) { return act.Mute(ctx, ref) }
+		}
+		fallthrough
+	case actUnmute:
+		return func(ctx context.Context) (ActionResult, error) { return act.Unmute(ctx, ref) }
+	}
+	return func(context.Context) (ActionResult, error) {
+		return ActionResult{}, fmt.Errorf("row action %d has no call here", a)
+	}
+}
+
+// factoryLoopEffect is what a does to the factory's own loop on a task's
+// PR (pr, row), in magnum's engine's terms, for its question; "" when it
+// changes nothing there. The factory runs no fix loop of its own on a
+// published task: magnum's autofix and magnum's fix loops work on its PR.
+// A mute holds only the rounds nobody forced (a fix loop's re-review is
+// forced) and stops autofix's new loops, never a loop at work's next
+// cycle; a snooze holds every fix start, a loop at work's next cycle
+// included, though not the re-review it forced; a review's findings go to
+// autofix, unless fix is off. autofix is the watch's (FactoryPRFacts),
+// with fix on.
+func factoryLoopEffect(a rowAct, row actRow, pr FactoryPR) string {
+	autofix := pr.Facts != nil && pr.Facts.Autofix && !pr.FixOff
+	switch a {
+	case actReview, actFresh:
+		switch {
+		case row.merged():
+		case pr.FixOff:
+			return "fix is off for the factory's PR: what it finds stays yours"
+		case autofix && pr.Off == "":
+			return "autofix may take what it finds on the factory's PR"
+		}
+	case actMute:
+		if what, _ := muteActFor(row.ghState, row.mergedUnreviewed, row.flagDismissed); what != muteAsk {
+			return ""
+		}
+		switch {
+		case pr.Fixing && autofix:
+			return "the fix loop at work on the factory's PR goes on, its re-reviews too, but autofix starts no other until U"
+		case pr.Fixing:
+			return "the fix loop at work on the factory's PR goes on, its re-reviews too"
+		case autofix:
+			return "autofix starts no fix loop on the factory's PR until U"
+		}
+	case actUnmute, actSnooze:
+		switch {
+		case row.merged() || row.closed():
+		case a == actUnmute || row.snoozed():
+			if autofix {
+				return "autofix may start fix loops on the factory's PR again"
+			}
+		case pr.Fixing && autofix:
+			return "the fix loop at work on the factory's PR stops before its next cycle, and autofix starts no other until then"
+		case pr.Fixing:
+			return "the fix loop at work on the factory's PR stops before its next cycle"
+		case autofix:
+			return "autofix starts no fix loop on the factory's PR until then"
+		}
+	}
+	return ""
+}
+
 // prLabel names row r's PR in a question or a note: your PR's key
 // ("#4602", "widget#12"), a task's key with its PR's number ("PR-12320's
 // #4530").
@@ -345,6 +492,10 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "f", "F", "K", "x":
 		if r, ok := m.selectedRow(); ok {
 			return m.prKey(k, r), true
+		}
+	case "r", "R", "z", "M", "U":
+		if r, ok := m.selectedRow(); ok {
+			return m.prActKey(k, r, true), true
 		}
 	default:
 		return nil, false
@@ -1207,12 +1358,14 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 			m.openCard(task)
 		}
 	case "r":
-		if !c.Retry {
-			return nil, true // the board's r means nothing here
+		if !c.Retry { // the review of its PR, as the board's r
+			return m.cardPRActKey(k, r, false), true
 		}
 		return m.ask(&factoryFollow{kind: followTask, task: task},
 			"Retry "+c.Key+": it goes on at its stage, which checks again what stopped it?",
 			func(ctx context.Context) (ActionResult, error) { return act.Retry(ctx, task) }), true
+	case "R", "z", "M", "U":
+		return m.cardPRActKey(k, r, c.Retry), true
 	case "x":
 		return m.ask(&factoryFollow{kind: followStop, task: task}, "Drop "+c.Key+": stop its agents, free its copy, keep the branch?",
 			func(ctx context.Context) (ActionResult, error) { return act.Stop(ctx, task) }), true
@@ -1222,6 +1375,16 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 		return nil, false
 	}
 	return nil, true
+}
+
+// cardPRActKey is r, R, z, M or U on the task card of row r (prActKey):
+// r is the review where the card offers no retry (retry false), which r
+// is otherwise, and the questions then name no key for the review.
+func (m *factoryModel) cardPRActKey(k string, r FactoryRow, retry bool) tea.Cmd {
+	if r.ID == 0 {
+		return m.note("r, R, z, M and U act on a PR in magnum's registry: " + m.taskKey(m.task) + " has none there")
+	}
+	return m.prActKey(k, r, !retry)
 }
 
 // new task

@@ -97,8 +97,8 @@ type FactoryRow struct {
 	Findings  *FindingsInfo
 	Approvals *FactoryApprovals
 
-	// PR is the row's open PR in magnum's registry, which f, F and K act
-	// on: on a row of your own PR, not a task (in any group but DONE
+	// PR is the row's open PR in magnum's registry, which f, F, K, r, R, z,
+	// M and U act on: on a row of your own PR, not a task (in any group but DONE
 	// TODAY), whose ID is the negative of magnum's id of the PR, which no
 	// task's has (yourPR); and on a task's row whose PR magnum read. nil on
 	// a task's row without one.
@@ -128,6 +128,36 @@ type FactoryPR struct {
 	// pane, which asks nothing.
 	Restores bool
 	Hold     time.Duration
+	// Facts are what r, R, z, M and U go by, as magnum's registry tells
+	// them; nil when the screen read none: the keys then refuse only what
+	// the rest of the row tells, and magnum's daemon decides the rest.
+	Facts *FactoryPRFacts
+}
+
+// FactoryPRFacts are what the board's row actions (review, fresh review,
+// snooze, mute, unmute) know of a PR on the factory screen, read from
+// magnum's registry, read only, and from its watch: the facts the board's
+// refusals and y/N questions go by, so a key refuses where the board's does.
+type FactoryPRFacts struct {
+	// State is magnum's state of the PR ("reviewed", "reviewing"), GHState
+	// GitHub's (OPEN, CLOSED, MERGED).
+	State, GHState string
+	// Head is the PR's head commit, Reviewed the head magnum reviewed last
+	// ("" when never).
+	Head, Reviewed string
+	// Muted says the PR is muted (`magnum mute`, M); SnoozedUntil is when its
+	// snooze ends (zero: not snoozed; `magnum snooze`, z).
+	Muted        bool
+	SnoozedUntil time.Time
+	// CodexFlag is the PR's Codex flag in one cell ("" when not flagged): the
+	// review keys refuse it, as `magnum review` does.
+	CodexFlag string
+	// MergedUnreviewed says GitHub merged it before magnum reviewed its last
+	// push; FlagDismissed that a mute dismissed that flag (M and U act on it).
+	MergedUnreviewed, FlagDismissed bool
+	// Autofix says the PR's watch starts fix loops by itself (autofix "own"
+	// or "open"): the questions say what a key does to them.
+	Autofix bool
 }
 
 // FactoryApprovals is what the people's reviews of a PR say, as GitHub's
