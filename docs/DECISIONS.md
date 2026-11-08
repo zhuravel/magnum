@@ -20136,8 +20136,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
     readable is done, "pushed, not confirmed".
   - Cancel ends a live effect at once under its flock, cancels a resolver job, and nothing pushes after it; a
     cancel during watch or confirm stops the watching only. A deploy never reverts a push.
-  - Step knows the repositories a caller named (Refresh, Plan, Deploy, Effects, Cancel); a Step while another
-    runs returns at once. Ended journals go after 30 days.
+  - A Step while another runs on the same client returns at once. Ended journals go after 30 days.
   Rejected: a deploy with `--force-with-lease` (a lease still rewrites a coworker's merge it raced), parsing git
   push's rejection text, a deploy that stops whenever Workflows is true, holding the env lock only per step (a
   second daemon would interleave its effect between the steps), a new exported Git method (an unexported
@@ -20155,6 +20154,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and TestTheDeploysBranchRuleIsConfigs, all on real git over a `file://` origin in a temp dir; the parents, the
   extra paths, the unseen migrations and workflows, the cap on merges again and both head checks each fail their
   test when taken out.
+  - The review's fixes (fix round 1: I1 to I3, M1 to M10). I1: the push checks the merge again right before it
+    pushes, from what the remote and the mirror say then, never the journal alone (a probe edited the journal's
+    merge to a commit that wiped the branch, and it was pushed): the merge is a commit object, its parents are
+    exactly [the tip just read, the PR's head], its tree is a fresh merge-tree's of them or differs from it only in
+    that merge-tree's conflicted paths, the head is still the plan's, the allowlist passes, and the journal's env
+    and PR are its id's (`idOf`: another configured env edited in fails); a tip that moved on (a descendant of the
+    merge's) merges again, any other mismatch fails, nothing pushed. Verify runs the same `checkMerge`. I2: every
+    failure a step tries again counts (`Fails`); the third in a row ends the effect, naming the step, failed before
+    the push and done, "pushed, not confirmed", after it (a push stands; failing a pushed deploy would invite a
+    second one), with the end as its one event; a resolver's job ends after 2 hours, watch goes on 2 hours after the
+    push while ci.yml still runs; a merge the mirror lacks, or one that is no commit, fails at once; a clean merge
+    is kept at `refs/magnum/deploy/<id>` for the effect's life, as a resolved one at `refs/magnum/resolved/<id>`. I3
+    (the controller's ruling, not the review's `Deps.Repos`): Step and Cancel find the effects themselves, scanning
+    `<mirror_dir>/*/*.deploys/*.json` (mirror_dir from `Deps.Mirror`'s layout, each journal's repository checked to
+    name the dir it sits in), so a fresh client resumes and cancels a deploy another daemon started with no wiring;
+    `meet` is gone. No scan runs in `New`: a constructor reads no disk. M1: a tag is never a merge (`cat-file -t`).
+    M2: an env's name is a slug of at most 32 characters not led by a dash, so its effect ids stay ids. M3: a git
+    failure's Why is git's own reason (fatal:, error:, the remote's lines, a ref's rejection), never the command
+    line. M4: a head the tip holds already is "already there" at Plan (Deploy refuses it), at the plan step and at
+    merge (done, no empty merge); Deploy checks and writes under the deploys dir's flock (`.deploys.lock`), which
+    claims take too, so two Deploys of one PR and head start one effect. M5: a resumed needs-you starts with fresh
+    counters, the resolver's tries included, and a Deploy that cannot write every journal takes back what it wrote.
+    M6: paths in a Why or an event are quoted when they hold a control character; the journal keeps at most 100
+    conflicted paths and a plan at most 1000 migrations. M7: git's local transport drops the fetch's `-c` options
+    for its upload-pack child, so the resolver fetch names its upload-pack with its own (`--upload-pack=git -c
+    core.hooksPath=/dev/null -c uploadpack.allowAnySHA1InWant=true upload-pack`) and pins `protocol.version=2`.
+    M8: a cancelled ci.yml run, a run still going after 2 hours and no run at all are kept in the done Why. M9:
+    only git runs under the mirror's flock, never GitHub, the resolver, PushEnv or CommitIdentity. M10: an event is
+    written in the journal with the state it records and delivered after the write; a client remembers the write it
+    delivered (`Seq`), so a crash between the two delivers it on the next load, at least once; `landed` returns its
+    error. Tests (each failed before its fix): TestThePushChecksTheMergeAgainFromTheLiveState (an empty-tree commit,
+    the right parents with another tree, a tag, another configured env), TestEveryRetryEndsAfterThreeFailures (a
+    pull ref gone, merge-tree, the fetch at verify, the default branch and the tip's history at push, ci.yml's runs,
+    the deployments), TestAResolverThatNeverAnswersEndsTheEffect, TestAMergeTheMirrorLacksFailsAtOnce (a prune
+    keeps the merge; a merge gone fails in one Step), TestAFreshClientResumesWithoutMeetingTheRepository,
+    TestATagAsTheResolversMergeIsRefused, TestAnEnvNameOutsideTheIdRuleIsRefused,
+    TestAPushFailureSaysGitsReasonNotTheArgv (a pre-receive hook on the test origin),
+    TestAHeadAlreadyOnTheBranchIsAlreadyThere, TestADeployStartsAllOrNoneAndAResumeStartsFresh,
+    TestPRPathsAreSanitizedInWhyAndEvents, TestTheResolverFetchPinsItsOptionsOnUploadPack,
+    TestACancelledCIRunIsKeptInTheEndState, TestNoMirrorLockAcrossGitHubTheResolverOrPushEnv,
+    TestAnEventCutByACrashIsDeliveredOnResume and TestACancelFromAnotherClientEndsTheEffectTheFirstHolds (the
+    review's P4, which passed before).
 
 ## Learned rules
 

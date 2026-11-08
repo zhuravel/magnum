@@ -65,28 +65,49 @@ type journal struct {
 	// after it moved (verify's and push's); Try is 1 + Remerges.
 	Tip      string `json:"tip,omitempty"`
 	Remerges int    `json:"remerges,omitempty"`
-	// MergeTree is merge-tree's result on Tip, Conflicts its conflicted
-	// paths; Merge the merge commit, clean or resolved.
-	MergeTree string   `json:"merge_tree,omitempty"`
-	Conflicts []string `json:"conflicts,omitempty"`
-	Merge     string   `json:"merge,omitempty"`
-	// Job is the resolver's running job; Resolves counts its tries.
-	// Resolved: the resolver's merge is in the mirror at resolvedRef.
-	Job      string `json:"job,omitempty"`
-	Resolves int    `json:"resolves,omitempty"`
-	Resolved bool   `json:"resolved,omitempty"`
-	// PushTries counts the pushes that failed for another reason than a
-	// moved tip; PushedAt is when the branch first held the merge.
-	PushTries int       `json:"push_tries,omitempty"`
-	PushedAt  time.Time `json:"pushed_at"`
-	// RunURL is ci.yml's run on the merge; CIAt when watch let it go (it
-	// passed, was cancelled, or none came).
+	// MergeTree is merge-tree's result on Tip; Conflicts its conflicted
+	// paths, at most maxStored of Conflicted; Merge the merge commit, clean or
+	// resolved.
+	MergeTree  string   `json:"merge_tree,omitempty"`
+	Conflicts  []string `json:"conflicts,omitempty"`
+	Conflicted int      `json:"conflicted,omitempty"`
+	Merge      string   `json:"merge,omitempty"`
+	// Job is the resolver's running job, started at JobAt; Resolves counts
+	// its tries.
+	Job      string    `json:"job,omitempty"`
+	JobAt    time.Time `json:"job_at"`
+	Resolves int       `json:"resolves,omitempty"`
+	// Held: the mirror may hold one of the effect's refs (mergeRef,
+	// resolvedRef); they go when it ends.
+	Held bool `json:"held,omitempty"`
+	// Fails counts the step's failures in a row; maxFails ends the effect.
+	Fails int `json:"fails,omitempty"`
+	// PushedAt is when the branch first held the merge.
+	PushedAt time.Time `json:"pushed_at"`
+	// RunURL is ci.yml's run on the merge; CIAt when watch let it go, CINote
+	// why when it did not pass (cancelled, still running, none).
 	RunURL string    `json:"run_url,omitempty"`
 	CIAt   time.Time `json:"ci_at"`
+	CINote string    `json:"ci_note,omitempty"`
 	// Deploys is the last read of the env's deployments, with its ETag.
 	Deploys *deployEntry `json:"deploys,omitempty"`
-	Started time.Time    `json:"started"`
-	Updated time.Time    `json:"updated"`
+	// Pending are the events of the last write not yet known delivered:
+	// they are written with the state they record and delivered after the
+	// write, so a crash between the two delivers them on the next load (at
+	// least once).
+	Pending []pendingEvent `json:"pending,omitempty"`
+	// Seq counts the journal's writes: a client that delivered a write's
+	// events remembers its Seq.
+	Seq     int       `json:"seq"`
+	Started time.Time `json:"started"`
+	Updated time.Time `json:"updated"`
+}
+
+// pendingEvent is an event a journal write records, for Deps.Event.
+type pendingEvent struct {
+	Step  string `json:"step"`
+	Phase string `json:"phase"`
+	Text  string `json:"text"`
 }
 
 // live reports whether the effect still runs or waits: queued or running.
@@ -112,6 +133,25 @@ func effectLockName(id EffectID) string { return string(id) + ".json.lock" }
 // envLockName is the env's flock in the deploys dir: whoever holds it runs
 // the env's one live effect.
 func envLockName(env string) string { return env + ".lock" }
+
+// dirLockName is the deploys dir's own flock, held while a Deploy checks
+// the journals and writes its own, and while a claim picks the next effect:
+// two Deploys of one PR and head never both start, and no claim sees half
+// a Deploy. No env name holds a dot, so none is this.
+const dirLockName = ".deploys.lock"
+
+// idTail is what newID puts after the PR number: -<time>-<8 hex>.
+var idTail = regexp.MustCompile(`-([0-9]+)-[0-9]{8}t[0-9]{6}-[0-9a-f]{8}$`)
+
+// idOf parses an effect id into its env and PR number.
+func idOf(id EffectID) (env string, number int, ok bool) {
+	m := idTail.FindStringSubmatchIndex(string(id))
+	if m == nil {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(string(id)[m[2]:m[3]])
+	return string(id)[:m[0]], n, err == nil
+}
 
 // openDeploys opens the deploys dir beside the mirror at dir, creating it
 // when create (through an os.Root on the owner's dir, never above it).
@@ -154,6 +194,31 @@ func writeJournal(root *os.Root, j *journal) error {
 		return err
 	}
 	return fsx.WriteFileAtomicIn(root, journalName(j.ID), data, 0o600)
+}
+
+// deployDirs lists the deploys dirs under mirror_dir root,
+// <root>/<owner>/<name>.deploys, never through a symlink.
+func deployDirs(root string) []string {
+	var out []string
+	owners, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, o := range owners {
+		if !o.IsDir() || !validPart(o.Name()) {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, o.Name()))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if name, ok := strings.CutSuffix(e.Name(), ".deploys"); ok && e.IsDir() && validPart(name) {
+				out = append(out, filepath.Join(root, o.Name(), e.Name()))
+			}
+		}
+	}
+	return out
 }
 
 // readJournals reads every journal in root, oldest first (Started, then
@@ -247,6 +312,21 @@ func (c *Client) release(dir, env string) {
 		unflock(l.f)
 		delete(c.envLocks, k)
 	}
+}
+
+// delivered records that this client delivered write seq of effect id's
+// journal.
+func (c *Client) delivered(id EffectID, seq int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent[id] = seq
+}
+
+// wasDelivered reports whether this client delivered write seq of id.
+func (c *Client) wasDelivered(id EffectID, seq int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sent[id] == seq
 }
 
 // releaseAll lets every env flock of this client go (Close): the effects

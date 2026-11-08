@@ -279,7 +279,9 @@ type Deps struct {
 	Git    Git
 	GitHub GitHub
 	// Mirror is the repository's mirror dir; ok false = not configured or
-	// its volume is absent (dir, when not "", says which: MirrorDir).
+	// its volume is absent (dir, when not "", says which: MirrorDir). It
+	// puts every repository at <mirror_dir>/<owner>/<name>.git, as MirrorDir
+	// does: a deploy finds every effect under that mirror_dir (Step, Cancel).
 	Mirror func(repo string) (dir string, ok bool)
 	// GitEnv is the environment of the fetch (the poll identity's git env:
 	// its GH_CONFIG_DIR, the credential helper's login); gh is git's only
@@ -310,8 +312,12 @@ type Deps struct {
 	// effect at merge, "commit identity not configured", with no commit.
 	CommitIdentity func(ctx context.Context, repo string) (name, email string, err error)
 	// Event records each step's begin, ok and fail (phase) of an effect, by
-	// whom it was asked (Effect.By); text holds shas, counts and the
-	// effect's own words, never PR text. Nil = not recorded.
+	// whom it was asked (Effect.By); text holds shas, counts, the effect's
+	// own words and paths made safe, never PR text. Nil = not recorded. An
+	// event is written in the journal with the state it records and handed
+	// to Event after that write, so a crash between the two hands it on when
+	// the effect next loads: at least once, a repeat possible. A failure the
+	// step tries again records none; the end it leads to records one.
 	Event func(e Effect, step, phase, text string)
 }
 
@@ -331,11 +337,11 @@ type Client struct {
 	life context.Context
 	end  context.CancelFunc
 
-	// The deploy's state: the repositories this client met (Refresh, Plan,
-	// Deploy, Effects, Cancel), whose effects Step advances; the env flocks
-	// it holds, by lock path; and stepping, which keeps Steps one at a time.
-	repos    map[string]string // by key(repo): the name as given
+	// The deploy's state: the env flocks this client holds, by deploys dir
+	// and env; the journal write whose events it delivered last, by effect;
+	// stepping keeps Steps one at a time.
 	envLocks map[string]*envLock
+	sent     map[EffectID]int
 	stepping sync.Mutex
 	// hook, in tests, runs at the named points of a step; an error it
 	// returns ends the Step there, as a killed process would.
@@ -352,7 +358,7 @@ func New(d Deps) *Client {
 	}
 	life, end := context.WithCancel(context.Background())
 	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, noted: map[string]bool{}, life: life, end: end,
-		repos: map[string]string{}, envLocks: map[string]*envLock{}}
+		envLocks: map[string]*envLock{}, sent: map[EffectID]int{}}
 }
 
 // Close stops the client's background clones and waits for them: their

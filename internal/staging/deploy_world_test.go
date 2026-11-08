@@ -22,23 +22,58 @@ type countingRunner struct {
 	// pushes and commits count the push and commit-tree commands.
 	pushes, commits int
 	beforePush      func()
+	// fail, when set, fails each command whose git subcommand (the first
+	// argument after the mirror's options) it names, as git exiting 128.
+	fail map[string]bool
+}
+
+// subcommand is a mirror command's git subcommand: the first argument past
+// --git-dir and the -c pairs.
+func subcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-c":
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			return a
+		}
+	}
+	return ""
 }
 
 func (r *countingRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 	var before func()
 	r.mu.Lock()
+	sub := subcommand(c.Args)
 	switch {
-	case slices.Contains(c.Args, "push") && slices.Contains(c.Args, "origin"):
+	case sub == "push" && slices.Contains(c.Args, "origin"):
 		r.pushes++
 		before = r.beforePush
-	case slices.Contains(c.Args, "commit-tree"):
+	case sub == "commit-tree":
 		r.commits++
 	}
+	failed := r.fail[sub]
 	r.mu.Unlock()
+	if failed {
+		return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: "fatal: injected " + sub + " failure\n"}
+	}
 	if before != nil {
 		before()
 	}
 	return r.inner.Run(ctx, c)
+}
+
+// failing makes the git subcommands fail from now on.
+func (r *countingRunner) failing(subs ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail == nil {
+		r.fail = map[string]bool{}
+	}
+	for _, s := range subs {
+		r.fail[s] = true
+	}
 }
 
 func (r *countingRunner) pushed() int {
@@ -59,6 +94,8 @@ type fakeResolver struct {
 	started   []ResolveRequest
 	results   map[string]ResolveResult // by job
 	cancelled []string
+	// resultErr, when set, fails every Result.
+	resultErr error
 }
 
 func newFakeResolver() *fakeResolver { return &fakeResolver{results: map[string]ResolveResult{}} }
@@ -75,6 +112,9 @@ func (f *fakeResolver) Start(_ context.Context, r ResolveRequest) (string, error
 func (f *fakeResolver) Result(_ context.Context, job string) (ResolveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.resultErr != nil {
+		return ResolveResult{}, f.resultErr
+	}
 	res, ok := f.results[job]
 	if !ok {
 		return ResolveResult{State: ResolveFailed, Why: "no such job"}, nil

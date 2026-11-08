@@ -232,6 +232,8 @@ type fakeGitHub struct {
 	etagSent  []string
 	// heads are the PRs' head branches headRefOf reads; nil = it fails.
 	heads map[int]string
+	// runsErr, when set, fails every RunsOf.
+	runsErr error
 }
 
 func newFakeGitHub() *fakeGitHub {
@@ -265,6 +267,9 @@ func (h *fakeGitHub) RunsOf(_ context.Context, repo, workflow, sha string) ([]Ru
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls["RunsOf"]++
+	if h.runsErr != nil {
+		return nil, h.runsErr
+	}
 	if workflow != Workflow {
 		return nil, fmt.Errorf("workflow %s, want %s", workflow, Workflow)
 	}

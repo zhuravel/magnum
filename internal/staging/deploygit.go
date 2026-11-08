@@ -30,10 +30,22 @@ var stagingBranchRe = regexp.MustCompile(`^staging-[a-z0-9-]+$`)
 // branch, never forced (no +), never a delete (an empty source).
 var pushSpecRe = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64}):refs/heads/(staging-[a-z0-9-]+)$`)
 
-// resolvedPrefix is where a resolver's merge is fetched into the mirror,
-// refs/magnum/resolved/<effect>, so the mirror holds it through verify and
-// the push; the ref goes when the effect ends.
-const resolvedPrefix = "refs/magnum/resolved/"
+// The refs that hold an effect's merge in the mirror for its life, so no
+// gc or prune takes it before the push: a resolver's merge is fetched into
+// refs/magnum/resolved/<effect>, a clean merge is kept at
+// refs/magnum/deploy/<effect>. Both go when the effect ends.
+const (
+	resolvedPrefix = "refs/magnum/resolved/"
+	mergePrefix    = "refs/magnum/deploy/"
+)
+
+// uploadPack is the upload-pack the resolver fetch runs on the resolver's
+// repository, with its own command-line options: git's local transport
+// drops the fetch's -c options (GIT_CONFIG_PARAMETERS) for that child, which
+// would otherwise read only that repository's config. Command-line config
+// wins over it: no hooks, and any sha may be fetched (the merge is on no
+// branch there).
+const uploadPack = "git -c core.hooksPath=/dev/null -c uploadpack.allowAnySHA1InWant=true upload-pack"
 
 // change is a path a tree changes against another, with git's status letter
 // (A added, D deleted, M modified, T type changed).
@@ -59,16 +71,18 @@ type deployGit interface {
 	commitTree(ctx context.Context, dir, tree string, parents []string, message, name, email string) (string, error)
 	// commitInfo reads a commit's tree and parents, in order.
 	commitInfo(ctx context.Context, dir, sha string) (tree string, parents []string, err error)
-	// hasCommit reports whether the mirror holds the commit, never fetching
-	// it.
-	hasCommit(ctx context.Context, dir, sha string) (bool, error)
+	// objectType is the type of the object sha in the mirror (commit, tag,
+	// tree, blob), "" when the mirror lacks it; it never fetches it.
+	objectType(ctx context.Context, dir, sha string) (string, error)
+	// keepMerge points the effect's merge ref at sha.
+	keepMerge(ctx context.Context, dir, ref, sha string) error
 	// isAncestor reports whether a is b or an ancestor of b.
 	isAncestor(ctx context.Context, dir, a, b string) (bool, error)
 	// fetchResolved fetches the commit sha from the local repository at src
 	// (a git dir checkResolverDir passed) into ref.
 	fetchResolved(ctx context.Context, dir, src, sha, ref string) error
-	// deleteRef deletes one of the mirror's resolved refs; an absent one is
-	// no error.
+	// deleteRef deletes one of the effect refs (resolved or merge); an
+	// absent one is no error.
 	deleteRef(ctx context.Context, dir, ref string) error
 	// push pushes sha to origin's branch with env (PushEnv's), the argv
 	// pushArgv builds and checkPushArgv passes; allowed says whether the
@@ -198,18 +212,26 @@ func (g *execGit) commitInfo(ctx context.Context, dir, sha string) (string, []st
 	return tree, parents, nil
 }
 
-func (g *execGit) hasCommit(ctx context.Context, dir, sha string) (bool, error) {
+func (g *execGit) objectType(ctx context.Context, dir, sha string) (string, error) {
 	if err := checkRevs(sha); err != nil {
-		return false, err
+		return "", err
 	}
-	_, err := g.run.Run(ctx, g.cmd(dir, "has commit", readTimeout, false, false, nil, "cat-file", "-e", sha+"^{commit}"))
+	res, err := g.run.Run(ctx, g.cmd(dir, "object type", readTimeout, false, false, nil, "cat-file", "-t", sha))
 	switch {
 	case err == nil:
-		return true, nil
+		return strings.TrimSpace(res.Out()), nil
 	case exitCode(err) > 0 && ctx.Err() == nil:
-		return false, nil
+		return "", nil
 	}
-	return false, err
+	return "", err
+}
+
+func (g *execGit) keepMerge(ctx context.Context, dir, ref, sha string) error {
+	if !effectRef(ref) || !isOID(sha) {
+		return fmt.Errorf("ref %q or sha %q refused", ref, sha)
+	}
+	_, err := g.run.Run(ctx, g.cmd(dir, "keep merge", readTimeout, true, false, nil, "update-ref", ref, sha))
+	return err
 }
 
 func (g *execGit) isAncestor(ctx context.Context, dir, a, b string) (bool, error) {
@@ -229,28 +251,44 @@ func (g *execGit) isAncestor(ctx context.Context, dir, a, b string) (bool, error
 // resolvedRef is the mirror's ref of effect id's resolved merge.
 func resolvedRef(id EffectID) string { return resolvedPrefix + string(id) }
 
+// mergeRef is the mirror's ref of effect id's clean merge.
+func mergeRef(id EffectID) string { return mergePrefix + string(id) }
+
+// effectRef reports whether ref is one of an effect's refs.
+func effectRef(ref string) bool {
+	for _, p := range []string{resolvedPrefix, mergePrefix} {
+		if id, ok := strings.CutPrefix(ref, p); ok && validID(EffectID(id)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *execGit) fetchResolved(ctx context.Context, dir, src, sha, ref string) error {
 	if !isOID(sha) {
 		return fmt.Errorf("%q is no sha", sha)
 	}
-	if id, ok := strings.CutPrefix(ref, resolvedPrefix); !ok || !validID(EffectID(id)) {
+	if !strings.HasPrefix(ref, resolvedPrefix) || !effectRef(ref) {
 		return fmt.Errorf("ref %q is none of the resolved refs", ref)
 	}
 	if !filepath.IsAbs(src) || strings.HasPrefix(src, "-") {
 		return fmt.Errorf("the resolver's repository %q is no absolute path", src)
 	}
-	// A local path only: protocol.file.allow for this call alone, no hooks
-	// (gitOptions), no submodules; the mirror never lazily fetches here.
+	// A local path only: protocol.file.allow for this call alone, protocol
+	// v2 pinned (no v0 server path), no hooks on either side (gitOptions
+	// here, uploadPack's own options there), no submodules; the mirror never
+	// lazily fetches here.
 	c := g.cmd(dir, "fetch resolved", fetchTimeout, true, false, nil)
-	c.Args = slices.Concat([]string{"--git-dir=" + dir}, gitOptions, []string{"-c", "protocol.file.allow=always",
-		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", src, sha + ":" + ref})
+	c.Args = slices.Concat([]string{"--git-dir=" + dir}, gitOptions, []string{"-c", "protocol.file.allow=always", "-c", "protocol.version=2",
+		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--upload-pack=" + uploadPack,
+		"--", src, sha + ":" + ref})
 	_, err := g.run.Run(ctx, c)
 	return err
 }
 
 func (g *execGit) deleteRef(ctx context.Context, dir, ref string) error {
-	if id, ok := strings.CutPrefix(ref, resolvedPrefix); !ok || !validID(EffectID(id)) {
-		return fmt.Errorf("ref %q is none of the resolved refs", ref)
+	if !effectRef(ref) {
+		return fmt.Errorf("ref %q is none of the effect refs", ref)
 	}
 	_, err := g.run.Run(ctx, g.cmd(dir, "delete ref", readTimeout, true, false, nil, "update-ref", "-d", ref))
 	return err

@@ -4981,17 +4981,18 @@ daemon advances one step a tick:
 | Step | What it does |
 |---|---|
 | claim | takes the env: one deploy per repository and env runs at a time, across both daemons; another waits, `queued` |
-| plan | reads the tip and the PR's head again; a head that moved since the plan fails it |
+| plan | reads the tip and the PR's head again; a head that moved since the plan fails it, and a head the branch already holds ends it `done`, "already there", with no merge |
 | merge | `git merge-tree` of the tip and the head in the mirror; clean, `git commit-tree` with the bot as author and committer; a conflict goes to the resolver agent (at most 2 tries), whose merge is fetched into the mirror |
-| verify | the merge's parents are exactly [tip, head], its tree is merge-tree's or differs from it only in the conflicted paths, and the head is still the plan's; a tip that moved merges again |
-| push | asks the push's credentials and rules (a merge that changes `.github/workflows` may be refused there), then `git push origin <sha>:refs/heads/staging-<name>`; a rejection because a coworker pushed first merges again |
-| watch | ci.yml's run on the merge: a failure fails the deploy, with the run's link |
+| verify | the merge is a commit whose parents are exactly [tip, head] and whose tree is a fresh merge-tree's of them, or differs from it only in the conflicted paths, and the head is still the plan's; a tip that moved on merges again |
+| push | asks the push's credentials and rules (a merge that changes `.github/workflows` may be refused there), checks everything verify checked again from what the remote and the mirror say right then (never from the journal alone), then `git push origin <sha>:refs/heads/staging-<name>`; a rejection because a coworker pushed first merges again |
+| watch | ci.yml's run on the merge: a failure fails the deploy, with the run's link; a cancelled run (a later push's run holds the merge) or one still running 2 hours after the push goes on, and the end says so |
 | confirm | done once a successful deployment of the env holds the merge; none 50 minutes after ci.yml passed, or deployments not readable, is done, `pushed, not confirmed` |
 
 A deploy ends `done`, `failed` (with why; before the push nothing was pushed), `cancelled`, or `needs you`: the
 branch's tip moved after your plan, and the merge on the new tip now adds a migration, or changes a workflow
 path, that the plan did not show you. Nothing is pushed then; plan again, and deploying the same PR at the same
-head resumes it. A deploy never runs migrations you did not see.
+head resumes it, with fresh counters. A deploy never runs migrations you did not see. A deploy of a head the branch
+already holds is refused at the plan ("already there").
 
 The guards: an env must be one of the repository's `[[factory.repo.staging]]` entries, its branch
 `staging-<name>`, and never master, main, the remote's default branch or `production*`, checked in the plan, at
@@ -5005,7 +5006,14 @@ recorded step and checks it again first: a push whose answer was lost is never p
 holds the merge). A cancel stops a deploy at once and nothing is pushed after it. A cancel during watch or confirm
 stops only the watching: **a deploy never reverts a push**, and neither does a failed CI or a missing deployment
 (revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
-events.
+events, at least once (an event a crash cut is recorded when the deploy resumes).
+
+No deploy holds its env for ever: a failure that comes back 3 times in a row at a step (a fetch, a git command, a
+read of GitHub or of the resolver, a push) ends it, failed before the push, `pushed, not confirmed` after it; a
+resolver that works over 2 hours fails it; a merge the mirror lacks fails it at once. Either daemon resumes a deploy
+the other started, from the journals under `mirror_dir`, at its next tick. Keep `mirror_dir` out of every directory an
+agent can write (the review slots, the factory's copies): the push checks the merge again from git, but the journals
+and the mirror are what a deploy works from.
 
 ## Daily use
 

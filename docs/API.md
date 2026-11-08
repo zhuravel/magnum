@@ -25737,9 +25737,9 @@ func (c *Client) Cancel(ctx context.Context, id EffectID) error
     Cancel stops effect id at once: a queued or running effect ends cancelled,
     its resolver job is cancelled, and it never pushes after (a step in flight
     finishes first, under the effect's flock). A cancel after the push stops
-    only the watching: the push stands, a deploy never reverts. An effect that
-    already ended stays as it is. The effect must be one of a repository this
-    client met.
+    only the watching: the push stands, a deploy never reverts. An effect
+    that already ended stays as it is. It finds the effect under mirror_dir,
+    whoever started it.
 
 func (c *Client) Close()
     Close stops the client's background clones and waits for them: their context
@@ -25751,12 +25751,14 @@ func (c *Client) Close()
 
 func (c *Client) Deploy(ctx context.Context, plan DeployPlan, by string) ([]EffectID, error)
     Deploy starts, on the operator's confirmed plan, one effect per env,
-    or resumes the one of the same PR and head that needs you there; by is
-    who asked (ByCLI, ByLiaison, ByFactory). It checks every env first and
-    starts none when one is refused: not on the allowlist, without a plan (Why,
-    no tip), or with a live effect of the same PR at the same head. Each effect
-    is written queued, and claims its env when no other effect holds or waits
-    for it; it returns at once, after the claim: Step does the rest.
+    or resumes the one of the same PR and head that needs you there;
+    by is who asked (ByCLI, ByLiaison, ByFactory). It starts all or none:
+    every env is checked first (on the allowlist, with a plan: no Why, a tip,
+    at most maxPlanPaths migrations; no live effect of the same PR at the same
+    head), and every journal is written, under the deploys dir's flock, before
+    any claim; a write that fails takes the others back. Each effect is written
+    queued and claims its env when no other effect holds or waits for it;
+    it returns at once, after the claim: Step does the rest.
 
 func (c *Client) Effects(repo string) []Effect
     Effects lists repo's effects, the newest first, from their journals:
@@ -25764,12 +25766,13 @@ func (c *Client) Effects(repo string) []Effect
 
 func (c *Client) Plan(ctx context.Context, pr PR, envs []Env) (DeployPlan, error)
     Plan reads, never writes a journal or pushes: for each env, the current tip,
-    whether the PR's head merges cleanly into it (merge-tree in the mirror), the
-    migrations the merge adds and whether it changes any .github/workflows path.
-    It fetches the env branches and the PR's pull ref into the mirror, under its
-    flock. Every env must pass the allowlist, and the remote's pull ref must be
-    the PR's head; an env whose branch is absent or whose merge cannot be read
-    has Why. The caller shows the plan to the operator before Deploy.
+    whether the PR's head merges cleanly into it (merge-tree in the mirror),
+    the migrations the merge adds and whether it changes any .github/workflows
+    path. It fetches the env branches and the PR's pull ref into the mirror,
+    under its flock. Every env must pass the allowlist, and the remote's pull
+    ref must be the PR's head; an env whose branch is absent, whose merge cannot
+    be read or whose tip holds the head already has Why. The caller shows the
+    plan to the operator before Deploy.
 
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
     Refresh fetches the mirror once (the staging-* tips, each distinct base of
@@ -25798,13 +25801,13 @@ func (c *Client) Status(pr PR, envs []Env) []EnvStatus
     that failed), each env is unknown.
 
 func (c *Client) Step(ctx context.Context) error
-    Step advances every live effect of the repositories this client met one
-    step: per env, the effect this client holds the env for, or the next one it
-    can claim (an env another process holds is left to it). It never blocks on
-    an agent or on CI, only on git in the mirror (a fetch, a merge, a push);
-    a Step while another runs on the same client returns at once. A daemon calls
-    it each tick; after a restart, an effect resumes once the daemon names its
-    repository to the client (a Refresh, Effects).
+    Step advances every live effect under mirror_dir one step: per env,
+    the effect this client holds the env for, or the next one it can claim
+    (an env another process holds is left to it). It finds the effects itself
+    (deployRepos), so a deploy one daemon started resumes in the other with no
+    wiring. It never blocks on an agent or on CI, only on git in the mirror
+    (a fetch, a merge, a push); a Step while another runs on the same client
+    returns at once. A daemon calls it each tick.
 
 type Commit struct {
 	SHA     string
@@ -25846,7 +25849,9 @@ type Deps struct {
 	Git    Git
 	GitHub GitHub
 	// Mirror is the repository's mirror dir; ok false = not configured or
-	// its volume is absent (dir, when not "", says which: MirrorDir).
+	// its volume is absent (dir, when not "", says which: MirrorDir). It
+	// puts every repository at <mirror_dir>/<owner>/<name>.git, as MirrorDir
+	// does: a deploy finds every effect under that mirror_dir (Step, Cancel).
 	Mirror func(repo string) (dir string, ok bool)
 	// GitEnv is the environment of the fetch (the poll identity's git env:
 	// its GH_CONFIG_DIR, the credential helper's login); gh is git's only
@@ -25875,8 +25880,12 @@ type Deps struct {
 	// effect at merge, "commit identity not configured", with no commit.
 	CommitIdentity func(ctx context.Context, repo string) (name, email string, err error)
 	// Event records each step's begin, ok and fail (phase) of an effect, by
-	// whom it was asked (Effect.By); text holds shas, counts and the
-	// effect's own words, never PR text. Nil = not recorded.
+	// whom it was asked (Effect.By); text holds shas, counts, the effect's
+	// own words and paths made safe, never PR text. Nil = not recorded. An
+	// event is written in the journal with the state it records and handed
+	// to Event after that write, so a crash between the two hands it on when
+	// the effect next loads: at least once, a repeat possible. A failure the
+	// step tries again records none; the end it leads to records one.
 	Event func(e Effect, step, phase, text string)
 }
     Deps is what a Client runs on.
@@ -25942,7 +25951,9 @@ type EnvPlan struct {
     head merges into it cleanly (else the conflicted paths), the migrations
     the merge adds (db/migrate files it adds against the tip), and whether it
     changes any .github/workflows path. Why says why the env has no plan (no
-    such branch, the merge could not be read); Deploy refuses such an env.
+    such branch, the merge could not be read, the head is on the branch already:
+    "already there"); Deploy refuses such an env. The paths are as git lists
+    them, not made safe for a terminal.
 
 type EnvStatus struct {
 	Env         Env
