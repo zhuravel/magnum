@@ -4140,8 +4140,8 @@ stages = [
 - **Staging.** Each `[[factory.repo.staging]]` has a `name` (also the GitHub deployment environment), a
   `branch` that is `staging-<name>` (it matches `^staging-[a-z0-9-]+$`, and is never master, main, the base or
   anything that starts with production), an optional `qa` skill and an optional `after`, another environment of
-  the repository whose QA must pass first (no cycles). [Staging status](#staging-status) reads which PRs are live on them; nothing
-  deploys yet.
+  the repository whose QA must pass first (no cycles). [Staging status](#staging-status) reads which PRs are live on them,
+  and only these environments are ever [deployed to](#staging-deploys), on your word.
 
 The factory daemon is a second daemon in the same binary, with its own launchd job
 (`zhuravel.magnum.factory`), registry (`factory/factory.db` in the data directory), pid, lock and log
@@ -4937,7 +4937,9 @@ over a run of several first-parent commits, or on a later merge's run, a new fai
 Checks: read for the annotations (without it, every failure reads "cannot tell"). A token without
 Deployments: read cannot confirm a deploy: a PR whose ci.yml passed, or that has no run 45 minutes after the
 push, is `pushed, not_confirmed`, and one whose ci.yml runs or failed says so; it is never `none` or `latest`.
-It only reads; nothing is pushed.
+The status only reads; nothing is pushed (the [staging deploy](#staging-deploys) is the one writer). Its
+`not_confirmed` counts 45 minutes from the push (`staging.ConfirmWait`, the merge's committer time); a deploy's
+confirm counts 50 minutes from ci.yml's pass (`staging.ConfirmAfterCI`).
 
 Git runs only on the mirror, named to git (`--git-dir`, `GIT_DIR`, the search for a repository stopped at its
 parent), with no global, system or environment git config, an empty HOME in `mirror_dir` (no `~/.netrc`), no
@@ -4962,6 +4964,48 @@ mirror_dir = "/Volumes/External/magnum-staging"   # default <state dir>/staging;
 A `mirror_dir` on an external disk that is not mounted leaves every status `unknown` ("the mirror's volume is
 not mounted"), and magnum creates nothing in its place: nothing above `mirror_dir` is ever created, and
 `/Volumes` or a volume's root is refused as `mirror_dir`.
+
+### Staging deploys
+
+On your confirmed word, and only then, magnum deploys a PR to one, two or all of its repository's
+`[[factory.repo.staging]]` environments (`internal/staging`; the daemons, `magnum staging` and the screens wire
+it next): it merges the PR's head into the shared `staging-<name>` branch as the two-parent merge [the branch's
+tip, the PR's head], with the message `Merge branch '<head branch>' into staging-<name>` ("Merge pull request
+#N into staging-<name>" when the head branch cannot be read), and pushes it with a plain push. Jenkins then runs
+ci.yml's checks, the env's migrations on its shared database and the deploy. Coworkers share these branches, and
+GitHub does not refuse a force push to them, so every guard is magnum's own. First, the plan shows you, for each
+env, the tip, whether the head merges cleanly (else the conflicted paths), the migrations the merge adds (files
+under `db/migrate/`) and whether it changes `.github/workflows`. Each env you confirm gets an effect, which a
+daemon advances one step a tick:
+
+| Step | What it does |
+|---|---|
+| claim | takes the env: one deploy per repository and env runs at a time, across both daemons; another waits, `queued` |
+| plan | reads the tip and the PR's head again; a head that moved since the plan fails it |
+| merge | `git merge-tree` of the tip and the head in the mirror; clean, `git commit-tree` with the bot as author and committer; a conflict goes to the resolver agent (at most 2 tries), whose merge is fetched into the mirror |
+| verify | the merge's parents are exactly [tip, head], its tree is merge-tree's or differs from it only in the conflicted paths, and the head is still the plan's; a tip that moved merges again |
+| push | asks the push's credentials and rules (a merge that changes `.github/workflows` may be refused there), then `git push origin <sha>:refs/heads/staging-<name>`; a rejection because a coworker pushed first merges again |
+| watch | ci.yml's run on the merge: a failure fails the deploy, with the run's link |
+| confirm | done once a successful deployment of the env holds the merge; none 50 minutes after ci.yml passed, or deployments not readable, is done, `pushed, not confirmed` |
+
+A deploy ends `done`, `failed` (with why; before the push nothing was pushed), `cancelled`, or `needs you`: the
+branch's tip moved after your plan, and the merge on the new tip now adds a migration, or changes a workflow
+path, that the plan did not show you. Nothing is pushed then; plan again, and deploying the same PR at the same
+head resumes it. A deploy never runs migrations you did not see.
+
+The guards: an env must be one of the repository's `[[factory.repo.staging]]` entries, its branch
+`staging-<name>`, and never master, main, the remote's default branch or `production*`, checked in the plan, at
+the deploy and again at the push. The push is the one argv magnum builds, `push origin
+<full sha>:refs/heads/staging-<name>`; a test refuses every other form (`+`, `--force` in any spelling,
+`--mirror`, `--delete`, another remote or refspec). The tip moving merges again at most twice (verify's and the
+push's together); the third move fails the deploy. A deploy of a PR at the head another deploy of it already runs
+for, on the same env, is refused. Every step writes begin, then ok or fail, to the effect's journal
+(`<mirror_dir>/<owner>/<repo>.deploys/<id>.json`, beside the mirror), so a restarted daemon resumes at the
+recorded step and checks it again first: a push whose answer was lost is never pushed twice (the branch already
+holds the merge). A cancel stops a deploy at once and nothing is pushed after it. A cancel during watch or confirm
+stops only the watching: **a deploy never reverts a push**, and neither does a failed CI or a missing deployment
+(revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
+events.
 
 ## Daily use
 

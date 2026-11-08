@@ -25588,12 +25588,76 @@ of the branch's first-parent chain (within a window), and live when the newest
 successful deployment's history holds the merge that brought it in. Ancestry
 decides, never sha equality.
 
-The package only reads: it never pushes (that is the deploy's, later), and it
-runs git only in its own mirror directory. Refresh fetches and reads GitHub at
-most once a minute per repository across processes (a flock and a state file
-beside the mirror); Status is a pure lookup over the last Refresh.
+Status, Refresh and Effects only read: Status never pushes, and every git
+command runs in the package's own mirror directory. Refresh fetches and reads
+GitHub at most once a minute per repository across processes (a flock and a
+state file beside the mirror); Status is a pure lookup over the last Refresh.
+
+The deploy (deploy.go) is the one writer: on the operator's confirmed word,
+Deploy merges a PR into a shared staging-<env> branch as that two-parent merge
+and pushes it with a plain push, through a resumable effect whose journal sits
+beside the mirror (<mirror_dir>/<owner>/<repo>.deploys). Plan shows the operator
+what a deploy would do first; Step advances the effects a tick at a time;
+Cancel stops one. A deploy never force-pushes, never pushes after a cancel,
+and never reverts a push.
 
 CONSTANTS
+
+const (
+	StepClaim   = "claim"
+	StepPlan    = "plan"
+	StepMerge   = "merge"
+	StepVerify  = "verify"
+	StepPush    = "push"
+	StepWatch   = "watch"
+	StepConfirm = "confirm"
+)
+    The steps of an effect, in order (Effect.Step).
+
+const (
+	PhaseBegin = "begin"
+	PhaseOK    = "ok"
+	PhaseFail  = "fail"
+)
+    The phases of a step, as Deps.Event gets them.
+
+const (
+	// EffectQueued: another effect runs on the env; this one waits.
+	EffectQueued = "queued"
+	// EffectRunning: it holds the env and advances a step at each Step.
+	EffectRunning = "running"
+	// EffectNeedsYou: it stopped before anything was pushed, for the
+	// operator: the tip moved and the merge now brings migrations or
+	// workflow changes the plan did not show. A new plan and Deploy of the
+	// same PR and head resumes it.
+	EffectNeedsYou = "needs you"
+	// EffectFailed: it ended on a failure, Why says which; before the push
+	// step nothing was pushed.
+	EffectFailed = "failed"
+	// EffectCancelled: the operator cancelled it; a push before the cancel
+	// stands.
+	EffectCancelled = "cancelled"
+	// EffectDone: pushed, CI passed, and a deployment holds the merge, or
+	// Why starts with NotConfirmed.
+	EffectDone = "done"
+)
+    The states of an effect (Effect.State). Queued and running are live;
+    the others end it.
+
+const (
+	ByCLI     = "cli"
+	ByLiaison = "liaison"
+	ByFactory = "factory"
+)
+    Who asks for a deploy (Deploy's by), recorded in the journal and every
+    Event; never inferred.
+
+const (
+	ResolveRunning = "running"
+	ResolveDone    = "done"
+	ResolveFailed  = "failed"
+)
+    The states of a resolver's job (ResolveResult.State).
 
 const (
 	// Window and WindowAge bound the first-parent walk from a branch's tip:
@@ -25601,9 +25665,15 @@ const (
 	// first. A PR merged before it is none.
 	Window    = 400
 	WindowAge = 90 * 24 * time.Hour
-	// ConfirmWait is how long after the push a passed ci.yml waits for a
-	// deployment before the PR is "not confirmed".
+	// ConfirmWait is Status's: how long after the push (the merge's
+	// committer time) a passed ci.yml waits for a deployment before the PR
+	// is "not confirmed".
 	ConfirmWait = 45 * time.Minute
+	// ConfirmAfterCI is a deploy's: how long after ci.yml passed on its
+	// merge the confirm step waits for a deployment that holds the merge
+	// before the effect ends done, "pushed, not confirmed" (Jenkins waits up
+	// to 50 minutes for ci.yml, then migrates and deploys).
+	ConfirmAfterCI = 50 * time.Minute
 	// RefreshEvery is how often Refresh fetches and reads GitHub for a
 	// repository at most, across every process that shares the mirror.
 	RefreshEvery = time.Minute
@@ -25615,6 +25685,11 @@ const (
 	Workflow = "ci.yml"
 )
     The fixed numbers of the rules.
+
+const NotConfirmed = "pushed, not confirmed"
+    NotConfirmed starts the Why of an effect done without a deployment that
+    holds its merge: none ConfirmAfterCI after ci.yml passed, or the deployments
+    are not readable.
 
 const WhyNotReadable = "deployments not readable (Deployments: read on the poll App)"
     WhyNotReadable is EnvStatus.Why of a pushed PR whose environment's
@@ -25658,12 +25733,43 @@ type Client struct {
 func New(d Deps) *Client
     New returns a Client on d.
 
+func (c *Client) Cancel(ctx context.Context, id EffectID) error
+    Cancel stops effect id at once: a queued or running effect ends cancelled,
+    its resolver job is cancelled, and it never pushes after (a step in flight
+    finishes first, under the effect's flock). A cancel after the push stops
+    only the watching: the push stands, a deploy never reverts. An effect that
+    already ended stays as it is. The effect must be one of a repository this
+    client met.
+
 func (c *Client) Close()
     Close stops the client's background clones and waits for them: their context
     ends, so execx ends each git's process group (SIGTERM, then SIGKILL),
     and the half clone is removed; a clone it cut counts as no failure. A closed
-    client starts no clone, whatever Refresh it races. The daemons' wiring is to
-    call it when a daemon stops.
+    client starts no clone, whatever Refresh it races. It also lets go of the
+    env flocks of the deploys it runs: their journals stand, and the next client
+    resumes them. The daemons' wiring is to call it when a daemon stops.
+
+func (c *Client) Deploy(ctx context.Context, plan DeployPlan, by string) ([]EffectID, error)
+    Deploy starts, on the operator's confirmed plan, one effect per env,
+    or resumes the one of the same PR and head that needs you there; by is
+    who asked (ByCLI, ByLiaison, ByFactory). It checks every env first and
+    starts none when one is refused: not on the allowlist, without a plan (Why,
+    no tip), or with a live effect of the same PR at the same head. Each effect
+    is written queued, and claims its env when no other effect holds or waits
+    for it; it returns at once, after the claim: Step does the rest.
+
+func (c *Client) Effects(repo string) []Effect
+    Effects lists repo's effects, the newest first, from their journals:
+    those of every process that deploys from the same mirror_dir.
+
+func (c *Client) Plan(ctx context.Context, pr PR, envs []Env) (DeployPlan, error)
+    Plan reads, never writes a journal or pushes: for each env, the current tip,
+    whether the PR's head merges cleanly into it (merge-tree in the mirror), the
+    migrations the merge adds and whether it changes any .github/workflows path.
+    It fetches the env branches and the PR's pull ref into the mirror, under its
+    flock. Every env must pass the allowlist, and the remote's pull ref must be
+    the PR's head; an env whose branch is absent or whose merge cannot be read
+    has Why. The caller shows the plan to the operator before Deploy.
 
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
     Refresh fetches the mirror once (the staging-* tips, each distinct base of
@@ -25691,12 +25797,29 @@ func (c *Client) Status(pr PR, envs []Env) []EnvStatus
     last Refresh of pr.Repo: no git, no network. Without a Refresh (or with one
     that failed), each env is unknown.
 
+func (c *Client) Step(ctx context.Context) error
+    Step advances every live effect of the repositories this client met one
+    step: per env, the effect this client holds the env for, or the next one it
+    can claim (an env another process holds is left to it). It never blocks on
+    an agent or on CI, only on git in the mirror (a fetch, a merge, a push);
+    a Step while another runs on the same client returns at once. A daemon calls
+    it each tick; after a restart, an effect resumes once the daemon names its
+    repository to the client (a Refresh, Effects).
+
 type Commit struct {
 	SHA     string
 	Parents []string
 	At      time.Time // committer time (FirstParent only)
 }
     Commit is a commit as the mirror lists it.
+
+type DeployPlan struct {
+	PR   PR
+	Envs []EnvPlan
+	At   time.Time
+}
+    DeployPlan is what a deploy of PR would do on each env, for the operator to
+    confirm before Deploy.
 
 type Deployment struct {
 	ID        int64
@@ -25732,6 +25855,29 @@ type Deps struct {
 	GitEnv func(repo string) map[string]string
 	Now    func() time.Time
 	Log    *slog.Logger
+
+	// Stagings lists the staging environments a repository may be deployed
+	// to: its [[factory.repo.staging]] entries (config.Stagings). Nil, or no
+	// entry for an environment, refuses every deploy to it; the structural
+	// rules (the branch is staging-<name>, never master, main, the remote's
+	// default branch or production*) apply as well.
+	Stagings func(repo string) []Env
+	// Resolver resolves a deploy's merge conflict; nil = none: a conflict
+	// ends the effect failed, "conflict: resolver not configured".
+	Resolver Resolver
+	// PushEnv is called right before each push: it applies its own rules
+	// (a merge that changes .github/workflows) and returns the env of the
+	// push (the bot's credentials); nil = push not configured: the effect
+	// ends failed at push.
+	PushEnv PushEnv
+	// CommitIdentity is the bot's name and email, the author and the
+	// committer of a deploy's merge commit. Nil, or an error, ends the
+	// effect at merge, "commit identity not configured", with no commit.
+	CommitIdentity func(ctx context.Context, repo string) (name, email string, err error)
+	// Event records each step's begin, ok and fail (phase) of an effect, by
+	// whom it was asked (Effect.By); text holds shas, counts and the
+	// effect's own words, never PR text. Nil = not recorded.
+	Event func(e Effect, step, phase, text string)
 }
     Deps is what a Client runs on.
 
@@ -25760,9 +25906,43 @@ const (
 )
     The details of StatePushed.
 
+type Effect struct {
+	ID               EffectID
+	Repo             string
+	Env              Env
+	PR               PR
+	By               string
+	Step, State, Why string
+	Merge, RunURL    string
+	Try              int
+	Started, Updated time.Time
+}
+    Effect is a deploy effect as the screens see it: its step and state, why,
+    the merge's sha once made, ci.yml's run, and Try, the merge's try (1,
+    and one more after each move of the tip).
+
+type EffectID string
+    EffectID names a deploy effect: <env>-<pr>-<time>-<random>, lower-case
+    letters, digits and dashes.
+
 type Env struct{ Name, Branch string }
     Env is a staging environment: its name, which is also the GitHub deployment
     environment, and its branch, staging-<name>.
+
+type EnvPlan struct {
+	Env        Env
+	Tip        string
+	Clean      bool
+	Conflicts  []string
+	Migrations []string
+	Workflows  bool
+	Why        string
+}
+    EnvPlan is a deploy's plan on one env: the branch's tip, whether the PR's
+    head merges into it cleanly (else the conflicted paths), the migrations
+    the merge adds (db/migrate files it adds against the tip), and whether it
+    changes any .github/workflows path. Why says why the env has no plan (no
+    such branch, the merge could not be read); Deploy refuses such an env.
 
 type EnvStatus struct {
 	Env         Env
@@ -25864,12 +26044,50 @@ type PR struct {
 	Number int
 	Head   string
 	Base   string // the base ref, for example master ("" = the remote's default branch)
+	// HeadRef is the PR's head branch, optional: a deploy names it in its
+	// merge's message ("Merge branch '<HeadRef>' into staging-<env>"). ""
+	// (or a name that is no plain branch name) makes the deploy read it from
+	// GitHub, and when that fails too the message is "Merge pull request #N
+	// into staging-<env>". Status ignores it.
+	HeadRef string
 	// Commits are the PR's commits, oldest first. When nil, Status takes
 	// the ones the last Refresh derived in the mirror, rev-list
 	// Base..refs/pull/N/head, for a PR it had open on that Base.
 	Commits []string
 }
     PR is the PR Status answers for.
+
+type PushEnv func(ctx context.Context, repo, mergeSHA, target string) (map[string]string, error)
+    PushEnv is called right before each push of mergeSHA to target
+    (staging-<env>): it refuses by its own rules (a merge's .github/workflows
+    paths) or returns the push's env, the bot's credentials.
+
+type ResolveRequest struct {
+	Repo, Ref, Target, TargetTip, Head, Effect string
+	Try                                        int
+}
+    ResolveRequest asks for the merge of Head into Target (staging-<env>) at
+    TargetTip, as [TargetTip, Head]: Ref is owner/repo#N, Effect the effect's
+    id, Try 1 or 2.
+
+type ResolveResult struct{ State, MergeSHA, Why, Dir string }
+    ResolveResult is a job's state. Done: MergeSHA is the merge, a commit in the
+    local repository at Dir (an absolute path, its git dir or its work tree),
+    which Deploy fetches into the mirror; the resolver keeps the commit there
+    until the effect is past verify or cancelled. Why also carries what the
+    resolver checked.
+
+type Resolver interface {
+	// Start starts a job and returns at once.
+	Start(ctx context.Context, r ResolveRequest) (job string, err error)
+	// Result is the job's state: running, done (MergeSHA in Dir) or failed
+	// (Why).
+	Result(ctx context.Context, job string) (ResolveResult, error)
+	// Cancel stops the job: the deploy stopped, or merges again.
+	Cancel(ctx context.Context, job string) error
+}
+    Resolver resolves a deploy's merge conflict in a repository of its own.
+    Result on a job it does not know answers failed.
 
 type Run struct {
 	ID         int64

@@ -13,11 +13,19 @@
 // window), and live when the newest successful deployment's history holds
 // the merge that brought it in. Ancestry decides, never sha equality.
 //
-// The package only reads: it never pushes (that is the deploy's, later),
-// and it runs git only in its own mirror directory. Refresh fetches and
+// Status, Refresh and Effects only read: Status never pushes, and every git
+// command runs in the package's own mirror directory. Refresh fetches and
 // reads GitHub at most once a minute per repository across processes (a
 // flock and a state file beside the mirror); Status is a pure lookup over
 // the last Refresh.
+//
+// The deploy (deploy.go) is the one writer: on the operator's confirmed
+// word, Deploy merges a PR into a shared staging-<env> branch as that
+// two-parent merge and pushes it with a plain push, through a resumable
+// effect whose journal sits beside the mirror (<mirror_dir>/<owner>/<repo>.deploys).
+// Plan shows the operator what a deploy would do first; Step advances the
+// effects a tick at a time; Cancel stops one. A deploy never force-pushes,
+// never pushes after a cancel, and never reverts a push.
 package staging
 
 import (
@@ -88,9 +96,15 @@ const (
 	// first. A PR merged before it is none.
 	Window    = 400
 	WindowAge = 90 * 24 * time.Hour
-	// ConfirmWait is how long after the push a passed ci.yml waits for a
-	// deployment before the PR is "not confirmed".
+	// ConfirmWait is Status's: how long after the push (the merge's
+	// committer time) a passed ci.yml waits for a deployment before the PR
+	// is "not confirmed".
 	ConfirmWait = 45 * time.Minute
+	// ConfirmAfterCI is a deploy's: how long after ci.yml passed on its
+	// merge the confirm step waits for a deployment that holds the merge
+	// before the effect ends done, "pushed, not confirmed" (Jenkins waits up
+	// to 50 minutes for ci.yml, then migrates and deploys).
+	ConfirmAfterCI = 50 * time.Minute
 	// RefreshEvery is how often Refresh fetches and reads GitHub for a
 	// repository at most, across every process that shares the mirror.
 	RefreshEvery = time.Minute
@@ -124,6 +138,12 @@ type PR struct {
 	Number int
 	Head   string
 	Base   string // the base ref, for example master ("" = the remote's default branch)
+	// HeadRef is the PR's head branch, optional: a deploy names it in its
+	// merge's message ("Merge branch '<HeadRef>' into staging-<env>"). ""
+	// (or a name that is no plain branch name) makes the deploy read it from
+	// GitHub, and when that fails too the message is "Merge pull request #N
+	// into staging-<env>". Status ignores it.
+	HeadRef string
 	// Commits are the PR's commits, oldest first. When nil, Status takes
 	// the ones the last Refresh derived in the mirror, rev-list
 	// Base..refs/pull/N/head, for a PR it had open on that Base.
@@ -268,6 +288,31 @@ type Deps struct {
 	GitEnv func(repo string) map[string]string
 	Now    func() time.Time
 	Log    *slog.Logger
+
+	// The deploy's (deploy.go).
+
+	// Stagings lists the staging environments a repository may be deployed
+	// to: its [[factory.repo.staging]] entries (config.Stagings). Nil, or no
+	// entry for an environment, refuses every deploy to it; the structural
+	// rules (the branch is staging-<name>, never master, main, the remote's
+	// default branch or production*) apply as well.
+	Stagings func(repo string) []Env
+	// Resolver resolves a deploy's merge conflict; nil = none: a conflict
+	// ends the effect failed, "conflict: resolver not configured".
+	Resolver Resolver
+	// PushEnv is called right before each push: it applies its own rules
+	// (a merge that changes .github/workflows) and returns the env of the
+	// push (the bot's credentials); nil = push not configured: the effect
+	// ends failed at push.
+	PushEnv PushEnv
+	// CommitIdentity is the bot's name and email, the author and the
+	// committer of a deploy's merge commit. Nil, or an error, ends the
+	// effect at merge, "commit identity not configured", with no commit.
+	CommitIdentity func(ctx context.Context, repo string) (name, email string, err error)
+	// Event records each step's begin, ok and fail (phase) of an effect, by
+	// whom it was asked (Effect.By); text holds shas, counts and the
+	// effect's own words, never PR text. Nil = not recorded.
+	Event func(e Effect, step, phase, text string)
 }
 
 // Client answers staging status from what Refresh read. It is safe for
@@ -285,6 +330,16 @@ type Client struct {
 	bg   sync.WaitGroup
 	life context.Context
 	end  context.CancelFunc
+
+	// The deploy's state: the repositories this client met (Refresh, Plan,
+	// Deploy, Effects, Cancel), whose effects Step advances; the env flocks
+	// it holds, by lock path; and stepping, which keeps Steps one at a time.
+	repos    map[string]string // by key(repo): the name as given
+	envLocks map[string]*envLock
+	stepping sync.Mutex
+	// hook, in tests, runs at the named points of a step; an error it
+	// returns ends the Step there, as a killed process would.
+	hook func(id EffectID, step, point string) error
 }
 
 // New returns a Client on d.
@@ -296,20 +351,24 @@ func New(d Deps) *Client {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
 	life, end := context.WithCancel(context.Background())
-	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, noted: map[string]bool{}, life: life, end: end}
+	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, noted: map[string]bool{}, life: life, end: end,
+		repos: map[string]string{}, envLocks: map[string]*envLock{}}
 }
 
 // Close stops the client's background clones and waits for them: their
 // context ends, so execx ends each git's process group (SIGTERM, then
 // SIGKILL), and the half clone is removed; a clone it cut counts as no
-// failure. A closed client starts no clone, whatever Refresh it races. The
-// daemons' wiring is to call it when a daemon stops.
+// failure. A closed client starts no clone, whatever Refresh it races. It
+// also lets go of the env flocks of the deploys it runs: their journals
+// stand, and the next client resumes them. The daemons' wiring is to call
+// it when a daemon stops.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.end()
 	c.mu.Unlock()
 	c.bg.Wait()
+	c.releaseAll()
 }
 
 // key is the repository's key in Client.data.

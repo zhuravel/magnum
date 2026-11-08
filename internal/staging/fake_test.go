@@ -230,6 +230,8 @@ type fakeGitHub struct {
 	runs      map[string][]Run // by sha
 	calls     map[string]int
 	etagSent  []string
+	// heads are the PRs' head branches headRefOf reads; nil = it fails.
+	heads map[int]string
 }
 
 func newFakeGitHub() *fakeGitHub {
@@ -280,6 +282,18 @@ func (h *fakeGitHub) runsWithoutPaths(ctx context.Context, repo, workflow, sha s
 	h.calls["RunsOf"]--
 	h.mu.Unlock()
 	return runs, err
+}
+
+// headRefOf is the PR's head branch, as the adapter reads it.
+func (h *fakeGitHub) headRefOf(_ context.Context, repo string, number int) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls["headRefOf"]++
+	ref, ok := h.heads[number]
+	if !ok {
+		return "", fmt.Errorf("PR #%d not read", number)
+	}
+	return ref, nil
 }
 
 func (h *fakeGitHub) n(method string) int {

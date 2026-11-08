@@ -59,6 +59,7 @@ const (
 // status is unknown, "cloning the mirror". A clone that fails is tried
 // again after 1, 5, 15 and then 60 minutes.
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error {
+	c.meet(repo)
 	now := c.d.Now()
 	if st := c.get(repo); st != nil && fresh(st, now) {
 		return st.err(repo)

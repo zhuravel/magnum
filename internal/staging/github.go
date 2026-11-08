@@ -159,3 +159,21 @@ func failedJobs(ctx context.Context, c *github.Client, owner, name string, runID
 	}
 	return out
 }
+
+// headRefOf reads PR number's head branch (GitHub's headRefName), for a
+// deploy's merge message (headRefs).
+func (a ghAdapter) headRefOf(ctx context.Context, repo string, number int) (string, error) {
+	c, owner, name, err := a.of(repo)
+	if err != nil {
+		return "", err
+	}
+	details, _, err := c.Details(ctx, owner, name, []int{number})
+	if err != nil {
+		return "", err
+	}
+	d, ok := details[number]
+	if !ok {
+		return "", fmt.Errorf("staging: PR #%d not read", number)
+	}
+	return d.HeadRefName, nil
+}

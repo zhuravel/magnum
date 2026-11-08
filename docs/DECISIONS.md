@@ -20081,6 +20081,80 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `Runtime.mu` around its call into the manager), TestAStopFailureAsksTheLoopForAPassAndDecidesNoPause,
   TestAStopFailureOnAStaleLimitLineEndsTheRunWithNoPause (the review's probe), TestEndedClosesWhenARunEnds and
   TestTheRunAStopFailureEndedStillEndsOnThePass.
+- **A staging deploy is a resumable effect that merges a PR into a shared `staging-<env>` branch as [tip, head]
+  and pushes it with a plain push, only on the operator's confirmed plan** (R46, 2026-11-08; `internal/staging`'s
+  `Plan`, `Deploy`, `Step`, `Effects`, `Cancel`). Coworkers share these branches, GitHub has no non-fast-forward
+  rule on them, and a push makes Jenkins migrate a shared database, so the code is the only guard. `Plan` reads:
+  per env, the tip, `git merge-tree --write-tree` of the tip and the head in the treeless mirror (the trees and
+  blobs it needs come by a lazy fetch with the poll identity's env), the conflicted paths, the migrations the merge
+  adds (files under any `db/migrate/` that `diff-tree` of the tip and the merged tree marks added) and whether it
+  changes a `.github/workflows` path. `Deploy` writes one effect per env, a JSON journal beside the mirror
+  (`<mirror_dir>/<owner>/<repo>.deploys/<id>.json`, `fsx.WriteFileAtomicIn`), and claims the env; `Step`, each
+  tick, runs one step of each live effect: claim, plan, merge, verify, push, watch, confirm, each writing begin
+  then ok or fail (`Deps.Event`, with `by`: cli, liaison or factory, never inferred), so a restart resumes at the
+  recorded step and its guard runs again first. The rulings:
+  - One effect per repository and env runs at a time: a flock `<env>.lock` in the deploys dir, held by the client
+    that runs the effect for its whole life (a dead process lets it go, and another client resumes the effect from
+    its journal); a second Deploy waits `queued`, oldest first, and one of the same PR at the same head is
+    refused. Each step, Cancel and a resumed Deploy hold the effect's own flock (`<id>.json.lock`), and every git
+    command runs under the mirror's flock, as R27's do (the lock order is env, effect, mirror; the env flock is
+    only ever tried, never waited for).
+  - The allowlist, in Plan, Deploy and at the push alike: one of `Deps.Stagings(repo)` (nil refuses every
+    deploy), the branch `staging-<name>` matching config's `^staging-[a-z0-9-]+$` (a test pins the copy to
+    `config.StagingBranchPattern`), never master, main, the remote's default branch (the mirror's HEAD) or
+    production* (name or branch, case ignored).
+  - The tip moved since the plan and the merge on the new tip adds a migration, or changes a workflow path, that
+    the plan did not show: `needs you`, nothing pushed; a new plan and Deploy of the same PR and head resumes the
+    effect. A workflow change the plan showed goes on to `PushEnv`, which applies its own rule and fails the
+    effect with its refusal (the agreed reading of "stop for PushEnv's rule"; always stopping on Workflows
+    was the other).
+  - Merge: clean, `git commit-tree -p tip -p head` with the bot as author and committer
+    (`Deps.CommitIdentity`, checked to be one line of at most 200 bytes without `<` or `>`; nil or an error ends
+    at merge, "commit identity not configured", with no commit) and the message "Merge branch '<head branch>' into
+    staging-<env>": the branch is the new optional `PR.HeadRef`, else GitHub's `headRefName` (the adapter's
+    unexported `headRefOf`, over `Details`), each a `validBranch` name, else "Merge pull request #N into
+    staging-<env>". A conflict starts a `Resolver` job (at most 2 per effect; nil: failed, "conflict: resolver not
+    configured", naming the paths); done, its `MergeSHA` is fetched from `ResolveResult.Dir` (new: the resolver's
+    local repository, an absolute clean path that `--git-dir` calls a repository, never a URL, a dash-led path or
+    the mirror) into `refs/magnum/resolved/<id>` (`-c protocol.file.allow=always` for that fetch alone, no hooks,
+    no lazy fetch), deleted when the effect ends.
+  - Verify, for any merge: parents exactly [the tip it was made on, the plan's head], its tree merge-tree's or
+    different only in the conflicted paths (strict: anything else fails, naming the paths), the PR's head still the
+    plan's; a moved tip goes back to merge, at most twice in all with the push's (Effect.Try counts the merges).
+  - Push: the branch already holding the merge is pushed no more (a resume after a lost answer); a tip that moved
+    merges again; `PushEnv` (nil: "push not configured"), the allowlist again, then the one argv
+    `pushArgv` builds, `--git-dir=<mirror> <gitOptions> push origin <sha>:refs/heads/staging-<env>`, which
+    `checkPushArgv` must pass right before it runs: any `+`, force, mirror, delete, all, tags, prune or receive-pack
+    option, another remote, an extra argument or a refspec other than a full lower-case sha onto an allowed
+    `refs/heads/staging-<name>` is refused (an empty sha is a delete, which a probe showed git runs). A rejection is
+    told by reading the tip again, never by git's words: holding the merge is pushed, moved merges again, else up
+    to 3 tries. The push may lazily fetch what origin lacks, so it runs with the network allowed.
+  - Watch: ci.yml's newest run on the merge; a failure fails with its URL, a cancel (a later push's run holds it)
+    or no run 50 minutes after the push goes on. Confirm: the env's deployments with their ETag (R27's
+    `deploymentsOf`); the newest success whose history holds the merge is done, "live"; none 50 minutes after
+    ci.yml passed (`ConfirmAfterCI`, beside Status's `ConfirmWait`, 45 minutes from the push) or deployments not
+    readable is done, "pushed, not confirmed".
+  - Cancel ends a live effect at once under its flock, cancels a resolver job, and nothing pushes after it; a
+    cancel during watch or confirm stops the watching only. A deploy never reverts a push.
+  - Step knows the repositories a caller named (Refresh, Plan, Deploy, Effects, Cancel); a Step while another
+    runs returns at once. Ended journals go after 30 days.
+  Rejected: a deploy with `--force-with-lease` (a lease still rewrites a coworker's merge it raced), parsing git
+  push's rejection text, a deploy that stops whenever Workflows is true, holding the env lock only per step (a
+  second daemon would interleave its effect between the steps), a new exported Git method (an unexported
+  `deployGit` keeps the read-side API as it was). Tests: TestACleanDeployReachesConfirmWithTheBotsTwoParentMerge,
+  TestAConflictWithoutAResolverFailsNamingThePaths, TestAResolversMergeIsVerifiedThenPushed,
+  TestAResolversMergeOutsideTheRulesIsNeverPushed, TestAResolversFailureOrForeignRepositoryFailsTheEffect,
+  TestTheResolversRepositoryMustBeALocalRepositoryOtherThanTheMirror, TestAMovedTipMergesAgainAtMostTwice,
+  TestANonFastForwardRejectionMergesAgain, TestAMergeThatNowAddsWhatThePlanDidNotShowNeedsYou,
+  TestPushEnvDecidesThePush, TestAMergeWithoutACommitIdentityMakesNoCommit, TestTheMergeMessageNamesTheHeadBranch,
+  TestThePushArgvGuardRefusesEveryOtherForm, TestTheAllowlistRefusesProductionTheDefaultBranchAndAnUnconfiguredEnv,
+  TestDeployRefusesWithoutStartingAnything, TestWatchAndConfirm,
+  TestAKilledDeployResumesFromTheJournalAndNeverPushesTwice (killed after each step's begin and after the push;
+  it fails with the push's "already holds" guard taken out), TestTwoClientsOnOneEnvAreSerializedByTheFlock (it
+  fails with the env flock taken out), TestACancelAtEachStepNeverPushesAfter, TestAMovedHeadFailsTheDeployBeforeThePush
+  and TestTheDeploysBranchRuleIsConfigs, all on real git over a `file://` origin in a temp dir; the parents, the
+  extra paths, the unseen migrations and workflows, the cap on merges again and both head checks each fail their
+  test when taken out.
 
 ## Learned rules
 
