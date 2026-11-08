@@ -140,8 +140,9 @@ func TestAFixPushNeverMovesTheRowBehindANewerHead(t *testing.T) {
 }
 
 // The prompt names a fix-sync line only when the job can fill it: the PR's
-// branch, and its base (else the repository's default branch) in
-// characters a shell does not read. Without one, the prompt names none and
+// branch, and its base in characters a shell does not read, never the
+// repository's default branch in place of an unknown base (a stacked PR's
+// parent is the branch below it). Without one, the prompt names none and
 // the fixer stops at a rejected push as before.
 func TestTheFixSyncLineNeedsTheBranchAndASafeBase(t *testing.T) {
 	h, _ := fixHarness(t)
@@ -153,7 +154,7 @@ func TestTheFixSyncLineNeedsTheBranchAndASafeBase(t *testing.T) {
 		def, want    string
 	}{
 		{"the PR's base", str("feature"), str("release/1.0"), "main", agents.FixSyncLine(bin, slotPath, fixHead, "feature", "release/1.0")},
-		{"the repository's default branch", str("feature"), nil, "main", agents.FixSyncLine(bin, slotPath, fixHead, "feature", "main")},
+		{"no base, though the repository has a default branch", str("feature"), nil, "main", ""},
 		{"no branch", nil, str("master"), "main", ""},
 		{"an empty branch", str(""), str("master"), "main", ""},
 		{"no base", str("feature"), nil, "", ""},

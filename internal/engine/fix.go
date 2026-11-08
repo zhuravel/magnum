@@ -674,6 +674,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 		}
 	}
 	var notes []string
+	if deref(pr.BaseRef) == "" { // the merge step merges a base the PR names, never the default branch (checkFixBase)
+		notes = append(notes, "no parent merge: the PR's base branch is not known yet")
+	}
 	switch {
 	case pin == fixPinRefuses || !isPinned(pr, slot, has):
 	case pin == fixPinWouldUnpin:
@@ -1156,6 +1159,9 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 	if e.d.Git == nil {
 		return nil
 	}
+	if base := e.jobBase(ctx, job); base != deref(job.pr.BaseRef) { // retargeted since the poll's last read: GitHub's wins
+		job.pr.BaseRef = &base
+	}
 	c, err := e.baseConflict(ctx, job.repo, job.pr, job.slot.Path, job.slot.MainClone, job.head, 0)
 	switch {
 	case ctx.Err() != nil:
@@ -1165,15 +1171,43 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 		if job.conflict.sha != "" {
 			then = fmt.Sprintf("%s merges the tip %s that the request fetched", job.role.Name, textx.ShortSHA(job.conflict.sha))
 		}
-		base := cmp.Or(deref(job.pr.BaseRef), job.repo.DefaultBranch)
-		e.event(ctx, "warn", job.subject(), "fix.conflict_unchecked", fmt.Sprintf("could not check %s for a conflict with its base %s: %s; %s",
-			job.label(), base, oneLine(err.Error(), 300), then), map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
+		base := deref(job.pr.BaseRef)
+		what := fmt.Sprintf("could not check %s for a conflict with its base %s", job.label(), base)
+		if base == "" {
+			what = "could not check " + job.label() + " against its base"
+		}
+		e.event(ctx, "warn", job.subject(), "fix.conflict_unchecked", fmt.Sprintf("%s: %s; %s", what, oneLine(err.Error(), 300), then),
+			map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
 		return nil
 	case c.sha == "" && job.forMerge:
 		return fixConflictGone{head: job.head, base: job.conflict.base, review: job.review.SHA}
 	}
 	job.conflict, job.baseChecked = c, true
 	return nil
+}
+
+// jobBase is the branch the job's merge step merges into the PR's head: the
+// PR's base as GitHub names it when the job starts (the poll identity's
+// Details read, so a retarget since the poll's last read wins), else the
+// PR row's base_ref (no client, a low budget, a failed read, an answer
+// without a base). "" when neither names one: the merge step then merges
+// nothing, and never the repository's default branch, since a stacked
+// PR's parent is the branch below it.
+func (e *Engine) jobBase(ctx context.Context, job *fixJob) string {
+	row := deref(job.pr.BaseRef)
+	gh := e.gh(job.watch.PollIdentity)
+	if _, low := e.githubLow(job.watch.PollIdentity); low || gh == nil {
+		return row
+	}
+	det, _, err := gh.Details(ctx, job.repo.Owner, job.repo.Name, []int{job.pr.Number})
+	if err != nil {
+		e.log.Info("fix: the PR's base as GitHub names it; the registry's stands", "subject", job.subject(), "err", err)
+		return row
+	}
+	if d, ok := det[job.pr.Number]; ok && d.BaseRefName != "" {
+		return d.BaseRefName
+	}
+	return row
 }
 
 // fixConflictGone is the guard's end of a job that started for the merge
@@ -1200,7 +1234,7 @@ func (e fixConflictGone) Error() string {
 // would read (the prompt names it), a failed or slow fetch, or a revision
 // git does not know.
 func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR, dir, mainClone, head string, within time.Duration) (fixConflict, error) {
-	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
+	base := deref(pr.BaseRef) // never the default branch (jobBase)
 	switch {
 	case e.d.Git == nil:
 		return fixConflict{}, errors.New("no git to look with")
@@ -1242,13 +1276,13 @@ func (e *Engine) requestBaseCheck(ctx context.Context, repo store.Repo, pr store
 			dir = e.cloneOf(repo)
 			clone = dir
 		}
-		within := time.Duration(-1)                                                                         // no fetch
-		if fetch && !e.fetchedThisTick(cmp.Or(clone, dir), cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)) { // fix_open.go fetched it
+		within := time.Duration(-1)                                             // no fetch
+		if fetch && !e.fetchedThisTick(cmp.Or(clone, dir), deref(pr.BaseRef)) { // fix_open.go fetched it
 			within = fixRequestFetch
 		}
 		c, err := e.baseConflict(ctx, repo, pr, dir, clone, pr.HeadSHA, within)
 		if err != nil {
-			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), repo.DefaultBranch, "its base"), err)
+			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), "its base"), err)
 		}
 		*into = c
 		return c.sha != "", err
@@ -1308,7 +1342,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	// the two it refuses from the pane: harmless for a gh fixer.
 	env["MAGNUM_PUSH_BRANCH"] = deref(pr.HeadRef)
 	env["MAGNUM_DEFAULT_BRANCH"] = job.repo.DefaultBranch
-	env["MAGNUM_BASE_BRANCH"] = cmp.Or(deref(pr.BaseRef), job.repo.DefaultBranch)
+	env["MAGNUM_BASE_BRANCH"] = deref(pr.BaseRef)
 	if err := e.fixRenewPane(ctx, job, env); err != nil {
 		return err
 	}
@@ -1381,7 +1415,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	// pushes with git push as the author.
 	push, login := "", ""
 	if logins := e.cfg.FixerLogins(&job.watch); len(logins) > 0 {
-		base := cmp.Or(deref(pr.BaseRef), job.repo.DefaultBranch)
+		base := deref(pr.BaseRef)
 		if !gitx.ShellSafeRef(base) {
 			base = ""
 		}
@@ -1487,7 +1521,7 @@ func (e *Engine) fixRenewPane(ctx context.Context, job *fixJob, env map[string]s
 // none) for a PR whose branch or base magnum does not know, or whose base's
 // name a shell would read.
 func (e *Engine) fixSyncLine(job *fixJob) string {
-	branch, base := deref(job.pr.HeadRef), cmp.Or(deref(job.pr.BaseRef), job.repo.DefaultBranch)
+	branch, base := deref(job.pr.HeadRef), deref(job.pr.BaseRef)
 	if branch == "" || !gitx.ShellSafeRef(base) {
 		return ""
 	}

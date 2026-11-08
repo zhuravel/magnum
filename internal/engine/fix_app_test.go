@@ -274,8 +274,9 @@ func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
 // A PR retargeted while its fixer App's pane stays live (a stacked PR
 // whose base merged) keeps the old base in the pane's MAGNUM_BASE_BRANCH,
 // made with the pane, which the cycle keeps (the same identity): its push
-// line names the PR's base as the cycle reads it, which magnum push takes
-// over the pane's, so the fixer's merge of the new base is pushed.
+// line names the PR's base as the cycle reads it from GitHub, which magnum
+// push takes over the pane's, so the fixer's merge of the new base is
+// pushed.
 func TestAnAppFixersPushLineNamesThePRsBaseOfTheCycle(t *testing.T) {
 	h, git := fixHarness(t, withFixerApp)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
@@ -286,6 +287,7 @@ func TestAnAppFixersPushLineNamesThePRsBaseOfTheCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixerSession(h, pr, made)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", base: "release"})
 	if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE prs SET base_ref = 'release' WHERE id = ?`, pr.ID); err != nil {
 		t.Fatal(err)
 	}
