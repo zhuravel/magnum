@@ -1514,32 +1514,51 @@ func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.
 // others; the errors come back joined. A task that never launched has
 // nothing to quit.
 func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error {
+	return r.quitSessions(ctx, t, "Codex", func(s store.Session) bool { return store.Deref(s.AgentKind) == agents.KindCodex },
+		"Codex never works on "+taskKey(t)+" again")
+}
+
+// QuitRole quits the live sessions of task t's role (as it runs), whatever
+// its kind, because why: a qa stage's walker whose run was cut (its browser
+// and its server stopped) must not go on driving them, nor hold the Mac's
+// memory. Its runs in flight are abandoned first, and each session is quit
+// hard, as QuitCodex quits; its conversation stays resumable. A session
+// whose pane you are in is left (ErrOperatorInPane in the error); a task
+// that never launched has nothing to quit.
+func (r *Runtime) QuitRole(ctx context.Context, t registry.Task, role, why string) error {
+	return r.quitSessions(ctx, t, role, func(s store.Session) bool { return s.Role == role }, why)
+}
+
+// quitSessions quits task t's starting and live sessions that match (what
+// names them in errors and the log), each run in flight abandoned first
+// with why, and leaves those whose pane you are in.
+func (r *Runtime) quitSessions(ctx context.Context, t registry.Task, what string, match func(store.Session) bool, why string) error {
 	pr, err := r.ownerRow(ctx, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("quit the Codex sessions of %s: %w", taskKey(t), err)
+		return fmt.Errorf("quit the %s sessions of %s: %w", what, taskKey(t), err)
 	}
 	sessions, err := r.st.SessionsByPR(ctx, pr.ID)
 	if err != nil {
-		return fmt.Errorf("quit the Codex sessions of %s: %w", taskKey(t), err)
+		return fmt.Errorf("quit the %s sessions of %s: %w", what, taskKey(t), err)
 	}
 	var errs []error
 	for _, s := range sessions {
-		if (s.State != store.SessionStarting && s.State != store.SessionLive) || store.Deref(s.AgentKind) != agents.KindCodex {
+		if (s.State != store.SessionStarting && s.State != store.SessionLive) || !match(s) {
 			continue
 		}
 		if r.operatorIn(ctx, &roleState{taskID: t.ID, role: config.Role{Name: s.Role}}) {
-			errs = append(errs, fmt.Errorf("quit %s's Codex session: %w", s.Role, ErrOperatorInPane))
+			errs = append(errs, fmt.Errorf("quit %s's %s session: %w", s.Role, what, ErrOperatorInPane))
 			continue
 		}
-		r.abandonRuns(ctx, pr, s.Role, "Codex never works on "+taskKey(t)+" again")
+		r.abandonRuns(ctx, pr, s.Role, why)
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
-			errs = append(errs, fmt.Errorf("quit %s's Codex session: %w", s.Role, err))
+			errs = append(errs, fmt.Errorf("quit %s's %s session: %w", s.Role, what, err))
 			continue
 		}
-		r.log.Info("quit a Codex session: Codex never works on the task again", "task", t.ID, "role", s.Role)
+		r.log.Info("quit a "+what+" session: "+why, "task", t.ID, "role", s.Role)
 	}
 	return errors.Join(errs...)
 }

@@ -294,7 +294,9 @@ databases = [
 #                                          # port, never a process outside it: one on the port fails the QA run
 #   boot = "5m"                            # the server must answer ready within this (default 5m)
 #   cap = "50m"                            # one run in all, the boot included (default 50m, at most 3h): keep it
-#                                          # above boot plus the walker's timeout (fx-qa: 35m)
+#                                          # above boot plus the walker's timeout (fx-qa: 35m); the walker launches
+#                                          # with --no-chrome and --disallowedTools=mcp__* (config.defaults.toml), so
+#                                          # it reaches the factory's Chrome alone, never yours
 #   max_pages = 12                         # pages the walker captures at most (default 12, at most 30)
 #   fixes = 2                              # writer turns for QA's defects before the task waits on you (1 to 5, default 2)
 #

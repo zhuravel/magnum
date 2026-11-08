@@ -415,12 +415,16 @@ type cardState struct {
 // else, the card's conditions holding (readyProblem, your gh identity, the
 // branch at the task's head), a conflict with a fresh origin/<base> sends
 // the task back to merge it, and otherwise the card is drawn (a new
-// revision when what it shows changed) and the task waits on you.
+// revision when what it shows changed) and the task waits on you. A task
+// whose card QA keeps goes back to its qa stage (qaBack).
 func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
 	if e.d.Git == nil {
 		return false, nil
 	}
 	sum, why := e.readyProblem(t)
+	if back, err := e.qaBack(ctx, t, why); err != nil || back {
+		return false, err
+	}
 	if why != "" {
 		return false, e.stageFailed(ctx, t, needsYou{"no ready card: " + why})
 	}

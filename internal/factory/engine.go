@@ -61,7 +61,8 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // stage calls),
 // the shift of every turn deadline after the Mac slept, the role that runs
 // for a role (its Claude fallback on a task Codex never works on), the quit
-// of such a task's Codex sessions, a run's state as the agents store keeps
+// of such a task's Codex sessions, the quit of one role's sessions (a QA
+// walker whose run was cut, QuitRole), a run's state as the agents store keeps
 // it across a restart, who is at work in a task's copy now (a run in flight,
 // you in a pane: the factory's own commands that change the copy wait for
 // them), and who could have changed it since a time (the factory puts back
@@ -92,6 +93,7 @@ type Runtime interface {
 	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
+	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)

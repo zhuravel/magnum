@@ -315,10 +315,9 @@ func TestAHeavySlotIsFreedWhenItsTaskLeavesTheStage(t *testing.T) {
 		}
 		return t.ID == first.ID && ok, nil // the first round passes, and its stage never released its slot
 	})
-	h.stage(config.FactoryStageQA, idleStage) // the stage after the local review: a stage of no heavy use of its own here
 
 	h.tick()
-	if got := h.reload(first.ID).Stage; got != "qa" || secondGot {
+	if got := h.reload(first.ID).Stage; got != "pr_body" || secondGot {
 		t.Fatalf("first at %q, second got the slot %v", got, secondGot)
 	}
 	h.clock.Add(time.Minute)

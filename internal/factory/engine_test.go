@@ -70,6 +70,7 @@ type fakeRuntime struct {
 	sendErr       error
 	quits         []int64
 	quitErr       error
+	roleQuits     []string // the QuitRole calls, "<task key>/<role>"
 	// runState is each run's state as the agents store keeps it (RunState):
 	// Send makes a working run, Observe's events end, pause or refuse it as
 	// the runtime does, Verify settles it.
@@ -322,6 +323,21 @@ func (f *fakeRuntime) RunsAs(t registry.Task, role config.Role) (config.Role, er
 		return fb, nil
 	}
 	return config.Role{}, errors.New(role.Name + " has no codex_fallback")
+}
+
+// QuitRole records the call, "<task key>/<role>".
+func (f *fakeRuntime) QuitRole(_ context.Context, t registry.Task, role, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.roleQuits = append(f.roleQuits, TaskKey(t)+"/"+role)
+	return nil
+}
+
+// roleQuitList are the QuitRole calls so far.
+func (f *fakeRuntime) roleQuitList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.roleQuits)
 }
 
 func (f *fakeRuntime) QuitCodex(_ context.Context, t registry.Task) error {

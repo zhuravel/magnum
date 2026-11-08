@@ -1231,6 +1231,30 @@ func TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes(t *testing.T) {
 	}
 }
 
+// The QA walker's launch takes no browser but the factory's Chrome: no
+// Claude in Chrome, whatever your setting, and no MCP tool at all (the
+// claude kind keeps your MCP servers out already, with --strict-mcp-config,
+// which the role does not repeat).
+func TestTheQAWalkerLaunchesWithoutChromeOrMCPTools(t *testing.T) {
+	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
+		r, ok := cfg.FactoryRole("fx-qa")
+		if !ok {
+			t.Fatal("the factory has no fx-qa role")
+		}
+		if want := []string{"--no-chrome", "--disallowedTools=mcp__*"}; !slices.Equal(r.Args, want) {
+			t.Fatalf("fx-qa args %q, want %q", r.Args, want)
+		}
+		for _, wrapper := range []bool{false, true} {
+			line := cfg.Kinds[r.AgentKind()].Argv(LaunchArgs{Effort: r.Effort, Wrapper: wrapper, Extra: r.Args})
+			for _, want := range []string{"--no-chrome", "--disallowedTools=mcp__*", "--strict-mcp-config"} {
+				if n := slices.Index(line, want); n < 0 || slices.Index(line[n+1:], want) >= 0 {
+					t.Errorf("fx-qa's launch line %q (wrapper %v) has %q other than once", line, wrapper, want)
+				}
+			}
+		}
+	}
+}
+
 // Every built-in kind looks at its change's pages once the local review
 // passed it: the stage after local_review is the qa stage of the fx-qa
 // walker (a repository without [factory.repo.qa] skips it).

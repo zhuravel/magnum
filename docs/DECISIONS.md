@@ -18678,33 +18678,61 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and why ("QA could not reach 1 state of the change: the passkey autofill list (headless Chrome draws no
     autofill); ..."). It is no defect for the writer: no check judged that page, which may show the very
     defect QA is for, and a writer's turn cannot make a sign-in work, seed local data or make headless Chrome
-    draw an autofill list, so the fix loop would spend its turns to its cap. Your retry walks a fresh run.
+    draw an autofill list, so the fix loop would spend its turns to its cap. Your retry walks once more (you
+    may have made the state reachable), and the wait says so. A second such walk in a row at the head
+    (`qaRowAt` of `qaBlockedOnly`) goes on with its states flagged on the card and in the PR body: it writes
+    `qa-summary.json` alone, clean with `Blocked`, and keeps the run's result and its failed check as the walk
+    ended, with no passing check (not `passQA`). Every other unavailable run (no page reached, a verdict that
+    no longer reads, the cap, a boot, a busy port, a failing `when`) has your retry walk again, as often as you
+    retry; defects still win over blocked states. `qaDecide` passes a run whose summary at the head names it.
   - The bounds (`qaBounded`), asked by `sweepQA` on every tick whatever holds the stages (a drain, the
-    infrastructure's or herdr's hold), and before each walk: a run past its cap since `qa-run.json`'s
-    `started` (the boot and the walk share the 50 minutes) is QA unavailable, "QA run N went over its cap of
-    50m0s", and needs you; the memory hold at critical pressure (`memoryCritical`) records a pressure result and
+    infrastructure's or herdr's hold), and before each walk: a run past its cap since its server's first start
+    (`qa-run.json`'s `began`, which a boot more and a teardown keep: the boots and the walk share the 50 minutes)
+    is QA unavailable, "QA run N went over its cap of 50m0s", and needs you; the memory hold at critical pressure (`memoryCritical`) records a pressure result and
     stops the session, and the hold's lift starts a fresh run, the second pressure in a row needing you (step 4's
     `qaDecide`).
   - Every teardown now fails the stage's attempts the run began that are still open (`qaCutRecord`, for every
     end, not only the cut of a run with no result): the cap and the pressure end a walking session with a
     result, and its walker's attempt would otherwise stay open, so the next run's walk would go on in it. An
     agent that needs you during the walk (stuck, lost, a dialog) cuts the run through `freeHeavy`, and its
-    attempt fails, so your retry walks a fresh run. A walk that passed is verified and stays so.
+    attempt fails, so your retry walks a fresh run. A walk that passed is verified and stays so. A teardown
+    that fails a walk's attempt also quits the stage's agents (`quitWalkers`, the runtime's new `QuitRole`: its
+    runs in flight abandoned, the session quit hard and kept resumable, you in its pane left alone), so no
+    walker drives the stopped Chrome, holds the Mac's memory under the pressure that cut it, or runs on while
+    the next run resumes its conversation. A result's time counts from `began` too, so a walk whose end lands
+    a pass late (the teardown forgot `started`) still records what it took.
   - `qaWalking` no longer counts an attempt still launching: a walker whose launch a hold keeps has not begun,
     so a drain ends its session at once instead of `install --drain` waiting on a launch the drain holds.
   - `readyProblem` adds `qaProblem`: for a repository with a qa block and a kind with a qa stage, the ready card
     needs `qa-summary.json` clean or not_needed at the task's head, else "QA did not pass at <sha7>" or "QA
-    looked at <sha7>, another head than <sha7>".
+    looked at <sha7>, another head than <sha7>". When that is what keeps the card, the ready stage and the
+    publish send the task back to its qa stage (`qaBack`, as `headMoved` sends a moved head to coding): a task
+    past its qa stage when you add `[factory.repo.qa]` runs QA at its head, then the PR body and the card,
+    where it would otherwise wait on you for good, every retry meeting the same problem.
+  - fx-qa launches with `args = ["--no-chrome", "--disallowedTools=mcp__*"]` (Go and `config.defaults.toml`):
+    no Claude in Chrome, whatever your setting (it shares your browser's logins), and no MCP tool, whatever a
+    config brings; the claude kind's `mcp_strict` keeps your MCP servers out already, so the role leaves
+    `--strict-mcp-config` to it. The probe's command passes `--max-output 10000000 --content-boundaries false`,
+    so a cap or boundary markers of your agent-browser settings never cut or wrap the file `readQAProbe` reads.
+  - A repository with no `[[factory.repo]]` entry skips the qa stage too (`nextStage`), as `qaProblem` has it.
 
   Rejected:
-  - A blocked state as a defect for the fix loop, or a run with one as clean with a flag on the card (the plan's
-    step 7 line): an unjudged page would pass QA, or the writer would chase an environment.
+  - A blocked state as a defect for the fix loop, or a first walk with one as clean with a flag on the card
+    (the plan's step 7 line): the writer would chase an environment, or an unjudged page would pass QA unseen.
   - Launching the walker in the claimed copy: its `open` and its browser tool would reach your browser.
   - Leaving the browser's attachment to the prompt alone: a command that drops the flags would start the tool's
     own browser, or join its shared default session.
   - Passing the probe's output through a tool or the agent's context (about 600 KB a page).
   - Enforcing the cap in `runQA` alone: `runQA` does not run while herdr is down or the infrastructure hold
     stands, and the session would keep the server, the Chrome, the lock and the heavy slot meanwhile.
+
+  After review, failing first: TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA (by your retry and by a y:
+  NEEDS YOU at the card for good), TestASecondBlockedOnlyWalkGoesOnWithTheStatesFlagged,
+  TestTheCapCountsFromTheRunsFirstBoot (a boot more restarted the cap), TestAWalkWhoseEndDidNotLandRecordsItsTime
+  (it took 0s), TestQuitRoleQuitsOnlyThatRolesSessions, TestTheQAWalkerLaunchesWithoutChromeOrMCPTools, the walker's
+  quit in the cap, pressure and NEEDS YOU tests (none quit), and the retry's words and the output flags in the
+  prompt tests. Rejected after review: passing the blocked states on your first retry (a retry after you made a
+  state reachable would not walk again); `--strict-mcp-config` in the role (the kind's to set).
 
   Tests, failing first (the walker was never launched, the default kinds had no qa stage and the card needed no
   QA): TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks, TestACleanWalkPassesQAAndStopsEverything,

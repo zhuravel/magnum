@@ -13576,6 +13576,7 @@ type Runtime interface {
 	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
 	QuitCodex(ctx context.Context, t registry.Task) error
+	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
@@ -13596,6 +13597,7 @@ type Runtime interface {
     (RecoverLost, which a rebuilt stage calls), the shift of every turn deadline
     after the Mac slept, the role that runs for a role (its Claude fallback on
     a task Codex never works on), the quit of such a task's Codex sessions,
+    the quit of one role's sessions (a QA walker whose run was cut, QuitRole),
     a run's state as the agents store keeps it across a restart, who is at work
     in a task's copy now (a run in flight, you in a pane: the factory's own
     commands that change the copy wait for them), and who could have changed it
@@ -15113,6 +15115,15 @@ func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
     is left for a later call (ErrOperatorInPane in the error), and a quit that
     fails does not stop the others; the errors come back joined. A task that
     never launched has nothing to quit.
+
+func (r *Runtime) QuitRole(ctx context.Context, t registry.Task, role, why string) error
+    QuitRole quits the live sessions of task t's role (as it runs), whatever its
+    kind, because why: a qa stage's walker whose run was cut (its browser and
+    its server stopped) must not go on driving them, nor hold the Mac's memory.
+    Its runs in flight are abandoned first, and each session is quit hard, as
+    QuitCodex quits; its conversation stays resumable. A session whose pane you
+    are in is left (ErrOperatorInPane in the error); a task that never launched
+    has nothing to quit.
 
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
     Reconcile settles the delivery of ledger entry e from its agent's

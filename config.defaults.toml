@@ -1000,6 +1000,10 @@ kind = "claude"
 effort = "high"
 prompt = "factory-qa.md"
 timeout = "35m"                   # within a run's qa.cap (50m by default), which the server's boot shares
+args = ["--no-chrome", "--disallowedTools=mcp__*"]   # the factory's Chrome alone, through the agent-browser CLI: no
+                                  # Claude in Chrome (your browser and its logins, whatever your setting) and no MCP
+                                  # tool; the claude kind's mcp_strict already keeps your MCP servers out, so the role
+                                  # leaves --strict-mcp-config to the kind ([kinds.claude] mcp_off)
 why = "look at the changed pages in a browser, in the states the ticket names"
 doing = "walking the pages"
 

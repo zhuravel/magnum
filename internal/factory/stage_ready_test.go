@@ -1096,3 +1096,43 @@ func TestNoReadyCardWithoutQAAtTheHead(t *testing.T) {
 		}
 	}
 }
+
+// A task past its qa stage when its repository gains [factory.repo.qa] goes
+// back to its qa stage, as a moved head goes back to coding: QA runs at its
+// head, then the PR body and the card again. Your retry at the card, or your y on
+// the card drawn before, takes it there, never to a wait on you that a retry
+// only repeats.
+func TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA(t *testing.T) {
+	for _, via := range []string{"retry", "push"} {
+		t.Run(via, func(t *testing.T) {
+			r := newReadyRig(t)
+			task, head := r.toCard("PR-12999")
+			first := r.card(task.ID)
+			r.cfg.Factory.Repos[0].QA = &config.FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}",
+				Ready: "/up", MaxPages: 12, Fixes: 2}
+			r.userFacing = func([]byte) (string, int) { return "", 0 } // nothing user-facing: QA passes at once
+			if via == "retry" {
+				r.retryAnswer(task.ID)
+			} else if q := r.decideOn(task.ID, first, ChoicePush, "", ""); q.State != registry.RequestFailed ||
+				!strings.Contains(q.Result, "QA did not pass at "+head[:7]) {
+				t.Fatalf("push request %s: %q, want it refused for QA", q.State, q.Result)
+			}
+			r.run(6, func() bool { return r.reload(task.ID).Stage == "pr_body" })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+				t.Fatalf("task %s at %s waits %q: %q, want it through QA and at its PR body", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+			}
+			if !slices.ContainsFunc(r.events(task.ID, "ready"), func(ev registry.Event) bool {
+				return strings.HasPrefix(ev.Text, "back to qa: QA did not pass at "+head[:7])
+			}) {
+				t.Fatalf("ready events %+v, want the move back to qa", r.events(task.ID, "ready"))
+			}
+			if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); !ok || sum.Outcome != QAOutcomeNotNeeded || sum.Head != head {
+				t.Fatalf("qa-summary.json %+v (%v), want not_needed at the head", sum, ok)
+			}
+			r.toBody(task)
+			if got := r.reload(task.ID); got.Stage != "ready" || !strings.HasPrefix(got.WaitsWhat, readyWait) {
+				t.Fatalf("task at %s waits %q, want its card again", got.Stage, got.WaitsWhat)
+			}
+		})
+	}
+}

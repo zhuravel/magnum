@@ -82,6 +82,9 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return false, e.stageFailed(ctx, t, err)
 	}
 	if _, why := e.readyProblem(t); why != "" {
+		if back, err := e.qaBack(ctx, t, why); err != nil || back { // QA at the head first, then a card again
+			return false, err
+		}
 		return false, e.stageFailed(ctx, t, needsYou{"nothing is pushed: " + why})
 	}
 	if t.HeadSHA != sha {

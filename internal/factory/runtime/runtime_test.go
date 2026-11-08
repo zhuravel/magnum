@@ -1103,6 +1103,42 @@ func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
 	}
 }
 
+// A QA run that is cut stops its walker: QuitRole quits the live sessions of
+// that one role of the task, whatever its kind, and abandons its runs in
+// flight; the task's other roles go on, and a session whose pane you are in
+// waits for you to leave.
+func TestQuitRoleQuitsOnlyThatRolesSessions(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro", "fx-cause")
+	repro := g.send("fx-repro", "reproduce it")
+	g.send("fx-cause", "find the cause")
+	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", g.clock.Now()) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.r.QuitRole(g.ctx, g.task, "fx-repro", "its QA run was cut"); !errors.Is(err, ErrOperatorInPane) {
+		t.Fatalf("QuitRole with you in the pane = %v, want ErrOperatorInPane", err)
+	}
+	g.session("fx-repro") // still live
+	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", g.clock.Now().Add(-time.Hour)) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.r.QuitRole(g.ctx, g.task, "fx-repro", "its QA run was cut"); err != nil {
+		t.Fatalf("QuitRole = %v", err)
+	}
+	if s, err := g.st.LiveSessionByPRRole(g.ctx, g.owner().ID, "fx-repro"); err == nil {
+		t.Fatalf("fx-repro's session %d is still %s", s.ID, s.State)
+	}
+	if run := g.storeRun(repro); run.State != store.RunAbandoned {
+		t.Fatalf("fx-repro's run is %s, want abandoned", run.State)
+	}
+	if s := g.session("fx-cause"); s.State != store.SessionLive {
+		t.Fatalf("fx-cause's session is %s, want live", s.State)
+	}
+	if err := g.r.QuitRole(g.ctx, g.newTask("PR-12398"), "fx-repro", "its QA run was cut"); err != nil {
+		t.Fatalf("QuitRole of a task that never launched = %v, want nothing to do", err)
+	}
+}
+
 // The observe pass says, from the snapshot it reads anyway, whether herdr's
 // focus is on a pane of a task's workspace, when herdr last showed you at
 // work in a factory pane (the proof of you: the focus alone, resting where

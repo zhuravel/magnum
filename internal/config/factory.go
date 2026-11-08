@@ -443,8 +443,11 @@ func DefaultFactoryRoles() []Role {
 			Why: "merge the findings into one report and the questions", Doing: "weighing the findings"},
 		{Name: "fx-writer", Kind: KindClaude, Model: "opus", Effort: "high", Prompt: "factory-writer.md", Timeout: Duration{90 * time.Minute},
 			Why: "write the change, test first", Doing: "writing the change"},
+		// The walker drives the factory's Chrome through the agent-browser CLI alone: no Claude in Chrome (your
+		// browser and its logins, whatever your setting) and no MCP tool (the kind's mcp_strict keeps your servers out).
 		{Name: "fx-qa", Kind: KindClaude, Effort: "high", Prompt: "factory-qa.md", Timeout: Duration{35 * time.Minute},
-			Why: "look at the changed pages in a browser, in the states the ticket names", Doing: "walking the pages"},
+			Args: []string{"--no-chrome", "--disallowedTools=mcp__*"},
+			Why:  "look at the changed pages in a browser, in the states the ticket names", Doing: "walking the pages"},
 		// The liaison talks with you about a task; no stage names it. It asks you itself (AskUserQuestion), so
 		// magnum leaves its dialogs to you.
 		{Name: "fx-liaison", Kind: KindClaude, Effort: "high", Prompt: "factory-liaison.md", Timeout: Duration{24 * time.Hour},

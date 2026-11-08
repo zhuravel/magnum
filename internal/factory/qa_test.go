@@ -1120,6 +1120,9 @@ func TestACleanWalkPassesQAAndStopsEverything(t *testing.T) {
 	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"pass:@" + head}) {
 		t.Fatalf("qa checks %q, want one passed at the head", got)
 	}
+	if got := r.rt.roleQuitList(); len(got) != 0 {
+		t.Fatalf("agents quit %v: a walker that ended its turn is left as it is", got)
+	}
 	if qs, err := r.reg.Questions(r.ctx, task.ID); err != nil || len(qs) != 0 {
 		t.Fatalf("questions %+v (%v), want none asked", qs, err)
 	}
@@ -1273,7 +1276,7 @@ func TestAWalkWithABlockedStateNeedsYouNotClean(t *testing.T) {
 	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
 	got := r.toYou(task)
 	for _, want := range []string{"QA could not reach 1 state", "the passkey autofill list (headless Chrome draws no autofill)",
-		"magnum factory retry"} {
+		fmt.Sprintf("`magnum factory retry %d` walks once more", task.ID), "flagged on the card and in the PR body"} {
 		if !strings.Contains(got.WaitsWhat, want) {
 			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
 		}
@@ -1317,12 +1320,16 @@ func TestQAOverItsCapNeedsYou(t *testing.T) {
 	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
 		t.Fatalf("qa attempts %v, want the walker's failed", got)
 	}
+	if got := r.rt.roleQuitList(); !slices.Equal(got, []string{"PR-12438/fx-qa"}) {
+		t.Fatalf("agents quit %v, want the walker", got)
+	}
 	r.qaFree(task.ID)
 }
 
 // Critical memory pressure stops the walk: its server and browser stop, the
-// run ends as pressure and the walker's attempt fails. Once the hold lifts a
-// fresh run walks; a second pressure in a row needs you.
+// run ends as pressure, the walker's attempt fails and its agent quits, so
+// nothing of the run holds memory. Once the hold lifts a fresh run walks; a
+// second pressure in a row needs you.
 func TestCriticalPressureStopsTheWalkAndRetriesOnceAfterIt(t *testing.T) {
 	r := newQARig(t)
 	var critical atomic.Bool
@@ -1344,6 +1351,9 @@ func TestCriticalPressureStopsTheWalkAndRetriesOnceAfterIt(t *testing.T) {
 	}
 	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
 		t.Fatalf("qa attempts %v, want the walker's failed", got)
+	}
+	if got := r.rt.roleQuitList(); !slices.Equal(got, []string{"PR-12439/fx-qa"}) {
+		t.Fatalf("agents quit %v, want the walker", got)
 	}
 	r.tick()
 	if got := r.reload(task.ID); got.WaitsWho != HoldMemory {
@@ -1408,6 +1418,9 @@ func TestNeedsYouDuringTheWalkCutsTheRunAndFailsTheWalkersAttempt(t *testing.T) 
 	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 {
 		t.Fatalf("browsers stopped %v, servers stopped %v; want each once", l.stoppedBrowsers, l.stopped)
 	}
+	if got := r.rt.roleQuitList(); !slices.Equal(got, []string{"PR-12441/fx-qa"}) {
+		t.Fatalf("agents quit %v, want the walker", got)
+	}
 	r.qaFree(task.ID)
 }
 
@@ -1442,4 +1455,117 @@ func TestADrainEndsAQASessionWhoseWalkerNeverLaunched(t *testing.T) {
 		t.Fatalf("work.json %+v, want nothing in flight", rec)
 	}
 	r.qaFree(task.ID)
+}
+
+// Your retry after a walk that reached its pages but not every state walks
+// once more; a second such walk at the head goes on with those states
+// flagged: qa-summary.json clean with them, each run's result and failed
+// check kept as they are, and no passing check. A walk that reached no page
+// is no such walk: your retry walks again, as often as you retry.
+func TestASecondBlockedOnlyWalkGoesOnWithTheStatesFlagged(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12445")
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.toWalker(task)
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q: %q, want pr_body", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+	sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID))
+	if !ok || sum.Outcome != QAOutcomeClean || sum.Head != head || sum.Run != 2 || sum.Pages != 1 || len(sum.Blocked) != 1 ||
+		sum.Blocked[0].What != "the passkey autofill list" {
+		t.Fatalf("qa-summary.json %+v (%v), want run 2 clean at the head with its blocked state", sum, ok)
+	}
+	for k := 1; k <= 2; k++ {
+		if res := r.qaResult(task.ID, k, head); res.Outcome != QAOutcomeUnavailable || len(res.Blocked) != 1 {
+			t.Fatalf("run %d's result.json %+v, want it as the walk ended", k, res)
+		}
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"fail:env@" + head, "fail:env@" + head}) {
+		t.Fatalf("qa checks %q, want each run's failed check and no pass", got)
+	}
+
+	n := newQARig(t)
+	other, _ := n.qaTask("PR-12446")
+	none := QAVerdict{Blocked: []QABlocked{{What: "the security tab", Why: "sign-in failed", Check: "A1"}}}
+	for range 2 {
+		n.toWalker(other)
+		n.walk(other, none, nil)
+		if got := n.toYou(other); !strings.Contains(got.WaitsWhat, "QA reached no page") {
+			t.Fatalf("the task waits %q, want the walk that reached no page", got.WaitsWhat)
+		}
+		n.retryAnswer(other.ID)
+	}
+	if _, ok := readQASummary(n.layout.FactoryTaskDir(other.ID)); ok {
+		t.Fatal("a walk that reached no page passed the stage")
+	}
+}
+
+// The cap of a run counts from its server's first start: a boot more after
+// a failed one starts no new cap.
+func TestTheCapCountsFromTheRunsFirstBoot(t *testing.T) {
+	r := newQARig(t)
+	r.setProbe(func(up bool, _ int) (int, error) {
+		if !up || len(r.copies.log().started) < 2 {
+			return 0, errRefused
+		}
+		return 200, nil
+	})
+	task, head := r.qaTask("PR-12447")
+	r.toWalker(task)
+	run, _ := readQARun(r.layout.FactoryTaskDir(task.ID))
+	if l := r.copies.log(); len(l.started) != 2 || run.Began.IsZero() || run.Started.Sub(run.Began) < 4*time.Minute {
+		t.Fatalf("servers started %v, qa-run.json %+v; want two boots, the run begun at the first", l.started, run)
+	}
+	r.clock.Add(47*time.Minute - r.clock.Now().Sub(run.Started)) // within 50m of the second start, past them since the first
+	r.tick()
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "over its cap of 50m0s") {
+		t.Fatalf("task %s waits %q, want NEEDS YOU over the cap", got.State, got.WaitsWhat)
+	}
+	if res := r.qaResult(task.ID, 1, head); !res.Started.Equal(run.Began) {
+		t.Fatalf("result.json started %s, want the run's first start %s", res.Started, run.Began)
+	}
+}
+
+// A walk that passed but whose end did not land (its result was not
+// written) ends on the next pass, with the time the run took from its
+// server's first start: the teardown that forgot the server's start keeps
+// when the run began.
+func TestAWalkWhoseEndDidNotLandRecordsItsTime(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12448")
+	r.toWalker(task)
+	v := oneSecurityPage()
+	run := r.savePages(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.writeVerdict(task, run, v)
+	as := r.attempts(task.ID)
+	if err := r.reg.TransitionAttempt(r.ctx, as[len(as)-1].ID, []string{registry.AttemptRunning}, registry.AttemptVerified, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.endQA(r.ctx, r.reload(task.ID), "its walk ended", ""); err != nil { // the end's teardown, then nothing
+		t.Fatal(err)
+	}
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); !run.Started.IsZero() {
+		t.Fatalf("qa-run.json %+v, want its server's start forgotten", run)
+	}
+	r.clock.Add(3 * time.Minute)
+	r.run(3, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" {
+		t.Fatalf("task at %s waits %q, want pr_body", got.Stage, got.WaitsWhat)
+	}
+	cs, err := r.reg.Checks(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(cs, func(c registry.Check) bool { return c.Kind == registry.CheckQA })
+	if i < 0 || cs[i].Result != registry.CheckPass || cs[i].HeadSHA != head || cs[i].Took < 3*time.Minute {
+		t.Fatalf("qa checks %+v, want a pass that took the run's time", cs)
+	}
 }

@@ -154,7 +154,8 @@ func TestCheckPromptsRendersTheQAWalkersPrompt(t *testing.T) {
 		"whose `head` is not the copy's HEAD", "a shot that is not a PNG", "a probe file that is not what " + d.QAProbe + " returned",
 		"more than 12 pages or 30 shots", "an id taken twice", "a class or a severity not listed here", "a defect on no page of `pages`",
 		"`agent-browser --session " + d.QASession + " --cdp " + d.QACDP, "--auto-connect", "a browser MCP tool",
-		"eval --stdin < " + d.QAProbe + " > " + d.QARun + "/pages/", "about 600 KB", "never through your context or a tool",
+		"--max-output 10000000 --content-boundaries false eval --stdin < " + d.QAProbe + " > " + d.QARun + "/pages/", "about 600 KB",
+		"never through your context or a tool",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the QA walker's prompt lacks %q:\n%s", want, text)

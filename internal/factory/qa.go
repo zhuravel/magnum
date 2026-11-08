@@ -142,8 +142,10 @@ var qaRunDirRe = regexp.MustCompile(`^([1-9][0-9]*)-[0-9a-f]+$`)
 // before it (the walker's turn is the first after them), the boots that
 // failed, the CDP endpoint of its browser, the probe's nonce and the
 // user-facing files (both "" and nil until the user-facing check ran to
-// its end), and when its server last started (zero before: a restart cut
-// nothing of a run that never started one).
+// its end), when its server last started (zero before, and after a
+// teardown with no cut: a restart cut nothing of a run with no server), and
+// when it first started (Began: a boot more or a teardown keeps it, so the
+// run's cap and its result's time count from it).
 type qaRun struct {
 	N              int       `json:"n"`
 	Port           int       `json:"port"`
@@ -159,6 +161,16 @@ type qaRun struct {
 	Nonce          string    `json:"nonce,omitempty"`
 	Changed        []string  `json:"changed,omitempty"`
 	Started        time.Time `json:"started"`
+	Began          time.Time `json:"began,omitzero"`
+}
+
+// began is when run's server first started: Began, else Started (a run of
+// an earlier build), zero before any start.
+func (run qaRun) began() time.Time {
+	if !run.Began.IsZero() {
+		return run.Began
+	}
+	return run.Started
 }
 
 // QAResult is how a QA run ended (result.json in its folder; qa-summary.json
@@ -371,8 +383,41 @@ func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.Factory
 	if res.Outcome == QAOutcomeDefects {
 		return e.qaBlocks(ctx, t, st, run, res)
 	}
-	e.toOperator(ctx, t, qaYouWhat(t, e.d.Layout.FactoryTaskDir(t.ID), res), "QA could not judge the change")
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	if n := qaRowAt(dir, run.Head, qaBlockedOnly); qaBlockedOnly(res) && n >= qaInARow {
+		return true, e.passBlocked(ctx, t, run, res, n)
+	}
+	e.toOperator(ctx, t, qaYouWhat(t, dir, res), "QA could not judge the change")
 	return false, nil
+}
+
+// qaBlockedOnly reports whether res is a walk that reached its pages and
+// found nothing that blocks there, but could not reach every state.
+func qaBlockedOnly(res QAResult) bool {
+	return res.Outcome == QAOutcomeUnavailable && res.Walked && res.Pages > 0 && len(res.Blocking) == 0 && len(res.Blocked) > 0
+}
+
+// passBlocked passes the qa stage on run's result res, the n-th walk in a
+// row at its head that reached its pages, found nothing that blocks there
+// and could not reach the same kind of states (qaBlockedOnly; the first sent
+// the task to you, and your retry walked once more): qa-summary.json alone,
+// clean with those states, which go on flagged on the card and in the PR
+// body. The run's result.json and its failed check stay as the walk ended,
+// and no check passes: QA did not judge those states.
+func (e *Engine) passBlocked(ctx context.Context, t registry.Task, run qaRun, res QAResult, n int) error {
+	sum := res
+	sum.Outcome = QAOutcomeClean
+	sum.Why = fmt.Sprintf("the walker reached %s but not %s, in %d walks in a row at this head: they go on flagged on the card and "+
+		"in the PR body (%s)", plural(res.Pages, "page"), plural(len(res.Blocked), "state"), n, qaBlockedList(res.Blocked))
+	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), qaSummaryFile), sum); err != nil {
+		return err
+	}
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d at %s: QA goes on with %s not reached, flagged, after %d walks in a row "+
+		"that reached the pages but not them", run.N, textx.ShortSHA(run.Head), plural(len(res.Blocked), "state"), n))
+	if t.WaitsWho == waitQA {
+		e.waitOn(ctx, t, "", "")
+	}
+	return nil
 }
 
 // qaBlocks takes the defects that block of run's result res: until the fix
@@ -394,7 +439,7 @@ func (e *Engine) qaBlocks(ctx context.Context, t registry.Task, _ config.Factory
 // counts what the checks found.
 func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QAResult, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	res := QAResult{Walked: true, Started: run.Started, Ended: e.now()}
+	res := QAResult{Walked: true, Started: run.began(), Ended: e.now()}
 	checks, p := qaAcceptanceChecks(dir)
 	var v QAVerdict
 	if p == nil {
@@ -570,13 +615,18 @@ func qaBlockedList(bs []QABlocked) string {
 // (in the task directory dir): the defects that block by class and page,
 // the walk's own reason (no page reached, a state not reached, a verdict
 // that no longer reads), each with the result's file, or why QA could not
-// run; then the retry command. It names no page text.
+// run; then the retry command, and for a walk that reached its pages but
+// not every state, what the retry does (it walks once more, and a second
+// such walk goes on with the states flagged). It names no page text.
 func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	see := "; see " + filepath.Join(dir, filepath.FromSlash(res.Dir), qaResultFile)
 	switch {
 	case res.Outcome == QAOutcomeDefects:
 		n := len(res.Blocking)
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
+	case qaBlockedOnly(res):
+		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
+			"not every state goes on with those states flagged on the card and in the PR body", res.Why, see, t.ID)
 	case res.Outcome == QAOutcomeUnavailable && res.Walked:
 		return res.Why + see + retryHint(t)
 	case res.Outcome == QAOutcomeUnavailable:
@@ -585,16 +635,51 @@ func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	return fmt.Sprintf("QA run %d ended %s: %s%s", res.Run, res.Outcome, res.Why, retryHint(t))
 }
 
+// qaStage is the qa stage of task t's kind.
+func (e *Engine) qaStage(t registry.Task) (config.FactoryStage, bool) {
+	for _, st := range e.cfg.Factory.Kinds[t.Kind].Stages {
+		if st.Type == config.FactoryStageQA {
+			return st, true
+		}
+	}
+	return config.FactoryStage{}, false
+}
+
+// qaBack sends task t back to its kind's qa stage when QA is what keeps its
+// card (why, readyProblem's, is qaProblem's), as a moved head goes back to
+// coding: a task that went past its qa stage before its repository had
+// [factory.repo.qa], or whose QA looked at another head, runs QA at its
+// head, then the stages after it, the PR body and the card among them. It
+// reports whether it did. A retry would only meet the same problem again.
+func (e *Engine) qaBack(ctx context.Context, t registry.Task, why string) (bool, error) {
+	st, ok := e.qaStage(t)
+	if why == "" || !ok || why != e.qaProblem(t) {
+		return false, nil
+	}
+	because := why + ": QA runs at the task's head"
+	if err := e.reg.TransitionTask(ctx, t.ID, liveStates, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("stage", st.Name)
+		u.Set("attempt", 0)
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+		u.Because(because)
+	}); err != nil {
+		return false, err
+	}
+	e.event(ctx, t.ID, "ready", registry.PhaseInfo, "back to "+st.Name+": "+because)
+	return true, nil
+}
+
 // qaBounded ends task t's session sess when it may run no longer, and
-// reports whether it did: past its cap since its server started (the boot
-// and the walk share it: QA is unavailable, and the task needs you), or
+// reports whether it did: past its cap since its server first started (its
+// boots and the walk share it: QA is unavailable, and the task needs you), or
 // while the memory hold stands at critical pressure (a pressure result: the
 // session stops, and a fresh run starts once the hold lifts, qaDecide).
 // Every tick's sweep asks it, so a run stays bounded while a hold keeps the
 // stages from running; the walker's attempt fails with the teardown (endQA).
 func (e *Engine) qaBounded(ctx context.Context, t registry.Task, sess *qaSession) bool {
 	run := sess.run
-	if !run.Started.IsZero() && e.now().Sub(run.Started) > sess.runCap {
+	if began := run.began(); !began.IsZero() && e.now().Sub(began) > sess.runCap {
 		why := fmt.Sprintf("QA run %d went over its cap of %s (its server's boot and the walk)", run.N, sess.runCap)
 		if err := e.qaUnavailable(ctx, t, run, why); err != nil {
 			e.log.Warn("end a QA run past its cap", "task", t.ID, "err", err)
@@ -602,7 +687,7 @@ func (e *Engine) qaBounded(ctx context.Context, t registry.Task, sess *qaSession
 		return true
 	}
 	if h := e.holds[HoldMemory]; h != nil && strings.HasPrefix(h.Reason, memoryCritical) {
-		res := QAResult{Outcome: QAOutcomePressure, Started: run.Started,
+		res := QAResult{Outcome: QAOutcomePressure, Started: run.began(),
 			Why: "the Mac's memory came under critical pressure during the run: its server and browser were stopped"}
 		if err := e.writeQAResult(ctx, t, run, res); err != nil {
 			e.log.Warn("record a QA run the memory stopped", "task", t.ID, "err", err)
@@ -619,9 +704,7 @@ func (e *Engine) qaBounded(ctx context.Context, t registry.Task, sess *qaSession
 // the task's head.
 func (e *Engine) qaProblem(t registry.Task) string {
 	repo, ok := e.cfg.FactoryRepo(t.Repo)
-	if !ok || repo.QA == nil || !slices.ContainsFunc(e.cfg.Factory.Kinds[t.Kind].Stages, func(st config.FactoryStage) bool {
-		return st.Type == config.FactoryStageQA
-	}) {
+	if _, has := e.qaStage(t); !ok || repo.QA == nil || !has {
 		return ""
 	}
 	sum, ok := readQASummary(e.d.Layout.FactoryTaskDir(t.ID))
@@ -634,13 +717,21 @@ func (e *Engine) qaProblem(t registry.Task) string {
 	return ""
 }
 
-// qaDecide acts on run's result res at the task's head: clean or not_needed
-// passes the stage; unavailable or defects waits on you once (qaTold), and
+// qaDecide acts on run's result res at the task's head: a summary of the run
+// at the head, clean or not_needed, passes the stage, as does such a
+// result; unavailable or defects waits on you once (qaTold), and
 // after your retry a fresh run starts; pressure waits for the memory hold to
 // lift, interrupted starts afresh, each unless qaInARow of it came in a row
 // at the head (interrupted by a crash only, qaInARowAt): then QA is
 // unavailable.
 func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run qaRun, res QAResult) (pass, again bool, err error) {
+	if sum, ok := readQASummary(dir); ok && sum.Run == run.N && sum.Head == run.Head &&
+		(sum.Outcome == QAOutcomeClean || sum.Outcome == QAOutcomeNotNeeded) { // it passed the stage (passBlocked's keeps the run's result)
+		if t.WaitsWho == waitQA {
+			e.waitOn(ctx, t, "", "")
+		}
+		return true, false, nil
+	}
 	switch res.Outcome {
 	case QAOutcomeClean, QAOutcomeNotNeeded:
 		if t.WaitsWho == waitQA {
@@ -857,6 +948,9 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 		return err
 	}
 	run.Started = e.now()
+	if run.Began.IsZero() { // its first start: the cap counts from it, a boot more keeps it
+		run.Began = run.Started
+	}
 	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), qaRunFile), run); err != nil {
 		return err
 	}
@@ -1192,7 +1286,7 @@ func (e *Engine) qaRecordEnd(ctx context.Context, t registry.Task, sess *qaSessi
 	if cut == qaCutDrain {
 		text = "the daemon stopped during the run (a drain or a signal): its server and browser were stopped"
 	}
-	return e.writeQAResult(ctx, t, sess.run, QAResult{Outcome: QAOutcomeInterrupted, Cut: cut, Why: text, Started: sess.run.Started})
+	return e.writeQAResult(ctx, t, sess.run, QAResult{Outcome: QAOutcomeInterrupted, Cut: cut, Why: text, Started: sess.run.began()})
 }
 
 // endQALogged is endQA whose failure the log keeps (its event says it too).
@@ -1294,7 +1388,7 @@ func (e *Engine) cutQA(ctx context.Context, tasks []registry.Task) {
 			continue
 		}
 		res := QAResult{Outcome: QAOutcomeInterrupted, Cut: qaCutCrash, Why: "the daemon stopped during the run: its server and browser were stopped",
-			Started: run.Started, Ended: e.now()}
+			Started: run.began(), Ended: e.now()}
 		if err := e.writeQAResult(ctx, t, run, res); err != nil {
 			e.log.Warn("record a QA run a restart cut", "task", t.ID, "err", err)
 			continue
@@ -1308,12 +1402,16 @@ func (e *Engine) cutQA(ctx context.Context, tasks []registry.Task) {
 
 // failQAAttempts fails the open attempts of task t's qa stage st that run
 // began (after its attempts_before): launching, running or ended unverified.
+// A walk it failed was cut with its walker at work, or due: the stage's
+// roles quit (quitWalkers), so no agent drives the stopped browser or holds
+// the Mac's memory, and the next run's walker resumes no turn still running.
 func (e *Engine) failQAAttempts(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun, because string) {
 	as, err := e.reg.Attempts(ctx, t.ID)
 	if err != nil {
 		e.log.Warn("read the attempts of a cut QA run", "task", t.ID, "err", err)
 		return
 	}
+	failed := false
 	for _, a := range as {
 		if a.Stage != st.Name || a.N <= run.AttemptsBefore {
 			continue
@@ -1324,8 +1422,38 @@ func (e *Engine) failQAAttempts(ctx context.Context, t registry.Task, st config.
 				u.Set("error", because)
 			}); err != nil {
 				e.log.Warn("end the attempt of a cut QA run", "attempt", a.ID, "err", err)
+				continue
 			}
+			failed = true
 		}
+	}
+	if failed {
+		e.quitWalkers(ctx, t, st, because)
+	}
+}
+
+// quitWalkers quits the agents of task t's qa stage st, each role as it
+// runs (Runtime.QuitRole), because why. A quit that fails (you in the pane,
+// herdr) is a qa event and a warning, never the teardown's failure.
+func (e *Engine) quitWalkers(ctx context.Context, t registry.Task, st config.FactoryStage, why string) {
+	if e.d.Runtime == nil {
+		return
+	}
+	for _, name := range st.Roles {
+		role, ok := e.cfg.FactoryRole(name)
+		if !ok {
+			continue
+		}
+		if runAs, err := e.d.Runtime.RunsAs(t, role); err == nil {
+			role = runAs
+		}
+		if err := e.d.Runtime.QuitRole(ctx, t, role.Name, why); err != nil {
+			e.log.Warn("quit the agent of a cut QA run", "task", t.ID, "role", role.Name, "err", err)
+			e.event(ctx, t.ID, "qa", registry.PhaseFail, "quit the "+role.Name+" agent of the cut run: "+
+				textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes))
+			continue
+		}
+		e.event(ctx, t.ID, "qa", registry.PhaseOK, "quit the "+role.Name+" agent: "+why)
 	}
 }
 
@@ -1336,7 +1464,7 @@ func (e *Engine) failQAAttempts(ctx context.Context, t registry.Task, st config.
 // for the next pass, which moves the task then (qaTold).
 func (e *Engine) qaUnavailable(ctx context.Context, t registry.Task, run qaRun, why string) error {
 	now := e.now()
-	started := run.Started
+	started := run.began()
 	if started.IsZero() {
 		started = now
 	}
@@ -1486,13 +1614,18 @@ func qaRunsAt(dir, head string) []int {
 // cut counts too), and one the factory cut itself (a drain, its task
 // leaving it) neither counts nor breaks the row.
 func qaInARowAt(dir, head, outcome string) int {
+	return qaRowAt(dir, head, func(res QAResult) bool { return res.Outcome == outcome })
+}
+
+// qaRowAt is qaInARowAt for the results that match, whatever their outcome.
+func qaRowAt(dir, head string, match func(QAResult) bool) int {
 	n := 0
 	for _, k := range qaRunsAt(dir, head) {
 		res, ok := readQAResult(dir, qaRun{Dir: qaRunDir(k, head)})
 		if ok && res.Outcome == QAOutcomeInterrupted && res.Cut != "" && res.Cut != qaCutCrash {
 			continue
 		}
-		if !ok || res.Outcome != outcome || res.Head != head {
+		if !ok || !match(res) || res.Head != head {
 			break
 		}
 		n++
@@ -1526,11 +1659,12 @@ func newestQARun(dir string) int {
 
 // nextStage is the stage after stage i of kind for task t, and the stages
 // it skips on the way: a qa stage of a repository without
-// [factory.repo.qa]. "" when every stage after i is skipped.
+// [factory.repo.qa] (or with no [[factory.repo]] at all, as qaProblem has
+// it). "" when every stage after i is skipped.
 func (e *Engine) nextStage(t registry.Task, kind config.FactoryKind, i int) (name string, skipped []string) {
-	repo, known := e.cfg.FactoryRepo(t.Repo)
+	repo, _ := e.cfg.FactoryRepo(t.Repo)
 	for _, st := range kind.Stages[i+1:] {
-		if st.Type == config.FactoryStageQA && known && repo.QA == nil {
+		if st.Type == config.FactoryStageQA && repo.QA == nil {
 			skipped = append(skipped, st.Name)
 			continue
 		}
