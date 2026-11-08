@@ -756,7 +756,8 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 			"Never reply in another reviewer's thread whose last comment is already the author's, unless the external file marks it `decision` (section 2). " +
 			"Reply at most once to each item, and never edit, hide or delete anyone else's comment.",
 		"6. Read the external file, if the prompt names one.",
-		"An item with `answered` set has its answer already: leave it. Every other item is an external item.",
+		"An item with `answered` set has its answer already: leave it.",
+		"Every other item is an external item.",
 		"Then judge each external item as a finding (section 3) and apply the same policy to it",
 		"A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, and do not reply.",
 		"An item that asks for nothing gets no verdict and no reply: a bot's status, CI or summary comment, a thanks, an approval.",

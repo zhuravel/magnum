@@ -154,3 +154,21 @@ func TestTheFixSkillCorrectsTheDescriptionLinesItsOwnCommitsMadeUntrue(t *testin
 		}
 	}
 }
+
+// The look of autofix = "open" starts a loop on work no loop was handed
+// while a person's items an earlier loop was handed still wait for the
+// author (2026-11-08), and its fixer's external file marks those `waits`:
+// the fixer leaves them alone, with no verdict, no fix and no reply, and its
+// report says so, so the push answers only the work never handed.
+func TestTheFixSkillLeavesAWaitingItemAlone(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"An item with `waits` set was handed to an earlier run, which left it to the author, and still waits for the author's word: " +
+			"leave it too, with no verdict, no fix and no reply.",
+		"(`answered already`, `answered meanwhile`, `asks for nothing`, `waits for the author`, `under Needs you`, `the reply failed`)",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+}
