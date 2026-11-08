@@ -13343,11 +13343,15 @@ type QABlocked struct {
 	Why         string `json:"why"`
 	Check       string `json:"check"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	Accepted    bool   `json:"accepted,omitempty"`
 }
     QABlocked is a state or page the walker could not reach, why, and the
-    acceptance check it was for. Fingerprint is the factory's own, never the
-    walker's: that of the defect an earlier run handed the writer whose page the
-    run did not walk again (qaCheckFixes), "" for any other.
+    acceptance check it was for. Fingerprint and Accepted are the factory's own,
+    never the walker's: Fingerprint that of the defect an earlier run handed
+    the writer whose page the run did not walk again (qaCheckFixes), "" for any
+    other; Accepted true in the result that passed the stage when you accepted
+    the state as one QA could not check (`magnum factory retry --accept-qa`),
+    which the card and the PR body flag as accepted by you.
 
 type QADefect struct {
 	ID          string   `json:"id"`
@@ -13546,11 +13550,13 @@ type Reservation struct {
 type RetryPayload struct {
 	TaskID  int64
 	Surface string
-	// AcceptQA is your acceptance of the QA defects that block which the
-	// writer declined with its risk, or of the writer's fixes a QA run did
-	// not walk again, at the task's head (`magnum factory retry
-	// --accept-qa`): the next QA run there lets them pass, and the PR body
-	// names them as accepted by you.
+	// AcceptQA is your acceptance of what QA's newest run left you at the
+	// task's head (`magnum factory retry --accept-qa`): the defects that
+	// block which the writer declined, its fixes or declines the run did not
+	// walk again, or the states a walk that reached its pages could not
+	// reach. The next QA run there lets the defects pass, the task goes on
+	// at once with the states flagged, and the PR body names each as
+	// accepted by you.
 	AcceptQA bool
 }
     RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at its
@@ -28771,9 +28777,9 @@ type FactoryActions interface {
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
 	// AcceptQA lets a task go on with what QA left you accepted by you, at
 	// its head: the defects the writer declined, at its fix loop's stop or
-	// whose pages a QA run did not walk again, and the writer's fixes a QA
-	// run did not walk again (the task card's A, as `magnum factory retry
-	// --accept-qa`).
+	// whose pages a QA run did not walk again, the writer's fixes a QA run
+	// did not walk again, and the states a walk that reached its pages could
+	// not reach (the task card's A, as `magnum factory retry --accept-qa`).
 	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
@@ -30355,9 +30361,10 @@ type TaskCard struct {
 	// AcceptQA is what A accepts: the QA defects the writer declined at the
 	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
 	// declined at abc1234 (flow on /settings/security)", magnum factory
-	// retry --accept-qa), or the fixes a QA run there did not walk again ("1
-	// fix QA did not walk again at abc1234 (...)"); "" for none, and no A
-	// then.
+	// retry --accept-qa), the fixes a QA run there did not walk again ("1
+	// fix QA did not walk again at abc1234 (...)"), or the states a walk
+	// there could not reach ("1 state QA could not reach at abc1234 (...)");
+	// "" for none, and no A then.
 	AcceptQA string
 	// QAReport is the report of the QA run whose stop AcceptQA names
 	// (summary.md, absolute), which e opens in the pager there; "" for none.

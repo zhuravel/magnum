@@ -19043,6 +19043,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADeclineYouDidNotAcceptThatAWalkAtItsHeadMissesNeedsYou (the second probe: a clean pass),
   TestAnAcceptSaysWhoAcceptedIt, TestABlockedOnlyWalkWithNoCheckNeedsYouAgain and
   TestPressureWaitsTheBackoffOfAFailedServerStop.
+- **Fix round 4 of visual QA, slice 1: your accept takes the states a walk could not reach, a decline counts
+  as declined in the fix's event, and the waits say what each way out does** (2026-11-08, R55 slice 1, after
+  the third scoped re-review). Round 3's strict `qaSameStops` left a walk that honestly blocked a state of no
+  acceptance check with no way to pass: every retry walked and waited again, `--accept-qa` refused, and the
+  wait still promised a flagged pass. The rule stays strict, and the operator's accept is the way out.
+  - `qaSameStops` is unchanged: a blocked-only walk goes on flagged when the acceptance checks it misses are a
+    known subset of the blocked-only walk's before it at the head; a state with no check, or with one the
+    acceptance does not list, matches nothing. Every other blocked state waits on you.
+  - `--accept-qa` and the card's `A` now also accept the states of the newest stop: `qaRunAcceptable` (was
+    `qaNotWalkedAcceptable`) takes a run's blocked states when the walk reached its pages and found nothing
+    that blocks there (`qaBlockedOnly`), `acceptQA` records them in `qa-accepted.json` (`blocked`, the result's
+    own what, why and check), and the next pass of the stage passes the run with no walk more
+    (`qaDecide` on an unavailable result, `qaBlockedAccepted`, `passBlockedAccepted`): the summary keeps the
+    states with `QABlocked.Accepted`, which the walker never sets. The card's QA line says "1 state not
+    reached, accepted by you", its FLAGS line ends ", accepted by you", and the PR body lists the states under
+    "Not reached, accepted by you", in the walker's words as code, sanitized as the section already is; the
+    run's own failed check stands, as for a flagged pass. A walk that reached no page offers nothing to
+    accept: nothing of it was checked. The accept is one per stop, and the mixed case (a fix not walked again
+    beside a state not reached) takes two: the fix first, then the state once the next walk is blocked-only.
+    `A` is offered exactly when `qaAcceptable` holds, so a card with nothing to accept offers none.
+  - The blocked-only wait says what a retry does for these states (a second walk goes on flagged only for
+    states of the acceptance checks this one missed; a state with no check waits on you again) and what
+    `--accept-qa` does (the task goes on at this head, the states flagged as accepted by you). The refusal of
+    `--accept-qa`, its short and long help, the retry's answer and event, the liaison's prompt, the README's
+    retry row, task card row and "When QA needs you" bullet, and the screen's help say the same.
+  - `closeQAFix`'s event counts a decline with no risk as declined, never as fixed (`ReviewReply.declinedIDs`,
+    which `qaHistory` shares): "run 1's fix at abc1234: 0 fixed, 1 declined".
+  - Words: a declined defect a walk did not find again at its head opens its wait "QA did not find again 1
+    defect the writer declined at this head" (`qaNotReachedWhat`), never "could not reach", and the wait on
+    such a page says a walk that skips or misses it again stops there again; a decline with no risk names its
+    reply as "the writer's reply (no risk named)"; the `qaRecheckFile` comment says "since the newest run that
+    passed each of them".
+  Rejected: matching a check-less state by its normalized words across walks (the walker's words differ, the
+  round 1 rejection stands); letting a check-less state match while their number does not grow (a walker that
+  renames its states passes on a count); re-walking after the accept (a walk that describes the state in other
+  words would wait on you again for what you accepted, and the walk that stopped is the one you looked at).
+  Tests, failing first: TestABlockedStateWithNoCheckWaitsOnYouUntilYourAccept (the reviewer's probe: two walks
+  wait, a plain retry walks again, the accept passes at once, the card, FLAGS and the PR body say accepted by
+  you and never fixed or clean), TestTheLiaisonsAcceptOfAStateQACouldNotReachIsTheLiaisons,
+  TestTheFixEventCountsADeclineWithoutARiskAsDeclined (the third probe), the new words in
+  TestADeclineYouDidNotAcceptThatAWalkAtItsHeadMissesNeedsYou and TestADeclineWithoutARiskBesideACommitIsNeverAFix,
+  the blocked-only cards in TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop and the help in
+  TestTheHelpNamesTheQAKeys.
 
 ## Learned rules
 

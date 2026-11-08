@@ -975,6 +975,10 @@ func TestADeclineWithoutARiskBesideACommitIsNeverAFix(t *testing.T) {
 		t.Errorf("the task waits %q, want %q and no fix", got.WaitsWhat, want)
 	}
 	dir := r.layout.FactoryTaskDir(task.ID)
+	reply := filepath.Join(dir, filepath.FromSlash(qaReplyFile(1, head)))
+	if want := "the writer's reply (no risk named): " + reply; !strings.Contains(got.WaitsWhat, want) || strings.Contains(got.WaitsWhat, "with its risk") {
+		t.Errorf("the task waits %q, want %q and no risk", got.WaitsWhat, want)
+	}
 	run, a, err := qaAcceptable(dir, got)
 	if what := qaAcceptWhat(dir, run, a); err != nil || !strings.HasPrefix(what, "1 QA defect the writer declined at ") || strings.Contains(what, "fix") {
 		t.Fatalf("A accepts %q (%v), want the decline, never a fix", what, err)
@@ -1021,10 +1025,29 @@ func TestADeclineYouDidNotAcceptThatAWalkAtItsHeadMissesNeedsYou(t *testing.T) {
 		t.Fatalf("qa-summary.json %+v: a decline you did not accept passed at its head", sum)
 	}
 	reply := filepath.Join(dir, filepath.FromSlash(qaReplyFile(1, head)))
-	for _, want := range []string{qaDeclinedNotFoundWhy, reply, fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID)} {
+	for _, want := range []string{"QA did not find again 1 defect the writer declined at this head", qaDeclinedNotFoundWhy,
+		"the writer's reply, with its risk: " + reply, fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID), "stops here again"} {
 		if !strings.Contains(got.WaitsWhat, want) {
 			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
 		}
+	}
+	if strings.Contains(got.WaitsWhat, "could not reach") {
+		t.Errorf("the task waits %q: the walk reached the page", got.WaitsWhat)
+	}
+}
+
+// The fix turn's event counts a decline as declined whether or not it names
+// a risk: a commit beside a decline with no risk fixed nothing of it.
+func TestTheFixEventCountsADeclineWithoutARiskAsDeclined(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12492")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), map[string]string{"Q1": ""})
+	fix := r.toQAAt(task, 1)
+	if got, want := r.eventsWith(task.ID, "qa", "run 1's fix at "), []string{"run 1's fix at " + fix[:7] + ": 0 fixed, 1 declined"}; !slices.Equal(got, want) {
+		t.Errorf("qa events %q, want %q", got, want)
 	}
 }
 

@@ -218,9 +218,9 @@ type FactoryActions interface {
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
 	// AcceptQA lets a task go on with what QA left you accepted by you, at
 	// its head: the defects the writer declined, at its fix loop's stop or
-	// whose pages a QA run did not walk again, and the writer's fixes a QA
-	// run did not walk again (the task card's A, as `magnum factory retry
-	// --accept-qa`).
+	// whose pages a QA run did not walk again, the writer's fixes a QA run
+	// did not walk again, and the states a walk that reached its pages could
+	// not reach (the task card's A, as `magnum factory retry --accept-qa`).
 	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
 }
 

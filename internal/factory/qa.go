@@ -408,7 +408,10 @@ func (e *Engine) walkDone(ctx context.Context, t registry.Task, st config.Factor
 // stage (qa-summary.json first); defects that block go to the writer
 // (qaFixPhase); a walk the checks cannot call clean or defects (no page
 // reached, a state not reached, a verdict that no longer reads) waits on
-// you.
+// you, unless it is the qaInARow-th in a row at the head that reached its
+// pages and missed only states of the acceptance checks the one before it
+// missed (then it goes on with them flagged, passBlocked); your accept of
+// the states it could not reach passes it later (qaDecide).
 func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun) (bool, error) {
 	e.endQALogged(ctx, t, "its walk ended", "")
 	res, err := e.evaluateQA(ctx, t, run)
@@ -446,19 +449,44 @@ func qaBlockedOnly(res QAResult) bool {
 
 // qaDeclineReplies is what a wait on the pages of declined defects res did
 // not walk again, or did not find again at the head they were declined at,
-// adds: "; the writer's reply, with its risk: <paths>", "" for none.
+// adds: "; the writer's reply, with its risk: <paths>" for the declines
+// that named one, "; the writer's reply (no risk named): <paths>" for those
+// that named none, "" for neither.
 func qaDeclineReplies(dir string, res QAResult) string {
 	hist := qaHistory(dir, res.Run)
-	var ds []QADefect
+	var withRisk, noRisk []QADefect
 	for _, b := range res.Blocked {
-		if h := hist[b.Fingerprint]; b.Fingerprint != "" && (h.declined || h.declinedNoRisk) {
-			ds = append(ds, QADefect{Fingerprint: b.Fingerprint})
+		switch h := hist[b.Fingerprint]; {
+		case b.Fingerprint == "":
+		case h.declined:
+			withRisk = append(withRisk, QADefect{Fingerprint: b.Fingerprint})
+		case h.declinedNoRisk:
+			noRisk = append(noRisk, QADefect{Fingerprint: b.Fingerprint})
 		}
 	}
-	if replies := qaReplies(dir, ds, hist); len(replies) > 0 {
-		return "; the writer's reply, with its risk: " + strings.Join(replies, ", ")
+	s := ""
+	if replies := qaReplies(dir, withRisk, hist); len(replies) > 0 {
+		s += "; the writer's reply, with its risk: " + strings.Join(replies, ", ")
 	}
-	return ""
+	if replies := qaReplies(dir, noRisk, hist); len(replies) > 0 {
+		s += "; the writer's reply (no risk named): " + strings.Join(replies, ", ")
+	}
+	return s
+}
+
+// qaStatesOfNoCheck is how many of the states bs the walker could not reach
+// name no acceptance check of the task directory dir's acceptance.json, or
+// one it does not list: a second walk that misses such a state never goes on
+// flagged (qaSameStops), so the wait says what a retry can do for it.
+func qaStatesOfNoCheck(dir string, bs []QABlocked) int {
+	checks, _ := qaAcceptanceChecks(dir)
+	n := 0
+	for _, b := range bs {
+		if b.Check == "" || !slices.Contains(checks, b.Check) {
+			n++
+		}
+	}
+	return n
 }
 
 // qaSameStops reports whether the acceptance checks that blocked-only run
@@ -500,23 +528,53 @@ func qaNotWalkedAgain(b QABlocked) bool { return b.Fingerprint != "" || b.Why ==
 // row at its head that reached its pages, found nothing that blocks there
 // and could not reach states only of the acceptance checks the walk before
 // it stopped on (qaBlockedOnly, qaSameStops; the first sent the task to you,
-// and your retry walked once more): qa-summary.json alone,
-// clean with those states, which go on flagged on the card and in the PR
-// body, and the run's report again, as passed. The run's result.json and its failed
-// check stay as the walk ended, and no check passes: QA did not judge those
-// states.
+// and your retry walked once more): clean with those states, which go on
+// flagged on the card and in the PR body (passFlagged).
 func (e *Engine) passBlocked(ctx context.Context, t registry.Task, run qaRun, res QAResult, n int) error {
+	why := fmt.Sprintf("the walker reached %s but not %s, in %d walks in a row at this head: they go on flagged on the card and "+
+		"in the PR body (%s)", plural(res.Pages, "page"), plural(len(res.Blocked), "state"), n, qaBlockedList(res.Blocked))
+	ev := fmt.Sprintf("run %d at %s: QA goes on with %s not reached, flagged, after %d walks in a row that reached the pages but not them",
+		run.N, textx.ShortSHA(run.Head), plural(len(res.Blocked), "state"), n)
+	return e.passFlagged(ctx, t, run, res, why, ev)
+}
+
+// passBlockedAccepted passes the qa stage on run's result res, a walk that
+// reached its pages, found nothing that blocks there and could not reach
+// states you accepted as ones QA could not check (qaBlockedAccepted, after
+// `magnum factory retry --accept-qa` or the card's A): clean with those
+// states, each marked accepted, which go on flagged on the card and in the
+// PR body as accepted by you (passFlagged). No walk runs for it: the walk
+// that stopped is the one you accepted.
+func (e *Engine) passBlockedAccepted(ctx context.Context, t registry.Task, run qaRun, res QAResult) error {
+	res.Blocked = slices.Clone(res.Blocked)
+	for i := range res.Blocked {
+		res.Blocked[i].Accepted = true
+	}
+	n := len(res.Blocked)
+	they := "they go"
+	if n == 1 {
+		they = "it goes"
+	}
+	why := fmt.Sprintf("the walker reached %s but not %s, which you accepted at this head: %s on flagged on the card and in the PR body as "+
+		"accepted by you (%s)", plural(res.Pages, "page"), plural(n, "state"), they, qaBlockedList(res.Blocked))
+	ev := fmt.Sprintf("run %d at %s: QA goes on with %s not reached, flagged as accepted by you", run.N, textx.ShortSHA(run.Head), plural(n, "state"))
+	return e.passFlagged(ctx, t, run, res, why, ev)
+}
+
+// passFlagged passes the qa stage on run's result res, whose states not
+// reached go on flagged, for why (the summary's) and ev (the qa event):
+// qa-summary.json alone, clean with those states, and the run's report
+// again, as passed. The run's result.json and its failed check stay as the
+// walk ended, and no check passes: QA did not judge those states.
+func (e *Engine) passFlagged(ctx context.Context, t registry.Task, run qaRun, res QAResult, why, ev string) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	sum := res
-	sum.Outcome = QAOutcomeClean
-	sum.Why = fmt.Sprintf("the walker reached %s but not %s, in %d walks in a row at this head: they go on flagged on the card and "+
-		"in the PR body (%s)", plural(res.Pages, "page"), plural(len(res.Blocked), "state"), n, qaBlockedList(res.Blocked))
+	sum.Outcome, sum.Why = QAOutcomeClean, why
 	if err := writeJSON(filepath.Join(dir, qaSummaryFile), sum); err != nil {
 		return err
 	}
 	e.writeQAReportLogged(t, run, sum)
-	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d at %s: QA goes on with %s not reached, flagged, after %d walks in a row "+
-		"that reached the pages but not them", run.N, textx.ShortSHA(run.Head), plural(len(res.Blocked), "state"), n))
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, ev)
 	if t.WaitsWho == waitQA {
 		e.waitOn(ctx, t, "", "")
 	}
@@ -601,8 +659,8 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 			shows = "show"
 		}
 		res.Outcome = QAOutcomeUnavailable
-		res.Why = fmt.Sprintf("QA could not reach %s of the change: %s; the %s it reached %s nothing that blocks",
-			plural(len(res.Blocked), "state"), qaBlockedList(res.Blocked), plural(res.Pages, "page"), shows)
+		res.Why = fmt.Sprintf("%s: %s; the %s it reached %s nothing that blocks", qaNotReachedWhat(res.Blocked), qaBlockedList(res.Blocked),
+			plural(res.Pages, "page"), shows)
 	default:
 		of := []string{plural(len(res.Known), "note")}
 		if n := len(res.Accepted); n > 0 {
@@ -739,6 +797,30 @@ func qaClassesAndPaths(ds []QADefect, pages []QAPage) string {
 	return strings.Join(out, ", ")
 }
 
+// qaNotReachedWhat opens the why of a run whose blocked states are bs: "QA
+// could not reach 1 state of the change" for states the walker could not
+// reach or pages it did not walk again; "QA did not find again 1 defect the
+// writer declined at this head" when every one is a declined defect a walk
+// of its page did not find (qaDeclinedNotFoundWhy: the page was reached);
+// both, joined, for a mix.
+func qaNotReachedWhat(bs []QABlocked) string {
+	notFound := 0
+	for _, b := range bs {
+		if b.Why == qaDeclinedNotFoundWhy {
+			notFound++
+		}
+	}
+	rest := len(bs) - notFound
+	switch {
+	case notFound == 0:
+		return fmt.Sprintf("QA could not reach %s of the change", plural(rest, "state"))
+	case rest == 0:
+		return fmt.Sprintf("QA did not find again %s the writer declined at this head", plural(notFound, "defect"))
+	}
+	return fmt.Sprintf("QA could not reach %s of the change, and did not find again %s the writer declined at this head",
+		plural(rest, "state"), plural(notFound, "defect"))
+}
+
 // qaBlockedList names the states bs the walker could not reach, each with
 // why, at most qaListMost of them: "the passkey autofill list (headless
 // Chrome draws no autofill)".
@@ -762,11 +844,16 @@ func qaBlockedList(bs []QABlocked) string {
 // state not reached, a verdict that no longer reads), with the result's
 // file, or why QA could not run; then the retry command, and for a walk
 // that reached its pages but not every state, what the retry does (it
-// walks once more, and a second such walk goes on with the states flagged).
-// It names no page text. Defects that block come here only when their fix
-// loop let them go with no stop (qaDecide's safety net): they go to the
-// writer (qaFixPhase). A walk that skipped a fixed defect's page names its
-// two ways out: a walk of that page, or your --accept-qa.
+// walks once more; a second such walk goes on with the states flagged when
+// it misses only states of the acceptance checks this one missed, and waits
+// on you again when a state names no check the acceptance lists) and what
+// --accept-qa does (the task goes on at once, the states flagged as
+// accepted by you). It names no page text. Defects that block come here
+// only when their fix loop let them go with no stop (qaDecide's safety
+// net): they go to the writer (qaFixPhase). A walk that skipped a fixed
+// or declined defect's page, or did not find a decline again at its head,
+// names its two ways out: a walk of that page that finds the defect, or
+// your --accept-qa; one that skips or misses it again stops here again.
 func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	see := "; see " + filepath.Join(dir, filepath.FromSlash(res.Dir), qaResultFile)
 	switch {
@@ -775,12 +862,33 @@ func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case res.Outcome == QAOutcomeUnavailable && res.Walked && slices.ContainsFunc(res.Blocked, qaNotWalkedAgain):
 		return fmt.Sprintf("%s%s%s; then `magnum factory retry %d` walks once more, and a walk of each such page in its state that finds "+
-			"the defect hands it to the writer, or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR "+
-			"body names as accepted by you", res.Why, see, qaDeclineReplies(dir, res), t.ID, t.ID)
+			"the defect hands it to the writer (one that skips the page, or does not find the defect again at this head, stops here again), "+
+			"or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR body names as accepted by you",
+			res.Why, see, qaDeclineReplies(dir, res), t.ID, t.ID)
 	case qaBlockedOnly(res):
-		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
-			"not every state, and misses only states of the acceptance checks this one missed, goes on with those states flagged on the "+
-			"card and in the PR body", res.Why, see, t.ID)
+		n := len(res.Blocked)
+		them, states := "them", "the states"
+		if n == 1 {
+			them, states = "it", "the state"
+		}
+		s := fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more", res.Why, see, t.ID)
+		switch none := qaStatesOfNoCheck(dir, res.Blocked); {
+		case none == 0:
+			s += ", and a second walk that again reaches the pages but not every state, and misses only states of the acceptance checks " +
+				"this one missed, goes on with those states flagged on the card and in the PR body"
+		case n == 1:
+			s += ", and a second walk goes on flagged only when it misses states of the acceptance checks this one missed alone: this " +
+				"state names no check the acceptance lists, so a walk that misses it again waits on you again"
+		case none == n:
+			s += fmt.Sprintf(", and a second walk goes on flagged only when it misses states of the acceptance checks this one missed alone: "+
+				"none of these %d states names a check the acceptance lists, so a walk that misses any of them again waits on you again", n)
+		default:
+			s += fmt.Sprintf(", and a second walk goes on flagged only when it misses states of the acceptance checks this one missed alone: "+
+				"%d of these %d states name no check the acceptance lists, so a walk that misses one of those again waits on you again", none, n)
+		}
+		return s + fmt.Sprintf("; or `magnum factory retry %d --accept-qa` accepts %s as %s QA could not check, and the task goes on at this "+
+			"head with %s flagged on the card and in the PR body as accepted by you", t.ID, states, map[bool]string{true: "one", false: "ones"}[n == 1],
+			them)
 	case res.Outcome == QAOutcomeUnavailable && res.Walked:
 		return res.Why + see + retryHint(t)
 	case res.Outcome == QAOutcomeUnavailable:
@@ -896,6 +1004,9 @@ func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run 
 		}
 		return true, false, nil
 	case QAOutcomeUnavailable:
+		if qaBlockedAccepted(dir, run, res) { // you accepted the states the walk could not reach: it goes on, flagged
+			return true, false, e.passBlockedAccepted(ctx, t, run, res)
+		}
 		told, err := e.qaTold(ctx, t, res)
 		return false, told && err == nil, err
 	case QAOutcomeDefects:

@@ -189,9 +189,10 @@ func (a *factoryActions) Retry(ctx context.Context, taskID int64) (tui.ActionRes
 	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface})
 }
 
-// AcceptQA lets a task that waits on you go on at its stage with what QA
-// left you accepted at its head (the defects the writer declined, the fixes
-// a QA run did not walk again), as `magnum factory retry --accept-qa`.
+// AcceptQA lets a task that waits on you go on at its stage with what QA's
+// newest run left you at its head accepted by you (the writer's declines,
+// its fixes or declines the run did not walk again, the states it could not
+// reach), as `magnum factory retry --accept-qa`.
 func (a *factoryActions) AcceptQA(ctx context.Context, taskID int64) (tui.ActionResult, error) {
 	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface, AcceptQA: true})
 }

@@ -162,6 +162,18 @@ const (
 	replyDeclined = "declined"
 )
 
+// declinedIDs are the ids of rep's findings declined, with a risk or with
+// none.
+func (rep ReviewReply) declinedIDs() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range rep.Replies {
+		if r.Action == replyDeclined {
+			out[r.ID] = true
+		}
+	}
+	return out
+}
+
 // declinedWithRisk are the ids of rep's findings declined with a risk, and
 // that risk.
 func (rep ReviewReply) declinedWithRisk() map[string]string {

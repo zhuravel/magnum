@@ -92,11 +92,13 @@ func (e *Engine) focusRequest(_ context.Context, p FocusPayload) (string, error)
 type RetryPayload struct {
 	TaskID  int64
 	Surface string
-	// AcceptQA is your acceptance of the QA defects that block which the
-	// writer declined with its risk, or of the writer's fixes a QA run did
-	// not walk again, at the task's head (`magnum factory retry
-	// --accept-qa`): the next QA run there lets them pass, and the PR body
-	// names them as accepted by you.
+	// AcceptQA is your acceptance of what QA's newest run left you at the
+	// task's head (`magnum factory retry --accept-qa`): the defects that
+	// block which the writer declined, its fixes or declines the run did not
+	// walk again, or the states a walk that reached its pages could not
+	// reach. The next QA run there lets the defects pass, the task goes on
+	// at once with the states flagged, and the PR body names each as
+	// accepted by you.
 	AcceptQA bool
 }
 
@@ -491,9 +493,10 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 // stays held until a read settles it or you let it go) and never lifts
 // Codex-never. A task that does not wait on you is refused, and so is one
 // whose questions wait for your answers: its stage would only ask them
-// again. With p.AcceptQA it accepts the QA defects the writer declined, or
-// the fixes a QA run did not walk again, at the task's head (acceptQA), and
-// is refused when QA left you neither.
+// again. With p.AcceptQA it accepts what QA's newest run left you at the
+// task's head (acceptQA): the defects the writer declined, its fixes or
+// declines the run did not walk again, or the states it could not reach;
+// it is refused when QA left you none of them.
 func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {

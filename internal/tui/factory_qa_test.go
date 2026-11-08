@@ -153,7 +153,7 @@ func TestTheHelpNamesTheQAKeys(t *testing.T) {
 	h := testFactory(t, 140, 40)
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
 	mustContain(t, help, "e the QA run's report (summary.md) in the pager, when QA walked the change (asks nothing)",
-		"A accept the QA defects the writer declined, or the fixes QA did not walk again, at the task's head (y/N)")
+		"A accept what QA left you at the task's head: the writer's declines, fixes QA did not walk again, states it could not reach (y/N)")
 }
 
 // testQAStop is the screen with PR-12330's task card at a stop of QA's fix

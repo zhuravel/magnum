@@ -128,14 +128,18 @@ type QADefect struct {
 }
 
 // QABlocked is a state or page the walker could not reach, why, and the
-// acceptance check it was for. Fingerprint is the factory's own, never the
-// walker's: that of the defect an earlier run handed the writer whose page
-// the run did not walk again (qaCheckFixes), "" for any other.
+// acceptance check it was for. Fingerprint and Accepted are the factory's
+// own, never the walker's: Fingerprint that of the defect an earlier run
+// handed the writer whose page the run did not walk again (qaCheckFixes),
+// "" for any other; Accepted true in the result that passed the stage when
+// you accepted the state as one QA could not check (`magnum factory retry
+// --accept-qa`), which the card and the PR body flag as accepted by you.
 type QABlocked struct {
 	What        string `json:"what"`
 	Why         string `json:"why"`
 	Check       string `json:"check"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	Accepted    bool   `json:"accepted,omitempty"`
 }
 
 // QANotShown is an acceptance check no page shows (a background job, an

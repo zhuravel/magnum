@@ -1289,6 +1289,36 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 	working := r.task("PR-12471", "bug", "Working", registry.TaskActive, "qa", "", "")
 	accepted := stopAt("PR-12473", true, head)
 	r.file(accepted.ID, qaAcceptedFile, `{"head": "`+head+`", "fingerprints": ["fp-flow"], "at": "2026-11-04T09:00:00Z"}`)
+	// A walk that reached its pages, found nothing that blocks there and
+	// could not reach a state offers that state; one whose states you
+	// accepted at the head offers nothing more.
+	blockedAt := func(key string, acceptedState bool) registry.Task {
+		t.Helper()
+		task := r.task(key, "bug", "Passkeys", registry.TaskActive, "qa", "", "")
+		task = r.move(task, registry.TaskNeedsYou, waitsYou, "QA could not reach 1 state of the change", func(u *registry.TaskUpdate) {
+			u.Set("head_sha", head)
+		})
+		run := qaRun{N: 1, Head: head, Dir: qaRunDir(1, head)}
+		state := QABlocked{What: "the admin's view of the page", Why: "no admin locally"}
+		files := map[string]any{
+			qaRunFile: run,
+			filepath.Join(run.Dir, qaResultFile): QAResult{Version: qaResultVersion, Run: 1, Dir: run.Dir, Head: head, Outcome: QAOutcomeUnavailable,
+				Walked: true, Pages: 1, Blocked: []QABlocked{state}},
+		}
+		if acceptedState {
+			files[qaAcceptedFile] = qaAccepted{Head: head, Blocked: []QABlocked{state}, At: screenNow}
+		}
+		for name, v := range files {
+			b, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.file(task.ID, name, string(b))
+		}
+		return task
+	}
+	blocked := blockedAt("PR-12474", false)
+	blockedAccepted := blockedAt("PR-12475", true)
 	d := r.data(screenNow)
 	for _, tc := range []struct {
 		task registry.Task
@@ -1296,6 +1326,7 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 	}{
 		{declined, "1 QA defect the writer declined at eeeeeee (flow on /settings/security)"},
 		{atCap, ""}, {moved, ""}, {working, ""}, {accepted, ""},
+		{blocked, "1 state QA could not reach at eeeeeee (the admin's view of the page)"}, {blockedAccepted, ""},
 	} {
 		got := d.Cards[tc.task.ID].Task.AcceptQA
 		_, _, guard := qaAcceptable(r.layout.FactoryTaskDir(tc.task.ID), tc.task)

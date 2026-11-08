@@ -45,8 +45,9 @@ const (
 	qaShotsSide = "the after side, from the copy's own server"
 	qaShotsNote = qaShotsSide + "; e opens the QA report"
 	// qaRecheckFile is a run's list of the pages it walks again, in its
-	// folder: those of the defects earlier runs handed the writer since the
-	// newest run that passed (qaRecheck), which the walker's prompt names.
+	// folder: those of the defects earlier runs handed the writer, fixed or
+	// declined, since the newest run that passed each of them (qaRechecks),
+	// which the walker's prompt names.
 	qaRecheckFile = "recheck.json"
 	// qaSectionMost is how many items each list of the PR body's Visual QA
 	// section names; a line counts the rest, which the run's report has.
@@ -108,9 +109,9 @@ var qaClassWords = map[string]string{
 // accepted by you and 1 state not reached: ..." when you accepted defects,
 // let a fix go that QA did not walk again ("1 fix not walked again,
 // accepted by you"), or the walker could not reach states (they are
-// flagged); "not needed: no
-// user-facing file changed"; "" for a repository without
-// [factory.repo.qa], or a run that did not pass.
+// flagged; "1 state not reached, accepted by you" when you accepted them as
+// ones QA could not check); "not needed: no user-facing file changed"; ""
+// for a repository without [factory.repo.qa], or a run that did not pass.
 func qaCardLine(res QAResult) string {
 	switch {
 	case res.Outcome == QAOutcomeNotNeeded && res.Why == qaNoBlockWhy:
@@ -128,13 +129,31 @@ func qaCardLine(res QAResult) string {
 	if n := len(res.Unchecked); n > 0 {
 		but = append(but, qaFixes(n)+" not walked again, accepted by you")
 	}
-	if n := len(res.Blocked); n > 0 {
+	flagged, accepted := qaBlockedSplit(res.Blocked)
+	if n := len(flagged); n > 0 {
 		but = append(but, plural(n, "state")+" not reached")
+	}
+	if n := len(accepted); n > 0 {
+		but = append(but, plural(n, "state")+" not reached, accepted by you")
 	}
 	if len(but) == 0 {
 		return "clean: " + line
 	}
 	return "passed with " + strings.Join(but, " and ") + ": " + line
+}
+
+// qaBlockedSplit is the states bs the walker could not reach in two: those
+// flagged alone, and those you accepted as ones QA could not check
+// (QABlocked.Accepted).
+func qaBlockedSplit(bs []QABlocked) (flagged, accepted []QABlocked) {
+	for _, b := range bs {
+		if b.Accepted {
+			accepted = append(accepted, b)
+		} else {
+			flagged = append(flagged, b)
+		}
+	}
+	return flagged, accepted
 }
 
 // CardLine is the ready card's QA line of r, the QA run that passed the
@@ -184,13 +203,17 @@ func qaDefectLine(d QADefect) string {
 
 // qaBlockedFlags are the ready card's FLAGS lines of the states bs the
 // walker could not reach, one each: "QA did not reach: the passkey
-// autofill list (headless Chrome draws no autofill)".
+// autofill list (headless Chrome draws no autofill)", ", accepted by you"
+// after one you accepted as a state QA could not check.
 func qaBlockedFlags(bs []QABlocked) []string {
 	var out []string
 	for _, b := range bs {
 		s := qaBlockedFlag + cmp.Or(qaPlain(b.What), "a state")
 		if why := qaPlain(b.Why); why != "" {
 			s += " (" + why + ")"
+		}
+		if b.Accepted {
+			s += ", accepted by you"
 		}
 		out = append(out, s)
 	}
@@ -217,7 +240,8 @@ func qaForCard(res QAResult) *QAResult {
 // the pages walked (path and state), the defects an earlier run found and
 // the writer fixed, those whose fix QA did not walk again and you let go,
 // those you accepted (accepted by you), the notes, and
-// the states the walker could not reach, flagged. "" without QA (a
+// the states the walker could not reach, flagged, those you accepted as
+// ones QA could not check apart (accepted by you). "" without QA (a
 // repository without [factory.repo.qa]).
 func qaSection(res QAResult) string {
 	line := qaCardLine(res)
@@ -230,14 +254,19 @@ func qaSection(res QAResult) string {
 		b.WriteString("No user-facing file changed: no visual QA ran.\n\n</details>\n")
 		return b.String()
 	}
+	flaggedStates, acceptedStates := qaBlockedSplit(res.Blocked)
+	states := "the states it could not reach are flagged below"
+	if len(flaggedStates) == 0 {
+		states = "the states it could not reach, which you accepted, are flagged below"
+	}
 	verdict := "Nothing it found blocks."
 	switch accepted, blocked := len(res.Accepted) > 0 || len(res.Unchecked) > 0, len(res.Blocked) > 0; {
 	case accepted && blocked:
-		verdict = "Nothing it found on the pages it reached blocks but what you accepted; the states it could not reach are flagged below."
+		verdict = "Nothing it found on the pages it reached blocks but what you accepted; " + states + "."
 	case accepted:
 		verdict = "Nothing it found blocks but what you accepted, below."
 	case blocked:
-		verdict = "Nothing it found on the pages it reached blocks; the states it could not reach are flagged below."
+		verdict = "Nothing it found on the pages it reached blocks; " + states + "."
 	}
 	fmt.Fprintf(&b, "Before this PR the factory ran the change's app in its own copy at `%s`, an agent walked the changed pages in a headless "+
 		"browser, and the factory checked each page it saved itself for HTML shown as text, missing translations, error pages, console "+
@@ -290,15 +319,19 @@ func qaSection(res QAResult) string {
 	}
 	list("Accepted by you, not fixed", defects(res.Accepted))
 	list("Notes, none of them blocks", defects(res.Known))
-	var blocked []string
-	for _, bl := range res.Blocked {
-		s := qaCode(cmp.Or(bl.What, "a state"))
-		if bl.Why != "" {
-			s += ": " + qaCode(bl.Why)
+	blocked := func(bs []QABlocked) []string {
+		var out []string
+		for _, bl := range bs {
+			s := qaCode(cmp.Or(bl.What, "a state"))
+			if bl.Why != "" {
+				s += ": " + qaCode(bl.Why)
+			}
+			out = append(out, s)
 		}
-		blocked = append(blocked, s)
+		return out
 	}
-	list("Not reached, flagged", blocked)
+	list("Not reached, flagged", blocked(flaggedStates))
+	list("Not reached, accepted by you", blocked(acceptedStates))
 	b.WriteString("</details>\n")
 	return b.String()
 }
@@ -428,6 +461,9 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 			}
 			if c := qaPlain(bl.Check); c != "" {
 				fmt.Fprintf(&b, " (check %s)", c)
+			}
+			if bl.Accepted {
+				b.WriteString(", accepted by you")
 			}
 			b.WriteString("\n")
 		}

@@ -1761,6 +1761,120 @@ func TestABlockedOnlyWalkWithNoCheckNeedsYouAgain(t *testing.T) {
 	}
 }
 
+// A state the walker could not reach that names no acceptance check waits
+// on you, and a plain retry walks again and waits on you again, however
+// many times: only your accept (A, --accept-qa) lets the task go on. The
+// wait says so and promises no flagged pass; A names the state in the
+// walker's words; the accept walks no more: the task goes on at once with
+// the state flagged on the card and in the PR body as accepted by you,
+// never as fixed and never as a clean pass, and the run's own failed check
+// stands.
+func TestABlockedStateWithNoCheckWaitsOnYouUntilYourAccept(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12490")
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the admin's view of the page", Why: "no admin locally", Check: ""}}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	var got registry.Task
+	for i := 1; i <= 2; i++ {
+		r.toWalker(task)
+		r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+		got = r.toYou(task)
+		if _, ok := readQASummary(dir); ok {
+			t.Fatalf("walk %d went on", i)
+		}
+		if i == 1 {
+			r.retryAnswer(task.ID) // a plain retry walks again
+		}
+	}
+	for _, want := range []string{"waits on you again", fmt.Sprintf("`magnum factory retry %d --accept-qa` accepts the state", task.ID),
+		"flagged on the card and in the PR body as accepted by you"} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	if strings.Contains(got.WaitsWhat, "goes on with those states flagged") {
+		t.Errorf("the task waits %q: it promises a flagged pass that cannot happen", got.WaitsWhat)
+	}
+	run, a, err := qaAcceptable(dir, got)
+	if what, want := qaAcceptWhat(dir, run, a), "1 state QA could not reach at "+head[:7]+" (the admin's view of the page)"; err != nil || what != want {
+		t.Fatalf("A accepts %q (%v), want %q", what, err, want)
+	}
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone || !strings.Contains(q.Result, "1 state it could not reach") {
+		t.Fatalf("your accept: %+v", q)
+	}
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if cur := r.reload(task.ID); cur.Stage != "pr_body" || !isLive(cur) {
+		t.Fatalf("task %s at %s waits %q: %q, want pr_body", cur.State, cur.Stage, cur.WaitsWho, cur.WaitsWhat)
+	}
+	if n := len(r.rt.promptsTo("fx-qa")); n != 2 {
+		t.Errorf("the walker got %d prompts, want 2: your accept walks no more", n)
+	}
+	sum, ok := readQASummary(dir)
+	if !ok || sum.Outcome != QAOutcomeClean || sum.Run != 2 || sum.Head != head || len(sum.Blocked) != 1 || !sum.Blocked[0].Accepted ||
+		sum.Blocked[0].What != "the admin's view of the page" || len(sum.Fixed) != 0 || len(sum.Accepted) != 0 || len(sum.Unchecked) != 0 {
+		t.Fatalf("qa-summary.json %+v (%v), want run 2 at the head with its state accepted by you and nothing else", sum, ok)
+	}
+	if !strings.Contains(sum.Why, "accepted by you") {
+		t.Errorf("the pass's why %q leaves your accept out", sum.Why)
+	}
+	if line, want := qaCardLine(sum), "passed with 1 state not reached, accepted by you: 1 page walked at "+head[:7]+", 0 notes"; line != want {
+		t.Errorf("the card's QA line %q, want %q", line, want)
+	}
+	if flags, want := qaBlockedFlags(sum.Blocked), []string{"QA did not reach: the admin's view of the page (no admin locally), accepted by you"}; !slices.Equal(flags, want) {
+		t.Errorf("FLAGS %q, want %q", flags, want)
+	}
+	section := qaSection(sum)
+	if want := "Not reached, accepted by you:\n\n- `the admin's view of the page`: `no admin locally`"; !strings.Contains(section, want) {
+		t.Errorf("the PR body's section lacks %q:\n%s", want, section)
+	}
+	if strings.Contains(strings.ToLower(section), "fixed") || strings.Contains(section, "clean:") || strings.Contains(section, "Not reached, flagged") {
+		t.Errorf("the PR body calls an accepted state fixed, clean or flagged without you:\n%s", section)
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"fail:env@" + head, "fail:env@" + head}) {
+		t.Errorf("qa checks %q, want each run's failed check and no pass", got)
+	}
+	if ev := r.eventsWith(task.ID, "qa", "you accepted 1 state QA could not reach"); len(ev) != 1 {
+		t.Errorf("qa events %q, want the accept of the state", ev)
+	}
+	if acc, ok := readQAAccepted(dir); !ok || acc.Head != head || len(acc.Blocked) != 1 || acc.Blocked[0].What != "the admin's view of the page" {
+		t.Errorf("qa-accepted.json %+v (%v), want the state at the head", acc, ok)
+	}
+}
+
+// At the first stop on a state the walker could not reach, your accept
+// through the liaison is recorded as the liaison's: the qa event names it,
+// and qa-accepted.json keeps the surface; the task goes on with the state
+// flagged as accepted by you.
+func TestTheLiaisonsAcceptOfAStateQACouldNotReachIsTheLiaisons(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12491")
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.toWalker(task)
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.toYou(task)
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqRetry, RetryPayload{TaskID: task.ID, Surface: "liaison", AcceptQA: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if q, err := r.reg.RequestByID(r.ctx, qid); err != nil || q.State != registry.RequestDone {
+		t.Fatalf("the liaison's accept: %+v (%v)", q, err)
+	}
+	if got := r.eventsWith(task.ID, "qa", "you accepted 1 state QA could not reach at "+head[:7]+" (run 1), through the liaison"); len(got) != 1 {
+		t.Errorf("qa events %q, want the accept naming the liaison", r.eventsWith(task.ID, "qa", "accepted"))
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if acc, ok := readQAAccepted(dir); !ok || acc.By != "liaison" || len(acc.Blocked) != 1 {
+		t.Errorf("qa-accepted.json %+v (%v), want the state by the liaison", acc, ok)
+	}
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if sum, ok := readQASummary(dir); !ok || sum.Run != 1 || len(sum.Blocked) != 1 || !sum.Blocked[0].Accepted {
+		t.Fatalf("qa-summary.json %+v (%v), want run 1 on with its state accepted by you", sum, ok)
+	}
+}
+
 // Under disk or memory pressure an idle task's server stop waits its
 // backoff too: a stop that failed is not tried again on every tick.
 func TestPressureWaitsTheBackoffOfAFailedServerStop(t *testing.T) {
