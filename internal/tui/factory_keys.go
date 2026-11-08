@@ -530,7 +530,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "/":
 		m.filtering = true
 	case "O":
-		return m.nextScope(), true
+		return m.nextOwner(), true
 	case "esc": // a filter kept is cleared, as on the board
 		if m.filter.Value() == "" {
 			return nil, false

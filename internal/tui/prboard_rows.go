@@ -692,15 +692,11 @@ func prURL(r PRBoardRow) string {
 
 // inRepo reports whether the row belongs to repo ("name" or "owner/name").
 func inRepo(r PRBoardRow, repo string) bool {
-	repo = strings.ToLower(strings.TrimSpace(repo))
-	if repo == "" {
+	if strings.TrimSpace(repo) == "" {
 		return true
 	}
 	owner, name, _ := prRefParts(r)
-	if strings.Contains(repo, "/") {
-		return repo == strings.ToLower(owner+"/"+name)
-	}
-	return repo == strings.ToLower(name)
+	return repoInScope(owner, name, repo)
 }
 
 // isOpen reports whether the PR is still open on GitHub (an unknown

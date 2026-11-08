@@ -223,6 +223,15 @@ type FactoryOptions struct {
 	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// Settings, when set, lets `,` open the settings screen over the factory.
 	Settings *SettingsScreen
+	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
+	// first when O cycles the owners, as on the PR board.
+	DefaultRepo string
+	// DefaultOwner is the owner scope the screen opens in, the board's (O):
+	// "" shows every owner, as does an owner with no rows. OwnerChanged,
+	// when set, hears every change of it (O, or its owner's last row
+	// leaving), so the next screen can open in it.
+	DefaultOwner string
+	OwnerChanged func(owner string)
 }
 
 // RunFactory shows the factory screen until the operator quits or ctx ends.
@@ -421,11 +430,12 @@ type factoryModel struct {
 	walk     bool // a: a decision leads to the next oldest
 	walked   map[int64]bool
 	// filter is home's / filter (factoryMatch), which has the keyboard
-	// while filtering; scope the repository O shows alone ("" = all).
-	// Neither outlives the screen, and a walk (a) ignores both.
+	// while filtering, and does not outlive the screen; owner is the owner
+	// scope O cycles, the board's ("" = every owner), which the cli keeps
+	// for both screens (opts.OwnerChanged). A walk (a) ignores both.
 	filter    textinput.Model
 	filtering bool
-	scope     string
+	owner     string
 
 	batches map[int64]*factoryBatch
 	readies map[int64]*factoryReady
@@ -481,6 +491,7 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
 		walked: map[int64]bool{}, batches: map[int64]*factoryBatch{}, readies: map[int64]*factoryReady{}, cursors: map[int64]int{},
 		input: in, filter: filter, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
+		owner: strings.TrimSpace(opts.DefaultOwner),
 	}
 	m.mouseOn = !opts.NoMouse
 	m.applyStyles(defaultStyles)
@@ -629,8 +640,7 @@ func (m *factoryModel) loaded(msg factoryDataMsg) tea.Cmd {
 		return cmd
 	}
 	m.data, m.haveData, m.loadErr = msg.data, true, nil
-	cmd = tea.Batch(cmd, m.rebind(), m.rebindReady()) // a question they drop leaves its note, which expires
-	m.keepScope()
+	cmd = tea.Batch(cmd, m.rebind(), m.rebindReady(), m.keepOwner()) // a question they drop leaves its note, which expires
 	m.fixCursor()
 	if m.selectKey != "" {
 		if i := slices.IndexFunc(m.data.Rows, func(r FactoryRow) bool { return r.Key == m.selectKey || r.Title == m.selectKey }); i >= 0 {
@@ -820,15 +830,15 @@ func (m factoryModel) orderOf(narrowed bool) []int64 {
 	return out
 }
 
-// shown reports whether home shows row r: it is of the scope's repository
-// (any, with no scope) and the filter matches it.
+// shown reports whether home shows row r: it is of the owner scope's
+// owner (ofOwner) and the filter matches it.
 func (m factoryModel) shown(r FactoryRow) bool {
-	return (m.scope == "" || strings.EqualFold(cleanText(r.Repo), m.scope)) && factoryMatch(r, m.filter.Value())
+	return m.ofOwner(r) && factoryMatch(r, m.filter.Value())
 }
 
-// narrowed reports whether the filter or the scope hides rows of home.
+// narrowed reports whether the filter or the owner scope hides rows of home.
 func (m factoryModel) narrowed() bool {
-	return m.scope != "" || strings.TrimSpace(m.filter.Value()) != ""
+	return m.owner != "" || strings.TrimSpace(m.filter.Value()) != ""
 }
 
 // factoryMatch reports whether the filter q matches row r, as the board's
@@ -855,53 +865,64 @@ func factoryMatch(r FactoryRow, q string) bool {
 	return true
 }
 
-// rowRepos are the repositories home's rows are of, sorted (case does not
-// matter): the scopes O cycles through.
-func (m factoryModel) rowRepos() []string {
-	var out []string
+// factoryRowOwner is the owner of the row's repository ("owner/name"): ""
+// for a row that names none.
+func factoryRowOwner(r FactoryRow) string {
+	owner, _, ok := strings.Cut(cleanText(r.Repo), "/")
+	if !ok {
+		return ""
+	}
+	return owner
+}
+
+// ofOwner reports whether row r is in the owner scope: every row with no
+// scope, else the scope owner's (case aside) and a row that names no
+// owner, which every scope shows.
+func (m factoryModel) ofOwner(r FactoryRow) bool {
+	o := factoryRowOwner(r)
+	return m.owner == "" || o == "" || sameOwner(o, m.owner)
+}
+
+// owners are the owners of home's rows, as O cycles them: the board's order
+// (ownerOrder), daemon.default_repo's owner first.
+func (m factoryModel) owners() []string {
+	owners := make([]string, 0, len(m.data.Rows))
 	for _, r := range m.data.Rows {
-		if repo := cleanText(r.Repo); repo != "" && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, repo) }) {
-			out = append(out, repo)
-		}
+		owners = append(owners, factoryRowOwner(r))
 	}
-	slices.SortFunc(out, func(a, b string) int { return cmp.Compare(strings.ToLower(a), strings.ToLower(b)) })
-	return out
+	return ownerOrder(owners, homeOwner(m.opts.DefaultRepo, ""))
 }
 
-// nextScope moves O's scope on (scopeAfter); the cursor stays on its row
-// or goes to the nearest one shown.
-func (m *factoryModel) nextScope() tea.Cmd {
-	if len(m.rowRepos()) == 0 {
-		return m.note("no repository to show alone: the rows name none")
+// setOwner changes the owner scope and tells opts.OwnerChanged.
+func (m *factoryModel) setOwner(owner string) {
+	m.owner = owner
+	if m.opts.OwnerChanged != nil {
+		m.opts.OwnerChanged(owner)
 	}
-	m.scope = m.scopeAfter()
+}
+
+// nextOwner moves O's owner scope on, as the board's O (ownerAfter); the
+// cursor stays on its row or goes to the nearest one shown.
+func (m *factoryModel) nextOwner() tea.Cmd {
+	owners := m.owners()
+	if len(owners) == 0 {
+		return m.note("no owner to show alone")
+	}
+	m.setOwner(ownerAfter(owners, m.owner))
 	m.fixCursor()
-	return m.note("repo: " + cmp.Or(m.scope, "all"))
+	return m.note(ownerNote(m.owner))
 }
 
-// scopeAfter is the scope O moves to from the current one: from every
-// repository the first with rows (rowRepos), from each the next, and from
-// the last (or one with no rows left) every repository again ("").
-func (m factoryModel) scopeAfter() string {
-	repos := m.rowRepos()
-	switch i := slices.IndexFunc(repos, func(r string) bool { return strings.EqualFold(r, m.scope) }); {
-	case len(repos) == 0:
-		return ""
-	case m.scope == "":
-		return repos[0]
-	case i < 0 || i == len(repos)-1:
-		return ""
-	default:
-		return repos[i+1]
+// keepOwner is the board's rule for an owner scope whose owner has no rows
+// (its last one left, or none at the start): home shows every owner again,
+// a change OwnerChanged hears, and the footer says why.
+func (m *factoryModel) keepOwner() tea.Cmd {
+	if m.owner == "" || slices.ContainsFunc(m.owners(), func(o string) bool { return sameOwner(o, m.owner) }) {
+		return nil
 	}
-}
-
-// keepScope drops a scope whose repository has no rows any more: home
-// shows every repository again.
-func (m *factoryModel) keepScope() {
-	if m.scope != "" && !slices.ContainsFunc(m.rowRepos(), func(r string) bool { return strings.EqualFold(r, m.scope) }) {
-		m.scope = ""
-	}
+	gone := m.owner
+	m.setOwner("")
+	return m.note("owner: all (" + gone + " has no tasks or PRs now)")
 }
 
 // row is the task id's row.
@@ -1116,10 +1137,12 @@ func (m factoryModel) homeFrame() factoryFrame {
 	if m.narrowed() { // the filter's and the scope's rows; the chips count every one
 		rows = slices.DeleteFunc(slices.Clone(d.Rows), func(r FactoryRow) bool { return !m.shown(r) })
 	}
+	owners := m.owners()
 	f := factoryFrame{Repos: d.Repos, Rows: rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
-		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1}
+		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1,
+		owner: m.owner, owners: len(owners) > 1}
 	if m.narrowed() {
-		f.all, f.scope, f.filter, f.scopeNext = d.Rows, m.scope, strings.TrimSpace(cleanInput(m.filter.Value())), m.scopeAfter()
+		f.all, f.filter, f.ownerNext = d.Rows, strings.TrimSpace(cleanInput(m.filter.Value())), ownerAfter(owners, m.owner)
 		f.hidden = len(m.orderOf(false)) - len(m.order())
 	}
 	if m.filtering {
@@ -1168,7 +1191,8 @@ func (m factoryModel) homeFrame() factoryFrame {
 }
 
 // homeHints are home's key hints for the row under the cursor: on your
-// PR's row its card and its PR's keys; while the filter is typed, its own.
+// PR's row its card and its PR's keys, and O while the rows span several
+// owners; while the filter is typed, its own.
 func (m factoryModel) homeHints() []hint {
 	if m.filtering {
 		return []hint{{"enter", "keep the filter"}, {"esc", "clear it"}, {"↑ ↓", "move"}}
@@ -1200,6 +1224,9 @@ func (m factoryModel) homeHints() []hint {
 	}
 	if m.filter.Value() != "" {
 		hs = append(hs, hint{"esc", "clear filter"})
+	}
+	if len(m.owners()) > 1 { // as the board's: O has an owner to show alone
+		hs = append(hs, hint{"O", "owner"})
 	}
 	return append(hs, hint{"?", "more"})
 }

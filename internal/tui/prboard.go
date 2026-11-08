@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -644,29 +643,14 @@ func rowOwner(r PRBoardRow) string {
 }
 
 // owners are the owners with loaded rows (as the first of them spells
-// it): the default repository's owner first, then alphabetically.
+// it): the default repository's owner first, then alphabetically
+// (ownerOrder, which the factory screen's O follows too).
 func (m prBoardModel) owners() []string {
-	home := m.opts.DefaultRepo
-	if home == "" {
-		home = m.opts.Repo
-	}
-	home, _, _ = strings.Cut(home, "/")
-	var out []string
+	owners := make([]string, 0, len(m.loaded))
 	for _, r := range m.loaded {
-		if o := rowOwner(r); o != "" && !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, o) }) {
-			out = append(out, o)
-		}
+		owners = append(owners, rowOwner(r))
 	}
-	slices.SortFunc(out, func(a, b string) int {
-		if ha, hb := strings.EqualFold(a, home), strings.EqualFold(b, home); ha != hb {
-			if ha {
-				return -1
-			}
-			return 1
-		}
-		return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
-	})
-	return out
+	return ownerOrder(owners, homeOwner(m.opts.DefaultRepo, m.opts.Repo))
 }
 
 // ownedBy are the rows of owner (case does not matter); none for "".
@@ -674,7 +658,7 @@ func ownedBy(rows []PRBoardRow, owner string) []PRBoardRow {
 	if owner == "" {
 		return nil
 	}
-	return slices.DeleteFunc(slices.Clone(rows), func(r PRBoardRow) bool { return !strings.EqualFold(rowOwner(r), owner) })
+	return slices.DeleteFunc(slices.Clone(rows), func(r PRBoardRow) bool { return !sameOwner(rowOwner(r), owner) })
 }
 
 // setOwner changes the owner scope and tells opts.OwnerChanged.
@@ -685,24 +669,17 @@ func (m *prBoardModel) setOwner(owner string) {
 	}
 }
 
-// nextOwner moves the owner scope on: every owner, then each owner with
-// rows (owners), then every owner again.
+// nextOwner moves the owner scope on (ownerAfter): every owner, then each
+// owner with rows (owners), then every owner again.
 func (m prBoardModel) nextOwner() (prBoardModel, tea.Cmd) {
 	owners := m.owners()
 	if len(owners) == 0 {
 		cmd := m.note("no owner to show alone")
 		return m, cmd
 	}
-	switch i := slices.IndexFunc(owners, func(o string) bool { return strings.EqualFold(o, m.owner) }); {
-	case m.owner == "":
-		m.setOwner(owners[0])
-	case i < 0 || i == len(owners)-1:
-		m.setOwner("")
-	default:
-		m.setOwner(owners[i+1])
-	}
+	m.setOwner(ownerAfter(owners, m.owner))
 	m.rebuild()
-	cmd := m.note("owner: " + cmp.Or(m.owner, "all"))
+	cmd := m.note(ownerNote(m.owner))
 	return m, cmd
 }
 
