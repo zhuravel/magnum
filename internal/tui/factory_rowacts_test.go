@@ -247,3 +247,52 @@ func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
 	mustNotContain(t, h.view(), "U unmute", "z lift snooze")
 }
 
+// The menu of a row or a card with a PR lists r, R, z, M and U in the
+// board's words, dimmed where the board's predicate refuses them (M on a
+// muted PR) and on a row without a PR; an item asks its key's y/N. On a
+// card that offers a retry, r is the retry's item alone.
+func TestTheMenuListsThePRKeys(t *testing.T) {
+	h := testYours(t, 160, 40)
+	h.facts("#4602", FactoryPRFacts{State: "reviewed", GHState: "OPEN", Muted: true})
+	h.press("g")
+	h.selectRow("#4602")
+	items := h.m.menuItems()
+	for k, want := range map[string]struct {
+		label string
+		ok    bool
+	}{"r": {"review", true}, "R": {"fresh review", true}, "z": {"snooze 2h", true}, "M": {"mute", false}, "U": {"unmute", true}} {
+		i := slices.IndexFunc(items, func(it menuItem) bool { return it.key == k })
+		if i < 0 || items[i].label != want.label || items[i].ok != want.ok {
+			t.Errorf("menu item %s: %+v, want %q (live %v)", k, items, want.label, want.ok)
+		}
+	}
+	h.m.menu = ctxMenu{open: true, rowKey: h.m.menuOwner()}
+	h.press("U")
+	mustContain(t, h.view(), "Unmute #4602: resume automatic reviews of it? y/N")
+	h.press("n")
+
+	h.selectRow("PR-12371") // a task's row without a PR
+	for _, it := range h.m.menuItems() {
+		if slices.Contains([]string{"r", "R", "z", "M", "U"}, it.key) && it.ok {
+			t.Errorf("the menu of a row without a PR offers %+v", it)
+		}
+	}
+
+	p := testPublished(t, 140, 40)
+	p.src.change(func(d *FactoryData) {
+		c := d.Cards[1]
+		c.Task.Retry = true
+		d.Cards[1] = c
+	})
+	p.press("ctrl+r")
+	p.open("PR-12320")
+	var rs []string
+	for _, it := range p.m.menuItems() {
+		if it.key == "r" {
+			rs = append(rs, it.label)
+		}
+	}
+	if !slices.Equal(rs, []string{"retry"}) {
+		t.Errorf("the r items of a card with a retry: %q, want the retry alone", rs)
+	}
+}

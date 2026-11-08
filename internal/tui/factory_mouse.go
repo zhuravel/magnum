@@ -141,6 +141,7 @@ func (m factoryModel) menuItems() []menuItem {
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
 			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
 		}
+		fixKeys = append(fixKeys, m.prMenu(sel, row, true)...)
 		if row && sel.yourPR() { // your PR: its PR's card, magnum's pane, no pane of the factory's
 			return slices.Concat([]menuItem{{"open its card", "enter", "enter", true}}, fixKeys, []menuItem{
 				{"step into magnum's pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
@@ -185,6 +186,7 @@ func (m factoryModel) menuItems() []menuItem {
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
 			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
 		}
+		fixKeys = append(fixKeys, m.prMenu(r, r.ID != 0, !c.Retry)...)
 		if r.yourPR() { // your PR's card: no task to retry, diff or drop
 			return slices.Concat(fixKeys, []menuItem{
 				{"step into magnum's pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
@@ -198,6 +200,21 @@ func (m factoryModel) menuItems() []menuItem {
 			[]menuItem{{"back", "esc", "esc", true}})
 	}
 	return nil
+}
+
+// prMenu are the menu's items of r, R, z, M and U on row r (a row the menu
+// is for when ok), in the board's words and dimmed where the board's
+// predicate refuses them, all dimmed on a row without a PR; reviewOnR
+// false leaves the review out (r retries on that card).
+func (m factoryModel) prMenu(r FactoryRow, ok, reviewOnR bool) []menuItem {
+	acts := factoryPRActs
+	if !reviewOnR {
+		acts = slices.DeleteFunc(slices.Clone(acts), func(a rowAct) bool { return a == actReview })
+	}
+	if !ok || r.PR == nil {
+		return actionMenu(acts, actRow{}, false, nil)
+	}
+	return actionMenu(acts, m.prActRow(r, reviewOnR), m.act != nil, nil)
 }
 
 // menuKey is a key while the menu is open: move, run the highlighted item
