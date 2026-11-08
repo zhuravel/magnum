@@ -299,8 +299,10 @@ type CIStatus struct {
 	// Rollup is GitHub's own count of the rollup's check runs and statuses
 	// by state when Checks were read (superseded runs included, past the
 	// 100 Checks lists, so not their tally): the poll reads Checks again
-	// when the cheap rollup read counts other failed or pending ones. A zero
-	// Total is unknown (a read before the counts existed, or none given).
+	// when the cheap rollup read counts other failed, pending or passed
+	// ones (and on every poll while the look's start of the CI workflow
+	// waits for its run). A zero Total is unknown (a read before the
+	// counts existed, or none given).
 	Rollup CheckCounts `json:"rollup,omitzero"`
 	// Merge is GitHub's merge state of the PR when Checks were read
 	// (github.PRDetails.MergeState: BLOCKED, BEHIND, DIRTY, CLEAN, UNSTABLE,

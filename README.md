@@ -844,8 +844,10 @@ same way starts no other, a different check failing later does. A rerun that tur
 or passes, while it waits drops it (`pr.ci_red_dropped`, back to reviewed), and a push supersedes it.
 A check `ignore_checks` names is no failure here: it starts no judge check, and its record never names
 it. The poll reads a head's checks again when its CI rollup's state changes, and also when its counts of
-failed or pending checks do (a rollup stays FAILURE while an earlier failure is red); the counts come in
-the same rollup request, with more fields.
+failed, pending or passed checks do (a rollup stays FAILURE while an earlier failure is red, and a check
+created passed, such as a run's report through the Checks API, moves only the passed count); the counts
+come in the same rollup request, with more fields. It also reads them on every poll while Magnum's start
+of a `ci_dispatch` workflow waits for its run.
 
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
@@ -3581,13 +3583,20 @@ ci_dispatch = "ci.yml"`, the workflow file that produces the repository's requir
 instead (a `workflow_dispatch` run on the PR's branch, as `[[repo]] ci_dispatch_as` when it names an
 `[[identity]]`, else as the watch's `poll_identity`, else its `identity`: the daemon's own client of that
 identity, never the fixer's pane), once per head, recorded before the call so that nothing
-starts it twice (`fix.open_ci_dispatch`), and waits for its run while the head's checks run and for
-`settle_max` after the start ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
-did not run"). GitHub's rollup of the head leaves that run out, so while the start waits each poll reads the
-head's checks once, and a check the run creates passed (a new passed count in the rollup) has the poll read
-them again after the wait too: the run's check ends the wait, or the need, with nothing for you to do. A
-run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
-without a `workflow_dispatch` trigger on the branch answers HTTP 422) and a PR it will not start
+starts it twice (`fix.open_ci_dispatch`), and waits for its run while the head's checks run, while the run
+waits for a runner or runs, and for `settle_max` after the start ("CI at a1b2c3d: magnum started ci.yml at
+14:05, as required check Completion did not run"). Magnum reads a head's checks from GitHub's rollup of the
+PR, which leaves that run out (its `workflow_dispatch` check suite), so while the start waits each poll also
+reads the head's checks and the workflow's runs that a dispatch started at the head (one REST call, as the
+identity that started it; `poll.ci_runs_error` says once that GitHub refused it). A run still queued or
+running past `settle_max` keeps the look waiting; the poll that sees it end reads the head's checks again,
+and so does any poll whose rollup counts a new passed check. The wait, or the need, ends with nothing for you
+to do only when the run creates the required check where the rollup lists it, as a `Completion` check that
+its last job posts through the Checks API to the head: a required check that is a plain job of the started
+workflow is never in the rollup, so its start always ends in needs you ("magnum started ci.yml at 14:05 and
+its run ended (success) without it"). A run that never comes ("and no run came"), a start GitHub refuses
+(`fix.open_ci_dispatch_failed`: a workflow without a `workflow_dispatch` trigger on the branch answers HTTP
+422) and a PR it will not start
 (`fix.open_ci_dispatch_refused`: one that changes its own `.github/workflows/` or `.github/actions/`, which
 would run its own CI with the repository's secrets, whose files GitHub did not list whole, or whose branch
 Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the GitHub

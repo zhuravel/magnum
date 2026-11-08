@@ -16267,6 +16267,18 @@ func (c *Client) DispatchWorkflow(ctx context.Context, owner, repo, workflow, re
     (ValidWorkflowFile) or an empty ref is refused before any call. It is marked
     Mutates, so execx.DryRun only plans it.
 
+func (c *Client) DispatchedRuns(ctx context.Context, owner, repo, workflow, sha string) ([]WorkflowRun, error)
+    DispatchedRuns lists the runs of the workflow file workflow ("ci.yml") of
+    owner/repo that a workflow_dispatch started at commit sha, newest first: GET
+    /repos/{o}/{r}/actions/workflows/{file}/runs filtered by event and head_sha,
+    one page of dispatchedRunsPage. A run is listed from the moment GitHub
+    creates it, queued, before any of its jobs or checks: what a PR's check
+    rollup, which leaves a dispatched run's check suite out, cannot show. A run
+    of another event or commit in the answer is left out. The identity needs
+    read access to the repository's Actions (an App: Actions: read). A workflow
+    that is not a plain file name of .github/workflows (ValidWorkflowFile) or a
+    sha that is no full commit id is refused before any call.
+
 func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (IssueComment, error)
     EditIssueComment replaces the body of issue comment commentID (PATCH
     /repos/{o}/{r}/issues/comments/{id}) as the client's identity, the body as
@@ -16865,6 +16877,20 @@ type ThreadComment struct {
 	DiffHunk          string
 }
     ThreadComment is one comment of a review thread.
+
+type WorkflowRun struct {
+	Status     string
+	Conclusion string
+	URL        string
+	CreatedAt  time.Time
+}
+    WorkflowRun is a run of a workflow as DispatchedRuns lists it: its
+    status (queued, waiting, requested, pending, in_progress or completed),
+    its conclusion once completed (success, failure, cancelled, timed_out, ...),
+    its page and when GitHub created it.
+
+func (r WorkflowRun) Done() bool
+    Done reports whether r ended (completed, whatever its conclusion).
 
 ```
 
@@ -25820,8 +25846,10 @@ type CIStatus struct {
 	// Rollup is GitHub's own count of the rollup's check runs and statuses
 	// by state when Checks were read (superseded runs included, past the
 	// 100 Checks lists, so not their tally): the poll reads Checks again
-	// when the cheap rollup read counts other failed or pending ones. A zero
-	// Total is unknown (a read before the counts existed, or none given).
+	// when the cheap rollup read counts other failed, pending or passed
+	// ones (and on every poll while the look's start of the CI workflow
+	// waits for its run). A zero Total is unknown (a read before the
+	// counts existed, or none given).
 	Rollup CheckCounts `json:"rollup,omitzero"`
 	// Merge is GitHub's merge state of the PR when Checks were read
 	// (github.PRDetails.MergeState: BLOCKED, BEHIND, DIRTY, CLEAN, UNSTABLE,

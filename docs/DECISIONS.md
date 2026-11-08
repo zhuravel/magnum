@@ -3473,11 +3473,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
 
 - **The poll sees the run of the CI workflow the look started** (2026-11-08, a read-only audit of the look's
   verdicts; amends "The look starts the CI workflow a head's required check did not run in, where the
-  repository names it"). On talkable#11949 the look started `ci.yml` at 15:00:47 UTC and the run's Completion
-  passed at 15:06:57, yet from 15:21 the verdict said "required check Completion did not run at ...: magnum
-  started ci.yml at 17:01 and no run came; run it on the PR's branch" (the clock is local); talkable#12213
-  said the same and healed only because magnum's own status comment moved its `updatedAt`, which read its
-  checks again. The cause: the poll reads a PR's checks again (Details) when its `updatedAt`, its head, the
+  repository names it" and the counts rule of "A head whose CI turns red after the review gets a judge
+  check"). On talkable#11949 the look started `ci.yml` at 15:00:47 UTC and the run's Completion passed at
+  15:06:57, yet from 15:21 the verdict said "required check Completion did not run at ...: magnum started
+  ci.yml at 17:01 and no run came; run it on the PR's branch" (the clock is local); talkable#12213 said the
+  same and healed only because magnum's own status comment moved its `updatedAt`, which read its checks
+  again. The cause: the poll reads a PR's checks again (Details) when its `updatedAt`, its head, the
   rollup's state or the rollup's failed or pending count moves (`ciCountsMoved`), and none did. GitHub's
   rollup of the head (`statusCheckRollup`, which the poll's cheap read and Details both take) leaves out the
   run's own `workflow_dispatch` check suite (81 runs; the rollup held 10, and the checks stored by #12213's
@@ -3485,29 +3486,58 @@ skill versions); people add theirs to the sections before it, at the end of the 
   through the Checks API in an older `pull_request` suite of the head: Completion and three test reports,
   created completed (started and completed in the same second), so never pending. They moved the rollup's
   passed count and its total (6 to 10), while its state stayed SUCCESS and its failed and pending counts
-  stayed 0. Two changes, each bounded. `ciCountsMoved` counts the passed count too: both sides are GitHub's
-  counts, so it reads the checks again only when GitHub's passed count moved, which a running check that
-  passes already did through its pending count; what it adds is a check created passed (a run's report, a
-  status posted as success), one more PR in the repository's one Details call; a check created skipped (a
-  comment's skipped workflow) still moves nothing. And while a start waits for its run (`ciRunAwaited`: GitHub
-  took it at the head less than `settle_max` ago, and the head's stored checks still miss a required check by
-  rule 11's own reading, `openCI`), each poll reads that PR's checks once, whatever the rollup says: a rollup
-  the poll could not read, or a run whose check its counts cannot show, no longer leaves the look waiting on
-  checks that ran. The reads end when the run shows or the wait ends, and only a repository with `ci_dispatch`
-  reads the start record. A verdict that already said no run came is the next look's to change: the poll that
-  reads the run's check makes the PR idle with nothing for you to do (#11949's stored verdict, on the first
-  poll of a build with the passed count). Nothing starts the workflow again: the start record is not touched.
-  Rejected: reading the head's check runs through REST (`/commits/{sha}/check-runs` lists the dispatch suite)
-  on every poll (one more call per open PR, where Details already holds the check the required list names);
-  counting the total too (each skipped run of a comment's workflow would read the checks again, and the
-  comment moves `updatedAt` anyway); waiting past `settle_max` (this run took 6 minutes, and the wait is the
-  operator's key). Tests, failing first: TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut,
+  stayed 0. For the same reason the rollup shows nothing of the run while it waits for a runner or runs:
+  a run longer than `settle_max` read as no run even once its check could be seen, and the operator, told
+  to run it by hand, would start a second run of 81 jobs. Two changes, each bounded. `ciCountsMoved`
+  counts the passed count too: both sides are GitHub's counts, so it reads the checks again only when
+  GitHub's passed count moved, which a running check that passes already did through its pending count;
+  what it adds is a check created passed (a run's report, a status posted as success), one more PR in the
+  repository's one Details call; a check created skipped (a comment's skipped workflow) still moves
+  nothing. And while a start waits for its run (`awaitCIRuns`: GitHub took it at the head the radar still
+  shows, the head's stored checks miss a required check by rule 11's own reading, `openCI`, and the start
+  is less than `settle_max` old or its run was queued or running at the last read), each poll reads that
+  PR's checks once, whatever the rollup says, and the runs a dispatch started of the workflow at the head
+  once (`github.Client.DispatchedRuns`: GET `actions/workflows/{file}/runs` with `event=workflow_dispatch`
+  and `head_sha`, one page of 20; as the identity that started it, which can run workflows and so read
+  them, and not while its budget is low). The newest run GitHub created since the start (a minute of clock
+  skew allowed: an older run of the head is someone's start by hand) is kept in the start's record
+  (`pr.<id>.ci_dispatch`'s `run`: status and conclusion). A queued or running run keeps the look waiting
+  past `settle_max`, and the poll that sees it end reads the head's checks after the runs, so its
+  Completion makes the PR idle in that tick. A run that ended with the required check still missing from
+  the rollup needs you with how it ended ("magnum started ci.yml at 14:05 and its run ended (timed out)
+  without it; run it on the PR's branch"; the conclusion is GitHub's plain word or left out); "no run
+  came" is left for a start whose run was not seen within `settle_max`. The reads end when the check
+  shows, when the run ends or, with no run seen, `settle_max` after the start; GitHub's own limits end a
+  run (a job waits 24 hours for a runner at most). A read GitHub refuses is said once (`poll.ci_runs_error`)
+  and leaves the last read standing; with no run read, the wait ends as before. Only a repository with
+  `ci_dispatch` reads the start records. A verdict that already said no run came is the next look's to
+  change: the poll that reads the run's check makes the PR idle with nothing for you to do (#11949's
+  stored verdict, on the first poll of a build with the passed count). Nothing starts the workflow again:
+  the poll writes only the record's run. The limit, in the README: magnum sees a required check only as
+  GitHub's rollup of the PR lists it, so the wait ends with nothing for you to do only where the run
+  creates the check in a suite the rollup lists (talkable's Completion, through the Checks API). A
+  required check that is a plain job of the dispatched workflow lives in the dispatch suite: its start
+  always ends in needs you, now with the run's end instead of "no run came". Rejected: reading the head's
+  check runs through REST (`/commits/{sha}/check-runs`, which lists the dispatch suite) for the waiting
+  PRs, bounded the same way: it would also see a plain job of the workflow, but it lists every job of the
+  run (81 here, in pages of 100) to answer what the runs list answers in one small page (is there a run,
+  and has it ended), and counting a job of the dispatch suite as the required check's run changes what
+  rule 11 calls a run, which no repository asked for yet; the commit's check suites in Details
+  (`checkSuites { status workflowRun { event } }`: one more connection priced on every PR of every
+  Details batch, for the few PRs whose start waits); counting the rollup's total too (each skipped run of a
+  comment's workflow would read the checks again, and the comment moves `updatedAt` anyway); waiting past
+  `settle_max` with no run seen (this run took 6 minutes, and the wait is the operator's key). Tests,
+  failing first: TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut,
   TestAStartWithNoRunReadsTheHeadsChecksOncePerPollUntilItsWaitEnds,
-  TestAPassedCheckThatCameAfterTheWaitClearsNoRunCame and the "a check created passed" case of
+  TestAPassedCheckThatCameAfterTheWaitClearsNoRunCame, the "a check created passed" case of
   TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedPendingOrPassedMoved (it was "another passed
-  check", which moved nothing); TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll, a guard that passes
-  before the fix, fails with the failed start's test taken out, and the first test's "no read once the run
-  shows" fails with the missing check's test taken out.
+  check", which moved nothing), TestARunOfTheStartedCIWorkflowThatOutlastsTheWaitKeepsTheLookWaiting,
+  TestARunOfTheStartedCIWorkflowThatEndedWithoutTheCheckNeedsYou and
+  TestDispatchedRunsListsTheWorkflowsDispatchedRunsAtACommit; TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll,
+  a guard that passes before the fix, fails with the failed start's test taken out, the first test's "no
+  read once the run shows" fails with the missing check's test taken out, and
+  TestARefusedReadOfTheDispatchedRunsIsSaidOnceAndTheWaitEndsAsWithNoRun, written with the fix, fails
+  with its event taken out.
 
 ## Screens and commands
 
