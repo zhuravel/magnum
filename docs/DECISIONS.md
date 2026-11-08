@@ -18745,6 +18745,59 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestCheckPromptsRendersTheQAWalkersPrompt. Mutants caught: the launch in the claimed copy, the cap only in
   `runQA`, a blocked state passing clean, a launching attempt counted as a walk, a teardown that fails no
   attempt of a run with a result, and the walker's questions file left in `questionFiles`.
+- **QA's defects that block go to the writer for a fix, then through the local review and QA again, at most
+  `fixes` times, and none of them becomes a known note** (2026-11-08, R55 slice 1, its sixth step). Step 5
+  sent every defect that blocks to you.
+  - The fix turn: `defects-<k>.json` in the run's folder, a `ReviewFile` (Q1, Q2, ...: the fingerprint, the
+    severity, the class before the title, the first code path the defect names, and a body with the page's
+    path, its state, the shot's absolute path and the quote), for one turn of the coding stage's roles in the
+    qa stage with `factory-qa-fix.md`. It is the local review's fix machinery (`runTurn` with a `reviewTurn`,
+    whose reply file is now its own, `replyFile`: the run's `reply-<k>.json`, the local review's names
+    unchanged), until an attempt after the file's passed: the proof and the precheck at the new head, the
+    reply, and a commit unless every defect was declined with its risk. `isFixTurn` keeps both fix turns out
+    of the coding stage's rework. The prompt asks for the fix test first: a request or view spec that renders
+    the page in its state and asserts on the rendered body (no escaped markup, no `translation missing`).
+  - After a commit the task goes back to the review stage before qa (`backToReview`: "back to local_review:
+    QA's fix at <sha7>: the local review and QA run again"), whose loop starts afresh (its last cycle
+    reviewed another head), and QA runs after it. A move that did not land is made on the next pass: QA's
+    fix moved the head and no review passed at it since (`qaFixReviewed`), so no QA run starts at a head the
+    review has not seen.
+  - The loop goes first in `runQA`, before the branch's checks: the writer commits and leaves changes in the
+    copy while its turn runs, which `branchHead` took for a move of the branch (back to coding) or a copy QA
+    cannot start in (NEEDS YOU).
+  - At most `fixes` fix turns a task (`qaFixTurns`, its defects files): then the task needs you, "QA still
+    finds 1 defect that blocks after 2 fix turns (escaped_markup on /settings/security); came back after its
+    fix: escaped_markup on /settings/security; see <result.json>; then `magnum factory retry <id>`", with no
+    defects file.
+  - R56's two exits closed for QA's defects (the R56 entry names them for the review's findings): a defect
+    that comes back after its fix (an earlier run's defects file has its fingerprint) still blocks, its body
+    says "came back after its fix", and it is never a doubt; the writer's decline with its risk (no commit,
+    the head unchanged) stops the task for you, "the writer declined QA's 1 defect that blocks, each with its
+    risk (...), and QA passes no visible defect as a known note: see <reply-1.json>; then `magnum factory
+    retry <id>`, and QA walks again", never `Known`. A partial decline beside a commit goes on to the review
+    and QA, which find the defect again. Each stop is recorded first (`fix-stop.json` in the run's folder), and
+    a daemon that stops before the move makes it on the next pass. Your retry after a stop walks QA again at
+    the head, and what it finds goes to the writer within the cap. The waits name classes, page paths and
+    files, never a quote or the writer's risk.
+  - A defect's fingerprint follows its page by the path its probe read (the URL's path, cleaned), never the
+    walker's spelling, which changes across runs ("/settings/security/", "settings/security"); the walker's
+    paths still name the pages everywhere else.
+
+  Rejected: the plan's pass of a stage whose every defect the writer declined, with the declines in
+  `qa-summary.json`'s Known (roadmap R56: a visible defect is never Known); a decline counted as open (the
+  writer would be told to commit until its prompts ran out, and its risk would never reach you); the loop
+  after the branch's checks; the walker's path in the fingerprint; a cap per head (the design pins it per
+  task).
+
+  Tests, failing first (the defects went to you): TestQADefectsGoToTheWriterAsAFixTurn (in place of
+  TestQADefectsNeedYouUntilTheFixLoopLands), TestAQAFixGoesBackThroughTheReviewThenQA,
+  TestAWriterAtWorkOnQAsDefectsIsNoMoveOfTheBranch, TestADeclinedQADefectNeedsYouAndNeverBecomesKnown (the plan's
+  TestADeclinedQADefectEndsTheStageWithoutALoop), TestAQADeclineWithoutARiskNeedsACommit,
+  TestQAFixTurnsStopAtTheCap, TestAQAFixGoesToTheReviewEvenWhenItsMoveThereWasLost,
+  TestCheckPromptsRendersTheQAFixPrompt, TestAReviewFixTurnStillRepliesInItsOwnFile and
+  TestNewestQADefectsIsTheNewestRunsFile. The QA rig's timer seam now fires only the probe's interval at once
+  (it cut the fix's precheck as over its cap). Mutants caught: the walker's path in the fingerprint, the loop
+  after the branch's checks, a passed fix taken as closed, a decline that passes or loops, and no cap.
 
 ## Learned rules
 

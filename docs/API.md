@@ -12379,6 +12379,10 @@ const LocalRoundCap = 3 * time.Hour
     a round takes 39 minutes at the median, its roles' own timeouts end within
     the hour. `magnum factory install --drain` waits longer.
 
+const QAFixPrompt = "factory-qa-fix.md"
+    QAFixPrompt is the prompt of the writer's fix turn of QA's defects:
+    the coding stage's roles get it in place of their own prompt.
+
 const QAMaxShots = 30
     QAMaxShots is the most screenshots one QA run may leave in its folder.
 
@@ -12481,12 +12485,13 @@ func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok boo
 
 func CheckPrompts(cfg *config.Config) error
     CheckPrompts renders the prompt of every factory role ([[factory.role]]),
-    every agents stage's own prompt (FactoryStage.Prompt) and the amend turn's
-    (AmendPrompt, for the roles of each kind's report stage) with data whose
-    every field is set, as the factory daemon does once at startup, after it
-    loaded its prompts: a prompt (or factory-shared.md) that names a field the
-    data lacks, or a block the partials file does not define, is an error naming
-    the role or the stage and its file.
+    every agents stage's own prompt (FactoryStage.Prompt), the amend turn's
+    (AmendPrompt, for the roles of each kind's report stage) and the writer's
+    fix turns' (ReviewFixPrompt and QAFixPrompt) with data whose every field
+    is set, as the factory daemon does once at startup, after it loaded its
+    prompts: a prompt (or factory-shared.md) that names a field the data lacks,
+    or a block the partials file does not define, is an error naming the role or
+    the stage and its file.
 
 func ConfirmSentence(t registry.Task, frees string, starts string) string
     ConfirmSentence is the y/N question of the ready card's push: the branch it
@@ -12589,8 +12594,9 @@ func PickKind(cfg config.Factory, t *jira.Ticket, prompt string) (kind, why stri
 
 func PromptNames(cfg *config.Config) []string
     PromptNames are the prompt files the factory renders: each factory role's
-    (of each prompt kind), each agents stage's own, and the amend turn's,
-    once each; the daemon loads them at startup (config.SnapshotPrompts).
+    (of each prompt kind), each agents stage's own, the amend turn's and
+    the writer's fix turns', once each; the daemon loads them at startup
+    (config.SnapshotPrompts).
 
 func QuestionKey(text string) string
     QuestionKey is how a question is told from the questions the task asked,
@@ -13268,24 +13274,26 @@ type PromptData struct {
     judge's report stage, questions-<role>.json for any other role); Report,
     Acceptance and Proof the judge's report.md and acceptance.json and the
     writer's proof.json; Review the local review's findings for the writer
-    (review-<n>.json, the newest round's) and ReviewReply the writer's reply to
-    them (review-reply-<n>.json), both "" outside the local review's fix turn
-    (ReviewFixPrompt). FactoryProof is the factory's proof (factory-proof.json),
-    ReviewSummary the local review's end (review-summary.json), PRBody the PR
-    body the pr_body stage writes (pr-body.md) and PRTemplate the repository's
-    PR template in the copy ("" when it has none). A coding turn back from the
-    ready card carries what it is back for (rework.json): SendBack your note's
-    file and SendBackReason the key of your reason (a send back), MergeBase the
-    base to merge (origin/<base>) and Conflicts the paths merging it conflicts
-    in (a conflict at the card), or HeadMoved the commit the branch moved to
-    after the checks passed at HeadWas (a commit the factory did not make);
-    each "" (nil) in any other turn. RedRun is the kind's proof: its specs must
-    fail on the base (config.FactoryKind.RedRun; a kind whose proof is "green"
-    keeps them green). ErrorSkill is the repository's error_skill ("" = none:
-    no prompt names one) and PRBodySkill its pr_body_skill ("" = none: the PR
-    body prompt writes the factory's own outline), DBLockCommand the `magnum
-    db-lock` line of the copy for the role as it runs, and Port the copy's
-    server's (0 when its env names none).
+    (review-<n>.json, the newest round's) and ReviewReply the writer's reply
+    to them (review-reply-<n>.json), or in QA's fix turn (QAFixPrompt) the
+    newest run's defects (qa/<k>-<sha7>/defects-<k>.json) and the reply to them
+    (reply-<k>.json beside it), both "" outside a fix turn. FactoryProof is
+    the factory's proof (factory-proof.json), ReviewSummary the local review's
+    end (review-summary.json), PRBody the PR body the pr_body stage writes
+    (pr-body.md) and PRTemplate the repository's PR template in the copy (""
+    when it has none). A coding turn back from the ready card carries what it is
+    back for (rework.json): SendBack your note's file and SendBackReason the key
+    of your reason (a send back), MergeBase the base to merge (origin/<base>)
+    and Conflicts the paths merging it conflicts in (a conflict at the card),
+    or HeadMoved the commit the branch moved to after the checks passed
+    at HeadWas (a commit the factory did not make); each "" (nil) in any
+    other turn. RedRun is the kind's proof: its specs must fail on the base
+    (config.FactoryKind.RedRun; a kind whose proof is "green" keeps them green).
+    ErrorSkill is the repository's error_skill ("" = none: no prompt names one)
+    and PRBodySkill its pr_body_skill ("" = none: the PR body prompt writes the
+    factory's own outline), DBLockCommand the `magnum db-lock` line of the copy
+    for the role as it runs, and Port the copy's server's (0 when its env names
+    none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`

@@ -1392,19 +1392,28 @@ func writeJSON(path string, v any) error {
 }
 
 // reviewTurn is the review's part of a fix turn's end fact (agentsTurn): the
-// cycle's number n, the head the round reviewed, and the ids of the
-// findings that need a fix (not the questions).
+// cycle's number n, the head the round reviewed, the ids of the findings
+// that need a fix (not the questions), the file of the writer's reply (""
+// for the local review's, review-reply-<n>.json; QA's fix turn names its
+// run's, qaReplyFile) and how the commit's problem names who looked at the
+// head ("" for "the local review reviewed").
 type reviewTurn struct {
 	n        int
 	reviewed string
 	live     []string
+	reply    string
+	by       string
 }
+
+// replyFile is the writer's reply to the turn's findings, relative to the
+// task's directory.
+func (rt *reviewTurn) replyFile() string { return cmp.Or(rt.reply, reviewReplyFile(rt.n)) }
 
 // replyProblem is what keeps the writer's reply from being read: missing,
 // older than since, not JSON, or a reply with another action than fixed or
 // declined.
 func (rt *reviewTurn) replyProblem(dir string, since time.Time) *endProblem {
-	name := reviewReplyFile(rt.n)
+	name := rt.replyFile()
 	text, p := readFresh(dir, name, since)
 	if p != nil {
 		return p
@@ -1430,13 +1439,13 @@ func (rt *reviewTurn) commitProblem(dir, head string) *endProblem {
 		return nil
 	}
 	var rep ReviewReply
-	if b, err := os.ReadFile(filepath.Join(dir, reviewReplyFile(rt.n))); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rt.replyFile()))); err == nil {
 		_ = json.Unmarshal(b, &rep) // replyProblem read it
 	}
 	risks := rep.declinedWithRisk()
 	if !slices.ContainsFunc(rt.live, func(id string) bool { return risks[id] == "" }) {
 		return nil // every finding declined with its risk: nothing to commit
 	}
-	return &endProblem{file: "the branch", change: true, why: fmt.Sprintf("the branch has no commit since the local review reviewed %s: "+
-		"commit your fixes, or decline each finding with its risk", short(rt.reviewed))}
+	return &endProblem{file: "the branch", change: true, why: fmt.Sprintf("the branch has no commit since %s %s: "+
+		"commit your fixes, or decline each finding with its risk", cmp.Or(rt.by, "the local review reviewed"), short(rt.reviewed))}
 }

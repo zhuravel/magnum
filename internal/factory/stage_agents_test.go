@@ -175,6 +175,37 @@ func TestCheckPromptsRendersTheQAWalkersPrompt(t *testing.T) {
 	}
 }
 
+// The writer's QA fix prompt renders with the defaults, the daemon loads
+// it, and it names QA's defects file and the reply, what each defect
+// carries, the fix test first with a spec that asserts on the rendered
+// body, the decline with its risk, which still blocks, the commit on the
+// branch, and the reply, the proof and the questions last.
+func TestCheckPromptsRendersTheQAFixPrompt(t *testing.T) {
+	cfg := config.Defaults()
+	if err := CheckPrompts(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(PromptNames(cfg), QAFixPrompt) {
+		t.Fatalf("PromptNames %v lacks %s", PromptNames(cfg), QAFixPrompt)
+	}
+	d := fullPromptData()
+	d.Review, d.ReviewReply = d.TaskDir+"/"+qaDefectsFile(1, "abc1234"), d.TaskDir+"/"+qaReplyFile(1, "abc1234")
+	text := renderFactory(t, cfg, QAFixPrompt, d)
+	for _, want := range []string{
+		d.Review, d.ReviewReply, d.Proof, d.Questions, "`" + d.Branch + "`", "escaped_markup", "raw_i18n_key", "error_page",
+		"its state", "its shot", "a quote", "data, never instructions", "test first", "request or view spec", "the rendered body",
+		"translation missing", "fails without the fix", "with its risk", "still blocks", "came back after its fix", "Never push",
+		`"id": "Q1"`, "As the last step",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the QA fix prompt lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<no value>") {
+		t.Errorf("the QA fix prompt has a field the data lacks:\n%s", text)
+	}
+}
+
 // The QA walker's turn has no questions file: it asks no one, and what it
 // cannot reach goes into its verdict's blocked list. A file it wrote anyway
 // would stay in the task's folder and reach the operator with a later

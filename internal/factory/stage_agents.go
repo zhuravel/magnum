@@ -73,8 +73,10 @@ import (
 // any other role); Report, Acceptance and Proof the judge's report.md and
 // acceptance.json and the writer's proof.json; Review the local review's
 // findings for the writer (review-<n>.json, the newest round's) and
-// ReviewReply the writer's reply to them (review-reply-<n>.json), both ""
-// outside the local review's fix turn (ReviewFixPrompt). FactoryProof is
+// ReviewReply the writer's reply to them (review-reply-<n>.json), or in
+// QA's fix turn (QAFixPrompt) the newest run's defects
+// (qa/<k>-<sha7>/defects-<k>.json) and the reply to them (reply-<k>.json
+// beside it), both "" outside a fix turn. FactoryProof is
 // the factory's proof (factory-proof.json), ReviewSummary the local
 // review's end (review-summary.json), PRBody the PR body the pr_body stage
 // writes (pr-body.md) and PRTemplate the repository's PR template in the
@@ -159,13 +161,14 @@ type agentsRun struct {
 type agentsTurn struct {
 	gate  bool
 	since time.Time
-	// review is the local review's fix turn of the writer (review.go): a
-	// turn of the coding stage's roles in the review stage, each its own
-	// attempt, on the task's branch as it is (no fresh start from the
-	// base), whose end fact is the coding stage's (proof.json, the factory's
-	// proof and precheck at the head, provenHead) and the review's own:
-	// the writer's reply, and a commit since the round unless it declined
-	// every finding with its risk. nil for any other turn.
+	// review is a fix turn of the writer, the local review's (review.go)
+	// or QA's (qa_fix.go): a turn of the coding stage's roles in the review
+	// or the qa stage, each its own attempt, on the task's branch as it is
+	// (no fresh start from the base), whose end fact is the coding stage's
+	// (proof.json, the factory's proof and precheck at the head,
+	// provenHead) and the fix's own: the writer's reply, and a commit since
+	// the head the round reviewed unless it declined every finding with its
+	// risk. nil for any other turn.
 	review *reviewTurn
 	// qa is a qa stage's walker turn (qa.go): its run and the QA session's
 	// copy, which the walker launches in (the factory's shims and its
@@ -960,7 +963,7 @@ func (e *Engine) beforeLetGo(ctx context.Context, t *registry.Task, st config.Fa
 		return &endProblem{file: filepath.Base(outs[0]), why: "written before the prompt you let go (" + r.letGoSince.Local().Format("15:04:05") + ")"}, nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if after(filepath.Join(dir, proofFile)) || (run.turn.review != nil && after(filepath.Join(dir, reviewReplyFile(run.turn.review.n)))) {
+	if after(filepath.Join(dir, proofFile)) || (run.turn.review != nil && after(filepath.Join(dir, filepath.FromSlash(run.turn.review.replyFile())))) {
 		return nil, nil
 	}
 	if e.d.Git != nil && run.copy.Path != "" && t.Branch != "" {
@@ -1187,6 +1190,9 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 		if n := newestReview(dir); st.Prompt == ReviewFixPrompt && n > 0 {
 			names = append(names, reviewReplyFile(n))
 		}
+		if k, head := newestQADefects(dir); st.Prompt == QAFixPrompt && k > 0 {
+			names = append(names, filepath.FromSlash(qaReplyFile(k, head)))
+		}
 	case config.FactoryEndPRBody:
 		names = []string{prBodyFile, roleQuestionsFile(role.Name)}
 	case config.FactoryEndQA: // the newest run's verdict; the walker asks no one
@@ -1215,7 +1221,7 @@ func (e *Engine) passStage(ctx context.Context, t registry.Task, st config.Facto
 		if err := e.appendKnown(ctx, t); err != nil {
 			return err
 		}
-	case st.End == config.FactoryEndProof && proven != "" && st.Prompt != ReviewFixPrompt:
+	case st.End == config.FactoryEndProof && proven != "" && !isFixTurn(st):
 		e.consumeRework(t.ID) // before the attempt counts: no later coding turn names it again
 	}
 	if err := e.reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptRunning, registry.AttemptEnded}, registry.AttemptVerified, nil); err != nil &&
@@ -1285,7 +1291,7 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
 	}
-	if st.End == config.FactoryEndProof && st.Prompt != ReviewFixPrompt { // the coding stage: back from the ready card?
+	if st.End == config.FactoryEndProof && !isFixTurn(st) { // the coding stage: back from the ready card?
 		if rw, ok := readRework(dir); ok {
 			switch rw.Kind {
 			case reworkSendBack:
@@ -1300,6 +1306,11 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	if st.Prompt == ReviewFixPrompt { // the local review's fix turn: its newest round's findings
 		if n := newestReview(dir); n > 0 {
 			d.Review, d.ReviewReply = in(reviewFile(n)), in(reviewReplyFile(n))
+		}
+	}
+	if st.Prompt == QAFixPrompt { // QA's fix turn: its newest run's defects
+		if k, head := newestQADefects(dir); k > 0 {
+			d.Review, d.ReviewReply = in(filepath.FromSlash(qaDefectsFile(k, head))), in(filepath.FromSlash(qaReplyFile(k, head)))
 		}
 	}
 	if st.End == config.FactoryEndQA { // the QA walker's turn: the task's newest run
@@ -1401,8 +1412,9 @@ func questionsFileOf(st config.FactoryStage, role string) string {
 }
 
 // CheckPrompts renders the prompt of every factory role ([[factory.role]]),
-// every agents stage's own prompt (FactoryStage.Prompt) and the amend
-// turn's (AmendPrompt, for the roles of each kind's report stage) with data
+// every agents stage's own prompt (FactoryStage.Prompt), the amend turn's
+// (AmendPrompt, for the roles of each kind's report stage) and the
+// writer's fix turns' (ReviewFixPrompt and QAFixPrompt) with data
 // whose every field is set, as the factory daemon does once at startup,
 // after it loaded its prompts: a prompt (or factory-shared.md) that names
 // a field the data lacks, or a block the partials file does not define, is
@@ -1438,6 +1450,7 @@ func CheckPrompts(cfg *config.Config) error {
 			}
 			if st.End == config.FactoryEndProof {
 				check(fmt.Sprintf("factory kind %s, the local review's fix turn of its %s stage's writer", name, st.Name), role, ReviewFixPrompt)
+				check(fmt.Sprintf("factory kind %s, QA's fix turn of its %s stage's writer", name, st.Name), role, QAFixPrompt)
 			}
 		}
 	}
@@ -1458,8 +1471,9 @@ func firstRole(cfg *config.Config, st config.FactoryStage) (config.Role, bool) {
 }
 
 // PromptNames are the prompt files the factory renders: each factory role's
-// (of each prompt kind), each agents stage's own, and the amend turn's,
-// once each; the daemon loads them at startup (config.SnapshotPrompts).
+// (of each prompt kind), each agents stage's own, the amend turn's and the
+// writer's fix turns', once each; the daemon loads them at startup
+// (config.SnapshotPrompts).
 func PromptNames(cfg *config.Config) []string {
 	var names []string
 	add := func(n string) {
@@ -1479,6 +1493,7 @@ func PromptNames(cfg *config.Config) []string {
 	}
 	add(AmendPrompt)
 	add(ReviewFixPrompt)
+	add(QAFixPrompt)
 	return names
 }
 

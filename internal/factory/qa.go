@@ -5,16 +5,17 @@ package factory
 // run, and each run has its folder qa/<n>-<sha7> (qaRunDir), which holds the
 // probe, the user-facing files, what the walker saves and the run's
 // result.json. runQA passes the stage on a run whose result is clean or
-// not_needed at the head, sends the task to you once on a run that could
-// not run or found defects that block (your retry starts a fresh one), and
-// otherwise goes on with the newest run or starts one: the repository's
-// qa.when reads the changed files and prints the user-facing ones (none: no
-// QA is needed; a failing command cannot tell, so QA could not run, never
-// "nothing user-facing"), then the session starts, and once it is ready the
-// fx-qa walker's turn walks the pages through the session's Chrome alone
-// (runTurn, end fact qa: a valid verdict.json). Its end stops the session
-// first; then the factory's own checks of the saved pages decide
-// (evaluateQA), never the walker's word.
+// not_needed at the head, hands a run's defects that block to the writer
+// (the fix loop, qa_fix.go), sends the task to you once on a run that could
+// not run (your retry starts a fresh one), and otherwise goes on with the
+// newest run or starts one: the repository's qa.when reads the changed
+// files and prints the user-facing ones (none: no QA is needed; a failing
+// command cannot tell, so QA could not run, never "nothing user-facing"),
+// then the session starts, and once it is ready the fx-qa walker's turn
+// walks the pages through the session's Chrome alone (runTurn, end fact qa:
+// a valid verdict.json). Its end stops the session first; then the
+// factory's own checks of the saved pages decide (evaluateQA), never the
+// walker's word.
 //
 // The session is one QA on the Mac at a time: the task's heavy slot, then the
 // machine's QA lock (Layout.FactoryQALock). It refuses a copy's port that
@@ -47,6 +48,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -259,10 +261,12 @@ func (e *Engine) qaSessionOf(id int64) *qaSession {
 // QA: the summary says so at the head, and the stage passes (nextStage skips
 // the stage before it runs; this is a task that came to it before the
 // block went). A build without runtime, copies or git leaves the task where
-// it is. The task's branch must be at its checked head (a move goes back to
-// coding, headMoved). The newest run's result at the head decides
-// (qaDecide); a run with none goes on, and a fresh run starts after a
-// result that asks for one or at another head.
+// it is. The newest run's defects that block go on in their fix loop first
+// (qaFixPhase), before the branch's checks: the writer's turn commits and
+// leaves changes in the copy as it works. Else the task's branch must be at
+// its checked head (a move goes back to coding, headMoved). The newest
+// run's result at the head decides (qaDecide); a run with none goes on, and
+// a fresh run starts after a result that asks for one or at another head.
 func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -282,6 +286,14 @@ func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactorySt
 	if err != nil {
 		return false, err
 	}
+	last, ok := readQARun(dir)
+	if ok {
+		if res, ended := readQAResult(dir, last); ended && res.Outcome == QAOutcomeDefects {
+			if held, err := e.qaFixPhase(ctx, t, st, last, res); err != nil || held {
+				return false, err
+			}
+		}
+	}
 	bh, err := e.branchHead(ctx, t, c, repo)
 	switch {
 	case err != nil:
@@ -292,7 +304,6 @@ func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactorySt
 		e.endQALogged(ctx, t, "the branch moved", qaCutTask)
 		return false, e.headMoved(ctx, t, bh.Head)
 	}
-	last, ok := readQARun(dir)
 	run, fresh := last, !ok || last.Head != bh.Head
 	if !fresh {
 		if res, ended := readQAResult(dir, last); ended {
@@ -364,9 +375,10 @@ func (e *Engine) walkDone(ctx context.Context, t registry.Task, st config.Factor
 // first (the browser and the server stop, the Mac's QA lock and the heavy
 // slot go), then the factory's checks of what the walker saved
 // (evaluateQA), and the run's result with its qa check. Clean passes the
-// stage (qa-summary.json first); defects that block go to qaBlocks; a walk
-// the checks cannot call clean or defects (no page reached, a state not
-// reached, a verdict that no longer reads) waits on you.
+// stage (qa-summary.json first); defects that block go to the writer
+// (qaFixPhase); a walk the checks cannot call clean or defects (no page
+// reached, a state not reached, a verdict that no longer reads) waits on
+// you.
 func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun) (bool, error) {
 	e.endQALogged(ctx, t, "its walk ended", "")
 	res, err := e.evaluateQA(ctx, t, run)
@@ -381,7 +393,8 @@ func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.Factory
 		return false, err
 	}
 	if res.Outcome == QAOutcomeDefects {
-		return e.qaBlocks(ctx, t, st, run, res)
+		_, err := e.qaFixPhase(ctx, t, st, run, res)
+		return false, err
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if n := qaRowAt(dir, run.Head, qaBlockedOnly); qaBlockedOnly(res) && n >= qaInARow {
@@ -420,14 +433,6 @@ func (e *Engine) passBlocked(ctx context.Context, t registry.Task, run qaRun, re
 	return nil
 }
 
-// qaBlocks takes the defects that block of run's result res: until the fix
-// loop lands, the task needs you with each class on its page and the
-// result's file (qaYouWhat), never a quote.
-func (e *Engine) qaBlocks(ctx context.Context, t registry.Task, _ config.FactoryStage, _ qaRun, res QAResult) (bool, error) {
-	e.toOperator(ctx, t, qaYouWhat(t, e.d.Layout.FactoryTaskDir(t.ID), res), "QA found defects")
-	return false, nil
-}
-
 // evaluateQA decides run from its walker's verdict and the factory's own
 // checks of every page the walker saved (detectQA on each probe and console
 // log, then qaOutcome): defects when one blocks; unavailable when the walk
@@ -450,8 +455,15 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		return res, nil
 	}
 	runPath := filepath.Join(dir, filepath.FromSlash(run.Dir))
+	// The defects' fingerprints follow each page by the path its probe read,
+	// the factory's own spelling, which stays the same across runs whatever
+	// the walker calls the page (a trailing slash, a query, no leading
+	// slash): a defect that comes back after its fix is the same defect. The
+	// walker's paths name the pages everywhere else.
+	followed := v
+	followed.Pages = slices.Clone(v.Pages)
 	var found []QADefect
-	for _, pg := range v.Pages {
+	for i, pg := range v.Pages {
 		probe, err := readQAProbe(runPath, pg.Probe)
 		if err != nil {
 			return QAResult{}, fmt.Errorf("QA run %d: probe %s", run.N, qaFileWhy(pg.Probe, err))
@@ -460,13 +472,14 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		if err != nil {
 			return QAResult{}, fmt.Errorf("QA run %d: console %s", run.N, qaFileWhy(pg.Console, err))
 		}
-		found = append(found, detectQA(pg, probe, console)...)
+		followed.Pages[i].Path = cmp.Or(qaProbePath(probe.URL), pg.Path)
+		found = append(found, detectQA(followed.Pages[i], probe, console)...)
 	}
 	shots, err := countQAShots(runPath)
 	if err != nil {
 		return QAResult{}, fmt.Errorf("QA run %d: its folder: %w", run.N, err)
 	}
-	res.Outcome, res.Blocking, res.Known = qaOutcome(v, found)
+	res.Outcome, res.Blocking, res.Known = qaOutcome(followed, found)
 	res.Pages, res.Shots = len(v.Pages), shots
 	for _, b := range v.Blocked {
 		res.Blocked = append(res.Blocked, QABlocked{What: qaClip(b.What), Why: qaClip(b.Why), Check: qaClip(b.Check)})
@@ -495,6 +508,17 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		run.N, plural(res.Pages, "page"), plural(res.Shots, "shot"), plural(len(res.Blocking), "defect"), blocksS(len(res.Blocking)),
 		plural(len(res.Known), "note"), plural(len(res.Blocked), "state")))
 	return res, nil
+}
+
+// qaProbePath is the path of the page a probe read, from its URL, cleaned
+// ("/settings/security/" is "/settings/security"); "" for a URL that does
+// not parse.
+func qaProbePath(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return path.Clean("/" + u.Path)
 }
 
 // blocksS is the verb's s after n things that block ("1 defect that
@@ -612,18 +636,16 @@ func qaBlockedList(bs []QABlocked) string {
 }
 
 // qaYouWhat is what task t waits on you for after its QA run ended with res
-// (in the task directory dir): the defects that block by class and page,
-// the walk's own reason (no page reached, a state not reached, a verdict
-// that no longer reads), each with the result's file, or why QA could not
-// run; then the retry command, and for a walk that reached its pages but
-// not every state, what the retry does (it walks once more, and a second
-// such walk goes on with the states flagged). It names no page text.
+// (in the task directory dir): the walk's own reason (no page reached, a
+// state not reached, a verdict that no longer reads), with the result's
+// file, or why QA could not run; then the retry command, and for a walk
+// that reached its pages but not every state, what the retry does (it
+// walks once more, and a second such walk goes on with the states flagged).
+// It names no page text. Defects that block never come here: they go to
+// the writer (qaFixPhase).
 func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	see := "; see " + filepath.Join(dir, filepath.FromSlash(res.Dir), qaResultFile)
 	switch {
-	case res.Outcome == QAOutcomeDefects:
-		n := len(res.Blocking)
-		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case qaBlockedOnly(res):
 		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
 			"not every state goes on with those states flagged on the card and in the PR body", res.Why, see, t.ID)
@@ -719,11 +741,12 @@ func (e *Engine) qaProblem(t registry.Task) string {
 
 // qaDecide acts on run's result res at the task's head: a summary of the run
 // at the head, clean or not_needed, passes the stage, as does such a
-// result; unavailable or defects waits on you once (qaTold), and
-// after your retry a fresh run starts; pressure waits for the memory hold to
-// lift, interrupted starts afresh, each unless qaInARow of it came in a row
-// at the head (interrupted by a crash only, qaInARowAt): then QA is
-// unavailable.
+// result; unavailable waits on you once (qaTold), and after your retry a
+// fresh run starts; defects that block come here only once their fix loop
+// let them go (qaFixPhase: your retry after it stopped for you), and a fresh
+// run starts; pressure waits for the memory hold to lift, interrupted
+// starts afresh, each unless qaInARow of it came in a row at the head
+// (interrupted by a crash only, qaInARowAt): then QA is unavailable.
 func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run qaRun, res QAResult) (pass, again bool, err error) {
 	if sum, ok := readQASummary(dir); ok && sum.Run == run.N && sum.Head == run.Head &&
 		(sum.Outcome == QAOutcomeClean || sum.Outcome == QAOutcomeNotNeeded) { // it passed the stage (passBlocked's keeps the run's result)
@@ -738,7 +761,7 @@ func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run 
 			e.waitOn(ctx, t, "", "")
 		}
 		return true, false, nil
-	case QAOutcomeUnavailable, QAOutcomeDefects:
+	case QAOutcomeUnavailable:
 		told, err := e.qaTold(ctx, t, res)
 		return false, told && err == nil, err
 	case QAOutcomePressure:

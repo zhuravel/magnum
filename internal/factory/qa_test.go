@@ -35,7 +35,7 @@ var errRefused = errors.New("dial tcp 127.0.0.1:3001: connect: connection refuse
 // bug kind with its qa stage after its local review, a readiness probe that
 // answers from probe (up: the copy's server started and did not stop since;
 // n counts the probes since it came up, from 1), a probe timer that fires at
-// once and a clock that moves a minute at each probe.
+// once (no other timer fires) and a clock that moves a minute at each probe.
 type qaRig struct {
 	*reviewRig
 	mu      sync.Mutex
@@ -77,10 +77,14 @@ func newQARig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResu
 	return r
 }
 
-// seams puts the rig's probe and timer on the engine.
+// seams puts the rig's probe and timer on the engine: the probe's
+// interval passes at once, and no other bound (a precheck's cap) runs out.
 func (r *qaRig) seams() {
 	r.e.qaProbe = r.probeQA
-	r.e.after = func(time.Duration) <-chan time.Time {
+	r.e.after = func(d time.Duration) <-chan time.Time {
+		if d != qaProbeEvery {
+			return nil
+		}
 		c := make(chan time.Time)
 		close(c)
 		return c
@@ -1135,14 +1139,14 @@ func TestACleanWalkPassesQAAndStopsEverything(t *testing.T) {
 
 // The #785 page: the walker says nothing is wrong, and the factory's own
 // check of the saved page finds the tooltip's markup shown as text. QA
-// blocks: the defect is the factory's, no summary passes the stage, and the
-// qa check fails as the change's.
+// blocks: the defect is the factory's, no summary passes the stage, the
+// qa check fails as the change's, and the writer gets the defect.
 func TestTheEscapedTooltipBlocksQAWhateverTheWalkerSays(t *testing.T) {
 	r := newQARig(t)
 	task, head := r.qaTask("PR-12432")
 	r.toWalker(task)
 	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
-	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
 	res := r.qaResult(task.ID, 1, head)
 	if res.Outcome != QAOutcomeDefects || len(res.Blocking) != 1 || res.Blocking[0].Class != QAEscapedMarkup ||
 		res.Blocking[0].Source != qaSourceFactory || res.Pages != 1 {
@@ -1173,35 +1177,13 @@ func TestQABlocksAVisibleDefectTheReviewLeftAsP3(t *testing.T) {
 	r.taskFile(task.ID, reviewSummaryFile, string(b))
 	r.toWalker(task)
 	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
-	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
 	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeDefects {
 		t.Fatalf("result.json %+v, want defects", res)
 	}
 	if got := r.readTask(task.ID, reviewSummaryFile); got != string(b) {
 		t.Fatalf("review-summary.json changed:\n%s\nwant\n%s", got, b)
 	}
-}
-
-// Until the fix loop lands, QA's defects that block need you: the wait
-// names each class on its page, the result's file and the retry, never the
-// page's text.
-func TestQADefectsNeedYouUntilTheFixLoopLands(t *testing.T) {
-	r := newQARig(t)
-	task, head := r.qaTask("PR-12434")
-	r.toWalker(task)
-	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
-	got := r.toYou(task)
-	result := filepath.Join(r.runDir(task.ID, 1, head), qaResultFile)
-	for _, want := range []string{"QA found 1 defect that blocks: escaped_markup on /settings/security", "see " + result,
-		fmt.Sprintf("magnum factory retry %d", task.ID)} {
-		if !strings.Contains(got.WaitsWhat, want) {
-			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
-		}
-	}
-	if strings.Contains(got.WaitsWhat, "<span") || strings.Contains(got.WaitsWhat, "Nov 07") {
-		t.Errorf("the task waits %q: it quotes the page", got.WaitsWhat)
-	}
-	r.qaFree(task.ID)
 }
 
 // A verdict whose page is off the copy's own server gets the walker one
