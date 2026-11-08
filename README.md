@@ -4084,8 +4084,9 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 `observe` (5 s: the turns in flight on every pass, its other sessions at most every 10 s) and runs its main tick every
 `poll` (45 s), and a turn's end moves the task on at once: the observe pass that sees a run end, pause, show a dialog
 or lose its pane kicks the tick, and a stage that passes in a tick starts the next stage's first pass in the same tick
-(one stage further at most; a hold or a drain still holds its launch), so the next agent gets its prompt about 15 to
-20 s after the last one stopped, not 81 s. A task's wait that costs
+(one stage further at most; a hold or a drain still holds its launch). The next agent's prompt is expected about 15
+to 20 s after the last one stopped, from 81 s: an estimate until it is measured on the factory's own handoffs after
+`magnum factory install --drain` puts this build on the factory daemon. A task's wait that costs
 it nothing (a hold, an agent at work in the copy, your pane, a review round of magnum's) logs once at INFO
 when it begins ("a factory task waits") and once when it ends, with how long it held, and at WARN only once
 it has held 30 minutes, then 1 hour and 2 hours after that and so on ("a factory task still waits"); a wait
@@ -4650,7 +4651,8 @@ for lack of a UTF-8 locale, or the same failure on two tasks within 10 minutes h
 the tasks, with tries after 2, 4, 8, 16 and then every 30 minutes (a try that runs a crashed lint's checks
 again ends when they do, and 3 such crashes at one head send that task to you); a hold that lasts 30 minutes
 needs you. A stage that keeps failing for a cause of its own (gh
-logged out, a token without scope, a push the remote's hooks refuse) is tried again on each tick, and after 5 failures
+logged out, a token without scope, a push the remote's hooks refuse) is tried again a poll after each failure, however
+often other tasks' turns kick a tick, and after 5 failures
 in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
 row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
 own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the

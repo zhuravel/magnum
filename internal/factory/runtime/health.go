@@ -141,13 +141,14 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 }
 
 // observeSessions is the agents manager's pass over snap, taken at at: over
-// every live session when fullObserveEvery has passed since the last such
-// pass (agents.ObserveSnapshotAt), else over the sessions with a turn in
-// flight alone (agents.ObserveRunsAt). A turn's end is seen on any pass, at
-// the factory's 5 s observe; the other sessions (a pane an earlier turn left
-// live, a liaison waiting, a dialog before a first prompt, you in an idle
-// pane) are read every 10 s as before, so the faster clock does not write
-// each idle session's row (its idle count) twice as often.
+// every live session on the first pass and on each pass fullObserveEvery or
+// more after the last such one (agents.ObserveSnapshotAt), else over the
+// sessions with a turn in flight alone (agents.ObserveRunsAt). A turn's end
+// is seen on every pass, each [factory] observe; the other sessions (a pane
+// an earlier turn left live, a liaison waiting, a dialog before a first
+// prompt, you in an idle pane) are read on the full passes alone, so an
+// observe shorter than fullObserveEvery does not write each idle session's
+// row (its idle count) more often.
 func (r *Runtime) observeSessions(ctx context.Context, snap herdr.Snapshot, at time.Time) ([]agents.Observation, error) {
 	r.mu.Lock()
 	full := r.fullAt.IsZero() || at.Sub(r.fullAt) >= fullObserveEvery || at.Before(r.fullAt)

@@ -1350,7 +1350,7 @@ func (r *Runtime) parkLeftLiaisons(ctx context.Context) {
 }
 
 // parkFailed logs that the park of task t's left liaison failed with err,
-// once per liaison per daemon start: the pass tries again every ten seconds.
+// once per liaison per daemon start: each observe pass tries again.
 func (r *Runtime) parkFailed(t registry.Task, err error) {
 	if r.first(fmt.Sprintf("liaison-park:%d", t.ID)) {
 		r.log.Warn("park a liaison its task's park left live", "task", t.ID, "err", err)

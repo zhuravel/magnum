@@ -19128,30 +19128,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
     loop: a next stage that also passes at once (a gate, a skipped critic) moves the task on and waits for the next
     tick. The tick that takes your push on the ready card thus runs the publish too, which checks the card again
     before it pushes, as it did a poll later.
+  - A stage that failed for a cause of its own is tried again a poll after the failure (`retryLater`, from the
+    failure's time in `stageFails`), whichever tick comes first after that. The kicks come between the polls now, and
+    every tick advances every task: a burst of other tasks' turn ends would spend a failing stage's
+    `stageFailLimit` tries in under a minute (five took four polls, three minutes, before) and send you a fault the
+    next minutes heal. A failing publish would also spend its GitHub calls as fast. The poll's pace keeps both
+    bounds, the stage's and the publish's, as they were.
   - `[factory] observe` is 5s by default (from 10s, in `config.defaults.toml` and `DefaultFactory`; still positive).
     The narrow pass of the review daemon's clock (`agents.ObserveRunsAt`, 50711773) did not reach the factory: it is
     a method of its own, and `Runtime.Observe` ran `ObserveSnapshotAt` over every live session, which writes each
     idle one's row (its idle count) on every pass, twice as often at 5 s. The factory has no other pass over every
     session (the review daemon keeps its tick's), so `observeSessions` reads every session at most every 10 s
     (`fullObserveEvery`: the panes earlier stages left live, the liaisons, a dialog before a first prompt, you in an
-    idle pane, as often as before) and the sessions with a turn in flight on every pass. Readings 5 s apart meet
+    idle pane, as often as before) and the sessions with a turn in flight on every pass; an `observe` that does not
+    divide 10 s (a 9s or 4s one, which neither the default nor the operator's config sets) gets its full pass on the
+    first pass 10 s or more after the last one, every 18 s or 12 s. Readings 5 s apart meet
     `agents.CompletionGap` (3 s), so a turn ends on the second; a deny awaiting its continuation holds the end 10 s,
     as on the review daemon's clock.
-  Expected: agent to agent about 15 to 20 s (from 81): up to 5 s to the first idle reading, 5 s to the second,
-  herdr's own 1 to 4 s, then the tick at once and the next stage's launch and prompt (under 5 s). Measure it with the
-  research's query, the true stop to the next stage's first `submitted_at`. Rejected: a loop of chained passes (a
+  Expected, an estimate until it is measured: agent to agent about 15 to 20 s (from 81): up to 5 s to the first idle
+  reading, 5 s to the second, herdr's own 1 to 4 s, then the tick at once and the next stage's launch and prompt
+  (under 5 s). Measure it once `magnum factory install --drain` runs this build, with the research's query: the true
+  stop to the next stage's first `submitted_at`. Rejected: a loop of chained passes (a
   kind whose gates and skipped stages all pass would run its whole length in one tick, and a stage that wrongly
   passes at once would spin the tick); a flag that `advance` returns for the move (its tail and signature, which
   another change of the move touches, for what the registry's re-read says); kicking on the delivery events
   (nothing a stage does at once); the narrow pass alone (with no other pass over every session, the dialogs, lost
   panes and liaisons of the sessions without a turn would go unseen); keeping 10 s (two readings 10 s apart are
-  most of the 16 s). Tests, failing first: TestAnEndedRolesEventKicksTheLoop,
+  most of the 16 s); counting a failure at most once a poll but trying the stage on every tick (the publish's
+  tries, each costing GitHub calls, would no longer be bounded); a kicked tick that advances only the tasks
+  whose events kicked it (the tick would have to know why it runs, and a request's kick or a check's end absorbed
+  into it would leave its task for the poll). Tests, failing first: TestAnEndedRolesEventKicksTheLoop,
   TestTheLoopTicksRightAfterAnObservePassSawAnEnd, TestAStageThatPassesLaunchesTheNextStagesRolesInTheSameTick,
-  TestTheChainRunsAtMostOncePerTaskPerTick, TestTheObservePassReadsOnlyTheTurnsInFlightBetweenFullPasses and
-  TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault; for guards that held before the chain,
+  TestTheChainRunsAtMostOncePerTaskPerTick, TestTheObservePassReadsOnlyTheTurnsInFlightBetweenFullPasses,
+  TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault and TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll
+  (a minute of ticks 10 s apart, each kicked by another task's turn end, tries the failing stage twice, and five
+  tries at the poll's pace still need you); for guards that held before the chain,
   TestATypedEventDoesNotKickTheLoop, TestNoChainWhileTheDaemonDrains (it fails with the drain's check taken out of
-  `passedOn`), TestNoChainedLaunchUnderAHold (the memory hold and install's drain) and
-  TestAFailedTransitionChainsNothing, and TestATaskWithoutAStageStartsAtItsKindsFirstStage fails with the later-stage
+  `passedOn`), TestNoChainedLaunchUnderAHold (the memory hold and install's drain),
+  TestAFailedTransitionChainsNothing and TestAPassThatSendsTheTaskToYouChainsNothing (a writer beside the loop sets
+  the task waiting on you during the pass; it fails with `passedOn`'s live and waits-on-you check taken out), and TestATaskWithoutAStageStartsAtItsKindsFirstStage fails with the later-stage
   check taken out (a stage that did not pass would run twice). Amended, as the chain moves on what they read a tick
   later: TestAPassedStageMovesTheTaskToTheNextStage, TestTheJudgesFilesAreRecordedAtEachRevision,
   TestTheCriticRunsOnlyForWideChanges, TestAPassedInvestigationVerifiesEveryRunAndMovesOn and
