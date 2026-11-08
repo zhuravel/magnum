@@ -186,6 +186,30 @@ func TestARoundInProgressNamesKOnlyWhereKStopsIt(t *testing.T) {
 	}
 }
 
+// r, R, z, M and U that went through on a card of the walk (a) move it on
+// to the next card, as f, F and K do (followPR): a PR the operator acted on
+// has had its turn. An answer n keeps the card.
+func TestAPRKeyThatWentThroughMovesTheWalkOn(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.src.change(func(d *FactoryData) { // PR-12345's questions answered: the walk starts at #4602
+		d.Rows = d.Rows[1:]
+		delete(d.Cards, 2)
+	})
+	h.press("ctrl+r", "a")
+	if h.m.view != fvTask || h.m.task != -72 {
+		t.Fatalf("a opened view %v of %d, want #4602's card", h.m.view, h.m.task)
+	}
+	h.press("M", "n")
+	if h.m.task != -72 {
+		t.Fatalf("n on M left #4602's card for %d", h.m.task)
+	}
+	h.press("M", "y")
+	if h.m.view != fvTask || h.m.task != -73 {
+		t.Errorf("M on #4602 left the walk on view %v of %d, want #4603's card", h.m.view, h.m.task)
+	}
+	h.wantPRCalls("mute example/talkable#4602")
+}
+
 // On a task card that offers a retry, r stays the retry and its hints say
 // "r retry"; R is the fresh review there as anywhere. On a card that
 // offers none, r is the review of the task's PR.

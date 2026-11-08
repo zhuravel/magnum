@@ -18168,7 +18168,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     row's facts make it true (the watch runs autofix, a loop works on the PR).
   - The card rule: on a task card that offers a retry (`TaskCard.Retry`), `r` stays the retry and its hints say
     `r retry`; there the review is on `R` alone, and the questions name no key for it. Elsewhere on the card and on
-    home `r` is the review. Nothing is added to the ready card or the question card.
+    home `r` is the review. Nothing is added to the ready card or the question card. Each key asks with the
+    `followPR` of `f`, `F` and `K`, so one that went through on a card of the walk moves it on to the next card:
+    the PR the operator acted on has had its turn.
   - After `M` or `z` the row says so: WAITS ON starts with `muted` and `snoozed → 16:09` unless its words say it
     already (LEFT ALONE's "#N is muted"), and the hints of the row and of its card offer `U unmute` and `z lift
     snooze`. The right click's menu lists the five keys, dimmed where the predicate refuses them.
@@ -18190,7 +18192,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (one letter, two meanings on one card); the walk over home's narrowed order (a filter would hide decisions).
   Tests, failing first: TestTheBoardsPRKeysAskAndRunOnAPRRow, TestZLiftsTheSnoozeAndUUnmutes,
   TestThePRKeysRefuseWhereTheBoardsDo, TestRReDecidesTheRepliesWaitingAsTheBoardsDoes,
-  TestARoundInProgressNamesKOnlyWhereKStopsIt, TestROnATaskCardRetriesWhereItCanElseReviews,
+  TestARoundInProgressNamesKOnlyWhereKStopsIt, TestAPRKeyThatWentThroughMovesTheWalkOn,
+  TestROnATaskCardRetriesWhereItCanElseReviews,
   TestThePRKeysSayWhatTheyDoToTheFactorysLoop, TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests,
   TestTheFactoryScreenReadsWhatThePRKeysGoBy, TestAMutedOrSnoozedPRsRowSaysSo, TestTheMenuListsThePRKeys,
   TestSlashFiltersHomesRows, TestAFilterThatMatchesNothingSaysSo, TestOCyclesTheRepositoryScope,
