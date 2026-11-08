@@ -41,6 +41,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [dblock](#dblock) | Package dblock is the lock behind `magnum db-lock`: the roles of a review round (the judge's own pass and the reviewers run at the same time) take turns on a checkout's databases. |
 | [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle), whether the daemon is inside its quiet hours (QuietHours) and which rounds they hold (QuietHoursHold). |
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
+| [escapes](#escapes) | Package escapes matches one review round's findings against another's by place: a finding of the other round escaped the local one when no local finding sits on its path within NearLines of its lines, at a head whose line numbers name the same code. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [evalrun](#evalrun) | Package evalrun replays one case of an eval corpus (internal/eval) as a blind dry-run round and scores it: what `magnum eval run` does for each case, in a package the daemon can call too. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
@@ -49,6 +50,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test). |
+| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -9082,6 +9084,10 @@ type ClassifyJob struct {
 	Candidates []learn.Candidate
 	Rejected   []learn.Rejected
 	Threads    []learn.OwnThread
+	// Factory is the directory of the copies of the factory task's plan,
+	// ticket and answers (learn.FactoryDir) on a pull request the factory
+	// published with a candidate its local round missed; "" otherwise.
+	Factory string
 }
     ClassifyJob is one PR's candidates for a Classifier: Dir holds
     CandidatesPath (learn.Candidates) and the commented files (learn.FilePath);
@@ -10643,6 +10649,11 @@ type RetroSummary struct {
 	// (store.Decline), Declined those the author declined or argued.
 	Declines int `json:"declines,omitempty"`
 	Declined int `json:"declined,omitempty"`
+	// Factory counts the factory-origin misses it stored: comments on PRs
+	// the factory published that its local review round missed, classified
+	// as a miss (those magnum's posted round caught included, which Misses
+	// leaves out).
+	Factory int `json:"factory,omitempty"`
 }
     RetroSummary is what the last retro did (KVRetroLast).
 
@@ -11017,6 +11028,126 @@ type WorkMark struct {
 	Work []WorkItem `json:"work"`
 }
     WorkMark is KVDaemonWork's value: the work in flight, oldest first.
+
+```
+
+## escapes
+
+```text
+package escapes // import "github.com/zhuravel/magnum/internal/escapes"
+
+Package escapes matches one review round's findings against another's by place:
+a finding of the other round escaped the local one when no local finding sits
+on its path within NearLines of its lines, at a head whose line numbers name
+the same code. It is the one near rule of the review retro (internal/learn: a
+comment near one of magnum's findings) and of the factory's local review against
+the rounds after it (DECISIONS "The review retro tags factory-origin misses and
+their stage").
+
+The package is pure: no registry, no I/O, nothing of a pull request beyond what
+a Finding holds. A caller that knows that two heads name the same code for a
+path (the file did not change between them) says so with SameCode.
+
+CONSTANTS
+
+const NearLines = 3
+    NearLines is how far apart, in lines, two findings on the same path may be
+    and still be about the same code.
+
+
+FUNCTIONS
+
+func Distance(a, b Finding) (int, bool)
+    Distance is how many lines lie between a's and b's ranges (0 when they
+    overlap or touch the same line), whatever their paths; false when either has
+    no line.
+
+
+TYPES
+
+type Escape struct {
+	Finding Finding
+	Reason  Reason
+	// Nearest is the local finding on the path nearest to it at a
+	// comparable head, the first in local's order on a tie, and Distance
+	// how many lines lie between their ranges; both are set for ReasonFar
+	// only.
+	Nearest  Finding
+	Distance int
+}
+    Escape is a finding of the other round that no local finding caught,
+    and why.
+
+func Match(local, other []Finding, opts ...Option) []Escape
+    Match returns, in other's order, an Escape for every finding of other that
+    no finding of local caught. A local finding catches one of other when both
+    are placed (a path and a line), their paths are equal, their heads are
+    comparable (equal, both unknown, or the same code by SameCode) and their
+    ranges are at most NearLines apart (Distance). A finding of other that
+    cannot be placed is an escape of its own (ReasonUnplaced), never matched;
+    a local one that cannot be placed catches nothing. Match never filters by
+    priority, and one local finding may catch several.
+
+type Finding struct {
+	Source Source
+	// Ref is the caller's own key, opaque here, to find its row again.
+	Ref  string
+	Path string
+	// StartLine and EndLine are the lines the finding is on, [StartLine,
+	// EndLine], in the file at Head: equal for a one-line finding, and a
+	// finding with only a line has StartLine = EndLine = that line.
+	// StartLine 0 means EndLine alone; EndLine 0 means no line (a file or
+	// review-body finding), which cannot be placed.
+	StartLine, EndLine int
+	// Priority is P0 to P3 as the registries write it ("" when unknown).
+	// Match never filters by it: callers do.
+	Priority string
+	// Title may be empty: the factory keeps only TitleHash.
+	Title, TitleHash string
+	// Round is magnum's round or the factory's review cycle that raised
+	// it (0 when unknown).
+	Round int
+	// Head is the commit the line numbers name ("" when unknown).
+	Head string
+}
+    Finding is one finding as Match places it.
+
+func (f Finding) Lines() (from, to int, ok bool)
+    Lines is f's range as [from, to] with from <= to, false when f has no line.
+
+type Option func(*config)
+    Option changes how Match compares heads.
+
+func SameCode(same func(path, localHead, otherHead string) bool) Option
+    SameCode lets Match compare a local finding with one of the other round at
+    two different heads: same(path, localHead, otherHead) reports whether path's
+    line numbers name the same code at both (the file did not change between
+    them). Match asks it only when both heads are set and differ. Without it,
+    two findings are compared only at the same head (or both unknown).
+
+type Reason string
+    Reason says why no local finding caught a finding of the other round.
+
+const (
+	// ReasonNoLocal: no local finding on its path at a comparable head.
+	ReasonNoLocal Reason = "no_local"
+	// ReasonFar: the nearest local finding on its path at a comparable
+	// head is more than NearLines away (Escape.Nearest, Escape.Distance).
+	ReasonFar Reason = "far"
+	// ReasonUnplaced: it has no path or no line, so nothing can catch it.
+	ReasonUnplaced Reason = "unplaced"
+)
+    Reasons.
+
+type Source string
+    Source says which round, or who, a finding is of.
+
+const (
+	SourceLocal   Source = "local"   // the factory's local review round (factory.db review_findings)
+	SourcePosted  Source = "posted"  // magnum's posted review round (magnum.db findings)
+	SourceComment Source = "comment" // a person's comment on the pull request
+)
+    Sources.
 
 ```
 
@@ -15221,6 +15352,86 @@ func (t TaskStats) MarshalJSON() ([]byte, error)
 
 ```
 
+## factoryread
+
+```text
+package factoryread // import "github.com/zhuravel/magnum/internal/factoryread"
+
+Package factoryread is the review side's read of what the factory keeps:
+the local review round of a pull request the factory published, from its
+registry (factory.db), and the task's plan, ticket and answers, from the task's
+directory, for the review retro (DECISIONS "The review retro tags factory-origin
+misses and their stage"). It only reads: the registry is opened read only
+(mode=ro, never created, so nothing writes its file or its WAL), with a busy
+timeout, and closed after each read; a task's files are read inside an os.Root
+of its directory. It knows the factory's schema only as far as these reads need
+(pr_links, review_findings) and never migrates it: internal/factory/registry
+owns it.
+
+CONSTANTS
+
+const (
+	KindPlan    = "plan"    // the plan: the report the factory's judge wrote
+	KindTicket  = "ticket"  // the Jira issue, or the prompt a task started from
+	KindAnswers = "answers" // the operator's answers to the task's questions
+)
+    The kinds of a task's files the retro's classifier reads (TaskFile.Kind).
+
+const TaskFileMax = 1 << 20
+    TaskFileMax is the largest task file read, in bytes.
+
+
+VARIABLES
+
+var ErrNoRegistry = errors.New("the factory's registry does not exist")
+    ErrNoRegistry is Published's error when the factory's registry does not
+    exist: no factory ever ran on this machine.
+
+
+TYPES
+
+type Task struct {
+	ID           int64
+	OpenedHead   string
+	ApprovedHead string
+	// Findings are the local review's findings, first seen first, each
+	// escapes.SourceLocal with Ref "<task id>/<finding id>", Round its last
+	// cycle (where the registry took its place from) and Head the task's
+	// Head.
+	Findings []escapes.Finding
+}
+    Task is one factory task that published a pull request: the heads its PR
+    opened on and its local review approved, and that review's findings.
+
+func Published(ctx context.Context, path, repo string, number int) ([]Task, error)
+    Published returns the tasks of the registry at path that published pull
+    request number of repo ("owner/name", any case), newest first, each with
+    its local review's findings; none when the factory published no such pull
+    request. A registry that does not exist is ErrNoRegistry; one that cannot
+    be opened or read (not a database, a schema without these tables) is another
+    error.
+
+func (t Task) Head() string
+    Head is the commit the task's local findings are taken to name: the head its
+    local review approved, else the one its PR opened on.
+
+type TaskFile struct {
+	Kind    string
+	Name    string
+	Data    []byte
+	Skipped string
+}
+    TaskFile is one of a task's files: its kind, its name in the task's
+    directory and its bytes, or why it was not read (Skipped).
+
+func TaskFiles(dir string) []TaskFile
+    TaskFiles reads the plan, the ticket and the answers in the task directory
+    dir, in that order, read only and inside dir: a kind none of whose names
+    exists is left out, and one larger than TaskFileMax or that cannot be read
+    says why (Skipped). A directory that does not exist has no files.
+
+```
+
 ## fsx
 
 ```text
@@ -18737,6 +18948,10 @@ const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
 	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
 	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
+	// FactoryDir holds the copies of the factory task's plan, ticket and
+	// answers (plan.md, ticket.md, answers.md) on a pull request the
+	// factory published, for a factory-origin candidate's stage.
+	FactoryDir = "factory"
 )
     Files of a pull request's retro directory.
 
@@ -18770,9 +18985,14 @@ const LearnedHeading = "## Learned rules"
     before it, so an entry of theirs on master and a candidate's entry never
     touch the same lines, and a landing's rebase does not conflict over them.
 
-const NearLines = 3
+const NearLines = escapes.NearLines
     NearLines is how far, in lines, a comment may be from one of magnum's
-    findings on the same path and still be about it.
+    findings on the same path and still be about it: escapes' near rule,
+    which the factory's local round is matched by too.
+
+const OriginFactory = store.MissOriginFactory
+    OriginFactory is a candidate's Origin on a pull request the factory
+    published when the factory's local round did not catch it.
 
 const OwnAuthor = "(magnum)"
     OwnAuthor is a reply's Author when magnum wrote it: no GitHub login has
@@ -18895,14 +19115,16 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
     a miss also has a severity (P0 to P3), a title of at most TitleMax runes,
     a lesson, a scope (repo or general), lines [from, to] with 1 <= from <= to
     and one to MatchMax patterns of at most PatternMax bytes that compile as
-    case-insensitive Go regular expressions. Only a miss keeps those fields:
-    the other classes keep their id, class and rejected finding. Likewise one
-    thread item per own thread, no other id and a known outcome; a declined or
-    argued one also has a verdict, and a wrong, over_ranked or missing_context
-    verdict a lesson, a scope and patterns as a miss has (checkThread),
-    except on a thread only magnum's fixer answered (OwnThread.Fixer), which
-    keeps none. The error names ids and fields, never the classifier's text,
-    so it can go back into a prompt.
+    case-insensitive Go regular expressions. Only a miss keeps those fields: the
+    other classes keep their id, class and rejected finding. A factory-origin
+    candidate (Candidate.Origin) of class miss, style or outside also keeps
+    its stage when it is plan, code or review (itemStage); any other stage is
+    dropped, never an error. Likewise one thread item per own thread, no other
+    id and a known outcome; a declined or argued one also has a verdict, and a
+    wrong, over_ranked or missing_context verdict a lesson, a scope and patterns
+    as a miss has (checkThread), except on a thread only magnum's fixer answered
+    (OwnThread.Fixer), which keeps none. The error names ids and fields,
+    never the classifier's text, so it can go back into a prompt.
 
 func ParsePins(b []byte) ([]string, int, error)
     ParsePins reads a pins file: the pins and the skill's cap. A file without a
@@ -18996,6 +19218,16 @@ type Candidate struct {
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
+	// Origin is OriginFactory for a comment on a pull request the factory
+	// published that its local review round did not catch (Input.Local),
+	// "" otherwise. The classifier gives such a candidate a stage.
+	Origin string `json:"origin,omitempty"`
+	// PostedCaught: magnum's posted round caught the comment (a finding it
+	// posted near it, or one it rejected as a duplicate of it) though the
+	// factory's local round did not. Without the factory such a comment is
+	// caught and no candidate; here it is one, recorded only as a
+	// factory-origin miss that teaches the review skill nothing.
+	PostedCaught bool `json:"posted_caught,omitempty"`
 	// File is the commented file at ReviewedSHA, relative to the candidates
 	// file's directory; FileSkipped says why there is no copy. The engine
 	// fills both.
@@ -19312,9 +19544,16 @@ type Input struct {
 	IncludeBots bool
 	// Compare compares a reviewed commit with a later one (GitHub's
 	// comparison). Build asks it only for an inline comment on a commit
-	// magnum did not review; nil means no comparison, so such a comment is
-	// outside.
+	// magnum did not review, or for a local finding of the factory's at
+	// another head than a comment's (Local); nil means no comparison, so
+	// such a comment is outside and such a finding catches nothing.
 	Compare func(from, to string) (Comparison, error)
+	// Local is the factory's local review round of a pull request the
+	// factory published (nil for every other pull request): the second
+	// caught set. A candidate none of its findings caught is the factory's
+	// miss (Candidate.Origin), and so is a comment magnum's posted round
+	// caught that the local round did not (Candidate.PostedCaught).
+	Local *LocalRound
 }
     Input is everything Build reads about one pull request.
 
@@ -19340,8 +19579,20 @@ type Item struct {
 	// reports the comment's problem, by meaning; "" when none does. Any
 	// class may name one.
 	Rejected string `json:"rejected,omitempty"`
+	// Stage is where a factory-origin candidate went wrong
+	// (store.MissStages): kept only on such a candidate of class miss,
+	// style or outside, and only when it is one of them.
+	Stage string `json:"stage,omitempty"`
 }
     Item is the classifier's verdict on one candidate.
+
+type LocalRound struct {
+	// Findings are the round's findings (escapes.SourceLocal), each of the
+	// head its line numbers name (the head the round approved).
+	Findings []escapes.Finding
+}
+    LocalRound is the factory's local review round of a pull request it
+    published, as factory.db keeps it.
 
 type Output struct {
 	Items   []Item       `json:"items"`
@@ -19420,7 +19671,9 @@ type Result struct {
 	// Caught counts comments near a finding magnum posted, or near one the
 	// judge rejected as a duplicate of a comment made before that review
 	// (reasonDuplicate), Dropped the comments too short or only an
-	// approval. Neither is stored.
+	// approval. Neither is stored. On a pull request the factory published
+	// a comment is caught only when its local round caught it too (else it
+	// is a candidate, PostedCaught).
 	Caught, Dropped int
 	// Rejected are the findings the judge rejected, the newest RejectedMax
 	// with a title, oldest first: the classifier names the one that
@@ -19465,6 +19718,14 @@ func Build(in Input) (Result, error)
     review that rejected it (rejectedAsDuplicate): the judge read the comment
     and agreed, so it is caught. A rejection for any other reason says the judge
     disagreed, and a comment made after the review was never read by it.
+
+    On a pull request the factory published (Input.Local), every candidate the
+    factory's local round did not catch (tagLocal) has Origin factory, a comment
+    that cannot be placed (a review body, deleted lines) included. A comment
+    magnum caught (posted near it, or rejected as its duplicate) that the local
+    round did not becomes such a candidate too, PostedCaught, instead of being
+    caught; one both rounds caught is caught. An outside comment takes no part:
+    it is about code magnum's review did not see.
 
 type Reviewed struct {
 	SHA string
@@ -24440,6 +24701,14 @@ const (
     review, or the classifier said so.
 
 const (
+	MissStagePlan   = "plan"   // the ticket or the operator's answers decided the point, or the factory needed to ask
+	MissStageCode   = "code"   // the plan was right, the code is wrong
+	MissStageReview = "review" // plan and code are as written: the local review should have caught it
+)
+    Where a factory-origin miss went wrong (misses.stage), as the retro's
+    classifier placed it; "" (NULL) when it did not.
+
+const (
 	MissNew       = "new"
 	MissUsed      = "used"
 	MissDismissed = "dismissed"
@@ -24730,6 +24999,12 @@ const MissDismissRejections = 2
     MissDismissRejections is how many proposals the operator rejected a miss may
     be in before it is dismissed.
 
+const MissOriginFactory = "factory"
+    MissOriginFactory is where a miss came from (misses.origin): a comment on
+    a pull request the factory published that the factory's local review round
+    did not catch (learn.Build over escapes.Match); "" (NULL) for every other
+    comment.
+
 const NotesUnusedRounds = 20
     NotesUnusedRounds is how many judge rounds a harness file must have existed
     for, with no recorded use, to be a curation candidate.
@@ -24781,6 +25056,9 @@ var InFlightStates = []string{PRClaiming, PRReviewing, PRVerifying}
     InFlightStates are the PR states of a review round being prepared or
     running. The daemon owns a PR in them: CLI writes refuse, recovery
     re-evaluates them at startup. Callers must not modify the slice.
+
+var MissStages = []string{MissStagePlan, MissStageCode, MissStageReview}
+    MissStages are the stages a classifier may give (MissStage*).
 
 
 FUNCTIONS
@@ -25662,6 +25940,18 @@ type Miss struct {
 	// OutsideReason says why a comment of class outside is (MissOutside*;
 	// "" for every other class, and in rows stored before migration 0029).
 	OutsideReason string `json:"outside_reason,omitempty"`
+	// Origin is MissOriginFactory for a comment on a pull request the
+	// factory published that its local review round did not catch, ""
+	// otherwise (and in rows stored before migration 0031).
+	Origin string `json:"origin,omitempty"`
+	// Stage is where a factory-origin miss went wrong as the classifier
+	// placed it (MissStage*; "" when it did not).
+	Stage string `json:"stage,omitempty"`
+	// PostedCaught: magnum's posted round caught the comment, though the
+	// factory's local round did not. Such a row is a factory-origin miss
+	// only, and teaches the review skill nothing: MissFilter leaves it out
+	// unless WithPostedCaught.
+	PostedCaught bool `json:"posted_caught,omitempty"`
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
@@ -25690,6 +25980,13 @@ type MissFilter struct {
 	// author declined, stored under its thread's link, which the declines
 	// row carries too, so no other reviewer raised it.
 	NoRoutedDeclines bool
+	// Origins selects the misses of these origins (MissOriginFactory);
+	// empty = any origin, none included.
+	Origins []string
+	// WithPostedCaught also selects the factory-origin misses magnum's
+	// posted round caught (Miss.PostedCaught), which every reader that
+	// learns from or counts the misses leaves out.
+	WithPostedCaught bool
 }
     MissFilter selects misses; zero values select everything.
 
@@ -27255,12 +27552,15 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error)
     brings back a dismissed or used miss. Every other column takes m's value,
     except that an unclassified m (a retro whose classifier failed) never
     replaces a class an earlier retro set, nor what came with it (severity,
-    title, lesson, scope, lines, match, the outside reason). Empty Class is
-    MissUnclassified, empty Raised is MissRaisedNone, nil Lines and Match
-    are empty lists, and "" or 0 in an optional column is stored as NULL.
-    PRID, SourceURL, SourceKind, Reviewer and ReviewedSHA are required;
-    an OutsideReason must be one of the MissOutside* reasons, and only class
-    outside has one.
+    title, lesson, scope, lines, match, the outside reason, the stage);
+    the origin and the posted catch are Build's, as the comment's commit is,
+    and always take m's value. Empty Class is MissUnclassified, empty Raised
+    is MissRaisedNone, nil Lines and Match are empty lists, and "" or 0
+    in an optional column is stored as NULL. PRID, SourceURL, SourceKind,
+    Reviewer and ReviewedSHA are required; an OutsideReason must be one of
+    the MissOutside* reasons, and only class outside has one; an Origin must
+    be MissOriginFactory, and only a factory-origin miss has a Stage (one of
+    MissStages) or PostedCaught.
 
 func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, error)
     UpsertPRFromGitHub inserts a PR (state InitialState, head_changed_at now)
