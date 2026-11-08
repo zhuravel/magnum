@@ -6,6 +6,8 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -76,4 +78,44 @@ func TestAHookFailureNeverWaitsForABlockedConsumer(t *testing.T) {
 		t.Fatal("a queue without a listener")
 	}
 	none.SendHookFailure(s, agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit})
+}
+
+// The App's agents manager hands the StopFailures its agents' hooks prove to
+// the engine's queue (HookFailures, through agents.Deps.HookFailure): a
+// StopFailure of a review session whose screen shows a usage limit, given
+// to Wake, comes out of the queue as its class and the screen's verdict.
+func TestTheAppsAgentsHandTheirHookFailuresToTheEnginesQueue(t *testing.T) {
+	srv := newHerdrServer(t, herdr.Snapshot{})
+	// The look's snapshot fails, so the look leaves the session to the
+	// observe pass and only the StopFailure's read of the screen counts.
+	srv.answerWith("⏺ Reading the diff.\n\n  ⎿  You've hit your session limit · resets 3pm (Europe/Kyiv)\n\n> \n", "session.snapshot")
+	a, _ := testAppWith(t, herdrConfig(srv.socket, ""), Options{HookSocket: "/state/run/hooks.sock"})
+	ctx := t.Context()
+	repo, err := a.Store.UpsertRepo(ctx, store.Repo{NodeID: "R_1", Owner: "talkable", Name: "talkable", WatchOwner: "talkable", Mode: store.RepoModePerPR})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, err := a.Store.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PR_1", Number: 1, URL: "https://github.com/talkable/talkable/pull/1",
+		HeadSHA: "a1", GHState: store.GHOpen, InitialState: store.PRReviewing, Identity: "talkable-app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sid = "0b5c1a52-3d2e-4f43-9b7c-4f6a3e2d1c00"
+	s, err := a.Store.CreateSession(ctx, store.Session{PRID: up.PR.ID, Role: config.RoleClaudeReview, AgentName: new("mg-1-claude-review-abc123"),
+		AgentKind: new(agents.KindClaude), SessionID: new(sid), HerdrWorkspaceID: new("w1"), HerdrPaneID: new("w1:p1"),
+		State: store.SessionLive, StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Agents.Wake(ctx, agenthooks.Event{Agent: agenthooks.AgentClaude, Name: agenthooks.NameStopFailure, Pane: "w1:p1", SessionID: sid,
+		Error: string(agents.StopFailureRateLimit)})
+	a.Agents.WaitWakes()
+	select {
+	case f := <-a.HookFailures:
+		if f.Session.ID != s.ID || f.Failure != agents.StopFailureRateLimit || f.Screen.Kind != agents.HealthUsageLimit {
+			t.Fatalf("queued %+v, want session %d's rate limit with the screen's usage limit", f, s.ID)
+		}
+	default:
+		t.Fatal("the review session's StopFailure never reached the engine's queue")
+	}
 }

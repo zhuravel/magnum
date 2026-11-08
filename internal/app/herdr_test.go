@@ -27,14 +27,27 @@ import (
 // and whose agents the slot guard and the inventory read too.
 
 // herdrServer is a herdr API socket of a test's own, answering the calls
-// the App's layers make: a snapshot it is given, a toast, sidebar tokens.
-// It records the method of every call.
+// the App's layers make: a snapshot it is given, a toast, sidebar tokens,
+// and the screen of every agent and pane (answerWith). It records the
+// method of every call.
 type herdrServer struct {
 	socket string
 	snap   herdr.Snapshot
 
 	mu    sync.Mutex
 	calls []string
+	// screen is the text agent.read and pane.read answer, and refuse the
+	// methods answered with an error (answerWith).
+	screen string
+	refuse []string
+}
+
+// answerWith has s answer agent.read and pane.read with screen and each of
+// the methods refuse with an error.
+func (s *herdrServer) answerWith(screen string, refuse ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.screen, s.refuse = screen, refuse
 }
 
 func newHerdrServer(t *testing.T, snap herdr.Snapshot) *herdrServer {
@@ -74,13 +87,21 @@ func (s *herdrServer) answer(conn net.Conn) {
 	}
 	s.mu.Lock()
 	s.calls = append(s.calls, req.Method)
+	screen, refused := s.screen, slices.Contains(s.refuse, req.Method)
 	s.mu.Unlock()
+	if refused {
+		b, _ := json.Marshal(map[string]any{"id": req.ID, "error": map[string]string{"code": "internal", "message": "refused"}})
+		conn.Write(append(b, '\n'))
+		return
+	}
 	var result any = map[string]any{}
 	switch req.Method {
 	case "session.snapshot":
 		result = map[string]any{"snapshot": s.snap}
 	case "notification.show":
 		result = herdr.NotificationResult{Shown: true}
+	case "agent.read", "pane.read":
+		result = map[string]any{"read": herdr.ReadResult{Text: screen}}
 	}
 	b, _ := json.Marshal(map[string]any{"id": req.ID, "result": result})
 	conn.Write(append(b, '\n'))
