@@ -15744,6 +15744,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAProbeThatDiesOnALineOfItsOwnIsChargedAndLeavesTheHold,
   TestAProbeWhoseKindLaunchesOnItsRestartLiftsTheHold, TestStatusShowsAKindASharedLaunchFailureHolds,
   TestPauseAndResumeWithoutDaemon.
+- **The next round on the head adopts the late review of a judge whose round gave up on its result**
+  (2026-11-08, the self-healing audit's R31). In that 2026-11-05 round the judge posted its review with the
+  round's marker and wrote its result file at 08:29, 15 minutes after the round ended needing attention
+  ("the judge stopped without posting a review or writing its result, also after a nudge"); the PR stayed
+  parked, its status comment said the review failed, and a push 45 minutes later started a new round. The
+  judge's runs of such a round (`agents.JudgeNoResult`) now count for the pipeline's `findUnverified` as a
+  review GitHub could not verify does: the next round on the same head looks for the review by the round's
+  marker first and adopts it (`round.adopted`, with the late result file's findings), prompting nothing;
+  without it the round runs, its judge given that marker (an info `round.unverified`, not a warning), so a
+  review the stopped judge still posts is found before a second one is posted. The runs are any declared
+  judge's, not only this round's judge's: a round whose judge_fallback runs in the place of a held kind's
+  judge (or a flagged PR's) adopts the stopped judge's review of the head all the same, as it now adopts any
+  judge's review GitHub could not verify. Rejected: waiting longer after the nudge while the judge works (the
+  audit's first proposal: this judge sat idle for 9 minutes after the nudge, its model at capacity, and a
+  longer wait would hold the round's slot for up to the judge's timeout); adopting a late result that is not
+  a posted review (a blocked or error result is the operator's to read, as before); and not taking the
+  judge's session at work after such a round for someone typing, R31's other half. The audit read the 08:22
+  turn as the judge's own, but its rollout shows the session's model and effort switched at 08:22, to ones
+  magnum never sets for the judge, and a turn a user started that no magnum prompt began: the operator had
+  stepped into the pane, and the 08:23 `agent.human_active` was right. Turning the guard off for the
+  judge's timeout (90 minutes for codex-judge) would let a push's round prompt into the operator's
+  conversation, and for a Claude judge it would drop typing the transcript proves; the adopting round
+  prompts nothing, so the cooldown does not hold it back. Tests, failing first:
+  TestNextRoundAdoptsTheLateReviewOfAJudgeItsRoundGaveUpOn,
+  TestARoundAfterAJudgeGaveUpGivesItsJudgeTheMarkerWhenNoLateReviewLanded,
+  TestARoundOfAnotherJudgeAdoptsTheLateReview; TestAJudgeAtWorkAfterItsRoundGaveUpOnItsResultIsSomeoneTyping
+  keeps the rejected rule out.
 
 ## The factory (2026-11-03)
 

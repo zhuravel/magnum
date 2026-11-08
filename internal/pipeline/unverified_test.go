@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,132 @@ func TestRestartDropsTheUnverifiedMarker(t *testing.T) {
 	}
 	if res.JudgeRunID == marker {
 		t.Fatalf("the review of %s carries the marker of the unverified run on %s", textx.ShortSHA(head2), textx.ShortSHA(target))
+	}
+}
+
+// gaveUpRound runs a round whose judge ends its turn and then its nudge's
+// without a result, so the round ends needing attention, and returns the
+// marker its review was asked to carry.
+func (e *env) gaveUpRound() string {
+	e.t.Helper()
+	e.ag.behaviors[agents.RoleJudge] = []behavior{endSilently(), endSilently()}
+	e.ag.reads[agents.RoleJudge] = "Selected model is at capacity.\n"
+	res, err := e.r.RunRound(e.ctx, e.nextRound())
+	if err != nil || res.Outcome != OutcomeNeedsAttention || !strings.HasPrefix(res.Error, agents.JudgeNoResult) || res.JudgeRunID == "" {
+		e.t.Fatalf("the round that gave up: result = %+v, err = %v", res, err)
+	}
+	return res.JudgeRunID
+}
+
+// postsLate is the judge's late work after its round gave up on its
+// result: its review on GitHub with the round's marker, and its result file.
+func (e *env) postsLate(marker string, p judgePost) {
+	e.t.Helper()
+	path := filepath.Join(e.reportDir(), "codex-judge.json")
+	if err := p.behavior(e.t)(e.ag, store.Run{ID: marker, ReportPath: &path}, "run_id "+marker); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// On 2026-11-05 a judge's turn and its nudge's ended without its result,
+// and the round ended needing attention; the judge worked on and posted its
+// review, with the round's marker, 15 minutes later, while the PR stayed
+// parked as failed. The next round on that head finds that review by the
+// marker and adopts it with the late result file's findings, prompting
+// nothing, as it adopts a review GitHub could not verify.
+func TestNextRoundAdoptsTheLateReviewOfAJudgeItsRoundGaveUpOn(t *testing.T) {
+	e := newEnv(t)
+	marker := e.gaveUpRound()
+	late := e.judgePosts(810, "CHANGES_REQUESTED", "REQUEST_CHANGES")
+	late.keepWorking = true
+	e.postsLate(marker, late)
+	submits, shells := len(e.ag.submits), len(e.ag.codexCalls)
+
+	res, err := e.r.RunRound(e.ctx, e.nextRound())
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 810 || res.JudgeRunID != marker || res.Round != 1 {
+		t.Fatalf("adopting round: result = %+v, err = %v", res, err)
+	}
+	if res.Event != "CHANGES_REQUESTED" || res.Findings["P2"] != 2 {
+		t.Fatalf("adopted review: %+v, want the late result's findings", res)
+	}
+	if len(e.ag.submits) != submits || len(e.ag.codexCalls) != shells {
+		t.Fatalf("the adopting round prompted: submits %d -> %d, shell runs %d -> %d", submits, len(e.ag.submits), shells, len(e.ag.codexCalls))
+	}
+	run, err := e.st.RunByID(e.ctx, marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != store.RunVerified || store.Deref(run.ReviewID) != 810 || run.Error != nil {
+		t.Fatalf("the judge's run after adoption: %+v", run)
+	}
+	var adopted []store.Event
+	for _, ev := range e.events() {
+		if ev.Kind == "round.adopted" {
+			adopted = append(adopted, ev)
+		}
+	}
+	if len(adopted) != 1 || !strings.Contains(adopted[0].Message, "after its round ended without its result") {
+		t.Fatalf("round.adopted events %+v, want one naming the late review", adopted)
+	}
+}
+
+// Without a late review on GitHub, the round after the one that gave up on
+// its judge's result runs as any round, and its judge is given that round's
+// marker: a judge still at work on the old round that posts with it is
+// found before a second review is posted. The round says so, as news, not
+// as a failure.
+func TestARoundAfterAJudgeGaveUpGivesItsJudgeTheMarkerWhenNoLateReviewLanded(t *testing.T) {
+	e := newEnv(t)
+	marker := e.gaveUpRound()
+
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(811, "COMMENTED", "COMMENT").behavior(t)}
+	res, err := e.r.RunRound(e.ctx, e.nextRound())
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 811 || res.JudgeRunID != marker {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	judge := e.ag.submitsFor(agents.RoleJudge)
+	if got := markerRunID(t, judge[len(judge)-1].Text); got != marker {
+		t.Fatalf("the judge's run_id = %s, want the run of the round that gave up %s", got, marker)
+	}
+	var said []store.Event
+	for _, ev := range e.events() {
+		if ev.Kind == "round.unverified" {
+			said = append(said, ev)
+		}
+	}
+	if len(said) != 1 || said[0].Level != "info" || !strings.Contains(said[0].Message, "stopped without its result and it is not on GitHub") {
+		t.Fatalf("round.unverified events %+v, want one info event naming the judge that stopped", said)
+	}
+}
+
+// A round whose judge is another one (a judge_fallback in the place of a
+// kind a shared launch failure holds) adopts the late review of the judge
+// whose round gave up on its result all the same: the review is the head's,
+// by the round's identity, whichever judge wrote it.
+func TestARoundOfAnotherJudgeAdoptsTheLateReview(t *testing.T) {
+	e := newEnv(t)
+	marker := e.gaveUpRound()
+	late := e.judgePosts(812, "COMMENTED", "COMMENT")
+	late.keepWorking = true
+	e.postsLate(marker, late)
+	fallback, ok := e.cfg.RoleByNameOrAlias(nil, "claude-judge")
+	if !ok {
+		t.Fatal("no claude-judge in the defaults")
+	}
+	in := e.nextRound()
+	for _, r := range e.cfg.RolesFor(nil) {
+		if r.Judge {
+			r = fallback
+		}
+		in.Roles = append(in.Roles, r)
+	}
+	submits := len(e.ag.submits)
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 812 || res.JudgeRunID != marker {
+		t.Fatalf("the other judge's round: result = %+v, err = %v", res, err)
+	}
+	if len(e.ag.submits) != submits {
+		t.Fatalf("the adopting round prompted: submits %d -> %d", submits, len(e.ag.submits))
 	}
 }

@@ -364,6 +364,14 @@ func (m *Manager) humanActive(ctx context.Context, prID int64, now time.Time) (t
 	return cfg.CooldownUntil(&now), nil
 }
 
+// JudgeNoResult begins the error of the judge's runs of a round that ended
+// without the judge's result, also after a nudge (the pipeline's verdict):
+// the judge may still post that round's review, which the next round on
+// the head adopts (the engine's late_result.go, the pipeline's
+// findUnverified). Its session at work after such a round is someone
+// typing, as any agent at work with no magnum prompt in flight.
+const JudgeNoResult = "the judge stopped without posting a review or writing its result"
+
 // turnTail reports whether judge session s (its row after this tick's
 // update) shows its agent still finishing the turn of its last run: the run
 // ended while the agent was working (the round went on once the judge's

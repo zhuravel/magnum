@@ -161,3 +161,61 @@ func TestAPromptToAJudgeThatKeepsWorkingIsRefusedAsBusy(t *testing.T) {
 		t.Fatalf("run = %+v, want abandoned", r)
 	}
 }
+
+// judgeGaveUp prompts the judge, lets it work and go idle, so its run ends,
+// and fails that run as the round does when it ends without the judge's
+// result, also after a nudge (JudgeNoResult); it returns the run's end.
+func (e *env) judgeGaveUp() time.Time {
+	e.t.Helper()
+	e.started()
+	e.h.mu.Lock()
+	e.h.reads[judgeAgent] = codexIdleScreen
+	e.h.mu.Unlock()
+	e.clock.Add(3 * time.Minute)
+	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunNudge, "nudge")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.clock.Add(5 * time.Minute)
+	e.observe()
+	e.h.setAgentStatus(judgeAgent, herdr.StatusIdle)
+	for range CompletionIdleTicks + 1 {
+		e.clock.Add(30 * time.Second)
+		e.observe()
+	}
+	r := e.run1(id)
+	if r.State != store.RunEnded || r.EndedAt == nil {
+		e.t.Fatalf("the judge's run after it went idle = %+v, want ended", r)
+	}
+	if err := e.st.TransitionRun(e.ctx, id, []string{store.RunEnded}, store.RunFailed, func(u *store.RunUpdate) {
+		u.Set("outcome", "needs_attention")
+		u.Set("error", JudgeNoResult+", also after a nudge")
+	}); err != nil {
+		e.t.Fatal(err)
+	}
+	return *r.EndedAt
+}
+
+// On 2026-11-05 a judge's turn and its nudge's both ended without its result
+// (the model was at capacity), and the round ended needing attention; 8
+// minutes later the judge's session worked on under another model and
+// effort, neither of them magnum's, on a turn its rollout says a user
+// started: the operator had stepped into the pane, and the observer was
+// right to take it for someone typing. A judge at work after its round gave
+// up on its result (its last run failed with JudgeNoResult) is someone
+// typing, as any agent at work with no magnum prompt in flight: the PR's
+// prompts wait the cooldown, and its late review is adopted all the same
+// (the engine's checkLateResults, the pipeline's findUnverified).
+func TestAJudgeAtWorkAfterItsRoundGaveUpOnItsResultIsSomeoneTyping(t *testing.T) {
+	e := newEnv(t)
+	e.judgeGaveUp()
+	e.clock.Add(8 * time.Minute)
+	e.h.setAgentStatus(judgeAgent, herdr.StatusWorking)
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleJudge]; o.Kind != ObsHumanActive {
+		t.Fatalf("the judge at work 8 minutes after its round gave up = %+v, want human_active", o)
+	}
+	if pr := e.reloadPR(); pr.HumanActiveAt == nil {
+		t.Fatal("human_active_at = nil, want the cooldown's start")
+	}
+}

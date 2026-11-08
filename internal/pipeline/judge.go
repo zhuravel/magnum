@@ -181,7 +181,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		}
 		if nudged {
 			return rd.finalizeJudge(ctx, runIDs, verdict{final: true, outcome: OutcomeNeedsAttention, result: v.result,
-				err: errors.New("the judge stopped without posting a review or writing its result, also after a nudge")})
+				err: errors.New(agents.JudgeNoResult + ", also after a nudge")})
 		}
 		nrun, err := rd.newRun(ctx, rd.judge, store.RunNudge)
 		if err != nil {
