@@ -5588,9 +5588,10 @@ classifier's answer would otherwise take a kind of finding out of every review w
 run`'s (`magnum eval list` shows them), and the result with the proposal; each case replays in a worktree of
 the gate's own (`~/.local/state/magnum/learn/eval/wt/<case>`, never the one `magnum eval run` replaces), and
 `magnum eval run` refuses to start while a gate runs (it names the proposal). The gate waits
-while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause` or a
-paused reviewing CLI (checked before each replay, so one that comes while it runs stops it), and counts as
-background work for a restart. A replay of a target or of its baseline, a second replay (of a lost case or
+while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause`, a
+paused reviewing CLI or one a launch failure shared across pull requests holds (while the hold's 15 minutes
+run or a round probes it; checked before each replay, so one that comes while it runs stops it), and counts
+as background work for a restart. A replay of a target or of its baseline, a second replay (of a lost case or
 a won target) or a guard's replay of the base that ends without a score (herdr away, a GitHub read that failed, a judge that timed out) stops the
 gate instead of deciding without it: the proposal stays `gating` and the gate tries again 30 minutes later,
 and only the third gate of it that stops so holds it for you, naming the replay. A corpus or a list of
@@ -5599,7 +5600,11 @@ keeps what it replayed: the next one takes the candidate's stored replays of the
 replay) instead of replaying them again. Every gate of a proposal that stops short, whatever
 stopped it (the budget, a usage limit, a replay without a score, an error), is counted, and the sixth
 holds it for you naming the last stop; a shutdown, a drain or a pause stop does not count, and leaves the
-count of the earlier stops as it is, since it says nothing about the proposal. A proposal still `gating`
+count of the earlier stops as it is, since it says nothing about the proposal. Nor does a CLI's outage: a
+replay that ends without a score while a reviewing CLI is held for a shared launch failure, or on a launch
+failure shared across pull requests (a pane line `agents.shared_failure` named that day, or one another
+pull request's agent ended with within 30 minutes), stops the gate as a drain does, counting toward neither
+limit, also for a case that is no target (the gate does not decide without it). A proposal still `gating`
 3 days after the editor made it is held too, whether or not a gate could start. Until then `magnum learn
 --review` shows the oldest `gating` proposal when none is held, and its `y` rejects it (the daemon stops a
 gate that runs for it first).

@@ -16008,6 +16008,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheRetroRunsAsBeforeWithoutAReadableFactoryRegistryAndSaysWhyOnce in engine;
   TestMissesShowTheFactoryOriginStageAndThePostedCatch and TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses
   in cli.
+- **A gate replay a CLI's outage ended is a delay, never a stop toward the hold** (2026-11-08, the audit of
+  what waits on the operator, which the operator approved on 2026-11-08; amends "A gate that cannot score
+  stops instead of deciding", extends "A drain or a pause stop of the skill gate does not count toward its
+  hold limit", builds on "A launch failure shared across PRs holds its kind until a probe launches it").
+  On 2026-11-05 the Codex CLI's launches died at the TUI bootstrap for two hours, and skill proposal 17's
+  gates at 18:20, 18:52 and 19:24 each stopped on the candidate replay of the same case, its codex-judge
+  prompt refused with the bootstrap line in its pane, the line `agents.shared_failure` had named for real
+  rounds at 18:22: the third such stop held the proposal for the operator under `gateStopLimit`, "held for
+  review" although no gate ever scored it, and the editor waited behind it. The outage said nothing about
+  the proposal. Now `gateHold` also waits while a kind the gate's roles use is held for a round
+  (`kindHoldGate` with no PR: the hold's span runs, or a round probes it; once the span is over and no
+  round probes it, the gate replays as any round may, and it never claims or settles a probe), and a
+  replay that ends without a score is a CLI's outage (`outageOf`) when a kind the gate replays is held,
+  whatever the hold's span (a shared failure may have held it while the replay ran), or when the pane line
+  its refused prompt carries (`agents.PaneErrorOf`) is a launch failure shared across PRs
+  (`sharedLaunchLine`: a line `agents.shared_failure` named within its 24 hours, or one another PR's
+  agent ended with within its 30 minutes, the replay's own case making the second PR, so a line only the
+  case's PR ended with stays its own failure). Such a replay comes back with `gateReplay.held`, the typed
+  flag of the daemon's own holds, and `halt` ends the gate through `waitsHeld`: a `learn.gate_waiting`
+  event naming the hold or the shared line, the retry wait as before, and neither `gateStopLimit` nor
+  `gateAttemptLimit` counts it. It does so for a case that is no target too, which a replay without a
+  score otherwise leaves out of the verdict: a verdict made while a CLI is out would leave out every case
+  the outage reached. `gateMaxAge` (3 days) still bounds a proposal that never scores, and its held
+  reason now names a held kind and a shared launch failure among what held every gate. Not done: putting
+  a proposal the stop limit held back to gating once the hold lifts (that would amend "a held one never
+  goes back to gating", and the operator approved only the delay). The shared failure of 2026-11-05
+  grouped claude-review and codex-judge, so `holdShared` held no kind then; the line alone (named, or
+  another PR's) is what makes such an outage a delay here, and the first gate at 18:20, two minutes
+  before the line was named and seconds before a real round ended on it, would still have counted once.
+  Rejected: matching the replay's error words for "TUI bootstrap" or `agent_not_found` (the words are the
+  CLI's and change with it, and any launch that died ends with `agent_not_found`, one the case's own
+  checkout broke included); waiting for every kind's hold to lift before a gate starts (no round probes a
+  kind no PR's round needs now, and the hold would keep every gate from starting until `gateMaxAge` held
+  the proposal); and leaving a non-target case's outage out of the verdict as before. Tests, failing first:
+  TestAGateReplayOnASharedLaunchFailureIsADelayNotAStop (nine gates on a line another PR's launch ended
+  with leave the proposal gating, then it passes once the target scores; a line named today alone; a
+  non-target case stops the gate; gateMaxAge holds it; the same line on the case's own PR alone holds it at
+  the third gate) and TestAGateWaitsOutAKindHoldAndAFailureUnderItIsADelay in engine.
 
 ## The factory (2026-11-03)
 
