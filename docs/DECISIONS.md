@@ -3896,11 +3896,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   their panes the socket, so the retro's `EnsureWorkspace` with no env of its own gets it from the manager).
   A pane agent registers when it sets up, only while the daemon listens, and at its close leaves before its
   scratch registry closes: its sink's context ends its later looks, the Wake in flight returns, then
-  `WaitWakes`. An event no registry records is dropped with a debug line naming the event alone (the agent
+  `WaitWakes`. The skill gate's replays, which the daemon runs in its own process, stay on polling: each is a
+  tagged App over a registry of its own (`evalrun`, `app.Options` without `HookSocket`), no sink of it
+  registers with the router, so a socket in its panes' env would only bring events the router drops. An event no registry records is dropped with a debug line naming the event alone (the agent
   picks the pane), and a datagram named `ping`, the doctor's probe of the install command's "hook socket"
   check, is dropped without a word (the listener already drops a name it does not know, at debug level; the
-  send succeeds). Each event handed on logs one debug line: its name, the pane, the registry, the session's
-  role and row and its run in flight, never a field of the payload. `Deps.HookFailure` must not block, and
+  send succeeds). Each event handed on logs one debug line of the router's (`hook event routed`): its name,
+  the pane, the registry, the session's role and row and its run in flight, never a field of the payload;
+  the listener's own line for each event it takes (`hook event`, the name and the pane) comes before it. `Deps.HookFailure` must not block, and
   the engine's pause writes the registry, records an event and toasts, so the managers queue each StopFailure
   (`app.App.SendHookFailure`, 16 deep; one past it is dropped at debug level, since the run's own end reads
   its screen again) and the engine handles the queue on a goroutine of its own while it listens
@@ -3933,6 +3936,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheDaemonPausesAKindOnAHookFailureWhileItListens, TestAHookFailureNeverWaitsForABlockedConsumer,
   TestFromAppHandsTheHookFailuresToTheEngine (it fails with FromApp's wiring taken out),
   TestTheDaemonRecordsWhetherItsHookListenerIsUp and TestStatusSaysWhetherTheDaemonsHookListenerIsUp.
+  Review then found the wiring between them untested: the Run tests claimed one layout and ran on another,
+  so Run taking the claim's lock again (which finds it held and exits "already running", status 0, never
+  restarted by launchd) passed, and so did taking out the router's open, FromApp's router for the pane
+  agents, the App's `HookFailure`, the daemon command's claim options and the in-flight guard of a pane
+  agent's removal. The Run tests now run on the claim's own layout (`onLayout`), and the daemon command's
+  `claimDaemon` returns the engine and App options it makes from the claim. Each of these fails with its
+  line taken out: TestRunHoldsTheDaemonLockItsClaimTook,
+  TestAPaneAgentsHookEventReachesItWhileTheDaemonServesItsClaim,
+  TestFromAppMakesThePaneAgentsOnTheEnginesHookRouter, TestThePaneAgentsHookFailuresGoToTheAppsQueue,
+  TestARemovedPaneAgentWaitsForItsWakeInFlight, TestTheAppsAgentsHandTheirHookFailuresToTheEnginesQueue
+  and TestTheDaemonsClaimGoesToRunAndItsSocketToThePanes.
 
 ## Screens and commands
 

@@ -6114,7 +6114,10 @@ within a second or two instead of on the next observe pass. The pieces:
   directory, `~/.local/state/magnum` by default), and `MAGNUM_HOOK_BIN`, the magnum binary. The path stays the
   same across restarts. A socket path of 104 bytes or more cannot be a Unix socket (a deep `MAGNUM_HOME`): then
   no pane gets the variables, and the daemon polls as before. A pane keeps the env it was made with, so a pane
-  made before the daemon listened stays on polling until it is renewed.
+  made before the daemon listened stays on polling until it is renewed. The replays are the exception: the
+  panes of the skill gate's replays, which the review daemon runs, and of `magnum eval` get neither variable
+  (each replay's agents are on a registry of their own that the listener does not route to) and are polled
+  as before.
 - **The script.** `hooks/magnum-agent-hook.sh` (embedded in the binary, header `# managed by magnum`,
   `MAGNUM_HOOK_ID`, `MAGNUM_HOOK_VERSION=1`) runs `magnum hook-event <agent> <event>` with the hook's payload on
   stdin, for Claude Code's and Codex's Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd and
@@ -6145,9 +6148,11 @@ within a second or two instead of on the next observe pass. The pieces:
   pane is dropped. A StopFailure whose screen shows a usage limit or a lost login pauses that agent kind at
   once, as a reviewer's run that proved it does at its end (until the reset the screen names, for a limit);
   an overload or a model limit is left to the run's end, as before. The doctor's probe (a datagram named
-  `ping`) is taken and dropped. With `--log-level debug` each event logs one line: its name, the pane, the
-  role and the run, never the payload. At shutdown the listener stops first, then the daemon waits for the
-  looks the events started.
+  `ping`) is taken and dropped. With `--log-level debug` the listener logs each event it takes (`hook event`:
+  its name and the pane) and the daemon one more line when it hands it on (`hook event routed`: the name, the
+  pane, the registry, the role and the run), never the payload; the look the event starts may add its own
+  lines, and a ping or a name the listener does not know logs only `hook datagram dropped`. At shutdown the
+  listener stops first, then the daemon waits for the looks the events started.
 
 `magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`), its doctor
 checks and the factory daemon's listener come in later releases; until the install, nothing runs the script
