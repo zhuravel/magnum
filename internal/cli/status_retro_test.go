@@ -123,6 +123,20 @@ func TestStatusRetroLineCountsNewDeclinedFindings(t *testing.T) {
 	}
 }
 
+// The last retro's factory-origin misses (comments on PRs the factory
+// published that its local review missed) are on the line, and the count is
+// left out when there is none.
+func TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 2,
+		Misses: 1, Factory: 2})
+	_, out := statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 2 classified, 2 factory-origin misses · 0 new misses\n")
+	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 1, Classified: 1, Factory: 1})
+	_, out = statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 1 PR, 1 classified, 1 factory-origin miss · 0 new misses\n")
+}
+
 func TestStatusRetroLineSaysWhyARetroStoppedAndCleansIt(t *testing.T) {
 	_, st, d, now := statusFixture(t)
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-50 * time.Minute), Finished: now.Add(-45 * time.Minute), PRs: 2, Classified: 1,

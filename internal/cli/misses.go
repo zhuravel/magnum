@@ -23,7 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const missesUsage = "[<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--declines] [--json]"
+const missesUsage = "[<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--factory] [--declines] [--json]"
 
 const (
 	// missesLessonRunes cuts the lesson when stdout is not a terminal.
@@ -54,20 +54,27 @@ func newMissesCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupInspect, "misses "+missesUsage, "what other reviewers caught on closed PRs that magnum's review did not",
 		"List what other reviewers commented on pull requests magnum reviewed, as the retro classified it (`magnum "+
 			"retro` runs one now; [learn] enabled = true runs one daily). Comments magnum had already posted never "+
-			"appear. By default it shows the real misses nobody drew a lesson from yet (class miss, state new); "+
-			"--class picks another class and --all lists every class and every state (with --class: that class in "+
-			"every state). A <ref> shows one PR's.\n\n"+
+			"appear, except on a PR the factory published, where one the factory's local review missed is a "+
+			"factory-origin miss (RAISED posted). By default it shows the real misses nobody drew a lesson from yet "+
+			"(class miss, state new), the posted ones left out: they teach magnum's review nothing; --class picks "+
+			"another class and --all lists every class and every state (with --class: that class in every state), "+
+			"the posted ones included. --factory lists only the factory-origin misses, the posted ones included. A "+
+			"<ref> shows one PR's.\n\n"+
 			"STATE (with --all) is new until a notes curation used the miss (a proposal accounting for it was applied) "+
 			"or it was dismissed (in two rejected proposals; one a skill proposal dismissed says why and which, "+
 			"\"dismissed: found at the baseline (skill proposal 12)\", as a decline's does); a miss of class miss and scope repo goes to its "+
 			"repository's next notes curation. PROPOSAL, when one is, is the latest notes proposal a miss was given to "+
 			"and where that stands (`magnum notes <repo> --review`). RAISED says what magnum did with the point: rejected:<reason> when its judge "+
-			"raised a similar finding and rejected it, blank when it never raised it. CLASS says why a comment is outside: "+
+			"raised a similar finding and rejected it, posted when its posted round caught it (a factory-origin miss only), "+
+			"blank when it never raised it. ORIGIN, when a row has one, is factory for a comment on a PR the factory "+
+			"published that its local review round missed, with the stage the retro's agent placed it at: factory:plan "+
+			"(the ticket or your answers decided the point, or the factory should have asked), factory:code (the plan was "+
+			"right, the code is wrong) or factory:review (its local review should have caught it). CLASS says why a comment is outside: "+
 			"outside:before_review (made before magnum's first review of the PR), :file_changed (on a later push that "+
 			"changed its file), :not_descendant (on a commit that does not descend from the one magnum reviewed), "+
 			":no_compare (GitHub could not compare the two), :body_unreviewed (a review summary on a commit magnum did "+
 			"not review) or :classifier (the retro's agent said so); --json has it as outside_reason, with comment_sha, "+
-			"the commit the comment was made on. WHERE is path:line, or - for a review summary. The lesson is cut to fit "+
+			"the commit the comment was made on, and origin, stage and posted_caught. WHERE is path:line, or - for a review summary. The lesson is cut to fit "+
 			"the terminal.\n\n"+
 			"--declines lists instead how the authors answered magnum's own findings, as the retro classified their "+
 			"replies: by default the findings they declined or argued that no lesson was drawn from yet (state new), "+
@@ -80,6 +87,7 @@ func newMissesCmd(c *Context) *cobra.Command {
 	fs := cmd.Flags()
 	fs.BoolVar(&f.all, "all", false, "every class and every state (not only new misses); with --declines, every answer")
 	fs.StringVar(&f.class, "class", "", "only this `class`: miss, not_issue, style, outside or unclassified (default: miss)")
+	fs.BoolVar(&f.factory, "factory", false, "only the misses of PRs the factory published that its local review missed")
 	fs.BoolVar(&f.declines, "declines", false, "how authors answered magnum's own findings (default: the declined and argued ones still new)")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	_ = cmd.RegisterFlagCompletionFunc("class", completeFlag(completeMissClasses))
@@ -89,8 +97,8 @@ func newMissesCmd(c *Context) *cobra.Command {
 
 // missesFlags are the parsed `magnum misses` flags.
 type missesFlags struct {
-	all, json, declines bool
-	class               string
+	all, json, declines, factory bool
+	class                        string
 }
 
 // completeMissClasses offers the --class values.
@@ -110,8 +118,8 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 	if class != "" && !slices.ContainsFunc(missesClasses, func(k missesClass) bool { return k.name == class }) {
 		return inspUsage(c, "misses", fmt.Sprintf("--class %q: want miss, not_issue, style, outside or unclassified", f.class), missesUsage)
 	}
-	if f.declines && f.class != "" {
-		return inspUsage(c, "misses", "--class picks misses; --declines lists answers to magnum's findings", missesUsage)
+	if f.declines && (f.class != "" || f.factory) {
+		return inspUsage(c, "misses", "--class and --factory pick misses; --declines lists answers to magnum's findings", missesUsage)
 	}
 	a, err := inspOpenApp(c, false)
 	if err != nil {
@@ -132,7 +140,7 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 	if f.declines {
 		return runDeclines(ctx, c, f, a.Store, defaultRepo(a.Config), prID)
 	}
-	filter := missesFilter(class, f.all)
+	filter := missesFilter(class, f.all, f.factory)
 	filter.PRID = prID
 	ms, err := a.Store.Misses(ctx, filter)
 	if err != nil {
@@ -148,7 +156,7 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 		return 0
 	}
 	if len(ms) == 0 {
-		fmt.Fprintln(c.Stdout, missesNone(class, f.all))
+		fmt.Fprintln(c.Stdout, missesNone(class, f.all, f.factory))
 		return 0
 	}
 	missesRender(c.Stdout, ms, defaultRepo(a.Config), missesTermWidth(c.Stdout), len(filter.States) != 1)
@@ -157,9 +165,14 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 
 // missesFilter is the registry query: class miss and state new, unless --class
 // names another class or --all lifts the state (and, without --class, the
-// class).
-func missesFilter(class string, all bool) store.MissFilter {
-	var f store.MissFilter
+// class). The misses only magnum's posted round caught (factory-origin
+// misses only) come with --all, and with --factory, which keeps only the
+// factory-origin misses.
+func missesFilter(class string, all, factory bool) store.MissFilter {
+	f := store.MissFilter{WithPostedCaught: all || factory}
+	if factory {
+		f.Origins = []string{store.MissOriginFactory}
+	}
 	switch {
 	case class != "":
 		f.Classes = []string{class}
@@ -173,9 +186,13 @@ func missesFilter(class string, all bool) store.MissFilter {
 }
 
 // missesNone explains an empty list.
-func missesNone(class string, all bool) string {
+func missesNone(class string, all, factory bool) string {
 	what, more := "no new misses", "; --all lists every class and state"
 	switch {
+	case factory && all:
+		what, more = "no factory-origin comments recorded", ""
+	case factory:
+		what = "no new factory-origin misses"
 	case all && class == "":
 		what, more = "no misses recorded", ""
 	case all:
@@ -205,11 +222,13 @@ var missesTermWidth = func(w io.Writer) int {
 
 // missesRender prints the table. Everything from GitHub or the classifier
 // goes through statusSafe. STATE is shown when the listing's states vary
-// (states), PROPOSAL when a miss listed was given to a notes proposal. The
-// lesson is the last column and is cut to the terminal's width (width > 0)
-// or to missesLessonRunes.
+// (states), PROPOSAL when a miss listed was given to a notes proposal,
+// ORIGIN when one has an origin (missesOrigin). The lesson is the last
+// column and is cut to the terminal's width (width > 0) or to
+// missesLessonRunes.
 func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, states bool) {
 	proposals := slices.ContainsFunc(ms, func(m store.Miss) bool { return m.ProposalID != nil })
+	origins := slices.ContainsFunc(ms, func(m store.Miss) bool { return m.Origin != "" })
 	header := []string{"PR", "REVIEWER", "WHERE", "CLASS", "SEV"}
 	if states {
 		header = append(header, "STATE")
@@ -217,6 +236,9 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 	header = append(header, "RAISED")
 	if proposals {
 		header = append(header, "PROPOSAL")
+	}
+	if origins {
+		header = append(header, "ORIGIN")
 	}
 	header = append(header, "TITLE")
 	rows := make([][]string, 0, len(ms))
@@ -235,6 +257,9 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 		row = append(row, missesRaised(m))
 		if proposals {
 			row = append(row, missesProposal(m))
+		}
+		if origins {
+			row = append(row, missesOrigin(m))
 		}
 		rows = append(rows, append(row, inspOrDash(statusSafe(m.Title, missesTitleRunes))))
 		lessons = append(lessons, statusSafe(m.Lesson, 0))
@@ -384,9 +409,22 @@ func missesClassCell(m store.Miss) string {
 	return statusSafe(m.Class, 0) + ":" + statusSafe(m.OutsideReason, 0)
 }
 
-// missesRaised is what magnum did with the point: rejected:<reason>, or
+// missesOrigin is a row's ORIGIN: factory, with the stage when the retro's
+// agent gave one (factory:plan), blank for a comment of no origin.
+func missesOrigin(m store.Miss) string {
+	if m.Origin == "" || m.Stage == "" {
+		return statusSafe(m.Origin, 0)
+	}
+	return statusSafe(m.Origin, 0) + ":" + statusSafe(m.Stage, 0)
+}
+
+// missesRaised is what magnum did with the point: rejected:<reason>,
+// posted when its posted round caught it (a factory-origin miss only), or
 // blank when it never raised it.
 func missesRaised(m store.Miss) string {
+	if m.PostedCaught {
+		return "posted"
+	}
 	if m.Raised != store.MissRaisedRejected {
 		return ""
 	}

@@ -417,7 +417,8 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 }
 
 // statusRetroText is the retro line's value: when the last retro finished
-// and how it went, then the real misses waiting for a lesson, the findings
+// and how it went (with the factory-origin misses it stored, when any),
+// then the real misses waiting for a lesson, the findings
 // authors declined or argued (when any) and the PRs waiting for the settle
 // delay.
 func statusRetroText(ro statusRetro, now time.Time) string {
@@ -435,6 +436,9 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 			s += textx.Count(l.PRs, "PR", "PRs") + ", " + strconv.Itoa(l.Classified) + " classified"
 			if l.Failed > 0 {
 				s += ", " + strconv.Itoa(l.Failed) + " failed"
+			}
+			if l.Factory > 0 {
+				s += ", " + textx.Count(l.Factory, "factory-origin miss", "factory-origin misses")
 			}
 		}
 	}

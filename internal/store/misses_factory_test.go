@@ -178,3 +178,29 @@ func TestVersionMeasureLeavesOutWhatThePostedRoundCaught(t *testing.T) {
 		t.Fatalf("VersionMeasure = %+v, %v; want one general miss", got, err)
 	}
 }
+
+// Origins selects the misses of an origin: the factory's (posted catches
+// left out unless asked, as always).
+func TestMissFilterSelectsTheFactorysMisses(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	pr := mustPR(t, st, mustRepo(t, st).ID, 7, PRReviewed)
+	for i, m := range []Miss{{}, {Origin: MissOriginFactory}, {Origin: MissOriginFactory, PostedCaught: true}} {
+		m.PRID, m.SourceURL, m.SourceKind, m.Reviewer, m.ReviewedSHA = pr.ID, pr.URL+"#o"+string(rune('1'+i)), MissSourceThread, "rev-ann", "h1"
+		if _, err := st.UpsertMiss(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		f    MissFilter
+		want int
+	}{
+		{MissFilter{Origins: []string{MissOriginFactory}}, 1},
+		{MissFilter{Origins: []string{MissOriginFactory}, WithPostedCaught: true}, 2},
+		{MissFilter{}, 2},
+	} {
+		if n, err := st.CountMisses(ctx, tc.f); err != nil || n != tc.want {
+			t.Errorf("CountMisses(%+v) = %d, %v; want %d", tc.f, n, err, tc.want)
+		}
+	}
+}

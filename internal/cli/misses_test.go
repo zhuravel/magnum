@@ -353,8 +353,8 @@ func TestMissesIsRegisteredInTheInspectGroup(t *testing.T) {
 	if code := execute(c, []string{"misses", "--help"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	actContains(t, out.String(), "magnum misses [<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--declines] [--json]",
-		"RAISED", "--all", "--declines", "VERDICT")
+	actContains(t, out.String(), "magnum misses [<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--factory] [--declines] [--json]",
+		"RAISED", "--all", "--declines", "VERDICT", "--factory", "ORIGIN")
 }
 
 // declineSeed stores d on pr (CommentID from the URL's tail, ReviewedSHA
@@ -444,6 +444,9 @@ func TestMissesDeclinesListsAnsweredFindings(t *testing.T) {
 	if len(ds) != 2 || ds[1].Title != "Gift cards skip the balance check" || ds[1].Repo != "talkable/talkable" || ds[1].Number != 101 ||
 		ds[1].Verdict != store.VerdictWrong || !slices.Equal(ds[1].Match, []string{"balance"}) {
 		t.Fatalf("--json = %+v", ds)
+	}
+	if code := f.run("misses", "--declines", "--factory"); code != 2 || !strings.Contains(f.Err.String(), "--factory") {
+		t.Errorf("--declines --factory: exit %d: %s", code, f.Err.String())
 	}
 	if code := f.run("misses", "--declines", "--class", "miss"); code != 2 || !strings.Contains(f.Err.String(), "--class") {
 		t.Errorf("--declines --class: exit %d: %s", code, f.Err.String())
@@ -536,4 +539,77 @@ func TestMissesAllSaysWhyACommentIsOutside(t *testing.T) {
 	if _, ok := ms[0]["outside_reason"]; ok {
 		t.Errorf("a row without a reason names one: %v", ms[0])
 	}
+}
+
+// factoryMissesFixture seeds talkable#101 with a miss both of the
+// factory's rounds missed ("Plan gap", stage plan), one only magnum's
+// posted round caught ("Posted already", stage review) and a miss of a PR
+// the factory did not write ("Plain miss").
+func factoryMissesFixture(t *testing.T) *inspFixture {
+	t.Helper()
+	f := newInspFixture(t)
+	st := f.store()
+	_, pr := inspSeedPR(t, st, "talkable/talkable", 101, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/1", Path: "a.rb", Line: 4, Class: store.MissMiss, Severity: "P2",
+		Title: "Plain miss", Lesson: "A lesson."})
+	missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/2", Path: "b.rb", Line: 9, Class: store.MissMiss, Severity: "P2",
+		Title: "Posted already", Origin: store.MissOriginFactory, Stage: store.MissStageReview, PostedCaught: true})
+	missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/3", Path: "c.rb", Line: 1, Class: store.MissMiss, Severity: "P1",
+		Title: "Plan gap", Origin: store.MissOriginFactory, Stage: store.MissStagePlan})
+	st.Close()
+	return f
+}
+
+// A miss on a PR the factory wrote says so, with its stage, in an ORIGIN
+// column; one only magnum's posted round caught is a factory-origin miss
+// only (RAISED posted), which the default list of what the review skill
+// has to learn leaves out and --all and --factory show.
+func TestMissesShowTheFactoryOriginStageAndThePostedCatch(t *testing.T) {
+	f := factoryMissesFixture(t)
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	out := missesRun(t, f)
+	if got, want := missesTitlesOf(out, "Plan gap", "Posted already", "Plain miss"), []string{"Plan gap", "Plain miss"}; !slices.Equal(got, want) {
+		t.Fatalf("default titles = %v, want %v:\n%s", got, want, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if got := norm(lines[0]); got != "PR REVIEWER WHERE CLASS SEV RAISED ORIGIN TITLE LESSON" {
+		t.Errorf("header = %q", got)
+	}
+	if got, want := norm(lines[1]), "talkable#101 alice c.rb:1 miss P1 factory:plan Plan gap -"; got != want {
+		t.Errorf("factory row = %q\nwant %q", got, want)
+	}
+	out = missesRun(t, f, "--all")
+	if got := missesTitlesOf(out, "Plan gap", "Posted already", "Plain miss"); len(got) != 3 {
+		t.Fatalf("--all titles = %v:\n%s", got, out)
+	}
+	for l := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(l, "Posted already") && (!strings.Contains(l, " posted ") || !strings.Contains(l, "factory:review")) {
+			t.Errorf("the posted catch's row = %q", l)
+		}
+	}
+	out = missesRun(t, f, "--factory")
+	if got, want := missesTitlesOf(out, "Plan gap", "Posted already", "Plain miss"), []string{"Plan gap", "Posted already"}; !slices.Equal(got, want) {
+		t.Errorf("--factory titles = %v, want %v:\n%s", got, want, out)
+	}
+	var ms []map[string]any
+	if err := json.Unmarshal([]byte(missesRun(t, f, "--json", "--factory")), &ms); err != nil || len(ms) != 2 {
+		t.Fatalf("--json --factory: %v, %v", ms, err)
+	}
+	if ms[0]["origin"] != store.MissOriginFactory || ms[0]["stage"] != store.MissStagePlan || ms[1]["posted_caught"] != true {
+		t.Errorf("--json rows = %v", ms)
+	}
+}
+
+// missesTitlesOf are the titles among titles that out lists, in out's
+// order.
+func missesTitlesOf(out string, titles ...string) []string {
+	var got []string
+	for l := range strings.SplitSeq(out, "\n") {
+		for _, title := range titles {
+			if strings.Contains(l, title) {
+				got = append(got, title)
+			}
+		}
+	}
+	return got
 }

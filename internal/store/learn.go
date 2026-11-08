@@ -393,6 +393,9 @@ type MissFilter struct {
 	// author declined, stored under its thread's link, which the declines
 	// row carries too, so no other reviewer raised it.
 	NoRoutedDeclines bool
+	// Origins selects the misses of these origins (MissOriginFactory);
+	// empty = any origin, none included.
+	Origins []string
 	// WithPostedCaught also selects the factory-origin misses magnum's
 	// posted round caught (Miss.PostedCaught), which every reader that
 	// learns from or counts the misses leaves out.
@@ -427,6 +430,10 @@ func (f MissFilter) where() (string, []any) {
 	}
 	if f.NoRoutedDeclines {
 		conds = append(conds, "NOT EXISTS (SELECT 1 FROM declines d WHERE d.source_url = m.source_url)")
+	}
+	if len(f.Origins) > 0 {
+		conds = append(conds, "m.origin IN ("+placeholders(len(f.Origins))+")")
+		args = append(args, anys(f.Origins)...)
 	}
 	if !f.WithPostedCaught {
 		conds = append(conds, "m.posted_caught = 0")
