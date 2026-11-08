@@ -237,6 +237,12 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// The callbacks below the collaborators (OwnerName, IdentityEnv,
+	// FixerEnv, Toast, Signal, Log) may run under the Manager's observe
+	// lock, on an observe pass or a look of Wake's: none may wait for a
+	// pass, and a lock one of them takes must never be held around a pass
+	// or a Wake call (the factory's OwnerName takes Runtime.mu).
+	//
 	// HookSocket is the socket of the daemon's hook listener
 	// (agenthooks.Listen at paths.Layout.HookSocket or FactoryHookSocket):
 	// every pane the Manager makes (EnsureWorkspace, EnsurePane, a dead
@@ -249,12 +255,14 @@ type Deps struct {
 	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
 	// (Layout.Binary). Without either, no pane gets the hook env.
 	HookBin string
-	// HookFailure receives the error a turn ended on, as an agent's
-	// StopFailure hook reports it (rate_limit, overloaded,
-	// authentication_failed, ...; Wake), with the session's row, so the
-	// engine feeds its usage, login and overload handling at once. It must
-	// not block; nil = none.
-	HookFailure func(session store.Session, errText string)
+	// HookFailure receives the class of API error a Claude turn ended on,
+	// as the session's own StopFailure hook names it and its screen, read
+	// again, shows it (Wake): the session's row, the class (never the
+	// agent's text) and the screen's verdict (its ResetAt for a limit), so
+	// the engine feeds its usage, login and overload handling at once. It
+	// runs on the goroutine that called Wake (the listener's), so it must
+	// not block, and Wake's caller must hold no lock it takes; nil = none.
+	HookFailure func(session store.Session, failure StopFailure, screen Health)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
 	// signals, and only processes of a command it proved an own run of
@@ -331,19 +339,21 @@ type Manager struct {
 	hooksTrustMu sync.Mutex
 	// obsMu is the observe lock: an observe pass (observeAt) and each of
 	// Wake's looks hold it, so one snapshot is applied at a time. Under it:
-	// lookedAt, when the snapshot of each session's last look was taken (a
-	// pass with an older one leaves the session alone, staleFor); woken,
-	// the looks' observations the next pass returns; hookIDs, the
-	// SessionStart events whose Codex rollout was not written yet
-	// (adoptHookID).
-	obsMu    sync.Mutex
-	lookedAt map[int64]time.Time
-	woken    []Observation
-	hookIDs  map[int64]agenthooks.Event
-	// relooks marks the sessions with Wake's later looks scheduled, with
-	// the Stop they may count (nil: none; under mu); wakes counts those
-	// goroutines.
-	relooks map[int64]*agenthooks.Event
+	// lookedAt, when the snapshot of each session's last look came back (a
+	// pass that started before leaves the session alone, staleFor);
+	// wokenEnds and wokenLast, the looks' observations the next pass
+	// returns (every end and loss, each session's newest other one);
+	// hookIDs, the SessionStart events whose transcript or rollout was not
+	// written yet (adoptHookID).
+	obsMu     sync.Mutex
+	lookedAt  map[int64]time.Time
+	wokenEnds []Observation
+	wokenLast map[int64]Observation
+	hookIDs   map[int64]agenthooks.Event
+	// looks is each session's look merge state, relooks its later looks
+	// under way (both under mu); wakes counts those goroutines (WaitWakes).
+	looks   map[int64]*lookMark
+	relooks map[int64]*relook
 	wakes   sync.WaitGroup
 }
 
@@ -358,8 +368,8 @@ func New(d Deps) *Manager {
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
-		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, hookIDs: map[int64]agenthooks.Event{},
-		relooks: map[int64]*agenthooks.Event{}}
+		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, wokenLast: map[int64]Observation{},
+		hookIDs: map[int64]agenthooks.Event{}, looks: map[int64]*lookMark{}, relooks: map[int64]*relook{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

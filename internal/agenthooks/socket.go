@@ -10,17 +10,23 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // Each pane's events pass a token bucket: rateBurst at once, then one per
 // rateEvery. A Claude or Codex turn sends one or two; a pane past it is a
 // flood (a forged one, a loop), and its events are dropped until its bucket
-// refills.
+// refills. The pane is the datagram's claim, so all panes also share one
+// bucket (globalBurst, then one per globalEvery): an agent that invents a
+// pane for each event cannot flood the daemon either.
 const (
-	rateBurst = 8
-	rateEvery = 250 * time.Millisecond
+	rateBurst   = 8
+	rateEvery   = 250 * time.Millisecond
+	globalBurst = 32
+	globalEvery = 25 * time.Millisecond
 	// maxBuckets bounds the panes the listener keeps a bucket for: past it
 	// the full buckets (idle panes) are dropped, and an event of a new pane
 	// is dropped while the rest are all at work.
@@ -75,10 +81,16 @@ type Listener struct {
 	// now is the rate limit's clock (time.Now).
 	now     func() time.Time
 	buckets map[string]*bucket // pane -> its token bucket; Serve's alone
+	global  *bucket            // all panes' bucket; Serve's alone
+	// read counts the datagrams Serve is done with, dropped ones too.
+	read atomic.Int64
 }
 
-// bucket is one pane's token bucket: tokens left, counted up to at.
+// bucket is a token bucket: tokens left of burst, one more each every,
+// counted up to at.
 type bucket struct {
+	burst  int
+	every  time.Duration
 	tokens int
 	at     time.Time
 	// cut is set while the pane's events are dropped, so a flood logs once.
@@ -125,7 +137,8 @@ func Listen(path string, log *slog.Logger) (*Listener, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Listener{conn: conn, path: path, log: log, now: time.Now, buckets: map[string]*bucket{}}, nil
+	return &Listener{conn: conn, path: path, log: log, now: time.Now, buckets: map[string]*bucket{},
+		global: &bucket{burst: globalBurst, every: globalEvery, tokens: globalBurst}}, nil
 }
 
 // Path is the socket's path.
@@ -143,11 +156,12 @@ func (l *Listener) Close() error {
 // event to handle, one at a time, on Serve's goroutine. It drops a datagram
 // over MaxDatagram, one that is no JSON object, of another V than Version,
 // or without a pane, an agent or an event this version knows, and a pane's
-// events past its rate (rateBurst at once, then one per rateEvery). The ids
+// events past its rate (rateBurst at once, then one per rateEvery, and all
+// panes' past globalBurst, then one per globalEvery). The ids
 // of an event it hands on are ids (as Parse makes them) and its free text is
 // cut, since anyone with the pane's env can send one. Each event it hands
-// on logs one debug line with its name and pane, never another field. A
-// handler that panics costs its event, not the listener.
+// on logs one debug line with its name and its pane (paneForLog), never
+// another field. A handler that panics costs its event, not the listener.
 func (l *Listener) Serve(ctx context.Context, handle func(Event)) {
 	defer l.Close()
 	defer context.AfterFunc(ctx, func() { _ = l.Close() })()
@@ -166,17 +180,24 @@ func (l *Listener) Serve(ctx context.Context, handle func(Event)) {
 			}
 			continue
 		}
-		ev, why := decode(buf[:n])
-		if why != "" {
-			l.log.Debug("hook datagram dropped", "why", why)
-			continue
-		}
-		if !l.allow(ev.Pane) {
-			continue
-		}
-		l.log.Debug("hook event", "event", ev.Name, "pane", ev.Pane)
-		l.dispatch(handle, ev)
+		l.take(buf[:n], handle)
+		l.read.Add(1)
 	}
+}
+
+// take hands the event datagram data holds to handle, or drops it (see
+// Serve).
+func (l *Listener) take(data []byte, handle func(Event)) {
+	ev, why := decode(data)
+	if why != "" {
+		l.log.Debug("hook datagram dropped", "why", why)
+		return
+	}
+	if !l.allow(ev.Pane) {
+		return
+	}
+	l.log.Debug("hook event", "event", ev.Name, "pane", paneForLog(ev.Pane))
+	l.dispatch(handle, ev)
 }
 
 // decode reads one datagram into an Event, or says why it is none.
@@ -201,8 +222,8 @@ func decode(data []byte) (Event, string) {
 	return ev, ""
 }
 
-// allow reports whether pane's bucket has a token for one more event, and
-// takes it.
+// allow reports whether pane's bucket and the bucket of all panes both
+// have a token for one more event, and takes one from each.
 func (l *Listener) allow(pane string) bool {
 	now := l.now()
 	b := l.buckets[pane]
@@ -211,35 +232,44 @@ func (l *Listener) allow(pane string) bool {
 			l.prune(now)
 		}
 		if len(l.buckets) >= maxBuckets {
-			l.log.Debug("hook event dropped: too many panes at once", "pane", pane)
+			l.log.Debug("hook event dropped: too many panes at once", "pane", paneForLog(pane))
 			return false
 		}
-		b = &bucket{tokens: rateBurst, at: now}
+		b = &bucket{burst: rateBurst, every: rateEvery, tokens: rateBurst, at: now}
 		l.buckets[pane] = b
 	}
 	b.refill(now)
-	if b.tokens == 0 {
+	l.global.refill(now)
+	switch {
+	case b.tokens == 0:
 		if !b.cut {
 			b.cut = true
-			l.log.Debug("hook events dropped: the pane is over its rate", "pane", pane)
+			l.log.Debug("hook events dropped: the pane is over its rate", "pane", paneForLog(pane))
+		}
+		return false
+	case l.global.tokens == 0:
+		if !l.global.cut {
+			l.global.cut = true
+			l.log.Debug("hook events dropped: the panes together are over their rate")
 		}
 		return false
 	}
 	b.tokens--
-	b.cut = false
+	l.global.tokens--
+	b.cut, l.global.cut = false, false
 	return true
 }
 
-// refill adds the tokens that came since b.at, up to rateBurst.
+// refill adds the tokens that came since b.at, up to b.burst.
 func (b *bucket) refill(now time.Time) {
-	if now.Before(b.at) { // the clock went back
+	if now.Before(b.at) || b.at.IsZero() { // the clock went back, or the first event
 		b.at = now
 	}
-	if n := int(now.Sub(b.at) / rateEvery); n > 0 {
-		b.tokens = min(rateBurst, b.tokens+n)
-		b.at = b.at.Add(time.Duration(n) * rateEvery)
+	if n := int(now.Sub(b.at) / b.every); n > 0 {
+		b.tokens = min(b.burst, b.tokens+n)
+		b.at = b.at.Add(time.Duration(n) * b.every)
 	}
-	if b.tokens == rateBurst {
+	if b.tokens == b.burst {
 		b.at = now
 	}
 }
@@ -247,10 +277,23 @@ func (b *bucket) refill(now time.Time) {
 // prune drops the buckets that are full again: their panes are idle.
 func (l *Listener) prune(now time.Time) {
 	for pane, b := range l.buckets {
-		if b.refill(now); b.tokens == rateBurst {
+		if b.refill(now); b.tokens == b.burst {
 			delete(l.buckets, pane)
 		}
 	}
+}
+
+// herdrPane is the shape of herdr's pane ids (w1:p2, w2J:p1).
+var herdrPane = regexp.MustCompile(`^w[0-9A-Za-z]{1,16}:p[0-9]{1,6}$`)
+
+// paneForLog is pane as a log line names it: a pane in herdr's shape as it
+// is, any other as "other" (an agent picks the pane, and could make it look
+// like a token).
+func paneForLog(pane string) string {
+	if herdrPane.MatchString(pane) {
+		return pane
+	}
+	return "other"
 }
 
 // dispatch hands ev to handle; a panic is logged with the event's name and
@@ -258,7 +301,7 @@ func (l *Listener) prune(now time.Time) {
 func (l *Listener) dispatch(handle func(Event), ev Event) {
 	defer func() {
 		if p := recover(); p != nil {
-			l.log.Error("hook event handler panicked", "event", ev.Name, "pane", ev.Pane)
+			l.log.Error("hook event handler panicked", "event", ev.Name, "pane", paneForLog(ev.Pane))
 		}
 	}()
 	handle(ev)

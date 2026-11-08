@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -95,6 +96,12 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 		return fmt.Errorf("agents: start pr %d %s: unknown agent kind %q", pr.Number, r, kindName)
 	}
 	if kind.SessionSource == config.SessionNone {
+		resume = ""
+	}
+	if resume != "" && !config.SessionArgOK(resume) {
+		// An id an agent's hook could have planted: the CLI might read it
+		// as a flag (the id itself is the agent's word, so it is not logged).
+		m.logAt(slog.LevelWarn, "agents: start pr %d %s: the session id to resume is no id a resume can pass; the role starts fresh", pr.Number, r)
 		resume = ""
 	}
 	repo, err := m.d.Store.RepoByID(ctx, pr.RepoID)

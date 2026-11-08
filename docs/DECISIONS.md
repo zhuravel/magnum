@@ -3479,68 +3479,97 @@ skill versions); people add theirs to the sections before it, at the end of the 
   bytes or more, `paths.CheckSocketPath`, a listener that failed): the env a recorded session or a caller
   passes loses them then, and the passes alone see the agents, as before. The hook script
   (`hooks/magnum-agent-hook.sh`, embedded as `magnum.AgentHookScript`, header `# managed by magnum`,
-  `MAGNUM_HOOK_ID`, `MAGNUM_HOOK_VERSION=1`) exits at its first line outside such a pane and otherwise runs
-  `magnum hook-event <agent> <event>`, an early dispatch before cobra that reads no config and no registry:
-  it reads stdin (64 KiB, 100 ms), keeps `session_id`, `transcript_path`, `turn_id`, `source`, `error`,
-  `tool_name`, `agent_id`, the count of `background_tasks`, `HERDR_PANE_ID` and `CODEX_THREAD_ID`
-  (`agenthooks.Parse`; an id that is no id is left out whole, the free text cut, the event fits 2 KiB), never
+  `MAGNUM_HOOK_ID`, `MAGNUM_HOOK_VERSION=1`) exits at its first line outside such a pane, otherwise runs
+  `magnum hook-event <agent> <event>` and exits 0 whatever that does (a binary mid-rebuild fails no hook).
+  `hook-event` is an early dispatch before cobra that reads no config and no registry: it reads stdin (64
+  KiB, 100 ms), keeps `session_id`, `transcript_path`, `turn_id`, `source`, `error`, `tool_name`,
+  `agent_id`, the count of `background_tasks`, `HERDR_PANE_ID` and `CODEX_THREAD_ID` (`agenthooks.Parse`;
+  an id that is no id is left out whole, the free text cut, the event fits 2 KiB), never
   `last_assistant_message`, `prompt` or `tool_input` (PR text), sends one Unix datagram (200 ms), prints
   nothing and exits 0 within 300 ms (measured: about 15 ms with the binary's start). The daemon's listener
   (`agenthooks.Listen`, `Serve`: directory 0700, socket 0600, a stale socket removed under the daemon lock,
   size-capped reads, unknown versions and malformed datagrams dropped, 8 events at once per pane then 4 a
-  second, one debug line with the event's name and pane) hands each event to `agents.Manager.Wake`. Every
-  event is a hint: Wake maps the pane to its live session by `herdr_pane_id` (an unknown pane is dropped),
-  reads herdr, the transcript or the rollout again, and acts only through observeOne and answerPermission.
-  A Stop counts as the second idle reading only when herdr shows the agent idle, its session id is the
-  row's, `agent_id` is empty, `CODEX_THREAD_ID` is empty or the session's, it reports no background task,
-  nothing holds the turn (background work, a Codex rollout still writing, a deny awaiting its
-  continuation) and the transcript's `turn_duration` (Claude) or the rollout's `task_complete` (Codex),
-  found by magnum and never at the path the event names, is newer than the run's prompt (the latest of
-  `submitted_at` and `last_prompt_at`); then the run ends and Ended's channel closes, as on a pass.
-  Otherwise, with a run in flight, it looks again at +1 s and +2 s on a goroutine of its own (herdr's
-  status lags the hook), then leaves it to the clock; a late Stop of an earlier turn, a subagent's or a
-  forged one only causes an early look, a reading like a pass's, so the gap rule holds. A permission
-  request looks now, so answerPermission denies at once; a look is no observe tick, so the deny's pace
-  stays the passes'. A StopFailure looks and hands its error to `Deps.HookFailure` (the engine's usage,
-  login and overload handling). A SessionStart gives a row without an id the agent's own when it is no
-  subagent's, no Codex helper's, of the session's kind, not held by another session, and its transcript
-  path is `<config dir>/projects/<the slot's cwd as Claude names it>/<id>.jsonl` (Claude) or its rollout is
-  the TUI's in the slot (Codex, recoverSessionID's checks; a rollout not written yet is checked again at
-  the pane's next event); a second id for a row that has one is skipped, and herdr's id still wins when it
-  differs. There is no column for the transcript's path: the readers find it from the id and the slot.
-  The Manager now owns the observe lock (`obsMu`): every pass and every look hold it, so a look never
-  interleaves with a pass, the engine's own lock still orders the tick and the clock, and the factory's
-  single loop needs none; a pass whose snapshot is older than a look's leaves that session alone (it would
-  write back the status the look replaced), and the next pass returns the looks' observations first, so
-  the factory hears of a turn's end and the engine of a lost pane as from their own passes. Rejected: the
-  hook writing the registry (a second SQLite writer, a slow and fallible start), a spool file with a signal
-  (a reused pid) or a watched directory (a second's lag, a cleanup duty), Wake acting on the event alone (a
-  forged or late Stop would end a turn), a look counting as an observe tick (it would halve the deny's 10
-  s hold), Wake taking the engine's lock (the factory has none, and the lock belongs with the passes it
-  orders), returning the looks' observations from Wake (each receiver would handle them its own way, the
-  factory's completed path twice), storing the event's transcript path (an agent in the pane could point
-  it anywhere). The install command, the doctor checks and the daemons' listeners are later tasks; without
-  them nothing runs the script, and the passes see the agents as before. Tests (those of agenthooks, paths
-  and hook-event failing first against stubs; each of Wake's guards and the pane env taken out once to
-  see its test fail): TestParseKeepsOnlyTheAllowedFields, TestAnEventsJSONHasSnakeKeys, TestParseTakesStringsAsStringsAndNothingElse,
+  second, and 32 at once for all panes together then 40 a second, since the pane is the datagram's claim;
+  one debug line with the event's name and its pane, a pane outside herdr's `w<id>:p<n>` shape logged as
+  "other") hands each event to `agents.Manager.Wake`. Every event is a hint: Wake maps the pane to its live
+  session by `herdr_pane_id` (an unknown pane is dropped), reads herdr, the screen, the transcript or the
+  rollout again, and acts only through observeOne and answerPermission. The looks of one session merge: one
+  within 250 ms of the last, or while another waits for the observe lock, is skipped. A Stop counts as the
+  second idle reading only when herdr shows the agent idle, its session id is the row's, `agent_id` is
+  empty, `CODEX_THREAD_ID` is empty or the session's, it reports no background task, nothing holds the
+  turn (background work, a Codex rollout still writing, a deny awaiting its continuation) and the
+  transcript's `turn_duration` (Claude) or the rollout's `task_complete` (Codex), found by magnum and never
+  at the path the event names, is newer than the run's prompt (the latest of `created_at`, `submitted_at`
+  and `last_prompt_at`); then the run ends and Ended's channel closes, as on a pass. A Stop, an Interrupt or
+  a PermissionRequest whose look found nothing to act on while a run is in flight looks again at +1 s and +2
+  s on a goroutine of its own (herdr's status lags the hook), then leaves it to the clock; an event that
+  comes while those looks run gets its own round after them, and `WaitWakes` waits for them at shutdown. A
+  late Stop of an earlier turn, a subagent's or a forged one only causes an early look, a reading like a
+  pass's, so the gap rule holds; a permission request has answerPermission deny the prompt the look sees;
+  a look is no observe tick, so the deny's pace stays the passes'. A StopFailure looks too, and goes to
+  `Deps.HookFailure func(session store.Session, failure StopFailure, screen Health)` only when it is the
+  session's own (a Claude session, its session id, no subagent's) and the screen, read again (CheckHealth),
+  shows such a failure: the class from a fixed list (`rate_limit`, `overloaded`, `authentication_failed`,
+  `billing_error`, `other`) and the screen's verdict, never the agent's text, which no log carries either. A
+  SessionStart gives a row without an id the agent's own only when it is a UUID (Claude's and Codex's
+  shape), no subagent's, no Codex helper's, of the session's kind, not held by another session, and the
+  agent's own file proves it: for Claude the transcript where magnum reads the slot's sessions
+  (`<config dir>/projects/<the slot's cwd as Claude names it>/<id>.jsonl`, the path the event names, if
+  any, being that one), whose first record with a `sessionId` names the id in the slot; for Codex the
+  TUI's rollout in the slot (recoverSessionID's checks). Until the file is there the event waits and the
+  pane's next look checks it again; a second id for a row that has one, or that waits on another, is
+  skipped, and herdr's id still wins when it differs. There is no column for the transcript's path: the
+  readers find it from the id and the slot. A resume never passes a session id a CLI could read as a flag
+  (`config.SessionArgOK`: letters, digits and `._:/@+=-`, no leading `-`): `Kind.Argv` leaves such a resume
+  out and StartAgent starts the role fresh, for every kind, since `codex resume <id>` takes the id as a
+  positional argument with no `=` form. The Manager now owns the observe lock (`obsMu`): every pass and
+  every look hold it, so a look never interleaves with a pass, the engine's own lock still orders the tick
+  and the clock, and the factory's single loop needs none; a pass whose snapshot started before a look's
+  came back leaves that session alone (it would write back the status the look replaced), and the next
+  pass returns the looks' observations first (every run's end and session's loss, and each session's
+  newest other reading, its SecondReadingAt included), so the factory hears of a turn's end, the engine of
+  a lost pane and the clock of a second reading due, as from their own passes. Wake runs the Deps
+  callbacks, some under the observe lock, so a receiver never calls it under a lock a callback takes (the
+  factory's OwnerName takes `Runtime.mu`). Rejected: the hook writing the registry (a second SQLite
+  writer, a slow and fallible start), a spool file with a signal (a reused pid) or a watched directory (a
+  second's lag, a cleanup duty), Wake acting on the event alone (a forged or late Stop would end a turn, a
+  forged StopFailure would pause a kind, a forged SessionStart would plant a resume flag), a look counting
+  as an observe tick (it would halve the deny's 10 s hold), Wake taking the engine's lock (the factory has
+  none, and the lock belongs with the passes it orders), returning the looks' observations from Wake (each
+  receiver would handle them its own way, the factory's completed path twice), a FIFO of the looks'
+  observations (a pane in a dialog would push an end out), storing the event's transcript path (an agent in
+  the pane could point it anywhere), and `--resume=<id>` for Claude alone (Codex's form is positional; the
+  guard covers every kind). The install command, the doctor checks and the daemons' listeners are later
+  tasks; without them nothing runs the script, and the passes see the agents as before. Tests (those of
+  agenthooks, paths and hook-event failing first against stubs, those of the review's fixes before the
+  fixes; each of Wake's guards and the pane env taken out once to see its test fail):
+  TestParseKeepsOnlyTheAllowedFields, TestAnEventsJSONHasSnakeKeys, TestParseTakesStringsAsStringsAndNothingElse,
   TestParseRefusesUnknownAgentsEventsAndHooksOutsideAPane, TestParseKeepsWhatCameBeforeACut,
   TestParseFitsTheEventIntoADatagram, TestParseLeavesOutAnIDThatIsNoID, TestReadPayloadStopsAtTheLimitAndTheDeadline,
   TestAnEventCrossesTheSocketWhole, TestListenMakesAPrivateSocketInPlaceOfAStaleOne,
   TestListenRefusesAPathTooLongForASocket, TestServeDropsWhatIsNoEvent, TestServeTakesAnEventWithAFieldItDoesNotKnow,
-  TestServeLimitsEachPanesRate, TestServeLogsTheEventNameAndPaneOnly, TestServeOutlivesAHandlerThatPanics,
-  TestServeClosesWhenItsContextEnds, TestSendToNoDaemonFailsAtOnce, TestSendRefusesAnEventOverADatagram,
-  TestTheHookScriptNamesItsOwnerAgentAndVersion, TestTheHookScriptRunsMagnumOnlyInAMagnumPane,
-  TestTheHookScriptChecksTheSocketFirst, TestTheHookSocketsLiveUnderTheStateDirsRun,
+  TestServeLimitsEachPanesRate, TestServeLimitsAllPanesTogether, TestServeLogsTheEventNameAndPaneOnly,
+  TestServeLogsAPaneOnlyInHerdrsShape, TestServeOutlivesAHandlerThatPanics, TestServeClosesWhenItsContextEnds,
+  TestSendToNoDaemonFailsAtOnce, TestSendRefusesAnEventOverADatagram, TestTheHookScriptNamesItsOwnerAgentAndVersion,
+  TestTheHookScriptRunsMagnumOnlyInAMagnumPane, TestTheHookScriptChecksTheSocketFirst,
+  TestTheHookScriptExitsZeroWhenMagnumFails, TestTheHookSocketsLiveUnderTheStateDirsRun,
   TestCheckSocketPathRefuses104Bytes, TestHookEventWithoutTheSocketSendsNothing, TestHookEventSendsTheParsedEvent,
-  TestHookEventEndsWithinItsBound, TestTheBinaryRunsHookEventBeforeItsCLI,
+  TestHookEventEndsWithinItsBound, TestTheBinaryRunsHookEventBeforeItsCLI (its MAGNUM_HOME and HOME stay empty),
+  TestArgvNeverPassesASessionThatCouldBeAFlag, TestAResumeOfAnIDThatCouldBeAFlagStartsFresh,
   TestEveryPaneGetsTheHookSocketAndBinaryWhileTheDaemonListens, TestNoPaneGetsTheHookEnvWithoutASocket,
   TestAStopOfTheRunsTurnEndsTheRunAtOnce, TestACodexStopEndsTheRunByItsRolloutsTaskComplete,
-  TestAStopThatDoesNotProveTheTurnEndOnlyObserves, TestAStopLooksAgainWhileHerdrStillShowsTheAgentWorking,
-  TestWakeLooksAgainOnItsOwnAndStopsAfterTwoSeconds, TestAPermissionRequestHasThePromptDeniedNow,
-  TestAStopFailureHandsItsErrorToHookFailure, TestASessionStartFillsAMissingIDAndSkipsNestedOnes,
-  TestACodexSessionStartFillsTheIDItsRolloutProves, TestAnEventOfAnUnknownPaneIsDropped,
-  TestAHookLooksObservationsComeWithTheNextPass, TestAPassOlderThanAHooksLookLeavesTheSessionAlone and
-  TestAHookLookWaitsForTheObservePassInFlight.
+  TestAStopThatDoesNotProveTheTurnEndOnlyObserves, TestAStopNeverReadsThePathItsEventNames,
+  TestAStopLooksAgainWhileHerdrStillShowsTheAgentWorking, TestWakeLooksAgainOnItsOwnAndStopsAfterTwoSeconds,
+  TestAStopDuringTheLaterLooksGetsLaterLooksOfItsOwn, TestTheLaterLooksEndWithTheirContext,
+  TestAnInterruptLooksButNeverEndsTheRunByItself, TestAPermissionRequestHasThePromptDeniedNow,
+  TestAPermissionRequestLooksAgainWhileHerdrLags, TestAStopFailureOfTheSessionReachesHookFailureAsAClass,
+  TestAStopFailureThatIsNotTheSessionsReachesNothing, TestASessionStartFillsAMissingIDOnceItsTranscriptNamesIt,
+  TestASessionStartRecordsNoIDItsTranscriptDoesNotProve (the review's probe: a `--dangerously-skip-permissions`
+  id), TestACodexSessionStartFillsTheIDItsRolloutProves, TestAnEventOfAnUnknownPaneIsDropped,
+  TestAHookLooksObservationsComeWithTheNextPass, TestTheLooksKeepEachSessionsNewestReadingAndEveryEnd,
+  TestAPassOlderThanAHooksLookLeavesTheSessionAlone, TestAPassThatStartedDuringALooksSnapshotLeavesTheSessionAlone,
+  TestAHookLookWaitsForTheObservePassInFlight, TestTheLooksOfOneSessionMerge and
+  TestTheHookStateOfASessionNoLongerLiveIsForgotten.
 
 - **The poll sees the run of the CI workflow the look started** (2026-11-08, a read-only audit of the look's
   verdicts; amends "The look starts the CI workflow a head's required check did not run in, where the

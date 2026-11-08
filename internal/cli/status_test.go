@@ -401,11 +401,19 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 }
 
 func TestStatusResumeQuotesEveryWord(t *testing.T) {
-	id, cwd := "a b;rm -rf $HOME", "/tmp/it's here"
+	id, cwd := "s-1", "/tmp/it's here"
 	s := store.Session{Role: "codex-judge", SessionID: &id, AgentKind: new("codex"), Cwd: &cwd}
-	want := `cd '/tmp/it'\''s here' && codex resume 'a b;rm -rf $HOME' -c tui.resume_cwd=current`
+	want := `cd '/tmp/it'\''s here' && codex resume s-1 -c tui.resume_cwd=current`
 	if got := statusResume(config.Defaults(), s); got != want {
 		t.Fatalf("statusResume = %q\nwant         %q", got, want)
+	}
+	// An id a resume may not pass (a flag, a word a shell splits) gives no
+	// line to paste at all.
+	for _, bad := range []string{"a b;rm -rf $HOME", "--dangerously-skip-permissions"} {
+		id = bad
+		if got := statusResume(config.Defaults(), s); got != "" {
+			t.Fatalf("statusResume of id %q = %q, want none", bad, got)
+		}
 	}
 	// Plainly safe words stay bare, and a home path keeps its ~.
 	t.Setenv("HOME", "/Users/x")

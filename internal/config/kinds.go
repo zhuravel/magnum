@@ -661,7 +661,9 @@ type LaunchArgs struct {
 // NoSubagents for 0), ToolOutputArgs, ConfigOffArgs(a.MCPServers,
 // a.ProjectServers, a.Untrusted, a.DocsOff), Start, Args (no wrapper only),
 // then a.Extra. A group whose value is empty is skipped;
-// placeholders are replaced in every element.
+// placeholders are replaced in every element. A session that is no
+// SessionArgOK is skipped too: the launch goes without the resume rather
+// than with an id the CLI could read as a flag.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
 	add := func(group []string, placeholder, value string) {
@@ -672,7 +674,9 @@ func (k Kind) Argv(a LaunchArgs) []string {
 			out = append(out, strings.ReplaceAll(s, placeholder, value))
 		}
 	}
-	add(k.Resume, PlaceholderSession, a.Session)
+	if SessionArgOK(a.Session) {
+		add(k.Resume, PlaceholderSession, a.Session)
+	}
 	add(k.Name, PlaceholderTitle, a.Title)
 	add(k.Model, PlaceholderModel, cmp.Or(a.Model, k.DefaultModel))
 	add(k.Effort, PlaceholderEffort, a.Effort)
@@ -690,6 +694,27 @@ func (k Kind) Argv(a LaunchArgs) []string {
 		out = append(out, k.Args...)
 	}
 	return append(out, a.Extra...)
+}
+
+// SessionArgOK reports whether a session id may go into a resume's args:
+// 1 to 256 bytes of letters, digits and . _ : / @ + = -, the first no "-".
+// An id an agent's hook planted (`--dangerously-skip-permissions`,
+// `--settings=x.json`) would be read as a flag after `--resume` or as an
+// option of `codex resume`, which takes the id as a positional argument and
+// has no "=" form; such an id is never passed.
+func SessionArgOK(id string) bool {
+	if id == "" || len(id) > 256 || id[0] == '-' {
+		return false
+	}
+	for i := range len(id) {
+		switch c := id[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("._:/@+=-", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // DefaultCodexToolOutputLimit is the codex kind's tool_output_limit: about

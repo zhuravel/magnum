@@ -84,6 +84,8 @@ type fakeHerdr struct {
 	clock      *storetest.Clock
 	// onSplit runs (with f.mu held) after every PaneSplit made a pane.
 	onSplit func(f *fakeHerdr, from, newPane string)
+	// onSnapshot runs (with f.mu held) as every Snapshot call starts.
+	onSnapshot func()
 
 	calls    []string
 	creates  []herdr.WorkspaceCreateOptions
@@ -262,6 +264,9 @@ func (f *fakeHerdr) Snapshot(ctx context.Context) (herdr.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("Snapshot")
+	if f.onSnapshot != nil {
+		f.onSnapshot()
+	}
 	if err := f.err("Snapshot"); err != nil {
 		return herdr.Snapshot{}, err
 	}
@@ -620,6 +625,9 @@ type env struct {
 	// onSleep runs inside every sleep of the manager, which then ends with
 	// its context's error, as the real one does.
 	onSleep func()
+	// sleepMoves has every sleep of the manager move the clock by its
+	// length.
+	sleepMoves bool
 
 	// codexConfig and claudeConfig are the temp CLI configs EnsureTrust
 	// edits (claudeConfig does not exist until a test writes it).
@@ -728,6 +736,9 @@ func newEnv(t *testing.T) *env {
 		CodexConfig: e.codexConfig, ClaudeConfig: e.claudeConfig, Log: e.logs, Toast: e.toasts.toast, Signal: e.sigs.send})
 	e.m.sleep = func(ctx context.Context, d time.Duration) error {
 		e.slept = append(e.slept, d)
+		if e.sleepMoves {
+			e.clock.Add(d)
+		}
 		if e.onSleep != nil {
 			e.onSleep()
 		}

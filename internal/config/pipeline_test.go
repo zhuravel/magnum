@@ -847,3 +847,37 @@ func TestDefaultKindsCarryAutonomyArgsWithoutAWrapper(t *testing.T) {
 		}
 	}
 }
+
+// A resume never passes a session id an agent CLI could read as a flag or
+// a shell as two words (one an agent's hook may have planted): the launch
+// goes without the resume, for every kind, the positional `codex resume
+// <id>` too.
+func TestArgvNeverPassesASessionThatCouldBeAFlag(t *testing.T) {
+	k := DefaultKinds()
+	for _, kind := range []string{"codex", "claude", "droid", "omp"} {
+		for _, id := range []string{"--dangerously-skip-permissions", "--settings=x.json", "-r", "a b", "a\tb", "a\nb", "a;b", "$(id)", "`id`",
+			"'x'", `"x"`, `a\b`, "a|b", "a&b", "a>b"} {
+			got := k[kind].Argv(LaunchArgs{Session: id, Wrapper: true})
+			for _, a := range got {
+				if strings.Contains(a, id) || a == "resume" || strings.HasPrefix(a, "--resume") {
+					t.Errorf("%s with session %q = %q: the id reached the argv", kind, id, got)
+					break
+				}
+			}
+		}
+		const uuid = "0a1b2c3d-0000-4000-8000-00000000c1a0"
+		if got := k[kind].Argv(LaunchArgs{Session: uuid, Wrapper: true}); !slices.ContainsFunc(got, func(a string) bool { return strings.Contains(a, uuid) }) {
+			t.Errorf("%s with session %s = %q: the id is missing", kind, uuid, got)
+		}
+	}
+	for _, id := range []string{"0a1b2c3d-0000-4000-8000-00000000c1a0", "u-1", "d1e2-session", "s_1.2:3", "019a7c3e-1d2f-7a40-b5c6-2e3f4a5b6c7d"} {
+		if !SessionArgOK(id) {
+			t.Errorf("SessionArgOK(%q) = false", id)
+		}
+	}
+	for _, id := range []string{"", "-x", "--x", "a b", "a=b c", "é", strings.Repeat("a", 257)} {
+		if SessionArgOK(id) {
+			t.Errorf("SessionArgOK(%q) = true", id)
+		}
+	}
+}

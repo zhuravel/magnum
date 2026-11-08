@@ -6012,16 +6012,20 @@ within a second or two instead of on the next observe pass. The pieces:
   `MAGNUM_HOOK_ID`, `MAGNUM_HOOK_VERSION=1`) runs `magnum hook-event <agent> <event>` with the hook's payload on
   stdin, for Claude Code's and Codex's Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd and
   Interrupt. In a pane without `MAGNUM_HOOK_SOCKET` (your own sessions) it exits at its first line and reads
-  nothing.
+  nothing. It always exits 0, also when magnum cannot run.
 - **`magnum hook-event`.** It runs before the CLI proper and reads no config and no registry. It keeps the
   session id, the transcript path, the turn, the source, the error, the tool, the subagent and the number of
   background tasks, never the agent's last message, a prompt or a tool's input. It sends one datagram, prints
   nothing and always exits 0 within 300 ms.
-- **The daemon.** Each event is only a hint to look at that pane now: the daemon reads herdr and the agent's
-  transcript or rollout again before it ends a run, denies a permission prompt (as `on_permission_prompt`
-  says) or records a session id, and its observe passes go on as before. A Stop ends the run only when it is
+- **The daemon.** Each event is only a hint to look at that pane now (and again a second and two seconds
+  later when herdr has not caught up): the daemon reads herdr, the screen and the agent's transcript or
+  rollout again before it ends a run, denies a permission prompt (as `on_permission_prompt` says), pauses a
+  kind or records a session id, and its observe passes go on as before. A Stop ends the run only when it is
   the session's own, from no subagent, with no background task, and the transcript (or rollout) shows the
   turn ended after magnum's prompt; any other Stop, a late or a forged one, only makes the daemon look early.
+  A StopFailure counts only when it is the session's own and the screen shows that failure, and a session id
+  only when it is a UUID that the session's own transcript or rollout names in the slot. A resume never
+  passes an id a CLI could read as a flag: such a role starts fresh.
 
 `magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`), its doctor
 checks and the daemons' listeners come in later releases; until then nothing runs the script.

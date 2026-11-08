@@ -119,3 +119,24 @@ func TestTheHookScriptChecksTheSocketFirst(t *testing.T) {
 	}
 	t.Fatal("the script has no command")
 }
+
+// The script exits 0 whatever magnum does: a binary that fails, and one
+// that cannot run at all (a rebuild in progress, a file that is no
+// program), never fail the agent's hook.
+func TestTheHookScriptExitsZeroWhenMagnumFails(t *testing.T) {
+	script, _, _ := installed(t)
+	dir := t.TempDir()
+	failing := filepath.Join(dir, "failing")
+	if err := os.WriteFile(failing, []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(dir, "garbage")
+	if err := os.WriteFile(garbage, []byte("\x00\x01 not a program\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, bin := range []string{failing, garbage} {
+		if out, errOut := runScript(t, script, []string{"MAGNUM_HOOK_SOCKET=/tmp/x.sock", "MAGNUM_HOOK_BIN=" + bin}); out != "" || errOut != "" {
+			t.Errorf("%s: printed %q / %q", filepath.Base(bin), out, errOut)
+		}
+	}
+}

@@ -270,12 +270,13 @@ func (l *Listener) Serve(ctx context.Context, handle func(Event))
     Serve reads the socket until ctx ends, then closes it, and hands each
     event to handle, one at a time, on Serve's goroutine. It drops a datagram
     over MaxDatagram, one that is no JSON object, of another V than Version,
-    or without a pane, an agent or an event this version knows, and a pane's
-    events past its rate (rateBurst at once, then one per rateEvery). The ids of
-    an event it hands on are ids (as Parse makes them) and its free text is cut,
+    or without a pane, an agent or an event this version knows, and a
+    pane's events past its rate (rateBurst at once, then one per rateEvery,
+    and all panes' past globalBurst, then one per globalEvery). The ids of an
+    event it hands on are ids (as Parse makes them) and its free text is cut,
     since anyone with the pane's env can send one. Each event it hands on logs
-    one debug line with its name and pane, never another field. A handler that
-    panics costs its event, not the listener.
+    one debug line with its name and its pane (paneForLog), never another field.
+    A handler that panics costs its event, not the listener.
 
 ```
 
@@ -1398,6 +1399,12 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// The callbacks below the collaborators (OwnerName, IdentityEnv,
+	// FixerEnv, Toast, Signal, Log) may run under the Manager's observe
+	// lock, on an observe pass or a look of Wake's: none may wait for a
+	// pass, and a lock one of them takes must never be held around a pass
+	// or a Wake call (the factory's OwnerName takes Runtime.mu).
+	//
 	// HookSocket is the socket of the daemon's hook listener
 	// (agenthooks.Listen at paths.Layout.HookSocket or FactoryHookSocket):
 	// every pane the Manager makes (EnsureWorkspace, EnsurePane, a dead
@@ -1410,12 +1417,14 @@ type Deps struct {
 	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
 	// (Layout.Binary). Without either, no pane gets the hook env.
 	HookBin string
-	// HookFailure receives the error a turn ended on, as an agent's
-	// StopFailure hook reports it (rate_limit, overloaded,
-	// authentication_failed, ...; Wake), with the session's row, so the
-	// engine feeds its usage, login and overload handling at once. It must
-	// not block; nil = none.
-	HookFailure func(session store.Session, errText string)
+	// HookFailure receives the class of API error a Claude turn ended on,
+	// as the session's own StopFailure hook names it and its screen, read
+	// again, shows it (Wake): the session's row, the class (never the
+	// agent's text) and the screen's verdict (its ResetAt for a limit), so
+	// the engine feeds its usage, login and overload handling at once. It
+	// runs on the goroutine that called Wake (the listener's), so it must
+	// not block, and Wake's caller must hold no lock it takes; nil = none.
+	HookFailure func(session store.Session, failure StopFailure, screen Health)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
 	// signals, and only processes of a command it proved an own run of
@@ -2677,44 +2686,63 @@ func (m *Manager) TypedDuringRun(ctx context.Context, run store.Run) bool
     transcript it cannot read report false: only Claude Code keeps a transcript
     magnum reads.
 
+func (m *Manager) WaitWakes()
+    WaitWakes waits for the later looks Wake started (lookAgain): they end with
+    the context Wake was given. A receiver calls it after its listener stopped
+    and the last Wake returned, before it closes the registry.
+
 func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event)
     Wake takes an event of an agent's hook (agenthooks.Listener's) as a hint
-    to look at its pane now, outside the observe passes. The pane is mapped to
-    its starting or live session by herdr_pane_id; an event of a pane no such
-    session (of an agent) records is dropped. Every look takes the observe lock
-    the passes take (obsMu), one herdr snapshot and the session's in-flight
-    runs, and goes through observeOne, as a pass would; a pass whose snapshot is
-    older than a look's leaves the session alone, and the next pass returns the
-    look's observations, so the daemon handles them as its own (the factory's
-    turn end, the engine's lost pane). A look never counts as an observe tick
-    (nextObserveTick), so the deny's pace (answerPermission) and the namer's
-    stay the passes'.
+    to look at its pane now, outside the observe passes. The pane is mapped
+    to its starting or live session by herdr_pane_id; an event of a pane
+    no such session (of an agent) records is dropped. Every look takes the
+    observe lock the passes take (obsMu), one herdr snapshot and the session's
+    in-flight runs, and goes through observeOne, as a pass would; a pass whose
+    snapshot started before a look's came back leaves the session alone,
+    and the next pass returns the looks' observations (each session's newest,
+    and every run's end and session's loss), so the daemon handles them as
+    its own (the factory's turn end, the engine's lost pane, the clock's
+    SecondReadingAt). A look never counts as an observe tick (nextObserveTick),
+    so the deny's pace (answerPermission) and the namer's stay the passes'.
+    The looks of one session merge: one within lookMerge of the last, or while
+    another waits for the observe lock, is skipped.
 
-      - stop and interrupt: a look now. A Stop counts as the second idle reading
-        when herdr shows the agent idle and all of these hold: its session id
-        is the session's, it comes from no subagent (agent_id empty) or Codex
-        helper (CODEX_THREAD_ID its session id), its agent is the session's
-        kind, it reports no background task, nothing holds the turn (background
-        work, a Codex rollout still writing, a deny awaiting its continuation),
-        and the transcript's turn_duration (Claude) or the rollout's
-        task_complete (Codex) is newer than the run's prompt (stopEndsTurn).
-        Then the run ends and Ended's channel closes, as on a pass. Otherwise,
-        while a run is in flight, Wake looks again at +1 s and +2 s on a
-        goroutine of its own (relookAfter; never the caller's), then leaves it
-        to the clock. A late Stop of an earlier turn, a subagent's or a forged
-        one only causes an early look.
-      - permission_request: a look now, so answerPermission denies the prompt
-        now. The hook itself decides nothing.
-      - stop_failure: a look now, and the error to Deps.HookFailure, which feeds
-        the engine's usage, login and overload handling.
-      - session_start: a row without a session id gets the event's, when it
-        passes the checks recoverSessionID's rule makes (adoptHookID). A Codex
-        session whose rollout is not written yet keeps the event and is checked
-        again at the pane's next event.
+      - stop, interrupt and permission_request: a look now. A Stop counts as
+        the second idle reading when herdr shows the agent idle and all of
+        these hold: its session id is the session's, it comes from no subagent
+        (agent_id empty) or Codex helper (CODEX_THREAD_ID its session id),
+        its agent is the session's kind, it reports no background task, nothing
+        holds the turn (background work, a Codex rollout still writing, a deny
+        awaiting its continuation), and the transcript's turn_duration (Claude)
+        or the rollout's task_complete (Codex), found where magnum reads the
+        session's (never the path the event names), is newer than the run's
+        prompt (stopEndsTurn). Then the run ends and Ended's channel closes, as
+        on a pass. A permission request has answerPermission deny the prompt the
+        look sees; the hook itself decides nothing. When the look found nothing
+        to act on while a run is in flight (or was merged into another), Wake
+        looks again at +1 s and +2 s on a goroutine of its own (relookAfter;
+        never the caller's), then leaves it to the clock. A late Stop of an
+        earlier turn, a subagent's or a forged one only causes an early look.
+      - stop_failure: a look now, then, when the event is the session's own
+        (a Claude session, its session id, no subagent's) and the screen
+        read again shows such a failure (CheckHealth, StopFailure.shownBy),
+        the failure's class and the screen's verdict to Deps.HookFailure,
+        which feeds the engine's usage, login and overload handling. The agent's
+        error text never goes on, nor into a log.
+      - session_start: a row without a session id gets the event's, a UUID,
+        once the agent's own file proves it (adoptHookID): the Claude transcript
+        where magnum reads the slot's sessions, whose first record names the id
+        in the slot, or the Codex rollout of the TUI in the slot. Until the file
+        is there the event waits, and the pane's next event checks it again.
       - session_end: a look now.
 
-    ctx bounds the later looks too: pass the daemon's, not one that ends when
-    Wake returns.
+    The rules a receiver keeps: ctx bounds the later looks too, so pass the
+    daemon's, not one that ends when Wake returns, and call WaitWakes once
+    the listener stopped. Wake runs the Deps callbacks (HookFailure on the
+    caller's goroutine; OwnerName, Toast, IdentityEnv and the rest under the
+    observe lock), so never call it under a lock a callback takes: the factory's
+    OwnerName (ownerName) takes Runtime.mu, so the factory calls Wake, and its
+    passes, without Runtime.mu held.
 
 func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error)
     WhiteboardPrompt renders the whiteboard role's prompt (its initial prompt,
@@ -3262,6 +3290,22 @@ func (e *ShellHoldError) Error() string
 
 func (e *ShellHoldError) Is(target error) bool
     Is makes a ShellHoldError match ErrShellHold.
+
+type StopFailure string
+    StopFailure is the class of API error a turn ended on, as an agent's
+    StopFailure hook names it (Wake, Deps.HookFailure): one of a fixed list,
+    never the agent's own text.
+
+const (
+	StopFailureRateLimit      StopFailure = "rate_limit"
+	StopFailureOverloaded     StopFailure = "overloaded"
+	StopFailureAuthentication StopFailure = "authentication_failed"
+	StopFailureBilling        StopFailure = "billing_error"
+	StopFailureOther          StopFailure = "other"
+)
+    The classes of StopFailure: Claude Code's error names, and StopFailureOther
+    for any other (invalid_request, server_error, max_output_tokens, unknown,
+    anything an agent made up).
 
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id
@@ -4966,6 +5010,14 @@ func RoleSkillPath(r Role, layout paths.Layout) string
     DefaultFixSkill when its skill is "" (Load leaves "" for a {{repo}} path
     without a checkout), and EmbeddedFixSkill where a judge gets EmbeddedSkill.
 
+func SessionArgOK(id string) bool
+    SessionArgOK reports whether a session id may go into a resume's args: 1 to
+    256 bytes of letters, digits and . _ : / @ + = -, the first no "-". An id an
+    agent's hook planted (`--dangerously-skip-permissions`, `--settings=x.json`)
+    would be read as a flag after `--resume` or as an option of `codex resume`,
+    which takes the id as a positional argument and has no "=" form; such an id
+    is never passed.
+
 func SkillPath(skill string, layout paths.Layout) string
     SkillPath is a judge's skill as a round names it: skill with {{repo}}
     replaced by layout's checkout, or layout.Skill() when skill is ""; the
@@ -6411,7 +6463,9 @@ func (k Kind) Argv(a LaunchArgs) []string
     (or NoSubagents for 0), ToolOutputArgs, ConfigOffArgs(a.MCPServers,
     a.ProjectServers, a.Untrusted, a.DocsOff), Start, Args (no wrapper only),
     then a.Extra. A group whose value is empty is skipped; placeholders are
-    replaced in every element.
+    replaced in every element. A session that is no SessionArgOK is skipped too:
+    the launch goes without the resume rather than with an id the CLI could read
+    as a flag.
 
 func (k Kind) ConfigOffArgs(servers, plugins []string, project []ProjectServer, untrusted []string, docsOff bool) []string
     ConfigOffArgs are the args that keep configuration out of a session:

@@ -662,9 +662,10 @@ func actIsJudge(cfg *config.Config, role string) bool {
 
 // actResumeArgv is the command that resumes a session's conversation by
 // hand: its agent kind (the session's, else its role's) with the kind's
-// resume args (config.Kind.Resume); nil when there is no session id, the
-// role is a shell role or the kind cannot resume. A nil cfg means the
-// built-in roles and kinds.
+// resume args (config.Kind.Resume); nil when there is no session id, or
+// none a resume may pass (config.SessionArgOK: one an agent's hook planted
+// could read as a flag), the role is a shell role or the kind cannot
+// resume. A nil cfg means the built-in roles and kinds.
 func actResumeArgv(cfg *config.Config, s store.Session) []string {
 	if cfg == nil {
 		cfg = config.Defaults()
@@ -675,7 +676,7 @@ func actResumeArgv(cfg *config.Config, s store.Session) []string {
 		kind = r.Kind
 	}
 	k, ok := cfg.KindSpec(kind)
-	if id == "" || !ok || len(k.Resume) == 0 {
+	if !config.SessionArgOK(id) || !ok || len(k.Resume) == 0 {
 		return nil
 	}
 	// A person resuming by hand keeps their own MCP servers and their own

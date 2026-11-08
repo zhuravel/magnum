@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -401,4 +402,69 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// Besides each pane's bucket, all panes share one: an agent that invents a
+// pane for each event is cut at globalBurst until the bucket refills.
+func TestServeLimitsAllPanesTogether(t *testing.T) {
+	path := filepath.Join(shortDir(t), "hooks.sock")
+	l, err := Listen(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	l.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return at }
+	ctx, cancel := context.WithCancel(context.Background())
+	evs := make(chan Event, 200)
+	done := make(chan struct{})
+	go func() { defer close(done); l.Serve(ctx, func(ev Event) { evs <- ev }) }()
+	t.Cleanup(func() { cancel(); <-done })
+	for i := range 2 * globalBurst {
+		if err := Send(path, Event{V: Version, Agent: AgentCodex, Name: NameStop, Pane: fmt.Sprintf("w%d:p1", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for deadline := time.Now().Add(5 * time.Second); l.read.Load() < 2*globalBurst; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the listener read %d of %d datagrams", l.read.Load(), 2*globalBurst)
+		}
+	}
+	mu.Lock()
+	at = at.Add(time.Minute) // every bucket full again: the sentinel goes through
+	mu.Unlock()
+	if err := Send(path, Event{V: Version, Agent: AgentCodex, Name: NameStop, Pane: "w0:p9"}); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for ev := range evs {
+		if ev.Pane == "w0:p9" {
+			break
+		}
+		n++
+	}
+	if n != globalBurst {
+		t.Fatalf("handled %d events of %d panes, want %d", n, 2*globalBurst, globalBurst)
+	}
+}
+
+// A pane that is not in herdr's shape (w<id>:p<n>) is not written to the
+// log: an agent picks it, and could make it look like a token.
+func TestServeLogsAPaneOnlyInHerdrsShape(t *testing.T) {
+	var buf syncBuffer
+	s := serve(t, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	for _, pane := range []string{"ghp_TOKENSHAPED0123456789", "w2J:p1"} {
+		if err := Send(s.path, Event{V: Version, Agent: AgentClaude, Name: NameStop, Pane: pane}); err != nil {
+			t.Fatal(err)
+		}
+		s.next(t)
+	}
+	s.stop()
+	out := buf.String()
+	if strings.Contains(out, "ghp_") {
+		t.Errorf("log carries the pane an agent chose:\n%s", out)
+	}
+	if !strings.Contains(out, "w2J:p1") {
+		t.Errorf("log lacks herdr's pane:\n%s", out)
+	}
 }

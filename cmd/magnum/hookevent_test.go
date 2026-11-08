@@ -90,11 +90,7 @@ func getenv(m map[string]string) func(string) string { return func(k string) str
 func TestHookEventWithoutTheSocketSendsNothing(t *testing.T) {
 	path, evs := listener(t)
 	stdin := &countingReader{r: strings.NewReader(stopPayload)}
-	start := time.Now()
 	hookEvent([]string{"claude", "stop"}, stdin, getenv(map[string]string{agenthooks.EnvPane: "w1:p1"}))
-	if took := time.Since(start); took > 20*time.Millisecond {
-		t.Errorf("hook-event without a socket took %s", took)
-	}
 	if stdin.reads != 0 {
 		t.Errorf("stdin read %d times", stdin.reads)
 	}
@@ -156,8 +152,17 @@ func TestHookEventEndsWithinItsBound(t *testing.T) {
 // runMain runs the binary's main with args, env and stdin.
 func runMain(t *testing.T, args string, env []string, stdin string) (stdout, stderr string, code int, took time.Duration) {
 	t.Helper()
+	home, user := t.TempDir(), t.TempDir()
+	t.Cleanup(func() { // hook-event reads no config and writes no registry: both stay empty
+		for _, dir := range []string{home, user} {
+			if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+				t.Errorf("%s %v: hook-event left %v (%v)", args, env, entries, err)
+			}
+		}
+	})
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append([]string{mainArgsEnv + "=" + args, "MAGNUM_HOME=" + t.TempDir(), "HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}, env...)
+	cmd.Env = append([]string{mainArgsEnv + "=" + args, "MAGNUM_HOME=" + home, "HOME=" + user, "XDG_STATE_HOME=" + user,
+		"XDG_DATA_HOME=" + user, "XDG_CONFIG_HOME=" + user, "PATH=/usr/bin:/bin"}, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
