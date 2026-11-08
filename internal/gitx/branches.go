@@ -451,22 +451,50 @@ func (c *Client) MergeConflicts(ctx context.Context, dir, head, base string) ([]
 	return c.mergeTreeConflicts(ctx, dir, "merge-tree "+head+" "+base, head, base)
 }
 
+// MergeTree is MergeConflicts with the merge itself: the id of the tree
+// `git merge-tree --write-tree head base` writes for a clean merge (no
+// conflicts), else no tree and the conflicting paths, sorted. It writes the
+// merge's objects and no ref, index or work tree, so CommitTree can make
+// the merge commit of that tree with nothing checked out.
+func (c *Client) MergeTree(ctx context.Context, dir, head, base string) (tree string, conflicts []string, err error) {
+	if err := errors.Join(checkRev("head", head), checkRev("base", base)); err != nil {
+		return "", nil, err
+	}
+	what := "merge-tree " + head + " " + base
+	tree, conflicts, err = c.mergeTree(ctx, dir, what, head, base)
+	switch {
+	case err != nil || conflicts != nil:
+		return "", conflicts, err
+	case !isOID(tree):
+		return "", nil, fmt.Errorf("gitx: %s: unreadable tree %.40q", what, tree)
+	}
+	return tree, nil, nil
+}
+
 // mergeTreeConflicts runs `git merge-tree --write-tree` with args (its
 // options, then the two revisions) in dir and returns the conflicting paths,
 // sorted, nil for a clean merge; what names the call in its errors.
 func (c *Client) mergeTreeConflicts(ctx context.Context, dir, what string, args ...string) ([]string, error) {
+	_, paths, err := c.mergeTree(ctx, dir, what, args...)
+	return paths, err
+}
+
+// mergeTree is mergeTreeConflicts with the first field of git's answer, the
+// merged tree's id for a clean merge (unchecked: "" or what git printed).
+func (c *Client) mergeTree(ctx context.Context, dir, what string, args ...string) (string, []string, error) {
 	res, err := c.git(ctx, dir, call{label: what, noExit: 1, timeout: commitTimeout},
 		append([]string{"merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"}, args...)...)
 	if err == nil {
-		return nil, nil
+		tree, _, _ := strings.Cut(strings.TrimSpace(string(res.Stdout)), "\x00")
+		return tree, nil, nil
 	}
 	if code, ok := exitCode(err); !ok || code != 1 {
-		return nil, err
+		return "", nil, err
 	}
 	// "<tree>\0<path>\0<path>\0": the merged tree, then each conflicted path once.
 	fields := strings.Split(string(res.Stdout), "\x00")
 	if !isOID(fields[0]) {
-		return nil, fmt.Errorf("gitx: %s: unreadable answer %.40q", what, res.Stdout)
+		return "", nil, fmt.Errorf("gitx: %s: unreadable answer %.40q", what, res.Stdout)
 	}
 	var paths []string
 	for _, f := range fields[1:] {
@@ -475,10 +503,54 @@ func (c *Client) mergeTreeConflicts(ctx context.Context, dir, what string, args 
 		}
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("gitx: %s: conflicts, but names no path", what)
+		return "", nil, fmt.Errorf("gitx: %s: conflicts, but names no path", what)
 	}
 	slices.Sort(paths)
-	return slices.Compact(paths), nil
+	return "", slices.Compact(paths), nil
+}
+
+// Signature is who a commit is by: the name and email of its author, who
+// is its committer too.
+type Signature struct{ Name, Email string }
+
+// CommitTree writes the commit of tree with parents (the first is the
+// branch it goes on: a merge's are the PR's head, then the base's tip) and
+// message, by who as author and committer whatever the environment or the
+// repository says, unsigned (commit.gpgsign=false), and returns its id:
+// `git commit-tree <tree> -p <parent>... -F -`, the message on stdin. No
+// ref, index or work tree changes. A tree or parent that is no revision, no
+// parent, or a signature with an empty, multi-line or bracketed part is
+// refused before git runs.
+func (c *Client) CommitTree(ctx context.Context, dir, tree string, parents []string, message string, who Signature) (string, error) {
+	errs := []error{checkRev("tree", tree)}
+	if len(parents) == 0 {
+		errs = append(errs, errors.New("gitx: commit-tree: no parent"))
+	}
+	for _, p := range parents {
+		errs = append(errs, checkRev("parent", p))
+	}
+	for _, part := range []string{who.Name, who.Email} {
+		if part == "" || strings.ContainsAny(part, "<>\n\r\x00") {
+			errs = append(errs, fmt.Errorf("gitx: commit-tree: signature %q is no name and email", who.Name+" <"+who.Email+">"))
+			break
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return "", err
+	}
+	args := []string{"-c", "commit.gpgsign=false", "commit-tree", tree}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	env := map[string]string{"GIT_AUTHOR_NAME": who.Name, "GIT_AUTHOR_EMAIL": who.Email, "GIT_COMMITTER_NAME": who.Name, "GIT_COMMITTER_EMAIL": who.Email}
+	out, err := c.runStdin(ctx, dir, call{label: "commit-tree " + tree, mutates: true, timeout: commitTimeout, env: env}, []byte(message), append(args, "-F", "-")...)
+	if err != nil {
+		return "", err
+	}
+	if sha := strings.TrimSpace(out); isOID(sha) {
+		return sha, nil
+	}
+	return "", fmt.Errorf("gitx: commit-tree %s: unreadable answer %.40q", tree, out)
 }
 
 // PatchID is the stable patch id of commit rev's change from its first

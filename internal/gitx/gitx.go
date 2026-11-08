@@ -100,6 +100,9 @@ type call struct {
 	// such key, `symbolic-ref -q` no symbolic ref), logged at Debug; any other
 	// failure warns. 0 = none.
 	noExit int
+	// env is the caller's environment over the command (a commit's author,
+	// a push's gh config dir), never over a key of gitx's own (gitEnv).
+	env map[string]string
 }
 
 // git runs `git -C dir args...`. Errors are wrapped with the label and keep the
@@ -118,10 +121,16 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 // gitCommand is the command git runs as: `git -C dir args...` with gitx's
 // environment.
 func gitCommand(dir string, k call, args []string) execx.Cmd {
+	env := gitEnv(k.mutates)
+	for key, v := range k.env {
+		if _, own := env[key]; !own {
+			env[key] = v
+		}
+	}
 	cmd := execx.Cmd{
 		Name:    "git",
 		Args:    append([]string{"-C", dir}, args...),
-		Env:     gitEnv(k.mutates),
+		Env:     env,
 		Unset:   ScrubbedEnv(),
 		Timeout: k.timeout,
 		Mutates: k.mutates,

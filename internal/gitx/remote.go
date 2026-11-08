@@ -82,13 +82,13 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
 		url, _ = c.RemoteURL(ctx, dir)
 	}
 	opts, target := NetworkRemote(url, c.HTTPSFetch)
-	return c.pushLease(ctx, dir, opts, target, sha, branch, expect)
+	return c.pushLease(ctx, dir, opts, target, sha, branch, expect, nil)
 }
 
 // pushLease is PushLease's and PushLeaseVia's core: the checks, then the
 // push of sha to target's refs/heads/<branch> with a lease on expect, opts
-// before the subcommand.
-func (c *Client) pushLease(ctx context.Context, dir string, opts []string, target, sha, branch, expect string) error {
+// before the subcommand, env over the push (PushLeaseViaAs; nil for none).
+func (c *Client) pushLease(ctx context.Context, dir string, opts []string, target, sha, branch, expect string, env map[string]string) error {
 	if !isOID(sha) {
 		return fmt.Errorf("gitx: push: %q is not a full commit id", sha)
 	}
@@ -109,7 +109,7 @@ func (c *Client) pushLease(ctx context.Context, dir string, opts []string, targe
 		}
 	}
 	args := slices.Concat(opts, []string{"push", "--quiet", "--force-with-lease=" + ref + ":" + expect, target, sha + ":" + ref})
-	_, err := c.git(ctx, dir, call{label: "push " + branch, mutates: true, timeout: pushTimeout}, args...)
+	_, err := c.git(ctx, dir, call{label: "push " + branch, mutates: true, timeout: pushTimeout, env: env}, args...)
 	return err
 }
 
@@ -348,10 +348,28 @@ func (c *Client) LsRemoteGitHub(ctx context.Context, dir, owner, repo string, ti
 // the App, whatever form origin has and whichever helper the operator's
 // config names.
 func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect string) error {
+	return c.PushLeaseViaAs(ctx, dir, url, sha, branch, expect, nil)
+}
+
+// PushLeaseViaAs is PushLeaseVia with env over the push, never over a key
+// of gitx's own: the daemon's push as a fixer App, whose GH_CONFIG_DIR
+// (with GH_TOKEN and GITHUB_TOKEN blanked, identity.Source.Env) holds the
+// token gh answers git with. No value of env is ever logged.
+func (c *Client) PushLeaseViaAs(ctx context.Context, dir, url, sha, branch, expect string, env map[string]string) error {
 	if err := checkURL(url); err != nil {
 		return err
 	}
-	return c.pushLease(ctx, dir, ghOnlyHelper, url, sha, branch, expect)
+	return c.pushLease(ctx, dir, ghOnlyHelper, url, sha, branch, expect, env)
+}
+
+// PushLeaseGitHubAs is PushLeaseViaAs to github.com/<owner>/<repo> over
+// HTTPS (GitHubHTTPSURL).
+func (c *Client) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
+	url, err := gitHubURL(owner, repo)
+	if err != nil {
+		return err
+	}
+	return c.PushLeaseViaAs(ctx, dir, url, sha, branch, expect, env)
 }
 
 // PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS
