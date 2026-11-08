@@ -2,8 +2,11 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // The daemon's agents manager gives its panes the hook socket and the
@@ -34,4 +37,43 @@ func TestTheAppsPanesGetTheHookEnvOnlyWithItsListenersSocket(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A StopFailure the agents' hooks proved goes to the engine through a
+// bounded queue (HookFailures) and never waits for it: with the engine's
+// consumer blocked (nobody reads), the sender, which runs on the hook
+// listener's goroutine or on Wake's own, returns at once, and the failures
+// past the queue's room are dropped (the run's own end reads its screen
+// again). Without a listener there is no queue, and a send does nothing.
+func TestAHookFailureNeverWaitsForABlockedConsumer(t *testing.T) {
+	a, _ := testApp(t, Options{HookSocket: "/state/run/hooks.sock"})
+	if cap(a.HookFailures) != hookFailureQueue {
+		t.Fatalf("the queue holds %d, want %d", cap(a.HookFailures), hookFailureQueue)
+	}
+	s := store.Session{ID: 7, Role: "claude-review", AgentKind: new(agents.KindClaude)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range hookFailureQueue + 3 {
+			a.SendHookFailure(s, agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SendHookFailure waited for a consumer that reads nothing")
+	}
+	if n := len(a.HookFailures); n != hookFailureQueue {
+		t.Fatalf("%d failures queued, want the queue's %d", n, hookFailureQueue)
+	}
+	f := <-a.HookFailures
+	if f.Session.ID != 7 || f.Failure != agents.StopFailureRateLimit || f.Screen.Kind != agents.HealthUsageLimit {
+		t.Fatalf("queued %+v", f)
+	}
+
+	none, _ := testApp(t, Options{})
+	if none.HookFailures != nil {
+		t.Fatal("a queue without a listener")
+	}
+	none.SendHookFailure(s, agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit})
 }

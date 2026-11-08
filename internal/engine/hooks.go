@@ -13,6 +13,7 @@ package engine
 // (WaitWakes).
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -137,7 +139,10 @@ func (e *Engine) lockDaemon(c *Claim) (unlock func(), held bool, err error) {
 // (routeHook) on ctx (the daemon's: Wake's later looks end with it), and
 // returns what stops it: ctx's cancel first (stop), then the wait for
 // Serve, which returns once the Wake in flight returned, then WaitWakes on
-// the daemon's manager (a pane agent's waits at its close: hookRouter.remove). Without a listener it warns once why (a claim that holds the
+// the daemon's manager (a pane agent's waits at its close: hookRouter.remove).
+// Beside it, the StopFailures the hooks proved (Deps.HookFailures) are
+// handled on a goroutine of their own (onHookFailure), since the managers
+// hand them on without waiting (app.App.SendHookFailure). Without a listener it warns once why (a claim that holds the
 // lock) and returns stop alone.
 func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Claim) func() {
 	if c == nil || c.listener == nil {
@@ -148,10 +153,16 @@ func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Cla
 	}
 	c.log.set(e.log.Handler())
 	e.agentHooks.open(ctx)
-	served := make(chan struct{})
+	served, failing := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(served)
 		c.listener.Serve(ctx, func(ev agenthooks.Event) { e.routeHook(ctx, ev) })
+	}()
+	go func() {
+		defer close(failing)
+		if e.d.HookFailures != nil {
+			e.hookFailures(ctx, e.d.HookFailures)
+		}
 	}()
 	e.log.Info(hooksListeningMsg, "socket", c.listener.Path())
 	return func() {
@@ -161,6 +172,7 @@ func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Cla
 		if e.d.Agents != nil {
 			e.d.Agents.WaitWakes()
 		}
+		<-failing // before the shutdown stops the toasts a pause sends
 	}
 }
 
@@ -390,10 +402,58 @@ func (h *lateHandler) then(step func(slog.Handler) slog.Handler) slog.Handler {
 // over a pane agent's scratch registry with the live herdr client h, tagged
 // LearnAgentTag, with the App's hook socket, so the panes they make get the
 // hook env exactly while the daemon listens (agents.Deps.HookSocket; the
-// pane agents' EnsureWorkspace passes no env of its own).
+// pane agents' EnsureWorkspace passes no env of its own), and the
+// StopFailures their hooks prove go to the App's queue, as its own
+// manager's do (agents.Deps.HookFailure).
 func learnAgents(h agents.Herdr, a *app.App) func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
 	return func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
-		return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
-			Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}, HookSocket: a.HookSocket})
+		d := agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
+			Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}, HookSocket: a.HookSocket}
+		if a.HookFailures != nil {
+			d.HookFailure = a.SendHookFailure
+		}
+		return agents.New(d)
+	}
+}
+
+// onHookFailure feeds a StopFailure the agents' hooks proved (app.HookFailure,
+// from Deps.HookFailures) into the handling the screen-read failure of its
+// kind gets today: a usage limit and a login loss, the screen's verdict on
+// a rate limit, an authentication or a billing error, pause the agent kind
+// at once (pauseTool, proven now: what a reviewer's run that proved them
+// does at its end, pauseAtOnce, and the retro's and the notes jobs' do),
+// a usage limit until the reset the screen names. An overload, a model
+// limit and any other failure pause nothing: the run's own end reads its
+// screen again and goes on as before (the round's backoff or its shared
+// overload, its model switch, the job's stop), so it logs at debug level.
+// A turn's failure is no launch failure (the agent took its prompt), so it
+// never holds the kind as a shared launch failure does (kind_hold.go).
+func (e *Engine) onHookFailure(ctx context.Context, f app.HookFailure) {
+	tool := cmp.Or(deref(f.Session.AgentKind), agents.KindClaude)
+	switch f.Screen.Kind {
+	case agents.HealthUsageLimit, agents.HealthLoginRequired:
+		p := pipeline.Pause{Kind: string(f.Screen.Kind), Tool: tool, Detail: f.Screen.Detail, Proven: true, ProvenAt: e.now()}
+		if f.Screen.ResetAt != nil {
+			p.Until = *f.Screen.ResetAt
+		}
+		e.log.Info("an agent's hook says its turn ended on an API error its screen shows: the kind pauses", "tool", tool,
+			"kind", p.Kind, "failure", string(f.Failure), "role", f.Session.Role, "session", f.Session.ID)
+		e.pauseTool(ctx, p)
+	default:
+		e.log.Debug("an agent's hook says its turn ended on an API error: its run's end handles it", "tool", tool,
+			"kind", string(f.Screen.Kind), "failure", string(f.Failure), "role", f.Session.Role, "session", f.Session.ID)
+	}
+}
+
+// hookFailures handles the queued StopFailures (Deps.HookFailures) one at a
+// time until ctx ends; one whose handling panicked costs itself alone.
+func (e *Engine) hookFailures(ctx context.Context, in <-chan app.HookFailure) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case f := <-in:
+			e.safely(ctx, "hook failure", "", func() { e.onHookFailure(ctx, f) }, nil)
+		}
 	}
 }

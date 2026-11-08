@@ -420,6 +420,10 @@ type Deps struct {
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
 	Webhooks WebhookSource
+	// HookFailures are the StopFailures the agents' hooks proved
+	// (app.App.HookFailures, which FromApp sets), handled while the daemon
+	// listens (onHookFailure); nil = none.
+	HookFailures <-chan app.HookFailure
 
 	// agentHooks is the router of the agents' hook events the engine
 	// serves (hooks.go), which FromApp makes before the pane agents'
@@ -912,6 +916,9 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		d.Probe = gitProbe(a.Git)
 	}
 	d.Webhooks = webhookSource(a)
+	if a.HookFailures != nil {
+		d.HookFailures = a.HookFailures // hooks.go
+	}
 	if !a.DryRun && a.AgentTag == "" {
 		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
 	}

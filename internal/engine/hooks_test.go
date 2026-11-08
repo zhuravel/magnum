@@ -509,3 +509,99 @@ func TestThePaneAgentsPanesGetTheHookEnvOnlyWhileTheDaemonListens(t *testing.T) 
 		})
 	}
 }
+
+// A StopFailure the agents' hooks proved goes where the screen-read failure
+// of its kind goes today: a usage limit and a login loss pause the agent
+// kind (pauseTool, as a reviewer's run that proved them does at once, and
+// the retro's and the notes jobs' do), the usage limit until the reset its
+// screen names; an overload, a model limit and any other failure pause
+// nothing, and are left to the run's own end (the round's backoff, its
+// model switch, the job's stop).
+func TestAHookFailureGoesWhereTheScreenReadFailureOfItsKindGoes(t *testing.T) {
+	reset := time.Date(2026, 10, 5, 13, 0, 0, 0, time.Local)
+	for _, tc := range []struct {
+		name    string
+		failure agents.StopFailure
+		screen  agents.Health
+		reason  string // "" = no pause
+		until   func(now time.Time) time.Time
+	}{
+		{"usage limit", agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthUsageLimit, ResetAt: &reset, Detail: "limit reached"},
+			string(agents.HealthUsageLimit), func(time.Time) time.Time { return reset }},
+		{"billing", agents.StopFailureBilling, agents.Health{Kind: agents.HealthUsageLimit, Detail: "credit"},
+			string(agents.HealthUsageLimit), func(now time.Time) time.Time { return now.Add(usageFallback) }},
+		{"login", agents.StopFailureAuthentication, agents.Health{Kind: agents.HealthLoginRequired, Detail: "login"},
+			string(agents.HealthLoginRequired), func(now time.Time) time.Time { return now.Add(loginRecheck) }},
+		{"overload", agents.StopFailureOverloaded, agents.Health{Kind: agents.HealthOverloaded, Detail: "overloaded"}, "", nil},
+		{"rate limit on one model", agents.StopFailureRateLimit, agents.Health{Kind: agents.HealthModelLimit, Detail: "model"}, "", nil},
+		{"other", agents.StopFailureOther, agents.Health{Kind: agents.HealthStalled, Detail: "stalled"}, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			s := store.Session{ID: 3, Role: config.RoleClaudeReview, AgentKind: new(agents.KindClaude)}
+			h.e.onHookFailure(h.ctx, app.HookFailure{Session: s, Failure: tc.failure, Screen: tc.screen})
+			p, paused := h.e.toolPause(h.ctx, agents.KindClaude)
+			if tc.reason == "" {
+				if paused {
+					t.Fatalf("paused %+v, want no pause", p)
+				}
+				return
+			}
+			if !paused || p.Reason != tc.reason || !p.Until.Equal(tc.until(h.clock.Now())) || p.Detail != tc.screen.Detail {
+				t.Fatalf("pause %+v (%v), want %s until %s with the screen's line", p, paused, tc.reason, tc.until(h.clock.Now()))
+			}
+		})
+	}
+}
+
+// The daemon consumes the hook failures on a goroutine of its own while it
+// listens: a usage limit sent to the queue pauses the kind.
+func TestTheDaemonPausesAKindOnAHookFailureWhileItListens(t *testing.T) {
+	l := shortLayout(t)
+	c := claim(t, l)
+	failures := make(chan app.HookFailure, 1)
+	h := newHarness(t, func(hs *harness) { hs.d.HookFailures = failures })
+	ctx, cancel := context.WithCancel(h.ctx)
+	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
+	failures <- app.HookFailure{Session: store.Session{ID: 3, Role: config.RoleClaudeReview, AgentKind: new(agents.KindClaude)},
+		Failure: agents.StopFailureAuthentication, Screen: agents.Health{Kind: agents.HealthLoginRequired, Detail: "login"}}
+	for deadline := time.Now().Add(clockGuard); ; time.Sleep(2 * time.Millisecond) {
+		if p, ok := h.e.toolPause(h.ctx, agents.KindClaude); ok && p.Reason == string(agents.HealthLoginRequired) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the hook failure never paused the kind")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// FromApp hands the App's queue of hook failures to the engine, which
+// handles them while it listens; an App without a hook socket has none.
+func TestFromAppHandsTheHookFailuresToTheEngine(t *testing.T) {
+	for _, socket := range []string{"/state/run/hooks.sock", ""} {
+		home := t.TempDir()
+		cfgText := strings.ReplaceAll(testConfigTOML, "HOME", home)
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		layout := paths.Layout{Home: home}
+		cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := app.New(cfg, layout, app.Options{DryRun: true, Runner: &execx.Fake{}, Logger: slog.New(slog.DiscardHandler),
+			HookSocket: socket, MySQLDSN: "root:@tcp(127.0.0.1:1)/?timeout=1s"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := FromApp(a)
+		if (socket != "") != (e.d.HookFailures != nil) || (socket != "" && e.d.HookFailures != (<-chan app.HookFailure)(a.HookFailures)) {
+			t.Errorf("socket %q: the engine's hook failures %v, the App's %v", socket, e.d.HookFailures, a.HookFailures)
+		}
+		a.Close()
+	}
+}

@@ -106,6 +106,11 @@ type App struct {
 	// HookSocket is Options.HookSocket: the pane agents' managers the
 	// engine makes (engine.FromApp) take it too.
 	HookSocket string
+	// HookFailures carries the StopFailures its agents managers' hooks
+	// proved (SendHookFailure, agents.Deps.HookFailure) to the engine,
+	// which handles them on a goroutine of its own; nil without a hook
+	// socket.
+	HookFailures chan HookFailure
 
 	// Herdr is the client of the herdr session magnum's panes are in,
 	// PaneSession: the agents, the rounds' keys and the engine drive it,
@@ -255,6 +260,9 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	a.GitHub = a.githubFor
 
 	a.AgentTag, a.Mise, a.HookSocket = opts.AgentTag, opts.Mise, opts.HookSocket
+	if a.HookSocket != "" {
+		a.HookFailures = make(chan HookFailure, hookFailureQueue)
+	}
 	a.wire()
 	ok = true
 	return a, nil
@@ -340,6 +348,7 @@ func (a *App) wire() {
 		Signal:       syscall.Kill, // StopShell's, for a command it proved its own
 		SkipGoneDirs: true,
 		HookSocket:   a.HookSocket, // the panes' MAGNUM_HOOK_SOCKET while the daemon listens
+		HookFailure:  a.hookFailure(),
 	})
 	// One Jira client for every identity's rounds: a token file problem
 	// warns once per daemon start (jira.Client.WarnTokenFile).
@@ -509,4 +518,44 @@ func (a *App) Close() error {
 	}
 	a.closers = nil
 	return errors.Join(errs...)
+}
+
+// hookFailureQueue bounds the StopFailures waiting for the engine
+// (App.HookFailures): a Claude turn's failure comes once per prompt of its
+// session, so a full queue means the engine is stuck, not busy.
+const hookFailureQueue = 16
+
+// HookFailure is one API error an agent's turn ended on, as the session's
+// own StopFailure hook named it and its screen, read again, proved it
+// (agents.Deps.HookFailure): the session's row, the class (never the
+// hook's text) and the screen's verdict.
+type HookFailure struct {
+	Session store.Session
+	Failure agents.StopFailure
+	Screen  agents.Health
+}
+
+// hookFailure is agents.Deps.HookFailure for the App's managers:
+// SendHookFailure while the daemon listens, nil otherwise.
+func (a *App) hookFailure() func(store.Session, agents.StopFailure, agents.Health) {
+	if a.HookFailures == nil {
+		return nil
+	}
+	return a.SendHookFailure
+}
+
+// SendHookFailure implements agents.Deps.HookFailure: it queues the failure
+// for the engine (HookFailures) and never waits, since it runs on the hook
+// listener's goroutine or on one of Wake's; a failure the full queue has no
+// room for is dropped with a debug line (the run's own end reads its screen
+// again). Without a listener (no queue) it does nothing.
+func (a *App) SendHookFailure(s store.Session, f agents.StopFailure, h agents.Health) {
+	if a.HookFailures == nil {
+		return
+	}
+	select {
+	case a.HookFailures <- HookFailure{Session: s, Failure: f, Screen: h}:
+	default:
+		a.Logger.Debug("hook failure dropped: the engine has not taken the earlier ones", "role", s.Role, "session", s.ID, "failure", string(f))
+	}
 }
