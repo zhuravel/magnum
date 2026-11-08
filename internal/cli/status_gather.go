@@ -168,6 +168,9 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 	if s, ok := engine.ReadShellPATH(ctx, d.Store); ok {
 		r.Daemon.ShellPATH = &s
 	}
+	if h, ok := engine.ReadDaemonHooks(ctx, d.Store); ok {
+		r.Daemon.Hooks = &h
+	}
 	r.Daemon.PromptsLoadedAt = kv.getTime(engine.KVPromptsLoadedAt)
 	if n := kv.getInt(engine.KVPromptsChanged); n != nil && *n > 0 {
 		r.Daemon.PromptsChanged = *n

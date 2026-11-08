@@ -15,6 +15,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -137,7 +138,8 @@ func (e *Engine) lockDaemon(c *Claim) (unlock func(), held bool, err error) {
 // startHooks starts serving the claim's hook listener on a goroutine of its
 // own, each event to Wake on the managers whose registries record its pane
 // (routeHook) on ctx (the daemon's: Wake's later looks end with it), and
-// returns what stops it: ctx's cancel first (stop), then the wait for
+// returns what stops it (it records first whether it listens, for `magnum
+// status`: recordHooks): ctx's cancel first (stop), then the wait for
 // Serve, which returns once the Wake in flight returned, then WaitWakes on
 // the daemon's manager (a pane agent's waits at its close: hookRouter.remove).
 // Beside it, the StopFailures the hooks proved (Deps.HookFailures) are
@@ -145,6 +147,7 @@ func (e *Engine) lockDaemon(c *Claim) (unlock func(), held bool, err error) {
 // hand them on without waiting (app.App.SendHookFailure). Without a listener it warns once why (a claim that holds the
 // lock) and returns stop alone.
 func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Claim) func() {
+	e.recordHooks(ctx, c)
 	if c == nil || c.listener == nil {
 		if why := c.Off(); why != "" {
 			e.log.Warn(hooksOffMsg, "why", why)
@@ -455,5 +458,51 @@ func (e *Engine) hookFailures(ctx context.Context, in <-chan app.HookFailure) {
 		case f := <-in:
 			e.safely(ctx, "hook failure", "", func() { e.onHookFailure(ctx, f) }, nil)
 		}
+	}
+}
+
+// KVDaemonHooks is the running daemon's hook listener as its start found
+// it, DaemonHooks's JSON, for `magnum status`; absent when the start took
+// no claim (a dry run).
+const KVDaemonHooks = "daemon.hooks"
+
+// DaemonHooks is whether the daemon listens for its agents' hooks: the
+// listener's socket, or why it has none (its agents are then polled
+// alone).
+type DaemonHooks struct {
+	Socket string `json:"socket,omitempty"`
+	Off    string `json:"off,omitempty"`
+}
+
+// ReadDaemonHooks is the running daemon's hook listener (KVDaemonHooks);
+// false before a daemon recorded it.
+func ReadDaemonHooks(ctx context.Context, st *store.Store) (DaemonHooks, bool) {
+	v, ok, err := st.GetKV(ctx, KVDaemonHooks)
+	if err != nil || !ok || v == "" {
+		return DaemonHooks{}, false
+	}
+	var h DaemonHooks
+	if json.Unmarshal([]byte(v), &h) != nil {
+		return DaemonHooks{}, false
+	}
+	return h, true
+}
+
+// recordHooks writes whether this start listens for its agents' hooks
+// (KVDaemonHooks): the claim's socket, or why it has none; without a
+// claim it removes an earlier start's record.
+func (e *Engine) recordHooks(ctx context.Context, c *Claim) {
+	var h DaemonHooks
+	switch {
+	case c.HookSocket() != "":
+		h.Socket = c.HookSocket()
+	case c.Off() != "":
+		h.Off = c.Off()
+	default:
+		e.delKV(ctx, KVDaemonHooks)
+		return
+	}
+	if raw, err := json.Marshal(h); err == nil {
+		e.setKV(ctx, KVDaemonHooks, string(raw))
 	}
 }

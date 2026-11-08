@@ -70,6 +70,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 		}
 	}
 	fmt.Fprintf(w, "daemon:   %s\n", daemon)
+	if h := dm.Hooks; dm.Running && h != nil {
+		fmt.Fprintf(w, "hooks:    %s\n", statusHooksText(*h))
+	}
 	if dm.Skew != "" {
 		fmt.Fprintf(w, "build:    %s\n", statusSafe(dm.Skew, 0))
 	}
@@ -1100,4 +1103,14 @@ func findingsSentence(f store.ReviewSummary) string {
 		s += fmt.Sprintf("; earlier: %d fixed, %d open, %d answered", f.Fixed, f.Open, f.Answered)
 	}
 	return s
+}
+
+// statusHooksText is the hooks line: "listening on <socket>: the agents'
+// hooks wake their panes", or "off, the daemon polls its agents alone:
+// <why>".
+func statusHooksText(h engine.DaemonHooks) string {
+	if h.Socket != "" {
+		return "listening on " + statusSafe(inspTilde(h.Socket), 0) + ": the agents' hooks wake their panes"
+	}
+	return "off, the daemon polls its agents alone: " + statusSafe(h.Off, 0)
 }

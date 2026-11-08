@@ -281,6 +281,10 @@ type statusDaemon struct {
 	// start ([daemon] shell_path; engine.KVDaemonShellPATH): the count, or
 	// why the shell gave none; nil with the key off.
 	ShellPATH *engine.ShellPATH `json:"shell_path,omitempty"`
+	// Hooks is whether the daemon listens for its agents' hooks
+	// (engine.KVDaemonHooks): its socket, or why it polls them alone; nil
+	// before a daemon recorded it.
+	Hooks *engine.DaemonHooks `json:"hooks,omitempty"`
 }
 
 // statusConfig is the user config (Path) while its bytes differ from the

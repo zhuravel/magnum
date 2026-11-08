@@ -605,3 +605,39 @@ func TestFromAppHandsTheHookFailuresToTheEngine(t *testing.T) {
 		a.Close()
 	}
 }
+
+// The daemon records at its start whether its hook listener is up, for
+// `magnum status`: its socket, or why it has none; a start without a claim
+// removes an earlier start's record.
+func TestTheDaemonRecordsWhetherItsHookListenerIsUp(t *testing.T) {
+	l := shortLayout(t)
+	h := newHarness(t)
+	run := func(c *Claim) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(h.ctx)
+		done := h.goRun(ctx, Options{NoSignals: true, Once: true, Claim: c})
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+	}
+	c := claim(t, l)
+	run(c)
+	if got, ok := ReadDaemonHooks(h.ctx, h.st); !ok || got.Socket != l.HookSocket() || got.Off != "" {
+		t.Fatalf("listening: %+v, %v; want the socket %s", got, ok, l.HookSocket())
+	}
+	c.Release()
+
+	long := paths.Layout{Home: filepath.Join(t.TempDir(), strings.Repeat("x", paths.SocketPathLimit))}
+	off := claim(t, long)
+	run(off)
+	if got, ok := ReadDaemonHooks(h.ctx, h.st); !ok || got.Socket != "" || !strings.Contains(got.Off, "must be under 104") {
+		t.Fatalf("off: %+v, %v; want why", got, ok)
+	}
+	off.Release()
+
+	run(nil)
+	if got, ok := ReadDaemonHooks(h.ctx, h.st); ok {
+		t.Fatalf("no claim: %+v, want no record", got)
+	}
+}
