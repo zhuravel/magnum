@@ -3818,6 +3818,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestANeedsYouLoopSaysWhatToDoPerThread and the "needs you" case of
   TestALoopStrandedInReviewingIsDecidedAtStartup now end on a re-review that posts no new finding.
 
+- **The look starts on work never handed while a person's handed items wait, and its fixer leaves them
+  alone** (2026-11-08, the audit of what waits on the operator; approved by the operator on 2026-11-08.
+  Changes the rule order in `decideOpen`'s comment of "`autofix = "open"`: a fix loop starts on anything
+  open on your own PR once the reviewers settle" (2026-11-07): rule 8 no longer comes before rule 9 when
+  every leftover is a person's.) On an own PR a lint bot's thread on code the base merge brought in was
+  never handed to a loop, a small fix, but a colleague's change request that an earlier loop was handed
+  waited for the author, and rule 8 (a handed item still open needs you) came before rule 9 (work starts a
+  loop), so the fix waited on the colleague. Now, when every handed item still open is a person's (another
+  reviewer who is not a bot: an unanswered thread, review body or comment, one a fixer answered twice, one a
+  fixer resolved with no answer) and rule 9 has work to start on that is not magnum's rebuttals alone, rule
+  9 decides: the loop starts on the work once the settle, the daily cap, a pause, quiet hours and the hands
+  off allow, the verdict lists the person's items as needs and says so ("starts a fix loop on 1 thread of a
+  bot; 1 item waits for you: 1 review body of a person"), and nothing raises them meanwhile. The push that
+  lands while the change request is open is limited to the work never handed: the look passes the waiting
+  items' keys to the loop (`FixState.Waits`, through `startFix`), every cycle's external file marks those
+  items `waits` (`externalItems.waiting`, on copies of the look's read; a thread or remark whose key moved,
+  with a new reply or an edit, is new work and not marked), and the fix skill leaves a `waits` item alone
+  (no verdict, no fix, no reply; `no reply: waits for the author` under Other reviewers). Once the loop
+  ended the items need you as before (rule 8, the look's raise). Anything else handed and still open
+  (magnum's finding skipped without a word, a bot's thread, a conflict, magnum's handed rebuttal) still
+  needs you first, and so do a person's items with no work beside them. Not done: a start while the look's
+  own raise of the person's items holds the PR in needs attention (rule 2 and startFix's refusal over
+  attention stand; the operator answers them, or a loop's own calls are lifted with `magnum fix --done`
+  first). Rejected: leaving the fixer to judge the waiting items again (it could push for a colleague's
+  open request the author has not answered); a start beside magnum's own leftovers (they are the loop's
+  unfinished work, which the operator decides). Tests, failing first:
+  TestTheLookStartsOnNeverHandedWorkWhileAPersonsItemsWait and TestTheLoopOverAPersonsWaitingItemLeavesItAlone
+  in engine; TestTheFixSkillLeavesAWaitingItemAlone in agents.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

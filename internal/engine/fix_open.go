@@ -295,7 +295,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		}
 	}
 	if v.Verdict == OpenFixing && len(work) > 0 {
-		v = e.openStart(ctx, repo, pr, &l, v, work, fp)
+		v = e.openStart(ctx, repo, pr, &l, v, work, waitsOf(needs), fp)
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
 }
@@ -774,7 +774,7 @@ func addFixerHead(heads []string, head string) []string {
 // attention); a PR whose state, mute, reviewed head or fingerprint changed
 // waits for the next look, which decides on the new row. A dry run starts
 // nothing.
-func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, fp string) OpenVerdict {
+func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, waits []string, fp string) OpenVerdict {
 	subject := prSubject(repo, pr.Number)
 	if l.Refused != "" && l.Refused == fp {
 		v.Verdict, v.Why = OpenNeedsYou, l.RefusedWhy
@@ -812,7 +812,7 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	if r, ok := e.openReads[pr.ID]; ok {
 		carried = &r
 	}
-	job, err := e.startFix(ctx, pr, autofixBy, FixState{}, carried)
+	job, err := e.startFix(ctx, pr, autofixBy, FixState{Waits: waits}, carried) // a person's handed items wait: its fixer leaves them alone
 	var budget *githubBudgetError
 	var unchecked *mergeUncheckedError
 	var noSlot noFreeFixSlot

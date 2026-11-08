@@ -3579,7 +3579,12 @@ answer after the resolution (a fix-marked reply, or yours) closes it. GitHub nam
 an App makes (a thread's `resolvedBy` is a User), so on a watch whose fixer is a dedicated App a person's
 thread resolved by no one named counts as the fixer's; a bot's thread resolved so is the bot's own, which
 resolves its threads once the code changed. A bot's handed review body or comment (a receipt, a
-summary, a status note) drops out as seen. A finding of Magnum's handed review that the fixer neither
+summary, a status note) drops out as seen. When every handed item still open is a person's, work no loop
+was handed (a lint bot's new thread, say) still starts a loop beside them: they stay listed in the verdict
+("starts a fix loop on 1 thread of a bot; 1 item waits for you: 1 review body of a person"), the loop's
+`external-threads.json` marks each one `waits` in every cycle, and the fixer leaves them alone (no fix, no
+reply), so a push while a colleague's change request is open answers only what was never handed. Once the
+loop ends they need you as below; while the look's own raise of them needs attention, nothing starts. A finding of Magnum's handed review that the fixer neither
 resolved nor answered (an optional one too) needs you, and so does a thread the fixer answered twice whose
 reviewer answered again. Magnum's own thread waits for your answer only after a rebuttal of Magnum's that
 came after its latest review: alone, with nothing else to fix, it needs you and starts no loop. A reviewed PR

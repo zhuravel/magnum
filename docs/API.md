@@ -10266,6 +10266,7 @@ type FixState struct {
 	Context      string     `json:"context,omitempty"`
 	OthersUnread string     `json:"others_unread,omitempty"`
 	Carried      []FixCarry `json:"carried,omitempty"`
+	Waits        []string   `json:"waits,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -10300,7 +10301,11 @@ type FixState struct {
     got them. Carried are the calls the loop's earlier cycles left the author,
     which it carries to its end, each cycle's under its own report (FixCarry,
     fix_carry.go): a re-review that posts new findings runs the next cycle over
-    them while cycles are left.
+    them while cycles are left. Waits are the keys of other reviewers' items
+    (fix_open_items.go) that an earlier loop was handed and that wait for the
+    author, a person's, beside which autofix = "open" started this loop on work
+    never handed (rule 9): every cycle's external file marks them waiting,
+    and the fixer leaves them alone (writeExternal).
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

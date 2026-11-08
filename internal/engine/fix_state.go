@@ -66,7 +66,11 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // Carried are the calls the loop's earlier cycles left the author, which it
 // carries to its end, each cycle's under its own report (FixCarry,
 // fix_carry.go): a re-review that posts new findings runs the next cycle
-// over them while cycles are left.
+// over them while cycles are left. Waits are the keys of other reviewers'
+// items (fix_open_items.go) that an earlier loop was handed and that wait
+// for the author, a person's, beside which autofix = "open" started this
+// loop on work never handed (rule 9): every cycle's external file marks
+// them waiting, and the fixer leaves them alone (writeExternal).
 type FixState struct {
 	Cycle        int        `json:"cycle"`
 	Cap          int        `json:"cap"`
@@ -84,6 +88,7 @@ type FixState struct {
 	Context      string     `json:"context,omitempty"`
 	OthersUnread string     `json:"others_unread,omitempty"`
 	Carried      []FixCarry `json:"carried,omitempty"`
+	Waits        []string   `json:"waits,omitempty"`
 }
 
 // answered is Answered as a set (nil for none), as needsYouCalls reads it.

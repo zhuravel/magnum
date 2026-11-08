@@ -29,13 +29,15 @@ package engine
 //     a bot's thread, a finding the fixer skipped without a word, a thread
 //     a fixer resolved with no answer, a thread with two fixer replies that
 //     the reviewer answered again (a bot's receipt or note is seen and
-//     drops out);
+//     drops out), unless every one of them is a person's and rule 9 has
+//     work to start on: the person's items then wait, listed, while the
+//     loop works on the rest, and its fixer leaves them alone (FixState.Waits);
 //  9. work (an item never handed, magnum's review no loop worked on) starts
-//     a loop once settle allows: never on magnum's rebuttals alone with no
-//     review work, at most autofix_max_loops a day, never under `magnum
-//     pause` or inside [daemon] quiet_hours (the work waits for their end,
-//     spending no start), never within hands_off_after_push of the
-//     operator's own push;
+//     a loop once settle allows, a person's handed items waiting or not:
+//     never on magnum's rebuttals alone with no review work, at most
+//     autofix_max_loops a day, never under `magnum pause` or inside
+//     [daemon] quiet_hours (the work waits for their end, spending no
+//     start), never within hands_off_after_push of the operator's own push;
 //  10. a head the reviewers have not settled on waits;
 //  11. red required CI needs you, pending required CI waits; a required
 //     check with no run at a head whose checks magnum read whole, where
@@ -518,13 +520,14 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	case !f.whole:
 		return say(OpenUnknown, "reading GitHub"), nil, needs
 	}
-	if len(needs) > 0 {
+	onlyRebuttals := len(work) > 0 && !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) &&
+		!reviewWork(*f.sum, len(f.optional), f.described)
+	if len(needs) > 0 && (len(work) == 0 || onlyRebuttals || !personsAlone(needs)) { // rule 8; a person's items alone wait beside work (rule 9)
 		v.leftovers = true
 		return say(OpenNeedsYou, needsWords(needs)), nil, needs
 	}
 	settled, until := settleDone(f)
 	if len(work) > 0 {
-		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum, len(f.optional), f.described)
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
 		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
 		switch {
@@ -550,7 +553,11 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 			v.Until = until
 			return say(OpenWaits, "settling: "+workWords(work)+" waits until "+waitClock(until, f.now)), nil, needs
 		}
-		return say(OpenFixing, "starts a fix loop on "+workWords(work)), work, needs
+		why := "starts a fix loop on " + workWords(work)
+		if len(needs) > 0 { // a person's handed items, which the loop leaves alone
+			why += "; " + textx.Count(len(needs), "item waits", "items wait") + " for you: " + workWords(needs)
+		}
+		return say(OpenFixing, why), work, needs
 	}
 	if !settled {
 		v.Until = until
@@ -749,6 +756,27 @@ func checksPending(pr store.PR, names []string) bool {
 		}
 	}
 	return false
+}
+
+// personsAlone reports whether every item of needs is a person's (another
+// reviewer who is not a bot): rule 8 lets rule 9 start beside them.
+func personsAlone(needs []openItem) bool {
+	return !slices.ContainsFunc(needs, func(it openItem) bool { return it.Class != classPerson })
+}
+
+// waitsOf are the keys of the items of needs that a fixer's external file
+// lists (another reviewer's open thread, review body or comment: not one a
+// fixer resolved, which the file leaves out), sorted: the loop the look
+// starts beside them marks them waiting (FixState.Waits).
+func waitsOf(needs []openItem) []string {
+	var keys []string
+	for _, it := range needs {
+		if it.Class == classPerson && !it.Resolved && (it.Kind == itemThread || it.Kind == itemReview || it.Kind == itemComment) {
+			keys = append(keys, it.Key)
+		}
+	}
+	slices.Sort(keys)
+	return slices.Compact(keys)
 }
 
 // openNeeds are items as needs: kind and link only.

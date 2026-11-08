@@ -830,7 +830,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	}
 	st := job.state
 	if prev.Cycle == 0 {
-		st = FixState{Cycle: 1, Cap: job.state.Cap, Since: job.head, By: by, StartedAt: e.now().UTC()}
+		st = FixState{Cycle: 1, Cap: job.state.Cap, Since: job.head, By: by, StartedAt: e.now().UTC(), Waits: prev.Waits}
 	} else {
 		st.Cycle++
 	}

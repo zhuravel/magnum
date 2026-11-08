@@ -97,9 +97,11 @@ type externalItems struct {
 // counting the ones between them that the file leaves out. Decision says
 // that the thread holds the author's decision on a call the fixer left them
 // there (fix_decide.go), at DecisionURL (its last comment but for any the
-// fixer may have written since): not answered, the fixer builds it. called
-// (not in the file) says that the fixer's call there is still open, which
-// `magnum fix --decide` answers.
+// fixer may have written since): not answered, the fixer builds it. Waits
+// says that an earlier loop was handed it and it waits for the author
+// (FixState.Waits): the fixer leaves it alone. called (not in the file)
+// says that the fixer's call there is still open, which `magnum fix
+// --decide` answers.
 type externalThread struct {
 	CommentID   int64             `json:"comment_id"`
 	URL         string            `json:"url"`
@@ -109,6 +111,7 @@ type externalThread struct {
 	Answered    bool              `json:"answered"`
 	Decision    bool              `json:"decision,omitempty"`
 	DecisionURL string            `json:"decision_url,omitempty"`
+	Waits       bool              `json:"waits,omitempty"`
 	Comments    []externalComment `json:"comments"`
 	Omitted     int               `json:"omitted,omitempty"`
 	called      bool
@@ -129,8 +132,9 @@ type externalComment struct {
 
 // externalRemark is a review body (Kind "review", with its State) or a
 // conversation comment (Kind "comment") of another reviewer: its REST id,
-// link, author, time and body (an excerpt), and whether the fixer answered
-// it already (a later comment of its links it).
+// link, author, time and body (an excerpt), whether the fixer answered it
+// already (a later comment of its links it), and whether it waits for the
+// author (Waits, as an externalThread's).
 type externalRemark struct {
 	Kind      string `json:"kind"`
 	ID        int64  `json:"id"`
@@ -142,6 +146,7 @@ type externalRemark struct {
 	Body      string `json:"body"`
 	Truncated bool   `json:"truncated,omitempty"`
 	Answered  bool   `json:"answered"`
+	Waits     bool   `json:"waits,omitempty"`
 }
 
 // Remark kinds (externalRemark.Kind), also the place a "## Needs you" entry
@@ -175,6 +180,27 @@ func (x externalItems) unanswered() (threads, conversation int) {
 		}
 	}
 	return threads, conversation
+}
+
+// waiting is x with its threads and conversation items whose key
+// (fix_open_items.go) is one of keys marked Waits (FixState.Waits), on
+// copies of its lists: the read a look hands a job is the look's too.
+func (x externalItems) waiting(keys []string) externalItems {
+	if len(keys) == 0 {
+		return x
+	}
+	x.Threads, x.Conversation = slices.Clone(x.Threads), slices.Clone(x.Conversation)
+	for i, t := range x.Threads {
+		if len(t.Comments) > 0 && slices.Contains(keys, threadKey(t.CommentID, t.Comments[len(t.Comments)-1].ID)) {
+			x.Threads[i].Waits = true
+		}
+	}
+	for i, r := range x.Conversation {
+		if slices.Contains(keys, remarkKey(r)) {
+			x.Conversation[i].Waits = true
+		}
+	}
+	return x
 }
 
 // excerptOf is s trimmed and cut to externalBodyMax characters, and
@@ -682,6 +708,7 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) (pa
 		read, err = e.readExternal(ctx, job)
 	}
 	x, outside := read.items, read.outside
+	x = x.waiting(job.state.Waits)
 	x.Fixer = x.Author // a gh fixer posts as the author
 	if logins := e.cfg.FixerLogins(&job.watch); len(logins) > 0 {
 		x.Fixer = logins[0]
