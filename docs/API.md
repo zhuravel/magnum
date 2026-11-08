@@ -4848,6 +4848,12 @@ func (c *Config) CIDispatch(fullName string) string
     required checks (ci_dispatch), "" when none does: autofix = "open" starts it
     once per head on an own PR whose required check did not run at its head.
 
+func (c *Config) CIDispatchAs(fullName string) string
+    CIDispatchAs returns the identity the [[repo]] block of repository
+    fullName ("owner/name", any case) names to start its CIDispatch workflow
+    (ci_dispatch_as), "" when none does: the look starts it as the watch's poll
+    identity, else its identity.
+
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
     a comment, not an approval, for a clean verdict on repository
@@ -6686,6 +6692,12 @@ type Repo struct {
 	// head (see Config.CIDispatch), and a RequiredChecks entry with no run
 	// at a head counts as not run there. "" (the default) starts nothing.
 	CIDispatch string `toml:"ci_dispatch"`
+
+	// CIDispatchAs names the [[identity]] that starts the CIDispatch
+	// workflow (see Config.CIDispatchAs): one that can, where the watch's
+	// poll identity cannot (an App with Actions: read only). "" (the
+	// default) starts it as the poll identity.
+	CIDispatchAs string `toml:"ci_dispatch_as"`
 }
     Repo is a [[repo]] block: the repository's verdicts (any watched repository,
     pooled or not) and setup for the per-PR worktrees of a repository

@@ -460,7 +460,8 @@ func validateCheckGlobs(where, key string, entries []string) []error {
 // validateRepos checks the [[repo]] blocks: owner/name covered by a watch,
 // not a pool repository, no duplicates, shell-safe env keys, copy_files
 // that stay inside the clone, well-formed required_checks and
-// ignore_checks globs and a ci_dispatch that names a workflow file.
+// ignore_checks globs, a ci_dispatch that names a workflow file and a
+// ci_dispatch_as that names an [[identity]] beside it.
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -479,12 +480,19 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers and ci_dispatch apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors, auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers, ci_dispatch and ci_dispatch_as apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
 		}
 		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "required_checks", r.RequiredChecks)...)
 		errs = append(errs, validateCheckGlobs("repo "+r.Repo, "ignore_checks", r.IgnoreChecks)...)
 		if r.CIDispatch != "" && !github.ValidWorkflowFile(r.CIDispatch) {
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch must be a workflow file of .github/workflows such as \"ci.yml\", got %q", r.Repo, r.CIDispatch))
+		}
+		switch {
+		case r.CIDispatchAs == "":
+		case r.CIDispatch == "":
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q without ci_dispatch: it names who starts the ci_dispatch workflow, and without one magnum starts no workflow; set ci_dispatch or remove ci_dispatch_as", r.Repo, r.CIDispatchAs))
+		case c.IdentityByName(r.CIDispatchAs) == nil:
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q names no [[identity]]", r.Repo, r.CIDispatchAs))
 		}
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))

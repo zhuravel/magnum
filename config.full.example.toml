@@ -172,8 +172,9 @@ databases = [
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
 # block with only those, keep_approvals, stakes, max_simplifications, auto_approve_skip_authors,
-# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers, ci_dispatch and the
-# readiness keys (prepare, ready, ready_timeout; each replaces the pool's) is valid for a [[pool]] repo too.
+# auto_approve_authors, allow_bot_authors, required_checks, ignore_checks, trackers, ci_dispatch,
+# ci_dispatch_as and the readiness keys (prepare, ready, ready_timeout; each replaces the pool's) is valid
+# for a [[pool]] repo too.
 #
 # [[repo]]
 # repo = "your-org/your-app"
@@ -197,11 +198,16 @@ databases = [
 # ignore_checks = ["Vendor Gates"]        # added to the watch's list for this repository's PRs alone
 # ci_dispatch = "ci.yml"                  # the workflow file that produces the required checks, for a CI that
 #                                         # runs only when a PR opens: under autofix = "open" magnum starts it on
-#                                         # the PR's branch, as the watch's poll identity, once per head on an own
-#                                         # PR whose required check did not run there (once nothing runs there,
-#                                         # past settle_max), never on a PR that changes its own workflows or
-#                                         # actions; it also makes a required_checks entry with no run at the head
-#                                         # count as not run; default: none
+#                                         # the PR's branch, as ci_dispatch_as (else the watch's poll identity),
+#                                         # once per head on an own PR whose required check did not run there
+#                                         # (once nothing runs there, past settle_max), never on a PR that changes
+#                                         # its own workflows or actions; it also makes a required_checks entry
+#                                         # with no run at the head count as not run; default: none
+# ci_dispatch_as = "zhuravel"             # the [[identity]] that starts ci_dispatch's workflow, where the poll
+#                                         # identity cannot (GitHub answers HTTP 403, as to an App with Actions:
+#                                         # read only); it needs Actions: write (an App, in its token_permissions
+#                                         # too where it sets them) or push access and the repo scope (a gh
+#                                         # login); needs ci_dispatch; default: the watch's poll identity
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

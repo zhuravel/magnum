@@ -792,6 +792,12 @@ type Repo struct {
 	// head (see Config.CIDispatch), and a RequiredChecks entry with no run
 	// at a head counts as not run there. "" (the default) starts nothing.
 	CIDispatch string `toml:"ci_dispatch"`
+
+	// CIDispatchAs names the [[identity]] that starts the CIDispatch
+	// workflow (see Config.CIDispatchAs): one that can, where the watch's
+	// poll identity cannot (an App with Actions: read only). "" (the
+	// default) starts it as the poll identity.
+	CIDispatchAs string `toml:"ci_dispatch_as"`
 }
 
 // RequiredWorkflowPrefix marks a required_checks entry naming a whole
@@ -802,8 +808,8 @@ const RequiredWorkflowPrefix = "workflow:"
 // worktreeKeys reports whether the block sets any per-PR worktree key
 // (everything but repo, the verdicts, readiness, keep_approvals, stakes,
 // max_simplifications, auto_approve_skip_authors, auto_approve_authors,
-// allow_bot_authors, required_checks, ignore_checks, trackers and
-// ci_dispatch).
+// allow_bot_authors, required_checks, ignore_checks, trackers,
+// ci_dispatch and ci_dispatch_as).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -1349,6 +1355,17 @@ func (c *Config) RequiredChecks(fullName string) []string {
 func (c *Config) CIDispatch(fullName string) string {
 	if r := c.RepoFor(fullName); r != nil {
 		return r.CIDispatch
+	}
+	return ""
+}
+
+// CIDispatchAs returns the identity the [[repo]] block of repository
+// fullName ("owner/name", any case) names to start its CIDispatch workflow
+// (ci_dispatch_as), "" when none does: the look starts it as the watch's
+// poll identity, else its identity.
+func (c *Config) CIDispatchAs(fullName string) string {
+	if r := c.RepoFor(fullName); r != nil {
+		return r.CIDispatchAs
 	}
 	return ""
 }
