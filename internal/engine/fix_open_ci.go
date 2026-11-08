@@ -75,11 +75,39 @@ func (e *Engine) openCIStartOf(ctx context.Context, full string, pr store.PR, ci
 	if workflow == "" {
 		return "", ciStart{}
 	}
+	return workflow, e.ciStartAt(ctx, pr)
+}
+
+// ciStartAt is the look's start of pr's CI workflow at its head
+// (kvPRCIStart; zero: none, or an older head's).
+func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 	var s ciStart
 	if raw, ok := e.getKV(ctx, kvPRCIStart(pr.ID)); ok && json.Unmarshal([]byte(raw), &s) == nil && s.Head == pr.HeadSHA {
-		return workflow, s
+		return s
 	}
-	return workflow, ciStart{}
+	return ciStart{}
+}
+
+// ciRunAwaited reports whether the poll of repository full at now reads
+// the checks of pr, whose head the radar did not move, again for the
+// look's start of its CI workflow: GitHub took the start at the head less
+// than settle_max before now (the look's wait for the run) and the head's
+// stored checks still miss a required check (openCI). GitHub's rollup of
+// the head leaves the run out (its workflow_dispatch check suite), and a
+// check it creates passed in an older suite of the head (Completion) moves
+// neither the rollup's state nor its failed or pending counts, so without
+// this read the look waited on a check that had passed and said no run
+// came. One read a poll for such a PR at most (fetchDetails asks once),
+// ending with the wait or once the run shows; it starts nothing.
+func (e *Engine) ciRunAwaited(ctx context.Context, full string, pr store.PR, now time.Time) bool {
+	if e.cfg.CIDispatch(full) == "" {
+		return false
+	}
+	s := e.ciStartAt(ctx, pr)
+	if s.At.IsZero() || s.Failed != "" || !now.Before(s.At.Add(e.openSettle().max)) {
+		return false
+	}
+	return len(e.openCI(ctx, full, pr).missing) > 0
 }
 
 // openMissingCI is rule 11's verdict v of f's head, at which the required

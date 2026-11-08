@@ -266,7 +266,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	// Requests may be answered during the Details read: byNode serves its
 	// GitHub fields only from here on, and applyRadarPRs decides on the rows
 	// its upserts read.
-	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, full, rr.PRs, byNode)
+	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, full, rr.PRs, byNode, now)
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 
 	var missing []store.PR
@@ -308,11 +308,12 @@ func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRa
 // failure is reported once per distinct error (the next poll asks again).
 // A finished CI run does not move a PR's updatedAt: its checks are fetched
 // again when the rollup readCI read differs from the stored checks' or
-// those are not the head's, or when its failed or pending count differs
-// from the one the stored checks were read with (ciCountsMoved): a check
-// that fails on a head whose rollup failed already leaves the state as it
-// was.
-func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs []github.PRRadar, byNode map[string]store.PR) (map[int]github.PRDetails, map[int]bool) {
+// those are not the head's, or when its failed, pending or passed count
+// differs from the one the stored checks were read with (ciCountsMoved): a
+// check that fails on a head whose rollup failed already leaves the state
+// as it was. A PR whose start of the CI workflow waits for its run has its
+// checks fetched on every poll, whatever the rollup says (ciRunAwaited).
+func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs []github.PRRadar, byNode map[string]store.PR, now time.Time) (map[int]github.PRDetails, map[int]bool) {
 	var need []int
 	needed := map[int]bool{}
 	for _, p := range prs {
@@ -326,7 +327,9 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 			cur.AuthorAssociation == nil ||
 			cur.CI == nil || !cur.CI.ByWorkflowFile || cur.CI.SHA != p.HeadRefOid || (p.CIKnown && cur.CI.State != p.CIState) ||
 			(p.CIKnown && ciCountsMoved(cur.CI.Rollup, p.CICounts)) ||
-			cur.GHState != store.GHOpen || cur.GHUpdatedAt == nil || !cur.GHUpdatedAt.Equal(p.UpdatedAt) {
+			cur.GHState != store.GHOpen || cur.GHUpdatedAt == nil || !cur.GHUpdatedAt.Equal(p.UpdatedAt) ||
+			e.ciRunAwaited(ctx, full, cur, now) { // fix_open_ci.go
+
 			need = append(need, p.Number)
 			needed[p.Number] = true
 		}
@@ -629,13 +632,17 @@ func checkResult(c github.Check) store.CheckResult {
 }
 
 // ciCountsMoved reports whether the rollup's counts read now (CIStates)
-// have other failed or pending checks than the counts the stored checks
-// were read with (store.CIStatus.Rollup, the same GitHub counts, so a
-// superseded run counts in both); false when either is unknown (a zero
+// have other failed, pending or passed checks than the counts the stored
+// checks were read with (store.CIStatus.Rollup, the same GitHub counts, so
+// a superseded run counts in both); false when either is unknown (a zero
 // Total: a rollup GitHub gave no counts for, or checks stored before the
-// counts were read), which leaves the rollup state's comparison.
+// counts were read), which leaves the rollup state's comparison. A check
+// created passed (a run's report through the Checks API, such as a
+// required Completion) moves the passed count alone; one created skipped
+// moves nothing a reader needs.
 func ciCountsMoved(stored store.CheckCounts, now github.CICounts) bool {
-	return stored.Total > 0 && now.Total > 0 && (stored.Failed != now.Failed || stored.Pending != now.Pending)
+	return stored.Total > 0 && now.Total > 0 &&
+		(stored.Failed != now.Failed || stored.Pending != now.Pending || stored.Passed != now.Passed)
 }
 
 // prFromInput builds the PR row a new PR is about to get (for Classify; its

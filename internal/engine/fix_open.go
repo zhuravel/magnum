@@ -258,7 +258,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	if c := l.Conflict; c.Unchecked && c.Head == pr.HeadSHA {
 		f.mergeUnchecked = c.Base
 	}
-	f.ci = e.openCI(ctx, repo, pr)
+	f.ci = e.openCI(ctx, repo.FullName(), pr)
 	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
 	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
@@ -540,15 +540,14 @@ func (c openConflict) fixConflict(head string) fixConflict {
 	return fixConflict{base: c.Base, sha: c.Tip, paths: c.Paths}
 }
 
-// openCI is rule 11's CI of pr's head (openCIOf), with the checks the
-// configuration ignores left out, and the required entries that name only
+// openCI is rule 11's CI of pr's head, of repository full (openCIOf),
+// with the checks the configuration ignores left out, and the required entries that name only
 // such checks (seenRequired; none left: the rollup derived from the rest
 // decides, as without a list); an entry with no run at the head is missing
 // where GitHub requires it on the PR's base (enforcedMissing, which reads
 // the checks as GitHub gave them: an ignored one ran) or the repository's
 // [[repo]] list names it and its ci_dispatch is set.
-func (e *Engine) openCI(ctx context.Context, repo store.Repo, pr store.PR) openCI {
-	full := repo.FullName()
+func (e *Engine) openCI(ctx context.Context, full string, pr store.PR) openCI {
 	required, err := e.st.RequiredChecks(ctx, full, e.cfg.RequiredChecks(full))
 	if err != nil {
 		return openCI{pending: true}
