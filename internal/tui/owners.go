@@ -66,12 +66,12 @@ func ownerNote(owner string) string { return "owner: " + cmp.Or(owner, "all") }
 // repoInScope reports whether repository owner/name is in the repository
 // scope ("name" or "owner/name", case aside; "" is every repository).
 func repoInScope(owner, name, scope string) bool {
-	scope = strings.ToLower(strings.TrimSpace(scope))
+	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		return true
 	}
 	if strings.Contains(scope, "/") {
-		return scope == strings.ToLower(owner+"/"+name)
+		return strings.EqualFold(scope, owner+"/"+name)
 	}
-	return scope == strings.ToLower(name)
+	return strings.EqualFold(scope, name)
 }

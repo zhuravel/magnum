@@ -97,7 +97,7 @@ func TestTheFactoryTitleSaysTheOwnerScopeAsTheBoards(t *testing.T) {
 	}
 	mustContain(t, h.title(), "owner example · 4 hidden")
 	narrow, _ := renderFactory(h.m.homeFrame(), 50, 40, h.m.st, h.m.g, factoryNow)
-	title := strings.Split(ansi.Strip(narrow), "\n")[0]
+	title, _, _ := strings.Cut(ansi.Strip(narrow), "\n")
 	mustContain(t, title, "magnum factory · example · 4 hidden")
 	mustNotContain(t, title, "owner example")
 
