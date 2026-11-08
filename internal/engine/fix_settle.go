@@ -109,6 +109,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		data["head"], data["commits"] = target, len(rep.Pushed)
 		e.event(ctx, "info", subject, "fix.pushed", fmt.Sprintf("%s pushed %s: the head is %s", job.role.Name,
 			textx.Count(len(rep.Pushed), "commit", "commits"), textx.ShortSHA(target)), data)
+		e.notePush(ctx, job.pr.ID, target) // ci_dispatch.go: its CI starts after the grace
 	}
 	replied := "replied"
 	if counted {

@@ -185,6 +185,10 @@ type fakeGH struct {
 	// runsErr fails it. Its calls record "runs:<owner>/<repo>:<workflow>@<sha>".
 	runs    map[string][]github.WorkflowRun
 	runsErr error
+	// recent answers RecentRuns (newest first); recentErr fails it. Its
+	// calls record "recent_runs:<owner>/<repo>:<workflow>".
+	recent    []github.WorkflowRun
+	recentErr error
 	// replyErr fails ReplyToReviewComment.
 	replyErr error
 }
@@ -205,6 +209,17 @@ func (g *fakeGH) DispatchedRuns(ctx context.Context, owner, repo, workflow, sha 
 		return nil, g.runsErr
 	}
 	return slices.Clone(g.runs[sha]), nil
+}
+
+func (g *fakeGH) RecentRuns(ctx context.Context, owner, repo, workflow string) ([]github.WorkflowRun, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("recent_runs:%s/%s:%s", owner, repo, workflow))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.recentErr != nil {
+		return nil, g.recentErr
+	}
+	return slices.Clone(g.recent), nil
 }
 
 func (g *fakeGH) ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error) {

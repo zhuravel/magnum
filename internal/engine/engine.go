@@ -1218,6 +1218,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.continueBudgetHeld(ctx)
 	e.continuePauseHeld(ctx)   // fix_held.go: the held fixes the fixer's pause held, once it ended
 	e.endOpenHolds(ctx)        // open_hold.go: a PR whose hold ended goes on in this dispatch
+	e.ciAfterPushes(ctx)       // ci_dispatch.go: the CI of magnum's own pushes, before the look reads their starts
 	_ = e.autofixOpen(ctx)     // fix_open.go: a loop it starts reserves its PR before dispatch can claim it
 	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)

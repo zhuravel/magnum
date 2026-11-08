@@ -181,6 +181,7 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 	if err := pg.PushLeaseGitHubAs(ctx, dir, job.repo.Owner, job.repo.Name, merge, branch, head, env); err != nil {
 		return "", fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
 	}
+	e.notePush(ctx, job.pr.ID, merge) // ci_dispatch.go: its CI starts after the grace
 	if err := e.resyncFixSlot(ctx, job, merge); err != nil {
 		return "", fmt.Errorf("slot %s to the merge %s: %w", job.slot.Name, textx.ShortSHA(merge), err)
 	}

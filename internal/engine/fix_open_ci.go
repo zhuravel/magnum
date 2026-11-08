@@ -26,10 +26,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -304,71 +302,22 @@ func missingWhat(missing []string) string {
 // (rule 11 asked: v.dispatch), and returns the start as the verdict reads
 // it; ok is false when it did nothing and the next look asks again (the
 // head's file list is not read yet, or the record could not be written).
-// It refuses, once per head, a PR that changes its own workflows or
-// actions or whose files GitHub did not list whole, and one whose branch
-// it does not know. Else it records the start (kvPRCIStart) before it
-// asks GitHub as [[repo]] ci_dispatch_as, else the watch's poll identity
-// (the identity the look reads the PR and its budget with), else its
-// identity, and records how it ended, with an event naming that identity:
-// fix.open_ci_dispatch, fix.open_ci_dispatch_failed (the status only: the
-// message of GitHub's refusal can name the branch, the PR's text; a 403
-// says that the identity cannot start workflows, cannotStartWorkflows) or
+// The start itself, its refusals, its record and its identity are
+// startCI's (ci_dispatch.go), with the look's events:
+// fix.open_ci_dispatch, fix.open_ci_dispatch_failed or
 // fix.open_ci_dispatch_refused.
 func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, workflow, what string) (ciStart, bool) {
-	s := ciStart{Head: pr.HeadSHA, Workflow: workflow}
-	files, listed, err := e.st.PRFilesOf(ctx, pr.ID)
-	switch {
-	case err != nil:
-		e.warnUnlessStopped(ctx, err, "autofix open: the PR's files before starting its CI", "pr", pr.ID)
-		return ciStart{}, false
-	case !listed || files.HeadSHA != pr.HeadSHA:
-		return ciStart{}, false // the poll lists them with its next Details read
-	case slices.ContainsFunc(files.Paths, changesWorkflow):
-		s.Refused = "the PR changes its own workflows or actions"
-	case files.Truncated:
-		s.Refused = "GitHub did not list every file of the PR"
-	case deref(pr.HeadRef) == "":
-		s.Refused = "the PR's branch is not known"
-	}
-	subject, short := prSubject(repo, pr.Number), textx.ShortSHA(pr.HeadSHA)
-	identity := e.ciDispatchIdentity(repo.FullName(), w)
-	data := map[string]any{"head": pr.HeadSHA, "workflow": workflow, "identity": identity}
-	if s.Refused != "" {
-		if !e.writeCIStart(ctx, pr, s) {
-			return ciStart{}, false
-		}
-		e.event(ctx, "info", subject, "fix.open_ci_dispatch_refused",
-			fmt.Sprintf("%s did not run at %s; magnum does not start %s: %s", what, short, workflow, s.Refused), data)
-		return s, true
-	}
-	s.At = e.now()
-	if !e.writeCIStart(ctx, pr, s) {
-		return ciStart{}, false
-	}
-	gh := e.gh(identity)
-	d, ok := gh.(workflowDispatcher)
-	if gh == nil || !ok {
-		s.Failed = "no GitHub client of " + identity
-	} else if err := d.DispatchWorkflow(ctx, repo.Owner, repo.Name, workflow, deref(pr.HeadRef)); err != nil {
-		s.Failed = "the call failed"
-		var api *github.APIError
-		if errors.As(err, &api) && api.Status != 0 {
-			s.Failed = fmt.Sprintf("GitHub answered HTTP %d", api.Status)
-		}
-		if errors.Is(err, github.ErrForbidden) {
-			s.Failed += ": " + e.cannotStartWorkflows(identity)
-		}
-	}
-	e.writeCIStart(ctx, pr, s)
-	if s.Failed != "" {
-		data["failed"] = s.Failed
-		e.event(ctx, "warn", subject, "fix.open_ci_dispatch_failed",
-			fmt.Sprintf("%s did not run at %s; magnum's start of %s as %s failed: %s", what, short, workflow, identity, s.Failed), data)
-		return s, true
-	}
-	e.event(ctx, "info", subject, "fix.open_ci_dispatch",
-		fmt.Sprintf("%s did not run at %s; magnum started %s on the PR's branch as %s", what, short, workflow, identity), data)
-	return s, true
+	lead := what + " did not run at " + textx.ShortSHA(pr.HeadSHA)
+	return e.startCI(ctx, repo, w, pr, workflow, ciWords{
+		kind:    "fix.open_ci_dispatch",
+		refused: func(why string) string { return fmt.Sprintf("%s; magnum does not start %s: %s", lead, workflow, why) },
+		failed: func(identity, why string) string {
+			return fmt.Sprintf("%s; magnum's start of %s as %s failed: %s", lead, workflow, identity, why)
+		},
+		started: func(identity string) string {
+			return fmt.Sprintf("%s; magnum started %s on the PR's branch as %s", lead, workflow, identity)
+		},
+	})
 }
 
 // cannotStartWorkflows says why GitHub refused identity a workflow start
