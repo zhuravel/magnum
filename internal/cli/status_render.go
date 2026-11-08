@@ -420,7 +420,8 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 // and how it went (with the factory-origin misses it stored, when any),
 // then what a job will take, each count left out when it is none: the
 // skill editor's misses and declined findings, the notes curation's
-// misses, and the PRs waiting for the settle delay.
+// misses (a job the config turns off says so, and what runs it on
+// request), and the PRs waiting for the settle delay.
 func statusRetroText(ro statusRetro, now time.Time) string {
 	s := "never"
 	if l := ro.Last; l != nil {
@@ -452,9 +453,15 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 		}
 		if len(editor) > 0 {
 			s += " · " + strings.Join(editor, " and ") + " for the skill editor"
+			if ro.EditorOff {
+				s += " (off: `magnum learn --propose` runs it)"
+			}
 		}
 		if in.NotesMisses > 0 {
 			s += " · " + textx.Count(in.NotesMisses, "miss", "misses") + " for the notes curation"
+			if ro.CurationOff {
+				s += " (off: `magnum notes <repo> --curate` runs it)"
+			}
 		}
 	}
 	if ro.Settling != nil && *ro.Settling > 0 {

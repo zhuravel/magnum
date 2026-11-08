@@ -338,15 +338,18 @@ type statusCodexUsage struct {
 // statusRetro is the learning loop: whether [learn] schedules the daily
 // retro, what the last retro did (engine.KVRetroLast), what the jobs that
 // learn from it will take now (engine.LearnInputs: the skill editor's
-// misses and declined findings, the notes curation's misses), and how many
-// closed PRs wait for [learn] settle before a retro takes them. It is left
-// out when [learn] is off and no retro ever ran.
+// misses and declined findings, the notes curation's misses) and which of
+// those jobs is off, so that only you can run it, and how many closed PRs
+// wait for [learn] settle before a retro takes them. It is left out when
+// [learn] is off and no retro ever ran.
 type statusRetro struct {
-	Enabled  bool                 `json:"enabled"`
-	Last     *engine.RetroSummary `json:"last,omitempty"`
-	Inputs   *engine.LearnInputs  `json:"inputs,omitempty"`   // nil when the registry could not be read
-	Settling *int                 `json:"settling,omitempty"` // nil when none wait (or no settle delay)
-	Settle   string               `json:"settle,omitempty"`   // [learn] settle, when PRs wait for it
+	Enabled     bool                 `json:"enabled"`
+	Last        *engine.RetroSummary `json:"last,omitempty"`
+	Inputs      *engine.LearnInputs  `json:"inputs,omitempty"`       // nil when the registry could not be read
+	EditorOff   bool                 `json:"editor_off,omitempty"`   // [learn] editor is off: only `magnum learn --propose` runs it
+	CurationOff bool                 `json:"curation_off,omitempty"` // [notes] curate is empty: only `magnum notes <repo> --curate` runs one
+	Settling    *int                 `json:"settling,omitempty"`     // nil when none wait (or no settle delay)
+	Settle      string               `json:"settle,omitempty"`       // [learn] settle, when PRs wait for it
 }
 
 // statusLearn is the self-improving loop (`magnum learn`): its newest skill

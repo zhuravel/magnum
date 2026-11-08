@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -42,8 +43,9 @@ func statusRetroSeed(t *testing.T, st *store.Store) {
 	}
 }
 
-// statusRetroInputs is the retro line's counts of statusRetroSeed's rows.
-const statusRetroInputs = " · 1 miss for the skill editor · 1 miss for the notes curation"
+// statusRetroInputs is the retro line's counts of statusRetroSeed's rows
+// under the built-in config: the skill editor off, a notes curation on misses.
+const statusRetroInputs = " · 1 miss for the skill editor (off: `magnum learn --propose` runs it) · 1 miss for the notes curation"
 
 func statusRetroOut(t *testing.T, d statusDeps) (statusReport, string) {
 	t.Helper()
@@ -117,6 +119,7 @@ func TestStatusRetroLineWordsOneAndFailures(t *testing.T) {
 // keeps the rest.
 func TestStatusRetroLineCountsOnlyWhatAJobWillUse(t *testing.T) {
 	_, st, d, now := statusFixture(t)
+	d.Config.Learn.Editor = true
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 1,
 		Declines: 4, Declined: 3})
 	_, pr := inspSeedPR(t, st, "talkable/talkable", 11801, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
@@ -166,6 +169,36 @@ func TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses(t *testing.T) {
 	actContains(t, out, "retro:    2h ago, 1 PR, 1 classified, 1 factory-origin miss\n")
 }
 
+// The skill editor is off by default ([learn] editor), and then no job
+// takes its inputs: only `magnum learn --propose` does. With [notes] curate
+// empty a notes curation runs only on demand. The line says so of each
+// count whose job is off, rather than name a job that never starts.
+func TestStatusRetroLineSaysWhenTheJobOfACountIsOff(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	d.Config.Learn.Enabled = true
+	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 3})
+	statusRetroSeed(t, st)
+	_, pr := inspSeedPR(t, st, "talkable/talkable", 11802, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	declineSeed(t, st, pr, 1, store.Decline{Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: store.MissScopeGeneral,
+		Lesson: "l", Match: []string{"x"}})
+
+	d.Config.Learn.Editor, d.Config.Notes.Curate = false, config.CurateTriggers{}
+	r, out := statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 3 classified"+
+		" · 1 miss and 1 declined finding for the skill editor (off: `magnum learn --propose` runs it)"+
+		" · 1 miss for the notes curation (off: `magnum notes <repo> --curate` runs it)\n")
+	if r.Retro == nil || !r.Retro.EditorOff || !r.Retro.CurationOff {
+		t.Errorf("retro = %+v", r.Retro)
+	}
+
+	d.Config.Learn.Editor, d.Config.Notes.Curate = true, config.CurateTriggers{config.CurateMisses}
+	r, out = statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 3 classified · 1 miss and 1 declined finding for the skill editor · 1 miss for the notes curation\n")
+	if r.Retro == nil || r.Retro.EditorOff || r.Retro.CurationOff {
+		t.Errorf("retro = %+v", r.Retro)
+	}
+}
+
 func TestStatusRetroLineSaysWhyARetroStoppedAndCleansIt(t *testing.T) {
 	_, st, d, now := statusFixture(t)
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-50 * time.Minute), Finished: now.Add(-45 * time.Minute), PRs: 2, Classified: 1,
@@ -199,6 +232,7 @@ func TestStatusJSONCarriesTheRetro(t *testing.T) {
 				EditorDeclines int `json:"editor_declines"`
 				NotesMisses    int `json:"notes_misses"`
 			} `json:"inputs"`
+			EditorOff bool `json:"editor_off"`
 			NewMisses *int `json:"new_misses"`
 		} `json:"retro"`
 	}
@@ -206,7 +240,7 @@ func TestStatusJSONCarriesTheRetro(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.Retro.Last.Run != "20261003-100000" || r.Retro.Last.PRs != 3 || r.Retro.Inputs == nil || r.Retro.Inputs.EditorMisses != 1 ||
-		r.Retro.Inputs.EditorDeclines != 0 || r.Retro.Inputs.NotesMisses != 1 || r.Retro.NewMisses != nil || r.Retro.Enabled {
+		r.Retro.Inputs.EditorDeclines != 0 || r.Retro.Inputs.NotesMisses != 1 || r.Retro.NewMisses != nil || r.Retro.Enabled || !r.Retro.EditorOff {
 		t.Errorf("retro = %+v", r.Retro)
 	}
 	if code := f.run("status"); code != 0 || !strings.Contains(f.Out.String(), "retro:    ") || !strings.Contains(f.Out.String(), "3 PRs, 2 classified"+statusRetroInputs) {

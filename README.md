@@ -5376,7 +5376,10 @@ for the notes curation": the `general` misses of P0 to P2 and the `general` find
 and how many pull requests wait for the settle delay, and every step is a `retro.*` event (`magnum logs
 <ref>`) that never quotes a comment. A `general` P3 miss and a declined finding that stands (verdict `right`:
 the author declined a correct finding) need nothing from you or from a job, so the line does not count
-them; `magnum misses` lists them.
+them; `magnum misses` lists them. A job the config turns off takes nothing, so its count says so and
+names what runs it on request: with `[learn] editor` off (the default) "8 declined findings for the skill
+editor (off: `magnum learn --propose` runs it)", with `[notes] curate` empty "3 misses for the notes
+curation (off: `magnum notes <repo> --curate` runs it)" (`editor_off` and `curation_off` in the JSON).
 
 **On a pull request the factory published.** The factory's local review (Factory, above) passed the change
 before anyone else saw it, so a comment that round did not catch is the factory's miss, whatever Magnum's

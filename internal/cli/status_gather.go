@@ -338,9 +338,11 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 }
 
 // statusGatherRetro fills the retro: the last one's summary and what the
-// jobs that learn from it will take now (engine.CountLearnInputs). A retro
-// nobody asked for (no [learn] enabled, none ever ran), an unreadable
-// summary or a failed count is absence, not an error.
+// jobs that learn from it will take now (engine.CountLearnInputs), and
+// which of them the config turns off: the skill editor with [learn] editor
+// off, the notes curation with [notes] curate empty. A retro nobody asked
+// for (no [learn] enabled, none ever ran), an unreadable summary or a
+// failed count is absence, not an error.
 func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *statusReport) {
 	ro := &statusRetro{Enabled: d.Config != nil && d.Config.Learn.Enabled}
 	if v, ok := kv.get(engine.KVRetroLast); ok {
@@ -354,6 +356,9 @@ func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *status
 	}
 	if in, err := engine.CountLearnInputs(ctx, d.Store); err == nil {
 		ro.Inputs = &in
+		if d.Config != nil {
+			ro.EditorOff, ro.CurationOff = !d.Config.Learn.Editor, len(d.Config.Notes.Curate) == 0
+		}
 	}
 	if d.Config != nil && d.Config.Learn.Settle.Duration > 0 {
 		lc, now := d.Config.Learn, r.GeneratedAt
