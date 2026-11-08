@@ -9,7 +9,10 @@ package engine
 // report: fixerCalls), your own word there after the call is a decision
 // (decisionIn): the external file marks the thread `decision` with your
 // reply's link, it counts as unanswered, and the fixer builds it (the fix,
-// or the won't-fix reply you chose; skills/magnum-fix/SKILL.md). Only your
+// or the won't-fix reply you chose; skills/magnum-fix/SKILL.md). A call in
+// one of magnum's own threads (an author's call of its review, a decline of
+// a blocking finding) is read the same way, and the file lists that thread
+// under its decisions, since it is no other reviewer's. Only your
 // reply counts, never another reviewer's, a bot's or the fixer's own (its
 // replies carry the fix marker), and only after the fixer's call for that
 // same thread: a fix-marked reply of the fixer's after the call closes it.
@@ -131,13 +134,6 @@ func (e *Engine) fixBusy(ctx context.Context, prID int64) func(time.Time) bool {
 	}
 }
 
-// decisionCall reports whether c, a call of a fix job's message, asks the
-// author to decide in another reviewer's thread (attention.DeclinedCall;
-// "a human's" in the older words).
-func decisionCall(c attention.FixCall) bool {
-	return c.Thread != "" && (strings.HasPrefix(c.Action, "decide another reviewer's ") || strings.HasPrefix(c.Action, "decide a human's "))
-}
-
 // kvPRFixCalls holds when the fixer made each call that the PR's attention
 // of kind fix asks the author to decide (JSON: the id of each thread's
 // first comment, then the time), written with that attention
@@ -147,8 +143,9 @@ func decisionCall(c attention.FixCall) bool {
 // date them at its end, and make a decision made before it an answer.
 func kvPRFixCalls(prID int64) string { return fmt.Sprintf("pr.%d.fix_calls", prID) }
 
-// fixerCalls are the calls the fixer left the author in other reviewers'
-// threads that the loop's record still asks for (decisionThreads), by the
+// fixerCalls are the calls the fixer left the author to decide, in other
+// reviewers' threads and in magnum's own, that the loop's record still asks
+// for (decisionThreads), by the
 // id of each thread's first comment, with when each was made: as recorded
 // (kvPRFixCalls), else at the time of the fix run whose report the
 // attention names (an attention raised before the record). None while the
@@ -177,7 +174,8 @@ func (e *Engine) fixerCalls(ctx context.Context, pr store.PR) map[int64]time.Tim
 // decisionThreads are the threads, by the id of each one's first comment,
 // in which the PR's attention of kind fix, while it asks for the fixer's
 // calls (attention.FixAsks), asks the author to decide a call the fixer left
-// them: each call it names that asks for a decision (decisionCall; one
+// them: each call it names that asks for a decision (attention.DecisionCall,
+// in magnum's thread or another reviewer's; one
 // magnum put back for a decision the fixer did not build, decisionsLeft, or
 // kept after a failure, keepDecisions, among them), and each entry of its
 // report's "## Needs you" that it still names (FixNeedsAsked) and the fixer
@@ -199,7 +197,7 @@ func (e *Engine) decisionThreads(ctx context.Context, pr store.PR) (threads []in
 		}
 	}
 	for _, c := range attention.Explain(attention.KindFix, msg, "").NeedsYou {
-		if decisionCall(c) {
+		if attention.DecisionCall(c) {
 			add(c.Thread)
 		}
 	}
@@ -334,7 +332,7 @@ func (e *Engine) decisionsLeft(ctx context.Context, job *fixJob, entries []strin
 	if !ok {
 		return entries, nil
 	}
-	decided := slices.DeleteFunc(slices.Clone(x.Threads), func(t externalThread) bool { return !t.Decision })
+	decided := x.decisions()
 	if len(decided) == 0 {
 		return entries, nil
 	}
@@ -423,7 +421,7 @@ func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]b
 }
 
 // keepDecisions is msg, the attention a fix job raises over old, the
-// PR's attention it replaces, with old's decision calls (decisionCall)
+// PR's attention it replaces, with old's decision calls (attention.DecisionCall)
 // that open says are still open after msg's own words, when msg asks for no
 // call of its own (a failed run, the cap): a person's decision never closes
 // on a failure, and the next `magnum fix` finds those calls still open
@@ -438,7 +436,7 @@ func keepDecisions(old, msg string, open func(thread string) bool) string {
 	}
 	var keep []attention.FixCall
 	for _, c := range attention.Explain(attention.KindFix, old, "").NeedsYou {
-		if decisionCall(c) && open(c.Thread) {
+		if attention.DecisionCall(c) && open(c.Thread) {
 			keep = append(keep, c)
 		}
 	}
@@ -538,9 +536,9 @@ func checkDecisions(decide []FixDecision) error {
 // a PR that is not yours (the reply goes out as you), a loop that runs, a
 // fix held for later, a drain for a restart (the reply would wait with the
 // fix), a GitHub budget below the floor, and a thread in which the fixer
-// left you no call that is still open (the other reviewers' items, read
-// now: fixerCalls through readExternal). The reply goes out as your gh
-// identity (decideIdentity).
+// left you no call that is still open (another reviewer's or magnum's own,
+// read now: fixerCalls through readExternal). The reply goes out as your
+// gh identity (decideIdentity).
 func (e *Engine) decideCheck(ctx context.Context, repo store.Repo, pr store.PR, decide []FixDecision) (decidePlan, error) {
 	if err := checkDecisions(decide); err != nil {
 		return decidePlan{}, err
@@ -587,11 +585,12 @@ func (e *Engine) decideCheck(ctx context.Context, repo store.Repo, pr store.PR, 
 	plan := decidePlan{decide: decide, login: login, client: client, read: read, posted: map[int64]string{}}
 	for _, d := range decide {
 		i := slices.IndexFunc(read.items.Threads, func(t externalThread) bool { return t.CommentID == d.Thread })
-		if i < 0 || !read.items.Threads[i].called {
+		if (i < 0 || !read.items.Threads[i].called) && !read.items.called[d.Thread] {
 			return decidePlan{}, fmt.Errorf("PR #%d: the fixer left you no call in thread %d (`magnum status %s` lists what it left); nothing was posted",
 				pr.Number, d.Thread, ref)
 		}
-		if t := read.items.Threads[i]; t.Decision {
+		if j := slices.IndexFunc(read.items.decisions(), func(t externalThread) bool { return t.CommentID == d.Thread }); j >= 0 {
+			t := read.items.decisions()[j]
 			body, _ := excerptOf(d.Text)
 			if slices.ContainsFunc(t.Comments, func(c externalComment) bool { return c.URL == t.DecisionURL && c.Body == body }) {
 				plan.posted[d.Thread] = t.DecisionURL // this very reply is your decision there already

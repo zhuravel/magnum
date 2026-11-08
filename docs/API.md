@@ -3720,6 +3720,11 @@ func CLIChange(kind string, at, now time.Time) string
     role's start ("start <role>: …"), so a command's output that ends the same
     way says nothing of a CLI.
 
+func DecisionCall(c FixCall) bool
+    DecisionCall reports whether c asks the author to decide in its thread:
+    a DeclinedCall, in one of magnum's threads or in another reviewer's ("a
+    human's" in the older words). `magnum fix --decide` answers it.
+
 func FixAsks(msg string) bool
     FixAsks reports whether msg, a fix job's message, asks the author for the
     calls of what its fixer left them, whatever the loop's own words before
@@ -3791,12 +3796,11 @@ func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCal
 func FixDecisionCalls(msg string) ([]FixCall, bool)
     FixDecisionCalls are the calls of msg, a fix job's message, when it asks for
     the fixer's calls alone (fixDoneFits: none of the loop's own words before
-    them and nothing under them), every one a DeclinedCall in another reviewer's
-    thread ("a human's" in the older words), with no finding in the older words
-    beside them; ok is false otherwise. Each asks the author to decide in that
-    thread, and an attention of these alone is answered once the author decided
-    each one there: the engine then lets a loop start over it and lifts it once
-    the fixer built every decision.
+    them and nothing under them), every one a DeclinedCall (DecisionCall),
+    with no finding in the older words beside them; ok is false otherwise.
+    Each asks the author to decide in that thread, and an attention of these
+    alone is answered once the author decided each one there: the engine then
+    lets a loop start over it and lifts it once the fixer built every decision.
 
 func FixedCall(thread, url, sha string, magnums bool) FixCall
     FixedCall is the call of a finding the fixer fixed in commit sha but did

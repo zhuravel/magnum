@@ -3404,6 +3404,12 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   or use `--decide`), and neither it nor an unmarked comment of Magnum's logins after your decision hides
   that decision. Magnum records when the fixer made each call as it raises the attention that asks for it,
   so a later run at the same head (one report per head) never makes the call newer than your decision.
+  A call to decide one of Magnum's own findings ("decide magnum's P2 on …": a blocking finding the fixer
+  declined, or an author's call of the review, whose options the fixer's report names) is answered the same
+  way: your reply in Magnum's thread after the call is a decision, which `external-threads.json` lists under
+  `decisions` (the thread is no other reviewer's), and the fixer builds it, the option you chose as a fix or
+  a "Won't fix" reply with your reason, in place of asking again. Under `autofix = "open"` the look starts
+  no loop on such a decision by itself: `--decide` or `magnum fix` hands it to the fixer.
   `magnum fix <ref> --decide <thread>="<your reply>"` (repeatable; the thread by its comment id or its link)
   does both in one step: it shows each reply and asks y/N (`--yes` does not), posts your reply in the thread
   as you (the gh identity the fix role uses, or the watch's operator identity when the fixer is an App), then

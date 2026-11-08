@@ -79,6 +79,14 @@ type externalItems struct {
 	FixerLogins  []string         `json:"fixer_logins"`
 	Threads      []externalThread `json:"threads"`
 	Conversation []externalRemark `json:"conversation"`
+	// Decisions are magnum's own threads that hold the author's decision on
+	// a call the fixer left them there (fix_decide.go), as a thread of
+	// Threads holds one: Decision set, at DecisionURL.
+	Decisions []externalThread `json:"decisions,omitempty"`
+	// called are magnum's own threads, by their first comment's id, in
+	// which the fixer's call is still open (not in the file), which `magnum
+	// fix --decide` answers.
+	called map[int64]bool
 }
 
 // externalThread is an unresolved review thread another reviewer started:
@@ -249,7 +257,10 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // in anyone else's comment answers nothing), unless it holds the author's
 // decision (decisionIn): their own word after the fixer's call there
 // (in.Calls) while that call is open, which no word the fixer may have
-// written since hides (in.Busy, under a gh fixer). A review body or conversation
+// written since hides (in.Busy, under a gh fixer). One of magnum's own
+// threads is no item, but one holding such a call: it is called while the
+// call is open, and with the author's decision there it is one of the
+// file's decisions (Decisions), read the same way. A review body or conversation
 // comment is another reviewer's when a reviewer other than the author and
 // magnum's logins wrote it, it says something (the body of a review that
 // comments or requests changes: remarkState) and it came after the author's last own
@@ -279,30 +290,40 @@ func externalOf(in externalInput) (externalItems, int) {
 	outside := 0
 	for _, t := range in.Threads {
 		all := t.AllComments()
-		if t.Resolved || len(all) == 0 || isOwn(all[0].AuthorLogin, all[0].AuthorType) || byAuthor(all[0].AuthorLogin, all[0].AuthorType) {
-			continue // resolved, or magnum's or the author's own thread
+		if t.Resolved || len(all) == 0 || byAuthor(all[0].AuthorLogin, all[0].AuthorType) {
+			continue // resolved, or the author's own thread
 		}
 		cs := slices.DeleteFunc(slices.Clone(all), func(c github.ThreadComment) bool {
 			return !reviewer(c.AuthorLogin, c.AuthorType, c.AuthorAssociation)
 		})
+		if isOwn(all[0].AuthorLogin, all[0].AuthorType) { // magnum's own: only the fixer's call there makes it the file's
+			if at, ok := in.Calls[all[0].ID]; ok {
+				if called, d := decisionIn(cs, at, byAuthor, isOwn, busy); called {
+					if x.called == nil {
+						x.called = map[int64]bool{}
+					}
+					x.called[all[0].ID] = true
+					if d != nil {
+						et := threadOf(t, all, cs, name)
+						et.Decision, et.DecisionURL = true, d.URL
+						x.Decisions = append(x.Decisions, et)
+					}
+				}
+			}
+			continue
+		}
 		outside += len(all) - len(cs)
 		if len(cs) == 0 || cs[0].ID != all[0].ID {
 			continue // an outsider started it
 		}
-		root, last := cs[0], cs[len(cs)-1]
-		answered := byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsFixReply(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
-		et := externalThread{CommentID: root.ID, URL: root.URL, Path: t.Path, Line: cmp.Or(t.Line, t.OriginalLine), Outdated: t.Outdated,
-			Answered: answered, Comments: []externalComment{}, Omitted: max(t.CommentCount-len(all), 0)}
-		if at, ok := in.Calls[root.ID]; ok {
+		last := cs[len(cs)-1]
+		et := threadOf(t, all, cs, name)
+		et.Answered = byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsFixReply(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
+		if at, ok := in.Calls[et.CommentID]; ok {
 			var d *github.ThreadComment
 			if et.called, d = decisionIn(cs, at, byAuthor, isOwn, busy); d != nil {
 				et.Decision, et.Answered, et.DecisionURL = true, false, d.URL
 			}
-		}
-		for _, c := range cs {
-			ec := externalComment{ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt), Fix: postreview.IsFixReply(c.Body)}
-			ec.Body, ec.Truncated = excerptOf(c.Body)
-			et.Comments = append(et.Comments, ec)
 		}
 		x.Threads = append(x.Threads, et)
 	}
@@ -368,6 +389,21 @@ func externalOf(in externalInput) (externalItems, int) {
 		x.Conversation = append(x.Conversation, it.r)
 	}
 	return x, outside
+}
+
+// threadOf is the file's thread t, all its comments GitHub listed and cs
+// the reviewers' among them (the first is its root), each comment's author
+// named by name; not answered, and with no decision.
+func threadOf(t github.Thread, all, cs []github.ThreadComment, name func(login, typ string) string) externalThread {
+	root := cs[0]
+	et := externalThread{CommentID: root.ID, URL: root.URL, Path: t.Path, Line: cmp.Or(t.Line, t.OriginalLine), Outdated: t.Outdated,
+		Comments: []externalComment{}, Omitted: max(t.CommentCount-len(all), 0)}
+	for _, c := range cs {
+		ec := externalComment{ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt), Fix: postreview.IsFixReply(c.Body)}
+		ec.Body, ec.Truncated = excerptOf(c.Body)
+		et.Comments = append(et.Comments, ec)
+	}
+	return et
 }
 
 // editedAt is the file's edited_at of a remark made at made and last
@@ -443,9 +479,18 @@ type externalRead struct {
 }
 
 // decided reports whether the read shows the author's decision in the
-// thread whose first comment is thread (externalThread.Decision).
+// thread whose first comment is thread (externalThread.Decision), another
+// reviewer's or magnum's own.
 func (r *externalRead) decided(thread int64) bool {
-	return slices.ContainsFunc(r.items.Threads, func(t externalThread) bool { return t.CommentID == thread && t.Decision })
+	return slices.ContainsFunc(r.items.decisions(), func(t externalThread) bool { return t.CommentID == thread })
+}
+
+// decisions are the threads of x that hold the author's decision on a call
+// the fixer left them: other reviewers' (Threads, Decision set), then
+// magnum's own (Decisions).
+func (x externalItems) decisions() []externalThread {
+	out := slices.DeleteFunc(slices.Clone(x.Threads), func(t externalThread) bool { return !t.Decision })
+	return append(out, x.Decisions...)
 }
 
 // externalReadOf is the read of in at head: the file's content
@@ -838,10 +883,8 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 	}
 	decisions := map[string]bool{}
 	if x, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath))); ok {
-		for _, t := range x.Threads {
-			if t.Decision {
-				decisions[t.DecisionURL] = true
-			}
+		for _, t := range x.decisions() {
+			decisions[t.DecisionURL] = true
 		}
 	}
 	asFixer := e.sinceFixStart(ctx, job)

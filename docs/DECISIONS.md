@@ -3676,6 +3676,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   fixes still needs the operator). Tests, failing first: TestAConflictTheFixerMergedAndPushedAsksNothing in
   engine and a case of TestTheFixSkillMergesTheBaseWhenThePRConflicts in agents.
 
+- **`magnum fix --decide` takes magnum's own threads too** (2026-11-08, the audit of what waits on the
+  operator, approved by the operator; widens "Your decision on the fixer's call is the fixer's work, not an
+  answer" to magnum's threads, and keeps its "A person's decision never closes on the fixer's word alone").
+  On an own PR (2026-11-07) the fixer left the operator magnum's P3 whose **Fix** ended "This is the author's
+  call." and asked which of two options to take; `--decide` refused his choice, since only "decide another
+  reviewer's" calls were decisions (`decisionCall`, `attention.FixDecisionCalls`) and `decideCheck` looked
+  for the thread in the external file, which lists only threads other reviewers started. The way out was a
+  reply on GitHub, a poll and `magnum fix --done`, and nothing built the option he chose. Now a "decide
+  magnum's" call is a decision call as well (`attention.DecisionCall`, which the engine uses for both), so
+  `fixerCalls` finds it through the PR's attention and dates it as before; `externalOf` reads magnum's own
+  thread holding such a call the same way (`decisionIn`), keeps it out of `threads` (it is no other
+  reviewer's: the look's items, `readThreadOwners` and the counts stay as they were), marks it called while
+  the call is open, and lists it under the file's new `decisions` once the author's word there came after
+  the call. `--decide` takes a thread either holds; the skill builds a `decisions` thread as one with
+  `decision` set (the chosen option as a fix and a `Fixed in` reply, or `Won't fix` with the author's reason,
+  "(decided at <link>)"), whatever its policy says of the finding, an author's call included. The settle's
+  `decisionsLeft` and the unmarked-reply look read `decisions` beside the decided threads, so a decision
+  GitHub shows no reply of the fixer's in goes back to the operator as "decide magnum's finding on
+  <path>:<line>", one it shows lifts an attention of decision calls alone (`liftDecided`), and a failed run
+  or the cap keeps magnum's decision calls as it keeps the others' (`keepDecisions`). Not
+  done: the look of `autofix = "open"` starting by itself on a decision in magnum's thread (its items carry
+  no such decision; `--decide` or `magnum fix` hands it over). Rejected: listing magnum's thread among
+  `threads` (every reader of that list takes it as another reviewer's, and the look would count it as a
+  person's or a bot's item). Tests, failing first: TestFixDecideTakesMagnumsOwnAuthorsCall in engine, the
+  three-call case of TestFixDecisionCallsAreTheFixersDecisionsAlone in attention, and two sentences of
+  TestTheFixSkillBuildsTheAuthorsDecision in agents.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

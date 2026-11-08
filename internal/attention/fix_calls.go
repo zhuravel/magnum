@@ -88,12 +88,12 @@ func ConflictCall(paths []string, url string) FixCall {
 
 // FixDecisionCalls are the calls of msg, a fix job's message, when it asks
 // for the fixer's calls alone (fixDoneFits: none of the loop's own words
-// before them and nothing under them), every one a DeclinedCall in another
-// reviewer's thread ("a human's" in the older words), with no finding in
-// the older words beside them; ok is false otherwise. Each asks the author
-// to decide in that thread, and an attention of these alone is answered once
-// the author decided each one there: the engine then lets a loop start over
-// it and lifts it once the fixer built every decision.
+// before them and nothing under them), every one a DeclinedCall
+// (DecisionCall), with no finding in the older words beside them; ok is
+// false otherwise. Each asks the author to decide in that thread, and an
+// attention of these alone is answered once the author decided each one
+// there: the engine then lets a loop start over it and lifts it once the
+// fixer built every decision.
 func FixDecisionCalls(msg string) ([]FixCall, bool) {
 	line, rest, _ := strings.Cut(msg, "\n")
 	if !fixDoneFits(line, rest) {
@@ -104,11 +104,26 @@ func FixDecisionCalls(msg string) ([]FixCall, bool) {
 		return nil, false
 	}
 	for _, c := range calls {
-		if c.Thread == "" || !strings.HasPrefix(c.Action, "decide another reviewer's ") && !strings.HasPrefix(c.Action, "decide a human's ") {
+		if !DecisionCall(c) {
 			return nil, false
 		}
 	}
 	return calls, true
+}
+
+// DecisionCall reports whether c asks the author to decide in its thread:
+// a DeclinedCall, in one of magnum's threads or in another reviewer's ("a
+// human's" in the older words). `magnum fix --decide` answers it.
+func DecisionCall(c FixCall) bool {
+	if c.Thread == "" {
+		return false
+	}
+	for _, whose := range []string{"magnum's", "another reviewer's", "a human's"} {
+		if strings.HasPrefix(c.Action, "decide "+whose+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // maxConflictPaths bounds the paths a conflict call names, as the fix

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -647,4 +648,120 @@ func TestAnAttentionWithMoreThanDecisionsStillNeedsYou(t *testing.T) {
 	if callsDecided(msg, func(int64) bool { return false }) {
 		t.Error("an attention whose call you did not decide counts as decided")
 	}
+}
+
+// magnumsCallThread is magnum's thread on PR #2 whose finding's Fix ends
+// "This is the author's call.": the fixer leaves it to you.
+const magnumsCallThread = 4302866759
+
+// magnumsCall is the call the fixer's "not fixed." entry in magnum's
+// thread makes.
+const magnumsCall = "decide magnum's P2 on app/models/offer.rb:42: the fixer declined it; reply won't fix at " +
+	prPage + "#discussion_r4302866759, or `magnum fix talkable/talkable#2` sends it back"
+
+// fixLeftMagnumsCall runs one loop on PR #2, whose review posted a P2 that
+// is the author's call in magnum's thread: the fixer leaves it to you, as
+// on an own PR on 2026-11-07 (it asked which of two options to take). The
+// PR needs attention with the call to decide it. next is the fixer of each
+// later run.
+func fixLeftMagnumsCall(t *testing.T, next func(h *harness, run store.Run) string) *harness {
+	t.Helper()
+	h, git := fixHarness(t)
+	h.gh.clock = h.clock.Now // a reply --decide posts is made now
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.setThreads(magnumsThread(magnumsCallThread, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), false))
+	var mu sync.Mutex
+	runs := 0
+	fixerBy(h, git, func(run store.Run) (string, string) {
+		mu.Lock()
+		runs++
+		first := runs == 1
+		mu.Unlock()
+		if first {
+			writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{magnumsCallThread}, nil)
+			return "", fixReport(run.ID, "nothing", noReplies,
+				"- 4302866759 P2 app/models/offer.rb:42: not fixed. This is the author's call: option A keeps the cap, option B lifts it")
+		}
+		return "", next(h, run)
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.Contains(msg, magnumsCall) {
+		t.Fatalf("last_error = %q, want the call to decide magnum's finding", msg)
+	}
+	h.advance(10 * time.Minute)
+	return h
+}
+
+// The fixer left you the author's call of magnum's own finding, and
+// `magnum fix --decide` refused your choice: it took only threads other
+// reviewers started, so the way out was a reply on GitHub, a poll and
+// `magnum fix --done`, and nothing built the option you picked. It now
+// takes magnum's thread too, found through the fixer's calls: it posts your
+// reply there as you and starts the loop, whose external file hands the
+// fixer your decision (decisions, never one of the other reviewers'
+// threads). The fixer builds it, and magnum still checks on GitHub that its
+// reply is there: one there lifts the attention, and none puts the call
+// back to you.
+func TestFixDecideTakesMagnumsOwnAuthorsCall(t *testing.T) {
+	decide := []FixDecision{{Thread: magnumsCallThread, Text: "Keep the cap: reply won't fix."}}
+	t.Run("built", func(t *testing.T) {
+		h := fixLeftMagnumsCall(t, func(h *harness, run store.Run) string {
+			x, _ := readExternalFile(filepath.Dir(deref(run.ReportPath)))
+			if len(x.Decisions) == 1 {
+				h.gh.mu.Lock()
+				h.gh.threads[2][0] = fixerSays(h.gh.threads[2][0], 4302866900, "Won't fix: the cap stays (decided at "+x.Decisions[0].DecisionURL+").",
+					h.clock.Now())
+				h.gh.mu.Unlock()
+			}
+			return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 0 not a bug, 1 won't fix)", "none")
+		})
+		id := h.fix(FixPayload{Decide: decide})
+		h.handle()
+		if res := h.wantDone(id); !strings.Contains(res, "replied in 1 thread as zhuravel: "+prPage+"#discussion_r") {
+			t.Errorf("answer = %q, want your reply posted and the loop started", res)
+		}
+		h.gh.mu.Lock()
+		got := slices.Clone(h.gh.calls)
+		h.gh.mu.Unlock()
+		if !slices.Contains(got, "reply:talkable/talkable#2/4302866759:Keep the cap: reply won't fix.") {
+			t.Errorf("GitHub calls = %q, want your reply in magnum's thread", got)
+		}
+		runs := h.fixRuns(h.pr(2).ID)
+		if len(runs) != 2 {
+			t.Fatalf("fix runs = %d, want the loop --decide started", len(runs))
+		}
+		x := readExternalOf(t, runs[1])
+		if len(x.Threads) != 0 {
+			t.Errorf("external threads = %+v, want none: magnum's thread is no other reviewer's", x.Threads)
+		}
+		if len(x.Decisions) != 1 || x.Decisions[0].CommentID != magnumsCallThread || !x.Decisions[0].Decision ||
+			!strings.HasPrefix(x.Decisions[0].DecisionURL, prPage+"#discussion_r") {
+			t.Errorf("decisions = %+v, want your decision in magnum's thread", x.Decisions)
+		}
+		if cur := h.wantState(2, store.PRReviewed); cur.LastError != nil {
+			t.Errorf("last_error = %q after the fixer built your decision", deref(cur.LastError))
+		}
+		if ev, ok := h.fixEvent("fix.decisions"); !ok || !strings.Contains(ev.Message, "built your decision in 1 thread") {
+			t.Errorf("fix.decisions = %q, %v", ev.Message, ok)
+		}
+		if ev, ok := h.fixEvent("fix.unmarked"); ok {
+			t.Errorf("fix.unmarked = %q: your decision read as the fixer's reply", ev.Message)
+		}
+	})
+	t.Run("not built", func(t *testing.T) {
+		h := fixLeftMagnumsCall(t, func(_ *harness, run store.Run) string {
+			return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 0 not a bug, 1 won't fix)", "none")
+		})
+		id := h.fix(FixPayload{Decide: decide})
+		h.handle()
+		h.wantDone(id)
+		cur := h.wantState(2, store.PRNeedsAttention)
+		if msg := deref(cur.LastError); !strings.Contains(msg, "decide magnum's finding on app/models/offer.rb:42: ") {
+			t.Errorf("last_error = %q, want the call back to you", msg)
+		}
+		if ev, ok := h.fixEvent("fix.decisions"); !ok || !strings.Contains(ev.Message, "1 decision goes back to you") {
+			t.Errorf("fix.decisions = %q, %v", ev.Message, ok)
+		}
+	})
 }

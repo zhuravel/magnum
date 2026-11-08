@@ -817,6 +817,12 @@ func TestTheFixSkillBuildsTheAuthorsDecision(t *testing.T) {
 		"A reply that builds a decision ends with `(decided at <decision_url>)`.",
 		"for a thread with `decision` set, skip it only when a comment by `author` or one of `fixer_logins` that carries the fix marker " +
 			"came after the comment at `decision_url`: the decision was built meanwhile.",
+		// The author's decision on a call in one of magnum's own threads comes
+		// in the file's decisions, and it wins over the policy (an author's
+		// call would otherwise be asked again).
+		"`decisions` lists magnum's own threads that hold such a decision: each is a thread with `decision` set, though the reviewer started it, " +
+			"and every rule below for such a thread holds for it.",
+		"A finding whose thread is under `decisions` is decided: build it as a thread with `decision` set (below), whatever this policy says of it.",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)
