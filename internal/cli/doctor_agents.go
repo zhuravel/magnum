@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -324,13 +326,136 @@ func doctorHooksTrust(_ context.Context, d doctorDeps) []doctorCheck {
 			out = append(out, doctorWarned(name, fmt.Sprintf("%s (%s; %s): Codex asks you to review them when a session starts, and a prompt "+
 				"magnum types into that review is lost, so new Codex sessions wait until they are trusted (`magnum resume --tool codex` starts "+
 				"them anyway until the file changes)", t.UntrustedSentence(hooksFile), t.UntrustedPlaces(), used),
-				"run `codex` once in a terminal and choose Trust all"))
+				doctorTrustAllFix(t)))
 		default:
 			out = append(out, doctorOK(name, fmt.Sprintf("the %s in %s %s trust entries (%s)",
 				textx.Count(t.Hooks, "hook", "hooks"), hooksFile, textx.Plural(t.Hooks, "has", "have"), used)))
 		}
 	}
 	return out
+}
+
+// doctorAgentHooks checks magnum's own agent hooks (`magnum hooks status`'s
+// targets as the configured roles use them, readHookStatus): "claude hooks"
+// for Claude's config directory while a role runs Claude, and "codex
+// hooks" for each Codex home a Codex role reads. Missing, outdated,
+// modified or incomplete hooks warn with the install as the fix (magnum's
+// panes then report a turn's end only to the observe passes); a Codex entry
+// without a trust entry warns with Codex's one-time Trust all; current ones
+// pass. A home that is unknown is skipped. It only reads.
+func doctorAgentHooks(_ context.Context, d doctorDeps) []doctorCheck {
+	getenv := d.Getenv
+	if getenv == nil {
+		getenv = func(string) string { return "" }
+	}
+	var out []doctorCheck
+	for _, t := range hookTargets(d.Config, claudeHookDir(getenv, d.UserHome), d.Agents.CodexHome, codexDefaultHome(getenv, d.UserHome), "") {
+		name, what := t.agent+" hooks", "magnum's "+agentName(t.agent)+" hooks"
+		if t.agent == agenthooks.AgentCodex {
+			what = "magnum's Codex hooks in " + inspTilde(t.settings())
+		}
+		used := "used by " + doctorRoleNames(t.users)
+		if t.dir == "" {
+			out = append(out, doctorSkipped(name, fmt.Sprintf("%s not checked: the %s home of %s is unknown", strings.TrimPrefix(what, "magnum's "), agentName(t.agent), doctorRoleNames(t.users))))
+			continue
+		}
+		fix := "magnum hooks install " + t.agent
+		s := readHookStatus(t)
+		blind := "magnum's " + agentName(t.agent) + " panes report a turn's end, a permission prompt and a session's id only to the observe passes"
+		switch s.state {
+		case hookCurrent:
+			out = append(out, doctorOK(name, fmt.Sprintf("%s are current (v%d) (%s, with its %s in %s; %s): magnum's %s panes report a turn's end at once",
+				what, s.version, inspTilde(t.script()), textx.Count(len(t.events()), "entry", "entries"), inspTilde(t.settings()), used, agentName(t.agent))))
+		case hookMissing:
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s are not installed (%s; %s): %s", what, inspTilde(t.settings()), used, blind), fix))
+		case hookRefused:
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s not checked: %s", what, s.why), hookHomeFix(t)))
+		case hookUntrusted:
+			fix := codexTrustStep + ": Codex asks it once per Codex home"
+			if s.stale {
+				fix = codexTrustStep + "; " + codexForgetStep
+			}
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s: %s (%s): Codex asks you to review them when a session starts, so new Codex sessions wait",
+				what, s.why, used), fix))
+		default:
+			switch {
+			case s.foreign:
+				fix = "move " + inspTilde(t.script()) + " away (it is not magnum's), then " + fix
+			case s.newer:
+				fix = "run the newer magnum's `" + fix + "`"
+			}
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s are %s (%s): %s", what, strings.TrimPrefix(s.line(), t.label()+": "), used, blind), fix))
+		}
+	}
+	return out
+}
+
+// doctorRoleNames names roles for a doctor line: the first three, then how
+// many more.
+func doctorRoleNames(roles []string) string {
+	if len(roles) <= 3 {
+		return strings.Join(roles, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(roles[:3], ", "), len(roles)-3)
+}
+
+// doctorHookSocket checks each daemon's hook socket (paths.Layout
+// HookSocket and FactoryHookSocket): it sends a datagram of
+// agenthooks.PingName, which a listening daemon drops. One that takes it passes. A socket that is
+// missing, deaf (its listener gone), no socket, or at a path too long for
+// one warns while its daemon runs (the daemon then listens for no hooks,
+// so its panes are seen by polling alone) and is skipped while it does not
+// (its next start makes it). It writes nothing.
+func doctorHookSocket(_ context.Context, d doctorDeps) []doctorCheck {
+	const name = "hook socket"
+	socks := []struct {
+		who, path, fix string
+		pid            func() (int, error)
+	}{
+		{"the review daemon", d.Layout.HookSocket(), "restart the daemon on a build that listens for hooks: `magnum daemon-restart --drain`", d.DaemonPID},
+		{"the factory daemon", d.Layout.FactoryHookSocket(), "restart it on a build that listens for hooks: `magnum factory install --drain`", d.FactoryPID},
+	}
+	const polling = "the daemon listens for no hooks: polling only"
+	var out []doctorCheck
+	for _, s := range socks {
+		running := false
+		if s.pid != nil {
+			pid, err := s.pid()
+			running = err != nil || pid > 0 // an unreadable pidfile counts as running
+		}
+		path := inspTilde(s.path)
+		var why string
+		switch st, err := os.Lstat(s.path); {
+		case paths.CheckSocketPath(s.path) != nil:
+			why = fmt.Sprintf("its hook socket's path %s is %d bytes, too long for a Unix socket (a shorter MAGNUM_HOME fixes it)", path, len(s.path))
+		case err != nil:
+			why = "there is no hook socket at " + path
+		case st.Mode()&os.ModeSocket == 0:
+			why = path + " is no socket, so the daemon cannot listen there (remove it)"
+		default:
+			if err := agenthooks.Send(s.path, agenthooks.Event{V: agenthooks.Version, Name: agenthooks.PingName}); err != nil {
+				why = fmt.Sprintf("its hook socket %s does not accept events (%s)", path, unwrapSendErr(err))
+			}
+		}
+		switch {
+		case why == "":
+			out = append(out, doctorOK(name, fmt.Sprintf("%s's hook socket %s accepts events: its panes' hooks reach it at once", s.who, path)))
+		case running:
+			out = append(out, doctorWarned(name, fmt.Sprintf("%s runs, but %s: %s", s.who, why, polling), s.fix))
+		default:
+			out = append(out, doctorSkipped(name, fmt.Sprintf("%s is not running (%s); its next start listens", s.who, why)))
+		}
+	}
+	return out
+}
+
+// unwrapSendErr is the system's reason a datagram was refused ("connection
+// refused"), without agenthooks' prefix and the path.
+func unwrapSendErr(err error) string {
+	if se, ok := errors.AsType[*os.SyscallError](err); ok {
+		return se.Err.Error()
+	}
+	return err.Error()
 }
 
 // doctorSessionIDs reads the registry: of the Codex sessions of the last
@@ -398,6 +523,17 @@ func doctorRolloutIDs(ctx context.Context, d doctorDeps, since time.Time) map[in
 		}
 	}
 	return out
+}
+
+// doctorTrustAllFix is the fix for Codex hooks without a valid trust
+// entry: Trust all, and the way out when a stale record of magnum's is
+// among them and Codex asks nothing.
+func doctorTrustAllFix(t agents.CodexHooksTrust) string {
+	fix := "run `codex` once in a terminal and choose Trust all"
+	if slices.ContainsFunc(t.Untrusted, func(h agents.CodexHookAt) bool { return h.Stale }) {
+		fix += "; " + codexForgetStep
+	}
+	return fix
 }
 
 // inspTildeIn shortens the Codex home home to ~ where s names it.

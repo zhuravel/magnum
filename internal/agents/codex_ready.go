@@ -190,6 +190,7 @@ func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess stor
 	settle := int(CodexPromptSettle / codexReadyPoll)
 	ready, answers := 0, 0 // ready: consecutive reads that showed the composer and no dialog
 	last := ""             // the screen's last read
+	reviewed := false      // a hooks review showed meanwhile
 	for range int(CodexReadyTimeout / codexReadyPoll) {
 		text, err := m.readVisible(ctx, ref)
 		if err == nil {
@@ -200,6 +201,7 @@ func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess stor
 			ready = 0
 		case startupDialog(text) != "":
 			ready = 0
+			reviewed = reviewed || HooksReviewShown(text)
 			if answers < codexReadyAnswers {
 				answers++
 				if m.answerStartup(ctx, run, sess, ref) {
@@ -208,6 +210,9 @@ func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess stor
 			}
 		case !dialogShown(text) && codexComposer(text):
 			if ready++; ready > settle {
+				if !reviewed && !m.hooksAnsweredSince(ref, sess.StartedAt) {
+					m.forgetStaleTrustOf(sess) // Codex read the home's hooks at the launch and trusts them as they are
+				}
 				return
 			}
 		default:

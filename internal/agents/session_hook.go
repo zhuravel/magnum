@@ -11,7 +11,10 @@ package agents
 // false. On 2026-10-16 that turned herdr's hook off; on 2026-10-22 a rewrite
 // of hooks.json moved it to the third group, behind two hooks without a
 // timeout, and most Codex sessions got no id. magnum never changes either
-// file (the hooks and their trust are the operator's): `magnum doctor`
+// file on its own (the hooks and their trust are the operator's; only
+// `magnum hooks install` and `uninstall`, on the operator's word, append or
+// remove magnum's own entries in hooks.json, and nothing writes the trust):
+// `magnum doctor`
 // reads them (ReadCodexSessionHook, CodexSessionHook.Problems) and the
 // registry's session ids (RecentSessionIDs, MissingSessionIDs), the daemon
 // warns when hooks.json changes into a failing state and when Codex sessions
@@ -32,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -446,6 +450,10 @@ type CodexHookAt struct {
 	// "<event>:<group>:<index>" ("pre_tool_use:1:0").
 	Place string
 	CodexHook
+	// Stale: its place has a trust entry, but of the hook before magnum
+	// rewrote it there (RecordStaleCodexTrust), which Codex no longer
+	// accepts.
+	Stale bool
 }
 
 // CodexHooksTrust is what a Codex home says of the trust of the hooks of
@@ -467,18 +475,37 @@ type CodexHooksTrust struct {
 	Fingerprint string
 }
 
-// UntrustedSentence says how many hooks of t have no trust entry, naming
-// hooksFile as given: "2 hooks in ~/.codex/hooks.json have no trust
-// entry"; "" when every hook has one.
+// UntrustedSentence says how many hooks of t have no trust entry, or one
+// Codex no longer accepts (Stale), naming hooksFile as given: "2 hooks in
+// ~/.codex/hooks.json have no trust entry"; with a stale one it adds the
+// way out when Codex asks nothing (CodexForgetStaleStep); "" when every
+// hook is trusted.
 func (t CodexHooksTrust) UntrustedSentence(hooksFile string) string {
-	switch n := len(t.Untrusted); n {
-	case 0:
+	n := len(t.Untrusted)
+	if n == 0 {
 		return ""
-	case 1:
-		return "1 hook in " + hooksFile + " has no trust entry"
-	default:
-		return fmt.Sprintf("%d hooks in %s have no trust entry", n, hooksFile)
 	}
+	stale := 0
+	for _, h := range t.Untrusted {
+		if h.Stale {
+			stale++
+		}
+	}
+	what := "no trust entry"
+	switch {
+	case stale == n:
+		what = "a trust entry Codex no longer accepts"
+	case stale > 0:
+		what = "no trust entry or one Codex no longer accepts"
+	}
+	out := fmt.Sprintf("%d hooks in %s have %s", n, hooksFile, what)
+	if n == 1 {
+		out = fmt.Sprintf("1 hook in %s has %s", hooksFile, what)
+	}
+	if stale > 0 {
+		out += " (" + CodexForgetStaleStep + ")"
+	}
+	return out
 }
 
 // UntrustedPlaces names the hooks of t without a trust entry and their
@@ -500,10 +527,13 @@ func hookPlaces(hooks []CodexHookAt) string {
 // (codexHookEvents), in every group, whose place has no [hooks.state] entry
 // with a trusted_hash in config.toml (keyed by the hooks.json path, as
 // written or with its symlinks resolved; an entry without a hash trusts
-// nothing). ok is false when there is nothing to judge: home unknown or no
-// hooks.json there. A missing config.toml or [hooks.state] table trusts
-// nothing. err names a file that cannot be read or decoded, without the
-// decoder's message. It only reads.
+// nothing), and every one whose entry keeps the hash magnum recorded when it
+// rewrote the hook there (RecordStaleCodexTrust: Stale). ok is false when
+// there is nothing to judge: home unknown or no hooks.json there. A missing
+// config.toml or [hooks.state] table trusts nothing. err names a file that
+// cannot be read or decoded, without the decoder's message. It never writes
+// Codex's files; it removes a record of magnum's whose entry's hash changed,
+// or whose entry or hook is gone.
 func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 	f, ok, err := readCodexHooksJSON(home)
 	t.HooksFile, t.ConfigFile = f.hooksFile, f.configFile
@@ -521,7 +551,13 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 		}
 	}
 	t.Hooks = len(all)
+	stale := readStaleTrust(staleTrustDirectory(), f.hooksFile)
 	if len(all) == 0 {
+		for _, rs := range stale {
+			for _, r := range rs {
+				removeStale(r) // no hook left for the record
+			}
+		}
 		return t, true, nil
 	}
 	state, err := readCodexHookState(f.configFile)
@@ -529,8 +565,22 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 		return t, false, err
 	}
 	for _, h := range all {
-		if _, e, ok := f.entry(state, h.Place); !ok || e.TrustedHash == "" {
+		_, e, ok := f.entry(state, h.Place)
+		switch {
+		case !ok || e.TrustedHash == "":
 			t.Untrusted = append(t.Untrusted, h)
+		case slices.ContainsFunc(stale[h.Place], func(r staleRecord) bool { return r.hash == e.TrustedHash }):
+			h.Stale = true
+			t.Untrusted = append(t.Untrusted, h)
+		}
+	}
+	for place, rs := range stale {
+		_, e, ok := f.entry(state, place)
+		hooked := slices.ContainsFunc(all, func(h CodexHookAt) bool { return h.Place == place })
+		for _, r := range rs {
+			if !ok || e.TrustedHash != r.hash || !hooked {
+				removeStale(r) // the operator trusted the new hook, or the entry or the hook is gone
+			}
 		}
 	}
 	return t, true, nil
@@ -612,6 +662,13 @@ func codexHookName(typ, command string) string {
 	}
 	return textx.Clip(name, codexHookMaxName)
 }
+
+// CodexHookName names a hook of a hooks.json as magnum's messages do
+// (codexHookName): the last path element of its program, or of the script
+// an interpreter runs ("bash ~/.codex/herdr-agent-state.sh session" is
+// herdr-agent-state.sh), cleaned for the terminal; its type for a hook that
+// runs no command.
+func CodexHookName(typ, command string) string { return codexHookName(typ, command) }
 
 // printable is s with only its printable runes, trimmed.
 func printable(s string) string {

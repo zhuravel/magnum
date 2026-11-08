@@ -173,6 +173,7 @@ extras you want:
 ```bash
 magnum install --plugin                      # launchd agent + herdr plugin
 magnum install --gh --no-launchd             # optional: `gh magnum …`
+magnum hooks install                         # optional: agents report a turn's end at once (see Agent hooks)
 magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
@@ -2318,7 +2319,9 @@ newest two Codex sessions in a row, of any PRs, that ran an agent have no sessio
 their start, one `codex.session_ids_missing` warning and one toast say since when ("Codex sessions get no
 session id since 16:08 (2 sessions). Judges cannot resume and can stop early. Run `magnum doctor`."),
 once, until a session started since has an id (herdr's or its rollout's), which one
-`codex.session_ids_back` info event says. Magnum never edits `hooks.json` or `[hooks.state]`. Prompts are files under `[pipeline]
+`codex.session_ids_back` info event says. Magnum never edits `hooks.json` on its own (only `magnum hooks install` and
+`uninstall`, on your word, add or remove magnum's own entries, see [Agent hooks](#agent-hooks)) and never edits
+`[hooks.state]`. Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
 a file edit, not a rebuild. The judge prompts take the text they share from one file,
 `prompts/judge-shared.md`, so a shared rule is one edit. The daemon loads the prompts and copies the judge skill and the fix skill when it starts,
@@ -5009,6 +5012,7 @@ not mounted"), and magnum creates nothing in its place: nothing above `mirror_di
 | `magnum restart-sessions --tool <kind>\|all [--pr <ref>] [--yes]` | Restart an agent kind's live sessions (every kind's with `all`, one PR's with `--pr`) in new processes after a switch of its account: a running agent keeps the login it started with. Each session parks (its pane closes, its conversation stays), an idle one now and one at work after its turn, and its next prompt resumes the conversation in a new process; no round starts on its PR before, and a pinned PR's sessions are left alone. The daemon does it (refused when none runs); a terminal asks y/N first ("Restart the 3 live codex sessions? They resume in new processes."; `--yes` does not), and the answer counts them ("restarting 3 live codex sessions: 2 park now, 1 after its turn; each resumes in a new process at its next prompt"). A change of Codex login does it for the Codex sessions by itself (see the Codex budget above); `magnum resume --tool` restarts none. The settings screen's `x` on a kind's row does the same. |
 | `magnum settings [--watch N\|--repo owner/name] [--history] [--restore N]` | The settings screen (below): change the settings you change most in `~/.config/magnum/config.toml` without opening it, and pause or resume automation. `--watch N` opens it on the N-th `[[watch]]`, `--repo` on a repository; `--history` lists the kept versions of the file, takes no other flag, and `--restore N` opens the save of the N-th (1 = the newest), a save like any other; both work when a hand edit broke the file. It needs a terminal (`--history` does not) and writes nothing without its `y`. `,` opens it from the PR board and the status dashboard. |
 | `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]` | The daemon and its launchd job. Stop and restart refuse while review rounds, a notes curation, a notes critique, the retro, a skill edit (or revert), a skill gate, a fix job whose fixer works, a whiteboard job whose writer works, a job queued or running on the heavy worker (a slot's provision, release or eviction, a slot request, the reconcile: "heavy job provision:talkable/talkable") or a GitHub write as you (an automatic approval or its withdrawal) are in flight unless `--now`, and a stop that comes anyway (`--now`, a signal) gives a GitHub write as you that started 30 s to finish before it cancels it; `daemon-restart --when-idle` waits, stopping nothing, until nothing is in flight and restarts then (it waits again when something starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, curations, critiques, retros, skill edits, skill gates (a running gate stops before its next replay, its proposal staying `gating`), fix cycles and whiteboard jobs, wait for those in flight and then restart (meanwhile `magnum retro` and `magnum notes --curate` are queued and `magnum fix` is held, all to start after the restart, as `magnum review` is queued); both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. Once `daemon-restart` has stopped the daemon, the stop and the start finish even after ctrl+c, so the daemon is not left down; a stopped daemon gets up to 50 s to exit (launchd's ExitTimeOut plus 5 s), and ctrl+c during any other wait ends it at once. `daemon-restart` then waits 15 s for the new daemon (launchd starts the job at most once per its 10 s ThrottleInterval). When none runs and launchd reports that it cannot spawn the job (`job state = spawn failed`, or `last exit code = 78: EX_CONFIG`, as after a rebuild that left the job "needs LWCR update"), it reloads the job once, as `install` does (`launchctl bootout`, then `bootstrap` of the same plist, which it does not rewrite and which must name the job), and waits 15 s more. Right before the bootout, with no registry write between, it looks again: a daemon that launchd started meanwhile (also when the plist cannot be used), or a magnum daemon started by hand that holds the pidfile, ends the restart with success and no reload (the second with a warning, since launchd's job still cannot spawn); a pidfile naming another process (named by its executable alone, never its command line), or launchd no longer reporting the failure, leaves the job as it is and says why. A daemon running after the reload ends the restart with success; otherwise it says what launchd reports (the state and the last exit code) and points at `magnum install --now`, and nothing tries the reload twice. The `daemon.reload_begin` event, written first, and one of `daemon.reloaded`, `daemon.reload_failed`, `daemon.reload_skipped` or `daemon.reload_refused` record it (best effort: a missing, read-only, busy or older registry is neither created nor migrated, and the restart goes on). `magnum daemon --log-level debug\|info\|warn\|error` sets the daemon's log level (default `info`). |
+| `magnum hooks [status\|install [--dry-run] [--forget-stale]\|uninstall [--dry-run] [--yes]] [claude\|codex]` | magnum's agent hook in Claude Code's and Codex's user hook settings (see [Agent hooks](#agent-hooks)). `install` writes the hook script and appends magnum's entries, keeping every other byte (`--forget-stale` first forgets magnum's records of Codex trust entries a rewrite left stale, for when `codex` asks nothing); `uninstall` removes them and the scripts, asking y/N before it moves another Codex hook to a new place (`--yes` answers for a script); `status`, the default, prints one line per target (`claude: current (v1) (~/.claude/hooks/magnum-agent-hook.sh)`) and exits 1 unless every one is current. With no agent named, the targets are those the configured roles use. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles (what you typed is matched against every recorded PR, not only the newest 200), slots,
 identities, roles and sorts from config.
@@ -6171,10 +6175,67 @@ within a second or two instead of on the next observe pass. The pieces:
   before. The doctor's `ping` wakes nothing. At shutdown the listener stops first, then the daemon waits for the
   looks, within the drain's budget ([Factory](#factory-writing-code-from-a-jira-key-or-a-prompt)).
 
-`magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`) and its doctor
-checks come in later releases; until the install, nothing runs the script and the daemons' listeners hear nothing.
-Each daemon listens on its own socket (the review daemon on `Layout.HookSocket`, the factory on
-`Layout.FactoryHookSocket`) and falls back to polling.
+- **`magnum hooks install`.** On your word, magnum puts the hook into the agents' user hook settings, as
+  `herdr integration` does. It writes the script (mode 0755) to `~/.claude/hooks/magnum-agent-hook.sh` (under
+  `$CLAUDE_CONFIG_DIR` when that is set) and to `magnum-agent-hook.sh` in each Codex home the Codex roles read
+  (the review's and the factory's: a role's `CODEX_HOME`, else `$CODEX_HOME`, else `~/.codex`). Then it appends
+  one entry per event, `sh '<script>' <agent> <event>` with `"async": true` and `"timeout": 5` (1 for Claude's
+  SessionEnd, which would otherwise raise the 1.5 s budget all SessionEnd hooks share, and for Codex's Interrupt,
+  which takes 1 to 3 s), to Claude's `settings.json` (Stop, StopFailure, PermissionRequest, SessionStart,
+  SessionEnd) and to each Codex home's `hooks.json` (Stop, SessionStart, PermissionRequest, Interrupt). Each entry is a group of its own at the end
+  of its event's list, in the file's own indentation and line ends; the event's key, or the `hooks` object, is
+  made when missing, and every other byte stays as it was. herdr's entries and any other tool's are never
+  moved or rewritten: Codex keys a hook's trust by its place (`stop:<group>:<index>`), so a hook moved to
+  another place loses it. An entry of magnum's already there (its command names `magnum-agent-hook.sh`)
+  stays where it is, and is rewritten in its place only when its command, timeout or async drifted. A matcher
+  someone puts on magnum's group is kept and not checked. The command line never changes across versions (an
+  upgrade changes only the script), so Codex's trust of the hook's definition holds; whether Codex also hashes
+  the script it runs is not yet tested, so a script upgrade may ask for one more trust. A file at the script's
+  path without magnum's `# managed by magnum` line, a script of a newer magnum (never downgraded), a link to
+  nothing at the script's or the settings' path (never replaced), a home that is not an absolute path, and
+  settings that are not valid JSON are refused, and nothing changes anywhere. Keys are read exactly, as the
+  agents read them. A key twice is read as each agent reads it: Codex skips a `hooks.json` with one of its own
+  keys twice (an event it runs; a group's `matcher` or `hooks`; a hook's `type`, `command`, `commandWindows`,
+  `timeout`, `async`, `statusMessage`, `additionalContextLimit`, `server`, `tool` or `input`), so magnum refuses
+  it and says so, and reads any other key twice as Codex does; Claude takes the last, so magnum does too, and
+  refuses a key twice only in a group or hook of magnum's own, or for an event magnum hooks. A settings file another tool wrote between the read and the write
+  is refused too. `--dry-run` prints each file and what it would add or change. A symlinked settings file is
+  written through its link.
+- **Where it looks.** Run `magnum hooks` in an env like the daemon's: it reads `$CODEX_HOME` and
+  `$CLAUDE_CONFIG_DIR` from your shell, while the daemon reads its own. A role whose env sets its own
+  `CLAUDE_CONFIG_DIR` reads another `settings.json`, which the install does not cover. After a dotfiles restore
+  brings back `settings.json` without the scripts, run `magnum hooks install`: until then each event's hook
+  fails, and status says `modified`.
+- **The Codex trust step.** Magnum never writes Codex's trust (`[hooks.state]` in `config.toml`). After the
+  first install, Codex asks you to review the new hooks once per Codex home, and until then the daemon holds new
+  Codex sessions (the `hooks_review` pause below). Run `codex` once and choose Trust all (or review them with
+  `/hooks`), or run `magnum resume --tool codex`. A rewrite of a drifted entry asks for the trust again, and the
+  install says so. It records the trust entry Codex keeps for the hook before the rewrite (in
+  `codex-stale-trust/` under the state directory), so status, doctor and the daemon's hold count that place
+  untrusted until Codex trusts the new hook; then the record goes. A rewrite Codex hashes the same as the old
+  hook (an Interrupt timeout of 0 is Codex's 1 s) records nothing. When the rewrite restored the very hook
+  Codex already trusts, Codex asks nothing. Then a Codex session that magnum launched after the record,
+  answered no hooks review in, and whose first prompt's screen shows none, forgets the home's records written
+  before its launch, and `magnum hooks install codex --forget-stale` forgets them all at once (status, doctor and
+  the hold's toast name it). Live Claude sessions pick the hooks up at once; Claude has no per-hook trust.
+- **`magnum hooks uninstall`** removes magnum's entries (a group with nothing else in it, and a key or `hooks`
+  object it leaves empty) and the scripts; an install and an uninstall give the file back byte for byte. When
+  magnum's Codex entry is not the last of its event, the removal moves the later hooks to new places, where
+  Codex no longer trusts them: it names them ("moshi-hook (stop:1:0 to stop:0:0)") and asks y/N, only `y`
+  goes on, `n` changes nothing, and `--yes` answers for a script.
+- **`magnum hooks status`** prints one line per target, like herdr: `claude: current (v1)
+  (~/.claude/hooks/magnum-agent-hook.sh)`. The states are `current`, `outdated (vM < vN)`, `missing`, `modified`
+  (the file at the script's path is not magnum's or a newer magnum's, an entry's command, timeout or async
+  drifted, or the entries run a script that is missing), `incomplete` (some events' entries are missing),
+  `refused` (the home is not an absolute path: the fix is in your shell's `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, or
+  in the role's env when the role sets it) and, for Codex, `untrusted` (an entry of magnum's has no trust entry,
+  or only the one of the hook before magnum rewrote it). It exits 1 unless every target is current. Status
+  writes nothing but the removal of magnum's own records that no longer apply.
+- **The doctor.** `magnum doctor` checks the same (`claude hooks`, and `codex hooks` per Codex home) and each
+  daemon's hook socket (`hook socket`): each daemon listens on its own socket (`run/hooks.sock` for the review
+  daemon, `run/factory-hooks.sock` for the factory, the two listeners above) and falls back to polling when it
+  cannot, so the line passes when the socket takes a `ping`, and warns while a running daemon's socket is
+  missing or deaf ("the daemon listens for no hooks: polling only").
 
 ## Webhooks relay
 
@@ -6270,7 +6331,8 @@ entry: run `codex` once and choose Trust all"), and one `codex.hooks_untrusted` 
 hooks need review: run `codex` once and choose Trust all. New Codex sessions wait.") come once per
 `hooks.json`. Once every hook has a trust entry the pause ends by itself within a minute; `magnum resume --tool
 codex` (or `all`) starts new Codex sessions anyway, until `hooks.json` changes again. A hook changed in place
-keeps its entry, so Magnum cannot see it. Magnum never edits `hooks.json` or the hook trust itself.
+keeps its entry, so Magnum cannot see it. Magnum never edits the hook trust itself, and edits `hooks.json` only
+when you run `magnum hooks install` or `uninstall` (magnum's own entries; see [Agent hooks](#agent-hooks)).
 
 ## Development
 
@@ -6392,7 +6454,14 @@ only when all pass, names its place and the herdr integration version its script
 session id judges are never resumed and a helper's Codex refusal is not seen), the trust of every hook in
 each Codex home's `hooks.json` that the Codex session roles read (a `codex hooks trust` WARN per home: "2 hooks in
 ~/.codex/hooks.json have no trust entry (moshi-hook at pre_tool_use:1:0, ...)", for which Codex shows its hooks
-review and new Codex sessions wait; fix: run `codex` once in a terminal and choose Trust all) and the Codex sessions' ids
+review and new Codex sessions wait; fix: run `codex` once in a terminal and choose Trust all), magnum's own agent
+hooks (a `claude hooks` WARN while Claude's are missing, outdated, modified or incomplete, fix `magnum hooks
+install claude`; a `codex hooks` WARN per Codex home for the same, fix `magnum hooks install codex`, and while an
+entry of magnum's has no trust entry, naming the home's `hooks.json` and the places, fix: run `codex` once and
+choose Trust all, or `/hooks`, or `magnum resume --tool codex`), each daemon's hook socket (a `hook socket` line
+per daemon: PASS when it takes a ping datagram, which the listeners drop; a WARN while its daemon runs and the
+socket is missing, deaf or too long a path: "the daemon listens for no hooks: polling only"; SKIP while the
+daemon is stopped) and the Codex sessions' ids
 in the registry (a `codex session ids` WARN when the newest two or more Codex sessions of the last day that
 ran an agent had no session id ten minutes after their start, whatever the hook checks say: "3 of the 4
 Codex sessions started since 16:08 have no session id, the newest 2 in a row"; the line also counts the ids

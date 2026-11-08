@@ -595,7 +595,8 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 		case reason == engine.HooksReviewPauseReason:
 			p.Until = nil // it ends when the hooks are trusted; the daemon renews the time every minute
 			p.Fix = "run `codex` once in a terminal and choose Trust all: new Codex sessions start once every hook has a trust entry " +
-				"(magnum re-checks every minute); `magnum resume --tool " + tool + "` starts new Codex sessions anyway until hooks.json changes again"
+				"(magnum re-checks every minute); `magnum resume --tool " + tool + "` starts new Codex sessions anyway until hooks.json changes again; " +
+				codexForgetStep + " (a record of magnum's after it rewrote its own hook)"
 		default:
 			p.Fix = "wait, or `magnum resume --tool " + tool + "` to retry now"
 		}

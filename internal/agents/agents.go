@@ -361,7 +361,12 @@ type Manager struct {
 	failing map[int64]*lookMark
 	failed  map[int64]failKey
 	relooks map[int64]*relook
-	wakes   sync.WaitGroup
+	// hooksAnswered is when magnum last answered (trusted or declined) a
+	// Codex hooks review of each agent (paneRef.String()): a session whose
+	// review magnum answered proves nothing about the stale trust records of
+	// its home (forgetStaleTrustOf).
+	hooksAnswered map[string]time.Time
+	wakes         sync.WaitGroup
 }
 
 // New returns a Manager.
@@ -377,7 +382,7 @@ func New(d Deps) *Manager {
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
 		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, woken: map[int64]*woken{},
 		hookIDs: map[int64]agenthooks.Event{}, looks: map[int64]*lookMark{}, failing: map[int64]*lookMark{}, failed: map[int64]failKey{},
-		relooks: map[int64]*relook{}}
+		relooks: map[int64]*relook{}, hooksAnswered: map[string]time.Time{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

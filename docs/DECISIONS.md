@@ -3963,6 +3963,140 @@ skill versions); people add theirs to the sections before it, at the end of the 
   one 10 s after denies again; it failed first on the tick rule), and TestObserveSamePromptWaitsOneTick now moves
   the clock 5 s between its ticks.
 
+- **magnum installs its own hooks on the operator's word** (2026-11-08, roadmap R50 slice 2, task B; amends
+  "magnum never changes either file" of herdr's Codex session hook and "magnum never writes hooks.json or
+  config.toml" of the hooks-review hold, which stand for everything but this command). `magnum hooks
+  install|uninstall|status [claude|codex]`, modelled on `herdr integration` and `installGhShim` (a marker, a
+  compare, a refusal of a file that is not magnum's, a dry run). Install writes the embedded script
+  (`agenthooks.Script`, mode 0755, `fsx.WriteFileAtomic`) to `~/.claude/hooks/magnum-agent-hook.sh`
+  (`$CLAUDE_CONFIG_DIR` when set) and to `magnum-agent-hook.sh` in each Codex home a Codex agent role reads,
+  the review's and the factory's (`agents.Manager.CodexHome`: a role's `CODEX_HOME`, else `$CODEX_HOME`, else
+  `~/.codex`; not `agents.CodexHookHomes`, which is empty unless the codex kind's `session_source` is herdr,
+  while magnum's hook serves every Codex pane), and refuses a file there without the `# managed by magnum`
+  line, a script of a newer magnum (never downgraded) and a link to nothing (never replaced). Then a byte
+  splice (`internal/cli/hooks_json.go`) puts one group per event, `sh '<script>' <agent> <event>` with
+  `"async": true` and a timeout frozen per event (it is in Codex's trust hash), into Claude's `settings.json`
+  (Stop, StopFailure, PermissionRequest and SessionStart 5 s; SessionEnd 1 s, since a SessionEnd hook's own
+  timeout raises the 1.5 s budget all SessionEnd hooks share, and Claude enforces no timeout on an async hook
+  anyway) and each Codex home's `hooks.json` (Stop, SessionStart and PermissionRequest 5 s, where Codex's
+  default is 600; Interrupt 1 s, its default, within its 1 to 3 s, which binds background hooks too; the hook
+  bounds itself to 300 ms): the arrays are found with `json.Decoder` offsets, the group is appended before
+  the event array's closing bracket in the white space of the element before it (the file's tabs or spaces and
+  CRLF or LF; a one-line file stays on one line), and the event's key or the `hooks` object is made when
+  missing; every other byte stays, and a file that is not valid JSON (or whose `hooks` is not an object of
+  arrays) is refused with nothing written. Keys are read exactly, as Claude and Codex read them (a `"Command"`
+  is no command), and a key twice as each reads it: Codex's derived structs reject one among the keys they
+  define (its events; a group's `matcher` and `hooks`; a hook's `type`, `command`, `commandWindows` or
+  `command_windows`, `timeout`, `async`, `statusMessage`, `additionalContextLimit`, `server`, `tool` and `input`;
+  the root's `description`) and ignore any other, so magnum refuses only those ("Codex skips a hooks.json with
+  one of its own keys twice") and reads an unknown key twice as Codex does; Claude's parser takes the last, so magnum does
+  too, and refuses a key twice only in a group or a hook that holds magnum's command (in any of the values) or
+  for an event magnum hooks, never for another tool's quirk. One edit at a time, the document
+  read again after each, and the file read again before the write: one another tool wrote meanwhile (Claude
+  writes its settings; uninstall may wait on a y/N) is refused, never overwritten. A home that is unknown or not
+  an absolute path is refused by install, uninstall and status (`refused`). A handler whose command names `magnum-agent-hook.sh` counts as present wherever it stands and
+  is rewritten in its own place only when its type, command, timeout or async differ, and the install then
+  says that Codex will ask for trust again. A rewrite keeps the place, so Codex's trust entry there keeps the
+  old hook's `trusted_hash`, which Codex no longer accepts: the install records it first
+  (`agents.RecordStaleCodexTrust`, one file per place in `<state>/codex-stale-trust/`, the directory `cli.Main`
+  gives the agents package for the process), and `agents.ReadCodexHooksTrust` counts that place untrusted
+  (`CodexHookAt.Stale`) while its entry keeps that hash, and removes the record once the hash differs or the
+  entry or the hook is gone. So status, doctor and the daemon's `hooks_review` hold, which calls that reader,
+  see the review Codex will show; the engine is unchanged but for the toast's text. A rewrite Codex hashes the
+  same as the old hook (its command, its timeout as Codex clamps it: Interrupt and SessionEnd 1 to 3 s, none 1,
+  the rest at least 1, none 600; async, none false; and no key the rewrite drops) records nothing. When the
+  rewrite restored the very hook Codex already trusts, Codex asks nothing and writes no new hash, so the record
+  would hold the place untrusted for good. A Codex session forgets its home's records written before its launch
+  (`sess.StartedAt`) when its first prompt's screen settles with no hooks review (`codexPromptReady`) and magnum
+  answered (trusted or declined) no review of that agent since the launch (`answerHooks` marks each answer, the
+  one at the launch in `StartAgent` too): only such a Codex read the rewritten hooks and trusts them as they are.
+  A record written after the launch stays (that Codex read the file before), a row with no launch time clears
+  nothing, and a row whose env names no `CODEX_HOME` (StartAgent's fallback row) takes the one Codex home the
+  roles read, and none when they read more than one, never the default for another. `magnum hooks install codex
+  --forget-stale` forgets them all on the operator's word (`agents.ForgetStaleCodexTrust`); status,
+  doctor, the hold's event and pause (`UntrustedSentence`: "a trust entry Codex no longer accepts") and its toast
+  name it. A record's file is named by its hooks.json, place and hash, and a reader removes it only when its
+  modification time is the one it read, so a reader never removes a newer record. Computing Codex's hash to
+  clear a record is rejected: its input is Codex's internal normal form. A matcher someone puts on magnum's group is kept and
+  not checked. The command line never changes across versions (only the script does, `MAGNUM_HOOK_VERSION`),
+  since Codex hashes the command, timeout and async into a hook's trust, and keys the trust by the hook's place
+  (`<event>:<group>:<index>`): magnum's group is never put anywhere but last and nothing is reordered. Codex
+  0.167's state also has a `trusted_content_hash`; whether it covers an ordinary hook's script is untested, so
+  check it in a throwaway `CODEX_HOME` before the first bump of `ScriptVersion`. magnum never writes `[hooks.state]`: after the first install the operator
+  trusts the new hooks once per Codex home (run `codex` once and choose Trust all, or `/hooks`, or `magnum
+  resume --tool codex`), which the install, `status` and doctor say, and until then the existing
+  `hooks_review` hold keeps new Codex sessions waiting. All targets are planned first: a refusal of one
+  changes nothing anywhere. Uninstall removes magnum's handlers, a group with nothing else in it, and an event
+  key or `hooks` object the removal leaves empty, so an install and an uninstall give the file back byte for
+  byte; then it removes the scripts that carry the marker (a foreign one is left and named). A removal that
+  moves another tool's Codex hook to a new place (magnum's group not last, or a handler before another in its
+  group) names each one ("moshi-hook (stop:1:0 to stop:0:0)") and asks y/N on a terminal, where only y goes on
+  and n changes nothing; without a terminal it refuses unless `--yes`. A symlinked settings file or script is
+  written through its link. `status` (the default) prints one line per target in herdr's form (`claude:
+  current (v1) (~/.claude/hooks/magnum-agent-hook.sh)`): current, `outdated (vM < vN)`, missing, modified (the
+  file at the script's path is not magnum's or a newer magnum's, the script differs from the build's, an entry
+  drifted, the settings cannot be read, or the entries run a script that is missing, as after a dotfiles
+  restore: each event's hook then fails), incomplete (some events' entries are missing), refused and, for
+  Codex, untrusted (`agents.ReadCodexHooksTrust` has no trust entry for one of magnum's places, or a stale one),
+  with what is wrong after a colon; it exits 1 unless every target is current. Doctor (`doctor_agents.go`) adds `claude hooks`
+  and `codex hooks` (one line per Codex home: a WARN for missing, outdated, modified or incomplete with
+  `magnum hooks install <agent>` as the fix, and for an untrusted Codex entry the one-time Trust all) and
+  `hook socket`, one line per daemon (`Layout.HookSocket`, `FactoryHookSocket`): it sends
+  `agenthooks.Event{V: 1, Name: agenthooks.PingName}` ("ping", which no hook sends and every receiver drops)
+  and passes when the socket takes it; a missing, deaf, non-socket or too long socket warns while its daemon
+  runs ("the daemon listens for no hooks: polling only", fix `magnum daemon-restart --drain` or `magnum factory
+  install --drain`: a build without the listener, or one whose listener failed, polls alone) and is skipped
+  while it is stopped. The review daemon's and the factory daemon's listeners (on
+  `Layout.HookSocket` and `Layout.FactoryHookSocket`, the paths the check pings) take and drop it. The homes come from the CLI shell's env (`$CODEX_HOME`, `$CLAUDE_CONFIG_DIR`), so the command runs in
+  an env like the daemon's, and a role's own `CLAUDE_CONFIG_DIR` is not covered (the README says both). The
+  research's `hook events`
+  check (how many of the newest sessions got a hook Stop) is left out: the registry keeps no hook-seen record
+  yet. No test reaches the user's home: `hooksSys`'s defaults refuse the home and read no env in a test
+  binary, the fixture's home is under the test's temp dir, doctor reads `doctorDeps.UserHome` and `Getenv`,
+  and the cli's TestMain also unsets `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. `agents.CodexHookName` exports the
+  hook naming the doctor lines use. Rejected: writing Codex's `trusted_hash` for magnum's own entries (spike
+  (a): the hash's input is unverified, and the operator chose the one-time Trust all), per-session hooks
+  (`claude --settings`, `codex -c hooks...`: no install, but every launch and resume path must carry them,
+  untested with `--setting-sources user`), re-encoding the settings with `encoding/json` (it reorders keys and
+  rewrites the operator's formatting, which chezmoi then re-adds as a diff), putting magnum's group first or
+  moving a drifted or non-last one to the end (both shift later hooks' trust, the 2026-10-22 outage), a
+  version in the command line (every upgrade would ask for trust again), and installing the targets that pass
+  when another refuses (a half install). Tests, failing first against stubs (the splice) or proven by taking
+  each guard out once (the command and doctor: the foreign-script refusal, all or nothing, the dry run, the
+  y/N, the exit code, the trust state, the test-binary home guard, the running-daemon and ping checks):
+  TestInstallKeepsEveryByteOfTheSettingsButTheAppendedGroups (herdr's entries, two-space, tab, four-space and
+  CRLF goldens), TestInstallAddsTheHooksObjectOrTheEventKeyWhenMissing, TestASecondInstallChangesNothing,
+  TestADriftedCommandOrTimeoutIsRewrittenInPlace, TestInstallRefusesSettingsThatAreNotValidJSON,
+  TestUninstallGivesBackTheFileTheInstallFound, TestUninstallRemovesOnlyMagnumsHandlers,
+  TestUninstallNamesTheCodexHooksWhosePlaceItMoves, TestReadHookEntriesTellsEachEventsState,
+  TestHooksInstallWritesTheScriptsAndAppendsTheEntries, TestHooksInstallRefusesAForeignScriptAndChangesNothing,
+  TestHooksInstallRefusesSettingsThatAreNotJSONAndWritesNothing, TestHooksDryRunWritesNothing,
+  TestHooksInstallRewritesADriftedEntryAndSaysCodexAsksAgain, TestHooksStatusSaysEveryStateAndExitsOneUnlessCurrent,
+  TestHooksUninstallAsksBeforeMovingACodexHooksPlace, TestHooksNeverReachTheRealHomeInATest,
+  TestDoctorWarnsUntilMagnumsClaudeHooksAreCurrent, TestDoctorChecksMagnumsCodexHooksPerHome,
+  TestDoctorChecksEachDaemonsHookSocket (a real unixgram listener in a short temp dir; the ping is never handed
+  on), and from the review's fix round, failing first against stubs or with each guard taken out once:
+  TestTheHookTimeoutsStayWithinTheAgentsLimitsAndNeverChange, TestHandlersAreReadWithExactKeysAndNoKeyTwice,
+  TestHooksARewrittenCodexEntryIsUntrustedUntilCodexTrustsItAgain, TestDoctorWarnsWhileARewrittenCodexEntryKeepsItsOldTrust,
+  TestARewrittenCodexHooksOldTrustReadsUntrustedUntilItChanges, TestStaleCodexTrustNeedsItsDirectory,
+  TestARewrittenCodexEntrysOldTrustHoldsNewCodexSessions (engine, a test file only),
+  TestHooksInstallRefusesADanglingLinkAndANewerScript, TestHooksUninstallRefusesAFileThatChangedWhileItAsked,
+  TestHooksRefuseAHomeThatIsNotAnAbsolutePath, the missing script of TestHooksStatusSaysEveryStateAndExitsOneUnlessCurrent,
+  and TestHooksNeverReachTheRealHomeInATest against the real homes TestMain records before it moves HOME; from
+  the second fix round, failing first against stubs and with each guard taken out once:
+  TestClaudeReadsAKeyTwiceAsClaudeDoesAndCodexRefusesIt (the re-review's three probe inputs),
+  TestARewriteSaysWhetherCodexTrustsTheNewHookAsTheOld, TestHooksARewriteCodexHashesTheSameRecordsNothing,
+  TestHooksForgetStaleClearsARecordCodexWillNeverReplace (the re-review's probe), TestHooksInstallRefusesASettingsFileThatChangedSinceItWasRead,
+  TestDoctorNamesTheShellForAClaudeDirectoryThatIsNotAbsolute, TestForgetStaleCodexTrustRemovesOnlyThatHomesRecords,
+  TestAReaderNeverRemovesARecordNewerThanTheOneItRead, TestTheUntrustedSentenceTellsAStaleTrustEntryApart,
+  the forget step of TestARewrittenCodexEntrysOldTrustHoldsNewCodexSessions; from the third, failing first and
+  with each guard taken out once: TestAQuietCodexStartForgetsOnlyTheStaleTrustRecordedBeforeItsLaunch (a true
+  quiet start, a session older than the record, a review the first prompt's wait answered),
+  TestAReviewAnsweredAtTheLaunchKeepsTheStaleTrust (the re-review's probe, declined and trusted),
+  TestAQuietStartOfARowWithoutItsHomeClearsOnlyTheOneConfiguredHome, TestCodexRefusesAKeyTwiceOnlyWhereItsOwnStructsReadIt
+  (the re-review's probe), TestAClaudeSettingsFileWithAnotherToolsKeysTwiceRoundTrips (its other probe) and
+  TestHooksUsageNamesForgetStale.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

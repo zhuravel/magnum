@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -47,6 +48,9 @@ func (c *Context) LoadConfig() error {
 func Main(version string, args []string, stdout, stderr io.Writer) int {
 	c := &Context{Version: version, Stdout: stdout, Stderr: stderr}
 	c.Layout, c.layoutErr = paths.Resolve()
+	if c.layoutErr == nil && c.Layout.Valid() {
+		agents.SetStaleCodexTrustDir(hooksStaleTrustDir(c.Layout)) // status, doctor and the daemons' hooks hold read it
+	}
 	return execute(c, args)
 }
 
@@ -106,7 +110,7 @@ func newRoot(c *Context) *cobra.Command {
 		newAttentionCmd(c), newPickCmd(c), newCleanupCmd(c), newKickCmd(c),
 		newPauseCmd(c), newResumeCmd(c), newRestartSessionsCmd(c), newSettingsCmd(c), newUICmd(c), newPostReviewCmd(c), newDBLockCmd(c), newFixReplyCmd(c), newFixSyncCmd(c), newPushCmd(c),
 		// Daemon
-		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newInstallCmd(c), newUninstallCmd(c), newFactoryCmd(c),
+		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newInstallCmd(c), newUninstallCmd(c), newHooksCmd(c), newFactoryCmd(c),
 	)
 	noFileCompletionByDefault(root)
 	return root

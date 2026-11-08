@@ -40,6 +40,11 @@ const (
 	NameInterrupt         = "interrupt"          // Codex: the turn was cut
 )
 
+// PingName is the event `magnum doctor` sends a daemon's hook socket to see
+// that it takes datagrams. No hook sends it, and every receiver drops it:
+// Serve hands on only the events above.
+const PingName = "ping"
+
 // The env of a magnum pane, and the agents' own env the parser reads.
 const (
 	// EnvSocket is the socket of the daemon that started the pane; without

@@ -192,6 +192,7 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 	if err := m.sendKeys(ctx, ref, "enter"); err != nil {
 		return false, fmt.Errorf("agents: hooks review in %s: %w", ref, err)
 	}
+	m.markHooksAnswered(ref)
 	keys = append(keys, "enter")
 	kindEv, msg := EventHooksTrusted, fmt.Sprintf("trusted the Codex hooks review of %s in %s: %s (%s)", role, ref, why, strings.Join(keys, ", "))
 	if choice == hooksDeclineOption {

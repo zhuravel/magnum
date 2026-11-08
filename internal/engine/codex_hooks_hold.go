@@ -13,7 +13,10 @@ package engine
 // hooks.json of each Codex home the codex kind's session roles read, and
 // while one has none the codex kind is paused, which holds every new Codex
 // session: rounds and jobs that need Codex wait, running sessions go on.
-// magnum never writes hooks.json or config.toml.
+// magnum never writes config.toml, and writes hooks.json only on the
+// operator's word: `magnum hooks install` appends magnum's own entries (so
+// the hold then waits for the operator's one-time Trust all) and `uninstall`
+// removes them.
 
 import (
 	"context"
@@ -62,7 +65,7 @@ const hooksHoldFor = 10 * time.Minute
 // The hold's toast.
 const (
 	hooksHoldTitle = "magnum: Codex hooks need review"
-	hooksHoldBody  = "Codex hooks need review: run `codex` once and choose Trust all. New Codex sessions wait."
+	hooksHoldBody  = "Codex hooks need review: run `codex` once and choose Trust all. New Codex sessions wait. If codex asks nothing: magnum hooks install codex --forget-stale."
 )
 
 // checkCodexHooksTrust reads, for each Codex home of homes (those the codex

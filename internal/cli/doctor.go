@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/launchd"
@@ -36,7 +37,9 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"without a timeout of 10 s or less, or with no trust entry for its place) and the Codex session ids of the registry (a WARN "+
 			"when the newest two Codex sessions have none), the trust of every hook in the hooks.json of each Codex home the Codex "+
 			"roles read (a WARN naming the hooks with no trust entry in config.toml, for which Codex asks to review the hooks and new "+
-			"Codex sessions wait), the judge skill, the fix role, the skill editor "+
+			"Codex sessions wait), magnum's own agent hooks (`magnum hooks status`: a WARN while Claude's or a Codex home's are "+
+			"missing, outdated, modified or incomplete, or a Codex entry of magnum's has no trust entry), each daemon's hook socket "+
+			"(it must accept a ping while its daemon runs, or the daemon polls alone), the judge skill, the fix role, the skill editor "+
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity (and a watch that polls as an App with no gh identity to stand for your login), the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+
@@ -106,6 +109,10 @@ type doctorDeps struct {
 	DiskFree    func(path string) (uint64, error)
 	Getenv      func(string) string
 	UserHome    string
+	// DaemonPID and FactoryPID read the review and the factory daemon's
+	// pidfiles (engine.DaemonPID, factory.DaemonPID); nil: not running.
+	DaemonPID  func() (int, error)
+	FactoryPID func() (int, error)
 }
 
 // doctorDiskFree reads the free bytes of a path (a seam for tests).
@@ -129,6 +136,8 @@ func runDoctor(c *Context, asJSON bool, pos []string) int {
 			return launchd.Status(ctx, a.Runner, os.Getuid(), launchd.DefaultLabel)
 		},
 		DiskFree: doctorDiskFree, Getenv: os.Getenv, UserHome: inspHome(),
+		DaemonPID:  func() (int, error) { return engine.DaemonPID(a.Layout) },
+		FactoryPID: func() (int, error) { return factory.DaemonPID(a.Layout) },
 	}
 	if a.MySQL != nil {
 		d.MySQL = a.MySQL
@@ -183,7 +192,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck,
 		doctorClones, doctorFixerPushURL, doctorFixerRepos, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}

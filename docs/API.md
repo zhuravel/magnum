@@ -168,6 +168,11 @@ const (
     magnum.AgentHookScript): ScriptMarker, "# MAGNUM_HOOK_ID=<agent>" and "#
     MAGNUM_HOOK_VERSION=<n>".
 
+const PingName = "ping"
+    PingName is the event `magnum doctor` sends a daemon's hook socket to see
+    that it takes datagrams. No hook sends it, and every receiver drops it:
+    Serve hands on only the events above.
+
 const Version = 1
     Version is the Event's V. The fields are additive under it: a later field
     never changes the meaning of an older one, so a daemon reads an event with a
@@ -544,6 +549,11 @@ const CodexCyberPolicy = "cyber_policy"
     CodexCyberPolicy is the codex_error_info of Codex's cybersecurity refusal
     ("This content was flagged for possible cybersecurity risk").
 
+const CodexForgetStaleStep = "if `codex` asks nothing, run `magnum hooks install codex --forget-stale`"
+    CodexForgetStaleStep is the way out of a record Codex will never replace (it
+    trusts the rewritten hook as it is, so it asks nothing): status, doctor and
+    the hold's texts name it.
+
 const CodexHookMaxTimeout = 10
     CodexHookMaxTimeout is the longest timeout, in seconds, a SessionStart hook
     that runs before herdr's may have for herdr's hook's place to pass: herdr's
@@ -841,6 +851,13 @@ func CodexHookHomes(cfg *config.Config, home func(config.Role) string) (homes []
     (CodexSessionHomes). None unless the codex kind's session ids come from
     herdr (session_source "herdr"); a shell role's `codex review` needs no id.
 
+func CodexHookName(typ, command string) string
+    CodexHookName names a hook of a hooks.json as magnum's messages do
+    (codexHookName): the last path element of its program, or of the script
+    an interpreter runs ("bash ~/.codex/herdr-agent-state.sh session" is
+    herdr-agent-state.sh), cleaned for the terminal; its type for a hook that
+    runs no command.
+
 func CodexSessionHomes(cfg *config.Config, home func(config.Role) string) (homes []string, users map[string][]string)
     CodexSessionHomes are the Codex homes the session roles of the codex
     kind read, in the roles' order, with the roles that read each (home:
@@ -898,6 +915,12 @@ func FixSyncLine(magnum, checkout, from, branch, base string) string
     branch, each shell-quoted. The command replays the fixer's commits onto the
     branch's new tip when the branch gained only merges of the base, and changes
     nothing otherwise.
+
+func ForgetStaleCodexTrust(home string) (int, error)
+    ForgetStaleCodexTrust removes every record of the Codex home home's
+    hooks.json and says how many it removed: a place magnum recorded that Codex
+    will never trust anew (it trusts the hook as it is) then reads trusted
+    again. Without a records directory there is none.
 
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
@@ -1107,6 +1130,15 @@ func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, 
     a failure after the limit's row was written (the repeat record, an ended
     row) leaves the limit recorded.
 
+func RecordStaleCodexTrust(home string, places []string) error
+    RecordStaleCodexTrust records, for each of places (as Codex keys its trust:
+    "stop:1:0") of the Codex home home's hooks.json, the trusted_hash its
+    [hooks.state] entry has now: magnum is about to rewrite the hook there in
+    its place, and ReadCodexHooksTrust counts the place untrusted while its
+    entry keeps that hash. A place without a trust entry needs no record (it
+    reads untrusted anyway). Without a records directory (SetStaleCodexTrustDir)
+    it records nothing and says so.
+
 func RelatedStackLine(below, above []int) string
     RelatedStackLine is JudgeData.RelatedStack, and the round.related event's
     words for the stacks: "#751 stacked below this PR; #753 above it", either
@@ -1148,6 +1180,13 @@ func SameModel(a, b string) bool
     messages and configs spell them: equal ignoring case, or one is a word of
     the other ("opus" and "claude-opus-4-5"). "" means UnknownModel.
 
+func SetStaleCodexTrustDir(dir string)
+    SetStaleCodexTrustDir sets the directory of magnum's records of Codex
+    trust entries that a rewrite of its own hooks left stale (under magnum's
+    state directory). The CLI sets it once at its start, for every command
+    and the daemons it runs; "" (the default, and a test binary's) keeps none,
+    and ReadCodexHooksTrust then reads Codex's files alone.
+
 func ShellDBLockLine(magnum, checkout, role, run string) string
     ShellDBLockLine is DBLockLine with `--run <run>` before the `--`: the line
     a shell role's command runs through (ShellData.DBLockCommand). The run id is
@@ -1184,6 +1223,10 @@ func SlashCommand(text string) (name string, ok bool)
     into the pane as a record of tags (<command-name>/model</command-name>,
     <command-message>, <command-args>), in no fixed order. ok is false for any
     other text.
+
+func StaleCodexTrustCount(home string) int
+    StaleCodexTrustCount is how many records the Codex home home's hooks.json
+    has (ForgetStaleCodexTrust's count, removing nothing).
 
 func TaggedAgentName(tag string, repo string, number int, role Role) string
     TaggedAgentName is AgentName for agents started under a tag (Deps.Tag,
@@ -1230,6 +1273,10 @@ type CodexHookAt struct {
 	// "<event>:<group>:<index>" ("pre_tool_use:1:0").
 	Place string
 	CodexHook
+	// Stale: its place has a trust entry, but of the hook before magnum
+	// rewrote it there (RecordStaleCodexTrust), which Codex no longer
+	// accepts.
+	Stale bool
 }
     CodexHookAt is one hook of a hooks.json at its place.
 
@@ -1265,19 +1312,25 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error)
     have no trust entry: every hook of every event Codex runs (codexHookEvents),
     in every group, whose place has no [hooks.state] entry with a trusted_hash
     in config.toml (keyed by the hooks.json path, as written or with its
-    symlinks resolved; an entry without a hash trusts nothing). ok is false when
-    there is nothing to judge: home unknown or no hooks.json there. A missing
-    config.toml or [hooks.state] table trusts nothing. err names a file that
-    cannot be read or decoded, without the decoder's message. It only reads.
+    symlinks resolved; an entry without a hash trusts nothing), and every one
+    whose entry keeps the hash magnum recorded when it rewrote the hook there
+    (RecordStaleCodexTrust: Stale). ok is false when there is nothing to judge:
+    home unknown or no hooks.json there. A missing config.toml or [hooks.state]
+    table trusts nothing. err names a file that cannot be read or decoded,
+    without the decoder's message. It never writes Codex's files; it removes
+    a record of magnum's whose entry's hash changed, or whose entry or hook is
+    gone.
 
 func (t CodexHooksTrust) UntrustedPlaces() string
     UntrustedPlaces names the hooks of t without a trust entry and their places:
     "moshi-hook at session_start:1:0, Bartender NotchBar at pre_tool_use:0:0".
 
 func (t CodexHooksTrust) UntrustedSentence(hooksFile string) string
-    UntrustedSentence says how many hooks of t have no trust entry, naming
-    hooksFile as given: "2 hooks in ~/.codex/hooks.json have no trust entry";
-    "" when every hook has one.
+    UntrustedSentence says how many hooks of t have no trust entry, or one
+    Codex no longer accepts (Stale), naming hooksFile as given: "2 hooks in
+    ~/.codex/hooks.json have no trust entry"; with a stale one it adds the way
+    out when Codex asks nothing (CodexForgetStaleStep); "" when every hook is
+    trusted.
 
 type CodexSessionHook struct {
 	HooksFile  string // <home>/hooks.json
