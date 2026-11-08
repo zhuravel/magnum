@@ -78,7 +78,10 @@ func newQARig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResu
 }
 
 // seams puts the rig's probe and timer on the engine: the probe's
-// interval passes at once, and no other bound (a precheck's cap) runs out.
+// interval passes at once, and no other bound (a precheck's cap) runs out:
+// its timer is a nil channel, which never fires, on purpose. A new timer on
+// the seam that a QA test needs to fire must be named here, or its test
+// waits for go test's timeout.
 func (r *qaRig) seams() {
 	r.e.qaProbe = r.probeQA
 	r.e.after = func(d time.Duration) <-chan time.Time {

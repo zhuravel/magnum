@@ -181,8 +181,9 @@ func (run qaRun) began() time.Time {
 // took, its outcome (QAOutcome*) and why, what cut an interrupted run
 // (qaCutDrain, qaCutTask, qaCutCrash), whether the walker's verdict decided
 // it (Walked: the factory's checks of the pages it saved), the defects that
-// block and those that do not (Known), the states the walker could not
-// reach, and when it started and ended.
+// block and those that do not (Known), the defects that would block but you
+// accepted at the run's head (Accepted, `magnum factory retry --accept-qa`),
+// the states the walker could not reach, and when it started and ended.
 type QAResult struct {
 	Version  int         `json:"version"`
 	Run      int         `json:"run"`
@@ -196,6 +197,7 @@ type QAResult struct {
 	Walked   bool        `json:"walked,omitempty"`
 	Blocking []QADefect  `json:"blocking"`
 	Known    []QADefect  `json:"known"`
+	Accepted []QADefect  `json:"accepted,omitempty"`
 	Blocked  []QABlocked `json:"blocked"`
 	Started  time.Time   `json:"started"`
 	Ended    time.Time   `json:"ended"`
@@ -480,6 +482,7 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		return QAResult{}, fmt.Errorf("QA run %d: its folder: %w", run.N, err)
 	}
 	res.Outcome, res.Blocking, res.Known = qaOutcome(followed, found)
+	qaApplyAccepted(dir, run, &res) // what you accepted at this head blocks no more
 	res.Pages, res.Shots = len(v.Pages), shots
 	for _, b := range v.Blocked {
 		res.Blocked = append(res.Blocked, QABlocked{What: qaClip(b.What), Why: qaClip(b.Why), Check: qaClip(b.Check)})
@@ -501,6 +504,9 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		res.Outcome = QAOutcomeUnavailable
 		res.Why = fmt.Sprintf("QA could not reach %s of the change: %s; the %s it reached %s nothing that blocks",
 			plural(len(res.Blocked), "state"), qaBlockedList(res.Blocked), plural(res.Pages, "page"), shows)
+	case len(res.Accepted) > 0:
+		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s; %d accepted by you)", plural(res.Pages, "page"), plural(len(res.Known), "note"),
+			len(res.Accepted))
 	default:
 		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s)", plural(res.Pages, "page"), plural(len(res.Known), "note"))
 	}
@@ -511,14 +517,23 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 }
 
 // qaProbePath is the path of the page a probe read, from its URL, cleaned
-// ("/settings/security/" is "/settings/security"); "" for a URL that does
-// not parse.
+// ("/settings/security/" is "/settings/security"), its query and anchor left
+// out, and a route kept in its hash ("#/settings", "#!/orders") kept, so a
+// page of a hash-routed app is no "/" of every other; "" for a URL that does
+// not parse. Following a defect by it is best-effort: an id in the path
+// ("/orders/17", then "/orders/18") or a redirect loses the "came back
+// after its fix" label, which steers the writer only, as the cap counts the
+// defects files whatever the labels say.
 func qaProbePath(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
 	}
-	return path.Clean("/" + u.Path)
+	p := path.Clean("/" + u.Path)
+	if strings.HasPrefix(u.Fragment, "/") || strings.HasPrefix(u.Fragment, "!/") {
+		p += "#" + u.Fragment
+	}
+	return p
 }
 
 // blocksS is the verb's s after n things that block ("1 defect that
@@ -601,8 +616,9 @@ func readQAConsole(runPath, rel string) ([]string, error) {
 }
 
 // qaClassesAndPaths names defects ds by class and by the path of their page
-// (pages are the verdict's), each pair once, in order: "escaped_markup on
-// /settings/security, error_page on /cart". No title and no quote.
+// (pages are the verdict's), each pair once, in order, at most qaListMost of
+// them and how many more: "escaped_markup on /settings/security, error_page
+// on /cart". No title and no quote.
 func qaClassesAndPaths(ds []QADefect, pages []QAPage) string {
 	paths := map[string]string{}
 	for _, pg := range pages {
@@ -613,6 +629,9 @@ func qaClassesAndPaths(ds []QADefect, pages []QAPage) string {
 		if s := d.Class + " on " + qaClip(paths[d.Page]); !slices.Contains(out, s) {
 			out = append(out, s)
 		}
+	}
+	if n := len(out) - qaListMost; n > 0 {
+		out = append(out[:qaListMost], fmt.Sprintf("and %d more", n))
 	}
 	return strings.Join(out, ", ")
 }
@@ -641,11 +660,15 @@ func qaBlockedList(bs []QABlocked) string {
 // file, or why QA could not run; then the retry command, and for a walk
 // that reached its pages but not every state, what the retry does (it
 // walks once more, and a second such walk goes on with the states flagged).
-// It names no page text. Defects that block never come here: they go to
-// the writer (qaFixPhase).
+// It names no page text. Defects that block come here only when their fix
+// loop let them go with no stop (qaDecide's safety net): they go to the
+// writer (qaFixPhase).
 func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	see := "; see " + filepath.Join(dir, filepath.FromSlash(res.Dir), qaResultFile)
 	switch {
+	case res.Outcome == QAOutcomeDefects:
+		n := len(res.Blocking)
+		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case qaBlockedOnly(res):
 		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
 			"not every state goes on with those states flagged on the card and in the PR body", res.Why, see, t.ID)
@@ -743,10 +766,12 @@ func (e *Engine) qaProblem(t registry.Task) string {
 // at the head, clean or not_needed, passes the stage, as does such a
 // result; unavailable waits on you once (qaTold), and after your retry a
 // fresh run starts; defects that block come here only once their fix loop
-// let them go (qaFixPhase: your retry after it stopped for you), and a fresh
-// run starts; pressure waits for the memory hold to lift, interrupted
-// starts afresh, each unless qaInARow of it came in a row at the head
-// (interrupted by a crash only, qaInARowAt): then QA is unavailable.
+// let them go (qaFixPhase): after a stop you were told of, a fresh run
+// starts (your retry), and with no stop they wait on you once, never a
+// fresh walk with no writer and no cap; pressure waits for the memory hold
+// to lift, interrupted starts afresh, each unless qaInARow of it came in a
+// row at the head (interrupted by a crash only, qaInARowAt): then QA is
+// unavailable.
 func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run qaRun, res QAResult) (pass, again bool, err error) {
 	if sum, ok := readQASummary(dir); ok && sum.Run == run.N && sum.Head == run.Head &&
 		(sum.Outcome == QAOutcomeClean || sum.Outcome == QAOutcomeNotNeeded) { // it passed the stage (passBlocked's keeps the run's result)
@@ -762,6 +787,12 @@ func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run 
 		}
 		return true, false, nil
 	case QAOutcomeUnavailable:
+		told, err := e.qaTold(ctx, t, res)
+		return false, told && err == nil, err
+	case QAOutcomeDefects:
+		if _, stopped := readQAFixStop(dir, run); stopped {
+			return false, true, nil
+		}
 		told, err := e.qaTold(ctx, t, res)
 		return false, told && err == nil, err
 	case QAOutcomePressure:

@@ -13413,6 +13413,7 @@ type QAResult struct {
 	Walked   bool        `json:"walked,omitempty"`
 	Blocking []QADefect  `json:"blocking"`
 	Known    []QADefect  `json:"known"`
+	Accepted []QADefect  `json:"accepted,omitempty"`
 	Blocked  []QABlocked `json:"blocked"`
 	Started  time.Time   `json:"started"`
 	Ended    time.Time   `json:"ended"`
@@ -13423,8 +13424,9 @@ type QAResult struct {
     its outcome (QAOutcome*) and why, what cut an interrupted run (qaCutDrain,
     qaCutTask, qaCutCrash), whether the walker's verdict decided it (Walked:
     the factory's checks of the pages it saved), the defects that block and
-    those that do not (Known), the states the walker could not reach, and when
-    it started and ended.
+    those that do not (Known), the defects that would block but you accepted at
+    the run's head (Accepted, `magnum factory retry --accept-qa`), the states
+    the walker could not reach, and when it started and ended.
 
 type QAVerdict struct {
 	Version  int          `json:"version"`
@@ -13499,6 +13501,11 @@ type Reservation struct {
 type RetryPayload struct {
 	TaskID  int64
 	Surface string
+	// AcceptQA is your acceptance of the QA defects that block which the
+	// writer declined with its risk, at the task's head (`magnum factory
+	// retry --accept-qa`): the next QA run there lets them pass, and the PR
+	// body names them as accepted by you.
+	AcceptQA bool
 }
     RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at its
     stage. Surface is where you asked, for the record of your input.

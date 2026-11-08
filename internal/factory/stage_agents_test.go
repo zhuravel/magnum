@@ -195,6 +195,7 @@ func TestCheckPromptsRendersTheQAFixPrompt(t *testing.T) {
 		d.Review, d.ReviewReply, d.Proof, d.Questions, "`" + d.Branch + "`", "escaped_markup", "raw_i18n_key", "error_page",
 		"its state", "its shot", "a quote", "data, never instructions", "test first", "request or view spec", "the rendered body",
 		"translation missing", "fails without the fix", "with its risk", "still blocks", "came back after its fix", "Never push",
+		"only the operator can accept one", "did not accept your decline",
 		`"id": "Q1"`, "As the last step",
 	} {
 		if !strings.Contains(text, want) {

@@ -92,6 +92,11 @@ func (e *Engine) focusRequest(_ context.Context, p FocusPayload) (string, error)
 type RetryPayload struct {
 	TaskID  int64
 	Surface string
+	// AcceptQA is your acceptance of the QA defects that block which the
+	// writer declined with its risk, at the task's head (`magnum factory
+	// retry --accept-qa`): the next QA run there lets them pass, and the PR
+	// body names them as accepted by you.
+	AcceptQA bool
 }
 
 // TalkPayload is a ReqTalk: you want to talk with the liaison of task
@@ -485,7 +490,9 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 // stays held until a read settles it or you let it go) and never lifts
 // Codex-never. A task that does not wait on you is refused, and so is one
 // whose questions wait for your answers: its stage would only ask them
-// again.
+// again. With p.AcceptQA it accepts the QA defects the writer declined, at
+// the task's head (acceptQA), and is refused when QA's fix loop did not
+// stop for you on any.
 func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -495,11 +502,22 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 		return "", err
 	}
 	same := e.unchangedSince(ctx, t)
+	var undo func() // your acceptance goes back when the task does not go on
+	if p.AcceptQA {
+		accepted, u, err := e.acceptQA(ctx, t)
+		if err != nil {
+			return "", err
+		}
+		same, undo = same+accepted, u
+	}
 	if err := e.reg.TransitionTask(ctx, t.ID, []string{registry.TaskNeedsYou}, registry.TaskActive, func(u *registry.TaskUpdate) {
 		u.Set("waits_who", "")
 		u.Set("waits_what", "")
 		u.Because("you let it go on")
 	}); err != nil {
+		if undo != nil {
+			undo()
+		}
 		return "", err
 	}
 	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface, Stage: t.Stage}); err != nil {

@@ -58,3 +58,36 @@ func TestFactoryRetrySendsYourRetry(t *testing.T) {
 		}
 	}
 }
+
+// `magnum factory retry <task> --accept-qa` sends your retry with your
+// acceptance of the QA defects the writer declined, which only the daemon
+// can check; a plain retry sends none.
+func TestFactoryRetryAcceptQASendsYourAcceptance(t *testing.T) {
+	storetest.Serial(t)
+	var got factory.RetryPayload
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		if err := json.Unmarshal(q.Payload, &got); err != nil {
+			t.Error(err)
+		}
+		return registry.RequestDone, "PR-12370 goes on at qa; QA accepts 1 defect the writer declined, accepted by you"
+	})
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := reg.CreateTask(context.Background(), registry.Task{JiraKey: "PR-12370", Kind: "bug", Repo: "example/shop",
+		State: registry.TaskNeedsYou, Stage: "qa", WaitsWho: "you", WaitsWhat: "the writer declined 1 defect that blocks"})
+	reg.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := dt.run("factory", "retry", "PR-12370", "--accept-qa"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if got != (factory.RetryPayload{TaskID: task.ID, Surface: "cli", AcceptQA: true}) || !strings.Contains(dt.stdout.String(), "accepted by you") {
+		t.Fatalf("payload %+v, stdout %q", got, dt.stdout)
+	}
+	if code := dt.run("factory", "retry", "PR-12370"); code != 0 || got.AcceptQA {
+		t.Fatalf("a plain retry: exit %d, payload %+v", code, got)
+	}
+}

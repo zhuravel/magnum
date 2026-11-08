@@ -2,6 +2,7 @@ package factory
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,13 +20,55 @@ import (
 // /settings/security whatever the walker calls the page.
 var escapedProbes = map[string]string{"P1": "escaped-tooltip.json"}
 
-// escapedWalk is a walk of one page, the security settings, which the
-// walker spells path, and the walker's own find of the tooltip's markup
-// there, naming the partial that renders it.
-func escapedWalk(path string) QAVerdict {
-	return QAVerdict{Pages: []QAPage{qaPage(1, "P1", path, "A1")},
-		Defects: []QADefect{{ID: "D1", Class: QAEscapedMarkup, Severity: "P2", Page: "P1", Title: "the dates show HTML",
-			Paths: []string{"app/views/settings/_keys.html.erb"}}}}
+// cleanProbes are the probes of a walk whose page shows the dates right.
+var cleanProbes = map[string]string{"P1": "clean-tooltip.json"}
+
+// The walker's own finds on the security settings: the tooltip's markup
+// shown as text (the factory's checks find it too), naming the partial that
+// renders it, and a flow of the check that does not do what it says, which
+// only the walker can see.
+var (
+	escapedFind = QADefect{ID: "D1", Class: QAEscapedMarkup, Severity: "P2", Page: "P1", Title: "the dates show HTML",
+		Paths: []string{"app/views/settings/_keys.html.erb"}}
+	flowFind = QADefect{ID: "D2", Class: QAFlow, Severity: "P2", Page: "P1", Title: "the date opens no tooltip"}
+)
+
+// walkWith is a walk of one page, the security settings, which the walker
+// spells path, with the walker's finds ds.
+func walkWith(path string, ds ...QADefect) QAVerdict {
+	return QAVerdict{Pages: []QAPage{qaPage(1, "P1", path, "A1")}, Defects: ds}
+}
+
+// escapedWalk is a walk of the security settings at path with the walker's
+// own find of the tooltip's markup.
+func escapedWalk(path string) QAVerdict { return walkWith(path, escapedFind) }
+
+// acceptQA sends your retry of task id with --accept-qa, as the CLI does,
+// and runs the tick that answers it; the request as that tick left it.
+func (r *qaRig) acceptQA(id int64) registry.Request {
+	r.t.Helper()
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqRetry, RetryPayload{TaskID: id, Surface: "cli", AcceptQA: true})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.tick()
+	q, err := r.reg.RequestByID(r.ctx, qid)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return q
+}
+
+// toQAAt runs the ticks until the task is back at its qa stage after k
+// review rounds, and returns its head.
+func (r *qaRig) toQAAt(task registry.Task, k int) string {
+	r.t.Helper()
+	r.run(12, func() bool { return len(r.rv.calls()) == k && r.reload(task.ID).Stage == "qa" })
+	got := r.reload(task.ID)
+	if got.Stage != "qa" || len(r.rv.calls()) != k {
+		r.t.Fatalf("after %d review rounds: task %s at %s waits %q: %q", len(r.rv.calls()), got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+	return got.HeadSHA
 }
 
 // qaDefects is defects-<k>.json of run k at head.
@@ -201,9 +244,11 @@ func TestAWriterAtWorkOnQAsDefectsIsNoMoveOfTheBranch(t *testing.T) {
 // Review Focus: the writer declines every QA defect with its risk and
 // commits nothing. The stage ends without a loop, and a defect QA finds
 // never becomes a known note (roadmap R56): no summary passes the stage,
-// the task needs you naming the defects and the writer's reply, and no
-// review round runs. Your retry walks QA again at the head, and the writer
-// gets the defect once more, marked as come back after its fix.
+// the task needs you naming the defects, the writer's reply and what each
+// retry does, and no review round runs. Your retry without --accept-qa
+// refuses the decline: QA walks again at the head, and the writer gets the
+// defect once more, marked as declined and not accepted, never as come back
+// after its fix.
 func TestADeclinedQADefectNeedsYouAndNeverBecomesKnown(t *testing.T) {
 	r := newQARig(t)
 	task, head := r.qaTask("PR-12443")
@@ -213,7 +258,8 @@ func TestADeclinedQADefectNeedsYouAndNeverBecomesKnown(t *testing.T) {
 	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
 	got := r.toYou(task)
 	reply := filepath.Join(r.runDir(task.ID, 1, head), "reply-1.json")
-	for _, want := range []string{"declined", "escaped_markup on /settings/security", reply, fmt.Sprintf("magnum factory retry %d", task.ID)} {
+	for _, want := range []string{"declined", "escaped_markup on /settings/security", reply, fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID),
+		"accepted by you", fmt.Sprintf("`magnum factory retry %d` walks QA again and hands it to the writer once more (1 of the task's 2 fix turns left)", task.ID)} {
 		if !strings.Contains(got.WaitsWhat, want) {
 			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
 		}
@@ -244,8 +290,208 @@ func TestADeclinedQADefectNeedsYouAndNeverBecomesKnown(t *testing.T) {
 	}
 	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
 	r.toWriter(task, 2)
-	if rf := r.qaDefects(task.ID, 2, head); len(rf.Findings) != 1 || !strings.Contains(rf.Findings[0].Body, "came back after its fix") {
-		t.Fatalf("defects-2.json %+v, want the defect marked as come back after its fix", rf)
+	if rf := r.qaDefects(task.ID, 2, head); len(rf.Findings) != 1 || !strings.Contains(rf.Findings[0].Body, "the operator did not accept the decline") ||
+		strings.Contains(rf.Findings[0].Body, "came back") {
+		t.Fatalf("defects-2.json %+v, want the defect marked as declined in run 1 and not accepted", rf)
+	}
+}
+
+// I1: the writer fixes one defect and declines the other with its risk,
+// beside a commit. The fix goes through the review and QA, and once QA
+// finds the declined defect again the task needs you, naming the reply of
+// the decline: the writer gets no turn of it again (no defects-2.json),
+// and it never came back after a fix. Your --accept-qa accepts it at that
+// head: the next run passes with it accepted by you, never a known note.
+func TestAPartialDeclineReachesYouAndYourAcceptPassesItAtItsHead(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12447")
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", escapedFind, flowFind), escapedProbes)
+	r.toWriter(task, 1)
+	rf := r.qaDefects(task.ID, 1, head)
+	if len(rf.Findings) != 2 || !strings.HasPrefix(rf.Findings[1].Title, "flow: ") {
+		t.Fatalf("defects-1.json %+v, want the markup and the flow", rf.Findings)
+	}
+	r.writerFixesQA(task, 1, head, fixedCredit(1), map[string]string{"Q2": "the tooltip's script is shared with the mailer"})
+	fix := r.toQAAt(task, 1)
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", flowFind), cleanProbes)
+	got := r.toYou(task)
+	reply := filepath.Join(r.runDir(task.ID, 1, head), "reply-1.json")
+	for _, want := range []string{"the writer declined 1 defect that blocks (flow on /settings/security) with its risk", reply,
+		fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID)} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	if strings.Contains(got.WaitsWhat, "came back") || strings.Contains(got.WaitsWhat, "shared with the mailer") {
+		t.Errorf("the task waits %q: a decline is no return after a fix, and the wait quotes no risk", got.WaitsWhat)
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if fsx.Exists(filepath.Join(dir, qaDefectsFile(2, fix))) || len(r.rt.promptsTo("fx-writer")) != 1 {
+		t.Fatalf("the writer got the declined defect again (%d prompts)", len(r.rt.promptsTo("fx-writer")))
+	}
+
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone || !strings.Contains(q.Result, "accepted by you") {
+		t.Fatalf("the retry with --accept-qa %+v", q)
+	}
+	var acc qaAccepted
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, qaAcceptedFile)), &acc); err != nil || acc.Head != fix || len(acc.Fingerprints) != 1 ||
+		acc.Fingerprints[0] != rf.Findings[1].Fingerprint {
+		t.Fatalf("qa-accepted.json %+v (%v), want the flow's fingerprint at %s", acc, err, fix)
+	}
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", flowFind), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" {
+		t.Fatalf("task %s at %s waits %q: %q, want pr_body", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+	sum, ok := readQASummary(dir)
+	if !ok || sum.Outcome != QAOutcomeClean || sum.Head != fix || len(sum.Accepted) != 1 || sum.Accepted[0].Class != QAFlow ||
+		slices.ContainsFunc(sum.Known, func(d QADefect) bool { return d.Class == QAFlow }) {
+		t.Fatalf("qa-summary.json %+v (%v), want clean at %s with the flow accepted by you, not known", sum, ok, fix)
+	}
+}
+
+// What you accept is exactly the declined defects at their head: another
+// defect at that head still blocks and goes to the writer, and a new head
+// blocks the accepted one again.
+func TestAnAcceptedQADefectLetsAnotherBlockAndANewHeadBlocksItAgain(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12448")
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", flowFind), cleanProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the tooltip's script is shared with the mailer"})
+	r.toYou(task)
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("the retry with --accept-qa %+v", q)
+	}
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", escapedFind, flowFind), escapedProbes)
+	r.toWriter(task, 2)
+	rf := r.qaDefects(task.ID, 2, head)
+	if len(rf.Findings) != 1 || !strings.HasPrefix(rf.Findings[0].Title, "escaped_markup: ") {
+		t.Fatalf("defects-2.json %+v, want the markup alone: the flow is accepted at this head", rf.Findings)
+	}
+	if res := r.qaResult(task.ID, 2, head); len(res.Accepted) != 1 || res.Accepted[0].Class != QAFlow || res.Outcome != QAOutcomeDefects {
+		t.Fatalf("run 2's result %+v, want the markup blocking and the flow accepted", res)
+	}
+	r.writerFixesQA(task, 2, head, fixedCredit(2), nil)
+	fix := r.toQAAt(task, 1)
+	r.toWalker(task)
+	r.walk(task, walkWith("/settings/security", flowFind), cleanProbes)
+	got := r.toYou(task)
+	if res := r.qaResult(task.ID, 3, fix); res.Outcome != QAOutcomeDefects || len(res.Accepted) != 0 || len(res.Blocking) != 1 ||
+		res.Blocking[0].Class != QAFlow {
+		t.Fatalf("run 3's result %+v, want the flow blocking again at the new head %s", res, fix)
+	}
+	if !strings.Contains(got.WaitsWhat, "after the task's 2 fix turns") || !strings.Contains(got.WaitsWhat, "--accept-qa` accepts the 1 the writer declined") {
+		t.Fatalf("the task waits %q, want the cap naming the declined flow", got.WaitsWhat)
+	}
+}
+
+// --accept-qa accepts only what the writer declined: a task whose QA
+// stopped for you with no decline is refused, and stays with you.
+func TestAcceptQARefusesATaskWithNoDeclinedDefect(t *testing.T) {
+	r := newQARig(t)
+	r.setProbe(func(bool, int) (int, error) { return 0, errRefused })
+	task, _ := r.qaTask("PR-12449")
+	r.toYou(task)
+	q := r.acceptQA(task.ID)
+	if q.State != registry.RequestFailed || !strings.Contains(q.Result, "--accept-qa") {
+		t.Fatalf("the retry with --accept-qa %+v, want it refused", q)
+	}
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s, want it still with you", got.State)
+	}
+	if fsx.Exists(filepath.Join(r.layout.FactoryTaskDir(task.ID), qaAcceptedFile)) {
+		t.Fatal("qa-accepted.json was written")
+	}
+}
+
+// M2: a run that looked at another head than the task's (a stop there, or
+// defects with no file) starts no QA run at the task's head before the
+// local review passed there.
+func TestAQARunAtAnotherHeadThanTheTasksGoesToTheReviewFirst(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12450")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	r.toYou(task)
+	moved := r.commit(task.JiraKey+" escapes the tooltip by hand", fixedCredit(1))
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("head_sha", moved)
+		u.Set("waits_who", "")
+		u.Set("waits_what", "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.run(2, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if got := r.reload(task.ID); got.Stage != "local_review" {
+		t.Fatalf("task %s at %s waits %q: %q, want the local review at %s", got.State, got.Stage, got.WaitsWho, got.WaitsWhat, moved)
+	}
+	if n := newestQARun(r.layout.FactoryTaskDir(task.ID)); n != 1 {
+		t.Fatalf("QA run %d started before the review of %s", n, moved)
+	}
+}
+
+// M3: a stop of the fix loop whose move to you did not land (the daemon
+// stopped first) still reaches you on the next pass, even after another
+// alert of the task: only its own alert lets it go.
+func TestADeclineStopReachesYouEvenAfterAnotherAlert(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12451")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.e.beforeStop = func() error { return errors.New("the daemon stops before the move") }
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	dir := r.layout.FactoryTaskDir(task.ID)
+	r.run(4, func() bool { return fsx.Exists(filepath.Join(r.runDir(task.ID, 1, head), qaFixStopFile)) })
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || !fsx.Exists(filepath.Join(r.runDir(task.ID, 1, head), qaFixStopFile)) {
+		t.Fatalf("task %s waits %q: want the stop written and no move yet", got.State, got.WaitsWhat)
+	}
+	r.e.beforeStop = nil
+	r.e.alert(r.ctx, task.ID, TaskKey(task)+": you: another cause")
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "the writer declined") || newestQARun(dir) != 1 {
+		t.Fatalf("task waits %q after run %d, want the decline", got.WaitsWhat, newestQARun(dir))
+	}
+}
+
+// M4: a page whose route lives in its URL's hash is followed by that route,
+// never by "/" alone; any other path is cleaned, its query and anchor left
+// out.
+func TestQAProbePathFollowsAHashRoute(t *testing.T) {
+	for raw, want := range map[string]string{
+		"http://app.example.localhost:3001/settings/security/":       "/settings/security",
+		"http://app.example.localhost:3001/settings?tab=keys#top":    "/settings",
+		"http://app.example.localhost:3001/#/settings/security":      "/#/settings/security",
+		"http://app.example.localhost:3001/app#!/orders":             "/app#!/orders",
+		"http://app.example.localhost:3001":                          "/",
+		"http://app.example.localhost:3001/settings#/not-a-route-of": "/settings#/not-a-route-of",
+	} {
+		if got := qaProbePath(raw); got != want {
+			t.Errorf("qaProbePath(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// M7: a wait names at most three classes on their pages, then how many
+// more.
+func TestQAClassesAndPathsNamesAtMostThree(t *testing.T) {
+	var pages []QAPage
+	var ds []QADefect
+	for i := range 5 {
+		id := fmt.Sprintf("P%d", i+1)
+		pages = append(pages, QAPage{ID: id, Path: fmt.Sprintf("/page/%d", i+1)})
+		ds = append(ds, QADefect{Class: QAErrorPage, Page: id})
+	}
+	if got, want := qaClassesAndPaths(ds, pages), "error_page on /page/1, error_page on /page/2, error_page on /page/3, and 2 more"; got != want {
+		t.Fatalf("qaClassesAndPaths = %q, want %q", got, want)
 	}
 }
 
@@ -298,8 +544,15 @@ func TestQAFixTurnsStopAtTheCap(t *testing.T) {
 	r.toWalker(task)
 	r.walk(task, escapedWalk(spellings[2]), escapedProbes)
 	got := r.toYou(task)
-	for _, want := range []string{"QA still finds 1 defect that blocks after 2 fix turns", "came back after its fix: escaped_markup on settings/security",
-		"see " + filepath.Join(r.runDir(task.ID, 3, heads[2]), qaResultFile), fmt.Sprintf("magnum factory retry %d", task.ID)} {
+	for _, want := range []string{"QA still finds 1 defect that blocks after the task's 2 fix turns",
+		"came back after its fix: escaped_markup on settings/security",
+		"the writer's replies: " + filepath.Join(r.runDir(task.ID, 1, heads[0]), "reply-1.json") + ", " + filepath.Join(r.runDir(task.ID, 2, heads[1]), "reply-2.json"),
+		"its defects with their shots: " + filepath.Join(r.runDir(task.ID, 2, heads[1]), "defects-2.json"),
+		"see " + filepath.Join(r.runDir(task.ID, 3, heads[2]), qaResultFile),
+		fmt.Sprintf("`magnum factory retry %d` walks QA once more and stops here again unless the branch changed", task.ID),
+		"a commit of yours on " + task.Branch + " goes back through coding",
+		"a higher `fixes` in [factory.repo.qa], after `magnum factory install`, gives the writer another turn",
+		"no defect here was declined with its risk, so `--accept-qa` accepts none"} {
 		if !strings.Contains(got.WaitsWhat, want) {
 			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
 		}

@@ -10,10 +10,15 @@ package factory
 // the task goes back to the local review, whose loop starts afresh (its
 // last cycle reviewed another head), and QA runs after it, at most
 // [factory.repo.qa] fixes turns a task. A defect QA finds that blocks
-// never becomes a known note (roadmap R56): one that comes back after its
-// fix still blocks, named so, never a doubt; one the writer declines with
-// its risk stops the task for you; past the cap the task needs you, never
-// the PR body. Your retry after either walks QA again at the head.
+// never becomes a known note (roadmap R56), and only you can accept it:
+// one that comes back after its fix still blocks, named so, never a doubt;
+// one the writer declines with its risk stops the task for you, at once
+// when it committed nothing, else once QA finds it again; past the cap the
+// task needs you, never the PR body. After a stop, `magnum factory retry
+// --accept-qa` accepts the defects the writer declined, at the head (the
+// next run there lets exactly those pass, and its summary names them as
+// accepted by you), and a plain retry walks QA again: a decline you saw and
+// did not accept goes to the writer once more, within the cap.
 
 import (
 	"cmp"
@@ -26,10 +31,13 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -44,10 +52,31 @@ const QAFixPrompt = "factory-qa-fix.md"
 // then, never a fresh run.
 const qaFixStopFile = "fix-stop.json"
 
-// qaFixStop is fix-stop.json.
+// qaFixStop is fix-stop.json: why, when, and the defects that block which
+// the writer declined with its risk (what --accept-qa accepts).
 type qaFixStop struct {
-	Why string    `json:"why"`
-	At  time.Time `json:"at"`
+	Why      string       `json:"why"`
+	At       time.Time    `json:"at"`
+	Declined []qaDeclined `json:"declined,omitempty"`
+}
+
+// qaDeclined is a defect the writer declined with its risk: its
+// fingerprint, and the run whose reply declined it.
+type qaDeclined struct {
+	Fingerprint string `json:"fingerprint"`
+	Run         int    `json:"run"`
+}
+
+// qaAcceptedFile is qa-accepted.json in the task's directory: the QA
+// defects you accepted (`magnum factory retry --accept-qa`), by
+// fingerprint, at the head QA found them at.
+const qaAcceptedFile = "qa-accepted.json"
+
+// qaAccepted is qa-accepted.json.
+type qaAccepted struct {
+	Head         string    `json:"head"`
+	Fingerprints []string  `json:"fingerprints"`
+	At           time.Time `json:"at"`
 }
 
 // qaDefectsFile is run k's defects for the writer at head, relative to the
@@ -113,30 +142,41 @@ func (e *Engine) qaFixTurns(t registry.Task) int {
 	return len(qaDefectsFiles(e.d.Layout.FactoryTaskDir(t.ID)))
 }
 
+// qaFixes is task t's cap of QA fix turns: its repository's
+// [factory.repo.qa] fixes.
+func (e *Engine) qaFixes(t registry.Task) int {
+	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok && repo.QA != nil {
+		return cmp.Or(repo.QA.Fixes, config.DefaultQAFixes)
+	}
+	return config.DefaultQAFixes
+}
+
 // qaFixPhase goes on with the fix loop of run's defects that block (its
 // result res) for task t at qa stage st, and reports whether the loop holds
-// the stage (false: a fresh run is QA's next step). A stop for you holds it
-// until you were told; then your retry walks again. At the head QA looked
-// at, the first pass writes the defects file (qaStartFix; past the cap, the
-// stop instead), then the writer's fix turn runs until it passed, and its
-// close follows (closeQAFix). A run at another head with neither file is
-// none of the loop's: QA runs at the task's head.
+// the stage (false: a fresh run is QA's next step). A run at another head
+// than the task's with no fix of its own to close (a stop there, or no
+// defects file) holds it only to send the task to the review first, when
+// the review has not passed at the task's head (qaReviewFirst). A stop for
+// you holds it until you were told; then your retry walks again. At the
+// head QA looked at, the first pass writes the defects file (qaStartFix;
+// a decline you were not told of, or the cap, stops for you instead), then
+// the writer's fix turn runs until it passed, and its close follows
+// (closeQAFix). A task with no head yet counts as at the run's.
 func (e *Engine) qaFixPhase(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun, res QAResult) (bool, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if stop, ok := readQAFixStop(dir, run); ok {
-		if run.Head != t.HeadSHA {
-			return false, nil
-		}
+	head := cmp.Or(t.HeadSHA, run.Head)
+	stop, stopped := readQAFixStop(dir, run)
+	rf, handed := readQADefects(dir, run)
+	if run.Head != head && (stopped || !handed) {
+		return e.qaReviewFirst(ctx, t, run)
+	}
+	if stopped {
 		told, err := e.qaToldOfFixStop(ctx, t, stop)
 		return err != nil || !told, err
 	}
-	rf, ok := readQADefects(dir, run)
-	if !ok {
-		if run.Head != t.HeadSHA {
-			return false, nil
-		}
+	if !handed {
 		var err error
-		if rf, ok, err = e.qaStartFix(ctx, t, st, run, res); err != nil || !ok {
+		if rf, handed, err = e.qaStartFix(ctx, t, st, run, res); err != nil || !handed {
 			return true, err
 		}
 	}
@@ -162,37 +202,59 @@ func (e *Engine) qaFixPhase(ctx context.Context, t registry.Task, st config.Fact
 	return e.closeQAFix(ctx, t, run, res, rf)
 }
 
+// qaReviewFirst lets go of run, a QA run at another head than task t's, and
+// reports whether the stage is held: the task goes back to the review stage
+// before qa (backToReview) when the review has not passed at the task's head
+// (qaFixReviewed), so no QA run starts at a head the review never saw.
+func (e *Engine) qaReviewFirst(ctx context.Context, t registry.Task, run qaRun) (bool, error) {
+	reviewed, err := e.qaFixReviewed(ctx, t)
+	if err != nil || reviewed {
+		return err != nil, err
+	}
+	return true, e.backToReview(ctx, t, fmt.Sprintf("QA run %d looked at %s, another head than %s: the local review and QA run at the task's head",
+		run.N, textx.ShortSHA(run.Head), textx.ShortSHA(t.HeadSHA)))
+}
+
 // qaStartFix writes run's defects file for the writer from its defects
-// that block (res) and reports whether it did: none once task t had its
-// fixes cap of fix turns, where the loop stops for you instead
-// (qaFixStopForYou), naming the defects and those that came back after
-// their fix. Each defect is a ReviewItem: Q<i>, its fingerprint and
-// severity, its class before its title, the first code path it names, and
-// a body with its page's path, state and shot (an absolute path) and its
-// quote, and "came back after its fix" when an earlier run's defects file
-// has its fingerprint.
+// that block (res) and reports whether it did. It stops for you instead
+// (qaFixStopForYou) when the writer declined one of them with its risk in
+// an earlier run's reply and no stop told you of that decline yet: only you
+// can accept a defect QA finds, and the writer gets no turn of it before
+// you saw the decline; then once task t had its fixes cap of fix turns. Each
+// stop records the defects that the writer declined, which --accept-qa
+// accepts. Each defect is a ReviewItem: Q<i>, its fingerprint and severity,
+// its class before its title, the first code path it names, and a body
+// with its page's path, state and shot (an absolute path) and its quote,
+// and what an earlier run made of it (qaFixItem).
 func (e *Engine) qaStartFix(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun, res QAResult) (ReviewFile, bool, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	pages := qaVerdictPages(dir, run)
-	earlier := qaEarlierDefects(dir, run.N)
-	var back []QADefect
+	hist := qaHistory(dir, run.N)
+	seen := qaSeenDeclines(dir, run.N)
+	var back, declined []QADefect
+	var stopDeclined []qaDeclined
+	unseen := false
 	for _, d := range res.Blocking {
-		if earlier[d.Fingerprint] > 0 {
+		h, ok := hist[d.Fingerprint]
+		switch {
+		case !ok:
+		case h.declined:
+			dc := qaDeclined{Fingerprint: d.Fingerprint, Run: h.run}
+			declined, stopDeclined = append(declined, d), append(stopDeclined, dc)
+			unseen = unseen || !seen[dc]
+		default:
 			back = append(back, d)
 		}
 	}
-	fixes := config.DefaultQAFixes
-	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok && repo.QA != nil {
-		fixes = cmp.Or(repo.QA.Fixes, fixes)
-	}
-	if turns := e.qaFixTurns(t); turns >= fixes {
-		n := len(res.Blocking)
-		why := fmt.Sprintf("QA still finds %s that block%s after %s (%s)", plural(n, "defect"), blocksS(n), plural(turns, "fix turn"), res.Why)
-		if len(back) > 0 {
-			why += "; came back after its fix: " + qaClassesAndPaths(back, slices.Collect(maps.Values(pages)))
-		}
-		why += "; see " + filepath.Join(dir, filepath.FromSlash(run.Dir), qaResultFile) + retryHint(t)
-		return ReviewFile{}, false, e.qaFixStopForYou(ctx, t, run, why, "QA's defects outlasted the writer's fix turns")
+	fixes, turns := e.qaFixes(t), e.qaFixTurns(t)
+	switch {
+	case unseen:
+		why := e.qaDeclinedWhat(t, run, declined, slices.Collect(maps.Values(pages)), qaReplies(dir, declined, hist), fixes-turns, fixes)
+		return ReviewFile{}, false, e.qaFixStopForYou(ctx, t, run, qaFixStop{Why: why, Declined: stopDeclined}, "the writer declined QA's defects")
+	case turns >= fixes:
+		why := e.qaCapWhat(t, dir, run, res, slices.Collect(maps.Values(pages)), back, declined, turns)
+		return ReviewFile{}, false, e.qaFixStopForYou(ctx, t, run, qaFixStop{Why: why, Declined: stopDeclined},
+			"QA's defects outlasted the writer's fix turns")
 	}
 	n, err := e.attemptsOf(ctx, t, st)
 	if err != nil {
@@ -201,7 +263,7 @@ func (e *Engine) qaStartFix(ctx context.Context, t registry.Task, st config.Fact
 	runPath := filepath.Join(dir, filepath.FromSlash(run.Dir))
 	rf := ReviewFile{Round: run.N, Head: run.Head, AttemptsBefore: n}
 	for i, d := range res.Blocking {
-		rf.Findings = append(rf.Findings, qaFixItem(i, d, pages[d.Page], runPath, earlier[d.Fingerprint]))
+		rf.Findings = append(rf.Findings, qaFixItem(i, d, pages[d.Page], runPath, hist[d.Fingerprint]))
 	}
 	name := qaDefectsFile(run.N, run.Head)
 	if err := writeJSON(filepath.Join(dir, filepath.FromSlash(name)), rf); err != nil {
@@ -212,14 +274,76 @@ func (e *Engine) qaStartFix(ctx context.Context, t registry.Task, st config.Fact
 	if len(back) > 0 {
 		what += fmt.Sprintf(", %d came back after its fix", len(back))
 	}
+	if len(declined) > 0 {
+		what += fmt.Sprintf(", %d declined before and not accepted by you", len(declined))
+	}
 	e.event(ctx, t.ID, "qa", registry.PhaseInfo, what)
 	return rf, true, nil
 }
 
+// qaDeclinedWhat is the wait on you of run's stop for defects ds that block,
+// which the writer declined with its risk (its replies), with left of the
+// task's fixes fix turns left: what --accept-qa and a plain retry do.
+func (e *Engine) qaDeclinedWhat(t registry.Task, run qaRun, ds []QADefect, pages []QAPage, replies []string, left, fixes int) string {
+	n := len(ds)
+	it := "it"
+	if n > 1 {
+		it = "them"
+	}
+	s := fmt.Sprintf("the writer declined %s that block%s (%s) with its risk, and QA passes no visible defect as a known note: see %s; "+
+		"`magnum factory retry %d --accept-qa` accepts %s at %s (the PR body names %s as accepted by you)", plural(n, "defect"), blocksS(n),
+		qaClassesAndPaths(ds, pages), strings.Join(replies, ", "), t.ID, it, textx.ShortSHA(run.Head), it)
+	if left > 0 {
+		return s + fmt.Sprintf(", and `magnum factory retry %d` walks QA again and hands %s to the writer once more (%d of the task's %s left)",
+			t.ID, it, left, plural(fixes, "fix turn"))
+	}
+	return s + fmt.Sprintf(", and `magnum factory retry %d` walks QA again and stops at the cap of the task's %s", t.ID, plural(fixes, "fix turn"))
+}
+
+// qaCapWhat is the wait on you of run's stop at the cap, after the task's
+// turns fix turns: its defects that block (res) by class and page, those
+// that came back after their fix (back), the writer's replies and the newest
+// defects file (the bodies with the shots), the run's result, and what each
+// way out does: a retry walks once more and stops here again, a commit of
+// yours goes back through coding, a higher fixes gives the writer a turn,
+// and --accept-qa accepts the defects the writer declined (declined).
+func (e *Engine) qaCapWhat(t registry.Task, dir string, run qaRun, res QAResult, pages []QAPage, back, declined []QADefect, turns int) string {
+	n := len(res.Blocking)
+	s := fmt.Sprintf("QA still finds %s that block%s after the task's %s (%s)", plural(n, "defect"), blocksS(n), plural(turns, "fix turn"), res.Why)
+	if len(back) > 0 {
+		s += "; came back after its fix: " + qaClassesAndPaths(back, pages)
+	}
+	refs := qaDefectsFiles(dir)
+	var replies []string
+	for _, ref := range refs {
+		if p := filepath.Join(dir, filepath.FromSlash(qaReplyFile(ref.k, ref.head))); fsx.Exists(p) {
+			replies = append(replies, p)
+		}
+	}
+	if len(replies) > 0 {
+		s += "; the writer's replies: " + strings.Join(replies, ", ")
+	}
+	if len(refs) > 0 {
+		last := refs[len(refs)-1]
+		s += "; its defects with their shots: " + filepath.Join(dir, filepath.FromSlash(qaDefectsFile(last.k, last.head)))
+	}
+	s += "; see " + filepath.Join(dir, filepath.FromSlash(run.Dir), qaResultFile)
+	s += fmt.Sprintf("; `magnum factory retry %d` walks QA once more and stops here again unless the branch changed; a commit of yours on %s "+
+		"goes back through coding, the local review and QA; a higher `fixes` in [factory.repo.qa], after `magnum factory install`, gives "+
+		"the writer another turn", t.ID, t.Branch)
+	if len(declined) == 0 {
+		return s + "; no defect here was declined with its risk, so `--accept-qa` accepts none"
+	}
+	return s + fmt.Sprintf("; `magnum factory retry %d --accept-qa` accepts the %d the writer declined with its risk (%s) at %s", t.ID,
+		len(declined), qaClassesAndPaths(declined, pages), textx.ShortSHA(run.Head))
+}
+
 // qaFixItem is QA's defect d, the i-th that blocks, as the writer gets it
-// (qaStartFix), on page pg in the run's folder runPath; cameBack is the
-// earlier run whose defects file had it (0 for none).
-func qaFixItem(i int, d QADefect, pg QAPage, runPath string, cameBack int) ReviewItem {
+// (qaStartFix), on page pg in the run's folder runPath; h is what an
+// earlier run made of it (the zero value for none): a defect it handed the
+// writer to fix came back after its fix; one the writer declined, which you
+// saw and did not accept, is to be fixed now.
+func qaFixItem(i int, d QADefect, pg QAPage, runPath string, h qaHanded) ReviewItem {
 	it := ReviewItem{ID: fmt.Sprintf("Q%d", i+1), Fingerprint: d.Fingerprint, Severity: d.Severity, Title: d.Class + ": " + d.Title}
 	if len(d.Paths) > 0 {
 		it.Path = qaClip(d.Paths[0])
@@ -234,8 +358,12 @@ func qaFixItem(i int, d QADefect, pg QAPage, runPath string, cameBack int) Revie
 	if d.Quote != "" {
 		body += "; the page shows: " + d.Quote
 	}
-	if cameBack > 0 {
-		body += fmt.Sprintf("; came back after its fix (run %d)", cameBack)
+	switch {
+	case h.run > 0 && h.declined:
+		body += fmt.Sprintf("; you declined it with its risk in run %d, and the operator did not accept the decline: fix it, or decline it "+
+			"again with its risk, which stops the task for the operator", h.run)
+	case h.run > 0:
+		body += fmt.Sprintf("; came back after its fix (run %d)", h.run)
 	}
 	it.Body = body
 	return it
@@ -246,10 +374,11 @@ func qaFixItem(i int, d QADefect, pg QAPage, runPath string, cameBack int) Revie
 // one the factory's checks passed at (passStage put it there). At run's
 // head the writer committed nothing, so it declined every defect with its
 // risk (commitProblem passes no other turn without a commit): the task
-// needs you, as a decline never makes a defect QA finds a known note. At a
-// new head the local review and QA run again (backToReview), unless the
-// review passed at that head since (the move landed: QA's fresh run there
-// is next).
+// needs you at once, as only you can accept a defect QA finds. At a new head
+// the local review and QA run again (backToReview), unless the review
+// passed at that head since (the move landed: QA's fresh run there is
+// next); a defect the writer declined beside its commit reaches you once QA
+// finds it again (qaStartFix).
 func (e *Engine) closeQAFix(ctx context.Context, t registry.Task, run qaRun, res QAResult, rf ReviewFile) (bool, error) {
 	cur, err := e.reg.TaskByID(ctx, t.ID)
 	if err != nil {
@@ -257,21 +386,20 @@ func (e *Engine) closeQAFix(ctx context.Context, t registry.Task, run qaRun, res
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if cur.HeadSHA == "" || cur.HeadSHA == run.Head {
-		n := len(res.Blocking)
-		why := fmt.Sprintf("the writer declined QA's %s that block%s, each with its risk (%s), and QA passes no visible defect as a "+
-			"known note: see %s%s, and QA walks again", plural(n, "defect"), blocksS(n), res.Why,
-			filepath.Join(dir, filepath.FromSlash(qaReplyFile(run.N, run.Head))), retryHint(cur))
-		return true, e.qaFixStopForYou(ctx, cur, run, why, "the writer declined QA's defects")
+		var declined []qaDeclined
+		for _, i := range rf.Findings {
+			declined = append(declined, qaDeclined{Fingerprint: i.Fingerprint, Run: run.N})
+		}
+		reply := filepath.Join(dir, filepath.FromSlash(qaReplyFile(run.N, run.Head)))
+		why := e.qaDeclinedWhat(cur, run, res.Blocking, slices.Collect(maps.Values(qaVerdictPages(dir, run))), []string{reply},
+			e.qaFixes(cur)-e.qaFixTurns(cur), e.qaFixes(cur))
+		return true, e.qaFixStopForYou(ctx, cur, run, qaFixStop{Why: why, Declined: declined}, "the writer declined QA's defects")
 	}
 	reviewed, err := e.qaFixReviewed(ctx, cur)
 	if err != nil || reviewed {
 		return err != nil, err
 	}
-	var rep ReviewReply
-	if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(qaReplyFile(run.N, run.Head)))); err == nil {
-		_ = json.Unmarshal(b, &rep) // the end fact read it
-	}
-	declined := len(rep.declinedWithRisk())
+	declined := len(readQAReply(dir, run).declinedWithRisk())
 	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d's fix at %s: %d fixed, %d declined", run.N, textx.ShortSHA(cur.HeadSHA),
 		len(rf.Findings)-declined, declined))
 	return true, e.backToReview(ctx, cur, fmt.Sprintf("QA's fix at %s: the local review and QA run again", textx.ShortSHA(cur.HeadSHA)))
@@ -329,12 +457,14 @@ func (e *Engine) backToReview(ctx context.Context, t registry.Task, because stri
 	return nil
 }
 
-// qaFixStopForYou stops run's fix loop for you, because why: fix-stop.json
-// first, a qa event, then task t moves to you (a daemon that stops before
-// the move makes it on the next pass, qaToldOfFixStop).
-func (e *Engine) qaFixStopForYou(ctx context.Context, t registry.Task, run qaRun, why, because string) error {
+// qaFixStopForYou stops run's fix loop for you with stop (its time set
+// here): fix-stop.json first, a qa event, then task t moves to you with its
+// why (a daemon that stops before the move makes it on the next pass,
+// qaToldOfFixStop).
+func (e *Engine) qaFixStopForYou(ctx context.Context, t registry.Task, run qaRun, stop qaFixStop, because string) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if err := writeJSON(filepath.Join(dir, filepath.FromSlash(run.Dir), qaFixStopFile), qaFixStop{Why: why, At: e.now()}); err != nil {
+	stop.At = e.now()
+	if err := writeJSON(filepath.Join(dir, filepath.FromSlash(run.Dir), qaFixStopFile), stop); err != nil {
 		return err
 	}
 	e.event(ctx, t.ID, "qa", registry.PhaseFail, fmt.Sprintf("run %d at %s: its fix loop stopped for you", run.N, textx.ShortSHA(run.Head)))
@@ -343,23 +473,110 @@ func (e *Engine) qaFixStopForYou(ctx context.Context, t registry.Task, run qaRun
 			return err
 		}
 	}
-	e.toOperator(ctx, t, why, because)
+	e.toOperator(ctx, t, stop.Why, because)
 	return nil
 }
 
-// qaToldOfFixStop reports whether you were told of the fix loop's stop (an
-// alert since it): a live task told so is one you let go on, and QA walks
-// again. One not told is moved to you now, with the stop's reason.
+// qaToldOfFixStop reports whether you were told of the fix loop's stop: its
+// own alert since it, the one whose text holds its why (another alert of
+// the task, of another cause, tells you nothing of it). A live task told so
+// is one you let go on, and QA walks again. One not told is moved to you
+// now, with the stop's reason.
 func (e *Engine) qaToldOfFixStop(ctx context.Context, t registry.Task, stop qaFixStop) (bool, error) {
 	evs, err := e.reg.Events(ctx, t.ID, qaEventsRead)
 	if err != nil {
 		return false, err
 	}
-	if slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Kind == "alert" && !ev.At.Before(stop.At) }) {
+	why := execx.Redact(stop.Why)
+	if slices.ContainsFunc(evs, func(ev registry.Event) bool {
+		return ev.Kind == "alert" && !ev.At.Before(stop.At) && strings.Contains(ev.Text, why)
+	}) {
 		return true, nil
 	}
 	e.toOperator(ctx, t, stop.Why, "QA's fix loop stopped for you")
 	return false, nil
+}
+
+// acceptQA records your acceptance of the defects task t's QA fix loop
+// stopped for you on that the writer declined with its risk (the newest
+// run's fix-stop.json, at the task's head) in qa-accepted.json, with those
+// accepted at that head before, and returns what the retry's answer adds.
+// A task whose newest run did not stop so, at its head, or whose stop names
+// no declined defect, is refused: --accept-qa accepts nothing else. undo
+// puts the file back as it was (the retry's move failed).
+func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, undo func(), err error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	run, ok := readQARun(dir)
+	stop, stopped := readQAFixStop(dir, run)
+	switch {
+	case !ok || !stopped || run.Head != t.HeadSHA:
+		return "", nil, fmt.Errorf("%s does not wait on QA's fix loop at its head: --accept-qa accepts only the QA defects the writer "+
+			"declined with its risk, and a plain `magnum factory retry %d` lets it go on", TaskKey(t), t.ID)
+	case len(stop.Declined) == 0:
+		return "", nil, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has none to accept; "+
+			"a plain `magnum factory retry %d` walks QA again", TaskKey(t), run.N, t.ID)
+	}
+	path := filepath.Join(dir, qaAcceptedFile)
+	before, readErr := os.ReadFile(path)
+	acc, _ := readQAAccepted(dir)
+	if acc.Head != run.Head {
+		acc = qaAccepted{Head: run.Head}
+	}
+	for _, d := range stop.Declined {
+		if !slices.Contains(acc.Fingerprints, d.Fingerprint) {
+			acc.Fingerprints = append(acc.Fingerprints, d.Fingerprint)
+		}
+	}
+	acc.At = e.now()
+	if err := writeJSON(path, acc); err != nil {
+		return "", nil, err
+	}
+	undo = func() {
+		if readErr != nil {
+			_ = os.Remove(path)
+			return
+		}
+		_ = fsx.WriteFileAtomic(path, before, 0o600)
+	}
+	n := len(stop.Declined)
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you accepted %s the writer declined at %s (run %d's stop)", plural(n, "QA defect"),
+		textx.ShortSHA(run.Head), run.N))
+	return fmt.Sprintf("; QA lets %s the writer declined pass at %s, and the PR body names %s as accepted by you", plural(n, "defect"),
+		textx.ShortSHA(run.Head), map[bool]string{true: "it", false: "them"}[n == 1]), undo, nil
+}
+
+// qaApplyAccepted moves the defects of res that block and that you accepted
+// at run's head (qa-accepted.json in the task directory dir) to Accepted:
+// exactly those fingerprints, at that head alone (a new head blocks them
+// again). A run left with none that blocks is clean.
+func qaApplyAccepted(dir string, run qaRun, res *QAResult) {
+	acc, ok := readQAAccepted(dir)
+	if !ok || acc.Head != run.Head || res.Outcome != QAOutcomeDefects {
+		return
+	}
+	var blocking []QADefect
+	for _, d := range res.Blocking {
+		if slices.Contains(acc.Fingerprints, d.Fingerprint) {
+			res.Accepted = append(res.Accepted, d)
+			continue
+		}
+		blocking = append(blocking, d)
+	}
+	res.Blocking = blocking
+	if len(blocking) == 0 {
+		res.Outcome = QAOutcomeClean
+	}
+}
+
+// readQAAccepted reads qa-accepted.json in the task directory dir; false for
+// none.
+func readQAAccepted(dir string) (qaAccepted, bool) {
+	var acc qaAccepted
+	b, err := os.ReadFile(filepath.Join(dir, qaAcceptedFile))
+	if err != nil || json.Unmarshal(b, &acc) != nil || acc.Head == "" {
+		return qaAccepted{}, false
+	}
+	return acc, true
 }
 
 // readQAFixStop reads run's fix-stop.json in the task directory dir; false
@@ -384,18 +601,83 @@ func readQADefects(dir string, run qaRun) (ReviewFile, bool) {
 	return rf, true
 }
 
-// qaEarlierDefects are the fingerprints of the defects files of the runs
-// before run k in the task directory dir, each with the newest such run.
-func qaEarlierDefects(dir string, k int) map[string]int {
-	out := map[string]int{}
+// readQAReply reads the writer's reply to run's defects in the task
+// directory dir; an empty one for none (the end fact read it).
+func readQAReply(dir string, run qaRun) ReviewReply {
+	var rep ReviewReply
+	if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(qaReplyFile(run.N, run.Head)))); err == nil {
+		_ = json.Unmarshal(b, &rep)
+	}
+	return rep
+}
+
+// qaHanded is what a run made of a defect it handed the writer: the run,
+// and whether the writer's reply declined it with its risk.
+type qaHanded struct {
+	run      int
+	declined bool
+}
+
+// qaHistory is what the runs before run k in the task directory dir handed
+// the writer, by fingerprint, the newest run's for each: declined when its
+// reply declined it with its risk, else it was to be fixed (fixed, a
+// decline without a risk, no reply).
+func qaHistory(dir string, k int) map[string]qaHanded {
+	out := map[string]qaHanded{}
 	for _, ref := range qaDefectsFiles(dir) {
 		if ref.k >= k {
 			continue
 		}
-		if rf, ok := readQADefects(dir, qaRun{N: ref.k, Head: ref.head, Dir: qaRunDir(ref.k, ref.head)}); ok {
-			for _, i := range rf.Findings {
-				out[i.Fingerprint] = ref.k
+		run := qaRun{N: ref.k, Head: ref.head, Dir: qaRunDir(ref.k, ref.head)}
+		rf, ok := readQADefects(dir, run)
+		if !ok {
+			continue
+		}
+		risks := readQAReply(dir, run).declinedWithRisk()
+		for _, i := range rf.Findings {
+			out[i.Fingerprint] = qaHanded{run: ref.k, declined: risks[i.ID] != ""}
+		}
+	}
+	return out
+}
+
+// qaSeenDeclines are the declines the stops of the runs before run k in the
+// task directory dir put to you: a stop holds the loop until you were told
+// of it (qaToldOfFixStop), so a run after it means you saw them, and a plain
+// retry did not accept them.
+func qaSeenDeclines(dir string, k int) map[qaDeclined]bool {
+	out := map[qaDeclined]bool{}
+	paths, _ := filepath.Glob(filepath.Join(dir, "qa", "*", qaFixStopFile))
+	for _, p := range paths {
+		m := qaRunDirRe.FindStringSubmatch(filepath.Base(filepath.Dir(p)))
+		if m == nil {
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err != nil || n >= k {
+			continue
+		}
+		var s qaFixStop
+		if b, err := os.ReadFile(p); err == nil && json.Unmarshal(b, &s) == nil {
+			for _, d := range s.Declined {
+				out[d] = true
 			}
+		}
+	}
+	return out
+}
+
+// qaReplies are the writer's replies (absolute paths, once each) that
+// declined defects ds, by what the earlier runs made of them (hist).
+func qaReplies(dir string, ds []QADefect, hist map[string]qaHanded) []string {
+	runs := map[int]string{}
+	for _, ref := range qaDefectsFiles(dir) {
+		runs[ref.k] = ref.head
+	}
+	var out []string
+	for _, d := range ds {
+		h := hist[d.Fingerprint]
+		if p := filepath.Join(dir, filepath.FromSlash(qaReplyFile(h.run, runs[h.run]))); !slices.Contains(out, p) {
+			out = append(out, p)
 		}
 	}
 	return out

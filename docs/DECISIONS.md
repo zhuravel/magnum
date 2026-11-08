@@ -18799,6 +18799,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (it cut the fix's precheck as over its cap). Mutants caught: the walker's path in the fingerprint, the loop
   after the branch's checks, a passed fix taken as closed, a decline that passes or loops, and no cap.
 
+  After review (the operator's rule: only you accept a QA defect, never the writer alone):
+  - A decline beside a commit reaches you too: once QA finds a defect the writer declined with its risk in an
+    earlier run's reply, and no stop told you of that decline yet, the loop stops for you naming the reply,
+    writes no defects file, and never calls it "came back after its fix". A full decline still stops at once.
+  - `magnum factory retry <id> --accept-qa` (`RetryPayload.AcceptQA`) accepts the declined defects of the
+    newest run's stop (`fix-stop.json` records them) at the task's head: `qa-accepted.json` holds the head,
+    the fingerprints and the time. The next QA run at that head moves exactly those from blocking to
+    `QAResult.Accepted` (a run left with none that blocks is clean), and the summary carries them for the PR
+    body's "accepted by you" line (Task 7). Another defect still blocks, a new head blocks them again, and the
+    daemon refuses `--accept-qa` for a task whose QA did not stop on such a decline.
+  - A plain retry after a decline stop refuses the decline: QA walks again, and the defect goes to the writer
+    once more ("you declined it ... and the operator did not accept the decline"), within the cap. A stop of
+    an earlier run means you saw its declines, since a stop holds the loop until you were told of it.
+  - The cap's wait names the writer's replies, the newest defects file (its bodies hold the shots), the
+    result, and what each way out does: a retry walks once more and stops here again unless the branch
+    changed, a commit of yours goes back through coding, a higher `fixes` after `magnum factory install`
+    gives the writer a turn, and `--accept-qa` accepts the declined ones (or none). It says the task's turns.
+  - A stop is let go only by its own alert (its why in the alert's text), never another cause's; qaDecide
+    waits on you for defects the loop let go with no stop, and a task with no head counts as at the run's
+    (no walk without a writer or a cap); a run at another head than the task's goes to the review first when
+    the review has not passed at the task's head (`qaReviewFirst`); `qaProbePath` keeps a hash route
+    (`#/settings`) and says the label is best-effort; a wait names at most three classes on pages.
+
+  Rejected after review: the writer's decline accepting a defect (R56: only you); a plain retry that walks and
+  stops on the same decline again (nothing would change but your accept or your commit); matching any alert
+  after a stop (another cause's alert let a decline pass you unseen). Left: the review's `toldOfStop` keeps its
+  any-alert match (the review's loop, outside this step); a lost move's second "N fixed" event (harmless, once
+  per lost move); the rig's timer seam keyed on the duration (now documented). Tests, failing first:
+  TestAPartialDeclineReachesYouAndYourAcceptPassesItAtItsHead, TestAnAcceptedQADefectLetsAnotherBlockAndANewHeadBlocksItAgain,
+  TestAcceptQARefusesATaskWithNoDeclinedDefect, TestAQARunAtAnotherHeadThanTheTasksGoesToTheReviewFirst,
+  TestADeclineStopReachesYouEvenAfterAnotherAlert, TestQAProbePathFollowsAHashRoute,
+  TestQAClassesAndPathsNamesAtMostThree, TestFactoryRetryAcceptQASendsYourAcceptance, and the new words of
+  TestQAFixTurnsStopAtTheCap and TestADeclinedQADefectNeedsYouAndNeverBecomesKnown. Mutants caught: no stop for
+  an unseen decline, an acceptance at any head, any alert telling, no review first at another head, and seen
+  declines stopping again.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
