@@ -1736,3 +1736,64 @@ func TestABlockedOnlyWalkOnAnotherCheckNeedsYouAgain(t *testing.T) {
 		t.Fatalf("qa-summary.json %+v (%v), want the third walk on flagged with A1", sum, ok)
 	}
 }
+
+// A blocked step that names no acceptance check matches nothing: a second
+// blocked-only walk whose states name none is a stop you have not seen, so
+// the task waits on you again. A check the acceptance does not list counts
+// as none.
+func TestABlockedOnlyWalkWithNoCheckNeedsYouAgain(t *testing.T) {
+	for _, check := range []string{"", "A9"} {
+		r := newQARig(t)
+		task, _ := r.qaTask("PR-12484")
+		v := oneSecurityPage()
+		r.toWalker(task)
+		v.Blocked = []QABlocked{{What: "sign in as an admin", Why: "no admin locally", Check: check}}
+		r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+		r.toYou(task)
+		r.retryAnswer(task.ID)
+		r.toWalker(task)
+		v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: check}}
+		r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+		r.toYou(task)
+		if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+			t.Errorf("check %q: qa-summary.json %+v, a second walk on a state you never saw went on flagged", check, sum)
+		}
+	}
+}
+
+// Under disk or memory pressure an idle task's server stop waits its
+// backoff too: a stop that failed is not tried again on every tick.
+func TestPressureWaitsTheBackoffOfAFailedServerStop(t *testing.T) {
+	r := newQARig(t)
+	var critical atomic.Bool
+	r.e.d.Memory = func(context.Context) engine.MemorySample {
+		if critical.Load() {
+			return engine.MemorySample{Level: engine.MemoryCritical}
+		}
+		return engine.MemorySample{Level: engine.MemoryNormal}
+	}
+	task, _ := r.qaTask("PR-12485")
+	r.toWalker(task)
+	r.copies.mu.Lock()
+	r.copies.stopErr = errors.New("prove the server of factory1 stopped: list the TCP listeners: lsof timed out")
+	r.copies.mu.Unlock()
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.toYou(task)
+	if _, held := r.e.servers[task.ID]; !held {
+		t.Fatal("precondition: the failed stop forgot the server")
+	}
+	critical.Store(true)
+	stops := len(r.copies.log().stopped)
+	r.tick()
+	r.tick()
+	if got := len(r.copies.log().stopped); got != stops {
+		t.Fatalf("%d server stops under pressure before the backoff, want %d", got, stops)
+	}
+	r.clock.Add(15 * time.Minute)
+	r.tick()
+	if got := len(r.copies.log().stopped); got != stops+1 {
+		t.Fatalf("%d server stops after the backoff, want %d", got, stops+1)
+	}
+}

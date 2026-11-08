@@ -18942,8 +18942,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     marks it), so two such walks at one head no longer pass flagged. The wait names the ways out: a retry that
     walks the page, or `magnum factory retry <id> --accept-qa`, which now also accepts such fixes at the head
     (`qa-accepted.json` `unchecked`, the screen's `A`): the next walk there passes with them in
-    `QAResult.Unchecked`, which the card's line, KNOWN, the PR body ("Fixed by the writer, not walked again by
-    QA, accepted by you") and the report name, never as fixed. A defect the next walk still finds is not
+    `QAResult.Unchecked`, which the card's line, KNOWN, the PR body ("The writer's fixes QA did not walk again,
+    accepted by you", since round 3) and the report name, never as fixed. A defect the next walk still finds is not
     accepted by it: the decline's fingerprints and the unchecked ones are kept apart.
   - A fixed defect's page matches by the path its probe read alone, on both sides: the run's walk keeps it
     (`QAPage.ProbePath` in `result.json`, never read from a verdict), the handed defect takes it from the
@@ -18991,7 +18991,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
     there accepts it as a decline (`qa-accepted.json` `fingerprints`), never as a fix. A walk that does not find
     a declined defect names it as nothing: no fix was made.
   - A blocked-only walk goes on flagged only when the acceptance checks it could not reach
-    (`QABlocked.Check`, the factory's ids) are among those the blocked-only walk before it stopped on
+    (`QABlocked.Check`, the acceptance checks' ids as the walker attributes them) are among those the blocked-only walk before it stopped on
     (`qaSameStops`); a walk blocked on another check waits on you again.
   - A failed server stop is tried again after 1, 2, 4, 8, then 15 minutes (`alertBackoff` of its fails, kept
     with the server in memory), and its second failure sends one alert, naming the copy, which stands while the
@@ -19014,6 +19014,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
   no alert), TestTheQAWalkersCopyOpensNoBrowserTab (no osascript shim, no CLAUDE_ENV_FILE),
   TestStartBrowserRecordsChromeAndReadsItsDevToolsPort (the port), TestYourAcceptLetsAFixQADidNotWalkAgainGoOn
   (the why) and TestFactoryRetryRecordsTheLiaisonsSurface (no flag).
+
+- **Fix round 3 of visual QA, slice 1: a decline is never a fix, a decline missed at its head waits on you, and
+  an accept says who gave it** (2026-11-08, R55 slice 1, after the second scoped re-review).
+  - A decline with no risk is a decline too: `qaHistory` keeps `declinedNoRisk` beside `declined` (with its
+    risk), and a handed defect counts as declined for either. So one made beside a commit is never `Fixed` nor
+    `Unchecked`: a run that skips its page blocks it "not walked again after the writer declined it with no
+    risk", `A` accepts it as a decline, and the PR body lists it as accepted by you, not fixed. Found again, the
+    writer reads "you declined it with no risk ..., which counts as open", never "came back after its fix", and
+    it is not counted as back.
+  - At the head the writer declined a defect at (`qaHandedDefect.handedAt`, the head of the newest run that
+    handed it), a walk of its page that does not find it is no pass: it is blocked "not found again at the head
+    the writer declined it at", the task waits on you, and `A` accepts it as a decline. Chosen over a FLAGS line
+    and a PR body line because it reuses the blocked-state path, its wait and its accept whole, and a walk that
+    contradicts the factory's own find at the same code needs your look before anything leaves the Mac. A
+    walk at a head the writer's commits moved past still names nothing.
+  - The wait on a declined defect's page names the writer's reply with its risk (`qaDeclineReplies`).
+  - Under disk or memory pressure an idle task's failed server stop waits its backoff too.
+  - In `qaSameStops` a blocked step with no check, or one the acceptance does not list, matches nothing, not
+    even another such step.
+  - `acceptQA` takes the retry's surface: its event says "through the liaison", "on the screen" or "at the
+    CLI", and `qa-accepted.json` keeps it (`by`).
+  - The unchecked heading says what is known: "The writer's fixes QA did not walk again, accepted by you"; the
+    walker's prompt, the README, the CLI help and the comments name declines and the per-defect pass.
+  Rejected: a FLAGS line for a decline missed at its head (a second way to pass a defect the factory found
+  there, beside the accept). Tests, failing first: TestADeclineWithoutARiskBesideACommitIsNeverAFix (the
+  reviewer's probe: "1 fix QA did not walk again", then "Fixed by the writer"),
+  TestADeclineYouDidNotAcceptThatAWalkAtItsHeadMissesNeedsYou (the second probe: a clean pass),
+  TestAnAcceptSaysWhoAcceptedIt, TestABlockedOnlyWalkWithNoCheckNeedsYouAgain and
+  TestPressureWaitsTheBackoffOfAFailedServerStop.
 
 ## Learned rules
 

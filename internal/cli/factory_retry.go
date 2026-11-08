@@ -32,9 +32,10 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"--accept-qa also accepts the QA defects that block which the writer declined with its risk, when QA's fix loop "+
 			"stopped for you on them: the next QA run at the task's head lets exactly those pass, the PR body names them as "+
 			"accepted by you, and a new head blocks them again; only you can accept a defect QA finds, never the writer. After "+
-			"a QA run that did not walk again the page of a defect the writer fixed, --accept-qa lets that fix go unchecked at "+
-			"the task's head, and the PR body names it as accepted by you. A plain retry walks QA again and hands a decline "+
-			"you did not accept to the writer once more, within its fix turns. --surface liaison says the factory's "+
+			"a QA run that did not walk again the page of a defect the writer fixed or declined, or did not find a decline again "+
+			"at the head it was made at, --accept-qa lets that fix go unchecked, or accepts that decline, at the task's head "+
+			"alone: the PR body names it as accepted by you, and a run at a new head walks the page again. A plain retry walks "+
+			"QA again and hands a decline you did not accept to the writer once more, within its fix turns. --surface liaison says the factory's "+
 			"liaison runs the retry for you, on your word in its chat (the default, cli, is you by hand); the factory "+
 			"records it so, as for answer and decide.",
 		func(pos []string) int { return runFactoryRetryCmd(c, acceptQA, where, pos) })

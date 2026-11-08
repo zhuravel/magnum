@@ -505,7 +505,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	same := e.unchangedSince(ctx, t)
 	var undo func() // your acceptance goes back when the task does not go on
 	if p.AcceptQA {
-		accepted, u, err := e.acceptQA(ctx, t)
+		accepted, u, err := e.acceptQA(ctx, t, p.Surface)
 		if err != nil {
 			return "", err
 		}

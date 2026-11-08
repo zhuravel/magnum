@@ -37,6 +37,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -73,13 +74,15 @@ type qaDeclined struct {
 const qaAcceptedFile = "qa-accepted.json"
 
 // qaAccepted is qa-accepted.json: at Head, the defects you let pass
-// (Fingerprints: the writer declined them), and the defects whose fix you
-// let go without QA's walk of their pages (Unchecked).
+// (Fingerprints: the writer declined them), the defects whose fix you let go
+// without QA's walk of their pages (Unchecked), when you last accepted, and
+// where (By: the retry's surface, cli, screen or liaison).
 type qaAccepted struct {
 	Head         string    `json:"head"`
 	Fingerprints []string  `json:"fingerprints"`
 	Unchecked    []string  `json:"unchecked,omitempty"`
 	At           time.Time `json:"at"`
+	By           string    `json:"by,omitempty"`
 }
 
 // qaAccept is what --accept-qa accepts at a run's head, by fingerprint: the
@@ -254,6 +257,7 @@ func (e *Engine) qaStartFix(ctx context.Context, t registry.Task, st config.Fact
 			dc := qaDeclined{Fingerprint: d.Fingerprint, Run: h.run}
 			declined, stopDeclined = append(declined, d), append(stopDeclined, dc)
 			unseen = unseen || !seen[dc]
+		case h.declinedNoRisk: // open: it goes to the writer again, as no fix of it came back
 		default:
 			back = append(back, d)
 		}
@@ -374,6 +378,9 @@ func qaFixItem(i int, d QADefect, pg QAPage, runPath string, h qaHanded) ReviewI
 	case h.run > 0 && h.declined:
 		body += fmt.Sprintf("; you declined it with its risk in run %d, and the operator did not accept the decline: fix it, or decline it "+
 			"again with its risk, which stops the task for the operator", h.run)
+	case h.run > 0 && h.declinedNoRisk:
+		body += fmt.Sprintf("; you declined it with no risk in run %d, which counts as open: fix it, or decline it with its risk, which "+
+			"stops the task for the operator", h.run)
 	case h.run > 0:
 		body += fmt.Sprintf("; came back after its fix (run %d)", h.run)
 	}
@@ -509,15 +516,18 @@ func (e *Engine) qaToldOfFixStop(ctx context.Context, t registry.Task, stop qaFi
 	return false, nil
 }
 
-// acceptQA records your acceptance of the defects task t's QA fix loop
-// stopped for you on that the writer declined with its risk (the newest
-// run's fix-stop.json, at the task's head), or of the fixes the newest run
-// did not walk again there, in qa-accepted.json, with those accepted at
-// that head before, and returns what the retry's answer adds
-// (qaAcceptable). A task whose newest run left neither at its head is
-// refused: --accept-qa accepts nothing else. undo
-// puts the file back as it was (the retry's move failed).
-func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, undo func(), err error) {
+// acceptQA records your acceptance, through surface (the retry's: cli,
+// screen or liaison), of what task t's newest QA run left you at its head
+// (qaAcceptable): the defects the writer declined, at its fix loop's stop
+// (fix-stop.json) or whose pages the run did not walk again, as declines,
+// and the writer's fixes the run did not walk again, unchecked. It writes
+// them to qa-accepted.json with those accepted at that head before (an
+// accept holds at its head alone) and the surface, writes a qa event that
+// names the surface, and returns what the retry's answer adds. A task whose
+// newest run left none of them at its head is refused: --accept-qa accepts
+// nothing else. undo puts the file back as it was (the retry's move
+// failed).
+func (e *Engine) acceptQA(ctx context.Context, t registry.Task, surface string) (what string, undo func(), err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	run, a, err := qaAcceptable(dir, t)
 	if err != nil {
@@ -539,7 +549,7 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 			acc.Unchecked = append(acc.Unchecked, fp)
 		}
 	}
-	acc.At = e.now()
+	acc.At, acc.By = e.now(), surface
 	if err := writeJSON(path, acc); err != nil {
 		return "", nil, err
 	}
@@ -561,7 +571,8 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 		lets = append(lets, qaFixes(n)+" it did not walk again")
 	}
 	n := len(a.declined) + len(a.unchecked)
-	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you %s at %s (run %d)", strings.Join(events, " and "), short, run.N))
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you %s at %s (run %d), %s", strings.Join(events, " and "), short, run.N,
+		qaAcceptedThrough(surface)))
 	return fmt.Sprintf("; QA lets %s pass at %s, and the PR body names %s as accepted by you", strings.Join(lets, " and "), short,
 		map[bool]string{true: "it", false: "them"}[n == 1]), undo, nil
 }
@@ -569,8 +580,9 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 // qaAcceptable is what --accept-qa accepts of task t (its task directory
 // dir): the newest run and its fix loop's stop at the task's head, which
 // names the defects the writer declined, or else the newest run at the
-// head that did not walk again the pages of fixes the writer made
-// (qaUncheckedAcceptable); an error that says why it accepts nothing (no
+// head that did not walk again the pages of defects the writer fixed or
+// declined, or did not find a decline again where it was made
+// (qaNotWalkedAcceptable); an error that says why it accepts nothing (no
 // such stop at the head, one that names no decline, or one whose declines
 // you accepted at the head already: qa-accepted.json holds them, and the
 // task waits on you for another cause). The screen's A is offered exactly
@@ -622,7 +634,7 @@ func qaNotWalkedAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, 
 	for _, b := range res.Blocked {
 		switch {
 		case b.Fingerprint == "":
-		case hist[b.Fingerprint].declined:
+		case hist[b.Fingerprint].declined, hist[b.Fingerprint].declinedNoRisk:
 			a.declined = append(a.declined, b.Fingerprint)
 		default:
 			a.unchecked = append(a.unchecked, b.Fingerprint)
@@ -641,6 +653,19 @@ func qaNotWalkedAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, 
 // qaHolds reports whether every one of fps is in have.
 func qaHolds(have, fps []string) bool {
 	return !slices.ContainsFunc(fps, func(fp string) bool { return !slices.Contains(have, fp) })
+}
+
+// qaAcceptedThrough is where an accept came from, as its event says it:
+// "through the liaison" (it ran the retry for you, on your word in its
+// chat), "on the screen", "at the CLI".
+func qaAcceptedThrough(surface string) string {
+	switch surface {
+	case runtime.SurfaceLiaison:
+		return "through the liaison"
+	case "", "cli":
+		return "at the CLI"
+	}
+	return "on the " + surface
 }
 
 // qaFixes is "1 fix" or "N fixes".
@@ -759,16 +784,20 @@ func readQAReply(dir string, run qaRun) ReviewReply {
 }
 
 // qaHanded is what a run made of a defect it handed the writer: the run,
-// and whether the writer's reply declined it with its risk.
+// and whether the writer's reply declined it with its risk (declined) or
+// with none (declinedNoRisk: no fix of it was made either, and it counts as
+// open).
 type qaHanded struct {
-	run      int
-	declined bool
+	run            int
+	declined       bool
+	declinedNoRisk bool
 }
 
 // qaHistory is what the runs before run k in the task directory dir handed
 // the writer, by fingerprint, the newest run's for each: declined when its
-// reply declined it with its risk, else it was to be fixed (fixed, a
-// decline without a risk, no reply).
+// reply declined it with its risk, declinedNoRisk when it declined it with
+// none (open, and no fix either), else it was to be fixed (fixed, no
+// reply).
 func qaHistory(dir string, k int) map[string]qaHanded {
 	out := map[string]qaHanded{}
 	for _, ref := range qaDefectsFiles(dir) {
@@ -780,9 +809,14 @@ func qaHistory(dir string, k int) map[string]qaHanded {
 		if !ok {
 			continue
 		}
-		risks := readQAReply(dir, run).declinedWithRisk()
+		rep := readQAReply(dir, run)
+		risks := rep.declinedWithRisk()
+		declined := map[string]bool{}
+		for _, r := range rep.Replies {
+			declined[r.ID] = declined[r.ID] || r.Action == replyDeclined
+		}
 		for _, i := range rf.Findings {
-			out[i.Fingerprint] = qaHanded{run: ref.k, declined: risks[i.ID] != ""}
+			out[i.Fingerprint] = qaHanded{run: ref.k, declined: risks[i.ID] != "", declinedNoRisk: declined[i.ID] && risks[i.ID] == ""}
 		}
 	}
 	return out

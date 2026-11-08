@@ -860,7 +860,7 @@ func TestYourAcceptLetsAFixQADidNotWalkAgainGoOn(t *testing.T) {
 		t.Errorf("the card's QA line %q", line)
 	}
 	section := qaSection(sum)
-	if want := "- P2 escaped_markup on `/settings/security` in the state `signed_in`: HTML markup shown as text, found by QA run 1"; !strings.Contains(section, "Fixed by the writer, not walked again by QA, accepted by you:\n\n"+want) {
+	if want := "- P2 escaped_markup on `/settings/security` in the state `signed_in`: HTML markup shown as text, found by QA run 1"; !strings.Contains(section, "The writer's fixes QA did not walk again, accepted by you:\n\n"+want) {
 		t.Errorf("the PR body's section lacks the unchecked fix:\n%s", section)
 	}
 }
@@ -951,5 +951,106 @@ func TestAnAcceptedDeclineAWalkSkipsStaysAcceptedNotFixed(t *testing.T) {
 	if len(res.Accepted) != 0 || len(res.Unchecked) != 0 || len(res.Fixed) != 0 || len(res.Blocked) != 1 ||
 		res.Blocked[0].Why != qaDeclinedNotWalkedWhy {
 		t.Errorf("a run at a new head that skips the page: %+v, want it waiting on you for the declined defect", res)
+	}
+}
+
+// A decline stays a decline whatever commits sit beside it: one that names
+// no risk, made with a commit, whose page the next run skips, waits on you as
+// a decline (no fix was made), A offers it as one, and the pass after your
+// accept lists it as accepted by you, not fixed, never "Fixed by the
+// writer". Found again, the writer reads that it declined it with no risk,
+// never that it came back after its fix.
+func TestADeclineWithoutARiskBesideACommitIsNeverAFix(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12480")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), map[string]string{"Q1": ""})
+	r.toQAAt(task, 1)
+	r.toWalker(task)
+	r.walk(task, skipWalk(), shortcutsProbes)
+	got := r.toYou(task)
+	if want := qaDeclinedNoRiskNotWalkedWhy; !strings.Contains(got.WaitsWhat, want) || strings.Contains(got.WaitsWhat, "after the writer's fix") {
+		t.Errorf("the task waits %q, want %q and no fix", got.WaitsWhat, want)
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	run, a, err := qaAcceptable(dir, got)
+	if what := qaAcceptWhat(dir, run, a); err != nil || !strings.HasPrefix(what, "1 QA defect the writer declined at ") || strings.Contains(what, "fix") {
+		t.Fatalf("A accepts %q (%v), want the decline, never a fix", what, err)
+	}
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("your accept: %+v", q)
+	}
+	r.toWalker(task)
+	r.walk(task, skipWalk(), shortcutsProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	sum, ok := readQASummary(dir)
+	if !ok || len(sum.Accepted) != 1 || len(sum.Unchecked) != 0 || len(sum.Fixed) != 0 {
+		t.Fatalf("qa-summary.json %+v (%v), want the decline accepted by you, no fix", sum, ok)
+	}
+	if s := qaSection(sum); strings.Contains(s, "Fixed by the writer") || strings.Contains(s, "fixed before this PR") ||
+		!strings.Contains(s, "Accepted by you, not fixed") {
+		t.Errorf("the PR body:\n%s", s)
+	}
+	it := qaFixItem(0, QADefect{ID: "D1", Class: QAEscapedMarkup, Severity: "P2", Page: "P1"}, QAPage{Path: "/settings/security"}, "",
+		qaHanded{run: 1, declinedNoRisk: true})
+	if !strings.Contains(it.Body, "you declined it with no risk in run 1") || strings.Contains(it.Body, "came back after its fix") {
+		t.Errorf("the writer's item %q", it.Body)
+	}
+}
+
+// At the head the writer declined a defect at, a walk that does not find it
+// is no proof it is gone (the factory's own check found it on that page at
+// that code): unless you accepted the decline, the task waits on you, naming
+// the writer's reply with its risk, and no summary passes it.
+func TestADeclineYouDidNotAcceptThatAWalkAtItsHeadMissesNeedsYou(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12481")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	got := r.toYou(task)
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if sum, ok := readQASummary(dir); ok {
+		t.Fatalf("qa-summary.json %+v: a decline you did not accept passed at its head", sum)
+	}
+	reply := filepath.Join(dir, filepath.FromSlash(qaReplyFile(1, head)))
+	for _, want := range []string{qaDeclinedNotFoundWhy, reply, fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID)} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+}
+
+// Your accept's own record says who accepted: the qa event names the
+// liaison when it ran the retry for you, and qa-accepted.json keeps that
+// surface.
+func TestAnAcceptSaysWhoAcceptedIt(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12483")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	r.toYou(task)
+	qid, err := r.reg.EnqueueRequest(r.ctx, ReqRetry, RetryPayload{TaskID: task.ID, Surface: "liaison", AcceptQA: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if q, err := r.reg.RequestByID(r.ctx, qid); err != nil || q.State != registry.RequestDone {
+		t.Fatalf("the liaison's accept: %+v (%v)", q, err)
+	}
+	if got := r.eventsWith(task.ID, "qa", "through the liaison"); len(got) != 1 {
+		t.Errorf("qa events %q, want the accept naming the liaison", got)
+	}
+	if acc, ok := readQAAccepted(r.layout.FactoryTaskDir(task.ID)); !ok || acc.By != "liaison" {
+		t.Errorf("qa-accepted.json %+v (%v), want it by the liaison", acc, ok)
 	}
 }

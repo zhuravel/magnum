@@ -331,8 +331,8 @@ func (e *Engine) pressure(ctx context.Context, now time.Time, tasks []registry.T
 		e.event(ctx, t.ID, "park", registry.PhaseOK, "parked its idle agents: the Mac is short on disk or memory")
 	}
 	for _, t := range tasks {
-		if s, ok := e.servers[t.ID]; ok && idle(t) {
-			_ = e.stopServer(ctx, t, s, "it was idle and the Mac is short on disk or memory") // its fail event says so; the next tick tries again
+		if s, ok := e.servers[t.ID]; ok && idle(t) && !now.Before(s.next) { // a stop that failed waits its backoff here too
+			_ = e.stopServer(ctx, t, s, "it was idle and the Mac is short on disk or memory") // its fail event says so; a later tick tries again
 		}
 	}
 }

@@ -58,6 +58,14 @@ const (
 	// which no accept of yours at the run's head covers, is a state the run
 	// did not reach.
 	qaDeclinedNotWalkedWhy = "not walked again after the writer declined it"
+	// qaDeclinedNoRiskNotWalkedWhy is the same for a decline that named no
+	// risk: no fix was made either.
+	qaDeclinedNoRiskNotWalkedWhy = "not walked again after the writer declined it with no risk"
+	// qaDeclinedNotFoundWhy is why a run that walked the page of a defect the
+	// writer declined, at the head it declined it at, and did not find it, is
+	// no pass for it: the factory's own check found it on that page at that
+	// code, so another state or other data stood behind the walker's label.
+	qaDeclinedNotFoundWhy = "not found again at the head the writer declined it at"
 )
 
 // qaRecheck is a page a run walks again, in recheck.json: the path and the
@@ -72,13 +80,17 @@ type qaRecheck struct {
 // qaHandedBefore has it: the first run that found it, its class, severity,
 // page and state (the newest run's page), its fingerprint, whether a run
 // handed it since the newest run that passed it (sincePass: the run checks
-// it), and whether the writer's newest reply declined it (declined: no fix
-// of it was made).
+// it), whether the writer's newest reply declined it, with its risk or with
+// none (declined: no fix of it was made; noRisk: with none), and the head of
+// the newest run that handed it (handedAt, as its run folder names it), the
+// head the writer replied at.
 type qaHandedDefect struct {
 	QAFixed
 	fingerprint string
 	sincePass   bool
 	declined    bool
+	noRisk      bool
+	handedAt    string
 }
 
 // qaClassWords are the factory's own words for each class of a QA defect.
@@ -261,7 +273,7 @@ func qaSection(res QAResult) string {
 		return out
 	}
 	list("Found by QA and fixed before this PR", fixes(res.Fixed))
-	list("Fixed by the writer, not walked again by QA, accepted by you", fixes(res.Unchecked))
+	list("The writer's fixes QA did not walk again, accepted by you", fixes(res.Unchecked))
 	defects := func(ds []QADefect) []string {
 		var out []string
 		for _, d := range ds {
@@ -406,7 +418,7 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 		}
 	}
 	fixes("Found by an earlier run and fixed", res.Fixed)
-	fixes("Fixed by the writer, not walked again, accepted by you", res.Unchecked)
+	fixes("The writer's fixes QA did not walk again, accepted by you", res.Unchecked)
 	if len(res.Blocked) > 0 {
 		section("Not reached", len(res.Blocked))
 		for _, bl := range res.Blocked {
@@ -492,19 +504,21 @@ func qaHandedBefore(dir string, k int) []qaHandedDefect {
 				out = append(out, qaHandedDefect{QAFixed: QAFixed{Run: ref.k, Class: d.Class, Severity: d.Severity}, fingerprint: d.Fingerprint})
 			}
 			out[i].Path, out[i].State = cmp.Or(pg.ProbePath, pg.Path), pg.State // the path its probe read (an older build kept the walker's)
+			out[i].handedAt = ref.head
 			out[i].sincePass = out[i].sincePass || ref.k > passOf(d.Fingerprint)
 		}
 	}
 	hist := qaHistory(dir, k)
 	for i := range out {
-		out[i].declined = hist[out[i].fingerprint].declined
+		h := hist[out[i].fingerprint]
+		out[i].declined, out[i].noRisk = h.declined || h.declinedNoRisk, h.declinedNoRisk
 	}
 	return out
 }
 
 // qaRechecks are the pages run k walks again (recheck.json): those of the
-// defects handed the writer since the newest run that passed
-// (qaHandedBefore), each page in its state once.
+// defects handed the writer since the newest run that passed each of them
+// (qaHandedBefore), fixed or declined, each page in its state once.
 func qaRechecks(dir string, k int) []qaRecheck {
 	var out []qaRecheck
 	seen := map[string]bool{}
@@ -594,13 +608,18 @@ func qaCheckFixes(dir string, run qaRun, res *QAResult) {
 		case h.declined && accepted(acc.Fingerprints, h.fingerprint):
 			res.Accepted = append(res.Accepted, QADefect{Class: h.Class, Severity: h.Severity, Source: qaSourceFactory,
 				Fingerprint: h.fingerprint, FoundPath: h.Path, FoundState: h.State})
-		case walked[qaPageKey(h.Path, h.State)]:
-			if !h.declined {
-				res.Fixed = append(res.Fixed, h.QAFixed)
-			}
+		case walked[qaPageKey(h.Path, h.State)] && !h.declined:
+			res.Fixed = append(res.Fixed, h.QAFixed)
 		case !h.sincePass:
+		case walked[qaPageKey(h.Path, h.State)] && h.handedAt == textx.ShortSHA(run.Head):
+			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaDeclinedNotFoundWhy, Fingerprint: h.fingerprint})
+		case walked[qaPageKey(h.Path, h.State)]: // a decline the head moved past, walked and not found: no fix to name
 		case h.declined:
-			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaDeclinedNotWalkedWhy, Fingerprint: h.fingerprint})
+			why := qaDeclinedNotWalkedWhy
+			if h.noRisk {
+				why = qaDeclinedNoRiskNotWalkedWhy
+			}
+			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: why, Fingerprint: h.fingerprint})
 		case accepted(acc.Unchecked, h.fingerprint):
 			f := h.QAFixed
 			f.Fingerprint = h.fingerprint

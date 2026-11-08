@@ -444,12 +444,30 @@ func qaBlockedOnly(res QAResult) bool {
 		!slices.ContainsFunc(res.Blocked, qaNotWalkedAgain)
 }
 
+// qaDeclineReplies is what a wait on the pages of declined defects res did
+// not walk again, or did not find again at the head they were declined at,
+// adds: "; the writer's reply, with its risk: <paths>", "" for none.
+func qaDeclineReplies(dir string, res QAResult) string {
+	hist := qaHistory(dir, res.Run)
+	var ds []QADefect
+	for _, b := range res.Blocked {
+		if h := hist[b.Fingerprint]; b.Fingerprint != "" && (h.declined || h.declinedNoRisk) {
+			ds = append(ds, QADefect{Fingerprint: b.Fingerprint})
+		}
+	}
+	if replies := qaReplies(dir, ds, hist); len(replies) > 0 {
+		return "; the writer's reply, with its risk: " + strings.Join(replies, ", ")
+	}
+	return ""
+}
+
 // qaSameStops reports whether the acceptance checks that blocked-only run
 // res (run) could not reach are all among those the blocked-only run before
-// it at its head stopped on, the stop you saw: QABlocked.Check is the
-// factory's id, the same whatever the walker calls a state (a blocked step
-// with no check matches one with none). A run the factory cut itself in
-// between is passed over, as qaRowAt does.
+// it at its head stopped on, the stop you saw: QABlocked.Check is an
+// acceptance check's id as the walker attributes the state to it, the same
+// whatever it calls the state. A blocked step with no check, or with one the
+// acceptance does not list, matches nothing, not even another such step. A
+// run the factory cut itself in between is passed over, as qaRowAt does.
 func qaSameStops(dir string, run qaRun, res QAResult) bool {
 	for _, k := range qaRunsAt(dir, run.Head) {
 		if k >= run.N {
@@ -462,9 +480,11 @@ func qaSameStops(dir string, run qaRun, res QAResult) bool {
 		if !ok || !qaBlockedOnly(prev) {
 			return false
 		}
+		checks, _ := qaAcceptanceChecks(dir)
+		known := func(id string) bool { return id != "" && slices.Contains(checks, id) }
 		seen := map[string]bool{}
 		for _, b := range prev.Blocked {
-			seen[b.Check] = true
+			seen[b.Check] = known(b.Check)
 		}
 		return !slices.ContainsFunc(res.Blocked, func(b QABlocked) bool { return !seen[b.Check] })
 	}
@@ -754,9 +774,9 @@ func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 		n := len(res.Blocking)
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case res.Outcome == QAOutcomeUnavailable && res.Walked && slices.ContainsFunc(res.Blocked, qaNotWalkedAgain):
-		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and only a walk of each such page in its state checks "+
-			"the defect there, or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR body names as "+
-			"accepted by you", res.Why, see, t.ID, t.ID)
+		return fmt.Sprintf("%s%s%s; then `magnum factory retry %d` walks once more, and a walk of each such page in its state that finds "+
+			"the defect hands it to the writer, or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR "+
+			"body names as accepted by you", res.Why, see, qaDeclineReplies(dir, res), t.ID, t.ID)
 	case qaBlockedOnly(res):
 		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
 			"not every state, and misses only states of the acceptance checks this one missed, goes on with those states flagged on the "+
