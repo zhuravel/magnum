@@ -10,7 +10,7 @@ import (
 
 // stateVersion is the version of the state file; a file of another version
 // is not read (the next Refresh rebuilds it).
-const stateVersion = 4
+const stateVersion = 5
 
 // state is what one Refresh of a repository read: the lookup data Status
 // answers from, and the caches the next Refresh starts from. Refresh writes
@@ -45,6 +45,8 @@ type state struct {
 	Runs    map[string]*runEntry    `json:"runs,omitempty"`
 	Paths   map[string]*pathsEntry  `json:"paths,omitempty"`
 	Deploys map[string]*deployEntry `json:"deploys,omitempty"`
+	// Seen is when a Refresh first saw each tip of the windows.
+	Seen map[string]time.Time `json:"seen,omitempty"`
 	// Wanted are the PRs each client asked for, with their bases and when:
 	// a Refresh fetches the ones asked for within wantedFor, whoever asked.
 	Wanted map[int]wantedPR `json:"wanted,omitempty"`
@@ -319,14 +321,11 @@ func (st *state) pushed(s *EnvStatus, base string, e *envData, mi int, dep *depl
 	default:
 		s.Detail = DetailCIFailedNotOurs
 		prev, prevSHA, prevPos := st.previousRun(e, ri, src)
-		merges := 0 // the run's: those from its merge down to the tip before
-		for _, m := range e.Merges {
-			if m.Pos >= e.Merges[ri].Pos && m.Pos < prevPos {
-				merges++
-			}
-		}
+		// The run's first-parent commits, from its merge down to the tip
+		// before (merges or not); its own merge's only when ri is mi.
+		span := prevPos - e.Merges[ri].Pos
 		var ours bool
-		ours, s.Why = failureIsOurs(r.Run, src.paths(base, s.InTip), prev, prevSHA, merges)
+		ours, s.Why = failureIsOurs(r.Run, src.paths(base, s.InTip), prev, prevSHA, span, ri == mi)
 		if ours {
 			s.Detail = DetailCIFailedOurs
 		}
@@ -382,14 +381,15 @@ func passed(r *Run) bool {
 
 // failureIsOurs reports whether run's failure is the PR's: a failing job
 // names a path the PR changes (p), or a job failed here that did not on
-// prev, the run of the tip before the merge (prevSHA; nil = none to tell
-// against), and the run covers that merge alone (merges, from the run's
-// merge down to prevSHA): a flaky job reads the same, so Why says "new
-// against". Over several merges a new failure may be any of theirs, and
-// the same jobs failing on prev is not the PR's. Why says when it cannot be
-// told: the run's jobs not read, no failing job listed, the PR's paths not
-// read, or a failing job that names no path.
-func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string, merges int) (bool, string) {
+// prev, the run of the tip before (prevSHA; nil = none to tell against),
+// and that run is the PR's own merge's (own) with exactly one first-parent
+// commit, the merge itself, down to prevSHA (span): a flaky job reads the
+// same, so Why says "new against". Over several commits, or on a later
+// merge's run, a new failure may be any of theirs; the same jobs failing on
+// prev is not the PR's. Why says when it cannot be told: the run's jobs not
+// read, no failing job listed, the PR's paths not read, or a failing job
+// that names no path.
+func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string, span int, own bool) (bool, string) {
 	const cannot = "cannot tell whether the failure is the PR's: "
 	switch {
 	case run.Failed == nil:
@@ -425,8 +425,11 @@ func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string, merges in
 			if before[job.Name] {
 				continue
 			}
-			if merges > 1 {
-				return false, fmt.Sprintf("new against %s, in a run of %d merges: cannot tell whose", short(prevSHA), merges)
+			switch {
+			case !own:
+				return false, fmt.Sprintf("new against %s, on a later merge's run: cannot tell whose", short(prevSHA))
+			case span != 1:
+				return false, fmt.Sprintf("new against %s, in a run of %d commits: cannot tell whose", short(prevSHA), span)
 			}
 			return true, "new against " + short(prevSHA) + ": a job failed that passed there (a flaky job reads the same)"
 		}

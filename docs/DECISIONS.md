@@ -19705,14 +19705,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
     default branch through the real path: the empty HOME, the scrubbed config and the gh helper line.
     A new failure is the PR's only when the run covers its merge alone, from the run's merge down to the tip
     told against; over several merges Why says "new against <sha>, in a run of N merges: cannot tell whose",
-    and only the paths rule can make it the PR's. `Client.Close` ends the background clone (execx ends git's
-    process group) and waits; the daemons call it when they stop. A second client finds a clone in the state
+    and only the paths rule can make it the PR's (since the last round: first-parent commits, see below). `Client.Close` ends the background clone (execx ends git's
+    process group) and waits; the daemons' wiring is to call it when a daemon stops. A second client finds a clone in the state
     file at once, never waiting for the lock. A tip pushed over 45 minutes ago without a run is not read again
     within 10 minutes, and the run a new failure is told against is read without its annotations. Git runs with
     an empty HOME in `mirror_dir` (no `~/.netrc`), `GIT_ASKPASS` and `SSH_ASKPASS` `/usr/bin/false`, and no
     `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS`; gh, the only
     credential helper, gets the operator's HOME back for its own login. The stale-lock sweep runs only once Base
     confirms the mirror. The /Volumes checks fold case.
+  - The last review's Minors. Every `GIT_CONFIG*` variable of the environment (`GIT_CONFIG`, which points git
+    config at another file, `GIT_CONFIG_SYSTEM` and the rest) is scrubbed from every git command: with
+    `GIT_CONFIG` set, the origin read found none and every Refresh moved a healthy mirror aside and cloned it.
+    "No such key" is exit 1 with nothing on stderr, and only an absent or wrong-typed entry fails the layout
+    check (an EIO is a plain error). A clone writes a marker into the git dir (`magnum-mirror`, the repository's
+    name), and only a marked dir is ever moved aside or deleted (the aside dirs are listed with ReadDir and a
+    prefix, never Glob); an unmarked dir at the mirror's path is "not magnum's mirror", an error that touches
+    nothing, logged once, unless Base confirms its origin is this repository's (a mirror from before the marker),
+    which is adopted and marked. Rejected: telling magnum's mirrors by their origin alone, which moved and later
+    deleted a bare clone someone keeps there. Close and the start of a clone are atomic under the client's
+    mutex, so no clone starts after Close; a clone Close cut is no failure (no backoff, the next client clones
+    at once). A new failure is the PR's only on its own merge's run with exactly one first-parent commit, the
+    merge, down to the tip told against: a non-merge tip between (a fast-forward, a commit on staging) or a later
+    merge's run says "cannot tell whose". "No run yet" counts from when a Refresh first saw the tip (the state's
+    `Seen`), never from its committer time.
   - Follow-ups, not done here: a PR whose own commits hold staging's history (it merged staging or another
     PR's branch) reads as outdated, and a fast-forward of a PR onto staging as none (M2); pull refs and stacked
     bases no client asks for are never pruned, and gc runs inside the fetch (M5); every staging-* branch is
@@ -19750,7 +19765,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestCloseStopsTheBackgroundCloneAndWaits, TestASecondClientSeesTheCloneAtOnce,
   TestOnlyTheNewestDirMovedAsideIsKept, TestTheLockSweepNeverTouchesADirThatIsNoMirror,
   TestTheTipsBeforeAFailedMergeCostLittle, TestConfigFromTheEnvironmentIsScrubbed and the state rows for a new
-  failure in a run of two merges and a path of the PR's in one; in github
+  failure in a run of two merges and a path of the PR's in one; for the last review's,
+  TestGitConfigInTheEnvironmentNeverMovesTheMirror, TestACloneMarksTheMirrorAsMagnums,
+  TestABareCloneWithoutTheMarkerIsAdoptedOnlyWhenItsOriginIsThisRepositorys, TestADirWithoutTheMarkerIsNotMagnumsMirror,
+  TestAClonedCutByCloseIsNoFailure, TestNoRunYetCountsFromWhenTheTipWasFirstSeen and the state row for a later
+  merge's run with a tip that passed between (each fails with its change taken out); in github
   TestDeploymentsAreReadWithTheirETag, TestDeploymentsRefusalsAndNotReadable, TestDeploymentStatusesListsTheStates,
   TestCommitRunsListsAWorkflowsRunsAtACommit and TestRunJobsAndAnnotationPaths; in config
   TestAStagingBranchMustBeAStagingBranchAndNeverTheBaseOrProduction, TestAStagingBranchIsStagingAndTheEnvironmentsName,

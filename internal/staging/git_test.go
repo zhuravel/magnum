@@ -83,7 +83,7 @@ func TestEveryMirrorCommandNamesTheMirrorAndIsolatesGitConfig(t *testing.T) {
 			t.Errorf("%q: HOME %q, askpass %q, prompt %q; want an empty HOME under mirror_dir (no ~/.netrc), no askpass, no prompt",
 				c.Args, c.Env["HOME"], c.Env["GIT_ASKPASS"], c.Env["GIT_TERMINAL_PROMPT"])
 		}
-		for _, v := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
+		for _, v := range []string{"GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
 			if !slices.Contains(c.Unset, v) {
 				t.Errorf("%q inherits %s", c.Args, v)
 			}

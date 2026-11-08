@@ -20,8 +20,9 @@ const (
 	// client's fetch.
 	wantedFor = 10 * time.Minute
 	// runKeep is how long a completed run is reused before it is read again
-	// (a re-run makes it run again); a run in progress, a merge without one
-	// and a failed read are read again at each Refresh.
+	// (a re-run makes it run again), and "no run" at a tip first seen over
+	// ConfirmWait ago; a run in progress, a newer tip without one and a
+	// failed read are read again at each Refresh.
 	runKeep = 10 * time.Minute
 	// pathsRetry is how long a failed read of a PR's changed paths waits
 	// before the next try; a read that worked is kept while the head is.
@@ -137,6 +138,13 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		if c.life.Err() != nil {
 			return fmt.Errorf("staging %s: the client is closed: no clone starts", repo)
 		}
+		if _, serr := os.Lstat(dir); serr == nil && !hasMarker(dir) {
+			// Not magnum's (no marker): never moved, deleted or fetched into.
+			st := &state{V: stateVersion, At: now, Err: dir + " is not magnum's mirror (no " + markerFile + " in it): nothing is touched; move it away to let magnum clone there"}
+			c.noteOnce(dir, "staging: the dir at the mirror's path is not magnum's mirror; left alone", "why", errLine(err))
+			c.set(repo, st)
+			return st.err(repo)
+		}
 		st, ok := c.prepareClone(repo, dir, open, prev, err, now)
 		if ok {
 			locked = false
@@ -147,6 +155,14 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		st := &state{V: stateVersion, At: now, Err: "the mirror could not be read: " + errLine(err)}
 		c.set(repo, st)
 		return st.err(repo)
+	}
+	if _, serr := os.Lstat(dir); serr == nil && !hasMarker(dir) {
+		// A mirror from before the marker: Base confirmed its origin.
+		if err := writeMarker(dir, repo); err != nil {
+			c.d.Log.Warn("staging: the mirror could not be marked as magnum's", "dir", dir, "err", errLine(err))
+		} else {
+			c.d.Log.Info("staging: adopted a mirror from before the marker", "dir", dir)
+		}
 	}
 	clearStaleLocks(dir, now, c.d.Log)
 	st := c.build(ctx, repo, dir, env, base, open, prev, now)
@@ -227,12 +243,32 @@ func (c *Client) prepareClone(repo, dir string, open []OpenPR, prev *state, why 
 	return st, true
 }
 
+// noteOnce logs msg about dir once in this client's life.
+func (c *Client) noteOnce(dir, msg string, args ...any) {
+	c.mu.Lock()
+	seen := c.noted[dir]
+	c.noted[dir] = true
+	c.mu.Unlock()
+	if !seen {
+		c.d.Log.Warn(msg, append([]any{"dir", dir}, args...)...)
+	}
+}
+
 // dropAside deletes the dirs earlier Refreshes moved aside from dir (under
 // the flock), so at most one, the next, is kept: each is a whole copy of a
-// mirror.
+// mirror. Only a dir named <dir>.broken-<...> beside it that carries
+// magnum's marker is deleted: a name alone guards nothing.
 func (c *Client) dropAside(dir string) {
-	aside, _ := filepath.Glob(dir + ".broken-*")
-	for _, old := range aside {
+	parent, prefix := filepath.Dir(dir), filepath.Base(dir)+".broken-"
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		old := filepath.Join(parent, entry.Name())
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !hasMarker(old) {
+			continue
+		}
 		if err := os.RemoveAll(old); err != nil {
 			c.d.Log.Warn("staging: an old mirror dir moved aside not deleted", "dir", old, "err", errLine(err))
 			continue
@@ -248,8 +284,13 @@ func (c *Client) dropAside(dir string) {
 // again.
 func (c *Client) startClone(ctx context.Context, repo, dir string, env map[string]string, unlock func(), st *state) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		// Close ran meanwhile: no goroutine may outlive it.
+		unlock()
+		return
+	}
 	c.cloning[dir] = st.At
-	c.mu.Unlock()
 	c.bg.Go(func() {
 		defer unlock()
 		defer func() {
@@ -263,13 +304,20 @@ func (c *Client) startClone(ctx context.Context, repo, dir string, env map[strin
 		err := c.d.Git.Clone(cctx, dir, repo, env)
 		now := c.d.Now()
 		next := &state{V: stateVersion, Wanted: st.Wanted, Err: "the mirror is cloned: the next Refresh reads it"}
-		if err != nil {
+		switch {
+		case err != nil && c.life.Err() != nil:
+			// Close cut it: no failure, so no backoff; the next client
+			// clones at once.
+			next.CloneFails = st.CloneFails
+			next.Err = "the clone was stopped with its client: the next Refresh clones again"
+			c.d.Log.Info("staging: the clone was stopped with its client", "repo", repo, "dir", dir)
+		case err != nil:
 			next.At, next.CloneFails = now, st.CloneFails+1
 			next.CloneRetryAt = now.Add(cloneBackoff(next.CloneFails))
 			next.CloneErr = "the mirror could not be cloned: " + errLine(err)
 			next.Err = next.CloneErr + "; the next try is at " + next.CloneRetryAt.Format("15:04")
 			c.d.Log.Warn("staging: the clone failed", "repo", repo, "dir", dir, "fails", next.CloneFails, "err", errLine(err))
-		} else {
+		default:
 			c.d.Log.Info("staging: the mirror is cloned", "repo", repo, "dir", dir)
 		}
 		if err := writeState(dir, next); err != nil {
@@ -332,6 +380,18 @@ func (c *Client) build(ctx context.Context, repo, dir string, env map[string]str
 			c.markDeployed(ctx, dir, e, st.Deploys[e.Env])
 		}
 		st.Envs[branch] = e
+	}
+	// When each tip was first seen (kept from prev): the "no run yet" of a
+	// tip counts from then.
+	st.Seen = map[string]time.Time{}
+	for _, e := range st.Envs {
+		for _, tip := range e.Chain {
+			if prev != nil && !prev.Seen[tip.SHA].IsZero() {
+				st.Seen[tip.SHA] = prev.Seen[tip.SHA]
+			} else {
+				st.Seen[tip.SHA] = now
+			}
+		}
 	}
 	// Read the runs and paths the fetched PRs' statuses need, as Status
 	// will ask for them.
@@ -701,11 +761,9 @@ type reader struct {
 	env  map[string]string
 	st   *state
 	now  time.Time
-	// ran and diffed are what this Refresh already read; tips are the
-	// windows' tips with when they were pushed (pushedAt).
+	// ran and diffed are what this Refresh already read.
 	ran    map[string]*runEntry
 	diffed map[string]*pathsEntry
-	tips   map[string]time.Time
 }
 
 // pathlessRuns is a GitHub that also reads a run's failed jobs without
@@ -714,23 +772,15 @@ type pathlessRuns interface {
 	runsWithoutPaths(ctx context.Context, repo, workflow, sha string) ([]Run, error)
 }
 
-// pushedAt is when the window put sha on a branch, zero when it is no tip.
-func (r *reader) pushedAt(sha string) time.Time {
-	if r.tips == nil {
-		r.tips = map[string]time.Time{}
-		for _, e := range r.st.Envs {
-			for _, tip := range e.Chain {
-				r.tips[tip.SHA] = tip.At
-			}
-		}
-	}
-	return r.tips[sha]
-}
+// seenAt is when a Refresh first saw sha as a tip of a branch's window,
+// zero when it is none: never its committer time, which a merge made long
+// before its push would put in the past.
+func (r *reader) seenAt(sha string) time.Time { return r.st.Seen[sha] }
 
 // keep reports whether prev, the last read of sha's runs, stands without a
 // new read: a completed run within runKeep (a re-run makes it run again),
-// or no run at a tip pushed over ConfirmWait ago (none is coming), within
-// runKeep too. A run in progress and a failed read are read again.
+// or no run at a tip first seen over ConfirmWait ago (none is coming),
+// within runKeep too. A run in progress and a failed read are read again.
 func (r *reader) keep(sha string, prev *runEntry) bool {
 	if prev == nil || prev.Err != "" || r.now.Sub(prev.ReadAt) >= runKeep {
 		return false
@@ -738,7 +788,7 @@ func (r *reader) keep(sha string, prev *runEntry) bool {
 	if prev.Run != nil {
 		return prev.Run.Status == "completed"
 	}
-	at := r.pushedAt(sha)
+	at := r.seenAt(sha)
 	return !at.IsZero() && r.now.Sub(at) >= ConfirmWait
 }
 

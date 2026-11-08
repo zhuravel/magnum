@@ -81,15 +81,18 @@ func newGit(r execx.Runner, url func(repo string) string) Git {
 // includeIf of the operator's ever applies. root is mirror_dir.
 func gitHome(root string) string { return filepath.Join(root, ".home") }
 
-// configVars are the variables of environ that give git config (
-// GIT_CONFIG_COUNT with its GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, and
-// GIT_CONFIG_PARAMETERS, which -c writes): an insteadOf or a URL-scoped
-// credential helper there would reach the fetch.
+// configVars are the variables that point git at config, every one an
+// environment can hold, environ's included: GIT_CONFIG (the file git config
+// reads in place of the repository's), GIT_CONFIG_SYSTEM, GIT_CONFIG_COUNT
+// with its GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS
+// (what -c writes), and any other GIT_CONFIG*. An insteadOf, a URL-scoped
+// credential helper or another file there would reach the fetch or the
+// mirror's checks. The command's own (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM)
+// are in its Env, which wins.
 func configVars(environ []string) []string {
-	out := []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"}
+	out := []string{"GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"}
 	for _, kv := range environ {
-		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_") {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "GIT_CONFIG") && !slices.Contains(out, k) {
 			out = append(out, k)
 		}
 	}
@@ -150,25 +153,31 @@ func (g *execGit) base(cwd, root, label string, timeout time.Duration, mutates, 
 
 // laidOut reports whether dir looks like a bare repository on disk: a
 // regular HEAD, objects/ and refs/ (without refs/, git takes it for no
-// repository and looks above it).
-func laidOut(dir string) bool {
-	head, err := os.Lstat(filepath.Join(dir, "HEAD"))
-	if err != nil || !head.Mode().IsRegular() {
-		return false
-	}
-	for _, sub := range []string{"objects", "refs"} {
-		if fi, err := os.Lstat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
-			return false
+// repository and looks above it). Only an absent entry or one of the wrong
+// type is an answer; another error (EIO on a failing disk) is returned.
+func laidOut(dir string) (bool, error) {
+	for _, entry := range []struct {
+		name string
+		dir  bool
+	}{{"HEAD", false}, {"objects", true}, {"refs", true}} {
+		fi, err := os.Lstat(filepath.Join(dir, entry.name))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return false, nil
+		case err != nil:
+			return false, err
+		case entry.dir != fi.IsDir() || !entry.dir && !fi.Mode().IsRegular():
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 // noSuchKey reports whether err is `git config --get`'s definite answer that
-// the key is not set: exit 1.
+// the key is not set: exit 1, and nothing on stderr.
 func noSuchKey(err error) bool {
 	ee, ok := errors.AsType[*execx.ExitError](err)
-	return ok && ee.Code == 1
+	return ok && ee.Code == 1 && strings.TrimSpace(ee.Stderr) == ""
 }
 
 // notARepository reports whether err is git's definite answer that the dir
@@ -181,15 +190,19 @@ func notARepository(err error) bool {
 // Base answers ErrNoMirror only on a definite answer, and never once ctx is
 // done: the layout check fails, git exits 128 with "not a git repository",
 // git calls the dir not bare, or its origin is not repo's (or it has none:
-// a dir of someone's bare clones, a repository renamed), so Refresh moves
-// it aside and clones again, never fetching into it. Anything else (a git
+// a change of the URL's format, a dir of bare clones), so Refresh moves it
+// aside and clones again when it is magnum's (markerFile), never fetching
+// into it. Anything else (a git
 // that cannot run, a signal, a timeout, a cancel) is a plain error that
 // leaves the dir alone, and so is a mirror of repo that is not treeless.
 func (g *execGit) Base(ctx context.Context, dir, repo string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("mirror dir %q is not absolute", dir)
 	}
-	if !laidOut(dir) {
+	switch ok, err := laidOut(dir); {
+	case err != nil:
+		return "", fmt.Errorf("checking %s: %w", dir, err)
+	case !ok:
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
@@ -263,6 +276,10 @@ func (g *execGit) Clone(ctx context.Context, dir, repo string, env map[string]st
 	if _, err := g.run.Run(ctx, cmd); err != nil {
 		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("clone: %w", err)
+	}
+	if err := writeMarker(tmp, repo); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		_ = os.RemoveAll(tmp)

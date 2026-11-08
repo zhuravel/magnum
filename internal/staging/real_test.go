@@ -163,6 +163,7 @@ func TestAMirrorDirWithoutRefsInsideARepositoryIsMovedAsideAndClonedAgain(t *tes
 		t.Fatal(err)
 	}
 	writeIn(t, mirror, "HEAD", "ref: refs/heads/master\n")
+	writeIn(t, mirror, markerFile, "acme/app\n") // magnum's mirror, which lost its refs/
 
 	gh := newFakeGitHub()
 	gh.deploys["void"] = []Deployment{{ID: 1, SHA: merge, Ref: merge, CreatedAt: time.Now(), Success: true}}
@@ -275,10 +276,9 @@ func TestAGitThatCannotRunLeavesTheMirrorInPlace(t *testing.T) {
 	untouched(t, c, r, mirror, head)
 }
 
-// A bare repository at the mirror's path whose origin is another
-// repository's (a mirror_dir set to a dir of bare clones, a repository
-// renamed on GitHub) is a definite answer that it is no mirror of this one:
-// it is moved aside under the flock, as a broken one is, and the mirror is
+// Magnum's mirror whose origin is another repository's (a change of the
+// URL's format) is a definite answer that it is no mirror of this one: it
+// is moved aside under the flock, as a broken one is, and the mirror is
 // cloned again from this repository's origin, never fetched into as it was.
 func TestAMirrorWhoseOriginIsAnotherRepositoryIsMovedAsideAndClonedAgain(t *testing.T) {
 	t.Parallel()
@@ -306,4 +306,93 @@ func TestAMirrorWhoseOriginIsAnotherRepositoryIsMovedAsideAndClonedAgain(t *test
 	if got := one(c, PR{Repo: "acme/app", Number: 1, Head: p1, Base: "master"}); got.State == StateUnknown {
 		t.Errorf("on the new mirror: %s %q", got.State, got.Why)
 	}
+}
+
+// A clone writes the marker that makes the mirror magnum's: the repository's
+// name, in the git dir.
+func TestACloneMarksTheMirrorAsMagnums(t *testing.T) {
+	t.Parallel()
+	_, _, mirror, _, _ := cloned(t)
+	if got, err := os.ReadFile(filepath.Join(mirror, markerFile)); err != nil || strings.TrimSpace(string(got)) != "acme/app" {
+		t.Errorf("the marker: %q, %v; want acme/app", got, err)
+	}
+}
+
+// A bare clone at the mirror's path that magnum did not make (no marker) is
+// never moved or deleted: when its origin is this repository's (a mirror from
+// before the marker), it is adopted and marked; when it is another's, the
+// Refresh fails and touches nothing.
+func TestABareCloneWithoutTheMarkerIsAdoptedOnlyWhenItsOriginIsThisRepositorys(t *testing.T) {
+	t.Parallel()
+	r := hermetic(t)
+	origin, _, p1, _ := newOrigin(t, r)
+	root := t.TempDir()
+	mirror := filepath.Join(root, "staging", "acme", "app.git")
+	if err := os.MkdirAll(filepath.Dir(mirror), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, r, filepath.Dir(mirror), "clone", "-q", "--bare", "--filter=tree:0", "--single-branch", "--no-tags", "--", "file://"+origin, mirror)
+	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
+	clock := time.Now()
+	client := func(url string) *Client {
+		return New(Deps{
+			Git:    newGit(r, func(string) string { return url }),
+			GitHub: newFakeGitHub(),
+			Mirror: func(string) (string, bool) { return mirror, true },
+			GitEnv: func(string) map[string]string { return map[string]string{} },
+			Now:    func() time.Time { return clock },
+		})
+	}
+	other := client("https://github.com/acme/other.git")
+	err := other.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}})
+	if err == nil || !strings.Contains(err.Error(), "not magnum's mirror") {
+		t.Errorf("another repository's clone without the marker: %v, want not magnum's mirror", err)
+	}
+	other.bg.Wait()
+	untouched(t, other, r, mirror, head)
+	if _, err := os.Stat(filepath.Join(mirror, markerFile)); err == nil {
+		t.Error("another repository's clone was marked")
+	}
+
+	clock = clock.Add(RefreshEvery)
+	mine := client("file://" + origin)
+	if err := mine.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}}); err != nil {
+		t.Fatalf("this repository's clone without the marker: %v", err)
+	}
+	mine.bg.Wait()
+	untouched(t, mine, r, mirror, head)
+	if got, err := os.ReadFile(filepath.Join(mirror, markerFile)); err != nil || strings.TrimSpace(string(got)) != "acme/app" {
+		t.Errorf("adopted, the marker is %q (%v)", got, err)
+	}
+	if got := one(mine, PR{Repo: "acme/app", Number: 1, Head: p1, Base: "master"}); got.State == StateUnknown {
+		t.Errorf("on the adopted mirror: %s %q", got.State, got.Why)
+	}
+}
+
+// GIT_CONFIG in the environment points git config at another file, where
+// the origin read finds none: it is scrubbed, so a healthy mirror is never
+// taken for none, moved aside and cloned again at every Refresh.
+func TestGitConfigInTheEnvironmentNeverMovesTheMirror(t *testing.T) {
+	t.Parallel()
+	_, now, mirror, origin, r := cloned(t)
+	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
+	other := filepath.Join(t.TempDir(), "other.config")
+	writeIn(t, filepath.Dir(other), filepath.Base(other), "[core]\n\tbare = true\n")
+	polluted := &execx.Real{BaseEnv: append(slices.Clone(r.BaseEnv), "GIT_CONFIG="+other, "GIT_CONFIG_SYSTEM="+other)}
+	clock := now.Add(RefreshEvery)
+	c := New(Deps{
+		Git:    newGit(polluted, func(string) string { return "file://" + origin }),
+		GitHub: newFakeGitHub(),
+		Mirror: func(string) (string, bool) { return mirror, true },
+		GitEnv: func(string) map[string]string { return map[string]string{} },
+		Now:    func() time.Time { return clock },
+	})
+	for range 3 {
+		if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}}); err != nil {
+			t.Errorf("Refresh with GIT_CONFIG set: %v", err)
+		}
+		c.bg.Wait()
+		clock = clock.Add(RefreshEvery)
+	}
+	untouched(t, c, r, mirror, head)
 }

@@ -214,6 +214,23 @@ func clearStaleLocks(dir string, now time.Time, log *slog.Logger) {
 	})
 }
 
+// markerFile is the file in a mirror's git dir that makes it magnum's: the
+// repository's name. A clone writes it; a mirror from before it is adopted
+// (marked) once Base confirmed its origin. Only a dir that carries it is
+// ever moved aside or deleted.
+const markerFile = "magnum-mirror"
+
+// hasMarker reports whether dir carries magnum's marker.
+func hasMarker(dir string) bool {
+	fi, err := os.Lstat(filepath.Join(dir, markerFile))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// writeMarker marks dir as magnum's mirror of repo.
+func writeMarker(dir, repo string) error {
+	return fsx.WriteFileAtomic(filepath.Join(dir, markerFile), []byte(repo+"\n"), 0o600)
+}
+
 // statePath is the state file beside the mirror.
 func statePath(dir string) string { return dir + ".json" }
 

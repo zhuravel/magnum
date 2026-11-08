@@ -64,13 +64,14 @@ const (
 	// DetailCIRunning: ci.yml runs on the merge (or has not started yet).
 	DetailCIRunning Detail = "ci_running"
 	// DetailCIFailedOurs: ci.yml failed, and a failing job names a path the
-	// PR changes, or a job failed that passed on the branch's tip before the
-	// merge, the merge alone in between ("new against" it: a flaky job reads
+	// PR changes, or a job failed on the PR's merge's own run that passed on
+	// the branch's tip right before it ("new against" it: a flaky job reads
 	// the same).
 	DetailCIFailedOurs Detail = "ci_failed_ours"
 	// DetailCIFailedNotOurs: ci.yml failed, but neither: no failing job names
 	// a path the PR changes, and the same jobs failed on the tip before, or
-	// the run covers several merges, or it cannot be told (Why says so).
+	// the run covers more first-parent commits or is a later merge's, or it
+	// cannot be told (Why says so).
 	DetailCIFailedNotOurs Detail = "ci_failed_not_ours"
 	// DetailWaitingJenkins: ci.yml passed, and the deploy has not recorded a
 	// deployment yet, less than ConfirmWait after the push.
@@ -277,6 +278,8 @@ type Client struct {
 	mu      sync.Mutex
 	data    map[string]*state    // by repository, lower case
 	cloning map[string]time.Time // the mirrors this client clones, by dir: since when
+	noted   map[string]bool      // the dirs noteOnce logged
+	closed  bool                 // Close ran: no clone starts
 	// bg runs the background clones, on life (tests wait for them); Close
 	// ends life.
 	bg   sync.WaitGroup
@@ -293,15 +296,19 @@ func New(d Deps) *Client {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
 	life, end := context.WithCancel(context.Background())
-	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, life: life, end: end}
+	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, noted: map[string]bool{}, life: life, end: end}
 }
 
 // Close stops the client's background clones and waits for them: their
 // context ends, so execx ends each git's process group (SIGTERM, then
-// SIGKILL), and the half clone is removed. A closed client starts no clone.
-// The daemons call it when they stop.
+// SIGKILL), and the half clone is removed; a clone it cut counts as no
+// failure. A closed client starts no clone, whatever Refresh it races. The
+// daemons' wiring is to call it when a daemon stops.
 func (c *Client) Close() {
+	c.mu.Lock()
+	c.closed = true
 	c.end()
+	c.mu.Unlock()
 	c.bg.Wait()
 }
 

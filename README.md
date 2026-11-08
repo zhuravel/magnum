@@ -4906,7 +4906,7 @@ once that tip is live (so an environment's branch is always `staging-<name>`):
 | State | Means |
 |---|---|
 | `latest` | the PR's head is on the branch, and the newest successful deployment holds the merge that brought it |
-| `pushed` | the head is on the branch, but no deployment confirms it yet: `ci_running`, `ci_failed_ours` (a failing job of ci.yml names a path the PR changes, or a job failed that passed on the tip before, with this merge alone in between), `ci_failed_not_ours` (neither, the same jobs failed before, the run covers several merges, or it cannot be told), `waiting_jenkins` (ci.yml passed), or `not_confirmed` (45 minutes after the push, or the deployments are not readable) |
+| `pushed` | the head is on the branch, but no deployment confirms it yet: `ci_running`, `ci_failed_ours` (a failing job of ci.yml names a path the PR changes, or a job failed on the PR's merge's own run that passed on the tip right before it), `ci_failed_not_ours` (neither: the same jobs failed before, the run covers more commits or is a later merge's, or it cannot be told), `waiting_jenkins` (ci.yml passed), or `not_confirmed` (45 minutes after the push, or the deployments are not readable) |
 | `outdated` | an older commit of the PR is on the branch and the head is not; it says how many commits behind |
 | `none` | no commit of the PR is on the branch: within its last 400 first-parent commits or 90 days, whichever ends first |
 | `unknown` | the mirror is absent (its volume is not mounted) or being cloned, a fetch failed, the PR's base could not be fetched or is no branch name, the last good read is over 10 minutes old (`stale`), or nothing has been read yet |
@@ -4920,9 +4920,9 @@ with the poll identity's credentials (the `staging-*` branches, each open PR's b
 the environment's deployments (with their ETag; a deployment counts once its newest status is a success) and
 ci.yml's runs at the merge (for a failed one, the paths its failed jobs' annotations name). A failure is the
 PR's (`ci_failed_ours`) when a failing job names a path the PR changes, or when a job failed that passed on the
-branch's tip before the merge and the run covers that merge alone ("new against" it, which a flaky job reads the
-same); over a run of several merges a new failure may be any of theirs ("cannot tell whose"), and the same jobs
-failing there are not the PR's. The poll identity needs Deployments: read for the deployments, Actions: read for the runs and
+branch's tip right before the merge, on the merge's own run ("new against" it, which a flaky job reads the same);
+over a run of several first-parent commits, or on a later merge's run, a new failure may be any of theirs
+("cannot tell whose"), and the same jobs failing there are not the PR's. The poll identity needs Deployments: read for the deployments, Actions: read for the runs and
 Checks: read for the annotations (without it, every failure reads "cannot tell"). A token without
 Deployments: read cannot confirm a deploy: a PR whose ci.yml passed, or that has no run 45 minutes after the
 push, is `pushed, not_confirmed`, and one whose ci.yml runs or failed says so; it is never `none` or `latest`.
@@ -4933,10 +4933,14 @@ parent), with no global, system or environment git config, an empty HOME in `mir
 askpass, and gh as its only credential helper (with the poll identity's `GH_CONFIG_DIR`). The first read of a
 repository clones its mirror in the background, on its own timeout whatever the caller's, and every status
 says `cloning the mirror` until it is done; a clone that fails is tried again after 1, 5, 15 and then 60
-minutes, and a daemon that stops stops its clone. A mirror dir that git calls no repository, or not bare, or
-whose origin is another repository's (a dir of someone's bare clones, a repository renamed) is moved aside
-(`<repo>.git.broken-<time>`, only the newest kept) and cloned again, never repaired or fetched into; a git that
-cannot run, a timeout or a cancel leave it as it is. In a confirmed mirror, a git lock file a killed git left is removed once it is 10
+minutes; a clone that a stopping daemon cuts (the daemons' wiring is to call `Close`) counts as no failure. A
+clone marks the mirror as magnum's (a `magnum-mirror` file in the git dir, holding the repository's name), and
+only a marked dir is ever moved aside or deleted: a mirror dir that git calls no repository, or not bare, or
+whose origin is another repository's is moved aside (`<repo>.git.broken-<time>`, only the newest marked one
+kept) and cloned again, never repaired or fetched into. A dir at the mirror's path without the marker is not
+magnum's mirror: every status says so and nothing touches it, unless its origin is this repository's (a
+mirror from before the marker), which is adopted and marked. A git that cannot run, a timeout or a cancel leave
+any dir as it is, and no `GIT_CONFIG` or other config variable of the environment reaches git. In a confirmed mirror, a git lock file a killed git left is removed once it is 10
 minutes old.
 
 ```toml

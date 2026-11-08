@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -226,21 +227,91 @@ func TestOnlyTheNewestDirMovedAsideIsKept(t *testing.T) {
 	s := newScene(t)
 	dir := filepath.Join(t.TempDir(), "acme", "app.git")
 	older := dir + ".broken-20261101T000000"
-	for _, d := range []string{filepath.Join(older, "objects"), filepath.Join(dir, "objects")} {
-		if err := os.MkdirAll(d, 0o750); err != nil {
+	foreign := dir + ".broken-someone-elses"
+	for _, d := range []string{older, dir, foreign} {
+		if err := os.MkdirAll(filepath.Join(d, "objects"), 0o750); err != nil {
 			t.Fatal(err)
+		}
+		if d != foreign {
+			if err := os.WriteFile(filepath.Join(d, markerFile), []byte("acme/app\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	s.git.absent = true
 	c := s.clientAt(dir)
 	s.refresh(c, 7)
 	c.bg.Wait()
-	aside, _ := filepath.Glob(dir + ".broken-*")
+	aside, _ := filepath.Glob(dir + ".broken-2*")
 	if len(aside) != 1 || aside[0] == older {
 		t.Errorf("dirs moved aside: %q, want only the newest", aside)
 	}
 	if _, err := os.Stat(filepath.Join(aside[0], "objects")); err != nil {
 		t.Errorf("the newest dir moved aside lost its content: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(foreign, "objects")); err != nil {
+		t.Errorf("a dir beside it without magnum's marker was deleted: %v", err)
+	}
+}
+
+// A dir at the mirror's path without magnum's marker is not magnum's mirror:
+// the Refresh fails, nothing is moved or cloned, and Why says so.
+func TestADirWithoutTheMarkerIsNotMagnumsMirror(t *testing.T) {
+	t.Parallel()
+	s := newScene(t)
+	dir := filepath.Join(t.TempDir(), "acme", "app.git")
+	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	s.git.absent = true
+	c := s.clientAt(dir)
+	for range 2 {
+		if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil || !strings.Contains(err.Error(), "not magnum's mirror") {
+			t.Errorf("Refresh: %v, want not magnum's mirror", err)
+		}
+		c.bg.Wait()
+		s.now = s.now.Add(RefreshEvery)
+	}
+	if aside, _ := filepath.Glob(dir + ".broken-*"); len(aside) != 0 || s.git.n("Clone") != 0 {
+		t.Errorf("moved aside %q, %d clones; want neither", aside, s.git.n("Clone"))
+	}
+	if got := one(c, s.pr()); got.State != StateUnknown || !strings.Contains(got.Why, "not magnum's mirror") {
+		t.Errorf("%s %q, want unknown, not magnum's mirror", got.State, got.Why)
+	}
+}
+
+// A clone that Close cut is no failure: no backoff follows it, so the next
+// client clones at once; and a closed client's startClone starts nothing.
+func TestAClonedCutByCloseIsNoFailure(t *testing.T) {
+	t.Parallel()
+	s := newScene(t)
+	s.git.absent = true
+	entered := make(chan struct{})
+	var once sync.Once
+	s.git.clone = func(ctx context.Context) error {
+		once.Do(func() { close(entered) })
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	dir := filepath.Join(t.TempDir(), "acme", "app.git")
+	a := s.clientAt(dir)
+	s.refresh(a, 7)
+	<-entered
+	a.Close()
+	s.git.clone = nil
+	s.now = s.now.Add(30 * time.Second) // inside the first backoff a failure would set
+	b := s.clientAt(dir)
+	s.refresh(b, 7)
+	b.bg.Wait()
+	if n := s.git.n("Clone"); n != 2 {
+		t.Errorf("%d clones, want the next client's at once, no backoff after a cut", n)
+	}
+
+	unlocked := false
+	a.startClone(context.Background(), "acme/app", dir, map[string]string{}, func() { unlocked = true }, cloningState(s.now, s.now))
+	a.bg.Wait()
+	if n := s.git.n("Clone"); n != 2 || !unlocked {
+		t.Errorf("a closed client's startClone: %d clones, unlocked %v; want none and the lock released", n, unlocked)
 	}
 }
 
@@ -252,6 +323,9 @@ func TestTheLockSweepNeverTouchesADirThatIsNoMirror(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "acme", "app.git")
 	lock := filepath.Join(dir, "config.lock")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, markerFile), []byte("acme/app\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(lock, nil, 0o600); err != nil {
@@ -274,8 +348,8 @@ func TestTheLockSweepNeverTouchesADirThatIsNoMirror(t *testing.T) {
 	}
 }
 
-// The tips before a failed merge that have no ci.yml run, pushed over 45
-// minutes ago, are not read again at every Refresh; the run a new failure is
+// The tips before a failed merge that have no ci.yml run, first seen over
+// 45 minutes ago, are not read again at every Refresh; the run a new failure is
 // told against is read without its annotations, which only the job names
 // of serve.
 func TestTheTipsBeforeAFailedMergeCostLittle(t *testing.T) {
@@ -292,13 +366,32 @@ func TestTheTipsBeforeAFailedMergeCostLittle(t *testing.T) {
 	if n := s.gh.n("RunsOf"); n != 1 {
 		t.Errorf("%d full run reads, want the merge's only: the tips before it are read without annotations", n)
 	}
-	before := s.gh.n("runsWithoutPaths")
-	if before == 0 {
+	if s.gh.n("runsWithoutPaths") == 0 {
 		t.Fatal("no tip before the merge was read")
 	}
+	s.now = s.now.Add(ConfirmWait + time.Minute) // the tips were first seen 46 min ago
+	s.refresh(c, 7)
+	before := s.gh.n("runsWithoutPaths")
 	s.now = s.now.Add(2 * RefreshEvery)
 	s.refresh(c, 7)
 	if n := s.gh.n("runsWithoutPaths"); n != before {
-		t.Errorf("the run-less tips were read again a Refresh later: %d reads, want %d", n, before)
+		t.Errorf("the run-less tips, first seen over 45 min ago, were read again a Refresh later: %d reads, want %d", n, before)
+	}
+}
+
+// "No run yet" is kept from when a Refresh first saw the tip, never from its
+// committer time: a merge made an hour before its push gets its run read
+// again at the next Refresh.
+func TestNoRunYetCountsFromWhenTheTipWasFirstSeen(t *testing.T) {
+	t.Parallel()
+	s := newScene(t)
+	m := s.push(2*time.Hour, s.p2) // committed two hours ago, seen now
+	c := s.client()
+	s.refresh(c, 7)
+	s.gh.runs[m] = []Run{run("in_progress", "")}
+	s.now = s.now.Add(RefreshEvery)
+	s.refresh(c, 7)
+	if got := one(c, s.pr()); got.Detail != DetailCIRunning || got.RunURL == "" {
+		t.Errorf("a minute later: %s/%s %q, want ci_running with its run", got.State, got.Detail, got.Why)
 	}
 }

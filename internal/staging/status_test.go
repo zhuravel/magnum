@@ -131,7 +131,18 @@ func TestTheStateRules(t *testing.T) {
 			s.gh.runs[next] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/q_spec.rb"}})}
 			s.git.paths[s.p2] = []string{"app/models/a.rb"}
 			return m
-		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "in a run of 2 merges: cannot tell whose", inTip: "p2", runURL: true},
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "cannot tell whose", inTip: "p2", runURL: true},
+		{name: "pushed, a new failure on a later merge's run, a tip that passed between, is not the PR's", set: func(s *scene) string {
+			m := s.push(30*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "cancelled")}
+			z := s.commit(20*time.Minute, m) // a commit on staging itself, holding the PR's merge
+			s.ref("refs/heads/staging-void", z)
+			s.gh.runs[z] = []Run{run("completed", "success")}
+			next := s.push(10*time.Minute, s.commit(time.Hour, s.m1))
+			s.gh.runs[next] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/q_spec.rb"}})}
+			s.git.paths[s.p2] = []string{"app/models/a.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "cannot tell whose", inTip: "p2", runURL: true},
 		{name: "pushed, in a run of two merges a failing path of the PR's is still the PR's", set: func(s *scene) string {
 			s.gh.runs[s.s0] = []Run{run("completed", "success")}
 			m := s.push(10*time.Minute, s.p2)

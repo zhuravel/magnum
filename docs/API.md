@@ -25451,8 +25451,9 @@ func New(d Deps) *Client
 func (c *Client) Close()
     Close stops the client's background clones and waits for them: their context
     ends, so execx ends each git's process group (SIGTERM, then SIGKILL),
-    and the half clone is removed. A closed client starts no clone. The daemons
-    call it when they stop.
+    and the half clone is removed; a clone it cut counts as no failure. A closed
+    client starts no clone, whatever Refresh it races. The daemons' wiring is to
+    call it when a daemon stops.
 
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
     Refresh fetches the mirror once (the staging-* tips, each distinct base of
@@ -25531,13 +25532,14 @@ const (
 	// DetailCIRunning: ci.yml runs on the merge (or has not started yet).
 	DetailCIRunning Detail = "ci_running"
 	// DetailCIFailedOurs: ci.yml failed, and a failing job names a path the
-	// PR changes, or a job failed that passed on the branch's tip before the
-	// merge, the merge alone in between ("new against" it: a flaky job reads
+	// PR changes, or a job failed on the PR's merge's own run that passed on
+	// the branch's tip right before it ("new against" it: a flaky job reads
 	// the same).
 	DetailCIFailedOurs Detail = "ci_failed_ours"
 	// DetailCIFailedNotOurs: ci.yml failed, but neither: no failing job names
 	// a path the PR changes, and the same jobs failed on the tip before, or
-	// the run covers several merges, or it cannot be told (Why says so).
+	// the run covers more first-parent commits or is a later merge's, or it
+	// cannot be told (Why says so).
 	DetailCIFailedNotOurs Detail = "ci_failed_not_ours"
 	// DetailWaitingJenkins: ci.yml passed, and the deploy has not recorded a
 	// deployment yet, less than ConfirmWait after the push.
