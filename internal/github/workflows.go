@@ -44,16 +44,21 @@ func (c *Client) DispatchWorkflow(ctx context.Context, owner, repo, workflow, re
 	return c.restInput(ctx, op, "POST", path, map[string]string{"ref": ref}, true, nil)
 }
 
-// WorkflowRun is a run of a workflow as DispatchedRuns and CommitRuns list
-// it: its id, its status (queued, waiting, requested, pending, in_progress
-// or completed), its conclusion once completed (success, failure,
-// cancelled, timed_out, ...), its page and when GitHub created it.
+// WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns and
+// RecentRuns list it: its id, its status (queued, waiting, requested,
+// pending, in_progress or completed), its conclusion once completed
+// (success, failure, cancelled, timed_out, ...), its page and when GitHub
+// created it; RecentRuns also says the commit, the branch and the event it
+// ran for (the branch is a PR's text: never logged).
 type WorkflowRun struct {
 	ID         int64
 	Status     string
 	Conclusion string
 	URL        string
 	CreatedAt  time.Time
+	HeadSHA    string
+	HeadBranch string
+	Event      string
 }
 
 // Done reports whether r ended (completed, whatever its conclusion).
@@ -253,4 +258,50 @@ func (c *Client) AnnotationPaths(ctx context.Context, owner, repo string, checkR
 		paths = append(paths, a.Path)
 	}
 	return paths, nil
+}
+
+// recentRunsPage is how many runs RecentRuns reads: the newest of one
+// workflow, of every branch, in which a run still in progress shows.
+const recentRunsPage = 50
+
+// RecentRuns lists the newest runs of the workflow file workflow ("ci.yml")
+// of owner/repo, of any event and branch, newest first, each with its
+// commit, branch and event: GET /repos/{o}/{r}/actions/workflows/{file}/runs,
+// one page of recentRunsPage. The caller picks a branch's runs out of it,
+// so no branch name reaches the command line, which a failed call logs. The
+// identity needs read access to the repository's Actions (an App: Actions:
+// read). A workflow that is not a plain file name of .github/workflows
+// (ValidWorkflowFile) is refused before any call.
+func (c *Client) RecentRuns(ctx context.Context, owner, repo, workflow string) ([]WorkflowRun, error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return nil, err
+	}
+	if !ValidWorkflowFile(workflow) {
+		return nil, fmt.Errorf("github: invalid workflow file %q", workflow)
+	}
+	var data struct {
+		Runs []struct {
+			ID         int64     `json:"id"`
+			Event      string    `json:"event"`
+			HeadSHA    string    `json:"head_sha"`
+			HeadBranch string    `json:"head_branch"`
+			Status     string    `json:"status"`
+			Conclusion *string   `json:"conclusion"`
+			URL        string    `json:"html_url"`
+			CreatedAt  time.Time `json:"created_at"`
+		} `json:"workflow_runs"`
+	}
+	path := fmt.Sprintf("repos/%s/%s/actions/workflows/%s/runs?exclude_pull_requests=true&per_page=%d", owner, repo, workflow, recentRunsPage)
+	if err := c.rest(ctx, fmt.Sprintf("recent runs %s/%s:%s", owner, repo, workflow), "GET", path, nil, false, &data); err != nil {
+		return nil, err
+	}
+	runs := []WorkflowRun{}
+	for _, r := range data.Runs {
+		run := WorkflowRun{ID: r.ID, Status: r.Status, URL: r.URL, CreatedAt: r.CreatedAt, HeadSHA: r.HeadSHA, HeadBranch: r.HeadBranch, Event: r.Event}
+		if r.Conclusion != nil {
+			run.Conclusion = *r.Conclusion
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
 }
