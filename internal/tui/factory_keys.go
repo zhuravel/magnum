@@ -409,14 +409,15 @@ func (m *factoryModel) openCard(id int64) {
 	}
 }
 
-// nextDecision is the oldest card in NEEDS YOU not walked yet: a task's
-// decision card (its questions, its ready card), and the card of a PR that
-// needs you, your PR's or a published task's.
+// nextDecision is the card of the oldest row in NEEDS YOU not walked yet,
+// as the chip counts them: a task's decision card (its questions, its ready
+// card), else its task card (a PR magnum never picked up, one closed
+// without a merge, a task that stopped), and the card of a PR that needs
+// you, yours or a published task's.
 func (m factoryModel) nextDecision() (int64, bool) {
 	var rows []FactoryRow
 	for _, r := range m.data.Rows {
-		c := m.data.Cards[r.ID]
-		if r.Group == GroupNeedsYou && (c.Question != nil || c.Ready != nil || r.PR != nil) && !m.walked[r.ID] {
+		if r.Group == GroupNeedsYou && r.ID != 0 && !m.walked[r.ID] {
 			rows = append(rows, r)
 		}
 	}

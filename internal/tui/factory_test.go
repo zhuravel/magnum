@@ -412,10 +412,17 @@ func TestEnterOnATaskCardOpensTheDecisionItsTaskWaitsOn(t *testing.T) {
 	mustContain(t, h.view(), "PR-12330 · bug · Advocate offer email locale", "STAGES")
 }
 
+// a walks NEEDS YOU oldest wait first, each row on its card: #4512's task
+// card (2h: alice's question waits on a reply, no decision card), then the
+// decision cards, each decision going on to the next.
 func TestAWalksTheDecisionsOldestFirst(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	h.press("a")
-	mustContain(t, h.view(), "PR-12345 · question 2 of 3") // asked 41m ago: the oldest card
+	if h.m.view != fvTask || h.m.task != 1 {
+		t.Fatalf("a opened view %v of %d, want #4512's task card (2h)", h.m.view, h.m.task)
+	}
+	h.press("a")
+	mustContain(t, h.view(), "PR-12345 · question 2 of 3") // asked 41m ago: the oldest decision card
 	h.press("1", "1", "y")
 	if len(h.act.answers) != 1 {
 		t.Fatalf("the batch was sent %d times", len(h.act.answers))

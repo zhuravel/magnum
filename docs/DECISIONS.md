@@ -17780,9 +17780,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
     magnum's judge has not read, `store.PR.PendingReplies`, now in `PRState.Replies`). A published task's card
     draws the same lines before its STAGES. Your PR's card takes the PR's keys (`f`, `F`, `K`, `o`, `b`, `t`, `e`,
     `a`); `x` and `d` say they are a task's, and the card goes home, saying so, when the PR leaves home.
-  - `a` walks NEEDS YOU's cards oldest wait first: the decision cards and the cards of the PRs that need you,
-    yours and a published task's. On a PR's card `a` goes on (the footer offers `a next`), and so does an `f`,
-    `F` or `K` that went through (`followPR`); the footer's "2 of your PRs need you" is gone with its reason.
+  - `a` walks every row of NEEDS YOU on its card, oldest wait first, as the chip counts them: a task's decision
+    card, else its task card (a PR magnum never picked up, one closed without a merge, a task that stopped), and
+    the cards of the PRs that need you, yours and a published task's; walking only the decision cards and the
+    rows with a PR said "Nothing waits on you." while the chip counted a task. On a card `a` goes on (the
+    footer offers `a next`), and so does an `f`, `F` or `K` that went through (`followPR`); the footer's "2 of
+    your PRs need you" is gone with its reason. The help names `a` on the task card and your PR's card, and the
+    right-click menu of your PR's row opens its card first; its `a` reads `oldest that needs you`.
   - `o` on your PR's row, and on a row whose PR magnum's fixer works on ("magnum fixes #N"), steps into magnum's
     pane through the board's open (`FactoryActions.OpenPR`, `screenActions.Open`): at once for a live pane, after
     the board's y/N when it restores a parked one in a slot (`FactoryPR.Restores`, from `PRState.OpenRestores`).
@@ -17798,8 +17802,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   resolution from GitHub (the factory reads magnum's registry only). Tests, failing first:
   TestPRStatesSayWhatMagnumsOpenDoes, TestThePRCardSaysWhatThePRIs, TestThePRCardDrawsThePRsLines,
   TestEnterOpensYourPRsCard, TestYourPRsCardGoesWhenItsPRDoes, TestOAndTOnAPRRow, TestOOnAPRRowOpensMagnumsPane,
-  TestThePRRowsKeysOnHome, TestTheWalkVisitsThePRsThatNeedYou, TestXNoLongerStopsMagnumsLoop,
-  TestAClickStartsNothingWithoutY; goldens prcard-100, -120, -140 and -200.
+  TestThePRRowsKeysOnHome, TestTheWalkVisitsThePRsThatNeedYou, TestTheWalkVisitsEveryRowThatNeedsYou,
+  TestXNoLongerStopsMagnumsLoop, TestAClickStartsNothingWithoutY, TestTheHelpNamesAOnTheCards,
+  TestTheMenuOfYourPRsRowOpensItsCard, and for a hunk no test held (checked by mutation)
+  TestKOnAPRsCardStopsMagnumsLoop; goldens prcard-100, -120, -140 and -200.
 - **A PR's CI line links its failed jobs and says why GitHub blocks the merge** (2026-11-08, the 2026-11-07 audit's
   R8, D #5). A failing job had a name and no link, so the operator hunted it on GitHub, and GitHub's own
   `mergeStateStatus` was never read: a PR showed approved and green while GitHub refused its merge. The CI fix

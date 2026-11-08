@@ -170,3 +170,81 @@ func TestOAndTOnAPRRow(t *testing.T) {
 			p.act.opens, p.act.openPRs)
 	}
 }
+
+// K on a PR's card stops magnum's loop, as on its row: on your PR's card
+// and on a published task's card whose PR magnum's fixer works on, each
+// behind the row's y/N, and only y runs the one Abort.
+func TestKOnAPRsCardStopsMagnumsLoop(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("#4612")
+	h.press("enter")
+	if h.m.view != fvTask {
+		t.Fatalf("enter on #4612 opened view %v, want its card", h.m.view)
+	}
+	h.press("K")
+	mustContain(t, h.view(), "Stop what magnum runs on #4612 (its fix loop and the re-review the loop forced)? y/N")
+	h.press("n")
+	if len(h.act.aborts) != 0 {
+		t.Fatalf("n on your PR's card ran the stop: %q", h.act.aborts)
+	}
+	h.press("K", "y")
+	if len(h.act.aborts) != 1 || h.act.aborts[0] != "example/talkable#4612" {
+		t.Errorf("K, y on your PR's card: Abort calls %q, want example/talkable#4612", h.act.aborts)
+	}
+
+	p := testPublished(t, 140, 40)
+	p.press("g")
+	p.selectRow("PR-12321")
+	p.press("enter")
+	if p.m.view != fvTask || p.m.task != 3 {
+		t.Fatalf("enter on PR-12321 opened view %v of %d, want its task card", p.m.view, p.m.task)
+	}
+	p.press("K")
+	mustContain(t, p.view(), "Stop what magnum runs on PR-12321's #4531 (its fix loop and the re-review the loop forced)? y/N")
+	p.press("n")
+	p.press("K", "y")
+	if len(p.act.aborts) != 1 || p.act.aborts[0] != "example/talkable#4531" {
+		t.Errorf("K, y on a published task's card: Abort calls %q, want example/talkable#4531", p.act.aborts)
+	}
+}
+
+// a walks every row in NEEDS YOU, each on its card, as the chip counts
+// them: a published task whose PR magnum never picked up (no PR in
+// magnum's registry, so no PR on the row) and a task that needs you with
+// no decision card are walked too, and home offers a while any is there.
+// Before, a walked only the decision cards and the rows with a PR, and said
+// "Nothing waits on you." while the chip said a task needed you.
+func TestTheWalkVisitsEveryRowThatNeedsYou(t *testing.T) {
+	h := testPublished(t, 140, 40)
+	h.src.change(func(d *FactoryData) {
+		for i := range d.Rows {
+			if d.Rows[i].Group == GroupNeedsYou {
+				d.Rows[i].Group, d.Rows[i].Mark = GroupWaits, MarkWaits
+			}
+		}
+		d.Rows = append(d.Rows, FactoryRow{ID: 9, Key: "PR-12390", GitHub: "#4590", Title: "Gift card balance", Group: GroupNeedsYou,
+			Mark: MarkNeedsYou, Since: factoryAgo(factoryNow, 3*time.Hour), WaitsOn: []WaitsOn{{Who: WaitsOnYou, OnYou: true,
+				What:  "magnum has not picked #4590 up since 11:05: `magnum review example/talkable#4590` asks for it",
+				Short: "magnum has not picked #4590 up since 11:05"}}},
+			FactoryRow{ID: 10, Key: "PR-12391", Title: "Stuck copy", Group: GroupNeedsYou, Mark: MarkNeedsYou,
+				Since: factoryAgo(factoryNow, time.Hour), WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "the copy failed: r retries it", OnYou: true}}})
+		d.Cards[9] = FactoryCards{Task: TaskCard{Key: "PR-12390", Title: "Gift card balance", PR: "#4590"}}
+		d.Cards[10] = FactoryCards{Task: TaskCard{Key: "PR-12391", Title: "Stuck copy"}}
+	})
+	h.press("ctrl+r", "g")
+	mustContain(t, h.view(), "a oldest ask")
+	h.press("a")
+	if h.m.view != fvTask || h.m.task != 9 {
+		t.Fatalf("a opened view %v of %d, want PR-12390's card (3h)", h.m.view, h.m.task)
+	}
+	h.press("a")
+	if h.m.view != fvTask || h.m.task != 10 {
+		t.Fatalf("a on PR-12390's card opened view %v of %d, want PR-12391's card (1h)", h.m.view, h.m.task)
+	}
+	h.press("a")
+	if h.m.view != fvHome {
+		t.Fatalf("a on the last card of the walk opened view %v of %d", h.m.view, h.m.task)
+	}
+	mustContain(t, h.view(), "Nothing else waits on you.")
+}

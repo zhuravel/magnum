@@ -140,16 +140,16 @@ func (m factoryModel) menuItems() []menuItem {
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
 			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
 		}
-		if row && sel.yourPR() { // your PR: no card, no pane of the factory's
-			return slices.Concat(fixKeys, []menuItem{
+		if row && sel.yourPR() { // your PR: its PR's card, magnum's pane, no pane of the factory's
+			return slices.Concat([]menuItem{{"open its card", "enter", "enter", true}}, fixKeys, []menuItem{
 				{"step into magnum's pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
-				{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(sel.ID), {"oldest decision", "a", "a", decision},
+				{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(sel.ID), {"oldest that needs you", "a", "a", decision},
 				{"new task", "n", "n", acts},
 				{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},
 			})
 		}
 		return slices.Concat([]menuItem{
-			{"open its card", "enter", "enter", row}, {"oldest decision", "a", "a", decision},
+			{"open its card", "enter", "enter", row}, {"oldest that needs you", "a", "a", decision},
 			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""},
 			{"open its PR", "b", "b", row && acts && c.PRURL != ""}, {"open its Jira issue", "t", "t", row && acts && c.IssueURL != ""},
 			m.reportItem(sel.ID)}, fixKeys, []menuItem{{"new task", "n", "n", acts},

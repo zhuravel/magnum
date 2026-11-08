@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,5 +78,52 @@ func TestATitleDropsTheKeyItsKeyCellShows(t *testing.T) {
 	narrow, _ := factoryFrameOf(f, 100, 22, true, IconsUnicode, factoryNow)
 	if l := line(narrow, "#4602"); !strings.Contains(l, "[PR-12400] Coupon") {
 		t.Errorf("at 100 the row of your PR keyed by its number lost its title's key: %q", l)
+	}
+}
+
+// The help names a on the task card and on your PR's card, which take it
+// (the walk's next card, or its first), as the README and the cards'
+// footers do. Before, its Task card section and its line for your PR's
+// card left it out.
+func TestTheHelpNamesAOnTheCards(t *testing.T) {
+	h := testFactory(t, 140, 50)
+	help := ansi.Strip(strings.Join(h.m.helpContent(200), "\n"))
+	_, card, ok := strings.Cut(help, "\nTask card\n")
+	card, _, _ = strings.Cut(card, "\n\n")
+	if !ok {
+		t.Fatalf("the help has no Task card section:\n%s", help)
+	}
+	var keyA, yours bool
+	for l := range strings.SplitSeq(card, "\n") {
+		l = strings.TrimSpace(l)
+		keyA = keyA || strings.HasPrefix(l, "a ")
+		if strings.HasPrefix(l, "your PR's card") {
+			yours = strings.Contains(l, " a ")
+		}
+	}
+	if !keyA || !yours {
+		t.Errorf("the Task card section names a: %v, on your PR's card: %v:\n%s", keyA, yours, card)
+	}
+}
+
+// The menu of your PR's row opens its card first, as enter and a double
+// click do, and names a as the walk it is (the oldest that needs you, a
+// PR's card included), on a task's row too. Before, it had no card item,
+// and a read "oldest decision".
+func TestTheMenuOfYourPRsRowOpensItsCard(t *testing.T) {
+	h := testYours(t, 140, 40)
+	h.press("g")
+	h.selectRow("#4602")
+	items := h.m.menuItems()
+	if len(items) == 0 || items[0].key != "enter" || !items[0].ok || items[0].label != "open its card" {
+		t.Errorf("the menu of your PR's row starts %+v, want its card", items)
+	}
+	for _, key := range []string{"#4602", "PR-12345"} {
+		h.press("g")
+		h.selectRow(key)
+		i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.key == "a" })
+		if i < 0 || h.m.menuItems()[i].label != "oldest that needs you" {
+			t.Errorf("%s's menu: a reads %+v, want the oldest that needs you", key, h.m.menuItems())
+		}
 	}
 }
