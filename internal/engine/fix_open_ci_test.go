@@ -516,4 +516,15 @@ func TestAStartGitHubForbidsSaysTheIdentityCannotStartWorkflows(t *testing.T) {
 			}
 		})
 	}
+	// A 403 for GitHub's rate limit says nothing of the identity's right
+	// to start workflows: the budget ran out, and ci_dispatch_as is not
+	// the fix.
+	t.Run("a rate limit", func(t *testing.T) {
+		h := failed(t, "talkable-app", &github.APIError{Op: "dispatch", Status: 403, Message: "API rate limit exceeded for installation"})
+		v := h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum's start of ci.yml failed (GitHub answered HTTP 403); run it on the PR's branch")
+		ev, ok := h.fixEvent("fix.open_ci_dispatch_failed")
+		if !ok || strings.Contains(ev.Message, "cannot start workflows") || strings.Contains(v.Why, "cannot start workflows") {
+			t.Errorf("fix.open_ci_dispatch_failed = %+v, %v; verdict %q: a rate limit says the identity cannot start workflows", ev, ok, v.Why)
+		}
+	})
 }

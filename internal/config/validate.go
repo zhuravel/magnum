@@ -461,7 +461,9 @@ func validateCheckGlobs(where, key string, entries []string) []error {
 // not a pool repository, no duplicates, shell-safe env keys, copy_files
 // that stay inside the clone, well-formed required_checks and
 // ignore_checks globs, a ci_dispatch that names a workflow file and a
-// ci_dispatch_as that names an [[identity]] beside it.
+// ci_dispatch_as beside it that names an [[identity]] whose tokens may
+// start workflows (no App whose token_permissions leave out actions =
+// "write", such as a fixer App).
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -487,12 +489,21 @@ func (c *Config) validateRepos() []error {
 		if r.CIDispatch != "" && !github.ValidWorkflowFile(r.CIDispatch) {
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch must be a workflow file of .github/workflows such as \"ci.yml\", got %q", r.Repo, r.CIDispatch))
 		}
+		id := c.IdentityByName(r.CIDispatchAs)
 		switch {
 		case r.CIDispatchAs == "":
 		case r.CIDispatch == "":
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q without ci_dispatch: it names who starts the ci_dispatch workflow, and without one magnum starts no workflow; set ci_dispatch or remove ci_dispatch_as", r.Repo, r.CIDispatchAs))
-		case c.IdentityByName(r.CIDispatchAs) == nil:
+		case id == nil:
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q names no [[identity]]", r.Repo, r.CIDispatchAs))
+		case id.Kind == "app" && len(id.TokenPermissions) > 0 && id.TokenPermissions["actions"] != "write":
+			// Every token magnum mints for the App carries its
+			// token_permissions alone (identity.App.mint), the daemon's
+			// client's too.
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q is an App whose token_permissions leave out actions = \"write\": "+
+				"its tokens cannot start workflows, and GitHub answers every start with HTTP 403; add actions = \"write\" there "+
+				"(a fixer App cannot: its tokens carry contents and pull_requests write alone), or name a gh identity or an App "+
+				"whose tokens carry it", r.Repo, r.CIDispatchAs))
 		}
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))

@@ -92,3 +92,42 @@ func TestABadCIDispatchAsFailsValidation(t *testing.T) {
 		t.Fatalf("ci_dispatch_as on a pooled repository: %v", err)
 	}
 }
+
+// Every token magnum mints for an App that sets token_permissions carries
+// those permissions alone, the daemon's client's too, so an App whose
+// token_permissions leave out actions = "write" gets HTTP 403 on every
+// start: ci_dispatch_as naming one fails to load, saying why. A fixer App
+// is one (its tokens carry contents and pull_requests write alone, and
+// adding actions = "write" makes it no fixer App), and the error says so.
+// An App that sets actions = "write", or no token_permissions (the
+// installation's whole access), is accepted.
+func TestCIDispatchAsRefusesAnAppWhoseTokensCannotStartWorkflows(t *testing.T) {
+	readsActions := fixerApp("reader")
+	readsActions.TokenPermissions = map[string]string{"actions": "read", "contents": "read"}
+	for name, id := range map[string]Identity{"a fixer App": fixerApp("fixer"), "an App that reads Actions": readsActions} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validPipelineConfig()
+			cfg.Identities = append(cfg.Identities, id)
+			cfg.Watches[0].FixIdentity = "fixer"
+			if id.Name != "fixer" {
+				cfg.Identities = append(cfg.Identities, fixerApp("fixer"))
+			}
+			cfg.Repos = []Repo{{Repo: "acme/app", CIDispatch: "ci.yml", CIDispatchAs: id.Name}}
+			wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "`+id.Name+`"`,
+				`token_permissions leave out actions = "write"`, "HTTP 403", "a fixer App cannot", "name a gh identity")
+		})
+	}
+
+	writesActions := fixerApp("starter")
+	writesActions.TokenPermissions = map[string]string{"actions": "write", "contents": "read"}
+	wholeAccess := fixerApp("whole")
+	wholeAccess.TokenRepositories, wholeAccess.TokenPermissions, wholeAccess.UserID = nil, nil, 0
+	for _, id := range []Identity{writesActions, wholeAccess} {
+		cfg := validPipelineConfig()
+		cfg.Identities = append(cfg.Identities, id)
+		cfg.Repos = []Repo{{Repo: "acme/app", CIDispatch: "ci.yml", CIDispatchAs: id.Name}}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("ci_dispatch_as %s (token_permissions %v): %v", id.Name, id.TokenPermissions, err)
+		}
+	}
+}

@@ -3550,14 +3550,18 @@ would run its own CI with the repository's secrets, whose files GitHub did not l
 Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the GitHub
 budget of the poll identity and of the identity it starts as, not for quiet hours. That identity needs the
 right to run workflows: an App with Actions: write (and `actions = "write"` in its `token_permissions` where
-it sets them), or a gh login that can push to the repository with the `repo` scope. A poll identity that
-is an App installation with Actions: read only cannot, and GitHub answers HTTP 403: set `ci_dispatch_as =
-"me"` (an `[[identity]]` name; it needs `ci_dispatch`, and validation refuses a name no `[[identity]]`
-defines) to start it as one that can. A 403 that is no rate limit says so in `fix.open_ci_dispatch_failed`
-and in the verdict ("magnum's start of ci.yml failed (GitHub answered HTTP 403: talkable-app cannot start
-workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity that can)"); the PR needs
-you as for any start GitHub refuses, and the head is not started again. The three events name the identity
-in their data, the first two in their message. Without `ci_dispatch` (the default) Magnum starts nothing.
+it sets them, since every token Magnum mints for it carries those alone), or a gh login that can push to the
+repository with the `repo` scope. A poll identity that is an App installation with Actions: read only
+cannot, and GitHub answers HTTP 403: set `ci_dispatch_as = "me"` (an `[[identity]]` name) to start it as one
+that can. Validation refuses a `ci_dispatch_as` without `ci_dispatch`, one that names no `[[identity]]`, and
+an App whose `token_permissions` leave out `actions = "write"`. A fixer App is such an App: its tokens
+carry contents and pull_requests write alone, and with `actions = "write"` it is no longer a valid fixer
+App, so name a gh identity or another App. A 403 that is no rate limit says so in
+`fix.open_ci_dispatch_failed` and in the verdict ("magnum's start of ci.yml failed (GitHub answered HTTP 403:
+talkable-app cannot start workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity
+that can)"); the PR needs you as for any start GitHub refuses, and the head is not started again. The three
+events name the identity in their data, the first two in their message. Without `ci_dispatch` (the default)
+Magnum starts nothing.
 
 **What you see.**
 

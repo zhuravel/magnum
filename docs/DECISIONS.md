@@ -3360,8 +3360,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   "GitHub answered HTTP 403". `ci_dispatch_as = "<identity>"` names the `[[identity]]` that starts it
   (`Config.CIDispatchAs`), through the same client-per-identity path (`e.gh`, every configured identity has
   one and its token is kept fresh); unset keeps the poll identity, else the watch's identity. It applies to
-  a pooled repository as `ci_dispatch` does, and validation refuses a name no `[[identity]]` defines and the
-  key without `ci_dispatch` (it names who starts that workflow, and without one magnum starts none). The start
+  a pooled repository as `ci_dispatch` does, and validation refuses a name no `[[identity]]` defines, the
+  key without `ci_dispatch` (it names who starts that workflow, and without one magnum starts none), and an
+  App whose `token_permissions` leave out `actions = "write"`: every token magnum mints for an App carries
+  its `token_permissions` alone (`identity.App.mint`), the daemon's client's too, so each of its starts
+  would get a 403 whatever the installation grants. A fixer App is one (`fixerAppProblem` allows its tokens
+  contents and pull_requests write alone, so adding `actions = "write"` makes it no fixer App), and the
+  error says to name a gh identity or another App. An App without `token_permissions` has the
+  installation's whole access, which validation cannot see, and is accepted. The start
   waits for that identity's GitHub budget too (`openFacts.ciLow`, beside the poll identity's: the look still
   reads with it), so the floor that holds the poll identity's writes holds this one. The three events carry
   the identity in their data (`fix.open_ci_dispatch_refused` the one it would start as), and the start's and
@@ -3372,15 +3378,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   can"); GitHub's message stays out, as before. What a failed start does to the PR is unchanged: it needs
   you (a `ci` need, no end), its head is not started again. A gh login's need is push access and the `repo`
   scope, which GitHub's REST docs name for this endpoint (the `workflow` scope is for writing workflow files,
-  not for starting them). Rejected: starting as the fix identity (a dedicated fix App rarely has Actions:
+  not for starting them). Rejected: starting as the fix identity (a fixer App's tokens cannot carry Actions:
   write, and its pane runs a model's commands), trying the poll identity first and the other on a 403 (two
   calls, and a start that runs as whichever answered is harder to read in the events), a per-watch key (the
-  workflow and who may start it are the repository's), and checking the identity's permission ahead of the
-  call (GitHub's 403 is the answer, as its 422 is for the trigger). Tests, failing first:
+  workflow and who may start it are the repository's), and asking GitHub for the identity's permission ahead
+  of the call (GitHub's 403 is the answer, as its 422 is for the trigger; the config check above reads only
+  what magnum's own tokens leave out). Tests, failing first:
   TestCIDispatchAsNamesTheIdentityThatStartsTheWorkflow, TestABadCIDispatchAsFailsValidation,
-  TestTheLookStartsTheCIWorkflowAsCIDispatchAs, TestTheStartOfTheCIWorkflowWaitsForTheBudgetOfCIDispatchAs,
+  TestCIDispatchAsRefusesAnAppWhoseTokensCannotStartWorkflows, TestTheLookStartsTheCIWorkflowAsCIDispatchAs,
+  TestTheStartOfTheCIWorkflowWaitsForTheBudgetOfCIDispatchAs,
   TestAStartGitHubForbidsSaysTheIdentityCannotStartWorkflows and the identity of
-  TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows's refused event;
+  TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows's refused event; the rate-limit case of
+  TestAStartGitHubForbidsSaysTheIdentityCannotStartWorkflows keeps a rate-limited 403 to GitHub's status alone
+  (it fails when the check reads the status code alone);
   TestTheTextsOnAPooledReposKeysNameEveryKeyTheCodeAllows holds the new key in the pooled repository's texts.
 
 ## Screens and commands
