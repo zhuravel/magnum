@@ -1345,7 +1345,11 @@ stages = [
 #                                         # .github/workflows/ or .github/actions/; GitHub refuses a workflow
 #                                         # without a workflow_dispatch trigger; it also makes a required_checks
 #                                         # entry with no run at the head count as not run; default: none (you
-#                                         # start it by hand)
+#                                         # start it by hand). The wait follows the started run itself, and it
+#                                         # sees a required check only where the PR's check rollup lists it (a
+#                                         # check the run posts through the Checks API); a plain job of the
+#                                         # started workflow is not seen, and the wait ends with a needs-you that
+#                                         # says the run ended without the check
 # ci_dispatch_as = "me"                   # the [[identity]] that starts ci_dispatch's workflow, where the poll
 #                                         # identity cannot (GitHub answers HTTP 403, as to an App with Actions:
 #                                         # read only); it needs Actions: write (an App, in its token_permissions
