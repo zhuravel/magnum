@@ -72,6 +72,15 @@ q() { sqlite3 -readonly -header -markdown "$db" "$1"; }
 miss_from="case when exists (select 1 from declines d where d.source_url = misses.source_url)
 	then 'declined finding' else 'comment' end"
 
+# miss_origin is where a miss came from and where it went wrong (migration 0031): origin factory for a comment on a PR
+# the factory published that its local review round missed, with the retro's stage (plan, code or review), and
+# posted 1 for a comment only magnum's posted round caught: a miss of the factory's local review, never of magnum's
+# review, which the review skill never learns from. A registry from before the migration has none of the columns.
+miss_origin="'-' as origin, '-' as stage, 0 as posted"
+if [[ $(sqlite3 -readonly "$db" "select count(*) from pragma_table_info('misses') where name = 'posted_caught'") == 1 ]]; then
+	miss_origin="coalesce(origin, '-') as origin, coalesce(stage, '-') as stage, posted_caught as posted"
+fi
+
 # origin says where each rejected finding that claude-review alone raised came from. A claude-review.md report
 # ends with a "Rejected" list: candidates the reviewer dropped itself, with its reason, and the judge re-judges them like
 # any claim (skills/magnum-review/SKILL.md), so the ledger holds each one as a rejected finding with the
@@ -476,9 +485,9 @@ PY
 	echo
 	echo "## Misses (retro)"
 	q "select class, coalesce(scope, '-') as scope, coalesce(severity, '-') as pri, raised, state, $miss_from as \"from\",
-	          count(*) as n
-	   from misses where created_at >= '$since' group by 1, 2, 3, 4, 5, 6 order by 7 desc"
-	q "select substr(created_at, 1, 10) as at, severity as pri, scope, $miss_from as \"from\", title, lesson
+	          $miss_origin, count(*) as n
+	   from misses where created_at >= '$since' group by 1, 2, 3, 4, 5, 6, 7, 8, 9 order by 10 desc"
+	q "select substr(created_at, 1, 10) as at, severity as pri, scope, $miss_from as \"from\", $miss_origin, title, lesson
 	   from misses where class = 'miss' and created_at >= '$since' order by created_at"
 	echo
 	echo "## Warn and error events by kind"

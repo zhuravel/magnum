@@ -23,7 +23,8 @@
 #     test-gap class per repository (its words matched in any case, a title's "(in the fix for" part not
 #     read, the latest answer of each finding, the rounds of test gaps only), and the fixer trial line (the
 #     replies to a fix run's own commits, those naming "also at", and the next round's tagged findings on the
-#     answered round's paths, read from the round's first run when its nudge twin is the later one); against a
+#     answered round's paths, read from the round's first run when its nudge twin is the later one), the misses'
+#     origin, stage and posted catch; against a
 #     factory registry with only the columns it reads, its holds and alerts by their real kinds and phases, the time
 #     per stage (after the publish left out), the waits on you by cause (a wait of several spans once), the take
 #     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
@@ -465,7 +466,7 @@ create table runs (id text primary key, pr_id integer, round integer, role text,
 create table findings (id integer primary key, run_id text, pr_id integer, round integer, finding_id text, severity text,
   path text, line integer, sources_json text, verdict text, reason_code text, created_at text, title text);
 create table misses (class text, scope text, severity text, raised text, state text, created_at text, source_url text,
-  title text, lesson text);
+  title text, lesson text, origin text, stage text, posted_caught integer not null default 0);
 create table declines (id integer primary key, source_url text, finding_row_id integer, outcome text);
 create table events (level text, kind text, at text);
 create table requests (kind text, state text, created_at text);
@@ -497,6 +498,11 @@ insert into findings (run_id, pr_id, round, finding_id, severity, path, line, so
   ('r1', 1, 1, 'F3', 'P1', 'app/log.rb', 9, '["claude-review"]', 'rejected', 'not_reproducible', '2026-10-10T10:00:00Z', 'Token appears in the log'),
   ('r1', 1, 1, 'F4', 'P2', 'app/cache.rb', 10, '["claude-review"]', 'rejected', 'duplicate', '2026-10-10T10:00:00Z', 'Cache key ignores the locale setting'),
   ('r1', 1, 1, 'F5', 'P3', 'app/other.rb', 3, '["codex-review"]', 'rejected', 'speculative', '2026-10-10T10:00:00Z', 'Retry loop sleeps too long');
+insert into misses (class, scope, severity, raised, state, created_at, source_url, title, lesson, origin, stage, posted_caught) values
+  ('miss', 'general', 'P2', 'none', 'new', '2026-10-12T09:00:00Z', 'https://github.com/example/app/pull/1#discussion_r301',
+   'Scope dropped', 'When X, check Y.', 'factory', 'review', 1),
+  ('miss', 'general', 'P2', 'none', 'new', '2026-10-12T09:00:00Z', 'https://github.com/example/app/pull/1#discussion_r302',
+   'Plain miss', 'When A, check B.', null, null, 0);
 SQL
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/out"
 [[ $rc == 0 ]] || fail "evidence.sh runs against a registry with only the columns it reads (rc $rc)"
@@ -521,6 +527,13 @@ sed -n '/^## Posted reviews/,/^## Findings/p' "$ev_md" >"$tmp/out"
 [[ $(grep -c '^| 2026.* example/app#1 ' "$tmp/out") == 2 && $(grep -c '| nudge ' "$tmp/out") == 1 ]] ||
     fail "the nudge whose twin is listed has no row; the one whose review id is its own stays"
 ok "evidence.sh counts a claude-review report's own Rejected bullets apart and leaves out a nudge whose twin is listed"
+
+# A miss of the factory's local review says so, with its stage and whether magnum's posted round caught it.
+grep -Fxq '| miss | general | P2 | none | new | comment | factory | review | 1 | 1 |' <<<"$rows" &&
+    grep -Fxq '| miss | general | P2 | none | new | comment | - | - | 0 | 1 |' <<<"$rows" &&
+    grep -Fq '| comment | factory | review | 1 | Scope dropped |' <<<"$rows" ||
+    fail "the misses tables name the origin, the stage and the posted catch: $(sed -n '/^## Misses/,/^## Warn/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+ok "evidence.sh's misses say which the factory's local review missed, at which stage, and which magnum caught"
 
 # PR 1's posted finding is no test gap; of PR 2's five, the two of its first review (one opening with "Regression",
 # the case of many real titles, so the words match the lowered title) and the one whose specs stay green are, and

@@ -10,7 +10,9 @@ registry, the return format), as `common-rules.md` is for builders.
 
 This lens is the loop's main teacher; start it in every run. Inputs: `magnum misses --all` (the retro's
 classification of other reviewers' comments on closed PRs), the evidence's misses section (its `from` column
-labels own-thread misses "declined finding"; count only "comment" rows as what others found), and, for open PRs, the
+labels own-thread misses "declined finding"; count only "comment" rows as what others found; a row of `origin`
+factory is a miss of the factory's local review, with the retro's `stage`, and one with `posted` 1 magnum's posted
+round caught, so it is no miss of magnum's review), and, for open PRs, the
 comments and reviews by people (not magnum's logins, not the author) posted after magnum's latest review on the same
 head: read them with `gh api` (GET) for the PRs magnum reviewed since `since`, at most 30 PRs.
 
