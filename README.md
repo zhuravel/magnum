@@ -6197,8 +6197,11 @@ within a second or two instead of on the next observe pass. The pieces:
   agents read them. A key twice is read as each agent reads it: Codex skips a `hooks.json` with one of its own
   keys twice (an event it runs; a group's `matcher` or `hooks`; a hook's `type`, `command`, `commandWindows`,
   `timeout`, `async`, `statusMessage`, `additionalContextLimit`, `server`, `tool` or `input`), so magnum refuses
-  it and says so, and reads any other key twice as Codex does; Claude takes the last, so magnum does too, and
-  refuses a key twice only in a group or hook of magnum's own, or for an event magnum hooks. A settings file another tool wrote between the read and the write
+  it and says so, and reads any other key twice there as Codex does; Claude takes the last, so magnum does too,
+  and refuses a key twice only in a group or hook of magnum's own, or for an event magnum hooks. Codex reads a
+  `hooks.json`'s root strictly and skips the whole file for a key there besides `description` and `hooks`:
+  status says `modified (Codex skips this file: unknown key <k>)`, doctor warns with the key, and install
+  refuses it and writes nothing. A settings file another tool wrote between the read and the write
   is refused too. `--dry-run` prints each file and what it would add or change. A symlinked settings file is
   written through its link.
 - **Where it looks.** Run `magnum hooks` in an env like the daemon's: it reads `$CODEX_HOME` and
@@ -6214,9 +6217,10 @@ within a second or two instead of on the next observe pass. The pieces:
   `codex-stale-trust/` under the state directory), so status, doctor and the daemon's hold count that place
   untrusted until Codex trusts the new hook; then the record goes. A rewrite Codex hashes the same as the old
   hook (an Interrupt timeout of 0 is Codex's 1 s) records nothing. When the rewrite restored the very hook
-  Codex already trusts, Codex asks nothing. Then a Codex session that magnum launched after the record,
-  answered no hooks review in, and whose first prompt's screen shows none, forgets the home's records written
-  before its launch, and `magnum hooks install codex --forget-stale` forgets them all at once (status, doctor and
+  Codex already trusts, Codex asks nothing. Then a Codex session that this daemon process launched itself
+  after the record, answered no hooks review in, and whose first prompt's screen shows none, forgets the home's
+  records written before its launch (a session launched before a restart, or an agent magnum adopted, clears
+  nothing), and `magnum hooks install codex --forget-stale` forgets them all at once (status, doctor and
   the hold's toast name it). Live Claude sessions pick the hooks up at once; Claude has no per-hook trust.
 - **`magnum hooks uninstall`** removes magnum's entries (a group with nothing else in it, and a key or `hooks`
   object it leaves empty) and the scripts; an install and an uninstall give the file back byte for byte. When

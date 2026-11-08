@@ -3988,8 +3988,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   is no command), and a key twice as each reads it: Codex's derived structs reject one among the keys they
   define (its events; a group's `matcher` and `hooks`; a hook's `type`, `command`, `commandWindows` or
   `command_windows`, `timeout`, `async`, `statusMessage`, `additionalContextLimit`, `server`, `tool` and `input`;
-  the root's `description`) and ignore any other, so magnum refuses only those ("Codex skips a hooks.json with
-  one of its own keys twice") and reads an unknown key twice as Codex does; Claude's parser takes the last, so magnum does
+  the root's `description`) and ignore any other there, so magnum refuses only those ("Codex skips a hooks.json
+  with one of its own keys twice") and reads an unknown key twice as Codex does. The handler's keys are the union
+  of Codex's handler variants (`command`, `mcp_tool`), while Codex checks each variant's own: so a key of another
+  variant twice is refused too, which fails safe (nothing is written) and is the chosen approximation. Codex reads
+  the root itself strictly (`HooksFile`'s `deny_unknown_fields`) and skips the whole file for a root key besides
+  `description` and `hooks`: status says `modified (Codex skips this file: unknown key <k>)`, doctor warns with
+  the key, and install refuses it and writes nothing (`codexSkipsFileError`); Claude's parser takes the last, so magnum does
   too, and refuses a key twice only in a group or a hook that holds magnum's command (in any of the values) or
   for an event magnum hooks, never for another tool's quirk. One edit at a time, the document
   read again after each, and the file read again before the write: one another tool wrote meanwhile (Claude
@@ -4007,12 +4012,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the rest at least 1, none 600; async, none false; and no key the rewrite drops) records nothing. When the
   rewrite restored the very hook Codex already trusts, Codex asks nothing and writes no new hash, so the record
   would hold the place untrusted for good. A Codex session forgets its home's records written before its launch
-  (`sess.StartedAt`) when its first prompt's screen settles with no hooks review (`codexPromptReady`) and magnum
-  answered (trusted or declined) no review of that agent since the launch (`answerHooks` marks each answer, the
-  one at the launch in `StartAgent` too): only such a Codex read the rewritten hooks and trusts them as they are.
-  A record written after the launch stays (that Codex read the file before), a row with no launch time clears
-  nothing, and a row whose env names no `CODEX_HOME` (StartAgent's fallback row) takes the one Codex home the
-  roles read, and none when they read more than one, never the default for another. `magnum hooks install codex
+  when this Manager launched it itself (`noteLaunch`, from `markStarted`'s launch time: an in-memory set of the
+  sessions this process launched), its first prompt's screen settles with no hooks review (`codexPromptReady`)
+  and magnum answered (trusted or declined) no review of that agent since the launch (`answerHooks` marks each
+  answer, the one at the launch in `StartAgent` too): only such a Codex read the rewritten hooks and trusts them
+  as they are. A session a daemon before a restart launched, an agent magnum adopted (its row's `started_at` is
+  the row's creation, not Codex's read) and another process's clear nothing, and `--forget-stale` is the way out
+  for them; a record written after the launch stays (that Codex read the file before), and a row whose env
+  names no `CODEX_HOME` (StartAgent's fallback row) takes the one Codex home the roles read, and none when they
+  read more than one, never the default for another. `magnum hooks install codex
   --forget-stale` forgets them all on the operator's word (`agents.ForgetStaleCodexTrust`); status,
   doctor, the hold's event and pause (`UntrustedSentence`: "a trust entry Codex no longer accepts") and its toast
   name it. A record's file is named by its hooks.json, place and hash, and a reader removes it only when its
@@ -4095,7 +4103,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAReviewAnsweredAtTheLaunchKeepsTheStaleTrust (the re-review's probe, declined and trusted),
   TestAQuietStartOfARowWithoutItsHomeClearsOnlyTheOneConfiguredHome, TestCodexRefusesAKeyTwiceOnlyWhereItsOwnStructsReadIt
   (the re-review's probe), TestAClaudeSettingsFileWithAnotherToolsKeysTwiceRoundTrips (its other probe) and
-  TestHooksUsageNamesForgetStale.
+  TestHooksUsageNamesForgetStale; from the landing's prep, failing first and with each guard taken out once:
+  TestARestartBetweenTheLaunchAndTheFirstPromptClearsNoStaleTrust and TestAnAdoptedCodexClearsNoStaleTrust (the
+  fourth review's probes), TestCodexSkipsAHooksJSONWithARootKeyItDoesNotKnow,
+  TestHooksStatusAndInstallNameAHooksJSONCodexSkips, TestDoctorWarnsForAHooksJSONCodexSkips, and
+  TestTheHookSocketCheckPassesAgainstTheDaemonsOwnListeners (the review daemon's own claim and the factory's
+  path, so the check pings the sockets both listeners open).
 
 ## Screens and commands
 

@@ -379,6 +379,8 @@ func doctorAgentHooks(_ context.Context, d doctorDeps) []doctorCheck {
 				what, s.why, used), fix))
 		default:
 			switch {
+			case s.skipKey != "":
+				fix = codexSkipsFix(s.skipKey, t.settings())
 			case s.foreign:
 				fix = "move " + inspTilde(t.script()) + " away (it is not magnum's), then " + fix
 			case s.newer:

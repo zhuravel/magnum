@@ -10,11 +10,12 @@ package agents
 // untrusted while its entry keeps it. Once the entry's hash differs (the
 // operator trusted the new hook) or the entry or the hook is gone, the
 // record is removed. When the rewrite restored the very hook Codex already
-// trusts, Codex asks nothing and writes no new hash: a Codex session whose
-// composer settles with no hooks review (codexPromptReady), and in which
-// magnum answered no review since its launch, proves that Codex read the
-// home's hooks at that launch and trusts them, so the home's records written
-// before the launch go (forgetStaleTrustOf); `magnum hooks install codex
+// trusts, Codex asks nothing and writes no new hash: a Codex session this
+// Manager launched whose composer settles with no hooks review
+// (codexPromptReady), and in which magnum answered no review since its
+// launch, proves that Codex read the home's hooks at that launch and trusts
+// them, so the home's records written before the launch go
+// (forgetStaleTrustOf); `magnum hooks install codex
 // --forget-stale` removes them all on the operator's word
 // (ForgetStaleCodexTrust). Codex's own files are never written.
 
@@ -208,24 +209,29 @@ func StaleCodexTrustCount(home string) int {
 }
 
 // forgetStaleTrustOf removes the stale trust records of the Codex home
-// session sess reads that were written before its launch (sess.StartedAt):
-// its first prompt's screen settled with no hooks review and magnum
+// session sess (the agent at ref) reads that were written before its
+// launch: its first prompt's screen settled with no hooks review and magnum
 // answered none since the launch, so the Codex it launched read the home's
-// hooks then and trusts them as they are. A record written after the launch
-// stays (that Codex read the hooks before the rewrite), and a row with no
-// launch time clears nothing. The home is the one the row's env names; a row
-// whose env names none (StartAgent's fallback row) takes the one Codex home
-// the configured roles read, and none when they read more than one, so the
+// hooks then and trusts them as they are. Only this Manager knows when it
+// launched a session and which reviews it answered since (noteLaunch,
+// markHooksAnswered), so a session it did not launch (one a daemon before a
+// restart launched, an agent it adopted, another process's) clears
+// nothing; `magnum hooks install codex --forget-stale` is the way out then.
+// A record written after the launch stays (that Codex read the hooks before
+// the rewrite). The home is the one the row's env names; a row whose env
+// names none (StartAgent's fallback row) takes the one Codex home the
+// configured roles read, and none when they read more than one, so the
 // default home never stands in for another.
-func (m *Manager) forgetStaleTrustOf(sess store.Session) {
-	if sess.StartedAt.IsZero() {
+func (m *Manager) forgetStaleTrustOf(sess store.Session, ref paneRef) {
+	launched, ok := m.launchOf(sess.ID)
+	if !ok || m.hooksAnsweredSince(ref, launched) {
 		return
 	}
 	home := m.staleTrustHome(sess)
 	if home == "" {
 		return
 	}
-	if n, err := forgetStaleBefore(home, sess.StartedAt); err != nil {
+	if n, err := forgetStaleBefore(home, launched); err != nil {
 		m.logf("agents: %v", err)
 	} else if n > 0 {
 		m.logf("agents: %s started with no hooks review: forgot %d stale Codex trust record(s) of its home", sess.Role, n)
@@ -256,6 +262,24 @@ func (m *Manager) staleTrustHome(sess store.Session) string {
 		return ""
 	}
 	return homes[0]
+}
+
+// noteLaunch records that this Manager launched session id's agent at at
+// (StartAgent, through markStarted): the session's Codex read its home's
+// hooks.json then.
+func (m *Manager) noteLaunch(id int64, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.launches[id] = at
+}
+
+// launchOf is when this Manager launched session id's agent; false for a
+// session it did not launch.
+func (m *Manager) launchOf(id int64) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.launches[id]
+	return at, ok
 }
 
 // markHooksAnswered records that magnum answered a Codex hooks review of

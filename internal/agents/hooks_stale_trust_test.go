@@ -355,7 +355,7 @@ func TestAReviewAnsweredAtTheLaunchKeepsTheStaleTrust(t *testing.T) {
 // A session row with no CODEX_HOME in its env (StartAgent's fallback row)
 // names its home by the roles: with one Codex home configured that one, and
 // with more than one none, so the clear never reaches another home's
-// records by the default. A row with no launch time clears nothing.
+// records by the default. A row this Manager did not launch clears nothing.
 func TestAQuietStartOfARowWithoutItsHomeClearsOnlyTheOneConfiguredHome(t *testing.T) {
 	storetest.Serial(t) // swaps the records' directory
 	row := store.Session{ID: 99, Role: string(RoleJudge), StartedAt: t0}
@@ -363,25 +363,118 @@ func TestAQuietStartOfARowWithoutItsHomeClearsOnlyTheOneConfiguredHome(t *testin
 	e := newEnv(t)
 	dir := staleHomeOf(t, e)
 	stampRecords(t, dir, t0.Add(-time.Hour))
-	noLaunch := row
-	noLaunch.StartedAt = time.Time{}
-	if e.m.forgetStaleTrustOf(noLaunch); recordCount(t, dir) != 1 {
-		t.Fatal("a row with no launch time cleared the records")
+	if e.m.forgetStaleTrustOf(row, paneRef{}); recordCount(t, dir) != 1 {
+		t.Fatal("a row this Manager did not launch cleared the records")
 	}
-	if e.m.forgetStaleTrustOf(row); recordCount(t, dir) != 0 {
+	e.m.noteLaunch(row.ID, t0)
+	if e.m.forgetStaleTrustOf(row, paneRef{}); recordCount(t, dir) != 0 {
 		t.Fatalf("one Codex home: records = %d, want 0", recordCount(t, dir))
 	}
 
 	e = newEnv(t)
 	dir = staleHomeOf(t, e)
 	stampRecords(t, dir, t0.Add(-time.Hour))
+	e.m.noteLaunch(row.ID, t0)
 	e.cfg.Roles = append(e.cfg.AllRoles(), config.Role{Name: "codex-alt", Kind: KindCodex, Env: map[string]string{"CODEX_HOME": t.TempDir()}})
 	e.cfg.Normalize()
-	if e.m.forgetStaleTrustOf(row); recordCount(t, dir) != 1 {
+	if e.m.forgetStaleTrustOf(row, paneRef{}); recordCount(t, dir) != 1 {
 		t.Fatalf("two Codex homes and a row with no home: records = %d, want 1", recordCount(t, dir))
 	}
 	row.Env = map[string]string{"CODEX_HOME": filepath.Dir(e.codexConfig)}
-	if e.m.forgetStaleTrustOf(row); recordCount(t, dir) != 0 {
+	if e.m.forgetStaleTrustOf(row, paneRef{}); recordCount(t, dir) != 0 {
 		t.Fatalf("a row that names its home: records = %d, want 0", recordCount(t, dir))
+	}
+}
+
+// declinedAtTheLaunch starts the judge in a checkout with Codex hooks of its
+// own, at a hooks review herdr shows blocked, which StartAgent declines.
+func declinedAtTheLaunch(t *testing.T, e *env) {
+	t.Helper()
+	checkout := t.TempDir()
+	writeFiles(t, checkout, map[string]string{".codex/hooks.json": "{}"})
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.m.EnsureWorkspace(e.ctx, e.pr, checkout, map[string]string{"WT_BRANCH": "review1"}, "talkable#11920", e.coreRoles())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "mg-11920-codex-judge-5d01cf"
+	e.h.mu.Lock()
+	e.h.startStatus = herdr.StatusBlocked
+	e.h.reads[name] = codexHooksScreen
+	e.h.onKeys = func(f *fakeHerdr, target string, keys []string) {
+		for _, k := range keys {
+			d, ok := detectHooksDialog(f.reads[target])
+			switch {
+			case !ok:
+			case k == "down":
+				f.reads[target] = hooksCursorAt(d.cursor + 1)
+			case k == "enter":
+				f.reads[target] = codexIdleScreen
+				for i := range f.agents {
+					f.agents[i].AgentStatus = herdr.StatusIdle
+				}
+			}
+		}
+	}
+	e.h.mu.Unlock()
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	if evs := hooksEvents(t, e); len(evs) != 1 || evs[0].Kind != EventHooksDeclined {
+		t.Fatalf("hooks events at the launch = %+v, want a decline", evs)
+	}
+}
+
+// Only the Manager that launched a session knows when its Codex read
+// hooks.json and which reviews it answered since: after a daemon restart
+// between the launch (whose review magnum declined) and the first prompt,
+// the new Manager's quiet first prompt clears nothing (the re-review's
+// probe).
+func TestARestartBetweenTheLaunchAndTheFirstPromptClearsNoStaleTrust(t *testing.T) {
+	storetest.Serial(t) // swaps the records' directory
+	e := newEnv(t)
+	e.clockedSleep()
+	dir := staleHomeOf(t, e)
+	stampRecords(t, dir, t0.Add(-time.Hour)) // before the launch
+	declinedAtTheLaunch(t, e)
+	restarted := New(e.m.d) // the daemon restarted
+	restarted.sleep = e.m.sleep
+	if _, err := restarted.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review"); err != nil {
+		t.Fatal(err)
+	}
+	if n := recordCount(t, dir); n != 1 {
+		t.Fatalf("records after the restarted daemon's quiet first prompt = %d, want 1", n)
+	}
+}
+
+// An agent magnum adopted (herdr restored the Codex conversation, which
+// read hooks.json before the install recorded the old trust) was not
+// launched by this Manager: its row's started_at is the row's creation, and
+// its quiet first prompt clears nothing (the re-review's other probe).
+func TestAnAdoptedCodexClearsNoStaleTrust(t *testing.T) {
+	storetest.Serial(t) // swaps the records' directory
+	e := newEnv(t)
+	e.clockedSleep()
+	dir := staleHomeOf(t, e)
+	stampRecords(t, dir, t0.Add(-5*time.Minute)) // the install, after herdr restored the Codex
+	ws := e.workspace()
+	e.h.addWorkspace("w9")
+	e.h.addPane(herdr.Pane{ID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", Cwd: "/Users/x/Projects/talkable.review1"})
+	e.h.addAgent(herdr.AgentInfo{PaneID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", Agent: "codex",
+		AgentStatus: herdr.StatusIdle, AgentSession: &herdr.AgentSession{Kind: "id", Value: "01a0-uuid"}})
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "01a0-uuid"); err != nil {
+		t.Fatal(err)
+	}
+	e.h.mu.Lock()
+	e.h.reads["mg-11920-codex-judge-5d01cf"] = codexIdleScreen
+	e.h.reads["w9:p1"] = codexIdleScreen
+	e.h.mu.Unlock()
+	if _, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review"); err != nil {
+		t.Fatal(err)
+	}
+	if n := recordCount(t, dir); n != 1 {
+		t.Fatalf("records after the adopted agent's quiet first prompt = %d, want 1", n)
 	}
 }

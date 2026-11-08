@@ -210,8 +210,8 @@ func (m *Manager) codexPromptReady(ctx context.Context, run store.Run, sess stor
 			}
 		case !dialogShown(text) && codexComposer(text):
 			if ready++; ready > settle {
-				if !reviewed && !m.hooksAnsweredSince(ref, sess.StartedAt) {
-					m.forgetStaleTrustOf(sess) // Codex read the home's hooks at the launch and trusts them as they are
+				if !reviewed {
+					m.forgetStaleTrustOf(sess, ref) // Codex read the home's hooks at the launch and trusts them as they are
 				}
 				return
 			}

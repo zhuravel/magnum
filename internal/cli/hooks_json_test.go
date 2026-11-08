@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -256,7 +257,7 @@ func TestInstallAddsTheHooksObjectOrTheEventKeyWhenMissing(t *testing.T) {
 			if c.in != "" {
 				in = []byte(c.in)
 			}
-			out, changes, err := spliceHooks(in, agenthooks.AgentCodex, codexStop)
+			out, changes, err := spliceHooks(in, agenthooks.AgentClaude, codexStop) // a file's shape, read as Claude reads its root
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -374,11 +375,11 @@ func TestUninstallGivesBackTheFileTheInstallFound(t *testing.T) {
 		}
 	}
 	for _, in := range []string{"{\n  \"model\": \"opus\"\n}\n", "{\n  \"hooks\": {\n    \"SessionStart\": []\n  }\n}\n", `{"hooks": {"SessionStart": []}}`} {
-		installed, _, err := spliceHooks([]byte(in), agenthooks.AgentCodex, codexStop)
+		installed, _, err := spliceHooks([]byte(in), agenthooks.AgentClaude, codexStop)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out, _, err := unspliceHooks(installed, agenthooks.AgentCodex); err != nil || string(out) != in {
+		if out, _, err := unspliceHooks(installed, agenthooks.AgentClaude); err != nil || string(out) != in {
 			t.Errorf("round trip of %q = %v\n%s", in, err, out)
 		}
 	}
@@ -433,7 +434,12 @@ func TestUninstallNamesTheCodexHooksWhosePlaceItMoves(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("shifts = %q, want %q", got, want)
 	}
-	if shifts, err := hookShifts([]byte(herdrSettingsInstalled), []byte(herdrSettings)); err != nil || len(shifts) != 0 {
+	base := []byte(`{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/homebrew/bin/moshi-hook codex-hook"}]}]}}`)
+	appended, _, err := spliceHooks(base, agenthooks.AgentCodex, testEntries(agenthooks.AgentCodex, "/c/magnum-agent-hook.sh", codexHookEvents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shifts, err := hookShifts(appended, base); err != nil || len(shifts) != 0 {
 		t.Fatalf("appended groups' removal = %v %v, want no shift", shifts, err)
 	}
 }
@@ -665,5 +671,31 @@ func TestAClaudeSettingsFileWithAnotherToolsKeysTwiceRoundTrips(t *testing.T) {
 	}
 	if back, _, err := unspliceHooks(out, agenthooks.AgentClaude); err != nil || string(back) != in {
 		t.Fatalf("uninstall = %v\n%s", err, back)
+	}
+}
+
+// Codex reads hooks.json's root strictly (deny_unknown_fields): a root key
+// besides description and hooks makes Codex skip the whole file, so magnum
+// refuses it for Codex, whose hooks would never run, and keeps reading
+// Claude's settings, whose root holds many keys.
+func TestCodexSkipsAHooksJSONWithARootKeyItDoesNotKnow(t *testing.T) {
+	t.Parallel()
+	codex := testEntries(agenthooks.AgentCodex, "/c/magnum-agent-hook.sh", codexHookEvents)
+	in := `{"x-note": 1, "hooks": {}}`
+	out, _, err := spliceHooks([]byte(in), agenthooks.AgentCodex, codex)
+	var skip *codexSkipsFileError
+	if err == nil || out != nil || !errors.As(err, &skip) || skip.key != "x-note" ||
+		!strings.Contains(err.Error(), `Codex skips this file: unknown key "x-note"`) {
+		t.Fatalf("Codex's install = %v, want a refusal naming the key", err)
+	}
+	if _, err := readHookEntries([]byte(in), agenthooks.AgentCodex, codex); err == nil {
+		t.Fatal("Codex's status read the file")
+	}
+	if _, _, err := spliceHooks([]byte(`{"description": "mine", "hooks": {}}`), agenthooks.AgentCodex, codex); err != nil {
+		t.Fatalf("description = %v, want it read", err)
+	}
+	claude := testEntries(agenthooks.AgentClaude, testClaudeScript, claudeHookEvents)
+	if _, _, err := spliceHooks([]byte(in), agenthooks.AgentClaude, claude); err != nil {
+		t.Fatalf("Claude's install = %v, want its settings read", err)
 	}
 }

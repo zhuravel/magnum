@@ -447,6 +447,9 @@ func (m *Manager) markStarted(ctx context.Context, sess store.Session, a herdr.A
 	if err != nil {
 		return fmt.Errorf("agents: mark session %d live: %w", sess.ID, err)
 	}
+	if !launched.IsZero() {
+		m.noteLaunch(sess.ID, launched) // its Codex reads hooks.json now (forgetStaleTrustOf)
+	}
 	m.markedLive(sess.ID, now)
 	// A fresh conversation of a kind without name args (codex) starts
 	// untitled and would show as "Codex" in herdr until its first turn; the

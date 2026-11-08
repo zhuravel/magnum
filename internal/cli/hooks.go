@@ -243,6 +243,7 @@ type hookStatus struct {
 	why     string // what is wrong, for every state but current, missing and outdated
 	foreign bool   // the file at the script's path is not magnum's: the install refuses it
 	newer   bool   // the script is a newer magnum's: the install refuses it
+	skipKey string // Codex: the root key it does not know, for which it skips hooks.json
 	stale   bool   // Codex: a place is untrusted only by magnum's stale trust record
 	places  []string
 }
@@ -292,7 +293,10 @@ func readHookStatus(t hookTarget) hookStatus {
 	var states []hookEntryState
 	if rerr == nil {
 		states, rerr = readHookEntries(doc, t.agent, t.entries())
-		if rerr != nil {
+		if skip, ok := errors.AsType[*codexSkipsFileError](rerr); ok {
+			s.skipKey = skip.key
+			rerr = fmt.Errorf("%w (%s)", rerr, file)
+		} else if rerr != nil {
 			rerr = fmt.Errorf("%s %w", file, rerr)
 		}
 	}
@@ -595,6 +599,10 @@ func planHookInstall(t hookTarget) (hookInstall, error) {
 	}
 	p.before = doc
 	out, changes, err := spliceHooks(doc, t.agent, t.entries())
+	if skip, ok := errors.AsType[*codexSkipsFileError](err); ok {
+		return p, fmt.Errorf("%s: %s: %w; nothing changed\nfix: %s, then re-run magnum hooks install %s",
+			t.label(), t.settings(), err, codexSkipsFix(skip.key, t.settings()), t.agent)
+	}
 	if err != nil {
 		return p, fmt.Errorf("%s: %s %w; nothing changed\nfix: fix the file (%s reads it at every start), then re-run magnum hooks install %s",
 			t.label(), t.settings(), err, agentName(t.agent), t.agent)
@@ -611,6 +619,12 @@ func hookHomeEnv(agent string) string {
 		return "CLAUDE_CONFIG_DIR"
 	}
 	return "CODEX_HOME"
+}
+
+// codexSkipsFix is the fix for a Codex hooks.json at file that Codex skips
+// for its root key key.
+func codexSkipsFix(key, file string) string {
+	return fmt.Sprintf("remove the key %q from %s: Codex skips a hooks.json with a root key it does not know", key, inspTilde(file))
 }
 
 // readSettings reads t's settings file (nil when there is none) and its

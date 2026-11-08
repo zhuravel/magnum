@@ -654,3 +654,20 @@ func TestHooksUsageNamesForgetStale(t *testing.T) {
 		t.Fatalf("usage = %d\n%s", code, f.Err)
 	}
 }
+
+// A Codex hooks.json Codex skips (a root key it does not know) reads
+// modified with the reason, and install refuses it and writes nothing.
+func TestHooksStatusAndInstallNameAHooksJSONCodexSkips(t *testing.T) {
+	f := newHooksFixture(t)
+	f.write(f.codexHooks(), `{"x-note": 1, "hooks": {}}`)
+	code := f.run("hooks", "status", "codex")
+	if line := strings.TrimSpace(f.Out.String()); code != 1 || line != "codex: modified ("+f.codexScript()+`): Codex skips this file: unknown key "x-note" (`+f.codexHooks()+")" {
+		t.Fatalf("status = %d %q", code, line)
+	}
+	if code := f.run("hooks", "install", "codex"); code != 1 || !strings.Contains(f.Err.String(), `Codex skips this file: unknown key "x-note"`) {
+		t.Fatalf("install = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if f.read(f.codexHooks()) != `{"x-note": 1, "hooks": {}}` || f.read(f.codexScript()) != "" {
+		t.Fatal("the install wrote something")
+	}
+}

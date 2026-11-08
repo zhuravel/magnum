@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -282,5 +283,56 @@ func TestDoctorNamesTheShellForAClaudeDirectoryThatIsNotAbsolute(t *testing.T) {
 	if c := doctorHookCheck(t, d, "claude hooks"); c.Status != doctorWarn || !strings.Contains(c.Detail, `"claude-alt"`) ||
 		c.Fix != "set CLAUDE_CONFIG_DIR in this shell to an absolute path, or unset it" {
 		t.Fatalf("relative Claude directory = %s %q fix %q", c.Status, c.Detail, c.Fix)
+	}
+}
+
+// A Codex hooks.json with a root key Codex does not know is one Codex
+// skips: doctor warns with the key and the fix.
+func TestDoctorWarnsForAHooksJSONCodexSkips(t *testing.T) {
+	_, d, _, ag := doctorFixture(t)
+	home := t.TempDir()
+	ag.codexHome = home
+	target := hookTarget{agent: agenthooks.AgentCodex, dir: home}
+	installHookFiles(t, target)
+	raw, err := os.ReadFile(target.settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target.settings(), []byte(strings.Replace(string(raw), "{", `{"x-note": 1,`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := doctorHookCheck(t, d, "codex hooks"); c.Status != doctorWarn || !strings.Contains(c.Detail, `Codex skips this file: unknown key "x-note"`) ||
+		!strings.Contains(c.Fix, `remove the key "x-note" from `+target.settings()) {
+		t.Fatalf("Codex skips = %s %q fix %q", c.Status, c.Detail, c.Fix)
+	}
+}
+
+// The doctor pings the very sockets the daemons listen on: the review
+// daemon's claim listens on Layout.HookSocket, and the factory's on
+// Layout.FactoryHookSocket, so both lines pass while both daemons run.
+func TestTheHookSocketCheckPassesAgainstTheDaemonsOwnListeners(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "dl") //nolint:usetesting // t.TempDir's path is too long for a Unix socket's
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	l := paths.Layout{Home: dir, StateDir: dir}
+	claim, err := engine.ClaimDaemon(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(claim.Release)
+	if claim.HookSocket() != l.HookSocket() || claim.Off() != "" {
+		t.Fatalf("the review daemon listens on %q (off %q), want %q", claim.HookSocket(), claim.Off(), l.HookSocket())
+	}
+	factory, err := agenthooks.Listen(l.FactoryHookSocket(), nil) // as the factory's listenHooks does
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = factory.Close() })
+	cs := socketChecks(t, l, true, true)
+	if cs["review"].Status != doctorPass || cs["factory"].Status != doctorPass {
+		t.Fatalf("socket checks = %+v, want both PASS", cs)
 	}
 }

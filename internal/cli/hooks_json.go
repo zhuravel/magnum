@@ -388,7 +388,9 @@ type hookHandler struct {
 // Codex does. Claude's parser takes the last, so magnum does too, and
 // refuses a key twice only in a group or a hook that holds magnum's
 // command, or for an event magnum hooks, where it writes. A "hooks" key
-// twice in the root is refused for both.
+// twice in the root is refused for both. Codex reads the root itself
+// strictly: a key there besides description and hooks makes it skip the
+// file (codexSkipsFileError).
 func readHooksDoc(doc []byte, agent string) (hooksDoc, error) {
 	if !json.Valid(doc) {
 		return hooksDoc{}, errors.New("is not valid JSON")
@@ -415,6 +417,13 @@ func readHooksDoc(doc []byte, agent string) (hooksDoc, error) {
 		return hooksDoc{}, errors.New(`has a "hooks" that is not an object`)
 	}
 	codex := agent == agenthooks.AgentCodex
+	if codex {
+		for _, m := range d.root.members {
+			if m.key != "description" && m.key != "hooks" {
+				return hooksDoc{}, &codexSkipsFileError{key: m.key}
+			}
+		}
+	}
 	if codex && slices.Contains(twiceKeys(d.root, nil), "description") {
 		return hooksDoc{}, fmt.Errorf("has two %q keys: %s", "description", codexSkipsTwice)
 	}
@@ -443,6 +452,15 @@ func readHooksDoc(doc []byte, agent string) (hooksDoc, error) {
 		d.events = append(d.events, ev)
 	}
 	return d, nil
+}
+
+// codexSkipsFileError is a Codex hooks.json whose root has a key besides
+// description and hooks: Codex reads the root strictly (HooksFile's
+// deny_unknown_fields) and skips the whole file, so no hook in it runs.
+type codexSkipsFileError struct{ key string }
+
+func (e *codexSkipsFileError) Error() string {
+	return fmt.Sprintf("Codex skips this file: unknown key %q", e.key)
 }
 
 // codexSkipsTwice is why a Codex hooks.json with a key twice is refused.
