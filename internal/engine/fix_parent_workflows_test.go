@@ -51,10 +51,17 @@ func TestAMergeThatBringsTheBasesWorkflowsIsPushedWithTheDaemonsOwnToken(t *test
 	}
 }
 
+// noWorkflowsRefusal is the refusal of the daemon's merge of master into
+// PR #2 while the fixer App lacks Workflows, and what the operator does.
+const noWorkflowsRefusal = "magnum did not merge the parent of talkable/talkable#2: the merge of master at c0c0c0c brings its workflow " +
+	"changes (1 file): needs Workflows on the App (" + fixerAppLogin + " lacks it); merge it on GitHub (Update branch), " +
+	"or grant Workflows on the App and run `magnum merge-parent talkable/talkable#2` again"
+
 // While the App lacks the Workflows permission, GitHub mints no such
 // token: the merge is refused with "needs Workflows on the App", nothing
-// is pushed, and a merge of the parent the operator asked for waits for
-// them under Needs you; a fix run's first cycle goes on without it.
+// is pushed, and the merge goes to the operator under Needs you: a merge
+// of the parent the operator asked for at once, a fix run's when its loop
+// ends, since its first cycle goes on to the findings without it.
 func TestAMergeThatBringsTheBasesWorkflowsNeedsWorkflowsOnTheApp(t *testing.T) {
 	t.Run("a merge of the parent", func(t *testing.T) {
 		h, mg := mergeHarness(t, withFixerApp, withoutWorkflows)
@@ -67,13 +74,43 @@ func TestAMergeThatBringsTheBasesWorkflowsNeedsWorkflowsOnTheApp(t *testing.T) {
 			t.Errorf("pushes = %v, want none", pushes)
 		}
 		pr := h.wantState(2, store.PRNeedsAttention)
-		const want = "fix: magnum did not merge the parent of talkable/talkable#2: the merge of master at c0c0c0c brings its workflow " +
-			"changes (1 file): needs Workflows on the App (" + fixerAppLogin + " lacks it); merge it on GitHub (Update branch)"
-		if got := deref(pr.LastError); !strings.HasPrefix(got, want) {
+		if got, want := deref(pr.LastError), "fix: "+noWorkflowsRefusal; got != want {
 			t.Errorf("attention = %q, want %q", got, want)
 		}
 		if _, ok := h.fixStateOf(2); ok {
 			t.Error("the merge's loop row stayed")
+		}
+	})
+	t.Run("a fix run that pushes nothing", func(t *testing.T) {
+		h, mg := mergeHarness(t, withFixerApp, withoutWorkflows)
+		fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+		mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
+		fixer(h, mg.fixGit, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixOneFixed, "none") })
+		id := h.fix(FixPayload{})
+		h.handle()
+		h.wantDone(id)
+		pr := h.wantState(2, store.PRNeedsAttention)
+		if got := deref(pr.LastError); !strings.Contains(got, noWorkflowsRefusal) {
+			t.Errorf("attention = %q, want it to say %q", got, noWorkflowsRefusal)
+		}
+		if _, ok := h.fixStateOf(2); ok {
+			t.Error("the loop goes on")
+		}
+	})
+	t.Run("a fix loop whose re-review is clean", func(t *testing.T) {
+		h, mg := mergeHarness(t, withFixerApp, withoutWorkflows)
+		mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
+		loopToReReview(t, h, mg.fixGit, findings(map[string]int{}, "COMMENTED"))
+		if st, _ := h.fixStateOf(2); !strings.Contains(st.ParentRefused, "needs Workflows on the App") {
+			t.Errorf("the loop's row keeps %q, want the refusal", st.ParentRefused)
+		}
+		reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+		if _, ok := h.fixEvent("fix.done"); !ok {
+			t.Error("no fix.done")
+		}
+		pr := h.wantState(2, store.PRNeedsAttention)
+		if got := deref(pr.LastError); !strings.Contains(got, noWorkflowsRefusal) {
+			t.Errorf("attention = %q, want it to say %q", got, noWorkflowsRefusal)
 		}
 	})
 	t.Run("a fix run", func(t *testing.T) {
@@ -173,7 +210,9 @@ func TestTheFixersMergeThatMagnumPushHandedOverIsPushedByTheDaemon(t *testing.T)
 }
 
 // Without Workflows on the App, the handed merge is not pushed: the slot
-// goes back to the PR's head and the operator merges it.
+// goes back to the PR's head and the operator merges the base by hand,
+// since GitHub offers no Update branch on a PR that conflicts with it, or
+// grants Workflows and asks for the merge again.
 func TestTheFixersHandedMergeNeedsWorkflowsOnTheApp(t *testing.T) {
 	h, mg := handedMerge(t, withoutWorkflows)
 	id := h.fix(FixPayload{Mode: FixModeMerge})
@@ -183,8 +222,11 @@ func TestTheFixersHandedMergeNeedsWorkflowsOnTheApp(t *testing.T) {
 		t.Errorf("pushes = %v, want none", pushes)
 	}
 	pr := h.wantState(2, store.PRNeedsAttention)
-	if got := deref(pr.LastError); !strings.Contains(got, "needs Workflows on the App") || !strings.Contains(got, "merge it on GitHub (Update branch)") {
-		t.Errorf("attention = %q", got)
+	const want = "fix: magnum did not push claude-fix's merge of the parent of talkable/talkable#2: the merge of master at c0c0c0c brings its " +
+		"workflow changes (1 file): needs Workflows on the App (" + fixerAppLogin + " lacks it); merge master into feature by hand and resolve " +
+		"app/models/offer.rb (GitHub offers no Update branch on a conflict), or grant Workflows on the App and run `magnum merge-parent talkable/talkable#2` again"
+	if got := deref(pr.LastError); got != want {
+		t.Errorf("attention = %q, want %q", got, want)
 	}
 	if cur := h.slot("review1"); deref(cur.CheckedOutSHA) != fixHead {
 		t.Errorf("slot review1 holds %s, want the PR's head back", deref(cur.CheckedOutSHA))

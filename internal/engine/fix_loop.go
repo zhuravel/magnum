@@ -389,7 +389,9 @@ func (e *Engine) loopMovedOn(ctx context.Context, prID int64, head string) (stri
 // goes (while it is still raw, endFixRowIf), fix.done is recorded and an
 // info toast says how many cycles it took. A loop whose last fixer did not
 // get all the other reviewers' items is clean for magnum's findings only,
-// and its event and toast say so (othersUnread).
+// and its event and toast say so (othersUnread). A loop whose first cycle's
+// merge of the parent was refused needs the operator for it instead of
+// the toast (parentRefusedNote).
 func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, raw, head string) {
 	st, pr := job.state, job.pr
 	if !e.endFixRowIf(ctx, job, raw) {
@@ -405,6 +407,11 @@ func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, raw, head string)
 		body, line = body+"\n"+unread, "; "+unread
 	}
 	e.event(ctx, "info", job.subject(), "fix.done", msg, job.loopData())
+	if note := job.parentRefusedNote(); note != "" { // fix_parent.go: the parent the first cycle did not merge is yours
+		e.event(ctx, "warn", job.subject(), "fix.needs_you", "fix: "+note, job.loopData())
+		e.fixAttention(ctx, job, "fix: "+note)
+		return
+	}
 	e.info(notify.Item{Key: fmt.Sprintf("fix-done:%d:%s", pr.ID, store.FormatTime(st.StartedAt)), Title: "magnum: " + what,
 		Body: body, Line: what + line + " " + pr.URL, Kind: kindFixEnded})
 }
@@ -423,7 +430,7 @@ func (e *Engine) endLoopForAttention(ctx context.Context, job *fixJob, raw, kind
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err == nil && pr.State == store.PRNeedsAttention {
 		return
 	}
-	e.fixAttention(ctx, job, withUnread(msg, job.othersUnread())) // fix_settle.go
+	e.fixAttention(ctx, job, withParentRefused(withUnread(msg, job.othersUnread()), job)) // fix_settle.go, fix_parent.go
 }
 
 // endFixRowIf ends the job's loop by removing its row while the row is still

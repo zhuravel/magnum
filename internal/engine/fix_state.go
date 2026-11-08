@@ -72,7 +72,11 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // loop on work never handed (rule 9): every cycle's external file marks
 // them waiting, and the fixer leaves them alone (writeExternal). Mode is
 // what the loop does: "" fixes findings, FixModeMerge merges the PR's
-// parent alone (fix_parent.go).
+// parent alone (fix_parent.go). ParentRefused is why the daemon did not
+// push its merge of the parent on the loop's first cycle (mergeParent's
+// refusal: "needs Workflows on the App", a branch it never pushes to),
+// which the cycle's fixer goes on without and the loop's end puts under
+// Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
 type FixState struct {
 	Cycle        int        `json:"cycle"`
 	Cap          int        `json:"cap"`
@@ -91,7 +95,8 @@ type FixState struct {
 	OthersUnread string     `json:"others_unread,omitempty"`
 	Carried      []FixCarry `json:"carried,omitempty"`
 	Waits        []string   `json:"waits,omitempty"`
-	Mode         string     `json:"mode,omitempty"`
+	Mode          string     `json:"mode,omitempty"`
+	ParentRefused string     `json:"parent_refused,omitempty"`
 }
 
 // answered is Answered as a set (nil for none), as needsYouCalls reads it.

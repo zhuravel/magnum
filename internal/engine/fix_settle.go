@@ -89,7 +89,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
 		return
 	case errors.As(headErr, new(fixHandRefused)): // fix_parent.go: the fixer's merge the daemon would not push
-		msg := fmt.Sprintf("fix: magnum did not push %s's merge of the parent of %s: %s; merge it on GitHub (Update branch)", job.role.Name, job.label(), headErr)
+		msg := fmt.Sprintf("fix: magnum did not push %s's merge of the parent of %s: %s; %s", job.role.Name, job.label(), headErr, job.mergeByHand(headErr.Error()))
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
 		e.event(ctx, "warn", subject, "fix.needs_you", msg, job.eventData())
@@ -178,11 +178,16 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
 		e.event(ctx, "warn", subject, "fix.needs_you", needs, data)
-		e.fixAttention(ctx, job, withUnread(needs, unread))
+		e.fixAttention(ctx, job, withParentRefused(withUnread(needs, unread), job)) // fix_parent.go
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
 		e.liftDecided(ctx, job, built) // fix_decide.go: it built every decision the attention asked for
+		if note := job.parentRefusedNote(); note != "" { // fix_parent.go: the parent the first cycle did not merge is yours
+			e.event(ctx, "warn", subject, "fix.needs_you", "fix: "+note, data)
+			e.fixAttention(ctx, job, withUnread("fix: "+note, unread))
+			return
+		}
 		repliedTo := "the findings"
 		switch {
 		case job.alone && counted: // a review that found nothing: the fixer answered the other reviewers alone
@@ -570,7 +575,7 @@ func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report stri
 	if carried := carriedText(job); carried != "" { // fix_carry.go: the calls of the loop's earlier cycles stay the author's
 		msg += "; " + carried
 	}
-	e.fixAttention(ctx, job, msg)
+	e.fixAttention(ctx, job, withParentRefused(msg, job)) // fix_parent.go
 }
 
 // endFixState ends the job's loop: its row goes.

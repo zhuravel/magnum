@@ -141,7 +141,7 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		env, release, err = dp.DaemonPushEnv(ctx, true)
 		switch {
 		case errors.Is(err, identity.ErrWorkflowsNotGranted):
-			return "", fmt.Sprintf("%s brings its workflow changes (%s): needs Workflows on the App (%s lacks it)", at, files, id.Login), nil
+			return "", fmt.Sprintf("%s brings its workflow changes (%s): %s (%s lacks it)", at, files, needsWorkflowsWords, id.Login), nil
 		case err != nil:
 			return "", "", fmt.Errorf("a push token with Workflows for %s: %w", id.Name, err)
 		}
@@ -302,6 +302,9 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 		return "", err
 	case refused != "":
 		e.event(ctx, "warn", job.subject(), "fix.parent_refused", fmt.Sprintf("%s: %s", job.label(), refused), data)
+		if job.mode != FixModeMerge { // the fixer goes on without it, and the loop's end tells the operator
+			job.state.ParentRefused = refused
+		}
 		return refused, nil
 	}
 	e.notePush(ctx, job.pr.ID, merge) // ci_dispatch.go: its CI starts after the grace
@@ -481,9 +484,61 @@ func (e *Engine) endParentMerged(ctx context.Context, job *fixJob) {
 // attention with why.
 func (e *Engine) parentRefused(ctx context.Context, job *fixJob, why string) {
 	e.endFixState(ctx, job)
-	msg := fmt.Sprintf("fix: magnum did not merge the parent of %s: %s; merge it on GitHub (Update branch)", job.label(), why)
+	msg := "fix: " + job.parentNote(why)
 	e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, job.eventData())
 	e.fixAttention(ctx, job, msg)
+}
+
+// needsWorkflowsWords are the words of every refusal of a push for want of
+// the Workflows permission on the fixer App (pushMerge).
+const needsWorkflowsWords = "needs Workflows on the App"
+
+// parentNote is what the operator is told of a merge of the parent the
+// daemon did not push (why): "magnum did not merge the parent of
+// <PR>: <why>; " and what to do (mergeByHand).
+func (j *fixJob) parentNote(why string) string {
+	return fmt.Sprintf("magnum did not merge the parent of %s: %s; %s", j.label(), why, j.mergeByHand(why))
+}
+
+// parentRefusedNote is parentNote of the loop's first cycle's refusal
+// (FixState.ParentRefused), "" for none: the loop's end puts it under Needs
+// you.
+func (j *fixJob) parentRefusedNote() string {
+	if j.state.ParentRefused == "" {
+		return ""
+	}
+	return j.parentNote(j.state.ParentRefused)
+}
+
+// withParentRefused is the attention message msg of a loop whose first
+// cycle's merge of the parent was refused, with parentRefusedNote on a line
+// of its own (as withUnread puts its note).
+func withParentRefused(msg string, job *fixJob) string {
+	if note := job.parentRefusedNote(); note != "" {
+		return msg + "\n" + note
+	}
+	return msg
+}
+
+// mergeByHand is what the operator does with a merge of the parent that
+// magnum did not push (why): GitHub's Update branch for a head that merges
+// the base cleanly; for one that conflicts, which GitHub offers no Update
+// branch on, the merge by hand and its conflicting paths, as a conflict:
+// entry of the fixer's names them. A refusal for want of Workflows on the
+// App also names the grant and `magnum merge-parent`.
+func (j *fixJob) mergeByHand(why string) string {
+	what := "merge it on GitHub (Update branch)"
+	if c := j.conflict; c.sha != "" {
+		paths := strings.Join(c.paths[:min(3, len(c.paths))], ", ")
+		if more := len(c.paths) - 3; more > 0 {
+			paths += fmt.Sprintf(" and %d more", more)
+		}
+		what = fmt.Sprintf("merge %s into %s by hand and resolve %s (GitHub offers no Update branch on a conflict)", c.base, deref(j.pr.HeadRef), paths)
+	}
+	if strings.Contains(why, needsWorkflowsWords) {
+		what += fmt.Sprintf(", or grant Workflows on the App and run `magnum merge-parent %s` again", j.label())
+	}
+	return what
 }
 
 // parentPushed settles a merge of the parent whose fixer pushed head, its
