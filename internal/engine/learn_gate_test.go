@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/learn"
@@ -300,6 +301,7 @@ type fakeEval struct {
 	mu        sync.Mutex
 	scores    map[string][]*eval.Score // "<candidate>|<case>"
 	outcomes  map[string]string        // "<candidate>|<case>" -> an outcome with no score
+	lines     map[string]string        // "<candidate>|<case>" -> the pane line such an outcome's refused prompt shows
 	inputs    map[string][2]string     // candidate -> its inputs and reviewer inputs
 	root      string                   // the eval runs (Layout.Eval), where a judge-only replay finds its reports
 	corpus    *eval.Corpus
@@ -336,6 +338,18 @@ func (f *fakeEval) fail(candidate, name, outcome string) {
 		return
 	}
 	f.outcomes[candidate+"|"+name] = outcome
+}
+
+// failOn is fail with line as the pane's error line the replay's refused
+// prompt carries, as a judge whose launch died leaves it.
+func (f *fakeEval) failOn(candidate, name, outcome, line string) {
+	f.fail(candidate, name, outcome)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lines == nil {
+		f.lines = map[string]string{}
+	}
+	f.lines[candidate+"|"+name] = line
 }
 
 func (f *fakeEval) run(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun {
@@ -390,6 +404,10 @@ func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) e
 	}
 	if out, ok := f.outcomes[key]; ok {
 		cr.Outcome, cr.Error, cr.ReportDir = out, "scripted "+out, ""
+		if line := f.lines[key]; line != "" {
+			cr.Error = "pipeline: judge prompt refused, also after a restart of the judge: agents: prompt mg-codex-judge: " +
+				"herdr agent.prompt: agent_not_found: agent target mg-codex-judge not found; the pane shows: " + line
+		}
 		return cr
 	}
 	ss := f.scores[key]
@@ -1128,6 +1146,145 @@ func TestADrainStopNeverCountsTowardTheGateHold(t *testing.T) {
 	}
 	if evs := f.h.events("learn.held"); len(evs) != 1 {
 		t.Fatalf("learn.held events = %+v", evs)
+	}
+}
+
+// On 2026-11-05 a Codex CLI outage ended every replay of skill proposal
+// 17's gate on the bootstrap line real rounds' codex-judge launches died on,
+// and the three gates that stopped so held it for the operator, never
+// scored. A replay that ends without a score on a launch failure shared
+// across PRs (a line another PR's agent ended with within 30 minutes, or one
+// agents.shared_failure named within the day) is a delay, never a stop: the
+// gate waits as for a drain, and the stop counts toward neither
+// gateStopLimit nor gateAttemptLimit, a case that is no target included (no
+// verdict is made without it); gateMaxAge still holds a proposal that never
+// scores, and a replay that scores again is judged as usual. A line only the
+// case's own PR ended with is the replay's own failure and counts, as
+// before.
+func TestAGateReplayOnASharedLaunchFailureIsADelayNotAStop(t *testing.T) {
+	scores := func(f *gateFixture) map[string]*eval.Score {
+		return map[string]*eval.Score{f.target.Name: found(nil, f.target.Name), f.other.Name: found([]string{"scope"})}
+	}
+	const other = 20 // a PR whose real round's codex-judge launch died on the line
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", scores(f))
+	f.ev.failOn(f.wt, f.target.Name, "error", bootstrapLine)
+	gates := gateStopLimit + gateAttemptLimit
+	for i := 1; i <= gates; i++ {
+		clearedLaunch(f.h, other, "codex-judge", bootstrapLine)
+		f.h.tick()
+		if n := len(f.ev.callsFor(f.wt)); n != i {
+			t.Fatalf("gate %d: %d candidate replays", i, n)
+		}
+		f.h.advance(gateRetryAfter + time.Minute)
+	}
+	if p := f.proposal(); p.State != store.LearnGating || len(f.h.events("learn.held")) != 0 {
+		t.Fatalf("proposal = %s %q after %d gates on a shared launch failure, want gating", p.State, p.Reason, gates)
+	}
+	evs := f.h.events("learn.gate_waiting")
+	if len(evs) != gates || !strings.Contains(evs[gates-1].Message, "a launch failure shared across PRs") ||
+		!strings.Contains(evs[gates-1].Message, bootstrapLine) {
+		t.Fatalf("waiting events = %+v, want %d naming the shared launch failure", evs, gates)
+	}
+	// The outage is over: the replay scores and the gate decides.
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	f.ev.fail(f.wt, f.target.Name, "")
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q once the target scored", p.State, p.Reason)
+	}
+
+	// A line agents.shared_failure named within the day is shared too, with
+	// no PR's launch ending on it now; gateMaxAge still holds the proposal.
+	f2 := newGateFixture(t, gateFullFiles)
+	f2.baseline("20261001-120000", "rev-master", scores(f2))
+	f2.h.e.event(f2.h.ctx, "warn", "tool:codex", EventSharedFailure, "2 PRs' codex-judge launches end the same way",
+		map[string]any{"last_line": bootstrapLine})
+	f2.h.advance(2 * time.Hour)
+	f2.ev.failOn(f2.wt, f2.target.Name, "error", bootstrapLine)
+	for i := 1; i <= gateStopLimit; i++ {
+		f2.h.tick()
+		f2.h.advance(gateRetryAfter + time.Minute)
+	}
+	if p, n := f2.proposal(), len(f2.ev.callsFor(f2.wt)); p.State != store.LearnGating || n != gateStopLimit {
+		t.Fatalf("proposal = %s %q after %d candidate replays on a line named today, want gating", p.State, p.Reason, n)
+	}
+	f2.h.advance(gateMaxAge)
+	f2.h.tick()
+	if p := f2.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, "3 days") ||
+		!strings.Contains(p.Reason, "a launch failure shared across PRs") {
+		t.Fatalf("proposal = %s %q after %v gating, want held", p.State, p.Reason, gateMaxAge)
+	}
+
+	// A case that is no target, on a shared launch failure, stops the gate
+	// instead of being left out of the verdict.
+	f3 := newGateFixture(t, gateFullFiles)
+	f3.baseline("20261001-120000", "rev-master", scores(f3))
+	f3.ev.script(f3.wt, f3.target.Name, found([]string{f3.target.Name}))
+	f3.ev.failOn(f3.wt, f3.other.Name, "error", bootstrapLine)
+	clearedLaunch(f3.h, other, "codex-judge", bootstrapLine)
+	f3.h.tick()
+	if p := f3.proposal(); p.State != store.LearnGating || len(f3.h.events("learn.gate_waiting")) != 1 {
+		t.Fatalf("proposal = %s %q, want gating after a shared launch failure of a case that is no target", p.State, p.Reason)
+	}
+
+	// The same line on the case's own PR alone is the replay's own failure:
+	// the third gate that stops on it holds the proposal.
+	f4 := newGateFixture(t, gateFullFiles)
+	f4.baseline("20261001-120000", "rev-master", scores(f4))
+	f4.ev.failOn(f4.wt, f4.target.Name, "error", bootstrapLine)
+	for range gateStopLimit {
+		clearedLaunch(f4.h, f4.miss.Number, "codex-judge", bootstrapLine)
+		f4.h.tick()
+		f4.h.advance(gateRetryAfter + time.Minute)
+	}
+	if p := f4.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, fmt.Sprintf("%d gates", gateStopLimit)) {
+		t.Fatalf("proposal = %s %q, want held after %d gates on its case's own line", p.State, p.Reason, gateStopLimit)
+	}
+}
+
+// A kind the gate replays that a shared launch failure holds holds the gate
+// as a drain does: no gate starts while the hold's span runs, and a replay
+// that ends without a score while the kind is held, whatever its line, is a
+// delay (the hold came while the replay ran); once the span is over and no
+// round probes the kind, the gate replays again, as any round may.
+func TestAGateWaitsOutAKindHoldAndAFailureUnderItIsADelay(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.fail(f.wt, f.target.Name, "needs_attention")
+	hold := func() {
+		now := f.h.clock.Now()
+		f.h.e.saveKindHold(context.WithoutCancel(f.h.ctx), agents.KindCodex, KindHold{Line: bootstrapLine, PRs: 2, Since: now,
+			Until: now.Add(kindHoldSpan)})
+	}
+	var once sync.Once
+	f.ev.after = func(evalCall) { once.Do(hold) } // real rounds' launches held codex while the first replay ran
+	for i := 1; i <= gateStopLimit; i++ {
+		f.h.tick()
+		if n := len(f.ev.callsFor(f.wt)); n != i {
+			t.Fatalf("gate %d: %d candidate replays", i, n)
+		}
+		f.h.advance(gateRetryAfter + time.Minute)
+	}
+	if p := f.proposal(); p.State != store.LearnGating || len(f.h.events("learn.held")) != 0 {
+		t.Fatalf("proposal = %s %q after %d gates under a kind hold, want gating", p.State, p.Reason, gateStopLimit)
+	}
+	if evs := f.h.events("learn.gate_waiting"); len(evs) != gateStopLimit || !strings.Contains(evs[0].Message, "codex held (shared launch failure)") {
+		t.Fatalf("waiting events = %+v, want %d naming the hold", evs, gateStopLimit)
+	}
+
+	// A new span: no gate starts until it is over.
+	hold()
+	f.h.tick()
+	if n := len(f.ev.callsFor(f.wt)); n != gateStopLimit {
+		t.Fatalf("%d candidate replays while codex's hold's span runs, want %d", n, gateStopLimit)
+	}
+	f.h.advance(kindHoldSpan + time.Minute)
+	f.h.tick()
+	if n := len(f.ev.callsFor(f.wt)); n != gateStopLimit+1 {
+		t.Fatalf("%d candidate replays once the span is over, want %d", n, gateStopLimit+1)
 	}
 }
 

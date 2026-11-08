@@ -42,8 +42,9 @@ package engine
 // that ended without a score where the verdict needs one leave the
 // proposal gating for a later tick; the third gate in a row that stops on
 // a replay without a score holds it (gateStopLimit), and the sixth stop
-// short of a verdict holds it too (gateAttemptLimit), a drain or a pause
-// not counting (waitsHeld).
+// short of a verdict holds it too (gateAttemptLimit), a drain, a pause, a
+// held kind and a replay a CLI's outage ended (outageOf: a launch failure
+// shared across PRs) not counting (waitsHeld).
 
 import (
 	"cmp"
@@ -58,6 +59,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/learn"
@@ -78,7 +80,7 @@ const (
 	// without a score before the next such stop holds it for the operator:
 	// a replay that never scores (a pull request GitHub no longer serves)
 	// would keep the oldest gating proposal, and the loop behind it, waiting
-	// for good.
+	// for good. A replay a CLI's outage ended (outageOf) is no such stop.
 	gateStopLimit = 3
 	// gateAttemptLimit is how many gates of a proposal may stop short for
 	// any reason but a shutdown or the daemon's own hold (the Codex budget,
@@ -197,18 +199,79 @@ func (e *Engine) gateUnavailable() string {
 
 // gateHold is why the gate waits now ("" = it may start): a drain, an
 // infrastructure pause, `magnum pause` (the gate replays review rounds), a
-// pause of a reviewing CLI, or the Codex soft cap (gateBudget tells).
+// pause of a reviewing CLI, the hold of a reviewing CLI's kind for a round
+// (kindHoldGate: its span runs, or a round probes it; once the span is
+// over and no round probes it, the gate replays as any round may), or the
+// Codex soft cap (gateBudget tells).
 func (e *Engine) gateHold(ctx context.Context) string {
 	if why := cmp.Or(e.holdReason(ctx), e.userPause(ctx)); why != "" {
 		return why
 	}
+	roles := e.cfg.RolesFor(nil)
 	var kinds []string
-	for _, r := range e.cfg.RolesFor(nil) {
+	for _, r := range roles {
 		if k := r.AgentKind(); k != "" && !slices.Contains(kinds, k) {
 			kinds = append(kinds, k)
 		}
 	}
-	return e.kindPauseReason(ctx, kinds)
+	if why := e.kindPauseReason(ctx, kinds); why != "" {
+		return why
+	}
+	if kind, why := e.kindHoldGate(ctx, roles, 0); why != "" {
+		return why + "; " + resumeToolHint(kind)
+	}
+	return ""
+}
+
+// gateKindHeld is the hold of the first agent kind the gate's roles use
+// that a shared launch failure holds, whatever its span (kindHoldOf):
+// "codex held (shared launch failure) since 18:22"; "" = none.
+func (e *Engine) gateKindHeld(ctx context.Context) string {
+	for _, k := range agentRoleKinds(e.cfg.RolesFor(nil)) {
+		if h, ok := e.kindHoldOf(ctx, k); ok {
+			return fmt.Sprintf("%s held (shared launch failure) since %s", k, h.Since.Local().Format("15:04"))
+		}
+	}
+	return ""
+}
+
+// sharedLaunchLine reports whether line, the pane line a replay of the
+// case of the PR pr ended with, is a launch failure shared across PRs: one
+// agents.shared_failure named within sharedFailureQuiet, or one another
+// PR's agent ended with within sharedFailureWindow (the replay's own PR
+// makes the second, as noteSharedFailures counts PRs; a line only that PR
+// ended with is its own).
+func (e *Engine) sharedLaunchLine(ctx context.Context, line, pr string) bool {
+	if line == "" {
+		return false
+	}
+	now := e.now()
+	if e.sharedFailuresSaid(ctx, now.Add(-sharedFailureQuiet))[line] {
+		return true
+	}
+	pr = strings.ToLower(pr)
+	return slices.ContainsFunc(e.launchLines(ctx, now.Add(-sharedFailureWindow)), func(l launchLine) bool {
+		return l.line == line && l.pr != pr
+	})
+}
+
+// outageOf is why the replay cr of case c (label: a candidate, a baseline,
+// ...), which ended without a score, why, is a CLI's outage and not the
+// replay's own failure: a kind the gate replays is held (gateKindHeld: a
+// shared launch failure held it, maybe while the replay ran), or cr ended
+// on a launch failure shared across PRs (sharedLaunchLine). Such a stop is
+// a delay (gateReplay.held), never a stop toward gateStopLimit or
+// gateAttemptLimit: on 2026-11-05 a Codex outage ended every replay of
+// skill proposal 17's gates, and three of them held it for the operator,
+// unscored. "" = neither.
+func (g *gateWork) outageOf(c eval.Case, cr eval.CaseRun, label, why string) string {
+	if held := g.e.gateKindHeld(g.ctx); held != "" {
+		return fmt.Sprintf("the %s replay of %s ended %s while %s: %s", label, c.Name, cr.Outcome, held, why)
+	}
+	if line := agents.PaneErrorOf(cr.Error); g.e.sharedLaunchLine(g.ctx, line, c.PR) {
+		return fmt.Sprintf("the %s replay of %s ended %s on a launch failure shared across PRs: %s", label, c.Name, cr.Outcome, line)
+	}
+	return ""
 }
 
 // maybeGate starts the gate of the oldest gating proposal (every tick),
@@ -249,7 +312,7 @@ func (e *Engine) maybeGate(ctx context.Context) {
 // for the operator, naming why its last gate stopped (kvLearnGateStops) or
 // that none could start; the result of its last gate, if any, stays.
 func (e *Engine) holdOldGate(ctx context.Context, p store.LearnProposal) {
-	why := "no gate of it could start (the Codex budget, a drain or a pause held every one)"
+	why := "no gate of it could start or finish (the Codex budget, a drain, a pause, a held kind or a launch failure shared across PRs held every one)"
 	if s, ok := e.gateStopsOf(ctx, p.ID); ok && s.Last != "" {
 		why = fmt.Sprintf("%s stopped short, the last: %s", textx.Count(s.Attempts, "gate", "gates"), s.Last)
 	}
@@ -350,9 +413,10 @@ func (e *Engine) stopGateOf(id int64) <-chan struct{} {
 // without a score: herdr away, a GitHub read, a judge's timeout, a judge
 // that read other reviewer reports than the gate chose) or stop (the gate
 // must stop now: something holds it, gateHold, the budget, a usage limit,
-// a login, a shutdown); held says the stop is the daemon's own hold
-// (gateHold: a drain, a stop or a pause), which says nothing about the
-// proposal and so does not count toward gateAttemptLimit (waitsHeld); the
+// a login, a shutdown, a CLI's outage); held says the stop is the daemon's
+// own hold (gateHold: a drain, a stop, a pause or a held kind) or a CLI's
+// outage (outageOf), which say nothing about the proposal and so count
+// toward neither gateStopLimit nor gateAttemptLimit (waitsHeld); the
 // eval run it is stored in and, judge-only, the full replay whose reviewer
 // reports its judge read.
 type gateReplay struct {
@@ -486,7 +550,8 @@ func (g *gateWork) waits(why string) error {
 
 // waitsHeld ends the gate short as waits does, for a stop that is the
 // daemon's own hold (gateHold: a drain for a restart, a stop or a pause of
-// the daemon or of a CLI): it neither counts toward gateAttemptLimit nor
+// the daemon or of a CLI, a held kind) or a CLI's outage (outageOf): it
+// neither counts toward gateAttemptLimit (nor gateStopLimit) nor
 // resets the count of the earlier stops, since a restart or a pause says
 // nothing about the proposal and the operator's own restarts (the improve
 // loop lands several commits a day) would hold it; gateMaxAge still bounds
@@ -576,6 +641,10 @@ func (g *gateWork) replay(slot **gateRun, label, dir string, judgeOnly bool, in,
 	case cr.Outcome == eval.OutcomeFlagged:
 		out.skip = learn.SkipFlagged
 	case cr.Score == nil:
+		if stop := g.outageOf(c, cr, label, why); stop != "" { // a delay, whether or not the verdict needs the score
+			out.stop, out.held = stop, true
+			break
+		}
 		out.missing = fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why)
 	case judgeOnly && want != "" && cr.ReportsRun != want: // a full replay newer than the gate's choice
 		out.missing = fmt.Sprintf("the %s replay of %s read the reviewer reports of run %s, not those of run %s", label, c.Name,
