@@ -18134,6 +18134,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   names: TestAFactoryStatusFileNeverOpensAComment (the file read before the opening checks),
   TestARefusedFactoryEditIsWrittenAtTheNextTry (the part's sum saved before GitHub took the edit) and
   TestEveryFactoryEnumWordHasItsWords (a word added to the contract).
+- **The factory screen takes the board's PR keys: `r` `R` review, `z` snooze, `M` `U` mute, a `/` filter and an `O`
+  repository scope** (2026-11-08, the 2026-11-07 audit's R29, with its A F5, A #11 and E #7, approved by the operator;
+  amends the `f`, `F` and `K` entry above, whose help left snooze out). The operator: "As you moved my PRs from magnum
+  to magnum factory, I should not have less visibility and control over my work". With `[board] own_prs = "factory"`
+  their PRs left the board, and with them its review, snooze and mute keys and its filter.
+  - `r` and `R` (review, fresh review), `z` (a snooze of 2h, or its lift on a snoozed PR, exactly as the board's z),
+    `M` and `U` (mute, unmute) act on home's row and on the task card's whenever the row has a PR in magnum's
+    registry (`FactoryRow.PR`); a row without one says why. They reuse the board's row actions (rowacts.go): the
+    screen builds an `actRow` from the factory row and asks the board's predicate (`actionRefusal`) and question
+    words (`actionQuestion`), so a key refuses where the board's does (a merged PR whose head magnum reviewed, a
+    closed one, a Codex flag, an already muted PR for `M`, an unmuted one for `U`) and asks what the board asks.
+    The questions name the factory's keys (`factoryActKeys`). `FactoryActions.Review`, `Snooze`, `Unsnooze`, `Mute`
+    and `Unmute` pass straight to the board's `screenActions`: magnum's own request paths, never the factory daemon.
+  - The predicate's facts (`FactoryPR.Facts`: magnum's state and GitHub's, the head and the reviewed head, the mute,
+    a snooze while it holds, the Codex flag, the merged-unreviewed flag and its dismissal, and whether the PR's watch
+    runs autofix) are read by the screen's source in the cli, once per frame, from magnum's registry opened read only
+    with every migration refused, as the board reads them (`codexFlagOf`, `ParseSnooze`). A PR the registry has no
+    row of, or a registry it cannot read, leaves them unread: the keys then refuse only on what the row tells, and
+    magnum's daemon decides the rest, as on the dashboard.
+  - On a task's PR the question also says what y does to the factory's own loop, which after the publish is
+    magnum's: the factory runs no fix loop of its own, magnum's autofix and fix loops work on its PR. From the
+    engine: a mute holds only the rounds nobody forced (the store's schedule picks `muted = 0 OR forced = 1`) and
+    stops autofix's new loops (`startFix` refuses a muted PR for autofix's first cycle, and the open look leaves it
+    alone), so a fix loop at work goes on, its forced re-reviews too; a snooze holds no forced round either, but
+    every fix start refuses a snoozed PR (`prepareFix`), so a loop at work stops before its next cycle; a review's
+    findings may go to autofix, unless fix is off. Each clause is said only where the row's facts make it true (the
+    watch runs autofix, a loop works on the PR).
+  - The card rule: on a task card that offers a retry (`TaskCard.Retry`), `r` stays the retry and its hints say
+    `r retry`; there the review is on `R` alone, and the questions name no key for it. Elsewhere on the card and on
+    home `r` is the review. Nothing is added to the ready card or the question card.
+  - After `M` or `z` the row says so: WAITS ON starts with `muted` and `snoozed → 16:09` unless its words say it
+    already (LEFT ALONE's "#N is muted"), and the hints of the row and of its card offer `U unmute` and `z lift
+    snooze`. The right click's menu lists the five keys, dimmed where the predicate refuses them.
+  - `/` filters home's rows as you type: each word, in any case, must be a substring of the row's key, title,
+    repository or PR number (the board's filter by words, each word a substring rather than fuzzy, so `4530`
+    names one PR); `enter` keeps it, `esc` clears it. `O` cycles the repository scope: all, each repository with
+    rows (sorted), all again; a scope whose repository has no rows any more falls back to all. They combine, ask
+    nothing (they change the view only, as on the board) and do not outlive the screen, which keeps no view state.
+    The title line says the scope, the filter and the rows they hide; the chips still count every row, an empty
+    NEEDS YOU draws no "Nothing waits on you." under them, and a filter that matches nothing says so. The
+    selection stays on its row while it shows, else goes to the nearest one shown, next first, as the board's.
+  - The walk ignores the filter and the scope: `a` reads every row of NEEDS YOU (`nextDecision` over the data,
+    never over home's order), so no decision hides from it.
+  Rejected: a predicate of the factory's own beside the board's (two copies drift, and a key would refuse where the
+  board's runs); the facts in `internal/factory`'s screen data (its `PRState` reads neither the mute nor the
+  snooze, and the screen's source reads magnum's registry cheaply itself); the board's fuzzy match (a PR number
+  or a Jira key would match rows it does not name); keeping the filter or the scope in a file (the screen keeps no
+  view state, and a filter left on would hide rows at the next start); `r` as the review on a card with a retry
+  (one letter, two meanings on one card); the walk over home's narrowed order (a filter would hide decisions).
+  Tests, failing first: TestTheBoardsPRKeysAskAndRunOnAPRRow, TestZLiftsTheSnoozeAndUUnmutes,
+  TestThePRKeysRefuseWhereTheBoardsDo, TestROnATaskCardRetriesWhereItCanElseReviews,
+  TestThePRKeysSayWhatTheyDoToTheFactorysLoop, TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests,
+  TestTheFactoryScreenReadsWhatThePRKeysGoBy, TestAMutedOrSnoozedPRsRowSaysSo, TestTheMenuListsThePRKeys,
+  TestSlashFiltersHomesRows, TestAFilterThatMatchesNothingSaysSo, TestOCyclesTheRepositoryScope,
+  TestTheWalkIgnoresTheFilterAndTheScope, TestTheHelpListsThePRKeysTheFilterAndTheScope; amended:
+  TestTheBoardsLettersKeepTheirMeaning (r on home is the review now) and TestTheHelpListsOnlyWhatExists (snooze
+  exists).
 
 ## Learned rules
 
