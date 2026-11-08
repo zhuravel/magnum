@@ -540,6 +540,9 @@ func (p *factoryPainter) whoStyle(w WaitsOn) lipgloss.Style {
 
 func (p *factoryPainter) waitsCell(r FactoryRow, form factoryForm) cell {
 	var c cell
+	for _, m := range p.prMarks(r) {
+		c = append(c, seg{m, p.st.Accent}, seg{p.g.sep, p.st.Dim})
+	}
 	for i, w := range r.WaitsOn {
 		if i > 0 {
 			c = append(c, seg{p.g.sep, p.st.Dim})
@@ -559,6 +562,31 @@ func (p *factoryPainter) waitsCell(r FactoryRow, form factoryForm) cell {
 }
 
 // percentOf turns "12/41" into "29%"; anything else stays as it is.
+// prMarks are the states of the row's PR that M and z set, before what it
+// waits on: "muted", and "snoozed → 16:09" while its snooze holds, each
+// unless the row's own words say it already (a muted PR magnum's look
+// leaves alone, in LEFT ALONE).
+func (p *factoryPainter) prMarks(r FactoryRow) []string {
+	if r.PR == nil || r.PR.Facts == nil {
+		return nil
+	}
+	var words []string
+	for _, w := range r.WaitsOn {
+		words = append(words, strings.ToLower(w.What+" "+w.Short+" "+w.Long))
+	}
+	says := func(word string) bool {
+		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(w, word) })
+	}
+	var marks []string
+	if f := r.PR.Facts; f.Muted && !says("muted") {
+		marks = append(marks, "muted")
+	}
+	if f := r.PR.Facts; f.SnoozedUntil.After(p.now) && !says("snoozed") {
+		marks = append(marks, "snoozed → "+untilClock(f.SnoozedUntil, p.now))
+	}
+	return marks
+}
+
 func percentOf(count string) string {
 	a, b, ok := strings.Cut(count, "/")
 	x, errA := strconv.Atoi(strings.TrimSpace(a))

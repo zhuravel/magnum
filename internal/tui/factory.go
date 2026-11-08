@@ -1037,13 +1037,13 @@ func (m factoryModel) homeHints() []hint {
 		if r.PR.Fixing {
 			hs = append(hs, hint{"K", "stop"})
 		}
-		hs = m.reportHints(append(hs, hint{"b", "PR"}), r.ID)
+		hs = m.reportHints(append(append(hs, m.undoHints(r, true)...), hint{"b", "PR"}), r.ID)
 	case ok:
 		hs = append(hs, hint{"enter", m.openVerb(r)})
 		if r.PR != nil && r.PR.Fixing { // magnum's loop on the task's PR
 			hs = append(hs, hint{"K", "stop magnum"})
 		}
-		hs = m.reportHints(hs, r.ID)
+		hs = m.reportHints(append(hs, m.undoHints(r, true)...), r.ID)
 	}
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})

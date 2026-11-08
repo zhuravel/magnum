@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -198,4 +199,50 @@ func TestThePRKeysSayWhatTheyDoToTheFactorysLoop(t *testing.T) {
 	}
 	h.press("n")
 	h.wantPRCalls()
+}
+
+// lineOf is the line of view that holds text.
+func lineOf(t *testing.T, view, text string) string {
+	t.Helper()
+	for l := range strings.SplitSeq(view, "\n") {
+		if strings.Contains(l, text) {
+			return l
+		}
+	}
+	t.Fatalf("no line holds %q:\n%s", text, view)
+	return ""
+}
+
+// After M or z the row says so: a muted PR's row says "muted" and a
+// snoozed one's "snoozed → <when it ends>" before what it waits on, and
+// the hints offer U and z's lift, on home and on the PR's card. A row whose
+// words say it is muted already (LEFT ALONE's "#4606 is muted: U on the
+// board unmutes it") gets no second mark. Before, nothing on the factory
+// screen said a PR was snoozed, and a mute showed only once magnum's look
+// left the PR alone.
+func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
+	h := testYours(t, 200, 40)
+	h.facts("#4602", FactoryPRFacts{State: "reviewed", GHState: "OPEN", Muted: true, SnoozedUntil: factoryNow.Add(2 * time.Hour)})
+	h.src.change(func(d *FactoryData) {
+		for i, r := range d.Rows {
+			if r.Key == "#4606" {
+				why := "#4606 is muted: U on the board unmutes it"
+				d.Rows[i].WaitsOn = []WaitsOn{{Who: WaitsOnYou, What: why, Short: "#4606 is muted", OnYou: true}}
+				d.Rows[i].PR = &FactoryPR{Ref: "example/talkable#4606", Off: why, Facts: &FactoryPRFacts{State: "reviewed", GHState: "OPEN", Muted: true}}
+			}
+		}
+	})
+	h.press("ctrl+r", "g")
+	h.selectRow("#4602")
+	v := h.view()
+	mustContain(t, lineOf(t, v, "Coupon rounding"), "muted · snoozed → 16:09 · you: 1 item needs you")
+	mustContain(t, v, "U unmute", "z lift snooze")
+	if l := lineOf(t, v, "Old sync job cleanup"); strings.Count(l, "muted") != 1 {
+		t.Errorf("the LEFT ALONE row of a muted PR says it twice: %q", l)
+	}
+	h.press("enter")
+	mustContain(t, h.view(), "U unmute", "z lift snooze")
+	h.press("esc", "g")
+	h.selectRow("#4603")
+	mustNotContain(t, h.view(), "U unmute", "z lift snooze")
 }

@@ -371,6 +371,24 @@ func (m factoryModel) prActRun(a rowAct, row actRow) factoryAction {
 	}
 }
 
+// undoHints are the hints of what undoes the state M and z set on row r's
+// PR: U while it is muted, z while its snooze holds (the board's z lifts
+// it), each where the board's predicate lets it run.
+func (m factoryModel) undoHints(r FactoryRow, reviewOnR bool) []hint {
+	if r.PR == nil || r.PR.Facts == nil {
+		return nil
+	}
+	row := m.prActRow(r, reviewOnR)
+	var hs []hint
+	if row.muted && actionRefusal(actUnmute, row) == "" {
+		hs = append(hs, hint{"U", "unmute"})
+	}
+	if row.snoozed() && actionRefusal(actSnooze, row) == "" {
+		hs = append(hs, hint{"z", "lift snooze"})
+	}
+	return hs
+}
+
 // factoryLoopEffect is what a does to the factory's own loop on a task's
 // PR (pr, row), in magnum's engine's terms, for its question; "" when it
 // changes nothing there. The factory runs no fix loop of its own on a
@@ -1230,6 +1248,7 @@ func (m factoryModel) taskCard() TaskCard {
 	if r.PR != nil && r.PR.Fixing { // magnum's loop on the task's PR
 		c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), hint{"K", "stop magnum"})
 	}
+	c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), m.undoHints(r, !c.Retry)...) // before esc and ?
 	c.Hints = m.walkHint(c.Hints)
 	return c
 }
@@ -1250,6 +1269,7 @@ func (m factoryModel) prCardHints(r FactoryRow, c TaskCard) []hint {
 	if r.PR.Fixing {
 		hs = append(hs, hint{"K", "stop"})
 	}
+	hs = append(hs, m.undoHints(r, true)...)
 	if m.act != nil {
 		hs = append(hs, hint{"o", "magnum's pane"})
 	}
