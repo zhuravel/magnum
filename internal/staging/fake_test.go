@@ -26,6 +26,10 @@ type fakeGit struct {
 	inFetch  func()              // called inside each fetch, outside the lock
 	// graphErr, when set, fails the Graph calls it returns an error for.
 	graphErr func(include []string) error
+	// absent: there is no mirror until a Clone; clone, when set, runs inside
+	// each Clone, outside the lock, and its error fails it.
+	absent bool
+	clone  func() error
 }
 
 func newFakeGit() *fakeGit {
@@ -56,9 +60,27 @@ func (g *fakeGit) n(method string) int {
 	return g.calls[method]
 }
 
-func (g *fakeGit) Ensure(_ context.Context, dir, repo string, env map[string]string) (string, error) {
-	g.count("Ensure")
+func (g *fakeGit) Base(_ context.Context, dir string) (string, error) {
+	g.count("Base")
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.absent {
+		return "", fmt.Errorf("%s: %w", dir, ErrNoMirror)
+	}
 	return g.base, nil
+}
+
+func (g *fakeGit) Clone(_ context.Context, dir, repo string, env map[string]string) error {
+	g.count("Clone")
+	if f := g.clone; f != nil {
+		if err := f(); err != nil {
+			return err
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.absent = false
+	return nil
 }
 
 func (g *fakeGit) Fetch(_ context.Context, dir string, env map[string]string, refspecs []string) error {

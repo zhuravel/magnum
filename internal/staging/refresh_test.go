@@ -139,6 +139,9 @@ func TestAPullRefTheRemoteLacksIsDroppedFromTheFetch(t *testing.T) {
 	if got := one(c, s.pr()); got.State != StatePushed {
 		t.Errorf("PR 7: %s %q, want pushed", got.State, got.Why)
 	}
+	if got := one(c, PR{Repo: "acme/app", Number: 9, Head: s.p1, Base: "master"}); got.State != StateUnknown || !strings.Contains(got.Why, "no pull ref") {
+		t.Errorf("PR 9: %s %q, want unknown, no pull ref on the remote", got.State, got.Why)
+	}
 }
 
 // The deployments are read with the last ETag: a 304 keeps the last list.

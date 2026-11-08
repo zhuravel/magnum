@@ -25395,6 +25395,10 @@ const (
 	// RefreshEvery is how often Refresh fetches and reads GitHub for a
 	// repository at most, across every process that shares the mirror.
 	RefreshEvery = time.Minute
+	// StaleAfter is how old the last good Refresh may be before Status says
+	// unknown, "stale": Refreshes that keep failing or being cut never leave
+	// an old answer standing.
+	StaleAfter = 10 * time.Minute
 	// Workflow is the workflow file whose run on a merge says its CI.
 	Workflow = "ci.yml"
 )
@@ -25411,6 +25415,10 @@ const WhyVolumeNotMounted = "the mirror's volume is not mounted"
 
 VARIABLES
 
+var ErrNoMirror = errors.New("no mirror")
+    ErrNoMirror is what Git.Base's error wraps when dir is no mirror: Refresh
+    moves such a dir aside and clones the mirror again.
+
 var ErrNotReadable = errors.New("not readable")
     ErrNotReadable is what GitHub.DeploymentsOf's error wraps on a 403 or a 404:
     the token may not read deployments, which never means "none".
@@ -25419,11 +25427,12 @@ var ErrNotReadable = errors.New("not readable")
 FUNCTIONS
 
 func MirrorDir(root string) func(repo string) (dir string, ok bool)
-    MirrorDir is Deps.Mirror over staging mirror_dir root: owner/name's
-    mirror is <root>/<owner>/<name>.git, in lower case. It reports ok false
-    for no root, a repository name that is not owner/name, and a root under
-    /Volumes/<volume> while that volume is not mounted (then with the dir,
-    which Refresh reads as WhyVolumeNotMounted). It creates nothing.
+    MirrorDir is Deps.Mirror over staging mirror_dir root: owner/name's mirror
+    is <root>/<owner>/<name>.git, in lower case. It reports ok false for no
+    root, a root that is /Volumes or a volume's root, a repository name that is
+    not owner/name, and a root under /Volumes/<volume> while that volume is not
+    mounted (then with the dir, which Refresh reads as WhyVolumeNotMounted).
+    It creates nothing.
 
 
 TYPES
@@ -25439,20 +25448,24 @@ func New(d Deps) *Client
 
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
     Refresh fetches the mirror once (the staging-* tips, each distinct base of
-    the open PRs and their refs/pull/N/head, and those another client asked
-    for in the last minutes), reads each staging environment's deployments
-    (with their ETag) and the ci.yml runs of the merges that brought the open
-    PRs' heads in, and builds the lookup data Status reads for the repository,
-    each PR's commits derived as its Base..refs/pull/N/head. A base that is no
-    plain branch name (git check-ref-format --branch, no leading '-') is refused
-    and never reaches git; its PRs, and those of a base the fetch cannot read,
-    are unknown, Why naming the base. It runs at most once a minute per
-    repository across processes (a flock in the mirror dir); a call within the
-    minute reuses the data and returns nil. It never blocks longer than ctx:
-    a Refresh that ctx cuts keeps the data it had and returns ctx's error.
-    The first Refresh clones the mirror, which takes as long as the repository's
-    commits take to download: give it a long ctx, and run Refresh outside a
-    daemon's tick.
+    the open PRs and their refs/pull/N/head, and those another client asked for
+    in the last minutes), reads each staging environment's deployments (with
+    their ETag) and the ci.yml runs of the merges that brought the open PRs'
+    heads in, and builds the lookup data Status reads for the repository, each
+    PR's commits derived as its Base..refs/pull/N/head. A base that is no plain
+    branch name (git check-ref-format --branch, no leading '-') is refused and
+    never reaches git; its PRs, and those of a base the fetch cannot read, are
+    unknown, Why naming the base. It runs at most once a minute per repository
+    across processes (a flock in the mirror dir); a call within the minute
+    reuses the data and returns its error again. It never blocks longer than
+    ctx: a Refresh that ctx cuts keeps the data it had and returns ctx's error.
+
+    The first Refresh of a repository, or one that finds its mirror dir no bare
+    repository of its own (it is moved aside, never repaired in place), starts
+    the clone in the background on a context of its own (at most cloneTimeout)
+    under the flock, and returns: until it is done every status is unknown,
+    "cloning the mirror". A clone that fails is tried again after 1, 5, 15 and
+    then 60 minutes.
 
 func (c *Client) Status(pr PR, envs []Env) []EnvStatus
     Status returns where pr stands on each of envs, in their order, from the
@@ -25544,10 +25557,14 @@ type EnvStatus struct {
     EnvStatus is a PR's state on one environment.
 
 type Git interface {
-	// Ensure makes dir a treeless bare mirror of repo (owner/name) unless
-	// it is one already, and returns the branch its HEAD names: the
-	// remote's default branch, the mirror's base.
-	Ensure(ctx context.Context, dir, repo string, env map[string]string) (base string, err error)
+	// Base returns the branch the mirror's HEAD names: the remote's default
+	// branch. dir must be a bare repository of its own (HEAD, objects/ and
+	// refs/, and git calls it one); an absent dir or one that is not fails
+	// with an error that wraps ErrNoMirror, and nothing in it is repaired.
+	Base(ctx context.Context, dir string) (string, error)
+	// Clone makes dir, which must be absent, a treeless bare mirror of repo
+	// (owner/name), its HEAD the remote's default branch.
+	Clone(ctx context.Context, dir, repo string, env map[string]string) error
 	// Fetch fetches refspecs (forced, explicit) from the mirror's origin
 	// with the tree:0 filter. A refspec whose source the remote lacks fails
 	// with a *MissingRefError.
@@ -25567,8 +25584,9 @@ type Git interface {
 	// fetches the two trees it needs.
 	ChangedPaths(ctx context.Context, dir string, env map[string]string, base, head string) ([]string, error)
 }
-    Git is the git the package runs, always in the mirror directory dir.
-    NewGit is the real one.
+    Git is the git the package runs, always on the mirror directory dir, named
+    to git (never found by git's search, which could walk up into a repository
+    around it). NewGit is the real one.
 
 func NewGit(r execx.Runner) Git
     NewGit returns the real Git: a mirror is a treeless bare clone of
@@ -25587,10 +25605,11 @@ type GitHub interface {
     GitHub is what the package reads from GitHub as the poll identity.
 
 func NewGitHub(client func(repo string) *github.Client) GitHub
-    NewGitHub is the package's GitHub over magnum's GitHub client: client
-    gives a repository's client, the one of its poll identity (nil = none:
-    each read fails). Deployments need Deployments: read and runs Actions: read;
-    a 403 or 404 of a deployment read is ErrNotReadable.
+    NewGitHub is the package's GitHub over magnum's GitHub client: client gives
+    a repository's client, the one of its poll identity (nil = none: each read
+    fails). Deployments need Deployments: read, runs and jobs Actions: read,
+    and the failed jobs' annotations Checks: read (without it every failure
+    reads "cannot tell"); a 403 or 404 of a deployment read is ErrNotReadable.
 
 type Job struct {
 	Name string

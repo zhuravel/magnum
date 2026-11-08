@@ -109,6 +109,31 @@ func TestTheStateRules(t *testing.T) {
 			s.git.paths[s.p2] = []string{"app/models/a.rb"}
 			return m
 		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "cannot tell", inTip: "p2", runURL: true},
+		{name: "pushed, ci failed on a job that passed on the tip before the merge", set: func(s *scene) string {
+			s.gh.runs[s.s0] = []Run{run("completed", "success")}
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/user_spec.rb"}})}
+			s.git.paths[s.p2] = []string{"app/models/user.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedOurs, why: "new against", inTip: "p2", runURL: true},
+		{name: "pushed, ci failed on the same job as on the tip before the merge", set: func(s *scene) string {
+			s.gh.runs[s.s0] = []Run{run("completed", "failure", Job{Name: "rspec (2)"})}
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/user_spec.rb"}})}
+			s.git.paths[s.p2] = []string{"app/models/user.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "same jobs failed", inTip: "p2", runURL: true},
+		{name: "pushed, ci failed and its jobs were not read", set: func(s *scene) string {
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "failure")}
+			s.git.paths[s.p2] = []string{"app/models/a.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "jobs were not read", inTip: "p2", runURL: true},
+		{name: "pushed, a deployment whose sha is no sha confirms nothing", set: func(s *scene) string {
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.deploys["void"] = []Deployment{{ID: 1, Ref: "staging-void", CreatedAt: s.now.Add(-time.Minute), Success: true}}
+			return m
+		}, state: StatePushed, detail: DetailCIRunning, why: "has not started", inTip: "p2"},
 		{name: "pushed, ci failed and the job's annotations were not read", set: func(s *scene) string {
 			m := s.push(10*time.Minute, s.p2)
 			s.gh.runs[m] = []Run{run("completed", "failure", Job{Name: "rspec", Paths: []string{}})}
@@ -210,6 +235,10 @@ func TestUnknownSaysWhy(t *testing.T) {
 	s.git.fetchErr = errors.New("fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host")
 	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil {
 		t.Error("a failed fetch: Refresh returned no error")
+	}
+	s.now = s.now.Add(time.Second)
+	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil || !strings.Contains(err.Error(), "fetch failed") {
+		t.Errorf("a Refresh within the minute after a failed one: %v, want its error again", err)
 	}
 	if got := one(c, s.pr()); got.State != StateUnknown || !strings.Contains(got.Why, "fetch failed") || !strings.Contains(got.Why, "resolve host") {
 		t.Errorf("after a failed fetch: %s %q, want unknown naming the fetch", got.State, got.Why)

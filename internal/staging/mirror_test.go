@@ -83,4 +83,10 @@ func TestMirrorDirIsOwnerRepoUnderTheRoot(t *testing.T) {
 	if dir, ok := mirrorDir("/Volumes", "")("acme/app"); ok || dir != "" {
 		t.Errorf("no mirror_dir: %q, %v; want none", dir, ok)
 	}
+	volumes := t.TempDir()
+	for _, root := range []string{volumes, filepath.Join(volumes, "Work"), volumes + "/"} {
+		if dir, ok := mirrorDir(volumes, root)("acme/app"); ok || dir != "" {
+			t.Errorf("mirror_dir %s, the volumes or a volume's root: %q, %v; want none", root, dir, ok)
+		}
+	}
 }

@@ -49,7 +49,9 @@ const (
 
 // The adapter reads an environment's deployments with their ETag through
 // magnum's GitHub client, and each one's statuses from the newest down to
-// the first success, which it marks; none older is read.
+// the first whose newest status is a success, which it marks (a success
+// that a failure followed, a health check or a rollback, is none); none
+// older is read.
 func TestTheGitHubAdapterReadsDeploymentsAndTheNewestSuccess(t *testing.T) {
 	t.Parallel()
 	f := ghAnswers(map[string]string{
@@ -57,8 +59,8 @@ func TestTheGitHubAdapterReadsDeploymentsAndTheNewestSuccess(t *testing.T) {
 			{"id": 12, "sha": "` + shaA + `", "ref": "` + shaA + `", "created_at": "2026-11-08T10:00:00Z"},
 			{"id": 11, "sha": "` + shaB + `", "ref": "staging-void", "created_at": "2026-11-08T09:00:00Z"},
 			{"id": 10, "sha": "` + shaB + `", "ref": "staging-void", "created_at": "2026-11-08T08:00:00Z"}]`,
-		"repos/acme/app/deployments/12/statuses": `[{"state": "in_progress"}]`,
-		"repos/acme/app/deployments/11/statuses": `[{"state": "inactive"}, {"state": "success"}]`,
+		"repos/acme/app/deployments/12/statuses": `[{"state": "failure"}, {"state": "success"}]`,
+		"repos/acme/app/deployments/11/statuses": `[{"state": "success"}, {"state": "in_progress"}]`,
 	})
 	got, err := adapterOn(f).DeploymentsOf(context.Background(), "acme/app", "void", "")
 	if err != nil {
@@ -68,10 +70,10 @@ func TestTheGitHubAdapterReadsDeploymentsAndTheNewestSuccess(t *testing.T) {
 		t.Fatalf("DeploymentsOf = %+v", got)
 	}
 	if d := got.List[0]; d.ID != 12 || d.SHA != shaA || d.Success || !d.CreatedAt.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) {
-		t.Errorf("the newest = %+v, want 12 at A, not a success", d)
+		t.Errorf("the newest = %+v, want 12 at A, not a success: its newest status is a failure", d)
 	}
 	if d := got.List[1]; d.ID != 11 || !d.Success || d.Ref != "staging-void" {
-		t.Errorf("the next = %+v, want 11, a success (once, before it went inactive)", d)
+		t.Errorf("the next = %+v, want 11, a success: its newest status", d)
 	}
 	if n := len(f.CallsWithPrefix("gh", "api", "repos/acme/app/deployments/10/statuses?per_page=10")); n != 0 {
 		t.Errorf("read the statuses of a deployment older than the newest success %d times, want none", n)
@@ -142,7 +144,7 @@ func TestTheGitHubAdapterReadsAFailedRunsJobsAndTheirAnnotationPaths(t *testing.
 	if n := len(f.CallsWithPrefix("gh", "api", "repos/acme/app/actions/runs/8/jobs?filter=latest&per_page=100")); n != 0 {
 		t.Errorf("read an older run's jobs %d times, want none", n)
 	}
-	if ours, why := failureIsOurs(&runs[0], &pathsEntry{Paths: []string{"app/a.rb"}}); ours || !strings.Contains(why, "cannot tell") {
+	if ours, why := failureIsOurs(&runs[0], &pathsEntry{Paths: []string{"app/a.rb"}}, nil, ""); ours || !strings.Contains(why, "cannot tell") {
 		t.Errorf("jest named no path: ours %v, why %q; want cannot tell", ours, why)
 	}
 	if _, err := NewGitHub(func(string) *github.Client { return nil }).RunsOf(context.Background(), "acme/app", Workflow, shaA); err == nil {

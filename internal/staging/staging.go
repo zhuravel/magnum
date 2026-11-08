@@ -90,6 +90,10 @@ const (
 	// RefreshEvery is how often Refresh fetches and reads GitHub for a
 	// repository at most, across every process that shares the mirror.
 	RefreshEvery = time.Minute
+	// StaleAfter is how old the last good Refresh may be before Status says
+	// unknown, "stale": Refreshes that keep failing or being cut never leave
+	// an old answer standing.
+	StaleAfter = 10 * time.Minute
 	// Workflow is the workflow file whose run on a merge says its CI.
 	Workflow = "ci.yml"
 )
@@ -144,13 +148,18 @@ type Commit struct {
 	At      time.Time // committer time (FirstParent only)
 }
 
-// Git is the git the package runs, always in the mirror directory dir.
-// NewGit is the real one.
+// Git is the git the package runs, always on the mirror directory dir,
+// named to git (never found by git's search, which could walk up into a
+// repository around it). NewGit is the real one.
 type Git interface {
-	// Ensure makes dir a treeless bare mirror of repo (owner/name) unless
-	// it is one already, and returns the branch its HEAD names: the
-	// remote's default branch, the mirror's base.
-	Ensure(ctx context.Context, dir, repo string, env map[string]string) (base string, err error)
+	// Base returns the branch the mirror's HEAD names: the remote's default
+	// branch. dir must be a bare repository of its own (HEAD, objects/ and
+	// refs/, and git calls it one); an absent dir or one that is not fails
+	// with an error that wraps ErrNoMirror, and nothing in it is repaired.
+	Base(ctx context.Context, dir string) (string, error)
+	// Clone makes dir, which must be absent, a treeless bare mirror of repo
+	// (owner/name), its HEAD the remote's default branch.
+	Clone(ctx context.Context, dir, repo string, env map[string]string) error
 	// Fetch fetches refspecs (forced, explicit) from the mirror's origin
 	// with the tree:0 filter. A refspec whose source the remote lacks fails
 	// with a *MissingRefError.
@@ -170,6 +179,10 @@ type Git interface {
 	// fetches the two trees it needs.
 	ChangedPaths(ctx context.Context, dir string, env map[string]string, base, head string) ([]string, error)
 }
+
+// ErrNoMirror is what Git.Base's error wraps when dir is no mirror: Refresh
+// moves such a dir aside and clones the mirror again.
+var ErrNoMirror = errors.New("no mirror")
 
 // MissingRefError is Git.Fetch's error when the remote has no Ref.
 type MissingRefError struct{ Ref string }
@@ -255,8 +268,11 @@ type Deps struct {
 type Client struct {
 	d Deps
 
-	mu   sync.Mutex
-	data map[string]*state // by repository, lower case
+	mu      sync.Mutex
+	data    map[string]*state    // by repository, lower case
+	cloning map[string]time.Time // the mirrors this client clones, by dir: since when
+	// bg runs the background clones (tests wait for them).
+	bg sync.WaitGroup
 }
 
 // New returns a Client on d.
@@ -267,7 +283,7 @@ func New(d Deps) *Client {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Client{d: d, data: map[string]*state{}}
+	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}}
 }
 
 // key is the repository's key in Client.data.

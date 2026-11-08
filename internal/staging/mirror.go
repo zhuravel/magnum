@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -31,9 +32,10 @@ var repoNamePart = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
 
 // MirrorDir is Deps.Mirror over [staging] mirror_dir root: owner/name's
 // mirror is <root>/<owner>/<name>.git, in lower case. It reports ok false
-// for no root, a repository name that is not owner/name, and a root under
-// /Volumes/<volume> while that volume is not mounted (then with the dir,
-// which Refresh reads as WhyVolumeNotMounted). It creates nothing.
+// for no root, a root that is /Volumes or a volume's root, a repository
+// name that is not owner/name, and a root under /Volumes/<volume> while
+// that volume is not mounted (then with the dir, which Refresh reads as
+// WhyVolumeNotMounted). It creates nothing.
 func MirrorDir(root string) func(repo string) (dir string, ok bool) {
 	return mirrorDir(volumesDir, root)
 }
@@ -42,7 +44,7 @@ func MirrorDir(root string) func(repo string) (dir string, ok bool) {
 func mirrorDir(volumes, root string) func(repo string) (string, bool) {
 	return func(repo string) (string, bool) {
 		owner, name, ok := strings.Cut(repo, "/")
-		if root == "" || !ok || !validPart(owner) || !validPart(name) {
+		if root == "" || volumeRoot(volumes, root) || !ok || !validPart(owner) || !validPart(name) {
 			return "", false
 		}
 		dir := filepath.Join(root, strings.ToLower(owner), strings.ToLower(name)+".git")
@@ -51,6 +53,14 @@ func mirrorDir(volumes, root string) func(repo string) (string, bool) {
 		}
 		return dir, true
 	}
+}
+
+// volumeRoot reports whether root is the volumes' directory itself or a
+// volume's root (/Volumes/<name>): a mirror_dir there would write into the
+// directory a volume mounts on.
+func volumeRoot(volumes, root string) bool {
+	root = filepath.Clean(root)
+	return root == filepath.Clean(volumes) || filepath.Dir(root) == filepath.Clean(volumes)
 }
 
 // validPart reports whether s is an owner or repository name, never . or ..
@@ -92,13 +102,28 @@ func device(fi fs.FileInfo) uint64 {
 	return 0
 }
 
-// lockMirror takes the flock beside the mirror (<dir>.lock), creating the
-// mirror's parent directory, and waits for it at most as long as ctx.
+// lockMirror takes the flock beside the mirror (<dir>.lock), and waits for
+// it at most as long as ctx. dir is <mirror_dir>/<owner>/<name>.git: it
+// creates mirror_dir and <owner> when they are missing, through an os.Root
+// on the directory that holds mirror_dir, never anything above it: when
+// that directory is absent (an unmounted volume's root) it fails and
+// creates nothing.
 func lockMirror(ctx context.Context, dir string) (unlock func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
+	parent := filepath.Dir(dir)
+	holder := filepath.Dir(filepath.Dir(parent))
+	rel, err := filepath.Rel(holder, parent)
+	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(dir+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	root, err := os.OpenRoot(holder)
+	if err != nil {
+		return nil, fmt.Errorf("the directory that holds the mirrors: %w", err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll(rel, 0o750); err != nil {
+		return nil, err
+	}
+	f, err := root.OpenFile(filepath.Join(rel, filepath.Base(dir)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +146,48 @@ func lockMirror(ctx context.Context, dir string) (unlock func(), err error) {
 		case <-time.After(lockPoll):
 		}
 	}
+}
+
+// staleLockAge is how old a git lock file in the mirror must be before a
+// Refresh, under the flock, takes it for the leftover of a git that was
+// killed (an unplugged disk, a power cut).
+const staleLockAge = 10 * time.Minute
+
+// gitLockFiles are the lock files git takes at the top of a bare
+// repository; the refs' own are <ref>.lock under refs/.
+var gitLockFiles = []string{"HEAD.lock", "config.lock", "packed-refs.lock", "shallow.lock", "index.lock"}
+
+// clearStaleLocks removes the git lock files in the mirror at dir that are
+// at least staleLockAge old at now. It runs under the flock, which every
+// git command of the mirror's runs under, so no git of magnum's holds them;
+// a newer one is left, in case a git outside magnum's runs there. It goes
+// through an os.Root on dir: nothing outside the mirror is touched.
+func clearStaleLocks(dir string, now time.Time, log *slog.Logger) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return // no mirror yet
+	}
+	defer root.Close()
+	remove := func(name string) {
+		fi, err := root.Lstat(name)
+		if err != nil || !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < staleLockAge {
+			return
+		}
+		if err := root.Remove(name); err != nil {
+			log.Warn("staging: a stale git lock in the mirror not removed", "dir", dir, "file", name, "err", errLine(err))
+			return
+		}
+		log.Info("staging: removed a stale git lock in the mirror", "dir", dir, "file", name, "age", now.Sub(fi.ModTime()).Round(time.Second))
+	}
+	for _, name := range gitLockFiles {
+		remove(name)
+	}
+	_ = fs.WalkDir(root.FS(), "refs", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(name, ".lock") {
+			remove(name)
+		}
+		return nil
+	})
 }
 
 // statePath is the state file beside the mirror.

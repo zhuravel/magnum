@@ -19669,14 +19669,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
     staging in would otherwise bring back every PR of that time).
   - A merge whose own ci.yml run was cancelled or never ran (a push of several merges runs the last) takes the
     next newer merge's run, so RunURL may be that run's.
-  - The first Refresh clones the mirror: it needs a long ctx, run outside a daemon's tick (a cut clone is
-    removed and tried again a minute later).
+  - The first Refresh starts the clone in the background, on a context of its own (cloneTimeout, never the
+    caller's end) under the flock, and every status says "cloning the mirror" until it is done; a failed clone is
+    tried again after 1, 5, 15 and then 60 minutes, and the wait is in the state file, so both daemons keep it.
   - Runs are read for the PRs some daemon has open; a PR opened within the minute is unknown until the next
     Refresh.
   - The remote's default branch is never a staging branch, but no config names it: the deploy (R46) checks it
     against the remote's HEAD.
   - The clone adds `--single-branch --no-tags`, the fetch `--prune --no-write-fetch-head`; the lock, state file
     and temporary clone sit beside the mirror (`<repo>.git.lock`, `.json`, `.clone`).
+  - The review's fixes (I1, M1, M3, M4, M6 to M9, M11 to M13). Every git command names the mirror
+    (`--git-dir=<dir>` and `GIT_DIR`, `GIT_CEILING_DIRECTORIES` at its parent), never `-C` alone: a dir with HEAD
+    and objects/ but no refs/ is no repository to git, which then walked up into the repository around it and
+    ran the forced fetch there. A mirror is a bare repository with HEAD, objects/ and refs/ that `git
+    --git-dir=<dir> rev-parse --is-bare-repository` confirms; a dir that fails is moved aside
+    (`<dir>.broken-<time>`) and cloned again, never repaired in place. No global or system git config applies
+    (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `protocol.ssh.allow=never`), gh stays the only
+    credential helper. Only a sha (40 or 64 hex) or one of the mirror's own refs reaches git as a revision, and a
+    fetch carries only the mirror's own refspecs. A failure is also the PR's when a job failed that passed on the
+    branch's tip before the merge (or the nearest older tip with a completed run, at most 5 back), "new against"
+    it; the same jobs failing there are not. Nothing is created above `mirror_dir` (an os.Root on the directory
+    that holds it), and `/Volumes` or a volume's root is refused as `mirror_dir`. Under the flock, a git lock file
+    in the mirror at least 10 minutes old is removed. A deployment counts only when its newest status is a
+    success. Data whose last good read is over 10 minutes old is unknown, "stale". The jobs not read, a pull ref
+    the remote lacks, and a Refresh within the minute after a failed one (which returns that error again) each
+    say so.
+  - Follow-ups, not done here: a PR whose own commits hold staging's history (it merged staging or another
+    PR's branch) reads as outdated, and a fast-forward of a PR onto staging as none (M2); pull refs and stacked
+    bases no client asks for are never pruned, and gc runs inside the fetch (M5); every staging-* branch is
+    walked and read each minute, a failed run's jobs are read again every 10 minutes, and the deployed sha's graph
+    keeps master's commits (M10); no opt-in live test pins gh's ETag and 304 (M15).
   Rejected: a clone of every branch (the PRs' own and the pull refs are what counts), comparing the tip or the
   deployment with the head (a later merge moves the tip, and a deploy of a later tip holds the PR), a process per
   PR, a deployment read failure as "none", a status read for every deployment (only the newest success counts),
@@ -19695,7 +19717,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARealTreelessMirrorTellsLatestAndPushed (a real origin in a temp dir, cloned with tree:0 over file://), the
   adapter's TestTheGitHubAdapterReadsDeploymentsAndTheNewestSuccess,
   TestTheGitHubAdapterTellsNotReadableFromNotModified and
-  TestTheGitHubAdapterReadsAFailedRunsJobsAndTheirAnnotationPaths over gh's recorded answers; in github
+  TestTheGitHubAdapterReadsAFailedRunsJobsAndTheirAnnotationPaths over gh's recorded answers, and for the
+  review's fixes TestAMirrorDirWithoutRefsInsideARepositoryIsMovedAsideAndClonedAgain (a real enclosing
+  repository whose refs and config stay the same; it fails with git's discovery back),
+  TestEveryMirrorCommandNamesTheMirrorAndIsolatesGitConfig, TestOnlyShasAndTheMirrorsRefsReachGit,
+  TestADirWithoutRefsIsNoMirror, TestAFirstCloneRunsInTheBackgroundWhateverTheCallersContext,
+  TestAFailedCloneBacksOff, TestStaleGitLocksInTheMirrorAreClearedUnderTheFlock,
+  TestNothingIsCreatedAboveTheMirrorDir, TestOldDataIsStale and the state rows for a new failure against the tip
+  before, the same failure there, jobs not read and a deployment that names no sha; in github
   TestDeploymentsAreReadWithTheirETag, TestDeploymentsRefusalsAndNotReadable, TestDeploymentStatusesListsTheStates,
   TestCommitRunsListsAWorkflowsRunsAtACommit and TestRunJobsAndAnnotationPaths; in config
   TestAStagingBranchMustBeAStagingBranchAndNeverTheBaseOrProduction, TestAStagingBranchIsStagingAndTheEnvironmentsName,

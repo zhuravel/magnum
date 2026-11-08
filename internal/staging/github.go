@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/github"
@@ -28,8 +27,10 @@ type ghAdapter struct {
 
 // NewGitHub is the package's GitHub over magnum's GitHub client: client
 // gives a repository's client, the one of its poll identity (nil = none:
-// each read fails). Deployments need Deployments: read and runs Actions:
-// read; a 403 or 404 of a deployment read is ErrNotReadable.
+// each read fails). Deployments need Deployments: read, runs and jobs
+// Actions: read, and the failed jobs' annotations Checks: read (without it
+// every failure reads "cannot tell"); a 403 or 404 of a deployment read is
+// ErrNotReadable.
 func NewGitHub(client func(repo string) *github.Client) GitHub { return ghAdapter{client: client} }
 
 // of is repo's client and its owner and name.
@@ -56,9 +57,10 @@ func notReadable(err error) error {
 
 // DeploymentsOf reads the environment's deployments with etag (GET
 // deployments?environment=<name>, If-None-Match), then the statuses of each
-// from the newest down to the first with a success, at most
-// maxStatusReads: the deployments older than it count for nothing, so none
-// of theirs is read.
+// from the newest down to the first whose newest status is a success, at
+// most maxStatusReads: a success that a failure or an error followed (a
+// health check, a rollback) is none. The deployments older than it count
+// for nothing, so none of theirs is read.
 func (a ghAdapter) DeploymentsOf(ctx context.Context, repo, environment, etag string) (Deployments, error) {
 	c, owner, name, err := a.of(repo)
 	if err != nil {
@@ -80,7 +82,7 @@ func (a ghAdapter) DeploymentsOf(ctx context.Context, repo, environment, etag st
 			if err != nil {
 				return Deployments{}, notReadable(err)
 			}
-			dep.Success = slices.Contains(states, "success")
+			dep.Success = len(states) > 0 && states[0] == "success"
 			found = dep.Success
 		}
 		out.List = append(out.List, dep)
@@ -122,14 +124,14 @@ func failedRun(r *Run) bool {
 	return r.Status == "completed" && !passed(r) && r.Conclusion != "cancelled"
 }
 
-// failedJobs is the failed jobs of run id with their annotations' paths;
-// nil when the jobs cannot be read.
+// failedJobs is the failed jobs of run id with their annotations' paths
+// (Checks: read); nil when the jobs cannot be read, empty when none failed.
 func failedJobs(ctx context.Context, c *github.Client, owner, name string, runID int64) []Job {
 	jobs, err := c.RunJobs(ctx, owner, name, runID)
 	if err != nil {
 		return nil
 	}
-	var out []Job
+	out := []Job{}
 	for _, j := range jobs {
 		if j.Status != "completed" || j.Conclusion == "success" || j.Conclusion == "skipped" || j.Conclusion == "neutral" || j.Conclusion == "cancelled" {
 			continue

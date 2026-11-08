@@ -4909,7 +4909,7 @@ once that tip is live (so an environment's branch is always `staging-<name>`):
 | `pushed` | the head is on the branch, but no deployment confirms it yet: `ci_running`, `ci_failed_ours` (a failing job of ci.yml names a path the PR changes), `ci_failed_not_ours` (none does, or that cannot be told), `waiting_jenkins` (ci.yml passed), or `not_confirmed` (45 minutes after the push, or the deployments are not readable) |
 | `outdated` | an older commit of the PR is on the branch and the head is not; it says how many commits behind |
 | `none` | no commit of the PR is on the branch: within its last 400 first-parent commits or 90 days, whichever ends first |
-| `unknown` | the mirror is absent (its volume is not mounted), a fetch failed, the PR's base could not be fetched or is no branch name, or nothing has been read yet |
+| `unknown` | the mirror is absent (its volume is not mounted) or being cloned, a fetch failed, the PR's base could not be fetched or is no branch name, the last good read is over 10 minutes old (`stale`), or nothing has been read yet |
 
 Ancestry decides, never a comparison of SHAs: the PR is on the branch at its newest commit that a merge of
 the branch's first-parent chain brought in (a merge of master brings no PR). A PR's commits are its
@@ -4917,14 +4917,23 @@ the branch's first-parent chain brought in (a merge of master brings no PR). A P
 status too. magnum reads a treeless bare mirror of the repository (`git clone --bare --filter=tree:0`: commits
 only, the two trees a diff needs fetched when ci.yml failed), fetched at most once a minute across both daemons
 with the poll identity's credentials (the `staging-*` branches, each open PR's base and `refs/pull/<n>/head`),
-the environment's deployments (with their ETag, and each one's statuses down to the newest success) and ci.yml's
-runs at the merge (for a failed one, the paths its failed jobs' annotations name). A token without
+the environment's deployments (with their ETag; a deployment counts once its newest status is a success) and
+ci.yml's runs at the merge (for a failed one, the paths its failed jobs' annotations name). A failure is the
+PR's (`ci_failed_ours`) when a failing job names a path the PR changes, or when a job failed that passed on the
+branch's tip before the merge ("new against" it, which a flaky job reads the same); the same jobs failing there
+are not the PR's. The poll identity needs Deployments: read for the deployments, Actions: read for the runs and
+Checks: read for the annotations (without it, every failure reads "cannot tell"). A token without
 Deployments: read cannot confirm a deploy: a PR whose ci.yml passed, or that has no run 45 minutes after the
 push, is `pushed, not_confirmed`, and one whose ci.yml runs or failed says so; it is never `none` or `latest`.
-The poll identity needs Actions: read for the runs. It only reads; nothing is pushed.
+It only reads; nothing is pushed.
 
-The first read of a repository clones its mirror, which takes as long as the repository's commits take to
-download: the daemons give it a long timeout, outside their tick.
+Git runs only on the mirror, named to git (`--git-dir`, `GIT_DIR`, the search for a repository stopped at its
+parent), with no global or system git config, and gh as its only credential helper. The first read of a
+repository clones its mirror in the background, on its own timeout whatever the caller's, and every status
+says `cloning the mirror` until it is done; a clone that fails is tried again after 1, 5, 15 and then 60
+minutes. A mirror dir that is no bare repository of its own is moved aside (`<repo>.git.broken-<time>`) and
+cloned again, never repaired in place, and a git lock file a killed git left in it is removed once it is 10
+minutes old.
 
 ```toml
 [staging]
@@ -4932,7 +4941,8 @@ mirror_dir = "/Volumes/External/magnum-staging"   # default <state dir>/staging;
 ```
 
 A `mirror_dir` on an external disk that is not mounted leaves every status `unknown` ("the mirror's volume is
-not mounted"), and magnum creates nothing in its place.
+not mounted"), and magnum creates nothing in its place: nothing above `mirror_dir` is ever created, and
+`/Volumes` or a volume's root is refused as `mirror_dir`.
 
 ## Daily use
 

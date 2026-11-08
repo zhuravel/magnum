@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,15 +46,20 @@ const (
 // leading '-') is refused and never reaches git; its PRs, and those of a
 // base the fetch cannot read, are unknown, Why naming the base. It runs at
 // most once a minute per repository across processes (a flock in the
-// mirror dir); a call within the minute reuses the data and returns nil.
-// It never blocks longer than ctx: a Refresh that ctx cuts keeps the data
-// it had and returns ctx's error. The first Refresh clones the mirror,
-// which takes as long as the repository's commits take to download: give
-// it a long ctx, and run Refresh outside a daemon's tick.
+// mirror dir); a call within the minute reuses the data and returns its
+// error again. It never blocks longer than ctx: a Refresh that ctx cuts
+// keeps the data it had and returns ctx's error.
+//
+// The first Refresh of a repository, or one that finds its mirror dir no
+// bare repository of its own (it is moved aside, never repaired in place),
+// starts the clone in the background on a context of its own (at most
+// cloneTimeout) under the flock, and returns: until it is done every
+// status is unknown, "cloning the mirror". A clone that fails is tried
+// again after 1, 5, 15 and then 60 minutes.
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error {
 	now := c.d.Now()
 	if st := c.get(repo); st != nil && fresh(st, now) {
-		return nil
+		return st.err(repo)
 	}
 	dir, ok := c.d.Mirror(repo)
 	if !ok {
@@ -63,6 +69,10 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		}
 		c.set(repo, &state{V: stateVersion, At: now, Err: why})
 		return errors.New("staging " + repo + ": " + why)
+	}
+	if since, busy := c.clonesInto(dir); busy {
+		c.set(repo, cloningState(now, since))
+		return nil
 	}
 	var env map[string]string
 	if c.d.GitEnv != nil {
@@ -76,13 +86,26 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 	unlock, err := lockMirror(ctx, dir)
 	if err != nil {
 		if ctx.Err() != nil {
+			// Another process holds the mirror (its clone, a slow fetch):
+			// its last word stands here too.
+			if st := readState(dir, c.d.Log); st != nil {
+				if cur := c.get(repo); cur == nil || st.At.After(cur.At) {
+					c.set(repo, st)
+				}
+			}
 			return fmt.Errorf("staging %s: waiting for the mirror's lock: %w", repo, ctx.Err())
 		}
 		why := "the mirror's lock: " + errLine(err)
 		c.set(repo, &state{V: stateVersion, At: now, Err: why})
 		return errors.New("staging " + repo + ": " + why)
 	}
-	defer unlock()
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+	clearStaleLocks(dir, now, c.d.Log)
 	prev := readState(dir, c.d.Log)
 	if prev != nil && fresh(prev, now) {
 		prev.want(open, now)
@@ -90,9 +113,23 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 			c.d.Log.Warn("staging: state file not written", "repo", repo, "err", errLine(err))
 		}
 		c.set(repo, prev)
-		return nil
+		return prev.err(repo)
 	}
-	st := c.build(ctx, repo, dir, env, open, prev, now)
+	base, err := c.d.Git.Base(ctx, dir)
+	switch {
+	case errors.Is(err, ErrNoMirror):
+		st, ok := c.prepareClone(repo, dir, open, prev, err, now)
+		if ok {
+			locked = false
+			c.startClone(ctx, repo, dir, env, unlock, st)
+		}
+		return st.err(repo)
+	case err != nil:
+		st := &state{V: stateVersion, At: now, Err: "the mirror could not be read: " + errLine(err)}
+		c.set(repo, st)
+		return st.err(repo)
+	}
+	st := c.build(ctx, repo, dir, env, base, open, prev, now)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("staging %s: refresh cut: %w", repo, err)
 	}
@@ -100,11 +137,110 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		c.d.Log.Warn("staging: state file not written", "repo", repo, "err", errLine(err))
 	}
 	c.set(repo, st)
-	if st.Err != "" {
-		return errors.New("staging " + repo + ": " + st.Err)
+	if st.Err == "" {
+		c.d.Log.Debug("staging: refreshed", "repo", repo, "envs", len(st.Envs), "prs", len(st.PRs))
 	}
-	c.d.Log.Debug("staging: refreshed", "repo", repo, "envs", len(st.Envs), "prs", len(st.PRs))
-	return nil
+	return st.err(repo)
+}
+
+// err is st's error for Refresh to return: nil when it holds data or a
+// clone runs.
+func (st *state) err(repo string) error {
+	if st.Err == "" || st.Cloning {
+		return nil
+	}
+	return errors.New("staging " + repo + ": " + st.Err)
+}
+
+// cloneBackoff is the wait before the next try of a clone that failed n
+// times.
+func cloneBackoff(n int) time.Duration {
+	steps := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
+	return steps[min(max(n, 1), len(steps))-1]
+}
+
+// cloningState is the state while a clone that started at since runs.
+func cloningState(now, since time.Time) *state {
+	return &state{V: stateVersion, At: now, Cloning: true, Err: "cloning the mirror (since " + since.Format("15:04") + ")"}
+}
+
+// clonesInto reports whether this client clones into dir, and since when.
+func (c *Client) clonesInto(dir string) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	since, ok := c.cloning[dir]
+	return since, ok
+}
+
+// prepareClone answers a mirror dir that is no mirror (why), under the
+// flock: within the backoff of a failed clone, the failure stands; else a
+// dir that exists is moved aside (<dir>.broken-<time>, never repaired in
+// place) and ok says to start the clone, whose state it returns.
+func (c *Client) prepareClone(repo, dir string, open []OpenPR, prev *state, why error, now time.Time) (*state, bool) {
+	st := cloningState(now, now)
+	if prev != nil {
+		st.Wanted, st.CloneFails = prev.Wanted, prev.CloneFails
+		if prev.CloneRetryAt.After(now) {
+			waiting := &state{V: stateVersion, At: now, Wanted: prev.Wanted, CloneFails: prev.CloneFails,
+				CloneRetryAt: prev.CloneRetryAt, CloneErr: prev.CloneErr,
+				Err: prev.CloneErr + "; the next try is at " + prev.CloneRetryAt.Format("15:04")}
+			waiting.want(open, now)
+			c.set(repo, waiting)
+			return waiting, false
+		}
+	}
+	st.want(open, now)
+	if _, err := os.Lstat(dir); err == nil {
+		aside := dir + ".broken-" + now.Format("20060102T150405")
+		if err := os.Rename(dir, aside); err != nil {
+			bad := &state{V: stateVersion, At: now, Err: "the mirror dir is no mirror and could not be moved aside: " + errLine(err)}
+			c.set(repo, bad)
+			return bad, false
+		}
+		c.d.Log.Warn("staging: the mirror dir is no mirror; moved aside, cloning again", "dir", dir, "aside", aside, "why", errLine(why))
+	}
+	if err := writeState(dir, st); err != nil {
+		c.d.Log.Warn("staging: state file not written", "repo", repo, "err", errLine(err))
+	}
+	c.set(repo, st)
+	return st, true
+}
+
+// startClone clones the mirror in the background, on a context of its own
+// (ctx's values, never its end, and cloneTimeout), holding the flock until
+// it is done (unlock). Done, the state says so and is never fresh, so the
+// next Refresh reads the mirror; failed, it says when the clone is tried
+// again.
+func (c *Client) startClone(ctx context.Context, repo, dir string, env map[string]string, unlock func(), st *state) {
+	c.mu.Lock()
+	c.cloning[dir] = st.At
+	c.mu.Unlock()
+	c.bg.Go(func() {
+		defer unlock()
+		defer func() {
+			c.mu.Lock()
+			delete(c.cloning, dir)
+			c.mu.Unlock()
+		}()
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloneTimeout)
+		defer cancel()
+		err := c.d.Git.Clone(cctx, dir, repo, env)
+		now := c.d.Now()
+		next := &state{V: stateVersion, Wanted: st.Wanted, Err: "the mirror is cloned: the next Refresh reads it"}
+		if err != nil {
+			next.At, next.CloneFails = now, st.CloneFails+1
+			next.CloneRetryAt = now.Add(cloneBackoff(next.CloneFails))
+			next.CloneErr = "the mirror could not be cloned: " + errLine(err)
+			next.Err = next.CloneErr + "; the next try is at " + next.CloneRetryAt.Format("15:04")
+			c.d.Log.Warn("staging: the clone failed", "repo", repo, "dir", dir, "fails", next.CloneFails, "err", errLine(err))
+		} else {
+			c.d.Log.Info("staging: the mirror is cloned", "repo", repo, "dir", dir)
+		}
+		if err := writeState(dir, next); err != nil {
+			c.d.Log.Warn("staging: state file not written", "repo", repo, "err", errLine(err))
+		}
+		c.set(repo, next)
+	})
 }
 
 // fresh reports whether st was read less than RefreshEvery before now.
@@ -129,21 +265,16 @@ func (st *state) want(open []OpenPR, now time.Time) {
 }
 
 // build reads the repository into a new state, starting from prev's caches.
-func (c *Client) build(ctx context.Context, repo, dir string, env map[string]string, open []OpenPR, prev *state, now time.Time) *state {
-	st := &state{V: stateVersion, At: now, Envs: map[string]*envData{}, PRs: map[int]*prData{}, BaseErr: map[string]string{},
+func (c *Client) build(ctx context.Context, repo, dir string, env map[string]string, base string, open []OpenPR, prev *state, now time.Time) *state {
+	st := &state{V: stateVersion, At: now, Envs: map[string]*envData{}, PRs: map[int]*prData{}, BaseErr: map[string]string{}, PRErr: map[int]string{},
 		Runs: map[string]*runEntry{}, Paths: map[string]*pathsEntry{}, Deploys: map[string]*deployEntry{}}
 	if prev != nil {
 		st.Wanted, st.Runs, st.Paths, st.Deploys = prev.Wanted, nonNil(prev.Runs), nonNil(prev.Paths), nonNil(prev.Deploys)
 	}
 	st.want(open, now)
-	base, err := c.d.Git.Ensure(ctx, dir, repo, env)
-	if err != nil {
-		st.Err = "the mirror could not be made: " + errLine(err)
-		return st
-	}
 	st.Base = base
-	prs := st.basesOf(base)
-	if prs, err = c.fetch(ctx, dir, env, st, prs); err != nil {
+	prs, err := c.fetch(ctx, dir, env, st, st.basesOf(base))
+	if err != nil {
 		st.Err = "the fetch failed: " + errLine(err)
 		return st
 	}
@@ -189,14 +320,14 @@ func nonNil[V any](m map[string]V) map[string]V {
 }
 
 // prune drops the caches nothing in st refers to any more: the runs of
-// merges no window holds, the paths of ranges no fetched PR has, the
+// tips no window holds, the paths of ranges no fetched PR has, the
 // deployments of environments the remote no longer has.
 func (st *state) prune() {
 	merges, ranges, envs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range st.Envs {
 		envs[e.Env] = true
-		for _, m := range e.Merges {
-			merges[m.SHA] = true
+		for _, sha := range e.Chain {
+			merges[sha] = true // a merge's, or a tip's that a new failure is told against
 		}
 	}
 	for _, p := range st.PRs {
@@ -209,6 +340,20 @@ func (st *state) prune() {
 
 // pullRef is the mirror's ref of PR n's head.
 func pullRef(n int) string { return "refs/pull/" + strconv.Itoa(n) + "/head" }
+
+// pullNumber is the PR number of a pull ref.
+func pullNumber(ref string) (int, bool) {
+	s, ok := strings.CutPrefix(ref, "refs/pull/")
+	if !ok {
+		return 0, false
+	}
+	s, ok = strings.CutSuffix(s, "/head")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil && n > 0
+}
 
 // basesOf is the wanted PRs by number with their bases, "" read as def (the
 // mirror's default branch); a base that is no plain branch name is refused
@@ -273,6 +418,8 @@ func (c *Client) fetch(ctx context.Context, dir string, env map[string]string, s
 		}
 		if b, ok := strings.CutPrefix(miss.Ref, "refs/heads/"); ok {
 			st.BaseErr[b] = fmt.Sprintf("the base %q could not be fetched: the remote has no branch %s", b, b)
+		} else if n, ok := pullNumber(miss.Ref); ok {
+			st.PRErr[n] = fmt.Sprintf("PR #%d has no pull ref on the remote (%s): it is not fetched", n, miss.Ref)
 		}
 		c.d.Log.Info("staging: the remote lacks a ref; fetching without it", "dir", dir, "ref", miss.Ref)
 	}
@@ -390,10 +537,11 @@ func (c *Client) envOf(ctx context.Context, dir, base, tip string, now time.Time
 	}
 	onChain := map[string]bool{}
 	var seconds [][]string
-	for _, f := range window {
+	for pos, f := range window {
 		onChain[f.SHA] = true
+		e.Chain = append(e.Chain, f.SHA)
 		if len(f.Parents) >= 2 {
-			e.Merges = append(e.Merges, mergeData{SHA: f.SHA, At: f.At})
+			e.Merges = append(e.Merges, mergeData{SHA: f.SHA, At: f.At, Pos: pos})
 			seconds = append(seconds, f.Parents[1:])
 		}
 	}
@@ -471,7 +619,13 @@ func (c *Client) markDeployed(ctx context.Context, dir string, e *envData, d *de
 		return
 	}
 	dep := d.List[i]
-	e.DeployedTip, e.DeployedAt = cmp.Or(dep.SHA, dep.Ref), dep.CreatedAt
+	tip := cmp.Or(dep.SHA, dep.Ref)
+	if !isOID(tip) {
+		// GitHub's answer is data: only a sha may reach git.
+		c.d.Log.Info("staging: the newest successful deployment names no sha; it confirms nothing", "dir", dir)
+		return
+	}
+	e.DeployedTip, e.DeployedAt = tip, dep.CreatedAt
 	if len(e.Merges) == 0 {
 		return
 	}

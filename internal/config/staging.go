@@ -56,10 +56,17 @@ func (c *Config) expandStaging() {
 }
 
 // validateStaging checks [staging]: mirror_dir is absolute after ~ expands
-// (or empty, without a layout).
+// (or empty, without a layout), and neither /Volumes nor a volume's root
+// (/Volumes/<name>), the directories a volume mounts on, where a mirror
+// would be written on the system disk while the volume is away.
 func (c *Config) validateStaging() []error {
-	if d := c.Staging.MirrorDir; d != "" && !filepath.IsAbs(d) {
+	d := c.Staging.MirrorDir
+	switch clean := filepath.Clean(d); {
+	case d == "":
+	case !filepath.IsAbs(d):
 		return []error{fmt.Errorf("staging.mirror_dir must be absolute after ~ expands, got %q", d)}
+	case clean == "/Volumes" || filepath.Dir(clean) == "/Volumes":
+		return []error{fmt.Errorf("staging.mirror_dir %q must be a directory on a volume, not /Volumes or a volume's root (/Volumes/<name>/magnum-staging)", d)}
 	}
 	return nil
 }
