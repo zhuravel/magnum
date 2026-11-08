@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -158,6 +159,15 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	eo.Once = o.Once
 	locale, shellPATH := daemonEnv(ctx, c.Config)
 	eo.ShellPATH = shellPATH
+	// The daemon lock and the agents' hook listener come before the App,
+	// whose agents managers give their panes the socket only while a
+	// listener reads it (engine.ClaimDaemon); Run holds the lock from here.
+	claim, err := claimDaemon(c.Layout, o.DryRun)
+	if err != nil {
+		return daemonDryRunReport{}, err
+	}
+	defer claim.Release()
+	eo.Claim = claim
 	a, err := app.New(c.Config, c.Layout, daemonAppOptions(c, o))
 	if err != nil {
 		return daemonDryRunReport{}, err
@@ -183,6 +193,16 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 		}
 	}
 	return rep, err
+}
+
+// claimDaemon is the daemon process's claim (engine.ClaimDaemon): none for a
+// dry run, which takes no lock and must leave a live daemon's hook socket
+// alone (the claim replaces a socket at its path).
+func claimDaemon(l paths.Layout, dryRun bool) (*engine.Claim, error) {
+	if dryRun {
+		return nil, nil
+	}
+	return engine.ClaimDaemon(l)
 }
 
 // daemonEngineOptions are the engine options of the daemon process: its

@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/cleanup"
@@ -160,6 +161,12 @@ type Agents interface {
 	// is gone and the role keeps a pane (quitAgentGone).
 	ClearDeadLaunch(ctx context.Context, s store.Session) (bool, error)
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
+	// Wake takes an agent's hook event as a hint to look at its pane now
+	// (agents.Manager.Wake: ctx bounds its later looks, so it is the
+	// daemon's), and WaitWakes waits for those looks once the listener
+	// stopped (hooks.go).
+	Wake(ctx context.Context, ev agenthooks.Event)
+	WaitWakes()
 	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
 	// gives a fixer whose time ran out its last call within the run.
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
@@ -440,6 +447,13 @@ type Options struct {
 	// before the engine was built ([daemon] shell_path), recorded at startup
 	// (KVDaemonShellPATH, event daemon.shell_path); nil with the key off.
 	ShellPATH *ShellPATH
+	// Claim is the daemon lock and hook listener the daemon command took
+	// before it built the App (ClaimDaemon): Run holds that lock instead of
+	// taking its own, serves the listener once startup is done, and
+	// releases both when it returns. nil: Run takes the lock itself and
+	// listens for no hooks (the panes then get no hook env either). A dry
+	// run takes no claim.
+	Claim *Claim
 }
 
 // Engine is the daemon. Create it with New or FromApp.
@@ -960,7 +974,7 @@ var ErrOpsLockHeld = errors.New("a magnum command holds state/ops.lock for in-pr
 // could see).
 func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if !e.d.DryRun {
-		unlock, held, err := AcquireLock(e.d.Layout.Lock())
+		unlock, held, err := e.lockDaemon(opts.Claim)
 		if err != nil {
 			return fmt.Errorf("engine: lock: %w", err)
 		}
@@ -1010,6 +1024,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	e.startup(ctx)
+	// hooks.go: Serve returns, then the Wakes' later looks are waited for,
+	// before the shutdown and before the caller closes the registry.
+	defer e.startHooks(ctx, cancel, opts.Claim)()
 	if opts.Once {
 		idle := make(chan struct{})
 		worker := make(chan struct{})

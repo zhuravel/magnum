@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
@@ -1005,6 +1006,42 @@ type fakeAgents struct {
 	// typed names the roles whose runs TypedDuringRun reports someone
 	// typed into (a run with a session only, as the transcript needs).
 	typed map[string]bool
+	// woken are the hook events Wake was given, in order. wakeGate, when
+	// set, holds each Wake until it gets a value, after a send on
+	// wakeStarted (when set).
+	woken       []agenthooks.Event
+	wakeGate    chan struct{}
+	wakeStarted chan struct{}
+}
+
+// Wake records the hook event ("wake <event> <pane>") and, with wakeGate
+// set, waits for it.
+func (f *fakeAgents) Wake(_ context.Context, ev agenthooks.Event) {
+	f.mu.Lock()
+	f.woken = append(f.woken, ev)
+	gate, started := f.wakeGate, f.wakeStarted
+	f.mu.Unlock()
+	f.record("wake " + ev.Name + " " + ev.Pane)
+	if started != nil {
+		started <- struct{}{}
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-time.After(leakWait):
+		}
+	}
+	f.record("woke " + ev.Name + " " + ev.Pane)
+}
+
+// WaitWakes records the call.
+func (f *fakeAgents) WaitWakes() { f.record("wait wakes") }
+
+// wakes are the hook events Wake was given so far.
+func (f *fakeAgents) wakes() []agenthooks.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.woken)
 }
 
 func (f *fakeAgents) record(s string) {
