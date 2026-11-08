@@ -68,6 +68,7 @@ type fakeHerdr struct {
 	startErr func(o herdr.AgentStartOptions) error
 
 	creates []herdr.WorkspaceCreateOptions
+	splits  []herdr.SplitOptions
 	starts  []herdr.AgentStartOptions
 	prompts []promptCall
 	keys    []keysCall
@@ -155,6 +156,7 @@ func (f *fakeHerdr) PaneSplit(_ context.Context, paneID string, o herdr.SplitOpt
 	defer f.mu.Unlock()
 	for _, p := range f.panes {
 		if p.ID == paneID {
+			f.splits = append(f.splits, o)
 			return f.newPaneLocked(p.WorkspaceID, o.Cwd), nil
 		}
 	}

@@ -4148,7 +4148,13 @@ The factory daemon is a second daemon in the same binary, with its own launchd j
 or lose its pane kicks the tick, and a stage that passes in a tick starts the next stage's first pass in the same tick
 (one stage further at most; a hold or a drain still holds its launch). The next agent's prompt is expected about 15
 to 20 s after the last one stopped, from 81 s: an estimate until it is measured on the factory's own handoffs after
-`magnum factory install --drain` puts this build on the factory daemon. A task's wait that costs
+`magnum factory install --drain` puts this build on the factory daemon. Its agents' own hooks, once installed, wake
+it at once: it listens on its hook socket, `run/factory-hooks.sock` under the state directory, every pane it starts
+names that socket, and an agent's Stop, StopFailure or permission prompt has it look at that pane and run an observe
+pass right away, so the next stage starts a second or two after the agent stopped instead of on the next `observe`; a
+StopFailure whose screen shows a usage limit, a lost login or an overload pauses that agent kind at once. Without a
+usable socket (a path of 104 bytes or more under a deep `MAGNUM_HOME`, a listener that fails) it says so once in its
+log and polls as before ([Agent hooks](#agent-hooks)). A task's wait that costs
 it nothing (a hold, an agent at work in the copy, your pane, a review round of magnum's) logs once at INFO
 when it begins ("a factory task waits") and once when it ends, with how long it held, and at WARN only once
 it has held 30 minutes, then 1 hour and 2 hours after that and so on ("a factory task still waits"); a wait

@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/evalrun"
@@ -76,7 +77,9 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // from the snapshot they read anyway, and Workspaces the herdr workspaces
 // of a task's live sessions: the alerts' toasts hold while you are in a
 // factory pane, and a task's sidebar token goes on its workspaces
-// (alerts.go).
+// (alerts.go). UseHookSocket has the panes it makes from then on name the
+// factory's hook socket, Wake looks at the pane an agent's hook event names,
+// and WaitWakes waits for the later looks a Wake started (hooks.go).
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
@@ -103,6 +106,9 @@ type Runtime interface {
 	PaneFocus() runtime.PaneFocus
 	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
 	Talk(ctx context.Context, t registry.Task, prompt string) (pane string, err error)
+	UseHookSocket(path string)
+	Wake(ctx context.Context, ev agenthooks.Event)
+	WaitWakes()
 }
 
 // The runtime the daemon wires (internal/factory/runtime) is the engine's.
@@ -292,6 +298,9 @@ type Engine struct {
 	// drainAt is when the stop signal came (Unix nanoseconds, 0 before):
 	// the drain's budget counts from it (drainLeft).
 	drainAt atomic.Int64
+	// observeNow asks the loop for an observe pass now (requestObserve: an
+	// agent's hook event); one pending absorbs the others, as a kick does.
+	observeNow chan struct{}
 
 	// Seams: the signal subscription, the process table that names the
 	// daemon that holds the lock, whether the command that asked for a
@@ -521,6 +530,7 @@ func New(d Deps) *Engine {
 		bgCtx: bgCtx, bgCancel: bgCancel,
 		runners:      map[string]stageRunner{},
 		kick:         make(chan struct{}, 1),
+		observeNow:   make(chan struct{}, 1),
 		notify:       ossignal.Notify,
 		getenv:       os.Getenv,
 		stopNotify:   ossignal.Stop,
@@ -654,13 +664,15 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 // RunLocked runs the daemon, whose lock the caller holds (Lock), until
-// SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
-// then a tick at once, every [factory] poll and on SIGUSR1, and an observe
-// pass every [factory] observe (one that saw an event a stage acts on kicks
-// a tick right after it). A stop signal drains: no new launch or
-// effect starts (a launch that waits for the stagger is cut), the tick in
-// progress ends with the task it advances (the others, and the alerts,
-// wait for the next daemon), the wait for the work off the loop ends within
+// SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, opens its
+// hook socket (listenHooks), runs startup, serves the socket (serveHooks),
+// then runs a tick at once, every [factory] poll and on SIGUSR1, and an
+// observe pass every [factory] observe and at once after an agent's hook
+// event (one that saw an event a stage acts on kicks a tick right after
+// it). A stop signal drains: no new launch or effect starts (a launch that
+// waits for the stagger is cut), the tick in progress ends with the task it
+// advances (the others, and the alerts, wait for the next daemon), the
+// waits for the hooks' looks and for the work off the loop end within
 // drainBudget of the signal, and it returns nil, so launchd (KeepAlive on a
 // failed exit only) starts the daemon again only after a crash.
 func (e *Engine) RunLocked(ctx context.Context) error {
@@ -690,9 +702,21 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	go e.signals(sigCtx, sigs, stop)
 
 	e.log.Info("magnum factory daemon starting", "pid", os.Getpid())
+	// The hook socket opens under the lock and before the startup's first
+	// pane, so every pane names it; it is served once the startup is done
+	// (events sent meanwhile wait in the socket), and its stop comes first
+	// as the daemon stops.
+	hooks := e.listenHooks()
+	if hooks != nil {
+		defer hooks.Close() // a startup that fails never serves it
+	}
 	if err := e.startup(ctx); err != nil {
 		e.log.Error("magnum factory daemon refusing to start", "err", err)
 		return err
+	}
+	if hooks != nil {
+		stopHooks := e.serveHooks(ctx, hooks)
+		defer stopHooks()
 	}
 	tick := time.NewTimer(0)
 	defer tick.Stop()
@@ -706,6 +730,10 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 			e.log.Info("magnum factory daemon stopped")
 			return nil
 		case <-observe.C:
+			e.observe(ctx)
+			observe.Reset(e.observeEvery())
+			continue
+		case <-e.observeNow: // an agent's hook: the pass now, and its clock starts over
 			e.observe(ctx)
 			observe.Reset(e.observeEvery())
 			continue

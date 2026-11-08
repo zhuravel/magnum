@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -114,6 +115,22 @@ type fakeRuntime struct {
 	// (nil: the pane "p_1"), run without the lock.
 	talks []talkCall
 	talk  func(ctx context.Context, t registry.Task, prompt string) (string, error)
+	// The hooks (hooks_test.go): hookSocket is UseHookSocket's path, wakes
+	// the Wake calls and wakeCtxs their contexts, observes the Observe
+	// calls, waitWakes the WaitWakes calls; order is the sequence of the
+	// UseHookSocket ("hooks"), Wake ("wake <event>"), Observe ("observe")
+	// and WaitWakes ("waitwakes") calls, and what noteOrder adds. onWake runs
+	// inside each Wake, onObserve at the start of each Observe and
+	// onWaitWakes inside each WaitWakes, all without the lock.
+	hookSocket  string
+	wakes       []agenthooks.Event
+	wakeCtxs    []context.Context
+	observes    int
+	waitWakes   int
+	order       []string
+	onWake      func(ev agenthooks.Event)
+	onObserve   func()
+	onWaitWakes func()
 }
 
 // talkCall is a Talk the engine made: the task and the prompt it rendered.
@@ -181,22 +198,26 @@ func (f *fakeRuntime) callList() []string {
 	return slices.Clone(f.calls)
 }
 
-// Recover records the call and answers changed for the task.
+// Recover records the call (in calls and order) and answers changed for
+// the task.
 func (f *fakeRuntime) Recover(_ context.Context, t registry.Task) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "recover "+TaskKey(t))
+	f.order = append(f.order, "recover "+TaskKey(t))
 	if err := f.failRecover[t.ID]; err != nil {
 		return nil, err
 	}
 	return f.changed[t.ID], f.recoverErr
 }
 
-// SettleWorkspaces records the call and answers orphans.
+// SettleWorkspaces records the call (in calls and order) and answers
+// orphans.
 func (f *fakeRuntime) SettleWorkspaces(context.Context) ([]runtime.Orphan, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "workspaces")
+	f.order = append(f.order, "workspaces")
 	if f.recoverErr != nil {
 		return nil, f.recoverErr
 	}
@@ -247,6 +268,7 @@ func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { 
 func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
 	f.mu.Lock()
 	f.launches = append(f.launches, t.ID)
+	f.order = append(f.order, "launch")
 	f.launchCopies = append(f.launchCopies, c)
 	names, prompts := make([]string, 0, len(roles)), make([]string, 0, len(roles))
 	for _, r := range roles {
@@ -421,6 +443,14 @@ func (f *fakeRuntime) codexQuits() []int64 {
 // ended run ends, a paused one is abandoned with its pause, a refused one
 // is abandoned.
 func (f *fakeRuntime) Observe(context.Context) ([]runtime.Event, error) {
+	f.mu.Lock()
+	on := f.onObserve
+	f.observes++
+	f.order = append(f.order, "observe")
+	f.mu.Unlock()
+	if on != nil {
+		on()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.observePanic != nil {

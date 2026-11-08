@@ -43,6 +43,13 @@ const (
 	pauseAgent    = "agent"
 )
 
+// pauseOf is the pause (pause.who) of each screen the health classifier
+// reads that pauses an agent kind: a usage limit, a lost login, an
+// overload. The observe pass pauses on them (completed, blocked), and so
+// does a StopFailure hook its screen proves (hookFailure).
+var pauseOf = map[agents.HealthKind]string{agents.HealthUsageLimit: pauseUsage, agents.HealthLoginRequired: pauseLogin,
+	agents.HealthOverloaded: pauseOverload}
+
 // pause is a hold on an agent kind: who and what as the wait says them,
 // until when (a login pause holds until a login lifts it).
 type pause struct {
@@ -339,8 +346,7 @@ func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run)
 	h := r.health(ctx, s, run)
 	switch h.Kind {
 	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded:
-		who := map[agents.HealthKind]string{agents.HealthUsageLimit: pauseUsage, agents.HealthLoginRequired: pauseLogin,
-			agents.HealthOverloaded: pauseOverload}[h.Kind]
+		who := pauseOf[h.Kind]
 		var until time.Time
 		if h.ResetAt != nil {
 			until = *h.ResetAt
@@ -469,8 +475,7 @@ func (r *Runtime) blocked(ctx context.Context, o agents.Observation) []Event {
 	}
 	switch h := r.classify(kind, screen); h.Kind {
 	case agents.HealthUsageLimit, agents.HealthLoginRequired, agents.HealthOverloaded: // a pause, as on a completed run
-		who := map[agents.HealthKind]string{agents.HealthUsageLimit: pauseUsage, agents.HealthLoginRequired: pauseLogin,
-			agents.HealthOverloaded: pauseOverload}[h.Kind]
+		who := pauseOf[h.Kind]
 		var until time.Time
 		if h.ResetAt != nil {
 			until = *h.ResetAt

@@ -96,6 +96,16 @@ func drainLeft(since time.Duration) time.Duration {
 	return min(drainWait, max(drainBudget-since, 0))
 }
 
+// drainWaitNow is how long the daemon, as it stops, may still wait for
+// work it cancelled: drainWait, or after a stop signal what is left of
+// drainBudget since it came (drainLeft).
+func (e *Engine) drainWaitNow() time.Duration {
+	if at := e.drainAt.Load(); at != 0 {
+		return drainLeft(time.Since(time.Unix(0, at)))
+	}
+	return drainWait
+}
+
 // claimCopy is how a stage gets its task's copy. The copy the task holds
 // comes at once. Otherwise the first call starts a claim off the loop
 // (never while the daemon drains or a hold of the machine holds launches)
@@ -376,10 +386,7 @@ func (e *Engine) stopBackground() {
 		e.bg.Wait()
 		close(done)
 	}()
-	wait := drainWait
-	if at := e.drainAt.Load(); at != 0 {
-		wait = drainLeft(time.Since(time.Unix(0, at)))
-	}
+	wait := e.drainWaitNow()
 	select {
 	case <-done:
 	case <-time.After(wait):

@@ -13379,16 +13379,18 @@ func (e *Engine) Run(ctx context.Context) error
     and runs the daemon (RunLocked) until it stops.
 
 func (e *Engine) RunLocked(ctx context.Context) error
-    RunLocked runs the daemon, whose lock the caller holds (Lock), until
-    SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
-    then a tick at once, every factory poll and on SIGUSR1, and an observe pass
-    every factory observe (one that saw an event a stage acts on kicks a tick
-    right after it). A stop signal drains: no new launch or effect starts (a
-    launch that waits for the stagger is cut), the tick in progress ends with
-    the task it advances (the others, and the alerts, wait for the next daemon),
-    the wait for the work off the loop ends within drainBudget of the signal,
-    and it returns nil, so launchd (KeepAlive on a failed exit only) starts the
-    daemon again only after a crash.
+    RunLocked runs the daemon, whose lock the caller holds (Lock), until SIGTERM
+    or SIGINT, or until ctx ends: it writes the pidfile, opens its hook socket
+    (listenHooks), runs startup, serves the socket (serveHooks), then runs a
+    tick at once, every factory poll and on SIGUSR1, and an observe pass every
+    factory observe and at once after an agent's hook event (one that saw an
+    event a stage acts on kicks a tick right after it). A stop signal drains:
+    no new launch or effect starts (a launch that waits for the stagger is cut),
+    the tick in progress ends with the task it advances (the others, and the
+    alerts, wait for the next daemon), the waits for the hooks' looks and for
+    the work off the loop end within drainBudget of the signal, and it returns
+    nil, so launchd (KeepAlive on a failed exit only) starts the daemon again
+    only after a crash.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
@@ -14177,6 +14179,9 @@ type Runtime interface {
 	PaneFocus() runtime.PaneFocus
 	Workspaces(ctx context.Context, t registry.Task) ([]string, error)
 	Talk(ctx context.Context, t registry.Task, prompt string) (pane string, err error)
+	UseHookSocket(path string)
+	Wake(ctx context.Context, ev agenthooks.Event)
+	WaitWakes()
 }
     Runtime is the factory's agent runtime (internal/factory/runtime): the owner
     row of a task in the factory's agents store, the launch of a stage's roles
@@ -14202,6 +14207,9 @@ type Runtime interface {
     from the snapshot they read anyway, and Workspaces the herdr workspaces of
     a task's live sessions: the alerts' toasts hold while you are in a factory
     pane, and a task's sidebar token goes on its workspaces (alerts.go).
+    UseHookSocket has the panes it makes from then on name the factory's hook
+    socket, Wake looks at the pane an agent's hook event names, and WaitWakes
+    waits for the later looks a Wake started (hooks.go).
 
 type ScreenOptions struct {
 	Config *config.Config
@@ -15834,6 +15842,15 @@ func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.
     their own commands changed: with somebody else at work since they began,
     they cannot tell their changes from that person's or that agent's.
 
+func (r *Runtime) UseHookSocket(path string)
+    UseHookSocket has every pane the runtime makes from now on carry the factory
+    daemon's hook socket at path and the magnum binary (agents.Deps.HookSocket:
+    MAGNUM_HOOK_SOCKET, MAGNUM_HOOK_BIN), so its agents' hooks send their events
+    there. The daemon calls it once, under its lock, when its listener is up
+    and before its startup: it builds the agents manager anew with the socket,
+    so it must come before the runtime's first use. "" keeps the panes without
+    the hook env.
+
 func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error
     Verify settles an ended run: verified when ok, failed with why otherwise,
     so the agents store's active runs stay few. It records the RoleRun's end:
@@ -15849,6 +15866,19 @@ func (r *Runtime) Void(ctx context.Context, runID, why string) error
     failed run's), and nothing that counts failed turns counts it; its RoleRun
     records its end as Verify's does, the outcome voided. It feeds the loop
     detector nothing: it is no failure, and no progress either.
+
+func (r *Runtime) WaitWakes()
+    WaitWakes waits for the later looks the events' Wake calls started
+    (agents.Manager.WaitWakes): the daemon calls it once its listener stopped
+    and the last Wake returned.
+
+func (r *Runtime) Wake(ctx context.Context, ev agenthooks.Event)
+    Wake hands an event of an agent's hook to the agents manager
+    (agents.Manager.Wake), which looks at the event's pane now; the next observe
+    pass returns what the look saw. ctx is the daemon's: it bounds the later
+    looks Wake starts, which WaitWakes waits for. Wake takes no lock of the
+    runtime's: the manager runs the runtime's callbacks inside it (ownerName and
+    hookFailure take r.mu), so a caller must hold none either.
 
 func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err error)
     Watchdog checks the runs in flight at now (the engine's observe pass):
