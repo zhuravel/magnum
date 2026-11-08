@@ -319,7 +319,7 @@ func (m *factoryModel) prActKey(k string, r FactoryRow, reviewOnR bool) tea.Cmd 
 func (m factoryModel) prActRow(r FactoryRow, reviewOnR bool) actRow {
 	pr := *r.PR
 	row := actRow{ok: true, ref: pr.Ref, label: prLabel(r), now: m.now(), fixOff: pr.FixOff, fixLoop: pr.Fixing,
-		keys: factoryActKeys(reviewOnR)}
+		keys: factoryActKeys(reviewOnR, pr.Fixing)}
 	f := pr.Facts
 	if f == nil {
 		return row
@@ -335,12 +335,17 @@ func (m factoryModel) prActRow(r FactoryRow, reviewOnR bool) actRow {
 
 // factoryActKeys are the factory screen's keys of the board's row actions
 // its refusals and questions name ("U unmutes it", "K kills it"): r only
-// where r is the review (reviewOnR).
-func factoryActKeys(reviewOnR bool) map[rowAct]string {
-	keys := map[rowAct]string{actFresh: "R", actSnooze: "z", actMute: "M", actUnmute: "U", actAbort: "K",
+// where r is the review (reviewOnR), and K only while a fix loop works on
+// the PR (fixing): the screen's K stops a fix loop and the re-review it
+// forced (prKey), never a review alone.
+func factoryActKeys(reviewOnR, fixing bool) map[rowAct]string {
+	keys := map[rowAct]string{actFresh: "R", actSnooze: "z", actMute: "M", actUnmute: "U",
 		actFix: "f", actFixOff: "F", actBrowser: "b"}
 	if reviewOnR {
 		keys[actReview] = "r"
+	}
+	if fixing {
+		keys[actAbort] = "K"
 	}
 	return keys
 }

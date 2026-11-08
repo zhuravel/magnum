@@ -157,6 +157,35 @@ func TestRReDecidesTheRepliesWaitingAsTheBoardsDoes(t *testing.T) {
 	h.wantPRCalls("replies example/talkable#4602", "fresh example/talkable#4602")
 }
 
+// r on a PR with a round in flight refuses as the board's r does, and
+// names K only where K stops what runs: K on this screen stops a fix loop
+// (and the re-review it forced), never a review alone. Before, the refusal
+// said "K kills it" on a PR magnum only reviewed, where K says no fix loop
+// runs and kills nothing.
+func TestARoundInProgressNamesKOnlyWhereKStopsIt(t *testing.T) {
+	h := testYours(t, 160, 40)
+	h.facts("#4602", FactoryPRFacts{State: "reviewing", GHState: "OPEN"})
+	h.facts("#4612", FactoryPRFacts{State: "reviewing", GHState: "OPEN"}) // magnum fixes #4612
+	h.press("g")
+	h.selectRow("#4602")
+	h.press("r")
+	v := h.view()
+	mustContain(t, v, "#4602: round in progress (reviewing)")
+	mustNotContain(t, v, "K kills it", "y/N")
+	h.press("K")
+	mustContain(t, h.view(), "no fix loop runs on #4602")
+
+	h.selectRow("#4612")
+	h.press("R")
+	mustContain(t, h.view(), "#4612: round in progress (reviewing); K kills it")
+	h.press("K")
+	mustContain(t, h.view(), "Stop what magnum runs on #4612 (its fix loop and the re-review the loop forced)? y/N")
+	h.press("n")
+	if h.act.calls() != 0 {
+		t.Errorf("the refusals ran %d calls", h.act.calls())
+	}
+}
+
 // On a task card that offers a retry, r stays the retry and its hints say
 // "r retry"; R is the fresh review there as anywhere. On a card that
 // offers none, r is the review of the task's PR.

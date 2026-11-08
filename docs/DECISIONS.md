@@ -18145,8 +18145,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     screen builds an `actRow` from the factory row and asks the board's predicate (`actionRefusal`) and question
     words (`actionQuestion`), so a key refuses where the board's does (a merged PR whose head magnum reviewed, a
     closed one, a Codex flag, an already muted PR for `M`, an unmuted one for `U`) and asks what the board asks.
-    The questions name the factory's keys (`factoryActKeys`). `FactoryActions.Review`, `Snooze`, `Unsnooze`, `Mute`
-    and `Unmute` pass straight to the board's `screenActions`: magnum's own request paths, never the factory daemon.
+    The questions name the factory's keys (`factoryActKeys`): `K` only while a fix loop works on the PR, since the
+    screen's `K` stops a fix loop and its re-review, never a review alone (the board's `K` kills any round, so its
+    refusal of a review in flight names it). `FactoryActions.Review`, `Snooze`, `Unsnooze`, `Mute` and `Unmute`
+    pass straight to the board's `screenActions`: magnum's own request paths, never the factory daemon.
   - The predicate's facts (`FactoryPR.Facts`: magnum's state and GitHub's, the head and the reviewed head, the mute,
     a snooze while it holds, the Codex flag, the merged-unreviewed flag and its dismissal, the replies its judge has
     not re-decided, so `r` asks for the board's judge-only reply round where the board's `r` would, and whether the
@@ -18188,7 +18190,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (one letter, two meanings on one card); the walk over home's narrowed order (a filter would hide decisions).
   Tests, failing first: TestTheBoardsPRKeysAskAndRunOnAPRRow, TestZLiftsTheSnoozeAndUUnmutes,
   TestThePRKeysRefuseWhereTheBoardsDo, TestRReDecidesTheRepliesWaitingAsTheBoardsDoes,
-  TestROnATaskCardRetriesWhereItCanElseReviews,
+  TestARoundInProgressNamesKOnlyWhereKStopsIt, TestROnATaskCardRetriesWhereItCanElseReviews,
   TestThePRKeysSayWhatTheyDoToTheFactorysLoop, TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests,
   TestTheFactoryScreenReadsWhatThePRKeysGoBy, TestAMutedOrSnoozedPRsRowSaysSo, TestTheMenuListsThePRKeys,
   TestSlashFiltersHomesRows, TestAFilterThatMatchesNothingSaysSo, TestOCyclesTheRepositoryScope,
