@@ -513,3 +513,47 @@ func TestANextCycleStartsWithoutTheLastCyclesAnsweredThreads(t *testing.T) {
 		t.Errorf("cycle 2's row while its fixer works = %+v; want none of cycle 1's answered threads", st)
 	}
 }
+
+// The fix skill writes "not fixed. The author's call:" for a finding of
+// magnum's whose Fix ends "This is the author's call." (a P0 to P2: a P3's
+// goes under Optional calls), and the call then says the review leaves the
+// choice to you, with a reply in the thread or `magnum fix --decide` on it,
+// where "the fixer declined it" and "`magnum fix` sends it back" were wrong
+// (a rerun only asks again, as an own PR showed on 2026-11-07). Any other
+// "not fixed." of magnum's stays a decline, and the same words in another
+// reviewer's thread stay that reviewer's decline: the review left them
+// nothing.
+func TestAnAuthorsCallAsksForYourChoiceNotADecline(t *testing.T) {
+	const prURL, ref = "https://github.com/talkable/talkable/pull/2", "talkable/talkable#2"
+	report := filepath.Join(t.TempDir(), "claude-fix.md")
+	writeFixReviewFiles(t, report, []int64{4302866759, 2102}, nil)
+	writeExternalFixture(t, report, 4322458360)
+	got := needsYouText([]string{
+		"4302866759 P2 app/models/offer.rb:42: not fixed. The author's call: option A keeps the cap, option B lifts it",
+		"2102 P2 app/lib/x.rb:7: not fixed. contested",
+		"4322458360 lib/sandbox.rb:185: not fixed. The author's call: keep stderr or drop it",
+	}, nil, report, prURL, ref, true)
+	want := "decide magnum's P2 on app/models/offer.rb:42: the review leaves the choice to you; reply with yours at " + prURL +
+		"#discussion_r4302866759, or run `magnum fix " + ref + " --decide 4302866759=\"<your choice>\"`; " +
+		"decide magnum's P2 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2102, or `magnum fix " + ref +
+		"` sends it back; " +
+		"decide another reviewer's finding on lib/sandbox.rb:185: the fixer declined it; reply won't fix at " + prURL +
+		"#discussion_r4322458360, or `magnum fix " + ref + "` sends it back; details: " + report
+	if got != want {
+		t.Errorf("needsYouText =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// writeExternalFixture writes, beside the fix report at report, an external
+// file that lists the other reviewers' threads whose first comments are
+// threads.
+func writeExternalFixture(t *testing.T, report string, threads ...int64) {
+	t.Helper()
+	x := externalItems{Author: "zhuravel", FixerLogins: []string{"talkable[bot]"}, Threads: []externalThread{}, Conversation: []externalRemark{}}
+	for _, id := range threads {
+		x.Threads = append(x.Threads, externalThread{CommentID: id, URL: prPage + "#discussion_r" + itoa(id), Comments: []externalComment{}})
+	}
+	if err := writeExternalFile(filepath.Join(filepath.Dir(report), externalFile), x); err != nil {
+		t.Fatal(err)
+	}
+}

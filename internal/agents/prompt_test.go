@@ -893,11 +893,13 @@ func TestTheFixPromptOfAReviewThatFoundNothingHandsOverTheOtherReviewersAlone(t 
 // fixes users would tell apart, ends with the review skill's
 // `This is the author's call.`: the fixer never picks an option, whatever
 // it thinks of the finding, and always leaves it under Needs you with the
-// options as its question (2026-10-20).
+// options as its question (2026-10-20), after the fixed words "The author's
+// call", which the engine reads to ask for the author's choice and not for
+// a decline (2026-11-08).
 func TestTheFixSkillLeavesTheAuthorsCallToTheAuthor(t *testing.T) {
 	const phrase = "`This is the author's call.`"
 	want := "A finding whose **Fix** ends with " + phrase + " is such a finding, whatever its verdict and score: " +
-		"do not fix it, write `not fixed.` and ask which of its options to take, naming each."
+		"do not fix it, write `not fixed. The author's call:` and ask which of its options to take, naming each."
 	if !strings.Contains(string(magnum.FixSkill), want) {
 		t.Errorf("the fix skill lacks %q", want)
 	}

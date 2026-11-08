@@ -23,7 +23,7 @@ import (
 // that starts the finding's thread (none for a conflict with the base,
 // which has no thread), the thread's link (the PR's page for a conflict),
 // and the sentence that says what to do there (FixedCall, DeclinedCall,
-// ResolveCall, ConflictCall).
+// AuthorsCall, ResolveCall, ConflictCall).
 type FixCall struct {
 	Thread string `json:"thread,omitempty"`
 	URL    string `json:"url"`
@@ -60,6 +60,19 @@ func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCal
 	}
 	return FixCall{Thread: thread, URL: url, Action: "decide " + whose + " " + cmp.Or(priority, "finding") + " on " + place +
 		": the fixer declined it; reply won't fix at " + url + ", or `magnum fix " + ref + "` sends it back"}
+}
+
+// AuthorsCall is the call of one of magnum's findings whose Fix ends "This
+// is the author's call." (a P0 to P2: a P3's is optional, never a call),
+// which the fixer left to the author without a verdict of its own: "decide
+// magnum's P2 on <place>: the review leaves the choice to you; reply with
+// yours at <url>, or run `magnum fix <ref> --decide <thread>="<your
+// choice>"`" ("finding" for one without a priority). Neither "the fixer
+// declined it" nor "`magnum fix` sends it back" holds there: a rerun only
+// asks again. It is a decision call (DecisionCall).
+func AuthorsCall(thread, url, priority, place, ref string) FixCall {
+	return FixCall{Thread: thread, URL: url, Action: "decide magnum's " + cmp.Or(priority, "finding") + " on " + place +
+		": the review leaves the choice to you; reply with yours at " + url + ", or run `magnum fix " + ref + " --decide " + thread + "=\"<your choice>\"`"}
 }
 
 // ResolveCall is the call of a finding in one of magnum's threads that shows
@@ -151,17 +164,20 @@ func FixCallsText(calls []FixCall, more, report string) string {
 }
 
 var (
-	// fixCallRe finds a call FixedCall, DeclinedCall, ResolveCall or
-	// ConflictCall wrote, in today's words or the older ones ("the thread a
-	// human started", "a human's"). Groups: the link and its comment id, of a
-	// fixed call (1, 2), a declined one (3, 4) or a resolution (5, 6), and
-	// the PR's page of a conflict (7).
+	// fixCallRe finds a call FixedCall, DeclinedCall, AuthorsCall,
+	// ResolveCall or ConflictCall wrote, in today's words or the older ones
+	// ("the thread a human started", "a human's"). Groups: the link and its
+	// comment id, of a fixed call (1, 2), a declined one (3, 4), a
+	// resolution (5, 6) or an author's call (8, 9), and the PR's page of a
+	// conflict (7).
 	fixCallRe = regexp.MustCompile("reply fixed in [0-9a-f]{7} in (?:(?:the thread a human started|magnum's thread) and resolve it|another reviewer's thread): " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
 		"|decide (?:magnum's|a human's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the fixer declined it; reply won't fix at " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back" +
 		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
-		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*(?: and \\d{1,9} more)?: (https://[^\\s#;,]+)")
+		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*(?: and \\d{1,9} more)?: (https://[^\\s#;,]+)" +
+		"|decide magnum's (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the review leaves the choice to you; reply with yours at " +
+		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or run `magnum fix [^`\\s]+ --decide \\d{1,20}=\"<your choice>\"`")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)
 )
@@ -183,7 +199,7 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 			break // the calls come together; a later match is not one of them
 		}
 		action := line[l[0]:l[1]]
-		urlAt := 2 // the fixed call's groups, else the declined one's, the resolution's or the conflict's
+		urlAt := 2 // the fixed call's groups, else the declined one's, the resolution's, the conflict's or the author's call's
 		switch {
 		case l[6] >= 0:
 			urlAt = 6
@@ -191,6 +207,8 @@ func fixCalls(line string) (prefix string, calls []FixCall, steps []string, ok b
 			urlAt = 10
 		case l[14] >= 0:
 			urlAt = 14
+		case l[16] >= 0:
+			urlAt = 16
 		}
 		call := FixCall{URL: line[l[urlAt]:l[urlAt+1]], Action: action}
 		if urlAt != 14 { // a conflict has no thread

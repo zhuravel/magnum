@@ -2,6 +2,7 @@ package attention
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,37 @@ func TestFixDecisionCallsAreTheFixersDecisionsAlone(t *testing.T) {
 		if calls, ok := FixDecisionCalls(msg); ok {
 			t.Errorf("%s: FixDecisionCalls = %+v, want none", name, calls)
 		}
+	}
+}
+
+// A finding of magnum's whose Fix ends "This is the author's call." asks
+// for your choice: the fixer did not decline it, and `magnum fix` would
+// only ask again. Its call says the review leaves the choice to you, with
+// the two ways to give it (a reply in the thread, or `magnum fix --decide`
+// on that thread); the card reads it back as one decision, and it is a
+// decision call, which --decide answers.
+func TestAnAuthorsCallLeavesTheChoiceToYou(t *testing.T) {
+	const (
+		report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+		url    = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
+		want   = "decide magnum's P2 on app/models/offer.rb:42: the review leaves the choice to you; reply with yours at " + url +
+			", or run `magnum fix talkable/talkable#2 --decide 4302866759=\"<your choice>\"`"
+	)
+	c := AuthorsCall("4302866759", url, "P2", "app/models/offer.rb:42", "talkable/talkable#2")
+	if c.Action != want || c.Thread != "4302866759" || c.URL != url {
+		t.Fatalf("AuthorsCall = %+v\nwant action %q", c, want)
+	}
+	for _, gone := range []string{"declined", "sends it back"} {
+		if strings.Contains(c.Action, gone) {
+			t.Errorf("the call says %q", gone)
+		}
+	}
+	msg := "fix: " + FixCallsText([]FixCall{c}, "", report)
+	r := Explain(KindFix, msg, "talkable#2")
+	if !slices.Equal(r.NeedsYou, []FixCall{c}) || r.Summary != "fix: decide 1 finding" {
+		t.Errorf("the card: needs you %+v, summary %q", r.NeedsYou, r.Summary)
+	}
+	if calls, ok := FixDecisionCalls(msg); !ok || !slices.Equal(calls, []FixCall{c}) {
+		t.Errorf("FixDecisionCalls = %+v, %v; want the author's call as a decision", calls, ok)
 	}
 }

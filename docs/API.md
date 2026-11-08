@@ -3775,7 +3775,17 @@ type FixCall struct {
     that starts the finding's thread (none for a conflict with the base,
     which has no thread), the thread's link (the PR's page for a conflict),
     and the sentence that says what to do there (FixedCall, DeclinedCall,
-    ResolveCall, ConflictCall).
+    AuthorsCall, ResolveCall, ConflictCall).
+
+func AuthorsCall(thread, url, priority, place, ref string) FixCall
+    AuthorsCall is the call of one of magnum's findings whose Fix ends "This
+    is the author's call." (a P0 to P2: a P3's is optional, never a call),
+    which the fixer left to the author without a verdict of its own: "decide
+    magnum's P2 on <place>: the review leaves the choice to you; reply with
+    yours at <url>, or run `magnum fix <ref> --decide <thread>="<your choice>"`"
+    ("finding" for one without a priority). Neither "the fixer declined it"
+    nor "`magnum fix` sends it back" holds there: a rerun only asks again.
+    It is a decision call (DecisionCall).
 
 func ConflictCall(paths []string, url string) FixCall
     ConflictCall is the call of a conflict with the PR's base that the fixer

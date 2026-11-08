@@ -3355,7 +3355,10 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   thread another reviewer started that the fixer could not answer (its reply failed, or your answer was the
   last comment there; that reviewer resolves it), and "decide magnum's P2 on <path>:<line>: the fixer
   declined it; reply won't fix at <link>, or `magnum fix <ref>` sends it back" ("another reviewer's" in such
-  a thread) for one it did not fix, the link being the finding's thread, and "merge the base by hand and decide the conflict in <paths>: <the PR's
+  a thread) for one it did not fix, the link being the finding's thread, "decide magnum's P2 on <path>:<line>: the
+  review leaves the choice to you; reply with yours at <link>, or run `magnum fix <ref> --decide <thread>="<your
+  choice>"`" for one of Magnum's findings whose Fix ends "This is the author's call." (the fixer declined
+  nothing there, and a rerun would only ask again; the skill marks it `not fixed. The author's call:`), and "merge the base by hand and decide the conflict in <paths>: <the PR's
   link>" for a conflict with the base the fixer left to you (A PR that conflicts with its base, above); then "details: <report>", where
   the fixer's reasons stay. A fix in another reviewer's thread that GitHub shows the fixer's reply in after
   all (the reply took though the fixer saw it fail) asks nothing of you and is not counted: Magnum looks
