@@ -220,13 +220,12 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 // prFacts gives the rows' PRs what r, R, z, M and U go by
 // (tui.FactoryPRFacts, the board's predicate's facts): magnum's row of each
 // PR (with the replies its judge has not re-decided), its snooze while it
-// holds and its Codex flag, read from magnum's
-// registry in one opening per frame, read only and never migrated (a
-// registry of another schema than this build's is not read), and whether
-// its watch runs autofix. A PR the registry has no row of, and a registry
-// that is not there or cannot be read, leave its facts unread: the keys
-// then refuse only on what the rest of the row tells, and magnum's daemon
-// decides the rest.
+// holds and its Codex flag, read from magnum's registry in one opening per
+// frame, read only and never migrated (a registry of another schema than
+// this build's is not read), and whether its watch runs autofix. A PR the
+// registry has no row of, and a registry that is not there or cannot be
+// read, leave its facts unread: the keys then refuse only on what the rest
+// of the row tells, and magnum's daemon decides the rest.
 func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow) {
 	if !slices.ContainsFunc(rows, func(r tui.FactoryRow) bool { return r.PR != nil }) || !fsx.Exists(s.c.Layout.DB()) {
 		return
