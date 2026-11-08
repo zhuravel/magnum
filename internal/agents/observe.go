@@ -69,6 +69,30 @@ type Observation struct {
 	SecondReadingAt time.Time
 }
 
+// Ended returns a channel that is closed when an observe pass next ends a
+// run (ObsCompleted) or marks a session lost (ObsLost); a call after that
+// returns a new one. A waiter takes it before it reads its run's row and
+// selects on it beside its poll, so an end that comes between the read and
+// the wait is not lost.
+func (m *Manager) Ended() <-chan struct{} {
+	m.endMu.Lock()
+	defer m.endMu.Unlock()
+	if m.endCh == nil {
+		m.endCh = make(chan struct{})
+	}
+	return m.endCh
+}
+
+// wakeEnded closes the channel Ended handed out, if any (Ended).
+func (m *Manager) wakeEnded() {
+	m.endMu.Lock()
+	defer m.endMu.Unlock()
+	if m.endCh != nil {
+		close(m.endCh)
+		m.endCh = nil
+	}
+}
+
 // LostGrace keeps an observe tick from judging a session lost from a
 // snapshot that may predate its agent: a session whose started_at,
 // agent_status_at or live mark (StartAgent, a rebind in Submit) is after, or
@@ -104,9 +128,12 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     increments idle_ticks, working|blocked resets it; a newly reported
 //     agent_session.value becomes session_id; a starting session becomes live.
 //     working + a submitted run -> run working (working_seen_at).
-//     idle_ticks >= CompletionIdleTicks + a submitted/working run -> run ended,
-//     ObsCompleted. working with no pending/submitted/working run (outside a
-//     short grace after start/prompt) -> ObsHumanActive (CooldownUntil set
+//     idle_ticks >= CompletionIdleTicks, this reading CompletionGap or more
+//     after the streak's first (see idleStreak), + a submitted/working run ->
+//     run ended, ObsCompleted, and Ended's channel closed; short of the gap,
+//     SecondReadingAt says when the reading that may end it is due.
+//     working with no pending/submitted/working run (outside a short grace
+//     after start/prompt) -> ObsHumanActive (CooldownUntil set
 //     when it begins the PR's cooldown), unless the agent is a claude agent
 //     whose transcript shows no prompt typed into the pane after magnum's
 //     last prompt to it (magnum's turn going on after esc cut it short, a
@@ -150,9 +177,10 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     EventSessionIDMissing, once per kind and Manager (see
 //     sessionIDMissing).
 //   - live agent session without its agent, or any session whose pane is gone
-//     -> session lost, ObsLost. A starting session (agent not started yet)
-//     with its pane still present is left alone, and so is a session that
-//     started or became live too close to capturedAt (LostGrace).
+//     -> session lost, ObsLost, and Ended's channel closed. A starting
+//     session (agent not started yet) with its pane still present is left
+//     alone, and so is a session that started or became live too close to
+//     capturedAt (LostGrace).
 func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]Observation, error) {
 	sessions, err := m.d.Store.LiveSessions(ctx)
 	if err != nil {
@@ -179,6 +207,9 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if o.Kind == ObsCompleted || o.Kind == ObsLost {
+			m.wakeEnded() // the waiter goes on now, not at its next poll
 		}
 		out = append(out, o)
 	}

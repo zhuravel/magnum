@@ -294,6 +294,11 @@ type Manager struct {
 	// until every process of it is proven gone (remember, forget).
 	launched map[string]bool
 	jobs     map[string]ownedShell
+	// endCh is the channel Ended hands out until an observe pass ends a
+	// run or loses a session and closes it (nil: none handed out since);
+	// endMu guards it.
+	endMu sync.Mutex
+	endCh chan struct{}
 	// hooksTrustMu serializes the check that tells the operator once per
 	// hooks.json that Codex did not save a hook trust (hooksTrustSaved).
 	hooksTrustMu sync.Mutex
