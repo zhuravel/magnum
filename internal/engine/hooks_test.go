@@ -2,12 +2,16 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -46,6 +51,30 @@ func claim(t *testing.T, l paths.Layout) *Claim {
 	}
 	t.Cleanup(c.Release)
 	return c
+}
+
+// onLayout builds a harness on layout l, the one its daemon claim took
+// (claim), as the daemon command builds its App on the layout it claimed:
+// Run then holds the claim's lock. On another layout Run would take a lock
+// of its own and the test would miss a Run that takes the claim's again.
+func onLayout(l paths.Layout) func(*harness) {
+	return func(hs *harness) { hs.layout, hs.d.Layout, hs.ag.layout = l, l, l }
+}
+
+// waitTicked waits for the daemon h runs (done: Run's result) to tick past
+// the before-th observe pass; Run returning first fails the test.
+func waitTicked(t *testing.T, h *harness, before int, done <-chan error) {
+	t.Helper()
+	for deadline := time.Now().Add(clockGuard); h.ag.count("observe") <= before; time.Sleep(2 * time.Millisecond) {
+		select {
+		case err := <-done:
+			t.Fatalf("Run returned before it ticked (%v): it did not hold the daemon lock", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the daemon never ticked")
+		}
+	}
 }
 
 // serveClaim serves c's listener into a channel of the events it hands on,
@@ -156,15 +185,11 @@ func TestAHookListenerThatFailsDoesNotStopTheDaemon(t *testing.T) {
 		t.Fatalf("held %v, socket %q, off %q: want the lock, no listener and why", c.Held(), c.HookSocket(), c.Off())
 	}
 	logs := &recordLog{}
-	h := newHarness(t, func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	h := newHarness(t, onLayout(l), func(hs *harness) { hs.d.Logger = slog.New(logs) })
 	before := h.ag.count("observe")
 	ctx, cancel := context.WithCancel(h.ctx)
 	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
-	for deadline := time.Now().Add(clockGuard); h.ag.count("observe") <= before; time.Sleep(2 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the daemon never ticked")
-		}
-	}
+	waitTicked(t, h, before, done)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run = %v", err)
@@ -186,7 +211,7 @@ func TestAHookListenerThatFailsDoesNotStopTheDaemon(t *testing.T) {
 func TestTheDaemonStopsItsHookListenerBeforeItWaitsForTheWakes(t *testing.T) {
 	l := shortLayout(t)
 	c := claim(t, l)
-	h := newHarness(t)
+	h := newHarness(t, onLayout(l))
 	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
 	gate, started := make(chan struct{}), make(chan struct{}, 1)
 	h.ag.mu.Lock()
@@ -258,6 +283,13 @@ func (l *recordLog) attr(level slog.Level, msg, key string) string {
 // scratch PR of its own, as a pane agent's registry holds one.
 func paneSession(t *testing.T, st *store.Store, pane string) store.Session {
 	t.Helper()
+	return paneSessionAs(t, st, pane, "")
+}
+
+// paneSessionAs is paneSession with the agent's session id sid ("" for
+// none).
+func paneSessionAs(t *testing.T, st *store.Store, pane, sid string) store.Session {
+	t.Helper()
 	ctx := context.Background()
 	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "learn:retro", Owner: "magnum", Name: "retro", WatchOwner: "magnum", Mode: store.RepoModePerPR})
 	if err != nil {
@@ -268,9 +300,13 @@ func paneSession(t *testing.T, st *store.Store, pane string) store.Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := st.CreateSession(ctx, store.Session{PRID: up.PR.ID, Role: config.LearnRoleName, AgentName: new("mg-learn"),
+	x := store.Session{PRID: up.PR.ID, Role: config.LearnRoleName, AgentName: new("mg-learn"),
 		AgentKind: new(agents.KindClaude), HerdrWorkspaceID: new("w2"), HerdrPaneID: new(pane), State: store.SessionLive,
-		StartedAt: time.Now()})
+		StartedAt: time.Now()}
+	if sid != "" {
+		x.SessionID = &sid
+	}
+	s, err := st.CreateSession(ctx, x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +421,7 @@ func TestAPingIsAcceptedAndDroppedQuietly(t *testing.T) {
 	l := shortLayout(t)
 	c := claim(t, l)
 	logs := &recordLog{}
-	h := newHarness(t, func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	h := newHarness(t, onLayout(l), func(hs *harness) { hs.d.Logger = slog.New(logs) })
 	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
 	ctx, cancel := context.WithCancel(h.ctx)
 	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
@@ -560,7 +596,7 @@ func TestTheDaemonPausesAKindOnAHookFailureWhileItListens(t *testing.T) {
 	l := shortLayout(t)
 	c := claim(t, l)
 	failures := make(chan app.HookFailure, 1)
-	h := newHarness(t, func(hs *harness) { hs.d.HookFailures = failures })
+	h := newHarness(t, onLayout(l), func(hs *harness) { hs.d.HookFailures = failures })
 	ctx, cancel := context.WithCancel(h.ctx)
 	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
 	failures <- app.HookFailure{Session: store.Session{ID: 3, Role: config.RoleClaudeReview, AgentKind: new(agents.KindClaude)},
@@ -611,7 +647,7 @@ func TestFromAppHandsTheHookFailuresToTheEngine(t *testing.T) {
 // removes an earlier start's record.
 func TestTheDaemonRecordsWhetherItsHookListenerIsUp(t *testing.T) {
 	l := shortLayout(t)
-	h := newHarness(t)
+	h := newHarness(t, onLayout(l))
 	run := func(c *Claim) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(h.ctx)
@@ -639,5 +675,267 @@ func TestTheDaemonRecordsWhetherItsHookListenerIsUp(t *testing.T) {
 	run(nil)
 	if got, ok := ReadDaemonHooks(h.ctx, h.st); ok {
 		t.Fatalf("no claim: %+v, want no record", got)
+	}
+}
+
+// Run holds the daemon lock the daemon command's claim took on its layout
+// and never takes it a second time: flock's locks belong to the open file,
+// so a second take in the same process finds the lock held, and Run would
+// exit as a second daemon does ("already running", status 0, which launchd
+// never restarts) with nothing done. It writes its pidfile, ticks, and
+// gives the lock up when it returns.
+func TestRunHoldsTheDaemonLockItsClaimTook(t *testing.T) {
+	l := shortLayout(t)
+	c := claim(t, l)
+	logs := &recordLog{}
+	h := newHarness(t, onLayout(l), func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	before := h.ag.count("observe")
+	ctx, cancel := context.WithCancel(h.ctx)
+	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
+	waitTicked(t, h, before, done)
+	if b, err := os.ReadFile(l.Pid()); err != nil || strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
+		t.Fatalf("the pidfile while Run runs: %q, %v", b, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if n := logs.count(slog.LevelInfo, "magnum daemon already running; exiting"); n != 0 {
+		t.Fatal("Run took the claim's lock again and found it held")
+	}
+	if again := claim(t, l); again.Held() {
+		t.Fatal("the lock stays taken after Run returned")
+	}
+}
+
+// While Run serves its claim's listener, the pane agents register with its
+// router (startHooks opens it), so the event of a pane agent's pane sent to
+// the socket reaches that agent's manager; once Run returned, none
+// registers.
+func TestAPaneAgentsHookEventReachesItWhileTheDaemonServesItsClaim(t *testing.T) {
+	l := shortLayout(t)
+	c := claim(t, l)
+	h := newHarness(t, onLayout(l))
+	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
+	ctx, cancel := context.WithCancel(h.ctx)
+	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
+	if err := agenthooks.Send(l.HookSocket(), hookEvent("w1:p1")); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(clockGuard); len(h.ag.wakes()) == 0; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the review pane's event never reached Wake: the daemon does not serve its listener")
+		}
+	}
+
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	paneSession(t, scratch, "w2:p1")
+	retro := &fakeAgents{st: scratch}
+	sink := h.e.agentHooks.add("retro", scratch, retro)
+	if sink == nil {
+		t.Fatal("no pane agent registers while the daemon serves its listener")
+	}
+	if err := agenthooks.Send(l.HookSocket(), hookEvent("w2:p1")); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(clockGuard); len(retro.wakes()) == 0; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the retro pane's event never reached the retro's manager")
+		}
+	}
+	h.e.agentHooks.remove(sink)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if got := panes(h.ag.wakes()); !slices.Equal(got, []string{"w1:p1"}) {
+		t.Fatalf("the daemon's manager woke for %v, want its review pane alone", got)
+	}
+	if s := h.e.agentHooks.add("retro", scratch, retro); s != nil {
+		t.Fatal("a pane agent registered after the daemon stopped listening")
+	}
+}
+
+// FromApp makes the pane agents (the retro's, a curation's, a critique's
+// and a skill edit's) on the engine's own hook router, the one Run serves,
+// so they register where the daemon routes its events, and their managers
+// give their panes the App's hook socket.
+func TestFromAppMakesThePaneAgentsOnTheEnginesHookRouter(t *testing.T) {
+	const socket = "/state/run/hooks.sock"
+	e, a, _ := appEngine(t, nil, app.Options{HookSocket: socket}, nil)
+	ctx := t.Context()
+	made := map[string]*paneAgent{}
+	if c, err := e.d.Classifier(ctx, RetroRun{ID: "r"}); err == nil {
+		made["retro"] = c.(*paneClassifier).paneAgent
+	}
+	if c, err := e.d.Curator(ctx, CurateRun{ID: "c"}); err == nil {
+		made["curation"] = c.(*paneCurator).paneAgent
+	}
+	if c, err := e.d.Critic(ctx, CriticRun{ID: "k"}); err == nil {
+		made["critique"] = c.(*paneCritic).paneAgent
+	}
+	if c, err := e.d.Editor(ctx, EditRun{ID: "e"}); err == nil {
+		made["skill edit"] = c.(*paneEditor).paneAgent
+	}
+	if len(made) != 4 {
+		t.Fatalf("FromApp made the pane agents %v, want the four", slices.Sorted(maps.Keys(made)))
+	}
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	for what, p := range made {
+		if p.d.Hooks == nil || p.d.Hooks != e.agentHooks {
+			t.Errorf("the %s agent's hook router is %p, want the engine's %p", what, p.d.Hooks, e.agentHooks)
+		}
+		m, ok := p.d.Agents(scratch, a.Config, a.Layout).(*agents.Manager)
+		if !ok {
+			t.Fatalf("the %s agent's manager is no agents.Manager", what)
+		}
+		env, err := m.PaneEnv(nil, a.Config.LearnRole())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env[agenthooks.EnvSocket] != socket {
+			t.Errorf("the %s agent's pane env: %v, want the socket %s", what, env, socket)
+		}
+	}
+}
+
+// limitHerdr is an evalHerdr whose agents all show screen and whose
+// snapshots fail, so a hook's look leaves the session to the observe pass
+// and only its StopFailure's read of the screen counts.
+type limitHerdr struct {
+	*evalHerdr
+	screen string
+}
+
+func (h limitHerdr) AgentRead(_ context.Context, _ string, o herdr.ReadOptions) (herdr.ReadResult, error) {
+	return herdr.ReadResult{Source: o.Source, Text: h.screen}, nil
+}
+
+func (limitHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
+	return herdr.Snapshot{}, errors.New("herdr: no snapshot")
+}
+
+// claudeLimitScreen is a Claude pane that hit its usage limit.
+const claudeLimitScreen = "⏺ Reading the diff.\n\n  ⎿  You've hit your session limit · resets 3pm (Europe/Kyiv)\n\n> \n"
+
+// A pane agent's manager hands the StopFailures its agents' hooks prove to
+// the App's queue, as the App's own manager does (learnAgents): a
+// StopFailure of the retro's session whose screen shows a usage limit,
+// given to Wake, comes out of the queue as its class and the screen's
+// verdict.
+func TestThePaneAgentsHookFailuresGoToTheAppsQueue(t *testing.T) {
+	h := newHarness(t)
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	ev := hookEvent("w2:p1")
+	ev.Name, ev.Error = agenthooks.NameStopFailure, string(agents.StopFailureRateLimit)
+	s := paneSessionAs(t, scratch, "w2:p1", ev.SessionID)
+	cfg := *h.cfg
+	cfg.Roles = []config.Role{cfg.LearnRole()}
+	a := &app.App{Runner: &execx.Fake{}, Logger: h.d.Logger, HookSocket: "/state/run/hooks.sock", HookFailures: make(chan app.HookFailure, 1)}
+	m := learnAgents(limitHerdr{evalHerdr: newEvalHerdr(), screen: claudeLimitScreen}, a)(scratch, &cfg, h.layout)
+	m.Wake(h.ctx, ev)
+	m.WaitWakes()
+	select {
+	case f := <-a.HookFailures:
+		if f.Session.ID != s.ID || f.Failure != agents.StopFailureRateLimit || f.Screen.Kind != agents.HealthUsageLimit {
+			t.Fatalf("queued %+v, want session %d's rate limit with the screen's usage limit", f, s.ID)
+		}
+	default:
+		t.Fatal("the retro's StopFailure never reached the App's queue")
+	}
+}
+
+// gatedWake is a pane agent's manager whose Wake waits for gate, after it
+// hands its context on started; it records "wake", "woke" and "wait wakes".
+type gatedWake struct {
+	started chan context.Context
+	gate    chan struct{}
+	order   *callOrder
+}
+
+func (g *gatedWake) Wake(ctx context.Context, _ agenthooks.Event) {
+	g.order.add("wake")
+	g.started <- ctx
+	select {
+	case <-g.gate:
+	case <-time.After(leakWait):
+	}
+	g.order.add("woke")
+}
+
+func (g *gatedWake) WaitWakes() { g.order.add("wait wakes") }
+
+// callOrder is the order of calls several goroutines make.
+type callOrder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (o *callOrder) add(s string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls = append(o.calls, s)
+}
+
+func (o *callOrder) all() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.calls)
+}
+
+// A pane agent that leaves the router while a Wake of its pane is in flight
+// (its close, before its scratch registry closes) ends that Wake's later
+// looks first (its sink's context is done at once) and returns only after
+// the Wake returned and its later looks were waited for: nothing reads or
+// writes the scratch registry after the close goes on.
+func TestARemovedPaneAgentWaitsForItsWakeInFlight(t *testing.T) {
+	h := newHarness(t)
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	paneSession(t, scratch, "w2:p1")
+	order := &callOrder{}
+	mgr := &gatedWake{started: make(chan context.Context, 1), gate: make(chan struct{}), order: order}
+	h.e.agentHooks.open(h.ctx)
+	sink := h.e.agentHooks.add("retro", scratch, mgr)
+	if sink == nil {
+		t.Fatal("no pane agent registered while the daemon listens")
+	}
+	routed := make(chan struct{})
+	go func() {
+		defer close(routed)
+		h.e.routeHook(h.ctx, hookEvent("w2:p1"))
+	}()
+	var wakeCtx context.Context
+	select {
+	case wakeCtx = <-mgr.started:
+	case <-time.After(clockGuard):
+		t.Fatal("the event never reached the pane agent's Wake")
+	}
+	removed := make(chan struct{})
+	go func() {
+		defer close(removed)
+		h.e.agentHooks.remove(sink)
+		order.add("removed")
+	}()
+	select {
+	case <-wakeCtx.Done():
+	case <-time.After(clockGuard):
+		t.Fatal("the Wake's context is not done while the pane agent leaves: its later looks would go on")
+	}
+	time.Sleep(50 * time.Millisecond) // remove would have returned by now, were it not waiting for the Wake
+	select {
+	case <-removed:
+		t.Fatal("remove returned while the Wake was in flight")
+	default:
+	}
+	close(mgr.gate)
+	for _, ch := range []chan struct{}{removed, routed} {
+		select {
+		case <-ch:
+		case <-time.After(clockGuard):
+			t.Fatal("remove or the routing never returned")
+		}
+	}
+	if got := order.all(); !slices.Equal(got, []string{"wake", "woke", "wait wakes", "removed"}) {
+		t.Fatalf("calls = %q, want the Wake, its return, WaitWakes, then remove's return", got)
 	}
 }
