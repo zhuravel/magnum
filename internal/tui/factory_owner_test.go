@@ -235,3 +235,23 @@ func TestRepoNarrowsTheFactoryScreen(t *testing.T) {
 	}
 	mustContain(t, empty(testOwners(t, FactoryOptions{Repo: "alice/widget"})), "Nothing of alice/widget.")
 }
+
+// The help of each screen says O's owner scope is the other's too, and the
+// factory's help glosses the title's scope words: "all repos" or the
+// repository --repo names, "all owners" or the owner O shows.
+func TestTheHelpOfBothScreensSaysTheOwnerScopeIsShared(t *testing.T) {
+	board := ownerBoard(t, 200, 40, PRBoardOptions{})
+	p := board.painter()
+	mustContain(t, ansi.Strip(strings.Join(p.helpContent(200), " ")), "O shows one owner's PRs",
+		"the factory screen's O is the same scope: both screens open in the one you left")
+
+	h := testFactory(t, 140, 50)
+	help := ansi.Strip(strings.Join(h.m.helpContent(240), "\n"))
+	if l := lineOf(t, help, "O the owner scope"); !strings.Contains(l, "the board's O") || !strings.Contains(l, "both screens open in the one you left") {
+		t.Errorf("the factory's help of O does not say the board shares it: %q", l)
+	}
+	if l := lineOf(t, help, "all repos · widget  "); !strings.Contains(l, "magnum factory --repo") {
+		t.Errorf("the factory's help does not gloss the repository scope with its flag: %q", l)
+	}
+	lineOf(t, help, "all owners · owner alice  ")
+}

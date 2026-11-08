@@ -28268,6 +28268,19 @@ type FactoryOptions struct {
 	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// Settings, when set, lets `,` open the settings screen over the factory.
 	Settings *SettingsScreen
+	// Repo shows only this repository's rows ("name" or "owner/name", as
+	// the board's --repo; case aside) and the rows that name none; ""
+	// shows every repository.
+	Repo string
+	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
+	// first when O cycles the owners, as on the PR board.
+	DefaultRepo string
+	// DefaultOwner is the owner scope the screen opens in, the board's (O):
+	// "" shows every owner, as does an owner with no rows. OwnerChanged,
+	// when set, hears every change of it (O, or its owner's last row
+	// leaving), so the next screen can open in it.
+	DefaultOwner string
+	OwnerChanged func(owner string)
 }
     FactoryOptions tune the factory screen.
 

@@ -98,6 +98,7 @@ func (p *prbPainter) helpContent(width int) []string {
 			"ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft",
 		"/ words match fuzzily; state:<s> assignee:<login> author:<login> (@me: you) review:requested narrow it; " +
 			"a,b lists alternatives",
+		"O shows one owner's PRs; the factory screen's O is the same scope: both screens open in the one you left",
 	} {
 		lines = append(lines, strings.Split(p.st.Dim.Width(inner).Render(l), "\n")...)
 	}

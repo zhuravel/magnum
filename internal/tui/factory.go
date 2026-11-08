@@ -224,7 +224,8 @@ type FactoryOptions struct {
 	// Settings, when set, lets `,` open the settings screen over the factory.
 	Settings *SettingsScreen
 	// Repo shows only this repository's rows ("name" or "owner/name", as
-	// the board's --repo; case aside); "" shows every repository.
+	// the board's --repo; case aside) and the rows that name none; ""
+	// shows every repository.
 	Repo string
 	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
 	// first when O cycles the owners, as on the PR board.

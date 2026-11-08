@@ -18202,6 +18202,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheWalkIgnoresTheFilterAndTheScope, TestTheHelpListsThePRKeysTheFilterAndTheScope; amended:
   TestTheBoardsLettersKeepTheirMeaning (r on home is the review now) and TestTheHelpListsOnlyWhatExists (snooze
   exists).
+- **The factory screen's `O` is the PR board's owner scope, kept for both screens in magnum's registry, and
+  `magnum factory --repo` is the board's repository scope** (2026-11-08, the operator's request; supersedes the `O`
+  repository cycle of R29's entry above, "The factory screen takes the board's PR keys: `r` `R` review, `z` snooze,
+  `M` `U` mute, a `/` filter and an `O` repository scope", whose `/` filter stands as it was). The operator: "magnum
+  board has filters 'all owners' / 'all repos' that should likely also filter magnum factory board, or magnum
+  factory board should have similar filters". Since R29 `O` meant the owner on the board and the repository on the
+  factory screen, neither screen's scope reached the other, and the factory screen had no repository scope.
+  - `O` on the factory screen cycles the owner scope exactly as the board's does: the user or organization owning
+    a row's repository (a task's `[[factory.repo]]`, your PR's repository), every owner, then each owner with rows,
+    `daemon.default_repo`'s first and the rest alphabetically, case aside, then every owner again, with the board's
+    footer words (`owner: example`, `owner: all`) and its refusal when no row names an owner (`no owner to show
+    alone`). One helper orders, cycles and matches for both screens (`internal/tui/owners.go`: `ownerOrder`,
+    `ownerAfter`, `sameOwner`, `homeOwner`, `repoInScope`); the board's `owners`, `nextOwner`, `ownedBy` and
+    `inRepo` call it in place of their own code. R29's `nextScope`, `scopeAfter`, `keepScope` and their `repo
+    widget` words are gone. Home's hints offer `O owner` while the rows span several owners.
+  - `magnum factory --repo owner/name|name` shows one repository's rows by the board's rule (`repoFlag` checks the
+    flag for both commands), and `O` then cycles the owners of that repository's rows. Neither screen has a key
+    that cycles repositories: the repository is picked when the screen opens, as on the board.
+  - The title says both scopes in the board's words and places, right after `magnum factory`: `all repos` or the
+    repository, then `owner example`, or `all owners` while the rows span several owners; a narrow title drops
+    `all repos`, `all owners` and the word `owner` before the repositories' names give way to their count, as the
+    board's drops them first. The factory's repository names follow as before, so the goldens of home change in
+    their title line alone (`magnum factory · all repos · talkable`).
+  - A row that names no repository shows in every owner and repository scope: nothing tells which scope it is of,
+    and a scope must not hide a decision's row. The title's `N hidden` counts what the scopes and the filter hide,
+    including the rows `--repo` leaves out (the board drops those at load, but the factory's chips count every row,
+    so the title says how many of them home does not show); the chips count every row and `a` walks every decision
+    whatever they hide, R29's rule.
+  - One owner scope for the two screens, in magnum's registry's kv under `screen.owner` (`kvScreenOwner`), as
+    `board.hide_skipped` keeps `h`. The board reads it each time it opens and writes every change (`O`, and its
+    fallback when its owner's last PR leaves); its tab round-trip still carries its own copy (`prsOptions.Owner`),
+    so a registry that cannot keep the scope loses nothing there. The factory screen reads it when it opens and
+    writes every change, through a handle on magnum's registry it opens for its life (`openScreenKV`): never
+    created, never migrated. A registry that is missing, of another schema or no database leaves the factory
+    screen with every owner and nothing said, and `O` works as ever.
+  - An owner with no rows follows the board's rule on both screens: the board falls back to every owner when a
+    load leaves its owner no rows (its last PR left, or none at the start) and tells `OwnerChanged`, so the scope
+    kept becomes every owner; the factory screen does the same and says so (`owner: all (example has no tasks or
+    PRs now)`). So an owner picked on the board whose rows the factory screen does not have is every owner again
+    once the factory screen opened. Keeping it for when its rows come back would give the two screens two rules for
+    one scope, and the board's rule is the one the operator knows.
+  Rejected: the board's owner code copied into the factory screen (two copies drift: R29's cycle already sorted
+  differently from the board's owners); a key that cycles repositories on either screen (a repository is picked at
+  the start, as with the board's `--repo`); a file of the screens' own for the scope (the registry's kv already keeps
+  the board's `h` and the column widths, and both screens open the registry); keeping a stored owner that has no
+  rows (the board clears it, and the screens would disagree on what is kept); a scope per screen (the operator asked
+  for one meaning of `O`, and a scope picked on one screen is what the other should show).
+  Tests, failing first: TestOOnTheFactoryScreenCyclesTheBoardsOwners, TestTheFactoryTitleSaysTheOwnerScopeAsTheBoards,
+  TestTheFactoryScreenOpensInTheOwnerAndReportsEveryChange, TestOWithNoOwnerToShowSaysSo,
+  TestHomeHintsOfferOWhileTheRowsSpanSeveralOwners, TestRepoNarrowsTheFactoryScreen,
+  TestTheFactoryScreenTakesTheBoardsRepoFlag, TestTheBoardAndTheFactoryScreenShareTheOwnerScope,
+  TestTheFactoryScreenWithoutMagnumsRegistryRunsWithEveryOwner, TestTheHelpOfBothScreensSaysTheOwnerScopeIsShared;
+  amended: TestAnEmptyScopeSaysWhatONextShows and TestTheWalkIgnoresTheFilterAndTheScope (over the owner scope),
+  TestTheHelpListsThePRKeysTheFilterAndTheScope (`O` is the owner), TestFactoryTitleNamesEveryRepositoryOrCountsThem
+  and TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName (`all repos` on the title); removed:
+  TestOCyclesTheRepositoryScope.
 
 ## Learned rules
 

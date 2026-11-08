@@ -44,7 +44,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"On a terminal this opens the live board, refreshed every 5s: j/k move (g/G to the first and last PR), enter "+
 			"shows the PR card (with the last round's stage timings), / filters (fuzzy words plus state:<s>, "+
 			"assignee:<login>, author:<login> and review:requested; @me means you), v cycles the views and O the "+
-			"owners, s cycles the sort and S reverses it, h hides ignored and skipped PRs. On the selected PR: r "+
+			"owners (the factory screen's O too: both open in the owner you left), s cycles the sort and S reverses it, h hides ignored and skipped PRs. On the selected PR: r "+
 			"reviews (R fresh, i with /simplify), K kills its running or queued review, I ignores it (kill, mute, free "+
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
 			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as you "+
