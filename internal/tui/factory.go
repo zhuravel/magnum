@@ -223,6 +223,9 @@ type FactoryOptions struct {
 	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// Settings, when set, lets `,` open the settings screen over the factory.
 	Settings *SettingsScreen
+	// Repo shows only this repository's rows ("name" or "owner/name", as
+	// the board's --repo; case aside); "" shows every repository.
+	Repo string
 	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
 	// first when O cycles the owners, as on the PR board.
 	DefaultRepo string
@@ -432,7 +435,8 @@ type factoryModel struct {
 	// filter is home's / filter (factoryMatch), which has the keyboard
 	// while filtering, and does not outlive the screen; owner is the owner
 	// scope O cycles, the board's ("" = every owner), which the cli keeps
-	// for both screens (opts.OwnerChanged). A walk (a) ignores both.
+	// for both screens (opts.OwnerChanged). A walk (a) ignores both, and
+	// the repository scope (opts.Repo) too.
 	filter    textinput.Model
 	filtering bool
 	owner     string
@@ -830,15 +834,17 @@ func (m factoryModel) orderOf(narrowed bool) []int64 {
 	return out
 }
 
-// shown reports whether home shows row r: it is of the owner scope's
-// owner (ofOwner) and the filter matches it.
+// shown reports whether home shows row r: it is of the repository scope
+// (inRepo) and of the owner scope's owner (ofOwner), and the filter
+// matches it.
 func (m factoryModel) shown(r FactoryRow) bool {
-	return m.ofOwner(r) && factoryMatch(r, m.filter.Value())
+	return m.inRepo(r) && m.ofOwner(r) && factoryMatch(r, m.filter.Value())
 }
 
-// narrowed reports whether the filter or the owner scope hides rows of home.
+// narrowed reports whether the filter, the repository scope or the owner
+// scope hides rows of home.
 func (m factoryModel) narrowed() bool {
-	return m.owner != "" || strings.TrimSpace(m.filter.Value()) != ""
+	return m.repo() != "" || m.owner != "" || strings.TrimSpace(m.filter.Value()) != ""
 }
 
 // factoryMatch reports whether the filter q matches row r, as the board's
@@ -865,14 +871,32 @@ func factoryMatch(r FactoryRow, q string) bool {
 	return true
 }
 
-// factoryRowOwner is the owner of the row's repository ("owner/name"): ""
-// for a row that names none.
-func factoryRowOwner(r FactoryRow) string {
-	owner, _, ok := strings.Cut(cleanText(r.Repo), "/")
-	if !ok {
-		return ""
+// factoryRowRepo is the row's repository ("owner/name") in its parts: no
+// owner for a bare name, neither for a row that names none.
+func factoryRowRepo(r FactoryRow) (owner, name string) {
+	repo := cleanText(r.Repo)
+	if owner, name, ok := strings.Cut(repo, "/"); ok {
+		return owner, name
 	}
+	return "", repo
+}
+
+// factoryRowOwner is the owner of the row's repository: "" for a row that
+// names none.
+func factoryRowOwner(r FactoryRow) string {
+	owner, _ := factoryRowRepo(r)
 	return owner
+}
+
+// repo is the repository scope, opts.Repo ("" = every repository).
+func (m factoryModel) repo() string { return strings.TrimSpace(m.opts.Repo) }
+
+// inRepo reports whether row r is in the repository scope, by the board's
+// rule (repoInScope): every row with no scope, else the scope's rows and a
+// row that names no repository, which every scope shows.
+func (m factoryModel) inRepo(r FactoryRow) bool {
+	owner, name := factoryRowRepo(r)
+	return name == "" || repoInScope(owner, name, m.repo())
 }
 
 // ofOwner reports whether row r is in the owner scope: every row with no
@@ -883,14 +907,17 @@ func (m factoryModel) ofOwner(r FactoryRow) bool {
 	return m.owner == "" || o == "" || sameOwner(o, m.owner)
 }
 
-// owners are the owners of home's rows, as O cycles them: the board's order
-// (ownerOrder), daemon.default_repo's owner first.
+// owners are the owners of home's rows in the repository scope, as O
+// cycles them: the board's order (ownerOrder), daemon.default_repo's
+// owner first.
 func (m factoryModel) owners() []string {
 	owners := make([]string, 0, len(m.data.Rows))
 	for _, r := range m.data.Rows {
-		owners = append(owners, factoryRowOwner(r))
+		if m.inRepo(r) {
+			owners = append(owners, factoryRowOwner(r))
+		}
 	}
-	return ownerOrder(owners, homeOwner(m.opts.DefaultRepo, ""))
+	return ownerOrder(owners, homeOwner(m.opts.DefaultRepo, m.repo()))
 }
 
 // setOwner changes the owner scope and tells opts.OwnerChanged.
@@ -1140,7 +1167,7 @@ func (m factoryModel) homeFrame() factoryFrame {
 	owners := m.owners()
 	f := factoryFrame{Repos: d.Repos, Rows: rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
 		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1,
-		owner: m.owner, owners: len(owners) > 1}
+		repo: m.repo(), owner: m.owner, owners: len(owners) > 1}
 	if m.narrowed() {
 		f.all, f.filter, f.ownerNext = d.Rows, strings.TrimSpace(cleanInput(m.filter.Value())), ownerAfter(owners, m.owner)
 		f.hidden = len(m.orderOf(false)) - len(m.order())

@@ -209,9 +209,9 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 	if f.limit < 0 {
 		return inspUsage(c, "tui", "--limit must be 0 (all) or more", prsUsage)
 	}
-	repo := strings.TrimSpace(f.repo)
-	if owner, name, ok := strings.Cut(repo, "/"); ok && (owner == "" || name == "" || strings.Contains(name, "/")) {
-		return inspUsage(c, "tui", fmt.Sprintf("--repo %q: want owner/name or name", f.repo), prsUsage)
+	repo, err := repoFlag(f.repo)
+	if err != nil {
+		return inspUsage(c, "tui", err.Error(), prsUsage)
 	}
 	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit, NeedsMe: f.needsMe, AutoApproved: f.autoApproved}
 
@@ -299,6 +299,16 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		return tuiPRBoard(ctx, src, acts, o)
 	}
 	return runScreens(ctx, first, dashboard, board)
+}
+
+// repoFlag is a screen's --repo, the board's and the factory screen's:
+// "owner/name" or "name", trimmed; "" shows every repository.
+func repoFlag(raw string) (string, error) {
+	repo := strings.TrimSpace(raw)
+	if owner, name, ok := strings.Cut(repo, "/"); ok && (owner == "" || name == "" || strings.Contains(name, "/")) {
+		return "", fmt.Errorf("--repo %q: want owner/name or name", raw)
+	}
+	return repo, nil
 }
 
 // kvBoardHideSkipped keeps the board's h (hide ignored and skipped PRs).

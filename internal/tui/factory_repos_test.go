@@ -193,7 +193,7 @@ func TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName(t *testing.T) {
 	if strings.Contains(lines[0], "example/talkable") {
 		t.Errorf("talkable is the only repository of its name, yet its row names the owner: %q", lines[0])
 	}
-	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[0], "magnum factory · talkable, example-org/widget, example/widget")
+	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[0], "magnum factory · all repos · talkable, example-org/widget, example/widget")
 }
 
 // The REPO cells tell the factory's repositories apart at every width from
@@ -252,7 +252,7 @@ func TestFactoryTitleNamesEveryRepositoryOrCountsThem(t *testing.T) {
 		return strings.Split(ansi.Strip(frame), "\n")[0]
 	}
 	f := fixtureTwoRepos()
-	mustContain(t, title(f, 140), "magnum factory · talkable, widget", "memory full: new tasks wait")
+	mustContain(t, title(f, 140), "magnum factory · all repos · talkable, widget", "memory full: new tasks wait")
 	f.Repos = []string{"example/talkable", "example/talkable-integration", "example/talkable-helm", "example/widget"}
 	got := title(f, 100)
 	mustContain(t, got, "magnum factory · 4 repos", "memory full: new tasks wait")

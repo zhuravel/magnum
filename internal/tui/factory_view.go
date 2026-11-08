@@ -70,19 +70,21 @@ type factoryFrame struct {
 	// status takes the place of the empty home's one line (styled): the
 	// screen is loading, or could not read the factory.
 	status string
-	// The screen's narrowing of home (its / filter and O's owner scope):
-	// all are every row, which the chips count, when Rows are the filter's
-	// and the scope's alone (nil: Rows are all); owner is the owner shown
-	// alone, which the title says as the board's does, or "all owners"
-	// while owners (the rows span several owners); filter is the filter's
-	// text, hidden the rows they hide, which the title line says; ownerNext
-	// is the owner O moves to ("" = every owner), which a scope that shows
-	// nothing names; input is the filter as it is typed, drawn in place of
-	// the selected row's help line.
-	all                             []FactoryRow
-	owner, ownerNext, filter, input string
-	owners                          bool
-	hidden                          int
+	// The screen's narrowing of home (its / filter, its repository scope
+	// and O's owner scope): all are every row, which the chips count, when
+	// Rows are the filter's and the scopes' alone (nil: Rows are all); repo
+	// is the repository shown alone, which the title says as the board's
+	// does, or "all repos"; owner is the owner shown alone, which the title
+	// says as the board's does, or "all owners" while owners (the rows span
+	// several owners); filter is the filter's text, hidden the rows they
+	// hide, which the title line says; ownerNext is the owner O moves to
+	// ("" = every owner), which a scope that shows nothing names; input is
+	// the filter as it is typed, drawn in place of the selected row's help
+	// line.
+	all                                   []FactoryRow
+	repo, owner, ownerNext, filter, input string
+	owners                                bool
+	hidden                                int
 }
 
 const (
@@ -238,7 +240,8 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 			return r.Group == GroupDone && p.digestLists(cleanText(r.Key))
 		})
 	}
-	p.f.owner, p.f.ownerNext, p.f.filter, p.f.input = cleanText(f.owner), cleanText(f.ownerNext), cleanText(f.filter), cleanText(f.input)
+	p.f.repo, p.f.owner, p.f.ownerNext = cleanText(f.repo), cleanText(f.owner), cleanText(f.ownerNext)
+	p.f.filter, p.f.input = cleanText(f.filter), cleanText(f.input)
 	for _, r := range p.rows {
 		for _, c := range r.Stagings {
 			if !slices.Contains(p.names, c.Name) {
@@ -1097,11 +1100,12 @@ func (p *factoryPainter) titleLine() string {
 		}
 	}
 	fits := func(left, right string) bool { return ansi.StringWidth(left)+1+ansi.StringWidth(right) <= p.width }
-	// From the fullest to the barest, as the board's title: the "all
-	// owners" scope and the word "owner" give way first, with the right
-	// side whole; then the names give way to their count, then the right
-	// side gives up its parts, then the names go. The owner shown alone, the
-	// filter and the rows they hide stay, whatever else gives way.
+	// From the fullest to the barest, as the board's title: the "all repos"
+	// and "all owners" scopes and the word "owner" give way first, with the
+	// right side whole; then the names give way to their count, then the
+	// right side gives up its parts, then the names go. The repository and
+	// the owner shown alone, the filter and the rows they hide stay,
+	// whatever else gives way.
 	if full := head(true) + strings.Join(named[:min(len(named), 1)], ""); fits(full, rights[0]) {
 		return spread(full, rights[0], p.width)
 	}
@@ -1121,20 +1125,28 @@ func (p *factoryPainter) titleLine() string {
 	return spread(bare, rights[len(rights)-1], p.width)
 }
 
-// scopes are the title's words of the owner scope, the board's words in
-// the board's place: "owner alice", or "all owners" while the rows span
-// several owners; a short title (full false) says the owner alone and no
-// "all owners".
+// scopes are the title's words of the repository and the owner scopes,
+// the board's words in the board's places: "all repos" or the repository,
+// then "owner alice", or "all owners" while the rows span several owners;
+// a short title (full false) says the repository and the owner shown
+// alone, without the word "owner", and no "all repos" or "all owners".
 func (p *factoryPainter) scopes(full bool) []string {
+	var parts []string
+	switch {
+	case p.f.repo != "":
+		parts = append(parts, p.st.Accent.Render(p.f.repo))
+	case full:
+		parts = append(parts, "all repos")
+	}
 	switch {
 	case p.f.owner != "" && full:
-		return []string{p.st.Dim.Render("owner ") + p.st.Accent.Render(p.f.owner)}
+		parts = append(parts, p.st.Dim.Render("owner ")+p.st.Accent.Render(p.f.owner))
 	case p.f.owner != "":
-		return []string{p.st.Accent.Render(p.f.owner)}
+		parts = append(parts, p.st.Accent.Render(p.f.owner))
 	case full && p.f.owners:
-		return []string{"all owners"}
+		parts = append(parts, "all owners")
 	}
-	return nil
+	return parts
 }
 
 // narrowing is what the title line says of the filter and of the rows the
@@ -1462,16 +1474,18 @@ func (p *factoryPainter) emptyLine() string {
 	switch {
 	case p.f.status != "": // the screen is loading, or could not read the factory
 		text = truncate(p.f.status, p.width)
-	case p.f.all != nil && p.f.filter != "": // the filter (and the scope) hide every row
+	case p.f.all != nil && p.f.filter != "": // the filter (and the scopes) hide every row
 		in := ""
-		if p.f.owner != "" {
-			in = " in " + p.f.owner
+		if scope := cmp.Or(p.f.repo, p.f.owner); scope != "" {
+			in = " in " + scope
 		}
 		text = p.st.Dim.Render(fmt.Sprintf("Nothing matches %q%s. ", p.f.filter, in)) + p.st.Key.Render("esc") +
 			p.st.Dim.Render(" clears the filter.")
 	case p.f.all != nil && p.f.owner != "": // the owner scope shows nothing: what O shows next
 		next := cmp.Or(p.f.ownerNext, "every owner")
 		text = p.st.Dim.Render("Nothing of "+p.f.owner+". ") + p.st.Key.Render("O") + p.st.Dim.Render(" shows "+next+".")
+	case len(p.f.all) > 0 && p.f.repo != "": // the repository scope shows nothing
+		text = p.st.Dim.Render("Nothing of " + p.f.repo + ".")
 	}
 	return spaces((p.width-ansi.StringWidth(text))/2) + text
 }

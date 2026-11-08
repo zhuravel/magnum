@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory"
@@ -34,9 +36,24 @@ import (
 // tuiFactory is the factory's screen; tests replace it.
 var tuiFactory = tui.RunFactory
 
+// factoryScreenFlags are the flags of `magnum factory` that tune its screen.
+type factoryScreenFlags struct {
+	repo string // the repository scope, as the board's --repo
+}
+
+// addFactoryScreenFlags defines the screen's flags on `magnum factory`.
+func addFactoryScreenFlags(c *Context, cmd *cobra.Command, f *factoryScreenFlags) {
+	cmd.Flags().StringVar(&f.repo, "repo", "", "the screen shows one repository (owner/name or name), as the board's --repo")
+	_ = cmd.RegisterFlagCompletionFunc("repo", completeFlag(c.completeRepos))
+}
+
 // runFactoryScreen opens the factory's screen until the operator quits;
 // the time it closes is the last time you saw home.
-func runFactoryScreen(c *Context) int {
+func runFactoryScreen(c *Context, f factoryScreenFlags) int {
+	repo, err := repoFlag(f.repo)
+	if err != nil {
+		return inspUsage(c, "factory", err.Error(), "[--repo owner/name|name]")
+	}
 	if !loadDaemonGroupConfig(c, "factory") {
 		return 1
 	}
@@ -47,8 +64,9 @@ func runFactoryScreen(c *Context) int {
 	acts := newScreenActions(c) // the settings screen's and your PRs' keys, as the board's
 	defer acts.Close()
 	opts := tui.FactoryOptions{Icons: screenIcons(c.Config), NoMouse: !c.Config.Terminal.Mouse, Now: inspNow,
-		Settings: &tui.SettingsScreen{Source: newSettingsSource(c, acts), Runtime: screenRuntime{acts}}}
-	err := tuiFactory(ctx, src, newFactoryActions(c, src, acts), opts)
+		Settings: &tui.SettingsScreen{Source: newSettingsSource(c, acts), Runtime: screenRuntime{acts}},
+		Repo:     repo, DefaultRepo: defaultRepo(c.Config)}
+	err = tuiFactory(ctx, src, newFactoryActions(c, src, acts), opts)
 	if fsx.Exists(c.Layout.FactoryDB()) { // a factory with no task has nothing you saw
 		if serr := factory.SaveSeen(c.Layout, inspNow()); serr != nil {
 			fmt.Fprintf(c.Stderr, "magnum factory: keep the time you saw home: %v\n", serr)

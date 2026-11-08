@@ -2,6 +2,7 @@ package tui
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -83,12 +84,12 @@ func TestOOnTheFactoryScreenCyclesTheBoardsOwners(t *testing.T) {
 // cycled the repositories and the title said "repo widget".
 func TestTheFactoryTitleSaysTheOwnerScopeAsTheBoards(t *testing.T) {
 	h := testOwners(t, FactoryOptions{})
-	mustContain(t, h.title(), "magnum factory · all owners · talkable")
+	mustContain(t, h.title(), "magnum factory · all repos · all owners · talkable")
 	h.press("O") // alice
 	if got := h.shownKeys(); !slices.Equal(got, []string{"#4603", "#4611"}) {
 		t.Errorf("owner alice shows %v, want #4603 and #4611, which names no repository", got)
 	}
-	mustContain(t, h.title(), "magnum factory · owner alice · 6 hidden · talkable")
+	mustContain(t, h.title(), "magnum factory · all repos · owner alice · 6 hidden · talkable")
 	mustNotContain(t, h.title(), "all owners", "repo ")
 	h.press("O") // example, as its first row spells it: Example/site too
 	if got := h.shownKeys(); !slices.Equal(got, []string{"#4602", "#4612", "#4611", "#4606"}) {
@@ -179,4 +180,58 @@ func TestHomeHintsOfferOWhileTheRowsSpanSeveralOwners(t *testing.T) {
 	if s := testFactory(t, 140, 40); slices.Contains(s.m.homeHints(), hint{"O", "owner"}) {
 		t.Errorf("rows that name no owner: hints %v offer O", s.m.homeHints())
 	}
+}
+
+// Repo narrows home to one repository, "name" or "owner/name" in any case,
+// as the board's --repo: the title says it where the board's says "all
+// repos" (which it says without one), the rows of other repositories hide
+// and the title counts them, but a row that names no repository shows. O
+// cycles the owners of the repository's rows. The chips count every row and
+// the walk reads every decision, the scope's or not.
+func TestRepoNarrowsTheFactoryScreen(t *testing.T) {
+	for _, tc := range []struct {
+		repo string
+		want []string
+	}{
+		{"widget", []string{"#4602", "#4612", "#4611"}},
+		{"Example/Widget", []string{"#4602", "#4612", "#4611"}},
+		{"talkable", []string{"PR-12345", "PR-12371", "#4611", "PR-12302"}},
+		{"example/site", []string{"#4611", "#4606"}},
+		{"alice/widget", []string{"#4611"}},
+	} {
+		h := testOwners(t, FactoryOptions{Repo: tc.repo})
+		if got := h.shownKeys(); !slices.Equal(got, tc.want) {
+			t.Errorf("repo %q shows %v, want %v", tc.repo, got, tc.want)
+		}
+		mustContain(t, h.title(), fmt.Sprintf("magnum factory · %s · %d hidden · talkable", tc.repo, 8-len(tc.want)))
+		mustNotContain(t, h.title(), "all repos", "all owners")
+	}
+
+	h := testOwners(t, FactoryOptions{Repo: "widget"})
+	mustContain(t, h.view(), "1 task and 2 PRs need you")
+	h.press("O")
+	if h.m.owner != "example" {
+		t.Errorf("O in widget picks %q, want example, the only owner of its rows", h.m.owner)
+	}
+	mustContain(t, h.title(), "magnum factory · widget · owner example · 5 hidden")
+	h.press("O")
+	if h.m.owner != "" {
+		t.Errorf("the second O in widget picks %q, want every owner", h.m.owner)
+	}
+	h.press("/")
+	h.typeText("nothing like it")
+	h.press("enter")
+	mustContain(t, h.view(), `Nothing matches "nothing like it" in widget. esc clears the filter.`)
+	h.press("esc", "a")
+	if h.m.view != fvQuestion || h.m.task != 2 {
+		t.Errorf("a in widget opened view %v of %d, want PR-12345's questions, the oldest decision", h.m.view, h.m.task)
+	}
+
+	empty := func(h *factoryHarness) string {
+		f := h.m.homeFrame()
+		f.Rows, f.Cursor = nil, -1
+		frame, _ := renderFactory(f, 160, 40, h.m.st, h.m.g, factoryNow)
+		return ansi.Strip(frame)
+	}
+	mustContain(t, empty(testOwners(t, FactoryOptions{Repo: "alice/widget"})), "Nothing of alice/widget.")
 }

@@ -165,6 +165,43 @@ func TestTheFactoryScreenWithoutARegistryShowsNoTask(t *testing.T) {
 	}
 }
 
+// --repo narrows the factory screen to one repository, "owner/name" or
+// "name" as the board's --repo, and daemon.default_repo's owner leads O's
+// cycle there as on the board; a malformed --repo is refused with the
+// usage, before the screen opens.
+func TestTheFactoryScreenTakesTheBoardsRepoFlag(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	cfg := *dt.ctx.Config
+	cfg.Daemon.DefaultRepo = "example/shop"
+	dt.ctx.Config = &cfg
+	onScreen(t)
+	var opened []tui.FactoryOptions
+	old := tuiFactory
+	tuiFactory = func(_ context.Context, _ tui.FactorySource, _ tui.FactoryActions, o tui.FactoryOptions) error {
+		opened = append(opened, o)
+		return nil
+	}
+	t.Cleanup(func() { tuiFactory = old })
+	for _, args := range [][]string{{"--repo", "example/shop"}, {"--repo", " shop "}, nil} {
+		if code := dt.run("factory", args...); code != 0 {
+			t.Fatalf("factory %q: exit %d, stderr: %s", args, code, dt.stderr)
+		}
+	}
+	if len(opened) != 3 || opened[0].Repo != "example/shop" || opened[1].Repo != "shop" || opened[2].Repo != "" {
+		t.Fatalf("the screens opened with %+v", opened)
+	}
+	if opened[0].DefaultRepo != "example/shop" {
+		t.Errorf("DefaultRepo %q, want daemon.default_repo", opened[0].DefaultRepo)
+	}
+	dt.stderr.Reset()
+	if code := dt.run("factory", "--repo", "example/shop/x"); code != 2 || len(opened) != 3 ||
+		!strings.Contains(dt.stderr.String(), `--repo "example/shop/x": want owner/name or name`) ||
+		!strings.Contains(dt.stderr.String(), "usage: magnum factory") {
+		t.Errorf("a malformed --repo: exit %d, %d screens, stderr: %s", code, len(opened), dt.stderr)
+	}
+}
+
 // ownOnlyMagnum is magnum's registry with your open PRs own and nothing
 // else.
 type ownOnlyMagnum struct{ own []factory.PRState }

@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	factoryUsage          = "factory <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
+	factoryUsage          = "factory [--repo owner/name|name] <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
 	factoryInstallUsage   = "install [--now | --drain [--timeout D]] [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"
 )
 
 func newFactoryCmd(c *Context) *cobra.Command {
+	var screen factoryScreenFlags
 	cmd := newCommand(groupDaemon, factoryUsage, "the factory: a second daemon that writes code from a Jira key or a prompt",
 		"The factory takes a Jira key or a free prompt and works it up to a PR ready for review, with agents in a "+
 			"herdr session of its own ([factory] herdr_session). It is a second daemon with its own launchd job "+
@@ -43,7 +44,7 @@ func newFactoryCmd(c *Context) *cobra.Command {
 		func(pos []string) int {
 			if len(pos) == 0 {
 				if inspScreen(c) {
-					return runFactoryScreen(c)
+					return runFactoryScreen(c, screen)
 				}
 				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>")
 			}
@@ -52,6 +53,7 @@ func newFactoryCmd(c *Context) *cobra.Command {
 	cmd.AddCommand(newFactoryDaemonCmd(c), newFactoryInstallCmd(c), newFactoryUninstallCmd(c), newFactoryStatusCmd(c),
 		newFactoryStartCmd(c), newFactoryAnswerCmd(c), newFactoryDecideCmd(c), newFactoryRetryCmd(c), newFactoryTalkCmd(c), newFactoryLetGoCmd(c), newFactoryStatsCmd(c),
 		newFactoryBaselineCmd(c))
+	addFactoryScreenFlags(c, cmd, &screen)
 	return cmd
 }
 

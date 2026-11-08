@@ -1,4 +1,4 @@
- magnum factory · talkable                                    memory full: new tasks wait · ↻ 15:20 
+ magnum factory · all repos · talkable                        memory full: new tasks wait · ↻ 15:20 
  ✓ nothing waits on you · 6 wait on others, 3 at work · 1 done today
 
  NEEDS YOU

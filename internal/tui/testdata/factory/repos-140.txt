@@ -1,4 +1,4 @@
- magnum factory · talkable, widget                                                                    memory full: new tasks wait · ↻ 14:09 
+ magnum factory · all repos · talkable, widget                                                        memory full: new tasks wait · ↻ 14:09 
  ● 2 tasks and 1 PR need you, 3 decisions · 4 wait on others, 1 at work · 1 left alone · 1 done today
 
  NEEDS YOU                                                    WAITS ON                          CI  FINDINGS  APPR   YOUR MOVE        WAITED
