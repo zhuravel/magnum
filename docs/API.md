@@ -1130,14 +1130,26 @@ func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, 
     a failure after the limit's row was written (the repeat record, an ended
     row) leaves the limit recorded.
 
+func RecordOldCodexTrust(home string, places []string, before time.Time, dry bool) (int, error)
+    RecordOldCodexTrust records, as RecordStaleCodexTrust does, the trust
+    entries at places (magnum's entries in the Codex home home's hooks.json)
+    that no record covers yet, and says how many it recorded (with dry,
+    how many it would). It is for entries an install made before magnum recorded
+    the trust an append landed on: with a non-zero before (when magnum wrote its
+    script), only when config.toml has not changed since, so that every entry in
+    it is older than magnum's hooks; with a zero before, on the operator's word.
+    It writes nothing when config.toml changed since before.
+
 func RecordStaleCodexTrust(home string, places []string) error
     RecordStaleCodexTrust records, for each of places (as Codex keys its trust:
     "stop:1:0") of the Codex home home's hooks.json, the trusted_hash its
-    [hooks.state] entry has now: magnum is about to rewrite the hook there in
-    its place, and ReadCodexHooksTrust counts the place untrusted while its
-    entry keeps that hash. A place without a trust entry needs no record (it
-    reads untrusted anyway). Without a records directory (SetStaleCodexTrustDir)
-    it records nothing and says so.
+    [hooks.state] entry has now: magnum rewrites its hook there in its place,
+    or puts its hook at a place whose entry a hook that once stood there left
+    (Codex never removes an entry), and ReadCodexHooksTrust counts the place
+    untrusted while its entry keeps that hash. A place without a trust entry,
+    or with one without a hash, needs no record (it reads untrusted
+    anyway). hooks.json need not exist yet. Without a records directory
+    (SetStaleCodexTrustDir) it records nothing and says so.
 
 func RelatedStackLine(below, above []int) string
     RelatedStackLine is JudgeData.RelatedStack, and the round.related event's

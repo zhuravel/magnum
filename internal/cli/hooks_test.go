@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/agenthooks"
@@ -669,5 +670,159 @@ func TestHooksStatusAndInstallNameAHooksJSONCodexSkips(t *testing.T) {
 	}
 	if f.read(f.codexHooks()) != `{"x-note": 1, "hooks": {}}` || f.read(f.codexScript()) != "" {
 		t.Fatal("the install wrote something")
+	}
+}
+
+// trustPlaces writes the Codex home's config.toml with a trust entry of
+// hash at each of places of its hooks.json.
+func (f *hooksFixture) trustPlaces(hash string, places ...string) {
+	f.t.Helper()
+	var state strings.Builder
+	for _, p := range places {
+		state.WriteString("[hooks.state.\"" + f.codexHooks() + ":" + p + "\"]\ntrusted_hash = \"" + hash + "\"\n")
+	}
+	f.write(filepath.Join(f.codex, "config.toml"), state.String())
+}
+
+// magnumPlaces are the places of magnum's Codex entries the install wrote.
+func (f *hooksFixture) magnumPlaces() []string {
+	f.t.Helper()
+	got, err := readHookEntries([]byte(f.read(f.codexHooks())), agenthooks.AgentCodex, f.entries(agenthooks.AgentCodex))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out []string
+	for _, e := range got {
+		out = append(out, e.places...)
+	}
+	return out
+}
+
+// A place magnum appends to can hold a trust entry a hook that once stood
+// there left behind (Codex never removes one): it trusts that old hook,
+// not magnum's, so Codex will ask. The install records it as it records
+// the old trust of a rewrite, so status, doctor and the hold read the place
+// untrusted until Codex writes a new hash; a place with no trust entry
+// needs no record.
+func TestHooksAnAppendOntoAPlaceWithAnOldTrustEntryReadsUntrusted(t *testing.T) {
+	f := newHooksFixture(t)
+	f.write(f.codexHooks(), `{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/homebrew/bin/moshi-hook codex-hook"}]}]}}`)
+	// Left behind: magnum's Stop lands at stop:1:0, its Interrupt at
+	// interrupt:0:0; moshi's own entry is valid.
+	f.trustPlaces("sha256:old", "stop:0:0", "stop:1:0", "interrupt:0:0")
+	if code := f.run("hooks", "install", "codex"); code != 0 {
+		t.Fatalf("install = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if !strings.Contains(f.Out.String(), "codex: untrusted (v1)") {
+		t.Fatalf("install output:\n%s", f.Out)
+	}
+	code := f.run("hooks", "status", "codex")
+	line := strings.TrimSpace(f.Out.String())
+	for _, want := range []string{"stop:1:0 (its trust is of the hook before magnum", "interrupt:0:0 (its trust is of the hook before magnum",
+		"no trust entry for session_start:0:0, permission_request:0:0"} {
+		if code != 1 || !strings.Contains(line, want) {
+			t.Fatalf("status = %d %q, want %q", code, line, want)
+		}
+	}
+	trust, _, err := agents.ReadCodexHooksTrust(f.codex)
+	if err != nil || slices.ContainsFunc(trust.Untrusted, func(h agents.CodexHookAt) bool { return h.Place == "stop:0:0" }) {
+		t.Fatalf("moshi's own trust = %+v %v, want it trusted", trust.Untrusted, err)
+	}
+	// The operator chose Trust all: Codex wrote the new hooks' hashes.
+	f.trustPlaces("sha256:new", append([]string{"stop:0:0"}, f.magnumPlaces()...)...)
+	if code := f.run("hooks", "status", "codex"); code != 0 || strings.TrimSpace(f.Out.String()) != "codex: current (v1) ("+f.codexScript()+")" {
+		t.Fatalf("after a new trust = %d %q", code, f.Out)
+	}
+}
+
+// A hooks.json the install makes can land on trust entries an earlier
+// hooks.json left in config.toml: they are recorded too.
+func TestHooksAnInstallIntoANewHooksJSONRecordsTheOldTrustAtItsPlaces(t *testing.T) {
+	f := newHooksFixture(t)
+	f.trustPlaces("sha256:old", "stop:0:0", "session_start:0:0", "permission_request:0:0", "interrupt:0:0")
+	if code := f.run("hooks", "install", "codex"); code != 0 {
+		t.Fatalf("install = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if code := f.run("hooks", "status", "codex"); code != 1 || !strings.Contains(f.Out.String(), "a trust entry Codex no longer accepts for stop:0:0") {
+		t.Fatalf("status = %d %q", code, f.Out)
+	}
+}
+
+// An install from before magnum recorded the trust an append landed on
+// left magnum's entries on old trust entries with no record. A re-run of
+// the install records them when config.toml has not changed since magnum
+// wrote its script (no trust was written after the install, so every
+// entry at magnum's places is older than magnum's hooks); when config.toml
+// changed since, it cannot tell and records nothing, and
+// --assume-untrusted records them on the operator's word.
+func TestHooksAReRunRecordsOldTrustOnlyWhenItCanTell(t *testing.T) {
+	f := newHooksFixture(t)
+	installed := func() {
+		t.Helper()
+		if code := f.run("hooks", "install", "codex"); code != 0 {
+			t.Fatalf("install = %d\n%s%s", code, f.Out, f.Err)
+		}
+		if n, err := agents.ForgetStaleCodexTrust(f.codex); err != nil {
+			t.Fatal(err)
+		} else if n != 0 {
+			t.Fatalf("the first install recorded %d, want none (no trust entries yet)", n)
+		}
+	}
+	installed()
+	f.trustPlaces("sha256:old", f.magnumPlaces()...) // as an earlier hooks.json left them, unrecorded
+	scriptAt := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(f.codexScript(), scriptAt, scriptAt); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(f.codex, "config.toml")
+
+	// config.toml written after the script: the re-run cannot tell.
+	if err := os.Chtimes(config, scriptAt.Add(time.Minute), scriptAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("hooks", "install", "codex"); code != 0 || !strings.Contains(f.Out.String(), "codex: current (v1)") {
+		t.Fatalf("re-run with a newer config.toml = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if code := f.run("hooks", "install", "codex", "--assume-untrusted"); code != 0 || !strings.Contains(f.Out.String(), "codex: recorded 4 trust entries at magnum's places as stale") ||
+		!strings.Contains(f.Out.String(), "codex: untrusted (v1)") {
+		t.Fatalf("--assume-untrusted = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if n, err := agents.ForgetStaleCodexTrust(f.codex); err != nil || n != 4 {
+		t.Fatalf("forget = %d %v", n, err)
+	}
+
+	// config.toml unchanged since the script: every entry predates it.
+	if err := os.Chtimes(config, scriptAt.Add(-time.Minute), scriptAt.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("hooks", "install", "codex"); code != 0 || !strings.Contains(f.Out.String(), "codex: recorded 4 trust entries at magnum's places as stale") ||
+		!strings.Contains(f.Out.String(), "codex: untrusted (v1)") {
+		t.Fatalf("re-run with an older config.toml = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if code := f.run("hooks", "install", "codex"); code != 0 || strings.Contains(f.Out.String(), "recorded") {
+		t.Fatalf("a second re-run = %d\n%s", code, f.Out)
+	}
+}
+
+// An upgrade rewrites the script, but the re-run compares config.toml
+// with the script as the earlier install wrote it, so a trust written
+// since that install is never taken for an old one.
+func TestHooksAnUpgradeNeverTakesTheTrustSinceTheInstallForOld(t *testing.T) {
+	f := newHooksFixture(t)
+	if code := f.run("hooks", "install", "codex"); code != 0 {
+		t.Fatal(f.Err)
+	}
+	f.trustPlaces("sha256:valid", f.magnumPlaces()...) // the operator's Trust all
+	old := time.Now().Add(-2 * time.Hour)
+	f.write(f.codexScript(), strings.Replace(f.read(f.codexScript()), "MAGNUM_HOOK_VERSION=1", "MAGNUM_HOOK_VERSION=0", 1))
+	if err := os.Chtimes(f.codexScript(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	trusted := old.Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(f.codex, "config.toml"), trusted, trusted); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.run("hooks", "install", "codex"); code != 0 || !strings.Contains(f.Out.String(), "codex: current (v1)") || strings.Contains(f.Out.String(), "recorded") {
+		t.Fatalf("upgrade = %d\n%s%s", code, f.Out, f.Err)
 	}
 }

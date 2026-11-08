@@ -413,6 +413,19 @@ func readCodexHooksJSON(home string) (f codexHookFiles, ok bool, err error) {
 	return f, true, nil
 }
 
+// codexHookPaths is the Codex home home's hooks.json and config.toml, with
+// the prefixes a [hooks.state] key of one of its hooks starts with (the
+// path as written, and with its symlinks resolved), whether hooks.json
+// exists or not.
+func codexHookPaths(home string) codexHookFiles {
+	f := codexHookFiles{hooksFile: filepath.Join(home, "hooks.json"), configFile: filepath.Join(home, "config.toml")}
+	f.prefixes = []string{f.hooksFile}
+	if resolved, err := filepath.EvalSymlinks(f.hooksFile); err == nil && resolved != f.hooksFile {
+		f.prefixes = append(f.prefixes, resolved)
+	}
+	return f
+}
+
 // entry is the [hooks.state] entry in state of the hook of f at place
 // (codexHookPlace), under any of f's prefixes, with its key.
 func (f codexHookFiles) entry(state map[string]codexHookEntry, place string) (string, codexHookEntry, bool) {

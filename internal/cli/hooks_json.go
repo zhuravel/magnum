@@ -75,9 +75,9 @@ func hookCommand(script, agent, arg string) string {
 // shSingleQuote is s as one single-quoted shell word.
 func shSingleQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// hookChange is one change the install makes: magnum's group added to
-// event, or its handler rewritten in place (its command, timeout or async
-// differed) at place ("stop:1:0"). newTrust says that Codex hashes the
+// hookChange is one change the install makes at place ("stop:1:0"):
+// magnum's group added to event, or its handler rewritten in place (its
+// command, timeout or async differed). newTrust says that Codex hashes the
 // rewritten hook unlike the one it replaced, so its trust entry there no
 // longer holds; a rewrite Codex hashes the same (an Interrupt timeout of 0
 // is Codex's 1 s) keeps it.
@@ -687,7 +687,7 @@ type jsonEdit struct {
 	start, end int
 	text       string
 	rewrite    bool   // it rewrites a handler of magnum's in place
-	place      string // the place of the handler a rewrite rewrites
+	place      string // the place of the handler the edit writes
 	newTrust   bool   // Codex hashes the rewritten handler unlike the old (codexSame)
 }
 
@@ -720,12 +720,16 @@ func (d *hooksDoc) entryEdit(e hookEntry) (jsonEdit, bool) {
 		if found {
 			return jsonEdit{}, false
 		}
-		return d.appendElem(ev.arr, hookGroupValue(e)), true
+		edit := d.appendElem(ev.arr, hookGroupValue(e))
+		edit.place = hookStateName(e.Event) + ":" + strconv.Itoa(len(ev.arr.elems)) + ":0"
+		return edit, true
 	}
+	edit := d.appendMember(d.root, "hooks", jsonObj{{e.Event, jsonArr{hookGroupValue(e)}}})
 	if d.hooks != nil {
-		return d.appendMember(d.obj, e.Event, jsonArr{hookGroupValue(e)}), true
+		edit = d.appendMember(d.obj, e.Event, jsonArr{hookGroupValue(e)})
 	}
-	return d.appendMember(d.root, "hooks", jsonObj{{e.Event, jsonArr{hookGroupValue(e)}}}), true
+	edit.place = hookStateName(e.Event) + ":0:0"
+	return edit, true
 }
 
 // removeFirst is the edit that removes the first handler of magnum's: the

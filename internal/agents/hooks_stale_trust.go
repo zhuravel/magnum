@@ -84,41 +84,80 @@ func staleTrustFile(dir, hooksFile, place, hash string) string {
 
 // RecordStaleCodexTrust records, for each of places (as Codex keys its
 // trust: "stop:1:0") of the Codex home home's hooks.json, the trusted_hash
-// its [hooks.state] entry has now: magnum is about to rewrite the hook
-// there in its place, and ReadCodexHooksTrust counts the place untrusted
-// while its entry keeps that hash. A place without a trust entry needs no
-// record (it reads untrusted anyway). Without a records directory
-// (SetStaleCodexTrustDir) it records nothing and says so.
+// its [hooks.state] entry has now: magnum rewrites its hook there in its
+// place, or puts its hook at a place whose entry a hook that once stood
+// there left (Codex never removes an entry), and ReadCodexHooksTrust counts
+// the place untrusted while its entry keeps that hash. A place without a
+// trust entry, or with one without a hash, needs no record (it reads
+// untrusted anyway). hooks.json need not exist yet. Without a records
+// directory (SetStaleCodexTrustDir) it records nothing and says so.
 func RecordStaleCodexTrust(home string, places []string) error {
+	_, err := recordStale(home, places, false, false)
+	return err
+}
+
+// RecordOldCodexTrust records, as RecordStaleCodexTrust does, the trust
+// entries at places (magnum's entries in the Codex home home's hooks.json)
+// that no record covers yet, and says how many it recorded (with dry, how
+// many it would). It is for entries an install made before magnum recorded
+// the trust an append landed on: with a non-zero before (when magnum wrote
+// its script), only when config.toml has not changed since, so that every
+// entry in it is older than magnum's hooks; with a zero before, on the
+// operator's word. It writes nothing when config.toml changed since before.
+func RecordOldCodexTrust(home string, places []string, before time.Time, dry bool) (int, error) {
+	if !before.IsZero() {
+		fi, err := os.Stat(filepath.Join(home, "config.toml"))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return 0, nil // no config.toml: no trust entry to record
+		case err != nil:
+			return 0, fmt.Errorf("agents: %w", err)
+		case !fi.ModTime().Before(before):
+			return 0, nil // written since: no telling whose its entries are
+		}
+	}
+	return recordStale(home, places, true, dry)
+}
+
+// recordStale writes a record for each of places whose trust entry has a
+// hash, and says how many (dry: writes none); with fresh, only for places
+// whose hash no record holds yet.
+func recordStale(home string, places []string, fresh, dry bool) (int, error) {
 	dir := staleTrustDirectory()
 	if dir == "" {
-		return errors.New("agents: no directory for magnum's stale Codex trust records")
+		return 0, errors.New("agents: no directory for magnum's stale Codex trust records")
 	}
-	f, ok, err := readCodexHooksJSON(home)
-	if err != nil || !ok {
-		return err
-	}
+	f := codexHookPaths(home)
 	state, err := readCodexHookState(f.configFile)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	recorded := readStaleTrust(dir, f.hooksFile)
+	n := 0
 	for _, place := range places {
 		_, e, ok := f.entry(state, place)
 		if !ok || e.TrustedHash == "" {
 			continue
 		}
+		if fresh && slices.ContainsFunc(recorded[place], func(r staleRecord) bool { return r.hash == e.TrustedHash }) {
+			continue
+		}
+		n++
+		if dry {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("agents: %w", err)
+			return n, fmt.Errorf("agents: %w", err)
 		}
 		b, err := json.Marshal(staleTrust{Hooks: f.hooksFile, Place: place, TrustedHash: e.TrustedHash})
 		if err != nil {
-			return fmt.Errorf("agents: %w", err)
+			return n, fmt.Errorf("agents: %w", err)
 		}
 		if err := fsx.WriteFileAtomic(staleTrustFile(dir, f.hooksFile, place, e.TrustedHash), b, 0o600); err != nil {
-			return fmt.Errorf("agents: record the stale trust of %s: %w", place, err)
+			return n, fmt.Errorf("agents: record the stale trust of %s: %w", place, err)
 		}
 	}
-	return nil
+	return n, nil
 }
 
 // staleRecord is a record as read: its file, the hash it holds and the

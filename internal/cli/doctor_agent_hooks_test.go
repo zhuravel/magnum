@@ -336,3 +336,22 @@ func TestTheHookSocketCheckPassesAgainstTheDaemonsOwnListeners(t *testing.T) {
 		t.Fatalf("socket checks = %+v, want both PASS", cs)
 	}
 }
+
+// Doctor warns for magnum's Codex entry appended onto a place whose trust
+// entry an earlier hook left, and passes once Codex trusts it anew.
+func TestDoctorWarnsForAnAppendOntoAnOldTrustEntry(t *testing.T) {
+	f := newHooksFixture(t)
+	f.trustPlaces("sha256:old", "stop:0:0")
+	if code := f.run("hooks", "install", "codex"); code != 0 {
+		t.Fatal(f.Err)
+	}
+	_, d, _, ag := doctorFixture(t)
+	ag.codexHome = f.codex
+	if c := doctorHookCheck(t, d, "codex hooks"); c.Status != doctorWarn || !strings.Contains(c.Detail, "a trust entry Codex no longer accepts for stop:0:0") {
+		t.Fatalf("old trust = %s %q", c.Status, c.Detail)
+	}
+	f.trustPlaces("sha256:new", f.magnumPlaces()...)
+	if c := doctorHookCheck(t, d, "codex hooks"); c.Status != doctorPass {
+		t.Fatalf("new trust = %s %q", c.Status, c.Detail)
+	}
+}

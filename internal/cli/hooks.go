@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -417,9 +418,9 @@ func unwrapPathErr(err error) error {
 const codexTrustStep = "run `codex` once and choose Trust all (or `/hooks`), or `magnum resume --tool codex`"
 
 // hooksFlags are the parsed `magnum hooks` flags.
-type hooksFlags struct{ dry, yes, forget bool }
+type hooksFlags struct{ dry, yes, forget, assumeUntrusted bool }
 
-const hooksUsage = "[status|install [--dry-run] [--forget-stale]|uninstall [--dry-run] [--yes]] [claude|codex]"
+const hooksUsage = "[status|install [--dry-run] [--forget-stale] [--assume-untrusted]|uninstall [--dry-run] [--yes]] [claude|codex]"
 
 func newHooksCmd(c *Context) *cobra.Command {
 	var f hooksFlags
@@ -440,14 +441,18 @@ func newHooksCmd(c *Context) *cobra.Command {
 			"script). `status` (the default) prints one line per target and exits 1 unless every target is current. With no "+
 			"agent named, the targets are those the configured roles use.",
 		func(pos []string) int { return runHooks(c, "status", f, pos) })
-	install := newCommand("", "install [claude|codex] [--dry-run] [--forget-stale]", "write the hook script and append magnum's entries",
+	install := newCommand("", "install [claude|codex] [--dry-run] [--forget-stale] [--assume-untrusted]", "write the hook script and append magnum's entries",
 		"Write the hook script and append magnum's entries to the agents' hook settings; --dry-run prints each file and what "+
 			"would be added or changed, and writes nothing. After a rewrite of a Codex entry, status counts its place untrusted "+
 			"while Codex keeps the trust entry of the hook before the rewrite; when `codex` asks nothing (it trusts the hook as "+
-			"it is), --forget-stale forgets those records for the Codex homes first.",
+			"it is), --forget-stale forgets those records for the Codex homes first. A place magnum appends to can hold a "+
+			"trust entry a hook that once stood there left: install records it the same way. For an install from before it "+
+			"did, a re-run records those entries when config.toml has not changed since magnum wrote its script, and "+
+			"--assume-untrusted records them on your word.",
 		func(pos []string) int { return runHooks(c, "install", f, pos) })
 	install.Flags().BoolVar(&f.dry, "dry-run", false, "print the plan; change nothing")
 	install.Flags().BoolVar(&f.forget, "forget-stale", false, "also forget magnum's records of Codex trust entries a rewrite left stale, for when `codex` asks nothing")
+	install.Flags().BoolVar(&f.assumeUntrusted, "assume-untrusted", false, "record the Codex trust entries at magnum's places as ones Codex no longer accepts, on your word that you chose no Trust all since the install")
 	uninstall := newCommand("", "uninstall [claude|codex] [--dry-run] [--yes]", "remove magnum's entries and the hook script",
 		"Remove magnum's entries from the agents' hook settings and the hook scripts; asks y/N before it moves another Codex "+
 			"hook to a new place (it loses its trust there).",
@@ -545,6 +550,9 @@ type hookInstall struct {
 	settings *hookWrite // nil: every entry is in place
 	before   []byte     // the settings the plan read (nil: none)
 	changes  []hookChange
+	// scriptMod is when the script the plan found was written (zero: none):
+	// the install it stands for (recordOldTrust).
+	scriptMod time.Time
 }
 
 // hookSettingsChanged says that t's settings file is no longer the before a
@@ -588,6 +596,9 @@ func planHookInstall(t hookTarget) (hookInstall, error) {
 		case version > agenthooks.ScriptVersion:
 			return p, fmt.Errorf("%s: %s is a newer magnum's (v%d > v%d); nothing changed\nfix: run `magnum hooks install` of that newer magnum",
 				t.label(), t.script(), version, agenthooks.ScriptVersion)
+		}
+		if fi, err := os.Stat(t.script()); err == nil {
+			p.scriptMod = fi.ModTime()
 		}
 		if fi, err := os.Stat(t.script()); !bytes.Equal(old, want) || err != nil || fi.Mode().Perm() != 0o755 {
 			p.script = &hookWrite{path: resolvedPath(t.script()), data: want, mode: 0o755}
@@ -706,6 +717,11 @@ func hooksInstall(c *Context, targets []hookTarget, f hooksFlags) int {
 				continue
 			}
 		}
+		if err := recordOldTrust(out, p, f.assumeUntrusted, dry); err != nil {
+			fmt.Fprintf(c.Stderr, "magnum hooks install: %s: %v\n", label, err)
+			code = 1
+			continue
+		}
 		switch {
 		case p.script == nil && p.settings == nil:
 			fmt.Fprintf(out, "%s: nothing to change in %s\n", label, inspTilde(p.t.dir))
@@ -731,6 +747,10 @@ func hooksInstall(c *Context, targets []hookTarget, f hooksFlags) int {
 				fmt.Fprintf(c.Stderr, "magnum hooks install: %s: write %s: %v\n", label, p.settings.path, err)
 				code = 1
 				continue
+			}
+			if err := recordAppendedTrust(p); err != nil {
+				fmt.Fprintf(c.Stderr, "magnum hooks install: %s: %v; run `magnum hooks install codex --assume-untrusted` once Codex's files are readable\n", label, err)
+				code = 1
 			}
 			added, rewrote := hookChangeNames(p.changes)
 			if len(added) > 0 {
@@ -776,6 +796,67 @@ func recordStaleTrust(p hookInstall) error {
 		return nil
 	}
 	return agents.RecordStaleCodexTrust(p.t.dir, places)
+}
+
+// recordAppendedTrust records, once p appended magnum's Codex entries, the
+// trust entries already at their places, which hooks that once stood there
+// left (Codex never removes one): Codex trusts those hooks, not magnum's,
+// and will ask, so status, doctor and the daemon's hooks hold count the
+// places untrusted until Codex writes a new hash. It runs after the write,
+// when the hooks stand at those places, since a reader removes a record
+// whose place holds no hook.
+func recordAppendedTrust(p hookInstall) error {
+	if p.t.agent != agenthooks.AgentCodex {
+		return nil
+	}
+	var places []string
+	for _, ch := range p.changes {
+		if !ch.rewrote {
+			places = append(places, ch.place)
+		}
+	}
+	if len(places) == 0 {
+		return nil
+	}
+	return agents.RecordStaleCodexTrust(p.t.dir, places)
+}
+
+// recordOldTrust records the trust entries at the places of magnum's Codex
+// entries p found already installed that no record covers, for an install
+// from before magnum recorded the trust an append landed on
+// (agents.RecordOldCodexTrust): when config.toml has not changed since the
+// install wrote the script p found (its mtime, read before this run writes
+// a new one), every entry in it is older than magnum's hooks; with assume,
+// on the operator's word. A config.toml written since tells nothing (Codex
+// writes it for other reasons too, and magnum for its folder trust), so
+// nothing is recorded then.
+func recordOldTrust(out io.Writer, p hookInstall, assume, dry bool) error {
+	if p.t.agent != agenthooks.AgentCodex || p.before == nil || (p.scriptMod.IsZero() && !assume) {
+		return nil
+	}
+	states, err := readHookEntries(p.before, p.t.agent, p.t.entries())
+	if err != nil {
+		return err
+	}
+	var places []string
+	for _, e := range states {
+		places = append(places, e.places...)
+	}
+	before, why := p.scriptMod, "config.toml has not changed since magnum wrote its script, so they are older than magnum's hooks"
+	if assume {
+		before, why = time.Time{}, "on your word, --assume-untrusted"
+	}
+	n, err := agents.RecordOldCodexTrust(p.t.dir, places, before, dry)
+	if err != nil || n == 0 {
+		return err
+	}
+	what := textx.Count(n, "trust entry", "trust entries")
+	if dry {
+		fmt.Fprintf(out, "dry-run: %s: would record %s at magnum's places as stale (%s)\n", p.t.label(), what, why)
+		return nil
+	}
+	fmt.Fprintf(out, "%s: recorded %s at magnum's places as stale (%s): Codex will ask to trust them\n", p.t.label(), what, why)
+	return nil
 }
 
 // forgetStaleTrust forgets magnum's stale trust records of the Codex home

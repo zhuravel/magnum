@@ -478,3 +478,16 @@ func TestAnAdoptedCodexClearsNoStaleTrust(t *testing.T) {
 		t.Fatalf("records after the adopted agent's quiet first prompt = %d, want 1", n)
 	}
 }
+
+// A record needs no hooks.json yet: the install records the trust entries
+// an earlier hooks.json left at the places of a file it is about to make.
+func TestRecordStaleCodexTrustNeedsNoHooksJSON(t *testing.T) {
+	dir := staleTrustDirFor(t)
+	home := t.TempDir()
+	if err := writeConfig(home, "[hooks.state.\"{hooks}:stop:0:0\"]\ntrusted_hash = \"sha256:old\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordStaleCodexTrust(home, []string{"stop:0:0", "interrupt:0:0"}); err != nil || recordCount(t, dir) != 1 {
+		t.Fatalf("record = %v, %d records, want 1", err, recordCount(t, dir))
+	}
+}
