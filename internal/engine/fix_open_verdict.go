@@ -30,8 +30,10 @@ package engine
 //     a fixer resolved with no answer, a thread with two fixer replies that
 //     the reviewer answered again (a bot's receipt or note is seen and
 //     drops out), unless every one of them is a person's and rule 9 has
-//     work to start on: the person's items then wait, listed, while the
-//     loop works on the rest, and its fixer leaves them alone (FixState.Waits);
+//     work to start on: the person's items then wait, listed and named in
+//     the verdict's words, while the loop works on the rest (its fixer
+//     leaves them alone: FixState.Waits) and while that work waits for its
+//     start, but at the daily cap they need you;
 //  9. work (an item never handed, magnum's review no loop worked on) starts
 //     a loop once settle allows, a person's handed items waiting or not:
 //     never on magnum's rebuttals alone with no review work, at most
@@ -530,34 +532,45 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	if len(work) > 0 {
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
 		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
+		// waiting names a person's handed items beside the work, which wait
+		// for the loop the work starts (rule 8's exception), as long as the
+		// work itself waits too: raised now, they would hold the PR and no
+		// loop would start on it.
+		waiting := func(why string) string {
+			if len(needs) == 0 {
+				return why
+			}
+			return why + "; " + textx.Count(len(needs), "item waits", "items wait") + " for you: " + workWords(needs)
+		}
 		switch {
 		case onlyRebuttals:
 			v.Needs = append(v.Needs, openNeeds(work)...)
 			return say(OpenNeedsYou, "magnum's reply waits for your answer: "+work[0].URL), nil, work
 		case f.ledger.startsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
+			if len(needs) > 0 { // no loop starts today: rule 8, as with no work beside them
+				v.leftovers = true
+				return say(OpenNeedsYou, needsWords(needs)), nil, needs
+			}
 			v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
 			return say(OpenNeedsYou, fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))), nil, needs
 		case f.pause != "" && f.pauseUntil.After(f.now):
 			v.Until = f.pauseUntil
-			return say(OpenWaits, f.pause+": "+workWords(work)+" waits until "+waitClock(f.pauseUntil, f.now)), nil, needs
+			return say(OpenWaits, waiting(f.pause+": "+workWords(work)+" waits until "+waitClock(f.pauseUntil, f.now))), nil, needs
 		case f.pause != "":
-			return say(OpenWaits, f.pause+": "+workWords(work)+" waits for `magnum resume`"), nil, needs
+			return say(OpenWaits, waiting(f.pause+": "+workWords(work)+" waits for `magnum resume`")), nil, needs
 		case quiet:
 			v.Until = quietEnd
-			return say(OpenWaits, fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, workWords(work), waitClock(quietEnd, f.now))), nil, needs
+			return say(OpenWaits, waiting(fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, workWords(work),
+				waitClock(quietEnd, f.now)))), nil, needs
 		case !slices.Contains(f.ledger.FixerHeads, head) && f.now.Before(handsOff):
 			v.Until = handsOff
-			return say(OpenWaits, fmt.Sprintf("you pushed %s at %s; hands off until %s", short, waitClock(f.pr.HeadChangedAt, f.now),
-				waitClock(handsOff, f.now))), nil, needs
+			return say(OpenWaits, waiting(fmt.Sprintf("you pushed %s at %s; hands off until %s", short, waitClock(f.pr.HeadChangedAt, f.now),
+				waitClock(handsOff, f.now)))), nil, needs
 		case !settled:
 			v.Until = until
-			return say(OpenWaits, "settling: "+workWords(work)+" waits until "+waitClock(until, f.now)), nil, needs
+			return say(OpenWaits, waiting("settling: "+workWords(work)+" waits until "+waitClock(until, f.now))), nil, needs
 		}
-		why := "starts a fix loop on " + workWords(work)
-		if len(needs) > 0 { // a person's handed items, which the loop leaves alone
-			why += "; " + textx.Count(len(needs), "item waits", "items wait") + " for you: " + workWords(needs)
-		}
-		return say(OpenFixing, why), work, needs
+		return say(OpenFixing, waiting("starts a fix loop on "+workWords(work))), work, needs // the loop leaves the person's items alone
 	}
 	if !settled {
 		v.Until = until

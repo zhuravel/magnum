@@ -42,6 +42,45 @@ func TestTheLookStartsOnNeverHandedWorkWhileAPersonsItemsWait(t *testing.T) {
 	wantVerdict(t, v, OpenNeedsYou, "1 item needs you: 1 thread of a person")
 }
 
+// A person's handed items wait beside work only for the loop the work
+// starts. While the work itself waits (a pause, quiet hours, the settle,
+// the hands off after your push) the verdict still names the person's
+// items, which the look raises once the loop ran; raising them now would
+// hold the PR in needs attention, and no loop would start on the work. At
+// the daily cap no loop starts today: rule 8 then raises them, as before.
+func TestAPersonsWaitingItemsStayNamedWhileTheWorkCannotStart(t *testing.T) {
+	person := personThread(4100)
+	lint := openItem{Key: "thread:4200@4200", Class: classBot, Kind: itemThread, URL: prPage + "#discussion_r4200"}
+	facts := func() openFacts {
+		f := idleFacts()
+		f.items = []openItem{person, lint}
+		f.ledger.Handed = map[string]time.Time{person.Key: openNow}
+		return f
+	}
+	f := facts()
+	f.pause = "fixes paused"
+	v, _, needs := decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "fixes paused: 1 thread of a bot waits for `magnum resume`; 1 item waits for you: 1 thread of a person")
+	if v.leftovers || len(needs) != 1 || len(v.Needs) != 1 {
+		t.Errorf("paused: leftovers %v, needs %v, verdict needs %+v; want the person's item listed, not raised", v.leftovers, needs, v.Needs)
+	}
+	f = facts()
+	act := openNow.Add(-time.Minute)
+	f.pr.HeadChangedAt, f.pr.ActivityAt = openNow.Add(-10*time.Minute), &act
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenWaits, "settling: 1 thread of a bot waits until 14:02; 1 item waits for you: 1 thread of a person")
+	if v.leftovers {
+		t.Error("settling: the person's item is raised")
+	}
+	f = facts()
+	f.ledger.Starts = []time.Time{openNow.Add(-5 * time.Hour), openNow.Add(-3 * time.Hour), openNow.Add(-time.Hour)}
+	v, work, _ := decideOpen(f)
+	wantVerdict(t, v, OpenNeedsYou, "1 item needs you: 1 thread of a person")
+	if !v.leftovers || len(work) != 0 {
+		t.Errorf("at the cap: leftovers %v, work %v; want the person's item raised as rule 8 does", v.leftovers, work)
+	}
+}
+
 // The loop the look starts while a person's handed items wait is limited to
 // the work never handed: its fixer's file marks each waiting item `waits`
 // (FixState.Waits, the items' keys), which the skill leaves alone, so no
