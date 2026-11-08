@@ -154,6 +154,15 @@ type fakeGitHub struct {
 	mintType   string           // the last mint request's Content-Type
 	account    string           // the installation's account (default talkable)
 	users      map[string]int64 // GET /users/<login>: the user's id by login
+	ungranted  string           // a permission the installation lacks: a mint that asks for it answers 422
+	revoked    []string         // the tokens DELETE /installation/token revoked
+}
+
+// revokedTokens are the tokens revoked so far.
+func (f *fakeGitHub) revokedTokens() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.revoked)
 }
 
 func newFakeGitHub(t *testing.T, clock *fakeClock) *fakeGitHub {
@@ -308,6 +317,15 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, status, map[string]string{"message": "boom"})
 			return
 		}
+		var asked mintBody
+		_ = json.Unmarshal(body, &asked)
+		f.mu.Lock()
+		ungranted := f.ungranted
+		f.mu.Unlock()
+		if _, ok := asked.Permissions[ungranted]; ok && ungranted != "" {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "The permissions requested are not granted to this installation."})
+			return
+		}
 		f.mu.Lock()
 		f.mints++
 		f.lastToken = fmt.Sprintf("ghs_test%d", f.mints)
@@ -347,6 +365,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			list = append(list, map[string]string{"full_name": repos[i]})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"total_count": len(repos), "repositories": list})
+	case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || !strings.HasPrefix(tok, "ghs_test") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+			return
+		}
+		f.mu.Lock()
+		f.revoked = append(f.revoked, tok)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/users/"):
 		f.mu.Lock()
 		id, ok := f.users[strings.TrimPrefix(r.URL.Path, "/users/")]

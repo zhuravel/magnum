@@ -62,6 +62,9 @@ type App struct {
 
 	wmu     sync.Mutex // serializes config dir writes
 	written string     // token currently in hosts.yml
+
+	pmu    sync.Mutex    // guards pushes
+	pushes []*daemonPush // the push tokens DaemonPushEnv minted and no release dropped yet
 }
 
 type flight struct {
@@ -267,8 +270,10 @@ func (a *App) refresh(ctx context.Context, fl *flight) {
 // EnsureConfigDir makes sure a fresh token exists and that ConfigDir holds it
 // (hosts.yml + config.yml, 0600 files in a 0700 dir, written atomically). It
 // rewrites the files whenever the token changed or a file is missing; call it
-// on every daemon tick so long-lived panes never see an expired token.
+// on every daemon tick so long-lived panes never see an expired token. It
+// also drops the daemon's push tokens past their hold (DaemonPushEnv).
 func (a *App) EnsureConfigDir(ctx context.Context) (string, error) {
+	a.sweepPushes(ctx) // push_token.go: a push token nobody released goes after its hold
 	if _, err := a.Token(ctx); err != nil {
 		return "", err
 	}
