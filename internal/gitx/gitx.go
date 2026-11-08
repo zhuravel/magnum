@@ -619,8 +619,32 @@ func (c *Client) ChangedBetween(ctx context.Context, dir, from, to string) ([]st
 	if err := checkRange(from, to); err != nil {
 		return nil, err
 	}
+	return c.namesBetween(ctx, dir, from, to, nil)
+}
+
+// DifferingPaths is ChangedBetween limited to paths (each relative to the
+// repository's top, a directory or a file, taken literally): which of them
+// differ between the commits a and b, in content, mode or presence, sorted;
+// nil when both have them alike. It compares the two trees alone, so a
+// merge that carries the base's files as the base has them shows none of
+// them against the base's tip. At least one path, none empty.
+func (c *Client) DifferingPaths(ctx context.Context, dir, a, b string, paths ...string) ([]string, error) {
+	if err := checkRange(a, b); err != nil {
+		return nil, err
+	}
+	specs, err := literal(paths)
+	if err != nil {
+		return nil, fmt.Errorf("gitx: diff: %w", err)
+	}
+	return c.namesBetween(ctx, dir, a, b, specs)
+}
+
+// namesBetween is `git diff --name-only from to -- specs`: the paths whose
+// content differs between the two trees, a rename as a deletion plus an
+// addition.
+func (c *Client) namesBetween(ctx context.Context, dir, from, to string, specs []string) ([]string, error) {
 	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff --name-only %s %s", from, to)},
-		"diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", from, to, "--")
+		append([]string{"diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", from, to, "--"}, specs...)...)
 	if err != nil {
 		return nil, err
 	}
