@@ -57,10 +57,12 @@ type prSpec struct {
 	labelsTruncated, reviewsTruncated bool
 	// ci is the head's check rollup ("" = no checks) CIStates and Details
 	// report, checks the Details' checks, whose tally both report as the
-	// rollup's counts (fakeCounts); ciUnknown makes CIStates unable to read
+	// rollup's counts (fakeCounts) unless counts names them (a rollup that
+	// leaves a check suite out); ciUnknown makes CIStates unable to read
 	// the rollup (a fork's PR).
 	ci        string
 	checks    []github.Check
+	counts    *github.CICounts
 	ciUnknown bool
 	// base is the branch the PR merges into ("" = master); another
 	// feature branch for a stacked PR. noBaseOid makes Details report no
@@ -613,6 +615,15 @@ func fakeCounts(checks []github.Check) github.CICounts {
 	return c
 }
 
+// specCounts are the rollup's counts by state GitHub reports for s's
+// head: s.counts, else the tally of its checks (fakeCounts).
+func specCounts(s prSpec) github.CICounts {
+	if s.counts != nil {
+		return *s.counts
+	}
+	return fakeCounts(s.checks)
+}
+
 func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string]github.CIState, github.RateLimit, error) {
 	github.BetweenCalls(ctx)
 	if fn := g.hook(&g.onCIStates); fn != nil {
@@ -633,7 +644,7 @@ func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string
 		for _, s := range specs {
 			id := fmt.Sprintf("PR_%s_%d", full, s.n)
 			if !s.ciUnknown && slices.ContainsFunc(prs, func(p github.PRRadar) bool { return p.NodeID == id && p.HeadRefOid == s.head }) {
-				out[id] = github.CIState{State: s.ci, Counts: fakeCounts(s.checks)}
+				out[id] = github.CIState{State: s.ci, Counts: specCounts(s)}
 			}
 		}
 	}
@@ -674,7 +685,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				ReviewRequests: []github.Reviewer{}, LatestReviews: append([]github.LatestReview{}, p.reviews...),
 				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,
 				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...),
-					Counts: fakeCounts(p.checks)}}
+					Counts: specCounts(p)}}
 			if p.noBaseOid {
 				d.BaseRefOid = ""
 			}

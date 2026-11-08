@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,134 @@ func TestTheRunOfTheStartedCIWorkflowEndsTheWait(t *testing.T) {
 	h.wantOpen(OpenWaits, "CI at a1a1a1a")
 	checks[1].State = github.CheckPassed
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", ci: "SUCCESS", checks: checks})
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+// detailsReads counts the fake GitHub's Details reads that asked for PR #n.
+func (h *harness) detailsReads(n int) int {
+	h.t.Helper()
+	reads := 0
+	for _, c := range h.ghCalls("details:talkable/talkable:") {
+		list := strings.TrimSuffix(c[strings.LastIndexByte(c, '[')+1:], "]")
+		if slices.Contains(strings.Fields(list), strconv.Itoa(n)) {
+			reads++
+		}
+	}
+	return reads
+}
+
+// polls advances the clock a minute and ticks, n times, and returns how
+// many Details reads asked for PR #2 meanwhile.
+func (h *harness) polls(n int) int {
+	h.t.Helper()
+	before := h.detailsReads(2)
+	for range n {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	return h.detailsReads(2) - before
+}
+
+// The live case of 2026-11-08: GitHub's rollup of the head left out the
+// run of the workflow magnum started (its workflow_dispatch check suite),
+// and the run's Completion check came between two polls, so neither the
+// rollup's state nor its counts moved, and nothing moved the PR's
+// updatedAt: the poll never read the head's checks again, and settle_max
+// after the start the look said that no run came while Completion had
+// passed. While a start waits for its run, each poll reads the head's
+// checks: the look sees Completion pass, the PR is idle, and the reads end
+// once the head's checks show the run.
+func TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+	others := othersChecks()
+	h.setCounts(2, fakeCounts(others)) // the rollup as before the start: the run is not in it
+	h.setCI(2, "SUCCESS", append(others, ciCheck("CI", "Completion", github.CheckPassed))...)
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if n := h.polls(3); n != 0 {
+		t.Errorf("details of #2 read %d times in 3 polls after the run was seen, want none", n)
+	}
+	h.advance(20 * time.Minute)
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+// While a start of the CI workflow waits for its run, each poll reads the
+// head's checks once; with no run the look waits, settle_max after the
+// start it needs you as before (the head is not started again), and the
+// reads end with the wait.
+func TestAStartWithNoRunReadsTheHeadsChecksOncePerPollUntilItsWaitEnds(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if n := h.polls(3); n != 3 {
+		t.Fatalf("details of #2 read %d times in 3 polls of the wait, want 3", n)
+	}
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+	h.advance(20 * time.Minute)
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
+	if n := h.polls(3); n != 0 {
+		t.Errorf("details of #2 read %d times in 3 polls after the wait, want none", n)
+	}
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+// Only a start that waits for its run reads the head's checks on every
+// poll: an own PR of a repository with ci_dispatch whose required check
+// has not started yet (no start), and one whose start GitHub refused, get
+// no Details read while nothing of theirs moves.
+func TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	if n := h.polls(3); n != 0 {
+		t.Errorf("no start: details of #2 read %d times in 3 polls, want none", n)
+	}
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: required check Completion has not started")
+	h.gh.mu.Lock()
+	h.gh.dispatchErr = &github.APIError{Op: "dispatch", Status: 422}
+	h.gh.mu.Unlock()
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "magnum's start of ci.yml failed (GitHub answered HTTP 422)")
+	if n := h.polls(3); n != 0 {
+		t.Errorf("a failed start: details of #2 read %d times in 3 polls, want none", n)
+	}
+}
+
+// The live PR already said that no run came when the run was there: the
+// rollup had moved by the checks the run adds to an older check suite of
+// the head (Completion and its test reports, created passed: no pending
+// count, the state SUCCESS throughout). A rollup whose passed count moved
+// reads the head's checks again, so the look, with no operator action,
+// calls the PR idle.
+func TestAPassedCheckThatCameAfterTheWaitClearsNoRunCame(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.advance(21 * time.Minute)
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
+	h.setCI(2, "SUCCESS", append(othersChecks(), ciCheck("CI", "Completion", github.CheckPassed))...)
+	h.advance(time.Minute)
 	h.tick()
 	h.tick()
 	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")

@@ -25,6 +25,20 @@ func (h *harness) setCI(n int, state string, checks ...github.Check) {
 	}
 }
 
+// setCounts makes the fake GitHub report counts as the rollup's counts of
+// PR #n's head (CIStates' and Details'), whatever its checks, keeping its
+// updatedAt: a rollup that leaves a check suite out.
+func (h *harness) setCounts(n int, counts github.CICounts) {
+	h.gh.mu.Lock()
+	defer h.gh.mu.Unlock()
+	prs := h.gh.repos["talkable/talkable"]
+	for i := range prs {
+		if prs[i].n == n {
+			prs[i].counts = &counts
+		}
+	}
+}
+
 func (h *harness) prEvents() int {
 	h.t.Helper()
 	var n int
@@ -152,11 +166,13 @@ func TestCIUnreadableRollupIsNotPolled(t *testing.T) {
 }
 
 // The rollup's counts read the checks again only when both reads have
-// counts and the failed or pending ones differ: unknown counts (checks
-// stored before they were read, a rollup GitHub gave none for) leave the
-// rollup state's comparison alone, and a check that passed or skipped
-// moves nothing a judge check needs.
-func TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedOrPendingMoved(t *testing.T) {
+// counts and the failed, pending or passed ones differ: unknown counts
+// (checks stored before they were read, a rollup GitHub gave none for)
+// leave the rollup state's comparison alone. A check created passed (a
+// required check that a run adds through the Checks API, never pending)
+// moves only the passed count, and rule 11 needs it; one created skipped
+// moves nothing a reader needs.
+func TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedPendingOrPassedMoved(t *testing.T) {
 	stored := store.CheckCounts{Failed: 1, Pending: 1, Passed: 3, Total: 5}
 	for _, tc := range []struct {
 		name   string
@@ -168,7 +184,8 @@ func TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedOrPendingMoved(t
 		{"a pending check passed", stored, github.CICounts{Failed: 1, Passed: 4, Total: 5}, true},
 		{"a rerun started", stored, github.CICounts{Failed: 1, Pending: 2, Passed: 3, Total: 6}, true},
 		{"as stored", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 3, Total: 5}, false},
-		{"another passed check", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 4, Total: 6}, false},
+		{"a check created passed", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 4, Total: 6}, true},
+		{"a check created skipped", stored, github.CICounts{Failed: 1, Pending: 1, Passed: 3, Skipped: 1, Total: 6}, false},
 		{"no counts now", stored, github.CICounts{}, false},
 		{"none stored", store.CheckCounts{}, github.CICounts{Failed: 2, Total: 2}, false},
 	} {
