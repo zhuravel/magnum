@@ -638,6 +638,18 @@ func TestRenderGolden(t *testing.T) {
 	// `magnum push` line in place of git push.
 	fixApp := fixFixture()
 	fixApp.FixerLogin, fixApp.PushCommand = "example-fixer[bot]", PushLine(fixApp.Magnum, fixApp.Checkout, "master")
+	// The merge of the PR's parent alone (magnum merge-parent), whose
+	// conflict the fixer App resolves: no review, no finding, no external
+	// item, no reply.
+	fixParentMerge := fixApp
+	fixParentMerge.MergeOnly, fixParentMerge.ReviewURL, fixParentMerge.ReviewFile, fixParentMerge.ReviewerLogin, fixParentMerge.ExternalFile = true, "", "", "", ""
+	fixParentMerge.OwnPR, fixParentMerge.PushCommand = false, PushLine(fixApp.Magnum, fixApp.Checkout, "release/2.4")
+	fixParentMerge.FixSyncCommand = FixSyncLine(fixApp.Magnum, fixApp.Checkout, fixApp.HeadSHA, fixApp.HeadRef, "release/2.4")
+	fixParentMerge.ConflictBase, fixParentMerge.ConflictSHA = "release/2.4", "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
+	fixParentMerge.ConflictPaths, fixParentMerge.ConflictFiles = []string{"Gemfile.lock"}, 1
+	// A fix run whose parent magnum merged before the fixer started.
+	fixMergedParent := fixApp
+	fixMergedParent.MergedBase, fixMergedParent.MergedSHA = "master", "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
 
 	cases := []struct {
 		golden, name string
@@ -758,6 +770,8 @@ func TestRenderGolden(t *testing.T) {
 		{"fix_no_findings", "fix.md", fixNoFindings},
 		{"fix_conflict", "fix.md", fixConflict},
 		{"fix_merge_only", "fix.md", fixMergeOnly},
+		{"fix_parent_merge", "fix.md", fixParentMerge},
+		{"fix_merged_parent", "fix.md", fixMergedParent},
 		{"fix_app", "fix.md", fixApp},
 		{"whiteboard", "whiteboard.md", whiteboardFixture("")},
 		{"whiteboard_update", "whiteboard.md", whiteboardFixture("6f0c2b9e-4d1a-4c3e-9b7a-2e5d8f1a0c3b")},

@@ -78,12 +78,13 @@ func TestTheFixPromptKeepsGitPushForAGhFixer(t *testing.T) {
 // The skill pushes with the prompt's push line, whichever it is, never
 // with force: a line `magnum push` refuses (exit 2) goes under Needs you, a
 // rejected one (exit 3, fetch first) runs the fix-sync line, as a push
-// GitHub rejected because the branch moved does.
+// GitHub rejected because the branch moved does. The fixes go out in one
+// push after the base merge's, which went out alone first.
 func TestTheFixSkillPushesWithThePromptsPushLine(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"- the push line, which every push goes through: `git push origin HEAD:<branch>`, or `magnum push` for a fixer that acts as a GitHub App",
-		"When every fix is committed, push once with the push line of the prompt, the base merge's commit included.",
+		"When every fix is committed, push once with the push line of the prompt. The base merge's commit went out alone before (section 2).",
 		"\n<push line>\n",
 		"When the push line is `magnum push` and it refuses the push (exit status 2, `refused: <reason>`), push nothing more: " +
 			"write `push failed: refused: <reason>` under `## Pushed`, put each finding you committed under `## Needs you`, and stop.",

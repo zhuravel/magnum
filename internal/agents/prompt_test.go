@@ -519,10 +519,23 @@ func TestTheFixPromptNamesTheConflictWithTheBase(t *testing.T) {
 // conflict that needs a product decision and lists it under Needs you
 // without an id, and names the merge commit first under Pushed. The rules
 // that forbade it exempt the merge alone: a failed push still merges
-// nothing.
+// nothing. The merge goes out alone, before any finding (the operator,
+// 2026-11-08: every fix merges the parent first), so a rejected push of the
+// fixes can be replayed; the base is the PR's own, never master by
+// default; a run of the merge alone posts no reply; a merge magnum made
+// before the run is not made again; and a conflict is resolved by the
+// team's merge-parent rules, its escalations being a product decision.
 func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
+		"6. Push the merge commit alone, at once, with the push line of the prompt (section 5 says how), before you judge any finding",
+		"The base is the PR's own base branch, never master by default: a stacked PR's base is the branch below it.",
+		"When the prompt says that this run is the base merge alone, the merge is your whole work: there is no review, finding or external item, you post no reply",
+		"If the prompt says that magnum merged the base before this run, do not merge it again: the head is that merge, and its changes are the base's.",
+		"Where both sides added different lines in one place, keep both, in an order that reads well.",
+		"Where both rewrote the same code toward the same goal, keep the newer, clearer version, and add `; dropped <what> in <path>` to the merge's line (step 6).",
+		"Where one side renamed a file that the other changed, apply the change at the new path.",
+		"or it is in a binary file, or both sides renamed one file to two different paths, resolve nothing:",
 		"7. If the prompt says that the PR conflicts with its base branch, merge the base now, before you judge any finding (the base merge, below).",
 		"\n### The base merge\n",
 		"1. Merge that tip into the detached HEAD: `git merge --no-edit <base sha>`. Never rebase, never pull and never force-push",
@@ -1040,5 +1053,61 @@ func TestWhiteboardPromptRendersTheFacts(t *testing.T) {
 	noCheckout.Checkout = ""
 	if _, err := e.m.WhiteboardPrompt(e.pr, role, run, noCheckout); err == nil {
 		t.Error("WhiteboardPrompt rendered a prompt without the checkout the whiteboard reads")
+	}
+}
+
+// The merge of a PR's parent alone (magnum merge-parent) whose conflict the
+// fixer resolves names no review, finding or other reviewer's item: the
+// prompt says the run is the skill's base merge alone and posts no reply,
+// then names the conflict as any fix prompt does. A fix run whose parent
+// magnum merged before the fixer started says so, with the base and the
+// tip it merged: the head is that merge, whose changes are the base's. A
+// merged base a shell would read, or a tip that is no commit id, is
+// refused, as a conflict's is.
+func TestTheFixPromptNamesTheMergeOfTheParent(t *testing.T) {
+	e := newEnv(t)
+	role := Role(config.RoleClaudeFix)
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunFix, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tip = "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912"
+	only := FixPromptInput{HeadRef: "feature/coupon-expiry", DBLockCommand: "/opt/magnum/bin/magnum db-lock --", FixReplyCommand: "/opt/magnum/bin/magnum fix-reply",
+		MergeOnly: true, ConflictBase: "release/2.4", ConflictSHA: tip, ConflictPaths: []string{"Gemfile.lock"}}
+	got, err := e.m.FixPrompt(e.pr, role, run, only)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"into it: this run is the skill's base merge (section 2) alone, with no review, finding or other reviewer's item to answer, and it posts no reply.",
+		" The PR conflicts with its base branch `release/2.4` in 1 file (`Gemfile.lock`): first merge its tip with `git merge --no-edit " + tip + "`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the merge-only prompt lacks %q:\n%s", want, got)
+		}
+	}
+	for _, leak := range []string{"Fix the findings", "found nothing to fix", "review.json", "other reviewers' open threads"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("the merge-only prompt names %q:\n%s", leak, got)
+		}
+	}
+
+	merged := FixPromptInput{HeadRef: "feature/coupon-expiry", ReviewURL: "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile: "/state/review.json", ReviewerLogin: "talkable[bot]", DBLockCommand: "/opt/magnum/bin/magnum db-lock --",
+		FixReplyCommand: "/opt/magnum/bin/magnum fix-reply", MergedBase: "master", MergedSHA: tip}
+	got, err = e.m.FixPrompt(e.pr, role, run, merged)
+	if want := " magnum merged the tip `" + tip + "` of the base branch `master` into the PR before this run, with no conflict: the head below is that merge, " +
+		"and its changes are the base's, not the PR's."; err != nil || !strings.Contains(got, want) {
+		t.Errorf("the fix prompt after magnum's merge = %q, %v; want %q", got, err, want)
+	}
+	unsafe := merged
+	unsafe.MergedBase = "master$(touch x)"
+	if _, err := e.m.FixPrompt(e.pr, role, run, unsafe); !errors.Is(err, ErrUnsafeBaseRef) || strings.Contains(err.Error(), unsafe.MergedBase) {
+		t.Errorf("FixPrompt with merged base %q = %v; want ErrUnsafeBaseRef without the name", unsafe.MergedBase, err)
+	}
+	notACommit := merged
+	notACommit.MergedSHA = "HEAD; rm -rf ."
+	if _, err := e.m.FixPrompt(e.pr, role, run, notACommit); err == nil || strings.Contains(err.Error(), notACommit.MergedSHA) {
+		t.Errorf("FixPrompt with merged tip %q = %v; want a refusal without it", notACommit.MergedSHA, err)
 	}
 }

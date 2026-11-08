@@ -74,6 +74,7 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 				d := sampleData[agents.RoleData](true)
 				d.Mode = mode
 				d.ConflictSHA = "0123456789abcdef0123456789abcdef01234567" // the fix prompt's merge line takes a commit id only
+				d.MergedSHA = d.ConflictSHA                                // and so does its sentence of magnum's merge
 				render(what, p, d)
 			}
 			render(what, p, agents.RoleData{})

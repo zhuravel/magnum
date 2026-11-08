@@ -107,6 +107,14 @@ var commitIDRe = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 // tip that is no commit id, which the merge line puts, unquoted, into the
 // command the fixer runs. Neither is quoted in the error.
 func checkConflict(name string, d RoleData) error {
+	if d.MergedSHA != "" {
+		if err := checkBaseRef(name, d.MergedBase); err != nil {
+			return err
+		}
+		if !commitIDRe.MatchString(d.MergedSHA) {
+			return fmt.Errorf("agents: render %s: the merged base tip is not a commit id", name)
+		}
+	}
 	if d.ConflictSHA == "" {
 		return nil
 	}
@@ -855,6 +863,13 @@ type RoleData struct {
 	ConflictBase, ConflictSHA string
 	ConflictPaths             []string
 	ConflictFiles             int
+	// MergeOnly, MergedBase and MergedSHA are the fix prompt's too: the run
+	// merges the PR's parent alone (the conflict above) with no review to
+	// fix; magnum merged the tip MergedSHA of the base MergedBase into the
+	// PR before the run, so the head the fixer starts from is that merge.
+	// false and "" otherwise.
+	MergeOnly             bool
+	MergedBase, MergedSHA string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -946,6 +961,12 @@ type FixPromptInput struct {
 	ConflictBase, ConflictSHA                                                                   string
 	ConflictPaths                                                                               []string
 	OwnPR                                                                                       bool
+	// MergeOnly: the run merges the PR's parent alone (the conflict above),
+	// with no review, finding or other reviewer's item. MergedBase and
+	// MergedSHA are the base whose tip magnum merged into the PR before the
+	// run ("" = none): the head the fixer starts from is that merge.
+	MergeOnly             bool
+	MergedBase, MergedSHA string
 }
 
 // maxConflictPaths bounds the conflicting paths the fix prompt names: the
@@ -989,7 +1010,10 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
 		FixSyncCommand: in.FixSyncCommand, PushCommand: in.PushCommand, FixerLogin: in.FixerLogin, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
-		OwnPR: in.OwnPR,
+		OwnPR: in.OwnPR, MergeOnly: in.MergeOnly,
+	}
+	if in.MergedSHA != "" {
+		d.MergedBase, d.MergedSHA = in.MergedBase, in.MergedSHA
 	}
 	if in.ConflictSHA != "" {
 		d.ConflictBase, d.ConflictSHA = in.ConflictBase, in.ConflictSHA
