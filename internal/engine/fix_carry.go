@@ -11,18 +11,25 @@ package engine
 // with the same comment id is that call now (the place it names may have
 // moved with a push), and what a later cycle was handed again is that
 // cycle's fixer's to leave again or answer (carriedLeft): a conflict with
-// the base (the later job checks the base again), a description entry (its
-// fixer judged the re-review's own line), another reviewer's thread, review
-// body or comment that its external file listed. magnum's own threads are
-// read again before each end, as the last cycle's are (freshCarried,
-// freshNeedsYou). A stop (`magnum abort`) ends the loop quietly, its carried
-// calls with it, as it does the last cycle's.
+// the base its job checked again, a description entry when its review has
+// the description line, another reviewer's thread, review body or comment
+// that its external file gave its fixer open. Anything else goes on, and
+// the loop's end dates each carried call at the run that made it
+// (carriedCallTimes), so the author's word in its thread while the loop
+// ran is a decision on it. magnum's own threads are read again before each
+// end, as the last cycle's are (freshCarried, freshNeedsYou). A stop
+// (`magnum abort`) ends the loop quietly, its carried calls with it, as it
+// does the last cycle's.
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
 )
@@ -66,14 +73,26 @@ func answeredOf(entries []string, answered map[string]bool) []string {
 	return out
 }
 
+// laterWork is what a later cycle's job was handed again of what an earlier
+// cycle may have left (carriedLeft): the description, when the review it
+// fixes has a `Description: ✗` line (fixJob.described), and the base,
+// when the job's guard checked it (fixJob.baseChecked: the conflict is the
+// fixer's to merge, or the head merges cleanly and it is gone) or the job
+// was given a conflict all the same (the tip prepareFix fetched).
+type laterWork struct{ description, base bool }
+
 // carriedLeft is carried without what the cycle whose report is report,
-// and whose fixer left entries, asks again or was handed again: an entry
-// with a comment id entries name (the later entry is the call now), a
-// conflict with the base and a description entry, and, when that cycle's
-// external file was written, every entry in another reviewer's thread,
-// review body or comment (its fixer had every open one, and left again what
-// still needs the author). A group left with no entry goes.
-func carriedLeft(carried []FixCarry, report string, entries []string) []FixCarry {
+// and whose fixer left entries, asks again or was handed again (took): an
+// entry with a comment id entries name (the later entry is the call now),
+// a conflict with the base and a description entry when took says so, and
+// an entry in another reviewer's thread, review body or comment that the
+// cycle's external file gave its fixer open (heldOpen). Every other entry
+// was never handed again, and goes on: a call in magnum's own thread, and
+// another reviewer's item the file lists answered (the author's reply
+// while the loop ran, which the next fixer leaves alone and a decision at
+// the loop's end may build), waiting, or not at all. A group left with no
+// entry goes.
+func carriedLeft(carried []FixCarry, report string, entries []string, took laterWork) []FixCarry {
 	if len(carried) == 0 {
 		return nil
 	}
@@ -83,7 +102,7 @@ func carriedLeft(carried []FixCarry, report string, entries []string) []FixCarry
 			asked[n.id] = true
 		}
 	}
-	_, handed := readExternalFile(filepath.Dir(report))
+	x, handed := readExternalFile(filepath.Dir(report))
 	var out []FixCarry
 	for _, c := range carried {
 		owners := readThreadOwners(filepath.Dir(c.Report))
@@ -92,15 +111,19 @@ func carriedLeft(carried []FixCarry, report string, entries []string) []FixCarry
 			switch {
 			case !ok:
 				return false
-			case n.id != "" && asked[n.id], n.place == conflictPlace, n.place == "description":
+			case n.id != "" && asked[n.id]:
 				return true
+			case n.place == conflictPlace:
+				return took.base
+			case n.place == "description":
+				return took.description
 			case !handed:
 				return false
 			case n.place == remarkReview, n.place == remarkComment:
-				return true
+				return x.heldOpen(n)
 			}
 			magnums, known := owners.owner(n)
-			return known && !magnums
+			return known && !magnums && x.heldOpen(n)
 		})
 		if len(kept) == 0 {
 			continue
@@ -108,6 +131,25 @@ func carriedLeft(carried []FixCarry, report string, entries []string) []FixCarry
 		out = append(out, FixCarry{Report: c.Report, NeedsYou: kept, Answered: answeredOf(kept, c.answered())})
 	}
 	return out
+}
+
+// heldOpen reports whether x, an external file, gave its fixer the item of
+// another reviewer that n names open: the thread of its comment id, or the
+// review body or comment of its id and kind, unanswered or holding the
+// author's decision, and not waiting for the author.
+func (x externalItems) heldOpen(n needsYouEntry) bool {
+	id, err := strconv.ParseInt(n.id, 10, 64)
+	if err != nil {
+		return false
+	}
+	if n.place == remarkReview || n.place == remarkComment {
+		return slices.ContainsFunc(x.Conversation, func(r externalRemark) bool {
+			return r.ID == id && r.Kind == n.place && !r.Answered && !r.Waits
+		})
+	}
+	return slices.ContainsFunc(x.Threads, func(t externalThread) bool {
+		return t.CommentID == id && (!t.Answered || t.Decision) && !t.Waits
+	})
 }
 
 // freshCarried is carried as magnum's own threads show it now, each group
@@ -124,6 +166,37 @@ func (e *Engine) freshCarried(ctx context.Context, job *fixJob, carried []FixCar
 			continue
 		}
 		out = append(out, FixCarry{Report: c.Report, NeedsYou: needs, Answered: answeredOf(needs, answered)})
+	}
+	return out
+}
+
+// carriedCallTimes are the calls the job's loop carries from its earlier
+// cycles (FixState.Carried), by the comment id of each entry, at the time
+// of the run whose report holds it (fixRunTime): the loop's end dates them
+// there (fixAttention, recordFixCalls), not at the last report's run, so
+// the author's word in such a thread while the loop ran came after the
+// call and is a decision on it. A report or run that cannot be read dates
+// nothing (the last report's run then does).
+func (e *Engine) carriedCallTimes(ctx context.Context, job *fixJob) map[int64]time.Time {
+	out := map[int64]time.Time{}
+	for _, c := range job.state.Carried {
+		b, err := os.ReadFile(c.Report)
+		if err != nil {
+			continue
+		}
+		runID, _ := agents.ReportRun(b)
+		at := e.fixRunTime(ctx, job.pr.ID, runID)
+		if runID == "" || at.IsZero() {
+			continue
+		}
+		for _, entry := range c.NeedsYou {
+			n, ok := readNeedsYouEntry(entry)
+			if id, err := strconv.ParseInt(n.id, 10, 64); ok && err == nil {
+				if _, seen := out[id]; !seen {
+					out[id] = at
+				}
+			}
+		}
 	}
 	return out
 }

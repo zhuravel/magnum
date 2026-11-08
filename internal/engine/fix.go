@@ -161,9 +161,11 @@ type fixJob struct {
 	// and the guard looks again for every job, in the slot the fixer works
 	// in (checkFixBase). Zero for a clean merge, or when nobody could check.
 	// forMerge: the merge is all the job starts for (a review that found
-	// nothing, and no other reviewer's item waits).
-	conflict fixConflict
-	forMerge bool
+	// nothing, and no other reviewer's item waits). baseChecked: the guard
+	// checked the base, so conflict is what the head does with it now.
+	conflict    fixConflict
+	forMerge    bool
+	baseChecked bool
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
@@ -1144,7 +1146,7 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 	case c.sha == "" && job.forMerge:
 		return fixConflictGone{head: job.head, base: job.conflict.base, review: job.review.SHA}
 	}
-	job.conflict = c
+	job.conflict, job.baseChecked = c, true
 	return nil
 }
 

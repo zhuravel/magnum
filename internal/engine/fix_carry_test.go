@@ -116,6 +116,45 @@ func TestTheCallsOfAnEarlierCycleReachTheLoopsEnd(t *testing.T) {
 	}
 }
 
+// A call carried from an earlier cycle is asked at the loop's end, and is
+// dated at the run of the cycle that made it, not the last report's: your
+// answer in its thread while the loop ran (the settle's toast asks for it
+// while the re-review runs) came after the call, so it is your decision on
+// it, never an answer from before the call that asks again.
+func TestACarriedCallIsDatedAtTheRunThatMadeIt(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 1})
+	cycleFixer(h, git, func(id string) (string, string) {
+		run, err := h.st.RunByID(h.ctx, id)
+		if err != nil {
+			h.t.Error(err)
+			return "", ""
+		}
+		writeFixReviewFiles(h.t, deref(run.ReportPath), []int64{2101}, nil)
+		return leavesCall(fixPushed, 42)(id)
+	}, func(id string) (string, string) {
+		return fixPushed2, fixReport(id, fixPushed2[:7]+" Fix the new total", fixReplied, "none")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	reviewWith(h, byHead(map[string]map[string]int{fixPushed: {"P2": 1}}))
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // cycle 2
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed2, author: "zhuravel"}) // a clean re-review: the loop's end
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if want := "decide magnum's P1 on app/models/offer.rb:42"; !strings.Contains(deref(cur.LastError), want) {
+		t.Fatalf("last_error = %q, want the carried call %q", deref(cur.LastError), want)
+	}
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 || runs[0].VerifiedAt == nil || runs[1].VerifiedAt == nil || !runs[1].VerifiedAt.After(*runs[0].VerifiedAt) {
+		t.Fatalf("fix runs = %+v, want two cycles, the second later", runs)
+	}
+	if at, ok := h.e.fixCallTimes(h.ctx, pr.ID)[2101]; !ok || !at.Equal(*runs[0].VerifiedAt) {
+		t.Errorf("the call on 2101 is dated %v (%v), want cycle 1's run at %v", at, ok, *runs[0].VerifiedAt)
+	}
+}
+
 // A next cycle whose fixer pushes nothing ends the loop at its settle: with
 // a call carried from cycle 1 that end needs attention for it, not the info
 // toast of a fixer that only replied; a cycle that fails keeps the call
@@ -151,11 +190,18 @@ func TestACycleThatEndsTheLoopAsksTheCallsItCarries(t *testing.T) {
 
 // What a later cycle asked again or took on is no carried call any more: an
 // entry with a comment id the later report lists (its entry is the call
-// now), a conflict with the base (the later job checks the base again) and
-// a description entry (its fixer judged the re-review's own line), and,
-// once the later cycle's fixer got the external file, another reviewer's
-// thread, review body or comment (it had every open one). A call in
-// magnum's own thread that the later fixer left alone is carried on.
+// now), a conflict with the base once the later job checked the base again
+// (it found the conflict, the fixer's to merge, or a clean merge), a
+// description entry once the later job was handed the re-review's own
+// `Description: ✗` line, and another reviewer's thread, review body or
+// comment that the later cycle's external file gave its fixer open
+// (unanswered, or holding your decision, and not waiting). Anything else
+// was never handed again and is carried on: a call in magnum's own thread
+// the later fixer left alone, a description entry or a conflict the later
+// job was not given (a review with no description line, a base it could
+// not check), and another reviewer's item the later file lists answered
+// (your reply while the loop ran, which the next fixer leaves alone),
+// waiting, or not at all.
 func TestACarriedCallGoesOnceALaterCycleTookItOn(t *testing.T) {
 	root := t.TempDir()
 	first, later := filepath.Join(root, "a1a1a1a"), filepath.Join(root, "b2b2b2b")
@@ -189,7 +235,11 @@ func TestACarriedCallGoesOnceALaterCycleTookItOn(t *testing.T) {
 		}
 		return out
 	}
-	got := carriedLeft(carried, report, nil)
+	took := laterWork{description: true, base: true}
+	if got := entries(carriedLeft(carried, report, nil, laterWork{})); !slices.Equal(got, carried[0].NeedsYou) {
+		t.Errorf("nothing handed again: carried %q, want every call", got)
+	}
+	got := carriedLeft(carried, report, nil, took)
 	if want := []string{"2101 P1 app/a.rb:1: not fixed. wants a schema change", "3101 app/b.rb:2: not fixed. contested",
 		"4100 review: not fixed. asks for the rollout plan"}; !slices.Equal(entries(got), want) {
 		t.Errorf("without the later file: carried %q, want %q", entries(got), want)
@@ -197,13 +247,37 @@ func TestACarriedCallGoesOnceALaterCycleTookItOn(t *testing.T) {
 	if len(got) != 1 || !slices.Equal(got[0].Answered, []string{"2101"}) {
 		t.Errorf("carried %+v, want 2101 still answered", got)
 	}
-	if err := writeExternalFile(filepath.Join(later, externalFile), externalItems{}); err != nil {
+	thread := func(answered, decision, waits bool) externalThread {
+		return externalThread{CommentID: 3101, Answered: answered, Decision: decision, Waits: waits}
+	}
+	remark := func(answered, waits bool) []externalRemark {
+		return []externalRemark{{Kind: remarkReview, ID: 4100, Answered: answered, Waits: waits}}
+	}
+	magnums := []string{"2101 P1 app/a.rb:1: not fixed. wants a schema change"}
+	for name, tc := range map[string]struct {
+		x    externalItems
+		want []string
+	}{
+		"handed open":         {externalItems{Threads: []externalThread{thread(false, false, false)}, Conversation: remark(false, false)}, magnums},
+		"your decision":       {externalItems{Threads: []externalThread{thread(false, true, false)}, Conversation: remark(false, false)}, magnums},
+		"answered meanwhile":  {externalItems{Threads: []externalThread{thread(true, false, false)}, Conversation: remark(true, false)}, entries(got)},
+		"waiting":             {externalItems{Threads: []externalThread{thread(false, false, true)}, Conversation: remark(false, true)}, entries(got)},
+		"listed nowhere":      {externalItems{}, entries(got)},
+		"the thread alone":    {externalItems{Threads: []externalThread{thread(false, false, false)}}, append(slices.Clone(magnums), "4100 review: not fixed. asks for the rollout plan")},
+		"another remark kind": {externalItems{Conversation: []externalRemark{{Kind: remarkComment, ID: 4100}}}, entries(got)},
+	} {
+		if err := writeExternalFile(filepath.Join(later, externalFile), tc.x); err != nil {
+			t.Fatal(err)
+		}
+		if got := entries(carriedLeft(carried, report, nil, took)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: carried %q, want %q", name, got, tc.want)
+		}
+	}
+	if err := writeExternalFile(filepath.Join(later, externalFile), externalItems{Threads: []externalThread{thread(false, false, false)}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := entries(carriedLeft(carried, report, nil)); !slices.Equal(got, []string{"2101 P1 app/a.rb:1: not fixed. wants a schema change"}) {
-		t.Errorf("with the later file: carried %q, want magnum's call alone", got)
-	}
-	if got := carriedLeft(carried, report, []string{"2101 P1 app/a.rb:3: not fixed. wants a schema change"}); len(got) != 0 {
-		t.Errorf("asked again: carried %+v, want none", got)
+	if got := entries(carriedLeft(carried, report, []string{"2101 P1 app/a.rb:3: not fixed. wants a schema change"}, took)); !slices.Equal(got,
+		[]string{"4100 review: not fixed. asks for the rollout plan"}) {
+		t.Errorf("asked again: carried %q, want the remark alone", got)
 	}
 }

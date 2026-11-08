@@ -134,7 +134,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
 	}
 	// fix_carry.go: what earlier cycles left that this one did not ask again or take on
-	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou)
+	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou, laterWork{description: job.described, base: job.baseChecked || job.conflict.sha != ""})
 	if len(carried) > 0 && !pushed { // the loop ends here: as magnum's threads show them now
 		carried = e.freshCarried(ctx, job, carried, "", read)
 	}
@@ -567,8 +567,9 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // answered the first): its message replaces the first loop's, and keeps the
 // first's decision calls that GitHub does not show built when it asks for
 // no call of its own (keepDecisions: a failed run, the cap), at the time
-// recorded for them (recordFixCalls, which dates the message's other calls
-// at its report's run). A PR waiting
+// recorded for them (recordFixCalls, which dates the calls the loop carried
+// from its earlier cycles at the run that made each, carriedCallTimes, and
+// the message's other calls at its report's run). A PR waiting
 // for a round keeps it, because a push came during the fix and that
 // re-review still runs: it gets the urgent toast alone. A PR elsewhere
 // (closed, ineligible) has the events only. The toast's dedupe key is the
@@ -587,6 +588,14 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 		calls := e.fixerCalls(ctx, pr)
 		if keep := keepDecisions(deref(pr.LastError), msg, e.callsOpen(ctx, job, calls)); keep != msg {
 			msg, kept = keep, calls
+		}
+	}
+	for id, at := range e.carriedCallTimes(ctx, job) { // fix_carry.go: a carried call dates from the cycle that made it
+		if _, ok := kept[id]; !ok {
+			if kept == nil {
+				kept = map[int64]time.Time{}
+			}
+			kept[id] = at
 		}
 	}
 	switch {

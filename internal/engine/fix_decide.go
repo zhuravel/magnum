@@ -218,11 +218,7 @@ func (e *Engine) decisionThreads(ctx context.Context, pr store.PR) (threads []in
 	if runID == "" {
 		return threads, time.Time{}
 	}
-	if run, err := e.st.RunByID(ctx, runID); err == nil && run.PRID == pr.ID && run.Kind == store.RunFix {
-		if at := cmp.Or(run.VerifiedAt, run.EndedAt); at != nil {
-			made = *at
-		}
-	}
+	made = e.fixRunTime(ctx, pr.ID, runID)
 	if rep, err := ParseFixReport(string(b), runID); err == nil {
 		owners := readThreadOwners(filepath.Dir(report))
 		for _, entry := range FixNeedsAsked(msg, rep.NeedsYou) {
@@ -236,6 +232,18 @@ func (e *Engine) decisionThreads(ctx context.Context, pr store.PR) (threads []in
 		}
 	}
 	return threads, made
+}
+
+// fixRunTime is when fix run runID of PR prID ended (verified, else
+// ended): a call it left is made when its settle reads its report. Zero
+// when the run cannot be read, is no fix run of that PR, or has not ended.
+func (e *Engine) fixRunTime(ctx context.Context, prID int64, runID string) time.Time {
+	if run, err := e.st.RunByID(ctx, runID); err == nil && run.PRID == prID && run.Kind == store.RunFix {
+		if at := cmp.Or(run.VerifiedAt, run.EndedAt); at != nil {
+			return *at
+		}
+	}
+	return time.Time{}
 }
 
 // fixCallTimes is the PR's record of when the fixer made its calls
