@@ -4653,8 +4653,8 @@ again ends when they do, and 3 such crashes at one head send that task to you); 
 needs you. A stage that keeps failing for a cause of its own (gh
 logged out, a token without scope, a push the remote's hooks refuse) is tried again no sooner than a poll after each
 failure, however often other tasks' turns kick a tick (a kicked tick restarts the poll's timer, so a try can come up to
-about two polls after the failure). An answer, a let go or a decision on the card that comes for such a task within
-that poll is taken at once but acted on at that try (a retry, of a task that waits on you, goes on at once). After 5
+about two polls after the failure). Your word moves it at once: an answer, a let go, a decision on the card or a retry
+ends that wait, and the tick it kicks runs the stage; only the factory's own retries keep the spacing. After 5
 failures in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
 row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
 own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the

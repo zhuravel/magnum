@@ -813,7 +813,8 @@ func (e *Engine) decideRequest(ctx context.Context, p DecidePayload) (string, er
 // its publish, a send back writes your note to send-back-<revision>.md and
 // returns the task to its coding stage (rework.json names the note and the
 // reason's key), and a drop stops the task, freeing its copy and keeping
-// its branch.
+// its branch. A decision taken ends the wait after a failure of the task's
+// stage (retryLater), as a retry does: the tick it kicks runs the task.
 func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 	switch p.Choice {
 	case ChoicePush, ChoiceDrop:
@@ -867,6 +868,7 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 	if err := e.reg.RecordDecision(ctx, d); err != nil {
 		return err
 	}
+	delete(e.lastFail, t.ID)
 	surface := cmp.Or(p.Surface, "cli")
 	choice := p.Choice
 	if p.Reason != "" {

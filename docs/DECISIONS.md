@@ -19136,9 +19136,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     took four polls, three minutes, before) and send you a fault the next minutes heal. A failing publish would also
     spend its GitHub calls as fast. The poll's pace keeps both bounds, the stage's and the publish's, as they were. A
     new task's first failure counts at its kind's first stage (`stageRan`), which its first pass records, so that
-    stage is paced too and needs you after 5 tries, not 6. A request other than a retry (an answer, a let go, a
-    decision on the card) that comes within that poll is taken at once but acted on at that try; a retry, of a task
-    that waits on you, clears the wait (`retryTask` drops the failures).
+    stage is paced too and needs you after 5 tries, not 6. Your word ends the wait, so the tick it kicks runs the
+    stage: an answer (`afterAnswers`), a let-go (`letGo`), a decision on the card (`decide`) and a retry
+    (`retryTask`) each drop the task's failures. Only the factory's own retries keep the spacing.
   - `[factory] observe` is 5s by default (from 10s, in `config.defaults.toml` and `DefaultFactory`; still positive).
     The narrow pass of the review daemon's clock (`agents.ObserveRunsAt`, 50711773) did not reach the factory: it is
     a method of its own, and `Runtime.Observe` ran `ObserveSnapshotAt` over every live session, which writes each
@@ -19168,8 +19168,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault, TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll
   (a minute of ticks, each kicked by another task's turn end, tries the failing stage at 0 s and at 45 s, exactly a
   poll after, which fails with `<=` for `<`; five tries at the poll's pace need you; a row for a new task's first
-  stage, which failed with the empty stage recorded) and TestAStageThatChangedSinceAFailureRunsAtOnce (it fails with
-  `retryLater`'s stage check taken out); for guards that held before the chain,
+  stage, which failed with the empty stage recorded), TestAStageThatChangedSinceAFailureRunsAtOnce (it fails with
+  `retryLater`'s stage check taken out) and TestYourWordRunsAStageThatFailedAMomentAgoAtOnce (an answer, a let-go and
+  a push on the card, each less than a poll after a failure, run the stage in the tick they kick); for guards that
+  held before the chain,
   TestATypedEventDoesNotKickTheLoop, TestNoChainWhileTheDaemonDrains (it fails with the drain's check taken out of
   `passedOn`), TestNoChainedLaunchUnderAHold (the memory hold and install's drain),
   TestAFailedTransitionChainsNothing and TestAPassThatSendsTheTaskToYouChainsNothing (a writer beside the loop sets

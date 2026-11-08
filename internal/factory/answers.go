@@ -501,8 +501,11 @@ func (e *Engine) recordAnswer(ctx context.Context, t registry.Task, q registry.Q
 
 // afterAnswers moves task t, if it waited for answers to its questions, as
 // its open questions now say: to work when none is open, else on whom it
-// waits for them (questionsWait), without a second alert.
+// waits for them (questionsWait), without a second alert. Your answers end
+// the wait after a failure of its stage (retryLater), as a retry does: the
+// tick they kick runs it.
 func (e *Engine) afterAnswers(ctx context.Context, t registry.Task) error {
+	delete(e.lastFail, t.ID)
 	cur, err := e.reg.TaskByID(ctx, t.ID)
 	if err != nil {
 		return err

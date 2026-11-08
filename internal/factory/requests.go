@@ -453,7 +453,8 @@ func (e *Engine) previewRequest(ctx context.Context, p PreviewPayload) (string, 
 // next pass, so a role whose let-go prompt was its turn's waits on you with
 // a plain reason (recheckFailed). A task that waited on you for unknown
 // deliveries goes on once none of them is left, and waits on the others
-// meanwhile.
+// meanwhile. It ends the wait after a failure of the task's stage
+// (retryLater), as a retry does: the tick it kicks runs the stage.
 func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -470,6 +471,7 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 		return "", fmt.Errorf("%s has no prompt of unknown delivery to %s: there is nothing to let go", TaskKey(t), p.Role)
 	}
 	delete(e.agentRuns, t.ID)
+	delete(e.lastFail, t.ID)
 	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface,
 		Stage: t.Stage, Role: p.Role}); err != nil {
 		e.log.Warn("record a let-go", "task", t.ID, "err", err)

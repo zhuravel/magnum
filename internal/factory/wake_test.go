@@ -3,6 +3,7 @@ package factory
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -381,6 +382,87 @@ func TestAStageThatChangedSinceAFailureRunsAtOnce(t *testing.T) {
 	if !slices.Equal(ran, []string{"two", "one"}) {
 		t.Fatalf("stages run %v; want two, then one at once on the next tick", ran)
 	}
+}
+
+// failedNow records a failure of task id's stage now, as the loop records
+// its pass's own failure (taskFailed): the task's next try waits a poll.
+func (h *harness) failedNow(id int64) {
+	h.t.Helper()
+	h.e.taskFailed(h.ctx, taskFailure{task: h.reload(id), err: errors.New("gh pr create: HTTP 403: Resource not accessible by token")})
+	if !h.e.retryLater(h.reload(id), h.clock.Now()) {
+		h.t.Fatal("the failure set no wait")
+	}
+}
+
+// Your word moves a task at once, whatever its stage's last failure: your
+// answers, a let-go and your decision on the ready card each clear the wait
+// a poll after a failure (as a retry does), so the tick the request kicks
+// runs the task's stage. Only the factory's own retries keep the poll's
+// spacing.
+func TestYourWordRunsAStageThatFailedAMomentAgoAtOnce(t *testing.T) {
+	t.Run("an answer", func(t *testing.T) {
+		h := newHarness(t)
+		task := h.gateTask("PR-12512", "feature", whenQuestion)
+		h.tick()
+		if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.Stage != "questions" {
+			t.Fatalf("task %s at %s, want NEEDS YOU at its questions", got.State, got.Stage)
+		}
+		h.failedNow(task.ID)
+		h.clock.Add(10 * time.Second)
+		h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: whenQuestion.Options[0].Label}})
+		if got := h.reload(task.ID); got.Stage != "coding" {
+			t.Fatalf("after your answer the task is %s at %s; want the gate run in the answer's tick, at coding", got.State,
+				got.Stage)
+		}
+	})
+
+	t.Run("a let-go", func(t *testing.T) {
+		h := newHarness(t)
+		passes := 0
+		h.stage(config.FactoryStageAgents, func(context.Context, registry.Task, config.FactoryStage) (bool, error) {
+			passes++
+			return false, nil
+		})
+		task := h.task("PR-12513", registry.TaskActive, "investigate")
+		a, err := h.reg.BeginAttempt(h.ctx, task.ID, "investigate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.reg.AppendLedger(h.ctx, registry.LedgerEntry{TaskID: task.ID, AttemptID: a.ID, Role: "fx-repro", RunID: "run-1",
+			Hash: runtime.PromptHash("reproduce the bug"), Text: "reproduce the bug"}); err != nil { // its delivery unknown
+			t.Fatal(err)
+		}
+		h.clock.Add(runtime.UnknownAfter)
+		h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventDeliveryUnknown,
+			Reason: runtime.UnknownReason(task.ID, "fx-repro")})
+		if got := h.reload(task.ID); got.State != registry.TaskNeedsYou {
+			t.Fatalf("task %s waits %q, want NEEDS YOU on the pane", got.State, got.WaitsWhat)
+		}
+		h.failedNow(task.ID)
+		h.clock.Add(10 * time.Second)
+		if _, err := h.reg.EnqueueRequest(h.ctx, ReqLetGo, LetGoPayload{TaskID: task.ID, Role: "fx-repro", Surface: "screen"}); err != nil {
+			t.Fatal(err)
+		}
+		h.tick()
+		if got := h.reload(task.ID); got.State != registry.TaskActive || passes != 1 {
+			t.Fatalf("after your let-go the task is %s and its stage ran %d times; want active, run once in the let-go's tick",
+				got.State, passes)
+		}
+	})
+
+	t.Run("a decision", func(t *testing.T) {
+		r := newReadyRig(t)
+		task, _ := r.toCard("PR-12514")
+		r.failedNow(task.ID)
+		r.clock.Add(10 * time.Second)
+		if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+			t.Fatalf("push request %s: %q", q.State, q.Result)
+		}
+		if got := r.reload(task.ID); got.Stage != "publish" {
+			t.Fatalf("after your push the task is %s at %s; want the ready stage run in the push's tick, at publish", got.State,
+				got.Stage)
+		}
+	})
 }
 
 // attemptPrompts are the prompts of ps sent in attempt id.
