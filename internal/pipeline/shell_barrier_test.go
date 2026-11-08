@@ -237,7 +237,7 @@ func TestAnIdlePaneIsAStopOnlyOnceTheCapturedJobIsGone(t *testing.T) {
 	e.ag.onStopShell = func(*fakeAgents, store.Run) error {
 		return errors.New("agents: stop codex-review in pane p3: 1 processes of its job still run after SIGKILL (sandbox-exec)")
 	}
-	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang())}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{atTheCommandsPush(e, head2)}
 
 	_, err := e.r.RunRound(e.ctx, in)
 	if got := sw.asked(); len(got) != 0 || !errors.Is(err, ErrShellRunning) {
