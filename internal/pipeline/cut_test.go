@@ -415,7 +415,7 @@ func TestARestartNeverSwitchesTheCheckoutUnderARunningCommand(t *testing.T) {
 		e.git.mu.Lock()
 		e.git.status = gitx.Status{Tracked: 1} // the stage leaves an edit
 		e.git.mu.Unlock()
-		return pushThen(e, head2, hang())(f, run, text)
+		return atTheCommandsPush(e, head2)(f, run, text)
 	}}
 
 	res, err := e.r.RunRound(e.ctx, in)
