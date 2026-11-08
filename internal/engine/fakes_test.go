@@ -161,6 +161,9 @@ type fakeGH struct {
 	// defaultFiles is the Details' file list of a PR whose spec lists none
 	// (nil: no list).
 	defaultFiles []string
+	// baseOid is the base's tip Details reports for every PR ("" =
+	// fakeBaseOid).
+	baseOid string
 	calls        []string
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
@@ -723,7 +726,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), AuthorLogin: author, AuthorType: cmp.Or(p.authorType, "User"),
 				Labels: p.labels, LabelsComplete: !p.labelsTruncated, LatestReviewsComplete: !p.reviewsTruncated,
 				HeadRefName: "feature", BaseRefName: specBase(p), State: "OPEN", IsDraft: p.draft,
-				HeadRefOid: p.head, BaseRefOid: fakeBaseOid, Assignees: append([]string{}, p.assignees...),
+				HeadRefOid: p.head, BaseRefOid: cmp.Or(g.baseOid, fakeBaseOid), Assignees: append([]string{}, p.assignees...),
 				ReviewRequests: []github.Reviewer{}, LatestReviews: append([]github.LatestReview{}, p.reviews...),
 				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,
 				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...),

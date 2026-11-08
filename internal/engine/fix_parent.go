@@ -30,6 +30,7 @@ package engine
 // re-reviewed").
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -86,15 +87,22 @@ const workflowsWord = "with Workflows"
 
 // pushMerge pushes merge, a merge of b's tip into head, to the job's PR
 // branch as the fix identity id, with a lease on head, from the job's
-// slot. A merge that changes no workflow file goes with the App's token
-// (its gh config dir, the pane's too). One that brings the base's workflow
-// changes goes only when every workflow file of the merge is as b's tip
-// has it, never with the PR's own, and then with a token of the daemon's
-// own with Workflows write (identity.App.DaemonPushEnv: never in a pane's
-// gh config dir), released after the push. how is workflowsWord for such
-// a push; refused says why nothing was pushed (the PR's own workflow
-// changes, or an App without Workflows: "needs Workflows on the App").
+// slot, never to master, main, the default branch or the PR's base
+// (refusedHeadBranch). A merge that changes no workflow file goes with the
+// App's token (its gh config dir, the pane's too). One that brings the
+// base's workflow changes goes only when b is on the base as GitHub has it
+// now and new to head (baseOnGitHub: never a ref of the slot, which the
+// fixer's pane can write) and every workflow file of the merge is as that
+// tip on GitHub has it, never with the PR's own, and then with a token of
+// the daemon's own with Workflows write (identity.App.DaemonPushEnv: never
+// in a pane's gh config dir), released after the push. how is
+// workflowsWord for such a push; refused says why nothing was pushed (the
+// branch, the PR's own workflow changes, a base GitHub has otherwise, or
+// an App without Workflows: "needs Workflows on the App").
 func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how, refused string, err error) {
+	if why := refusedHeadBranch(job.repo, job.pr, b.base); why != "" {
+		return "", why, nil
+	}
 	src := e.d.Identities[id.Name]
 	if src == nil {
 		return "", "", fmt.Errorf("identity %q is not configured", id.Name)
@@ -111,13 +119,20 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 			return "", "", fmt.Errorf("the token of %s: %w", id.Name, err)
 		}
 	} else {
-		own, err := pg.DifferingPaths(ctx, dir, merge, b.sha, workflowsPath)
+		files := textx.Count(len(workflows), "file", "files")
+		tip, why := e.baseOnGitHub(ctx, job, b, head)
+		if why != "" {
+			return "", fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why), nil
+		}
+		own, err := pg.DifferingPaths(ctx, dir, merge, tip, workflowsPath)
 		if err != nil {
 			return "", "", fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
 		}
-		files := textx.Count(len(workflows), "file", "files")
 		dp, ok := src.(daemonPusher)
 		switch {
+		case len(own) > 0 && tip != b.sha:
+			return "", fmt.Sprintf("%s has workflow files that are not as the tip %s of %s on GitHub has them (%s), which %s never pushes",
+				at, textx.ShortSHA(tip), b.base, strings.Join(own[:min(3, len(own))], ", "), id.Login), nil
 		case len(own) > 0:
 			return "", fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at, strings.Join(own[:min(3, len(own))], ", "), id.Login), nil
 		case !ok:
@@ -137,6 +152,57 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		return "", "", fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
 	}
 	return how, "", nil
+}
+
+// refusedHeadBranch says why magnum never pushes to pr's branch, "" when
+// it may: master, main, repo's default branch and the PR's base (its
+// row's, and base, the one the job merges), as `magnum push` refuses them
+// (internal/cli/push.go). A PR from main into production is not the bot's
+// to push to.
+func refusedHeadBranch(repo store.Repo, pr store.PR, base string) string {
+	branch := deref(pr.HeadRef)
+	if slices.ContainsFunc([]string{"master", "main", repo.DefaultBranch, deref(pr.BaseRef), base}, func(b string) bool { return b != "" && strings.EqualFold(b, branch) }) {
+		return fmt.Sprintf("magnum never pushes to %s (master, main, the default branch or the PR's base)", branch)
+	}
+	return ""
+}
+
+// baseOnGitHub checks b, the commit of the PR's base a merge into head
+// merges, against the base as GitHub has it now (the poll identity's
+// Details, never a ref of the slot, which the fixer's pane can write): the
+// PR's base on GitHub is still b.base, b.sha is on it (its tip has it, as
+// the slot's git knows the tip: a fetch of the base brings it) and head
+// lacks b.sha. It returns that tip, or why not (refused), in a few words
+// for pushMerge's refusal.
+func (e *Engine) baseOnGitHub(ctx context.Context, job *fixJob, b fixConflict, head string) (tip, refused string) {
+	gh := e.gh(job.watch.PollIdentity)
+	if gh == nil {
+		return "", fmt.Sprintf("no GitHub client of %s says where the tip of %s is", job.watch.PollIdentity, b.base)
+	}
+	det, _, err := gh.Details(ctx, job.repo.Owner, job.repo.Name, []int{job.pr.Number})
+	d, ok := det[job.pr.Number]
+	switch {
+	case err != nil:
+		return "", fmt.Sprintf("GitHub does not say where the tip of %s is: %s", b.base, oneLine(err.Error(), 200))
+	case !ok || d.BaseRefOid == "":
+		return "", fmt.Sprintf("GitHub does not say where the tip of %s is", b.base)
+	case d.BaseRefName != b.base:
+		return "", fmt.Sprintf("the PR's base on GitHub is %s now, not %s", d.BaseRefName, b.base)
+	}
+	dir, short := job.slot.Path, textx.ShortSHA(b.sha)
+	switch on, err := e.d.Git.IsAncestor(ctx, dir, b.sha, d.BaseRefOid); {
+	case err != nil:
+		return "", fmt.Sprintf("whether %s is on %s as GitHub has it (its tip is %s) could not be checked: %s", short, b.base, textx.ShortSHA(d.BaseRefOid), oneLine(err.Error(), 200))
+	case !on:
+		return "", fmt.Sprintf("%s is not on %s as GitHub has it (its tip is %s)", short, b.base, textx.ShortSHA(d.BaseRefOid))
+	}
+	switch in, err := e.d.Git.IsAncestor(ctx, dir, b.sha, head); {
+	case err != nil:
+		return "", fmt.Sprintf("whether the head has %s already could not be checked: %s", short, oneLine(err.Error(), 200))
+	case in:
+		return "", fmt.Sprintf("the head has %s already: the merge brings nothing of %s", short, b.base)
+	}
+	return d.BaseRefOid, ""
 }
 
 // fixerSignature is the identity the fix role whose identity is name acts
@@ -279,6 +345,9 @@ func (e *Engine) parentOnRow(ctx context.Context, job *fixJob, head string) erro
 	if cur, err := e.st.PRByID(ctx, pr.ID); err == nil {
 		pr = cur
 	}
+	if job.pr.BaseRef != nil { // the guard's, as GitHub names it (checkFixBase): the row may hold the poll's older read
+		pr.BaseRef = job.pr.BaseRef
+	}
 	job.pr = pr
 	return nil
 }
@@ -306,9 +375,14 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	if !ok || !app || base == "" || head == job.head {
 		return "", nil
 	}
-	tip, handed := e.handedMerge(ctx, job, pg, who, base, head)
+	tip, handed := e.handedMerge(ctx, job, pg, who, head)
 	if !handed {
 		return "", nil
+	}
+	// the tip GitHub names is in the slot's git after this fetch, whose
+	// forced refspec also writes over any ref of the base the pane wrote
+	if err := e.fetchBase(ctx, cmp.Or(job.slot.MainClone, job.slot.Path), base, fixRequestFetch); err != nil {
+		return "", fmt.Errorf("the fetch of %s: %w", base, err)
 	}
 	b := fixConflict{base: base, sha: tip}
 	how, refused, err := e.pushMerge(ctx, job, pg, id, job.head, head, b)
@@ -322,11 +396,13 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 }
 
 // handedMerge reports whether head is a merge `magnum push` handed to
-// magnum, as pushHanded reads it, and the commit of base it merges: GitHub
-// still has the job's head, head is one merge, by who, of that commit
-// (on base) into the job's head, and it changes workflow files. Any read
-// that fails says no.
-func (e *Engine) handedMerge(ctx context.Context, job *fixJob, pg parentGit, who gitx.Signature, base, head string) (string, bool) {
+// magnum, as pushHanded reads it, and the commit it merges: GitHub still
+// has the job's head, head is one merge, by who as author and committer,
+// of that commit into the job's head, and it changes workflow files. Any
+// read that fails says no. Whether that commit is on base, as GitHub has
+// it, is pushMerge's to check (baseOnGitHub): the slot's refs are the
+// pane's to write.
+func (e *Engine) handedMerge(ctx context.Context, job *fixJob, pg parentGit, who gitx.Signature, head string) (string, bool) {
 	dir := job.slot.Path
 	if got, err := e.remoteHead(ctx, job); err != nil || got != job.head { // pushed by the pane, or the branch moved
 		return "", false
@@ -339,14 +415,10 @@ func (e *Engine) handedMerge(ctx context.Context, job *fixJob, pg parentGit, who
 	if len(c.Parents) != 2 || c.Parents[0] != job.head || !strings.EqualFold(c.AuthorEmail, who.Email) || !strings.EqualFold(c.CommitterEmail, who.Email) {
 		return "", false
 	}
-	tip := c.Parents[1]
-	if on, err := e.d.Git.IsAncestor(ctx, dir, tip, "refs/remotes/origin/"+base); err != nil || !on {
-		return "", false
-	}
 	if workflows, err := pg.ChangedPaths(ctx, dir, job.head, head, workflowsPath); err != nil || len(workflows) == 0 {
 		return "", false
 	}
-	return tip, true
+	return c.Parents[1], true
 }
 
 // parentSchema marks the job's pool slot for a schema reload when the
@@ -484,7 +556,8 @@ func (j *fixJob) mergeWords(login string) string {
 // that is no fixer App (the daemon pushes as one), a running loop, a PR
 // that is not the operator's own (the fixer's ownership check), a fork, a
 // PR not open or with a round in flight, an unknown branch or base, a
-// slot or PR that cannot take the job (pinned or held), a snooze, a
+// branch the bot never pushes to (refusedHeadBranch), a slot or PR that
+// cannot take the job (pinned or held), a snooze, a
 // person's recent typing, a paused agent kind and no free slot. No review
 // needs to stand on the head. It then looks at the base (fetched within
 // fixRequestFetch when fetch is set): a conflict is the fix role's to
@@ -533,6 +606,8 @@ func (e *Engine) prepareMerge(ctx context.Context, pr store.PR, fetch bool) (*fi
 		return nil, "", fmt.Errorf("%s: its branch is not known yet (no details from GitHub)", label)
 	case deref(pr.BaseRef) == "":
 		return nil, "", fmt.Errorf("%s: no parent merge: the PR's base branch is not known yet", label)
+	case refusedHeadBranch(repo, pr, "") != "":
+		return nil, "", fmt.Errorf("%s: %s", label, refusedHeadBranch(repo, pr, ""))
 	}
 	slot, has, err := e.slotOf(ctx, pr.ID)
 	if err != nil {

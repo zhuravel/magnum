@@ -89,55 +89,75 @@ const (
 	fixerAppEmail = "4242+" + fixerAppLogin + "@users.noreply.github.com"
 )
 
-// mergeGit is fixGit that can merge a PR's parent (parentGit): the head
-// lacks the base's tip when behind is set (IsAncestor of fixBaseTip),
-// MergeTree answers fixGit's conflicts (and no tree), else fixParentTree,
-// CommitTree makes fixParentMerge and records its call ("<dir>:<tree>:
-// <parents>:<name> <email>:<message>"), ChangedPaths answers workflows for
-// .github/workflows and schema for any other pathspec, and
-// PushLeaseGitHubAs records its call ("<owner>/<repo>:<sha>:<branch>:
-// <expect>:<GH_CONFIG_DIR>") and moves the PR's head on the fake GitHub,
-// unless pushErr fails it.
+// mergeGit is fixGit that can merge a PR's parent (parentGit): every
+// commit is its own ancestor, the head lacks the base's tip when behind is
+// set (IsAncestor of fixBaseTip in any other commit), MergeTree answers
+// fixGit's conflicts (and no tree), else fixParentTree, CommitTree makes
+// fixParentMerge and records its call ("<dir>:<tree>:<parents>:<name>
+// <email>:<message>"), ChangedPaths answers workflows for
+// .github/workflows and schema for any other pathspec, DifferingPaths of
+// .github/workflows answers differ by the commit compared with, else own,
+// FirstParentIdentities answers handed when set, and PushLeaseGitHubAs
+// records its call ("<owner>/<repo>:<sha>:<branch>:<expect>:
+// <GH_CONFIG_DIR>") and moves the PR's head on the fake GitHub, unless
+// pushErr fails it. Its harness's GitHub has fixBaseTip as every base's
+// tip (mergeHarness).
 type mergeGit struct {
 	*fixGit
 	gh        *fakeGH
 	behind    bool
 	pushErr   error
 	workflows []string
-	own       []string // DifferingPaths of .github/workflows: the workflow files that differ from the base's
+	own       []string            // DifferingPaths of .github/workflows: the workflow files that differ from the base's
+	differ    map[string][]string // own by the commit the merge is compared with
+	handed    *gitx.CommitIdentity
 	schema    []string
 	commits   []string
 	pushes    []string
 }
 
-func (g *mergeGit) DifferingPaths(_ context.Context, _, _, _ string, paths ...string) ([]string, error) {
+func (g *mergeGit) DifferingPaths(_ context.Context, _, _, b string, paths ...string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if slices.Contains(paths, workflowsPath) {
-		return slices.Clone(g.own), nil
+	switch {
+	case !slices.Contains(paths, workflowsPath):
+		return nil, nil
+	case g.differ != nil:
+		return slices.Clone(g.differ[b]), nil
 	}
-	return nil, nil
+	return slices.Clone(g.own), nil
 }
 
 // FirstParentIdentities answers that to is one merge, by the fixer App's
-// bot, of the base's tip into from: the fixer's base merge.
+// bot, of the base's tip into from (the fixer's base merge), or handed.
 func (g *mergeGit) FirstParentIdentities(_ context.Context, _, from, to string) ([]gitx.CommitIdentity, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.handed != nil {
+		return []gitx.CommitIdentity{*g.handed}, nil
+	}
 	return []gitx.CommitIdentity{{SHA: to, Parents: []string{from, fixBaseTip}, AuthorEmail: fixerAppEmail, CommitterEmail: fixerAppEmail}}, nil
 }
 
-// mergeHarness is fixHarness whose git merges parents (mergeGit).
+// mergeHarness is fixHarness whose git merges parents (mergeGit), and
+// whose GitHub names fixBaseTip as the tip of every PR's base, as the
+// slot's origin/<base> has it.
 func mergeHarness(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) {
 	t.Helper()
 	mg := &mergeGit{}
 	h, _ := fixHarness(t, append(mods, func(h *harness) {
 		mg.fixGit, mg.gh = h.d.Git.(*fixGit), h.gh
+		h.gh.baseOid = fixBaseTip
 		h.d.Git = mg
 	})...)
 	return h, mg
 }
 
 func (g *mergeGit) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error) {
-	if ancestor == fixBaseTip {
+	switch {
+	case ancestor == rev:
+		return true, nil
+	case ancestor == fixBaseTip:
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		return !g.behind, nil
@@ -466,5 +486,88 @@ func TestAutofixDoesNotStartForABranchThatIsOnlyBehind(t *testing.T) {
 	}
 	if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
 		t.Errorf("autofix merged the parent: %v %v", commits, pushes)
+	}
+}
+
+// The daemon pushes a merge of the parent to the PR's own branch alone: a
+// PR whose head is master, main or the repository's default branch (a PR
+// from main into production) is never pushed to by the bot, as `magnum
+// push` refuses it. A merge of the parent is refused before any job, and
+// a fix run's first cycle leaves the parent unmerged and says why.
+func TestTheDaemonNeverPushesAParentMergeToMasterMainOrTheDefaultBranch(t *testing.T) {
+	for _, tc := range []struct{ head, def string }{{"master", "main"}, {"main", "main"}, {"develop", "develop"}} {
+		t.Run("a merge of the parent from "+tc.head, func(t *testing.T) {
+			h, mg := mergeHarness(t, withFixerApp)
+			pr := fixablePR(h, "zhuravel", nil)
+			mg.behind = true
+			onBranch(h, pr, tc.head, tc.def)
+			id := h.fix(FixPayload{Mode: FixModeMerge})
+			h.handle()
+			r := h.request(id)
+			want := "talkable/talkable#2: magnum never pushes to " + tc.head + " (master, main, the default branch or the PR's base)"
+			if r.State != store.RequestFailed || deref(r.Result) != want {
+				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+			}
+			if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
+				t.Errorf("merged: %v %v", commits, pushes)
+			}
+		})
+	}
+	t.Run("a fix run", func(t *testing.T) {
+		h, mg := mergeHarness(t, withFixerApp)
+		pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+		mg.behind = true
+		onBranch(h, pr, "main", "main")
+		fixer(h, mg.fixGit, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixOneFixed, "none") })
+		id := h.fix(FixPayload{})
+		h.handle()
+		h.wantDone(id)
+		if _, pushes := mg.made(); len(pushes) != 0 {
+			t.Errorf("pushes = %v, want none", pushes)
+		}
+		if ev, ok := h.fixEvent("fix.parent_refused"); !ok || !strings.Contains(ev.Message, "magnum never pushes to main") {
+			t.Errorf("fix.parent_refused = %q, %v", ev.Message, ok)
+		}
+	})
+}
+
+// onBranch makes pr's head branch head and its repository's default branch
+// def in the registry.
+func onBranch(h *harness, pr store.PR, head, def string) {
+	h.t.Helper()
+	if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE prs SET head_ref = ? WHERE id = ?`, head, pr.ID); err != nil {
+		h.t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE repos SET default_branch = ? WHERE id = ?`, def, pr.RepoID); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// A PR retargeted after the poll's last read keeps the base GitHub names
+// past the daemon's merge of it: the merge is of that base, and the fixer
+// that starts from the merge is told that base (its fix-sync and push
+// lines, its pane's MAGNUM_BASE_BRANCH), not the registry's older one.
+func TestTheDaemonsMergeOfARetargetedPRKeepsTheBaseGitHubNames(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", base: "release"})
+	mg.behind = true
+	fixer(h, mg.fixGit, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixOneFixed, "none") })
+	id := h.fix(FixPayload{})
+	h.handle()
+	h.wantDone(id)
+	if commits, _ := mg.made(); len(commits) != 1 || !strings.HasSuffix(commits[0], ":Merge branch 'release' into feature") {
+		t.Errorf("merge commits = %q, want the merge of release", commits)
+	}
+	slot := h.slot("review1")
+	in := h.fixInput()
+	if want := agents.FixSyncLine(h.d.Layout.Binary(), slot.Path, fixParentMerge, "feature", "release"); in.FixSyncCommand != want {
+		t.Errorf("fix-sync line = %q, want %q", in.FixSyncCommand, want)
+	}
+	if want := agents.PushLine(h.layout.Binary(), slot.Path, "release"); in.PushCommand != want {
+		t.Errorf("push line = %q, want %q", in.PushCommand, want)
+	}
+	if env := h.ag.paneEnv("claude-fix"); env["MAGNUM_BASE_BRANCH"] != "release" {
+		t.Errorf("the pane's MAGNUM_BASE_BRANCH = %q, want release", env["MAGNUM_BASE_BRANCH"])
 	}
 }

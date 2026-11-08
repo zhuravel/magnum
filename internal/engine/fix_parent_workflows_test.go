@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -127,7 +128,7 @@ func handedMerge(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) {
 	h, mg := mergeHarness(t, append([]func(*harness){withFixerApp}, mods...)...)
 	fixablePR(h, "zhuravel", nil)
 	mg.conflict("app/models/offer.rb")
-	mg.workflows = []string{".github/workflows/ci.yml"}
+	mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
 	mg.lostPush = true
 	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
 		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
@@ -142,9 +143,17 @@ func handedMerge(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) {
 // the loop ends as for any pushed merge.
 func TestTheFixersMergeThatMagnumPushHandedOverIsPushedByTheDaemon(t *testing.T) {
 	h, mg := handedMerge(t)
+	var before []string // the fetches until the fixer ran
+	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
+		before, _ = mg.calls()
+		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
 	id := h.fix(FixPayload{Mode: FixModeMerge})
 	h.handle()
 	h.wantDone(id)
+	if fetches, _ := mg.calls(); len(fetches) != len(before)+1 || fetches[len(fetches)-1] != h.slot("review1").MainClone+":master" {
+		t.Errorf("fetches = %v after the fixer's %v, want the settle's fetch of master", fetches, before)
+	}
 	_, pushes := mg.made()
 	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixMergeHead, fixHead, daemonPushDir); !slices.Equal(pushes, []string{want}) {
 		t.Errorf("pushes = %q, want %q", pushes, want)
@@ -179,5 +188,65 @@ func TestTheFixersHandedMergeNeedsWorkflowsOnTheApp(t *testing.T) {
 	}
 	if cur := h.slot("review1"); deref(cur.CheckedOutSHA) != fixHead {
 		t.Errorf("slot review1 holds %s, want the PR's head back", deref(cur.CheckedOutSHA))
+	}
+}
+
+// The settle pushes the merge a fixer handed over with the daemon's
+// Workflows token, and the fixer's pane can write the slot's git: its refs
+// (the slot's origin/<base> among them), its commits and who they say they
+// are by. So the merge is checked against GitHub, never against a ref of
+// the slot: one merge, by the bot, into the head GitHub still has, of a
+// commit the head lacks that is on the base as GitHub has it now, after a
+// fetch of the base, and every workflow file of it is as the base's tip on
+// GitHub has it. Any other merge is not pushed, and no token is minted
+// for it.
+func TestAHandedMergeIsCheckedAgainstTheBaseAsGitHubHasIt(t *testing.T) {
+	const (
+		forged = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" // a commit of the pane's, which a ref it wrote puts on the slot's origin/master
+		older  = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" // an older commit of master that the head has already
+		other  = "a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9" // a commit that is not the PR's head
+	)
+	ci := []string{".github/workflows/ci.yml"}
+	bot := func(parents ...string) gitx.CommitIdentity {
+		return gitx.CommitIdentity{SHA: fixMergeHead, Parents: parents, AuthorEmail: fixerAppEmail, CommitterEmail: fixerAppEmail}
+	}
+	foreign := bot(fixHead, fixBaseTip)
+	foreign.AuthorEmail = "alice@example.com"
+	committer := bot(fixHead, fixBaseTip)
+	committer.CommitterEmail = "alice@example.com"
+	for _, tc := range []struct {
+		name      string
+		commit    gitx.CommitIdentity
+		ancestors map[string]bool
+		differ    map[string][]string
+	}{
+		{name: "another author", commit: foreign},
+		{name: "another committer", commit: committer},
+		{name: "a merge into another commit", commit: bot(other, fixBaseTip)},
+		{name: "a commit off the base on a forged origin ref", commit: bot(fixHead, forged),
+			ancestors: map[string]bool{forged + "..refs/remotes/origin/master": true},
+			differ:    map[string][]string{forged: nil, fixBaseTip: ci}},
+		{name: "an older commit of the base the head has", commit: bot(fixHead, older),
+			ancestors: map[string]bool{older + "..refs/remotes/origin/master": true, older + ".." + fixBaseTip: true, older + ".." + fixHead: true},
+			differ:    map[string][]string{older: nil, fixBaseTip: ci}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mg := handedMerge(t)
+			mg.mu.Lock()
+			mg.handed, mg.ancestors, mg.differ = &tc.commit, tc.ancestors, tc.differ
+			mg.mu.Unlock()
+			id := h.fix(FixPayload{Mode: FixModeMerge})
+			h.handle()
+			h.wantDone(id)
+			if _, pushes := mg.made(); len(pushes) != 0 {
+				t.Errorf("pushes = %v, want none", pushes)
+			}
+			if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) != 0 {
+				t.Errorf("daemon push tokens minted: %v", mints)
+			}
+			if cur := h.pr(2); cur.HeadSHA != fixHead {
+				t.Errorf("the PR's head = %s, want its own", cur.HeadSHA)
+			}
+		})
 	}
 }
