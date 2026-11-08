@@ -18550,6 +18550,70 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLsofListenersReadsTheListenersAndTheirDirectories; and for the gaps it named,
   TestReconcileStopsAnUnrecordedServerAndWhatItLeftInTheCopy, TestAStopOfAStaleRecordWhosePidListensOnThePortSignalsNothing,
   TestInCopyTakesTheTargetOfALinkedCopy and TestSpawnServerGivesTheServerTheShimsAndNoSecrets.
+- **The factory's QA stage starts the copy's server alone on the Mac, and stops it and its browser on every way
+  out** (2026-11-08, R55 slice 1, its fourth step). Step 3 gave the stops; nothing ran them yet. A stage of type
+  `qa` now runs `runQA` (`internal/factory/qa.go`) up to a session ready for the walk; the walk is step 5's. No
+  built-in kind names the stage yet.
+  - A run belongs to the task's head. `qa-run.json` in the task's directory is the newest run, and each run has
+    its folder `qa/<n>-<sha7>` (the name factory-qa.md's `.QARun` gives) with its `result.json`. A result of
+    clean or not_needed at the head passes the stage, after `qa-summary.json`, which is written first. An
+    unavailable one waits on you once, as the local review's stop does (`qaTold`: an alert since the result, else
+    the move to you now), and your retry starts a fresh run. An interrupted one starts a fresh run, and so does a
+    pressure one once the memory hold lifts, until two of the kind come in a row at the head: then QA is
+    unavailable. A head the branch moved to goes back to coding (`headMoved`).
+  - A fresh run reads the change's files (`ChangedFiles` from the merge base, every status) into the
+    repository's `qa.when` on its stdin, in the copy with its env and without the daemon's secrets, for at most
+    2 minutes. No line printed is not_needed: the stage passes with a skipped qa check. A failing or cut command
+    cannot tell: QA could not run, never "nothing user-facing", and the task needs you with its exit, the first
+    line of its stderr (masked, clipped to 200 runes) and `magnum factory retry <id>`. Otherwise the run writes
+    `changed.txt`, `probe.js` with a fresh 16-byte nonce, and the stage's attempts so far.
+  - The session takes, in order: no hold of the machine stops launches, the task's heavy slot, then the
+    machine's `factory-qa.lock`, so one QA runs on the Mac at a time (held elsewhere: the task waits "another QA
+    runs on this Mac", holding no heavy slot). It does not take the spec lock. A copy's port that answers before
+    its server started is another server, and QA would walk the wrong app: QA is unavailable, naming the port.
+    Then the server starts, and a goroutine off the loop asks `url + ready` every 2 s until a 2xx or 3xx answer
+    or the repository's boot runs out. The probe dials 127.0.0.1, then ::1, on the copy's port whatever host the
+    url names, asks with that host, follows no redirect, uses no proxy and verifies TLS. A failed boot (no
+    answer, or a start that failed) is stopped with its proof and gets one boot more; the second failure is QA
+    unavailable with the ready path, the boot and the last answer, or the start's error. A panic in the probe is
+    the boot's error, with no boot more. Once the boot answered, the factory's Chrome starts in the run's folder
+    and its CDP endpoint goes into `qa-run.json`.
+  - The teardown (`endQASession`) runs on a context of its own: it cancels the boot's goroutine and waits for
+    it (at most 15 s), stops the browser, stops the server (`stopServer`, with its proof; `Copies.StopServer` for
+    a start that failed), then lets go of the QA lock and the heavy slot. A failed step does not stop the next
+    one, and a qa event says how it ended. It runs at the end of every run, from `freeHeavy` (NEEDS YOU, a stop,
+    a drop, a panic sent to you), from `sweepQA` each tick (a task gone, no longer live, or at another stage),
+    and from `stopQASessions`, which `RunLocked` defers for a drain or a signal. The engine's `stopServer` also
+    runs on `context.WithoutCancel` now, and returns its error.
+  - A restart cuts a run whose server started: startup's `cutQA`, after `Copies.Reconcile` ended the strays,
+    records it interrupted ("the daemon stopped during the run: its server and browser were stopped"), clears
+    its wait, and fails the stage's open attempts after the run's `attempts_before`. `adoptHeavy` adopts no qa
+    attempt; a qa stage is heavy.
+  - The walker's copy (`qaSession.copy`, for step 5's launch) has `BROWSER=true` and the factory's shims first
+    on its PATH, before the daemon's, so the walker opens no tab in your browser either.
+  - A qa check per result: clean passes, not_needed is skipped, defects fail as the change's and unavailable
+    as the environment's. Interrupted and pressure decide nothing and record none.
+
+  Rejected:
+  - Cutting every newest run that has no result at a restart (the plan's rule). A run that only waited for the
+    lock or a heavy slot started no server, and its record would say the daemon stopped one, and count towards
+    the two in a row. `started` in `qa-run.json` is set when the server starts, and a run without it goes on.
+  - A boot more after a panic in the probe: the panic is the factory's own, and it would come again.
+  - Resolving the url's host for the probe: a name under .localhost need not resolve outside a browser.
+  - Following a redirect, or skipping TLS verification: a sign-in redirect is an answer, and the factory's
+    Chrome would refuse a certificate the probe took.
+  - QA as work in `work.json`: install would wait out a 50-minute run, and a cut run runs again.
+
+  Tests, failing first (none of it existed): TestARepoWithoutAQABlockSkipsTheQAStage,
+  TestAChangeWithNoUserFacingFileNeedsNoQA, TestAFailingWhenCommandNeedsYouNotNotNeeded,
+  TestQAStartsTheServerThenWaitsForItToAnswer, TestQARefusesAPortThatAnswersBeforeTheServerStarts,
+  TestAServerThatNeverAnswersNeedsYouWithTheRetryCommand, TestAServerThatFailsToStartGetsOneRetry,
+  TestOneQAAtATimeOnTheMac, TestQATeardownRunsWhenTheBootProbePanics, TestQATeardownRunsWhenTheDaemonStops,
+  TestQATeardownRunsWhenTheTaskGoesToYou, TestQATeardownRunsWhenTheTaskLeavesItsStage,
+  TestARestartDuringQARunsAFreshRun, TestARestartBeforeTheServerStartsKeepsTheRun,
+  TestARetryAfterUnavailableStartsAFreshRun, TestTheQAWalkersCopyOpensNoBrowserTab and
+  TestTheReadinessProbeAsksTheMacAndFollowsNoRedirect. The teardown tests failed against a mutant whose
+  teardown ran on the caller's context, and one whose `freeHeavy` ended no session.
 
 ## Learned rules
 

@@ -279,9 +279,9 @@ func TestDetectQAQuotesAtMost120RunesAndMasksSecrets(t *testing.T) {
 	}
 }
 
-// qaRun is a QA run's folder as a walker leaves it: a verdict of two
+// verdictRun is a QA run's folder as a walker leaves it: a verdict of two
 // pages, their shots, probes and console logs, in task directory taskDir.
-type qaRun struct {
+type verdictRun struct {
 	t       *testing.T
 	taskDir string
 	runPath string
@@ -299,10 +299,10 @@ const (
 // pngMagic is the signature every PNG file starts with.
 var pngMagic = "\x89PNG\r\n\x1a\n"
 
-func newQARun(t *testing.T) *qaRun {
+func newVerdictRun(t *testing.T) *verdictRun {
 	t.Helper()
 	dir := t.TempDir()
-	r := &qaRun{t: t, taskDir: dir, runPath: filepath.Join(dir, qaTestRun), since: time.Now().Add(-time.Minute),
+	r := &verdictRun{t: t, taskDir: dir, runPath: filepath.Join(dir, qaTestRun), since: time.Now().Add(-time.Minute),
 		want: qaWant{Head: qaTestHead, Nonce: "n0nce", Port: 3001, MaxPages: 12, Checks: []string{"A1", "A2"}}}
 	r.v = QAVerdict{Version: 1, Head: qaTestHead}
 	r.page("P1", "/settings/security", "http://app.example.localhost:3001/settings/security", "A1")
@@ -314,7 +314,7 @@ func newQARun(t *testing.T) *qaRun {
 
 // page adds a page to the verdict with its shot, its probe at url and its
 // console log, numbered after the pages before it.
-func (r *qaRun) page(id, path, url string, checks ...string) {
+func (r *verdictRun) page(id, path, url string, checks ...string) {
 	r.t.Helper()
 	n := len(r.v.Pages) + 1
 	base := fmt.Sprintf("pages/%02d-%s-after", n, strings.ToLower(id))
@@ -327,7 +327,7 @@ func (r *qaRun) page(id, path, url string, checks ...string) {
 }
 
 // probe writes a probe of the page at url with nonce at rel.
-func (r *qaRun) probe(rel, nonce, url string) {
+func (r *verdictRun) probe(rel, nonce, url string) {
 	r.t.Helper()
 	b, err := json.Marshal(QAProbe{Nonce: nonce, URL: url, Status: 200, Title: "Security", Text: "Security", HTML: "<html></html>"})
 	if err != nil {
@@ -337,7 +337,7 @@ func (r *qaRun) probe(rel, nonce, url string) {
 }
 
 // write writes text to rel in the run's folder.
-func (r *qaRun) write(rel, text string) {
+func (r *verdictRun) write(rel, text string) {
 	r.t.Helper()
 	p := filepath.Join(r.runPath, rel)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -349,7 +349,7 @@ func (r *qaRun) write(rel, text string) {
 }
 
 // read writes the verdict (raw, else v) and reads it as the factory does.
-func (r *qaRun) read() (QAVerdict, *endProblem) {
+func (r *verdictRun) read() (QAVerdict, *endProblem) {
 	r.t.Helper()
 	b, err := json.Marshal(r.v)
 	if err != nil {
@@ -365,7 +365,7 @@ func (r *qaRun) read() (QAVerdict, *endProblem) {
 // every acceptance check: the factory takes it, and marks the walker's
 // defects as the walker's, with the factory's own fingerprint.
 func TestReadQAVerdictTakesAValidRun(t *testing.T) {
-	r := newQARun(t)
+	r := newVerdictRun(t)
 	v, p := r.read()
 	if p != nil {
 		t.Fatalf("a valid run was refused: %s", p)
@@ -377,13 +377,13 @@ func TestReadQAVerdictTakesAValidRun(t *testing.T) {
 	if d.Source != "walker" || d.Fingerprint != qaFingerprint(d, "/settings/passkeys") || len(d.Fingerprint) != 16 {
 		t.Errorf("the walker's defect = %+v, want source walker and the factory's fingerprint", d)
 	}
-	blocked := newQARun(t)
+	blocked := newVerdictRun(t)
 	blocked.v.Pages[1].Checks = nil
 	blocked.v.Blocked = []QABlocked{{What: "the passkeys page with a key added", Why: "no virtual authenticator", Check: "A2"}}
 	if _, p := blocked.read(); p != nil {
 		t.Errorf("a check in blocked was refused: %s", p)
 	}
-	notShown := newQARun(t)
+	notShown := newVerdictRun(t)
 	notShown.v.Pages[1].Checks = nil
 	notShown.v.NotShown = []QANotShown{{Check: "A2", Why: "a background job"}}
 	if _, p := notShown.read(); p != nil {
@@ -400,57 +400,59 @@ func TestReadQAVerdictTakesAValidRun(t *testing.T) {
 func TestReadQAVerdictRefuses(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		edit  func(r *qaRun)
+		edit  func(r *verdictRun)
 		wants string
 	}{
-		{"stale", func(r *qaRun) { r.since = time.Now().Add(time.Hour) }, "older than this stage"},
-		{"not JSON", func(r *qaRun) { r.raw = "{" }, "not valid JSON"},
-		{"version 2", func(r *qaRun) { r.v.Version = 2 }, "version 2"},
-		{"head", func(r *qaRun) { r.v.Head = "0000000def5678abc1234def5678abc1234def56" }, "head"},
-		{"head a token", func(r *qaRun) { r.v.Head = "ghp_" + strings.Repeat("x9", 18) }, "<redacted>"},
-		{"shot ../x.png", func(r *qaRun) { r.write("../x.png", pngMagic); r.v.Pages[0].Shot = "../x.png" }, "outside the run folder"},
-		{"shot linked out", func(r *qaRun) {
+		{"stale", func(r *verdictRun) { r.since = time.Now().Add(time.Hour) }, "older than this stage"},
+		{"not JSON", func(r *verdictRun) { r.raw = "{" }, "not valid JSON"},
+		{"version 2", func(r *verdictRun) { r.v.Version = 2 }, "version 2"},
+		{"head", func(r *verdictRun) { r.v.Head = "0000000def5678abc1234def5678abc1234def56" }, "head"},
+		{"head a token", func(r *verdictRun) { r.v.Head = "ghp_" + strings.Repeat("x9", 18) }, "<redacted>"},
+		{"shot ../x.png", func(r *verdictRun) { r.write("../x.png", pngMagic); r.v.Pages[0].Shot = "../x.png" }, "outside the run folder"},
+		{"shot linked out", func(r *verdictRun) {
 			r.write("../x.png", pngMagic)
 			if err := os.Symlink(filepath.Join(r.taskDir, "qa", "x.png"), filepath.Join(r.runPath, "pages", "link.png")); err != nil {
 				t.Fatal(err)
 			}
 			r.v.Pages[0].Shot = "pages/link.png"
 		}, "outside the run folder"},
-		{"missing shot", func(r *qaRun) { r.v.Pages[0].Shot = "pages/09-gone.png" }, "missing"},
-		{"shot not a PNG", func(r *qaRun) { r.write(r.v.Pages[0].Shot, "<html>not an image</html>") }, "not a PNG"},
-		{"missing probe", func(r *qaRun) { r.v.Pages[1].Probe = "pages/09-gone.json" }, "missing"},
-		{"probe nonce", func(r *qaRun) { r.probe(r.v.Pages[0].Probe, "other", "http://app.example.localhost:3001/") }, "not the factory's probe"},
-		{"probe failed", func(r *qaRun) {
+		{"missing shot", func(r *verdictRun) { r.v.Pages[0].Shot = "pages/09-gone.png" }, "missing"},
+		{"shot not a PNG", func(r *verdictRun) { r.write(r.v.Pages[0].Shot, "<html>not an image</html>") }, "not a PNG"},
+		{"missing probe", func(r *verdictRun) { r.v.Pages[1].Probe = "pages/09-gone.json" }, "missing"},
+		{"probe nonce", func(r *verdictRun) { r.probe(r.v.Pages[0].Probe, "other", "http://app.example.localhost:3001/") }, "not the factory's probe"},
+		{"probe failed", func(r *verdictRun) {
 			r.write(r.v.Pages[0].Probe, `{"nonce": "n0nce", "url": "http://app.example.localhost:3001/", "error": "boom"}`)
 		}, "the probe failed in the page"},
-		{"probe wrapped twice", func(r *qaRun) {
+		{"probe wrapped twice", func(r *verdictRun) {
 			b, _ := json.Marshal(`"{\"nonce\": \"n0nce\"}"`)
 			r.write(r.v.Pages[0].Probe, string(b))
 		}, "not the JSON the probe returns"},
-		{"off-host: http://staging.example.com/x", func(r *qaRun) { r.probe(r.v.Pages[0].Probe, "n0nce", "http://staging.example.com/x") },
+		{"off-host: http://staging.example.com/x", func(r *verdictRun) { r.probe(r.v.Pages[0].Probe, "n0nce", "http://staging.example.com/x") },
 			"not on the copy's own server"},
-		{"other-port: :3000", func(r *qaRun) { r.probe(r.v.Pages[0].Probe, "n0nce", "http://app.example.localhost:3000/settings") },
+		{"other-port: :3000", func(r *verdictRun) {
+			r.probe(r.v.Pages[0].Probe, "n0nce", "http://app.example.localhost:3000/settings")
+		},
 			"not on the copy's own server"},
-		{"no port", func(r *qaRun) { r.probe(r.v.Pages[0].Probe, "n0nce", "http://localhost/settings") }, "not on the copy's own server"},
-		{"missing console", func(r *qaRun) { r.v.Pages[0].Console = "console/09.log" }, "missing"},
-		{"two pages P1", func(r *qaRun) { r.v.Pages[1].ID = "P1" }, "twice"},
-		{"13 pages with max 12", func(r *qaRun) {
+		{"no port", func(r *verdictRun) { r.probe(r.v.Pages[0].Probe, "n0nce", "http://localhost/settings") }, "not on the copy's own server"},
+		{"missing console", func(r *verdictRun) { r.v.Pages[0].Console = "console/09.log" }, "missing"},
+		{"two pages P1", func(r *verdictRun) { r.v.Pages[1].ID = "P1" }, "twice"},
+		{"13 pages with max 12", func(r *verdictRun) {
 			for i := 3; i <= 13; i++ {
 				r.page(fmt.Sprintf("P%d", i), "/x", "http://app.example.localhost:3001/x", "A1")
 			}
 		}, "13 pages"},
-		{"31 shots", func(r *qaRun) {
+		{"31 shots", func(r *verdictRun) {
 			for i := range 29 {
 				r.write(fmt.Sprintf("pages/extra-%02d.png", i), pngMagic)
 			}
 		}, "31 shots"},
-		{"defect class ugly", func(r *qaRun) { r.v.Defects[0].Class = "ugly" }, "class"},
-		{"severity P0", func(r *qaRun) { r.v.Defects[0].Severity = "P0" }, "severity"},
-		{"defect on page P9", func(r *qaRun) { r.v.Defects[0].Page = "P9" }, "P9"},
-		{"A2 uncovered", func(r *qaRun) { r.v.Pages[1].Checks = nil }, "A2"},
+		{"defect class ugly", func(r *verdictRun) { r.v.Defects[0].Class = "ugly" }, "class"},
+		{"severity P0", func(r *verdictRun) { r.v.Defects[0].Severity = "P0" }, "severity"},
+		{"defect on page P9", func(r *verdictRun) { r.v.Defects[0].Page = "P9" }, "P9"},
+		{"A2 uncovered", func(r *verdictRun) { r.v.Pages[1].Checks = nil }, "A2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := newQARun(t)
+			r := newVerdictRun(t)
 			c.edit(r)
 			_, p := r.read()
 			if p == nil {

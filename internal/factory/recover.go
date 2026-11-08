@@ -3,8 +3,9 @@ package factory
 // The startup's recovery (spec section 10): what a daemon that stopped,
 // drained or crashed left is settled before the first tick, in one order,
 // each step under its own guard and in the event log. A copy a base run
-// left detached is restored first (resumeDetached), then the servers a
-// stopped daemon left are ended (Copies.Reconcile), a stop or a publish cut
+// left detached is restored first (resumeDetached), then the servers and
+// the browsers a stopped daemon left are ended (Copies.Reconcile), a QA run
+// they cut is recorded interrupted (cutQA), a stop or a publish cut
 // short is finished and its copy released, a claim a crash cut has its
 // begin ended (its next claim runs its steps again), the sessions are bound
 // to the panes herdr shows again and the workspaces no row names are
@@ -55,6 +56,7 @@ func (e *Engine) startup(ctx context.Context) error {
 			e.event(ctx, 0, "server", registry.PhaseFail, "reconcile: "+err.Error())
 		}
 	}
+	e.cutQA(ctx, tasks)
 	e.finishEnds(ctx, tasks)
 	e.closeCutClaims(ctx, tasks)
 	e.recoverAgents(ctx, tasks)

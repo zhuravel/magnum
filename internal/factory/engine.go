@@ -413,6 +413,14 @@ type Engine struct {
 	// restart.
 	agentRuns map[int64]*agentsRun
 
+	// qaSessions are the qa stages' runs that hold the Mac, by task (qa.go):
+	// the loop's own but for each boot's answer, which its goroutine writes
+	// before its done closes; qaMu guards the map. qaProbe asks a copy's
+	// server whether it answers (nil: httpQAProbe), a seam of the tests.
+	qaMu       sync.Mutex
+	qaSessions map[int64]*qaSession
+	qaProbe    func(ctx context.Context, url, host string) (status int, err error)
+
 	// run is Deps.Run behind the deny list (Guard). The factory's checks of
 	// a task's head (its proof and its precheck) run off the loop, one per
 	// task (checks); checkNotes say what each does now, the task's wait
@@ -535,6 +543,7 @@ func New(d Deps) *Engine {
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
 		agentRuns:    map[int64]*agentsRun{},
+		qaSessions:   map[int64]*qaSession{},
 		run:          Guard(d.Run, d.Config),
 		checks:       map[int64]*headCheck{},
 		checkNotes:   map[int64]string{},
@@ -555,6 +564,7 @@ func New(d Deps) *Engine {
 	e.runners[config.FactoryStageReview] = e.runReview
 	e.runners[config.FactoryStageDecision] = e.runDecision
 	e.runners[config.FactoryStageEffect] = e.runEffect
+	e.runners[config.FactoryStageQA] = e.runQA
 	e.alerts = e.newAlertDelivery(d.Notifier)
 	return e
 }
@@ -663,6 +673,9 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	// The work off the loop ends with the daemon: a claim's setup or install
 	// must not go on in a copy after it exits.
 	defer e.stopBackground()
+	// A QA run's server and browser stop with the daemon, a drain's or a
+	// signal's, on a context of their own (it runs before stopBackground).
+	defer e.stopQASessions(context.WithoutCancel(ctx))
 	e.endDrainAtStart(ctx)
 
 	stop := make(chan struct{})
@@ -849,6 +862,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("factory tick: %w", err)
 	}
+	e.sweepQA(ctx, tasks)
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
 	e.sweepChecks(tasks)
@@ -947,7 +961,9 @@ func live(tasks []registry.Task) []registry.Task {
 
 // advance runs one pass of the task's current stage (an empty stage is its
 // kind's first, recorded) and moves the task to the next stage once the
-// stage passes. The last stage's own effect ends the task. A task that
+// stage passes (nextStage: a qa stage of a repository without
+// [factory.repo.qa] is skipped, a stage event says so). The last stage's own
+// effect ends the task. A task that
 // waits for Jira before its first stage tries Jira instead (retryJira), and
 // one whose key has no ticket.md yet (your answer linked it) reads its
 // ticket first (linkedTicket). A copy a base run left detached is restored
@@ -1002,12 +1018,21 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	if err != nil || !done || i+1 == len(kind.Stages) {
 		return err
 	}
-	next := kind.Stages[i+1].Name
-	return e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
+	next, skipped := e.nextStage(t, kind, i)
+	if next == "" {
+		return nil
+	}
+	if err := e.reg.TransitionTask(ctx, t.ID, []string{t.State}, "", func(u *registry.TaskUpdate) {
 		u.Set("stage", next)
 		u.Set("attempt", 0)
 		u.Because(st.Name + " passed")
-	})
+	}); err != nil {
+		return err
+	}
+	for _, name := range skipped {
+		e.event(ctx, t.ID, "stage", registry.PhaseInfo, name+" skipped: "+t.Repo+" has no [factory.repo.qa]")
+	}
+	return nil
 }
 
 func stageIndex(k config.FactoryKind, name string) int {

@@ -13382,6 +13382,28 @@ type QAProbe struct {
     the HTML was cut at its cap, and the error that broke the probe in the page
     ("" when none did).
 
+type QAResult struct {
+	Version  int         `json:"version"`
+	Run      int         `json:"run"`
+	Pages    int         `json:"pages"`
+	Shots    int         `json:"shots"`
+	Dir      string      `json:"dir"`
+	Head     string      `json:"head"`
+	Outcome  string      `json:"outcome"`
+	Why      string      `json:"why"`
+	Blocking []QADefect  `json:"blocking"`
+	Known    []QADefect  `json:"known"`
+	Blocked  []QABlocked `json:"blocked"`
+	Started  time.Time   `json:"started"`
+	Ended    time.Time   `json:"ended"`
+}
+    QAResult is how a QA run ended (result.json in its folder; qa-summary.json
+    in the task's directory is the one that passed the stage): its version, the
+    run's number, folder and head, the pages it walked and the shots it took,
+    its outcome (QAOutcome*) and why, the defects that block and those that do
+    not (Known), the states the walker could not reach, and when it started and
+    ended.
+
 type QAVerdict struct {
 	Version  int          `json:"version"`
 	Head     string       `json:"head"`

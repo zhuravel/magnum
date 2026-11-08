@@ -332,7 +332,7 @@ func (e *Engine) pressure(ctx context.Context, now time.Time, tasks []registry.T
 	}
 	for _, t := range tasks {
 		if s, ok := e.servers[t.ID]; ok && idle(t) {
-			e.stopServer(ctx, t, s, "it was idle and the Mac is short on disk or memory")
+			_ = e.stopServer(ctx, t, s, "it was idle and the Mac is short on disk or memory") // its fail event says so; the next tick tries again
 		}
 	}
 }
@@ -498,17 +498,20 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 	return nil
 }
 
-// stopServer stops a server startServer started and frees its heavy use. A
-// stop that found the copy's port held by a process outside the copy
-// (portHeld) stopped and forgot the factory's server all the same: it
-// counts as stopped, and its event names the holder.
-func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why string) {
+// stopServer stops a server startServer started and frees its heavy use,
+// on a context of its own (a tick's end or the daemon's shutdown never cuts
+// a stop). A stop that found the copy's port held by a process outside the
+// copy (portHeld) stopped and forgot the factory's server all the same: it
+// counts as stopped, and its event names the holder. A stop that failed
+// keeps the server, which the next stop tries again.
+func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why string) error {
+	ctx = context.WithoutCancel(ctx)
 	err := e.d.Copies.StopServer(ctx, s.copy)
 	held, isHeld := errors.AsType[portHeld](err)
 	if err != nil && !isHeld {
 		e.log.Warn("stop a server", "task", t.ID, "copy", s.copy.Name, "err", err)
 		e.event(ctx, t.ID, "server", registry.PhaseFail, "stop "+s.copy.Name+": "+err.Error())
-		return
+		return fmt.Errorf("stop %s's server: %w", s.copy.Name, err)
 	}
 	delete(e.servers, t.ID)
 	s.release()
@@ -517,6 +520,7 @@ func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why 
 		text += "; " + held.Error()
 	}
 	e.event(ctx, t.ID, "server", registry.PhaseOK, text)
+	return nil
 }
 
 // heavySlot is a task's hold on the heavy stages: its key and the use the
@@ -592,10 +596,13 @@ func (e *Engine) releaseHeavy(id int64, what string) {
 }
 
 // freeHeavy frees everything heavy of task t, which is no longer live (it
-// needs you, it stopped, it ended): its server stops and its slot goes.
+// needs you, it stopped, it ended): its QA session ends (endQASession: its
+// browser and its server stop, the Mac's QA lock goes), its server stops
+// and its slot goes.
 func (e *Engine) freeHeavy(ctx context.Context, t registry.Task, why string) {
+	e.endQASessionLogged(ctx, t, why)
 	if s, ok := e.servers[t.ID]; ok {
-		e.stopServer(ctx, t, s, why)
+		_ = e.stopServer(ctx, t, s, why) // its fail event says so; the server stays for the next stop
 	}
 	e.heavyMu.Lock()
 	delete(e.heavyHeld, t.ID)
@@ -647,8 +654,10 @@ func isLive(t registry.Task) bool { return slices.Contains(liveStates, t.State) 
 // local review, a round whose cycle is open with no result (its agents may
 // still work in magnum's herdr), holds its slot until that stage takes it
 // back (heavy) and releases it. A local review's attempts are its writer's
-// fix turns, never heavy. A task that is not live (a panic sent it to you
-// with its attempt left running) holds none: nothing would release it.
+// fix turns, never heavy; a qa stage's attempts belong to a run the restart
+// cut (cutQA), whose fresh run takes its slot anew. A task that is not live
+// (a panic sent it to you with its attempt left running) holds none: nothing
+// would release it.
 func (e *Engine) adoptHeavy(ctx context.Context) error {
 	tasks, err := e.reg.Tasks(ctx)
 	if err != nil {
@@ -664,7 +673,8 @@ func (e *Engine) adoptHeavy(ctx context.Context) error {
 		}
 		for _, a := range as {
 			st, ok := e.stageOf(t, a.Stage)
-			if !ok || !heavyStage(st) || st.Type == config.FactoryStageReview || (a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
+			if !ok || !heavyStage(st) || st.Type == config.FactoryStageReview || st.Type == config.FactoryStageQA ||
+				(a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
 				continue
 			}
 			e.adoptSlot(t, st)
@@ -693,5 +703,8 @@ func (e *Engine) adoptSlot(t registry.Task, st config.FactoryStage) {
 	}
 }
 
-// heavyStage reports whether a stage is heavy: the local review loop.
-func heavyStage(st config.FactoryStage) bool { return st.Type == config.FactoryStageReview }
+// heavyStage reports whether a stage is heavy: the local review loop, and
+// a qa stage (its server, its browser and its walker).
+func heavyStage(st config.FactoryStage) bool {
+	return st.Type == config.FactoryStageReview || st.Type == config.FactoryStageQA
+}

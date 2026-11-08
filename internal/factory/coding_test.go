@@ -64,6 +64,10 @@ type codingRig struct {
 	// starts to wait.
 	blocks  map[string]chan struct{}
 	entered chan string
+	// userFacing answers bin/user-facing (a repository's qa.when): what it
+	// prints of the changed files it reads on stdin, and its exit; a failing
+	// exit prints its output on stderr. nil: the copy has no such script.
+	userFacing func(stdin []byte) (string, int)
 }
 
 // scriptRun is one script the copy ran: the script, the copy's branch and
@@ -223,6 +227,20 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		if fails != "" {
 			r.record(run)
 			return execx.Result{Code: 1, Stderr: []byte(fails)}, &execx.ExitError{Cmd: c, Code: 1, Stderr: fails}
+		}
+	case "bin/user-facing":
+		r.mu.Lock()
+		userFacing := r.userFacing
+		r.mu.Unlock()
+		if userFacing == nil {
+			r.record(run)
+			return execx.Result{Code: 127, Stderr: []byte("sh: bin/user-facing: not found")},
+				&execx.ExitError{Cmd: c, Code: 127, Stderr: "sh: bin/user-facing: not found"}
+		}
+		run.Out, run.Exit = userFacing(c.Stdin)
+		if run.Exit != 0 {
+			r.record(run)
+			return execx.Result{Code: run.Exit, Stderr: []byte(run.Out)}, &execx.ExitError{Cmd: c, Code: run.Exit, Stderr: run.Out}
 		}
 	case "bin/jest":
 	case "bin/rails":

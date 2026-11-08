@@ -724,6 +724,36 @@ type fakeCopies struct {
 	stopCtxErr                       []error
 	// stopErr is what each StopServer returns.
 	stopErr error
+	// startErrs are what the next StartServer calls return, one each (none
+	// once they run out: the server starts); browserDirs are the folders the
+	// StartBrowser calls got, in order; up names the copies whose server
+	// started and has not stopped since.
+	startErrs   []error
+	browserDirs []string
+	up          map[string]bool
+}
+
+// copiesLog is what the fake copies were asked to do so far: the servers
+// started (a start that failed too) and stopped, the browsers started (and
+// their folders) and stopped, and the context's error at each stop.
+type copiesLog struct {
+	started, stopped, browsers, browserDirs, stoppedBrowsers []string
+	stopCtxErr                                               []error
+}
+
+func (f *fakeCopies) log() copiesLog {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return copiesLog{started: slices.Clone(f.started), stopped: slices.Clone(f.stopped), browsers: slices.Clone(f.startedBrowsers),
+		browserDirs: slices.Clone(f.browserDirs), stoppedBrowsers: slices.Clone(f.stoppedBrowsers), stopCtxErr: slices.Clone(f.stopCtxErr)}
+}
+
+// serverUp reports whether a server of copy name started and has not
+// stopped since.
+func (f *fakeCopies) serverUp(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.up[name]
 }
 
 func (f *fakeCopies) Claim(ctx context.Context, t registry.Task) (Copy, error) {
@@ -822,6 +852,15 @@ func (f *fakeCopies) StartServer(_ context.Context, c Copy) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, c.Name)
+	if len(f.startErrs) > 0 {
+		err := f.startErrs[0]
+		f.startErrs = f.startErrs[1:]
+		return err
+	}
+	if f.up == nil {
+		f.up = map[string]bool{}
+	}
+	f.up[c.Name] = true
 	return nil
 }
 
@@ -830,13 +869,15 @@ func (f *fakeCopies) StopServer(ctx context.Context, c Copy) error {
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, c.Name)
 	f.stopCtxErr = append(f.stopCtxErr, ctx.Err())
+	delete(f.up, c.Name)
 	return f.stopErr
 }
 
-func (f *fakeCopies) StartBrowser(_ context.Context, c Copy, _ string) (string, error) {
+func (f *fakeCopies) StartBrowser(_ context.Context, c Copy, dir string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startedBrowsers = append(f.startedBrowsers, c.Name)
+	f.browserDirs = append(f.browserDirs, dir)
 	return "http://127.0.0.1:9333", nil
 }
 
