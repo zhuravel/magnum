@@ -19103,6 +19103,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop, TestADeclineNotFoundAgainIsNoStateNotReachedInTheEventOrTheReport
   and TestAMixedRunsWaitSaysTheStatesNeedASecondAccept.
 
+- **A turn's end moves the factory on at once: the observe pass kicks the tick, and a stage that passes chains the
+  next stage's first pass** (2026-11-08, roadmap R50 slice 1, the factory's part; the review daemon's is the entry
+  "The review daemon observes the turns in flight on its own clock" under Agents in panes). Measured with the
+  research's query (2026-11-06..07, the registries against the agents' own transcripts and rollouts): from an
+  agent's true stop to the next stage's first prompt 81 s median (n=11, p90 95 s). Two idle readings at the 10 s
+  `[factory] observe` took about 16 s; the observe pass only queued the end for the 45 s tick, a wait of about 17 to
+  22 s; and a stage that passed only set the next stage, which launched on the tick after (7 of 11 handoffs waited
+  44.8 to 45.7 s there). Now:
+  - The observe pass asks for a tick (`Kick`, which a pending kick absorbs) when it keeps an event an agents stage
+    acts on when it takes it, `stageEvents` beside `onAgentEvent`: ended (the end fact is checked), paused (the
+    wait), refused (the Codex fallback launches), blocked, hooks_trust, lost, stuck and no_progress (the task goes to
+    you, and its alert comes up to a poll sooner; each is said once per spell, so none repeats a kick every pass).
+    The turns typed into a pane are a record, and the delivery events are settled by the observe pass itself
+    (`deliveryUnknown`, `delivered`, `undelivered`; an undelivered prompt goes again on the stage's next pass, from
+    the once-a-minute reconcile): those kick nothing.
+  - `Tick` runs the next stage's first pass right after a pass that moved the task on (`passedOn`): the pass ended
+    with no error, the task read again from the registry is at a later stage of its kind (the stage passed and the
+    compare-and-set move landed; a stage that did not pass leaves it where it was, a send back to coding moves it
+    earlier), it is live and waits on no one but its agents, and the daemon does not drain. The chained pass sees
+    the new stage and attempt, and runs under `safely` and the same per-task handling as any pass: the first pass's
+    held wait and failures end, and the chained one's count at the new stage. A launch still refuses the holds and
+    install's drain, so under one the next stage starts on a later tick, as before. It is one extra pass, not a
+    loop: a next stage that also passes at once (a gate, a skipped critic) moves the task on and waits for the next
+    tick. The tick that takes your push on the ready card thus runs the publish too, which checks the card again
+    before it pushes, as it did a poll later.
+  - `[factory] observe` is 5s by default (from 10s, in `config.defaults.toml` and `DefaultFactory`; still positive).
+    The narrow pass of the review daemon's clock (`agents.ObserveRunsAt`, 50711773) did not reach the factory: it is
+    a method of its own, and `Runtime.Observe` ran `ObserveSnapshotAt` over every live session, which writes each
+    idle one's row (its idle count) on every pass, twice as often at 5 s. The factory has no other pass over every
+    session (the review daemon keeps its tick's), so `observeSessions` reads every session at most every 10 s
+    (`fullObserveEvery`: the panes earlier stages left live, the liaisons, a dialog before a first prompt, you in an
+    idle pane, as often as before) and the sessions with a turn in flight on every pass. Readings 5 s apart meet
+    `agents.CompletionGap` (3 s), so a turn ends on the second; a deny awaiting its continuation holds the end 10 s,
+    as on the review daemon's clock.
+  Expected: agent to agent about 15 to 20 s (from 81): up to 5 s to the first idle reading, 5 s to the second,
+  herdr's own 1 to 4 s, then the tick at once and the next stage's launch and prompt (under 5 s). Measure it with the
+  research's query, the true stop to the next stage's first `submitted_at`. Rejected: a loop of chained passes (a
+  kind whose gates and skipped stages all pass would run its whole length in one tick, and a stage that wrongly
+  passes at once would spin the tick); a flag that `advance` returns for the move (its tail and signature, which
+  another change of the move touches, for what the registry's re-read says); kicking on the delivery events
+  (nothing a stage does at once); the narrow pass alone (with no other pass over every session, the dialogs, lost
+  panes and liaisons of the sessions without a turn would go unseen); keeping 10 s (two readings 10 s apart are
+  most of the 16 s). Tests, failing first: TestAnEndedRolesEventKicksTheLoop,
+  TestTheLoopTicksRightAfterAnObservePassSawAnEnd, TestAStageThatPassesLaunchesTheNextStagesRolesInTheSameTick,
+  TestTheChainRunsAtMostOncePerTaskPerTick, TestTheObservePassReadsOnlyTheTurnsInFlightBetweenFullPasses and
+  TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault; for guards that held before the chain,
+  TestATypedEventDoesNotKickTheLoop, TestNoChainWhileTheDaemonDrains (it fails with the drain's check taken out of
+  `passedOn`), TestNoChainedLaunchUnderAHold (the memory hold and install's drain) and
+  TestAFailedTransitionChainsNothing, and TestATaskWithoutAStageStartsAtItsKindsFirstStage fails with the later-stage
+  check taken out (a stage that did not pass would run twice). Amended, as the chain moves on what they read a tick
+  later: TestAPassedStageMovesTheTaskToTheNextStage, TestTheJudgesFilesAreRecordedAtEachRevision,
+  TestTheCriticRunsOnlyForWideChanges, TestAPassedInvestigationVerifiesEveryRunAndMovesOn and
+  TestARestartKeepsTheRolesThatPassed; TestThePublishChecksTheReviewAgainBeforeItPushes,
+  TestAPublishCutAfterItsEffectEndedFinishesIt and TestAPublishWithoutAGhIdentityNeedsYouNamingTheKey push under
+  install's drain (`pushHeld`), so they change what the publish reads before it runs, and
+  TestAPublishCutAfterThePushResumesWithoutPushingAgain takes the publish in the push's tick.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

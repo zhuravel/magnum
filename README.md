@@ -3874,7 +3874,7 @@ memory_gate_swap = 80                # new tasks wait while the swap is this man
 heavy_stages = 1                     # heavy stages at once across tasks (a local review round, local QA, a server)
 herdr_session = "factory"            # the herdr session of the factory's panes: its own windows, apart from reviews
 # diff_pager = "hunk pager"          # the pager of the screen's d (GIT_PAGER); "" = git's own
-observe = "10s"                      # how often it reads its panes
+observe = "5s"                       # how often it reads its panes (a turn's end there moves the task on at once)
 poll = "45s"                         # how often its main tick moves the tasks (a request kicks one at once)
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
@@ -4080,7 +4080,12 @@ stages = [
 
 The factory daemon is a second daemon in the same binary, with its own launchd job
 (`zhuravel.magnum.factory`), registry (`factory/factory.db` in the data directory), pid, lock and log
-(`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`). A task's wait that costs
+(`logs/factory.log`; launchd's capture of its output is `logs/factory-launchd.log`). It reads its agents' panes every
+`observe` (5 s: the turns in flight on every pass, its other sessions at most every 10 s) and runs its main tick every
+`poll` (45 s), and a turn's end moves the task on at once: the observe pass that sees a run end, pause, show a dialog
+or lose its pane kicks the tick, and a stage that passes in a tick starts the next stage's first pass in the same tick
+(one stage further at most; a hold or a drain still holds its launch), so the next agent gets its prompt about 15 to
+20 s after the last one stopped, not 81 s. A task's wait that costs
 it nothing (a hold, an agent at work in the copy, your pane, a review round of magnum's) logs once at INFO
 when it begins ("a factory task waits") and once when it ends, with how long it held, and at WARN only once
 it has held 30 minutes, then 1 hour and 2 hours after that and so on ("a factory task still waits"); a wait

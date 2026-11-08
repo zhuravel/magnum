@@ -12861,8 +12861,9 @@ func (e *Engine) RunLocked(ctx context.Context) error
     RunLocked runs the daemon, whose lock the caller holds (Lock), until
     SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
     then a tick at once, every factory poll and on SIGUSR1, and an observe pass
-    every factory observe. A stop signal drains: no new launch or effect starts
-    (a launch that waits for the stagger is cut), the tick in progress ends with
+    every factory observe (one that saw an event a stage acts on kicks a tick
+    right after it). A stop signal drains: no new launch or effect starts (a
+    launch that waits for the stagger is cut), the tick in progress ends with
     the task it advances (the others, and the alerts, wait for the next daemon),
     the wait for the work off the loop ends within drainBudget of the signal,
     and it returns nil, so launchd (KeepAlive on a failed exit only) starts the
@@ -15136,17 +15137,18 @@ func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int,
     prompt that arrived, is abandoned. It returns how many it settled.
 
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
-    Observe runs one observe pass over herdr's snapshot and returns its
-    events (and those Send and the recoveries found since the last pass):
-    a run that ended (EventEnded), one that paused on its CLI's limit, login
-    or overload (EventPaused, its reason and end), a refusal (EventRefused),
-    a dialog left to the operator (EventBlocked, EventHooksTrust), a lost
-    pane whose recoveries ran out (EventLost) and a loop without progress
-    (EventNoProgress), and the turns typed into its panes (EventTyped, typed).
-    It parks the liaisons their task's park left live (parkLeftLiaisons). A pass
-    reads the user turns of an agent's transcript once, for the turns typed and
-    the delivery of a prompt alike. A panic is contained: it comes back as the
-    error.
+    Observe runs one observe pass over herdr's snapshot and returns its events
+    (and those Send and the recoveries found since the last pass), reading every
+    session at most fullObserveEvery apart and the turns in flight on every
+    pass (observeSessions): a run that ended (EventEnded), one that paused
+    on its CLI's limit, login or overload (EventPaused, its reason and end),
+    a refusal (EventRefused), a dialog left to the operator (EventBlocked,
+    EventHooksTrust), a lost pane whose recoveries ran out (EventLost) and a
+    loop without progress (EventNoProgress), and the turns typed into its panes
+    (EventTyped, typed). It parks the liaisons their task's park left live
+    (parkLeftLiaisons). A pass reads the user turns of an agent's transcript
+    once, for the turns typed and the delivery of a prompt alike. A panic is
+    contained: it comes back as the error.
 
 func (r *Runtime) Owner(ctx context.Context, t registry.Task) (store.PR, error)
     Owner upserts task t's owner row: repository factory/<repo name>, number the
