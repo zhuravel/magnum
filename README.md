@@ -3173,10 +3173,14 @@ their links, your replies since the fixer started that carry no Magnum marker, i
 the conversation, whenever the run may have replied (its report counts replies or leaves calls, or there is
 no report, a failed run included); Magnum edits no posted comment. It resolves Magnum's threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
-from the code, which a finding whose **Fix** ends "This is the author's call." always is: the fixer never
-picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
+from the code, which a P0 to P2 finding whose **Fix** ends "This is the author's call." always is: the fixer
+never picks one of its options, and its entry asks which to take. Those go under `Needs you` in its report, so
 the call stays yours, and so does a finding it fixed and pushed but could not answer (its thread is answered already, or its reply failed); each entry
-says `fixed in <sha7>.` or `not fixed.` after the finding's place. It never resolves or minimizes a thread
+says `fixed in <sha7>.` or `not fixed.` after the finding's place. A P3 whose **Fix** ends so is optional:
+the fixer leaves the code as it is, posts no reply (its title says none is needed) and lists it under `Optional
+calls` in its report, with its options. Magnum raises no attention for it and the loop ends without you; the
+call is yours to take or leave at the merge (Autofix on anything open names it in the idle verdict, and
+`magnum fix --decide` builds the option you pick). It never resolves or minimizes a thread
 someone else started, never force-pushes or rebases what is on GitHub (`magnum fix-sync` replays only its own commits, below), never touches another branch, merges nothing but the base's tip when the PR conflicts with it (below), and adds no dependency.
 
 **Your PR's description.** The fix prompt says that the PR is your own when the fix job's check of its author
@@ -3318,8 +3322,10 @@ still moves the PR row to the fixer's push, which descends from it, so the loop'
 push, never the merge alone.
 
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
-four sections: `Pushed`, `Replied`, `Needs you` and `Other reviewers` (one line per item of
-`external-threads.json`; Magnum does not read it). To use another policy, point the role's `skill` at your
+five sections: `Pushed`, `Replied`, `Needs you`, `Optional calls` (the P3 author's calls, which hold nothing:
+a `fix.optional` event names their links, and Magnum keeps them as the PR's optional calls,
+`pr.<id>.optional_calls`; a P0 to P2, or an entry Magnum cannot read, listed there holds as under `Needs you`)
+and `Other reviewers` (one line per item of `external-threads.json`; Magnum does not read it). To use another policy, point the role's `skill` at your
 own file with an absolute path. The block inherits every key it does not set, so model, effort and timeout
 (60m) stay the built-in's.
 
@@ -3527,7 +3533,9 @@ loop still ends as done on such a re-review.
 Each tick, before dispatch, Magnum looks at every own open PR of such a watch and keeps a verdict for it in
 the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your
 own push, a pause, quiet hours), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", with "· 2 commits after
-the approval" when the head moved past a person's approval), `unknown` (it has not read GitHub since the PR
+the approval" when the head moved past a person's approval, and "· 1 optional call: <link>" for each P3 author's call a fixer
+left you whose thread is still open and unanswered: it holds nothing, so you see it at the merge; the look starts no
+loop on such a call, and a loop's re-review whose one open P3 is that call ends the loop as done), `unknown` (it has not read GitHub since the PR
 changed, or could not check the head's merge with its base: never idle) or `off`, with since when it has said the same (`since`: a change of the PR keeps it while
 the verdict, the approval and the reason to be off stay). The look reads GitHub (the three reads the fix job makes of the other
 reviewers) only when the PR changed (its head, its updatedAt, its activity or Magnum's last review), 30
@@ -4505,7 +4513,8 @@ never write or migrate (a registry of a schema the build does not know is an err
 published task's row says what the PR waits on, by magnum's `autofix = "open"` verdict (see Autofix on anything
 open): `agent: magnum fixes #4530 (cycle 2 of 5)`, a wait on `magnum`, `CI` or `reviewers` in the verdict's words,
 `you:` with the verdict's words when the PR needs you (its task card lists the threads and findings as links under
-WAITING FOR), `you: nothing open at a1b2c3d · approved, merge is yours` (your move: the merge, which stays yours)
+WAITING FOR), `you: nothing open at a1b2c3d · approved, merge is yours` (your move: the merge, which stays yours,
+with "· 1 optional call: <link>" after it for each optional call magnum's fixer left you)
 or `reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago` (the reviewers asked and not yet answered, with how
 long ago; with nobody asked it needs you, `you: nothing open at a1b2c3d · no reviewer asked`, your move `ask a
 reviewer`), and, in LEFT ALONE as your PR in that state, why when magnum leaves the PR alone or does not review it

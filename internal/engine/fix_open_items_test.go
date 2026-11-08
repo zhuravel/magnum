@@ -392,3 +392,35 @@ func TestAnEditedRemarkIsNewWorkAgain(t *testing.T) {
 		t.Errorf("items after a reply to the edited guide = %v, want the note alone", got)
 	}
 }
+
+// A P3 whose Fix left the choice to the author, which a fixer listed under
+// Optional calls, is the operator's call, no fixer's work: after the loop
+// that was handed its review it is no finding skipped without a word, and a
+// later review that keeps it open (the operator pushed meanwhile) starts no
+// loop on it. Another open P3 beside it is still work, and so is the call's
+// thread once it is no optional call.
+func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
+	sum := cleanSum()
+	sum.Counts[3] = 1
+	call := magnumThreadWith(5000, itemsAt.Add(-time.Minute))
+	read := readFor([]github.Thread{call}, nil, nil, nil, nil)
+	optional := map[int64]bool{5000: true}
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: sum, handed: true, head: fixHead, optional: optional})); len(got) != 0 {
+		t.Errorf("after the loop: items = %v, want none", got)
+	}
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: sum, handed: true, head: fixHead})); !slices.Equal(got, []string{"review:r1", "rthread:5000"}) {
+		t.Errorf("no optional call: items = %v, want the review and the skipped finding", got)
+	}
+	later := cleanSum()
+	later.RunID, later.OpenCounts = "r2", &[4]int{0, 0, 0, 1}
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); len(got) != 0 {
+		t.Errorf("a later review keeping the call open: items = %v, want none", got)
+	}
+	later.OpenCounts = &[4]int{0, 0, 0, 2}
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); !slices.Equal(got, []string{"review:r2"}) {
+		t.Errorf("another open P3 beside the call: items = %v, want the review", got)
+	}
+	if reviewWork(*later, 2) || !reviewWork(*later, 1) || !reviewWork(*later, 0) {
+		t.Error("reviewWork does not leave out the optional calls among the open P3s")
+	}
+}

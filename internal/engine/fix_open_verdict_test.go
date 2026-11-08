@@ -827,3 +827,25 @@ func TestMagnumIsNeverLateUnderThePauseAndCountsFromItsEnd(t *testing.T) {
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 14:10")
 }
+
+// An optional call the fixer left the operator holds nothing, but the
+// operator sees it at the merge: the idle verdict ends with "1 optional
+// call: <link>" (counted, each linked), approved or not, and carries the
+// links for the factory screen's merge move.
+func TestTheIdleVerdictNamesTheOptionalCalls(t *testing.T) {
+	const link = prPage + "#discussion_r4302866759"
+	f := idleFacts()
+	f.optional = []optionalCall{{Thread: 4302866759, URL: link}}
+	v, work, needs := decideOpen(f)
+	wantVerdict(t, v, OpenIdle, "nothing open at a1a1a1a · approved, merge is yours · 1 optional call: "+link)
+	if len(work)+len(needs) != 0 || len(v.Optional) != 1 || v.Optional[0] != link {
+		t.Errorf("work %v, needs %v, optional %q; want only the link", work, needs, v.Optional)
+	}
+	f.pr.ReviewGate = nil
+	f.optional = append(f.optional, optionalCall{Thread: 4302866800, URL: prPage + "#discussion_r4302866800"})
+	v, _, _ = decideOpen(f)
+	wantVerdict(t, v, OpenIdle, "nothing open at a1a1a1a · no approval yet · 2 optional calls: "+link+", "+prPage+"#discussion_r4302866800")
+	if got := OptionalCallsWords(nil); got != "" {
+		t.Errorf("OptionalCallsWords(nil) = %q", got)
+	}
+}

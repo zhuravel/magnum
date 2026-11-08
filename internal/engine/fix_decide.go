@@ -148,21 +148,26 @@ func kvPRFixCalls(prID int64) string { return fmt.Sprintf("pr.%d.fix_calls", prI
 // for (decisionThreads), by the
 // id of each thread's first comment, with when each was made: as recorded
 // (kvPRFixCalls), else at the time of the fix run whose report the
-// attention names (an attention raised before the record). None while the
-// PR needs nothing of the kind.
+// attention names (an attention raised before the record); and the PR's
+// optional calls, which raise no attention, at the time the settle took
+// each (fix_optional.go). None while the PR needs nothing of the kind.
 func (e *Engine) fixerCalls(ctx context.Context, pr store.PR) map[int64]time.Time {
 	threads, made := e.decisionThreads(ctx, pr)
-	if len(threads) == 0 {
-		return nil
-	}
-	recorded := e.fixCallTimes(ctx, pr.ID)
 	calls := map[int64]time.Time{}
-	for _, id := range threads {
-		switch at, ok := recorded[id]; {
-		case ok:
-			calls[id] = at
-		case !made.IsZero():
-			calls[id] = made
+	if len(threads) > 0 {
+		recorded := e.fixCallTimes(ctx, pr.ID)
+		for _, id := range threads {
+			switch at, ok := recorded[id]; {
+			case ok:
+				calls[id] = at
+			case !made.IsZero():
+				calls[id] = made
+			}
+		}
+	}
+	for _, c := range e.optionalCalls(ctx, pr.ID) {
+		if _, ok := calls[c.Thread]; !ok && !c.At.IsZero() {
+			calls[c.Thread] = c.At
 		}
 	}
 	if len(calls) == 0 {

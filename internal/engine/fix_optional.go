@@ -20,16 +20,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // optionalCall is a P3 of magnum's that a fixer left the author as an
-// optional call: the id of its thread's first comment, and the thread's
-// link on the PR's page.
+// optional call: the id of its thread's first comment, the thread's link
+// on the PR's page, and when the settle took the call (At): the author's
+// own word in the thread after it is a decision on it, as on any call the
+// fixer left (fixerCalls), which `magnum fix --decide` posts.
 type optionalCall struct {
-	Thread int64  `json:"thread"`
-	URL    string `json:"url"`
+	Thread int64     `json:"thread"`
+	URL    string    `json:"url"`
+	At     time.Time `json:"at,omitzero"`
 }
 
 // kvPROptionalCalls holds the PR's optional calls (JSON: []optionalCall,
@@ -83,7 +87,7 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 			needs = append(needs, entry)
 			continue
 		}
-		found = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id})
+		found = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()})
 	}
 	if len(found) == 0 {
 		return needs
@@ -114,4 +118,68 @@ func optionalLinks(calls []optionalCall) []string {
 		out[i] = c.URL
 	}
 	return out
+}
+
+// openOptional are the PR's optional calls whose thread mine (magnum's
+// unresolved threads, as the look's whole read lists them) shows open and
+// unanswered, in the record's order, and their threads: the operator's
+// calls still waiting. A call whose thread is resolved, or gone, is
+// dropped from the record (a dry run writes nothing); one answered (a
+// reply of the author's, which may be a decision on it, or the fixer's)
+// stays recorded but waits no more.
+func (e *Engine) openOptional(ctx context.Context, prID int64, mine []magnumThread) ([]optionalCall, map[int64]bool) {
+	calls := e.optionalCalls(ctx, prID)
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	byRoot := make(map[int64]magnumThread, len(mine))
+	for _, mt := range mine {
+		byRoot[mt.RootID] = mt
+	}
+	var open []optionalCall
+	threads := map[int64]bool{}
+	kept := slices.DeleteFunc(slices.Clone(calls), func(c optionalCall) bool {
+		_, ok := byRoot[c.Thread]
+		return !ok
+	})
+	for _, c := range kept {
+		if !byRoot[c.Thread].Answered {
+			open, threads[c.Thread] = append(open, c), true
+		}
+	}
+	if len(kept) != len(calls) && !e.d.DryRun {
+		e.setOptionalCalls(ctx, prID, kept)
+	}
+	return open, threads
+}
+
+// openOptionalAt is how many of the job's PR's optional calls a re-review
+// leaves open: those whose thread the threads file in dir, a re-review's
+// written after the fixer's report (threadsFileNow), shows unresolved with
+// no answer, or all of them when there is no such file (no thread is read
+// here: a call counted that is answered already only ends the loop as
+// done, and the look, which reads the threads, starts the next).
+func (e *Engine) openOptionalAt(ctx context.Context, job *fixJob, dir string) int {
+	calls := e.optionalCalls(ctx, job.pr.ID)
+	threads, ok := threadsFileNow(dir, job.state.Report)
+	if !ok {
+		return len(calls)
+	}
+	n := 0
+	for _, c := range calls {
+		if t, found := threads[c.Thread]; found && !t.resolved && t.answer == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// OptionalCallsWords names the optional calls whose links are links, as
+// the idle verdict and the factory screen's merge move end with them: "1
+// optional call: <link>", "2 optional calls: <link>, <link>"; "" for none.
+func OptionalCallsWords(links []string) string {
+	if len(links) == 0 {
+		return ""
+	}
+	return textx.Count(len(links), "optional call", "optional calls") + ": " + strings.Join(links, ", ")
 }

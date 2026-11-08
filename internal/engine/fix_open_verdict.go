@@ -44,7 +44,9 @@ package engine
 //     settle_max after the push, and then needs you (it did not run: a
 //     workflow that runs only when the PR opens), never green; a merge
 //     with the base the look could not check is unknown;
-//  12. otherwise the PR is idle: nothing open at its head.
+//  12. otherwise the PR is idle: nothing open at its head. It names the
+//     operator's optional calls still open (P3 author's calls a fixer left
+//     them, fix_optional.go), which are never work and hold nothing.
 //
 // Unknown is never idle.
 
@@ -114,6 +116,10 @@ type OpenVerdict struct {
 	Approved      string     `json:"approved,omitempty"`
 	AfterApproval int        `json:"after_approval,omitempty"`
 	Off           string     `json:"off,omitempty"`
+	// Optional are the links of the operator's optional calls an idle
+	// verdict names (fix_optional.go): P3s whose Fix leaves the choice to
+	// the operator, which hold nothing and wait for them at the merge.
+	Optional []string `json:"optional,omitempty"`
 	// leftovers: the verdict needs you for what loops left (rule 8), which
 	// the look raises to needs_attention; late: for magnum's late review
 	// (rule 5), which it toasts once per head; dispatch: for a required
@@ -402,6 +408,9 @@ type openFacts struct {
 	// whole read shows your decision in each one's thread (callsDecided),
 	// so it stops no start (rule 2).
 	decided bool
+	// optional are the operator's optional calls the whole read shows open
+	// (openOptional, fix_optional.go): no work, and named at the merge.
+	optional []optionalCall
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -512,7 +521,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	settled, until := settleDone(f)
 	if len(work) > 0 {
-		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum)
+		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum, len(f.optional))
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
 		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
 		switch {
@@ -563,6 +572,10 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	if f.approved != "" && f.afterCount > 0 {
 		why += " · " + textx.Count(f.afterCount, "commit", "commits") + " after the approval"
+	}
+	if len(f.optional) > 0 { // fix_optional.go: the operator's calls, seen at the merge
+		v.Optional = optionalLinks(f.optional)
+		why += " · " + OptionalCallsWords(v.Optional)
 	}
 	return say(OpenIdle, why), nil, nil
 }

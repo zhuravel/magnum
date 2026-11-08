@@ -3703,6 +3703,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   three-call case of TestFixDecisionCallsAreTheFixersDecisionsAlone in attention, and two sentences of
   TestTheFixSkillBuildsTheAuthorsDecision in agents.
 
+- **A P3 author's call is an optional call, which holds nothing** (2026-11-08, the audit of what waits on the
+  operator; approved by the operator on 2026-11-08. Amends, for P3s only, "A Fix that would undo what the PR
+  or its series removed, or that picks between fixes users tell apart, names the options and ends "This is
+  the author's call.", and the fixer leaves it to the author" (2026-10-20, spec 90: "whatever its verdict and
+  score"), and rule A1 of "`autofix = "open"`: a fix loop starts on anything open on your own PR once the
+  reviewers settle" (2026-11-07: an optional P3 counts as open until a fix or a fix-marked reply). Both
+  entries stand for P0 to P2.) On an own PR (2026-11-07) a P3 whose Fix ended "This is the author's call." held
+  the PR in Needs you for a day, and the CI start the look owes a settled head waited behind it, though a P3's
+  title says "(optional, no reply needed)" and open P3s never block; on another, such a P3 waited on the
+  operator beside the other calls. Now the fix skill's rule 6 keeps the
+  author's call for P0 to P2 and makes a P3's optional, whatever its verdict and score: the fixer leaves the
+  code as it is, posts no reply, and lists it under a new report section, `## Optional calls` (`- <comment id>
+  P3 <path>:<line>: <its options>`, after `## Needs you`; a report without it is still whole). The settle
+  raises no attention for it: it records it as the PR's optional call (`pr.<id>.optional_calls`, by thread,
+  with its link and the time of the call; `settleOptional`), says so in a `fix.optional` event that names the
+  links, never the fixer's words, and holds anything else listed there (a P0 to P2, an entry magnum cannot
+  read) as a Needs you entry. With nothing else, the loop ends as one that replied. The record is the look's:
+  `reviewWork` leaves the operator's open optional calls out of a review's P3s, new or kept open, so no loop
+  starts on them again, and `magnumItemsOf` lists no "skipped without a word" finding for them
+  (`openOptional`: the record's calls whose thread the whole read shows unresolved and unanswered; a resolved
+  or gone one leaves the record); `optionalLeft` leaves them out of a loop's re-review under "open"
+  (`openOptionalAt`: by the re-review's threads file, else all of them), so a re-review whose one open P3 is
+  the call ends the loop as done. `prepareFix` keeps counting them: a start asked for may hand the fixer the
+  call again, and the look never starts what prepareFix refuses. The idle verdict ends with "1 optional
+  call: <link>" (`OpenVerdict.Optional`, `OptionalCallsWords`), approved or not, and the factory screen's
+  merge move with the same words, so the operator sees the call at the merge. An optional call is still
+  a call of the fixer's: `fixerCalls` dates it from the record, so the author's word in its thread after it
+  is a decision and `magnum fix --decide` takes it (the entry above). The call words of a P0 to P2 author's
+  call change too: the skill writes "not fixed. The author's call:", which `needsYouEntryRe` reads, and the
+  call says "the review leaves the choice to you; reply with yours at <link>, or run `magnum fix <ref>
+  --decide <thread>="<your choice>"`" (`attention.AuthorsCall`, a decision call), where "the fixer declined
+  it" and "`magnum fix` sends it back" were wrong (a rerun only asks again). The older entries are left as
+  they are, as this file's preamble asks. Rejected: dropping the call silently (the operator would merge
+  without seeing it); keeping the P3 in Needs you with a softer word (it still holds the PR and its CI);
+  reading the fixer's reason for the options (the fixer's words are never read). Tests, failing first:
+  TestParseFixReportReadsTheOptionalCalls, TestAnOptionalCallHoldsNothing, TestFixDecideTakesAnOptionalCall,
+  TestALoopEndsAsDoneWhenItsOptionalCallIsAllThatIsLeft, TestAnOptionalCallIsNoFixersWork,
+  TestTheIdleVerdictNamesTheOptionalCalls, TestTheLookLeavesAnOptionalCallToTheMerge and
+  TestAnAuthorsCallAsksForYourChoiceNotADecline in engine; TestAnAuthorsCallLeavesTheChoiceToYou in
+  attention; TestTheMergeMoveNamesTheOptionalCalls in factory; the new sentences of
+  TestTheFixSkillLeavesTheAuthorsCallToTheAuthor in agents.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

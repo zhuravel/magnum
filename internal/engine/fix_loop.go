@@ -679,7 +679,9 @@ func fixRemains(res pipeline.RoundResult) bool {
 // from its summary) when the PR's watch says autofix = "open": there they
 // are work as findings are (rule A1, reviewWork), and the loop goes on
 // with them within its cycles, where an end as done would have the look
-// start a new loop on the loop's own re-review. 0 under any other value,
+// start a new loop on the loop's own re-review. The P3s the operator holds
+// as optional calls (openOptionalAt) are no fixer's work: a next cycle
+// would only list them again. 0 under any other value,
 // whose loops end on them as before, and when the summary cannot be read
 // or is not that re-review's.
 func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.RoundResult) int {
@@ -691,7 +693,7 @@ func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.Rou
 	if err != nil || !ok || sum.SHA != cmp.Or(res.TargetSHA, job.state.Head) || res.ReviewID != 0 && sum.ReviewID != res.ReviewID {
 		return 0
 	}
-	return sum.Simplifications + openP3(sum)
+	return sum.Simplifications + max(openP3(sum)-e.openOptionalAt(ctx, job, res.ReportDir), 0)
 }
 
 // roundOpenProblems is how many earlier P0 to P2 findings a round's review

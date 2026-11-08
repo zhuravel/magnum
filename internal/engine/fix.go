@@ -256,12 +256,16 @@ func (j *fixJob) work() string {
 // reviewWork reports whether sum, magnum's review, leaves the fixer work of
 // its own: new findings (P0 to P3), simplifications, or earlier findings it
 // keeps open, the optional P3s among them (rule A1: an optional finding
-// counts as open until a fix or a fix-marked reply). prepareFix starts a job
-// on such a review without asking the other reviewers, and autofix = "open"
-// counts the review as an item (openItemsOf) by the same rule, so the look
-// never starts what prepareFix refuses.
-func reviewWork(sum store.ReviewSummary) bool {
-	return sum.Findings()+sum.Simplifications+sum.OpenProblems()+openP3(sum) > 0
+// counts as open until a fix or a fix-marked reply), but for calls of its
+// P3s, new or kept open, that a fixer left the operator as optional calls
+// (fix_optional.go): the operator's, never the fixer's again. prepareFix
+// starts a job on such a review without asking the other reviewers (calls 0:
+// a start asked for may hand the fixer a call again), and autofix = "open"
+// counts the review as an item (openItemsOf) by the same rule with the calls
+// its read shows open, so the look never starts what prepareFix refuses.
+func reviewWork(sum store.ReviewSummary, calls int) bool {
+	p3 := sum.Counts[3] + openP3(sum)
+	return sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+max(p3-calls, 0) > 0
 }
 
 // openP3 is the earlier P3s sum keeps open; 0 when its result gave only the
@@ -585,7 +589,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// the fixer only what waits for an answer there (spec 96; a next cycle's changes
 	// request may keep earlier findings open with neither, fixRemains). A
 	// read GitHub refuses for the rate limit holds the job as the floor does.
-	alone := prev.Cycle == 0 && !reviewWork(sum)
+	alone := prev.Cycle == 0 && !reviewWork(sum, 0)
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
 	// for it only when nothing else would start the job.

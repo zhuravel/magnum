@@ -212,6 +212,25 @@ func TestAnIdleApprovedPRWaitsOnYouToMerge(t *testing.T) {
 	}
 }
 
+// An optional call magnum's fixer left you holds nothing, so the PR is idle
+// and merges as any approved one does, but you see it at the merge: the
+// move ends with "1 optional call: <link>", and the card links it.
+func TestTheMergeMoveNamesTheOptionalCalls(t *testing.T) {
+	const link = "https://github.com/talkable/talkable/pull/4534#discussion_r4302866759"
+	r := newScreenRig(t)
+	r.withMagnum()
+	r.publishedTask("PR-12324", 4534)
+	why := "nothing open at a1b2c3d · approved, merge is yours · 1 optional call: " + link
+	r.pr(4534, func(v *PRState) {
+		v.HasOpen, v.Approved, v.Open = true, true, verdict(engine.OpenIdle, why)
+		v.Open.Optional = []string{link}
+	})
+	row := rowOf(t, r.data(time.Time{}), "PR-12324")
+	if row.Group != tui.GroupNeedsYou || row.Move != "merge #4534 on GitHub · 1 optional call: "+link || row.MoveShort != "merge it" {
+		t.Errorf("its move %q / %q in %v, want the merge with the optional call", row.Move, row.MoveShort, row.Group)
+	}
+}
+
 // An idle PR nobody approved waits on its reviewers.
 func TestAnIdleUnapprovedPRWaitsOnReviewers(t *testing.T) {
 	r := newScreenRig(t)

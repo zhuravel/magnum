@@ -250,7 +250,11 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	if f.whole {
 		f.cut = l.Read.Cut
 		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
-		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA)...)
+		var optional map[int64]bool
+		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
+			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine)
+		}
+		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA, optional)...)
 		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
 			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
 		}
@@ -696,7 +700,7 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		}
 	}
 	if loops > 0 {
-		for _, it := range magnumItemsOf(l.Read.Mine, nil, false, l.Conflict.fixConflict(l.Conflict.Head), l.Conflict.Head) {
+		for _, it := range magnumItemsOf(l.Read.Mine, nil, false, l.Conflict.fixConflict(l.Conflict.Head), l.Conflict.Head, nil) {
 			if it.Kind == itemMagnum || it.Kind == itemConflict {
 				hand(it.Key)
 			}

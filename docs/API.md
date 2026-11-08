@@ -9216,6 +9216,11 @@ func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string
     not refuse it either: the operator decides by hand, the board shows those.
     sum is magnum's latest posted round of pr (nil: none).
 
+func OptionalCallsWords(links []string) string
+    OptionalCallsWords names the optional calls whose links are links,
+    as the idle verdict and the factory screen's merge move end with them:
+    "1 optional call: <link>", "2 optional calls: <link>, <link>"; "" for none.
+
 func OverruleHooksHold(ctx context.Context, st *store.Store) (bool, error)
     OverruleHooksHold lets the hooks.json files whose hooks without a trust
     entry the daemon told about (KVCodexHooksUntrusted) start new Codex sessions
@@ -10209,6 +10214,11 @@ type FixReport struct {
 	// Description are the changes to the PR description ("description:
 	// <what changed>" lines under "## Pushed"), what changed per line.
 	Description []string
+	// Optional are the optional calls the fixer left the author (the P3s
+	// whose Fix leaves the choice to the author), one entry per line of
+	// "## Optional calls" without its "- ", in the shape of a Needs you
+	// entry; none for "none" or a report without the section.
+	Optional []string
 }
     FixReport is what the fixer reports.
 
@@ -10858,6 +10868,10 @@ type OpenVerdict struct {
 	Approved      string     `json:"approved,omitempty"`
 	AfterApproval int        `json:"after_approval,omitempty"`
 	Off           string     `json:"off,omitempty"`
+	// Optional are the links of the operator's optional calls an idle
+	// verdict names (fix_optional.go): P3s whose Fix leaves the choice to
+	// the operator, which hold nothing and wait for them at the merge.
+	Optional []string `json:"optional,omitempty"`
 
 	// Has unexported fields.
 }

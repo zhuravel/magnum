@@ -848,6 +848,10 @@ func verdictWait(st PRState, n int, c prClock) prWait {
 		if st.Approved {
 			w := you(o.Why, short, "")
 			w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
+			if len(o.Optional) > 0 { // the optional calls magnum's fixer left you, seen at the merge
+				w.move += " · " + engine.OptionalCallsWords(o.Optional)
+				w.links = append(w.links, o.Optional...)
+			}
 			return w
 		}
 		if st.Gate == nil {
