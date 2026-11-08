@@ -18180,7 +18180,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     rows (sorted), all again; a scope whose repository has no rows any more falls back to all. They combine, ask
     nothing (they change the view only, as on the board) and do not outlive the screen, which keeps no view state.
     The title line says the scope, the filter and the rows they hide; the chips still count every row, an empty
-    NEEDS YOU draws no "Nothing waits on you." under them, and a filter that matches nothing says so. The
+    NEEDS YOU draws no "Nothing waits on you." under them, a filter that matches nothing says so, and a scope
+    that shows nothing names what `O` shows next (the next repository, after the last every one). The
     selection stays on its row while it shows, else goes to the nearest one shown, next first, as the board's.
   - The walk ignores the filter and the scope: `a` reads every row of NEEDS YOU (`nextDecision` over the data,
     never over home's order), so no decision hides from it.
@@ -18197,6 +18198,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestThePRKeysSayWhatTheyDoToTheFactorysLoop, TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests,
   TestTheFactoryScreenReadsWhatThePRKeysGoBy, TestAMutedOrSnoozedPRsRowSaysSo, TestTheMenuListsThePRKeys,
   TestSlashFiltersHomesRows, TestAFilterThatMatchesNothingSaysSo, TestOCyclesTheRepositoryScope,
+  TestAnEmptyScopeSaysWhatONextShows,
   TestTheWalkIgnoresTheFilterAndTheScope, TestTheHelpListsThePRKeysTheFilterAndTheScope; amended:
   TestTheBoardsLettersKeepTheirMeaning (r on home is the review now) and TestTheHelpListsOnlyWhatExists (snooze
   exists).

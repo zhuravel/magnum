@@ -27,7 +27,7 @@ var factoryWords = [][2]string{
 	{"WAITED", "how long it has waited on this"},
 	{"muted", "M muted the PR: magnum starts no automatic review or autofix loop on it (U unmutes it)"},
 	{"snoozed → 16:09", "z snoozed the PR until then: no automatic review or fix loop starts on it (z lifts it)"},
-	{`filter "coupon" · 6 hidden`, "the / filter (and repo widget, the O scope) hide 6 rows: esc clears the filter, O shows every repository"},
+	{`filter "coupon" · 6 hidden`, "the / filter (and repo widget, the O scope) hide 6 rows: esc clears the filter, O shows the next repository, after the last every one"},
 	{"decisions", "single answers you owe, across all tasks"},
 	{"you:", "you are the blocker"},
 	{"agent:", "an AI agent is working on it"},

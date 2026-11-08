@@ -868,24 +868,32 @@ func (m factoryModel) rowRepos() []string {
 	return out
 }
 
-// nextScope moves O's scope on: every repository, then each one with rows
-// (rowRepos), then every one again; the cursor stays on its row or goes to
-// the nearest one shown.
+// nextScope moves O's scope on (scopeAfter); the cursor stays on its row
+// or goes to the nearest one shown.
 func (m *factoryModel) nextScope() tea.Cmd {
-	repos := m.rowRepos()
-	if len(repos) == 0 {
+	if len(m.rowRepos()) == 0 {
 		return m.note("no repository to show alone: the rows name none")
 	}
-	switch i := slices.IndexFunc(repos, func(r string) bool { return strings.EqualFold(r, m.scope) }); {
-	case m.scope == "":
-		m.scope = repos[0]
-	case i < 0 || i == len(repos)-1:
-		m.scope = ""
-	default:
-		m.scope = repos[i+1]
-	}
+	m.scope = m.scopeAfter()
 	m.fixCursor()
 	return m.note("repo: " + cmp.Or(m.scope, "all"))
+}
+
+// scopeAfter is the scope O moves to from the current one: from every
+// repository the first with rows (rowRepos), from each the next, and from
+// the last (or one with no rows left) every repository again ("").
+func (m factoryModel) scopeAfter() string {
+	repos := m.rowRepos()
+	switch i := slices.IndexFunc(repos, func(r string) bool { return strings.EqualFold(r, m.scope) }); {
+	case len(repos) == 0:
+		return ""
+	case m.scope == "":
+		return repos[0]
+	case i < 0 || i == len(repos)-1:
+		return ""
+	default:
+		return repos[i+1]
+	}
 }
 
 // keepScope drops a scope whose repository has no rows any more: home
@@ -1111,7 +1119,7 @@ func (m factoryModel) homeFrame() factoryFrame {
 	f := factoryFrame{Repos: d.Repos, Rows: rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
 		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1}
 	if m.narrowed() {
-		f.all, f.scope, f.filter = d.Rows, m.scope, strings.TrimSpace(cleanInput(m.filter.Value()))
+		f.all, f.scope, f.filter, f.scopeNext = d.Rows, m.scope, strings.TrimSpace(cleanInput(m.filter.Value())), m.scopeAfter()
 		f.hidden = len(m.orderOf(false)) - len(m.order())
 	}
 	if m.filtering {

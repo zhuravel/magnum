@@ -173,6 +173,23 @@ func TestOCyclesTheRepositoryScope(t *testing.T) {
 	}
 }
 
+// A scope that shows no row says what O shows next: the next repository,
+// or every one from the last. Before, it said "O shows every repository"
+// whichever repository came next.
+func TestAnEmptyScopeSaysWhatONextShows(t *testing.T) {
+	h := testRepos(t)
+	empty := func() string {
+		f := h.m.homeFrame()
+		f.Rows, f.Cursor = nil, -1 // the scope's rows all gone from view
+		frame, _ := renderFactory(f, 160, 40, h.m.st, h.m.g, factoryNow)
+		return ansi.Strip(frame)
+	}
+	h.press("O")
+	mustContain(t, empty(), "Nothing of talkable. O shows widget.")
+	h.press("O")
+	mustContain(t, empty(), "Nothing of widget. O shows every repository.")
+}
+
 // a walks every decision whatever the filter and the scope hide: no
 // decision hides from it.
 func TestTheWalkIgnoresTheFilterAndTheScope(t *testing.T) {
@@ -240,4 +257,7 @@ func TestTheHelpListsThePRKeysTheFilterAndTheScope(t *testing.T) {
 		t.Errorf("the help's Task card lacks the r rule, R z M U or your PR's card's keys:\n%s", strings.Join(card, "\n"))
 	}
 	mustContain(t, help, "muted  ", "snoozed → 16:09  ", `filter "coupon" · 6 hidden  `)
+	if l := lineOf(t, help, `filter "coupon" · 6 hidden  `); !strings.Contains(l, "O shows the next repository, after the last every one") {
+		t.Errorf("the scope's gloss does not say where O moves: %q", l)
+	}
 }

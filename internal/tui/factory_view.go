@@ -74,11 +74,12 @@ type factoryFrame struct {
 	// every row, which the chips count, when Rows are the filter's and the
 	// scope's alone (nil: Rows are all); scope is the repository shown
 	// alone, filter the filter's text, hidden the rows they hide, which the
-	// title line says; input is the filter as it is typed, drawn in place of
-	// the selected row's help line.
-	all                  []FactoryRow
-	scope, filter, input string
-	hidden               int
+	// title line says; scopeNext is the scope O moves to ("" = every
+	// repository), which a scope that shows nothing names; input is the
+	// filter as it is typed, drawn in place of the selected row's help line.
+	all                             []FactoryRow
+	scope, scopeNext, filter, input string
+	hidden                          int
 }
 
 const (
@@ -234,7 +235,7 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 			return r.Group == GroupDone && p.digestLists(cleanText(r.Key))
 		})
 	}
-	p.f.scope, p.f.filter, p.f.input = cleanText(f.scope), cleanText(f.filter), cleanText(f.input)
+	p.f.scope, p.f.scopeNext, p.f.filter, p.f.input = cleanText(f.scope), cleanText(f.scopeNext), cleanText(f.filter), cleanText(f.input)
 	for _, r := range p.rows {
 		for _, c := range r.Stagings {
 			if !slices.Contains(p.names, c.Name) {
@@ -1440,9 +1441,13 @@ func (p *factoryPainter) emptyLine() string {
 		}
 		text = p.st.Dim.Render(fmt.Sprintf("Nothing matches %q%s. ", p.f.filter, in)) + p.st.Key.Render("esc") +
 			p.st.Dim.Render(" clears the filter.")
-	case p.f.all != nil:
+	case p.f.all != nil: // the scope shows nothing: what O shows next
+		next := "every repository"
+		if p.f.scopeNext != "" {
+			next = cmp.Or(p.labels[strings.ToLower(p.f.scopeNext)], p.f.scopeNext)
+		}
 		text = p.st.Dim.Render("Nothing of "+cmp.Or(p.labels[strings.ToLower(p.f.scope)], p.f.scope)+". ") + p.st.Key.Render("O") +
-			p.st.Dim.Render(" shows every repository.")
+			p.st.Dim.Render(" shows "+next+".")
 	}
 	return spaces((p.width-ansi.StringWidth(text))/2) + text
 }
