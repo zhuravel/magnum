@@ -159,3 +159,38 @@ func TestAnOutsideCommentIsCaughtByAPostedFindingButLinksNoRejectedOne(t *testin
 		}
 	}
 }
+
+// A comment on a range of lines is near a finding within NearLines of the
+// range, its first line included: a posted finding three lines above the
+// range catches it and one four lines above does not, and a rejected one
+// is raised by the same rule.
+func TestACommentOnARangeIsNearAFindingWithinThreeLinesOfItsFirstLine(t *testing.T) {
+	ranged := func(id int64, path string) github.Thread {
+		th := thread(id, path, 20, shaA, longish)
+		th.OriginalStartLine = 10
+		return th
+	}
+	in := input([]github.Thread{ranged(1, "a.rb"), ranged(2, "b.rb"), ranged(3, "c.rb"), ranged(4, "d.rb")}, nil)
+	in.Findings = []store.Finding{
+		{RunID: "r-1", FindingID: "F1", Path: "a.rb", Line: 7, Verdict: store.FindingPosted},
+		{RunID: "r-1", FindingID: "F2", Path: "b.rb", Line: 6, Verdict: store.FindingPosted},
+		{RunID: "r-1", FindingID: "F3", Title: "Scope dropped", Path: "c.rb", Line: 7, Verdict: store.FindingRejected, ReasonCode: "speculative"},
+		{RunID: "r-1", FindingID: "F4", Title: "Scope dropped", Path: "d.rb", Line: 6, Verdict: store.FindingRejected, ReasonCode: "speculative"},
+	}
+	res, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Caught != 1 || !slices.Equal(ids(res.Candidates), []string{"t2", "t3", "t4"}) {
+		t.Fatalf("caught %d, candidates %v; want t1 caught", res.Caught, ids(res.Candidates))
+	}
+	for _, c := range res.Candidates {
+		want := store.MissRaisedNone
+		if c.ID == "t3" {
+			want = store.MissRaisedRejected
+		}
+		if c.Raised != want || (want == store.MissRaisedRejected) != (c.FindingRef == "r-1/F3") {
+			t.Errorf("%s: raised %q by %q, want %q", c.ID, c.Raised, c.FindingRef, want)
+		}
+	}
+}

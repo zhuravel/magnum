@@ -245,3 +245,41 @@ func TestTheRetroRunsAsBeforeWithoutAReadableFactoryRegistryAndSaysWhyOnce(t *te
 		})
 	}
 }
+
+// A repository miss only magnum's posted round caught (t105, next to its
+// posted finding, on a pull request the factory published) is the
+// factory's alone: it marks the repository for no notes curation, which
+// learns only from what magnum's review missed.
+func TestAPostedCaughtRepoMissMarksNoNotesCuration(t *testing.T) {
+	fc := &fakeClassifier{answer: func(job ClassifyJob) (ClassifyResult, error) {
+		var out learn.Output
+		for _, c := range job.Candidates {
+			it := learn.Item{ID: c.ID, Class: store.MissStyle}
+			if c.ID == "t105" {
+				it = learn.Item{ID: c.ID, Class: store.MissMiss, Severity: "P1", Title: "Coupon lookup ignores the site",
+					Lesson: "A finder that takes a code from the request must scope it to the current site.",
+					Scope:  store.MissScopeRepo, Lines: []int{80, 80}, Match: []string{"site"}, Stage: store.MissStageReview}
+			}
+			out.Items = append(out.Items, it)
+		}
+		b, _ := json.Marshal(out)
+		return ClassifyResult{}, os.WriteFile(job.OutputPath, b, 0o600)
+	}}
+	h, _ := missesHarness(t, fc, &fakeCurator{write: notedProposal})
+	pr := retroPR(h, 7, 25*time.Hour)
+	retroFinding(h, pr)
+	seedRetroGitHub(h, 7)
+	seedFactory(h, 7)
+
+	h.requestRetro(RetroPayload{})
+	if m := h.allMisses(pr.ID)["105"]; m.Class != store.MissMiss || m.Scope != store.MissScopeRepo || !m.PostedCaught ||
+		m.Origin != store.MissOriginFactory {
+		t.Fatalf("t105 = %+v; want a repo miss of the factory's that the posted round caught", m)
+	}
+	if v, _ := h.e.getKV(h.ctx, KVNotesMisses("talkable/talkable")); v != "" {
+		t.Errorf("the repository is marked for a curation: %q", v)
+	}
+	if evs := notesEvents(t, h, "notes.misses"); len(evs) != 0 {
+		t.Errorf("notes.misses events = %+v", evs)
+	}
+}

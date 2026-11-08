@@ -662,8 +662,9 @@ type retroFactory struct {
 }
 
 // retroLocal is the factory's local review round of pr for learn.Build
-// (learn.Input.Local: every finding of every task that published pr) and
-// the newest such task, whose files the classifier reads; nil and 0 when
+// (learn.Input.Local: the head each task that published pr approved, and
+// every finding of those tasks) and the newest such task, whose files the
+// classifier reads; nil and 0 when
 // the factory did not publish pr, when the layout keeps no data, or when
 // factory.db is missing (logged) or cannot be read (a retro.factory
 // warning), each said once per retro (fr): the retro then takes pr as it
@@ -693,6 +694,9 @@ func (e *Engine) retroLocal(ctx context.Context, fr *retroFactory, repo store.Re
 	}
 	local := &learn.LocalRound{}
 	for _, t := range tasks {
+		if h := t.Head(); h != "" {
+			local.Heads = append(local.Heads, h)
+		}
 		local.Findings = append(local.Findings, t.Findings...)
 	}
 	return local, tasks[0].ID

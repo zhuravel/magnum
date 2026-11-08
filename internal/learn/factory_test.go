@@ -17,11 +17,12 @@ func localAt(ref, path string, line int, head string) escapes.Finding {
 	return escapes.Finding{Source: escapes.SourceLocal, Ref: ref, Path: path, StartLine: line, EndLine: line, Priority: "P2", Head: head}
 }
 
-// factoryInput is input on a pull request the factory published, whose
-// local round found what local holds.
+// factoryInput is input on a pull request the factory published on shaA,
+// the head magnum then reviewed first, whose local round found what local
+// holds.
 func factoryInput(threads []github.Thread, reviews []github.Review, local ...escapes.Finding) Input {
 	in := input(threads, reviews)
-	in.Local = &LocalRound{Findings: local}
+	in.Local = &LocalRound{Heads: []string{shaA}, Findings: local}
 	return in
 }
 
@@ -106,7 +107,7 @@ func TestACommentOnlyThePostedRoundCaughtIsAFactoryOriginCandidate(t *testing.T)
 // is the posted round's catch too.
 func TestACommentThePostedRoundRejectedAsADuplicateIsTheFactorysMiss(t *testing.T) {
 	in := duplicateCase(t0.Add(time.Hour), t0.Add(2*time.Hour), "duplicate")
-	in.Local = &LocalRound{}
+	in.Local = &LocalRound{Heads: []string{shaA}}
 	res, err := Build(in)
 	if err != nil {
 		t.Fatal(err)
@@ -117,20 +118,22 @@ func TestACommentThePostedRoundRejectedAsADuplicateIsTheFactorysMiss(t *testing.
 	if c := res.Candidates[0]; c.Origin != OriginFactory || !c.PostedCaught {
 		t.Errorf("t1 = %+v; want origin factory, caught by the posted round", c)
 	}
-	in.Local = &LocalRound{Findings: []escapes.Finding{localAt("1/31", "a.rb", 44, shaA)}}
+	in.Local = &LocalRound{Heads: []string{shaA}, Findings: []escapes.Finding{localAt("1/31", "a.rb", 44, shaA)}}
 	if res, err := Build(in); err != nil || res.Caught != 1 || len(res.Candidates) != 0 {
 		t.Errorf("caught by both rounds: caught %d, candidates %v, %v", res.Caught, ids(res.Candidates), err)
 	}
 }
 
-// A local finding names the approved head. A comment on a later reviewed
-// head is compared with it only when the file did not change between the
-// two (the retro's own comparison, asked once per pair of commits); at a
-// head where it changed, or with no comparison, the local finding catches
-// nothing.
+// A local finding names the head its review cycle saw. A comment on a
+// later reviewed head is on the factory's code only when its file did not
+// change since the head the factory approved (the retro's own comparison,
+// asked once per pair of commits): a local finding there catches it (t1),
+// and with none near it is the factory's miss (t3). A comment on a file
+// that changed (t2) is on code the local round never saw, and with no
+// comparison nothing tells, so neither has an origin.
 func TestALocalFindingCatchesACommentOfALaterHeadOnlyWhenItsFileDidNotChange(t *testing.T) {
-	in := factoryInput([]github.Thread{thread(1, "a.rb", 42, shaC, longish), thread(2, "b.rb", 5, shaC, longish)}, nil,
-		localAt("1/31", "a.rb", 42, shaA), localAt("1/32", "b.rb", 5, shaA))
+	in := factoryInput([]github.Thread{thread(1, "a.rb", 42, shaC, longish), thread(2, "b.rb", 5, shaC, longish),
+		thread(3, "c.rb", 9, shaC, longish)}, nil, localAt("1/31", "a.rb", 42, shaA), localAt("1/32", "b.rb", 5, shaA))
 	in.Reviewed = append(in.Reviewed, Reviewed{SHA: shaC, At: t0.Add(30 * time.Minute)})
 	var asked [][2]string
 	in.Compare = func(from, to string) (Comparison, error) {
@@ -142,20 +145,82 @@ func TestALocalFindingCatchesACommentOfALaterHeadOnlyWhenItsFileDidNotChange(t *
 		t.Fatal(err)
 	}
 	got := byID(res.Candidates)
-	if got["t1"].Origin != "" || got["t2"].Origin != OriginFactory {
-		t.Errorf("t1 origin %q (a.rb did not change: caught), t2 origin %q (b.rb changed: missed)", got["t1"].Origin, got["t2"].Origin)
+	for id, want := range map[string]string{"t1": "", "t2": "", "t3": OriginFactory} {
+		if c, ok := got[id]; !ok || c.Origin != want || c.PostedCaught {
+			t.Errorf("%s: origin %q (a candidate: %v), want %q", id, c.Origin, ok, want)
+		}
 	}
 	if !slices.Equal(asked, [][2]string{{shaA, shaC}}) {
 		t.Errorf("compared %v, want shaA...shaC once", asked)
 	}
 	in.Compare = nil
-	if res, err := Build(in); err != nil || byID(res.Candidates)["t1"].Origin != OriginFactory {
-		t.Errorf("with no comparison the local finding of another head caught t1: %+v, %v", res.Candidates, err)
+	res, err = Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range res.Candidates {
+		if c.Origin != "" {
+			t.Errorf("with no comparison %s is taken for the factory's code: %+v", c.ID, c)
+		}
+	}
+}
+
+// A comment on a head after the one the factory approved, on a file that
+// changed since (a fixer's push, the author's, a merge of the base
+// branch), is on code the local round never saw: no origin, whether a local
+// finding is on its path (t3) or none is (t1), and one magnum's posted round
+// caught (t2) is caught, as on any other pull request.
+func TestACommentOnAFileThatChangedAfterTheFactoryApprovedItIsNotTheFactorysMiss(t *testing.T) {
+	in := factoryInput([]github.Thread{
+		thread(1, "fixer.rb", 10, shaC, longish),
+		thread(2, "fixer.rb", 30, shaC, longish),
+		thread(3, "other.rb", 40, shaC, longish),
+	}, nil, localAt("1/31", "other.rb", 5, shaA))
+	in.Reviewed = append(in.Reviewed, Reviewed{SHA: shaC, At: t0.Add(30 * time.Minute)})
+	in.Targets["r-2"] = shaC
+	in.Findings = []store.Finding{{RunID: "r-2", FindingID: "F1", Severity: "P2", Path: "fixer.rb", Line: 31, Verdict: store.FindingPosted}}
+	in.Compare = func(string, string) (Comparison, error) {
+		return Comparison{Descendant: true, Complete: true, Paths: []string{"fixer.rb", "other.rb"}}, nil
+	}
+	res, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Caught != 1 || !slices.Equal(ids(res.Candidates), []string{"t1", "t3"}) {
+		t.Fatalf("caught %d, candidates %v; want t2 caught, t1 and t3 candidates", res.Caught, ids(res.Candidates))
+	}
+	for _, c := range res.Candidates {
+		if c.Origin != "" || c.PostedCaught {
+			t.Errorf("%s is the factory's: %+v", c.ID, c)
+		}
+	}
+}
+
+// An outside comment (on a push magnum did not review, whose file changed)
+// near a finding magnum posted is caught on a pull request the factory
+// published as on any other: it is on no reviewed commit, so it takes no
+// part in the local round's matching.
+func TestAnOutsideCommentNearAPostedFindingStaysCaughtOnAFactoryPR(t *testing.T) {
+	in := factoryInput([]github.Thread{thread(1, "a.rb", 42, shaB, longish)}, nil)
+	in.Findings = []store.Finding{{RunID: "r-1", FindingID: "F1", Severity: "P2", Path: "a.rb", Line: 43, Verdict: store.FindingPosted}}
+	in.Compare = func(_, to string) (Comparison, error) {
+		if to == shaB { // a.rb changed in the push magnum did not review
+			return Comparison{Descendant: true, Complete: true, Paths: []string{"a.rb"}}, nil
+		}
+		return Comparison{Descendant: true, Complete: true}, nil
+	}
+	res, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Caught != 1 || len(res.Candidates) != 0 || len(res.Outside) != 0 {
+		t.Errorf("caught %d, candidates %+v, outside %v; want t1 caught", res.Caught, res.Candidates, ids(res.Outside))
 	}
 }
 
 // A comparison GitHub fails for the local round is the build's error, as
-// for magnum's own rounds.
+// for magnum's own rounds; one it answers with a 404 proves nothing, so the
+// comment is not taken for the factory's code.
 func TestAComparisonThatFailsForTheLocalRoundFailsTheBuild(t *testing.T) {
 	in := factoryInput([]github.Thread{thread(1, "a.rb", 42, shaC, longish)}, nil, localAt("1/31", "a.rb", 42, shaA))
 	in.Reviewed = append(in.Reviewed, Reviewed{SHA: shaC, At: t0.Add(30 * time.Minute)})
@@ -165,8 +230,8 @@ func TestAComparisonThatFailsForTheLocalRoundFailsTheBuild(t *testing.T) {
 	}
 	in.Compare = func(string, string) (Comparison, error) { return Comparison{}, github.ErrNotFound }
 	res, err := Build(in)
-	if err != nil || byID(res.Candidates)["t1"].Origin != OriginFactory {
-		t.Errorf("a 404 proves nothing, so the local finding catches nothing: %+v, %v", res.Candidates, err)
+	if c, ok := byID(res.Candidates)["t1"]; err != nil || !ok || c.Origin != "" {
+		t.Errorf("a 404 proves nothing, so nothing tells that t1 is on the factory's code: %+v, %v", res.Candidates, err)
 	}
 }
 
