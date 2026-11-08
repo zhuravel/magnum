@@ -190,7 +190,7 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 	}
 	job.head, job.merged = merge, b
 	msg := fmt.Sprintf("magnum merged %s at %s into %s as %s: the head is %s", b.base, textx.ShortSHA(b.sha), job.label(), id.Login, textx.ShortSHA(merge))
-	if schema := e.parentSchema(ctx, job, head, merge); schema != "" {
+	if schema := e.parentSchema(ctx, job, head, merge, job.mode != FixModeMerge); schema != "" {
 		job.schema = schema
 		msg += "; " + schema
 		data["schema"] = schema
@@ -224,11 +224,11 @@ func (e *Engine) parentOnRow(ctx context.Context, job *fixJob, head string) erro
 
 // parentSchema marks the job's pool slot for a schema reload when the
 // merge from..to changed the pool's schema_paths (dirty_schema, which the
-// release reads), and, for a job whose fixer runs specs next, loads the
-// merged schema into the slot's databases now (Slots.EnsureSchema), so they
-// do not fall to `not run: environment`. It returns what it did ("" for
-// nothing).
-func (e *Engine) parentSchema(ctx context.Context, job *fixJob, from, to string) string {
+// release reads), and, with load (a job whose fixer runs specs next),
+// loads the merged schema into the slot's databases now
+// (Slots.EnsureSchema), so they do not fall to `not run: environment`. It
+// returns what it did ("" for nothing).
+func (e *Engine) parentSchema(ctx context.Context, job *fixJob, from, to string, load bool) string {
 	pool := job.pool
 	pg, ok := e.d.Git.(parentGit)
 	if !ok || pool == nil || len(pool.SchemaPaths) == 0 || job.slot.Kind != store.SlotKindPool || e.d.Slots == nil {
@@ -244,7 +244,7 @@ func (e *Engine) parentSchema(ctx context.Context, job *fixJob, from, to string)
 	if err := e.st.UpdateSlotFields(ctx, job.slot.ID, func(u *store.SlotUpdate) { u.Set("dirty_schema", true) }); err != nil {
 		e.log.Warn("fix: mark the slot's schema dirty", "subject", job.subject(), "slot", job.slot.Name, "err", err)
 	}
-	if job.mode == FixModeMerge {
+	if !load {
 		return "the merge changes the schema: the next round loads it"
 	}
 	slot, err := e.st.SlotByID(ctx, job.slot.ID)

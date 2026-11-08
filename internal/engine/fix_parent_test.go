@@ -238,11 +238,13 @@ func TestAMergeOfACleanParentIsTheDaemonsAndStartsNoFixer(t *testing.T) {
 // A merge of the parent that conflicts goes to the fix role alone, with a
 // prompt of the merge (no review, no findings, no other reviewer's item):
 // the conflicting paths and the tip it merges. Its push is judged as any
-// push of a merge: the loop ends with no forced re-review.
+// push of a merge: the loop ends with no forced re-review. A pushed merge
+// that changes the pool's schema paths marks the slot's schema dirty.
 func TestAMergeOfAConflictingParentGoesToTheFixerAlone(t *testing.T) {
-	h, mg := mergeHarness(t, withFixerApp)
+	h, mg := mergeHarness(t, withFixerApp, func(h *harness) { h.cfg.Pools[0].SchemaPaths = []string{"db/schema.rb"} })
 	pr := fixablePR(h, "zhuravel", nil)
 	mg.conflict("app/models/offer.rb", "db/schema.rb")
+	mg.schema = []string{"db/schema.rb"}
 	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
 		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
 	})
@@ -270,6 +272,9 @@ func TestAMergeOfAConflictingParentGoesToTheFixerAlone(t *testing.T) {
 	}
 	if cur := h.pr(2); cur.HeadSHA != fixMergeHead {
 		t.Errorf("the PR's head = %s, want the fixer's merge", cur.HeadSHA)
+	}
+	if !h.slot("review1").DirtySchema {
+		t.Error("the slot's schema is not marked dirty after a merge that changed it")
 	}
 }
 
