@@ -374,9 +374,10 @@ func TestTheCapEndsTheLoopAsNeedsAttention(t *testing.T) {
 }
 
 // Findings the fixer left to the author when it pushed end the loop once
-// the push is re-reviewed, whatever that round found: needs attention names
-// how many, each by its comment id, priority and place, and the report, but
-// never the fixer's reasons, which stay in the report.
+// the push is re-reviewed and that round posted no new finding (one that
+// did runs the next cycle, which carries them: fix_carry_test.go): needs
+// attention names how many, each by its comment id, priority and place,
+// and the report, but never the fixer's reasons, which stay in the report.
 func TestNeedsYouEndsTheLoopAfterItsReReview(t *testing.T) {
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
@@ -386,7 +387,7 @@ func TestNeedsYouEndsTheLoopAfterItsReReview(t *testing.T) {
 	})
 	h.fix(FixPayload{})
 	h.handle()
-	reviewWith(h, findings(map[string]int{"P2": 1}, "COMMENTED"))
+	reviewWith(h, findings(map[string]int{}, "COMMENTED"))
 	h.advance(time.Minute)
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
 
@@ -572,7 +573,8 @@ func TestAFixersCallAfterAPushToastsAtOnce(t *testing.T) {
 		t.Errorf("the toast carries the fixer's words: %v", h.nh.shown())
 	}
 
-	reviewWith(h, findings(map[string]int{"P2": 1}, "COMMENTED"))
+	// Nothing new: the loop ends on the call (new findings carry it on: fix_carry_test.go).
+	reviewWith(h, findings(map[string]int{}, "COMMENTED"))
 	h.advance(attentionWindow + time.Hour) // a re-review that waited for long
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
 
@@ -1318,7 +1320,7 @@ func TestALoopStrandedInReviewingIsDecidedAtStartup(t *testing.T) {
 				t.Errorf("toasts = %v", h.nh.shown())
 			}
 		}},
-		{name: "needs you", findings: map[string]int{"P2": 1}, row: func(st *FixState) { st.NeedsYou = []string{"2102 P2 app/lib/x.rb:7: contested"} },
+		{name: "needs you", findings: map[string]int{}, row: func(st *FixState) { st.NeedsYou = []string{"2102 P2 app/lib/x.rb:7: contested"} },
 			check: func(t *testing.T, h *harness, _ store.PR) {
 				t.Helper()
 				cur := h.wantState(2, store.PRNeedsAttention)

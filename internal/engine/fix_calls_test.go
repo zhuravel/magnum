@@ -98,7 +98,7 @@ func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 		t.Errorf("toasts at the push = %q, want one with both calls", h.nh.shown())
 	}
 
-	reviewWith(h, findings(map[string]int{"P2": 1}, "COMMENTED"))
+	reviewWith(h, findings(map[string]int{}, "COMMENTED")) // nothing new: the loop ends on the calls
 	h.advance(time.Minute)
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
 

@@ -221,9 +221,14 @@ func (n needsYouEntry) call(o threadOwners, prURL, ref string, answered bool) (a
 // findings need your call (2101 P1 app/models/offer.rb:42, 1 entry magnum
 // could not read)"; "" when none is left).
 func needsYouCalls(entries []string, answered map[string]bool, report, prURL, ref string) ([]attention.FixCall, string) {
+	calls, left := needsYouCallsOf(entries, answered, report, prURL, ref)
+	return calls, moreWords(left)
+}
+
+// needsYouCallsOf is needsYouCalls with the entries magnum cannot read as
+// calls themselves (left), not yet in words.
+func needsYouCallsOf(entries []string, answered map[string]bool, report, prURL, ref string) (calls []attention.FixCall, left []string) {
 	owners := readThreadOwners(filepath.Dir(report))
-	var calls []attention.FixCall
-	var left []string
 	for _, entry := range entries {
 		n, ok := readNeedsYouEntry(entry)
 		if ok {
@@ -234,10 +239,16 @@ func needsYouCalls(entries []string, answered map[string]bool, report, prURL, re
 		}
 		left = append(left, entry)
 	}
+	return calls, left
+}
+
+// moreWords are the older words of the entries left beside the calls ("2
+// more findings need your call (…)"; "" for none).
+func moreWords(left []string) string {
 	if len(left) == 0 {
-		return calls, ""
+		return ""
 	}
-	return calls, fmt.Sprintf("%d more %s %s your call (%s)", len(left), textx.Plural(len(left), "finding", "findings"),
+	return fmt.Sprintf("%d more %s %s your call (%s)", len(left), textx.Plural(len(left), "finding", "findings"),
 		textx.Plural(len(left), "needs", "need"), strings.Join(needsYouNames(left), ", "))
 }
 
@@ -341,14 +352,15 @@ func namesNeedsYouID(line, id string) bool {
 
 // FixCalls are the calls of the findings the fixer of the loop st left to
 // the author when it pushed (FixState.NeedsYou, kept while the loop waits
-// for the re-review of its push), as the loop's end names them: the files
-// beside its report place their threads, prURL is the PR's page and ref how
-// `magnum fix` names it, and a thread the settle found answered
-// (FixState.Answered) asks only for the resolution, as the settle's toast
-// said: no thread is read again here. None for entries magnum cannot read
-// so.
+// for the re-review of its push), with those its earlier cycles left and
+// the loop carries (FixState.Carried, each call once: loopCalls), as the
+// loop's end names them: the files beside each report place their threads,
+// prURL is the PR's page and ref how `magnum fix` names it, and a thread
+// the settle found answered (FixState.Answered) asks only for the
+// resolution, as the settle's toast said: no thread is read again here.
+// None for entries magnum cannot read so.
 func FixCalls(st FixState, prURL, ref string) []attention.FixCall {
-	calls, _ := needsYouCalls(st.NeedsYou, st.answered(), st.Report, prURL, ref)
+	calls, _ := loopCalls(st.Carried, st.NeedsYou, st.answered(), st.Report, prURL, ref)
 	return calls
 }
 

@@ -3352,7 +3352,13 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   threads. An info toast says "PR #N: claude-fix pushed nothing, replied to 3 findings". The judge reads the
   replies in its usual reply round.
 - **Needs you.** The fixer left findings under `Needs you`, or the cap was reached with findings left, or a
-  run failed. A failed run is no report, a report of another run, a failed push (yours, made while the fixer
+  run failed. Calls alone do not end the loop when its re-review posts new findings (or a `Description: ✗`
+  line) and cycles are left: the next cycle works on them, and the loop carries the calls of the cycles
+  before (its row's `carried`) to its end, wherever it ends (after a re-review, a cycle that pushed nothing,
+  a failed run), where they are asked with the last cycle's, each once by its comment id with the place the
+  last fixer named (a push may move a line). What a later cycle was handed again is that fixer's to leave
+  again or answer: another reviewer's thread, review body or comment its `external-threads.json` listed,
+  a conflict with the base, the description. A failed run is no report, a report of another run, a failed push (yours, made while the fixer
   worked, makes its push fail, unless it only merged the base: `magnum fix-sync` above), a push GitHub does
   not show ("push not confirmed on GitHub"), a timeout, or a daemon restart in the middle of the run ("fix
   run lost in a daemon restart"). When your own push came in

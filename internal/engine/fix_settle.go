@@ -133,11 +133,20 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou, read)                // fix_external.go
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
 	}
+	// fix_carry.go: what earlier cycles left that this one did not ask again or take on
+	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou)
+	if len(carried) > 0 && !pushed { // the loop ends here: as magnum's threads show them now
+		carried = e.freshCarried(ctx, job, carried, "", read)
+	}
+	job.state.Carried = carried
 	n := len(rep.NeedsYou)
 	needs := "fix: " + needsYouText(rep.NeedsYou, answered, report, job.pr.URL, job.label(), false)
 	attn := withUnread(needs, unread)
 	if n > 0 {
 		data["needs_you"] = n
+	}
+	if len(carried) > 0 {
+		data["carried"] = len(carried)
 	}
 	switch {
 	case pushed && n > 0:
@@ -149,11 +158,13 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	case pushed:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
 		e.fixReReview(ctx, job, target, nil, nil)
-	case n > 0:
+	case n > 0 || len(carried) > 0:
+		// carried calls are named, since another cycle's report holds them
+		needs = "fix: " + loopNeedsText(carried, rep.NeedsYou, answered, report, job.pr.URL, job.label(), len(carried) > 0)
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
 		e.event(ctx, "warn", subject, "fix.needs_you", needs, data)
-		e.fixAttention(ctx, job, attn)
+		e.fixAttention(ctx, job, withUnread(needs, unread))
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
@@ -535,6 +546,9 @@ func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report stri
 		data["operator_typed"] = true
 	}
 	e.event(ctx, "warn", job.subject(), "fix.failed", msg, data)
+	if carried := carriedText(job); carried != "" { // fix_carry.go: the calls of the loop's earlier cycles stay the author's
+		msg += "; " + carried
+	}
 	e.fixAttention(ctx, job, msg)
 }
 

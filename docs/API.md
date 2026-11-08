@@ -8925,13 +8925,15 @@ func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.
 
 func FixCalls(st FixState, prURL, ref string) []attention.FixCall
-    FixCalls are the calls of the findings the fixer of the loop st left to the
-    author when it pushed (FixState.NeedsYou, kept while the loop waits for the
-    re-review of its push), as the loop's end names them: the files beside its
-    report place their threads, prURL is the PR's page and ref how `magnum fix`
-    names it, and a thread the settle found answered (FixState.Answered) asks
-    only for the resolution, as the settle's toast said: no thread is read again
-    here. None for entries magnum cannot read so.
+    FixCalls are the calls of the findings the fixer of the loop st left to
+    the author when it pushed (FixState.NeedsYou, kept while the loop waits
+    for the re-review of its push), with those its earlier cycles left and
+    the loop carries (FixState.Carried, each call once: loopCalls), as the
+    loop's end names them: the files beside each report place their threads,
+    prURL is the PR's page and ref how `magnum fix` names it, and a thread the
+    settle found answered (FixState.Answered) asks only for the resolution,
+    as the settle's toast said: no thread is read again here. None for entries
+    magnum cannot read so.
 
 func FixNeedsAsked(msg string, entries []string) []string
     FixNeedsAsked keeps of entries, the "## Needs you" of the fixer's report
@@ -10154,6 +10156,18 @@ type EvidenceMapEntry struct {
     the round that wrote it. A stale entry (pipeline.EvidenceStale) keeps the
     state it was written with in Was.
 
+type FixCarry struct {
+	Report   string   `json:"report"`
+	NeedsYou []string `json:"needs_you"`
+	Answered []string `json:"answered,omitempty"`
+}
+    FixCarry is the calls one earlier cycle of a fix loop left the author
+    (FixState.Carried): the cycle's report, beside which its files place the
+    threads, the entries of its "## Needs you" still asked (in the fixer's
+    own words, so never put in an event or a log), and the comment ids among
+    them whose threads showed their answer and ask only for the resolution (as
+    FixState.Answered).
+
 type FixCommit struct {
 	SHA     string // 7 to 40 hex digits, as the fixer wrote it
 	Message string
@@ -10236,21 +10250,22 @@ func ParseFixReport(text string, runID string) (FixReport, error)
     fit its section is an error that quotes the line (not a sentinel).
 
 type FixState struct {
-	Cycle        int       `json:"cycle"`
-	Cap          int       `json:"cap"`
-	Phase        string    `json:"phase"`
-	Since        string    `json:"since"`
-	Head         string    `json:"head"`
-	By           string    `json:"by"`
-	Report       string    `json:"report"`
-	StartedAt    time.Time `json:"started_at"`
-	NeedsYou     []string  `json:"needs_you,omitempty"`
-	Answered     []string  `json:"answered,omitempty"`
-	Role         string    `json:"role,omitempty"`
-	ForcedAt     time.Time `json:"forced_at,omitzero"`
-	Held         bool      `json:"held,omitempty"`
-	Context      string    `json:"context,omitempty"`
-	OthersUnread string    `json:"others_unread,omitempty"`
+	Cycle        int        `json:"cycle"`
+	Cap          int        `json:"cap"`
+	Phase        string     `json:"phase"`
+	Since        string     `json:"since"`
+	Head         string     `json:"head"`
+	By           string     `json:"by"`
+	Report       string     `json:"report"`
+	StartedAt    time.Time  `json:"started_at"`
+	NeedsYou     []string   `json:"needs_you,omitempty"`
+	Answered     []string   `json:"answered,omitempty"`
+	Role         string     `json:"role,omitempty"`
+	ForcedAt     time.Time  `json:"forced_at,omitzero"`
+	Held         bool       `json:"held,omitempty"`
+	Context      string     `json:"context,omitempty"`
+	OthersUnread string     `json:"others_unread,omitempty"`
+	Carried      []FixCarry `json:"carried,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -10282,7 +10297,10 @@ type FixState struct {
     cycle's fixer did not get all the other reviewers' items (writeExternal):
     "not read (HTTP 502)", "not all read (over 1000 review threads)", a short
     cause and never PR text; the loop's end says so (othersUnread). "" when it
-    got them.
+    got them. Carried are the calls the loop's earlier cycles left the author,
+    which it carries to its end, each cycle's under its own report (FixCarry,
+    fix_carry.go): a re-review that posts new findings runs the next cycle over
+    them while cycles are left.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

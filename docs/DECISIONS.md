@@ -3780,6 +3780,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt and TestTheFixPromptOfAnOwnPRLetsTheFixerEditItsDescription
   in agents.
 
+- **A re-review with new findings runs the next cycle, and the loop carries the earlier calls to its end**
+  (2026-11-08, the audit of what waits on the operator; approved by the operator on 2026-11-08. Widens the
+  `keepDecisions` part of "Your decision on the fixer's call is the fixer's work, not an answer"
+  (2026-11-07, R51: a failed run or the cap keeps the decision calls of the attention it replaces) to every
+  call of the loop's earlier cycles. It does not reverse "Autofix leaves a muted PR alone, and starts on the
+  PR's row as it is now" (2026-11-07: startFix refuses a new autofix loop over attention): the next cycle is
+  the same loop's, and no attention is up while it runs.) On an own PR the first cycle's fixer left the
+  author a product call and pushed; the re-review of its push posted 4 new optional findings, and
+  `continueFixLoop` ended the loop as needs attention at once, since any `Needs you` entry ended it before
+  the next cycle could start: no fixer was ever handed those findings, and the look kept autofix off
+  behind the attention. Now a posted re-review with new findings, or a `Description: ✗` line (the entry
+  above), runs the next cycle while cycles are left, whatever calls the fixer left; the calls go on in the
+  loop's row (`FixState.Carried`, one `FixCarry` per cycle: its report, beside which its files place the
+  threads, its entries and the threads that ask only for the resolution) and are asked at the loop's end
+  with the last cycle's, wherever it ends: after a re-review that leaves calls and no new work or no cycle,
+  at a settle whose fixer pushed nothing (an end that would have been an info toast for replies alone now
+  needs attention for them), after a re-review that did not post, a next cycle that could not start or a
+  PR that moved on, and on a failed run, whose words they follow (`carriedText`). A call is asked once, by
+  its comment id: a later cycle's entry for it is the call now, with the place it names (a push may move
+  the line), and `loopCalls` drops an older one in any case. What a later cycle was handed again is its
+  fixer's to leave again or answer (`carriedLeft`, at that cycle's settle): a conflict with the base (the
+  later job checks the base again), a description entry (its fixer judged the re-review's own line), and,
+  once its external file was written, another reviewer's thread, review body or comment (it had every
+  open one). magnum's own threads are read again before each end for the carried calls as for the last
+  cycle's (`freshCarried`, `freshNeedsYou`: a resolved thread asks nothing, an answered one only for the
+  resolution). `FixCalls` (the status of a loop waiting for its re-review) names the carried calls too. A
+  stop ends the loop quietly, its carried calls with it, as before. Calls carried from an earlier cycle are
+  dated, for a decision in their thread, at the last report's run (`recordFixCalls`): later than they were
+  made, so an answer between the two asks again rather than counting as a decision. Rejected: letting the
+  next cycle's fixer find the calls again (a call the re-review does not name as open would be lost);
+  carrying the rendered calls (a later read of magnum's threads could no longer settle them); raising the
+  earlier calls at once as attention (startFix would then refuse the next cycle). Tests, failing first:
+  TestAReReviewWithNewFindingsRunsTheNextCycleOverTheCalls, TestTheCallsOfAnEarlierCycleReachTheLoopsEnd and
+  TestACycleThatEndsTheLoopAsksTheCallsItCarries; TestACarriedCallGoesOnceALaterCycleTookItOn pins
+  `carriedLeft`. TestNeedsYouEndsTheLoopAfterItsReReview, TestAFixersCallAfterAPushToastsAtOnce,
+  TestANeedsYouLoopSaysWhatToDoPerThread and the "needs you" case of
+  TestALoopStrandedInReviewingIsDecidedAtStartup now end on a re-review that posts no new finding.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

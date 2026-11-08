@@ -63,22 +63,27 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // not get all the other reviewers' items (writeExternal): "not read (HTTP
 // 502)", "not all read (over 1000 review threads)", a short cause and never
 // PR text; the loop's end says so (othersUnread). "" when it got them.
+// Carried are the calls the loop's earlier cycles left the author, which it
+// carries to its end, each cycle's under its own report (FixCarry,
+// fix_carry.go): a re-review that posts new findings runs the next cycle
+// over them while cycles are left.
 type FixState struct {
-	Cycle        int       `json:"cycle"`
-	Cap          int       `json:"cap"`
-	Phase        string    `json:"phase"`
-	Since        string    `json:"since"`
-	Head         string    `json:"head"`
-	By           string    `json:"by"`
-	Report       string    `json:"report"`
-	StartedAt    time.Time `json:"started_at"`
-	NeedsYou     []string  `json:"needs_you,omitempty"`
-	Answered     []string  `json:"answered,omitempty"`
-	Role         string    `json:"role,omitempty"`
-	ForcedAt     time.Time `json:"forced_at,omitzero"`
-	Held         bool      `json:"held,omitempty"`
-	Context      string    `json:"context,omitempty"`
-	OthersUnread string    `json:"others_unread,omitempty"`
+	Cycle        int        `json:"cycle"`
+	Cap          int        `json:"cap"`
+	Phase        string     `json:"phase"`
+	Since        string     `json:"since"`
+	Head         string     `json:"head"`
+	By           string     `json:"by"`
+	Report       string     `json:"report"`
+	StartedAt    time.Time  `json:"started_at"`
+	NeedsYou     []string   `json:"needs_you,omitempty"`
+	Answered     []string   `json:"answered,omitempty"`
+	Role         string     `json:"role,omitempty"`
+	ForcedAt     time.Time  `json:"forced_at,omitzero"`
+	Held         bool       `json:"held,omitempty"`
+	Context      string     `json:"context,omitempty"`
+	OthersUnread string     `json:"others_unread,omitempty"`
+	Carried      []FixCarry `json:"carried,omitempty"`
 }
 
 // answered is Answered as a set (nil for none), as needsYouCalls reads it.

@@ -182,9 +182,13 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 
 // continueFixLoop takes a loop whose re-review ended (res) to its next
 // step: a re-review that did not post, or findings the fixer left to the
-// author when it pushed that still ask something of the author (magnum's
-// threads read again, from the re-review's threads file when it read them
-// after the fixer's report: freshNeedsYou), end it as needs attention; a
+// author when it pushed, or that an earlier cycle left and the loop carries
+// (FixState.Carried, fix_carry.go), that still ask something of the author
+// (magnum's threads read again, from the re-review's threads file when it
+// read them after the fixer's report: freshNeedsYou), end it as needs
+// attention, unless the re-review posted new findings or a description
+// line and cycles are left: the next cycle then runs and carries those
+// calls to the loop's end, each named once (loopCalls); a
 // review that found nothing ends it as done (under autofix = "open", one
 // that left no optional work either: optionalLeft); findings, and a
 // `Description: ✗` line of the review's body (reviewDescribes), start the next cycle (startFix) while
@@ -229,11 +233,22 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		left = "earlier findings still open"
 	}
 	paused := e.pauseContinues(ctx, job.pr, res.Outcome)
-	needs, answered := st.NeedsYou, st.answered()
-	if !paused && len(needs) > 0 { // what magnum's threads show now, the re-review's read of them first
+	needs, answered, carried := st.NeedsYou, st.answered(), st.Carried
+	if !paused && (len(needs) > 0 || len(carried) > 0) { // what magnum's threads show now, the re-review's read of them first
 		fctx := github.WithOp(ctx, opFix)
-		needs, answered = e.freshNeedsYou(fctx, job, needs, answered, res.ReportDir, e.threadsReader(fctx, job))
+		read := e.threadsReader(fctx, job)
+		if len(needs) > 0 {
+			needs, answered = e.freshNeedsYou(fctx, job, needs, answered, res.ReportDir, read)
+		}
+		carried = e.freshCarried(fctx, job, carried, res.ReportDir, read) // fix_carry.go
 	}
+	calls := len(needs) > 0 || len(carried) > 0
+	callsText := func() string {
+		return loopNeedsText(carried, needs, answered, st.Report, job.pr.URL, job.label(), true)
+	}
+	// New findings, or the description line, are the next cycle's work while
+	// cycles are left, whatever calls the loop carries (fix_carry.go).
+	next := (found > 0 || described) && st.Cycle < st.Cap
 	switch {
 	case paused:
 		e.log.Info(fmt.Sprintf("fix: the re-review's turn continues after a %s pause; the loop waits for it", res.Outcome),
@@ -242,18 +257,20 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			fmt.Sprintf("the fix loop waits: the re-review's judge turn paused (%s) and continues after the pause", res.Outcome), job.loopData())
 	case res.Outcome != pipeline.OutcomePosted:
 		msg := fmt.Sprintf("fix loop ended: the re-review did not post (%s)", cmp.Or(res.Outcome, pipeline.OutcomeError))
-		if len(needs) > 0 {
-			msg += "; " + needsYouText(needs, answered, st.Report, job.pr.URL, job.label(), true)
+		if calls {
+			msg += "; " + callsText()
 		}
 		e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
-	case len(needs) > 0:
-		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYouText(needs, answered, st.Report, job.pr.URL, job.label(), true))
+	case calls && !next:
+		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+callsText())
 	case !remains && optional == 0:
 		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
 		e.endLoopForAttention(ctx, job, raw, "fix.capped", e.capMessage(ctx, job, res, found, left))
 	default:
-		_, err := e.startFix(ctx, job.pr, st.By, st, nil)
+		cont := st // the next cycle carries the calls left so far to the loop's end
+		cont.Carried = carryOn(carried, st.Report, needs, answered)
+		_, err := e.startFix(ctx, job.pr, st.By, cont, nil)
 		switch {
 		case err == nil:
 		case errors.Is(err, errFixLoopGone):
@@ -267,12 +284,18 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			e.holdNextCycle(ctx, job, raw, true)
 		default:
 			if why, moved := e.loopMovedOn(ctx, job.pr.ID, cmp.Or(res.TargetSHA, st.Head)); moved {
-				if e.endFixRowIf(ctx, job, raw) {
+				if calls { // the calls are still the author's, as at an end with no next cycle
+					e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+callsText())
+				} else if e.endFixRowIf(ctx, job, raw) {
 					e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends before cycle %d: %s", st.Cycle+1, why), job.loopData())
 				}
 				return
 			}
-			e.endLoopForAttention(ctx, job, raw, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
+			msg := fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err)
+			if calls {
+				msg += "; " + callsText()
+			}
+			e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
 		}
 	}
 }
