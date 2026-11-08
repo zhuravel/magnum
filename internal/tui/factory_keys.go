@@ -163,6 +163,8 @@ func (m *factoryModel) viewKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.boxKey(k)
 	case m.view == fvQuestion && m.q.typing, m.view == fvReady && m.readyState().noting:
 		return m.inputKey(msg)
+	case m.view == fvHome && m.filtering:
+		return m.filterKey(msg)
 	}
 	var cmd tea.Cmd
 	var handled bool
@@ -515,10 +517,44 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		if r, ok := m.selectedRow(); ok {
 			return m.prActKey(k, r, true), true
 		}
+	case "/":
+		m.filtering = true
+	case "O":
+		return m.nextScope(), true
+	case "esc": // a filter kept is cleared, as on the board
+		if m.filter.Value() == "" {
+			return nil, false
+		}
+		m.filter.SetValue("")
+		m.fixCursor()
 	default:
 		return nil, false
 	}
 	return nil, true
+}
+
+// filterKey is a key while home's filter has the keyboard: it edits the
+// text, which narrows home at once; enter keeps the filter and gives the
+// keys back, esc clears it; the arrows still move the cursor, as on the
+// board. It asks nothing.
+func (m *factoryModel) filterKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.filtering = false
+		m.filter.SetValue("")
+	case "enter":
+		m.filtering = false
+	case "down", "ctrl+n":
+		m.moveTo(m.selIdx + 1)
+		return nil
+	case "up", "ctrl+p":
+		m.moveTo(m.selIdx - 1)
+		return nil
+	default:
+		m.filter = editLine(m.filter, msg)
+	}
+	m.fixCursor()
+	return nil
 }
 
 // openPage opens task's PR (b) or its Jira issue (t) in the browser, asking
@@ -1691,6 +1727,9 @@ func (m *factoryModel) paste(msg tea.PasteMsg) tea.Cmd {
 		}
 	case m.view == fvQuestion && m.q.typing, m.view == fvReady && m.readyState().noting:
 		m.input = editLine(m.input, msg)
+	case m.view == fvHome && m.filtering:
+		m.filter = editLine(m.filter, msg)
+		m.fixCursor()
 	}
 	return nil
 }

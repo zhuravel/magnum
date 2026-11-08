@@ -420,6 +420,12 @@ type factoryModel struct {
 	cardName string
 	walk     bool // a: a decision leads to the next oldest
 	walked   map[int64]bool
+	// filter is home's / filter (factoryMatch), which has the keyboard
+	// while filtering; scope the repository O shows alone ("" = all).
+	// Neither outlives the screen, and a walk (a) ignores both.
+	filter    textinput.Model
+	filtering bool
+	scope     string
 
 	batches map[int64]*factoryBatch
 	readies map[int64]*factoryReady
@@ -459,30 +465,43 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 	area.CharLimit, area.ShowLineNumbers = 0, false
 	area.SetWidth(200)
 	_ = area.Focus() // the text is drawn by the painter: the blink is not needed
-	in := textinput.New()
-	in.CharLimit = 500
-	_ = in.Focus()
+	in, filter := typedLine(500), typedLine(200)
 	// The painter draws the caret at the end of the text: the keys that would
 	// move the cursor elsewhere (or select, or read the clipboard) are off,
 	// so what is typed goes where the caret is.
-	ak, ik := &area.KeyMap, &in.KeyMap
+	ak := &area.KeyMap
 	for _, b := range []*key.Binding{&ak.CharacterBackward, &ak.CharacterForward, &ak.WordForward, &ak.WordBackward,
 		&ak.LineNext, &ak.LinePrevious, &ak.LineStart, &ak.LineEnd, &ak.InputBegin, &ak.InputEnd, &ak.PageUp, &ak.PageDown,
 		&ak.SelectCharacterForward, &ak.SelectCharacterBackward, &ak.SelectWordForward, &ak.SelectWordBackward,
-		&ak.SelectLineUp, &ak.SelectLineDown, &ak.SelectAll, &ak.Paste,
-		&ik.CharacterForward, &ik.CharacterBackward, &ik.WordForward, &ik.WordBackward, &ik.LineStart, &ik.LineEnd,
-		&ik.Paste, &ik.AcceptSuggestion, &ik.NextSuggestion, &ik.PrevSuggestion} {
+		&ak.SelectLineUp, &ak.SelectLineDown, &ak.SelectAll, &ak.Paste} {
 		b.SetEnabled(false)
 	}
 	m := factoryModel{
 		bar: newFactoryBar(ctx, nil, opts.Now, opts.Tick), ctx: ctx, src: src, act: act, opts: opts,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
 		walked: map[int64]bool{}, batches: map[int64]*factoryBatch{}, readies: map[int64]*factoryReady{}, cursors: map[int64]int{},
-		input: in, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
+		input: in, filter: filter, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
 	}
 	m.mouseOn = !opts.NoMouse
 	m.applyStyles(defaultStyles)
 	return m
+}
+
+// typedLine is a line typed on the screen of at most limit runes (your own
+// answer, a send back's note, home's filter). The painter draws its text
+// and the caret at its end: the keys that would move the cursor elsewhere
+// (or read the clipboard) are off, so what is typed goes where the caret
+// is.
+func typedLine(limit int) textinput.Model {
+	in := textinput.New()
+	in.CharLimit = limit
+	_ = in.Focus()
+	ik := &in.KeyMap
+	for _, b := range []*key.Binding{&ik.CharacterForward, &ik.CharacterBackward, &ik.WordForward, &ik.WordBackward,
+		&ik.LineStart, &ik.LineEnd, &ik.Paste, &ik.AcceptSuggestion, &ik.NextSuggestion, &ik.PrevSuggestion} {
+		b.SetEnabled(false)
+	}
+	return in
 }
 
 // defaultEditor is $VISUAL, else $EDITOR, else vi, on path.
@@ -611,6 +630,7 @@ func (m *factoryModel) loaded(msg factoryDataMsg) tea.Cmd {
 	}
 	m.data, m.haveData, m.loadErr = msg.data, true, nil
 	cmd = tea.Batch(cmd, m.rebind(), m.rebindReady()) // a question they drop leaves its note, which expires
+	m.keepScope()
 	m.fixCursor()
 	if m.selectKey != "" {
 		if i := slices.IndexFunc(m.data.Rows, func(r FactoryRow) bool { return r.Key == m.selectKey || r.Title == m.selectKey }); i >= 0 {
@@ -779,7 +799,11 @@ func (m *factoryModel) startAnim() tea.Cmd {
 // order is home's tasks in the order they are drawn: grouped by who they
 // wait on, the done ones a visible digest lists left out (its line stands
 // for them).
-func (m factoryModel) order() []int64 {
+func (m factoryModel) order() []int64 { return m.orderOf(true) }
+
+// orderOf is home's tasks in the order they are drawn, the ones the filter
+// and the scope hide left out when narrowed (order), or kept.
+func (m factoryModel) orderOf(narrowed bool) []int64 {
 	rows := slices.Clone(m.data.Rows)
 	sort.SliceStable(rows, func(a, b int) bool { return rows[a].Group < rows[b].Group })
 	dig := &factoryPainter{}
@@ -788,12 +812,88 @@ func (m factoryModel) order() []int64 {
 	}
 	out := make([]int64, 0, len(rows))
 	for _, r := range rows {
-		if r.Group == GroupDone && dig.digestLists(cleanText(r.Key)) {
+		if r.Group == GroupDone && dig.digestLists(cleanText(r.Key)) || narrowed && !m.shown(r) {
 			continue
 		}
 		out = append(out, r.ID)
 	}
 	return out
+}
+
+// shown reports whether home shows row r: it is of the scope's repository
+// (any, with no scope) and the filter matches it.
+func (m factoryModel) shown(r FactoryRow) bool {
+	return (m.scope == "" || strings.EqualFold(cleanText(r.Repo), m.scope)) && factoryMatch(r, m.filter.Value())
+}
+
+// narrowed reports whether the filter or the scope hides rows of home.
+func (m factoryModel) narrowed() bool {
+	return m.scope != "" || strings.TrimSpace(m.filter.Value()) != ""
+}
+
+// factoryMatch reports whether the filter q matches row r, as the board's
+// filter matches its rows by their words, but each word a substring: every
+// word of q, in any case, is in the row's key, its title, its repository
+// or its PR's number (#4530, its ref). An empty q matches every row.
+func factoryMatch(r FactoryRow, q string) bool {
+	words := strings.Fields(strings.ToLower(q))
+	if len(words) == 0 {
+		return true
+	}
+	fields := []string{r.Key, r.Title, r.Repo, r.GitHub, r.Jira}
+	if r.PR != nil {
+		fields = append(fields, r.PR.Ref)
+	}
+	for i, f := range fields {
+		fields[i] = strings.ToLower(cleanText(f))
+	}
+	for _, w := range words {
+		if !slices.ContainsFunc(fields, func(f string) bool { return strings.Contains(f, w) }) {
+			return false
+		}
+	}
+	return true
+}
+
+// rowRepos are the repositories home's rows are of, sorted (case does not
+// matter): the scopes O cycles through.
+func (m factoryModel) rowRepos() []string {
+	var out []string
+	for _, r := range m.data.Rows {
+		if repo := cleanText(r.Repo); repo != "" && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, repo) }) {
+			out = append(out, repo)
+		}
+	}
+	slices.SortFunc(out, func(a, b string) int { return cmp.Compare(strings.ToLower(a), strings.ToLower(b)) })
+	return out
+}
+
+// nextScope moves O's scope on: every repository, then each one with rows
+// (rowRepos), then every one again; the cursor stays on its row or goes to
+// the nearest one shown.
+func (m *factoryModel) nextScope() tea.Cmd {
+	repos := m.rowRepos()
+	if len(repos) == 0 {
+		return m.note("no repository to show alone: the rows name none")
+	}
+	switch i := slices.IndexFunc(repos, func(r string) bool { return strings.EqualFold(r, m.scope) }); {
+	case m.scope == "":
+		m.scope = repos[0]
+	case i < 0 || i == len(repos)-1:
+		m.scope = ""
+	default:
+		m.scope = repos[i+1]
+	}
+	m.fixCursor()
+	return m.note("repo: " + cmp.Or(m.scope, "all"))
+}
+
+// keepScope drops a scope whose repository has no rows any more: home
+// shows every repository again.
+func (m *factoryModel) keepScope() {
+	if m.scope != "" && !slices.ContainsFunc(m.rowRepos(), func(r string) bool { return strings.EqualFold(r, m.scope) }) {
+		m.scope = ""
+	}
 }
 
 // row is the task id's row.
@@ -814,15 +914,33 @@ func (m factoryModel) selectedRow() (FactoryRow, bool) {
 }
 
 // fixCursor keeps the cursor on its task, or at its place when the task left.
+// A row the filter or the scope hides keeps no cursor: it goes to the
+// nearest row shown, the next one first, as the board's does; with none
+// shown, the row stays the cursor's for when the filter lets it show.
 func (m *factoryModel) fixCursor() {
 	ids := m.order()
 	if len(ids) == 0 {
-		m.selID, m.selIdx = 0, 0
+		m.selIdx = 0
+		if !m.narrowed() {
+			m.selID = 0
+		}
 		return
 	}
 	if i := slices.Index(ids, m.selID); i >= 0 {
 		m.selIdx = i
 		return
+	}
+	if all := m.orderOf(false); m.narrowed() {
+		if at := slices.Index(all, m.selID); at >= 0 {
+			for d := 1; d < len(all); d++ {
+				for _, j := range []int{at + d, at - d} {
+					if j >= 0 && j < len(all) && slices.Contains(ids, all[j]) {
+						m.selID, m.selIdx = all[j], slices.Index(ids, all[j])
+						return
+					}
+				}
+			}
+		}
 	}
 	m.selIdx = min(max(m.selIdx, 0), len(ids)-1)
 	m.selID = ids[m.selIdx]
@@ -986,14 +1104,29 @@ func (m factoryModel) rule() string { return m.bar.note(max(m.viewWidth()-4, 1))
 // homeFrame is home as the painter draws it.
 func (m factoryModel) homeFrame() factoryFrame {
 	d := m.data
-	f := factoryFrame{Repos: d.Repos, Rows: d.Rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
+	rows := d.Rows
+	if m.narrowed() { // the filter's and the scope's rows; the chips count every one
+		rows = slices.DeleteFunc(slices.Clone(d.Rows), func(r FactoryRow) bool { return !m.shown(r) })
+	}
+	f := factoryFrame{Repos: d.Repos, Rows: rows, Blocking: d.Blocking, BlockingLong: d.BlockingLong, RuleChip: d.RuleChip,
 		Flash: d.Flash, Decisions: d.Decisions, Next: d.Next, Digest: m.digest(), Spinner: m.anim, Cursor: -1}
+	if m.narrowed() {
+		f.all, f.scope, f.filter = d.Rows, m.scope, strings.TrimSpace(cleanInput(m.filter.Value()))
+		f.hidden = len(m.orderOf(false)) - len(m.order())
+	}
+	if m.filtering {
+		caret := "▏"
+		if m.g.mode == IconsASCII {
+			caret = "_"
+		}
+		f.input = "/ " + cleanInput(m.filter.Value()) + caret
+	}
 	if _, ok := m.selectedRow(); ok {
-		f.Cursor = slices.IndexFunc(d.Rows, func(r FactoryRow) bool { return r.ID == m.selID })
+		f.Cursor = slices.IndexFunc(rows, func(r FactoryRow) bool { return r.ID == m.selID })
 	}
 	// Answers not sent yet are the screen's: the row's line under the rule
 	// counts them, and the rule says nothing is sent (spec 9.C, 9.G).
-	f.Rows = slices.Clone(d.Rows)
+	f.Rows = slices.Clone(rows)
 	for i, r := range f.Rows {
 		answered, total, last, ok := m.unsent(r.ID)
 		if !ok {
@@ -1027,8 +1160,11 @@ func (m factoryModel) homeFrame() factoryFrame {
 }
 
 // homeHints are home's key hints for the row under the cursor: on your
-// PR's row its card and its PR's keys.
+// PR's row its card and its PR's keys; while the filter is typed, its own.
 func (m factoryModel) homeHints() []hint {
+	if m.filtering {
+		return []hint{{"enter", "keep the filter"}, {"esc", "clear it"}, {"↑ ↓", "move"}}
+	}
 	var hs []hint
 	r, ok := m.selectedRow()
 	switch {

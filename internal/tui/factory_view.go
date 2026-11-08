@@ -70,6 +70,15 @@ type factoryFrame struct {
 	// status takes the place of the empty home's one line (styled): the
 	// screen is loading, or could not read the factory.
 	status string
+	// The screen's narrowing of home (its / filter and O scope): all are
+	// every row, which the chips count, when Rows are the filter's and the
+	// scope's alone (nil: Rows are all); scope is the repository shown
+	// alone, filter the filter's text, hidden the rows they hide, which the
+	// title line says; input is the filter as it is typed, drawn in place of
+	// the selected row's help line.
+	all                  []FactoryRow
+	scope, filter, input string
+	hidden               int
 }
 
 const (
@@ -176,6 +185,9 @@ type factoryPainter struct {
 	repoFloor int
 	// prs is true when a row has a PR: a split layout has a PR column.
 	prs bool
+	// counted are the rows the chips count: every row of home, those the
+	// filter and the scope hide too.
+	counted []FactoryRow
 }
 
 // renderFactory draws the home screen in width cells and at most height
@@ -216,6 +228,13 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 		}
 		p.rows = append(p.rows, cleanFactoryRow(f.Rows[i]))
 	}
+	p.counted = p.rows
+	if f.all != nil {
+		p.counted = slices.DeleteFunc(slices.Clone(f.all), func(r FactoryRow) bool {
+			return r.Group == GroupDone && p.digestLists(cleanText(r.Key))
+		})
+	}
+	p.f.scope, p.f.filter, p.f.input = cleanText(f.scope), cleanText(f.filter), cleanText(f.input)
 	for _, r := range p.rows {
 		for _, c := range r.Stagings {
 			if !slices.Contains(p.names, c.Name) {
@@ -1056,6 +1075,9 @@ func (p *factoryPainter) titleLine() string {
 	}
 	rights = append(rights, clock+" ")
 	bare := " " + st.Title.Render("magnum factory")
+	if v := p.narrowing(); v != "" { // the filter and the scope stay, whatever else gives way
+		bare += st.Dim.Render(p.g.sep) + st.Accent.Render(v)
+	}
 	// The repositories' names give way to their count before the right side
 	// gives up anything, and go only when the count does not fit either.
 	var named []string
@@ -1085,6 +1107,23 @@ func (p *factoryPainter) titleLine() string {
 	return spread(bare, rights[len(rights)-1], p.width)
 }
 
+// narrowing is what the title line says of the filter and the scope:
+// the repository shown alone, the filter and the rows they hide ("repo
+// widget · filter "coupon" · 6 hidden"); "" when home shows every row.
+func (p *factoryPainter) narrowing() string {
+	var parts []string
+	if p.f.scope != "" {
+		parts = append(parts, "repo "+cmp.Or(p.labels[strings.ToLower(p.f.scope)], p.f.scope))
+	}
+	if p.f.filter != "" {
+		parts = append(parts, fmt.Sprintf("filter %q", p.f.filter))
+	}
+	if p.f.hidden > 0 {
+		parts = append(parts, fmt.Sprintf("%d hidden", p.f.hidden))
+	}
+	return strings.Join(parts, p.g.sep)
+}
+
 func factoryPlural(n int, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)
@@ -1100,7 +1139,7 @@ func factoryPlural(n int, one, many string) string {
 func (p *factoryPainter) chipLine() string {
 	st := p.st
 	var tasks, prs, waits, working, alone, done int
-	for _, r := range p.rows {
+	for _, r := range p.counted {
 		switch r.Group {
 		case GroupNeedsYou:
 			if r.yourPR() {
@@ -1269,7 +1308,7 @@ func (p *factoryPainter) bands() []factoryBand {
 			b.items = append(b.items, factoryLine{text: p.rowLine(r, i == p.cursor), group: g, row: i, kind: lineRow, key: r.Key, tasks: 1})
 		}
 		hasRows := len(b.items) > 0
-		if len(b.items) == 0 && g == GroupNeedsYou && len(p.rows) > 1 {
+		if len(b.items) == 0 && g == GroupNeedsYou && len(p.rows) > 1 && p.f.all == nil { // a narrowed home may hide what needs you
 			b.fold = false
 			b.items = append(b.items, factoryLine{text: "   " + p.st.OK.Bold(true).Render(p.tick()+" Nothing waits on you."), group: g, row: -1, kind: lineNote})
 			if p.f.Next != "" {
@@ -1393,14 +1432,26 @@ func collapse(bands []factoryBand, room int) []factoryBand {
 // emptyLine is the one line of a home with no task.
 func (p *factoryPainter) emptyLine() string {
 	text := p.st.Dim.Render("No tasks yet. ") + p.st.Key.Render("n") + p.st.Dim.Render(" starts one from a Jira key or your words.")
-	if p.f.status != "" { // the screen is loading, or could not read the factory
+	switch {
+	case p.f.status != "": // the screen is loading, or could not read the factory
 		text = truncate(p.f.status, p.width)
+	case p.f.all != nil && p.f.filter != "": // the filter (and the scope) hide every row
+		in := ""
+		if p.f.scope != "" {
+			in = " in " + cmp.Or(p.labels[strings.ToLower(p.f.scope)], p.f.scope)
+		}
+		text = p.st.Dim.Render(fmt.Sprintf("Nothing matches %q%s. ", p.f.filter, in)) + p.st.Key.Render("esc") +
+			p.st.Dim.Render(" clears the filter.")
+	case p.f.all != nil:
+		text = p.st.Dim.Render("Nothing of "+cmp.Or(p.labels[strings.ToLower(p.f.scope)], p.f.scope)+". ") + p.st.Key.Render("O") +
+			p.st.Dim.Render(" shows every repository.")
 	}
 	return spaces((p.width-ansi.StringWidth(text))/2) + text
 }
 
 func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	empty := len(p.rows) == 0 && !p.digestDone()
+	narrowedEmpty := empty && p.f.all != nil && len(p.counted) > 0 // the chips still count what it hides
 	bodyH := 0
 	if height > 0 {
 		bodyH = max(height-factoryTop-factoryBottom, 1)
@@ -1446,7 +1497,7 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	// The rule counts the tasks below the screen, not the headings and blanks between them.
 	below := tasks(body[min(start+bodyH, len(body)):])
 	top := []string{p.titleLine(), p.chipLine(), ""}
-	if empty {
+	if empty && !narrowedEmpty {
 		top[1] = ""
 	}
 	lines := top
@@ -1479,6 +1530,9 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 		if t != "" {
 			help = truncate(" "+t, p.width)
 		}
+	}
+	if p.f.input != "" { // the filter as it is typed
+		help = truncate(" "+p.st.Accent.Render(p.f.input), p.width)
 	}
 	lines = append(lines, p.base.footerRule(p.width, msg, below), help, p.hintsLine())
 	if height > 0 && len(lines) > height {

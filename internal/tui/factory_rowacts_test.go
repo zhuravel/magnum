@@ -246,3 +246,4 @@ func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
 	h.selectRow("#4603")
 	mustNotContain(t, h.view(), "U unmute", "z lift snooze")
 }
+

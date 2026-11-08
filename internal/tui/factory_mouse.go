@@ -60,6 +60,7 @@ func (m *factoryModel) wheel(b tea.MouseButton) {
 // click is a button going down: it answers a question with no, works the
 // menu, selects or opens a row, or opens the menu.
 func (m *factoryModel) click(ev tea.Mouse) tea.Cmd {
+	m.filtering = false // a click hands the keys back from the filter, which it keeps
 	switch {
 	case m.bar.asking != nil:
 		cmd, _ := m.bar.cancel()
