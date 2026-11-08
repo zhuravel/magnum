@@ -808,8 +808,8 @@ func TestTheCriticRunsOnlyForWideChanges(t *testing.T) {
 	chore := h.kindTask("PR-12322", "chore", "critic")
 	h.taskFile(chore.ID, "report.md", reportNaming("app/models/campaign.rb", "spec/models/campaign_spec.rb"))
 	h.tick()
-	if got := h.reload(chore.ID); got.Stage != "questions" {
-		t.Fatalf("a chore of 2 files is at %q, want past the critic, at questions", got.Stage)
+	if got := h.reload(chore.ID); got.Stage != "coding" {
+		t.Fatalf("a chore of 2 files is at %q, want past the critic and the questions gate the same tick passes, at coding", got.Stage)
 	}
 	if n := h.copies.claimCount(); n != 0 || len(h.rt.launchedRoles()) != 0 {
 		t.Fatalf("a skipped critic claimed %d copies and launched %v", n, h.rt.launchedRoles())
@@ -938,11 +938,12 @@ func TestAPassedInvestigationVerifiesEveryRunAndMovesOn(t *testing.T) {
 	if len(vs) != 3 || slices.ContainsFunc(vs, func(v verifyCall) bool { return !v.OK }) {
 		t.Fatalf("Verify calls %+v, want the three runs verified", vs)
 	}
-	if as := h.attempts(task.ID); len(as) != 1 || as[0].State != registry.AttemptVerified {
+	as := h.attempts(task.ID)
+	if len(as) == 0 || as[0].Stage != "investigate" || as[0].State != registry.AttemptVerified {
 		t.Fatalf("attempts %+v, want the investigation's verified", as)
 	}
-	if n := len(h.rt.allPrompts()); n != 3 {
-		t.Fatalf("%d prompts, want no nudge", n)
+	if n := len(attemptPrompts(h.rt.allPrompts(), as[0].ID)); n != 3 {
+		t.Fatalf("%d prompts in the investigation, want no nudge", n)
 	}
 }
 
@@ -957,8 +958,8 @@ func TestTheJudgesFilesAreRecordedAtEachRevision(t *testing.T) {
 	h.taskFile(task.ID, "answers.md", "1. master\n")
 	h.ended(task, "fx-judge")
 	h.tick()
-	if got := h.reload(task.ID); got.Stage != "critic" {
-		t.Fatalf("task at %q, want past the judge", got.Stage)
+	if got := h.reload(task.ID); got.Stage != "questions" {
+		t.Fatalf("task at %q, want past the judge and the critic its narrow plan skips in the same tick", got.Stage)
 	}
 	if err := h.reg.TransitionTask(h.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) {
 		u.Set("stage", "judge")
@@ -1213,8 +1214,8 @@ func TestARestartKeepsTheRolesThatPassed(t *testing.T) {
 	if got := h.reload(task.ID); got.Stage != "judge" {
 		t.Fatalf("task %s at %q waiting %q, want past the investigation", got.State, got.Stage, got.WaitsWhat)
 	}
-	if n := len(h.rt.allPrompts()); n != 3 {
-		t.Fatalf("%d prompts, want the 3 of before the restart", n)
+	if n := len(attemptPrompts(h.rt.allPrompts(), h.attempts(task.ID)[0].ID)); n != 3 {
+		t.Fatalf("%d prompts in the investigation, want the 3 of before the restart", n)
 	}
 }
 

@@ -1149,8 +1149,8 @@ func (h *harness) captureSignals() <-chan chan<- os.Signal {
 func TestAPassedStageMovesTheTaskToTheNextStage(t *testing.T) {
 	h := newHarness(t)
 	task := h.task("PR-12304", registry.TaskActive, "investigate")
-	h.stage(config.FactoryStageAgents, func(context.Context, registry.Task, config.FactoryStage) (bool, error) {
-		return true, nil
+	h.stage(config.FactoryStageAgents, func(_ context.Context, _ registry.Task, st config.FactoryStage) (bool, error) {
+		return st.Name == "investigate", nil // the judge's first pass, which the tick chains, does not pass
 	})
 
 	h.tick()

@@ -616,6 +616,17 @@ func (run *agentsRun) byName(name string) *stageRole {
 	return nil
 }
 
+// stageEvents are the kinds of the runtime's events onAgentEvent acts on
+// when its stage takes them: the observe pass that keeps one kicks the loop
+// (Engine.observe), so a turn's end is checked, a pause waited on, a Codex
+// refusal's fallback launched and a dialog, a lost pane, a stuck turn or a
+// loop without progress sent to you on the tick right after it, not at the
+// next poll. The turns typed into a pane are a record (typed), and the
+// delivery events the observe pass settles itself (deliveryUnknown,
+// delivered, undelivered): none kicks.
+var stageEvents = []runtime.EventKind{runtime.EventEnded, runtime.EventPaused, runtime.EventRefused, runtime.EventBlocked,
+	runtime.EventHooksTrust, runtime.EventLost, runtime.EventStuck, runtime.EventNoProgress}
+
 // onAgentEvent takes one of the runtime's events about task t: an ended
 // run's end fact is checked and the run verified (a failed one gets its
 // nudge, or, nudged already, the role's file is what the task waits on you

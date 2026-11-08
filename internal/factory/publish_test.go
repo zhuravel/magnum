@@ -150,14 +150,12 @@ func TestTheGitHubClientReadsTheMergeMethods(t *testing.T) {
 func TestThePublishChecksTheReviewAgainBeforeItPushes(t *testing.T) {
 	r := newReadyRig(t)
 	task, head := r.toCard("PR-12383")
-	c := r.card(task.ID)
-	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
-		t.Fatalf("push request %s: %q", q.State, q.Result)
-	}
+	lift := r.pushHeld(task.ID)
 	if got := r.reload(task.ID); got.Stage != "publish" {
 		t.Fatalf("task at %s after your push, want publish", got.Stage)
 	}
 	r.summary(task.ID, registry.ExitUnavailable, head)
+	lift()
 	r.run(3, nil)
 	got := r.reload(task.ID)
 	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "review unavailable") || r.remoteHead(task.Branch) != "" {
@@ -521,9 +519,7 @@ func TestPRByBranchIgnoresAForksPR(t *testing.T) {
 func TestAPublishCutAfterItsEffectEndedFinishesIt(t *testing.T) {
 	r := newReadyRig(t)
 	task, head := r.toCard("PR-12378")
-	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
-		t.Fatalf("push request %s: %q", q.State, q.Result)
-	}
+	r.pushHeld(task.ID)()
 	key := publishKey(task.ID, head)
 	if _, _, err := r.reg.BeginEffect(r.ctx, key, "publish", task.ID); err != nil {
 		t.Fatal(err)
@@ -552,10 +548,10 @@ func TestAPublishCutAfterThePushResumesWithoutPushingAgain(t *testing.T) {
 	r := newReadyRig(t)
 	task, head := r.toCard("PR-12388")
 	r.gh.createErr = fmt.Errorf("gh: HTTP 502")
+	// The push's tick chains the publish: the push goes through, the PR does not.
 	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
 		t.Fatalf("push request %s: %q", q.State, q.Result)
 	}
-	r.tick() // the publish: the push goes through, the PR does not
 	if r.remoteHead(task.Branch) != head || len(r.gh.createCalls()) != 1 || r.reload(task.ID).State == registry.TaskPublished {
 		t.Fatalf("remote %q, %d PRs: want the push done and the PR not", r.remoteHead(task.Branch), len(r.gh.createCalls()))
 	}
@@ -667,10 +663,9 @@ func TestAResumedPublishNeverForces(t *testing.T) {
 func TestAPublishWithoutAGhIdentityNeedsYouNamingTheKey(t *testing.T) {
 	r := newReadyRig(t)
 	task, _ := r.toCard("PR-12393")
-	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
-		t.Fatalf("push request %s: %q", q.State, q.Result)
-	}
+	lift := r.pushHeld(task.ID)
 	r.cfg.Identities = nil
+	lift()
 	got := r.published(task.ID)
 	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, `[[identity]] kind = "gh"`) || r.remoteHead(task.Branch) != "" {
 		t.Fatalf("task %s waits %q; remote %q", got.State, got.WaitsWhat, r.remoteHead(task.Branch))

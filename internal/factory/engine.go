@@ -656,7 +656,8 @@ func (e *Engine) Run(ctx context.Context) error {
 // RunLocked runs the daemon, whose lock the caller holds (Lock), until
 // SIGTERM or SIGINT, or until ctx ends: it writes the pidfile, runs startup,
 // then a tick at once, every [factory] poll and on SIGUSR1, and an observe
-// pass every [factory] observe. A stop signal drains: no new launch or
+// pass every [factory] observe (one that saw an event a stage acts on kicks
+// a tick right after it). A stop signal drains: no new launch or
 // effect starts (a launch that waits for the stagger is cut), the tick in
 // progress ends with the task it advances (the others, and the alerts,
 // wait for the next daemon), the wait for the work off the loop ends within
@@ -904,6 +905,11 @@ func (e *Engine) Tick(ctx context.Context) error {
 				break
 			}
 			err := e.safely(ctx, t, func(ctx context.Context) error { return e.advance(ctx, t) })
+			if next, ok := e.passedOn(ctx, t, err); ok { // the next stage's first pass, in this tick, once
+				delete(e.lastFail, t.ID)
+				e.endHeld(t.ID, now)
+				t, err = next, e.safely(ctx, next, func(ctx context.Context) error { return e.advance(ctx, next) })
+			}
 			switch {
 			case err == nil:
 				delete(e.lastFail, t.ID)
@@ -1055,11 +1061,37 @@ func (e *Engine) stageOf(t registry.Task, name string) (config.FactoryStage, boo
 	return config.FactoryStage{}, false
 }
 
+// passedOn is task t read again after a pass of its stage that ended with
+// err, when that pass moved it to a later stage of its kind (the stage
+// passed and the move landed), and it is still live and waits on no one but
+// its agents: Tick then runs the next stage's first pass in the same tick,
+// under the guards of any pass (safely, the per-task handling, a launch's
+// holds), so the next agent's prompt goes at once, not a poll later. Only
+// the pass a tick began with chains: a task moves at most one stage further
+// a tick. ok is false after an error, a stage that did not pass, a move that
+// failed, a pass that ended the task or sent it to you, and while the daemon
+// drains.
+func (e *Engine) passedOn(ctx context.Context, t registry.Task, err error) (registry.Task, bool) {
+	kind := e.cfg.Factory.Kinds[t.Kind]
+	if err != nil || e.draining.Load() || len(kind.Stages) == 0 {
+		return t, false
+	}
+	next, err := e.reg.TaskByID(ctx, t.ID)
+	if err != nil || stageIndex(kind, next.Stage) <= stageIndex(kind, cmp.Or(t.Stage, kind.Stages[0].Name)) ||
+		!slices.Contains(liveStates, next.State) || waitsOnYou(next) {
+		return t, false
+	}
+	return next, true
+}
+
 // observe is the pass between ticks: it reads the agents' panes and the
 // watchdog (Runtime.Observe and Watchdog) and keeps their events for each
 // task's next advance (takeEvents), except the turns typed into the panes,
-// which it records (typed). A failed read is a failure the next tick weighs
-// (an infrastructure hold), unless the Mac just woke.
+// which it records (typed). An event a stage acts on when it takes it
+// (stageEvents: a run's end, a pause, a dialog, a lost pane) kicks the loop,
+// so the tick takes it now rather than at its poll. A failed read is a
+// failure the next tick weighs (an infrastructure hold), unless the Mac
+// just woke.
 func (e *Engine) observe(ctx context.Context) {
 	now := e.now()
 	e.wake(now)
@@ -1085,6 +1117,9 @@ func (e *Engine) observe(ctx context.Context) {
 		e.inbox[ev.TaskID] = append(e.inbox[ev.TaskID], ev)
 		if box := e.inbox[ev.TaskID]; len(box) > maxInbox {
 			e.inbox[ev.TaskID] = box[len(box)-maxInbox:]
+		}
+		if slices.Contains(stageEvents, ev.Kind) {
+			e.Kick() // the stage takes it on the tick right after this pass
 		}
 		switch ev.Kind {
 		case runtime.EventDeliveryUnknown:
