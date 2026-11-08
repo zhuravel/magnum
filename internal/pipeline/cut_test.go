@@ -99,6 +99,21 @@ func (e *env) codexUntilCut(sw *switcher, presses int, sha string) {
 	}
 }
 
+// atTheCommandsPush is a reviewer's turn at work when codex-review's first
+// command (codexUntilCut) pushes sha: it waits for that push and leaves its
+// run working, so its wait notices the push on its first look, with the
+// command running, and cuts the stage. A turn that pushed sha itself could
+// cut the stage before codex-review's line was typed (the stage's goroutines
+// start in no set order): that run is abandoned with no command to stop,
+// and the first command then runs in the restarted round, where nothing
+// cuts it.
+func atTheCommandsPush(e *env, sha string) behavior {
+	return func(f *fakeAgents, run store.Run, text string) error {
+		e.waitHead(sha)
+		return nil
+	}
+}
+
 // A push while claude-review (with background work that never stops),
 // codex-review's command and the judge's own pass all work: every cut turn
 // gets its interrupt at the cut, before any wait (claude-review's for its
