@@ -2347,6 +2347,8 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		Config: cfg, Layout: layout, Store: st, Now: clock.Now,
 		Logger: slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Sleep:  func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+		// The observe clock passes only when a test steps it (observeSteps).
+		ObserveSleep: func(ctx context.Context, _ time.Duration) error { <-ctx.Done(); return ctx.Err() },
 		GitHub: func(id string) GitHub {
 			if id == "zhuravel" {
 				return h.gh

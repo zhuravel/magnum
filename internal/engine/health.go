@@ -43,29 +43,21 @@ type tickState struct {
 
 // observe takes the tick's herdr snapshot and feeds agents.ObserveSnapshotAt
 // with the time it was taken (the completion signal rounds poll the store
-// for; a session started after the snapshot is not judged lost from it).
+// for; a session started after the snapshot is not judged lost from it),
+// under the observe lock the observe clock's passes take too
+// (lockObserve).
 func (e *Engine) observe(ctx context.Context) tickState {
 	ts := tickState{busyPR: map[int64]bool{}}
 	if e.d.Herdr == nil {
 		return ts
 	}
-	capturedAt := e.now()
-	snap, err := e.d.Herdr.Snapshot(ctx)
+	snap, err := e.observePass(ctx)
 	e.noteHerdr(ctx, err)
 	if err != nil {
 		return ts
 	}
 	ts.herdrUp, ts.snap = true, snap
 	ts.workingCodex = agents.CountWorking(snap.Agents, agents.KindCodex) + e.yoursWorkingCodex(ctx)
-	if !e.d.DryRun && e.d.Agents != nil {
-		obs, err := e.d.Agents.ObserveSnapshotAt(ctx, snap, capturedAt)
-		if err != nil {
-			e.warnUnlessStopped(ctx, err, "observe agents")
-		}
-		for _, o := range obs {
-			e.onObservation(ctx, o)
-		}
-	}
 	if live, err := e.st.LiveSessions(ctx); err == nil {
 		for _, s := range live {
 			switch herdr.Status(deref(s.AgentStatus)) {
@@ -75,6 +67,26 @@ func (e *Engine) observe(ctx context.Context) tickState {
 		}
 	}
 	return ts
+}
+
+// observePass is the tick's observe pass: the snapshot, and, unless the
+// run is dry, the agents' observation of it and its observations handled,
+// all under the observe lock.
+func (e *Engine) observePass(ctx context.Context) (herdr.Snapshot, error) {
+	defer e.lockObserve("the tick")()
+	capturedAt := e.now()
+	snap, err := e.d.Herdr.Snapshot(ctx)
+	if err != nil || e.d.DryRun || e.d.Agents == nil {
+		return snap, err
+	}
+	obs, err := e.d.Agents.ObserveSnapshotAt(ctx, snap, capturedAt)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "observe agents")
+	}
+	for _, o := range obs {
+		e.onObservation(ctx, o)
+	}
+	return snap, nil
 }
 
 // yoursWorkingCodex counts the Codex agents working in your herdr session

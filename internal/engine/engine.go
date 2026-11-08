@@ -2,6 +2,8 @@
 // observes herdr, applies health pauses, consumes CLI requests, dispatches
 // review rounds into slots (each round in its own goroutine), releases closed
 // PRs after their grace and reconciles the registry with disk, MySQL and herdr.
+// Between the ticks an observe clock ([daemon] observe_interval) reads herdr
+// for the turns of the runs in flight, so a turn's end is seen within seconds.
 // Slow slot work (provisioning, eviction, cleanup, reconcile) runs one job at a
 // time on a background heavy worker that reports only through store rows.
 //
@@ -89,7 +91,9 @@ type GitHub interface {
 }
 
 // Herdr is the part of *herdr.Client the tick reads: one snapshot per tick
-// (agent statuses for completion, the working-Codex gate, liveness).
+// (agent statuses for completion, the working-Codex gate, liveness), and
+// one per pass of the observe clock while a run is in flight
+// (observe_clock.go).
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
 }
@@ -285,6 +289,9 @@ type Deps struct {
 	// timer). Tests replace both.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
+	// ObserveSleep is the observe clock's wait between its passes
+	// (observe_clock.go; nil = a timer honouring ctx). Tests step it.
+	ObserveSleep func(ctx context.Context, d time.Duration) error
 	// DryRun: every decision is made (against the store the caller passes,
 	// which app.New makes a private copy) but nothing outside the store is
 	// changed: no herdr calls besides the snapshot, no agents, no rounds, no
@@ -747,6 +754,12 @@ type Engine struct {
 
 	// hooks is the webhooks consumer's memory in shadow mode (webhooks.go).
 	hooks webhookState
+
+	// observeMu serializes the observe passes, the tick's (observe) and the
+	// observe clock's (observeRuns): lockObserve. observeSlowAt is when a
+	// slow pass of the clock last warned, under observeMu.
+	observeMu     sync.Mutex
+	observeSlowAt time.Time
 }
 
 // New returns an engine over d.
@@ -1020,8 +1033,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		defer close(worker)
 		e.heavyWorker(ctx)
 	}()
-	hooks := e.goWebhooks(ctx) // webhooks.go: shadow mode's consumer
-	defer func() { cancel(); <-worker; <-hooks }()
+	hooks := e.goWebhooks(ctx)         // webhooks.go: shadow mode's consumer
+	observing := e.goObserveClock(ctx) // observe_clock.go: the turns in flight, between the ticks
+	defer func() { cancel(); <-worker; <-hooks; <-observing }()
 
 	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	timer := time.NewTimer(0)
