@@ -4651,9 +4651,11 @@ for lack of a UTF-8 locale, or the same failure on two tasks within 10 minutes h
 the tasks, with tries after 2, 4, 8, 16 and then every 30 minutes (a try that runs a crashed lint's checks
 again ends when they do, and 3 such crashes at one head send that task to you); a hold that lasts 30 minutes
 needs you. A stage that keeps failing for a cause of its own (gh
-logged out, a token without scope, a push the remote's hooks refuse) is tried again a poll after each failure, however
-often other tasks' turns kick a tick, and after 5 failures
-in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
+logged out, a token without scope, a push the remote's hooks refuse) is tried again no sooner than a poll after each
+failure, however often other tasks' turns kick a tick (a kicked tick restarts the poll's timer, so a try can come up to
+about two polls after the failure). An answer, a let go or a decision on the card that comes for such a task within
+that poll is taken at once but acted on at that try (a retry, of a task that waits on you, goes on at once). After 5
+failures in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
 row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
 own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the
 factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold, and a stage that meets herdr down inside its pass counts no failure) and opens `herdr --session <herdr_session>` in your terminal, at most twice an

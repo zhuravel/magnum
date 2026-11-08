@@ -12881,6 +12881,8 @@ func (e *Engine) Tick(ctx context.Context) error
     Last, the alerts are delivered (deliverAlerts). The returned error joins
     what failed, for the log; each step records its own. A task's held wait is
     no error of the tick: logHeld logs it once, at WARN only past heldWarnAfter.
+    A task whose stage failed for a cause of its own is advanced no sooner than
+    a poll after the failure (retryLater).
 
 type ErrRunning struct {
 	PID  int

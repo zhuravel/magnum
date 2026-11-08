@@ -19128,12 +19128,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     loop: a next stage that also passes at once (a gate, a skipped critic) moves the task on and waits for the next
     tick. The tick that takes your push on the ready card thus runs the publish too, which checks the card again
     before it pushes, as it did a poll later.
-  - A stage that failed for a cause of its own is tried again a poll after the failure (`retryLater`, from the
-    failure's time in `stageFails`), whichever tick comes first after that. The kicks come between the polls now, and
-    every tick advances every task: a burst of other tasks' turn ends would spend a failing stage's
-    `stageFailLimit` tries in under a minute (five took four polls, three minutes, before) and send you a fault the
-    next minutes heal. A failing publish would also spend its GitHub calls as fast. The poll's pace keeps both
-    bounds, the stage's and the publish's, as they were.
+  - A stage that failed for a cause of its own is tried again no sooner than a poll after the failure
+    (`retryLater`, from the failure's time in `stageFails`), on the first tick after that. A kicked tick in between
+    restarts the poll's timer, so with no other kick the try can come up to nearly two polls after the failure. The
+    observe pass's kicks now come between the polls (a request's kicked before), and every tick advances every task:
+    a burst of other tasks' turn ends would spend a failing stage's `stageFailLimit` tries in under a minute (five
+    took four polls, three minutes, before) and send you a fault the next minutes heal. A failing publish would also
+    spend its GitHub calls as fast. The poll's pace keeps both bounds, the stage's and the publish's, as they were. A
+    new task's first failure counts at its kind's first stage (`stageRan`), which its first pass records, so that
+    stage is paced too and needs you after 5 tries, not 6. A request other than a retry (an answer, a let go, a
+    decision on the card) that comes within that poll is taken at once but acted on at that try; a retry, of a task
+    that waits on you, clears the wait (`retryTask` drops the failures).
   - `[factory] observe` is 5s by default (from 10s, in `config.defaults.toml` and `DefaultFactory`; still positive).
     The narrow pass of the review daemon's clock (`agents.ObserveRunsAt`, 50711773) did not reach the factory: it is
     a method of its own, and `Runtime.Observe` ran `ObserveSnapshotAt` over every live session, which writes each
@@ -19160,9 +19165,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   into it would leave its task for the poll). Tests, failing first: TestAnEndedRolesEventKicksTheLoop,
   TestTheLoopTicksRightAfterAnObservePassSawAnEnd, TestAStageThatPassesLaunchesTheNextStagesRolesInTheSameTick,
   TestTheChainRunsAtMostOncePerTaskPerTick, TestTheObservePassReadsOnlyTheTurnsInFlightBetweenFullPasses,
-  TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault and TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll
-  (a minute of ticks 10 s apart, each kicked by another task's turn end, tries the failing stage twice, and five
-  tries at the poll's pace still need you); for guards that held before the chain,
+  TestTheFactoryObservesItsPanesEveryFiveSecondsByDefault, TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll
+  (a minute of ticks, each kicked by another task's turn end, tries the failing stage at 0 s and at 45 s, exactly a
+  poll after, which fails with `<=` for `<`; five tries at the poll's pace need you; a row for a new task's first
+  stage, which failed with the empty stage recorded) and TestAStageThatChangedSinceAFailureRunsAtOnce (it fails with
+  `retryLater`'s stage check taken out); for guards that held before the chain,
   TestATypedEventDoesNotKickTheLoop, TestNoChainWhileTheDaemonDrains (it fails with the drain's check taken out of
   `passedOn`), TestNoChainedLaunchUnderAHold (the memory hold and install's drain),
   TestAFailedTransitionChainsNothing and TestAPassThatSendsTheTaskToYouChainsNothing (a writer beside the loop sets
