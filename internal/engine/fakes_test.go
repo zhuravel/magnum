@@ -2323,8 +2323,9 @@ func (f *fakeIdentity) Check(context.Context) (identity.Report, error) {
 
 type fakeAppIdentity struct{ fakeIdentity }
 
-// DaemonPushEnv is identity.App's: a push token of the daemon's own, in
-// the dir /state/gh/.<name>.push, or pushErr.
+// DaemonPushEnv is identity.App's: a push token of the daemon's own as
+// GH_TOKEN ("<name>-push-token") over the App's gh config dir
+// /state/gh/<name>, whose hosts.yml keeps the pane's, or pushErr.
 func (f *fakeAppIdentity) DaemonPushEnv(_ context.Context, workflows bool) (map[string]string, func(), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2340,7 +2341,7 @@ func (f *fakeAppIdentity) DaemonPushEnv(_ context.Context, workflows bool) (map[
 			f.mu.Unlock()
 		})
 	}
-	return map[string]string{"GH_CONFIG_DIR": "/state/gh/." + f.name + ".push", "GH_TOKEN": "", "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
+	return map[string]string{"GH_CONFIG_DIR": "/state/gh/" + f.name, "GH_TOKEN": f.name + "-push-token", "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
 }
 
 func (f *fakeAppIdentity) EnsureConfigDir(context.Context) (string, error) {

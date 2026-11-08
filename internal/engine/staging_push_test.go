@@ -106,7 +106,7 @@ func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testin
 		wantMint       bool
 	}{
 		{name: "the tip's workflows", target: "staging-void", wantDir: "/state/gh/" + fixerAppName},
-		{name: "the base's workflows", tip: []string{ci}, target: "staging-void", wantDir: daemonPushDir, wantMint: true},
+		{name: "the base's workflows", tip: []string{ci}, target: "staging-void", wantDir: daemonPushAs, wantMint: true},
 		{name: "the PR's own", tip: []string{ci, own}, base: []string{own}, target: "staging-void",
 			wantE: "carries workflow files that differ from both staging-void's and master's (.github/workflows/own.yml)"},
 		{name: "no Workflows on the App", tip: []string{ci}, target: "staging-void", noWorkflows: true, wantMint: true,
@@ -135,8 +135,8 @@ func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testin
 			switch {
 			case tc.wantE != "" && (err == nil || !strings.Contains(err.Error(), tc.wantE)):
 				t.Errorf("err = %v, want it to say %q", err, tc.wantE)
-			case tc.wantE == "" && (err != nil || env["GH_CONFIG_DIR"] != tc.wantDir):
-				t.Errorf("env = %v, %v; want GH_CONFIG_DIR %s", env, err, tc.wantDir)
+			case tc.wantE == "" && (err != nil || pushedAs(env) != tc.wantDir):
+				t.Errorf("env = %v, %v; want it to push as %s", env, err, tc.wantDir)
 			}
 			if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) > 0 != tc.wantMint || slices.Contains(mints, false) {
 				t.Errorf("daemon push tokens = %v, want one with workflows: %v", mints, tc.wantMint)

@@ -98,8 +98,8 @@ const (
 // .github/workflows and schema for any other pathspec, DifferingPaths of
 // .github/workflows answers differ by the commit compared with, else own,
 // FirstParentIdentities answers handed when set, and PushLeaseGitHubAs
-// records its call ("<owner>/<repo>:<sha>:<branch>:<expect>:
-// <GH_CONFIG_DIR>") and moves the PR's head on the fake GitHub, unless
+// records its call ("<owner>/<repo>:<sha>:<branch>:<expect>:<pushedAs>")
+// and moves the PR's head on the fake GitHub, unless
 // pushErr fails it. Its harness's GitHub has fixBaseTip as every base's
 // tip (mergeHarness).
 type mergeGit struct {
@@ -191,13 +191,23 @@ func (g *mergeGit) ChangedPaths(_ context.Context, _, base, head string, pathspe
 
 func (g *mergeGit) PushLeaseGitHubAs(_ context.Context, _, owner, repo, sha, branch, expect string, env map[string]string) error {
 	g.mu.Lock()
-	g.pushes = append(g.pushes, fmt.Sprintf("%s/%s:%s:%s:%s:%s", owner, repo, sha, branch, expect, env["GH_CONFIG_DIR"]))
+	g.pushes = append(g.pushes, fmt.Sprintf("%s/%s:%s:%s:%s:%s", owner, repo, sha, branch, expect, pushedAs(env)))
 	err := g.pushErr
 	g.mu.Unlock()
 	if err == nil {
 		g.gh.setHead(owner+"/"+repo, 2, sha)
 	}
 	return err
+}
+
+// pushedAs is who a push with env goes as in mergeGit's record: its gh
+// config dir, and "+GH_TOKEN" when a token of the daemon's own rides in
+// the env (identity.App.DaemonPushEnv).
+func pushedAs(env map[string]string) string {
+	if env["GH_TOKEN"] != "" {
+		return env["GH_CONFIG_DIR"] + "+GH_TOKEN"
+	}
+	return env["GH_CONFIG_DIR"]
 }
 
 // made are the merge commits and pushes the daemon made so far.

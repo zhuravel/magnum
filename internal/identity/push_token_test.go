@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,10 +29,11 @@ func pushApp(t *testing.T) (*App, *fakeGitHub, *fakeClock) {
 // The daemon's push of a merge that carries its base's workflow files
 // needs Workflows write, which the pane's token never has: it mints a
 // token of its own, narrowed as the App's are with workflows = "write"
-// added, into a gh config dir of its own that no pane names (never the
-// App's ConfigDir, whose files it leaves alone), and its release revokes
-// the token and removes the dir.
-func TestADaemonPushTokenAddsWorkflowsInADirNoPaneNames(t *testing.T) {
+// added, and hands it in the env of that one push alone (GH_TOKEN, which
+// gh answers git with before any hosts.yml): no file holds it, so no pane
+// of the App, which runs as the same user, can read it from disk, and the
+// App's ConfigDir keeps the pane's token. Its release revokes the token.
+func TestADaemonPushTokenAddsWorkflowsAndIsWrittenNowhere(t *testing.T) {
 	app, f, _ := pushApp(t)
 	env, release, err := app.DaemonPushEnv(context.Background(), true)
 	if err != nil {
@@ -48,29 +51,44 @@ func TestADaemonPushTokenAddsWorkflowsInADirNoPaneNames(t *testing.T) {
 	if f.id.TokenPermissions["workflows"] != "" {
 		t.Error("the identity's own permissions gained workflows")
 	}
-	dir := env["GH_CONFIG_DIR"]
-	if dir == "" || dir == app.ConfigDir() || filepath.Dir(dir) != filepath.Dir(app.ConfigDir()) {
-		t.Fatalf("GH_CONFIG_DIR = %q, want a dir of its own beside %s", dir, app.ConfigDir())
+	if env["GH_TOKEN"] != "ghs_test1" || env["GITHUB_TOKEN"] != "" || env["GH_HOST"] != "github.com" || env["GH_CONFIG_DIR"] != app.ConfigDir() {
+		t.Errorf("env = %v, want the push's token as GH_TOKEN over the App's ConfigDir", redactedEnv(env))
 	}
-	if env["GH_TOKEN"] != "" || env["GITHUB_TOKEN"] != "" || env["GH_HOST"] != "github.com" {
-		t.Errorf("env = %v, want the App env's blanks and host", env)
-	}
-	if hosts, err := os.ReadFile(filepath.Join(dir, "hosts.yml")); err != nil || !strings.Contains(string(hosts), `oauth_token: "ghs_test1"`) {
-		t.Errorf("hosts.yml = %q, %v", hosts, err)
-	}
-	if st, err := os.Stat(dir); err != nil || st.Mode().Perm() != 0o700 {
-		t.Errorf("the dir's mode = %v, %v; want 0700", st, err)
-	}
-	if _, err := os.Stat(filepath.Join(app.ConfigDir(), "hosts.yml")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the App's ConfigDir got a token: %v", err)
-	}
+	wantWrittenNowhere(t, app, "ghs_test1")
 	release()
 	release()
-	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the dir is left after the release: %v", err)
-	}
 	if got := f.revokedTokens(); !slices.Equal(got, []string{"ghs_test1"}) {
 		t.Errorf("revoked = %v, want the push's token once", got)
+	}
+}
+
+// redactedEnv is env with its token values replaced, for a failure message.
+func redactedEnv(env map[string]string) map[string]string {
+	out := maps.Clone(env)
+	for k, v := range out {
+		if strings.HasPrefix(v, "ghs_") {
+			out[k] = "<token>"
+		}
+	}
+	return out
+}
+
+// wantWrittenNowhere fails if any file under the App's gh config root
+// holds token.
+func wantWrittenNowhere(t *testing.T, app *App, token string) {
+	t.Helper()
+	root := filepath.Dir(app.ConfigDir())
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), token) {
+			t.Errorf("%s holds the push's token", path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
 	}
 }
 
@@ -94,36 +112,35 @@ func TestADaemonPushTokenSaysWhenTheAppLacksWorkflows(t *testing.T) {
 	}
 	defer release()
 	body, _ := f.lastMint()
-	if strings.Contains(string(body), "workflows") || env["GH_CONFIG_DIR"] == "" {
-		t.Errorf("the mint asked for %s, env %v; want no workflows", body, env)
+	if strings.Contains(string(body), "workflows") || env["GH_TOKEN"] == "" {
+		t.Errorf("the mint asked for %s, env %v; want no workflows", body, redactedEnv(env))
 	}
 }
 
 // A push whose caller cannot release its token (staging's PushEnv hands
-// back the env alone) leaves it to the App: the next refresh after the
-// push's hold revokes the token and removes its dir.
+// back the env alone) leaves it to the App: the first refresh after the
+// push's hold, a few minutes, revokes the token.
 func TestADaemonPushTokenLeftUnreleasedGoesAtTheNextRefreshAfterItsHold(t *testing.T) {
 	app, f, clock := pushApp(t)
-	env, _, err := app.DaemonPushEnv(context.Background(), true)
-	if err != nil {
+	if _, _, err := app.DaemonPushEnv(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	dir := env["GH_CONFIG_DIR"]
+	if daemonPushHold > 5*time.Minute {
+		t.Errorf("the hold is %s, want a few minutes at most", daemonPushHold)
+	}
 	if _, err := app.EnsureConfigDir(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("the dir went before its hold: %v", err)
+	if got := f.revokedTokens(); len(got) != 0 {
+		t.Fatalf("revoked %v before the hold", got)
 	}
 	clock.Advance(daemonPushHold + time.Second)
 	if _, err := app.EnsureConfigDir(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	waitRefresh(t, app)
-	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the dir is left after its hold: %v", err)
-	}
 	if got := f.revokedTokens(); !slices.Equal(got, []string{"ghs_test1"}) {
 		t.Errorf("revoked = %v, want the push's token", got)
 	}
+	wantWrittenNowhere(t, app, "ghs_test1")
 }

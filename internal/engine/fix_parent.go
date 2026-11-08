@@ -74,7 +74,8 @@ var _ parentGit = (*gitx.Client)(nil)
 
 // daemonPusher is the identity a push of a merge that carries its base's
 // workflow files goes out as (*identity.App has it): a token of the
-// daemon's own with Workflows write, which no pane holds.
+// daemon's own with Workflows write, in the push's env alone, which no
+// pane holds.
 type daemonPusher interface {
 	DaemonPushEnv(ctx context.Context, workflows bool) (map[string]string, func(), error)
 }
@@ -94,8 +95,8 @@ const workflowsWord = "with Workflows"
 // now and new to head (baseOnGitHub: never a ref of the slot, which the
 // fixer's pane can write) and every workflow file of the merge is as that
 // tip on GitHub has it, never with the PR's own, and then with a token of
-// the daemon's own with Workflows write (identity.App.DaemonPushEnv: never
-// in a pane's gh config dir), released after the push. how is
+// the daemon's own with Workflows write (identity.App.DaemonPushEnv: in
+// the push's env alone, never in a file), released after the push. how is
 // workflowsWord for such a push; refused says why nothing was pushed (the
 // branch, the PR's own workflow changes, a base GitHub has otherwise, or
 // an App without Workflows: "needs Workflows on the App").

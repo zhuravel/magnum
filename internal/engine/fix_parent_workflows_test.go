@@ -11,9 +11,10 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// daemonPushDir is the gh config dir of the fixer App's daemon-only push
-// token (fakeAppIdentity.DaemonPushEnv), never the pane's /state/gh/<name>.
-const daemonPushDir = "/state/gh/." + fixerAppName + ".push"
+// daemonPushAs is how a push with the fixer App's daemon-only token goes
+// (pushedAs): its own token as GH_TOKEN (fakeAppIdentity.DaemonPushEnv),
+// never the pane's hosts.yml alone.
+const daemonPushAs = "/state/gh/" + fixerAppName + "+GH_TOKEN"
 
 // withoutWorkflows makes the fixer App's daemon push token fail as GitHub
 // does while the App lacks the Workflows permission.
@@ -27,8 +28,9 @@ func withoutWorkflows(h *harness) {
 // A merge of the parent that brings the base's own workflow changes, and
 // whose workflow files are all as the base's tip has them, is pushed by
 // the daemon with a token of its own that may write workflows (Workflows
-// write added, never the pane's gh config dir), released after the push:
-// no merge of the base waits for the operator for it.
+// write added, in the push's env alone, never in the pane's gh config
+// dir), released after the push: no merge of the base waits for the
+// operator for it.
 func TestAMergeThatBringsTheBasesWorkflowsIsPushedWithTheDaemonsOwnToken(t *testing.T) {
 	h, mg := mergeHarness(t, withFixerApp)
 	fixablePR(h, "zhuravel", nil)
@@ -37,7 +39,7 @@ func TestAMergeThatBringsTheBasesWorkflowsIsPushedWithTheDaemonsOwnToken(t *test
 	h.handle()
 	h.wantDone(id)
 	_, pushes := mg.made()
-	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixParentMerge, fixHead, daemonPushDir); !slices.Equal(pushes, []string{want}) {
+	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixParentMerge, fixHead, daemonPushAs); !slices.Equal(pushes, []string{want}) {
 		t.Errorf("pushes = %q, want %q", pushes, want)
 	}
 	if mints, released := h.ids[fixerAppName].daemonPushes(); !slices.Equal(mints, []bool{true}) || released != 1 {
@@ -192,7 +194,7 @@ func TestTheFixersMergeThatMagnumPushHandedOverIsPushedByTheDaemon(t *testing.T)
 		t.Errorf("fetches = %v after the fixer's %v, want the settle's fetch of master", fetches, before)
 	}
 	_, pushes := mg.made()
-	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixMergeHead, fixHead, daemonPushDir); !slices.Equal(pushes, []string{want}) {
+	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixMergeHead, fixHead, daemonPushAs); !slices.Equal(pushes, []string{want}) {
 		t.Errorf("pushes = %q, want %q", pushes, want)
 	}
 	if mints, released := h.ids[fixerAppName].daemonPushes(); !slices.Equal(mints, []bool{true}) || released != 1 {

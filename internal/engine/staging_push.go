@@ -69,10 +69,11 @@ func (e *Engine) CommitIdentity(_ context.Context, repo string) (name, email str
 // PR that changes its own workflow files is never pushed by the bot). A
 // merge whose workflow files are the tip's goes with the App's token; one
 // that brings the base's goes with the daemon's own token with Workflows
-// write (identity.App.DaemonPushEnv, never a pane's gh config dir), which
-// the App revokes once its hold is over, since the push's caller has no
-// release; while the App lacks Workflows it is refused with "needs
-// Workflows on the App".
+// write (identity.App.DaemonPushEnv), which the App revokes once its hold
+// of a few minutes is over, since the push's caller has no release; while
+// the App lacks Workflows it is refused with "needs Workflows on the App".
+// That token rides in the env itself (GH_TOKEN), never in a file: the env
+// is for that one git push alone, never logged nor kept.
 func (e *Engine) StagingPushEnv(mirror func(repo string) (dir string, ok bool)) func(ctx context.Context, repo, mergeSHA, target string) (map[string]string, error) {
 	return func(ctx context.Context, repo, mergeSHA, target string) (map[string]string, error) {
 		env, err := e.stagingPushEnv(ctx, mirror, repo, mergeSHA, target)
