@@ -1189,8 +1189,10 @@ func TestTheReadyCardSaysQAWasNotNeeded(t *testing.T) {
 }
 
 // The qa stage is visual QA on the screen: magnum's own step while no
-// agent works, "QA found nothing that blocks" once it passed, and skipped
-// for a repository without visual QA (no summary).
+// agent works, "QA found nothing that blocks" once it passed clean, the
+// card's own line for a pass with a defect you accepted or a state not
+// reached, and skipped with no summary: for a repository without visual
+// QA, or one whose task ran no QA.
 func TestTheQAStageSaysWhatItDoes(t *testing.T) {
 	r := newScreenRig(t)
 	booting := r.task("PR-12465", "bug", "Booting", registry.TaskActive, "qa", "", "")
@@ -1212,18 +1214,34 @@ func TestTheQAStageSaysWhatItDoes(t *testing.T) {
 		t.Fatalf("no qa stage on %s's card", TaskKey(t2))
 		return tui.CardStage{}
 	}
-	walked := r.task("PR-12466", "bug", "Walked", registry.TaskActive, "pr_body", "", "")
-	b, err := json.Marshal(qaFound(strings.Repeat("d", 40)))
-	if err != nil {
-		t.Fatal(err)
+	summary := func(t2 registry.Task, res QAResult) {
+		t.Helper()
+		b, err := json.Marshal(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.file(t2.ID, qaSummaryFile, string(b))
 	}
-	r.file(walked.ID, qaSummaryFile, string(b))
+	clean := qaFound(strings.Repeat("d", 40))
+	clean.Accepted, clean.Blocked = nil, nil
+	walked := r.task("PR-12466", "bug", "Walked", registry.TaskActive, "pr_body", "", "")
+	summary(walked, clean)
 	if st := stageOf(walked); st.State != "done" || st.Proof != "QA found nothing that blocks" {
-		t.Errorf("a qa stage that walked %+v", st)
+		t.Errorf("a qa stage that walked clean %+v", st)
+	}
+	accepted := r.task("PR-12472", "bug", "Accepted", registry.TaskPublished, "", "", "")
+	summary(accepted, qaFound(strings.Repeat("d", 40)))
+	if st := stageOf(accepted); st.State != "done" ||
+		st.Proof != "passed with 1 defect accepted by you and 1 state not reached: 3 pages walked at ddddddd, 1 note" {
+		t.Errorf("a qa stage that passed with a defect you accepted %+v", st)
 	}
 	skipped := r.task("PR-12467", "bug", "No QA", registry.TaskActive, "pr_body", "", "")
 	if st := stageOf(skipped); st.State != "skipped" || st.Proof != "skipped: the repository has no [factory.repo.qa]" {
 		t.Errorf("a qa stage with no summary %+v", st)
+	}
+	r.cfg.Factory.Repos[0].QA = &config.FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}"}
+	if st := stageOf(skipped); st.State != "skipped" || st.Proof != "skipped: no QA ran" {
+		t.Errorf("a qa stage with no summary in a repository with QA %+v", st)
 	}
 }
 
@@ -1265,21 +1283,35 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 		return task
 	}
 	declined := stopAt("PR-12468", true, head)
+	r.file(declined.ID, filepath.Join(qaRunDir(1, head), qaReportFile), "# QA run 1\n")
 	atCap := stopAt("PR-12469", false, head)
 	moved := stopAt("PR-12470", true, strings.Repeat("f", 40))
 	working := r.task("PR-12471", "bug", "Working", registry.TaskActive, "qa", "", "")
+	accepted := stopAt("PR-12473", true, head)
+	r.file(accepted.ID, qaAcceptedFile, `{"head": "`+head+`", "fingerprints": ["fp-flow"], "at": "2026-11-04T09:00:00Z"}`)
 	d := r.data(screenNow)
 	for _, tc := range []struct {
 		task registry.Task
 		want string
 	}{
 		{declined, "1 QA defect the writer declined at eeeeeee (flow on /settings/security)"},
-		{atCap, ""}, {moved, ""}, {working, ""},
+		{atCap, ""}, {moved, ""}, {working, ""}, {accepted, ""},
 	} {
 		got := d.Cards[tc.task.ID].Task.AcceptQA
 		_, _, guard := qaAcceptable(r.layout.FactoryTaskDir(tc.task.ID), tc.task)
 		if got != tc.want || (got != "") != (guard == nil) {
 			t.Errorf("%s: accept %q (the accept's guard: %v), want %q", TaskKey(tc.task), got, guard, tc.want)
+		}
+	}
+	// At the stop the task card's e opens that run's report, so you see the
+	// shots before you accept.
+	report := filepath.Join(r.layout.FactoryTaskDir(declined.ID), qaRunDir(1, head), qaReportFile)
+	if got := d.Cards[declined.ID].Task.QAReport; got != report {
+		t.Errorf("the declined task's QA report %q, want %q", got, report)
+	}
+	for _, other := range []registry.Task{atCap, moved, working, accepted} {
+		if got := d.Cards[other.ID].Task.QAReport; got != "" {
+			t.Errorf("%s: QA report %q, want none", TaskKey(other), got)
 		}
 	}
 }

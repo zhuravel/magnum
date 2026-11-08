@@ -117,3 +117,23 @@ func TestFactoryDecideSendsTheCardYouRead(t *testing.T) {
 		}
 	}
 }
+
+// The card `magnum factory decide <task>` prints has its QA line, as the
+// screen's does: what the QA run that passed at its head found.
+func TestFactoryDecidePrintsTheCardsQALine(t *testing.T) {
+	storetest.Serial(t)
+	dt := newFactoryStartTest(t, 250, func(registry.Request) (string, string) { return registry.RequestDone, "" })
+	task, card := seedReadyCard(t, dt)
+	card.QA = &factory.QAResult{Run: 1, Pages: 3, Head: card.Head, Outcome: factory.QAOutcomeClean, Walked: true,
+		Accepted: []factory.QADefect{{Class: factory.QAFlow, Severity: "P2"}}}
+	b, _ := json.Marshal(card)
+	if err := os.WriteFile(filepath.Join(dt.ctx.Layout.FactoryTaskDir(task.ID), "ready-card.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := dt.run("factory", "decide", "PR-12360"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if out, want := dt.stdout.String(), "qa       passed with 1 defect accepted by you: 3 pages walked at ccccccc, 0 notes\n"; !strings.Contains(out, want) {
+		t.Errorf("the card lacks %q:\n%s", want, out)
+	}
+}

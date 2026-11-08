@@ -491,6 +491,9 @@ type TaskCard struct {
 	// declined at abc1234 (flow on /settings/security)", magnum factory
 	// retry --accept-qa); "" for none, and no A then.
 	AcceptQA string
+	// QAReport is the report of the QA run whose stop AcceptQA names
+	// (summary.md, absolute), which e opens in the pager there; "" for none.
+	QAReport string
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
 	// Ask is the y/N question being asked (a retry, a drop); empty: the key

@@ -135,7 +135,9 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 	return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, p, "it takes your decision")
 }
 
-// printReadyCard prints task t's ready card and how to decide on it.
+// printReadyCard prints task t's ready card and how to decide on it: its
+// flags, the local review's end, the QA run's line, the PR body's file and
+// the push's sentence.
 func printReadyCard(ctx context.Context, c *Context, reg *registry.Registry, t registry.Task, card factory.ReadyCardFile) int {
 	tasks, err := reg.Tasks(ctx)
 	if err != nil {
@@ -160,6 +162,11 @@ func printReadyCard(ctx context.Context, c *Context, reg *registry.Registry, t r
 	r := card.Review
 	fmt.Fprintf(w, "review   %s after %d round(s): %d left, %d declined, %d doubts\n", r.Exit, r.Rounds, len(r.Leftovers), len(r.Declined),
 		len(r.Doubts))
+	if card.QA != nil {
+		if line := card.QA.CardLine(); line != "" {
+			fmt.Fprintf(w, "qa       %s\n", line)
+		}
+	}
 	fmt.Fprintf(w, "body     %s\n", filepath.Join(c.Layout.FactoryTaskDir(t.ID), "pr-body.md"))
 	fmt.Fprintf(w, "\n%s\n", factory.ConfirmSentence(t, card.Copy, factory.NextQueued(tasks)))
 	fmt.Fprintf(w, "decide with `magnum factory decide %d push --card %d`, `send_back --card %d --reason <key> --note <text>` or "+

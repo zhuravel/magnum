@@ -185,8 +185,8 @@ func (run qaRun) began() time.Time {
 // accepted at the run's head (Accepted, `magnum factory retry --accept-qa`),
 // the states the walker could not reach, the pages it walked (Walk: each
 // one's id, path, state and shot, as its verdict has them, the words
-// clipped), what an earlier run found that the writer fixed (Fixed, in the
-// result that passed the stage), and when it started and ended.
+// clipped), what an earlier run handed the writer that this run walked
+// again and found no more (Fixed), and when it started and ended.
 type QAResult struct {
 	Version  int         `json:"version"`
 	Run      int         `json:"run"`
@@ -209,8 +209,9 @@ type QAResult struct {
 }
 
 // QAFixed is a defect an earlier QA run of the task handed the writer that
-// the run no longer finds: the run that found it, its class and severity,
-// and the path and state of its page there.
+// the run walked again, its page in its state, and no longer finds: the run
+// that found it, its class and severity, and the path and state of its
+// page.
 type QAFixed struct {
 	Run      int    `json:"run"`
 	Class    string `json:"class"`
@@ -431,15 +432,14 @@ func qaBlockedOnly(res QAResult) bool {
 // row at its head that reached its pages, found nothing that blocks there
 // and could not reach the same kind of states (qaBlockedOnly; the first sent
 // the task to you, and your retry walked once more): qa-summary.json alone,
-// clean with those states (and what the writer fixed before,
-// qaFixedBefore), which go on flagged on the card and in the PR body, and
-// the run's report again, as passed. The run's result.json and its failed
+// clean with those states, which go on flagged on the card and in the PR
+// body, and the run's report again, as passed. The run's result.json and its failed
 // check stay as the walk ended, and no check passes: QA did not judge those
 // states.
 func (e *Engine) passBlocked(ctx context.Context, t registry.Task, run qaRun, res QAResult, n int) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	sum := res
-	sum.Outcome, sum.Fixed = QAOutcomeClean, qaFixedBefore(dir, res)
+	sum.Outcome = QAOutcomeClean
 	sum.Why = fmt.Sprintf("the walker reached %s but not %s, in %d walks in a row at this head: they go on flagged on the card and "+
 		"in the PR body (%s)", plural(res.Pages, "page"), plural(len(res.Blocked), "state"), n, qaBlockedList(res.Blocked))
 	if err := writeJSON(filepath.Join(dir, qaSummaryFile), sum); err != nil {
@@ -456,10 +456,12 @@ func (e *Engine) passBlocked(ctx context.Context, t registry.Task, run qaRun, re
 
 // evaluateQA decides run from its walker's verdict and the factory's own
 // checks of every page the walker saved (detectQA on each probe and console
-// log, then qaOutcome): defects when one blocks; unavailable when the walk
-// reached no page, or reached pages but not every state it was to (a state
-// it could not reach is a page no check judged, so the run is not clean, and
-// a writer's turn cannot make a sign-in work: you look); else clean. A
+// log, then qaOutcome, then qaCheckFixes: a defect handed the writer since
+// the newest pass whose page the run did not walk again is a state it did
+// not reach): defects when one blocks; unavailable when the walk reached no
+// page, or reached pages but not every state it was to (a state it could
+// not reach is a page no check judged, so the run is not clean, and a
+// writer's turn cannot make a sign-in work: you look); else clean. A
 // verdict the end fact took that no longer reads is unavailable too. The
 // blocked states' words are the walker's, clipped and masked; a qa event
 // counts what the checks found.
@@ -508,6 +510,9 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 	}
 	for _, b := range v.Blocked {
 		res.Blocked = append(res.Blocked, QABlocked{What: qaClip(b.What), Why: qaClip(b.Why), Check: qaClip(b.Check)})
+	}
+	if len(v.Pages) > 0 {
+		qaCheckFixes(dir, run.N, &res, v.Pages, followed.Pages)
 	}
 	switch {
 	case res.Outcome == QAOutcomeUnavailable:
@@ -849,9 +854,12 @@ func (e *Engine) newQARun(dir string, last qaRun, bh branchHead, c Copy, q confi
 // files (every status, one per line on its stdin), with the copy's env and
 // none of the daemon's secrets, for at most qaWhenCap (on the loop: a later
 // step runs it off the loop, as the checks run). A failure cannot
-// tell: QA could not run. No file printed needs no QA: the stage passes.
-// Else the files go to changed.txt, the probe with a fresh nonce to
-// probe.js, and the run records them (pass false, run.Nonce set).
+// tell: QA could not run. No file printed needs no QA, and the stage
+// passes, unless the run has pages to walk again after the writer's fix
+// (qaRechecks: a fix is checked on its page, never passed as not needed).
+// Else the files go to changed.txt, those pages to recheck.json, the probe
+// with a fresh nonce to probe.js, and the run records them (pass false,
+// run.Nonce set).
 func (e *Engine) qaUserFacing(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, q config.FactoryQA, run *qaRun) (bool, error) {
 	if e.run == nil {
 		return false, heldError{who: "factory", what: "this build runs no commands"}
@@ -879,7 +887,8 @@ func (e *Engine) qaUserFacing(ctx context.Context, t registry.Task, st config.Fa
 		}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if len(files) == 0 {
+	rechecks := qaRechecks(dir, run.N)
+	if len(files) == 0 && len(rechecks) == 0 {
 		now := e.now()
 		return true, e.passQA(ctx, t, *run, QAResult{Outcome: QAOutcomeNotNeeded, Started: now, Ended: now,
 			Why: fmt.Sprintf("the user-facing check `%s` printed none of the %s", q.When, plural(len(changes), "changed file"))})
@@ -899,6 +908,11 @@ func (e *Engine) qaUserFacing(ctx context.Context, t registry.Task, st config.Fa
 	if err := writeFile(filepath.Join(runPath, qaChangedFile), strings.Join(files, "\n")+"\n"); err != nil {
 		return false, err
 	}
+	if len(rechecks) > 0 {
+		if err := writeJSON(filepath.Join(runPath, qaRecheckFile), rechecks); err != nil {
+			return false, err
+		}
+	}
 	next := *run
 	next.Nonce, next.Changed, next.AttemptsBefore = hex.EncodeToString(nonce), files, n
 	if err := fsx.WriteFileAtomic(filepath.Join(runPath, qaProbeFile), qaProbeScript(next.Nonce), 0o600); err != nil {
@@ -908,8 +922,12 @@ func (e *Engine) qaUserFacing(ctx context.Context, t registry.Task, st config.Fa
 		return false, err
 	}
 	*run = next
-	e.event(ctx, t.ID, "qa", registry.PhaseInfo, fmt.Sprintf("run %d at %s: %s of the %s are user-facing", run.N, textx.ShortSHA(run.Head),
-		plural(len(files), "file"), plural(len(changes), "changed file")))
+	again := ""
+	if len(rechecks) > 0 {
+		again = fmt.Sprintf("; it walks %s of the writer's fixes again (%s)", plural(len(rechecks), "page"), qaRecheckFile)
+	}
+	e.event(ctx, t.ID, "qa", registry.PhaseInfo, fmt.Sprintf("run %d at %s: %s of the %s are user-facing%s", run.N, textx.ShortSHA(run.Head),
+		plural(len(files), "file"), plural(len(changes), "changed file"), again))
 	return false, nil
 }
 
@@ -1634,16 +1652,11 @@ func (e *Engine) writeQAReportLogged(t registry.Task, run qaRun, res QAResult) {
 }
 
 // passQA passes the qa stage on run's result res: qa-summary.json first,
-// with what an earlier run found that the writer fixed (qaFixedBefore, for
-// a walk), then the run's result.json, so a result that passed always has
-// its summary; the task's wait on QA ends.
+// then the run's result.json, so a result that passed always has its
+// summary; the task's wait on QA ends.
 func (e *Engine) passQA(ctx context.Context, t registry.Task, run qaRun, res QAResult) error {
 	res = e.qaResultOf(run, res)
-	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if res.Walked {
-		res.Fixed = qaFixedBefore(dir, res)
-	}
-	if err := writeJSON(filepath.Join(dir, qaSummaryFile), res); err != nil {
+	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), qaSummaryFile), res); err != nil {
 		return err
 	}
 	if err := e.writeQAResult(ctx, t, run, res); err != nil {

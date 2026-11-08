@@ -3,11 +3,13 @@ package tui
 // The reports e opens in the pager, asking nothing (spec 9.D: opening asks
 // nothing): magnum's fixer's on home's row of a published task or of your
 // PR whose fix loop left you items, and on the task card; the QA run's
-// (summary.md) on the ready card of a change visual QA walked. The task
-// card's FixReport names the fixer's (factory.ScreenData sets it only for a
-// report under magnum's reviews directory), and the task card lists the
-// items it left you under WAITING FOR (fixNeedRows); the ready card's
-// QAReport names the QA run's.
+// (summary.md) on the ready card of a change visual QA walked, and on the
+// task card of a task whose QA fix loop stopped on the writer's declines,
+// so you see the shots before A accepts them. The task card's FixReport
+// names the fixer's (factory.ScreenData sets it only for a report under
+// magnum's reviews directory), and the task card lists the items it left
+// you under WAITING FOR (fixNeedRows); the ready card's QAReport and the
+// task card's name the QA run's.
 
 import (
 	"cmp"
@@ -38,10 +40,11 @@ func defaultPager(ctx context.Context, path string) *exec.Cmd {
 
 // reportOf is the report e opens on the row or task id ("" for none) and
 // its name: on the ready card the QA run's (summary.md), elsewhere the
-// fixer's ("claude-fix.md").
+// fixer's ("claude-fix.md"), else the QA run's of a stop on the writer's
+// declines.
 func (m factoryModel) reportOf(id int64) (path, name string) {
 	cards := m.data.Cards[id]
-	path = cards.Task.FixReport
+	path = cmp.Or(cards.Task.FixReport, cards.Task.QAReport)
 	if m.view == fvReady {
 		path = ""
 		if cards.Ready != nil {
@@ -106,7 +109,11 @@ func (m factoryModel) reportHints(hs []hint, id int64, after ...string) []hint {
 // report.
 func (m factoryModel) reportItem(id int64) menuItem {
 	path, _ := m.reportOf(id)
-	return menuItem{"read the fixer's report", reportKey, reportKey, path != ""}
+	label := "read the fixer's report"
+	if c := m.data.Cards[id].Task; c.FixReport == "" && c.QAReport != "" {
+		label = "read the QA report"
+	}
+	return menuItem{label, reportKey, reportKey, path != ""}
 }
 
 // cardFixNeedsShown bounds the items WAITING FOR lists; a last line counts

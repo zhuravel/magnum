@@ -18381,11 +18381,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: `{port}` anywhere in the url (a url whose path holds it walks whatever answers on the written
   port); `fixes = 0` as "no fix turns" (zero is the default here as elsewhere); the `qa` end fact on an agents
   stage (nothing would start the server or the browser it needs); an override sentence in factory-qa.md over
-  the shared rules' questions file (the rules claim to come first). For the slice as a whole (recorded with its
-  seventh step): QA before the local review (QA binds to the head the review passed, and the review's fixes
-  would move it), a Go CDP library (a new dependency, and the walker drives the Chrome the factory starts through
-  the agent-browser CLI), and the repository's own QA skill as the walker in slice 1 (its unattended mode is
-  slice 3; the walker reads it for sign-in, test data and page conventions only). Tests, failing first:
+  the shared rules' questions file (the rules claim to come first). Tests, failing first:
   TestARepoWithoutAQABlockHasNoQA, TestTheQABlockTakesItsDefaults, TestQAPageURLRendersThePortThenThePath,
   TestTheQABlockIsValidated, TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt, TestFactoryBrowserMustBeAbsolute,
   TestLocalHostTakesOnlyTheMacsOwnNames, TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes and
@@ -18844,9 +18840,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   named no QA. The slice's motive was an escaped tooltip that a P3 leftover of the review let through; a
   reader of the PR now sees what QA walked and what it did not reach.
   - The run's result keeps what it showed: `QAResult.Walk`, each page's id, path, state and shot as the
-    verdict has them (clipped), and, in the result that passes the stage, `QAResult.Fixed`, the defects an
-    earlier run handed the writer that this run finds no more, neither blocking, known nor accepted
-    (`qaFixedBefore`: the first run that found each, its class, severity, path and state).
+    verdict has them (clipped), and `QAResult.Fixed`, the defects an earlier run handed the writer that this
+    run walked again and finds no more (after review, below).
   - The run's report: `summary.md` in its folder, written at each result (`writeQAResult`) and again as passed
     when a second blocked-only walk goes on flagged (`passBlocked`): the run, its head and the copy's URL, how
     it ended, each page with its state and its shot's absolute path, the defects with their titles and the
@@ -18854,16 +18849,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
     reached; the walker's words on one line, control characters as spaces (`qaPlain`), as it opens in a
     pager. A report that cannot be written is a warning: `result.json` decides.
   - The ready card (`ReadyCardFile.QA`): the summary at the card's head, its quotes left out (`qaForCard`),
-    and a FLAGS line for each state the walker could not reach (`QA did not reach: <what> (<why>)`). The screen
+    and a FLAGS line for each state the walker could not reach (`QA did not reach: <what> (<why>)`); the card's
+    event counts those states and never names them. The screen
     draws a QA row after PROOF (`qaCardLine`: `clean: 3 pages walked at <sha7>, 1 note`, `passed with 1 defect
     accepted by you and 1 state not reached: ...`, `not needed: no user-facing file changed`, none for a
     repository without `[factory.repo.qa]`), the walk's shots in SCREENSHOTS (`the after side, from the copy's own
     server; e opens the QA report`), QA's notes and what you accepted under KNOWN (`qa: P3 broken_layout: ...`,
     `qa: accepted by you: ...`), and a recommendation that adds `and QA found nothing that blocks` (with `but
     what you accepted`, or `on the pages it reached: read FLAGS`). The task card's qa stage says `QA found
-    nothing that blocks`, `not needed: ...`, or `skipped: the repository has no [factory.repo.qa]` when no
-    summary is there (it said done for every task of a repository without QA), and magnum's own step at a qa
-    stage is `visual QA`.
+    nothing that blocks` for a clean pass, the card's line for any other pass (not needed, a defect you
+    accepted, a state not reached), and with no summary `skipped: the repository has no [factory.repo.qa]`, or
+    `skipped: no QA ran` in a repository that has QA now (it said done for every task of a repository without
+    QA); magnum's own step at a qa stage is `visual QA`. `magnum factory decide <task>` prints the card's QA
+    line too (`QAResult.CardLine`).
   - `e` on the ready card opens the run's `summary.md` (`ReadyCard.QAReport`, set for a walked run whose report
     is there) in the pager that opens the fixer's report, through the same `reportOf` and `openReport`, asking
     nothing; it is no read of the diff. Its hint is `e QA shots` in place of `e screenshots`, which the painter
@@ -18874,13 +18872,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     for the summary at the task's head only. Its words are the factory's own: what QA did, the pages walked,
     what QA found and the writer fixed (by QA run), what you accepted (`Accepted by you, not fixed`), the
     notes, and the states not reached, flagged; classes, severities, counts and the head, with the walker's
-    paths, states and blocked steps as code spans. A change with no user-facing file says `No user-facing file
-    changed: no visual QA ran.`; a repository without `[factory.repo.qa]` gets no section.
+    paths, states and blocked steps as code spans, their control, format (bidi) and line-separator characters
+    spaces. Each list names at most 20 items, then `and N more in the run's report`. A change with no
+    user-facing file says `No user-facing file changed: no visual QA ran.`; a repository without
+    `[factory.repo.qa]` gets no section.
   - `A` on the task card accepts the QA defects the writer declined, as `magnum factory retry <id> --accept-qa`
     (`FactoryActions.AcceptQA`, a retry request with `AcceptQA`), behind a y/N that names them
     (`TaskCard.AcceptQA`: `1 QA defect the writer declined at <sha7> (flow on /settings/security)`). The
     factory offers it exactly where the accept goes on: a retry would go on, and the newest run's fix loop
-    stopped at the task's head on declines (`qaAcceptable`, which `acceptQA` now shares).
+    stopped at the task's head on declines you did not accept there yet (`qaAcceptable`, which `acceptQA` now
+    shares, so a second accept is refused). At such a stop the task card's `e` opens that run's `summary.md`
+    (`TaskCard.QAReport`, `e summary.md`), so you see the shots before you press `A`.
 
   Rejected: `A` on the ready card (the operator's word): a decline stops the task at its qa stage, and no card is
   drawn until QA passed at the head, so the accept could only be refused there; the walker's defect titles in
@@ -18889,7 +18891,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   would still render); the plan's `clean: ...` line for a summary with defects you accepted or states not
   reached (it hid both); `e` opening the run's folder in Finder (the plan's decision: the pager the fixer's
   report opens in); reading `verdict.json` again for the PR body's pages at its append (the summary holds
-  them, and the section is the summary's alone).
+  them, and the section is the summary's alone). For the slice as a whole: QA before the local review (QA
+  binds to the head the review passed, and the review's fixes would move it), a Go CDP library (a new
+  dependency, and the walker drives the Chrome the factory starts through the agent-browser CLI), and the
+  repository's own QA skill as the walker in slice 1 (its unattended mode is slice 3; the walker reads it for
+  sign-in, test data and page conventions only).
 
   Tests, failing first (the card, the body and the screen knew nothing of QA): TestTheReadyCardSaysWhatQAFound,
   TestThePRBodyNotesTheQAResult, TestThePRBodyHasNoQASectionForARepoWithoutQA,
@@ -18900,6 +18906,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   row of TestTheFactoryScreensActionsAreFactoryRequests, and new words in
   TestAPartialDeclineReachesYouAndYourAcceptPassesItAtItsHead. The ready goldens lost `e screenshots`. Mutants
   caught: the PR body's section of another head's summary, and a fixed list with a defect QA still finds.
+
+  After review:
+  - A defect is fixed only when the run walked its page in its state again and found it no more
+    (`qaCheckFixes` in `evaluateQA`, for every walked result): the PR body said "Found by QA and fixed before
+    this PR" of a defect whose page the passing run never opened. The pages match as the factory reads paths
+    (`qaPageKey`: a probe's path spelling, a state's words in lower case, `_` and `-` as spaces), by the
+    walker's path or the path its probe read.
+  - After a fix turn the next run checks the fix (step 6's gate passed a run that skipped the defect's page):
+    the defects handed the writer since the newest run that passed (`qaHandedBefore`) go to `recheck.json` in
+    the run's folder, which the walker's prompt names (`PromptData.QARecheck`: walk each page in its state and
+    give it the same path and state), and a run that does not walk one is no pass for it. It is a state not
+    reached (`escaped_markup on /settings/security in the state signed_in, which QA run 1 found (not walked
+    again after the writer's fix)`), on the blocked states' path: it needs you, your retry walks again, and a
+    second such walk in a row goes on with it flagged on the card and in the PR body, never in silence. A fix
+    the user-facing check filters out wholly still gets its walk, never not_needed.
+
+  Rejected after review: counting a defect fixed because the passing run did not find it (it may not have
+  looked); a fixed list of every earlier cycle whatever this run walked (a defect a pass confirmed before and
+  this run did not walk is left out, not called fixed now); refusing such a run outright (a page the walker
+  cannot reach again is your call, as any state not reached is). Tests, failing first:
+  TestAQARunAfterAFixMustWalkTheDefectsPageAgain (the review's probe: run 2 walks the help's shortcuts alone),
+  TestAQARunAfterAFixWalksEvenWithNoUserFacingFile, TestTheVisualQASectionKeepsTheWalkersWordsInert (bidi and
+  U+2028 passed), TestTheVisualQASectionListsAtMostTwentyOfEachKind, the new words of
+  TestTheQAStageSaysWhatItDoes, TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop (a second accept, the report),
+  TestTheReadyCardSaysWhatQAFound (the event) and TestCheckPromptsRendersTheQAWalkersPrompt,
+  TestEOpensTheQAReportOnTheTaskCardAtADeclineStop, TestTheMenusAcceptAsksYN,
+  TestACollapsedKnownRowNamesWhereQAsNotesAre and TestFactoryDecidePrintsTheCardsQALine.
 
 ## Learned rules
 

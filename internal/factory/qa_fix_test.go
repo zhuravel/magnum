@@ -656,3 +656,75 @@ func TestTheQASummaryNamesWhatTheWriterFixed(t *testing.T) {
 		t.Errorf("the summary's pages %+v", sum.Walk)
 	}
 }
+
+// shortcutsProbes are the probes of a walk of the help's shortcuts page
+// alone, which shows nothing that blocks.
+var shortcutsProbes = map[string]string{"P1": "angle-placeholder.json"}
+
+// After a fix turn, the next run checks the writer's fix only on a page it
+// walks: the walker's prompt names the earlier defects' pages and states to
+// walk again (recheck.json), and a run that walks other pages only is no
+// pass for them. It needs you as a state not reached would, naming the
+// defect's class, page and state and the run that found it, and nothing is
+// "fixed"; your retry walks again, and a walk of the page in its state that
+// finds it no more passes with the defect fixed.
+func TestAQARunAfterAFixMustWalkTheDefectsPageAgain(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12458")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), nil)
+	fix := r.toQAAt(task, 1)
+	r.toWalker(task)
+	recheck := filepath.Join(r.runDir(task.ID, 2, fix), qaRecheckFile)
+	if text := r.rt.promptsTo("fx-qa")[1].Text; !strings.Contains(text, recheck) {
+		t.Errorf("run 2's walker prompt does not name %s:\n%s", recheck, text)
+	}
+	var again []qaRecheck
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, filepath.Join(qaRunDir(2, fix), qaRecheckFile))), &again); err != nil ||
+		len(again) != 1 || again[0].Path != "/settings/security" || again[0].State != "signed_in" || again[0].Class != QAEscapedMarkup {
+		t.Fatalf("recheck.json %+v (%v), want the security settings signed in, escaped_markup", again, err)
+	}
+	r.walk(task, QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/help/shortcuts", "A1")}}, shortcutsProbes)
+	got := r.toYou(task)
+	for _, want := range []string{"escaped_markup on /settings/security in the state signed_in, which QA run 1 found",
+		"not walked again after the writer's fix", fmt.Sprintf("magnum factory retry %d", task.ID)} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if _, ok := readQASummary(dir); ok {
+		t.Fatal("a run that did not walk the fixed defect's page passed QA")
+	}
+	if res := r.qaResult(task.ID, 2, fix); res.Outcome != QAOutcomeUnavailable || len(res.Fixed) != 0 || len(res.Blocked) != 1 {
+		t.Fatalf("run 2's result.json %+v, want unavailable, nothing fixed, the page not walked again", res)
+	}
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	sum, ok := readQASummary(dir)
+	want := []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "signed_in"}}
+	if !ok || sum.Run != 3 || !slices.Equal(sum.Fixed, want) || len(sum.Blocked) != 0 {
+		t.Fatalf("qa-summary.json %+v (%v), want run 3 clean with the defect fixed", sum, ok)
+	}
+}
+
+// A fix the user-facing check filters out entirely still gets its walk: the
+// earlier defect's page is checked again, never passed as not needed.
+func TestAQARunAfterAFixWalksEvenWithNoUserFacingFile(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12459")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), nil)
+	r.userFacing = func([]byte) (string, int) { return "", 0 }
+	r.toQAAt(task, 1)
+	r.toWalker(task)
+	if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+		t.Fatalf("qa-summary.json %+v: the fix passed QA as not needed", sum)
+	}
+}

@@ -227,10 +227,14 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 	body = append(body, p.fileRows(c.Files, f.files)...)
 	list("DOUBTS", c.Doubts, len(c.Doubts), f.doubtsOne, "none", noStyle, nil)
 	list("KNOWN", c.Leftovers, f.known, f.knownOne, "none: the local review left nothing open", noStyle, func(n, shown int) string {
-		if shown == 0 {
-			return factoryPlural(n, "note", "notes") + ", listed under Known in the PR body"
+		where := "listed under Known in the PR body"
+		if slices.ContainsFunc(c.Leftovers[shown:], func(l string) bool { return strings.HasPrefix(l, "qa: ") }) {
+			where = "listed under Known and Visual QA in the PR body"
 		}
-		return "+" + strconv.Itoa(n) + " more, listed under Known in the PR body"
+		if shown == 0 {
+			return factoryPlural(n, "note", "notes") + ", " + where
+		}
+		return "+" + strconv.Itoa(n) + " more, " + where
 	})
 	shots := cell{{"none", p.st.Dim}}
 	if c.Screenshots > 0 {

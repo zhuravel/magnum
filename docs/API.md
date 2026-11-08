@@ -13252,11 +13252,13 @@ type PromptData struct {
 	// browser tool (agent-browser's --session, one per run); QAProbe the
 	// probe script the walker evaluates on each page, QAVerdict the verdict it
 	// writes last and QAChanged the user-facing files the change touches (the
-	// repository's qa.when), all in QARun; QASignIn and QASkill the
+	// repository's qa.when), all in QARun, and QARecheck the pages of the
+	// defects earlier runs handed the writer, which it walks again
+	// (recheck.json in QARun, "" for none); QASignIn and QASkill the
 	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
 	// qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill, QASession                       string
+	QASignIn, QASkill, QASession, QARecheck            string
 	QAMaxPages, QAMaxShots                             int
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
@@ -13367,9 +13369,9 @@ type QAFixed struct {
 	Path     string `json:"path"`
 	State    string `json:"state,omitempty"`
 }
-    QAFixed is a defect an earlier QA run of the task handed the writer that
-    the run no longer finds: the run that found it, its class and severity,
-    and the path and state of its page there.
+    QAFixed is a defect an earlier QA run of the task handed the writer that the
+    run walked again, its page in its state, and no longer finds: the run that
+    found it, its class and severity, and the path and state of its page.
 
 type QANotShown struct {
 	Check string `json:"check"`
@@ -13441,8 +13443,12 @@ type QAResult struct {
     the run's head (Accepted, `magnum factory retry --accept-qa`), the states
     the walker could not reach, the pages it walked (Walk: each one's id, path,
     state and shot, as its verdict has them, the words clipped), what an earlier
-    run found that the writer fixed (Fixed, in the result that passed the
-    stage), and when it started and ended.
+    run handed the writer that this run walked again and found no more (Fixed),
+    and when it started and ended.
+
+func (r QAResult) CardLine() string
+    CardLine is the ready card's QA line of r, the QA run that passed the stage
+    (qaCardLine), as `magnum factory decide` prints it: "" for none.
 
 type QAVerdict struct {
 	Version  int          `json:"version"`
@@ -30328,6 +30334,9 @@ type TaskCard struct {
 	// declined at abc1234 (flow on /settings/security)", magnum factory
 	// retry --accept-qa); "" for none, and no A then.
 	AcceptQA string
+	// QAReport is the report of the QA run whose stop AcceptQA names
+	// (summary.md, absolute), which e opens in the pager there; "" for none.
+	QAReport string
 	// Hints are the footer's key hints; none: the card's own (taskHints).
 	Hints []hint `json:"-"`
 	// Ask is the y/N question being asked (a retry, a drop); empty: the key

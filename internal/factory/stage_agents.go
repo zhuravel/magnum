@@ -129,11 +129,13 @@ type PromptData struct {
 	// browser tool (agent-browser's --session, one per run); QAProbe the
 	// probe script the walker evaluates on each page, QAVerdict the verdict it
 	// writes last and QAChanged the user-facing files the change touches (the
-	// repository's qa.when), all in QARun; QASignIn and QASkill the
+	// repository's qa.when), all in QARun, and QARecheck the pages of the
+	// defects earlier runs handed the writer, which it walks again
+	// (recheck.json in QARun, "" for none); QASignIn and QASkill the
 	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
 	// qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill, QASession                       string
+	QASignIn, QASkill, QASession, QARecheck            string
 	QAMaxPages, QAMaxShots                             int
 }
 
@@ -1328,6 +1330,9 @@ func (e *Engine) qaPromptData(d *PromptData, t registry.Task, dir string) {
 		d.QARun, d.QAURL, d.QACDP, d.QASession = runDir, run.URL, run.CDP, qaBrowserSession(t.ID, run.N)
 		d.QAProbe, d.QAVerdict = filepath.Join(runDir, qaProbeFile), filepath.Join(runDir, qaVerdictFile)
 		d.QAChanged = filepath.Join(runDir, qaChangedFile)
+		if p := filepath.Join(runDir, qaRecheckFile); fsx.Exists(p) {
+			d.QARecheck = p
+		}
 		d.QAMaxPages, d.QAMaxShots = run.MaxPages, QAMaxShots
 	}
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok && repo.QA != nil {
@@ -1512,7 +1517,7 @@ func checkData(role config.Role) PromptData {
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
 		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
-		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt",
+		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
 		QAMaxShots: 30}
 }

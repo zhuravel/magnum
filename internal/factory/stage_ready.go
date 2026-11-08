@@ -672,9 +672,13 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 	if err := writeJSON(filepath.Join(dir, readyCardFile), card); err != nil {
 		return card, err
 	}
+	lines := f.Lines() // the factory's own flags; QA's states are counted, never named: the walker's words stay on the card
+	if card.QA != nil && len(card.QA.Blocked) > 0 {
+		lines = append(lines, "QA did not reach "+plural(len(card.QA.Blocked), "state"))
+	}
 	flags := "nothing flagged"
-	if len(card.Flags) > 0 {
-		flags = plural(len(card.Flags), "flag") + ": " + textx.Clip(strings.Join(card.Flags, "; "), 300)
+	if len(lines) > 0 {
+		flags = plural(len(lines), "flag") + ": " + textx.Clip(strings.Join(lines, "; "), 300)
 	}
 	e.event(ctx, t.ID, "ready", registry.PhaseInfo, fmt.Sprintf("card %d at %s: %s", card.Revision, short(card.Head), flags))
 	return card, nil

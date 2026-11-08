@@ -3,18 +3,22 @@ package factory
 // What visual QA found, in words (R55 slice 1, step 7): the ready card's QA
 // line (qaCardLine) and its notes under KNOWN (qaKnownLines), the PR body's
 // Visual QA section (qaSection), the run's report in its folder
-// (summary.md, writeQAReport), which the card's e opens, and what an
-// earlier run found that the writer fixed (qaFixedBefore). The PR body's
-// words are the factory's own: classes, severities, counts and the head,
-// with the walker's paths, states and blocked steps as code, never a title
-// or a quote of the walker's, which may carry the page's text.
+// (summary.md, writeQAReport), which the card's e opens, and the defects
+// earlier runs handed the writer (qaHandedBefore): a run walks their pages
+// again (recheck.json), and only a walk of a page in its state that finds
+// the defect no more makes it fixed. The PR body's words are the factory's
+// own: classes, severities, counts and the head, with the walker's paths,
+// states and blocked steps as code, never a title or a quote of the
+// walker's, which may carry the page's text.
 
 import (
 	"cmp"
 	"fmt"
 	"html"
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -38,7 +42,36 @@ const (
 	qaNoBlockWhy = "the repository has no [factory.repo.qa]"
 	// qaShotsNote is what the ready card's shots of a walked change are.
 	qaShotsNote = "the after side, from the copy's own server; e opens the QA report"
+	// qaRecheckFile is a run's list of the pages it walks again, in its
+	// folder: those of the defects earlier runs handed the writer since the
+	// newest run that passed (qaRecheck), which the walker's prompt names.
+	qaRecheckFile = "recheck.json"
+	// qaSectionMost is how many items each list of the PR body's Visual QA
+	// section names; a line counts the rest, which the run's report has.
+	qaSectionMost = 20
+	// qaNotWalkedWhy is why a page to walk again is a state the run did not
+	// reach.
+	qaNotWalkedWhy = "not walked again after the writer's fix"
 )
+
+// qaRecheck is a page a run walks again, in recheck.json: the path and the
+// state of the page an earlier run found a defect of class on.
+type qaRecheck struct {
+	Path  string `json:"path"`
+	State string `json:"state,omitempty"`
+	Class string `json:"class"`
+}
+
+// qaHandedDefect is a defect an earlier run handed the writer, as
+// qaHandedBefore has it: the first run that found it, its class, severity,
+// page and state (the newest run's page), its fingerprint, and whether a run
+// handed it since the newest run that passed (sincePass: the run checks its
+// fix).
+type qaHandedDefect struct {
+	QAFixed
+	fingerprint string
+	sincePass   bool
+}
 
 // qaClassWords are the factory's own words for each class of a QA defect.
 var qaClassWords = map[string]string{
@@ -78,6 +111,10 @@ func qaCardLine(res QAResult) string {
 	}
 	return "passed with " + strings.Join(but, " and ") + ": " + line
 }
+
+// CardLine is the ready card's QA line of r, the QA run that passed the
+// stage (qaCardLine), as `magnum factory decide` prints it: "" for none.
+func (r QAResult) CardLine() string { return qaCardLine(r) }
 
 // qaWhy is what the ready card's recommendation adds for res, the QA run
 // that passed at the card's head: "" for none, or a run that walked no
@@ -183,8 +220,11 @@ func qaSection(res QAResult) string {
 			return
 		}
 		b.WriteString(title + ":\n\n")
-		for _, it := range items {
+		for _, it := range items[:min(len(items), qaSectionMost)] {
 			b.WriteString("- " + it + "\n")
+		}
+		if n := len(items) - qaSectionMost; n > 0 {
+			fmt.Fprintf(&b, "- and %d more in the run's report\n", n)
 		}
 		b.WriteString("\n")
 	}
@@ -241,11 +281,13 @@ func qaCode(s string) string {
 	return "`" + strings.ReplaceAll(cmp.Or(qaPlain(s), "?"), "`", "'") + "`"
 }
 
-// qaPlain is the walker's s on one line, each control character a space, so
-// no escape sequence reaches a pager or the PR body.
+// qaPlain is the walker's s on one line, each control, format (a bidi
+// override or isolate, a zero-width character) and line or paragraph
+// separator character a space, so no escape sequence reaches a pager and no
+// line of the PR body is reordered.
 func qaPlain(s string) string {
 	return oneLine(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return ' '
 		}
 		return r
@@ -331,21 +373,25 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 	return fsx.WriteFileAtomic(path, []byte(b.String()), 0o600)
 }
 
-// qaFixedBefore are the defects the runs before res's handed the writer
-// (their defects files, in the task directory dir) that res finds no more,
-// neither blocking, known nor accepted: each once, by the first run that
-// handed it, with its class, severity, page and state from that run's
-// result and verdict.
-func qaFixedBefore(dir string, res QAResult) []QAFixed {
-	found := map[string]bool{}
-	for _, ds := range [][]QADefect{res.Blocking, res.Known, res.Accepted} {
-		for _, d := range ds {
-			found[d.Fingerprint] = true
+// qaHandedBefore are the defects the runs before run k handed the writer
+// (their defects files, in the task directory dir), each once, by its
+// fingerprint: the first run that found it, its class and severity from
+// that run's result, the path and state of its page as the newest run that
+// handed it saw them, and whether a run handed it after the newest run
+// before k that passed (a clean or not_needed result): run k checks the fix
+// of those.
+func qaHandedBefore(dir string, k int) []qaHandedDefect {
+	pass := 0
+	for _, ref := range qaRunFolders(dir) {
+		if res, ok := readQAResult(dir, qaRun{Dir: qaRunDir(ref.k, ref.head)}); ok && ref.k < k &&
+			(res.Outcome == QAOutcomeClean || res.Outcome == QAOutcomeNotNeeded) {
+			pass = max(pass, ref.k)
 		}
 	}
-	var out []QAFixed
+	var out []qaHandedDefect
+	at := map[string]int{}
 	for _, ref := range qaDefectsFiles(dir) {
-		if ref.k >= res.Run {
+		if ref.k >= k {
 			continue
 		}
 		run := qaRun{N: ref.k, Head: ref.head, Dir: qaRunDir(ref.k, ref.head)}
@@ -356,15 +402,105 @@ func qaFixedBefore(dir string, res QAResult) []QAFixed {
 		prev, _ := readQAResult(dir, run)
 		pages := qaVerdictPages(dir, run)
 		for _, it := range rf.Findings {
-			i := slices.IndexFunc(prev.Blocking, func(d QADefect) bool { return d.Fingerprint == it.Fingerprint })
-			if found[it.Fingerprint] || i < 0 {
+			j := slices.IndexFunc(prev.Blocking, func(d QADefect) bool { return d.Fingerprint == it.Fingerprint })
+			if j < 0 {
 				continue
 			}
-			found[it.Fingerprint] = true
-			d := prev.Blocking[i]
+			d := prev.Blocking[j]
 			pg := pages[d.Page]
-			out = append(out, QAFixed{Run: ref.k, Class: d.Class, Severity: d.Severity, Path: qaClip(pg.Path), State: qaClip(pg.State)})
+			i, seen := at[d.Fingerprint]
+			if !seen {
+				i, at[d.Fingerprint] = len(out), len(out)
+				out = append(out, qaHandedDefect{QAFixed: QAFixed{Run: ref.k, Class: d.Class, Severity: d.Severity}, fingerprint: d.Fingerprint})
+			}
+			out[i].Path, out[i].State = qaClip(pg.Path), qaClip(pg.State)
+			out[i].sincePass = out[i].sincePass || ref.k > pass
 		}
 	}
 	return out
+}
+
+// qaRechecks are the pages run k walks again (recheck.json): those of the
+// defects handed the writer since the newest run that passed
+// (qaHandedBefore), each page in its state once.
+func qaRechecks(dir string, k int) []qaRecheck {
+	var out []qaRecheck
+	seen := map[string]bool{}
+	for _, h := range qaHandedBefore(dir, k) {
+		if key := qaPageKey(h.Path, h.State); h.sincePass && !seen[key] {
+			seen[key] = true
+			out = append(out, qaRecheck{Path: h.Path, State: h.State, Class: h.Class})
+		}
+	}
+	return out
+}
+
+// qaPageKey is a page in a state as the factory matches it across runs:
+// its path as a probe's is read (qaProbePath: no trailing slash, no query,
+// a leading one), and its state's words in lower case, an underscore or a
+// hyphen a space ("signed_in" is "Signed in").
+func qaPageKey(path, state string) string {
+	words := strings.Fields(strings.NewReplacer("_", " ", "-", " ").Replace(strings.ToLower(qaPlain(state))))
+	return cmp.Or(qaProbePath(qaPlain(path)), "/") + "\x00" + strings.Join(words, " ")
+}
+
+// qaRecheckWhat names handed defect h as a state its run did not reach:
+// "escaped_markup on /settings/security in the state signed_in, which QA
+// run 1 found".
+func qaRecheckWhat(h qaHandedDefect) string {
+	s := h.Class + " on " + cmp.Or(qaPlain(h.Path), "a page")
+	if st := qaPlain(h.State); st != "" {
+		s += " in the state " + st
+	}
+	return fmt.Sprintf("%s, which QA run %d found", s, h.Run)
+}
+
+// qaRunFolders are the run folders under dir/qa: their numbers and their
+// heads (sha7), ascending.
+func qaRunFolders(dir string) []qaDefectsRef {
+	entries, _ := os.ReadDir(filepath.Join(dir, "qa"))
+	var out []qaDefectsRef
+	for _, en := range entries {
+		if m := qaRunDirRe.FindStringSubmatch(en.Name()); m != nil && en.IsDir() {
+			if k, err := strconv.Atoi(m[1]); err == nil {
+				out = append(out, qaDefectsRef{k: k, head: en.Name()[len(m[1])+1:]})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b qaDefectsRef) int { return a.k - b.k })
+	return out
+}
+
+// qaCheckFixes checks run k's result res (in the task directory dir; pages
+// are its walker's, followed the same pages by the paths their probes
+// read) against the defects earlier runs handed the writer
+// (qaHandedBefore). One the run finds again is the run's own. One whose
+// page the run walked in its state, and finds no more, is fixed
+// (res.Fixed). One handed since the newest pass whose page the run did not
+// walk again is a state it did not reach (res.Blocked): the run is no pass
+// for it, and you look, as for any state not reached. One a pass checked
+// before, which the run did not walk, is neither.
+func qaCheckFixes(dir string, k int, res *QAResult, pages, followed []QAPage) {
+	found := map[string]bool{}
+	for _, ds := range [][]QADefect{res.Blocking, res.Known, res.Accepted} {
+		for _, d := range ds {
+			found[d.Fingerprint] = true
+		}
+	}
+	walked := map[string]bool{}
+	for i, pg := range pages {
+		walked[qaPageKey(pg.Path, pg.State)] = true
+		if i < len(followed) {
+			walked[qaPageKey(followed[i].Path, pg.State)] = true
+		}
+	}
+	for _, h := range qaHandedBefore(dir, k) {
+		switch {
+		case found[h.fingerprint]:
+		case walked[qaPageKey(h.Path, h.State)]:
+			res.Fixed = append(res.Fixed, h.QAFixed)
+		case h.sincePass:
+			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaNotWalkedWhy})
+		}
+	}
 }

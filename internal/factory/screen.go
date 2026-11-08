@@ -680,10 +680,13 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 			c.WaitingFor = strings.Join(append([]string{v.pr.card}, parts[1:]...), " · ")
 		}
 	}
-	if v.retry {
+	if v.retry { // at a stop on the writer's declines: A, and e for that run's report (its shots) first
 		dir := s.l.FactoryTaskDir(t.ID)
 		if run, stop, err := qaAcceptable(dir, t); err == nil {
 			c.AcceptQA = qaAcceptWhat(dir, run, stop)
+			if p := filepath.Join(dir, filepath.FromSlash(run.Dir), qaReportFile); fsx.Exists(p) {
+				c.QAReport = p
+			}
 		}
 	}
 	c.Stages = s.stages(v, row)
@@ -776,11 +779,9 @@ func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 				}
 			}
 			if st.Type == config.FactoryStageQA {
-				switch res, ok := readQASummary(s.l.FactoryTaskDir(t.ID)); {
-				case !ok || qaCardLine(res) == "":
-					cs.State, cs.Proof, cs.Finished = "skipped", "skipped: "+qaNoBlockWhy, time.Time{}
-				case res.Outcome == QAOutcomeNotNeeded:
-					cs.Proof = qaCardLine(res)
+				cs.State, cs.Proof = s.qaStageDone(t, cs.State, cs.Proof)
+				if cs.State == "skipped" {
+					cs.Finished = time.Time{}
 				}
 			}
 			if !in.IsZero() && !out2.IsZero() {
@@ -808,6 +809,27 @@ func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 		out = append(out, cs)
 	}
 	return out
+}
+
+// qaStageDone is the state and proof of task t's qa stage once done (state
+// and proof as stageProof has them): the card's own line of the run that
+// passed when it was no plain clean (not needed, a defect you accepted, a
+// state not reached), and skipped with no summary: for a repository without
+// [factory.repo.qa], or one whose task ran no QA (it passed the stage
+// before the repository had it).
+func (s *screen) qaStageDone(t registry.Task, state, proof string) (string, string) {
+	res, ok := readQASummary(s.l.FactoryTaskDir(t.ID))
+	line := qaCardLine(res)
+	switch {
+	case ok && line != "" && !strings.HasPrefix(line, "clean: "):
+		return state, line
+	case ok && line != "":
+		return state, proof
+	}
+	if repo, has := s.cfg.FactoryRepo(t.Repo); has && repo.QA != nil {
+		return "skipped", "skipped: no QA ran"
+	}
+	return "skipped", "skipped: " + qaNoBlockWhy
 }
 
 // stageProof says what made a stage done, in words.

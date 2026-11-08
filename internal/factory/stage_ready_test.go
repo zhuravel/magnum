@@ -1195,8 +1195,11 @@ func TestTheReadyCardSaysWhatQAFound(t *testing.T) {
 	if !slices.Contains(card.Flags, flag) {
 		t.Errorf("flags %q, want %q", card.Flags, flag)
 	}
-	if evs := r.events(task.ID, "ready"); !slices.ContainsFunc(evs, func(ev registry.Event) bool { return strings.Contains(ev.Text, flag) }) {
-		t.Errorf("ready events %+v, want the card's event to name the flag", evs)
+	// The card's event counts the states, in the factory's words alone.
+	if evs := r.events(task.ID, "ready"); !slices.ContainsFunc(evs, func(ev registry.Event) bool {
+		return strings.Contains(ev.Text, "QA did not reach 1 state") && !strings.Contains(ev.Text, "passkey")
+	}) {
+		t.Errorf("ready events %+v, want the card's event to count the state, never name it", evs)
 	}
 
 	other := newReadyRig(t)

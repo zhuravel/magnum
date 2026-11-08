@@ -542,8 +542,10 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 // qaAcceptable is what --accept-qa accepts of task t (its task directory
 // dir): the newest run and its fix loop's stop at the task's head, which
 // names the defects the writer declined; an error that says why it accepts
-// nothing (no such stop at the head, or one that names no decline). The
-// screen's A is offered exactly when it holds.
+// nothing (no such stop at the head, one that names no decline, or one
+// whose declines you accepted at the head already: qa-accepted.json holds
+// them, and the task waits on you for another cause). The screen's A is
+// offered exactly when it holds.
 func qaAcceptable(dir string, t registry.Task) (qaRun, qaFixStop, error) {
 	run, ok := readQARun(dir)
 	stop, stopped := readQAFixStop(dir, run)
@@ -554,6 +556,12 @@ func qaAcceptable(dir string, t registry.Task) (qaRun, qaFixStop, error) {
 	case len(stop.Declined) == 0:
 		return qaRun{}, qaFixStop{}, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has "+
 			"none to accept; a plain `magnum factory retry %d` walks QA again", TaskKey(t), run.N, t.ID)
+	}
+	if acc, ok := readQAAccepted(dir); ok && acc.Head == run.Head && !slices.ContainsFunc(stop.Declined, func(d qaDeclined) bool {
+		return !slices.Contains(acc.Fingerprints, d.Fingerprint)
+	}) {
+		return qaRun{}, qaFixStop{}, fmt.Errorf("%s: you accepted the defects the writer declined at %s already, and QA run %d has not "+
+			"walked since; a plain `magnum factory retry %d` lets it go on", TaskKey(t), textx.ShortSHA(run.Head), run.N, t.ID)
 	}
 	return run, stop, nil
 }

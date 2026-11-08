@@ -173,7 +173,7 @@ func cleanTaskCard(c TaskCard) TaskCard {
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
 	c.Ask, c.AcceptQA = cleanText(c.Ask), cleanText(c.AcceptQA)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
-	c.Links, c.FixNeeds = cleanAll(c.Links), cleanAll(c.FixNeeds) // FixReport is a path the pager opens, never drawn whole
+	c.Links, c.FixNeeds = cleanAll(c.Links), cleanAll(c.FixNeeds) // FixReport and QAReport are paths the pager opens, never drawn whole
 	if c.PRInfo != nil {
 		pr := *c.PRInfo
 		pr.State, pr.Review, pr.Reviewers, pr.Threads, pr.FixLoop = cleanText(pr.State), cleanText(pr.Review),

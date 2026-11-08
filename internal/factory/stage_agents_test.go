@@ -156,6 +156,7 @@ func TestCheckPromptsRendersTheQAWalkersPrompt(t *testing.T) {
 		"`agent-browser --session " + d.QASession + " --cdp " + d.QACDP, "--auto-connect", "a browser MCP tool",
 		"--max-output 10000000 --content-boundaries false eval --stdin < " + d.QAProbe + " > " + d.QARun + "/pages/", "about 600 KB",
 		"never through your context or a tool",
+		d.QARecheck, "give it the same `path` and `state` in your verdict", "as a state you could not reach",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the QA walker's prompt lacks %q:\n%s", want, text)

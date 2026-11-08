@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -153,4 +154,78 @@ func TestTheHelpNamesTheQAKeys(t *testing.T) {
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
 	mustContain(t, help, "e the QA run's report (summary.md) in the pager, when QA walked the change (asks nothing)",
 		"A accept the QA defects the writer declined, when QA's fix loop stopped on them (y/N)")
+}
+
+// testQAStop is the screen with PR-12330's task card at a stop of QA's fix
+// loop on the writer's declines: A to accept them, and the run's report,
+// which e opens in the pager (recorded).
+func testQAStop(t *testing.T) (*factoryHarness, *[]string) {
+	t.Helper()
+	h := testFactory(t, 140, 40)
+	h.src.change(func(d *FactoryData) {
+		c := d.Cards[5]
+		c.Task = fixtureRetryCard()
+		c.Task.AcceptQA = "1 QA defect the writer declined at abc1234 (flow on /settings/security)"
+		c.Task.QAReport = qaReport
+		d.Cards[5] = c
+	})
+	h.press("ctrl+r")
+	var opened []string
+	h.m.pager = func(_ context.Context, path string) *exec.Cmd {
+		opened = append(opened, path)
+		return exec.Command("true")
+	}
+	return h, &opened
+}
+
+// At a stop on the writer's declines, the task card's e opens that run's
+// report in the same pager, asking nothing, so you see the shots before you
+// press A; the hints and the menu offer it by the report's name.
+func TestEOpensTheQAReportOnTheTaskCardAtADeclineStop(t *testing.T) {
+	h, opened := testQAStop(t)
+	h.open("PR-12330")
+	mustContain(t, h.view(), "e summary.md", "A accept QA")
+	h.press("e")
+	if !slices.Equal(*opened, []string{qaReport}) || len(h.execs) != 1 || h.m.bar.asking != nil {
+		t.Fatalf("e opened %q with %d ExecProcess messages (asking %v), want the QA report", *opened, len(h.execs), h.m.bar.asking != nil)
+	}
+	if menu := menuState(h.m.menuItems()); !menu["read the QA report"] {
+		t.Errorf("the task card's menu %v, want the QA report", menu)
+	}
+}
+
+// The menu's accept asks the same y/N as A does, and only y accepts.
+func TestTheMenusAcceptAsksYN(t *testing.T) {
+	h, _ := testQAStop(t)
+	h.open("PR-12330")
+	h.feed(tea.MouseClickMsg{X: 20, Y: 10, Button: tea.MouseRight})
+	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.label == "accept QA's declines" })
+	if !h.m.menu.open || i < 0 {
+		t.Fatalf("no menu with the accept: %+v", h.m.menuItems())
+	}
+	for range i {
+		h.press("j")
+	}
+	h.press("enter")
+	mustContain(t, cardSquash(h.view()), "Accept for PR-12393:", "y/N")
+	if h.act.calls() != 0 {
+		t.Fatal("the menu accepted without y")
+	}
+	h.press("y")
+	if !slices.Equal(h.act.acceptsQA, []int64{5}) {
+		t.Errorf("accepts %v, want task 5's", h.act.acceptsQA)
+	}
+}
+
+// A KNOWN row that gives way names where its hidden lines are: QA's under
+// Visual QA, the local review's under Known.
+func TestACollapsedKnownRowNamesWhereQAsNotesAre(t *testing.T) {
+	c := fixtureReadyCardQA()
+	p := newCardPainter(140, newStyles(true), newGlyphs(IconsUnicode), cardQuestionNow)
+	f := readyFit{flags: len(c.Flags), files: len(c.Files), known: 0}
+	got := ansi.Strip(strings.Join(p.readyLists(c, f), "\n"))
+	mustContain(t, got, "5 notes, listed under Known and Visual QA in the PR body")
+	c = fixtureReadyCard()
+	f = readyFit{flags: len(c.Flags), files: len(c.Files), known: 0}
+	mustContain(t, ansi.Strip(strings.Join(p.readyLists(c, f), "\n")), "4 notes, listed under Known in the PR body")
 }
