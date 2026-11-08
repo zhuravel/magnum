@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -105,9 +106,9 @@ const LostGrace = 15 * time.Second
 
 // Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
 // it was taken. The daemon calls ObserveSnapshotAt itself, once per tick,
-// with the snapshot that tick also counts working agents from, and on its
-// observe clock between the ticks while a run is in flight (polling is the
-// completion signal).
+// with the snapshot that tick also counts working agents from, and
+// ObserveRunsAt on its observe clock between the ticks while a run is in
+// flight (polling is the completion signal).
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error) {
 	at := m.now()
 	snap, err := m.d.Herdr.Snapshot(ctx)
@@ -186,6 +187,21 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     alone, and so is a session that started or became live too close to
 //     capturedAt (LostGrace).
 func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]Observation, error) {
+	return m.observeAt(ctx, snap, capturedAt, false)
+}
+
+// ObserveRunsAt is ObserveSnapshotAt for the sessions with a run submitted or
+// at work alone: the review daemon's observe clock, there to see their turns
+// end every few seconds, reads and writes no other session's row (a pass over
+// them all would write each one's idle count as often); the tick's pass
+// observes every session. It counts as an observe tick all the same
+// (nextObserveTick).
+func (m *Manager) ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]Observation, error) {
+	return m.observeAt(ctx, snap, capturedAt, true)
+}
+
+// observeAt is ObserveSnapshotAt, or ObserveRunsAt when runsOnly.
+func (m *Manager) observeAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time, runsOnly bool) ([]Observation, error) {
 	sessions, err := m.d.Store.LiveSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("agents: observe: %w", err)
@@ -207,6 +223,9 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 	var out []Observation
 	var errs []error
 	for _, s := range sessions {
+		if runsOnly && !slices.ContainsFunc(inflight[s.ID], turnInFlight) {
+			continue
+		}
 		o, err := m.observeOne(ctx, s, snap, panes, inflight[s.ID], now, capturedAt)
 		if err != nil {
 			errs = append(errs, err)
@@ -416,6 +435,12 @@ func (m *Manager) idleStreak(id int64, busy, idle bool, ticks int, status herdr.
 	}
 	m.idleFrom[id] = first
 	return first
+}
+
+// turnInFlight reports whether run r is submitted or at work: a turn an
+// observe pass may end.
+func turnInFlight(r store.Run) bool {
+	return r.State == store.RunSubmitted || r.State == store.RunWorking
 }
 
 // endGap is how long after its streak's first idle reading a reading may

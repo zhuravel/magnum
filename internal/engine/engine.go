@@ -101,6 +101,9 @@ type Herdr interface {
 // Agents is the part of *agents.Manager the engine drives.
 type Agents interface {
 	ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]agents.Observation, error)
+	// ObserveRunsAt is ObserveSnapshotAt for the sessions with a run
+	// submitted or at work alone: the observe clock's pass.
+	ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]agents.Observation, error)
 	EnsureWorkspace(ctx context.Context, pr store.PR, slotPath string, env map[string]string, label string, roles []config.Role) (agents.Workspace, error)
 	EnsurePane(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, role config.Role) (agents.Workspace, error)
 	StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error

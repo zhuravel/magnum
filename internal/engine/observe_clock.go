@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -72,8 +73,10 @@ func (e *Engine) observeClock(ctx context.Context, every time.Duration) {
 
 // observeRuns is one pass of the observe clock and returns how long the
 // clock waits for the next: a herdr snapshot fed to the agents' observation
-// and its observations handled as the tick handles its own (onObservation),
-// under the observe lock the tick takes too. With no run in flight there is
+// of the sessions with a run in flight (agents.ObserveRunsAt: the others'
+// rows are the tick's to write) and its observations handled as the tick
+// handles its own (onObservation), but for a dialog's (ObsBlocked), which
+// the tick reports, under the observe lock the tick takes too. With no run in flight there is
 // no turn to end and the pass reads nothing, so an idle daemon makes no
 // socket call for it; herdr's being up or down is the tick's to say. Each
 // pass logs its duration at debug level, and a pass that took longer than
@@ -89,12 +92,14 @@ func (e *Engine) observeRuns(ctx context.Context, every time.Duration) time.Dura
 		e.log.Debug("observe clock: no herdr snapshot; the tick says whether herdr is down", "err", err)
 		return every
 	}
-	obs, err := e.d.Agents.ObserveSnapshotAt(ctx, snap, start)
+	obs, err := e.d.Agents.ObserveRunsAt(ctx, snap, start)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "observe agents")
 	}
 	for _, o := range obs {
-		e.onObservation(ctx, o)
+		if o.Kind != agents.ObsBlocked { // the tick's to report: at this pace its warning, toast and reveal would repeat every pass
+			e.onObservation(ctx, o)
+		}
 	}
 	end := e.now()
 	next := every

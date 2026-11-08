@@ -1005,11 +1005,29 @@ func (f *fakeAgents) count(prefix string) int {
 
 func (f *fakeAgents) ObserveSnapshotAt(context.Context, herdr.Snapshot, time.Time) ([]agents.Observation, error) {
 	f.record("observe")
+	return f.takeObs(), nil
+}
+
+// ObserveRunsAt is the observe clock's pass: it hands out the queued
+// observations as ObserveSnapshotAt does.
+func (f *fakeAgents) ObserveRunsAt(context.Context, herdr.Snapshot, time.Time) ([]agents.Observation, error) {
+	f.record("observe runs")
+	return f.takeObs(), nil
+}
+
+func (f *fakeAgents) takeObs() []agents.Observation {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	obs := f.obs
 	f.obs = nil
-	return obs, nil
+	return obs
+}
+
+// queueObs has the next observe pass return obs.
+func (f *fakeAgents) queueObs(obs ...agents.Observation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.obs = obs
 }
 
 // paneOf is the fake pane id of a role: p-judge, p-claude, p-codex and

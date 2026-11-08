@@ -197,3 +197,37 @@ func TestAPromptBeginsANewIdleStreak(t *testing.T) {
 		t.Fatalf("run ended %v, want %v", r.EndedAt, start.Add(CompletionGap))
 	}
 }
+
+// The observe clock reads herdr every few seconds to see the turns in flight
+// end. A pass over every live session would also write each one's row (its
+// idle count) every few seconds, most of them agents with nothing to do:
+// ObserveRunsAt observes the sessions with a run submitted or at work, and
+// leaves the others' rows to the tick's pass.
+func TestObservingTheRunsInFlightLeavesTheOtherSessionsAlone(t *testing.T) {
+	e := newEnv(t)
+	id := e.judgeAtWork() // the judge's run is at work; claude-review has none
+	e.h.setAgentStatus(claudeAgent, herdr.StatusIdle)
+	e.h.setAgentStatus(judgeAgent, herdr.StatusIdle)
+	before := e.session(RoleClaude)
+
+	e.clock.Add(5 * time.Second)
+	snap, err := e.h.Snapshot(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := e.m.ObserveRunsAt(e.ctx, snap, e.clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 1 || obs[0].Role != RoleJudge || obs[0].Run == nil || obs[0].Run.ID != id || obs[0].Session.IdleTicks != 1 {
+		t.Fatalf("observations = %+v, want the judge's alone, its first idle reading", obs)
+	}
+	after := e.session(RoleClaude)
+	if after.IdleTicks != before.IdleTicks || store.Deref(after.AgentStatus) != store.Deref(before.AgentStatus) {
+		t.Fatalf("claude-review, no run in flight: idle_ticks %d -> %d, status %q -> %q; want its row untouched",
+			before.IdleTicks, after.IdleTicks, store.Deref(before.AgentStatus), store.Deref(after.AgentStatus))
+	}
+	if o, ok := e.observe()[RoleClaude]; !ok || o.Session.IdleTicks != before.IdleTicks+1 {
+		t.Fatalf("the tick's pass: claude-review = %+v (observed %v), want its idle reading counted", o, ok)
+	}
+}

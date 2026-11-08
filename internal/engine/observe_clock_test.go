@@ -296,8 +296,8 @@ func TestTheObserveClockIsOffWhereNothingIsObserved(t *testing.T) {
 }
 
 // holdAgents holds the observe pass the test arms inside its
-// ObserveSnapshotAt until released, and counts any pass that enters while
-// one is held.
+// ObserveSnapshotAt or ObserveRunsAt until released, and counts any pass
+// that enters while one is held.
 type holdAgents struct {
 	Agents
 	armed    atomic.Bool
@@ -309,19 +309,31 @@ type holdAgents struct {
 }
 
 func (a *holdAgents) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, at time.Time) ([]agents.Observation, error) {
+	defer a.enter()()
+	return a.Agents.ObserveSnapshotAt(ctx, snap, at)
+}
+
+// ObserveRunsAt is the observe clock's pass, held and counted as
+// ObserveSnapshotAt is.
+func (a *holdAgents) ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, at time.Time) ([]agents.Observation, error) {
+	defer a.enter()()
+	return a.Agents.ObserveRunsAt(ctx, snap, at)
+}
+
+// enter counts a pass, holds it when armed, and returns its leave.
+func (a *holdAgents) enter() func() {
 	if a.inside.Add(1) > 1 {
 		select {
 		case a.overlaps <- struct{}{}:
 		default:
 		}
 	}
-	defer a.inside.Add(-1)
 	a.passes++
 	if a.armed.CompareAndSwap(true, false) {
 		a.held <- struct{}{}
 		<-a.release
 	}
-	return a.Agents.ObserveSnapshotAt(ctx, snap, at)
+	return func() { a.inside.Add(-1) }
 }
 
 // logSignal is a logger whose records of msg are signalled on seen.
@@ -513,4 +525,42 @@ func (l *recordLog) count(level slog.Level, msg string) int {
 		}
 	}
 	return n
+}
+
+// The clock's pass observes the sessions with a run in flight alone
+// (agents.ObserveRunsAt): a pass over every live session writes each one's
+// row, which the tick does every poll and the clock would do every few
+// seconds, mostly for agents with nothing to do. A dialog the clock's pass
+// sees is the tick's to report: at the clock's pace its warning, urgent
+// toast and reveal would come every few seconds.
+func TestTheObserveClockReadsTheRunsInFlightAndLeavesDialogsToTheTick(t *testing.T) {
+	steps := newObserveSteps(t)
+	logs := &recordLog{}
+	h := newHarness(t, func(hs *harness) {
+		hs.d.ObserveSleep = steps.sleep
+		hs.d.Logger = slog.New(logs)
+	})
+	r := h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "p1", t.TempDir())
+	s, err := h.st.SessionByID(h.ctx, *r.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := agents.Observation{Kind: agents.ObsBlocked, Role: agents.Role(config.RoleClaudeReview), PRID: r.PRID, Session: s, Run: &r}
+	const dialog = "agent waits on a dialog"
+	full, runs := h.ag.count("observe"), h.ag.count("observe runs")
+	h.goClock(5 * time.Second)
+	steps.next()
+	h.ag.queueObs(blocked)
+	steps.pass()
+	if n, m := h.ag.count("observe runs")-runs, h.ag.count("observe")-full; n != 1 || m != 1 {
+		t.Fatalf("the clock's pass: %d passes over the runs in flight, %d in all; want the one over the runs", n, m)
+	}
+	if n := logs.count(slog.LevelWarn, dialog); n != 0 {
+		t.Fatalf("the clock's pass warned of the dialog %d times, want none", n)
+	}
+	h.ag.queueObs(blocked)
+	h.tick()
+	if n := logs.count(slog.LevelWarn, dialog); n != 1 {
+		t.Fatalf("the tick's pass warned of the dialog %d times, want once", n)
+	}
 }
