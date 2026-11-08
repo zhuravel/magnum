@@ -18148,11 +18148,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     The questions name the factory's keys (`factoryActKeys`). `FactoryActions.Review`, `Snooze`, `Unsnooze`, `Mute`
     and `Unmute` pass straight to the board's `screenActions`: magnum's own request paths, never the factory daemon.
   - The predicate's facts (`FactoryPR.Facts`: magnum's state and GitHub's, the head and the reviewed head, the mute,
-    a snooze while it holds, the Codex flag, the merged-unreviewed flag and its dismissal, and whether the PR's watch
-    runs autofix) are read by the screen's source in the cli, once per frame, from magnum's registry opened read only
-    with every migration refused, as the board reads them (`codexFlagOf`, `ParseSnooze`). A PR the registry has no
-    row of, or a registry it cannot read, leaves them unread: the keys then refuse only on what the row tells, and
-    magnum's daemon decides the rest, as on the dashboard.
+    a snooze while it holds, the Codex flag, the merged-unreviewed flag and its dismissal, the replies its judge has
+    not re-decided, so `r` asks for the board's judge-only reply round where the board's `r` would, and whether the
+    PR's watch runs autofix) are read by the screen's source in the cli, once per frame, from magnum's registry
+    opened read only with every migration refused, as the board reads them (`codexFlagOf`, `ParseSnooze`,
+    `PendingReplies`). A PR the registry has no row of, or a registry it cannot read, leaves them unread: the keys
+    then refuse only on what the row tells, and magnum's daemon decides the rest, as on the dashboard.
   - On a task's PR the question also says what y does to the factory's own loop, which after the publish is
     magnum's: the factory runs no fix loop of its own, magnum's autofix and fix loops work on its PR. From the
     engine: a mute holds only the rounds nobody forced (the store's schedule picks `muted = 0 OR forced = 1`) and
@@ -18186,7 +18187,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   view state, and a filter left on would hide rows at the next start); `r` as the review on a card with a retry
   (one letter, two meanings on one card); the walk over home's narrowed order (a filter would hide decisions).
   Tests, failing first: TestTheBoardsPRKeysAskAndRunOnAPRRow, TestZLiftsTheSnoozeAndUUnmutes,
-  TestThePRKeysRefuseWhereTheBoardsDo, TestROnATaskCardRetriesWhereItCanElseReviews,
+  TestThePRKeysRefuseWhereTheBoardsDo, TestRReDecidesTheRepliesWaitingAsTheBoardsDoes,
+  TestROnATaskCardRetriesWhereItCanElseReviews,
   TestThePRKeysSayWhatTheyDoToTheFactorysLoop, TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests,
   TestTheFactoryScreenReadsWhatThePRKeysGoBy, TestAMutedOrSnoozedPRsRowSaysSo, TestTheMenuListsThePRKeys,
   TestSlashFiltersHomesRows, TestAFilterThatMatchesNothingSaysSo, TestOCyclesTheRepositoryScope,

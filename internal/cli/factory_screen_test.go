@@ -307,7 +307,8 @@ func (m statesMagnum) PRStates(context.Context, []factory.PRRef) (map[factory.PR
 // The rows' PRs carry what r, R, z, M and U go by (tui.FactoryPRFacts),
 // read from magnum's registry, read only: magnum's state and GitHub's,
 // the head and the reviewed head, the mute, a snooze that holds, the
-// Codex flag, and whether the PR's watch runs autofix; for your PR's row
+// Codex flag, the replies waiting for the judge, and whether the PR's
+// watch runs autofix; for your PR's row
 // and for a published task's alike. A PR the registry has no row of, and
 // a snooze that has ended, give nothing. Before, the screen read none of
 // it, and had no key that needed it.
@@ -353,7 +354,11 @@ func TestTheFactoryScreenReadsWhatThePRKeysGoBy(t *testing.T) {
 	headTask, headOwn := strings.Repeat("a1", 20), strings.Repeat("b2", 20)
 	taskPR, own, gone := pr("example", "shop", 4530, headTask), pr("example", "widget", 12, headOwn), pr("example", "widget", 13, headOwn)
 	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	if err := st.UpdatePR(ctx, taskPR.ID, func(u *store.PRUpdate) { u.Set("muted", true); u.Set("reviewed_sha", headTask) }); err != nil {
+	if err := st.UpdatePR(ctx, taskPR.ID, func(u *store.PRUpdate) {
+		u.Set("muted", true)
+		u.Set("reviewed_sha", headTask)
+		u.Set("replies_json", `[{"at":"2026-11-01T10:00:00Z","by":"alice","thread":true}]`) // one the judge has not re-decided
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for key, v := range map[string]string{
@@ -387,7 +392,7 @@ func TestTheFactoryScreenReadsWhatThePRKeysGoBy(t *testing.T) {
 	}
 	want := map[string]*tui.FactoryPRFacts{
 		"example/shop#4530": {State: store.PRReviewed, GHState: store.GHOpen, Head: headTask, Reviewed: headTask, Muted: true,
-			SnoozedUntil: until, Autofix: true},
+			SnoozedUntil: until, Autofix: true, Replies: 1},
 		"example/widget#12": {State: store.PRReviewed, GHState: store.GHOpen, Head: headOwn, CodexFlag: "Codex flagged · never reviewed again"},
 		"example/widget#13": {State: store.PRReviewed, GHState: store.GHOpen, Head: headOwn},
 		"example/widget#14": nil, // no row of it in magnum's registry

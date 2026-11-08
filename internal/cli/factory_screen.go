@@ -219,7 +219,8 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 
 // prFacts gives the rows' PRs what r, R, z, M and U go by
 // (tui.FactoryPRFacts, the board's predicate's facts): magnum's row of each
-// PR, its snooze while it holds and its Codex flag, read from magnum's
+// PR (with the replies its judge has not re-decided), its snooze while it
+// holds and its Codex flag, read from magnum's
 // registry in one opening per frame, read only and never migrated (a
 // registry of another schema than this build's is not read), and whether
 // its watch runs autofix. A PR the registry has no row of, and a registry
@@ -256,7 +257,7 @@ func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow
 			continue
 		}
 		f := &tui.FactoryPRFacts{State: pr.State, GHState: pr.GHState, Head: pr.HeadSHA, Reviewed: store.Deref(pr.ReviewedSHA),
-			Muted: pr.Muted, MergedUnreviewed: pr.MergedUnreviewed(), FlagDismissed: pr.FlagDismissed()}
+			Muted: pr.Muted, MergedUnreviewed: pr.MergedUnreviewed(), FlagDismissed: pr.FlagDismissed(), Replies: len(pr.PendingReplies())}
 		if v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(pr.ID)); err == nil && ok {
 			if z, ok := engine.ParseSnooze(v); ok && z.Active(now) {
 				f.SnoozedUntil = z.Until

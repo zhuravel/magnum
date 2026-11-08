@@ -134,7 +134,7 @@ type actRow struct {
 	facts    string // what the review question says about the PR
 	// replies counts the replies on magnum's review its judge has not
 	// re-decided yet; 0 when there are none or the screen does not know
-	// (only the board does).
+	// (only the board and the factory screen do).
 	replies int
 	// findings is what magnum's latest review concluded (nil: magnum has not
 	// reviewed the PR); verdicts says the screen knows it, so A and C apply.

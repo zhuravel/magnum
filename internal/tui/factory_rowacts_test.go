@@ -134,6 +134,29 @@ func TestThePRKeysRefuseWhereTheBoardsDo(t *testing.T) {
 	}
 }
 
+// r on a PR whose reviewed head has replies waiting for the judge has the
+// judge alone re-decide them, as the board's r does (ReviewOpts.Replies,
+// the board's question and menu words); R is still a fresh full review.
+// Before, the factory screen never knew of the replies: its r ran an
+// ordinary forced review of every role on the same head, where the
+// board's r runs the judge-only reply round.
+func TestRReDecidesTheRepliesWaitingAsTheBoardsDoes(t *testing.T) {
+	h := testYours(t, 160, 40)
+	h.facts("#4602", FactoryPRFacts{State: "reviewed", GHState: "OPEN", Head: factoryHead, Reviewed: factoryHead, Replies: 1})
+	h.press("g")
+	h.selectRow("#4602")
+	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.key == "r" })
+	if i < 0 || h.m.menuItems()[i].label != "re-decide replies" {
+		t.Errorf("the menu's r item: %+v, want re-decide replies", h.m.menuItems())
+	}
+	h.press("r")
+	mustContain(t, h.view(), "Judge re-decides 1 reply on #4602 now (judge only; no new commits since head b2c3d4e was reviewed)? y/N")
+	h.press("y", "R")
+	mustContain(t, h.view(), "Fresh review of #4602 in new agent sessions")
+	h.press("y")
+	h.wantPRCalls("replies example/talkable#4602", "fresh example/talkable#4602")
+}
+
 // On a task card that offers a retry, r stays the retry and its hints say
 // "r retry"; R is the fresh review there as anywhere. On a card that
 // offers none, r is the review of the task's PR.

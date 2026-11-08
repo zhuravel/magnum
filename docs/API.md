@@ -28313,6 +28313,10 @@ type FactoryPRFacts struct {
 	// MergedUnreviewed says GitHub merged it before magnum reviewed its last
 	// push; FlagDismissed that a mute dismissed that flag (M and U act on it).
 	MergedUnreviewed, FlagDismissed bool
+	// Replies counts the replies on magnum's review its judge has not
+	// re-decided yet (store.PR.PendingReplies): r then has the judge alone
+	// re-decide them, as the board's r does.
+	Replies int
 	// Autofix says the PR's watch starts fix loops by itself (autofix "own"
 	// or "open"): the questions say what a key does to them.
 	Autofix bool

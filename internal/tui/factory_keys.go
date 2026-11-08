@@ -328,7 +328,7 @@ func (m factoryModel) prActRow(r FactoryRow, reviewOnR bool) actRow {
 	row.head, row.reviewed = cleanText(f.Head), cleanText(f.Reviewed)
 	row.muted, row.mutedKnown = f.Muted || row.state == "ignored", true
 	row.snoozedUntil, row.flag = f.SnoozedUntil, cleanText(f.CodexFlag)
-	row.mergedUnreviewed, row.flagDismissed = f.MergedUnreviewed, f.FlagDismissed
+	row.mergedUnreviewed, row.flagDismissed, row.replies = f.MergedUnreviewed, f.FlagDismissed, f.Replies
 	row.facts = reviewFacts(row.state, "", &ReviewFacts{HeadSHA: row.head, ReviewedSHA: row.reviewed}, row.now)
 	return row
 }
