@@ -3703,44 +3703,59 @@ skill versions); people add theirs to the sections before it, at the end of the 
   three-call case of TestFixDecisionCallsAreTheFixersDecisionsAlone in attention, and two sentences of
   TestTheFixSkillBuildsTheAuthorsDecision in agents.
 
-- **A P3 author's call is an optional call, which holds nothing** (2026-11-08, the audit of what waits on the
-  operator; approved by the operator on 2026-11-08. Amends, for P3s only, "A Fix that would undo what the PR
-  or its series removed, or that picks between fixes users tell apart, names the options and ends "This is
-  the author's call.", and the fixer leaves it to the author" (2026-10-20, spec 90: "whatever its verdict and
-  score"), and rule A1 of "`autofix = "open"`: a fix loop starts on anything open on your own PR once the
-  reviewers settle" (2026-11-07: an optional P3 counts as open until a fix or a fix-marked reply). Both
-  entries stand for P0 to P2.) On an own PR (2026-11-07) a P3 whose Fix ended "This is the author's call." held
-  the PR in Needs you for a day, and the CI start the look owes a settled head waited behind it, though a P3's
-  title says "(optional, no reply needed)" and open P3s never block; on another, such a P3 waited on the
-  operator beside the other calls. Now the fix skill's rule 6 keeps the
-  author's call for P0 to P2 and makes a P3's optional, whatever its verdict and score: the fixer leaves the
-  code as it is, posts no reply, and lists it under a new report section, `## Optional calls` (`- <comment id>
-  P3 <path>:<line>: <its options>`, after `## Needs you`; a report without it is still whole). The settle
-  raises no attention for it: it records it as the PR's optional call (`pr.<id>.optional_calls`, by thread,
-  with its link and the time of the call; `settleOptional`), says so in a `fix.optional` event that names the
-  links, never the fixer's words, and holds anything else listed there (a P0 to P2, an entry magnum cannot
-  read) as a Needs you entry. With nothing else, the loop ends as one that replied. The record is the look's:
-  `reviewWork` leaves the operator's open optional calls out of a review's P3s, new or kept open, so no loop
-  starts on them again, and `magnumItemsOf` lists no "skipped without a word" finding for them
-  (`openOptional`: the record's calls whose thread the whole read shows unresolved and unanswered; a resolved
-  or gone one leaves the record); `optionalLeft` leaves them out of a loop's re-review under "open"
-  (`openOptionalAt`: by the re-review's threads file, else all of them), so a re-review whose one open P3 is
-  the call ends the loop as done. `prepareFix` keeps counting them: a start asked for may hand the fixer the
-  call again, and the look never starts what prepareFix refuses. The idle verdict ends with "1 optional
-  call: <link>" (`OpenVerdict.Optional`, `OptionalCallsWords`), approved or not, and the factory screen's
-  merge move with the same words, so the operator sees the call at the merge. An optional call is still
-  a call of the fixer's: `fixerCalls` dates it from the record, so the author's word in its thread after it
-  is a decision and `magnum fix --decide` takes it (the entry above). The call words of a P0 to P2 author's
-  call change too: the skill writes "not fixed. The author's call:", which `needsYouEntryRe` reads, and the
-  call says "the review leaves the choice to you; reply with yours at <link>, or run `magnum fix <ref>
-  --decide <thread>="<your choice>"`" (`attention.AuthorsCall`, a decision call), where "the fixer declined
-  it" and "`magnum fix` sends it back" were wrong (a rerun only asks again). The older entries are left as
-  they are, as this file's preamble asks. Rejected: dropping the call silently (the operator would merge
-  without seeing it); keeping the P3 in Needs you with a softer word (it still holds the PR and its CI);
-  reading the fixer's reason for the options (the fixer's words are never read). Tests, failing first:
-  TestParseFixReportReadsTheOptionalCalls, TestAnOptionalCallHoldsNothing, TestFixDecideTakesAnOptionalCall,
-  TestALoopEndsAsDoneWhenItsOptionalCallIsAllThatIsLeft, TestAnOptionalCallIsNoFixersWork,
-  TestTheIdleVerdictNamesTheOptionalCalls, TestTheLookLeavesAnOptionalCallToTheMerge and
+- **A P3 author's call is an optional call, which holds nothing** (2026-11-08, the audit of what waits on
+  the operator; approved by the operator on 2026-11-08. Amends, for P3s only, "A Fix that would undo what
+  the PR or its series removed, or that picks between fixes users tell apart, names the options and ends
+  "This is the author's call.", and the fixer leaves it to the author" (2026-10-20, spec 90: "whatever its
+  verdict and score"), and rule A1 of "`autofix = "open"`: a fix loop starts on anything open on your own PR
+  once the reviewers settle" (2026-11-07: an optional P3 counts as open until a fix or a fix-marked reply).
+  Both entries stand for P0 to P2.) On an own PR (2026-11-07) a P3 whose Fix ended "This is the author's
+  call." held the PR in Needs you for a day, and the CI start the look owes a settled head waited behind it,
+  though a P3's title says "(optional, no reply needed)" and open P3s never block; on another, such a P3
+  waited on the operator beside the other calls. Now the fix skill's rule 6 keeps the author's call for P0
+  to P2 and makes a P3's optional, whatever its verdict and score: the fixer leaves the code as it is, posts
+  no reply, and lists it under a new report section, `## Optional calls` (`- <comment id> P3 <path>:<line>:
+  <its options>`, after `## Needs you`; a report without it is still whole). The settle raises no attention
+  for it: it records it as the PR's optional call (`pr.<id>.optional_calls`, by thread, with its link and
+  the time of the call; `settleOptional`), says so in a `fix.optional` event that names the links, never the
+  fixer's words, and holds anything else listed there as a Needs you entry: an entry magnum cannot read, and
+  one that magnum's own comment does not show to be a P3 whose Fix ends "This is the author's call."
+  (`optionalFinding`: its comment in the review file by path and line, else the first comment of its thread
+  as the settle's GitHub read shows it, started by one of magnum's logins), so a P1 the fixer labels P3, or
+  an ordinary P3, never holds nothing on the fixer's word alone. With nothing else, the loop ends as one
+  that replied. The record is the look's: `reviewWork` leaves the operator's open optional calls out of a
+  review's P3s, so no loop starts on them again, each against the P3s of its own review alone
+  (`optionalSplit`: a call in a thread of that review's against its new P3s, any other against the earlier
+  ones it keeps open), so a call of an earlier review never hides a P3 a later review posts; and
+  `magnumItemsOf` lists no "skipped without a word" finding for them. `openOptional` keeps the record's
+  calls whose thread the whole read shows unresolved and unanswered since the call (`optionalWaits`: a reply
+  of the author's or a fix-marked one after it, the rule a decision is read by, so a question the author
+  asked before the call takes nothing); a resolved or gone one leaves the record, and so does one of an
+  earlier review's that still waits once the review that stands keeps no earlier P3 open (it counts that
+  finding fixed or answered: the operator took the call with a push), while one answered since the call
+  stays for its decision. The review result gives counts by priority and no thread, so a P3 of an earlier
+  review that stays open beside such a call is told from the call by count alone. `optionalLeft` leaves them
+  out of a loop's re-review under "open" (`openOptionalAt`: by the same rule on the loop's one GitHub read
+  of the threads, else all of them), so a re-review whose one open P3 is the call ends the loop as done.
+  `prepareFix` keeps counting them: a start asked for may hand the fixer the call again, and the look never
+  starts what prepareFix refuses. The idle verdict ends with "1 optional call: <link>"
+  (`OpenVerdict.Optional`, `OptionalCallsWords`), approved or not, and the factory screen's merge move with
+  the same words, so the operator sees the call at the merge. An optional call is still a call of the
+  fixer's: `fixerCalls` dates it from the record, so the author's word in its thread after it is a decision
+  and `magnum fix --decide` takes it (the entry above). The call words of a P0 to P2 author's call change
+  too: the skill writes "not fixed. The author's call:", which `needsYouEntryRe` reads, and the call says
+  "the review leaves the choice to you; reply with yours at <link>, or run `magnum fix <ref> --decide
+  <thread>="<your choice>"`" (`attention.AuthorsCall`, a decision call), where "the fixer declined it" and
+  "`magnum fix` sends it back" were wrong (a rerun only asks again). The skill writes the same words for a
+  product or business-logic choice another reviewer's thread asks for (its step 6, "as an author's call
+  is"), and that call says the same, "decide another reviewer's finding on <place>: …". The older entries
+  are left as they are, as this file's preamble asks. Rejected: dropping the call silently (the operator
+  would merge without seeing it); keeping the P3 in Needs you with a softer word (it still holds the PR and
+  its CI); reading the fixer's reason for the options (the fixer's words are never read). Tests, failing
+  first: TestParseFixReportReadsTheOptionalCalls, TestAnOptionalCallHoldsNothing,
+  TestFixDecideTakesAnOptionalCall, TestALoopEndsAsDoneWhenItsOptionalCallIsAllThatIsLeft,
+  TestAnOptionalCallIsNoFixersWork, TestTheIdleVerdictNamesTheOptionalCalls,
+  TestTheLookLeavesAnOptionalCallToTheMerge, TestAnOptionalCallWaitsUntilYouTakeIt and
   TestAnAuthorsCallAsksForYourChoiceNotADecline in engine; TestAnAuthorsCallLeavesTheChoiceToYou in
   attention; TestTheMergeMoveNamesTheOptionalCalls in factory; the new sentences of
   TestTheFixSkillLeavesTheAuthorsCallToTheAuthor in agents.
@@ -3789,32 +3804,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the same loop's, and no attention is up while it runs.) On an own PR the first cycle's fixer left the
   author a product call and pushed; the re-review of its push posted 4 new optional findings, and
   `continueFixLoop` ended the loop as needs attention at once, since any `Needs you` entry ended it before
-  the next cycle could start: no fixer was ever handed those findings, and the look kept autofix off
-  behind the attention. Now a posted re-review with new findings, or a `Description: ✗` line (the entry
-  above), runs the next cycle while cycles are left, whatever calls the fixer left; the calls go on in the
-  loop's row (`FixState.Carried`, one `FixCarry` per cycle: its report, beside which its files place the
-  threads, its entries and the threads that ask only for the resolution) and are asked at the loop's end
-  with the last cycle's, wherever it ends: after a re-review that leaves calls and no new work or no cycle,
-  at a settle whose fixer pushed nothing (an end that would have been an info toast for replies alone now
-  needs attention for them), after a re-review that did not post, a next cycle that could not start or a
-  PR that moved on, and on a failed run, whose words they follow (`carriedText`). A call is asked once, by
-  its comment id: a later cycle's entry for it is the call now, with the place it names (a push may move
-  the line), and `loopCalls` drops an older one in any case. What a later cycle was handed again is its
-  fixer's to leave again or answer (`carriedLeft`, at that cycle's settle): a conflict with the base (the
-  later job checks the base again), a description entry (its fixer judged the re-review's own line), and,
-  once its external file was written, another reviewer's thread, review body or comment (it had every
-  open one). magnum's own threads are read again before each end for the carried calls as for the last
-  cycle's (`freshCarried`, `freshNeedsYou`: a resolved thread asks nothing, an answered one only for the
-  resolution). `FixCalls` (the status of a loop waiting for its re-review) names the carried calls too. A
-  stop ends the loop quietly, its carried calls with it, as before. Calls carried from an earlier cycle are
-  dated, for a decision in their thread, at the last report's run (`recordFixCalls`): later than they were
-  made, so an answer between the two asks again rather than counting as a decision. Rejected: letting the
-  next cycle's fixer find the calls again (a call the re-review does not name as open would be lost);
-  carrying the rendered calls (a later read of magnum's threads could no longer settle them); raising the
-  earlier calls at once as attention (startFix would then refuse the next cycle). Tests, failing first:
+  the next cycle could start: no fixer was ever handed those findings, and the look kept autofix off behind
+  the attention. Now a posted re-review with new findings, or a `Description: ✗` line (the entry above),
+  runs the next cycle while cycles are left, whatever calls the fixer left; the calls go on in the loop's
+  row (`FixState.Carried`, one `FixCarry` per cycle: its report, beside which its files place the threads,
+  its entries and the threads that ask only for the resolution) and are asked at the loop's end with the
+  last cycle's, wherever it ends: after a re-review that leaves calls and no new work or no cycle, at a
+  settle whose fixer pushed nothing (an end that would have been an info toast for replies alone now needs
+  attention for them), after a re-review that did not post, a next cycle that could not start or a PR that
+  moved on, and on a failed run, whose words they follow (`carriedText`). A call is asked once, by its
+  comment id: a later cycle's entry for it is the call now, with the place it names (a push may move the
+  line), and `loopCalls` drops an older one in any case. What a later cycle was handed again is its fixer's
+  to leave again or answer (`carriedLeft`, at that cycle's settle, told what the later job was handed,
+  `laterWork`): a conflict with the base once the later job's guard checked the base (it found the conflict,
+  or a clean merge) or it was given a conflict, a description entry once the later job's review has a
+  `Description: ✗` line, and another reviewer's thread, review body or comment that its external file gave
+  its fixer open (unanswered, or holding the author's decision, and not waiting). Anything else goes on: a
+  call in magnum's own thread, and another reviewer's item the later file lists answered (the operator's
+  reply while the loop ran, which that fixer leaves alone), waiting, or not at all. magnum's own threads are
+  read again before each end for the carried calls as for the last cycle's (`freshCarried`, `freshNeedsYou`:
+  a resolved thread asks nothing, an answered one only for the resolution). `FixCalls` (the status of a loop
+  waiting for its re-review) names the carried calls too. A stop ends the loop quietly, its carried calls
+  with it, as before. Calls carried from an earlier cycle are dated, for a decision in their thread, at the
+  run of the cycle that made them (`carriedCallTimes`, through `fixAttention`'s kept times to
+  `recordFixCalls`), not at the last report's: the operator's reply while the loop ran came after the call,
+  so it is a decision the next loop builds, never an answer that asks again. Rejected: letting the next
+  cycle's fixer find the calls again (a call the re-review does not name as open would be lost); carrying
+  the rendered calls (a later read of magnum's threads could no longer settle them); raising the earlier
+  calls at once as attention (startFix would then refuse the next cycle). Tests, failing first:
   TestAReReviewWithNewFindingsRunsTheNextCycleOverTheCalls, TestTheCallsOfAnEarlierCycleReachTheLoopsEnd and
   TestACycleThatEndsTheLoopAsksTheCallsItCarries; TestACarriedCallGoesOnceALaterCycleTookItOn pins
-  `carriedLeft`. TestNeedsYouEndsTheLoopAfterItsReReview, TestAFixersCallAfterAPushToastsAtOnce,
+  `carriedLeft` and TestACarriedCallIsDatedAtTheRunThatMadeIt the dating.
+  TestNeedsYouEndsTheLoopAfterItsReReview, TestAFixersCallAfterAPushToastsAtOnce,
   TestANeedsYouLoopSaysWhatToDoPerThread and the "needs you" case of
   TestALoopStrandedInReviewingIsDecidedAtStartup now end on a re-review that posts no new finding.
 
@@ -3830,22 +3851,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   fixer resolved with no answer) and rule 9 has work to start on that is not magnum's rebuttals alone, rule
   9 decides: the loop starts on the work once the settle, the daily cap, a pause, quiet hours and the hands
   off allow, the verdict lists the person's items as needs and says so ("starts a fix loop on 1 thread of a
-  bot; 1 item waits for you: 1 review body of a person"), and nothing raises them meanwhile. The push that
-  lands while the change request is open is limited to the work never handed: the look passes the waiting
-  items' keys to the loop (`FixState.Waits`, through `startFix`), every cycle's external file marks those
-  items `waits` (`externalItems.waiting`, on copies of the look's read; a thread or remark whose key moved,
-  with a new reply or an edit, is new work and not marked), and the fix skill leaves a `waits` item alone
-  (no verdict, no fix, no reply; `no reply: waits for the author` under Other reviewers). Once the loop
-  ended the items need you as before (rule 8, the look's raise). Anything else handed and still open
+  bot; 1 item waits for you: 1 review body of a person"), and nothing raises them meanwhile. While the work
+  waits for its start (the settle, a pause, quiet hours, the hands off) the verdict's words name them the
+  same way and nothing raises them, since a raise would hold the PR in needs attention and no loop would
+  start on the work; at the daily cap no loop starts that day, and rule 8 raises them as before. The push
+  that lands while the change request is open is limited to the work never handed: the look passes the
+  waiting items' keys to the loop (`FixState.Waits`, through `startFix`), every cycle's external file marks
+  those items `waits` (`externalItems.waiting`, on copies of the look's read; a thread or remark whose key
+  moved, with a new reply or an edit, is new work and not marked), and the fix skill leaves a `waits` item
+  alone (no verdict, no fix, no reply; `no reply: waits for the author` under Other reviewers). Once the
+  loop ended the items need you as before (rule 8, the look's raise). Anything else handed and still open
   (magnum's finding skipped without a word, a bot's thread, a conflict, magnum's handed rebuttal) still
   needs you first, and so do a person's items with no work beside them. Not done: a start while the look's
   own raise of the person's items holds the PR in needs attention (rule 2 and startFix's refusal over
   attention stand; the operator answers them, or a loop's own calls are lifted with `magnum fix --done`
-  first). Rejected: leaving the fixer to judge the waiting items again (it could push for a colleague's
-  open request the author has not answered); a start beside magnum's own leftovers (they are the loop's
+  first). Rejected: leaving the fixer to judge the waiting items again (it could push for a colleague's open
+  request the author has not answered); a start beside magnum's own leftovers (they are the loop's
   unfinished work, which the operator decides). Tests, failing first:
-  TestTheLookStartsOnNeverHandedWorkWhileAPersonsItemsWait and TestTheLoopOverAPersonsWaitingItemLeavesItAlone
-  in engine; TestTheFixSkillLeavesAWaitingItemAlone in agents.
+  TestTheLookStartsOnNeverHandedWorkWhileAPersonsItemsWait,
+  TestAPersonsWaitingItemsStayNamedWhileTheWorkCannotStart and
+  TestTheLoopOverAPersonsWaitingItemLeavesItAlone in engine; TestTheFixSkillLeavesAWaitingItemAlone in
+  agents.
 
 ## Screens and commands
 

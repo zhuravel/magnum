@@ -3325,7 +3325,8 @@ push, never the merge alone.
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
 five sections: `Pushed`, `Replied`, `Needs you`, `Optional calls` (the P3 author's calls, which hold nothing:
 a `fix.optional` event names their links, and Magnum keeps them as the PR's optional calls,
-`pr.<id>.optional_calls`; a P0 to P2, or an entry Magnum cannot read, listed there holds as under `Needs you`)
+`pr.<id>.optional_calls`; an entry that Magnum's own comment does not show to be a P3 whose Fix ends with the
+author's call, or that Magnum cannot read, listed there holds as under `Needs you`)
 and `Other reviewers` (one line per item of `external-threads.json`; Magnum does not read it). To use another policy, point the role's `skill` at your
 own file with an absolute path. The block inherits every key it does not set, so model, effort and timeout
 (60m) stay the built-in's.
@@ -3357,8 +3358,12 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   before (its row's `carried`) to its end, wherever it ends (after a re-review, a cycle that pushed nothing,
   a failed run), where they are asked with the last cycle's, each once by its comment id with the place the
   last fixer named (a push may move a line). What a later cycle was handed again is that fixer's to leave
-  again or answer: another reviewer's thread, review body or comment its `external-threads.json` listed,
-  a conflict with the base, the description. A failed run is no report, a report of another run, a failed push (yours, made while the fixer
+  again or answer: another reviewer's thread, review body or comment its `external-threads.json` gave it
+  open (unanswered, or holding your decision), a conflict with the base once its job checked the base again,
+  the description once its re-review had the `Description: ✗` line. Anything else goes on to the loop's end,
+  your reply in another reviewer's thread while the loop ran included, and the end dates each carried call
+  at the run of the cycle that made it, so such a reply is your decision on it. A failed run is no report, a
+  report of another run, a failed push (yours, made while the fixer
   worked, makes its push fail, unless it only merged the base: `magnum fix-sync` above), a push GitHub does
   not show ("push not confirmed on GitHub"), a timeout, or a daemon restart in the middle of the run ("fix
   run lost in a daemon restart"). When your own push came in
@@ -3373,8 +3378,10 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   declined it; reply won't fix at <link>, or `magnum fix <ref>` sends it back" ("another reviewer's" in such
   a thread) for one it did not fix, the link being the finding's thread, "decide magnum's P2 on <path>:<line>: the
   review leaves the choice to you; reply with yours at <link>, or run `magnum fix <ref> --decide <thread>="<your
-  choice>"`" for one of Magnum's findings whose Fix ends "This is the author's call." (the fixer declined
-  nothing there, and a rerun would only ask again; the skill marks it `not fixed. The author's call:`), and "merge the base by hand and decide the conflict in <paths>: <the PR's
+  choice>"`" for one of Magnum's findings whose Fix ends "This is the author's call." ("another reviewer's"
+  for a product or business-logic choice another reviewer's thread asks for; the fixer declined nothing
+  there, and a rerun would only ask again; the skill marks both `not fixed. The author's call:`), and "merge
+  the base by hand and decide the conflict in <paths>: <the PR's
   link>" for a conflict with the base the fixer left to you (A PR that conflicts with its base, above); then "details: <report>", where
   the fixer's reasons stay. A fix in another reviewer's thread that GitHub shows the fixer's reply in after
   all (the reply took though the fixer saw it fail) asks nothing of you and is not counted: Magnum looks
@@ -3544,8 +3551,10 @@ Each tick, before dispatch, Magnum looks at every own open PR of such a watch an
 the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your
 own push, a pause, quiet hours), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", with "· 2 commits after
 the approval" when the head moved past a person's approval, and "· 1 optional call: <link>" for each P3 author's call a fixer
-left you whose thread is still open and unanswered: it holds nothing, so you see it at the merge; the look starts no
-loop on such a call, and a loop's re-review whose one open P3 is that call ends the loop as done), `unknown` (it has not read GitHub since the PR
+left you whose thread is still open and unanswered since the call: it holds nothing, so you see it at the
+merge; the look starts no loop on such a call, which counts against its own review's P3s alone, never a later
+review's new ones, and a loop's re-review whose one open P3 is that call ends the loop as done; a later review
+that keeps no earlier P3 open drops a call of an earlier review's), `unknown` (it has not read GitHub since the PR
 changed, or could not check the head's merge with its base: never idle) or `off`, with since when it has said the same (`since`: a change of the PR keeps it while
 the verdict, the approval and the reason to be off stay). The look reads GitHub (the three reads the fix job makes of the other
 reviewers) only when the PR changed (its head, its updatedAt, its activity or Magnum's last review), 30
@@ -3583,8 +3592,11 @@ summary, a status note) drops out as seen. When every handed item still open is 
 was handed (a lint bot's new thread, say) still starts a loop beside them: they stay listed in the verdict
 ("starts a fix loop on 1 thread of a bot; 1 item waits for you: 1 review body of a person"), the loop's
 `external-threads.json` marks each one `waits` in every cycle, and the fixer leaves them alone (no fix, no
-reply), so a push while a colleague's change request is open answers only what was never handed. Once the
-loop ends they need you as below; while the look's own raise of them needs attention, nothing starts. A finding of Magnum's handed review that the fixer neither
+reply), so a push while a colleague's change request is open answers only what was never handed. While the
+work waits for its start (the settle, a pause, quiet hours, the hands off after your push) the verdict names
+them the same way; at the daily cap of loops they need you, as with no work beside them. Once the loop ends
+they need you as below; while the look's own raise of them needs attention, nothing starts. A finding of
+Magnum's handed review that the fixer neither
 resolved nor answered (an optional one too) needs you, and so does a thread the fixer answered twice whose
 reviewer answered again. Magnum's own thread waits for your answer only after a rebuttal of Magnum's that
 came after its latest review: alone, with nothing else to fix, it needs you and starts no loop. A reviewed PR
