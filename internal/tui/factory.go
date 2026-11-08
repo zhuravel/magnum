@@ -1190,6 +1190,9 @@ func (m factoryModel) homeHints() []hint {
 	if m.act != nil {
 		hs = append(hs, hint{"n", "new task"})
 	}
+	if m.filter.Value() != "" {
+		hs = append(hs, hint{"esc", "clear filter"})
+	}
 	return append(hs, hint{"?", "more"})
 }
 

@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Home's / filter and O repository scope (R29): they change the view
@@ -80,7 +82,7 @@ func TestSlashFiltersHomesRows(t *testing.T) {
 		t.Error("q after enter did not reach the keys")
 	}
 	h.quit = false
-	mustContain(t, h.view(), `filter "COUPON csv" · 7 hidden`)
+	mustContain(t, h.view(), `filter "COUPON csv" · 7 hidden`, "esc clear filter")
 
 	h.press("/", "esc") // esc clears it
 	if h.m.filtering || h.m.filter.Value() != "" || len(h.shownKeys()) != 8 {
@@ -188,4 +190,54 @@ func TestTheWalkIgnoresTheFilterAndTheScope(t *testing.T) {
 	if !strings.Contains(h.view(), "PR-12345") {
 		t.Error("the walk's card is not PR-12345's")
 	}
+}
+
+// helpSection is the lines of the help's section title, trimmed.
+func helpSection(t *testing.T, help, title string) []string {
+	t.Helper()
+	_, sec, ok := strings.Cut(help, "\n"+title+"\n")
+	if !ok {
+		t.Fatalf("the help has no %s section:\n%s", title, help)
+	}
+	sec, _, _ = strings.Cut(sec, "\n\n")
+	var out []string
+	for l := range strings.SplitSeq(sec, "\n") {
+		out = append(out, strings.TrimSpace(l))
+	}
+	return out
+}
+
+// The help lists the new keys: r R, z and M U on home and on the task card
+// (y/N, on a row with a PR), / and O on home, the r rule on the task card
+// (r retries where the card offers it, else reviews), and the keys of your
+// PR's card; it glosses the marks M and z leave on a row and what the title
+// line says of the filter and the scope.
+func TestTheHelpListsThePRKeysTheFilterAndTheScope(t *testing.T) {
+	h := testFactory(t, 140, 50)
+	help := ansi.Strip(strings.Join(h.m.helpContent(240), "\n"))
+	has := func(lines []string, prefix string, words ...string) bool {
+		return slices.ContainsFunc(lines, func(l string) bool {
+			if !strings.HasPrefix(l, prefix) {
+				return false
+			}
+			for _, w := range words {
+				if !strings.Contains(l, w) {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	home := helpSection(t, help, "Home")
+	for _, k := range [][]string{{"r R ", "review", "y/N"}, {"z ", "snooze", "y/N"}, {"M U ", "mute", "y/N"}, {"/ ", "filter", "esc"},
+		{"O ", "repository"}} {
+		if !has(home, k[0], k[1:]...) {
+			t.Errorf("the help's Home lacks %q with %q:\n%s", k[0], k[1:], strings.Join(home, "\n"))
+		}
+	}
+	card := helpSection(t, help, "Task card")
+	if !has(card, "r ", "retry", "review") || !has(card, "R z M U ", "y/N") || !has(card, "your PR's card", "r R z M U") {
+		t.Errorf("the help's Task card lacks the r rule, R z M U or your PR's card's keys:\n%s", strings.Join(card, "\n"))
+	}
+	mustContain(t, help, "muted  ", "snoozed → 16:09  ", `filter "coupon" · 6 hidden  `)
 }

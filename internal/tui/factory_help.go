@@ -2,7 +2,7 @@ package tui
 
 // The factory screen's help (?: its keys and the words of spec 9.E that the
 // screen draws, each with its gloss; a word of a feature still to come, such
-// as staging, QA, snooze, the learning view or the rating, comes with it)
+// as staging, QA, the learning view or the rating, comes with it)
 // and its action log (!: the outcome of every action, then every alert the
 // factory raised, with its time; spec 9.F: nothing vanishes).
 
@@ -25,6 +25,9 @@ var factoryWords = [][2]string{
 	{"APPR", "the people's reviews GitHub counts: ✔ 2 approvals (⟳ one of an older commit), ✗ 1 changes request"},
 	{"YOUR MOVE", "the step the factory recommends to you; on a narrow screen the help line says it"},
 	{"WAITED", "how long it has waited on this"},
+	{"muted", "M muted the PR: magnum starts no automatic review or autofix loop on it (U unmutes it)"},
+	{"snoozed → 16:09", "z snoozed the PR until then: no automatic review or fix loop starts on it (z lifts it)"},
+	{`filter "coupon" · 6 hidden`, "the / filter (and repo widget, the O scope) hide 6 rows: esc clears the filter, O shows every repository"},
 	{"decisions", "single answers you owe, across all tasks"},
 	{"you:", "you are the blocker"},
 	{"agent:", "an AI agent is working on it"},
@@ -79,6 +82,11 @@ var factoryKeyHelp = []struct {
 		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one)"},
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
+		{"r R", "on a row with a PR: magnum reviews it now, or afresh in new agent sessions, as the board's r and R (y/N)"},
+		{"z", "on a row with a PR: snooze its automatic reviews for 2h, or lift the snooze (y/N)"},
+		{"M U", "on a row with a PR: mute its automatic reviews, unmute them (y/N); a task's PR's question says what it does to its fix loop"},
+		{"/", "filter the rows by key, title, repository or PR number as you type: enter keeps it, esc clears it"},
+		{"O", "the repository scope: every repository, each one alone, every one again (the walk a ignores both)"},
 		{reportKey, "the report of magnum's fixer (claude-fix.md) in the pager, on a row whose fix loop left you items (asks nothing)"},
 		{"n", "new task"},
 		{logKey, "the action log and the alerts"}, {"?", "this help"}, {settingsKey, "settings"},
@@ -91,13 +99,14 @@ var factoryKeyHelp = []struct {
 		{"2", "send back: a reason's digit, then a note (y/N)"}, {"3", "drop: free the copy, keep the branch (y/N)"},
 		{"enter", "the marked one"}}},
 	{"Task card", []hint{{"j k", "move"}, {"enter", "the decision card its task waits on: its questions, its ready card"},
-		{"r", "retry: it goes on at its stage (y/N, when it can)"}, {"d", "the diff"},
+		{"r", "retry: it goes on at its stage (y/N, when it can); on a card that offers no retry, the review of its PR, as on home"},
+		{"R z M U", "on a card with a PR: a fresh review, snooze, mute, unmute, as on home (y/N)"}, {"d", "the diff"},
 		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane"},
 		{"b t", "its PR, its Jira issue in the browser (asks nothing)"},
 		{reportKey, "the report of magnum's fixer, when its fix loop left you items (asks nothing)"},
 		{"f F K", "on a card with a PR: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
 		{"a", "the next card that needs you (a walk; off one, its first)"},
-		{"", "your PR's card has the PR's keys alone: f F K, o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
+		{"", "your PR's card has the PR's keys alone: f F K r R z M U, o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
 		{"esc", "back"}}},
 	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line"}, {"ctrl+g", "your editor"},
 		{"tab", "the kind: bug, feature, chore"}, {repoKey, "the repository, when the factory has several"},

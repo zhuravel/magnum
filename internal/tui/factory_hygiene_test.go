@@ -9,7 +9,7 @@ import (
 )
 
 // The help glosses only what the screen draws: no staging cells, QA,
-// CI-fix tries, snooze, "say one line", learning view or rating, which no
+// CI-fix tries, "say one line", learning view or rating, which no
 // data fills and no key offers yet; the stages it glosses are the built-in
 // kinds' (judge, reproduction, publish), not the spec's later ones (tests,
 // merge master, cleanup). Before, it listed all of spec 9.E's words.
@@ -24,7 +24,7 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 	}
 	for _, gone := range []string{"void, bart, bastion", "outdated", "latest", "merging", "deploying", "CI 12/41", "QA 4/9",
 		"QA ✓ / QA ✗", "bart: no QA", "bastion waits for void QA", "code failed", "runner died", "try 1 of 2", "out of fix tries",
-		"ready to merge", "access needed", "snooze", "say one line", "you're in it", "no output 9m", "your PR, written by hand",
+		"ready to merge", "access needed", "say one line", "you're in it", "no output 9m", "your PR, written by hand",
 		"lesson", "rule", "skill edit", "test case", "replay", "used in", "repeats seen after the rule", "rule to approve",
 		"rate + / −", "codex limit: waits till 16:00", "runbook", "start", "tests", "merge master", "merge", "cleanup", "pushed"} {
 		if words[gone] {
