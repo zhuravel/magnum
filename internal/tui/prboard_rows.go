@@ -249,7 +249,11 @@ type PRBoardRow struct {
 	// --off`); its tags and the card say "fix off".
 	Fixing  string
 	FixLoop bool
-	FixOff  bool
+	// Fixer is the login the PR's fixer pushes and replies as (its watch's
+	// fix role's identity: a fixer App's bot, or yours), which f's
+	// question names; "" when the config does not say.
+	Fixer  string
+	FixOff bool
 	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
 	// it and the head it describes (engine.KVPRWhiteboard, written after a
 	// review or by `magnum whiteboard`); nil when the PR has none. The card
@@ -792,7 +796,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
-	r.Fixing, r.AttentionSum = cleanText(r.Fixing), cleanText(r.AttentionSum)
+	r.Fixing, r.AttentionSum, r.Fixer = cleanText(r.Fixing), cleanText(r.AttentionSum), cleanText(r.Fixer)
 	if r.Open != nil {
 		o := *r.Open
 		o.Verdict, o.Why, o.Head = cleanText(o.Verdict), cleanText(o.Why), cleanText(o.Head)

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -123,4 +124,36 @@ func TestMergeParentWaitSaysTheParentWasMerged(t *testing.T) {
 		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
 	}
 	actContains(t, h.out.String(), "talkable#5: merged master at c0c0c0c with no conflict: the head is e7e7e7e")
+}
+
+// The screens' P runs the command's own path: its dry run hands back the
+// daemon's plan as the result's question (Ask), and the merge the screen
+// then asked y/N for queues the merge alone, never asking again; a plan
+// the daemon refuses is the screen's error, with no question.
+func TestScreenMergeParentPlansThenMerges(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.mergeDaemon()
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	ctx := context.Background()
+
+	res, err := acts.MergeParent(ctx, "talkable#5", true)
+	if want := "Merge the parent of talkable/talkable#5: magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict?"; err != nil || res.Ask != want {
+		t.Fatalf("the plan = %q, %v; want the question %q", res.Ask, err, want)
+	}
+	if res, err = acts.MergeParent(ctx, "talkable#5", false); err != nil || res.Ask != "" || !strings.Contains(res.Text, mergeAnswer) {
+		t.Fatalf("the merge = %+v, %v", res, err)
+	}
+	reqs := h.requests()
+	if len(reqs) != 2 || !actDecode[engine.FixPayload](t, reqs[0].Payload).DryRun || actDecode[engine.FixPayload](t, reqs[1].Payload).DryRun {
+		t.Fatalf("requests = %+v, want the plan and the merge", reqs)
+	}
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestFailed, "PR #5 is alice's, not yours: magnum merges the parent of your own PRs alone")
+	}
+	if res, err := acts.MergeParent(ctx, "talkable#5", true); err == nil || res.Ask != "" {
+		t.Errorf("a refused plan = %+v, %v; want the error and no question", res, err)
+	}
 }

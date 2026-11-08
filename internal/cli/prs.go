@@ -47,9 +47,10 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"owners (the factory screen's O too: both open in the owner you left), s cycles the sort and S reverses it, h hides ignored and skipped PRs. On the selected PR: r "+
 			"reviews (R fresh, i with /simplify), K kills its running or queued review, I ignores it (kill, mute, free "+
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
-			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as you "+
+			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as the fixer's login "+
 			"(F takes it out of autofix or puts it back; on a PR whose fix loop left you calls, d says you did them all: "+
-			"back to reviewed, with no review), w opens its whiteboard, o opens the judge's pane, "+
+			"back to reviewed, with no review), P merges its base into it as the fixer App's bot (asking y/N with the daemon's "+
+			"plan), w opens its whiteboard, o opens the judge's pane, "+
 			"p/u pin and unpin, * stars it or unstars it (`magnum star`), x releases, M/U mute and unmute, b opens the "+
 			"PR in the browser and t its issue in the tracker; every one of them but o, p, u, *, b and t asks y/N "+
 			"first, and only y confirms. Starred PRs (✪ before the title) lead their section, the open PRs or the "+
@@ -469,6 +470,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 			row.Fixing, row.FixLoop, row.FixOff = boardFix(ctx, st, r.PRID)
+			row.Fixer = fixerLogin(cfg, full) // f's question names it
 			row.Whiteboard = boardWhiteboard(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))

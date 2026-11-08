@@ -260,6 +260,21 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		return m.ask(f, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
 			return act.Fix(ctx, pr.Ref)
 		})
+	case k == "P": // the daemon's plan first (a dry run changes nothing); its question puts the merge behind y
+		if why := actionRefusal(actMergeParent, m.prActRow(r, true)); why != "" {
+			return m.note(why)
+		}
+		if m.act == nil {
+			return m.note(noActions)
+		}
+		return m.bar.start("Plan the merge of the parent of "+key, func(ctx context.Context) (ActionResult, error) {
+			res, err := act.MergeParent(ctx, pr.Ref, true)
+			if err == nil && res.Ask != "" {
+				res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Merge the parent of " + key,
+					run: func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, false) }}
+			}
+			return res, err
+		})
 	case k == "F" && pr.FixOff:
 		return m.ask(f, "Switch fix on again for "+key+"?", func(ctx context.Context) (ActionResult, error) {
 			return act.FixOff(ctx, pr.Ref, false)
@@ -340,7 +355,7 @@ func (m factoryModel) prActRow(r FactoryRow, reviewOnR bool) actRow {
 // forced (prKey), never a review alone.
 func factoryActKeys(reviewOnR, fixing bool) map[rowAct]string {
 	keys := map[rowAct]string{actFresh: "R", actSnooze: "z", actMute: "M", actUnmute: "U",
-		actFix: "f", actFixOff: "F", actBrowser: "b"}
+		actFix: "f", actFixOff: "F", actBrowser: "b", actMergeParent: "P"}
 	if reviewOnR {
 		keys[actReview] = "r"
 	}
@@ -519,7 +534,7 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 		if r, ok := m.selectedRow(); ok {
 			return m.openPage(k, r.ID), true
 		}
-	case "f", "F", "K", "x":
+	case "f", "F", "K", "x", "P":
 		if r, ok := m.selectedRow(); ok {
 			return m.prKey(k, r), true
 		}

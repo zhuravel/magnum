@@ -761,6 +761,9 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
 	r.fixLoops, r.fixOffs = statusFixMarks(ctx, st)
+	if cfg := d.Config; cfg != nil {
+		r.fixer = func(repo string) string { return fixerLogin(cfg, repo) }
+	}
 	if d.Config != nil {
 		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
 	}

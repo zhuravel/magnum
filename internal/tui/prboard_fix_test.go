@@ -60,10 +60,10 @@ func fixBoard(t *testing.T, edit func(r *PRBoardRow)) (prBoardModel, *fakeAction
 	return m, act
 }
 
-// f asks before it has the PR's findings fixed, as you; only y sends the
+// f asks before it has the PR's findings fixed, as the fixer's login; only y sends the
 // request, and any other key (enter too) cancels.
 func TestFAsksBeforeFixing(t *testing.T) {
-	const want = "Fix the findings of talkable#5 as you?"
+	const want = "Fix the findings of talkable#5 as magnum's fixer?"
 	m, act := fixBoard(t, nil)
 	m, cmd := send(t, m, keyMsg("f"))
 	if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
@@ -102,7 +102,7 @@ func TestFRefusesBeforeAsking(t *testing.T) {
 // and sends the request; the daemon's refusal, when nothing waits, shows in
 // the footer as any other.
 func TestFOnAReviewThatFoundNothingAsksTheDaemon(t *testing.T) {
-	const want = "Answer the other reviewers' open threads and comments on talkable#5, and merge its base if it conflicts, as you " +
+	const want = "Answer the other reviewers' open threads and comments on talkable#5, and merge its base if it conflicts, as magnum's fixer " +
 		"(magnum's review of abcdef1 found nothing to fix)?"
 	const refusal = "nothing to fix: the review on abcdef1 found nothing and no other reviewer's thread or comment waits for an answer"
 	for _, c := range []struct {
@@ -139,7 +139,7 @@ func TestFFixesAnEarlierFindingTheReviewKeepsOpen(t *testing.T) {
 	})
 	mustContain(t, viewOf(m), "1 open")
 	m, _ = send(t, m, keyMsg("f"))
-	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as you?" || len(act.calls) != 0 {
+	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as magnum's fixer?" || len(act.calls) != 0 {
 		t.Fatalf("f asked %+v, ran %v; want the question", m.confirm, act.calls)
 	}
 }
@@ -156,7 +156,7 @@ func TestFFixesTheReviewAHeadKeptThroughARoundThatOnlyReplied(t *testing.T) {
 		r.Findings = &FindingsInfo{Verdict: "non_blocking", Posted: "COMMENT", SHA: "abcdef1234", Fixed: 97, Open: 1, OpenProblems: 1, Answered: 14}
 	})
 	m, _ = send(t, m, keyMsg("f"))
-	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as you?" || len(act.calls) != 0 {
+	if m.confirm == nil || m.confirm.question != "Fix the findings of talkable#5 as magnum's fixer?" || len(act.calls) != 0 {
 		t.Fatalf("f asked %+v, ran %v; want the question", m.confirm, act.calls)
 	}
 	boardAct(t, m, "y")
@@ -281,7 +281,7 @@ func TestDMarksWhatTheFixerLeftDone(t *testing.T) {
 	}
 	m, _ = fixBoard(t, needs)
 	help, _ := send(t, m, keyMsg("?"))
-	mustContain(t, viewOf(help), "you did what a fix loop left you (asks y/N)")
+	mustContain(t, viewOf(help), "fix loop's calls done / merge base (asks y/N)")
 }
 
 // The help, the card's actions and the right-click menu name both keys.
@@ -290,7 +290,7 @@ func TestTheBoardNamesTheFixKeys(t *testing.T) {
 	card, _ := send(t, m, keyMsg("enter"))
 	mustContain(t, viewOf(card), "f fix findings", "F fix off")
 	help, _ := send(t, m, keyMsg("?"))
-	mustContain(t, viewOf(help), "f / F", "fix findings as you / fix off or on (asks y/N)")
+	mustContain(t, viewOf(help), "f / F", "fix as the fixer / fix off or on (asks y/N)")
 	off, _ := fixBoard(t, func(r *PRBoardRow) { r.FixOff = true })
 	card, _ = send(t, off, keyMsg("enter"))
 	mustContain(t, viewOf(card), "F fix on")
@@ -304,7 +304,7 @@ func TestDashboardFixKeysAsk(t *testing.T) {
 	for _, c := range []struct {
 		key, ask, call string
 	}{
-		{"f", "Fix the findings of talkable#7 as you?", "fix talkable#7"},
+		{"f", "Fix the findings of talkable#7 as magnum's fixer?", "fix talkable#7"},
 		{"F", "Leave talkable#7's findings to you (no autofix)?", "fix --off talkable#7"},
 	} {
 		m, src, act := newDash(t, 220, 50)
@@ -324,7 +324,7 @@ func TestDashboardFixKeysAsk(t *testing.T) {
 	}
 	m, _, _ := newDash(t, 220, 50)
 	m, _ = send(t, m, keyMsg("?"))
-	mustContain(t, viewOf(m), "fix the PR's findings as you (asks y/N)", "no autofix (asks y/N)")
+	mustContain(t, viewOf(m), "fix the PR's findings as the fixer's login (asks y/N)", "no autofix (asks y/N)")
 }
 
 // K reaches a PR with a fix loop in either phase although the PR stays

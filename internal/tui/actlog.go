@@ -24,6 +24,16 @@ type ActionResult struct {
 	Text string
 	// Requests are the daemon requests it queued, as last read.
 	Requests []Request
+	// Ask is the question an action that only planned asks before its
+	// next step, ending in "?": the daemon's plan of a merge of the parent
+	// (MergeParent's dry run), which the screen puts as y/N before it
+	// merges. "" for none.
+	Ask string
+	// next and nextFactory are that next step on the board and the
+	// dashboard (actionRun), and on the factory screen (prKey): the screen
+	// asks Ask y/N, and y runs it.
+	next        *pendingAction
+	nextFactory *factoryQuestion
 }
 
 // Request is a daemon request as the screens follow it.

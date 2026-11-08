@@ -211,6 +211,9 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 			row.MergedUnreviewed, row.FlagDismissed = q.rec.MergedUnreviewed(), q.rec.FlagDismissed()
 			row.FixLoop, row.FixOff = r.fixLoops[q.rec.ID], r.fixOffs[q.rec.ID]
 		}
+		if r.fixer != nil {
+			row.Fixer = r.fixer(q.Repo)
+		}
 		return row
 	}
 	for _, q := range r.Queue {

@@ -150,6 +150,10 @@ type PRRow struct {
 	// exists), which K aborts although the PR may be reviewed; FixOff: it
 	// was switched out of autofix (`magnum fix --off`), so F reads "fix on".
 	FixLoop, FixOff bool
+	// Fixer is the login the PR's fixer pushes and replies as (its watch's
+	// fix role's identity: a fixer App's bot, or yours), which f's
+	// question names; "" when the config does not say.
+	Fixer string
 }
 
 // AttentionRow is something that needs the user.
@@ -224,6 +228,11 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// MergeParent merges the PR's parent, its base branch, into the
+	// operator's own PR as the fixer App's bot (magnum merge-parent); with
+	// dry, it only asks the daemon what would happen and returns the plan
+	// as the result's Ask, the y/N the screen puts before the merge.
+	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
 	// --done); the board's d, which asked first. seen is the digest of the
@@ -691,7 +700,7 @@ func (m dashboardModel) actRow() actRow {
 		row.fixLoop, row.fixOff = s.PRFixLoop, s.PRFixOff
 	}
 	if q, ok := m.queueRow(ref); ok {
-		row.fixLoop, row.fixOff = row.fixLoop || q.FixLoop, row.fixOff || q.FixOff
+		row.fixLoop, row.fixOff, row.fixer = row.fixLoop || q.FixLoop, row.fixOff || q.FixOff, q.Fixer
 	}
 	if ref == "" {
 		row.slot, row.label, row.none = r.slot.Name, "slot "+r.slot.Name, "slot "+r.slot.Name+" holds no PR"
@@ -1347,7 +1356,8 @@ func dashboardKeys(judge string) []hint {
 		{"r", "review now (asks y/N)"},
 		{"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"},
-		{"f", "fix the PR's findings as you (asks y/N)"},
+		{"f", "fix the PR's findings as the fixer's login (asks y/N)"},
+		{"P", "merge the PR's base into it as the fixer App's bot (asks y/N with the daemon's plan)"},
 		{"F", "leave its findings to you: no autofix (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 		{"p / u", "pin / unpin (the slot when it holds no PR)"},
@@ -1470,7 +1480,7 @@ func sanitizeStatus(d StatusData) StatusData {
 	d.Queue = cleanEach(d.Queue, func(r *PRRow) {
 		r.Ref, r.Title, r.Author, r.State = cleanText(r.Ref), cleanText(r.Title), cleanText(r.Author), cleanText(r.State)
 		r.Next, r.Age, r.URL, r.GHState = cleanText(r.Next), cleanText(r.Age), cleanText(r.URL), cleanText(r.GHState)
-		r.Review = cleanReviewFacts(r.Review)
+		r.Review, r.Fixer = cleanReviewFacts(r.Review), cleanText(r.Fixer)
 	})
 	d.Attention = cleanEach(d.Attention, func(a *AttentionRow) {
 		a.Subject, a.Kind, a.Message, a.Fix = cleanText(a.Subject), cleanText(a.Kind), cleanText(a.Message), cleanText(a.Fix)

@@ -48,6 +48,7 @@ const (
 	actWhiteboard
 	actStar
 	actFixDone
+	actMergeParent
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -84,6 +85,7 @@ var rowActDefs = [...]rowActDef{
 	actWhiteboard:     {"w", "open whiteboard", "whiteboard", "whiteboard --open"},
 	actStar:           {"*", "star", "star", "star"},
 	actFixDone:        {"d", "fixer's calls done", "done", "fix --done"},
+	actMergeParent:    {"P", "merge parent", "parent", "merge-parent"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
@@ -91,9 +93,9 @@ var rowActDefs = [...]rowActDef{
 // shows and hides the manual worktrees, as its t switches to the board, and
 // a star orders the board's rows, not the dashboard's queue.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
-		actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
-	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actMergeParent, actAbort, actIgnore, actApprove, actRequestChanges,
+		actUnapprove, actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
+	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actMergeParent, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
 
@@ -181,6 +183,10 @@ type actRow struct {
 	// (PRBoardRow.FixLoop, PRRow.FixLoop), which K aborts although the PR
 	// stays reviewed while its fixer works.
 	fixOff, fixLoop bool
+	// fixer is the login the PR's fixer pushes and replies as
+	// (PRBoardRow.Fixer, PRRow.Fixer; "" when the screen does not know),
+	// which f's question names.
+	fixer string
 	// attentionKind is why the PR needs attention (PRBoardRow.AttentionKind;
 	// "" when it does not, or the screen does not know: only the board
 	// does), which d checks: only the fixer's calls (kind fix) are yours to
@@ -338,6 +344,17 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + " is already ignored" + r.orKey(actUnmute, " (%k stops ignoring it)")
 		case r.merged() && !r.running() && !r.queued() && !r.paused():
 			return l + " is merged: nothing to ignore"
+		}
+	// The daemon decides the rest of a merge of the parent: whose PR it
+	// is, its fixer App, its base and whether the head lacks its tip.
+	case actMergeParent:
+		switch {
+		case r.merged() || r.closed() || r.ended():
+			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to merge"
+		case r.running():
+			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")
+		case r.fixLoop:
+			return l + ": a fix loop works on it" + r.orKey(actAbort, "; %k stops it")
 		}
 	// The daemon decides the rest: whose PR it is, a loop already running,
 	// the slot, and, for a review that found nothing, whether another
@@ -519,12 +536,13 @@ func actionQuestion(a rowAct, r actRow) string {
 		}
 		return muteQuestion(l, false)
 	case actFix:
-		q, notes := "Fix the findings of "+l+" as you", []string(nil)
+		as := cmp.Or(r.fixer, "magnum's fixer")
+		q, notes := "Fix the findings of "+l+" as "+as, []string(nil)
 		// A review that found nothing leaves the fixer the other reviewers'
 		// items and a conflict with the base alone, when one of them waits
 		// (the daemon looks; the board knows neither).
 		if f := r.findings; f != nil && f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3]+f.OpenProblems == 0 {
-			q = "Answer the other reviewers' open threads and comments on " + l + ", and merge its base if it conflicts, as you"
+			q = "Answer the other reviewers' open threads and comments on " + l + ", and merge its base if it conflicts, as " + as
 			notes = append(notes, "magnum's review of "+textx.ShortSHA(f.SHA)+" found nothing to fix")
 		}
 		if r.pinKnown && r.pinned { // the daemon unpins it, as for a review (its slot's guards still hold a person's changes)
@@ -716,6 +734,17 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		}
 	case actWhiteboard:
 		return what, on(DashboardActions.OpenWhiteboard)
+	case actMergeParent: // the daemon's plan first (a dry run changes nothing); its question puts the merge behind y
+		return what + " plan", func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			res, err := act.MergeParent(ctx, target, true)
+			if err == nil && res.Ask != "" {
+				res.next = &pendingAction{question: res.Ask, what: what, target: target,
+					fn: func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+						return act.MergeParent(ctx, target, false)
+					}}
+			}
+			return res, err
+		}
 	case actFixDone:
 		seen := r.seen
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
@@ -885,7 +914,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		hold: r.SlotHold, holdSlot: r.Slot, inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != "",
-		attentionKind: r.AttentionKind, seen: r.AttentionSum}
+		attentionKind: r.AttentionKind, seen: r.AttentionSum, fixer: r.Fixer}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

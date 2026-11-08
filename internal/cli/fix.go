@@ -272,7 +272,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		}
 		question = "Merge the parent of " + rest + "?"
 	}
-	if code, ok := fixConfirm(ctx, c, d, label, fixerLogin(d.Cfg, t.full()), question, o); !ok {
+	if code, ok := fixConfirm(ctx, c, d, label, cmp.Or(fixerLogin(d.Cfg, t.full()), "you"), question, o); !ok {
 		return code
 	}
 
@@ -369,18 +369,18 @@ func fixHeldForRestart(ctx context.Context, c *Context, d *actDeps, t actTarget,
 func fixAsks(d *actDeps, o fixOpts) bool { return !o.dryRun && !o.yes && d.StdinTTY && d.StdoutTTY }
 
 // fixerLogin is the login the fixer of repo's watch pushes and replies as
-// (its fix role's identity: a fixer App's bot, or your own login), "you"
+// (its fix role's identity: a fixer App's bot, or your own login), ""
 // when the config does not say.
 func fixerLogin(cfg *config.Config, repo string) string {
 	if cfg == nil {
-		return "you"
+		return ""
 	}
 	if r, ok := cfg.FixRoleFor(cfg.WatchFor(repo)); ok {
-		if id := cfg.IdentityByName(r.Identity); id != nil && id.Login != "" {
+		if id := cfg.IdentityByName(r.Identity); id != nil {
 			return id.Login
 		}
 	}
-	return "you"
+	return ""
 }
 
 // mergeParentDry is how the daemon's answer to a dry run of a merge of the

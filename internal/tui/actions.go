@@ -28,6 +28,7 @@ type (
 		target     string
 		reqs       []Request
 		err        error
+		next       *pendingAction // the y/N the action's result asks before its next step (ActionResult.next)
 	}
 	// requestsMsg is a re-read of the pending requests asked.
 	requestsMsg struct {
@@ -154,7 +155,7 @@ func (b *actionBar) start(what, target string, fn actionFunc) (cmd tea.Cmd, star
 	ctx, act := b.ctx, b.act
 	return func() tea.Msg {
 		res, err := fn(ctx, act)
-		return actionDoneMsg{what: what, target: target, text: res.Text, reqs: res.Requests, err: err}
+		return actionDoneMsg{what: what, target: target, text: res.Text, reqs: res.Requests, err: err, next: res.next}
 	}, true
 }
 
@@ -185,6 +186,10 @@ func (b *actionBar) done(msg actionDoneMsg) (cmd tea.Cmd, quit bool) {
 	}
 	if msg.err != nil {
 		return b.failure(actionText(msg)), false
+	}
+	if msg.next != nil { // a plan: its question goes up, and y runs the next step
+		b.confirm = msg.next
+		return nil, false
 	}
 	if i := slices.IndexFunc(msg.reqs, Request.pending); i >= 0 {
 		return b.note(msg.what + ": " + msg.reqs[i].label() + " is queued; the daemon has not answered yet (its row is marked until it does)"), false

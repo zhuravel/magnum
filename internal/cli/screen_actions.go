@@ -239,6 +239,27 @@ func (s *screenActions) Fix(ctx context.Context, ref string) (tui.ActionResult, 
 	})
 }
 
+// MergeParent merges the PR's parent into it as the fixer App's bot
+// (magnum merge-parent). With dry it asks the daemon in a dry run and
+// returns its plan as the result's Ask ("Merge the parent of <ref>: magnum
+// merges <base> at <tip> into <branch> as <bot>, with no conflict?"), the
+// y/N the screen puts before the merge; an answer that is no plan (nothing
+// to merge) has none. Without dry the screen asked that question first.
+func (s *screenActions) MergeParent(ctx context.Context, ref string, dry bool) (tui.ActionResult, error) {
+	res, err := s.do(ctx, "merge-parent", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{merge: true, dryRun: dry, yes: true})
+	})
+	if err != nil || !dry {
+		return res, err
+	}
+	for _, r := range res.Requests {
+		if rest, ok := strings.CutPrefix(r.Result, mergeParentDry); ok && r.State == tui.RequestDone {
+			res.Ask = "Merge the parent of " + rest + "?"
+		}
+	}
+	return res, nil
+}
+
 // FixOff takes the PR out of autofix (off) or puts it back (magnum fix --off
 // and --on); the screen asked first.
 func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.ActionResult, error) {

@@ -115,6 +115,8 @@ type fakeFactoryActions struct {
 	aborts    []string        // the PRs Abort was asked for
 	openPRs   []string        // the PRs OpenPR stepped into magnum's pane of
 	acceptsQA []int64         // the tasks AcceptQA was asked for
+	plans     []string        // the PRs MergeParent's dry run was asked for
+	merges    []string        // the PRs MergeParent merged the parent of
 	// prActs are the board's row actions the screen ran on PRs, as
 	// "<call> <ref>" ("review owner/name#12", "fresh owner/name#12",
 	// "snooze 2h0m0s owner/name#12", "unsnooze", "mute", "unmute").

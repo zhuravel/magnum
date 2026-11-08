@@ -46,6 +46,7 @@ type (
 	factoryDoneMsg struct {
 		label, text string
 		err         error
+		next        *factoryQuestion // the y/N the action's result asks before its next step (ActionResult.nextFactory)
 	}
 	// factoryExpireMsg ends the footer note numbered seq, unless a newer note
 	// replaced it.
@@ -198,7 +199,7 @@ func (b *factoryBar) run(label string, run factoryAction) tea.Cmd {
 			e.err = err.Error()
 		}
 		log.add(e)
-		return factoryDoneMsg{label: label, text: res.Text, err: err}
+		return factoryDoneMsg{label: label, text: res.Text, err: err, next: res.nextFactory}
 	}
 }
 
@@ -209,6 +210,10 @@ func (b *factoryBar) update(msg tea.Msg) (cmd tea.Cmd, taken bool) {
 		b.busy = ""
 		if msg.err != nil {
 			return b.show(msg.label+" failed: "+errLine(msg.err), factoryFlashFailed), true
+		}
+		if msg.next != nil && !b.dropped { // a plan: its question goes up, and y runs the next step
+			b.asking, b.flash = msg.next, ""
+			return nil, true
 		}
 		return b.show(cmp.Or(lastLine(msg.text), msg.label+": done"), factoryFlashDone), true
 	case factoryExpireMsg:

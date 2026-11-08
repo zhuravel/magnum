@@ -34,6 +34,7 @@ func TestEveryRowActionRunsItsOwnCall(t *testing.T) {
 		actWhiteboard:     "whiteboard --open talkable#7",
 		actStar:           "star talkable#7",
 		actFixDone:        "fix --done talkable#7",
+		actMergeParent:    "merge-parent --dry-run talkable#7",
 	}
 	if len(want) != len(rowActDefs) {
 		t.Fatalf("the test knows %d row actions, rowActDefs %d", len(want), len(rowActDefs))

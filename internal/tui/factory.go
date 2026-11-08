@@ -209,6 +209,9 @@ type FactoryActions interface {
 	Diff(taskID int64) *exec.Cmd
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// MergeParent is DashboardActions.MergeParent: the factory's P on a
+	// PR row, the plan first (dry), then the merge.
+	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
 	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 	Review(ctx context.Context, ref string, o ReviewOpts) (ActionResult, error)

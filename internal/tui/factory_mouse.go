@@ -139,7 +139,7 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		fixKeys := []menuItem{
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
-			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing},
+			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing}, {"merge the parent", "P", "P", acts && hasPR && !pr.Fixing},
 		}
 		fixKeys = append(fixKeys, m.prMenu(sel, row, true)...)
 		if row && sel.yourPR() { // your PR: its PR's card, magnum's pane, no pane of the factory's

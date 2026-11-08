@@ -33,8 +33,8 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"sizes with du.\n\n"+
 			"--watch on a terminal opens the live dashboard, refreshed every 2s: j/k select a slot or PR, enter "+
 			"(or o) opens its judge pane, r reviews (R fresh, i with /simplify), K kills the PR's running or queued "+
-			"review, I ignores the PR (kill, mute, free its slot), f fixes its findings as you (F takes it out of "+
-			"autofix or puts it back), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
+			"review, I ignores the PR (kill, mute, free its slot), f fixes its findings as the fixer's login (F takes it out of "+
+			"autofix or puts it back), P merges its base into it as the fixer App's bot (asking y/N with the daemon's plan), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
 			"ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
 			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
 			"worktrees, ! shows the action log, m turns the mouse off and on (wheel, click, double click to open, "+
@@ -217,6 +217,9 @@ type statusReport struct {
 	// phase and the PRs switched out of autofix, for the dashboard's K and F
 	// (not printed); nil when the registry cannot say.
 	fixLoops, fixOffs map[int64]bool
+	// fixer is the login repo's fixer pushes and replies as (fixerLogin),
+	// for the dashboard's f question; nil without a config.
+	fixer func(repo string) string
 
 	// pinnedPRs are the registry's pinned PRs and repoNames the repositories'
 	// full names by id, for the pins line (statusGatherPins; not printed).
