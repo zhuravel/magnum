@@ -631,7 +631,7 @@ func TestATasksPRAndYoursInOneOffStateShareAGroup(t *testing.T) {
 		"muted": {func(v *PRState) {
 			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "muted")
 			v.Open.Off = engine.OpenOffMuted
-		}, tui.GroupYours, tui.WaitsOnYou, "#%d is muted: U on the board unmutes it", ""},
+		}, tui.GroupYours, tui.WaitsOnYou, "#%d is muted: U unmutes it", ""},
 		"a baseline without a fresh verdict": {func(v *PRState) { v.OpenWatch, v.State = false, store.PRBaseline }, tui.GroupYours,
 			tui.WaitsOnYou, "#%d is yours to follow: it was open before magnum first synced the repository", ""},
 	} {

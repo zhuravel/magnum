@@ -4475,7 +4475,7 @@ WAITING FOR), `you: nothing open at a1b2c3d · approved, merge is yours` (your m
 or `reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago` (the reviewers asked and not yet answered, with how
 long ago; with nobody asked it needs you, `you: nothing open at a1b2c3d · no reviewer asked`, your move `ask a
 reviewer`), and, in LEFT ALONE as your PR in that state, why when magnum leaves the PR alone or does not review it
-(`#4530 is a draft: mark it ready`, `#4530 is muted: U on the board unmutes it`). Fix off is not that: magnum
+(`#4530 is a draft: mark it ready`, `#4530 is muted: U unmutes it`). Fix off is not that: magnum
 still reviews the PR, so its row says what magnum's row says (below) and its long form and help line add `· fix is
 off for #4530 (F turns it on)`. A verdict that no longer
 tells the PR's state (magnum's last tick four poll intervals ago, another head, a PR row that changed since), or

@@ -330,7 +330,7 @@ func TestAMutedOwnPRSaysItIsMuted(t *testing.T) {
 		v.Open.Off = engine.OpenOffMuted
 	})
 	row := rowOf(t, r.data(time.Time{}), "#4608")
-	if row.Group != tui.GroupYours || row.PR.Off == "" || row.WaitsOn[0].What != "#4608 is muted: U on the board unmutes it" {
+	if row.Group != tui.GroupYours || row.PR.Off == "" || row.WaitsOn[0].What != "#4608 is muted: U unmutes it" {
 		t.Errorf("a muted PR: %+v (%+v), want it dim in LEFT ALONE with the way to unmute it", row, row.PR)
 	}
 }

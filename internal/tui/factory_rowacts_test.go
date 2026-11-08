@@ -307,8 +307,8 @@ func lineOf(t *testing.T, view, text string) string {
 // After M or z the row says so: a muted PR's row says "muted" and a
 // snoozed one's "snoozed → <when it ends>" before what it waits on, and
 // the hints offer U and z's lift, on home and on the PR's card. A row whose
-// words say it is muted already (LEFT ALONE's "#4606 is muted: U on the
-// board unmutes it") gets no second mark. Before, nothing on the factory
+// words say it is muted already (LEFT ALONE's "#4606 is muted: U unmutes
+// it") gets no second mark. Before, nothing on the factory
 // screen said a PR was snoozed, and a mute showed only once magnum's look
 // left the PR alone.
 func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
@@ -317,7 +317,7 @@ func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
 	h.src.change(func(d *FactoryData) {
 		for i, r := range d.Rows {
 			if r.Key == "#4606" {
-				why := "#4606 is muted: U on the board unmutes it"
+				why := "#4606 is muted: U unmutes it"
 				d.Rows[i].WaitsOn = []WaitsOn{{Who: WaitsOnYou, What: why, Short: "#4606 is muted", OnYou: true}}
 				d.Rows[i].PR = &FactoryPR{Ref: "example/talkable#4606", Off: why, Facts: &FactoryPRFacts{State: "reviewed", GHState: "OPEN", Muted: true}}
 			}
@@ -335,7 +335,7 @@ func TestAMutedOrSnoozedPRsRowSaysSo(t *testing.T) {
 	mustContain(t, h.view(), "U unmute", "z lift snooze")
 	h.press("esc", "g")
 	h.selectRow("#4603")
-	mustNotContain(t, h.view(), "U unmute", "z lift snooze")
+	mustNotContain(t, lineOf(t, h.view(), "? more"), "U unmute", "z lift snooze") // the hints: LEFT ALONE's words say "U unmutes it"
 }
 
 // The menu of a row or a card with a PR lists r, R, z, M and U in the
