@@ -103,7 +103,9 @@ func (r *Runtime) lift(kind, why string, whos ...string) {
 }
 
 // Observe runs one observe pass over herdr's snapshot and returns its
-// events (and those Send and the recoveries found since the last pass): a
+// events (and those Send and the recoveries found since the last pass),
+// reading every session at most fullObserveEvery apart and the turns in
+// flight on every pass (observeSessions): a
 // run that ended (EventEnded), one that paused on its CLI's limit, login or
 // overload (EventPaused, its reason and end), a refusal (EventRefused), a
 // dialog left to the operator (EventBlocked, EventHooksTrust), a lost pane
@@ -122,7 +124,7 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 		return r.drain(), fmt.Errorf("observe: %w", err)
 	}
 	r.noteFocus(snap, at)
-	obs, oerr := r.mgr.ObserveSnapshotAt(ctx, snap, at)
+	obs, oerr := r.observeSessions(ctx, snap, at)
 	for _, o := range obs {
 		evs = append(evs, r.onObservation(ctx, o)...)
 	}
@@ -136,6 +138,27 @@ func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error) {
 		oerr = fmt.Errorf("observe: %w", oerr)
 	}
 	return append(r.drain(), evs...), oerr
+}
+
+// observeSessions is the agents manager's pass over snap, taken at at: over
+// every live session when fullObserveEvery has passed since the last such
+// pass (agents.ObserveSnapshotAt), else over the sessions with a turn in
+// flight alone (agents.ObserveRunsAt). A turn's end is seen on any pass, at
+// the factory's 5 s observe; the other sessions (a pane an earlier turn left
+// live, a liaison waiting, a dialog before a first prompt, you in an idle
+// pane) are read every 10 s as before, so the faster clock does not write
+// each idle session's row (its idle count) twice as often.
+func (r *Runtime) observeSessions(ctx context.Context, snap herdr.Snapshot, at time.Time) ([]agents.Observation, error) {
+	r.mu.Lock()
+	full := r.fullAt.IsZero() || at.Sub(r.fullAt) >= fullObserveEvery || at.Before(r.fullAt)
+	if full {
+		r.fullAt = at
+	}
+	r.mu.Unlock()
+	if full {
+		return r.mgr.ObserveSnapshotAt(ctx, snap, at)
+	}
+	return r.mgr.ObserveRunsAt(ctx, snap, at)
 }
 
 // contain turns a panic of a pass the engine runs outside a task's step

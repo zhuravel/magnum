@@ -591,7 +591,7 @@ func (e *Engine) observeEvery() time.Duration {
 	if d := e.cfg.Factory.Observe.Duration; d > 0 {
 		return d
 	}
-	return 10 * time.Second
+	return 5 * time.Second
 }
 
 // Kick asks the loop for a tick now (SIGUSR1, `magnum factory start` and

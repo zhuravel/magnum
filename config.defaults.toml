@@ -862,7 +862,9 @@ herdr_session = "factory"         # the herdr session of the factory's panes (`h
                                   # /Applications/Google Chrome.app and /Applications/Chromium.app that exists; else
                                   # the absolute path of its binary (~ expands). It runs with a profile of its own in
                                   # the QA run's folder, never yours, and never attaches to your running Chrome
-observe = "10s"                   # how often the factory reads its panes; must be positive
+observe = "5s"                    # how often the factory reads its agents' panes: the turns in flight on every pass,
+                                  # its other sessions at most every 10 s; a turn's end, a pause or a dialog seen
+                                  # there kicks the main tick at once; must be positive
 poll = "45s"                      # how often its main tick runs: the holds, your requests, the published PRs as
                                   # magnum's registry has them, then a step of each task (a request kicks a tick at
                                   # once); must be positive

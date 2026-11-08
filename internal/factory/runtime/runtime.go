@@ -80,6 +80,11 @@ const (
 	overloadWait  = 2 * time.Minute
 	versionTTL    = time.Hour
 	versionWait   = 10 * time.Second
+
+	// fullObserveEvery is how often at most an observe pass reads every live
+	// session (agents.ObserveSnapshotAt); the passes between read the
+	// sessions with a turn in flight alone (observeSessions).
+	fullObserveEvery = 10 * time.Second
 )
 
 // ErrOperatorInPane is Send's answer while the operator types in the role's
@@ -179,6 +184,7 @@ type Runtime struct {
 	reconciled time.Time
 	versions   map[string]cliVersion
 	typedRead  time.Time             // the last read of the turns typed into the panes
+	fullAt     time.Time             // the capture time of the last observe pass over every session (observeSessions)
 	seen       map[string]fileMark   // conversation -> its transcript as the last read that took it whole saw it
 	youAt      map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
 	commands   map[string]bool       // the slash commands magnum types (agents.MagnumCommands)

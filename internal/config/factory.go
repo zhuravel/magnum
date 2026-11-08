@@ -397,7 +397,7 @@ func DefaultFactory() Factory {
 		MemoryGateSwap: 80,
 		HeavyStages:    1,
 		HerdrSession:   "factory",
-		Observe:        Duration{10 * time.Second},
+		Observe:        Duration{5 * time.Second},
 		Poll:           Duration{45 * time.Second},
 		HumanCooldown:  Duration{15 * time.Minute},
 		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
