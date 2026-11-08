@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -263,6 +264,77 @@ func TestAFailedTransitionChainsNothing(t *testing.T) {
 
 	if got := h.reload(task.ID); got.Stage != "one" || !slices.Equal(ran, []string{"one"}) {
 		t.Fatalf("the task is at %q, stages run %v; want one run once and the task left at one", got.Stage, ran)
+	}
+}
+
+// A pass whose stage passed while the task came to wait on you (a writer
+// beside the loop, such as a CLI command, set it meanwhile) chains nothing:
+// the next stage waits for your answer, not for the tick.
+func TestAPassThatSendsTheTaskToYouChainsNothing(t *testing.T) {
+	h := newHarness(t)
+	var ran []string
+	h.instantKind(&ran)
+	h.e.runners["instant"] = func(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
+		ran = append(ran, st.Name)
+		return true, h.reg.TransitionTask(ctx, t.ID, nil, "", func(u *registry.TaskUpdate) {
+			u.Set("waits_who", waitsYou)
+			u.Set("waits_what", "a question about the plan")
+		})
+	}
+	task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: "PR-12508", Kind: "instant", Repo: "example/shop", Title: "t",
+		State: registry.TaskActive, Stage: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.tick()
+
+	if got := h.reload(task.ID); got.Stage != "two" || got.WaitsWho != waitsYou || !slices.Equal(ran, []string{"one"}) {
+		t.Fatalf("the task is at %q waiting on %q, stages run %v; want one run, the task at two waiting on you", got.Stage,
+			got.WaitsWho, ran)
+	}
+}
+
+// A task's own failure is tried again a poll after it, however often the
+// ticks come: the ticks other tasks' turn ends kick would spend its
+// stageFailLimit tries in under a minute (before the kick, five tries took
+// four polls, three minutes) and send you a fault the next minutes heal. Its
+// failures still need you after five tries at the poll's pace.
+func TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll(t *testing.T) {
+	h := newHarness(t)
+	failing := h.task("PR-12509", registry.TaskActive, "investigate")
+	busy := h.task("PR-12510", registry.TaskActive, "investigate")
+	tries := 0
+	h.stage(config.FactoryStageAgents, func(_ context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+		if t.ID != failing.ID {
+			return false, nil
+		}
+		tries++
+		return false, fmt.Errorf("gh pr create: HTTP 403: Resource not accessible by token")
+	})
+	for i := range 7 { // a minute of ticks, 10 s apart, each kicked by the other task's turn end
+		if i > 0 {
+			h.clock.Add(10 * time.Second)
+		}
+		h.observeEvents(runtime.Event{TaskID: busy.ID, Role: "fx-repro", RunID: fmt.Sprintf("r%d", i), Kind: runtime.EventEnded})
+		if !h.kicked() {
+			t.Fatal("the turn's end kicked no tick")
+		}
+		h.tick()
+	}
+	if got := h.reload(failing.ID); got.State != registry.TaskActive || tries != 2 {
+		t.Fatalf("after a minute of kicked ticks the failing task is %s waiting %q, tried %d times; want at work, tried twice "+
+			"(at 0 s and at 50 s, a poll after)", got.State, got.WaitsWhat, tries)
+	}
+	for range 6 {
+		if h.reload(failing.ID).State == registry.TaskNeedsYou {
+			break
+		}
+		h.clock.Add(45 * time.Second)
+		h.tick()
+	}
+	if got := h.reload(failing.ID); got.State != registry.TaskNeedsYou || tries != stageFailLimit {
+		t.Fatalf("the failing task is %s after %d tries; want you after %d", got.State, tries, stageFailLimit)
 	}
 }
 

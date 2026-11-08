@@ -904,6 +904,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 			if e.draining.Load() { // the task in progress ended its pass; the next daemon advances the others
 				break
 			}
+			if e.retryLater(t, now) {
+				continue
+			}
 			err := e.safely(ctx, t, func(ctx context.Context) error { return e.advance(ctx, t) })
 			if next, ok := e.passedOn(ctx, t, err); ok { // the next stage's first pass, in this tick, once
 				delete(e.lastFail, t.ID)
@@ -1373,19 +1376,31 @@ func TaskKey(t registry.Task) string {
 }
 
 // A stage that keeps failing for a cause of its own (no infrastructure's)
-// is tried again on each tick, and after stageFailLimit failures in a row,
-// or failures for stageFailSpan, the task needs you with the cause.
+// is tried again a poll after each failure (retryLater), and after
+// stageFailLimit failures in a row, or failures for stageFailSpan, the task
+// needs you with the cause.
 const (
 	stageFailLimit = 5
 	stageFailSpan  = 5 * time.Minute
 )
 
 // stageFails are a task's failures in a row at one stage: how many, since
-// when, and the text of the last one.
+// when, when the last one was, and its text.
 type stageFails struct {
 	stage, text string
 	n           int
-	first       time.Time
+	first, last time.Time
+}
+
+// retryLater reports whether task t's stage failed less than a poll
+// interval before now: its next try waits for the tick a poll after the
+// failure. The ticks between the polls (an observe pass that saw another
+// task's turn end, a request) try a failing stage no more often than the
+// poll did, so its stageFailLimit tries still take four polls, and a failing
+// publish's GitHub calls stay as few.
+func (e *Engine) retryLater(t registry.Task, now time.Time) bool {
+	sf := e.lastFail[t.ID]
+	return sf != nil && sf.stage == t.Stage && now.Sub(sf.last) < e.poll()
 }
 
 // taskFailed records a task's own failure as an `advance` fail event, once
@@ -1402,7 +1417,7 @@ func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 		sf = &stageFails{stage: f.task.Stage, first: now}
 		e.lastFail[f.task.ID] = sf
 	}
-	sf.n++
+	sf.n, sf.last = sf.n+1, now
 	if sf.text != text {
 		sf.text = text
 		e.log.Warn("a task's step failed", "task", f.task.ID, "err", f.err)

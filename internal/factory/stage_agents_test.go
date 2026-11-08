@@ -939,8 +939,8 @@ func TestAPassedInvestigationVerifiesEveryRunAndMovesOn(t *testing.T) {
 		t.Fatalf("Verify calls %+v, want the three runs verified", vs)
 	}
 	as := h.attempts(task.ID)
-	if len(as) == 0 || as[0].Stage != "investigate" || as[0].State != registry.AttemptVerified {
-		t.Fatalf("attempts %+v, want the investigation's verified", as)
+	if len(as) != 2 || as[0].Stage != "investigate" || as[0].State != registry.AttemptVerified || as[1].Stage != "judge" {
+		t.Fatalf("attempts %+v, want the investigation's verified and the judge's, which the tick chains", as)
 	}
 	if n := len(attemptPrompts(h.rt.allPrompts(), as[0].ID)); n != 3 {
 		t.Fatalf("%d prompts in the investigation, want no nudge", n)
@@ -1214,7 +1214,11 @@ func TestARestartKeepsTheRolesThatPassed(t *testing.T) {
 	if got := h.reload(task.ID); got.Stage != "judge" {
 		t.Fatalf("task %s at %q waiting %q, want past the investigation", got.State, got.Stage, got.WaitsWhat)
 	}
-	if n := len(attemptPrompts(h.rt.allPrompts(), h.attempts(task.ID)[0].ID)); n != 3 {
+	as := h.attempts(task.ID)
+	if len(as) != 2 || as[0].Stage != "investigate" || as[1].Stage != "judge" {
+		t.Fatalf("attempts %+v, want the investigation's one and the judge's, which the tick chains", as)
+	}
+	if n := len(attemptPrompts(h.rt.allPrompts(), as[0].ID)); n != 3 {
 		t.Fatalf("%d prompts in the investigation, want the 3 of before the restart", n)
 	}
 }
