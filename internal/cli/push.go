@@ -296,10 +296,10 @@ func pushOwnWorkflows(ctx context.Context, g *gitx.Client, dir, sha, base string
 	if base == "" || !gitx.ShellSafeRef(base) {
 		return paths, nil
 	}
-	if _, err := g.RevParse(ctx, dir, ref); err != nil {
-		return paths, nil // the checkout has no base to compare with
+	if _, err := g.RevParse(ctx, dir, ref); err == nil {
+		return g.DifferingPaths(ctx, dir, sha, ref, paths...)
 	}
-	return g.DifferingPaths(ctx, dir, sha, ref, paths...)
+	return paths, nil // the checkout has no base to compare with
 }
 
 // pushLoneMerge reports whether commits, the push's first-parent chain

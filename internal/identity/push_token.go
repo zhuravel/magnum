@@ -102,7 +102,7 @@ func (a *App) writePushDir(token string) (string, error) {
 		return "", fmt.Errorf("write a push token's gh config dir: %w", err)
 	}
 	cfg, hosts := filepath.Join(dir, "config.yml"), filepath.Join(dir, "hosts.yml")
-	err = errors.Join(os.Chmod(dir, 0o700), fsx.WriteFileAtomic(cfg, renderConfigYML(a.cfg.Name), 0o600),
+	err = errors.Join(fsx.WriteFileAtomic(cfg, renderConfigYML(a.cfg.Name), 0o600), // MkdirTemp made the dir 0700
 		fsx.WriteFileAtomic(hosts, renderHostsYML(a.cfg.Name, token, a.cfg.Login), 0o600))
 	if err != nil {
 		_ = os.RemoveAll(dir)

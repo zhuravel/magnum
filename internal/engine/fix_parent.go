@@ -302,26 +302,12 @@ func (e fixHandRefused) Error() string { return e.why }
 func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (string, error) {
 	pg, ok := e.d.Git.(parentGit)
 	id, who, app := e.fixerSignature(job.role.Identity)
-	base, dir := deref(job.pr.BaseRef), job.slot.Path
+	base := deref(job.pr.BaseRef)
 	if !ok || !app || base == "" || head == job.head {
 		return "", nil
 	}
-	if got, err := e.remoteHead(ctx, job); err != nil || got != job.head { // pushed by the pane, or the branch moved
-		return "", nil
-	}
-	commits, err := pg.FirstParentIdentities(ctx, dir, job.head, head)
-	if err != nil || len(commits) != 1 {
-		return "", nil
-	}
-	c := commits[0]
-	if len(c.Parents) != 2 || c.Parents[0] != job.head || !strings.EqualFold(c.AuthorEmail, who.Email) || !strings.EqualFold(c.CommitterEmail, who.Email) {
-		return "", nil
-	}
-	tip := c.Parents[1]
-	if on, err := e.d.Git.IsAncestor(ctx, dir, tip, "refs/remotes/origin/"+base); err != nil || !on {
-		return "", nil
-	}
-	if workflows, err := pg.ChangedPaths(ctx, dir, job.head, head, workflowsPath); err != nil || len(workflows) == 0 {
+	tip, handed := e.handedMerge(ctx, job, pg, who, base, head)
+	if !handed {
 		return "", nil
 	}
 	b := fixConflict{base: base, sha: tip}
@@ -333,6 +319,34 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 		job.role.Name, base, textx.ShortSHA(tip), job.label(), id.Login, how, textx.ShortSHA(head)),
 		map[string]any{"base": base, "tip": tip, "head": job.head, "merge": head, "identity": id.Name, "cycle": job.state.Cycle})
 	return "", nil
+}
+
+// handedMerge reports whether head is a merge `magnum push` handed to
+// magnum, as pushHanded reads it, and the commit of base it merges: GitHub
+// still has the job's head, head is one merge, by who, of that commit
+// (on base) into the job's head, and it changes workflow files. Any read
+// that fails says no.
+func (e *Engine) handedMerge(ctx context.Context, job *fixJob, pg parentGit, who gitx.Signature, base, head string) (string, bool) {
+	dir := job.slot.Path
+	if got, err := e.remoteHead(ctx, job); err != nil || got != job.head { // pushed by the pane, or the branch moved
+		return "", false
+	}
+	commits, err := pg.FirstParentIdentities(ctx, dir, job.head, head)
+	if err != nil || len(commits) != 1 {
+		return "", false
+	}
+	c := commits[0]
+	if len(c.Parents) != 2 || c.Parents[0] != job.head || !strings.EqualFold(c.AuthorEmail, who.Email) || !strings.EqualFold(c.CommitterEmail, who.Email) {
+		return "", false
+	}
+	tip := c.Parents[1]
+	if on, err := e.d.Git.IsAncestor(ctx, dir, tip, "refs/remotes/origin/"+base); err != nil || !on {
+		return "", false
+	}
+	if workflows, err := pg.ChangedPaths(ctx, dir, job.head, head, workflowsPath); err != nil || len(workflows) == 0 {
+		return "", false
+	}
+	return tip, true
 }
 
 // parentSchema marks the job's pool slot for a schema reload when the
