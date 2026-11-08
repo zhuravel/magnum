@@ -109,7 +109,7 @@ type prsFlags struct {
 // prsOptions are what the board and the printed rows show.
 type prsOptions struct {
 	Repo  string
-	Owner string // the board's owner scope (O), kept across a tab round-trip; "" = all
+	Owner string // the board's owner scope (O): kvScreenOwner's at each open, else the last board's; "" = all
 	View  tui.PRView
 	Sort  tui.PRSort
 	Desc  bool
@@ -250,7 +250,9 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 // runInspScreens runs the status dashboard and the PR board with one set of
 // actions, starting with first; tab switches between them. Both keep their
 // dragged column widths in the registry, the mouse toggle (m) carries over
-// to the other screen and the board reopens in the view it was left in.
+// to the other screen and the board reopens in the view it was left in, and
+// in the owner scope the registry keeps for it and the factory screen
+// (kvScreenOwner).
 // `,` on either opens the settings screen, whose pauses go through the same
 // actions.
 func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOptions, po prsOptions, first string) error {
@@ -281,11 +283,17 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		}
 	}
 	board := func(ctx context.Context) error {
+		if owner, ok := screenOwner(ctx, d.Store); ok { // the scope the factory screen or the last board left
+			po.Owner = owner
+		}
 		o := prsBoardOptions(d.Config, po)
 		o.NoMouse, o.MouseToggled, o.Widths, o.Log, o.Settings = !mouse, toggled, widths, log, settings
 		o.Facts = func(ctx context.Context) tui.DaemonFacts { return screenFacts(ctx, d) }
 		o.ViewChanged = func(v tui.PRView) { po.View = v }
-		o.OwnerChanged = func(owner string) { po.Owner = owner }
+		o.OwnerChanged = func(owner string) {
+			po.Owner = owner // the tab round-trip's, whatever the registry keeps
+			keepScreenOwner(ctx, d.Store, owner)
+		}
 		o.HideSkipped = hide
 		if d.Config.OwnPRsOnFactory() {
 			o.OwnElsewhere = func() int { return int(ownHidden.Load()) }
@@ -313,6 +321,28 @@ func repoFlag(raw string) (string, error) {
 
 // kvBoardHideSkipped keeps the board's h (hide ignored and skipped PRs).
 const kvBoardHideSkipped = "board.hide_skipped"
+
+// kvScreenOwner keeps the owner scope (O) the PR board and the factory
+// screen share: each opens in it and writes every change ("" = every owner).
+const kvScreenOwner = "screen.owner"
+
+// screenOwner is the owner scope the screens share (kvScreenOwner); ok is
+// false without a registry, or when it keeps none or cannot be read.
+func screenOwner(ctx context.Context, st *store.Store) (owner string, ok bool) {
+	if st == nil {
+		return "", false
+	}
+	v, ok, err := st.GetKV(ctx, kvScreenOwner)
+	return strings.TrimSpace(v), ok && err == nil
+}
+
+// keepScreenOwner writes owner as the screens' owner scope, best effort: a
+// registry that cannot keep it leaves the next screen in the scope it had.
+func keepScreenOwner(ctx context.Context, st *store.Store, owner string) {
+	if st != nil {
+		_ = st.SetKV(context.WithoutCancel(ctx), kvScreenOwner, owner)
+	}
+}
 
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {

@@ -48,7 +48,9 @@ func addFactoryScreenFlags(c *Context, cmd *cobra.Command, f *factoryScreenFlags
 }
 
 // runFactoryScreen opens the factory's screen until the operator quits;
-// the time it closes is the last time you saw home.
+// the time it closes is the last time you saw home. The screen opens in the
+// owner scope magnum's registry keeps for it and the board, and keeps every
+// change of it there.
 func runFactoryScreen(c *Context, f factoryScreenFlags) int {
 	repo, err := repoFlag(f.repo)
 	if err != nil {
@@ -63,9 +65,15 @@ func runFactoryScreen(c *Context, f factoryScreenFlags) int {
 	defer src.close()
 	acts := newScreenActions(c) // the settings screen's and your PRs' keys, as the board's
 	defer acts.Close()
+	kv := openScreenKV(c.Layout) // the owner scope the board shares; nil: every owner, kept nowhere
+	if kv != nil {
+		defer kv.Close()
+	}
+	owner, _ := screenOwner(ctx, kv)
 	opts := tui.FactoryOptions{Icons: screenIcons(c.Config), NoMouse: !c.Config.Terminal.Mouse, Now: inspNow,
 		Settings: &tui.SettingsScreen{Source: newSettingsSource(c, acts), Runtime: screenRuntime{acts}},
-		Repo:     repo, DefaultRepo: defaultRepo(c.Config)}
+		Repo:     repo, DefaultRepo: defaultRepo(c.Config), DefaultOwner: owner,
+		OwnerChanged: func(owner string) { keepScreenOwner(ctx, kv, owner) }}
 	err = tuiFactory(ctx, src, newFactoryActions(c, src, acts), opts)
 	if fsx.Exists(c.Layout.FactoryDB()) { // a factory with no task has nothing you saw
 		if serr := factory.SaveSeen(c.Layout, inspNow()); serr != nil {
@@ -77,6 +85,23 @@ func runFactoryScreen(c *Context, f factoryScreenFlags) int {
 		return 1
 	}
 	return 0
+}
+
+// openScreenKV is magnum's registry for the owner scope the screen shares
+// with the PR board (kvScreenOwner): nil when there is none or it cannot be
+// opened. It never creates the registry and never migrates it: a registry of
+// another schema than this build's keeps no scope for the screen.
+func openScreenKV(l paths.Layout) *store.Store {
+	if !fsx.Exists(l.DB()) {
+		return nil
+	}
+	st, err := store.OpenWith(l.DB(), store.Options{BeforeMigrate: func(from, to int) error {
+		return fmt.Errorf("magnum's registry is at schema %d and this build reads %d", from, to)
+	}})
+	if err != nil {
+		return nil
+	}
+	return st
 }
 
 // factoryScreenSource reads the factory for the screen (factory.ScreenData).
