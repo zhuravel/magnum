@@ -4933,10 +4933,10 @@ parent), with no global, system or environment git config, an empty HOME in `mir
 askpass, and gh as its only credential helper (with the poll identity's `GH_CONFIG_DIR`). The first read of a
 repository clones its mirror in the background, on its own timeout whatever the caller's, and every status
 says `cloning the mirror` until it is done; a clone that fails is tried again after 1, 5, 15 and then 60
-minutes, and a daemon that stops stops its clone. A mirror dir that git calls no repository, or not bare, is
-moved aside (`<repo>.git.broken-<time>`, only the newest kept) and cloned again, never repaired in place; a git
-that cannot run, a timeout or a cancel leave it as it is, and a bare repository whose origin is another
-repository is never touched. In a confirmed mirror, a git lock file a killed git left is removed once it is 10
+minutes, and a daemon that stops stops its clone. A mirror dir that git calls no repository, or not bare, or
+whose origin is another repository's (a dir of someone's bare clones, a repository renamed) is moved aside
+(`<repo>.git.broken-<time>`, only the newest kept) and cloned again, never repaired or fetched into; a git that
+cannot run, a timeout or a cancel leave it as it is. In a confirmed mirror, a git lock file a killed git left is removed once it is 10
 minutes old.
 
 ```toml

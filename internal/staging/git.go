@@ -164,6 +164,13 @@ func laidOut(dir string) bool {
 	return true
 }
 
+// noSuchKey reports whether err is `git config --get`'s definite answer that
+// the key is not set: exit 1.
+func noSuchKey(err error) bool {
+	ee, ok := errors.AsType[*execx.ExitError](err)
+	return ok && ee.Code == 1
+}
+
 // notARepository reports whether err is git's definite answer that the dir
 // it was named is no repository: exit 128, "not a git repository".
 func notARepository(err error) bool {
@@ -173,10 +180,11 @@ func notARepository(err error) bool {
 
 // Base answers ErrNoMirror only on a definite answer, and never once ctx is
 // done: the layout check fails, git exits 128 with "not a git repository",
-// or git calls the dir not bare. Anything else (a git that cannot run, a
-// signal, a timeout, a cancel) is a plain error that leaves the dir alone,
-// and so is a bare repository whose origin is not repo's, or that is not
-// treeless: someone's own clone, never moved or fetched into.
+// git calls the dir not bare, or its origin is not repo's (or it has none:
+// a dir of someone's bare clones, a repository renamed), so Refresh moves
+// it aside and clones again, never fetching into it. Anything else (a git
+// that cannot run, a signal, a timeout, a cancel) is a plain error that
+// leaves the dir alone, and so is a mirror of repo that is not treeless.
 func (g *execGit) Base(ctx context.Context, dir, repo string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("mirror dir %q is not absolute", dir)
@@ -204,11 +212,13 @@ func (g *execGit) Base(ctx context.Context, dir, repo string) (string, error) {
 		return "", fmt.Errorf("%s is not a bare repository to git (bare: %q): %w", dir, bare, ErrNoMirror)
 	}
 	url, err := read("origin", "config", "--get", "remote.origin.url")
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		return "", err
-	}
-	if err != nil || !strings.EqualFold(url, g.url(repo)) {
-		return "", fmt.Errorf("%s is no mirror of %s: its origin is another repository's, or none", dir, repo)
+	case err != nil && !noSuchKey(err):
+		return "", fmt.Errorf("reading the origin of %s: %w", dir, err)
+	case err != nil || !strings.EqualFold(url, g.url(repo)):
+		return "", fmt.Errorf("%s is no mirror of %s: its origin is another repository's, or none: %w", dir, repo, ErrNoMirror)
 	}
 	if filter, err := read("filter", "config", "--get", "remote.origin.partialclonefilter"); err != nil || filter != "tree:0" {
 		if ctx.Err() != nil {

@@ -25572,8 +25572,9 @@ type Git interface {
 	// branch. dir must be a bare repository of its own (HEAD, objects/ and
 	// refs/, and git calls it one) whose origin is repo's and treeless. Only
 	// a definite answer that it is none (absent, laid out otherwise, git's
-	// "not a git repository", not bare), with ctx not done, wraps
-	// ErrNoMirror; anything else is a plain error, and the dir stays as it is.
+	// "not a git repository", not bare, another repository's origin or
+	// none), with ctx not done, wraps ErrNoMirror; anything else is a plain
+	// error, and the dir stays as it is.
 	Base(ctx context.Context, dir, repo string) (string, error)
 	// Clone makes dir, which must be absent, a treeless bare mirror of repo
 	// (owner/name), its HEAD the remote's default branch.

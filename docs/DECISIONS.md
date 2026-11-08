@@ -19698,7 +19698,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     check, git's exit 128 "not a git repository", a bare value other than true); a git that cannot run, a
     timeout or a cancel is "the mirror could not be read" and the dir stays, Refresh checks ctx right after the
     lock, and no clone starts for a cancelled caller or a closed client. Base also checks the origin is this
-    repository's and treeless: someone's own bare clone is left alone. Only the newest dir moved aside is kept.
+    repository's and treeless: another repository's origin, or none, is a definite answer too, so that dir is
+    moved aside and cloned again with the same backoff, never fetched into (a mirror stuck on "no mirror" until
+    someone moved it by hand was rejected: it never heals). Only the newest dir moved aside is kept. An opt-in
+    live test (`MAGNUM_LIVE_GITHUB=1`, read-only) clones the public zhuravel/magnum treeless and fetches its
+    default branch through the real path: the empty HOME, the scrubbed config and the gh helper line.
     A new failure is the PR's only when the run covers its merge alone, from the run's merge down to the tip
     told against; over several merges Why says "new against <sha>, in a run of N merges: cannot tell whose",
     and only the paths rule can make it the PR's. `Client.Close` ends the background clone (execx ends git's
@@ -19741,7 +19745,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestNothingIsCreatedAboveTheMirrorDir, TestOldDataIsStale and the state rows for a new failure against the tip
   before, the same failure there, jobs not read and a deployment that names no sha; for the re-review's,
   TestACancelledRefreshLeavesTheMirrorInPlace and TestAGitThatCannotRunLeavesTheMirrorInPlace (real git; both
-  fail with any error of Base taken for no mirror), TestABareCloneOfAnotherRepositoryIsLeftAlone,
+  fail with any error of Base taken for no mirror), TestAMirrorWhoseOriginIsAnotherRepositoryIsMovedAsideAndClonedAgain,
+  TestLiveTreelessFetchOfAPublicRepository (opt-in),
   TestCloseStopsTheBackgroundCloneAndWaits, TestASecondClientSeesTheCloneAtOnce,
   TestOnlyTheNewestDirMovedAsideIsKept, TestTheLockSweepNeverTouchesADirThatIsNoMirror,
   TestTheTipsBeforeAFailedMergeCostLittle, TestConfigFromTheEnvironmentIsScrubbed and the state rows for a new

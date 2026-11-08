@@ -275,29 +275,35 @@ func TestAGitThatCannotRunLeavesTheMirrorInPlace(t *testing.T) {
 	untouched(t, c, r, mirror, head)
 }
 
-// A bare repository at the mirror's path whose origin is another repository
-// (someone's own clone, a mirror_dir set to a dir of bare clones) is no
-// mirror of this one: Refresh says so and touches nothing, never moving it
-// aside or fetching into it.
-func TestABareCloneOfAnotherRepositoryIsLeftAlone(t *testing.T) {
+// A bare repository at the mirror's path whose origin is another
+// repository's (a mirror_dir set to a dir of bare clones, a repository
+// renamed on GitHub) is a definite answer that it is no mirror of this one:
+// it is moved aside under the flock, as a broken one is, and the mirror is
+// cloned again from this repository's origin, never fetched into as it was.
+func TestAMirrorWhoseOriginIsAnotherRepositoryIsMovedAsideAndClonedAgain(t *testing.T) {
 	t.Parallel()
 	_, now, mirror, _, r := cloned(t)
-	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
 	refs := gitIn(t, r, mirror, "for-each-ref")
+	other, _, p1, _ := newOrigin(t, r)
 	c := New(Deps{
-		Git:    newGit(r, func(string) string { return "https://github.com/acme/other.git" }),
+		Git:    newGit(r, func(string) string { return "file://" + other }),
 		GitHub: newFakeGitHub(),
 		Mirror: func(string) (string, bool) { return mirror, true },
 		GitEnv: func(string) map[string]string { return map[string]string{} },
 		Now:    func() time.Time { return now.Add(RefreshEvery) },
 	})
-	err := c.Refresh(context.Background(), "acme/other", []OpenPR{{Number: 1, Base: "master"}})
-	if err == nil || !strings.Contains(err.Error(), "no mirror of acme/other") {
-		t.Errorf("Refresh on another repository's clone: %v, want no mirror of acme/other", err)
+	refreshCloned(t, c, OpenPR{Number: 1, Base: "master"})
+	if got := gitIn(t, r, mirror, "config", "--get", "remote.origin.url"); got != "file://"+other {
+		t.Errorf("the mirror's origin is %q, want this repository's %q", got, "file://"+other)
 	}
-	c.bg.Wait()
-	untouched(t, c, r, mirror, head)
-	if after := gitIn(t, r, mirror, "for-each-ref"); after != refs {
-		t.Errorf("its refs changed:\n%s\nwant\n%s", after, refs)
+	aside, _ := filepath.Glob(mirror + ".broken-*")
+	if len(aside) != 1 {
+		t.Fatalf("moved aside: %q, want the other repository's clone, once", aside)
+	}
+	if got := gitIn(t, r, aside[0], "for-each-ref"); got != refs {
+		t.Errorf("the clone moved aside changed:\n%s\nwant\n%s", got, refs)
+	}
+	if got := one(c, PR{Repo: "acme/app", Number: 1, Head: p1, Base: "master"}); got.State == StateUnknown {
+		t.Errorf("on the new mirror: %s %q", got.State, got.Why)
 	}
 }
