@@ -6133,9 +6133,25 @@ within a second or two instead of on the next observe pass. The pieces:
   A StopFailure counts only when it is the session's own and the screen shows that failure, and a session id
   only when it is a UUID that the session's own transcript or rollout names in the slot. A resume never
   passes an id a CLI could read as a flag: such a role starts fresh.
+- **The review daemon's listener.** `magnum daemon` takes its lock and starts the listener on `run/hooks.sock`
+  before anything else, so a second daemon, which exits at once, never touches the first one's socket, and a
+  dry run listens for nothing. A socket an earlier daemon left there is replaced; a file at that path that is no
+  socket is left alone. When the path is too long or the listener cannot start, the daemon starts anyway and
+  polls its agents as before: none of its panes gets the hook env, one warning in `daemon.log` says why, and so
+  does `magnum status` (`hooks:    off, the daemon polls its agents alone: ...`; while it listens, `hooks:
+  listening on ~/.local/state/magnum/run/hooks.sock: ...`). Each event goes to the agents of the registry that
+  records its pane: the PR's own (the review, fix and whiteboard panes) and, while they run, the retro's, a
+  notes curation's or critique's and a skill edit's, each over a registry of its own; an event of any other
+  pane is dropped. A StopFailure whose screen shows a usage limit or a lost login pauses that agent kind at
+  once, as a reviewer's run that proved it does at its end (until the reset the screen names, for a limit);
+  an overload or a model limit is left to the run's end, as before. The doctor's probe (a datagram named
+  `ping`) is taken and dropped. With `--log-level debug` each event logs one line: its name, the pane, the
+  role and the run, never the payload. At shutdown the listener stops first, then the daemon waits for the
+  looks the events started.
 
 `magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`), its doctor
-checks and the daemons' listeners come in later releases; until then nothing runs the script.
+checks and the factory daemon's listener come in later releases; until the install, nothing runs the script
+and the review daemon's listener hears nothing.
 
 ## Webhooks relay
 

@@ -3479,6 +3479,14 @@ type App struct {
 	AgentTag string
 	// Mise is Options.Mise.
 	Mise string
+	// HookSocket is Options.HookSocket: the pane agents' managers the
+	// engine makes (engine.FromApp) take it too.
+	HookSocket string
+	// HookFailures carries the StopFailures its agents managers' hooks
+	// proved (SendHookFailure, agents.Deps.HookFailure) to the engine,
+	// which handles them on a goroutine of its own; nil without a hook
+	// socket.
+	HookFailures chan HookFailure
 
 	// Herdr is the client of the herdr session magnum's panes are in,
 	// PaneSession: the agents, the rounds' keys and the engine drive it,
@@ -3535,6 +3543,23 @@ func (a *App) IdentityNames() []string
 func (a *App) Refs() RefParser
     Refs is the App's RefParser (cfg.Daemon.DefaultRepo).
 
+func (a *App) SendHookFailure(s store.Session, f agents.StopFailure, h agents.Health)
+    SendHookFailure implements agents.Deps.HookFailure: it queues the failure
+    for the engine (HookFailures) and never waits, since it runs on the hook
+    listener's goroutine or on one of Wake's; a failure the full queue has no
+    room for is dropped with a debug line (the run's own end reads its screen
+    again). Without a listener (no queue) it does nothing.
+
+type HookFailure struct {
+	Session store.Session
+	Failure agents.StopFailure
+	Screen  agents.Health
+}
+    HookFailure is one API error an agent's turn ended on, as the session's
+    own StopFailure hook named it and its screen, read again, proved it
+    (agents.Deps.HookFailure): the session's row, the class (never the hook's
+    text) and the screen's verdict.
+
 type Options struct {
 	// DryRun wraps the runner in execx.DryRun, puts slots in dry-run mode,
 	// disables toasts and opens a private copy of the registry, so nothing
@@ -3577,6 +3602,13 @@ type Options struct {
 	// (the CLI refuses to migrate it under a running daemon); a dry-run copy
 	// migrates freely.
 	BeforeMigrate func(from, to int) error
+	// HookSocket is the socket of the daemon's hook listener, which the
+	// daemon command started under the daemon lock before New
+	// (engine.ClaimDaemon): the agents manager gives every pane it makes
+	// the socket and the binary (agents.Deps.HookSocket). "" = no listener,
+	// and no pane gets either: the CLI, a dry run, a tagged App, a daemon
+	// whose socket path is too long or whose listener failed.
+	HookSocket string
 }
     Options tune New.
 
@@ -8680,6 +8712,11 @@ const KVCodexSessionIDsMissing = "codex.session_ids_missing"
     id the daemon warned of started (store.FormatTime); absent when there is no
     such run.
 
+const KVDaemonHooks = "daemon.hooks"
+    KVDaemonHooks is the running daemon's hook listener as its start found it,
+    DaemonHooks's JSON, for `magnum status`; absent when the start took no claim
+    (a dry run).
+
 const KVDaemonShellPATH = "daemon.shell_path"
     KVDaemonShellPATH is what the running daemon took from the login shell's
     PATH at its start, as ShellPATH's JSON (the count, never a directory);
@@ -9451,6 +9488,12 @@ type Agents interface {
 	// is gone and the role keeps a pane (quitAgentGone).
 	ClearDeadLaunch(ctx context.Context, s store.Session) (bool, error)
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
+	// Wake takes an agent's hook event as a hint to look at its pane now
+	// (agents.Manager.Wake: ctx bounds its later looks, so it is the
+	// daemon's), and WaitWakes waits for those looks once the listener
+	// stopped (hooks.go).
+	Wake(ctx context.Context, ev agenthooks.Event)
+	WaitWakes()
 	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
 	// gives a fixer whose time ran out its last call within the run.
 	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
@@ -9514,6 +9557,42 @@ func ReadDaemonBuild(ctx context.Context, st *store.Store) (Build, bool)
 func (b Build) Label() string
     Label is how messages name the build: its version, with the commit when the
     version does not say it ("dev (8ad5bb2)").
+
+type Claim struct {
+	// Has unexported fields.
+}
+    Claim is what a review daemon takes before it builds its App (ClaimDaemon):
+    the daemon lock and, when it got it, the hook listener on Layout.HookSocket.
+    Run takes the lock it holds (Options.Claim) and serves the listener; Release
+    gives both up.
+
+func ClaimDaemon(l paths.Layout) (*Claim, error)
+    ClaimDaemon takes the daemon lock (Layout.Lock) for a daemon that is about
+    to build its App, and, when it got it, starts the agents' hook listener on
+    Layout.HookSocket (paths.CheckSocketPath first; Listen replaces a socket an
+    earlier daemon left, since the lock's holder owns the path, and leaves alone
+    a file that is no socket). The lock taken by another process is no error:
+    the claim says so (Held), and Run exits as when it finds the lock taken
+    itself. A path too long for a Unix socket and a listener that cannot start
+    are no errors either: the claim has no listener and says why (Off), so the
+    daemon makes no pane with the hook env and polls. Only a lock that cannot be
+    taken at all is an error.
+
+func (c *Claim) Held() bool
+    Held reports whether another process held the daemon lock.
+
+func (c *Claim) HookSocket() string
+    HookSocket is the listener's socket, the panes' MAGNUM_HOOK_SOCKET;
+    "" without a listener (no claim, the lock held, a path too long, a listener
+    that failed).
+
+func (c *Claim) Off() string
+    Off says why the claim has no listener while it holds the lock ("" with
+    one).
+
+func (c *Claim) Release()
+    Release closes the listener and gives the lock up, once; a nil claim does
+    nothing.
 
 type Classifier interface {
 	Classify(ctx context.Context, job ClassifyJob) (ClassifyResult, error)
@@ -9756,6 +9835,17 @@ type Curator interface {
 }
     Curator proposes curated notes for one curation; Close ends it.
 
+type DaemonHooks struct {
+	Socket string `json:"socket,omitempty"`
+	Off    string `json:"off,omitempty"`
+}
+    DaemonHooks is whether the daemon listens for its agents' hooks: the
+    listener's socket, or why it has none (its agents are then polled alone).
+
+func ReadDaemonHooks(ctx context.Context, st *store.Store) (DaemonHooks, bool)
+    ReadDaemonHooks is the running daemon's hook listener (KVDaemonHooks);
+    false before a daemon recorded it.
+
 type DeltaCheckRound struct {
 	Lines  int    `json:"lines"`  // the delta's changed code lines
 	Files  int    `json:"files"`  // its files
@@ -9949,6 +10039,12 @@ type Deps struct {
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
 	Webhooks WebhookSource
+	// HookFailures are the StopFailures the agents' hooks proved
+	// (app.App.HookFailures, which FromApp sets), handled while the daemon
+	// listens (onHookFailure); nil = none.
+	HookFailures <-chan app.HookFailure
+
+	// Has unexported fields.
 }
     Deps are the engine's collaborators. Config, Store and Logger are required;
     a nil port disables the steps that need it.
@@ -10975,6 +11071,13 @@ type Options struct {
 	// before the engine was built ([daemon] shell_path), recorded at startup
 	// (KVDaemonShellPATH, event daemon.shell_path); nil with the key off.
 	ShellPATH *ShellPATH
+	// Claim is the daemon lock and hook listener the daemon command took
+	// before it built the App (ClaimDaemon): Run holds that lock instead of
+	// taking its own, serves the listener once startup is done, and
+	// releases both when it returns. nil: Run takes the lock itself and
+	// listens for no hooks (the panes then get no hook env either). A dry
+	// run takes no claim.
+	Claim *Claim
 }
     Options tune Run.
 

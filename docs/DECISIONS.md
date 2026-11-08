@@ -3873,6 +3873,67 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLoopOverAPersonsWaitingItemLeavesItAlone in engine; TestTheFixSkillLeavesAWaitingItemAlone in
   agents.
 
+- **The review daemon listens for its agents' hooks under its lock, and polls alone when it cannot**
+  (2026-11-08, roadmap R50 slice 2, the review engine's receiver; builds on "An agent's own hook is a hint to
+  look at its pane now; polling stays the floor"). The listener must start under the daemon lock: the lock's
+  holder owns `run/hooks.sock`, and `agenthooks.Listen` removes a socket it finds there, so a second daemon
+  (which exits "already running") or a dry run listening first would cut the live daemon off its agents. And
+  the panes may carry `MAGNUM_HOOK_SOCKET` only while a listener reads it, while `agents.Deps.HookSocket` is
+  fixed when the App builds its manager, which came before `Run` took the lock. So the daemon command now
+  claims first (`engine.ClaimDaemon`: the state dirs, the lock, then `paths.CheckSocketPath` and `Listen`),
+  builds the App with the claim's socket (`app.Options.HookSocket`, "" without a listener) and hands the claim
+  to `Run` (`Options.Claim`), which holds its lock instead of taking its own; a claim that finds the lock
+  taken makes `Run` answer as before (`lockHeld`), and a dry run claims nothing. A path of 104 bytes or more
+  and a listener that fails (a file that is no socket at the path, which stays) are no errors: the daemon
+  starts, makes no pane with the hook env and polls, and one warning says why. The listener's own debug
+  lines reach `daemon.log` once `Run` has the logger (`lateHandler`), since the claim comes before the App.
+  `Run` serves the listener once startup is done, on the daemon's context, so Wake's later looks end with
+  it; at shutdown it cancels that context, waits for `Serve` (which returns once the Wake in flight returned)
+  and only then calls `WaitWakes`, before the rounds' shutdown and before the caller closes the registry.
+  The events go through a router: each reaches Wake on every manager whose registry records a live session
+  on its pane, the App's (the rounds', the fix job's and the whiteboard's panes) and, while they run, the
+  pane agents' (the retro's, a notes curation's or critique's, a skill edit's: `learnAgents`, which also gives
+  their panes the socket, so the retro's `EnsureWorkspace` with no env of its own gets it from the manager).
+  A pane agent registers when it sets up, only while the daemon listens, and at its close leaves before its
+  scratch registry closes: its sink's context ends its later looks, the Wake in flight returns, then
+  `WaitWakes`. An event no registry records is dropped with a debug line naming the event alone (the agent
+  picks the pane), and a datagram named `ping`, the doctor's probe of the install command's "hook socket"
+  check, is dropped without a word (the listener already drops a name it does not know, at debug level; the
+  send succeeds). Each event handed on logs one debug line: its name, the pane, the registry, the session's
+  role and row and its run in flight, never a field of the payload. `Deps.HookFailure` must not block, and
+  the engine's pause writes the registry, records an event and toasts, so the managers queue each StopFailure
+  (`app.App.SendHookFailure`, 16 deep; one past it is dropped at debug level, since the run's own end reads
+  its screen again) and the engine handles the queue on a goroutine of its own while it listens
+  (`Deps.HookFailures`, `onHookFailure`). A failure goes where the screen-read one of its kind goes today: the
+  screen's verdict of a usage limit or a lost login (from a rate limit, an authentication or a billing error)
+  pauses the agent kind through `pauseTool`, proven now, as a reviewer's run that proved it does at its end
+  (`pauseAtOnce`) and as the retro and the notes jobs do, a limit until the reset the screen names; an
+  overload, a model limit and any other failure pause nothing and are left to the run's end (the round's
+  backoff or shared overload, its model switch, the job's stop). A turn's failure is no launch failure (the
+  agent took its prompt, which is what lifts R37's hold), so it never starts a kind hold. At its start the
+  daemon records its listener (kv `daemon.hooks`: the socket, or why none) and `magnum status` prints it
+  under the daemon line (`hooks:    listening on ...` or `hooks:    off, the daemon polls its agents alone:
+  ...`); it does not probe the socket, which the doctor's check does. Rejected: a setter on `agents.Manager`
+  for the socket after New (Deps would no longer be what the Manager was built with, which the hooks core's
+  pane env and Wake rely on); starting the listener in `Run` with the socket already in the panes'
+  env (a listener that failed would leave every pane pointing at a socket nobody reads); fanning each event
+  out to every manager and letting Wake drop it (each manager that does not own the pane would log a drop
+  at debug level for every event of a running retro); handling a StopFailure on the listener's goroutine
+  (the pause can wait on the registry and the toasts); and holding the kind on hook failures shared across
+  PRs (R37 holds on launches that never came up, and an overload shared across PRs already charges no
+  attempt). Tests, failing first against stubs: TestTheDaemonListensOnItsHookSocketUnderItsLock,
+  TestAHookSocketPathTooLongLeavesTheDaemonPolling, TestAHookListenerThatFailsDoesNotStopTheDaemon,
+  TestTheDaemonStopsItsHookListenerBeforeItWaitsForTheWakes, TestADryRunDaemonClaimsNeitherTheLockNorTheHookSocket
+  (it fails with the dry-run guard taken out), TestAHookEventReachesTheManagerThatOwnsItsPane,
+  TestNoPaneAgentRegistersWithoutAListener, TestTheRetroAgentsHookEventsReachItsOwnManager,
+  TestAPingIsAcceptedAndDroppedQuietly, TestEachHookEventLogsItsNameItsPaneAndItsRun,
+  TestTheAppsPanesGetTheHookEnvOnlyWithItsListenersSocket,
+  TestThePaneAgentsPanesGetTheHookEnvOnlyWhileTheDaemonListens,
+  TestAHookFailureGoesWhereTheScreenReadFailureOfItsKindGoes,
+  TestTheDaemonPausesAKindOnAHookFailureWhileItListens, TestAHookFailureNeverWaitsForABlockedConsumer,
+  TestFromAppHandsTheHookFailuresToTheEngine (it fails with FromApp's wiring taken out),
+  TestTheDaemonRecordsWhetherItsHookListenerIsUp and TestStatusSaysWhetherTheDaemonsHookListenerIsUp.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
