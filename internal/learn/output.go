@@ -22,6 +22,10 @@ const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
 	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
 	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
+	// FactoryDir holds the copies of the factory task's plan, ticket and
+	// answers (plan.md, ticket.md, answers.md) on a pull request the
+	// factory published, for a factory-origin candidate's stage.
+	FactoryDir = "factory"
 )
 
 // Limits of the classifier's answer.

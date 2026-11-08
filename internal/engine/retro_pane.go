@@ -306,7 +306,8 @@ func (c *paneClassifier) prompt(job ClassifyJob) (string, error) {
 		return "", fmt.Errorf("the retro prompt cannot be read: %w", err)
 	}
 	return agents.RenderPrompt(p, retroData{URL: job.PR.URL, ReviewedSHAs: job.ReviewedSHAs, Candidates: job.CandidatesPath,
-		Files: filepath.Join(job.Dir, learn.FilesDir), Output: job.OutputPath, Count: len(job.Candidates), Threads: len(job.Threads)})
+		Files: filepath.Join(job.Dir, learn.FilesDir), Output: job.OutputPath, Count: len(job.Candidates), Threads: len(job.Threads),
+		Factory: job.Factory})
 }
 
 // setup makes, once, the scratch registry under the run directory with the

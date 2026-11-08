@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -91,6 +93,11 @@ type RetroSummary struct {
 	// (store.Decline), Declined those the author declined or argued.
 	Declines int `json:"declines,omitempty"`
 	Declined int `json:"declined,omitempty"`
+	// Factory counts the factory-origin misses it stored: comments on PRs
+	// the factory published that its local review round missed, classified
+	// as a miss (those magnum's posted round caught included, which Misses
+	// leaves out).
+	Factory int `json:"factory,omitempty"`
 }
 
 // RetroRun is one retro: its id and directory (learn/retro/<id>).
@@ -117,6 +124,10 @@ type ClassifyJob struct {
 	Candidates []learn.Candidate
 	Rejected   []learn.Rejected
 	Threads    []learn.OwnThread
+	// Factory is the directory of the copies of the factory task's plan,
+	// ticket and answers (learn.FactoryDir) on a pull request the factory
+	// published with a candidate its local round missed; "" otherwise.
+	Factory string
 }
 
 // ClassifyResult is how a Classifier's turn ended, besides its error.
@@ -524,6 +535,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	}()
 
 	withCandidates := 0
+	factory := &retroFactory{}       // says once why factory.db cannot be read
 	offline := false                 // GitHub could not be reached
 	repoMisses := map[string]int{}   // repository -> its misses for the notes
 	repoDeclines := map[string]int{} // repository -> its declines routed to the notes
@@ -531,7 +543,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		if ctx.Err() != nil || withCandidates >= e.cfg.Learn.MaxPRs {
 			break
 		}
-		o := e.retroPR(ctx, run, pr, classifier)
+		o := e.retroPR(ctx, run, pr, classifier, factory)
 		if o.stop != "" && o.status == "" { // interrupted: the PR stays due
 			sum.Stopped, offline = o.stop, o.offline
 			break
@@ -541,6 +553,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		sum.Caught += o.caught
 		sum.Declines += o.declines
 		sum.Declined += o.declined
+		sum.Factory += o.factory
 		if o.repoMisses > 0 {
 			repoMisses[o.repo] += o.repoMisses
 		}
@@ -590,6 +603,10 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		msg += fmt.Sprintf(", %d answered finding(s), %d declined", sum.Declines, sum.Declined)
 		data["declines"], data["declined"] = sum.Declines, sum.Declined
 	}
+	if sum.Factory > 0 {
+		msg += fmt.Sprintf(", %d factory-origin miss(es)", sum.Factory)
+		data["factory"] = sum.Factory
+	}
 	switch {
 	case shutdown:
 		msg += "; stopped by the daemon's shutdown (neither done nor failed: the PRs not reached stay due)"
@@ -633,6 +650,52 @@ type retroOutcome struct {
 	// threads counts magnum's own threads someone answered; declines the
 	// answers stored, declined those the author declined or argued.
 	threads, declines, declined int
+	// factory counts the factory-origin misses (RetroSummary.Factory).
+	factory int
+}
+
+// retroFactory is one retro's read of the factory's registry (factory.db,
+// read only through factoryread): why it could not read it is said once
+// per retro, however many PRs it looks at.
+type retroFactory struct {
+	said bool
+}
+
+// retroLocal is the factory's local review round of pr for learn.Build
+// (learn.Input.Local: every finding of every task that published pr) and
+// the newest such task, whose files the classifier reads; nil and 0 when
+// the factory did not publish pr, when the layout keeps no data, or when
+// factory.db is missing (logged) or cannot be read (a retro.factory
+// warning), each said once per retro (fr): the retro then takes pr as it
+// takes any other.
+func (e *Engine) retroLocal(ctx context.Context, fr *retroFactory, repo store.Repo, pr store.PR) (*learn.LocalRound, int64) {
+	if !e.d.Layout.Valid() {
+		return nil, 0
+	}
+	db := e.d.Layout.FactoryDB()
+	tasks, err := factoryread.Published(ctx, db, repo.FullName(), pr.Number)
+	switch {
+	case err == nil:
+	case fr.said || ctx.Err() != nil:
+		return nil, 0
+	case errors.Is(err, factoryread.ErrNoRegistry):
+		fr.said = true
+		e.log.Info("retro: no factory registry, so it takes no PR for the factory's", "path", db)
+		return nil, 0
+	default:
+		fr.said = true
+		e.event(ctx, "warn", "", "retro.factory", "retro: the factory's registry cannot be read, so it takes no PR for the factory's: "+
+			oneLine(err.Error(), retroWhyRunes), nil)
+		return nil, 0
+	}
+	if len(tasks) == 0 {
+		return nil, 0
+	}
+	local := &learn.LocalRound{}
+	for _, t := range tasks {
+		local.Findings = append(local.Findings, t.Findings...)
+	}
+	return local, tasks[0].ID
 }
 
 // markRepoMisses marks every repository a retro stored misses for its
@@ -670,7 +733,13 @@ func (e *Engine) markRepoMisses(ctx context.Context, run RetroRun, misses, decli
 // stops the retro, so the PR stays due; only a usage limit and a logout
 // pause the tool, as in rounds (a per-model limit and an overload are the
 // model's or the moment's).
-func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classifier func() (Classifier, error)) retroOutcome {
+//
+// On a pull request the factory published (retroLocal), the factory's local
+// round is Build's second caught set: the candidates it missed are
+// factory-origin, the task's plan, ticket and answers go to the classifier
+// for their stage, and a comment only magnum's posted round caught is
+// stored as a factory-origin miss its learners leave out.
+func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classifier func() (Classifier, error), fr *retroFactory) retroOutcome {
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
 		e.event(ctx, "warn", fmt.Sprintf("pr:%d", pr.ID), "retro.fail", "retro: "+oneLine(err.Error(), retroWhyRunes), nil)
@@ -718,26 +787,45 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	if err != nil {
 		return readFail(retroOutcome{}, err)
 	}
+	var task int64
+	in.Local, task = e.retroLocal(ctx, fr, repo, pr)
 	res, err := learn.Build(in) // compares commits on GitHub
 	if err != nil {
 		return readFail(retroOutcome{}, err)
 	}
-	o := retroOutcome{candidates: len(res.Candidates), threads: len(res.Threads), caught: res.Caught, repo: repo.FullName()}
+	// A comment only the posted round caught is magnum's catch all the
+	// same, though it is a candidate (learn.Candidate.PostedCaught).
+	caught, origins := res.Caught, 0
+	for _, c := range res.Candidates {
+		if c.PostedCaught {
+			caught++
+		}
+		if c.Origin == learn.OriginFactory {
+			origins++
+		}
+	}
+	o := retroOutcome{candidates: len(res.Candidates), threads: len(res.Threads), caught: caught, repo: repo.FullName()}
 	for _, c := range res.Outside {
 		e.storeMiss(ctx, subject, pr, c, learn.Item{Class: store.MissOutside})
 	}
-	counts := map[string]any{"candidates": len(res.Candidates), "outside": len(res.Outside), "caught": res.Caught, "dropped": res.Dropped}
+	counts := map[string]any{"candidates": len(res.Candidates), "outside": len(res.Outside), "caught": caught, "dropped": res.Dropped}
 	if len(res.Threads) > 0 {
 		counts["threads"] = len(res.Threads)
+	}
+	if origins > 0 {
+		counts["factory_origin"] = origins
 	}
 	if len(res.Candidates) == 0 && len(res.Threads) == 0 {
 		o.status = store.RetroNothing
 		e.event(ctx, "info", subject, "retro.ok", fmt.Sprintf("retro: nothing to classify (%d outside, %d caught, %d dropped)",
-			len(res.Outside), res.Caught, res.Dropped), counts)
+			len(res.Outside), caught, res.Dropped), counts)
 		return record(o, "")
 	}
 
-	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates, res.Rejected, res.Threads)
+	if origins == 0 {
+		task = 0 // no candidate asks for a stage
+	}
+	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates, res.Rejected, res.Threads, task)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, nil)
@@ -785,9 +873,15 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	}
 	rejected, repoMisses := e.storeCandidates(ctx, subject, repo, pr, in.Own, learn.LinkRejected(res.Candidates, items, res.Rejected), items)
 	o.repoMisses = repoMisses
-	for _, it := range items {
-		if it.Class == store.MissMiss {
+	for _, c := range res.Candidates {
+		if items[c.ID].Class != store.MissMiss {
+			continue
+		}
+		if !c.PostedCaught {
 			o.misses++
+		}
+		if c.Origin == learn.OriginFactory {
+			o.factory++
 		}
 	}
 	// Only a classified answer is stored: a decline is the classifier's
@@ -814,19 +908,25 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	if len(rejected) > 0 {
 		counts["lesson_rejected"] = rejected
 	}
+	if o.factory > 0 {
+		counts["factory"] = o.factory
+	}
 	msg := fmt.Sprintf("retro: %d candidate(s) left unclassified (%d outside, %d caught, %d dropped)",
-		len(res.Candidates), len(res.Outside), res.Caught, res.Dropped)
+		len(res.Candidates), len(res.Outside), caught, res.Dropped)
 	if len(res.Threads) > 0 {
 		msg = fmt.Sprintf("retro: %d candidate(s) and %d answered finding(s) left unclassified (%d outside, %d caught, %d dropped)",
-			len(res.Candidates), len(res.Threads), len(res.Outside), res.Caught, res.Dropped)
+			len(res.Candidates), len(res.Threads), len(res.Outside), caught, res.Dropped)
 	}
 	if o.status == store.RetroClassified {
 		answered := ""
 		if len(res.Threads) > 0 {
 			answered = fmt.Sprintf(", %d answered finding(s), %d declined", o.declines, o.declined)
 		}
+		if o.factory > 0 {
+			answered += fmt.Sprintf(", %d factory-origin", o.factory)
+		}
 		msg = fmt.Sprintf("retro: %d candidate(s) classified, %d miss(es)%s (%d outside, %d caught, %d dropped)",
-			len(res.Candidates), o.misses, answered, len(res.Outside), res.Caught, res.Dropped)
+			len(res.Candidates), o.misses, answered, len(res.Outside), caught, res.Dropped)
 		if len(rejected) > 0 {
 			msg += fmt.Sprintf("; %d lesson(s) rejected (lesson_rejected)", len(rejected))
 		}
@@ -935,9 +1035,12 @@ func (e *Engine) retroOwnLogins(pr store.PR, runs []store.Run) []string {
 // the candidate or thread, when GitHub has no copy or it is above
 // github.FileAtLimit) and candidates.json with the rejected findings and
 // magnum's own answered threads (replies included), every write confined to
-// the directory (os.Root): the paths come from GitHub.
+// the directory (os.Root): the paths come from GitHub. With a factory task
+// (task > 0: a candidate its local round missed asks for a stage), the
+// task's plan, ticket and answers are copied into factory/ beside them
+// (retroFactoryFiles), which the job names.
 func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, pr store.PR, gh RetroGitHub,
-	reviewed []learn.Reviewed, cands []learn.Candidate, rejected []learn.Rejected, threads []learn.OwnThread) (ClassifyJob, error) {
+	reviewed []learn.Reviewed, cands []learn.Candidate, rejected []learn.Rejected, threads []learn.OwnThread, task int64) (ClassifyJob, error) {
 	dir := filepath.Join(run.Dir, repo.Owner, repo.Name, strconv.Itoa(pr.Number))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ClassifyJob{}, err
@@ -984,8 +1087,35 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 	if err := learn.WriteFileAtomic(root, learn.CandidatesFile, b); err != nil {
 		return ClassifyJob{}, err
 	}
-	return ClassifyJob{Dir: dir, CandidatesPath: filepath.Join(dir, learn.CandidatesFile), OutputPath: filepath.Join(dir, learn.OutputFile),
-		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands, Rejected: rejected, Threads: threads}, nil
+	job := ClassifyJob{Dir: dir, CandidatesPath: filepath.Join(dir, learn.CandidatesFile), OutputPath: filepath.Join(dir, learn.OutputFile),
+		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands, Rejected: rejected, Threads: threads}
+	if task > 0 {
+		if err := e.retroFactoryFiles(root, task); err != nil {
+			return ClassifyJob{}, err
+		}
+		job.Factory = filepath.Join(dir, learn.FactoryDir)
+	}
+	return job, nil
+}
+
+// retroFactoryFiles copies factory task id's plan, ticket and answers
+// (factoryread.TaskFiles, read only) into root's factory/ as plan.md,
+// ticket.md and answers.md; a file the task does not have is left out, and
+// so is one it cannot read (logged).
+func (e *Engine) retroFactoryFiles(root *os.Root, id int64) error {
+	if err := root.MkdirAll(learn.FactoryDir, 0o700); err != nil {
+		return err
+	}
+	for _, f := range factoryread.TaskFiles(e.d.Layout.FactoryTaskDir(id)) {
+		if f.Skipped != "" {
+			e.log.Warn("retro: a factory task's file is not copied", "task", id, "file", f.Name, "why", f.Skipped)
+			continue
+		}
+		if err := learn.WriteFileAtomic(root, path.Join(learn.FactoryDir, f.Kind+".md"), f.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // retroFetch copies path at sha to rel inside root; it returns why it did
@@ -1037,7 +1167,8 @@ func (e *Engine) storeCandidates(ctx context.Context, subject string, repo store
 					map[string]any{"candidate": c.ID, "reason": reason})
 			}
 		}
-		if m, ok := e.storeMiss(ctx, subject, pr, c, it); ok && m.Class == store.MissMiss && m.Scope == store.MissScopeRepo && m.State == store.MissNew {
+		if m, ok := e.storeMiss(ctx, subject, pr, c, it); ok && m.Class == store.MissMiss && m.Scope == store.MissScopeRepo && m.State == store.MissNew &&
+			!m.PostedCaught {
 			forNotes++
 		}
 	}
@@ -1047,12 +1178,13 @@ func (e *Engine) storeCandidates(ctx context.Context, subject string, repo store
 // storeMiss upserts candidate c as classified by it and returns the stored
 // row, with the commit the comment was made on and, for an outside one,
 // why: Build's reason (learn.Candidate.OutsideReason), else the
-// classifier's answer.
+// classifier's answer; a factory-origin candidate keeps its origin, the
+// posted round's catch and the classifier's stage.
 func (e *Engine) storeMiss(ctx context.Context, subject string, pr store.PR, c learn.Candidate, it learn.Item) (store.Miss, bool) {
 	m := store.Miss{
 		PRID: pr.ID, SourceURL: c.URL, SourceKind: c.Kind, Reviewer: c.Reviewer, Path: c.Path, Line: c.Line,
 		ReviewedSHA: c.ReviewedSHA, CommentSHA: c.CommentSHA, Class: it.Class, Raised: c.Raised, FindingRef: c.FindingRef,
-		ReasonCode: c.ReasonCode, Lines: c.Lines(),
+		ReasonCode: c.ReasonCode, Lines: c.Lines(), Origin: c.Origin, PostedCaught: c.PostedCaught, Stage: it.Stage,
 	}
 	if it.Class == store.MissOutside {
 		m.OutsideReason = cmp.Or(c.OutsideReason, store.MissOutsideClassifier)
