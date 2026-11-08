@@ -564,6 +564,19 @@ func (g *fakeGH) setHead(full string, n int, head string) {
 	g.repos[full] = prs
 }
 
+// headOf is the head of talkable/talkable's PR #n on the fake GitHub (ok
+// false: no such open PR).
+func (g *fakeGH) headOf(n int) (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, p := range g.repos["talkable/talkable"] {
+		if p.n == n {
+			return p.head, true
+		}
+	}
+	return "", false
+}
+
 // specBase is the base branch GitHub names for p: its base, master for
 // none, nothing for noBase.
 func specBase(p prSpec) string {

@@ -261,7 +261,9 @@ func TestAHandedMergeIsCheckedAgainstTheBaseAsGitHubHasIt(t *testing.T) {
 		commit    gitx.CommitIdentity
 		ancestors map[string]bool
 		differ    map[string][]string
+		moved     bool // someone pushed to the branch while the fixer ran
 	}{
+		{name: "a branch that moved on GitHub", commit: bot(fixHead, fixBaseTip), moved: true},
 		{name: "another author", commit: foreign},
 		{name: "another committer", commit: committer},
 		{name: "a merge into another commit", commit: bot(other, fixBaseTip)},
@@ -277,6 +279,14 @@ func TestAHandedMergeIsCheckedAgainstTheBaseAsGitHubHasIt(t *testing.T) {
 			mg.mu.Lock()
 			mg.handed, mg.ancestors, mg.differ = &tc.commit, tc.ancestors, tc.differ
 			mg.mu.Unlock()
+			head := fixHead
+			if tc.moved {
+				head = other
+				fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
+					h.gh.setHead("talkable/talkable", 2, other)
+					return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+				})
+			}
 			id := h.fix(FixPayload{Mode: FixModeMerge})
 			h.handle()
 			h.wantDone(id)
@@ -286,8 +296,8 @@ func TestAHandedMergeIsCheckedAgainstTheBaseAsGitHubHasIt(t *testing.T) {
 			if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) != 0 {
 				t.Errorf("daemon push tokens minted: %v", mints)
 			}
-			if cur := h.pr(2); cur.HeadSHA != fixHead {
-				t.Errorf("the PR's head = %s, want its own", cur.HeadSHA)
+			if got, _ := h.gh.headOf(2); got != head {
+				t.Errorf("GitHub's head = %s, want %s", got, head)
 			}
 		})
 	}

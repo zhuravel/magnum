@@ -90,13 +90,17 @@ func TestAStagingMergeIsByTheFixIdentitysBot(t *testing.T) {
 // tip has it (the base's own changes, which the PR merged), with the
 // daemon's own Workflows token; a merge carrying a workflow file that
 // differs from both (the PR's own change) is refused, and so is any push
-// while the App lacks Workflows, or to a branch the bot never pushes to.
+// while the App lacks Workflows, of a merge that is not on the target's
+// tip, or to a branch the bot never pushes to (master, main, the default
+// branch).
 func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testing.T) {
 	const ci, own = ".github/workflows/ci.yml", ".github/workflows/own.yml"
+	const elsewhere = "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
 	for _, tc := range []struct {
 		name           string
 		tip, base      []string // the merge's workflow files that differ from the tip's, the base's
 		target         string
+		def, first     string // the repository's default branch (the registry's when ""), the merge's first parent (stagingTip when "")
 		noWorkflows    bool
 		wantDir, wantE string
 		wantMint       bool
@@ -108,6 +112,9 @@ func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testin
 		{name: "no Workflows on the App", tip: []string{ci}, target: "staging-void", noWorkflows: true, wantMint: true,
 			wantE: "needs Workflows on the App"},
 		{name: "master", target: "master", wantE: "never pushes to master"},
+		{name: "main", target: "main", def: "develop", wantE: "never pushes to main"},
+		{name: "the default branch", target: "develop", def: "develop", wantE: "never pushes to develop"},
+		{name: "a merge off the tip", target: "staging-void", first: elsewhere, wantE: "the merge is on 7c7c7c7, not on staging-void's tip 5a5a5a5"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mods []func(*harness)
@@ -116,6 +123,14 @@ func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testin
 			}
 			h, mg := stagingHarness(t, mods...)
 			mg.differ[stagingTip], mg.differ[fixBaseTip] = tc.tip, tc.base
+			if tc.first != "" {
+				mg.refs[stagingMerge+"^1"] = tc.first
+			}
+			if tc.def != "" {
+				if _, err := h.st.DB().ExecContext(h.ctx, `UPDATE repos SET default_branch = ?`, tc.def); err != nil {
+					t.Fatal(err)
+				}
+			}
 			env, err := h.e.StagingPushEnv(stagingMirrors)(h.ctx, "talkable/talkable", stagingMerge, tc.target)
 			switch {
 			case tc.wantE != "" && (err == nil || !strings.Contains(err.Error(), tc.wantE)):
