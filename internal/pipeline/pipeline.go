@@ -16,10 +16,11 @@
 // audit events (subject "pr:<owner>/<name>#<N>"), but never changes the PR's
 // state: the engine maps RoundResult.Outcome onto the PR state machine.
 //
-// Completion of an agent turn is read from the store: the engine's per-tick
-// agents.Observe moves a run to ended after two idle ticks, and this package
-// polls the run rows (every PollInterval) until then, or until the role's
-// timeout. The judge's turn also ends as soon as its result file holds a
+// Completion of an agent turn is read from the store: the engine's observe
+// pass (agents.ObserveSnapshotAt) moves a run to ended after two idle
+// readings, and this package polls the run rows (every PollInterval) until
+// then, or until the role's timeout; the pass's run-ended broadcast
+// (Runner.Ended) cuts a poll's sleep short. The judge's turn also ends as soon as its result file holds a
 // final status (its last step; the agent may still print its final message,
 // which agents counts as the run's), and when a file with another status has
 // been present for ResultSettle.
@@ -269,6 +270,12 @@ type Runner struct {
 	Sleep        func(ctx context.Context, d time.Duration) error // nil = a timer honouring ctx
 	PollInterval time.Duration                                    // 0 = DefaultPollInterval
 	Logger       execx.Logger                                     // optional
+	// Ended hands out the observe pass's run-ended broadcast
+	// (agents.Manager.Ended): a channel closed when the pass next ends a
+	// run or loses a session. A turn's wait selects on it beside its poll,
+	// so the next stage starts as soon as the run ended. nil = the poll
+	// alone.
+	Ended func() <-chan struct{}
 	// AgentTag is agents.Deps.Tag of the agents this runner prompts ("eval"
 	// for magnum eval); it leads the shell roles' pane titles too.
 	AgentTag string
@@ -1410,6 +1417,43 @@ func (r *Runner) poll() time.Duration {
 		return r.PollInterval
 	}
 	return DefaultPollInterval
+}
+
+// ended is the observe pass's run-ended channel (Runner.Ended); nil, which
+// never fires, without one.
+func (r *Runner) ended() <-chan struct{} {
+	if r.Ended == nil {
+		return nil
+	}
+	return r.Ended()
+}
+
+// sleepUntil sleeps d, or less when wake is closed first (at once when it
+// is already): nil then, as after the whole sleep; otherwise the sleep's
+// own answer. A nil wake is the plain sleep.
+func (r *Runner) sleepUntil(ctx context.Context, d time.Duration, wake <-chan struct{}) error {
+	if wake == nil {
+		return r.sleep(ctx, d)
+	}
+	select {
+	case <-wake:
+		return ctx.Err()
+	default:
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-wake:
+			cancel()
+		case <-sctx.Done():
+		}
+	}()
+	err := r.sleep(sctx, d)
+	if err != nil && ctx.Err() == nil && sctx.Err() != nil {
+		return nil // woken: only wake cancels sctx while ctx lives
+	}
+	return err
 }
 
 func (r *Runner) sleep(ctx context.Context, d time.Duration) error {

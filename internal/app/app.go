@@ -344,6 +344,7 @@ func (a *App) wire() {
 			Store: a.Store, Identity: src, SelfLogin: selfLogin(cfg, name),
 			Config: cfg, Layout: a.Layout, AgentTag: a.AgentTag, Mise: a.Mise,
 			Logger: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "pipeline"},
+			Ended:  a.Agents.Ended, // a turn's wait ends with the observe pass that ended its run
 		}
 	}
 	a.Cleanup = &cleanup.Planner{

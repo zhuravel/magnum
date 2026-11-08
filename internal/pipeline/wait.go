@@ -81,12 +81,16 @@ func (rd *round) submitAndWait(ctx context.Context, run store.Run, text string, 
 // wait polls run until it ends, its session is lost, the result file holds a
 // final status (finalStatus) or, with another status, settles for
 // ResultSettle (judge only; a file that does not parse, or names another run
-// id, does not count), or timeout passes.
+// id, does not count), or timeout passes. The observe pass's run-ended
+// broadcast (Runner.Ended) cuts a poll's sleep short: the channel is taken
+// before each read of the run, so an end between the read and the sleep
+// wakes it too.
 func (rd *round) wait(ctx context.Context, runID string, timeout time.Duration, resultFile string, ids map[string]bool) turn {
 	deadline := rd.r.now().Add(timeout)
 	var fileSeen time.Time
 	var run store.Run
 	for {
+		ended := rd.r.ended()
 		var err error
 		run, err = rd.r.Store.RunByID(ctx, runID)
 		if err != nil {
@@ -127,7 +131,7 @@ func (rd *round) wait(ctx context.Context, runID string, timeout time.Duration, 
 			return turn{kind: waitTimeout, run: run, err: fmt.Errorf("pipeline: %s run %s: no result after %s", run.Role, run.ID, timeout)}
 		}
 		rd.noticePush(ctx) // a reviewer's wait: a push cancels ctx, so the sleep below ends the wait
-		if err := rd.r.sleep(ctx, rd.r.poll()); err != nil {
+		if err := rd.r.sleepUntil(ctx, rd.r.poll(), ended); err != nil {
 			return turn{kind: waitCancelled, run: run, err: err}
 		}
 	}
