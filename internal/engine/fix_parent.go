@@ -57,16 +57,87 @@ const workflowsPath = ".github/workflows"
 
 // parentGit is the git the daemon's merge of a PR's parent takes beyond Git
 // (*gitx.Client has it): the merged tree, its merge commit, the paths a
-// change touches and the push as the fixer App. A git without it (a test's)
-// merges no parent: the fixer starts as before.
+// change touches, the paths two commits have otherwise, a first-parent
+// chain's commits and the push as the fixer App. A git without it (a
+// test's) merges no parent: the fixer starts as before.
 type parentGit interface {
 	MergeTree(ctx context.Context, dir, head, base string) (tree string, conflicts []string, err error)
 	CommitTree(ctx context.Context, dir, tree string, parents []string, message string, who gitx.Signature) (string, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
+	DifferingPaths(ctx context.Context, dir, a, b string, paths ...string) ([]string, error)
+	FirstParentIdentities(ctx context.Context, dir, from, to string) ([]gitx.CommitIdentity, error)
 	PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error
 }
 
 var _ parentGit = (*gitx.Client)(nil)
+
+// daemonPusher is the identity a push of a merge that carries its base's
+// workflow files goes out as (*identity.App has it): a token of the
+// daemon's own with Workflows write, which no pane holds.
+type daemonPusher interface {
+	DaemonPushEnv(ctx context.Context, workflows bool) (map[string]string, func(), error)
+}
+
+var _ daemonPusher = (*identity.App)(nil)
+
+// workflowsWord is how the daemon's events say it pushed with its own
+// token that may write workflows (pushMerge).
+const workflowsWord = "with Workflows"
+
+// pushMerge pushes merge, a merge of b's tip into head, to the job's PR
+// branch as the fix identity id, with a lease on head, from the job's
+// slot. A merge that changes no workflow file goes with the App's token
+// (its gh config dir, the pane's too). One that brings the base's workflow
+// changes goes only when every workflow file of the merge is as b's tip
+// has it, never with the PR's own, and then with a token of the daemon's
+// own with Workflows write (identity.App.DaemonPushEnv: never in a pane's
+// gh config dir), released after the push. how is workflowsWord for such
+// a push; refused says why nothing was pushed (the PR's own workflow
+// changes, or an App without Workflows: "needs Workflows on the App").
+func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how, refused string, err error) {
+	src := e.d.Identities[id.Name]
+	if src == nil {
+		return "", "", fmt.Errorf("identity %q is not configured", id.Name)
+	}
+	dir, at := job.slot.Path, fmt.Sprintf("the merge of %s at %s", b.base, textx.ShortSHA(b.sha))
+	workflows, err := pg.ChangedPaths(ctx, dir, head, merge, workflowsPath)
+	if err != nil {
+		return "", "", err
+	}
+	var env map[string]string
+	release := func() {}
+	if len(workflows) == 0 {
+		if env, err = src.Env(ctx); err != nil {
+			return "", "", fmt.Errorf("the token of %s: %w", id.Name, err)
+		}
+	} else {
+		own, err := pg.DifferingPaths(ctx, dir, merge, b.sha, workflowsPath)
+		if err != nil {
+			return "", "", fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
+		}
+		files := textx.Count(len(workflows), "file", "files")
+		dp, ok := src.(daemonPusher)
+		switch {
+		case len(own) > 0:
+			return "", fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at, strings.Join(own[:min(3, len(own))], ", "), id.Login), nil
+		case !ok:
+			return "", fmt.Sprintf("%s brings its workflow changes (%s): %s mints no token that may write them", at, files, id.Name), nil
+		}
+		env, release, err = dp.DaemonPushEnv(ctx, true)
+		switch {
+		case errors.Is(err, identity.ErrWorkflowsNotGranted):
+			return "", fmt.Sprintf("%s brings its workflow changes (%s): needs Workflows on the App (%s lacks it)", at, files, id.Login), nil
+		case err != nil:
+			return "", "", fmt.Errorf("a push token with Workflows for %s: %w", id.Name, err)
+		}
+		how = workflowsWord
+	}
+	defer release()
+	if err := pg.PushLeaseGitHubAs(ctx, dir, job.repo.Owner, job.repo.Name, merge, deref(job.pr.HeadRef), head, env); err != nil {
+		return "", "", fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
+	}
+	return how, "", nil
+}
 
 // fixerSignature is the identity the fix role whose identity is name acts
 // as and who its commits are by, the bot's login and its noreply email, as
@@ -144,10 +215,6 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 			map[string]any{"base": b.base, "tip": b.sha, "cycle": job.state.Cycle})
 		return refused, nil
 	}
-	src := e.d.Identities[id.Name]
-	if src == nil {
-		return "", fmt.Errorf("identity %q is not configured", id.Name)
-	}
 	branch, dir, head := deref(job.pr.HeadRef), job.slot.Path, job.head
 	tree, conflicts, err := pg.MergeTree(ctx, dir, head, b.sha)
 	switch {
@@ -163,23 +230,13 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 		return "", err
 	}
 	data := map[string]any{"base": b.base, "tip": b.sha, "head": head, "merge": merge, "identity": id.Name, "cycle": job.state.Cycle}
-	workflows, err := pg.ChangedPaths(ctx, dir, head, merge, workflowsPath)
-	if err != nil {
+	how, refused, err := e.pushMerge(ctx, job, pg, id, head, merge, b)
+	switch {
+	case err != nil:
 		return "", err
-	}
-	if len(workflows) > 0 {
-		refused = fmt.Sprintf("the merge of %s at %s brings its workflow changes (%s), which %s may not push", b.base, textx.ShortSHA(b.sha),
-			textx.Count(len(workflows), "file", "files"), id.Login)
-		data["workflows"] = len(workflows)
+	case refused != "":
 		e.event(ctx, "warn", job.subject(), "fix.parent_refused", fmt.Sprintf("%s: %s", job.label(), refused), data)
 		return refused, nil
-	}
-	env, err := src.Env(ctx)
-	if err != nil {
-		return "", fmt.Errorf("the token of %s: %w", id.Name, err)
-	}
-	if err := pg.PushLeaseGitHubAs(ctx, dir, job.repo.Owner, job.repo.Name, merge, branch, head, env); err != nil {
-		return "", fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
 	}
 	e.notePush(ctx, job.pr.ID, merge) // ci_dispatch.go: its CI starts after the grace
 	if err := e.resyncFixSlot(ctx, job, merge); err != nil {
@@ -189,7 +246,11 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 		return "", err
 	}
 	job.head, job.merged = merge, b
-	msg := fmt.Sprintf("magnum merged %s at %s into %s as %s: the head is %s", b.base, textx.ShortSHA(b.sha), job.label(), id.Login, textx.ShortSHA(merge))
+	as := id.Login
+	if how != "" {
+		as, data["workflows"] = as+" "+how, true
+	}
+	msg := fmt.Sprintf("magnum merged %s at %s into %s as %s: the head is %s", b.base, textx.ShortSHA(b.sha), job.label(), as, textx.ShortSHA(merge))
 	if schema := e.parentSchema(ctx, job, head, merge, job.mode != FixModeMerge); schema != "" {
 		job.schema = schema
 		msg += "; " + schema
@@ -220,6 +281,58 @@ func (e *Engine) parentOnRow(ctx context.Context, job *fixJob, head string) erro
 	}
 	job.pr = pr
 	return nil
+}
+
+// fixHandRefused is pushedHead's end of a fixer's merge that magnum push
+// handed to magnum and that the daemon would not push either (pushHanded's
+// refusal): the operator merges it.
+type fixHandRefused struct{ why string }
+
+func (e fixHandRefused) Error() string { return e.why }
+
+// pushHanded pushes head, the fixer's base merge that `magnum push` handed
+// to magnum (exit 4: the merge carries the base's workflow files, which
+// the pane's token may not push), as the settle finds it: GitHub still
+// has the job's head, and head is one merge, by the fix identity's bot, of
+// a commit of the PR's base into it that changes workflow files. The
+// daemon pushes it as any merge of the parent (pushMerge: only with every
+// workflow file as that commit has it, with its own Workflows token).
+// Any other head is left to confirmPush. It returns why it pushed nothing
+// (fixHandRefused's words).
+func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (string, error) {
+	pg, ok := e.d.Git.(parentGit)
+	id, who, app := e.fixerSignature(job.role.Identity)
+	base, dir := deref(job.pr.BaseRef), job.slot.Path
+	if !ok || !app || base == "" || head == job.head {
+		return "", nil
+	}
+	if got, err := e.remoteHead(ctx, job); err != nil || got != job.head { // pushed by the pane, or the branch moved
+		return "", nil
+	}
+	commits, err := pg.FirstParentIdentities(ctx, dir, job.head, head)
+	if err != nil || len(commits) != 1 {
+		return "", nil
+	}
+	c := commits[0]
+	if len(c.Parents) != 2 || c.Parents[0] != job.head || !strings.EqualFold(c.AuthorEmail, who.Email) || !strings.EqualFold(c.CommitterEmail, who.Email) {
+		return "", nil
+	}
+	tip := c.Parents[1]
+	if on, err := e.d.Git.IsAncestor(ctx, dir, tip, "refs/remotes/origin/"+base); err != nil || !on {
+		return "", nil
+	}
+	if workflows, err := pg.ChangedPaths(ctx, dir, job.head, head, workflowsPath); err != nil || len(workflows) == 0 {
+		return "", nil
+	}
+	b := fixConflict{base: base, sha: tip}
+	how, refused, err := e.pushMerge(ctx, job, pg, id, job.head, head, b)
+	if err != nil || refused != "" {
+		return refused, err
+	}
+	e.event(ctx, "info", job.subject(), "fix.parent_pushed", fmt.Sprintf("magnum pushed %s's merge of %s at %s into %s as %s %s: the head is %s",
+		job.role.Name, base, textx.ShortSHA(tip), job.label(), id.Login, how, textx.ShortSHA(head)),
+		map[string]any{"base": base, "tip": tip, "head": job.head, "merge": head, "identity": id.Name, "cycle": job.state.Cycle})
+	return "", nil
 }
 
 // parentSchema marks the job's pool slot for a schema reload when the

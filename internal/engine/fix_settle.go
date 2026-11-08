@@ -88,6 +88,13 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	case err != nil:
 		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
 		return
+	case errors.As(headErr, new(fixHandRefused)): // fix_parent.go: the fixer's merge the daemon would not push
+		msg := fmt.Sprintf("fix: magnum did not push %s's merge of the parent of %s: %s; merge it on GitHub (Update branch)", job.role.Name, job.label(), headErr)
+		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
+		e.endFixState(ctx, job)
+		e.event(ctx, "warn", subject, "fix.needs_you", msg, job.eventData())
+		e.fixAttention(ctx, job, msg)
+		return
 	case headErr != nil:
 		e.failFixTyped(ctx, job, "fix settle failed: "+headErr.Error(), "", typed)
 		return
@@ -410,6 +417,13 @@ func (e *Engine) pushedHead(ctx context.Context, job *fixJob, rep FixReport) (st
 	if !slices.ContainsFunc(rep.Pushed, func(c FixCommit) bool { return strings.HasPrefix(head, c.SHA) }) {
 		return "", fmt.Errorf("the checkout's HEAD %s is none of the %s the report lists", textx.ShortSHA(head),
 			textx.Count(len(rep.Pushed), "commit", "commits"))
+	}
+	// fix_parent.go: a base merge magnum push handed to magnum (it carries
+	// the base's workflow files) is the daemon's to push
+	if refused, err := e.pushHanded(ctx, job, head); err != nil {
+		return "", fmt.Errorf("magnum's push of %s's merge %s: %w", job.role.Name, textx.ShortSHA(head), err)
+	} else if refused != "" {
+		return "", fixHandRefused{why: refused}
 	}
 	if err := e.confirmPush(ctx, job, head); err != nil {
 		return "", err

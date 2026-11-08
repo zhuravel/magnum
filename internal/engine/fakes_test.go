@@ -2253,6 +2253,19 @@ type fakeIdentity struct {
 	runErr string
 	// ensureErr: EnsureConfigDir (the tick's token refresh) fails with it.
 	ensureErr string
+	// pushErr: an App's DaemonPushEnv fails with it; pushMints are its
+	// calls' workflows arguments, released its releases.
+	pushErr   error
+	pushMints []bool
+	released  int
+}
+
+// daemonPushes are an App's DaemonPushEnv calls (their workflows
+// arguments) and the releases of their tokens so far.
+func (f *fakeIdentity) daemonPushes() ([]bool, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.pushMints), f.released
 }
 
 // fail sets what the fake's next checks and token refreshes fail with (""
@@ -2293,6 +2306,26 @@ func (f *fakeIdentity) Check(context.Context) (identity.Report, error) {
 }
 
 type fakeAppIdentity struct{ fakeIdentity }
+
+// DaemonPushEnv is identity.App's: a push token of the daemon's own, in
+// the dir /state/gh/.<name>.push, or pushErr.
+func (f *fakeAppIdentity) DaemonPushEnv(_ context.Context, workflows bool) (map[string]string, func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushMints = append(f.pushMints, workflows)
+	if f.pushErr != nil {
+		return nil, nil, f.pushErr
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.released++
+			f.mu.Unlock()
+		})
+	}
+	return map[string]string{"GH_CONFIG_DIR": "/state/gh/." + f.name + ".push", "GH_TOKEN": "", "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
+}
 
 func (f *fakeAppIdentity) EnsureConfigDir(context.Context) (string, error) {
 	f.mu.Lock()

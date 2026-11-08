@@ -104,9 +104,25 @@ type mergeGit struct {
 	behind    bool
 	pushErr   error
 	workflows []string
+	own       []string // DifferingPaths of .github/workflows: the workflow files that differ from the base's
 	schema    []string
 	commits   []string
 	pushes    []string
+}
+
+func (g *mergeGit) DifferingPaths(_ context.Context, _, _, _ string, paths ...string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if slices.Contains(paths, workflowsPath) {
+		return slices.Clone(g.own), nil
+	}
+	return nil, nil
+}
+
+// FirstParentIdentities answers that to is one merge, by the fixer App's
+// bot, of the base's tip into from: the fixer's base merge.
+func (g *mergeGit) FirstParentIdentities(_ context.Context, _, from, to string) ([]gitx.CommitIdentity, error) {
+	return []gitx.CommitIdentity{{SHA: to, Parents: []string{from, fixBaseTip}, AuthorEmail: fixerAppEmail, CommitterEmail: fixerAppEmail}}, nil
 }
 
 // mergeHarness is fixHarness whose git merges parents (mergeGit).
@@ -331,30 +347,6 @@ func TestAMergeOfTheParentIsRefusedWhereItCannotRun(t *testing.T) {
 				t.Error("a loop started")
 			}
 		})
-	}
-}
-
-// A merge that brings the base's own workflow changes is not the fixer
-// App's to push (its token may not write workflows): the daemon pushes
-// nothing, and the PR needs the operator, who merges it on GitHub.
-func TestAMergeThatBringsTheBasesWorkflowsIsLeftToYou(t *testing.T) {
-	h, mg := mergeHarness(t, withFixerApp)
-	fixablePR(h, "zhuravel", nil)
-	mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
-	id := h.fix(FixPayload{Mode: FixModeMerge})
-	h.handle()
-	h.wantDone(id)
-	if _, pushes := mg.made(); len(pushes) != 0 {
-		t.Errorf("pushes = %v, want none", pushes)
-	}
-	pr := h.wantState(2, store.PRNeedsAttention)
-	const want = "fix: magnum did not merge the parent of talkable/talkable#2: the merge of master at c0c0c0c brings its workflow changes (1 file), " +
-		"which " + fixerAppLogin + " may not push; merge it on GitHub (Update branch)"
-	if got := deref(pr.LastError); !strings.HasPrefix(got, want) {
-		t.Errorf("attention = %q, want %q", got, want)
-	}
-	if _, ok := h.fixStateOf(2); ok {
-		t.Error("the merge's loop row stayed")
 	}
 }
 
