@@ -80,6 +80,13 @@ type Options struct {
 	// (the CLI refuses to migrate it under a running daemon); a dry-run copy
 	// migrates freely.
 	BeforeMigrate func(from, to int) error
+	// HookSocket is the socket of the daemon's hook listener, which the
+	// daemon command started under the daemon lock before New
+	// (engine.ClaimDaemon): the agents manager gives every pane it makes
+	// the socket and the binary (agents.Deps.HookSocket). "" = no listener,
+	// and no pane gets either: the CLI, a dry run, a tagged App, a daemon
+	// whose socket path is too long or whose listener failed.
+	HookSocket string
 }
 
 // App is the wired set of components one process uses.
@@ -96,6 +103,9 @@ type App struct {
 	AgentTag string
 	// Mise is Options.Mise.
 	Mise string
+	// HookSocket is Options.HookSocket: the pane agents' managers the
+	// engine makes (engine.FromApp) take it too.
+	HookSocket string
 
 	// Herdr is the client of the herdr session magnum's panes are in,
 	// PaneSession: the agents, the rounds' keys and the engine drive it,
@@ -244,7 +254,7 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	}
 	a.GitHub = a.githubFor
 
-	a.AgentTag, a.Mise = opts.AgentTag, opts.Mise
+	a.AgentTag, a.Mise, a.HookSocket = opts.AgentTag, opts.Mise, opts.HookSocket
 	a.wire()
 	ok = true
 	return a, nil
@@ -329,6 +339,7 @@ func (a *App) wire() {
 		Toast:        a.toastAsync,
 		Signal:       syscall.Kill, // StopShell's, for a command it proved its own
 		SkipGoneDirs: true,
+		HookSocket:   a.HookSocket, // the panes' MAGNUM_HOOK_SOCKET while the daemon listens
 	})
 	// One Jira client for every identity's rounds: a token file problem
 	// warns once per daemon start (jira.Client.WarnTokenFile).

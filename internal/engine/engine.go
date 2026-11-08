@@ -888,11 +888,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		// live registry shares the per-model limits with the rounds.
 		pd := paneDeps{
 			Config: a.Config, Layout: a.Layout, Logger: a.Logger, Herdr: h, Keys: h.AgentSendKeys, CloseWorkspace: h.WorkspaceClose,
-			Store: a.Store, Hooks: d.agentHooks,
-			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
-				return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
-					Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}})
-			},
+			Store: a.Store, Hooks: d.agentHooks, Agents: learnAgents(h, a), // hooks.go
 		}
 		d.Classifier = paneClassifiers(pd)
 		// The notes curator (notes_curate.go) and the skill editor

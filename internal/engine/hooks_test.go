@@ -13,7 +13,9 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -463,4 +465,47 @@ func (l *recordLog) since(n int) []slog.Record {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return slices.Clone(l.recs[min(n, len(l.recs)):])
+}
+
+// The pane agents' managers (the retro's, a curation's, ...) give their
+// panes the hook env exactly while the daemon listens: the retro's
+// EnsureWorkspace passes no env of its own, and its session's pane gets the
+// App's hook socket and the binary, or neither without a listener.
+func TestThePaneAgentsPanesGetTheHookEnvOnlyWhileTheDaemonListens(t *testing.T) {
+	for _, tc := range []struct {
+		name, socket string
+	}{{"listening", "/state/run/hooks.sock"}, {"no listener", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+			old := paneSession(t, scratch, "w0:p0") // an earlier session, closed: the PR row is the one to use
+			if err := scratch.TransitionSession(h.ctx, old.ID, []string{store.SessionLive}, store.SessionClosed, nil); err != nil {
+				t.Fatal(err)
+			}
+			cfg := *h.cfg
+			role := cfg.LearnRole()
+			cfg.Roles = []config.Role{role}
+			a := &app.App{Runner: &execx.Fake{}, Logger: h.d.Logger, HookSocket: tc.socket}
+			m := learnAgents(newEvalHerdr(), a)(scratch, &cfg, h.layout)
+			row, err := scratch.PRByID(h.ctx, old.PRID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.EnsureWorkspace(h.ctx, row, t.TempDir(), nil, learnWorkspace, []config.Role{role}); err != nil {
+				t.Fatal(err)
+			}
+			s, err := scratch.LiveSessionByPRRole(h.ctx, row.ID, role.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, has := s.Env[agenthooks.EnvSocket]
+			bin, hasBin := s.Env[agenthooks.EnvBin]
+			switch {
+			case tc.socket != "" && (got != tc.socket || bin != h.layout.Binary()):
+				t.Fatalf("the retro pane's env: socket %q, bin %q; want %q and %q", got, bin, tc.socket, h.layout.Binary())
+			case tc.socket == "" && (has || hasBin):
+				t.Fatalf("the retro pane's env without a listener: %v", s.Env)
+			}
+		})
+	}
 }

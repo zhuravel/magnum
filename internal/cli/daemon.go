@@ -168,7 +168,9 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	}
 	defer claim.Release()
 	eo.Claim = claim
-	a, err := app.New(c.Config, c.Layout, daemonAppOptions(c, o))
+	aopts := daemonAppOptions(c, o)
+	aopts.HookSocket = claim.HookSocket() // "" without a listener: no pane gets the hook env
+	a, err := app.New(c.Config, c.Layout, aopts)
 	if err != nil {
 		return daemonDryRunReport{}, err
 	}

@@ -21,6 +21,9 @@ import (
 	"sync/atomic"
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/app"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -381,4 +384,16 @@ func (h *lateHandler) then(step func(slog.Handler) slog.Handler) slog.Handler {
 		}
 		return step(to)
 	}}
+}
+
+// learnAgents makes the pane agents' managers (paneDeps.Agents): agents.New
+// over a pane agent's scratch registry with the live herdr client h, tagged
+// LearnAgentTag, with the App's hook socket, so the panes they make get the
+// hook env exactly while the daemon listens (agents.Deps.HookSocket; the
+// pane agents' EnsureWorkspace passes no env of its own).
+func learnAgents(h agents.Herdr, a *app.App) func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+	return func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+		return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
+			Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}, HookSocket: a.HookSocket})
+	}
 }
