@@ -1535,7 +1535,8 @@ func (f *fakeAgents) Tell(_ context.Context, run store.Run, text string) error {
 // then "|no findings" for a review that found nothing) and renders a prompt
 // that names the run's report and marker; an empty input but the external
 // file is an error, as the real prompt would render a broken push or review
-// line.
+// line (the review's inputs may be empty for the merge of the parent alone,
+// MergeOnly, whose prompt names no review).
 func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error) {
 	f.record(fmt.Sprintf("fix_prompt:%s:%s|%s|%s|%s|%s|%s|%s", role, run.ID, in.HeadRef, in.ReviewURL, in.ReviewFile, in.ReviewerLogin, in.DBLockCommand,
 		in.ExternalFile) + map[bool]string{true: "|no findings"}[in.NoFindings])
@@ -1546,7 +1547,8 @@ func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in 
 	if ferr != nil {
 		return "", ferr
 	}
-	if in.HeadRef == "" || in.ReviewURL == "" || in.ReviewFile == "" || in.ReviewerLogin == "" || in.DBLockCommand == "" || in.FixReplyCommand == "" {
+	review := in.MergeOnly || (in.ReviewURL != "" && in.ReviewFile != "" && in.ReviewerLogin != "")
+	if in.HeadRef == "" || !review || in.DBLockCommand == "" || in.FixReplyCommand == "" {
 		return "", fmt.Errorf("fake fix prompt of %s: an empty input %+v", run.ID, in)
 	}
 	return fmt.Sprintf("fix the findings of %s on %s; report to %s, first line %s", in.ReviewURL, pr.URL, deref(run.ReportPath), agents.ReportMarker(run.ID)), nil

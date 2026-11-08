@@ -59,7 +59,8 @@ const ReqFix = "fix"
 // None of Off, On and Done starts a loop. Decide posts your replies in the
 // threads the fixer left you, as you, then starts the loop, whose fixer
 // builds them as your decisions (fix_decide.go); it goes without Off, On and
-// Done.
+// Done. Mode FixModeMerge merges the PR's parent alone (fix_parent.go),
+// with DryRun and nothing else.
 type FixPayload struct {
 	PRTarget
 	DryRun bool          `json:"dry_run,omitempty"`
@@ -68,6 +69,7 @@ type FixPayload struct {
 	Done   bool          `json:"done,omitempty"`
 	Seen   string        `json:"seen,omitempty"`
 	Decide []FixDecision `json:"decide,omitempty"`
+	Mode   string        `json:"mode,omitempty"`
 }
 
 const (
@@ -166,6 +168,14 @@ type fixJob struct {
 	conflict    fixConflict
 	forMerge    bool
 	baseChecked bool
+	// mode is the job's FixState.Mode: "" fixes a review's findings,
+	// FixModeMerge merges the PR's parent alone (fix_parent.go). behind is
+	// the base whose tip the head lacks though it merges it cleanly, which
+	// the daemon merges before the fixer starts (mergeParent: the first
+	// cycle of a loop, and the merge mode); merged is the base whose tip
+	// it merged so, whose merge is then the job's head (the prompt says so).
+	mode           string
+	behind, merged fixConflict
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
@@ -241,6 +251,10 @@ func (j *fixJob) work() string {
 	n := j.review.Findings() + open
 	optional := j.review.Simplifications + openP3(j.review)
 	switch {
+	case j.mode == FixModeMerge && j.conflict.sha != "":
+		return fmt.Sprintf("%s in %s, the merge of the PR's parent alone", j.conflict.words(), where)
+	case j.mode == FixModeMerge:
+		return fmt.Sprintf("merges %s at %s in %s, with no conflict", j.behind.base, textx.ShortSHA(j.behind.sha), where)
 	case j.forMerge && j.conflict.sha != "":
 		return fmt.Sprintf("%s in %s (%s)", j.conflict.words(), where, note)
 	case j.alone && j.othersDeferred:
@@ -390,6 +404,12 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	subject := prSubject(repo, pr.Number)
 	switch {
+	case p.Mode != "" && p.Mode != FixModeMerge:
+		return "", fmt.Errorf("magnum fix: no mode %q", p.Mode)
+	case p.Mode == FixModeMerge && (len(p.Decide) > 0 || p.Done || p.Off || p.On):
+		return "", errors.New("magnum merge-parent goes alone, without --decide, --done, --off or --on")
+	case p.Mode == FixModeMerge:
+		return e.requestMerge(ctx, pr, p.DryRun || e.d.DryRun) // fix_parent.go
 	case len(p.Decide) > 0 && (p.Done || p.Off || p.On):
 		return "", errors.New("magnum fix: --decide goes alone, without --done, --off or --on")
 	case p.Done && (p.Off || p.On):
@@ -948,10 +968,23 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	if job.slot.ID == 0 { // the pool took the PR's slot back
 		failed, err = "fix claim failed: ", steps.Step(ctx, e.st, subject, "fix.claim", func(ctx context.Context) error { return e.fixClaim(ctx, job) })
 	}
+	refused, merged := "", false // the daemon's merge of the parent (fix_parent.go)
 	if err == nil {
 		if err = steps.Step(ctx, e.st, subject, "fix.guard", func(ctx context.Context) error { return e.fixGuard(ctx, job) }); err != nil {
 			failed = "fix guard failed: "
-		} else if err = steps.Step(ctx, e.st, subject, "fix.start", func(ctx context.Context) error { return e.fixStart(ctx, job) }); err != nil {
+		} else if job.behind.sha != "" {
+			if err = steps.Step(ctx, e.st, subject, "fix.parent", func(ctx context.Context) error {
+				var err error
+				refused, err = e.mergeParent(ctx, job)
+				return err
+			}); err != nil {
+				failed = "fix merge failed: "
+			}
+			merged = err == nil && refused == "" && job.merged.sha != ""
+		}
+	}
+	if err == nil && (job.mode != FixModeMerge || job.conflict.sha != "") { // a merge the daemon made or refused needs no fixer
+		if err = steps.Step(ctx, e.st, subject, "fix.start", func(ctx context.Context) error { return e.fixStart(ctx, job) }); err != nil {
 			failed = "fix run failed: "
 		} else if err = steps.Step(ctx, e.st, subject, "fix.wait", func(ctx context.Context) error { return e.fixWait(ctx, job) }); err != nil {
 			failed = "fix run failed: "
@@ -967,11 +1000,18 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		return
 	}
 	var gone fixConflictGone
+	var none fixNothingToMerge
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot): // the claim lost its free slot (fixClaim): nothing failed
 		e.endFixUnclaimed(fctx, job, err.Error(), true)
 	case errors.As(err, &gone): // a merge-only job whose conflict is gone (checkFixBase): nothing to do
 		e.endFixUnclaimed(fctx, job, gone.Error(), false)
+	case errors.As(err, &none): // a merge of the parent that has its tip already (checkFixBase)
+		e.endFixUnclaimed(fctx, job, none.Error(), false)
+	case err == nil && job.mode == FixModeMerge && refused != "":
+		e.parentRefused(fctx, job, refused)
+	case err == nil && job.mode == FixModeMerge && merged:
+		e.endParentMerged(fctx, job)
 	case err != nil:
 		msg := failed + err.Error()
 		if job.touched {
@@ -1061,7 +1101,13 @@ func (e *Engine) closeFixHandle(prID int64) []stopOrder {
 // another round took since prepareFix found it free fails as prepareFix
 // refuses (noFreeFixSlot), and runFix ends the loop quietly with it.
 func (e *Engine) fixClaim(ctx context.Context, job *fixJob) error {
-	slot, note, err := e.claimAtReviewedHead(ctx, job.pr, job.repo)
+	claim := e.claimAtReviewedHead
+	if job.mode == FixModeMerge { // no review: the slot is claimed at the head the merge goes on
+		claim = func(ctx context.Context, pr store.PR, repo store.Repo) (store.Slot, string, error) {
+			return e.claimForAt(ctx, pr, repo, fixMergeBy, job.head)
+		}
+	}
+	slot, note, err := claim(ctx, job.pr, job.repo)
 	fctx := context.WithoutCancel(ctx)
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot) && job.pool != nil:
@@ -1118,11 +1164,13 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	switch {
 	case slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused:
 		return fmt.Errorf("a round is in progress (%s)", pr.State)
+	case pr.HeadSHA != head && job.mode == FixModeMerge:
+		return fmt.Errorf("the head moved to %s since the request asked to merge into %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(head))
 	case pr.HeadSHA != head:
 		return fmt.Errorf("the head moved to %s since the review on %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(job.review.SHA))
-	case deref(pr.ReviewedSHA) != head:
+	case deref(pr.ReviewedSHA) != head && job.mode != FixModeMerge: // the merge mode needs no review
 		return fmt.Errorf("the reviewed head is %s, not %s", textx.ShortSHA(deref(pr.ReviewedSHA)), textx.ShortSHA(head))
-	case deref(slot.CheckedOutSHA) != head:
+	case deref(slot.CheckedOutSHA) != head && job.mode != FixModeMerge: // the merge mode checks the head out below
 		return fmt.Errorf("slot %s holds %s, not the reviewed head %s", slot.Name, textx.ShortSHA(deref(slot.CheckedOutSHA)), textx.ShortSHA(head))
 	}
 	if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); e.now().Before(until) {
@@ -1136,6 +1184,12 @@ func (e *Engine) fixGuard(ctx context.Context, job *fixJob) error {
 	}
 	if err := e.d.Slots.Guard(ctx, slot); err != nil {
 		return err
+	}
+	if deref(slot.CheckedOutSHA) != head { // the merge mode's slot held an older head of the PR (fix_parent.go)
+		if slot, err = e.checkoutAt(ctx, slot, pr, job.pool, head); err != nil {
+			return err
+		}
+		job.slot = slot
 	}
 	if err := e.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", e.now()) }); err != nil {
 		return err
@@ -1176,13 +1230,34 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 		if base == "" {
 			what = "could not check " + job.label() + " against its base"
 		}
+		if job.mode == FixModeMerge { // nothing else to do: the merge is the job
+			return fmt.Errorf("%s: %s", what, oneLine(err.Error(), 300))
+		}
 		e.event(ctx, "warn", job.subject(), "fix.conflict_unchecked", fmt.Sprintf("%s: %s; %s", what, oneLine(err.Error(), 300), then),
 			map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
 		return nil
-	case c.sha == "" && job.forMerge:
+	case c.sha == "" && job.forMerge && job.mode != FixModeMerge:
 		return fixConflictGone{head: job.head, base: job.conflict.base, review: job.review.SHA}
 	}
 	job.conflict, job.baseChecked = c, true
+	job.forMerge = job.forMerge && c.sha != ""
+	// The parent first (fix_parent.go): a head that lacks the base's tip
+	// and merges it cleanly is merged by the daemon, on a loop's first
+	// cycle and in the merge mode; a later cycle merges only a conflict,
+	// which is the fixer's.
+	if c.sha == "" && (job.state.Cycle <= 1 || job.mode == FixModeMerge) {
+		b, err := e.behindBase(ctx, job)
+		switch {
+		case err != nil && job.mode == FixModeMerge:
+			return err
+		case err != nil:
+			e.log.Info("fix: whether the head lacks the base's tip", "subject", job.subject(), "err", err)
+		}
+		job.behind = b
+	}
+	if job.mode == FixModeMerge && c.sha == "" && job.behind.sha == "" {
+		return fixNothingToMerge{label: job.label(), base: deref(job.pr.BaseRef)}
+	}
 	return nil
 }
 
@@ -1385,7 +1460,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		return err
 	}
 	external, unread := "", ""
-	if job.state.Report != "" {
+	if job.state.Report != "" && job.mode != FixModeMerge { // the merge of the parent answers nobody
 		external, unread = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
 	}
 	if unread != "" { // the loop's end says so (othersUnread)
@@ -1421,10 +1496,14 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		}
 		push, login = agents.PushLine(e.d.Layout.Binary(), job.slot.Path, base), logins[0]
 	}
+	reviewFile := ""
+	if job.review.SHA != "" { // the merge of the parent has no review
+		reviewFile = filepath.Join(e.d.Layout.ReviewDir(job.repo.Owner, job.repo.Name, pr.Number, job.review.SHA), agents.PostReviewFile)
+	}
 	text, err := e.d.Agents.FixPrompt(pr, agents.Role(job.role.Name), run, agents.FixPromptInput{
 		HeadRef:         deref(pr.HeadRef),
 		ReviewURL:       job.review.URL,
-		ReviewFile:      filepath.Join(e.d.Layout.ReviewDir(job.repo.Owner, job.repo.Name, pr.Number, job.review.SHA), agents.PostReviewFile),
+		ReviewFile:      reviewFile,
 		ExternalFile:    external,
 		ReviewerLogin:   job.login,
 		DBLockCommand:   agents.DBLockLine(e.d.Layout.Binary(), job.slot.Path, job.role.Name),
@@ -1433,11 +1512,14 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		PushCommand:     push,
 		FixerLogin:      login,
 		NoFindings:      job.alone,
-		OwnPR:           e.ownPR(pr), // prepareFix refused any other: it lets the fixer edit the description
+		OwnPR:           e.ownPR(pr) && job.mode != FixModeMerge, // prepareFix refused any other: it lets the fixer edit the description
 		NotesParts:      notesParts,
 		ConflictBase:    job.conflict.base,
 		ConflictSHA:     job.conflict.sha,
 		ConflictPaths:   job.conflict.paths,
+		MergeOnly:       job.mode == FixModeMerge,
+		MergedBase:      job.merged.base,
+		MergedSHA:       job.merged.sha,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())
@@ -1469,6 +1551,10 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	}
 	if c := job.conflict; c.sha != "" { // checkFixBase: the fixer merges the base first, as fixes says
 		data["conflict_base"], data["conflict_sha"], data["conflict_files"] = c.base, c.sha, len(c.paths)
+	}
+	if m := job.merged; m.sha != "" { // mergeParent: the fixer starts from magnum's merge of the parent
+		msg += fmt.Sprintf("; on magnum's merge of %s at %s", m.base, textx.ShortSHA(m.sha))
+		data["merged_base"], data["merged_sha"] = m.base, m.sha
 	}
 	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
 	return nil

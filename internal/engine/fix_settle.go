@@ -149,6 +149,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		data["carried"] = len(carried)
 	}
 	switch {
+	case pushed && job.mode == FixModeMerge: // fix_parent.go: the poller's rules judge the merge, as any push of a merge
+		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
+		e.parentPushed(ctx, job, target, needs, n > 0)
 	case pushed && n > 0:
 		e.event(ctx, "warn", subject, "fix.needs_you", needs+"; the re-review of "+textx.ShortSHA(target)+" runs first", data)
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")

@@ -255,8 +255,13 @@ func (e *Engine) claimAtReviewedHead(ctx context.Context, pr store.PR, repo stor
 // returns the slot reserved with the error, for the caller to hand back: a
 // claimed slot is neither evictable nor reclaimed otherwise.
 func (e *Engine) claimFor(ctx context.Context, pr store.PR, repo store.Repo, by string) (slot store.Slot, schemaNote string, err error) {
+	return e.claimForAt(ctx, pr, repo, by, reviewedTarget(pr))
+}
+
+// claimForAt is claimFor at target: the merge of a PR's parent claims a slot
+// at its head, which no review needs to stand on (fix_parent.go).
+func (e *Engine) claimForAt(ctx context.Context, pr store.PR, repo store.Repo, by, target string) (slot store.Slot, schemaNote string, err error) {
 	full := repo.FullName()
-	target := reviewedTarget(pr)
 	pool := e.cfg.PoolFor(full)
 	if pool == nil {
 		w := e.cfg.WatchFor(full)
