@@ -12,9 +12,10 @@ package engine
 // produces its required checks, starts that workflow on the PR's branch
 // once for the head (openStartCI) as [[repo]] ci_dispatch_as, else the
 // watch's poll identity, the daemon's own client of that identity (never
-// the fixer's pane), and waits for its run
-// while the head's checks run and settle_max after the start. GitHub runs
-// the workflow as the branch has it and refuses one without a
+// the fixer's pane), and waits for its run while the head's checks run,
+// while the run is queued or runs (the poll reads it, awaitCIRuns: GitHub's
+// rollup of the head leaves it out) and settle_max after the start. GitHub
+// runs the workflow as the branch has it and refuses one without a
 // workflow_dispatch trigger there; a PR that changes its own workflows or
 // actions is never started (its CI would run its own code with the
 // repository's secrets). The start is recorded before the call
@@ -27,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -46,22 +48,57 @@ func kvPRCIStart(prID int64) string { return fmt.Sprintf("pr.%d.ci_dispatch", pr
 // end was lost still counts), why it failed (Failed: GitHub's answer as a
 // status, "GitHub answered HTTP 422", never its message; a 403 adds
 // cannotStartWorkflows' words) or why magnum did not start it (Refused, At
-// zero).
+// zero), and its run as the poll last read it (Run: nil, none seen).
 type ciStart struct {
 	Head     string    `json:"head"`
 	Workflow string    `json:"workflow"`
 	At       time.Time `json:"at,omitzero"`
 	Failed   string    `json:"failed,omitempty"`
 	Refused  string    `json:"refused,omitempty"`
+	Run      *ciRun    `json:"run,omitempty"`
 }
+
+// ciRun is the newest run of a start's workflow that a dispatch started at
+// the head since the start (dispatchedRun): GitHub's status of it (queued,
+// in_progress, completed, ...) and, once it ended, its conclusion.
+type ciRun struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+}
+
+// running reports whether r is a run that has not ended (queued, waiting
+// or in progress); ended whether it ended. Both are false for nil, no run.
+func (r *ciRun) running() bool { return r != nil && r.Status != "completed" }
+func (r *ciRun) ended() bool   { return r != nil && r.Status == "completed" }
+
+// ciRunSkew is how long before the look's start GitHub may have created
+// its run, GitHub's clock against the daemon's: a run created earlier is
+// an older one of the head (someone's start by hand), not the look's.
+const ciRunSkew = time.Minute
 
 // workflowDispatcher is the engine's GitHub client's start of a workflow
-// run (*github.Client's DispatchWorkflow).
-type workflowDispatcher interface {
-	DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string) error
-}
+// run (*github.Client's DispatchWorkflow); dispatchedRunLister its list of
+// the runs a dispatch started (DispatchedRuns).
+type (
+	workflowDispatcher interface {
+		DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string) error
+	}
+	dispatchedRunLister interface {
+		DispatchedRuns(ctx context.Context, owner, repo, workflow, sha string) ([]github.WorkflowRun, error)
+	}
+)
 
-var _ workflowDispatcher = (*github.Client)(nil)
+var (
+	_ workflowDispatcher  = (*github.Client)(nil)
+	_ dispatchedRunLister = (*github.Client)(nil)
+)
+
+// ciDispatchIdentity is the identity that starts the CI workflow of
+// repository full under w, and reads its runs: [[repo]] ci_dispatch_as,
+// else the watch's poll identity, else its identity.
+func (e *Engine) ciDispatchIdentity(full string, w config.Watch) string {
+	return cmp.Or(e.cfg.CIDispatchAs(full), w.PollIdentity, w.Identity)
+}
 
 // openCIStartOf is what the look knows of starting pr's CI workflow, of
 // repository full, for f.ci (rule 11's): [[repo]] ci_dispatch where a
@@ -88,26 +125,83 @@ func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 	return ciStart{}
 }
 
-// ciRunAwaited reports whether the poll of repository full at now reads
-// the checks of pr, whose head the radar did not move, again for the
-// look's start of its CI workflow: GitHub took the start at the head less
-// than settle_max before now (the look's wait for the run) and the head's
-// stored checks still miss a required check (openCI). GitHub's rollup of
-// the head leaves the run out (its workflow_dispatch check suite), and a
-// check it creates passed in an older suite of the head (Completion) moves
-// neither the rollup's state nor its failed or pending counts, so without
-// this read the look waited on a check that had passed and said no run
-// came. One read a poll for such a PR at most (fetchDetails asks once),
-// ending with the wait or once the run shows; it starts nothing.
-func (e *Engine) ciRunAwaited(ctx context.Context, full string, pr store.PR, now time.Time) bool {
+// awaitCIRuns is the poll's read of the runs of the look's starts of the
+// CI workflow of repository full under w at now, and the numbers of the
+// radar's PRs whose checks the poll reads for them, whatever the rollup
+// says (fetchDetails). A start waits where GitHub took it at the head the
+// radar still shows, the head's stored checks miss a required check
+// (openCI), and it is less than settle_max old or its run was queued or
+// running at the last read. For such a PR the poll reads the head's checks
+// and the workflow's dispatched runs at the head (dispatchedRun), and keeps
+// the newest one that GitHub created since the start in the start's record
+// (ciStart.Run). GitHub's rollup of the head leaves that run out (its
+// workflow_dispatch check suite), so a run that is queued or runs shows
+// only there, and the Completion check the run creates at its end in an
+// older suite of the head is created passed, which moves neither the
+// rollup's state nor its failed or pending counts. So the look waits while
+// the run does, past settle_max (GitHub's limits end a run), and the poll
+// that sees the run end reads the checks it left. One read of each a poll
+// for such a PR at most, none once the run's check shows, the run ended
+// and, with no run, the wait ended; it starts nothing.
+func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, prs []github.PRRadar, byNode map[string]store.PR, now time.Time) map[int]bool {
 	if e.cfg.CIDispatch(full) == "" {
-		return false
+		return nil
 	}
-	s := e.ciStartAt(ctx, pr)
-	if s.At.IsZero() || s.Failed != "" || !now.Before(s.At.Add(e.openSettle().max)) {
-		return false
+	owner, name, _ := strings.Cut(full, "/")
+	identity := e.ciDispatchIdentity(full, w)
+	var awaited map[int]bool
+	for _, p := range prs {
+		pr, ok := byNode[p.NodeID]
+		if !ok || pr.HeadSHA != p.HeadRefOid { // a moved head's checks are read anyway; the start was the old head's
+			continue
+		}
+		s := e.ciStartAt(ctx, pr)
+		waits := now.Before(s.At.Add(e.openSettle().max)) || s.Run.running()
+		if s.At.IsZero() || s.Failed != "" || !waits || len(e.openCI(ctx, full, pr).missing) == 0 {
+			continue
+		}
+		if awaited == nil {
+			awaited = map[int]bool{}
+		}
+		awaited[p.Number] = true
+		if run, ok := e.dispatchedRun(ctx, identity, owner, name, s); ok && (s.Run == nil || *s.Run != run) {
+			s.Run = &run
+			e.writeCIStart(ctx, pr, s)
+		}
 	}
-	return len(e.openCI(ctx, full, pr).missing) > 0
+	return awaited
+}
+
+// dispatchedRun is the newest run of start s's workflow at its head that
+// GitHub created since the start (less ciRunSkew), as identity reads the
+// runs a dispatch started (DispatchedRuns); ok is false for none, and for
+// runs that were not read: identity's GitHub budget is low, it has no
+// client that lists them, or the call failed (said once per distinct
+// error, poll.ci_runs_error), which leaves the last read standing.
+func (e *Engine) dispatchedRun(ctx context.Context, identity, owner, name string, s ciStart) (ciRun, bool) {
+	if _, low := e.githubLow(identity); low {
+		return ciRun{}, false
+	}
+	l, ok := e.gh(identity).(dispatchedRunLister)
+	if !ok {
+		return ciRun{}, false
+	}
+	full := owner + "/" + name
+	runs, err := l.DispatchedRuns(ctx, owner, name, s.Workflow, s.Head)
+	if err != nil {
+		if e.changed("ci_runs:"+full, err.Error()) {
+			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error",
+				fmt.Sprintf("the runs of %s that magnum started at %s: %v", s.Workflow, textx.ShortSHA(s.Head), err), nil)
+		}
+		return ciRun{}, false
+	}
+	e.changed("ci_runs:"+full, "")
+	for _, r := range runs { // newest first
+		if !r.CreatedAt.Before(s.At.Add(-ciRunSkew)) {
+			return ciRun{Status: r.Status, Conclusion: r.Conclusion}, true
+		}
+	}
+	return ciRun{}, false
 }
 
 // openMissingCI is rule 11's verdict v of f's head, at which the required
@@ -120,9 +214,11 @@ func (e *Engine) ciRunAwaited(ctx context.Context, full string, pr store.PR, now
 // (f.ciWorkflow): it asks for the start (v.dispatch) when nothing holds it,
 // waits for the end of `magnum pause` and for the GitHub budget (the poll
 // identity's, f.low, and ci_dispatch_as's, f.ciLow), and waits
-// for the run of a start it made (f.ciStart) while the head's checks run
-// and until settle_max after the start. A start that failed, one magnum
-// refused, and one whose run never came need you.
+// for the run of a start it made (f.ciStart) while the head's checks run,
+// while the run is queued or runs (ciStart.Run) and until settle_max after
+// the start. A start that failed, one magnum refused, one whose run ended
+// without the checks (in words of the run's conclusion, runEnd) and one
+// whose run never came need you.
 func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
 	waits := func(why string, until time.Time) OpenVerdict {
@@ -144,7 +240,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	}
 	due := f.pr.HeadChangedAt.Add(f.settle.max)
 	switch {
-	case f.ci.running && started:
+	case (f.ci.running || s.Run.running()) && started:
 		return waits(startedWhy(), s.At.Add(f.settle.max))
 	case f.ci.running || f.now.Before(due):
 		return waits(what+" has not started", due)
@@ -159,6 +255,8 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return needsYou(fmt.Sprintf("magnum's start of %s failed (%s)%s", wf, s.Failed, byHand))
 	case started && f.now.Before(s.At.Add(f.settle.max)):
 		return waits(startedWhy(), s.At.Add(f.settle.max))
+	case started && s.Run.ended():
+		return needsYou(fmt.Sprintf("magnum started %s at %s and its run ended%s without it%s", wf, waitClock(s.At, f.now), runEnd(s.Run.Conclusion), byHand))
 	case started:
 		return needsYou(fmt.Sprintf("magnum started %s at %s and no run came%s", wf, waitClock(s.At, f.now), byHand))
 	case f.pause != "":
@@ -168,6 +266,19 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	}
 	v.dispatch = true
 	return needsYou("magnum starts " + wf)
+}
+
+// conclusionRe is a run's conclusion as GitHub writes one ("timed_out").
+var conclusionRe = regexp.MustCompile(`^[a-z_]{1,32}$`)
+
+// runEnd is how a run of the CI workflow ended, by its conclusion, in the
+// verdict's words (" (timed out)"); "" for none, or one that is not
+// GitHub's plain word.
+func runEnd(conclusion string) string {
+	if !conclusionRe.MatchString(conclusion) {
+		return ""
+	}
+	return " (" + strings.ReplaceAll(conclusion, "_", " ") + ")"
 }
 
 // missingWhat names missing, required entries with no run on a head, in
@@ -220,7 +331,7 @@ func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watc
 		s.Refused = "the PR's branch is not known"
 	}
 	subject, short := prSubject(repo, pr.Number), textx.ShortSHA(pr.HeadSHA)
-	identity := cmp.Or(e.cfg.CIDispatchAs(repo.FullName()), w.PollIdentity, w.Identity)
+	identity := e.ciDispatchIdentity(repo.FullName(), w)
 	data := map[string]any{"head": pr.HeadSHA, "workflow": workflow, "identity": identity}
 	if s.Refused != "" {
 		if !e.writeCIStart(ctx, pr, s) {

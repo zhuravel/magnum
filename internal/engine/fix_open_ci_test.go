@@ -315,6 +315,35 @@ func TestARunOfTheStartedCIWorkflowThatEndedWithoutTheCheckNeedsYou(t *testing.T
 	}
 }
 
+// A read of the dispatched runs that GitHub refuses (an identity that
+// cannot read the repository's Actions) is said once, and the look waits
+// and then needs you as with no run: settle_max bounds it.
+func TestARefusedReadOfTheDispatchedRunsIsSaidOnceAndTheWaitEndsAsWithNoRun(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.gh.mu.Lock()
+	h.gh.runsErr = &github.APIError{Op: "dispatched runs", Status: 403}
+	h.gh.mu.Unlock()
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	if _, runs := h.polls(3); runs != 3 {
+		t.Fatalf("runs read %d times in 3 polls of the wait, want 3", runs)
+	}
+	if evs := h.events("poll.ci_runs_error"); len(evs) != 1 || evs[0].Level != "warn" ||
+		!strings.HasPrefix(evs[0].Message, "the runs of ci.yml that magnum started at a1a1a1a: ") {
+		t.Errorf("poll.ci_runs_error events = %+v, want one", evs)
+	}
+	h.advance(20 * time.Minute)
+	h.tick()
+	v := h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
+	if !strings.HasSuffix(v.Why, " and no run came; run it on the PR's branch") {
+		t.Errorf("why = %q, want no run came", v.Why)
+	}
+	if _, runs := h.polls(3); runs != 0 {
+		t.Errorf("runs read %d times in 3 polls after the wait, want none", runs)
+	}
+}
+
 // Only a start that waits for its run reads the head's checks and the
 // workflow's dispatched runs on every poll: an own PR of a repository with
 // ci_dispatch whose required check has not started yet (no start), and one
