@@ -5369,9 +5369,14 @@ keeps a comment's text; that stays in the retro's run directory,
 `~/.local/share/magnum/learn/retro/<run>/<owner>/<repo>/<N>/` (`candidates.json`, the files, `retro.json`),
 which is deleted after 30 days. `magnum misses` lists the new misses (`--all` every class and state, with
 the latest notes proposal each was given to and an outside comment's reason in its class,
-`outside:before_review`; `--json` has `outside_reason` and `comment_sha`), `magnum status` shows when the last retro ran, how many new
-misses wait and how many pull requests wait for the settle delay, and every step is a `retro.*` event
-(`magnum logs <ref>`) that never quotes a comment.
+`outside:before_review`; `--json` has `outside_reason` and `comment_sha`), `magnum status` shows when the last retro ran,
+what the jobs that learn from it will take ("21 misses and 8 declined findings for the skill editor · 3 misses
+for the notes curation": the `general` misses of P0 to P2 and the `general` findings declined as `wrong` or
+`over_ranked`, still `new`, and the repository misses; a count of none is left out, `inputs` in the JSON)
+and how many pull requests wait for the settle delay, and every step is a `retro.*` event (`magnum logs
+<ref>`) that never quotes a comment. A `general` P3 miss and a declined finding that stands (verdict `right`:
+the author declined a correct finding) need nothing from you or from a job, so the line does not count
+them; `magnum misses` lists them.
 
 **On a pull request the factory published.** The factory's local review (Factory, above) passed the change
 before anyone else saw it, so a comment that round did not catch is the factory's miss, whatever Magnum's
@@ -5390,7 +5395,7 @@ yours, a merge of the base branch) and a review summary on a later head. No comm
 factory did not publish gets one either. A comment Magnum's posted round caught that the local round did
 not is no longer only counted: it is stored as a factory-origin miss marked as the posted round's catch
 (`posted_caught`), which nothing that teaches Magnum's review reads (the skill editor, the notes curation,
-the learned eval corpus, the counts of new misses), since that round already knew it. A comment both
+the learned eval corpus, the status line's counts), since that round already knew it. A comment both
 rounds missed is an ordinary miss, origin `factory` as well. The agent also gets copies of the task's plan
 (`report.md`), ticket (`ticket.md`, or `prompt.md` for a task started from a prompt) and your answers
 (`answers.md`) in `factory/` beside the candidates, data like the comments and never instructions, and
@@ -5450,8 +5455,7 @@ a repository miss, so the next notes curation of that repository takes it like a
 retro of the pull request answers it otherwise; the skill editor takes only the `general` ones. `magnum misses --declines` lists the findings authors
 declined or argued that no lesson was drawn from yet (`--all` every answer, `--json` the rows),
 `magnum stats` counts the answers by source and by priority (a simplification's, every one of them, under
-`simplification`), and `magnum status` adds how many declined
-findings wait.
+`simplification`), and `magnum status` counts the declined findings the skill editor will take.
 
 **The learned eval corpus.** Each retro ends by rewriting `~/.local/share/magnum/learn/corpus.toml`, which
 `magnum eval` reads after your corpus: one case per `general` miss of severity P0 to P2 (`miss-<id>`, a

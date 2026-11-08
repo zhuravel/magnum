@@ -337,9 +337,10 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 	r.Codex = u
 }
 
-// statusGatherRetro fills the retro: the last one's summary and the new
-// misses. A retro nobody asked for (no [learn] enabled, none ever ran), an
-// unreadable summary or a failed count is absence, not an error.
+// statusGatherRetro fills the retro: the last one's summary and what the
+// jobs that learn from it will take now (engine.CountLearnInputs). A retro
+// nobody asked for (no [learn] enabled, none ever ran), an unreadable
+// summary or a failed count is absence, not an error.
 func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *statusReport) {
 	ro := &statusRetro{Enabled: d.Config != nil && d.Config.Learn.Enabled}
 	if v, ok := kv.get(engine.KVRetroLast); ok {
@@ -351,11 +352,8 @@ func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *status
 	if !ro.Enabled && ro.Last == nil {
 		return
 	}
-	if n, err := d.Store.CountMisses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, States: []string{store.MissNew}}); err == nil {
-		ro.NewMisses = &n
-	}
-	if n, err := d.Store.CountDeclines(ctx, declinesFilter(false, 0)); err == nil {
-		ro.Declined = &n
+	if in, err := engine.CountLearnInputs(ctx, d.Store); err == nil {
+		ro.Inputs = &in
 	}
 	if d.Config != nil && d.Config.Learn.Settle.Duration > 0 {
 		lc, now := d.Config.Learn, r.GeneratedAt

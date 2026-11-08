@@ -10248,6 +10248,22 @@ type LearnGit interface {
     LearnGit is the git work of an editor run, its gate and its landing
     (learn_land.go) (*gitx.Client).
 
+type LearnInputs struct {
+	EditorMisses   int `json:"editor_misses"`
+	EditorDeclines int `json:"editor_declines"`
+	NotesMisses    int `json:"notes_misses"`
+}
+    LearnInputs counts what the jobs that learn from the retro will take now,
+    as `magnum status` shows it: the skill editor's inputs (editorEvidence:
+    the general misses of P0 to P2 and the general findings declined as wrong
+    or over-ranked, still new) and the repository misses the notes curation
+    takes (notesMissFilter). A general P3 miss, a declined finding that stands
+    (verdict right: the author declined a correct finding) and a repository
+    decline that is no miss feed no job; `magnum misses` lists them.
+
+func CountLearnInputs(ctx context.Context, st *store.Store) (LearnInputs, error)
+    CountLearnInputs counts LearnInputs in st.
+
 type LearnProposePayload struct{}
     LearnProposePayload is a `magnum learn --propose` request.
 

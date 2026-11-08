@@ -316,30 +316,65 @@ func (e *Engine) scheduledEditStopped(ctx context.Context, err error) {
 // errNothingToLearn is an edit run that found no input.
 var errNothingToLearn = errors.New("no new general miss or declined finding to learn from")
 
-// generalEvidence lists the editor's inputs now, by their inputs.json ids:
-// the general misses of P0 to P2 and the general findings declined as
-// wrong or over-ranked, still new.
+// generalEvidence lists the editor's inputs now (editorEvidence), by their
+// inputs.json ids.
 func (e *Engine) generalEvidence(ctx context.Context) ([]string, error) {
-	misses, err := e.st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeGeneral},
-		States: []string{store.MissNew}})
-	if err != nil {
-		return nil, err
-	}
-	declines, err := e.st.Declines(ctx, store.DeclineFilter{Verdicts: []string{store.VerdictWrong, store.VerdictOverRanked},
-		Scopes: []string{store.MissScopeGeneral}, States: []string{store.MissNew}})
+	misses, declines, err := editorEvidence(ctx, e.st)
 	if err != nil {
 		return nil, err
 	}
 	var out []string
 	for _, m := range misses {
-		if slices.Contains(editSeverities, m.Severity) {
-			out = append(out, learn.MissInputID(m.ID))
-		}
+		out = append(out, learn.MissInputID(m.ID))
 	}
 	for _, d := range declines {
 		out = append(out, learn.DeclineInputID(d.ID))
 	}
 	return out, nil
+}
+
+// editorEvidence is the editor's inputs now in st: the general misses of P0
+// to P2 and the general findings declined as wrong or over-ranked, still
+// new.
+func editorEvidence(ctx context.Context, st *store.Store) ([]store.Miss, []store.Decline, error) {
+	misses, err := st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeGeneral},
+		States: []string{store.MissNew}})
+	if err != nil {
+		return nil, nil, err
+	}
+	declines, err := st.Declines(ctx, store.DeclineFilter{Verdicts: []string{store.VerdictWrong, store.VerdictOverRanked},
+		Scopes: []string{store.MissScopeGeneral}, States: []string{store.MissNew}})
+	if err != nil {
+		return nil, nil, err
+	}
+	return slices.DeleteFunc(misses, func(m store.Miss) bool { return !slices.Contains(editSeverities, m.Severity) }), declines, nil
+}
+
+// LearnInputs counts what the jobs that learn from the retro will take now,
+// as `magnum status` shows it: the skill editor's inputs (editorEvidence:
+// the general misses of P0 to P2 and the general findings declined as
+// wrong or over-ranked, still new) and the repository misses the notes
+// curation takes (notesMissFilter). A general P3 miss, a declined finding
+// that stands (verdict right: the author declined a correct finding) and a
+// repository decline that is no miss feed no job; `magnum misses` lists
+// them.
+type LearnInputs struct {
+	EditorMisses   int `json:"editor_misses"`
+	EditorDeclines int `json:"editor_declines"`
+	NotesMisses    int `json:"notes_misses"`
+}
+
+// CountLearnInputs counts LearnInputs in st.
+func CountLearnInputs(ctx context.Context, st *store.Store) (LearnInputs, error) {
+	misses, declines, err := editorEvidence(ctx, st)
+	if err != nil {
+		return LearnInputs{}, err
+	}
+	notes, err := st.CountMisses(ctx, notesMissFilter(0))
+	if err != nil {
+		return LearnInputs{}, err
+	}
+	return LearnInputs{EditorMisses: len(misses), EditorDeclines: len(declines), NotesMisses: notes}, nil
 }
 
 // newEvidence counts the inputs of after that before lacks.

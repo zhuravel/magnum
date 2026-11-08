@@ -418,9 +418,9 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 
 // statusRetroText is the retro line's value: when the last retro finished
 // and how it went (with the factory-origin misses it stored, when any),
-// then the real misses waiting for a lesson, the findings
-// authors declined or argued (when any) and the PRs waiting for the settle
-// delay.
+// then what a job will take, each count left out when it is none: the
+// skill editor's misses and declined findings, the notes curation's
+// misses, and the PRs waiting for the settle delay.
 func statusRetroText(ro statusRetro, now time.Time) string {
 	s := "never"
 	if l := ro.Last; l != nil {
@@ -442,11 +442,20 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 			}
 		}
 	}
-	if ro.NewMisses != nil {
-		s += " · " + textx.Count(*ro.NewMisses, "new miss", "new misses")
-	}
-	if ro.Declined != nil && *ro.Declined > 0 {
-		s += " · " + strconv.Itoa(*ro.Declined) + " declined"
+	if in := ro.Inputs; in != nil {
+		var editor []string
+		if in.EditorMisses > 0 {
+			editor = append(editor, textx.Count(in.EditorMisses, "miss", "misses"))
+		}
+		if in.EditorDeclines > 0 {
+			editor = append(editor, textx.Count(in.EditorDeclines, "declined finding", "declined findings"))
+		}
+		if len(editor) > 0 {
+			s += " · " + strings.Join(editor, " and ") + " for the skill editor"
+		}
+		if in.NotesMisses > 0 {
+			s += " · " + textx.Count(in.NotesMisses, "miss", "misses") + " for the notes curation"
+		}
 	}
 	if ro.Settling != nil && *ro.Settling > 0 {
 		s += " · " + textx.Count(*ro.Settling, "PR waits", "PRs wait") + " for the " + ro.Settle + " settle delay"

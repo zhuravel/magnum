@@ -259,7 +259,7 @@ func TestStatusRetroLineCountsThePRsThatWaitForTheSettleDelay(t *testing.T) {
 		}
 	}
 	r, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    never · 0 new misses · 1 PR waits for the 24h settle delay\n")
+	actContains(t, out, "retro:    never · 1 PR waits for the 24h settle delay\n")
 	if r.Retro == nil || r.Retro.Settling == nil || *r.Retro.Settling != 1 {
 		t.Errorf("retro = %+v", r.Retro)
 	}

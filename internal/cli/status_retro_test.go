@@ -24,18 +24,26 @@ func statusRetroSet(t *testing.T, st *store.Store, sum engine.RetroSummary) {
 	}
 }
 
-// statusRetroSeed adds new misses of class miss (two), a used one and a style one.
+// statusRetroSeed adds new misses of class miss: a general P2 one (the
+// skill editor's), a general P3 one (no job's) and a repository P3 one (the
+// notes curation's); a used general P1 one and a style one.
 func statusRetroSeed(t *testing.T, st *store.Store) {
 	t.Helper()
 	_, pr := inspSeedPR(t, st, "talkable/talkable", 11800, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	general, repo := store.MissScopeGeneral, store.MissScopeRepo
 	for i, m := range []store.Miss{
-		{Class: store.MissMiss}, {Class: store.MissMiss}, {Class: store.MissMiss, State: store.MissUsed}, {Class: store.MissStyle},
+		{Class: store.MissMiss, Scope: general, Severity: "P2"}, {Class: store.MissMiss, Scope: general, Severity: "P3"},
+		{Class: store.MissMiss, Scope: repo, Severity: "P3"}, {Class: store.MissMiss, Scope: general, Severity: "P1", State: store.MissUsed},
+		{Class: store.MissStyle},
 	} {
 		m.SourceURL = "https://example.com/c/" + string(rune('a'+i))
 		m.Title = "t"
 		missSeed(t, st, pr, m)
 	}
 }
+
+// statusRetroInputs is the retro line's counts of statusRetroSeed's rows.
+const statusRetroInputs = " · 1 miss for the skill editor · 1 miss for the notes curation"
 
 func statusRetroOut(t *testing.T, d statusDeps) (statusReport, string) {
 	t.Helper()
@@ -68,10 +76,10 @@ func TestStatusRetroLineWhenEnabledNeverRan(t *testing.T) {
 	_, st, d, _ := statusFixture(t)
 	d.Config.Learn.Enabled = true
 	_, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    never · 0 new misses\n")
+	actContains(t, out, "retro:    never\n")
 	statusRetroSeed(t, st)
 	_, out = statusRetroOut(t, d)
-	actContains(t, out, "retro:    never · 2 new misses\n")
+	actContains(t, out, "retro:    never"+statusRetroInputs+"\n")
 }
 
 func TestStatusRetroLineAfterARetroEvenWhenLearnIsOff(t *testing.T) {
@@ -80,8 +88,9 @@ func TestStatusRetroLineAfterARetroEvenWhenLearnIsOff(t *testing.T) {
 	statusRetroSet(t, st, engine.RetroSummary{Run: "20261003-100000", At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour),
 		PRs: 3, Classified: 1, Misses: 2, Caught: 4})
 	r, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 new misses\n")
-	if r.Retro == nil || r.Retro.Enabled || r.Retro.Last == nil || r.Retro.NewMisses == nil || *r.Retro.NewMisses != 2 {
+	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified"+statusRetroInputs+"\n")
+	if r.Retro == nil || r.Retro.Enabled || r.Retro.Last == nil || r.Retro.Inputs == nil ||
+		*r.Retro.Inputs != (engine.LearnInputs{EditorMisses: 1, NotesMisses: 1}) {
 		t.Errorf("retro = %+v", r.Retro)
 	}
 	// The line sits after the codex line (or the github one) and before the rounds line.
@@ -94,31 +103,51 @@ func TestStatusRetroLineWordsOneAndFailures(t *testing.T) {
 	_, st, d, now := statusFixture(t)
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-90 * time.Minute), Finished: now.Add(-time.Hour), PRs: 1, Classified: 0, Failed: 1})
 	_, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    1h ago, 1 PR, 0 classified, 1 failed · 0 new misses\n")
+	actContains(t, out, "retro:    1h ago, 1 PR, 0 classified, 1 failed\n")
 }
 
-// TestStatusRetroLineCountsNewDeclinedFindings: the retro line adds the
-// findings authors declined or argued that no lesson was drawn from yet,
-// and leaves the count out when there is none.
-func TestStatusRetroLineCountsNewDeclinedFindings(t *testing.T) {
+// On 2026-11-08 the line read "87 new misses · 221 declined", which reads
+// as work for you, yet 63 of the misses were general P3s that no job takes,
+// and the declines are the retro's inputs, 171 of them findings that stand
+// (verdict right: the author declined a correct finding). The line counts
+// what a job will use and says which:
+// the skill editor's general misses of P0 to P2 and general findings
+// declined as wrong or over-ranked, still new, and the notes curation's
+// repository misses; a count of nothing is left out, and `magnum misses`
+// keeps the rest.
+func TestStatusRetroLineCountsOnlyWhatAJobWillUse(t *testing.T) {
 	_, st, d, now := statusFixture(t)
-	statusRetroSeed(t, st)
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 1,
 		Declines: 4, Declined: 3})
-	_, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 new misses\n")
 	_, pr := inspSeedPR(t, st, "talkable/talkable", 11801, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
-	for i, outcome := range []string{store.DeclineDeclined, store.DeclineArgued, store.DeclineFixed, store.DeclineDeclined} {
-		dl := declineSeed(t, st, pr, int64(i+1), store.Decline{Outcome: outcome, Verdict: store.VerdictRight})
-		if i == 3 {
-			if _, err := st.SetDeclineState(context.Background(), []int64{dl.ID}, []string{store.MissNew}, store.MissUsed); err != nil {
+	general, repo := store.MissScopeGeneral, store.MissScopeRepo
+	for i, dl := range []store.Decline{
+		{Outcome: store.DeclineDeclined, Verdict: store.VerdictRight},
+		{Outcome: store.DeclineArgued, Verdict: store.VerdictRight},
+		{Outcome: store.DeclineFixed},
+		{Outcome: store.DeclineDeclined, Verdict: store.VerdictMissingContext, Scope: repo, Lesson: "l", Match: []string{"x"}},
+		{Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: repo, Lesson: "l", Match: []string{"x"}},
+		{Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: general, Lesson: "l", Match: []string{"x"}},
+		{Outcome: store.DeclineArgued, Verdict: store.VerdictOverRanked, Scope: general, Lesson: "l", Match: []string{"x"}},
+		{Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: general, Lesson: "l", Match: []string{"x"}},
+	} {
+		got := declineSeed(t, st, pr, int64(i+1), dl)
+		if i == 7 { // a lesson was drawn from it
+			if _, err := st.SetDeclineState(context.Background(), []int64{got.ID}, []string{store.MissNew}, store.MissUsed); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
+	_, out := statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 declined findings for the skill editor\n")
+	if strings.Contains(out, "declined ·") || strings.Contains(out, "new misses") {
+		t.Errorf("the line counts what no job uses:\n%s", out)
+	}
+	statusRetroSeed(t, st)
 	r, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 new misses · 2 declined\n")
-	if r.Retro == nil || r.Retro.Declined == nil || *r.Retro.Declined != 2 {
+	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 1 miss and 2 declined findings for the skill editor"+
+		" · 1 miss for the notes curation\n")
+	if r.Retro == nil || r.Retro.Inputs == nil || *r.Retro.Inputs != (engine.LearnInputs{EditorMisses: 1, EditorDeclines: 2, NotesMisses: 1}) {
 		t.Errorf("retro = %+v", r.Retro)
 	}
 }
@@ -131,10 +160,10 @@ func TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses(t *testing.T) {
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 2,
 		Misses: 1, Factory: 2})
 	_, out := statusRetroOut(t, d)
-	actContains(t, out, "retro:    2h ago, 3 PRs, 2 classified, 2 factory-origin misses · 0 new misses\n")
+	actContains(t, out, "retro:    2h ago, 3 PRs, 2 classified, 2 factory-origin misses\n")
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 1, Classified: 1, Factory: 1})
 	_, out = statusRetroOut(t, d)
-	actContains(t, out, "retro:    2h ago, 1 PR, 1 classified, 1 factory-origin miss · 0 new misses\n")
+	actContains(t, out, "retro:    2h ago, 1 PR, 1 classified, 1 factory-origin miss\n")
 }
 
 func TestStatusRetroLineSaysWhyARetroStoppedAndCleansIt(t *testing.T) {
@@ -165,16 +194,22 @@ func TestStatusJSONCarriesTheRetro(t *testing.T) {
 				Run string `json:"run"`
 				PRs int    `json:"prs"`
 			} `json:"last"`
+			Inputs *struct {
+				EditorMisses   int `json:"editor_misses"`
+				EditorDeclines int `json:"editor_declines"`
+				NotesMisses    int `json:"notes_misses"`
+			} `json:"inputs"`
 			NewMisses *int `json:"new_misses"`
 		} `json:"retro"`
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.Retro.Last.Run != "20261003-100000" || r.Retro.Last.PRs != 3 || r.Retro.NewMisses == nil || *r.Retro.NewMisses != 2 || r.Retro.Enabled {
+	if r.Retro.Last.Run != "20261003-100000" || r.Retro.Last.PRs != 3 || r.Retro.Inputs == nil || r.Retro.Inputs.EditorMisses != 1 ||
+		r.Retro.Inputs.EditorDeclines != 0 || r.Retro.Inputs.NotesMisses != 1 || r.Retro.NewMisses != nil || r.Retro.Enabled {
 		t.Errorf("retro = %+v", r.Retro)
 	}
-	if code := f.run("status"); code != 0 || !strings.Contains(f.Out.String(), "retro:    ") || !strings.Contains(f.Out.String(), "3 PRs, 2 classified · 2 new misses") {
+	if code := f.run("status"); code != 0 || !strings.Contains(f.Out.String(), "retro:    ") || !strings.Contains(f.Out.String(), "3 PRs, 2 classified"+statusRetroInputs) {
 		t.Errorf("status text: exit %d\n%s", code, f.Out.String())
 	}
 }
