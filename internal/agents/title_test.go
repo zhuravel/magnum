@@ -351,3 +351,30 @@ func TestTitlesKeepPRNumbersByDefault(t *testing.T) {
 		t.Fatalf("tagged pane label = %q", got)
 	}
 }
+
+// The review daemon observes every few seconds now: a rename that has not
+// shown in the title yet is typed again only titleRetry after the last
+// (the factory's own clock, 10 s, and the tick are slower than that), so
+// the five attempts are not spent, and five /rename lines typed into a
+// working Codex, within half a minute.
+func TestNameJudgeWaitsTitleRetryBetweenAttempts(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	pane := ws.Panes[RoleJudge]
+	if _, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review"); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.renames(pane); len(got) != 1 {
+		t.Fatalf("renames after submit = %q", got)
+	}
+	e.clock.Add(titleRetry / 2)
+	e.observe()
+	if got := e.renames(pane); len(got) != 1 {
+		t.Fatalf("renames %s after the last = %q, want none more", titleRetry/2, got)
+	}
+	e.clock.Add(titleRetry / 2)
+	e.observe()
+	if got := e.renames(pane); len(got) != 2 {
+		t.Fatalf("renames %s after the last = %q, want a second", titleRetry, got)
+	}
+}

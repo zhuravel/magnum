@@ -3418,7 +3418,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   pass with no run submitted or at work reads nothing, so an idle daemon makes no socket call for it; each
   pass logs its duration at debug level, and one slower than the interval warns, at most once a minute.
   The clock is off in a dry run (it observes nothing), in `--once` (`observeUntilIdle`, as before) and
-  without herdr or agents. The end then wakes what waits for it: `agents.Manager.Ended` hands out a channel
+  without herdr or agents. What counted observe ticks counts passes now: the namer's `/rename` of a Codex
+  agent is paced by time too (`titleRetry`, 10 s, the factory's cadence), so the faster clock neither spends
+  its five attempts nor types five renames into a working Codex within half a minute; a permission prompt
+  denied on one pass is denied again, if the screen still shows it, two passes later, 10 s instead of
+  about a minute and still well past the screen's lag. The end then wakes what waits for it: `agents.Manager.Ended` hands out a channel
   the observe pass closes when it next ends a run or marks a session lost (then a new one), which
   `pipeline.Runner.Ended` passes to the turn's wait; the wait takes it before each read of its run and
   sleeps its 10 s poll only until it closes, so an end between the read and the sleep is not lost, and
@@ -3441,7 +3445,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLoadReadsObserveInterval, TestTheObserveClockEndsARunOneIntervalAndTheGapAfterTheStop,
   TestNoObservePassRunsWithNoRunInFlight, TestTheDaemonObservesBetweenItsTicks,
   TestTheObserveClockIsOffWhereNothingIsObserved, TestTheTickAndTheObserveClockNeverObserveAtOnce (it
-  fails with the lock taken out) and TestASlowObservePassWarnsAtMostOnceAMinute; for guards no test held,
+  fails with the lock taken out), TestASlowObservePassWarnsAtMostOnceAMinute and
+  TestNameJudgeWaitsTitleRetryBetweenAttempts; for guards no test held,
   TestAnIdleStreakFromBeforeARestartKeepsItsFirstReading, TestReadingsFartherApartThanTheGapEndATurnOnTheSecond,
   TestReadingsThatEndNothingCloseNothing and TestTheTickObservesAloneWithTheClockOff. Two permission tests
   took both idle readings at the same instant and now move the clock by the gap between them.

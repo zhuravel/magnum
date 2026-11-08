@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -79,13 +80,26 @@ func (m *Manager) paneLabel(pr store.PR, r Role) string {
 // restart creates a new row and a fresh budget).
 const TitleAttempts = 5
 
+// titleRetry is the shortest time between two rename attempts of a session
+// row: the review daemon's observe clock reads herdr every few seconds, and
+// a rename typed then has not always reached the terminal title yet.
+const titleRetry = 10 * time.Second
+
 // titleState is the namer's progress for one session row. Kept in memory
 // only: after a daemon restart a mistitled agent gets a new budget.
 type titleState struct {
 	title    string // Title of the session's PR role, resolved once
 	command  string // the kind's rename command for title
 	attempts int
-	tick     uint64 // observe tick of the last attempt (valid when attempts > 0)
+	tick     uint64    // observe tick of the last attempt (valid when attempts > 0)
+	at       time.Time // when the last attempt was made (valid when attempts > 0)
+}
+
+// titleSpent reports whether st allows no rename attempt now: TitleAttempts
+// made, or one made in this observe tick or less than titleRetry ago.
+// Under m.mu.
+func (m *Manager) titleSpent(st *titleState, now time.Time) bool {
+	return st.attempts >= TitleAttempts || (st.attempts > 0 && (st.tick == m.tick || now.Sub(st.at) < titleRetry))
 }
 
 // nameAgent types the kind's rename command (Kind.RenameCommand, e.g.
@@ -96,8 +110,8 @@ type titleState struct {
 // first turn, overwriting an earlier rename, so this runs on every tick
 // while magnum's turn works (and once right after Submit sees it working),
 // never while blocked or idle (an idle composer may hold a half-typed
-// prompt). At most one attempt per observe tick and TitleAttempts per
-// session row; a title that already matches (a resumed conversation keeps
+// prompt). At most one attempt per observe tick and per titleRetry, and
+// TitleAttempts per session row; a title that already matches (a resumed conversation keeps
 // its name) costs nothing. Best effort: failures are only logged.
 func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, current string) {
 	if paneID == "" || !m.isAgentSession(s) {
@@ -113,7 +127,8 @@ func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, curren
 		st = &titleState{}
 		m.titles[s.ID] = st
 	}
-	title, command, spent := st.title, st.command, st.attempts >= TitleAttempts || (st.attempts > 0 && st.tick == m.tick)
+	now := m.now()
+	title, command, spent := st.title, st.command, m.titleSpent(st, now)
 	m.mu.Unlock()
 	if spent {
 		return
@@ -139,12 +154,12 @@ func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, curren
 		return
 	}
 	m.mu.Lock()
-	if st.attempts >= TitleAttempts || (st.attempts > 0 && st.tick == m.tick) {
+	if m.titleSpent(st, now) {
 		m.mu.Unlock()
 		return // a concurrent Submit/Observe took this tick's attempt
 	}
 	st.attempts++
-	st.tick = m.tick
+	st.tick, st.at = m.tick, now
 	n := st.attempts
 	m.mu.Unlock()
 	if err := m.d.Herdr.PaneRun(ctx, paneID, command); err != nil {
