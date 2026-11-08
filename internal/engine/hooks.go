@@ -78,11 +78,11 @@ func ClaimDaemon(l paths.Layout) (*Claim, error) {
 		return c, nil
 	}
 	path := l.HookSocket()
-	if err := paths.CheckSocketPath(path); err != nil {
-		c.off = err.Error()
-		return c, nil
+	err = paths.CheckSocketPath(path)
+	if err == nil {
+		c.listener, err = agenthooks.Listen(path, slog.New(c.log))
 	}
-	if c.listener, err = agenthooks.Listen(path, slog.New(c.log)); err != nil {
+	if err != nil { // no listener: the daemon polls, and its panes get no hook env
 		c.off = err.Error()
 	}
 	return c, nil
