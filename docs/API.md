@@ -10240,6 +10240,13 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine
 func New(d Deps) *Engine
     New returns an engine over d.
 
+func (e *Engine) CommitIdentity(_ context.Context, repo string) (name, email string, err error)
+    CommitIdentity is who a merge magnum commits for repo ("owner/name") is by,
+    author and committer alike: the fix identity's bot, its login and its
+    noreply email (<user_id>+<login>@users.noreply.github.com), which GitHub
+    links to the bot, so the commit is attributed. It is the staging package's
+    Deps.CommitIdentity; an error says why there is no such bot.
+
 func (e *Engine) Kick()
     Kick asks the running loop for a tick now (what SIGUSR1 does).
 
@@ -10299,6 +10306,22 @@ func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResu
     environment (c.Env), never a per-PR worktree's env for the synthetic number.
     A case without a full base commit or a description file, or a judge-only
     one, never starts.
+
+func (e *Engine) StagingPushEnv(mirror func(repo string) (dir string, ok bool)) func(ctx context.Context, repo, mergeSHA, target string) (map[string]string, error)
+    StagingPushEnv is the staging package's Deps.PushEnv over mirror (the dir
+    of each repository's mirror, where the merge is: staging.MirrorDir): the git
+    env of one push of mergeSHA, a merge of a PR's head onto target's tip ([tip,
+    head]), to target, as the fix identity's bot. It refuses a target the bot
+    never pushes to (master, main, the default branch), a merge that is not on
+    target's tip in the mirror, and a merge carrying a .github/workflows file
+    that differs from both the tip's and the PR's base tip's (the PR whose
+    head is the merge's second parent; a PR that changes its own workflow
+    files is never pushed by the bot). A merge whose workflow files are the
+    tip's goes with the App's token; one that brings the base's goes with
+    the daemon's own token with Workflows write (identity.App.DaemonPushEnv,
+    never a pane's gh config dir), which the App revokes once its hold is over,
+    since the push's caller has no release; while the App lacks Workflows it is
+    refused with "needs Workflows on the App".
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
@@ -17944,6 +17967,14 @@ func (c *Client) DiffStat(ctx context.Context, dir, base, head string) ([]FileSt
     an addition, no external diff or textconv), in git's order; nil when head
     changes nothing.
 
+func (c *Client) DifferingPaths(ctx context.Context, dir, a, b string, paths ...string) ([]string, error)
+    DifferingPaths is ChangedBetween limited to paths (each relative to the
+    repository's top, a directory or a file, taken literally): which of them
+    differ between the commits a and b, in content, mode or presence, sorted;
+    nil when both have them alike. It compares the two trees alone, so a merge
+    that carries the base's files as the base has them shows none of them
+    against the base's tip. At least one path, none empty.
+
 func (c *Client) DirFiles(ctx context.Context, dir, rev string, dirs ...string) ([]string, error)
     DirFiles lists the files directly in each of dirs (relative to the top,
     "." for the top itself) at rev, never a directory, a submodule or a file
@@ -19177,6 +19208,12 @@ var ErrPlaceholderKey = errors.New("identity: placeholder private key")
     still holds the placeholder sentence the tracked mise.toml sets, instead of
     the PEM text or key file path from mise.local.toml.
 
+var ErrWorkflowsNotGranted = errors.New("the App's installation lacks the Workflows permission")
+    ErrWorkflowsNotGranted is DaemonPushEnv's error when GitHub will not mint
+    a token with Workflows write: the App, or its installation, lacks the
+    permission (the operator grants it on the App's settings and accepts it on
+    the installation).
+
 
 FUNCTIONS
 
@@ -19249,11 +19286,24 @@ func (a *App) Check(ctx context.Context) (Report, error)
 func (a *App) ConfigDir() string
     ConfigDir is the identity's private GH_CONFIG_DIR.
 
+func (a *App) DaemonPushEnv(ctx context.Context, workflows bool) (map[string]string, func(), error)
+    DaemonPushEnv mints a token for one push the daemon makes as the App,
+    narrowed as the App's tokens are (token_repositories and token_permissions,
+    config.Identity), with workflows = "write" added when workflows is set,
+    writes it into a gh config dir of its own beside ConfigDir (0700, never
+    ConfigDir, which panes name: the pane's token stays as narrow as it was),
+    and returns the env that selects that dir (as Env does) and the release
+    that removes the dir and revokes the token (once; later calls do nothing).
+    A token never released goes at the first refresh after daemonPushHold.
+    GitHub's refusal of Workflows is ErrWorkflowsNotGranted. The token is never
+    logged nor returned.
+
 func (a *App) EnsureConfigDir(ctx context.Context) (string, error)
     EnsureConfigDir makes sure a fresh token exists and that ConfigDir holds
     it (hosts.yml + config.yml, 0600 files in a 0700 dir, written atomically).
     It rewrites the files whenever the token changed or a file is missing;
     call it on every daemon tick so long-lived panes never see an expired token.
+    It also drops the daemon's push tokens past their hold (DaemonPushEnv).
 
 func (a *App) Env(ctx context.Context) (map[string]string, error)
     Env implements Source: a fresh token written to ConfigDir, selected via
@@ -29780,6 +29830,13 @@ type ActionResult struct {
 	Text string
 	// Requests are the daemon requests it queued, as last read.
 	Requests []Request
+	// Ask is the question an action that only planned asks before its
+	// next step, ending in "?": the daemon's plan of a merge of the parent
+	// (MergeParent's dry run), which the screen puts as y/N before it
+	// merges. "" for none.
+	Ask string
+
+	// Has unexported fields.
 }
     ActionResult is what a finished action reports.
 
@@ -30107,6 +30164,11 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// MergeParent merges the PR's parent, its base branch, into the
+	// operator's own PR as the fixer App's bot (magnum merge-parent); with
+	// dry, it only asks the daemon what would happen and returns the plan
+	// as the result's Ask, the y/N the screen puts before the merge.
+	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
 	// --done); the board's d, which asked first. seen is the digest of the
@@ -30203,6 +30265,9 @@ type FactoryActions interface {
 	Diff(taskID int64) *exec.Cmd
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
+	// MergeParent is DashboardActions.MergeParent: the factory's P on a
+	// PR row, the plan first (dry), then the merge.
+	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
 	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 	Review(ctx context.Context, ref string, o ReviewOpts) (ActionResult, error)
@@ -30849,7 +30914,11 @@ type PRBoardRow struct {
 	// --off`); its tags and the card say "fix off".
 	Fixing  string
 	FixLoop bool
-	FixOff  bool
+	// Fixer is the login the PR's fixer pushes and replies as (its watch's
+	// fix role's identity: a fixer App's bot, or yours), which f's
+	// question names; "" when the config does not say.
+	Fixer  string
+	FixOff bool
 	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
 	// it and the head it describes (engine.KVPRWhiteboard, written after a
 	// review or by `magnum whiteboard`); nil when the PR has none. The card
@@ -30989,6 +31058,10 @@ type PRRow struct {
 	// exists), which K aborts although the PR may be reviewed; FixOff: it
 	// was switched out of autofix (`magnum fix --off`), so F reads "fix on".
 	FixLoop, FixOff bool
+	// Fixer is the login the PR's fixer pushes and replies as (its watch's
+	// fix role's identity: a fixer App's bot, or yours), which f's
+	// question names; "" when the config does not say.
+	Fixer string
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
