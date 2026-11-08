@@ -133,7 +133,7 @@ Then judge each external item as a finding (section 3) and apply the same policy
 - An external item is blocking when its reviewer marks it so (a review that requests changes, or a tag such as P0 to P2, blocker, critical or major). Any other is optional.
 - An item that asks for nothing gets no verdict and no reply: a bot's status, CI or summary comment, a thanks, an approval.
 - A question that the code answers gets a reply with the answer. A question that only the author can answer (why the PR does something, what users should get) is step 6.
-- A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, and do not reply.
+- A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, do not reply, and write `not fixed. The author's call:` and the choice to make.
 - An item that asks to change the PR description is a description finding (section 3): fix it as section 5 says when it is right.
 - Each external item that gets a reply gets exactly one, in its own thread, or for a review body or a comment one issue comment (section 6).
 - A thread with `decision` set gets no verdict of yours: the author decided it. Read the decision at `decision_url` and build it, never overrule it: when it asks for a fix, fix it (section 5) and reply `Fixed in`; when it says to leave the code as it is, reply with the form it names, `Won't fix` unless it says `Not a bug`, and the author's reason. When you cannot build it (the decision is unclear, or its fix fails its specs and you cannot make them pass), do not reply: put it under `## Needs you` with `not fixed.` and why. magnum checks on GitHub that your reply is there; one that is not goes back to the author.

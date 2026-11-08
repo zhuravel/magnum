@@ -64,14 +64,20 @@ func DeclinedCall(thread, url, priority, place, ref string, magnums bool) FixCal
 
 // AuthorsCall is the call of one of magnum's findings whose Fix ends "This
 // is the author's call." (a P0 to P2: a P3's is optional, never a call),
-// which the fixer left to the author without a verdict of its own: "decide
-// magnum's P2 on <place>: the review leaves the choice to you; reply with
-// yours at <url>, or run `magnum fix <ref> --decide <thread>="<your
-// choice>"`" ("finding" for one without a priority). Neither "the fixer
-// declined it" nor "`magnum fix` sends it back" holds there: a rerun only
-// asks again. It is a decision call (DecisionCall).
-func AuthorsCall(thread, url, priority, place, ref string) FixCall {
-	return FixCall{Thread: thread, URL: url, Action: "decide magnum's " + cmp.Or(priority, "finding") + " on " + place +
+// or of a product or business-logic choice another reviewer's thread asks
+// for (magnums false), which the fixer left to the author without a verdict
+// of its own: "decide magnum's P2 on <place>: the review leaves the choice
+// to you; reply with yours at <url>, or run `magnum fix <ref> --decide
+// <thread>="<your choice>"`" ("another reviewer's" in a thread another
+// reviewer started, "finding" for one without a priority). Neither "the
+// fixer declined it" nor "`magnum fix` sends it back" holds there: a rerun
+// only asks again. It is a decision call (DecisionCall).
+func AuthorsCall(thread, url, priority, place, ref string, magnums bool) FixCall {
+	whose := "another reviewer's"
+	if magnums {
+		whose = "magnum's"
+	}
+	return FixCall{Thread: thread, URL: url, Action: "decide " + whose + " " + cmp.Or(priority, "finding") + " on " + place +
 		": the review leaves the choice to you; reply with yours at " + url + ", or run `magnum fix " + ref + " --decide " + thread + "=\"<your choice>\"`"}
 }
 
@@ -176,7 +182,7 @@ var (
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or `magnum fix [^`\\s]+` sends it back" +
 		"|resolve magnum's thread, already answered: (https://[^\\s#;,]+#discussion_r(\\d{1,20}))" +
 		"|merge the base by hand and decide the conflict in [A-Za-z0-9._/@+-]+(?:, [A-Za-z0-9._/@+-]+)*(?: and \\d{1,9} more)?: (https://[^\\s#;,]+)" +
-		"|decide magnum's (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the review leaves the choice to you; reply with yours at " +
+		"|decide (?:magnum's|another reviewer's) (?:P[0-3]|finding) on [A-Za-z0-9._/@+-]+:\\d{1,9}: the review leaves the choice to you; reply with yours at " +
 		"(https://[^\\s#;,]+#discussion_r(\\d{1,20})), or run `magnum fix [^`\\s]+ --decide \\d{1,20}=\"<your choice>\"`")
 	// fixMoreRe reads how many findings the older words after the calls name.
 	fixMoreRe = regexp.MustCompile(`^(\d+) more findings? needs? your call\b`)

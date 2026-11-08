@@ -54,7 +54,7 @@ func TestAnAuthorsCallLeavesTheChoiceToYou(t *testing.T) {
 		want   = "decide magnum's P2 on app/models/offer.rb:42: the review leaves the choice to you; reply with yours at " + url +
 			", or run `magnum fix talkable/talkable#2 --decide 4302866759=\"<your choice>\"`"
 	)
-	c := AuthorsCall("4302866759", url, "P2", "app/models/offer.rb:42", "talkable/talkable#2")
+	c := AuthorsCall("4302866759", url, "P2", "app/models/offer.rb:42", "talkable/talkable#2", true)
 	if c.Action != want || c.Thread != "4302866759" || c.URL != url {
 		t.Fatalf("AuthorsCall = %+v\nwant action %q", c, want)
 	}
@@ -70,5 +70,17 @@ func TestAnAuthorsCallLeavesTheChoiceToYou(t *testing.T) {
 	}
 	if calls, ok := FixDecisionCalls(msg); !ok || !slices.Equal(calls, []FixCall{c}) {
 		t.Errorf("FixDecisionCalls = %+v, %v; want the author's call as a decision", calls, ok)
+	}
+	// A product choice another reviewer's thread asks for is the author's
+	// call too (the fix skill's step 6): nobody declined it either.
+	const other = "https://github.com/talkable/talkable/pull/2#discussion_r4322458360"
+	o := AuthorsCall("4322458360", other, "", "lib/sandbox.rb:185", "talkable/talkable#2", false)
+	if want := "decide another reviewer's finding on lib/sandbox.rb:185: the review leaves the choice to you; reply with yours at " + other +
+		", or run `magnum fix talkable/talkable#2 --decide 4322458360=\"<your choice>\"`"; o.Action != want {
+		t.Fatalf("AuthorsCall in another reviewer's thread = %q\nwant %q", o.Action, want)
+	}
+	msg = "fix: " + FixCallsText([]FixCall{c, o}, "", report)
+	if calls, ok := FixDecisionCalls(msg); !ok || !slices.Equal(calls, []FixCall{c, o}) {
+		t.Errorf("FixDecisionCalls = %+v, %v; want both author's calls as decisions", calls, ok)
 	}
 }

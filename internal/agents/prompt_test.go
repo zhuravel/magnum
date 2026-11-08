@@ -759,7 +759,7 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"An item with `answered` set has its answer already: leave it.",
 		"Every other item is an external item.",
 		"Then judge each external item as a finding (section 3) and apply the same policy to it",
-		"A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, and do not reply.",
+		"A choice of business logic or product behaviour is step 6, as an author's call is: do not fix it, do not reply, and write `not fixed. The author's call:` and the choice to make.",
 		"An item that asks for nothing gets no verdict and no reply: a bot's status, CI or summary comment, a thanks, an approval.",
 		"Each external item that gets a reply gets exactly one, in its own thread, or for a review body or a comment one issue comment (section 6).",
 		"the threads of the external file that are not `answered`. Post the reply to the thread's first comment: the review comment, or an external thread's `comment_id`.",

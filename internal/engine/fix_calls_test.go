@@ -519,10 +519,11 @@ func TestANextCycleStartsWithoutTheLastCyclesAnsweredThreads(t *testing.T) {
 // goes under Optional calls), and the call then says the review leaves the
 // choice to you, with a reply in the thread or `magnum fix --decide` on it,
 // where "the fixer declined it" and "`magnum fix` sends it back" were wrong
-// (a rerun only asks again, as an own PR showed on 2026-11-07). Any other
-// "not fixed." of magnum's stays a decline, and the same words in another
-// reviewer's thread stay that reviewer's decline: the review left them
-// nothing.
+// (a rerun only asks again, as an own PR showed on 2026-11-07). The skill
+// writes the same words for a product or business-logic choice another
+// reviewer's thread asks for (its step 6, as an author's call is), and the
+// call leaves that choice to you the same way. Any other "not fixed." stays
+// a decline.
 func TestAnAuthorsCallAsksForYourChoiceNotADecline(t *testing.T) {
 	const prURL, ref = "https://github.com/talkable/talkable/pull/2", "talkable/talkable#2"
 	report := filepath.Join(t.TempDir(), "claude-fix.md")
@@ -537,8 +538,8 @@ func TestAnAuthorsCallAsksForYourChoiceNotADecline(t *testing.T) {
 		"#discussion_r4302866759, or run `magnum fix " + ref + " --decide 4302866759=\"<your choice>\"`; " +
 		"decide magnum's P2 on app/lib/x.rb:7: the fixer declined it; reply won't fix at " + prURL + "#discussion_r2102, or `magnum fix " + ref +
 		"` sends it back; " +
-		"decide another reviewer's finding on lib/sandbox.rb:185: the fixer declined it; reply won't fix at " + prURL +
-		"#discussion_r4322458360, or `magnum fix " + ref + "` sends it back; details: " + report
+		"decide another reviewer's finding on lib/sandbox.rb:185: the review leaves the choice to you; reply with yours at " + prURL +
+		"#discussion_r4322458360, or run `magnum fix " + ref + " --decide 4322458360=\"<your choice>\"`; details: " + report
 	if got != want {
 		t.Errorf("needsYouText =\n %q\nwant\n %q", got, want)
 	}

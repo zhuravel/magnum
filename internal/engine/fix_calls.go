@@ -55,8 +55,9 @@ import (
 // (path:line, or "description"), and what the fixer did: fixedIn is the
 // commit it says fixed it ("fixed in <sha>."), notFixed says it did not
 // ("not fixed."); neither when the entry does not say. authorsCall: a
-// finding it did not fix because its Fix leaves the choice to the author
-// ("not fixed. The author's call"). A conflict of the base merge the fixer
+// finding it did not fix because its Fix leaves the choice to the author,
+// or another reviewer's item that asks for a product or business-logic
+// choice ("not fixed. The author's call"). A conflict of the base merge the fixer
 // aborted has no id: its place is conflictPlace and paths are the paths it
 // names.
 type needsYouEntry struct {
@@ -186,10 +187,11 @@ func (n needsYouEntry) asks() bool {
 // not say what the fixer did, names the description or another reviewer's
 // review body or comment, which have no thread, or its thread cannot be
 // placed): the thread's link on the PR's page prURL, and `magnum fix ref`
-// to send a declined finding back to the fixer, or, for an author's call in
-// magnum's thread, `magnum fix ref --decide` with your choice
-// (attention.AuthorsCall). answered (one of magnum's
-// threads that shows its answer, freshNeedsYou) asks only to resolve it. A
+// to send a declined finding back to the fixer, or, for an author's call
+// (in magnum's thread, or a product choice in another reviewer's), `magnum
+// fix ref --decide` with your choice (attention.AuthorsCall). answered (one
+// of magnum's threads that shows its answer, freshNeedsYou) asks only to
+// resolve it. A
 // conflict of the base merge asks the author to merge the base on the PR's
 // page and decide the conflict (attention.ConflictCall).
 func (n needsYouEntry) call(o threadOwners, prURL, ref string, answered bool) (attention.FixCall, bool) {
@@ -209,8 +211,8 @@ func (n needsYouEntry) call(o threadOwners, prURL, ref string, answered bool) (a
 		return attention.ResolveCall(n.id, url), true
 	case n.fixedIn != "":
 		return attention.FixedCall(n.id, url, n.fixedIn, magnums), true
-	case magnums && n.authorsCall:
-		return attention.AuthorsCall(n.id, url, n.priority, n.place, ref), true
+	case n.authorsCall:
+		return attention.AuthorsCall(n.id, url, n.priority, n.place, ref, magnums), true
 	}
 	return attention.DeclinedCall(n.id, url, n.priority, n.place, ref, magnums), true
 }
