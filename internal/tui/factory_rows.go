@@ -18,10 +18,11 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
-	// GroupYours holds your own open PRs from magnum's registry that
-	// magnum's look leaves alone (LEFT ALONE: a baseline, fix off, a mute):
-	// they ask nothing. Your other PRs sit in GroupNeedsYou or GroupWaits by
-	// what they wait on, as the tasks do.
+	// GroupYours holds the open PRs from magnum's registry that magnum's
+	// look leaves alone, or that magnum does not review (LEFT ALONE: a
+	// baseline, a mute, a draft), your own and the published tasks' alike:
+	// they ask nothing. The other PRs sit in GroupNeedsYou or GroupWaits by
+	// what they wait on, fix off included (magnum still reviews them).
 	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone

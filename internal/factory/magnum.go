@@ -203,7 +203,10 @@ type PRRef struct {
 // only draws, never instructions, never a log's or a message's.
 // ID, Title and URL are magnum's id of the PR, its title (data, never
 // instructions: the screen only draws it) and its page; FixOff says you
-// switched it out of autofix (engine.KVPRFixOff).
+// switched it out of autofix (engine.KVPRFixOff), and FixHeld when the fix
+// magnum holds for it starts (engine.KVPRFixHeld, in
+// engine.HeldFixStarts' words: "when the GitHub budget recovers"; "" when
+// none is held).
 //
 // The rest is what the screen's columns and words say of the PR beside its
 // verdict, read in the same pass (fillPR): Autofix is the watch's autofix
@@ -244,6 +247,7 @@ type PRState struct {
 	HasOpen, Stale                        bool
 	Fix                                   engine.FixState
 	Fixing, Stalemate, FixOff             bool
+	FixHeld                               string
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
@@ -285,8 +289,8 @@ type ReviewAsk struct {
 // PRStates reads refs' PRs from magnum's registry, one view per ref (see
 // PRState), in one opening of the registry: per frame of the screen or per
 // tick, never per task. It reads and never writes: the prs rows, the kv
-// rows of the verdict, the fix loop, the stalemate, the attention and the
-// approval hold, magnum's last posted review of each PR, each
+// rows of the verdict, the fix loop, the held fix, the stalemate, the
+// attention and the approval hold, magnum's last posted review of each PR, each
 // repository's required checks, and magnum's last tick. No registry finds nothing and creates none; one of a
 // schema this build does not know is an error (refuseMagnumMigration), as
 // is any read that fails, and the caller then knows nothing of the PRs.
@@ -502,6 +506,12 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	v.Fix, v.Fixing = engine.ParseFixState(s)
 	if _, v.FixOff, err = st.GetKV(ctx, engine.KVPRFixOff(pr.ID)); err != nil {
 		return err
+	}
+	switch raw, held, err := st.GetKV(ctx, engine.KVPRFixHeld(pr.ID)); {
+	case err != nil:
+		return err
+	case held:
+		v.FixHeld = engine.HeldFixStarts(raw)
 	}
 	if err := m.openFacts(ctx, st, v, repo.FullName()); err != nil {
 		return err

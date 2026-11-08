@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -252,8 +253,9 @@ func TestWithoutMagnumTheRowKeepsTodaysWords(t *testing.T) {
 
 // Each fact of the PR has its row: a merge is done (before the tick moves
 // the task), a close waits for a reopen within [daemon] close_grace and
-// needs you after it, a PR magnum leaves alone needs you with why, one no
-// watch covers needs you to finish it, and an unreadable registry is magnum
+// needs you after it, a PR magnum leaves alone is LEFT ALONE with why (fix
+// off is not that: magnum still reviews it), one no watch covers needs you
+// to finish it, and an unreadable registry is magnum
 // looking; without a verdict (autofix is not "open") the loop, the
 // attention and magnum's review still show.
 func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
@@ -276,12 +278,12 @@ func TestAPublishedTasksRowFollowsItsPR(t *testing.T) {
 		"fix off": {func(v *PRState) {
 			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "fix is off (F)")
 			v.Open.Off = engine.OpenOffFixOff
-		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
-			tui.WaitsOn{Who: tui.WaitsOnYou, What: "fix is off for #4540 (F turns it on)", Short: "fix is off for #4540", OnYou: true}},
+		}, nil, tui.GroupWaits, tui.MarkWaits,
+			tui.WaitsOn{Who: "magnum", What: "review of #4540", Long: "review of #4540 · fix is off for #4540 (F turns it on)"}},
 		"a draft": {func(v *PRState) {
 			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "a draft")
 			v.Open.Off = engine.OpenOffDraft
-		}, nil, tui.GroupNeedsYou, tui.MarkNeedsYou, tui.WaitsOn{Who: tui.WaitsOnYou, What: "#4540 is a draft: mark it ready", Short: "#4540 is a draft", OnYou: true}},
+		}, nil, tui.GroupYours, tui.MarkWaits, tui.WaitsOn{Who: tui.WaitsOnYou, What: "#4540 is a draft: mark it ready", Short: "#4540 is a draft", OnYou: true}},
 		"no watch": {func(v *PRState) { *v = PRState{DaemonUp: true} }, nil, tui.GroupNeedsYou, tui.MarkNeedsYou,
 			tui.WaitsOn{Who: tui.WaitsOnYou, What: "magnum does not watch example/talkable: merge or close #4540 yourself, then x drops the task",
 				Short: "magnum does not watch example/talkable", OnYou: true}},
@@ -494,10 +496,47 @@ func TestARowSaysMagnumsOutcomeAndWhomItWaitsOn(t *testing.T) {
 	}{
 		"findings, no loop takes them": {func(v *PRState) { reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking) },
 			tui.GroupNeedsYou, tui.WaitsOnYou, "4 findings open at a1b2c3d (P1 P2×3) · f fixes them", "4 findings open", "f fixes them"},
-		"findings, magnum's fixer takes them": {func(v *PRState) {
+		"findings just posted under autofix own: its loop starts": {func(v *PRState) {
 			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
-			v.Autofix = config.AutofixOwn
+			v.Autofix, v.Review.At = config.AutofixOwn, screenNow.Add(-30*time.Second)
 		}, tui.GroupWaits, "magnum", "4 findings open at a1b2c3d (P1 P2×3) · magnum's fixer takes them", "4 findings open", ""},
+		"findings under autofix own, its loop stopped or never started": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
+			v.Autofix = config.AutofixOwn // reviewed 2h ago, and no loop runs: a K stopped it, or startFix refused
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "4 findings open at a1b2c3d (P1 P2×3) · f fixes them", "4 findings open", "f fixes them"},
+		"findings under autofix own, its fix held": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
+			v.Autofix, v.FixHeld = config.AutofixOwn, "when the GitHub budget recovers"
+		}, tui.GroupWaits, "magnum", "4 findings open at a1b2c3d (P1 P2×3) · magnum's fixer takes them when the GitHub budget recovers",
+			"4 findings open", ""},
+		"findings under autofix open": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
+			v.Autofix = config.AutofixOpen
+		}, tui.GroupWaits, "magnum", "4 findings open at a1b2c3d (P1 P2×3) · magnum's fixer takes them", "4 findings open", ""},
+		"findings under autofix own, fix off": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 3, 0}, store.VerdictBlocking)
+			v.Autofix, v.FixOff, v.Review.At = config.AutofixOwn, true, screenNow.Add(-30*time.Second)
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "4 findings open at a1b2c3d (P1 P2×3) · f fixes them", "4 findings open", "f fixes them"},
+		"clean, a reviewer asked for changes": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.Gate = &store.ReviewGate{Decision: "CHANGES_REQUESTED", Opinions: []store.LatestReview{{Login: "rev-ann", State: "CHANGES_REQUESTED"}}}
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "no findings at a1b2c3d · rev-ann asked for changes", "rev-ann asked for changes", "answer rev-ann"},
+		"clean, no review required": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.Gate = &store.ReviewGate{}
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "no findings at a1b2c3d · no review required, merge is yours", "merge is yours", "merge #%d on GitHub"},
+		"clean, a required check has not run yet": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.CI.Required = []tui.CheckState{{Name: "Completion", Label: "Completion", State: "missing"}}
+			v.HeadChangedAt = screenNow.Add(-5 * time.Minute)
+		}, tui.GroupWaits, "CI", "no findings at a1b2c3d · Completion has not run at a1b2c3d", "Completion has not run", ""},
+		"clean, a required check never ran past settle_max": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			v.CI.Required = []tui.CheckState{{Name: "Completion", Label: "Completion", State: "missing"}}
+			v.HeadChangedAt = screenNow.Add(-72 * time.Hour)
+		}, tui.GroupNeedsYou, tui.WaitsOnYou,
+			"no findings at a1b2c3d · Completion did not run at a1b2c3d: run its workflow on the PR's branch, or push",
+			"Completion did not run", "run its workflow, or push"},
 		"all fixed, a reviewer asked": {func(v *PRState) {
 			reviewedAt(v, [4]int{}, store.VerdictClean)
 			v.Review.Fixed = 3
@@ -553,6 +592,72 @@ func TestARowSaysMagnumsOutcomeAndWhomItWaitsOn(t *testing.T) {
 					t.Errorf("%s: group %d, %+v; want group %d, %s: %q (short %q)", key, row.Group, w, c.group, c.who, what, c.short)
 				case c.group == tui.GroupNeedsYou && row.Move != move:
 					t.Errorf("%s: move %q, want %q", key, row.Move, move)
+				}
+			}
+		})
+	}
+}
+
+// A task's PR and your PR in the same state sit in the same group, a look
+// that leaves them alone included. Fix off is no reason to leave a PR
+// alone: magnum still reviews it, so its row says what magnum's row says
+// (its outcome, whom it waits on), with fix off and F named on the long
+// form. A PR magnum does not review (muted, a baseline) is LEFT ALONE, a
+// task's as yours. Before, fix off put a task's PR in NEEDS YOU ("you: fix
+// is off for #4540 (F turns it on)") whatever it waited on, while your PR
+// in that state sat in LEFT ALONE.
+func TestATasksPRAndYoursInOneOffStateShareAGroup(t *testing.T) {
+	fixOff := func(v *PRState) {
+		v.HasOpen, v.FixOff, v.Open = true, true, verdict(engine.OpenOff, "fix is off (F)")
+		v.Open.Off = engine.OpenOffFixOff
+	}
+	for name, c := range map[string]struct {
+		edit      func(*PRState)
+		group     tui.FactoryGroup
+		who, what string
+		long      string
+	}{
+		"fix off, the reviewers asked": {func(v *PRState) {
+			reviewedAt(v, [4]int{}, store.VerdictClean)
+			fixOff(v)
+			v.Gate = &store.ReviewGate{Decision: "REVIEW_REQUIRED"}
+			v.Asked = []ReviewAsk{{Who: "rev-ann", At: screenNow.Add(-2 * time.Hour)}}
+		}, tui.GroupWaits, "reviewers", "no findings at a1b2c3d · asked rev-ann 2h ago", "fix is off for #%d (F turns it on)"},
+		"fix off, findings open": {func(v *PRState) {
+			reviewedAt(v, [4]int{0, 1, 0, 0}, store.VerdictBlocking)
+			fixOff(v)
+		}, tui.GroupNeedsYou, tui.WaitsOnYou, "1 finding open at a1b2c3d (P1) · f fixes them", "fix is off for #%d (F turns it on)"},
+		"fix off, magnum's review to come": {fixOff, tui.GroupWaits, "magnum", "review of #%d", "fix is off for #%d (F turns it on)"},
+		"muted": {func(v *PRState) {
+			v.HasOpen, v.Open = true, verdict(engine.OpenOff, "muted")
+			v.Open.Off = engine.OpenOffMuted
+		}, tui.GroupYours, tui.WaitsOnYou, "#%d is muted: U on the board unmutes it", ""},
+		"a baseline without a fresh verdict": {func(v *PRState) { v.OpenWatch, v.State = false, store.PRBaseline }, tui.GroupYours,
+			tui.WaitsOnYou, "#%d is yours to follow: it was open before magnum first synced the repository", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newScreenRig(t)
+			r.withMagnum()
+			r.publishedTask("PR-12340", 4540)
+			r.pr(4540, c.edit)
+			r.own(81, 4541, c.edit)
+			d := r.data(time.Time{})
+			for key, n := range map[string]int{"PR-12340": 4540, "#4541": 4541} {
+				row := rowOf(t, d, key)
+				w := row.WaitsOn[0]
+				what := strings.ReplaceAll(c.what, "%d", strconv.Itoa(n))
+				if row.Group != c.group || w.Who != c.who || w.What != what {
+					t.Errorf("%s: group %d, %+v; want group %d, %s: %q", key, row.Group, w, c.group, c.who, what)
+				}
+				if long := strings.ReplaceAll(c.long, "%d", strconv.Itoa(n)); long != "" &&
+					(!strings.Contains(w.Long, long) || !strings.Contains(row.Help, long)) {
+					t.Errorf("%s: long %q, help %q; want them to say %q", key, w.Long, row.Help, long)
+				}
+				if c.group == tui.GroupYours && (row.Move != "" || row.Mark == tui.MarkNeedsYou || row.PR == nil || row.PR.Off == "") {
+					t.Errorf("%s is left alone, yet asks something: move %q, mark %v, PR %+v", key, row.Move, row.Mark, row.PR)
+				}
+				if c.group != tui.GroupYours && row.PR != nil && row.PR.Off != "" {
+					t.Errorf("%s is not left alone, yet its PR says why: %q", key, row.PR.Off)
 				}
 			}
 		})
@@ -727,7 +832,7 @@ func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
 	d := r.data(time.Time{})
 	for key, want := range map[string]*tui.FactoryPR{
 		"PR-12340": {Ref: "example/talkable#4540", Fixing: true, Restores: true, Hold: 30 * time.Minute},
-		"PR-12341": {Ref: "example/talkable#4541", FixOff: true, Off: "fix is off for #4541 (F turns it on)"},
+		"PR-12341": {Ref: "example/talkable#4541", FixOff: true},
 		"PR-12342": {Ref: "example/talkable#4542", Off: "#4542 is a draft: mark it ready"},
 		"PR-12343": nil,
 		"PR-12344": nil,
@@ -740,7 +845,7 @@ func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
 			t.Errorf("%s carries %+v, want %+v", key, row.PR, *want)
 		}
 	}
-	if w := rowOf(t, d, "PR-12341").WaitsOn[0]; w.What != "fix is off for #4541 (F turns it on)" {
-		t.Errorf("a task's PR with fix off says %q, want the screen's F", w.What)
+	if w := rowOf(t, d, "PR-12341").WaitsOn[0]; !strings.HasSuffix(w.Long, "fix is off for #4541 (F turns it on)") {
+		t.Errorf("a task's PR with fix off says %q, want the screen's F", w.Long)
 	}
 }

@@ -318,6 +318,7 @@ func TestPRStatesReadsTheRowTheVerdictTheLoopAndTheStalemate(t *testing.T) {
 	setKV(t, st, engine.KVPROpen(fixing.ID), verdict)
 	setKV(t, st, engine.KVPRFix(fixing.ID), engine.FixState{Cycle: 2, Cap: 5, Phase: "fixing", Head: head})
 	setKV(t, st, engine.KVPRStalemate(fixing.ID), engine.Stalemate{Threads: []engine.StalemateThread{{ID: "T1", URL: "https://github.com/example/shop/pull/7#r1"}}})
+	setKV(t, st, engine.KVPRFixHeld(attn.ID), map[string]any{"at": now, "head": head, "by": "autofix", "why": "github_budget"})
 
 	refs := []PRRef{{"example/shop", 7}, {"example/shop", 8}, {"example/shop", 9}, {"example/shop", 10}, {"other/site", 1}}
 	views, err := NewMagnum(l, openWatchConfig()).PRStates(ctx, refs)
@@ -339,12 +340,16 @@ func TestPRStatesReadsTheRowTheVerdictTheLoopAndTheStalemate(t *testing.T) {
 		t.Errorf("#7's loop: fixing %v, %+v", v.Fixing, v.Fix)
 	case !v.Stalemate:
 		t.Error("#7's stalemate not read")
+	case v.FixHeld != "":
+		t.Errorf("#7 holds no fix, yet reads %q", v.FixHeld)
 	}
 	if v := views[refs[1]]; !v.Found || v.GHState != store.GHMerged || v.MergedAt == nil || v.HasOpen || v.Fixing {
 		t.Errorf("#8, merged: %+v", v)
 	}
 	if v := views[refs[2]]; v.State != store.PRNeedsAttention || v.Attention != "blocked" || !strings.Contains(v.AttentionMsg, "the slot's database is gone") {
 		t.Errorf("#9, needs attention: state %q, attention %q, %q", v.State, v.Attention, v.AttentionMsg)
+	} else if v.FixHeld != "when the GitHub budget recovers" {
+		t.Errorf("#9's held fix reads %q, want when it starts", v.FixHeld)
 	}
 	if v := views[refs[3]]; v.Found || !v.Watched || !v.DaemonUp {
 		t.Errorf("#10, not in magnum's registry: %+v", v)

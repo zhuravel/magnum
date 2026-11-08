@@ -514,10 +514,10 @@ func (p *factoryPainter) markSeg(r FactoryRow) seg {
 	return seg{p.markGlyph(r.Mark), p.st.Dim}
 }
 
-// tone is st, or Dim on a done row and on the row of your PR that magnum
-// leaves alone (it asks nothing).
+// tone is st, or Dim on a done row and on a row whose PR magnum leaves
+// alone, your PR's or a task's (it asks nothing).
 func (p *factoryPainter) tone(r FactoryRow, st lipgloss.Style) lipgloss.Style {
-	if r.Group == GroupDone || r.yourPR() && r.PR.Off != "" {
+	if r.Group == GroupDone || r.PR != nil && r.PR.Off != "" {
 		return p.st.Dim
 	}
 	return st

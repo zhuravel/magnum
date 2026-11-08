@@ -17697,14 +17697,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   while a task's PR in the same state sat in WAITS ON OTHERS; and the chip counted four baselines "at work".
   - Without a verdict that tells it, a row says what magnum's row says (`rowWait`): its round under way, its review
     to come, else its outcome at the head (`outcomeOf`: the findings it keeps open by priority, only optional
-    ones, all fixed, its approval, none) with what comes next and whom it waits on. Problems no loop of magnum's
-    takes wait on you; ones its fixer takes wait on magnum; a head clean on magnum's side waits on CI (failed: you),
-    then GitHub's review gate (`nextWait`): your merge, your answer to a changes request, the reviewers asked with
-    how long ago, or you to ask one. An idle verdict without a person's approval waits the same way once magnum
-    read the gate.
+    ones, all fixed, its approval, none) with what comes next and whom it waits on. Problems magnum's fixer takes
+    wait on magnum (`fixerTakes`: fix not off, and a fix magnum holds for the PR, with when it starts, autofix =
+    "open", or autofix = "own" for four of magnum's polls after its review of the head, while the loop autofix
+    starts right after the round is not written yet); the others wait on you, `f fixes them` (under "own" a `K`
+    that stopped the loop, or a start autofix logged as refused, leaves nobody else to take them). A head clean on
+    magnum's side waits on CI (failed: you; a required check that has not run, until `[pipeline] settle_max` after
+    the push, and then you, as the look's rule 11 has it: `Completion did not run at a1b2c3d: run its workflow on
+    the PR's branch, or push`), then GitHub's review gate (`nextWait`): your merge, your answer to a changes
+    request, the reviewers asked with how long ago, or you to ask one. An idle verdict without a person's
+    approval waits the same way once magnum read the gate. The pass reads the held fix (`PRState.FixHeld`,
+    `engine.KVPRFixHeld` in `engine.HeldFixStarts`' words).
   - The outcome decides the group, for your PR as for a task's: your PR that waits on others is in WAITS ON
-    OTHERS, and only the PRs magnum's look leaves alone keep a group of their own, LEFT ALONE (`tui.GroupYours`).
-    A baseline or a PR magnum does not review is left alone without a fresh verdict under autofix = "open" too.
+    OTHERS, and only the PRs magnum's look leaves alone keep a group of their own, LEFT ALONE (`tui.GroupYours`),
+    a published task's PR in that state too (`magnumWait` over `offOf`), dim and asking nothing. A baseline or a
+    PR magnum does not review is left alone without a fresh verdict under autofix = "open" too. Fix off is no
+    reason to leave a PR alone: magnum still reviews it, so its row says what magnum's row says (`rowWait`), with
+    `fix is off for #N (F turns it on)` on the long form and the help line; before, the look's off verdict put a
+    task's PR in NEEDS YOU whatever it waited on and your PR in LEFT ALONE, one `F` from either.
   - "looking at #N" is said for four of magnum's polls (OpenVerdict.Stale's count) since the PR's row changed,
     with magnum's daemon ticking, and waits since then; past that the row says what magnum's row says and names
     the look that has not decided, with why (its daemon stopped ticking, or runs an old build). A published PR
@@ -17723,11 +17733,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the title line says once); the verdict's last words for a stale verdict (an idle "merge is yours" would outlive
   a new head); a YOUR PRS group beside WAITS ON OTHERS (the same state in two groups); the CI's state for a head
   magnum has not reviewed (the review comes first, and its words say so). Tests, failing first:
-  TestARowSaysMagnumsOutcomeAndWhomItWaitsOn, TestAnIdleUnapprovedPRNamesItsReviewers,
+  TestARowSaysMagnumsOutcomeAndWhomItWaitsOn (with the loop autofix starts, a stopped one, a held fix, a
+  changes request, no review required, and a required check before and after settle_max),
+  TestATasksPRAndYoursInOneOffStateShareAGroup, TestAnIdleUnapprovedPRNamesItsReviewers,
   TestYourPRsThatWaitOnOthersSitInWaitsOnOthers, TestOnlyThePRsMagnumLeavesAloneKeepAGroupOfTheirOwn,
   TestTheChipCountsHonestly, TestTheHelpGlossesYourPRs, TestLookingAtIsSaidOnlyWhileItIsTrue,
   TestAPublishedPRMagnumNeverPickedUpNeedsYou, TestABaselineWithoutAFreshVerdictIsLeftAlone,
-  TestPRStatesSayMagnumsDaemonRunsAnOlderBuild, TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild; goldens
+  TestPRStatesSayMagnumsDaemonRunsAnOlderBuild, TestTheTitleLineSaysMagnumsDaemonRunsAnOlderBuild,
+  TestPRStatesReadsTheRowTheVerdictTheLoopAndTheStalemate (the held fix); goldens
   repos-100, -120, -140 and -200, yours-100, -140 and -200.
 - **`f`, `F` and `K` act on every row with a PR, and home's hygiene** (2026-11-08, the 2026-11-07 audit's R6 and
   R10, with its E #3 and A F10; amends "Your PRs on the factory screen", whose `f`, `F` and `x` refused a task's

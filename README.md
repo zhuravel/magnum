@@ -4369,8 +4369,10 @@ open): `agent: magnum fixes #4530 (cycle 2 of 5)`, a wait on `magnum`, `CI` or `
 WAITING FOR), `you: nothing open at a1b2c3d · approved, merge is yours` (your move: the merge, which stays yours)
 or `reviewers: nothing open at a1b2c3d · asked rev-ann 17h ago` (the reviewers asked and not yet answered, with how
 long ago; with nobody asked it needs you, `you: nothing open at a1b2c3d · no reviewer asked`, your move `ask a
-reviewer`), and `you:` with why when magnum leaves the PR alone
-(`fix is off for #4530 (F on the board turns it on)`, `#4530 is a draft: mark it ready`). A verdict that no longer
+reviewer`), and, in LEFT ALONE as your PR in that state, why when magnum leaves the PR alone or does not review it
+(`#4530 is a draft: mark it ready`, `#4530 is muted: U on the board unmutes it`). Fix off is not that: magnum
+still reviews the PR, so its row says what magnum's row says (below) and its long form and help line add `· fix is
+off for #4530 (F turns it on)`. A verdict that no longer
 tells the PR's state (magnum's last tick four poll intervals ago, another head, a PR row that changed since), or
 one still to come, says `magnum: looking at #4530` only while that is true: for four of magnum's polls since
 the PR's row last changed, with magnum's daemon ticking, waiting since then (WAITED gives its age). Past that the
@@ -4397,12 +4399,15 @@ only, and only draws it. Without the verdict (the watch's autofix is not `"open"
 review of #4530` before magnum reviewed the head, `magnum: magnum reviews a1b2c3d now` while its round runs, and
 once it reviewed the head, never a bare "reviewed": magnum's outcome there, what comes next and whom it waits on,
 which decide the row's group. Findings it keeps open there, new and earlier ones, by priority (`4 findings open at
-a1b2c3d (P1 P2×3)`) wait on magnum when its fixer takes them (`autofix = "own"` or `"open"`, fix not off: `· magnum's
-fixer takes them`) and on you otherwise (`· f fixes them` on your PR, `· f on the board fixes them` on a task's).
+a1b2c3d (P1 P2×3)`) wait on magnum when its fixer takes them (`· magnum's fixer takes them`: fix not off, and a fix
+magnum holds for the PR, `· magnum's fixer takes them when the GitHub budget recovers`, `autofix = "open"`, or
+`autofix = "own"` for four of magnum's polls after its review, while its loop starts) and on you otherwise (`· f
+fixes them`, on every row: under `"own"` nothing takes them once a `K` stopped the loop or its start was refused).
 A head clean on magnum's side (`magnum approved a1b2c3d`, `all 3 findings fixed at a1b2c3d`, `no problems at
 a1b2c3d, 2 optional (P3×2)`, `no findings at a1b2c3d`) never waits on magnum: a failed CI waits on you (`· CI
 failed: Completion`, your move `fix the CI`), a running one or a required check that has not run on `CI` (`· CI
-runs: 25/41`), then GitHub's review gate: approved, or no review required, waits on your merge (`· approved by
+runs: 25/41`, `· Completion has not run at a1b2c3d`) until `[pipeline] settle_max` after the push, and then on you
+(`· Completion did not run at a1b2c3d: run its workflow on the PR's branch, or push`), then GitHub's review gate: approved, or no review required, waits on your merge (`· approved by
 rev-ann, merge is yours`), changes asked on your answer (`· rev-cid asked for changes`), the reviewers asked on
 them (`reviewers: … · asked rev-ann 17h ago`), nobody asked on you (`· no reviewer asked`). A fix loop shows as soon as it
 starts (its row in magnum's registry), before the look's next verdict says `fixing`. WAITED counts from when the PR began to wait as it does (the
@@ -4452,12 +4457,13 @@ line and `e` for the report), unless a fix loop works on it. Its WAITED counts f
 write of its row. Every other one waits in WAITS ON OTHERS, beside the tasks whose PRs wait alike, in the words a
 published task's row has (`agent: magnum fixes #4612 (cycle 1 of 5)`, `CI: CI at a1b2c3d`, `reviewers: all 3
 findings fixed at a1b2c3d · asked rev-bob 2h ago`, `magnum: looking at #4613`): the same state is never in two
-groups. A PR magnum's look leaves alone (a baseline, fix off, a mute, a watch whose `include_own` is false;
-without a fresh verdict, a baseline or one magnum does not review, whatever the watch's autofix) waits in LEFT
-ALONE, between WAITS ON OTHERS and DONE TODAY, oldest first, dim, with why (`#4606 is yours to
-follow: it was open before magnum first synced the repository`, `fix is off for #4607 (F turns it on)`), after
-the others, so a short screen folds it first: it asks nothing, so a baseline open for weeks never sits in NEEDS
-YOU. The chip counts both kinds that need you (`1 task
+groups. A PR magnum's look leaves alone (a baseline, a mute, a watch whose `include_own` is false; without a
+fresh verdict, a baseline or one magnum does not review, whatever the watch's autofix) waits in LEFT ALONE, as a
+published task's PR in that state does, between WAITS ON OTHERS and DONE TODAY, oldest first, dim, with why
+(`#4606 is yours to follow: it was open before magnum first synced the repository`, `#4607 is muted: U on the
+board unmutes it`), after the others, so a short screen folds it first: it asks nothing, so a baseline open for
+weeks never sits in NEEDS YOU. Fix off is not left alone: magnum still reviews the PR, and its row waits as
+magnum's outcome says, with `· fix is off for #4607 (F turns it on)` on its long form and help line. The chip counts both kinds that need you (`1 task
 and 2 PRs need you`, or `2 PRs need you`), the rows that wait on others with those an agent or magnum's fixer
 works on now, the moving mark (`5 wait on others, 2 at work`), and your PRs magnum leaves alone apart (`4 left
 alone`), never as at work; a narrow chip gives up `today`, then its `at work`, before it is cut. The window title

@@ -10,7 +10,9 @@ package factory
 // watch does not run autofix = "open"), the row says what magnum's row says
 // (rowWait): its fix loop, its attention or stalemate, magnum's review to
 // come, else magnum's outcome at the head and whom it waits on next, never
-// a bare "reviewed". A PR magnum has not read is magnum looking at it until
+// a bare "reviewed". A PR magnum's look leaves alone, or magnum does not
+// review, is LEFT ALONE, as your PR in that state (offOf); fix off is not
+// that. A PR magnum has not read is magnum looking at it until
 // it should have found it (pickupFor), then it needs you; a registry that
 // cannot be read is magnum looking. A fix attention whose loop left you
 // items says the fixer's own items from its report (fixerWait). The row's
@@ -260,17 +262,20 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 }
 
 // prClock is when a PR's wait is read and the timings of magnum's daemon it
-// is read by: [daemon] close_grace, and poll_interval (30s unset).
+// is read by: [daemon] close_grace, poll_interval (30s unset), and
+// [pipeline] settle_max (20m unset), how long a required check may take to
+// start after a push before it did not run.
 type prClock struct {
-	now         time.Time
-	grace, poll time.Duration
+	now                 time.Time
+	grace, poll, settle time.Duration
 }
 
 // clockOf is cfg's prClock at now.
 func clockOf(cfg *config.Config, now time.Time) prClock {
-	c := prClock{now: now, poll: 30 * time.Second}
+	c := prClock{now: now, poll: 30 * time.Second, settle: 20 * time.Minute}
 	if cfg != nil {
 		c.grace, c.poll = cfg.Daemon.CloseGrace.Duration, cmp.Or(cfg.Daemon.PollInterval.Duration, c.poll)
+		c.settle = cmp.Or(cfg.Pipeline.SettleMax.Duration, c.settle)
 	}
 	return c
 }
@@ -318,15 +323,28 @@ func publishedWait(t registry.Task, ref PRRef, st PRState, c prClock) prWait {
 }
 
 // magnumWait is the wait of open PR #n as magnum's registry tells it (st):
-// its daemon down, the PR not read yet, its fix loop (the loop's row, which
-// a start writes at once, before the look's next verdict says fixing), its
-// fresh verdict (verdictWait), its attention or stalemate (attentionWait),
-// a verdict the look owes (a stale one, or one still to come: magnum
-// looking at the PR, while that is true, lookOwed; past it what magnum's
-// row says, with the look named), else what magnum's row says (rowWait).
+// left alone when magnum's look leaves it alone or magnum does not review
+// it (offOf: LEFT ALONE, a task's PR as yours, asking nothing), its daemon
+// down, the PR not read yet, its fix loop (the loop's row, which a start
+// writes at once, before the look's next verdict says fixing), its
+// attention or stalemate before a fresh verdict that leaves it alone, fix
+// off (magnum still reviews the PR: what magnum's row says, rowWait, with
+// fix off named), its fresh verdict (verdictWait), its attention or
+// stalemate (attentionWait), a verdict the look owes (a stale one, or one
+// still to come: magnum looking at the PR, while that is true, lookOwed;
+// past it what magnum's row says, with the look named), else what magnum's
+// row says (rowWait).
 func magnumWait(st PRState, n int, c prClock) prWait {
 	looking := fmt.Sprintf("looking at #%d", n)
-	switch {
+	fresh := st.HasOpen && !st.Stale
+	switch off := offOf(st); {
+	case off != "":
+		w := youWait(off, clauseShort(off), "")
+		w.group, w.mark = tui.GroupYours, tui.MarkWaits
+		if fresh {
+			w.since = cmp.Or(st.Open.Since, st.Open.At)
+		}
+		return w
 	case !st.DaemonUp:
 		return waitsWait("magnum", "daemon down", "", fmt.Sprintf("magnum's daemon is down: nothing looks at #%d", n))
 	case !st.Found:
@@ -339,6 +357,11 @@ func magnumWait(st PRState, n int, c prClock) prWait {
 		// magnum's own row says it needs you: a verdict to come or one gone
 		// stale never hides it as "looking at".
 		return attentionWait(st, n)
+	case fresh && st.Open.Verdict == engine.OpenOff && (st.State == store.PRNeedsAttention || st.Stalemate):
+		return attentionWait(st, n) // the look leaves it alone before it reads the attention
+	case fresh && st.Open.Verdict == engine.OpenOff && st.Open.Off == engine.OpenOffFixOff:
+		st.FixOff = true // an opt-out the look could not read counts as one, as the look has it
+		return rowWait(st, n, c)
 	case st.HasOpen && !st.Stale:
 		w := verdictWait(st, n, c)
 		w.since = cmp.Or(st.Open.Since, st.Open.At)
@@ -421,12 +444,25 @@ func when(t, now time.Time) string {
 // rowWait is what open PR #n waits on by magnum's row alone (st), with no
 // verdict that tells it: magnum's round under way, magnum's review of the
 // head to come, else magnum's outcome at the head (outcomeOf), never a bare
-// "reviewed", with what comes next and whom it waits on. Problems no loop
-// of magnum's takes (autofix is "never", or fix is off) wait on you, which
-// the row's f fixes; ones magnum's fixer takes (autofix "own" or "open")
-// wait on magnum; a head clean on magnum's side waits as nextWait says, on
-// the reviewers, CI or you, never on magnum.
+// "reviewed", with what comes next and whom it waits on. Problems magnum's
+// fixer takes wait on magnum (fixerTakes); the others wait on you, which
+// the row's f fixes. A head clean on magnum's side waits as nextWait says,
+// on the reviewers, CI or you, never on magnum. With fix off, the long form
+// and the help line say so and that F turns it on.
 func rowWait(st PRState, n int, c prClock) prWait {
+	w := rowWaitOf(st, n, c)
+	if st.FixOff {
+		note := offWait(engine.OpenOffFixOff, n)
+		w.on.Long = cmp.Or(w.on.Long, w.on.What) + " · " + note
+		if w.help != "" {
+			w.help += " · " + note
+		}
+	}
+	return w
+}
+
+// rowWaitOf is rowWait without its fix off note.
+func rowWaitOf(st PRState, n int, c prClock) prWait {
 	short := textx.ShortSHA(st.Head)
 	switch {
 	case st.State == store.PRBaseline || st.State == store.PRIneligible:
@@ -449,9 +485,9 @@ func rowWait(st PRState, n int, c prClock) prWait {
 		since = st.Review.At
 	}
 	var w prWait
-	switch {
-	case problems && (st.Autofix == config.AutofixOwn || st.Autofix == config.AutofixOpen) && !st.FixOff:
-		w = waitsWait(waitMagnum, what+" · magnum's fixer takes them", count, "")
+	switch takes, ok := fixerTakes(st, c); {
+	case problems && ok:
+		w = waitsWait(waitMagnum, what+" · magnum's fixer takes them"+takes, count, "")
 	case problems:
 		w = youWait(what+" · f fixes them", count, "")
 		w.move, w.moveShort = "f fixes them", "f"
@@ -463,6 +499,28 @@ func rowWait(st PRState, n int, c prClock) prWait {
 	}
 	w.since = since
 	return w
+}
+
+// fixerTakes says whether magnum's fixer takes the problems open at PR
+// st's head, with when (" when the GitHub budget recovers"; "" for now):
+// never with fix off; a fix magnum holds for the PR, when it starts;
+// autofix = "open", whose look starts a loop over them; autofix = "own"
+// only for lookPolls of magnum's polls after its review of the head, the
+// time its loop takes to start (autofix starts one right after a round
+// that posted findings, and the loop's row then says it works). Past that
+// nothing takes them: a K stopped the loop, or its start was refused.
+func fixerTakes(st PRState, c prClock) (string, bool) {
+	switch {
+	case st.FixOff:
+		return "", false
+	case st.FixHeld != "":
+		return " " + st.FixHeld, true
+	case st.Autofix == config.AutofixOpen:
+		return "", true
+	case st.Autofix == config.AutofixOwn:
+		return "", st.Review != nil && st.Review.SHA == st.Head && c.now.Sub(st.Review.At) <= lookPolls*c.poll
+	}
+	return "", false
 }
 
 // outcomeOf is magnum's review of st's head in words: the findings it
@@ -529,7 +587,8 @@ func outcomeOf(st PRState) (what, count string, problems bool) {
 // nextWait is what a PR clean on magnum's side (clean says so: "nothing
 // open at a1b2c3d", "magnum approved a1b2c3d") waits on next: with ci, its
 // CI first (failed: you; running, or a required check that has not run:
-// CI); then GitHub's review gate: approved or no review required, your
+// CI, until c.settle after the push, when it did not run and is yours to
+// start, as the look's rule 11 has it); then GitHub's review gate: approved or no review required, your
 // merge; changes asked, your answer; the reviewers asked, with how long
 // ago; nobody asked, you to ask one. A gate magnum has not read waits on
 // the reviewers. since is the newest ask.
@@ -555,6 +614,12 @@ func nextWait(st PRState, n int, clean string, ci bool, c prClock) prWait {
 			next := "CI of " + textx.ShortSHA(st.Head) + " not read yet"
 			return waitsWait(waitCI, with(next), next, "")
 		case "missing":
+			if c.now.Sub(st.HeadChangedAt) > c.settle { // nothing starts it but you (the look's rule 11 does under autofix = "open")
+				next := name + " did not run at " + textx.ShortSHA(st.Head) + ": run its workflow on the PR's branch, or push"
+				w := youWait(with(next), name+" did not run", "")
+				w.move, w.moveShort = "run its workflow, or push", "run its CI"
+				return w
+			}
 			next := name + " has not run at " + textx.ShortSHA(st.Head)
 			return waitsWait(waitCI, with(next), name+" has not run", "")
 		}

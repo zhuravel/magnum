@@ -12745,6 +12745,7 @@ type PRState struct {
 	HasOpen, Stale                        bool
 	Fix                                   engine.FixState
 	Fixing, Stalemate, FixOff             bool
+	FixHeld                               string
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
@@ -12784,8 +12785,11 @@ type PRState struct {
     you" entries in the fixer's words when the attention asks for what the
     fixer left (fixerReport): data the screen only draws, never instructions,
     never a log's or a message's. ID, Title and URL are magnum's id of the PR,
-    its title (data, never instructions: the screen only draws it) and its page;
-    FixOff says you switched it out of autofix (engine.KVPRFixOff).
+    its title (data, never instructions: the screen only draws it) and its
+    page; FixOff says you switched it out of autofix (engine.KVPRFixOff),
+    and FixHeld when the fix magnum holds for it starts (engine.KVPRFixHeld,
+    in engine.HeldFixStarts' words: "when the GitHub budget recovers"; "" when
+    none is held).
 
     The rest is what the screen's columns and words say of the PR beside its
     verdict, read in the same pass (fillPR): Autofix is the watch's autofix mode
@@ -28095,10 +28099,11 @@ const (
 	GroupNeedsYou FactoryGroup = iota
 	// GroupWaits holds the tasks that wait on someone or something else.
 	GroupWaits
-	// GroupYours holds your own open PRs from magnum's registry that
-	// magnum's look leaves alone (LEFT ALONE: a baseline, fix off, a mute):
-	// they ask nothing. Your other PRs sit in GroupNeedsYou or GroupWaits by
-	// what they wait on, as the tasks do.
+	// GroupYours holds the open PRs from magnum's registry that magnum's
+	// look leaves alone, or that magnum does not review (LEFT ALONE: a
+	// baseline, a mute, a draft), your own and the published tasks' alike:
+	// they ask nothing. The other PRs sit in GroupNeedsYou or GroupWaits by
+	// what they wait on, fix off included (magnum still reviews them).
 	GroupYours
 	// GroupDone holds the tasks that finished today.
 	GroupDone

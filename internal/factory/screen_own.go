@@ -9,9 +9,11 @@ package factory
 // your attention or where magnum stopped arguing (whatever its verdict
 // says, and without one) is in NEEDS YOU; one that waits on others (its
 // reviewers, CI, magnum, a fix loop at work) in WAITS ON OTHERS; one
-// magnum's look leaves alone (a baseline, fix off), or without a verdict
+// magnum's look leaves alone (a baseline, a mute), or without a verdict
 // one magnum does not review, is drawn dim with why in a group of its own
-// (tui.GroupYours), oldest first, and asks nothing. The rows are read
+// (tui.GroupYours, LEFT ALONE, where a task's PR in that state sits too),
+// oldest first, and asks nothing. Fix off is no reason to leave a PR
+// alone: magnum still reviews it. The rows are read
 // only: f, F, K and o on them, as on a task's row with a PR (screenPR), go
 // through magnum's own request paths, as the board's keys do, never
 // through the factory daemon.
@@ -92,26 +94,19 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // with its CI, FINDINGS and APPR cells, waiting since its wait began (the
 // verdict's Since, a loop's start, an attention's row change), else since
 // its last activity on GitHub, never magnum's last write of its row. It
-// is magnumWait's wait, in NEEDS YOU when it is on you and in WAITS ON
-// OTHERS when it waits on others, except for a PR magnum's look leaves
-// alone (off), which is dim in a group of its own. An attention
-// or a stalemate needs you whatever the verdict says (fix off does not
-// hide it, and a verdict decided before it is stale), unless a loop works
-// on the PR. Without a fresh verdict, a PR magnum does not review (a
-// baseline, include_own = false, a mute) is off too: no review comes.
+// is magnumWait's wait, as a published task's row says it: in NEEDS YOU
+// when it is on you, in WAITS ON OTHERS when it waits on others, and dim
+// in LEFT ALONE when magnum's look leaves it alone or magnum does not
+// review it (offOf: a baseline, include_own = false, a mute; fix off is not
+// that, magnum still reviews it). An attention or a stalemate needs you
+// whatever the verdict says (a verdict decided before it is stale), unless
+// a loop works on the PR.
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
 	w := magnumWait(st, n, s.clock())
-	fresh := st.HasOpen && !st.Stale
 	off := offOf(st)
-	switch {
-	case st.Fixing:
-	case st.State == store.PRNeedsAttention || st.Stalemate:
-		if w.group != tui.GroupNeedsYou || fresh && st.Open.Verdict == engine.OpenOff {
-			w = attentionWait(st, n)
-		}
-	case !fresh && off != "":
-		w = youWait(off, clauseShort(off), "")
+	if (st.State == store.PRNeedsAttention || st.Stalemate) && !st.Fixing && w.group != tui.GroupNeedsYou {
+		w = attentionWait(st, n)
 	}
 	key := s.ownKey(st.Ref)
 	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: fmt.Sprintf("#%d", n), Repo: st.Ref.Repo, Title: st.Title,
@@ -152,14 +147,15 @@ func screenPR(st PRState) *tui.FactoryPR {
 // offOf is why magnum's look leaves PR st alone, as its row says it: its
 // fresh verdict's off, or without one a PR magnum does not review (a
 // baseline, include_own = false, a mute); "" while a loop works on it, it
-// needs your attention or magnum stopped arguing there, and when the look
-// covers it.
+// needs your attention or magnum stopped arguing there, for fix off (magnum
+// still reviews the PR, and its row says what it waits on), and when the
+// look covers it.
 func offOf(st PRState) string {
 	fresh := st.HasOpen && !st.Stale
 	switch {
 	case st.Fixing, st.State == store.PRNeedsAttention, st.Stalemate:
 		return ""
-	case fresh && st.Open.Verdict == engine.OpenOff:
+	case fresh && st.Open.Verdict == engine.OpenOff && st.Open.Off != engine.OpenOffFixOff:
 		return offWait(st.Open.Off, st.Ref.Number)
 	case !fresh && (st.State == store.PRIneligible || st.State == store.PRBaseline):
 		why := engine.OpenOffIneligible

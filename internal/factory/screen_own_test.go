@@ -154,9 +154,11 @@ func TestAFactoryPRIsListedOnceAsItsTask(t *testing.T) {
 	}
 }
 
-// A PR magnum's look leaves alone (a baseline, fix off) waits in LEFT ALONE
-// with its reason and asks nothing, never in NEEDS YOU: a baseline open
-// for weeks would wear that group out. Fix off says that F turns it on.
+// A PR magnum's look leaves alone (a baseline) waits in LEFT ALONE with its
+// reason and asks nothing, never in NEEDS YOU: a baseline open for weeks
+// would wear that group out. Fix off is no such reason: magnum still
+// reviews the PR, so its row says what it waits on, and its long form that
+// F turns fix on.
 func TestAnOffOwnPRWaitsInYourPRs(t *testing.T) {
 	r := newScreenRig(t)
 	r.withMagnum()
@@ -177,7 +179,8 @@ func TestAnOffOwnPRWaitsInYourPRs(t *testing.T) {
 		t.Errorf("a baseline PR asks something: move %q, mark %v", base.Move, base.Mark)
 	}
 	off := rowOf(t, d, "#4607")
-	if off.Group != tui.GroupYours || !off.PR.FixOff || off.WaitsOn[0].What != "fix is off for #4607 (F turns it on)" {
+	if w := off.WaitsOn[0]; off.Group != tui.GroupWaits || !off.PR.FixOff || off.PR.Off != "" || w.What != "review of #4607" ||
+		w.Long != "review of #4607 · fix is off for #4607 (F turns it on)" {
 		t.Errorf("a PR with fix off: %+v (%+v)", off, off.PR)
 	}
 }
@@ -226,8 +229,8 @@ func TestOnlyThePRsMagnumLeavesAloneKeepAGroupOfTheirOwn(t *testing.T) {
 		v.Open.Off, v.Open.Since = engine.OpenOffBaseline, screenNow.Add(-26*time.Hour)
 	})
 	r.own(77, 4607, func(v *PRState) {
-		v.HasOpen, v.FixOff, v.Open = true, true, verdict(engine.OpenOff, "fix off")
-		v.Open.Off, v.Open.Since = engine.OpenOffFixOff, screenNow.Add(-5*time.Hour)
+		v.HasOpen, v.Open = true, verdict(engine.OpenOff, "muted")
+		v.Open.Off, v.Open.Since = engine.OpenOffMuted, screenNow.Add(-5*time.Hour)
 	})
 	r.own(81, 4611, func(v *PRState) {
 		v.HasOpen, v.Open = true, verdict(engine.OpenWaits, "CI at a1b2c3d")
