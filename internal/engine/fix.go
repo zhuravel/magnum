@@ -26,7 +26,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -130,10 +132,14 @@ type fixJob struct {
 	// the start (nil when the read failed, or the budget held the job):
 	// writeExternal writes these without reading GitHub again. alone: the
 	// review left the fixer no work of its own (reviewWork: no finding, no
-	// simplification, nothing open, not even an optional P3), and the job,
-	// a new loop, answers their unanswered items alone (spec 96).
-	others *externalRead
-	alone  bool
+	// simplification, nothing open, not even an optional P3, no
+	// description line), and the job, a new loop, answers their unanswered
+	// items alone (spec 96). described: the review's body says a claim of
+	// the PR description is untrue (reviewDescribes), which the fixer of the
+	// operator's own PR fixes.
+	others    *externalRead
+	alone     bool
+	described bool
 	// budget is set when prepareFix found the GitHub budget of the identity
 	// the job reads as below the floor (github_floor.go), or GitHub refused
 	// its read of the other reviewers' items for the rate limit and the
@@ -244,6 +250,8 @@ func (j *fixJob) work() string {
 			textx.Count(threads+conversation, "unanswered thread or comment", "unanswered threads and comments"), where, note)
 	case n == 0 && optional > 0:
 		return fmt.Sprintf("fixes the %s of the review on %s in %s", textx.Count(optional, "optional finding", "optional findings"), sha, where)
+	case n == 0 && j.described:
+		return fmt.Sprintf("fixes the description finding of the review on %s in %s", sha, where)
 	case n == 0:
 		return fmt.Sprintf("fixes the open earlier findings of the review on %s in %s", sha, where)
 	case open == 0:
@@ -258,14 +266,45 @@ func (j *fixJob) work() string {
 // keeps open, the optional P3s among them (rule A1: an optional finding
 // counts as open until a fix or a fix-marked reply), but for calls of its
 // P3s, new or kept open, that a fixer left the operator as optional calls
-// (fix_optional.go): the operator's, never the fixer's again. prepareFix
+// (fix_optional.go): the operator's, never the fixer's again; or, described,
+// its body's `Description: ✗` line (reviewDescribes), which the fixer of the
+// operator's own PR fixes (skills/magnum-fix/SKILL.md, section 5). prepareFix
 // starts a job on such a review without asking the other reviewers (calls 0:
 // a start asked for may hand the fixer a call again), and autofix = "open"
 // counts the review as an item (openItemsOf) by the same rule with the calls
 // its read shows open, so the look never starts what prepareFix refuses.
-func reviewWork(sum store.ReviewSummary, calls int) bool {
+func reviewWork(sum store.ReviewSummary, calls int, described bool) bool {
 	p3 := sum.Counts[3] + openP3(sum)
-	return sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+max(p3-calls, 0) > 0
+	return described || sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+max(p3-calls, 0) > 0
+}
+
+// descriptionLineRe finds a review body's `Description: ✗` line: a claim of
+// the PR description the review found untrue with no impact
+// (skills/magnum-review/SKILL.md, section 2; eval's scorer reads the same).
+var descriptionLineRe = regexp.MustCompile(`(?m)^[ \t]*(?:[-*][ \t]+)?Description:[ \t]*[✗✘❌]`)
+
+// reviewDescribes reports whether the review file in dir (the judge's
+// agents.PostReviewFile, the file the fixer is handed) has a
+// `Description: ✗` line in its body; false when it is missing or cannot be
+// read.
+func reviewDescribes(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, agents.PostReviewFile))
+	if err != nil {
+		return false
+	}
+	var review struct {
+		Body string `json:"body"`
+	}
+	return json.Unmarshal(b, &review) == nil && descriptionLineRe.MatchString(review.Body)
+}
+
+// reviewDescribed is reviewDescribes of magnum's review of PR number of repo
+// at sha, in that head's review directory, where the fixer finds it.
+func (e *Engine) reviewDescribed(repo store.Repo, number int, sha string) bool {
+	if sha == "" {
+		return false
+	}
+	return reviewDescribes(e.d.Layout.ReviewDir(repo.Owner, repo.Name, number, sha))
 }
 
 // openP3 is the earlier P3s sum keeps open; 0 when its result gave only the
@@ -589,7 +628,8 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// the fixer only what waits for an answer there (spec 96; a next cycle's changes
 	// request may keep earlier findings open with neither, fixRemains). A
 	// read GitHub refuses for the rate limit holds the job as the floor does.
-	alone := prev.Cycle == 0 && !reviewWork(sum, 0)
+	described := e.reviewDescribed(repo, pr.Number, sum.SHA)
+	alone := prev.Cycle == 0 && !reviewWork(sum, 0, described)
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
 	// for it only when nothing else would start the job.
@@ -627,7 +667,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	}
 	// The conflict is asked for only when nothing else waits: the merge is then the job's whole work.
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
-		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone,
+		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone, described: described,
 		conflict: conflict, forMerge: conflict.sha != ""}
 	if isLow { // the other reviewers' items are read when the held fix starts
 		job.budget, job.othersDeferred = &low, true

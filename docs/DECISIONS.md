@@ -3745,6 +3745,41 @@ skill versions); people add theirs to the sections before it, at the end of the 
   attention; TestTheMergeMoveNamesTheOptionalCalls in factory; the new sentences of
   TestTheFixSkillLeavesTheAuthorsCallToTheAuthor in agents.
 
+- **The fixer corrects what its own commits made untrue in an own PR's description, and a review's
+  `Description: ✗` line is fix work** (2026-11-08, the audit of what waits on the operator; approved by the
+  operator on 2026-11-08. Reverses the rejected clause of "The fixer edits an own PR's description when a
+  finding or an item names it" (2026-11-07: "letting the fixer also change a line its own fix made untrue
+  when no finding or item names it"), and amends "A review that found nothing starts a fix when another
+  reviewer waits for an answer" (2026-10-20, spec 96): a review whose body has a `Description: ✗` line no
+  longer found nothing.) On one own PR a Test Plan row's count went from 19 to 21 with the fixer's own
+  commit, and the fixer left the row to the operator because no finding named it; on another, the body kept
+  claiming the old behaviour after a fixer commit changed it, and the re-review said so in its
+  `Description: ✗` line, but nothing handed that line to a fixer: `fixRemains` and `reviewWork` counted
+  findings, simplifications and open earlier findings alone, so the re-review read as clean, the loop ended
+  as done and the look of `autofix = "open"` saw nothing to start. Now the fix skill lets the fixer of the
+  operator's own PR also correct a line of the description that a commit it pushes in the run made untrue,
+  when a command shows the fact (a count it runs again, what the code its commit changed does); never the
+  title, and with the guards of the 2026-11-07 entry (one edit after the push, a diff of the copy that shows
+  only those lines, the body read again right before the write, never a hidden marker or a checklist line).
+  A line its commits made untrue that no command settles (a reason, a plan, a decision) stays the author's
+  under `Needs you`, and the re-review checks every claim again. The fix prompt's own-PR sentence says so.
+  In the engine the review file's body (`agents.PostReviewFile` in the head's review directory, the file the
+  fixer is handed) is read for that line (`reviewDescribes`, the review skill's form, as eval's scorer
+  reads it), and the line is work: `reviewWork` counts it, so `prepareFix` no longer hands such a review
+  over as one that found nothing (the prompt then says "Fix the findings", and the job "fixes the
+  description finding of the review on <sha7>"), the look lists the review as an item and its rule on
+  magnum's rebuttals alone counts it, and `continueFixLoop` takes a posted re-review with such a line to
+  the next cycle within the cap ("the description finding left" at the cap). A loop that fixed the line
+  without a push ends as one that replied, and the look hands a review once, so the line of a review that
+  stands asks for no second loop. Autofix "own" still starts only after a round with findings. Rejected:
+  recording the line on the review summary (the store is not the fixer's, and the file is what the fixer
+  reads); letting a fixer correct a line an earlier commit made untrue that no review names (the re-review
+  names it, and then it is a finding). Tests, failing first: TestAReviewsDescriptionLineIsTheFixersWork,
+  TestALoopGoesOnWhenItsReReviewFindsTheDescriptionUntrue and TestTheLookStartsALoopOnAReviewsDescriptionLine
+  in engine; TestTheFixSkillCorrectsTheDescriptionLinesItsOwnCommitsMadeUntrue and the new sentences of
+  TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt and TestTheFixPromptOfAnOwnPRLetsTheFixerEditItsDescription
+  in agents.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

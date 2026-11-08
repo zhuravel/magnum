@@ -27,7 +27,8 @@ package engine
 //     reply), unless a fixer left it the operator as an optional call
 //     (fix_optional.go);
 //   - review:<run id>: magnum's review of the head, when it leaves the fixer
-//     work (reviewWork, the operator's open optional calls left out);
+//     work (reviewWork, the operator's open optional calls left out, its
+//     `Description: ✗` line counted);
 //   - conflict:<head sha12>: the head conflicts with its base. The key names
 //     the head, not the base's tip, which moves several times a day.
 //
@@ -233,16 +234,18 @@ func quietOf(in externalInput) map[int64]bool {
 // itemsInput is what openItemsOf makes the items of: the look's whole read
 // of GitHub, magnum's last review that stands at the head (nil: none),
 // whether a finished loop was handed that review (handed), the conflict of
-// the head with its base (zero: none), the quiet rules and the threads of
-// the operator's open optional calls (optional, magnumItemsOf).
+// the head with its base (zero: none), the quiet rules, the threads of the
+// operator's open optional calls (optional, magnumItemsOf) and whether the
+// review's body has a `Description: ✗` line (described, reviewDescribes).
 type itemsInput struct {
-	read     externalRead
-	sum      *store.ReviewSummary
-	handed   bool
-	conflict fixConflict
-	head     string
-	quiet    quietRules
-	optional map[int64]bool
+	read      externalRead
+	sum       *store.ReviewSummary
+	handed    bool
+	conflict  fixConflict
+	head      string
+	quiet     quietRules
+	optional  map[int64]bool
+	described bool
 }
 
 // openItemsOf lists what is open on the PR (the keys of this file's
@@ -250,7 +253,7 @@ type itemsInput struct {
 // bodies and comments, magnum's threads that wait for an answer, the
 // findings a loop skipped, magnum's review and the conflict.
 func openItemsOf(in itemsInput) []openItem {
-	return append(othersItemsOf(in.read, in.quiet), magnumItemsOf(in.read.mine, in.sum, in.handed, in.conflict, in.head, in.optional)...)
+	return append(othersItemsOf(in.read, in.quiet), magnumItemsOf(in.read.mine, in.sum, in.handed, in.conflict, in.head, in.optional, in.described)...)
 }
 
 // othersItemsOf are the other reviewers' items of read: their unanswered
@@ -301,8 +304,10 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 // handed it (handed), sum itself when it leaves the fixer work, and the
 // conflict of head with its base (zero: none). optional are the threads,
 // by their first comment's id, of the operator's open optional calls
-// (fix_optional.go): no skipped finding, and no work in sum.
-func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, conflict fixConflict, head string, optional map[int64]bool) []openItem {
+// (fix_optional.go): no skipped finding, and no work in sum. described: sum's
+// body has a `Description: ✗` line, which is work (reviewWork).
+func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, conflict fixConflict, head string, optional map[int64]bool,
+	described bool) []openItem {
 	var out []openItem
 	var since time.Time
 	if sum != nil {
@@ -320,7 +325,7 @@ func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, c
 			}
 		}
 	}
-	if sum != nil && reviewWork(*sum, len(optional)) {
+	if sum != nil && reviewWork(*sum, len(optional), described) {
 		out = append(out, openItem{Key: reviewKey(sum.RunID), Class: classMagnum, Kind: itemFindings, URL: sum.URL})
 	}
 	if conflict.sha != "" && head != "" {

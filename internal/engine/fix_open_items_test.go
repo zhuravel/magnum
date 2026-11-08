@@ -420,7 +420,7 @@ func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
 	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); !slices.Equal(got, []string{"review:r2"}) {
 		t.Errorf("another open P3 beside the call: items = %v, want the review", got)
 	}
-	if reviewWork(*later, 2) || !reviewWork(*later, 1) || !reviewWork(*later, 0) {
+	if reviewWork(*later, 2, false) || !reviewWork(*later, 1, false) || !reviewWork(*later, 0, false) {
 		t.Error("reviewWork does not leave out the optional calls among the open P3s")
 	}
 }

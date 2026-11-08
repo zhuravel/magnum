@@ -3344,7 +3344,10 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   clean: the next cycle fixes that finding, and at the cap the line says "1 earlier finding still open". The
   same review counts for `magnum fix` and the board's `f`, whose answer says "fixes the 1 finding of the
   review on <sha7>, 1 of them open from earlier reviews"; an earlier P3 left open is optional and counts for
-  neither.
+  neither. A re-review whose body says a claim of your description is untrue (its `Description: ✗` line) is
+  not clean either: the next cycle hands the fixer that line as a finding ("fixes the description finding of
+  the review on <sha7>"), and at the cap the line says "the description finding left"; `magnum fix`, `f` and
+  Autofix on anything open count such a line as work too.
 - **Replies only.** The fixer pushed nothing and left nothing to you. It answered every finding in the
   threads. An info toast says "PR #N: claude-fix pushed nothing, replied to 3 findings". The judge reads the
   replies in its usual reply round.
@@ -3505,7 +3508,7 @@ autofix. The status dashboard has the same `f` and `F` keys, and its `F` reads `
 out, as the board's does.
 
 **Autofix on anything open.** `autofix = "open"` starts a loop on your own PR whenever something on it is
-open: Magnum's findings (simplifications and optional findings included), another reviewer's unanswered
+open: Magnum's findings (simplifications, optional findings and a `Description: ✗` line of its review's body included), another reviewer's unanswered
 thread, review body (one that comments or requests changes: an approval asks for nothing) or comment, or a
 conflict with the PR's own base. It starts only once the reviewers
 settled on the head: Magnum reviewed it (waited for without a cap; `magnum_late_after` past the time its

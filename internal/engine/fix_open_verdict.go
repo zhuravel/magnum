@@ -411,6 +411,9 @@ type openFacts struct {
 	// optional are the operator's optional calls the whole read shows open
 	// (openOptional, fix_optional.go): no work, and named at the merge.
 	optional []optionalCall
+	// described: magnum's review that stands at the head has a
+	// `Description: ✗` line (reviewDescribes), which is review work.
+	described bool
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -521,7 +524,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	settled, until := settleDone(f)
 	if len(work) > 0 {
-		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum, len(f.optional))
+		onlyRebuttals := !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) && !reviewWork(*f.sum, len(f.optional), f.described)
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
 		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
 		switch {

@@ -186,7 +186,8 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 // threads read again, from the re-review's threads file when it read them
 // after the fixer's report: freshNeedsYou), end it as needs attention; a
 // review that found nothing ends it as done (under autofix = "open", one
-// that left no optional work either: optionalLeft); findings start the next cycle (startFix) while
+// that left no optional work either: optionalLeft); findings, and a
+// `Description: ✗` line of the review's body (reviewDescribes), start the next cycle (startFix) while
 // cycles are left, and end it as needs attention at the cap, which says what
 // is left (capMessage); a next cycle that cannot start ends it as needs attention with why, unless the PR moved
 // on since the re-review (closed, or a newer head the operator pushed:
@@ -209,7 +210,9 @@ func (e *Engine) roundIgnored(ctx context.Context, job *fixJob, res pipeline.Rou
 func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
-	remains, optional := fixRemains(res), 0
+	// fix.go: the re-review's `Description: ✗` line is the next cycle's work
+	described := res.Outcome == pipeline.OutcomePosted && e.reviewDescribed(job.repo, job.pr.Number, cmp.Or(res.TargetSHA, st.Head))
+	remains, optional := fixRemains(res) || described, 0
 	if !remains {
 		optional = e.optionalLeft(ctx, job, res)
 	}
@@ -220,6 +223,8 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		left = textx.Count(open, "earlier finding", "earlier findings") + " still open"
 	case optional > 0:
 		left = textx.Count(optional, "optional finding", "optional findings") + " left"
+	case described && res.Event != "CHANGES_REQUESTED":
+		left = "the description finding left"
 	default:
 		left = "earlier findings still open"
 	}
