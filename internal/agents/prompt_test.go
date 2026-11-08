@@ -906,6 +906,8 @@ func TestTheFixSkillLeavesTheAuthorsCallToTheAuthor(t *testing.T) {
 		"A P3 whose **Fix** ends so is optional, whatever its verdict and score: leave the code as it is, post no reply " +
 			"(its title says none is needed), and list it under `## Optional calls` (section 7), never under `## Needs you`.",
 		"\n## Optional calls\n- <comment id> P3 <path>:<line>: <its options>\n## Other reviewers\n",
+		// Step 4 replies to a declined P3: an author's call skips it.
+		"Apply it to each other finding, in this order, but a finding whose **Fix** ends with " + phrase + " takes step 6 alone:",
 		"- `## Optional calls`: one line per P3 whose **Fix** ends with " + phrase + " (section 4, step 6), starting with `- `: " +
 			"its comment id, `P3`, its path and line, then its options, each named. magnum asks the author for nothing about them before the merge. " +
 			"If there is none, write `none`.",

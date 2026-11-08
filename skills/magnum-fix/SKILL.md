@@ -119,7 +119,7 @@ A finding or an external item about the PR description (section 5) changes no co
 
 The findings of this run are this review's: its comments, its `Description: ✗` line and the threads its body names as still open. A finding you remember from an earlier run that this review does not name is not this run's: leave it, and do not report it; the re-review checks again. The external items (section 2) come after the findings. When the prompt says that the review found nothing to fix, the base merge (when the prompt names a conflict) and the external items are this run's whole work: merge the base, then judge, fix and answer the items alone.
 
-A finding whose thread is under `decisions` is decided: build it as a thread with `decision` set (below), whatever this policy says of it. Apply it to each other finding, in this order:
+A finding whose thread is under `decisions` is decided: build it as a thread with `decision` set (below), whatever this policy says of it. Apply it to each other finding, in this order, but a finding whose **Fix** ends with `This is the author's call.` takes step 6 alone:
 
 1. `fix` with a net score of 3 or more, a simplification or a description finding that is `fix`, and each finding that section 3 always makes `fix`: fix it (section 5), then reply (section 6).
 2. `fix` with a net score below 3 that is no simplification: make it `won't fix`, with the score as the reason. Then apply step 4 or 5.
