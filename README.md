@@ -4013,12 +4013,14 @@ factory never migrates magnum's registry, which it only reads for the local revi
 by who it waits on (NEEDS YOU, WAITS ON OTHERS, DONE TODAY), and one per open PR of yours that no task has
 (below), grouped the same way by what it waits on, or LEFT ALONE: what it waits on and, when it needs you, your
 move. When home shows more than one
-repository, or your PR of a repository the factory does not have, each row names its own first, in a column of its own: the name without the owner the rows share
-(`owner/name` when they span several owners, as the board's REPO does), cut to 11 cells on a narrow screen and to
-6 once the staging cells go short, whole when the title keeps 24 cells; a factory of one repository whose rows
+repository, or your PR of a repository the factory does not have, each row names its own first, in a column of its own: its name
+alone (`owner/name` only for a name two owners share, so `talkable` and `example/widget` beside `other/widget`), cut to 11
+cells on a narrow screen and to 6 once the staging cells go short, whole when the title keeps 24 cells, and never so
+short that two repositories' cells read alike (beside `talkable`, `talkable-widget` keeps at least `talkable-…`,
+and the layout gives up its other steps first, FINDINGS and APPR included); a factory of one repository whose rows
 are all of it draws no such column. From 120 columns a row with a PR shows its number in a column of its own
 after the key, which is then the Jira key (`PR-12320  #4530`); below 120 the key alone stays. The title line
-names the factory's repositories (`magnum factory · talkable, widget`, the configured ones in their order), or
+names the factory's repositories as the rows do (`magnum factory · talkable, widget`, the configured ones in their order), or
 counts them (`4 repos`) when they do not fit beside the blocker line. A wide screen draws the long forms (the
 whole blockers, the staging cells' ages) with the title cut down to 24 cells rather than giving them up; from 180
 columns the longest blockers give up their ends there, down to 48 cells, before the title goes under 24 (the

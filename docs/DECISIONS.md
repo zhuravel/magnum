@@ -17628,9 +17628,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   showed only in the wide layout, which needed every column at its natural width with the whole title: about 210
   columns with a 93-cell title, so below that the PR was only in "magnum: looking at #N".
   - Every row carries its repository (`FactoryRow.Repo`: a task's, its PR link's once published, your PR's),
-    drawn in a column before the key: the name without the owner the rows share, `owner/name` when they span
-    several (as the board's REPO), cut to 11 cells on a narrow screen and to 6 once the staging cells go short,
-    and whole again when the title keeps 24 cells. A home of one repository that every row is of draws no such
+    drawn in a column before the key: its name alone, `owner/name` only for a name two owners share (`repoLabels`;
+    the board's REPO says the owner whenever the rows span several, which cut to 6 or 11 cells left only the
+    owner: `talka…` for two repositories of one owner beside a third owner's), cut to 11 cells on a narrow screen
+    and to 6 once the staging cells go short, and whole again when the title keeps 24 cells, but never narrower
+    than the cell that tells the rows' repositories apart (`repoFloor`: no cut cell's text before its ellipsis
+    starts another's name, so `talkable-widget` keeps `talkable-…` beside `talkable`; the layout's other steps,
+    FINDINGS and APPR included, give way first). A home of one repository that every row is of draws no such
     column: the title names it.
   - The title names every configured repository (`FactoryData.Repos`, in place of `Repo`, in the config's order;
     the tasks' when none is configured), or counts them ("4 repos") before the blocker line gives anything up.
@@ -17643,10 +17647,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     spec's home mockup the long form of YOUR MOVE.
   - The task card's facts start with the repository and the PR's number (`example/talkable #4530`).
   Rejected: a repository column on every home (one repository is named by the title already); dropping the
-  repository from your PR's key (the y/N and the more line would read alike for two repositories' PRs); the
-  whole title as the wide layout's condition (a long title cost the PR number at every width); headers for the
-  repository and PR columns (the group's name stands where they would be, and the cells read as what they
-  are). Tests, failing first: TestFactoryRowsNameTheirRepository, TestFactoryRowsOfSeveralOwnersNameTheOwner,
+  repository from your PR's key (the y/N and the more line would read alike for two repositories' PRs); a cut
+  from the front or the middle for a name that starts another's (`…widget`, `tal…et`: a second form of cell to
+  read); the whole title as the wide layout's condition (a long title cost the PR number at every width);
+  headers for the repository and PR columns (the group's name stands where they would be, and the cells read as
+  what they are). Tests, failing first: TestFactoryRowsNameTheirRepository,
+  TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName, TestFactoryRepoCellsTellTheRepositoriesApart,
   TestFactoryTitleNamesEveryRepositoryOrCountsThem, TestFactoryOneRepositoryDrawsNoRepoColumn,
   TestScreenDataNamesTheRepositoryOfEveryRow, TestFactoryRowsKeepTheirPRNumberFrom120Columns,
   TestFactoryTheWideLayoutSqueezesALongTitle, TestTaskCardNamesItsRepositoryFirst; goldens repos-100, -120,

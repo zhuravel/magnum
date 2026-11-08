@@ -174,20 +174,73 @@ func TestFactoryRowsNameTheirRepository(t *testing.T) {
 	}
 }
 
-// Rows of several owners name each repository with its owner, as the PR
-// board does.
-func TestFactoryRowsOfSeveralOwnersNameTheOwner(t *testing.T) {
+// Rows of several owners name a repository by its name alone when no other
+// repository has that name, and with its owner beside a name two owners
+// share; the title names them so too. Before, every row of several owners
+// read owner/name, which the narrow layouts cut to its owner.
+func TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName(t *testing.T) {
 	f := fixtureTwoRepos()
-	f.Repos = []string{"example/talkable", "example-org/widget"}
+	f.Repos = []string{"example/talkable", "example-org/widget", "example/widget"}
 	for i := range f.Rows {
-		if strings.HasSuffix(f.Rows[i].Repo, "/widget") {
+		if strings.HasSuffix(f.Rows[i].Repo, "/widget") && i != 2 {
 			f.Rows[i].Repo = "example-org/widget"
 		}
 	}
 	frame, _ := factoryFrameOf(f, 200, factoryReposHeight, true, IconsUnicode, factoryNow)
 	lines := factoryRowLines(t, frame, f.Rows)
-	mustContain(t, lines[0], "example/talkable")
 	mustContain(t, lines[1], "example-org/widget")
+	mustContain(t, lines[2], "example/widget")
+	if strings.Contains(lines[0], "example/talkable") {
+		t.Errorf("talkable is the only repository of its name, yet its row names the owner: %q", lines[0])
+	}
+	mustContain(t, strings.Split(ansi.Strip(frame), "\n")[0], "magnum factory · talkable, example-org/widget, example/widget")
+}
+
+// The REPO cells tell the factory's repositories apart at every width from
+// 100 columns, with repositories of two owners where one's name starts
+// another's: no two cells read alike, and no cut cell's text before its
+// ellipsis starts another repository's name. Before, two owners made every
+// cell owner/name, cut to 6 or 11 cells (13 at 140), so talkable and
+// talkable-widget both read "talka…", "talkable/…" or "talkable/ta…" below
+// 200 columns.
+func TestFactoryRepoCellsTellTheRepositoriesApart(t *testing.T) {
+	repos := []string{"example/talkable", "example-org/example-org", "example/talkable-widget"}
+	names := map[string]string{repos[0]: "talkable", repos[1]: "example-org", repos[2]: "talkable-widget"}
+	f := fixtureTwoRepos()
+	f.Repos = repos
+	for i := range f.Rows {
+		f.Rows[i].Repo = repos[i%len(repos)]
+	}
+	for w := 100; w <= 200; w++ {
+		frame, _ := factoryFrameOf(f, w, factoryReposHeight, true, IconsUnicode, factoryNow)
+		lines := factoryRowLines(t, frame, f.Rows)
+		cells := map[string]string{}
+		for i, line := range lines {
+			c := strings.TrimSpace(string([]rune(line)[factoryMarkW:]))
+			c, _, _ = strings.Cut(c, "  ")
+			if ansi.StringWidth(line) > w {
+				t.Errorf("%d columns: a row is wider than the screen: %q", w, line)
+			}
+			repo := f.Rows[i].Repo
+			if prev, ok := cells[repo]; ok && prev != c {
+				t.Errorf("%d columns: %s reads %q and %q", w, repo, prev, c)
+			}
+			cells[repo] = c
+		}
+		for a, ca := range cells {
+			for b, cb := range cells {
+				if a == b {
+					continue
+				}
+				if ca == cb {
+					t.Errorf("%d columns: %s and %s both read %q", w, a, b, ca)
+				}
+				if shown, cut := strings.CutSuffix(ca, "…"); cut && strings.HasPrefix(names[b], shown) {
+					t.Errorf("%d columns: %s's cell %q starts %s's name %q", w, a, ca, b, names[b])
+				}
+			}
+		}
+	}
 }
 
 // The title names every repository the factory has, never the first

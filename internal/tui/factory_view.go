@@ -8,9 +8,11 @@ package tui
 // PR's CI, FINDINGS and APPR, YOUR MOVE, one column per staging server,
 // WAITED. The PR's columns are drawn when a row has their data, in the PR
 // board's own cells (ciCell, findingsCell). The repository has a column
-// only when home shows more than one, or one the title does not name; it
+// only when home shows more than one, or one the title does not name, by
+// its name (its owner too only beside another owner's of the same name); it
 // is cut to 11 cells on a narrow screen and to 6 once the staging cells go
-// short, unless the title keeps 24 cells with its whole name. The widths
+// short, unless the title keeps 24 cells with its whole name, and never so
+// short that two repositories' cells read alike. The widths
 // come from the data. When the screen is too narrow the painter gives up,
 // in this order, (1) the title's width down to 14 cells, (2) YOUR MOVE for
 // its short form, then the PR's cells for theirs (the CI's glyph, the
@@ -28,6 +30,7 @@ package tui
 // its own after the key, which is then the Jira key.
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
@@ -164,9 +167,13 @@ type factoryPainter struct {
 	lay    factoryLayout
 
 	// repos is true when the rows need a REPO column: home shows more than
-	// one repository, or one the title does not name; owners when the rows
-	// span several owners, so their cells name them (as the board's do).
-	repos, owners bool
+	// one repository, or one the title does not name. labels name each
+	// repository of the title and the rows (repoLabels, by its lower-cased
+	// owner/name), and repoFloor is the narrowest REPO cell that still tells
+	// the rows' repositories apart.
+	repos     bool
+	labels    map[string]string
+	repoFloor int
 	// prs is true when a row has a PR: a split layout has a PR column.
 	prs bool
 }
@@ -216,54 +223,105 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 			}
 		}
 	}
-	p.repos, p.owners = p.repoColumn()
+	p.repos, p.labels, p.repoFloor = p.repoColumn()
 	p.prs = slices.ContainsFunc(p.rows, func(r FactoryRow) bool { return r.GitHub != "" })
 	p.lay = p.plan()
 	return p
 }
 
-// repoColumn says whether the rows need a REPO column, and whether they
-// span several owners. A title that names one repository every row is of
-// leaves the column out.
-func (p *factoryPainter) repoColumn() (column, owners bool) {
+// repoColumn says whether the rows need a REPO column, how the title and
+// the rows name each repository (repoLabels, over both), and the narrowest
+// REPO cell at which the rows' cells still tell their repositories apart
+// (repoFloor). A title that names one repository every row is of leaves the
+// column out.
+func (p *factoryPainter) repoColumn() (column bool, labels map[string]string, floor int) {
 	one := ""
 	if len(p.f.Repos) == 1 {
 		one = p.f.Repos[0]
 	}
-	var repos []string
+	repos := slices.Clone(p.f.Repos)
+	var shown []string
 	for _, r := range p.rows {
 		if r.Repo != "" {
 			column = column || !strings.EqualFold(r.Repo, one)
 			repos = append(repos, r.Repo)
+			shown = append(shown, r.Repo)
 		}
 	}
-	return column, manyOwners(repos)
+	labels = repoLabels(repos)
+	var cells []string
+	for _, full := range shown {
+		if l := labels[strings.ToLower(full)]; !slices.Contains(cells, l) {
+			cells = append(cells, l)
+		}
+	}
+	return column, labels, repoFloor(cells)
 }
 
-// repoText is the row's REPO cell: the repository's name, with its owner
-// when the rows span several.
+// repoText is the row's REPO cell: its repository as the screen names it.
 func (p *factoryPainter) repoText(r FactoryRow) string {
-	return repoLabel(r.Repo, p.owners)
+	return cmp.Or(p.labels[strings.ToLower(r.Repo)], r.Repo)
 }
 
-// repoLabel is repository full ("owner/name") as the screen names it: its
-// name, or the whole of it when owners says the screen spans several.
-func repoLabel(full string, owners bool) string {
-	if _, name, ok := strings.Cut(full, "/"); ok && !owners {
-		return name
-	}
-	return full
-}
-
-// manyOwners says whether repositories span several owners.
-func manyOwners(repos []string) bool {
-	seen := map[string]bool{}
+// repoLabels names each of repos ("owner/name") as the screen does, by its
+// lower-cased owner/name: its name alone, or owner/name when a repository
+// of another owner has the same name, so the owner is said only where it
+// tells two repositories apart. One without an owner keeps its words.
+func repoLabels(repos []string) map[string]string {
+	owners := map[string]map[string]bool{} // by lower-cased name
 	for _, full := range repos {
-		if owner, _, ok := strings.Cut(full, "/"); ok {
-			seen[strings.ToLower(owner)] = true
+		if owner, name, ok := strings.Cut(full, "/"); ok {
+			n := strings.ToLower(name)
+			if owners[n] == nil {
+				owners[n] = map[string]bool{}
+			}
+			owners[n][strings.ToLower(owner)] = true
 		}
 	}
-	return len(seen) > 1
+	out := make(map[string]string, len(repos))
+	for _, full := range repos {
+		label := full
+		if _, name, ok := strings.Cut(full, "/"); ok && len(owners[strings.ToLower(name)]) < 2 {
+			label = name
+		}
+		out[strings.ToLower(full)] = label
+	}
+	return out
+}
+
+// repoFloor is the narrowest cell in which labels, each cut as a cell is
+// (fit), still tell their repositories apart: no cut label's text before
+// its ellipsis starts another label, so talkable-widget is never "talka…"
+// beside talkable. It is the widest label's width when no narrower cell
+// does.
+func repoFloor(labels []string) int {
+	widest := 0
+	for _, l := range labels {
+		widest = max(widest, ansi.StringWidth(l))
+	}
+	for w := 1; w < widest; w++ {
+		if repoCutsApart(labels, w) {
+			return w
+		}
+	}
+	return widest
+}
+
+// repoCutsApart says whether labels cut to w cells tell their repositories
+// apart (repoFloor).
+func repoCutsApart(labels []string, w int) bool {
+	for _, l := range labels {
+		if ansi.StringWidth(l) <= w {
+			continue
+		}
+		shown := strings.ToLower(strings.TrimRight(ansi.Truncate(l, w-1, ""), " "))
+		for _, o := range labels {
+			if o != l && strings.HasPrefix(strings.ToLower(o), shown) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // digestDone is true when the digest has lines of what finished: they take
@@ -665,10 +723,13 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	if l.split {
 		l.ghW = factoryGitHubMin
 	}
+	if p.repos { // never so narrow that two repositories' cells read alike
+		l.repoFull = p.repoFloor
+	}
 	for _, r := range p.rows {
 		if p.repos {
 			l.repoFull = max(l.repoFull, min(ansi.StringWidth(p.repoText(r)), factoryRepoWide), 1)
-			l.repoW = min(l.repoFull, l.repoCap)
+			l.repoW = max(min(l.repoFull, l.repoCap), p.repoFloor)
 		}
 		if l.split {
 			l.ghW = max(l.ghW, ansi.StringWidth(r.GitHub))
@@ -966,10 +1027,9 @@ func (p *factoryPainter) titleLine() string {
 	// gives up anything, and go only when the count does not fit either.
 	var named []string
 	if n := len(p.f.Repos); n > 0 {
-		owners := manyOwners(p.f.Repos)
 		names := make([]string, n)
 		for i, full := range p.f.Repos {
-			names[i] = repoLabel(full, owners)
+			names[i] = cmp.Or(p.labels[strings.ToLower(full)], full)
 		}
 		named = append(named, bare+st.Dim.Render(p.g.sep)+strings.Join(names, ", "))
 		if n > 1 {
