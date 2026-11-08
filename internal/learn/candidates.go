@@ -88,10 +88,29 @@ type Input struct {
 	IncludeBots bool
 	// Compare compares a reviewed commit with a later one (GitHub's
 	// comparison). Build asks it only for an inline comment on a commit
-	// magnum did not review; nil means no comparison, so such a comment is
-	// outside.
+	// magnum did not review, or for a local finding of the factory's at
+	// another head than a comment's (Local); nil means no comparison, so
+	// such a comment is outside and such a finding catches nothing.
 	Compare func(from, to string) (Comparison, error)
+	// Local is the factory's local review round of a pull request the
+	// factory published (nil for every other pull request): the second
+	// caught set. A candidate none of its findings caught is the factory's
+	// miss (Candidate.Origin), and so is a comment magnum's posted round
+	// caught that the local round did not (Candidate.PostedCaught).
+	Local *LocalRound
 }
+
+// LocalRound is the factory's local review round of a pull request it
+// published, as factory.db keeps it.
+type LocalRound struct {
+	// Findings are the round's findings (escapes.SourceLocal), each of the
+	// head its line numbers name (the head the round approved).
+	Findings []escapes.Finding
+}
+
+// OriginFactory is a candidate's Origin on a pull request the factory
+// published when the factory's local round did not catch it.
+const OriginFactory = store.MissOriginFactory
 
 // Comparison is what Build needs of GitHub's comparison of two commits.
 type Comparison struct {
@@ -146,6 +165,16 @@ type Candidate struct {
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
+	// Origin is OriginFactory for a comment on a pull request the factory
+	// published that its local review round did not catch (Input.Local),
+	// "" otherwise. The classifier gives such a candidate a stage.
+	Origin string `json:"origin,omitempty"`
+	// PostedCaught: magnum's posted round caught the comment (a finding it
+	// posted near it, or one it rejected as a duplicate of it) though the
+	// factory's local round did not. Without the factory such a comment is
+	// caught and no candidate; here it is one, recorded only as a
+	// factory-origin miss that teaches the review skill nothing.
+	PostedCaught bool `json:"posted_caught,omitempty"`
 	// File is the commented file at ReviewedSHA, relative to the candidates
 	// file's directory; FileSkipped says why there is no copy. The engine
 	// fills both.
@@ -159,10 +188,11 @@ type Candidate struct {
 }
 
 // finding is the candidate as escapes places it: its path and line range,
-// at the commit its lines name (the comment's own, else the reviewed one).
+// at a commit its lines name (the reviewed one it applies to, else its
+// own).
 func (c Candidate) finding() escapes.Finding {
 	return escapes.Finding{Source: escapes.SourceComment, Ref: c.ID, Path: c.Path, StartLine: c.StartLine, EndLine: c.Line,
-		Head: cmp.Or(c.CommentSHA, c.ReviewedSHA)}
+		Head: cmp.Or(c.ReviewedSHA, c.CommentSHA)}
 }
 
 // Lines is the candidate's line range as [from, to] (nil without a line).
@@ -182,7 +212,9 @@ type Result struct {
 	// Caught counts comments near a finding magnum posted, or near one the
 	// judge rejected as a duplicate of a comment made before that review
 	// (reasonDuplicate), Dropped the comments too short or only an
-	// approval. Neither is stored.
+	// approval. Neither is stored. On a pull request the factory published
+	// a comment is caught only when its local round caught it too (else it
+	// is a candidate, PostedCaught).
 	Caught, Dropped int
 	// Rejected are the findings the judge rejected, the newest RejectedMax
 	// with a title, oldest first: the classifier names the one that
@@ -228,6 +260,14 @@ type Result struct {
 // (rejectedAsDuplicate): the judge read the comment and agreed, so it is
 // caught. A rejection for any other reason says the judge disagreed, and a
 // comment made after the review was never read by it.
+//
+// On a pull request the factory published (Input.Local), every candidate
+// the factory's local round did not catch (tagLocal) has Origin factory, a
+// comment that cannot be placed (a review body, deleted lines) included. A
+// comment magnum caught (posted near it, or rejected as its duplicate) that
+// the local round did not becomes such a candidate too, PostedCaught,
+// instead of being caught; one both rounds caught is caught. An outside
+// comment takes no part: it is about code magnum's review did not see.
 func Build(in Input) (Result, error) {
 	res := Result{Rejected: rejectedRows(in.Findings), Threads: OwnThreads(in)}
 	b := builder{in: in, reviewed: map[string]time.Time{}, compared: map[[2]string]compared{}}
@@ -265,9 +305,21 @@ func Build(in Input) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
-		// A comment outside is measured against the review before it.
+		// A comment outside is measured against the review before it, and
+		// takes no part in the local round's: it is on code magnum's
+		// review did not see.
 		if b.postedNear(c, cmp.Or(c.ReviewedSHA, base)) {
-			res.Caught++
+			if why == "" {
+				if err := b.tagLocal(&c); err != nil {
+					return Result{}, err
+				}
+			}
+			if c.Origin == "" {
+				res.Caught++
+				continue
+			}
+			c.PostedCaught = true
+			res.Candidates = append(res.Candidates, c)
 			continue
 		}
 		if why != "" {
@@ -275,13 +327,21 @@ func Build(in Input) (Result, error) {
 			res.Outside = append(res.Outside, c)
 			continue
 		}
+		if err := b.tagLocal(&c); err != nil {
+			return Result{}, err
+		}
 		f, err := b.rejectedNear(c)
 		if err != nil {
 			return Result{}, err
 		}
 		if f != nil {
 			if rejectedAsDuplicate(*f, cm.CreatedAt, postedAt) {
-				res.Caught++
+				if c.Origin == "" {
+					res.Caught++
+					continue
+				}
+				c.PostedCaught = true
+				res.Candidates = append(res.Candidates, c)
 				continue
 			}
 			c.Raised, c.FindingRef, c.ReasonCode = store.MissRaisedRejected, findingRef(*f), f.ReasonCode
@@ -304,6 +364,9 @@ func Build(in Input) (Result, error) {
 			CommentSHA: r.CommitOid, Body: r.Body, CreatedAt: r.SubmittedAt, Raised: store.MissRaisedNone}
 		if _, ok := b.reviewed[r.CommitOid]; ok && r.CommitOid != "" {
 			c.ReviewedSHA = r.CommitOid
+			if err := b.tagLocal(&c); err != nil { // a body has no line: the local round's miss
+				return Result{}, err
+			}
 			res.Candidates = append(res.Candidates, c)
 			continue
 		}
@@ -445,6 +508,34 @@ func (b *builder) rejectedNear(c Candidate) (*store.Finding, error) {
 		}
 	}
 	return nil, nil
+}
+
+// tagLocal sets c's Origin to OriginFactory when the pull request is the
+// factory's (Input.Local) and no finding of its local round caught c
+// (escapes.Match): the same path, within NearLines, at the head the finding
+// names or at one c's file did not change since (changed, GitHub's
+// comparison of the two). A comment with no path or line can be caught by
+// none. Only a comparison that failed is an error.
+func (b *builder) tagLocal(c *Candidate) error {
+	if b.in.Local == nil {
+		return nil
+	}
+	var cmpErr error
+	same := escapes.SameCode(func(path, localHead, otherHead string) bool {
+		why, err := b.changed(localHead, otherHead, path)
+		if err != nil && cmpErr == nil {
+			cmpErr = err
+		}
+		return err == nil && why == ""
+	})
+	missed := len(escapes.Match(b.in.Local.Findings, []escapes.Finding{c.finding()}, same)) > 0
+	if cmpErr != nil {
+		return cmpErr
+	}
+	if missed {
+		c.Origin = OriginFactory
+	}
+	return nil
 }
 
 // other reports whether login (Account form) is another reviewer: not the
