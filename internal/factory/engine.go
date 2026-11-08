@@ -848,7 +848,9 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // covers costs its task nothing. Last, the alerts are delivered
 // (deliverAlerts). The returned error joins what failed, for the log; each
 // step records its own. A task's held wait is no error of the tick:
-// logHeld logs it once, at WARN only past heldWarnAfter.
+// logHeld logs it once, at WARN only past heldWarnAfter. A task whose stage
+// failed for a cause of its own is advanced no sooner than a poll after the
+// failure (retryLater).
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -1080,11 +1082,21 @@ func (e *Engine) passedOn(ctx context.Context, t registry.Task, err error) (regi
 		return t, false
 	}
 	next, err := e.reg.TaskByID(ctx, t.ID)
-	if err != nil || stageIndex(kind, next.Stage) <= stageIndex(kind, cmp.Or(t.Stage, kind.Stages[0].Name)) ||
+	if err != nil || stageIndex(kind, next.Stage) <= stageIndex(kind, e.stageRan(t)) ||
 		!slices.Contains(liveStates, next.State) || waitsOnYou(next) {
 		return t, false
 	}
 	return next, true
+}
+
+// stageRan is the stage a pass of task t runs: its stage, or for a task
+// without one yet its kind's first, which advance records on the task's
+// own copy alone (Tick's copy keeps the empty stage).
+func (e *Engine) stageRan(t registry.Task) string {
+	if k := e.cfg.Factory.Kinds[t.Kind]; t.Stage == "" && len(k.Stages) > 0 {
+		return k.Stages[0].Name
+	}
+	return t.Stage
 }
 
 // observe is the pass between ticks: it reads the agents' panes and the
@@ -1392,15 +1404,16 @@ type stageFails struct {
 	first, last time.Time
 }
 
-// retryLater reports whether task t's stage failed less than a poll
-// interval before now: its next try waits for the tick a poll after the
-// failure. The ticks between the polls (an observe pass that saw another
-// task's turn end, a request) try a failing stage no more often than the
-// poll did, so its stageFailLimit tries still take four polls, and a failing
-// publish's GitHub calls stay as few.
+// retryLater reports whether the stage task t's pass runs (stageRan)
+// failed less than a poll interval before now: its next try waits for the
+// first tick no sooner than a poll after the failure. The ticks between the
+// polls (an observe pass that saw another task's turn end, a request) try a
+// failing stage no more often than the poll did, so its stageFailLimit
+// tries still take four polls, and a failing publish's GitHub calls stay as
+// few.
 func (e *Engine) retryLater(t registry.Task, now time.Time) bool {
 	sf := e.lastFail[t.ID]
-	return sf != nil && sf.stage == t.Stage && now.Sub(sf.last) < e.poll()
+	return sf != nil && sf.stage == e.stageRan(t) && now.Sub(sf.last) < e.poll()
 }
 
 // taskFailed records a task's own failure as an `advance` fail event, once
@@ -1412,9 +1425,10 @@ func (e *Engine) retryLater(t registry.Task, now time.Time) bool {
 func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 	text := textx.Clip(textx.FirstLine(execx.Redact(f.err.Error())), 300)
 	now := e.now()
+	stage := e.stageRan(f.task) // a new task's first pass ran its kind's first stage
 	sf := e.lastFail[f.task.ID]
-	if sf == nil || sf.stage != f.task.Stage {
-		sf = &stageFails{stage: f.task.Stage, first: now}
+	if sf == nil || sf.stage != stage {
+		sf = &stageFails{stage: stage, first: now}
 		e.lastFail[f.task.ID] = sf
 	}
 	sf.n, sf.last = sf.n+1, now
@@ -1429,7 +1443,7 @@ func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 	delete(e.lastFail, f.task.ID)
 	e.toOperator(ctx, f.task, fmt.Sprintf("the %s stage failed %d times in a row: %s; fix its cause (a change of the configuration "+
 		"takes effect after `magnum factory install`, one of magnum's code after `make build && magnum factory install`)%s",
-		stageWhat(cmp.Or(f.task.Stage, "first")), sf.n, text, retryHint(f.task)), "a stage that keeps failing")
+		stageWhat(cmp.Or(stage, "first")), sf.n, text, retryHint(f.task)), "a stage that keeps failing")
 }
 
 // stageWhat is a stage's name as a wait says it ("local_review": "local

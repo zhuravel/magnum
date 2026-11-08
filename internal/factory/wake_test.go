@@ -1,9 +1,11 @@
 package factory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -295,46 +297,89 @@ func TestAPassThatSendsTheTaskToYouChainsNothing(t *testing.T) {
 	}
 }
 
-// A task's own failure is tried again a poll after it, however often the
-// ticks come: the ticks other tasks' turn ends kick would spend its
-// stageFailLimit tries in under a minute (before the kick, five tries took
-// four polls, three minutes) and send you a fault the next minutes heal. Its
-// failures still need you after five tries at the poll's pace.
+// A task's own failure is tried again no sooner than a poll after it,
+// however often the ticks come: the ticks other tasks' turn ends kick would
+// spend its stageFailLimit tries in under a minute (before the kick, five
+// tries took four polls, three minutes) and send you a fault the next
+// minutes heal. A tick exactly a poll after the failure tries it. A new
+// task's first stage, which its first pass records, is paced the same, and
+// its failures still need you after exactly five tries at the poll's pace.
 func TestKickedTicksTryAFailingStageNoMoreOftenThanThePoll(t *testing.T) {
+	for _, stage := range []string{"investigate", ""} {
+		t.Run(cmp.Or(stage, "a new task's first stage"), func(t *testing.T) {
+			h := newHarness(t)
+			failing := h.task("PR-12509", registry.TaskActive, stage)
+			busy := h.task("PR-12510", registry.TaskActive, "investigate")
+			var tries []time.Duration
+			h.stage(config.FactoryStageAgents, func(_ context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
+				if t.ID != failing.ID {
+					return false, nil
+				}
+				tries = append(tries, h.clock.Now().Sub(t0))
+				return false, fmt.Errorf("gh pr create: HTTP 403: Resource not accessible by token")
+			})
+			// A minute of ticks, each kicked by the other task's turn end;
+			// the sixth lands exactly a poll after the first failure.
+			for i, secs := range []int{0, 10, 20, 30, 40, 45, 55, 60} {
+				h.clock.Set(t0.Add(time.Duration(secs) * time.Second))
+				h.observeEvents(runtime.Event{TaskID: busy.ID, Role: "fx-repro", RunID: fmt.Sprintf("r%d", i), Kind: runtime.EventEnded})
+				if !h.kicked() {
+					t.Fatal("the turn's end kicked no tick")
+				}
+				h.tick()
+			}
+			if got := h.reload(failing.ID); got.State != registry.TaskActive || !slices.Equal(tries, []time.Duration{0, 45 * time.Second}) {
+				t.Fatalf("after a minute of kicked ticks the failing task is %s waiting %q, tried at %v; want at work, tried at "+
+					"0s and 45s, a poll after", got.State, got.WaitsWhat, tries)
+			}
+			for range 6 {
+				if h.reload(failing.ID).State == registry.TaskNeedsYou {
+					break
+				}
+				h.clock.Add(45 * time.Second)
+				h.tick()
+			}
+			if got := h.reload(failing.ID); got.State != registry.TaskNeedsYou || len(tries) != stageFailLimit ||
+				!strings.Contains(got.WaitsWhat, "the investigate stage failed 5 times in a row") {
+				t.Fatalf("the failing task is %s waiting %q after %d tries; want you after %d, the stage named", got.State,
+					got.WaitsWhat, len(tries), stageFailLimit)
+			}
+		})
+	}
+}
+
+// A task whose stage changed since its last failure (a send back to
+// coding, a request that moved it) runs its new stage at once: the wait
+// after a failure is the failed stage's, not the task's.
+func TestAStageThatChangedSinceAFailureRunsAtOnce(t *testing.T) {
 	h := newHarness(t)
-	failing := h.task("PR-12509", registry.TaskActive, "investigate")
-	busy := h.task("PR-12510", registry.TaskActive, "investigate")
-	tries := 0
-	h.stage(config.FactoryStageAgents, func(_ context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
-		if t.ID != failing.ID {
-			return false, nil
+	var ran []string
+	h.instantKind(&ran)
+	h.e.runners["instant"] = func(_ context.Context, _ registry.Task, st config.FactoryStage) (bool, error) {
+		ran = append(ran, st.Name)
+		if st.Name == "two" {
+			return false, fmt.Errorf("gh pr create: HTTP 403: Resource not accessible by token")
 		}
-		tries++
-		return false, fmt.Errorf("gh pr create: HTTP 403: Resource not accessible by token")
-	})
-	for i := range 7 { // a minute of ticks, 10 s apart, each kicked by the other task's turn end
-		if i > 0 {
-			h.clock.Add(10 * time.Second)
-		}
-		h.observeEvents(runtime.Event{TaskID: busy.ID, Role: "fx-repro", RunID: fmt.Sprintf("r%d", i), Kind: runtime.EventEnded})
-		if !h.kicked() {
-			t.Fatal("the turn's end kicked no tick")
-		}
-		h.tick()
+		return false, nil
 	}
-	if got := h.reload(failing.ID); got.State != registry.TaskActive || tries != 2 {
-		t.Fatalf("after a minute of kicked ticks the failing task is %s waiting %q, tried %d times; want at work, tried twice "+
-			"(at 0 s and at 50 s, a poll after)", got.State, got.WaitsWhat, tries)
+	task, err := h.reg.CreateTask(h.ctx, registry.Task{JiraKey: "PR-12511", Kind: "instant", Repo: "example/shop", Title: "t",
+		State: registry.TaskActive, Stage: "two"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for range 6 {
-		if h.reload(failing.ID).State == registry.TaskNeedsYou {
-			break
-		}
-		h.clock.Add(45 * time.Second)
-		h.tick()
+	h.tick() // two fails
+	if err := h.reg.TransitionTask(h.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) {
+		u.Set("stage", "one")
+		u.Set("attempt", 0)
+		u.Because("back to one, as a send back moves a task")
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if got := h.reload(failing.ID); got.State != registry.TaskNeedsYou || tries != stageFailLimit {
-		t.Fatalf("the failing task is %s after %d tries; want you after %d", got.State, tries, stageFailLimit)
+	h.clock.Add(10 * time.Second)
+	h.tick()
+
+	if !slices.Equal(ran, []string{"two", "one"}) {
+		t.Fatalf("stages run %v; want two, then one at once on the next tick", ran)
 	}
 }
 
