@@ -20,7 +20,6 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
-	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -162,14 +161,11 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	// The daemon lock and the agents' hook listener come before the App,
 	// whose agents managers give their panes the socket only while a
 	// listener reads it (engine.ClaimDaemon); Run holds the lock from here.
-	claim, err := claimDaemon(c.Layout, o.DryRun)
+	claim, eo, aopts, err := claimDaemon(c, o, eo)
 	if err != nil {
 		return daemonDryRunReport{}, err
 	}
 	defer claim.Release()
-	eo.Claim = claim
-	aopts := daemonAppOptions(c, o)
-	aopts.HookSocket = claim.HookSocket() // "" without a listener: no pane gets the hook env
 	a, err := app.New(c.Config, c.Layout, aopts)
 	if err != nil {
 		return daemonDryRunReport{}, err
@@ -197,14 +193,26 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	return rep, err
 }
 
-// claimDaemon is the daemon process's claim (engine.ClaimDaemon): none for a
-// dry run, which takes no lock and must leave a live daemon's hook socket
-// alone (the claim replaces a socket at its path).
-func claimDaemon(l paths.Layout, dryRun bool) (*engine.Claim, error) {
-	if dryRun {
-		return nil, nil
+// claimDaemon is the daemon process's claim (engine.ClaimDaemon) with the
+// engine options eo and the App's options (daemonAppOptions) that use it:
+// Run holds the claim's lock instead of taking it a second time
+// (engine.Options.Claim; a second take in the same process finds the lock
+// held, and Run would exit as a second daemon does), and the App's panes
+// get its listener's socket (app.Options.HookSocket, "" without a listener:
+// no pane gets the hook env). A dry run claims nothing, since it takes no
+// lock and must leave a live daemon's hook socket alone (the claim replaces
+// a socket at its path).
+func claimDaemon(c *Context, o daemonOptions, eo engine.Options) (*engine.Claim, engine.Options, app.Options, error) {
+	ao := daemonAppOptions(c, o)
+	if o.DryRun {
+		return nil, eo, ao, nil
 	}
-	return engine.ClaimDaemon(l)
+	claim, err := engine.ClaimDaemon(c.Layout)
+	if err != nil {
+		return nil, eo, ao, err
+	}
+	eo.Claim, ao.HookSocket = claim, claim.HookSocket()
+	return claim, eo, ao, nil
 }
 
 // daemonEngineOptions are the engine options of the daemon process: its
