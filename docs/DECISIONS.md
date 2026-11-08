@@ -18636,6 +18636,87 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPanicInStartServerDoesNotStallTheLoop (a 15 s tick), TestRunLockedEndsTheQASessionsAsItStops,
   TestTheUserFacingCheckRunsAtMostThirtySeconds, TestFactoryInstallRefusesWhileTheFactoryRunsQA and
   TestFactoryInstallDrainWaitsForAQARun; each new factory test failed against a mutant without its fix.
+- **The QA walker walks the changed pages, the factory's own checks of what it saved decide, and no ready card
+  comes without QA at the head** (2026-11-08, R55 slice 1, its fifth step). Step 4 left a session ready for a
+  walk that nothing started.
+  - The built-in kinds (bug, feature, chore) run `{ name = "qa", type = "qa", roles = ["fx-qa"], end = "qa" }`
+    after `local_review`, in Go and in `config.defaults.toml`. A repository without `[factory.repo.qa]` skips it,
+    so every task of such a repository moves from the local review to the PR body as before.
+  - The walk: a session found ready for it (the pass after the one that started its Chrome, which leaves the
+    task waiting "ready for the walk") runs one fx-qa turn through the agents stages' machinery (`runTurn` with
+    `agentsTurn.qa`), each run's walk an attempt of its own, and the task waits on nothing while the walker
+    works. The walker launches in the QA session's copy, never the task's claimed copy: `BROWSER=true` and the
+    factory's shims first on its PATH (step 4), and its browser tool attached to the run's own Chrome by its
+    env, `AGENT_BROWSER_CDP` (the session's endpoint), `AGENT_BROWSER_SESSION` (`magnum-qa-<task>-<run>`, so
+    never the tool's default session, a browser every agent on the Mac shares, nor an earlier run's) and
+    `AGENT_BROWSER_IDLE_TIMEOUT_MS` (10 minutes, so the tool's daemon of the run ends after it).
+    `factory-qa.md` says exactly how to attach, `agent-browser --session {{.QASession}} --cdp {{.QACDP}}` on
+    every command, and forbids another session, `--auto-connect`, `--profile`, `--state`, `--restore`, a
+    browser MCP tool and a browser extension: each can reach your running Chrome and its logins. The probe is
+    evaluated by one shell command whose output goes straight into `pages/NN-....json`
+    (`eval --stdin < probe.js > ...`): it is about 600 KB, too much to pass through a tool or the agent's
+    context. The prompt's run folder is `qa/<n>-<sha7>` (`PromptData` and `prompts/README.md` said `<head>`).
+  - The end fact `qa` (`checkQAEnd`, `checkEnd`'s new case): the newest run's `verdict.json` (`qaVerdictFile`,
+    which `readQAVerdict` now uses), newer than the walker's turn, valid for the run (its head, its nonce, the
+    copy's port, the page cap, from `qa-run.json`) and covering every id of `acceptance.json` (none when the
+    file is not there; one that does not read is yours: no walker's turn fixes it). An invalid verdict gets the
+    one nudge, which names `<run>/verdict.json` and why, then the task needs you, "the fx-qa agent wrote no
+    valid qa/<n>-<sha7>/verdict.json". The walker has no questions file (step 1), and a `questions-fx-qa.json`
+    it writes anyway is left out of `questionFiles` (`asksNoOne`), so it never reaches you with a later role's
+    questions.
+  - Once the turn passed (`walkDone`: an attempt after the run's `attempts_before` is verified), `endWalk` runs
+    the teardown first (the browser and the server stop, the Mac's QA lock and the heavy slot go), then
+    `evaluateQA`: the verdict read again, `detectQA` on every page's probe and console log, `qaOutcome`. Then
+    the run's `result.json` and its qa check (`qa run <n>`, its time from the server's start). Clean writes
+    `qa-summary.json` and passes the stage. Defects that block go to `qaBlocks`, which until the fix loop (step
+    6) needs you: "QA found 1 defect that blocks: escaped_markup on /settings/security; see <result.json>; then
+    `magnum factory retry <id>`", the classes and page paths only, never a quote. A walk that reached no page
+    needs you with "QA reached no page: <the first blocked state's why>". `walkDone` is read before the session,
+    so a pass whose end did not land ends the walk on the next pass without starting a server again.
+  - A state the walker could not reach makes the run not clean, however clean its pages: it is unavailable
+    (`Walked`), the qa check fails as the environment's, and the task needs you with up to three of the states
+    and why ("QA could not reach 1 state of the change: the passkey autofill list (headless Chrome draws no
+    autofill); ..."). It is no defect for the writer: no check judged that page, which may show the very
+    defect QA is for, and a writer's turn cannot make a sign-in work, seed local data or make headless Chrome
+    draw an autofill list, so the fix loop would spend its turns to its cap. Your retry walks a fresh run.
+  - The bounds (`qaBounded`), asked by `sweepQA` on every tick whatever holds the stages (a drain, the
+    infrastructure's or herdr's hold), and before each walk: a run past its cap since `qa-run.json`'s
+    `started` (the boot and the walk share the 50 minutes) is QA unavailable, "QA run N went over its cap of
+    50m0s", and needs you; the memory hold at critical pressure (`memoryCritical`) records a pressure result and
+    stops the session, and the hold's lift starts a fresh run, the second pressure in a row needing you (step 4's
+    `qaDecide`).
+  - Every teardown now fails the stage's attempts the run began that are still open (`qaCutRecord`, for every
+    end, not only the cut of a run with no result): the cap and the pressure end a walking session with a
+    result, and its walker's attempt would otherwise stay open, so the next run's walk would go on in it. An
+    agent that needs you during the walk (stuck, lost, a dialog) cuts the run through `freeHeavy`, and its
+    attempt fails, so your retry walks a fresh run. A walk that passed is verified and stays so.
+  - `qaWalking` no longer counts an attempt still launching: a walker whose launch a hold keeps has not begun,
+    so a drain ends its session at once instead of `install --drain` waiting on a launch the drain holds.
+  - `readyProblem` adds `qaProblem`: for a repository with a qa block and a kind with a qa stage, the ready card
+    needs `qa-summary.json` clean or not_needed at the task's head, else "QA did not pass at <sha7>" or "QA
+    looked at <sha7>, another head than <sha7>".
+
+  Rejected:
+  - A blocked state as a defect for the fix loop, or a run with one as clean with a flag on the card (the plan's
+    step 7 line): an unjudged page would pass QA, or the writer would chase an environment.
+  - Launching the walker in the claimed copy: its `open` and its browser tool would reach your browser.
+  - Leaving the browser's attachment to the prompt alone: a command that drops the flags would start the tool's
+    own browser, or join its shared default session.
+  - Passing the probe's output through a tool or the agent's context (about 600 KB a page).
+  - Enforcing the cap in `runQA` alone: `runQA` does not run while herdr is down or the infrastructure hold
+    stands, and the session would keep the server, the Chrome, the lock and the heavy slot meanwhile.
+
+  Tests, failing first (the walker was never launched, the default kinds had no qa stage and the card needed no
+  QA): TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks, TestACleanWalkPassesQAAndStopsEverything,
+  TestTheEscapedTooltipBlocksQAWhateverTheWalkerSays, TestQABlocksAVisibleDefectTheReviewLeftAsP3,
+  TestQADefectsNeedYouUntilTheFixLoopLands, TestAnInvalidVerdictGetsOneNudgeThenNeedsYou,
+  TestAWalkThatReachesNoPageNeedsYou, TestAWalkWithABlockedStateNeedsYouNotClean, TestQAOverItsCapNeedsYou (herdr
+  down), TestCriticalPressureStopsTheWalkAndRetriesOnceAfterIt, TestARestartMidWalkFailsTheWalkersAttempt,
+  TestNeedsYouDuringTheWalkCutsTheRunAndFailsTheWalkersAttempt, TestADrainEndsAQASessionWhoseWalkerNeverLaunched,
+  TestNoReadyCardWithoutQAAtTheHead, TestTheDefaultKindsRunQAAfterTheLocalReview and new phrases in
+  TestCheckPromptsRendersTheQAWalkersPrompt. Mutants caught: the launch in the claimed copy, the cap only in
+  `runQA`, a blocked state passing clean, a launching attempt counted as a walk, a teardown that fails no
+  attempt of a run with a result, and the walker's questions file left in `questionFiles`.
 
 ## Learned rules
 

@@ -2,7 +2,7 @@ package factory
 
 // The QA walker's verdict and the factory's own reading of the pages it
 // saved (R55 slice 1). The walker walks the changed pages in a headless
-// browser and writes verdict.json in its run's folder (qa/<n>-<head>):
+// browser and writes verdict.json in its run's folder (qa/<n>-<sha7>):
 // the pages with their shot, the probe's JSON and the console's log, its
 // defects, what it could not reach, and the acceptance checks no page
 // shows. The factory refuses a verdict whose files it cannot trust
@@ -495,7 +495,7 @@ func qaWord(s string) string {
 // as the factory keeps them (walkerDefect). A problem's file is
 // <runRel>/verdict.json.
 func readQAVerdict(taskDir, runRel string, since time.Time, want qaWant) (QAVerdict, *endProblem) {
-	file := path.Join(filepath.ToSlash(runRel), "verdict.json")
+	file := path.Join(filepath.ToSlash(runRel), qaVerdictFile)
 	bad := func(format string, a ...any) (QAVerdict, *endProblem) {
 		return QAVerdict{}, &endProblem{file: file, why: fmt.Sprintf(format, a...)}
 	}

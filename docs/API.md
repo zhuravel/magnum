@@ -4602,8 +4602,9 @@ func DefaultFactoryKinds() map[string]FactoryKind
     investigates (the bug's reproducer, cause and history, the feature's points,
     the chore's scope) and in the bug's gate on a reproduction; the rest is the
     same: a judge, a critic for a wide plan, one batch of questions, the writer,
-    the local review, the PR body, your decision, and the publish that only the
-    decision leads to.
+    the local review, visual QA of the change's pages (a repository without
+    [factory.repo.qa] skips it), the PR body, your decision, and the publish
+    that only the decision leads to.
 
 func DefaultKinds() map[string]Kind
     DefaultKinds returns the built-in kinds (fresh copies):
@@ -12468,7 +12469,12 @@ func CheckEnd(fact string, dir string, since time.Time, roles ...string) (ok boo
         and its questions-<role>.json, when it is there, valid. The rest of the
         fact (commits on the branch after origin/<base>, no tracked change,
         the factory's own proof and the precheck passed at the head) is the
-        coding stage's to check (provenHead).
+        coding stage's to check (provenHead);
+      - qa: the QA walker's verdict.json in the newest run's folder
+        (qa-run.json), newer than since, valid for the run and covering
+        acceptance.json's checks (checkQAEnd). The outcome (clean, defects,
+        unavailable) is the qa stage's to decide from the saved pages
+        (evaluateQA).
 
     The clean and pr facts are checked by the stages that own them, not here
     (not done, saying so).
@@ -13232,17 +13238,19 @@ type PromptData struct {
 	// "" while no read of them went through.
 	MergeMethods string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
-	// other: QARun is the run's folder (qa/<n>-<head> in TaskDir), where the
+	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
-	// (config.FactoryQA.PageURL of its port, no path); QACDP the factory's
-	// headless browser's CDP endpoint; QAProbe the probe script the walker
-	// evaluates on each page, QAVerdict the verdict it writes last and
-	// QAChanged the user-facing files the change touches (the repository's
-	// qa.when), all in QARun; QASignIn and QASkill the repository's
-	// qa.sign_in and qa.skill ("" = none); QAMaxPages its qa.max_pages and
-	// QAMaxShots the most shots of a run.
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the CDP endpoint
+	// of the factory's headless Chrome of the run's session, the one browser
+	// the walker attaches to, and QASession the walker's own session of its
+	// browser tool (agent-browser's --session, one per run); QAProbe the
+	// probe script the walker evaluates on each page, QAVerdict the verdict it
+	// writes last and QAChanged the user-facing files the change touches (the
+	// repository's qa.when), all in QARun; QASignIn and QASkill the
+	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
+	// qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill                                  string
+	QASignIn, QASkill, QASession                       string
 	QAMaxPages, QAMaxShots                             int
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of
@@ -13394,6 +13402,7 @@ type QAResult struct {
 	Outcome  string      `json:"outcome"`
 	Why      string      `json:"why"`
 	Cut      string      `json:"cut,omitempty"`
+	Walked   bool        `json:"walked,omitempty"`
 	Blocking []QADefect  `json:"blocking"`
 	Known    []QADefect  `json:"known"`
 	Blocked  []QABlocked `json:"blocked"`
@@ -13404,9 +13413,10 @@ type QAResult struct {
     in the task's directory is the one that passed the stage): its version, the
     run's number, folder and head, the pages it walked and the shots it took,
     its outcome (QAOutcome*) and why, what cut an interrupted run (qaCutDrain,
-    qaCutTask, qaCutCrash), the defects that block and those that do not
-    (Known), the states the walker could not reach, and when it started and
-    ended.
+    qaCutTask, qaCutCrash), whether the walker's verdict decided it (Walked:
+    the factory's checks of the pages it saved), the defects that block and
+    those that do not (Known), the states the walker could not reach, and when
+    it started and ended.
 
 type QAVerdict struct {
 	Version  int          `json:"version"`

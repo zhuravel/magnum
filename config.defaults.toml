@@ -1024,10 +1024,12 @@ doing = "talking with you"
 #   review    magnum's review loop on the change ([factory.local_review]); ends when a round is clean
 #   decision  waits for you: ready_push shows the ready card, and your y binds to the head it shows
 #   effect    publish pushes the approved head and opens the PR, ready for review, under your login
-#   qa        starts the copy's server (the repository's [factory.repo.qa]), has its one role (fx-qa) walk the
-#             changed pages in the factory's headless browser, and checks the saved pages itself; ends on
-#             `end = "qa"`. At most one per kind, after a review stage and before the ready_push decision; no
-#             prompt and no when (a repository without [factory.repo.qa] skips it)
+#   qa        starts the copy's server and a headless Chrome; the roles walk the changed pages ([factory.repo.qa]);
+#             ends when the factory's checks of the saved pages find nothing that blocks (`end = "qa"`). Its one
+#             role (fx-qa) walks the pages through the factory's Chrome alone. A defect that blocks, a state the
+#             walker could not reach, a run past its cap or one that reached no page waits on you. At most one per
+#             kind, after a review stage and before the ready_push decision; no prompt and no when (a repository
+#             without [factory.repo.qa] skips it)
 # `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security. A publish effect
 # must come after a ready_push decision: nothing leaves the Mac without your y.
 
@@ -1040,6 +1042,7 @@ stages = [
   { name = "reproduction", type = "gate", gate = "reproduced" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
+  { name = "qa", type = "qa", roles = ["fx-qa"], end = "qa" },
   { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },
@@ -1053,6 +1056,7 @@ stages = [
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
+  { name = "qa", type = "qa", roles = ["fx-qa"], end = "qa" },
   { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },
@@ -1069,6 +1073,7 @@ stages = [
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
+  { name = "qa", type = "qa", roles = ["fx-qa"], end = "qa" },
   { name = "pr_body", type = "agents", roles = ["fx-judge"], end = "pr_body", prompt = "factory-pr-body.md" },
   { name = "ready", type = "decision", decision = "ready_push" },
   { name = "publish", type = "effect", effect = "publish", end = "pr" },

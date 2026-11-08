@@ -58,8 +58,10 @@ type fakeRuntime struct {
 	reg         *registry.Registry
 	launchRoles [][]string
 	// launchPrompts are the prompt files of the roles of each Launch, as
-	// the stage runs them; voided the Void calls.
+	// the stage runs them, launchCopies the copy each ran in; voided the
+	// Void calls.
 	launchPrompts [][]string
+	launchCopies  []Copy
 	sent          []sentPrompt
 	verified      []verifyCall
 	voided        []verifyCall
@@ -241,9 +243,10 @@ func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { 
 
 // Launch records the launch and, as the runtime does, moves a launching
 // attempt to running when it goes through.
-func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, _ Copy, roles []config.Role) error {
+func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
 	f.mu.Lock()
 	f.launches = append(f.launches, t.ID)
+	f.launchCopies = append(f.launchCopies, c)
 	names, prompts := make([]string, 0, len(roles)), make([]string, 0, len(roles))
 	for _, r := range roles {
 		names, prompts = append(names, r.Name), append(prompts, r.Prompt)
@@ -345,6 +348,13 @@ func (f *fakeRuntime) launchedRoles() [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.launchRoles)
+}
+
+// launchedCopies are the copies each Launch ran its roles in.
+func (f *fakeRuntime) launchedCopies() []Copy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.launchCopies)
 }
 
 // launchedPrompts are the prompt files of the roles of each Launch.

@@ -428,6 +428,10 @@ func existingDir(dir string) string {
 	return ""
 }
 
+// memoryCritical starts the memory hold's reason at the kernel's critical
+// pressure level, which stops a QA run (qaBounded).
+const memoryCritical = "critical pressure"
+
 // memoryPressure is the memory hold's reason ("" for none): the kernel's
 // pressure level at critical, or the swap at [factory] memory_gate_swap
 // percent or more, then the largest processes and the Codex brokers with
@@ -438,7 +442,7 @@ func (e *Engine) memoryPressure(ctx context.Context, now time.Time) string {
 	if e.d.Memory != nil {
 		s := e.d.Memory(ctx)
 		if s.Level == engine.MemoryCritical {
-			reason = "critical pressure, " + s.SwapText()
+			reason = memoryCritical + ", " + s.SwapText()
 		} else if gate := e.cfg.Factory.MemoryGateSwap; gate > 0 && s.Swap != nil && s.Swap.TotalBytes > 0 {
 			if pct := int(s.Swap.UsedBytes * 100 / s.Swap.TotalBytes); pct >= gate {
 				reason = fmt.Sprintf("swap %d%% used, launches wait below %d%%", pct, gate)

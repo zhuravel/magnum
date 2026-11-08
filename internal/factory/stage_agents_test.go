@@ -122,7 +122,7 @@ func fullPromptData() PromptData {
 		DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001,
 		QARun: dir + "/qa/1-abc1234", QAURL: "http://app.example.localhost:3001", QACDP: "http://127.0.0.1:9222",
 		QAProbe: dir + "/qa/1-abc1234/probe.js", QAVerdict: dir + "/qa/1-abc1234/verdict.json", QAChanged: dir + "/qa/1-abc1234/changed.txt",
-		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QAMaxPages: 12, QAMaxShots: 30}
+		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-7-1", QAMaxPages: 12, QAMaxShots: 30}
 }
 
 // The QA walker's prompt names the browser it drives, the probe it runs on
@@ -153,6 +153,8 @@ func TestCheckPromptsRendersTheQAWalkersPrompt(t *testing.T) {
 		"an empty file when there are none", "each `id` its own", "`page` the `id` of the page in `pages`",
 		"whose `head` is not the copy's HEAD", "a shot that is not a PNG", "a probe file that is not what " + d.QAProbe + " returned",
 		"more than 12 pages or 30 shots", "an id taken twice", "a class or a severity not listed here", "a defect on no page of `pages`",
+		"`agent-browser --session " + d.QASession + " --cdp " + d.QACDP, "--auto-connect", "a browser MCP tool",
+		"eval --stdin < " + d.QAProbe + " > " + d.QARun + "/pages/", "about 600 KB", "never through your context or a tool",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the QA walker's prompt lacks %q:\n%s", want, text)

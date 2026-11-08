@@ -477,8 +477,9 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 // readyProblem is why task t has no ready card ("" when it may have one)
 // and the local review's end: the review ended clean or on an oscillation
 // (review-summary.json), at the task's head, where the factory's proof
-// holds and the precheck passed, and the report and the PR body are there.
-// A review that did not finish or stopped at its cap never has a card.
+// holds and the precheck passed, QA passed when the task has QA
+// (qaProblem), and the report and the PR body are there. A review that did
+// not finish or stopped at its cap never has a card.
 func (e *Engine) readyProblem(t registry.Task) (ReviewSummary, string) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	var sum ReviewSummary
@@ -510,6 +511,9 @@ func (e *Engine) readyProblem(t registry.Task) (ReviewSummary, string) {
 	}
 	if !precheckPassedAt(dir, t.HeadSHA) {
 		return sum, "the precheck did not pass at " + short(t.HeadSHA)
+	}
+	if why := e.qaProblem(t); why != "" {
+		return sum, why
 	}
 	for _, name := range []string{reportFile, prBodyFile} {
 		if fi, err := os.Stat(filepath.Join(dir, name)); err != nil || fi.Size() == 0 {

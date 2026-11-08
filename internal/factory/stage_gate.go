@@ -268,7 +268,9 @@ type questionsOf struct{ name, raisedBy string }
 
 // questionFiles are the questions files in task t's directory dir:
 // questions.json (raised by the role of the kind's report stage), then each
-// questions-<role>.json by name, raised by the role its name gives.
+// questions-<role>.json by name, raised by the role its name gives, but for
+// the QA walker's (asksNoOne): it asks no one, so a file it wrote anyway
+// never reaches you with a later role's questions.
 func (e *Engine) questionFiles(t registry.Task, dir string) ([]questionsOf, error) {
 	var out []questionsOf
 	if _, err := os.Stat(filepath.Join(dir, questionsFile)); err == nil {
@@ -282,11 +284,27 @@ func (e *Engine) questionFiles(t registry.Task, dir string) ([]questionsOf, erro
 	for _, path := range names {
 		name := filepath.Base(path)
 		role := strings.TrimSuffix(strings.TrimPrefix(name, "questions-"), ".json")
-		if role != "" && role != "*" {
+		if role != "" && role != "*" && !e.asksNoOne(t, role) {
 			out = append(out, questionsOf{name, role})
 		}
 	}
 	return out, nil
+}
+
+// asksNoOne reports whether role, in task t's kind, has no questions file
+// (questionsFileOf): a qa stage names it, and no other stage does.
+func (e *Engine) asksNoOne(t registry.Task, role string) bool {
+	qa := false
+	for _, st := range e.cfg.Factory.Kinds[t.Kind].Stages {
+		if !slices.Contains(st.Roles, role) {
+			continue
+		}
+		if questionsFileOf(st, role) != "" {
+			return false
+		}
+		qa = true
+	}
+	return qa
 }
 
 // reportRole is the role that raises the questions of questions.json: the

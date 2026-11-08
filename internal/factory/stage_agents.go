@@ -119,17 +119,19 @@ type PromptData struct {
 	// "" while no read of them went through.
 	MergeMethods string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
-	// other: QARun is the run's folder (qa/<n>-<head> in TaskDir), where the
+	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
-	// (config.FactoryQA.PageURL of its port, no path); QACDP the factory's
-	// headless browser's CDP endpoint; QAProbe the probe script the walker
-	// evaluates on each page, QAVerdict the verdict it writes last and
-	// QAChanged the user-facing files the change touches (the repository's
-	// qa.when), all in QARun; QASignIn and QASkill the repository's
-	// qa.sign_in and qa.skill ("" = none); QAMaxPages its qa.max_pages and
-	// QAMaxShots the most shots of a run.
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the CDP endpoint
+	// of the factory's headless Chrome of the run's session, the one browser
+	// the walker attaches to, and QASession the walker's own session of its
+	// browser tool (agent-browser's --session, one per run); QAProbe the
+	// probe script the walker evaluates on each page, QAVerdict the verdict it
+	// writes last and QAChanged the user-facing files the change touches (the
+	// repository's qa.when), all in QARun; QASignIn and QASkill the
+	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
+	// qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill                                  string
+	QASignIn, QASkill, QASession                       string
 	QAMaxPages, QAMaxShots                             int
 }
 
@@ -165,6 +167,12 @@ type agentsTurn struct {
 	// the writer's reply, and a commit since the round unless it declined
 	// every finding with its risk. nil for any other turn.
 	review *reviewTurn
+	// qa is a qa stage's walker turn (qa.go): its run and the QA session's
+	// copy, which the walker launches in (the factory's shims and its
+	// browser tool's attachment to the session's Chrome), never the claimed
+	// copy; each run's walk is an attempt of its own. nil for any other
+	// turn.
+	qa *qaWalk
 }
 
 // since is the time the end fact's files of attempt a must be newer than.
@@ -244,7 +252,7 @@ const waitAgent = "agent"
 // agentsEnds are the end facts an agents stage of this build checks: a
 // stage of another end waits for the build that brings its stage.
 var agentsEnds = []string{config.FactoryEndFindings, config.FactoryEndReport, config.FactoryEndCritic, config.FactoryEndProof,
-	config.FactoryEndPRBody}
+	config.FactoryEndPRBody, config.FactoryEndQA}
 
 // runAgents runs one pass of an agents stage of task t (the engine's runner
 // for config.FactoryStageAgents); done reports that its end fact held for
@@ -268,13 +276,14 @@ func (e *Engine) runAgents(ctx context.Context, t registry.Task, st config.Facto
 }
 
 // runTurn is runAgents for stage st run as turn says: an agents stage of the
-// task's kind, or a gate's own turn (a stage value the gate builds, named
-// as the gate, with the prompt its roles get).
+// task's kind, a gate's own turn (a stage value the gate builds, named as
+// the gate, with the prompt its roles get), or a qa stage's walker turn in
+// its QA session's copy.
 func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.FactoryStage, turn agentsTurn) (bool, error) {
 	if !slices.Contains(agentsEnds, st.End) || e.d.Runtime == nil || (st.End == config.FactoryEndProof && e.d.Git == nil) {
 		return false, nil
 	}
-	a, open, passed, err := e.stageAttempt(ctx, t, st, turn.gate || turn.review != nil)
+	a, open, passed, err := e.stageAttempt(ctx, t, st, turn.gate || turn.review != nil || turn.qa != nil)
 	if err != nil || passed {
 		return passed, err
 	}
@@ -283,8 +292,10 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 			return skip, err
 		}
 	}
-	c, err := e.claimCopy(ctx, t)
-	if err != nil {
+	var c Copy
+	if turn.qa != nil {
+		c = turn.qa.copy // the task's copy as its QA session runs the walker in it
+	} else if c, err = e.claimCopy(ctx, t); err != nil {
 		return false, err
 	}
 	if !open {
@@ -1178,6 +1189,10 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 		}
 	case config.FactoryEndPRBody:
 		names = []string{prBodyFile, roleQuestionsFile(role.Name)}
+	case config.FactoryEndQA: // the newest run's verdict; the walker asks no one
+		if run, ok := readQARun(dir); ok {
+			names = []string{filepath.Join(filepath.FromSlash(run.Dir), qaVerdictFile)}
+		}
 	}
 	for i, n := range names {
 		names[i] = filepath.Join(dir, n)
@@ -1287,7 +1302,26 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 			d.Review, d.ReviewReply = in(reviewFile(n)), in(reviewReplyFile(n))
 		}
 	}
+	if st.End == config.FactoryEndQA { // the QA walker's turn: the task's newest run
+		e.qaPromptData(&d, t, dir)
+	}
 	return d
+}
+
+// qaPromptData fills the QA walker's fields of d for task t (its directory
+// dir) from its newest run (qa-run.json, as the session that is ready for
+// the walk wrote it) and the repository's [factory.repo.qa].
+func (e *Engine) qaPromptData(d *PromptData, t registry.Task, dir string) {
+	if run, ok := readQARun(dir); ok {
+		runDir := filepath.Join(dir, filepath.FromSlash(run.Dir))
+		d.QARun, d.QAURL, d.QACDP, d.QASession = runDir, run.URL, run.CDP, qaBrowserSession(t.ID, run.N)
+		d.QAProbe, d.QAVerdict = filepath.Join(runDir, qaProbeFile), filepath.Join(runDir, qaVerdictFile)
+		d.QAChanged = filepath.Join(runDir, qaChangedFile)
+		d.QAMaxPages, d.QAMaxShots = run.MaxPages, QAMaxShots
+	}
+	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok && repo.QA != nil {
+		d.QASignIn, d.QASkill = repo.QA.SignIn, repo.QA.Skill
+	}
 }
 
 // mergeMethodsBound bounds a read of a repository's merge methods, which a
@@ -1464,5 +1498,6 @@ func checkData(role config.Role) PromptData {
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
 		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt",
-		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QAMaxPages: 12, QAMaxShots: 30}
+		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
+		QAMaxShots: 30}
 }

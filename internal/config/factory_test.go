@@ -1137,8 +1137,13 @@ func TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt(t *testing.T) {
 			return slices.Insert(s, findStage(s, before), st)
 		}
 	}
+	// noQA is the built-in bug kind without its own qa stage, so each case
+	// places the one it tests.
+	noQA := func(s []FactoryStage) []FactoryStage {
+		return slices.DeleteFunc(s, func(st FactoryStage) bool { return st.Type == FactoryStageQA })
+	}
 	cfg := validFactoryConfig()
-	editKind(cfg, "bug", qa("pr_body"))
+	editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { return qa("pr_body")(noQA(s)) })
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("a qa stage after the local review: %v", err)
 	}
@@ -1166,7 +1171,7 @@ func TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cfg := validFactoryConfig()
-			editKind(cfg, "bug", tc.edit)
+			editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { return tc.edit(noQA(s)) })
 			err := cfg.Validate()
 			wantError(t, err, append([]string{"factory kind bug"}, tc.want...)...)
 			if errs := validateErrs(err); len(errs) != 1 {
@@ -1211,7 +1216,8 @@ func TestLocalHostTakesOnlyTheMacsOwnNames(t *testing.T) {
 }
 
 // fx-qa, the QA walker, looks at the changed pages in a browser: a Claude
-// session at high effort with 35 minutes, which no built-in kind names yet.
+// session at high effort with 35 minutes, which the built-in kinds' qa
+// stage names.
 func TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes(t *testing.T) {
 	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
 		r, ok := cfg.FactoryRole("fx-qa")
@@ -1221,6 +1227,22 @@ func TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes(t *testing.T) {
 		if r.Kind != KindClaude || r.Effort != "high" || r.Prompt != "factory-qa.md" || r.Timeout.Duration != 35*time.Minute ||
 			r.Why != "look at the changed pages in a browser, in the states the ticket names" || r.Doing != "walking the pages" {
 			t.Errorf("fx-qa = %+v", r)
+		}
+	}
+}
+
+// Every built-in kind looks at its change's pages once the local review
+// passed it: the stage after local_review is the qa stage of the fx-qa
+// walker (a repository without [factory.repo.qa] skips it).
+func TestTheDefaultKindsRunQAAfterTheLocalReview(t *testing.T) {
+	want := FactoryStage{Name: "qa", Type: FactoryStageQA, Roles: []string{"fx-qa"}, End: FactoryEndQA}
+	for _, cfg := range []*Config{Defaults(), mustLoadDefaults(t)} {
+		for _, name := range []string{"bug", "feature", "chore"} {
+			stages := cfg.Factory.Kinds[name].Stages
+			i := findStage(stages, "local_review")
+			if i < 0 || i+1 >= len(stages) || !equalAny(stages[i+1], want) {
+				t.Errorf("kind %s: the stage after local_review is not %+v: %+v", name, want, stages)
+			}
 		}
 	}
 }

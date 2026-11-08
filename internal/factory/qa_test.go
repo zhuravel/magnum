@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
@@ -29,8 +31,8 @@ var errRefused = errors.New("dial tcp 127.0.0.1:3001: connect: connection refuse
 
 // qaRig is the review rig with visual QA for example/shop: its qa block
 // (bin/user-facing, the copy's server bin/dev at
-// http://app.example.localhost:{port}, ready at /up, a 5-minute boot), a bug
-// kind with a qa stage after its local review, a readiness probe that
+// http://app.example.localhost:{port}, ready at /up, a 5-minute boot), the
+// bug kind with its qa stage after its local review, a readiness probe that
 // answers from probe (up: the copy's server started and did not stop since;
 // n counts the probes since it came up, from 1), a probe timer that fires at
 // once and a clock that moves a minute at each probe.
@@ -53,11 +55,12 @@ func newQARig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResu
 	repo.Server = "bin/dev"
 	repo.QA = &config.FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}", Ready: "/up",
 		Boot: config.Duration{Duration: 5 * time.Minute}, Cap: config.Duration{Duration: 50 * time.Minute}, MaxPages: 12, Fixes: 2}
-	kind := r.cfg.Factory.Kinds["bug"]
-	i := stageIndex(kind, "local_review")
-	kind.Stages = slices.Insert(slices.Clone(kind.Stages), i+1,
-		config.FactoryStage{Name: "qa", Type: config.FactoryStageQA, Roles: []string{"fx-qa"}, End: config.FactoryEndQA})
-	r.cfg.Factory.Kinds["bug"] = kind
+	if kind := r.cfg.Factory.Kinds["bug"]; stageIndex(kind, "qa") < 0 {
+		i := stageIndex(kind, "local_review")
+		kind.Stages = slices.Insert(slices.Clone(kind.Stages), i+1,
+			config.FactoryStage{Name: "qa", Type: config.FactoryStageQA, Roles: []string{"fx-qa"}, End: config.FactoryEndQA})
+		r.cfg.Factory.Kinds["bug"] = kind
+	}
 	r.userFacing = func(stdin []byte) (string, int) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -105,11 +108,17 @@ func (r *qaRig) setProbe(fn func(up bool, n int) (int, error)) {
 	r.probe = fn
 }
 
+// qaAcceptance is the judge's acceptance check of the rig's tasks: A1, on
+// the security settings.
+const qaAcceptance = `{"checks": [{"id": "A1", "point": "the passkeys list says when each passkey was added", ` +
+	`"given": "a user with a passkey", "then": "the date shows as a date", "how": "QA: /settings/security"}]}`
+
 // qaTask is a bug task at its qa stage: its writer's fix committed and
-// proven, the head its local review passed.
+// proven, the head its local review passed, and its acceptance check.
 func (r *qaRig) qaTask(key string) (registry.Task, string) {
 	r.t.Helper()
 	task, head := r.reviewTask(key)
+	r.taskFile(task.ID, acceptanceFile, qaAcceptance)
 	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
 		u.Set("stage", "qa")
 	}); err != nil {
@@ -919,4 +928,518 @@ func TestTheUserFacingCheckRunsAtMostThirtySeconds(t *testing.T) {
 	if i < 0 || seen[i].Timeout != 30*time.Second || len(seen[i].Stdin) == 0 {
 		t.Fatalf("the user-facing check ran as %+v, want 30s and the changed files on stdin", seen)
 	}
+}
+
+// qaPage is the walker's n-th page, id at path, showing checks: its shot,
+// probe and console log named as factory-qa.md names them.
+func qaPage(n int, id, path string, checks ...string) QAPage {
+	base := fmt.Sprintf("pages/%02d-%s-signed_in-after", n, strings.ToLower(id))
+	return QAPage{ID: id, Path: path, State: "signed_in", Side: "after", Shot: base + ".png", Probe: base + ".json",
+		Console: fmt.Sprintf("console/%02d.log", n), Status: 200, Checks: checks}
+}
+
+// toWalker runs the ticks until the task's session is ready for the walk,
+// then until the walker got the first prompt of its turn.
+func (r *qaRig) toWalker(task registry.Task) {
+	r.t.Helper()
+	before := len(r.rt.promptsTo("fx-qa"))
+	r.toWalk(task)
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-qa")) > before })
+	if len(r.rt.promptsTo("fx-qa")) == before {
+		got := r.reload(task.ID)
+		r.t.Fatalf("the walker got no prompt; task %s at %s waits %q: %q", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+// runFile writes text to rel in the run's folder runPath.
+func (r *qaRig) runFile(runPath, rel, text string) {
+	r.t.Helper()
+	p := filepath.Join(runPath, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// savePages writes what the walker saves of each page of v in the task's
+// newest run: a PNG shot, the probe probes[page id] names (a page of
+// testdata/qa, the run's nonce in place of the fixture's) and an empty
+// console log. It returns the run.
+func (r *qaRig) savePages(task registry.Task, v QAVerdict, probes map[string]string) qaRun {
+	r.t.Helper()
+	run, ok := readQARun(r.layout.FactoryTaskDir(task.ID))
+	if !ok || run.Nonce == "" {
+		r.t.Fatalf("qa-run.json %+v (%v), want a run with its nonce", run, ok)
+	}
+	runPath := r.runDir(task.ID, run.N, run.Head)
+	for _, pg := range v.Pages {
+		b, err := os.ReadFile(filepath.Join("testdata", "qa", probes[pg.ID]))
+		if err != nil {
+			r.t.Fatal(err)
+		}
+		r.runFile(runPath, pg.Shot, pngMagic+"the page")
+		r.runFile(runPath, pg.Probe, strings.Replace(string(b), `"n0nce"`, `"`+run.Nonce+`"`, 1))
+		r.runFile(runPath, pg.Console, "")
+	}
+	return run
+}
+
+// writeVerdict writes v as the run's verdict.json, version 1 at the run's
+// head unless v says otherwise, a second after the clock.
+func (r *qaRig) writeVerdict(task registry.Task, run qaRun, v QAVerdict) {
+	r.t.Helper()
+	if v.Version == 0 {
+		v.Version = QAVerdictVersion
+	}
+	if v.Head == "" {
+		v.Head = run.Head
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.taskFile(task.ID, filepath.Join(run.Dir, qaVerdictFile), string(b))
+}
+
+// walk is the walker's turn: its pages saved (savePages), v as the run's
+// verdict.json, then its turn's end.
+func (r *qaRig) walk(task registry.Task, v QAVerdict, probes map[string]string) {
+	r.t.Helper()
+	run := r.savePages(task, v, probes)
+	r.writeVerdict(task, run, v)
+	r.ended(task, "fx-qa")
+}
+
+// oneSecurityPage is a verdict of one page, the security settings, which
+// shows A1.
+func oneSecurityPage() QAVerdict {
+	return QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/settings/security", "A1")}}
+}
+
+// qaAttempts are the states of the task's attempts of its qa stage, oldest
+// first.
+func (r *qaRig) qaAttempts(id int64) []string {
+	r.t.Helper()
+	var out []string
+	for _, a := range r.attempts(id) {
+		if a.Stage == "qa" {
+			out = append(out, a.State)
+		}
+	}
+	return out
+}
+
+// stageAtStop are the rig's copies that note the task's stage at each stop
+// of its server.
+type stageAtStop struct {
+	*fakeCopies
+	reg    *registry.Registry
+	id     int64
+	mu     sync.Mutex
+	stages []string
+}
+
+func (s *stageAtStop) StopServer(ctx context.Context, c Copy) error {
+	if t, err := s.reg.TaskByID(context.WithoutCancel(ctx), s.id); err == nil {
+		s.mu.Lock()
+		s.stages = append(s.stages, t.Stage)
+		s.mu.Unlock()
+	}
+	return s.fakeCopies.StopServer(ctx, c)
+}
+
+// The walker's turn: the qa stage launches fx-qa alone, in the QA session's
+// copy (no tab in your browser, and its browser tool attached to the
+// factory's Chrome by its env), and its prompt names the session's CDP
+// endpoint with the flags that attach to it, the run's verdict, the probe
+// and the acceptance checks.
+func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12430")
+	r.toWalker(task)
+	if got := r.rt.launchedRoles(); !slices.EqualFunc(got, [][]string{{"fx-qa"}}, slices.Equal) {
+		t.Fatalf("launches %v, want fx-qa alone", got)
+	}
+	session := fmt.Sprintf("magnum-qa-%d-1", task.ID)
+	cs := r.rt.launchedCopies()
+	if len(cs) != 1 {
+		t.Fatalf("launches in %d copies, want 1", len(cs))
+	}
+	if env := cs[0].Env; cs[0].Path != r.copyDir || env["BROWSER"] != "true" || !strings.HasPrefix(env["PATH"], r.layout.FactoryShims()+":") ||
+		env["AGENT_BROWSER_CDP"] != "http://127.0.0.1:9333" || env["AGENT_BROWSER_SESSION"] != session || env["PORT"] != "3001" {
+		t.Fatalf("the walker launched in %s with env %v, want the QA session's copy", cs[0].Path, env)
+	}
+	if ps := r.rt.allPrompts(); slices.ContainsFunc(ps, func(p sentPrompt) bool { return p.Role != "fx-qa" }) {
+		t.Fatalf("prompts %+v, want the walker's alone", ps)
+	}
+	text := r.rt.promptsTo("fx-qa")[0].Text
+	dir := r.layout.FactoryTaskDir(task.ID)
+	runDir := filepath.Join(dir, "qa", "1-"+head[:7])
+	for _, want := range []string{"http://127.0.0.1:9333", "--session " + session + " --cdp http://127.0.0.1:9333",
+		filepath.Join(runDir, "verdict.json"), filepath.Join(runDir, "probe.js"), filepath.Join(dir, "acceptance.json"),
+		"http://app.example.localhost:3001", "> " + runDir + "/pages/"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the walker's prompt lacks %q:\n%s", want, text)
+		}
+	}
+}
+
+// A walk whose pages the factory's checks find clean passes QA: the
+// browser and the server stop before the stage moves, the summary names
+// the head, and the qa check passes there. A questions file the walker
+// wrote anyway suspends nothing and reaches no one.
+func TestACleanWalkPassesQAAndStopsEverything(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12431")
+	watch := &stageAtStop{fakeCopies: r.copies, reg: r.reg, id: task.ID}
+	r.e.d.Copies = watch
+	r.toWalker(task)
+	r.taskFile(task.ID, roleQuestionsFile("fx-qa"), `[{"text": "Which user should I sign in as?", "context": "the sign-in", `+
+		`"example": "qa@example.com", "options": [{"label": "qa", "means": "the qa user"}, {"label": "admin", "means": "an admin"}]}]`)
+	r.walk(task, oneSecurityPage(), map[string]string{"P1": "clean-tooltip.json"})
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	got := r.reload(task.ID)
+	if got.Stage != "pr_body" || !isLive(got) {
+		t.Fatalf("task %s at %s waits %q: %q, want pr_body", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 {
+		t.Fatalf("browsers stopped %v, servers stopped %v; want each once", l.stoppedBrowsers, l.stopped)
+	}
+	watch.mu.Lock()
+	stages := slices.Clone(watch.stages)
+	watch.mu.Unlock()
+	if !slices.Equal(stages, []string{"qa"}) {
+		t.Fatalf("the server stopped at stages %v, want once, before the stage moved", stages)
+	}
+	sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID))
+	if !ok || sum.Outcome != QAOutcomeClean || sum.Head != head || sum.Pages != 1 || sum.Run != 1 {
+		t.Fatalf("qa-summary.json %+v (%v), want clean at %s with 1 page", sum, ok, head)
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"pass:@" + head}) {
+		t.Fatalf("qa checks %q, want one passed at the head", got)
+	}
+	if qs, err := r.reg.Questions(r.ctx, task.ID); err != nil || len(qs) != 0 {
+		t.Fatalf("questions %+v (%v), want none asked", qs, err)
+	}
+	files, err := r.e.questionFiles(got, r.layout.FactoryTaskDir(task.ID))
+	if err != nil || slices.ContainsFunc(files, func(q questionsOf) bool { return q.raisedBy == "fx-qa" }) {
+		t.Fatalf("question files %+v (%v): the walker's would reach you", files, err)
+	}
+	r.qaFree(task.ID)
+}
+
+// The #785 page: the walker says nothing is wrong, and the factory's own
+// check of the saved page finds the tooltip's markup shown as text. QA
+// blocks: the defect is the factory's, no summary passes the stage, and the
+// qa check fails as the change's.
+func TestTheEscapedTooltipBlocksQAWhateverTheWalkerSays(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12432")
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
+	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	res := r.qaResult(task.ID, 1, head)
+	if res.Outcome != QAOutcomeDefects || len(res.Blocking) != 1 || res.Blocking[0].Class != QAEscapedMarkup ||
+		res.Blocking[0].Source != qaSourceFactory || res.Pages != 1 {
+		t.Fatalf("result.json %+v, want the factory's escaped_markup blocking", res)
+	}
+	if got := r.reload(task.ID); got.Stage == "pr_body" {
+		t.Fatal("the stage passed with a defect that blocks")
+	}
+	if _, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+		t.Fatal("a qa-summary.json was written: the stage passed")
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"fail:code@" + head}) {
+		t.Fatalf("qa checks %q, want one failed as the change's", got)
+	}
+	r.qaFree(task.ID)
+}
+
+// A visible defect the local review left as a P3 still blocks QA: QA's
+// decision reads no severity of the review's, and leaves its summary alone.
+func TestQABlocksAVisibleDefectTheReviewLeftAsP3(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12433")
+	b, err := json.Marshal(ReviewSummary{Exit: registry.ExitClean, Rounds: 1, Head: head,
+		Leftovers: []ReviewItem{{ID: "F1", Severity: "P3", Title: "dates show HTML", Path: "app/views/settings/_keys.html.erb"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.taskFile(task.ID, reviewSummaryFile, string(b))
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
+	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeDefects {
+		t.Fatalf("result.json %+v, want defects", res)
+	}
+	if got := r.readTask(task.ID, reviewSummaryFile); got != string(b) {
+		t.Fatalf("review-summary.json changed:\n%s\nwant\n%s", got, b)
+	}
+}
+
+// Until the fix loop lands, QA's defects that block need you: the wait
+// names each class on its page, the result's file and the retry, never the
+// page's text.
+func TestQADefectsNeedYouUntilTheFixLoopLands(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12434")
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), map[string]string{"P1": "escaped-tooltip.json"})
+	got := r.toYou(task)
+	result := filepath.Join(r.runDir(task.ID, 1, head), qaResultFile)
+	for _, want := range []string{"QA found 1 defect that blocks: escaped_markup on /settings/security", "see " + result,
+		fmt.Sprintf("magnum factory retry %d", task.ID)} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	if strings.Contains(got.WaitsWhat, "<span") || strings.Contains(got.WaitsWhat, "Nov 07") {
+		t.Errorf("the task waits %q: it quotes the page", got.WaitsWhat)
+	}
+	r.qaFree(task.ID)
+}
+
+// A verdict whose page is off the copy's own server gets the walker one
+// nudge naming verdict.json and why; a second such verdict needs you, and
+// the run's server is stopped.
+func TestAnInvalidVerdictGetsOneNudgeThenNeedsYou(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12435")
+	r.toWalker(task)
+	v := oneSecurityPage()
+	run := r.savePages(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	runPath := r.runDir(task.ID, run.N, run.Head)
+	b, err := os.ReadFile(filepath.Join(runPath, v.Pages[0].Probe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.runFile(runPath, v.Pages[0].Probe, strings.Replace(string(b), "http://app.example.localhost:3001", "http://staging.example.com", 1))
+	r.writeVerdict(task, run, v)
+	r.ended(task, "fx-qa")
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-qa")) > 1 })
+	ps := r.rt.promptsTo("fx-qa")
+	verdict := filepath.Join("qa", "1-"+head[:7], "verdict.json")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, nudgeLead) || !strings.Contains(ps[1].Text, verdict) ||
+		!strings.Contains(ps[1].Text, "staging.example.com") {
+		t.Fatalf("the walker's prompts %+v, want its nudge naming %s and the host", ps, verdict)
+	}
+	r.ended(task, "fx-qa")
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "the fx-qa agent wrote no valid "+verdict) {
+		t.Fatalf("the task waits %q, want the walker's verdict named", got.WaitsWhat)
+	}
+	if l := r.copies.log(); len(l.stopped) != 1 || len(l.stoppedBrowsers) != 1 {
+		t.Fatalf("servers stopped %v, browsers stopped %v; want each once", l.stopped, l.stoppedBrowsers)
+	}
+	if _, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+		t.Fatal("an invalid verdict passed the stage")
+	}
+	r.qaFree(task.ID)
+}
+
+// A walk that reached no page cannot tell: QA is unavailable, and the task
+// needs you with the walker's reason.
+func TestAWalkThatReachesNoPageNeedsYou(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12436")
+	r.toWalker(task)
+	r.walk(task, QAVerdict{Blocked: []QABlocked{{What: "the security tab", Why: "sign-in failed", Check: "A1"}}}, nil)
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "QA reached no page: sign-in failed") || !strings.Contains(got.WaitsWhat, "magnum factory retry") {
+		t.Fatalf("the task waits %q, want the walker's reason and the retry", got.WaitsWhat)
+	}
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeUnavailable || len(res.Blocked) != 1 {
+		t.Fatalf("result.json %+v, want unavailable with the blocked state", res)
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"fail:env@" + head}) {
+		t.Fatalf("qa checks %q, want one failed for the environment", got)
+	}
+	r.qaFree(task.ID)
+}
+
+// A state the walker could not reach is a page no check judged, so a run
+// with one is not clean however clean its other pages are. It needs you,
+// naming the state and why: a writer's turn cannot make a sign-in work or
+// headless Chrome draw an autofill list, so it is no defect for the fix
+// loop.
+func TestAWalkWithABlockedStateNeedsYouNotClean(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12437")
+	r.toWalker(task)
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	got := r.toYou(task)
+	for _, want := range []string{"QA could not reach 1 state", "the passkey autofill list (headless Chrome draws no autofill)",
+		"magnum factory retry"} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	res := r.qaResult(task.ID, 1, head)
+	if res.Outcome == QAOutcomeClean || res.Pages != 1 || len(res.Blocked) != 1 || len(res.Blocking) != 0 {
+		t.Fatalf("result.json %+v, want a run that is not clean, with its page and its blocked state", res)
+	}
+	if _, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+		t.Fatal("a qa-summary.json was written: the stage passed")
+	}
+	if got := r.qaChecks(task.ID); !slices.Equal(got, []string{"fail:env@" + head}) {
+		t.Fatalf("qa checks %q, want one failed for the environment", got)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
+		t.Fatalf("the writer got %d prompts for a state QA could not reach", len(ps))
+	}
+}
+
+// A run past its cap ends whatever holds the loop's stages: the sweep of
+// every tick stops its browser and its server and needs you, here with
+// herdr down, when no stage runs.
+func TestQAOverItsCapNeedsYou(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12438")
+	r.toWalker(task)
+	herdrDown := errors.New("herdr: connection refused")
+	r.e.d.HerdrUp = func(context.Context) error { return herdrDown }
+	r.clock.Add(51 * time.Minute)
+	r.tick()
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "over its cap of 50m0s") {
+		t.Fatalf("task %s waits %q, want NEEDS YOU over the cap", got.State, got.WaitsWhat)
+	}
+	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 {
+		t.Fatalf("browsers stopped %v, servers stopped %v; want each once", l.stoppedBrowsers, l.stopped)
+	}
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeUnavailable {
+		t.Fatalf("result.json %+v, want unavailable", res)
+	}
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
+		t.Fatalf("qa attempts %v, want the walker's failed", got)
+	}
+	r.qaFree(task.ID)
+}
+
+// Critical memory pressure stops the walk: its server and browser stop, the
+// run ends as pressure and the walker's attempt fails. Once the hold lifts a
+// fresh run walks; a second pressure in a row needs you.
+func TestCriticalPressureStopsTheWalkAndRetriesOnceAfterIt(t *testing.T) {
+	r := newQARig(t)
+	var critical atomic.Bool
+	r.e.d.Memory = func(context.Context) engine.MemorySample {
+		if critical.Load() {
+			return engine.MemorySample{Level: engine.MemoryCritical}
+		}
+		return engine.MemorySample{Level: engine.MemoryNormal}
+	}
+	task, head := r.qaTask("PR-12439")
+	r.toWalker(task)
+	critical.Store(true)
+	r.run(2, func() bool { return r.e.qaSessionOf(task.ID) == nil })
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomePressure {
+		t.Fatalf("run 1's result.json %+v, want pressure", res)
+	}
+	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 {
+		t.Fatalf("browsers stopped %v, servers stopped %v; want each once", l.stoppedBrowsers, l.stopped)
+	}
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
+		t.Fatalf("qa attempts %v, want the walker's failed", got)
+	}
+	r.tick()
+	if got := r.reload(task.ID); got.WaitsWho != HoldMemory {
+		t.Fatalf("the task waits %q: %q, want the memory hold", got.WaitsWho, got.WaitsWhat)
+	}
+	critical.Store(false)
+	r.toWalker(task)
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.N != 2 {
+		t.Fatalf("qa-run.json %+v, want run 2 after the hold lifted", run)
+	}
+	critical.Store(true)
+	r.run(2, func() bool { return r.e.qaSessionOf(task.ID) == nil })
+	critical.Store(false)
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "the Mac's memory stopped QA 2 times in a row at this head") {
+		t.Fatalf("the task waits %q, want the two pressures named", got.WaitsWhat)
+	}
+	r.qaFree(task.ID)
+}
+
+// A restart in the middle of the walk cuts the run and fails the walker's
+// attempt; the next daemon's fresh run walks in an attempt of its own.
+func TestARestartMidWalkFailsTheWalkersAttempt(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12440")
+	r.toWalker(task)
+	r.restartDaemon()
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted {
+		t.Fatalf("run 1's result.json %+v, want interrupted", res)
+	}
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
+		t.Fatalf("qa attempts %v, want the walker's failed", got)
+	}
+	r.toWalker(task)
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed, registry.AttemptRunning}) {
+		t.Fatalf("qa attempts %v, want run 2's walker in an attempt of its own", got)
+	}
+	ps := r.rt.promptsTo("fx-qa")
+	if len(ps) != 2 || ps[0].Attempt == ps[1].Attempt || !strings.Contains(ps[1].Text, "qa/2-"+head[:7]) {
+		t.Fatalf("the walker's prompts %+v, want run 2's in a new attempt", ps)
+	}
+}
+
+// An agent that needs you in the middle of the walk cuts the run: its
+// server and browser stop, the run is interrupted by its task leaving it,
+// and the walker's attempt fails, so your retry walks a fresh run.
+func TestNeedsYouDuringTheWalkCutsTheRunAndFailsTheWalkersAttempt(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12441")
+	r.toWalker(task)
+	r.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-qa", RunID: r.lastRun("fx-qa"), Kind: runtime.EventStuck, Reason: "no output for 20m"})
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "the fx-qa agent is stuck") {
+		t.Fatalf("the task waits %q, want the stuck walker", got.WaitsWhat)
+	}
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutTask {
+		t.Fatalf("run 1's result.json %+v, want interrupted by its task leaving it", res)
+	}
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptFailed}) {
+		t.Fatalf("qa attempts %v, want the walker's failed", got)
+	}
+	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 {
+		t.Fatalf("browsers stopped %v, servers stopped %v; want each once", l.stoppedBrowsers, l.stopped)
+	}
+	r.qaFree(task.ID)
+}
+
+// A walker whose launch waits (the memory's soft hold) has not begun its
+// walk: a drain ends its session at once, as one whose walk never started,
+// so install --drain never waits on a launch the drain holds.
+func TestADrainEndsAQASessionWhoseWalkerNeverLaunched(t *testing.T) {
+	r := newQARig(t)
+	r.e.drainerAlive = func(Drain) bool { return true }
+	var full atomic.Bool
+	r.e.d.Memory = func(context.Context) engine.MemorySample {
+		if full.Load() {
+			return engine.MemorySample{Level: engine.MemoryNormal, Swap: &engine.MemorySwap{UsedBytes: 95, TotalBytes: 100}}
+		}
+		return engine.MemorySample{Level: engine.MemoryNormal}
+	}
+	task, head := r.qaTask("PR-12442")
+	r.toWalk(task)
+	full.Store(true)
+	r.tick()
+	if got := r.qaAttempts(task.ID); !slices.Equal(got, []string{registry.AttemptLaunching}) || len(r.rt.launchedRoles()) != 0 {
+		t.Fatalf("qa attempts %v, launches %v; want the walker's launch held", got, r.rt.launchedRoles())
+	}
+	if err := WriteDrain(r.layout, Drain{Since: r.clock.Now(), PID: os.Getpid()}.Value()); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutDrain {
+		t.Fatalf("run 1's result.json %+v, want interrupted by the drain", res)
+	}
+	if rec, _, _ := ReadWork(r.layout); len(rec.Work) != 0 {
+		t.Fatalf("work.json %+v, want nothing in flight", rec)
+	}
+	r.qaFree(task.ID)
 }

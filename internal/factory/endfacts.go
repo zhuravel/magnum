@@ -122,7 +122,12 @@ func (p *endProblem) String() string { return p.file + ": " + p.why }
 //     its questions-<role>.json, when it is there, valid. The rest of the
 //     fact (commits on the branch after origin/<base>, no tracked change, the
 //     factory's own proof and the precheck passed at the head) is the coding
-//     stage's to check (provenHead).
+//     stage's to check (provenHead);
+//   - qa: the QA walker's verdict.json in the newest run's folder
+//     (qa-run.json), newer than since, valid for the run and covering
+//     acceptance.json's checks (checkQAEnd). The outcome (clean, defects,
+//     unavailable) is the qa stage's to decide from the saved pages
+//     (evaluateQA).
 //
 // The clean and pr facts are checked by the stages that own them, not
 // here (not done, saying so).
@@ -174,6 +179,8 @@ func checkEnd(fact, dir string, since time.Time, roles []string) *endProblem {
 			}
 		}
 		return nil
+	case config.FactoryEndQA:
+		return checkQAEnd(dir, since)
 	case config.FactoryEndPR, config.FactoryEndClean:
 		return &endProblem{file: fact, why: "its own stage checks it, not an agents stage of this build"}
 	}

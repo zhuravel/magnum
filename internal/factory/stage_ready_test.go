@@ -1056,3 +1056,43 @@ func TestTheReadyCardListsTheFlaggedFilesFirst(t *testing.T) {
 		t.Errorf("diff args without an order file %q", args)
 	}
 }
+
+// No ready card comes without QA at the head, for a repository with a qa
+// block and a kind with a qa stage: no summary, or one of another head,
+// says why; a clean one at the head says nothing, and neither does a
+// repository without a qa block.
+func TestNoReadyCardWithoutQAAtTheHead(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCard("PR-12443")
+	task = r.reload(task.ID)
+	if _, why := r.e.readyProblem(task); why != "" {
+		t.Fatalf("a repository without a qa block: %q, want a card", why)
+	}
+	r.cfg.Factory.Repos[0].QA = &config.FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}", Ready: "/up",
+		MaxPages: 12, Fixes: 2}
+	if _, why := r.e.readyProblem(task); why != "QA did not pass at "+head[:7] {
+		t.Fatalf("no qa-summary.json: %q, want QA did not pass at %s", why, head[:7])
+	}
+	older := strings.Repeat("b", 40)
+	summary := func(outcome, at string) {
+		b, err := json.Marshal(QAResult{Version: qaResultVersion, Run: 1, Head: at, Outcome: outcome})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.taskFile(task.ID, qaSummaryFile, string(b))
+	}
+	summary(QAOutcomeClean, older)
+	if _, why := r.e.readyProblem(task); why != "QA looked at bbbbbbb, another head than "+head[:7] {
+		t.Fatalf("a summary of another head: %q, want both heads named", why)
+	}
+	summary(QAOutcomeDefects, head)
+	if _, why := r.e.readyProblem(task); why != "QA did not pass at "+head[:7] {
+		t.Fatalf("a summary of defects: %q, want QA did not pass", why)
+	}
+	for _, outcome := range []string{QAOutcomeClean, QAOutcomeNotNeeded} {
+		summary(outcome, head)
+		if _, why := r.e.readyProblem(task); why != "" {
+			t.Fatalf("a %s summary at the head: %q, want a card", outcome, why)
+		}
+	}
+}

@@ -468,8 +468,9 @@ func factoryNotchRoles() []Role {
 // investigates (the bug's reproducer, cause and history, the feature's
 // points, the chore's scope) and in the bug's gate on a reproduction; the
 // rest is the same: a judge, a critic for a wide plan, one batch of
-// questions, the writer, the local review, the PR body, your decision, and
-// the publish that only the decision leads to.
+// questions, the writer, the local review, visual QA of the change's pages
+// (a repository without [factory.repo.qa] skips it), the PR body, your
+// decision, and the publish that only the decision leads to.
 func DefaultFactoryKinds() map[string]FactoryKind {
 	kind := func(investigators []string, gates ...FactoryStage) FactoryKind {
 		stages := []FactoryStage{
@@ -482,6 +483,7 @@ func DefaultFactoryKinds() map[string]FactoryKind {
 		return FactoryKind{Stages: append(stages,
 			FactoryStage{Name: "coding", Type: FactoryStageAgents, Roles: []string{"fx-writer"}, End: FactoryEndProof},
 			FactoryStage{Name: "local_review", Type: FactoryStageReview, End: FactoryEndClean},
+			FactoryStage{Name: "qa", Type: FactoryStageQA, Roles: []string{"fx-qa"}, End: FactoryEndQA},
 			FactoryStage{Name: "pr_body", Type: FactoryStageAgents, Roles: []string{"fx-judge"}, End: FactoryEndPRBody, Prompt: "factory-pr-body.md"},
 			FactoryStage{Name: "ready", Type: FactoryStageDecision, Decision: FactoryDecisionReadyPush},
 			FactoryStage{Name: "publish", Type: FactoryStageEffect, Effect: FactoryEffectPublish, End: FactoryEndPR},
