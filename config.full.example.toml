@@ -280,7 +280,8 @@ databases = [
 #   [factory.repo.qa]                      # visual QA of the change's pages in the copy's own server, by a kind's qa
 #                                          # stage; none = no QA. Needs server and a PORT in env above
 #   when = "bin/user-facing"               # reads the changed files on stdin, prints the user-facing ones (none: no
-#                                          # QA); a failing command waits on you, never skips QA
+#                                          # QA); a failing command waits on you, never skips QA. Keep it a quick
+#                                          # filter of paths: it has 30s, and nothing boots the app for it
 #   url = "http://app.example.localhost:{port}"   # the copy's server; on this Mac (localhost, *.localhost, 127.0.0.1,
 #                                          # ::1), with {port} as its port
 #   ready = "/"                            # a 2xx or 3xx answer here says the server is up (default /)

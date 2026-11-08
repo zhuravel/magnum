@@ -68,6 +68,9 @@ type codingRig struct {
 	// prints of the changed files it reads on stdin, and its exit; a failing
 	// exit prints its output on stderr. nil: the copy has no such script.
 	userFacing func(stdin []byte) (string, int)
+	// seenMise sees every command the copy runs (`mise …`) as the factory
+	// built it.
+	seenMise func(c execx.Cmd)
 }
 
 // scriptRun is one script the copy ran: the script, the copy's branch and
@@ -156,6 +159,12 @@ func (x rigRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 		}
 		return x.r.real.Run(ctx, c)
 	case "mise":
+		x.r.mu.Lock()
+		seen := x.r.seenMise
+		x.r.mu.Unlock()
+		if seen != nil {
+			seen(c)
+		}
 		if c.Timeout > 0 { // as execx bounds a command
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, c.Timeout)

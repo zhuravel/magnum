@@ -18560,10 +18560,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
     unavailable one waits on you once, as the local review's stop does (`qaTold`: an alert since the result, else
     the move to you now), and your retry starts a fresh run. An interrupted one starts a fresh run, and so does a
     pressure one once the memory hold lifts, until two of the kind come in a row at the head: then QA is
-    unavailable. A head the branch moved to goes back to coding (`headMoved`).
+    unavailable. Only a crash's interruption counts (`cut = "crash"`). A run the factory cut itself, by a drain or a
+    stop signal (`"drain"`) or by its task leaving it (`"task"`: NEEDS YOU, a stop, another stage), neither counts
+    nor breaks the row. A head the branch moved to goes back to coding (`headMoved`).
   - A fresh run reads the change's files (`ChangedFiles` from the merge base, every status) into the
     repository's `qa.when` on its stdin, in the copy with its env and without the daemon's secrets, for at most
-    2 minutes. No line printed is not_needed: the stage passes with a skipped qa check. A failing or cut command
+    30 seconds. It runs on the loop, so a slow one holds every task's pass and a drain's 45 s; a later step moves it
+    off the loop, as the checks run. No line printed is not_needed: the stage passes with a skipped qa check. A failing or cut command
     cannot tell: QA could not run, never "nothing user-facing", and the task needs you with its exit, the first
     line of its stderr (masked, clipped to 200 runes) and `magnum factory retry <id>`. Otherwise the run writes
     `changed.txt`, `probe.js` with a fresh 16-byte nonce, and the stage's attempts so far.
@@ -18577,18 +18580,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
     answer, or a start that failed) is stopped with its proof and gets one boot more; the second failure is QA
     unavailable with the ready path, the boot and the last answer, or the start's error. A panic in the probe is
     the boot's error, with no boot more. Once the boot answered, the factory's Chrome starts in the run's folder
-    and its CDP endpoint goes into `qa-run.json`.
+    and its CDP endpoint goes into `qa-run.json`. A session with no endpoint starts the browser again on the next
+    pass: a start that panicked is never "ready for the walk".
   - The teardown (`endQASession`) runs on a context of its own: it cancels the boot's goroutine and waits for
-    it (at most 15 s), stops the browser, stops the server (`stopServer`, with its proof; `Copies.StopServer` for
-    a start that failed), then lets go of the QA lock and the heavy slot. A failed step does not stop the next
-    one, and a qa event says how it ended. It runs at the end of every run, from `freeHeavy` (NEEDS YOU, a stop,
+    it (at most 15 s, and not at all for a boot that never began), stops the browser, stops the server
+    (`stopServer`, with its proof; `Copies.StopServer` for a start that failed), each step under its own recover,
+    and records the cut of a run with no result. The QA lock, the heavy slot and the work record go in defers, so
+    a step that fails or panics never keeps them, and a qa event says how it ended. It runs at the end of every run, from `freeHeavy` (NEEDS YOU, a stop,
     a drop, a panic sent to you), from `sweepQA` each tick (a task gone, no longer live, or at another stage),
     and from `stopQASessions`, which `RunLocked` defers for a drain or a signal. The engine's `stopServer` also
     runs on `context.WithoutCancel` now, and returns its error.
-  - A restart cuts a run whose server started: startup's `cutQA`, after `Copies.Reconcile` ended the strays,
-    records it interrupted ("the daemon stopped during the run: its server and browser were stopped"), clears
-    its wait, and fails the stage's open attempts after the run's `attempts_before`. `adoptHeavy` adopts no qa
-    attempt; a qa stage is heavy.
+  - A session is work a restart would cut: `WorkQA` is in `work.json` from its server's start to its teardown,
+    so a plain `magnum factory install` refuses and names "QA run N of KEY". While a drain holds, a session whose
+    walk has not begun (no attempt of its stage after the run's `attempts_before`) ends at once, cut by the drain,
+    since it would wait for a launch the drain holds while `--drain` waited for it. No fresh run and no
+    user-facing check starts during a drain. A cut records the run interrupted, fails the stage's attempts it
+    began, and a drain's cut clears its task's wait.
+  - A crash leaves a run whose server started with no result: startup's `cutQA`, after `Copies.Reconcile` ended
+    the strays, records it interrupted by a crash ("the daemon stopped during the run: its server and browser
+    were stopped"), clears its wait, and fails the stage's open attempts after the run's `attempts_before`. A
+    teardown with no cut (a failed boot or start) clears the run's `started` instead, so a restart cuts nothing
+    of it. `adoptHeavy` adopts no qa attempt; a qa stage is heavy.
   - The walker's copy (`qaSession.copy`, for step 5's launch) has `BROWSER=true` and the factory's shims first
     on its PATH, before the daemon's, so the walker opens no tab in your browser either.
   - A qa check per result: clean passes, not_needed is skipped, defects fail as the change's and unavailable
@@ -18602,7 +18614,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - Resolving the url's host for the probe: a name under .localhost need not resolve outside a browser.
   - Following a redirect, or skipping TLS verification: a sign-in redirect is an answer, and the factory's
     Chrome would refuse a certificate the probe took.
-  - QA as work in `work.json`: install would wait out a 50-minute run, and a cut run runs again.
+  - Counting a drain's cut towards the cap (this step's first version): two `factory install` runs during one
+    head's QA sent the task to NEEDS YOU, and a clean stop is no sign that QA crashes the daemon.
+  - Leaving QA out of `work.json` (this step's first version): a plain install restarted the daemon mid-run, and
+    `--drain` did not wait.
 
   Tests, failing first (none of it existed): TestARepoWithoutAQABlockSkipsTheQAStage,
   TestAChangeWithNoUserFacingFileNeedsNoQA, TestAFailingWhenCommandNeedsYouNotNotNeeded,
@@ -18613,7 +18628,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARestartDuringQARunsAFreshRun, TestARestartBeforeTheServerStartsKeepsTheRun,
   TestARetryAfterUnavailableStartsAFreshRun, TestTheQAWalkersCopyOpensNoBrowserTab and
   TestTheReadinessProbeAsksTheMacAndFollowsNoRedirect. The teardown tests failed against a mutant whose
-  teardown ran on the caller's context, and one whose `freeHeavy` ended no session.
+  teardown ran on the caller's context, and one whose `freeHeavy` ended no session. After review, failing first:
+  TestTwoDrainsDuringOneHeadsQADoNotNeedYou (NEEDS YOU after two drains),
+  TestOnlyCrashesCountTowardsTheCapOfInterruptedRuns, TestAQARunIsInTheWorkRecordUntilItEnds,
+  TestADrainEndsAQASessionThatHasNotBegunItsWalk, TestATeardownWhoseBrowserStopPanicsStillFreesTheMac (the lock
+  stayed held), TestAPanicInStartBrowserStartsItAgain (ready with no browser),
+  TestAPanicInStartServerDoesNotStallTheLoop (a 15 s tick), TestRunLockedEndsTheQASessionsAsItStops,
+  TestTheUserFacingCheckRunsAtMostThirtySeconds, TestFactoryInstallRefusesWhileTheFactoryRunsQA and
+  TestFactoryInstallDrainWaitsForAQARun; each new factory test failed against a mutant without its fix.
 
 ## Learned rules
 

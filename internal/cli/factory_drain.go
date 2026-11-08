@@ -2,7 +2,7 @@ package cli
 
 // `magnum factory install`'s guard of the work the factory daemon runs: a
 // restart cuts the work it runs off its loop (a round of the local review,
-// a check of a head, a claim of a copy, a talk with a liaison), so install
+// a check of a head, a claim of a copy, a talk with a liaison, a QA run), so install
 // reads the record the daemon keeps of it (factory.ReadWork) and refuses
 // while anything runs, unless --now; with --drain it asks the daemon for a
 // drain (factory.WriteDrain) and waits until the daemon holds it and
@@ -87,6 +87,7 @@ func factoryCutShort(work []factory.WorkItem) string {
 		{factory.WorkCheck, "a proof or a precheck runs again"},
 		{factory.WorkClaim, "a claim of a copy runs its steps again"},
 		{factory.WorkTalk, "a talk with a liaison starts again"},
+		{factory.WorkQA, "a QA run stops its server and its browser and starts again in a fresh folder"},
 	} {
 		if slices.ContainsFunc(work, func(w factory.WorkItem) bool { return w.Kind == k.kind }) {
 			parts = append(parts, k.words)
@@ -101,7 +102,7 @@ func factoryCutShort(work []factory.WorkItem) string {
 // factoryCannotTell says that what the factory daemon pid runs cannot be
 // told (err: factoryInFlight's), and how to go on.
 func factoryCannotTell(c *Context, pid int, err error) {
-	const cut = "stopping it now may cut a local review round, a check, a claim of a copy or a talk short"
+	const cut = "stopping it now may cut a local review round, a check, a claim of a copy, a talk or a QA run short"
 	if errors.Is(err, errNoFactoryRecord) {
 		fmt.Fprintf(c.Stderr, "magnum factory install: cannot tell what the factory daemon (pid %d) runs: it keeps no record of its work in %s "+
 			"(a build before this one keeps none and takes no drain; one that could not write it removed it)\n%s\n"+

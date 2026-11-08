@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/evalrun"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 )
@@ -142,6 +143,25 @@ func (r *qaRig) toYou(task registry.Task) registry.Task {
 func (r *qaRig) restartDaemon() {
 	r.t.Helper()
 	r.e.stopQASessions(r.ctx)
+	r.restart()
+	r.seams()
+	if err := r.e.startup(r.ctx); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// crashDaemon is a daemon that dies in the middle of the run: no teardown
+// runs (the kernel frees its QA lock with the process), and the next
+// daemon's startup reconciles what it left (Copies.Reconcile, cutQA).
+func (r *qaRig) crashDaemon() {
+	r.t.Helper()
+	r.e.qaMu.Lock()
+	sessions := r.e.qaSessions
+	r.e.qaSessions = map[int64]*qaSession{}
+	r.e.qaMu.Unlock()
+	for _, s := range sessions {
+		s.unlock()
+	}
 	r.restart()
 	r.seams()
 	if err := r.e.startup(r.ctx); err != nil {
@@ -503,9 +523,9 @@ func TestQATeardownRunsWhenTheTaskLeavesItsStage(t *testing.T) {
 	r.qaFree(task.ID)
 }
 
-// A restart in the middle of the run cuts it: the next daemon records it
-// interrupted, fails the stage's attempt the run began, and starts a fresh
-// run at the same head.
+// A restart in the middle of the run cuts it: the daemon that stops records
+// it interrupted by its drain and fails the stage's attempt the run began,
+// and the next daemon starts a fresh run at the same head.
 func TestARestartDuringQARunsAFreshRun(t *testing.T) {
 	r := newQARig(t)
 	task, head := r.qaTask("PR-12413")
@@ -515,9 +535,9 @@ func TestARestartDuringQARunsAFreshRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.restartDaemon()
-	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted ||
-		res.Why != "the daemon stopped during the run: its server and browser were stopped" {
-		t.Fatalf("run 1's result.json %+v, want interrupted", res)
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutDrain ||
+		res.Why != "the daemon stopped during the run (a drain or a signal): its server and browser were stopped" {
+		t.Fatalf("run 1's result.json %+v, want interrupted by the drain", res)
 	}
 	if as := r.attempts(task.ID); !slices.ContainsFunc(as, func(a registry.Attempt) bool {
 		return a.ID == walker.ID && a.State == registry.AttemptFailed
@@ -648,5 +668,255 @@ func TestTheReadinessProbeAsksTheMacAndFollowsNoRedirect(t *testing.T) {
 	srv.Close()
 	if _, err := httpQAProbe(t.Context(), "http://"+host+"/up", host); err == nil {
 		t.Fatal("a port nothing listens on answered")
+	}
+}
+
+// panickyCopies are the rig's copies with a stop of the browser that
+// panics, and a start of the browser or of the server that panics once.
+type panickyCopies struct {
+	*fakeCopies
+	mu                                       sync.Mutex
+	stopBrowser, startBrowserOnce, startOnce bool
+}
+
+func (p *panickyCopies) StopBrowser(ctx context.Context, c Copy) error {
+	if p.stopBrowser {
+		panic("lsof: unexpected output")
+	}
+	return p.fakeCopies.StopBrowser(ctx, c)
+}
+
+func (p *panickyCopies) StartBrowser(ctx context.Context, c Copy, dir string) (string, error) {
+	p.mu.Lock()
+	once := p.startBrowserOnce
+	p.startBrowserOnce = false
+	p.mu.Unlock()
+	if once {
+		panic("ps: unexpected output")
+	}
+	return p.fakeCopies.StartBrowser(ctx, c, dir)
+}
+
+func (p *panickyCopies) StartServer(ctx context.Context, c Copy) error {
+	p.mu.Lock()
+	once := p.startOnce
+	p.startOnce = false
+	p.mu.Unlock()
+	if once {
+		panic("ps: unexpected output")
+	}
+	return p.fakeCopies.StartServer(ctx, c)
+}
+
+// Two installs during one head's QA are routine, no crash: each records its
+// run interrupted by its drain, which no cap counts, and a fresh run starts
+// each time.
+func TestTwoDrainsDuringOneHeadsQADoNotNeedYou(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12418")
+	r.toWalk(task)
+	r.restartDaemon()
+	r.toWalk(task)
+	r.restartDaemon()
+	r.toWalk(task)
+	if got := r.reload(task.ID); got.State != registry.TaskActive {
+		t.Fatalf("task %s waits %q: %q, want at work after two drains", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	for k := 1; k <= 2; k++ {
+		if res := r.qaResult(task.ID, k, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutDrain {
+			t.Fatalf("run %d's result.json %+v, want interrupted by a drain", k, res)
+		}
+	}
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.N != 3 {
+		t.Fatalf("qa-run.json %+v, want run 3", run)
+	}
+}
+
+// Only a crash counts towards the cap of interrupted runs: two crashes in a
+// row at a head make QA unavailable, and a drain between them neither counts
+// nor breaks the row.
+func TestOnlyCrashesCountTowardsTheCapOfInterruptedRuns(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12419")
+	r.toWalk(task)
+	r.crashDaemon()
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutCrash ||
+		res.Why != "the daemon stopped during the run: its server and browser were stopped" {
+		t.Fatalf("run 1's result.json %+v, want interrupted by a crash", res)
+	}
+	r.toWalk(task)
+	r.restartDaemon()
+	r.toWalk(task)
+	r.crashDaemon()
+	got := r.toYou(task)
+	if !strings.Contains(got.WaitsWhat, "the daemon stopped during 2 QA runs in a row at this head") ||
+		!strings.Contains(got.WaitsWhat, "magnum factory retry") {
+		t.Fatalf("the task waits %q, want the two crashes named", got.WaitsWhat)
+	}
+	if l := r.copies.log(); len(l.started) != 3 {
+		t.Fatalf("servers started %v, want three runs", l.started)
+	}
+}
+
+// A QA run is work a restart would cut: it is in the work record from its
+// server's start until its session ends, and a session the factory ended
+// (the task went to you) is no crash at the next start.
+func TestAQARunIsInTheWorkRecordUntilItEnds(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12420")
+	r.toWalk(task)
+	rec, ok, err := ReadWork(r.layout)
+	if err != nil || !ok || len(rec.Work) != 1 || rec.Work[0].Kind != WorkQA || rec.Work[0].Task != task.ID ||
+		rec.Work[0].What != "QA run 1 of PR-12420" {
+		t.Fatalf("work.json %+v (%v, %v), want the QA run", rec, ok, err)
+	}
+	r.e.toOperator(r.ctx, r.reload(task.ID), "a test sends it to you", "test")
+	if rec, _, _ := ReadWork(r.layout); len(rec.Work) != 0 {
+		t.Fatalf("work.json %+v, want nothing once the session ended", rec)
+	}
+	r.restart()
+	if err := r.e.startup(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutTask {
+		t.Fatalf("run 1's result.json %+v, want interrupted as its task left it, no crash", res)
+	}
+}
+
+// A drain ends a QA session that has not begun its walk at once, so
+// install --drain never waits on a session that waits on the drain; a
+// session whose walker is at work stays in the record until it ends. No
+// fresh run starts while the drain holds.
+func TestADrainEndsAQASessionThatHasNotBegunItsWalk(t *testing.T) {
+	r := newQARig(t)
+	r.e.drainerAlive = func(Drain) bool { return true }
+	task, head := r.qaTask("PR-12421")
+	r.toWalk(task)
+	walker, err := r.reg.BeginAttempt(r.ctx, task.ID, "qa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.TransitionAttempt(r.ctx, walker.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil); err != nil {
+		t.Fatal(err)
+	}
+	value := Drain{Since: r.clock.Now(), PID: os.Getpid()}.Value()
+	if err := WriteDrain(r.layout, value); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if rec, _, _ := ReadWork(r.layout); rec.Drain != value || len(rec.Work) != 1 || rec.Work[0].Kind != WorkQA {
+		t.Fatalf("work.json %+v, want the drain held and the walking run in it", rec)
+	}
+	if l := r.copies.log(); len(l.stopped) != 0 {
+		t.Fatalf("servers stopped %v under a walker at work", l.stopped)
+	}
+	if err := r.reg.TransitionAttempt(r.ctx, walker.ID, []string{registry.AttemptRunning}, registry.AttemptFailed, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	if rec, _, _ := ReadWork(r.layout); rec.Drain != value || len(rec.Work) != 0 {
+		t.Fatalf("work.json %+v, want the drain held and nothing in flight", rec)
+	}
+	if l := r.copies.log(); len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 || len(l.started) != 1 {
+		t.Fatalf("servers started %v, stopped %v, browsers stopped %v; want the one run stopped, none started",
+			l.started, l.stopped, l.stoppedBrowsers)
+	}
+	if res := r.qaResult(task.ID, 1, head); res.Outcome != QAOutcomeInterrupted || res.Cut != qaCutDrain {
+		t.Fatalf("run 1's result.json %+v, want interrupted by the drain", res)
+	}
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.N != 1 {
+		t.Fatalf("qa-run.json %+v: a fresh run began while the drain holds", run)
+	}
+	r.qaFree(task.ID)
+}
+
+// A stop of the browser that panics in the teardown still stops the server
+// and frees the Mac's QA lock and the heavy slot.
+func TestATeardownWhoseBrowserStopPanicsStillFreesTheMac(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12422")
+	r.toWalk(task)
+	r.e.d.Copies = &panickyCopies{fakeCopies: r.copies, stopBrowser: true}
+	r.e.toOperator(r.ctx, r.reload(task.ID), "a test sends it to you", "test")
+	if l := r.copies.log(); len(l.stopped) != 1 {
+		t.Fatalf("servers stopped %v, want the one", l.stopped)
+	}
+	if !slices.ContainsFunc(r.events(task.ID, "qa"), func(ev registry.Event) bool {
+		return ev.Phase == registry.PhaseFail && strings.Contains(ev.Text, "stop its browser panicked")
+	}) {
+		t.Fatalf("qa events %+v, want the browser's stop named as failed", r.events(task.ID, "qa"))
+	}
+	r.qaFree(task.ID)
+}
+
+// A start of the browser that panics leaves no session ready for the walk
+// without a browser: the next pass starts it again.
+func TestAPanicInStartBrowserStartsItAgain(t *testing.T) {
+	r := newQARig(t)
+	r.e.d.Copies = &panickyCopies{fakeCopies: r.copies, startBrowserOnce: true}
+	task, _ := r.qaTask("PR-12423")
+	r.toWalk(task)
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.CDP != "http://127.0.0.1:9333" {
+		t.Fatalf("qa-run.json %+v, want the browser's endpoint", run)
+	}
+	if l := r.copies.log(); len(l.browsers) != 1 {
+		t.Fatalf("browsers started %v, want the one after the panic", l.browsers)
+	}
+}
+
+// A start of the server that panics ends its session at once, without the
+// wait for a boot that never began, and the next pass starts it again.
+func TestAPanicInStartServerDoesNotStallTheLoop(t *testing.T) {
+	r := newQARig(t)
+	r.e.d.Copies = &panickyCopies{fakeCopies: r.copies, startOnce: true}
+	task, _ := r.qaTask("PR-12424")
+	var worst time.Duration
+	for range 8 {
+		if r.reload(task.ID).WaitsWhat == qaReadyWhat {
+			break
+		}
+		start := time.Now()
+		r.tick()
+		r.e.waitBackground()
+		worst = max(worst, time.Since(start))
+	}
+	if worst >= qaBootWait/3 {
+		t.Fatalf("a tick took %s, want no wait for a boot that never began", worst)
+	}
+	r.toWalk(task)
+	if l := r.copies.log(); len(l.started) != 1 || len(l.stopped) != 1 {
+		t.Fatalf("servers started %v, stopped %v; want the panicked start stopped and one start after it", l.started, l.stopped)
+	}
+}
+
+// The daemon's stop, whatever ends its loop, ends the QA sessions
+// (RunLocked's deferred stopQASessions).
+func TestRunLockedEndsTheQASessionsAsItStops(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12425")
+	r.toWalk(task)
+	r.captureSignals()
+	ctx, cancel := context.WithCancel(r.ctx)
+	cancel()
+	_ = r.e.RunLocked(ctx) // an ended context: its startup fails, its defers run
+	l := r.copies.log()
+	if len(l.stoppedBrowsers) != 1 || len(l.stopped) != 1 || slices.ContainsFunc(l.stopCtxErr, func(err error) bool { return err != nil }) {
+		t.Fatalf("browsers stopped %v, servers stopped %v, their contexts %v; want each once, on a context of its own",
+			l.stoppedBrowsers, l.stopped, l.stopCtxErr)
+	}
+	r.qaFree(task.ID)
+}
+
+// The user-facing check runs at most 30 seconds (it runs on the loop), with
+// the changed files on its stdin.
+func TestTheUserFacingCheckRunsAtMostThirtySeconds(t *testing.T) {
+	r := newQARig(t)
+	var seen []execx.Cmd
+	r.seenMise = func(c execx.Cmd) { seen = append(seen, c) }
+	task, _ := r.qaTask("PR-12426")
+	r.toWalk(task)
+	i := slices.IndexFunc(seen, func(c execx.Cmd) bool { return c.Args[len(c.Args)-1] == "bin/user-facing" })
+	if i < 0 || seen[i].Timeout != 30*time.Second || len(seen[i].Stdin) == 0 {
+		t.Fatalf("the user-facing check ran as %+v, want 30s and the changed files on stdin", seen)
 	}
 }

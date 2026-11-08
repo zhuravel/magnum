@@ -21,9 +21,12 @@ package factory
 // the run's folder. Its teardown (endQASession) runs on every way out: the
 // run's end, NEEDS YOU, a stop or a drop (freeHeavy), the task leaving the
 // stage (sweepQA) and the daemon's stop (stopQASessions), each stop on a
-// context of its own. A restart cuts a run whose server started: the next
-// daemon's startup records it interrupted (cutQA) and a fresh run starts, at
-// most twice in a row at a head.
+// context of its own and under its own recover. A session is work a restart
+// would cut (WorkQA in work.json), from its server's start to its end, and a
+// drain ends one whose walk has not begun at once. A run the factory cut
+// itself (a drain, a stop signal, its task leaving it) is recorded
+// interrupted by that cut and starts afresh, uncounted; a crash's (cutQA at
+// the next start) counts, and two in a row at a head make QA unavailable.
 
 import (
 	"context"
@@ -79,14 +82,15 @@ const (
 	// how long one probe may take; qaWhenCap bounds the user-facing check.
 	qaProbeEvery   = 2 * time.Second
 	qaProbeTimeout = 5 * time.Second
-	qaWhenCap      = 2 * time.Minute
+	qaWhenCap      = 30 * time.Second // it runs on the loop: well within launchd's 45 s ExitTimeOut
 	// qaBootSlack is the boot's bound on the wall clock past its own (the
 	// boot counts on the engine's clock), qaBootWait how long a teardown waits
 	// for the boot's goroutine to end after it cancelled it.
 	qaBootSlack = time.Minute
 	qaBootWait  = 15 * time.Second
 	// qaInARow is how many results of one kind in a row at a head
-	// (interrupted, pressure) a fresh run follows: then QA is unavailable.
+	// (interrupted by a crash, pressure) a fresh run follows: then QA is
+	// unavailable.
 	// A run gets one boot more after a failed one.
 	qaInARow   = 2
 	qaBootMore = 1
@@ -134,9 +138,10 @@ type qaRun struct {
 // QAResult is how a QA run ended (result.json in its folder; qa-summary.json
 // in the task's directory is the one that passed the stage): its version,
 // the run's number, folder and head, the pages it walked and the shots it
-// took, its outcome (QAOutcome*) and why, the defects that block and those
-// that do not (Known), the states the walker could not reach, and when it
-// started and ended.
+// took, its outcome (QAOutcome*) and why, what cut an interrupted run
+// (qaCutDrain, qaCutTask, qaCutCrash), the defects that block and those that
+// do not (Known), the states the walker could not reach, and when it started
+// and ended.
 type QAResult struct {
 	Version  int         `json:"version"`
 	Run      int         `json:"run"`
@@ -146,6 +151,7 @@ type QAResult struct {
 	Head     string      `json:"head"`
 	Outcome  string      `json:"outcome"`
 	Why      string      `json:"why"`
+	Cut      string      `json:"cut,omitempty"`
 	Blocking []QADefect  `json:"blocking"`
 	Known    []QADefect  `json:"known"`
 	Blocked  []QABlocked `json:"blocked"`
@@ -153,23 +159,35 @@ type QAResult struct {
 	Ended    time.Time   `json:"ended"`
 }
 
+// What cut an interrupted run (QAResult.Cut): the daemon's own stop (a
+// drain, a stop signal), its task leaving the run (NEEDS YOU, a stop or a
+// drop, another stage), or a daemon that died without its teardown (cutQA).
+// Only a crash counts towards qaInARow.
+const (
+	qaCutDrain = "drain"
+	qaCutTask  = "task"
+	qaCutCrash = "crash"
+)
+
 // qaSession is a QA run's hold on the Mac: its task and stage, the run, the
 // walker's copy (qaWalkerCopy), whether the boot answered (ready), whether
 // the server and the browser were started (server, browser: their stop runs
-// whatever came of the start), the boot's error, its goroutine's cancel and
-// done (ready and err are written before done closes), and the release of
-// the heavy slot and of the machine's QA lock. The loop owns it but for
-// ready and err; qaMu guards the map of them.
+// whatever came of the start), whether the boot's goroutine started
+// (booting: only then does a teardown wait for its done), the boot's error,
+// its goroutine's cancel and done (ready and err are written before done
+// closes), and the release of the heavy slot, of the machine's QA lock and
+// of its entry in the work record. The loop owns it but for ready and err;
+// qaMu guards the map of them.
 type qaSession struct {
-	task                   int64
-	stage                  string
-	run                    qaRun
-	copy                   Copy
-	ready, server, browser bool
-	err                    error
-	cancel                 context.CancelFunc
-	done                   chan struct{}
-	release, unlock        func()
+	task                            int64
+	stage                           string
+	run                             qaRun
+	copy                            Copy
+	ready, server, browser, booting bool
+	err                             error
+	cancel                          context.CancelFunc
+	done                            chan struct{}
+	release, unlock, endWork        func()
 }
 
 func (s *qaSession) ended() bool {
@@ -228,7 +246,7 @@ func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactorySt
 	case bh.Problem != "":
 		return false, e.stageFailed(ctx, t, needsYou{"QA cannot start: " + bh.Problem})
 	case t.HeadSHA != "" && bh.Head != t.HeadSHA: // QA looks at a checked head only
-		e.endQASessionLogged(ctx, t, "the branch moved")
+		e.endQALogged(ctx, t, "the branch moved", qaCutTask)
 		return false, e.headMoved(ctx, t, bh.Head)
 	}
 	last, ok := readQARun(dir)
@@ -242,8 +260,11 @@ func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactorySt
 			fresh = true
 		}
 	}
+	if (fresh || run.Nonce == "") && e.startsHeld() { // nothing new runs while the daemon drains
+		return false, heldError{who: holdRestart, what: drainWhat}
+	}
 	if fresh {
-		e.endQASessionLogged(ctx, t, "a fresh run starts") // a session of an older run
+		e.endQALogged(ctx, t, "a fresh run starts", qaCutTask) // a session of an older run
 		if run, err = e.newQARun(dir, last, bh, c, *repo.QA); err != nil {
 			return false, err
 		}
@@ -261,7 +282,8 @@ func (e *Engine) runQA(ctx context.Context, t registry.Task, st config.FactorySt
 // passes the stage; unavailable or defects waits on you once (qaTold), and
 // after your retry a fresh run starts; pressure waits for the memory hold to
 // lift, interrupted starts afresh, each unless qaInARow of it came in a row
-// at the head: then QA is unavailable.
+// at the head (interrupted by a crash only, qaInARowAt): then QA is
+// unavailable.
 func (e *Engine) qaDecide(ctx context.Context, t registry.Task, dir string, run qaRun, res QAResult) (pass, again bool, err error) {
 	switch res.Outcome {
 	case QAOutcomeClean, QAOutcomeNotNeeded:
@@ -302,7 +324,8 @@ func (e *Engine) newQARun(dir string, last qaRun, bh branchHead, c Copy, q confi
 
 // qaUserFacing runs the repository's qa.when in copy c on the run's changed
 // files (every status, one per line on its stdin), with the copy's env and
-// none of the daemon's secrets, for at most qaWhenCap. A failure cannot
+// none of the daemon's secrets, for at most qaWhenCap (on the loop: a later
+// step runs it off the loop, as the checks run). A failure cannot
 // tell: QA could not run. No file printed needs no QA: the stage passes.
 // Else the files go to changed.txt, the probe with a fresh nonce to
 // probe.js, and the run records them (pass false, run.Nonce set).
@@ -389,7 +412,7 @@ func qaWhenFailed(when string, err error) string {
 func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaRun) error {
 	sess := e.qaSessionOf(t.ID)
 	if sess != nil && (sess.run.N != run.N || sess.run.Head != run.Head || sess.copy.Name != c.Name || sess.stage != t.Stage) {
-		e.endQASessionLogged(ctx, t, "its run is no longer the task's")
+		e.endQALogged(ctx, t, "its run is no longer the task's", qaCutTask)
 		sess = nil
 	}
 	switch {
@@ -399,7 +422,7 @@ func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaR
 		return nil // the task waits while the server boots
 	case sess.err != nil:
 		return e.qaBootFailed(ctx, t, c, sess)
-	case !sess.browser:
+	case sess.run.CDP == "": // no browser yet, or a start of it that did not return
 		return e.qaBrowser(ctx, t, sess)
 	}
 	e.waitOn(ctx, t, waitQA, qaReadyWhat)
@@ -415,7 +438,8 @@ func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaR
 // runs out; a panic there is the boot's error. Whatever fails or panics
 // before the session exists releases what was taken; after, the session's
 // teardown does (a start that failed ends it at once, and the same pass
-// takes that boot's failure).
+// takes that boot's failure). From then on the session is in the work
+// record (WorkQA) until its teardown.
 func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, run qaRun) error {
 	if who, what, ok := e.mayLaunch(); !ok {
 		if who != holdRestart {
@@ -441,8 +465,8 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 	defer func() { // a failure or a panic before the session is the session's own
 		switch {
 		case ok:
-		case sess != nil:
-			e.endQASessionLogged(ctx, t, "its start failed")
+		case sess != nil: // no boot began: the teardown waits for none
+			e.endQALogged(ctx, t, "its start failed", "")
 		default:
 			if unlock != nil {
 				unlock()
@@ -481,7 +505,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 	}
 	bctx, cancel := context.WithTimeout(e.bgCtx, boot+qaBootSlack)
 	sess = &qaSession{task: t.ID, stage: t.Stage, run: run, copy: wc, server: true, cancel: cancel, done: make(chan struct{}),
-		release: release, unlock: unlock}
+		release: release, unlock: unlock, endWork: e.beginWork(WorkQA, t.ID, fmt.Sprintf("QA run %d of %s", run.N, TaskKey(t)))}
 	e.qaMu.Lock()
 	e.qaSessions[t.ID] = sess
 	e.qaMu.Unlock()
@@ -498,6 +522,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 		return e.qaBootFailed(ctx, t, c, sess)
 	}
 	e.waitOn(ctx, t, waitQA, fmt.Sprintf("the copy's server boots (up to %s)", boot))
+	sess.booting = true
 	e.bg.Go(func() {
 		defer close(sess.done)
 		defer cancel()
@@ -548,12 +573,13 @@ func (e *Engine) bootQA(ctx context.Context, url, host, ready string, boot time.
 // unavailable.
 func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess *qaSession) error {
 	why := sess.err.Error()
-	e.endQASessionLogged(ctx, t, "its boot failed")
+	e.endQALogged(ctx, t, "its boot failed", "")
 	run := sess.run
 	if _, panicked := errors.AsType[qaPanic](sess.err); panicked || run.BootTries >= qaBootMore {
 		return e.qaUnavailable(ctx, t, run, why)
 	}
 	run.BootTries++
+	run.Started = time.Time{} // no server runs until the next start
 	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), qaRunFile), run); err != nil {
 		return err
 	}
@@ -564,7 +590,8 @@ func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess
 // qaBrowser starts the factory's headless Chrome for session sess in its
 // run's folder, once no hold stops launches, and records its CDP endpoint:
 // the session is ready for the walk. A browser that does not start is QA
-// unavailable.
+// unavailable; a start that panicked runs again on the next pass (the
+// session has no endpoint), and the teardown stops whatever it started.
 func (e *Engine) qaBrowser(ctx context.Context, t registry.Task, sess *qaSession) error {
 	if who, what, ok := e.mayLaunch(); !ok {
 		if who != holdRestart {
@@ -680,14 +707,27 @@ func httpQAProbe(ctx context.Context, raw, host string) (int, error) {
 	return resp.StatusCode, nil
 }
 
-// endQASession ends task t's QA session, if it has one, because why, on a
-// context of its own (the daemon's shutdown or the tick's end never cuts a
-// stop): it cancels the boot's goroutine and waits for it (at most
-// qaBootWait), then stops the browser (StopBrowser) and the server
-// (stopServer, with its proof; Copies.StopServer for one whose start
-// failed), then lets go of the machine's QA lock and the heavy slot. A step
-// that fails does not stop the next one. A qa event says how it ended.
+// endQASession ends task t's QA session, if it has one, because why, its
+// task leaving the run (endQA with qaCutTask).
 func (e *Engine) endQASession(ctx context.Context, t registry.Task, why string) error {
+	return e.endQA(ctx, t, why, qaCutTask)
+}
+
+// endQA ends task t's QA session, if it has one, because why, on a context
+// of its own (the daemon's shutdown or the tick's end never cuts a stop). It
+// cancels the boot's goroutine and waits for it (at most qaBootWait; none
+// for a boot that never began), stops the browser (StopBrowser) and the
+// server (stopServer; Copies.StopServer for one whose start failed, though a
+// failed start already ended what it spawned, and a copy with no record of a
+// server has nothing stopped or proven), each under its own
+// recover (a panic is that step's error, and the next step runs), and
+// records the run's end (qaCutRecord): a run with no result is interrupted
+// by cut (qaCutDrain, qaCutTask), or, with no cut ("": a failed boot or
+// start, QA unavailable), forgets its server's start, so a restart cuts
+// nothing of it. Whatever happens, the machine's QA
+// lock, then the heavy slot, then the session's work record go. A qa event
+// says how it ended.
+func (e *Engine) endQA(ctx context.Context, t registry.Task, why, cut string) error {
 	ctx = context.WithoutCancel(ctx)
 	e.qaMu.Lock()
 	sess := e.qaSessions[t.ID]
@@ -696,44 +736,101 @@ func (e *Engine) endQASession(ctx context.Context, t registry.Task, why string) 
 	if sess == nil {
 		return nil
 	}
+	defer sess.endWork()
+	defer sess.release()
+	defer sess.unlock()
 	sess.cancel()
-	wait := time.NewTimer(qaBootWait)
-	select {
-	case <-sess.done:
-	case <-wait.C:
-		e.log.Warn("a QA boot's probe did not end with its run; the teardown goes on", "task", t.ID)
+	if sess.booting {
+		wait := time.NewTimer(qaBootWait)
+		select {
+		case <-sess.done:
+		case <-wait.C:
+			e.log.Warn("a QA boot's probe did not end with its run; the teardown goes on", "task", t.ID)
+		}
+		wait.Stop()
 	}
-	wait.Stop()
 	var errs []error
-	if sess.browser {
-		if err := e.d.Copies.StopBrowser(ctx, sess.copy); err != nil {
-			errs = append(errs, fmt.Errorf("stop its browser: %w", err))
-		}
-	}
-	if s, ok := e.servers[t.ID]; ok {
-		if err := e.stopServer(ctx, t, s, "its QA run ended: "+why); err != nil {
-			errs = append(errs, err)
-		}
-	} else if sess.server { // a start that failed: its stop proves nothing is left
-		if err := e.d.Copies.StopServer(ctx, sess.copy); err != nil {
-			if _, held := errors.AsType[portHeld](err); !held {
-				errs = append(errs, fmt.Errorf("stop its server: %w", err))
+	step := func(what string, fn func() error) {
+		defer func() {
+			if p := recover(); p != nil {
+				msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(p))), " "), panicRunes)
+				e.log.Error("panic in a QA teardown; the teardown goes on", "task", t.ID, "step", what, "panic", msg,
+					"stack", execx.Redact(string(debug.Stack())))
+				errs = append(errs, fmt.Errorf("%s panicked: %s", what, msg))
 			}
+		}()
+		if err := fn(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", what, err))
 		}
 	}
-	sess.unlock()
-	sess.release()
+	if sess.browser {
+		step("stop its browser", func() error { return e.d.Copies.StopBrowser(ctx, sess.copy) })
+	}
+	step("stop its server", func() error {
+		if s, ok := e.servers[t.ID]; ok {
+			return e.stopServer(ctx, t, s, "its QA run ended: "+why)
+		}
+		if !sess.server {
+			return nil
+		}
+		err := e.d.Copies.StopServer(ctx, sess.copy)
+		if _, held := errors.AsType[portHeld](err); held {
+			return nil
+		}
+		return err
+	})
+	step("record its end", func() error { return e.qaCutRecord(ctx, t, sess, why, cut) })
 	what := fmt.Sprintf("run %d at %s ended (%s)", sess.run.N, textx.ShortSHA(sess.run.Head), why)
 	if err := errors.Join(errs...); err != nil {
-		e.event(ctx, t.ID, "qa", registry.PhaseFail, what+": "+textx.Clip(textx.FirstLine(err.Error()), panicRunes))
+		e.event(ctx, t.ID, "qa", registry.PhaseFail, what+": "+textx.Clip(strings.Join(strings.Fields(err.Error()), " "), panicRunes))
 		return err
 	}
 	e.event(ctx, t.ID, "qa", registry.PhaseOK, what+": its browser and its server are stopped, the Mac's QA lock is free")
 	return nil
 }
 
-// endQASessionLogged is endQASession whose failure the log keeps (its event
-// says it too).
+// qaCutRecord records the end of session sess's run when it has no result:
+// cut cuts it (interrupted, why it was cut, the stage's attempts it began
+// failed, and a drain's task waits on its run no more), or, with no cut, the
+// run forgets its server's start (qa-run.json's started, when it is still
+// this run's).
+func (e *Engine) qaCutRecord(ctx context.Context, t registry.Task, sess *qaSession, why, cut string) error {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	if _, ended := readQAResult(dir, sess.run); ended {
+		return nil
+	}
+	if cut == "" {
+		run, ok := readQARun(dir)
+		if !ok || run.N != sess.run.N || run.Head != sess.run.Head || run.Started.IsZero() {
+			return nil
+		}
+		run.Started = time.Time{}
+		return writeJSON(filepath.Join(dir, qaRunFile), run)
+	}
+	text := "the run was cut (" + why + "): its server and browser were stopped"
+	if cut == qaCutDrain {
+		text = "the daemon stopped during the run (a drain or a signal): its server and browser were stopped"
+	}
+	if err := e.writeQAResult(ctx, t, sess.run, QAResult{Outcome: QAOutcomeInterrupted, Cut: cut, Why: text, Started: sess.run.Started}); err != nil {
+		return err
+	}
+	if st, ok := e.stageOf(t, sess.stage); ok {
+		e.failQAAttempts(ctx, t, st, sess.run, "its QA run was cut: "+why)
+	}
+	if cut == qaCutDrain && t.WaitsWho == waitQA {
+		e.waitOn(ctx, t, "", "")
+	}
+	return nil
+}
+
+// endQALogged is endQA whose failure the log keeps (its event says it too).
+func (e *Engine) endQALogged(ctx context.Context, t registry.Task, why, cut string) {
+	if err := e.endQA(ctx, t, why, cut); err != nil {
+		e.log.Warn("end a QA session", "task", t.ID, "err", err)
+	}
+}
+
+// endQASessionLogged is endQASession whose failure the log keeps.
 func (e *Engine) endQASessionLogged(ctx context.Context, t registry.Task, why string) {
 	if err := e.endQASession(ctx, t, why); err != nil {
 		e.log.Warn("end a QA session", "task", t.ID, "err", err)
@@ -751,17 +848,21 @@ func (e *Engine) stopQASessions(ctx context.Context) {
 		if err != nil {
 			t = registry.Task{ID: id}
 		}
-		e.endQASessionLogged(ctx, t, "the daemon stops")
+		e.endQALogged(ctx, t, "the daemon stops", qaCutDrain)
 	}
 }
 
 // sweepQA ends the QA sessions of the tasks that are not at their run: gone,
 // not live (a request stopped them, they wait on you), or at another stage
-// than the session's (sent back).
+// than the session's (sent back). While the daemon drains, it ends every
+// session whose walk has not begun (qaWalking), as a drain's cut: such a
+// session waits for a launch the drain holds, and install --drain would
+// wait for it in turn.
 func (e *Engine) sweepQA(ctx context.Context, tasks []registry.Task) {
 	e.qaMu.Lock()
 	sessions := maps.Clone(e.qaSessions)
 	e.qaMu.Unlock()
+	drain := e.startsHeld()
 	for _, id := range slices.Sorted(maps.Keys(sessions)) {
 		i := slices.IndexFunc(tasks, func(t registry.Task) bool { return t.ID == id })
 		switch {
@@ -771,13 +872,31 @@ func (e *Engine) sweepQA(ctx context.Context, tasks []registry.Task) {
 			e.endQASessionLogged(ctx, tasks[i], "its task is not at work")
 		case tasks[i].Stage != sessions[id].stage:
 			e.endQASessionLogged(ctx, tasks[i], "its task left the "+sessions[id].stage+" stage")
+		case drain && !e.qaWalking(ctx, tasks[i], sessions[id]):
+			e.endQALogged(ctx, tasks[i], "a drain holds before its walk began", qaCutDrain)
 		}
 	}
 }
 
-// cutQA is startup's record of the QA runs a stopped daemon cut: each task
-// at work or waiting on you, at a qa stage, whose newest run started its
-// server and has no result gets the outcome interrupted (its server and its
+// qaWalking reports whether session sess's walk began: an attempt of its
+// stage after the run's attempts_before launches, runs or ended unverified.
+// A registry that cannot be read counts as a walk (the session stays, and
+// the next tick looks again).
+func (e *Engine) qaWalking(ctx context.Context, t registry.Task, sess *qaSession) bool {
+	as, err := e.reg.Attempts(ctx, t.ID)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(as, func(a registry.Attempt) bool {
+		return a.Stage == sess.stage && a.N > sess.run.AttemptsBefore &&
+			(a.State == registry.AttemptLaunching || a.State == registry.AttemptRunning || a.State == registry.AttemptEnded)
+	})
+}
+
+// cutQA is startup's record of the QA runs a crashed daemon cut (one that
+// stopped cleanly recorded its own, qaCutRecord): each task at work or
+// waiting on you, at a qa stage, whose newest run started its server and has
+// no result gets the outcome interrupted by a crash (its server and its
 // browser were stopped by Copies.Reconcile before), its wait on the run
 // ends, and the stage's open attempts the run began (after AttemptsBefore)
 // fail. A run that never started its server goes on.
@@ -798,7 +917,7 @@ func (e *Engine) cutQA(ctx context.Context, tasks []registry.Task) {
 		if _, ended := readQAResult(dir, run); ended {
 			continue
 		}
-		res := QAResult{Outcome: QAOutcomeInterrupted, Why: "the daemon stopped during the run: its server and browser were stopped",
+		res := QAResult{Outcome: QAOutcomeInterrupted, Cut: qaCutCrash, Why: "the daemon stopped during the run: its server and browser were stopped",
 			Started: run.Started, Ended: e.now()}
 		if err := e.writeQAResult(ctx, t, run, res); err != nil {
 			e.log.Warn("record a QA run a restart cut", "task", t.ID, "err", err)
@@ -807,22 +926,28 @@ func (e *Engine) cutQA(ctx context.Context, tasks []registry.Task) {
 		if t.WaitsWho == waitQA { // "ready for the walk" no more
 			e.waitOn(ctx, t, "", "")
 		}
-		as, err := e.reg.Attempts(ctx, t.ID)
-		if err != nil {
-			e.log.Warn("read the attempts of a QA run a restart cut", "task", t.ID, "err", err)
+		e.failQAAttempts(ctx, t, st, run, "the daemon stopped during its QA run")
+	}
+}
+
+// failQAAttempts fails the open attempts of task t's qa stage st that run
+// began (after its attempts_before): launching, running or ended unverified.
+func (e *Engine) failQAAttempts(ctx context.Context, t registry.Task, st config.FactoryStage, run qaRun, because string) {
+	as, err := e.reg.Attempts(ctx, t.ID)
+	if err != nil {
+		e.log.Warn("read the attempts of a cut QA run", "task", t.ID, "err", err)
+		return
+	}
+	for _, a := range as {
+		if a.Stage != st.Name || a.N <= run.AttemptsBefore {
 			continue
 		}
-		for _, a := range as {
-			if a.Stage != st.Name || a.N <= run.AttemptsBefore {
-				continue
-			}
-			switch a.State {
-			case registry.AttemptLaunching, registry.AttemptRunning, registry.AttemptEnded:
-				if err := e.reg.TransitionAttempt(ctx, a.ID, []string{a.State}, registry.AttemptFailed, func(u *registry.AttemptUpdate) {
-					u.Set("error", "the daemon stopped during its QA run")
-				}); err != nil {
-					e.log.Warn("end the attempt of a QA run a restart cut", "attempt", a.ID, "err", err)
-				}
+		switch a.State {
+		case registry.AttemptLaunching, registry.AttemptRunning, registry.AttemptEnded:
+			if err := e.reg.TransitionAttempt(ctx, a.ID, []string{a.State}, registry.AttemptFailed, func(u *registry.AttemptUpdate) {
+				u.Set("error", because)
+			}); err != nil {
+				e.log.Warn("end the attempt of a cut QA run", "attempt", a.ID, "err", err)
 			}
 		}
 	}
@@ -840,7 +965,7 @@ func (e *Engine) qaUnavailable(ctx context.Context, t registry.Task, run qaRun, 
 		started = now
 	}
 	err := e.writeQAResult(ctx, t, run, QAResult{Outcome: QAOutcomeUnavailable, Why: why, Started: started, Ended: now})
-	e.endQASessionLogged(ctx, t, "QA could not run")
+	e.endQALogged(ctx, t, "QA could not run", "")
 	if err != nil {
 		return err
 	}
@@ -984,11 +1109,17 @@ func qaRunsAt(dir, head string) []int {
 	return ns
 }
 
-// qaInARowAt is how many of the newest runs at head in a row ended outcome.
+// qaInARowAt is how many of the newest runs at head in a row ended outcome;
+// an interrupted run counts only as a crash's (a cut of one older than its
+// cut counts too), and one the factory cut itself (a drain, its task
+// leaving it) neither counts nor breaks the row.
 func qaInARowAt(dir, head, outcome string) int {
 	n := 0
 	for _, k := range qaRunsAt(dir, head) {
 		res, ok := readQAResult(dir, qaRun{Dir: qaRunDir(k, head)})
+		if ok && res.Outcome == QAOutcomeInterrupted && res.Cut != "" && res.Cut != qaCutCrash {
+			continue
+		}
 		if !ok || res.Outcome != outcome || res.Head != head {
 			break
 		}

@@ -189,7 +189,8 @@ type FactoryRepo struct {
 type FactoryQA struct {
 	// When reads the changed files on stdin and prints the user-facing ones,
 	// one per line, in the copy (required): none printed, no QA; a failing
-	// command means "cannot tell", never "nothing user-facing".
+	// command means "cannot tell", never "nothing user-facing". It has 30
+	// seconds: a quick filter of paths, which boots nothing.
 	When string `toml:"when"`
 	// URL is the copy's server as a browser reaches it, with {port} as its
 	// port (required): "http://app.example.localhost:{port}". Its host is on

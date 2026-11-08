@@ -80,7 +80,7 @@ func newFactoryInstallCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runFactoryInstallCmd(c, dry, f, pos) })
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print what would be written and run; change nothing")
 	addRestartFlags(cmd, &f)
-	cmd.Flags().Lookup("now").Usage = "install even while the factory daemon runs a local review round, a check, a claim of a copy or a talk (they start over)"
+	cmd.Flags().Lookup("now").Usage = "install even while the factory daemon runs a local review round, a check, a claim of a copy, a talk or a QA run (they start over)"
 	cmd.Flags().Lookup("drain").Usage = "start nothing new in the factory, wait for the work in flight, then install"
 	timeout := cmd.Flags().Lookup("timeout")
 	f.timeout, timeout.DefValue = factoryDrainTimeout, factoryDrainTimeout.String()

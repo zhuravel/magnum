@@ -5611,7 +5611,8 @@ type FactoryPrecheck struct {
 type FactoryQA struct {
 	// When reads the changed files on stdin and prints the user-facing ones,
 	// one per line, in the copy (required): none printed, no QA; a failing
-	// command means "cannot tell", never "nothing user-facing".
+	// command means "cannot tell", never "nothing user-facing". It has 30
+	// seconds: a quick filter of paths, which boots nothing.
 	When string `toml:"when"`
 	// URL is the copy's server as a browser reaches it, with {port} as its
 	// port (required): "http://app.example.localhost:{port}". Its host is on
@@ -12342,6 +12343,7 @@ const (
 	WorkCheck = "check" // the factory's proof and precheck of a head
 	WorkClaim = "claim" // a claim of a copy
 	WorkTalk  = "talk"  // a talk with a task's liaison
+	WorkQA    = "qa"    // a QA run: its server, its browser and its walk
 )
     The kinds of WorkItem.
 
@@ -13391,6 +13393,7 @@ type QAResult struct {
 	Head     string      `json:"head"`
 	Outcome  string      `json:"outcome"`
 	Why      string      `json:"why"`
+	Cut      string      `json:"cut,omitempty"`
 	Blocking []QADefect  `json:"blocking"`
 	Known    []QADefect  `json:"known"`
 	Blocked  []QABlocked `json:"blocked"`
@@ -13400,8 +13403,9 @@ type QAResult struct {
     QAResult is how a QA run ended (result.json in its folder; qa-summary.json
     in the task's directory is the one that passed the stage): its version, the
     run's number, folder and head, the pages it walked and the shots it took,
-    its outcome (QAOutcome*) and why, the defects that block and those that do
-    not (Known), the states the walker could not reach, and when it started and
+    its outcome (QAOutcome*) and why, what cut an interrupted run (qaCutDrain,
+    qaCutTask, qaCutCrash), the defects that block and those that do not
+    (Known), the states the walker could not reach, and when it started and
     ended.
 
 type QAVerdict struct {

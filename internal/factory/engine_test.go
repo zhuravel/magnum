@@ -889,10 +889,12 @@ func (f *fakeCopies) StopBrowser(ctx context.Context, c Copy) error {
 	return nil
 }
 
-// Reconcile runs onReconcile, when set (a test's record of the order).
+// Reconcile runs onReconcile, when set (a test's record of the order), and
+// ends the servers a stopped daemon left, as the copies' reconcile does.
 func (f *fakeCopies) Reconcile(context.Context) error {
 	f.mu.Lock()
 	on := f.onReconcile
+	f.up = nil
 	f.mu.Unlock()
 	if on != nil {
 		on()

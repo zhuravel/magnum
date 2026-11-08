@@ -5,7 +5,9 @@ package factory
 // that runs off the loop: a round of the local review (its agents' turns
 // are lost and it runs again from its start), a check of a task's head (the
 // proof and the precheck run again), a claim of a copy (its steps run
-// again) and a talk with a liaison (it starts again). The daemon keeps that
+// again), a talk with a liaison (it starts again) and a QA run (its server
+// and its browser stop, and a fresh run starts; a drain ends one whose walk
+// has not begun at once). The daemon keeps that
 // work in work.json, under its pid, from its start to its stop, and install
 // reads it first: it refuses while anything runs, unless --now. A check
 // stays in the record until a tick took its result, which lives only in
@@ -47,6 +49,7 @@ const (
 	WorkCheck = "check" // the factory's proof and precheck of a head
 	WorkClaim = "claim" // a claim of a copy
 	WorkTalk  = "talk"  // a talk with a task's liaison
+	WorkQA    = "qa"    // a QA run: its server, its browser and its walk
 )
 
 // WorkItem is one piece of work a restart would cut: its kind (Work*), its

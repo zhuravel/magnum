@@ -91,6 +91,60 @@ func TestFactoryInstallRefusesWhileTheFactoryRunsWork(t *testing.T) {
 	}
 }
 
+// factoryQA is a QA run of PR-12345 whose server runs.
+var factoryQA = factory.WorkItem{Kind: factory.WorkQA, Task: 5, What: "QA run 1 of PR-12345", Since: time.Now().Add(-6 * time.Minute)}
+
+// While the factory daemon runs a QA run, install refuses and names it: the
+// restart would stop its server and its browser, and the run would start
+// again.
+func TestFactoryInstallRefusesWhileTheFactoryRunsQA(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	writeFactoryWork(t, dt.ctx.Layout, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{factoryQA}})
+
+	if code := dt.run("factory", "install"); code != 1 {
+		t.Fatalf("exit %d, want 1; stdout %s stderr %s", code, dt.stdout, dt.stderr)
+	}
+	actContains(t, dt.stderr.String(),
+		"magnum factory install: 1 background job(s) in flight: QA run 1 of PR-12345 (since "+inspClock(time.Now(), factoryQA.Since)+")",
+		"stopping the factory daemon now cuts them short: a QA run stops its server and its browser and starts again in a fresh folder",
+		"fix: `magnum factory install --drain` starts nothing new and waits for these, --now interrupts them")
+	if reloads(dt) != 0 {
+		t.Fatal("the refusal reloaded the job")
+	}
+}
+
+// --drain waits for a QA run as for any work, and reloads once the daemon,
+// holding the drain, ended it.
+func TestFactoryInstallDrainWaitsForAQARun(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{factoryQA}})
+	sleeps := 0
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
+		sleeps++
+		v, _ := factory.ReadDrain(l)
+		switch sleeps {
+		case 1: // the daemon's tick took the drain; the run's walker is at work
+			writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{factoryQA}})
+		case 3: // the run ended
+			writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{}})
+		}
+		if sleeps < 3 && reloads(dt) != 0 {
+			t.Errorf("sleep %d: the job was reloaded while the QA run ran", sleeps)
+		}
+		return nil
+	}
+
+	if code := dt.run("factory", "install", "--drain"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	actContains(t, dt.stdout.String(), "waiting for 1 background job(s) in flight (at most 3h30m0s): QA run 1 of PR-12345",
+		"drained after 15s: nothing in flight")
+	if reloads(dt) != 1 {
+		t.Fatalf("bootstrap calls %d, want the job reloaded once", reloads(dt))
+	}
+}
+
 // --now restarts the factory daemon at once, cutting what runs, as install
 // always did.
 func TestFactoryInstallNowCutsTheWork(t *testing.T) {
