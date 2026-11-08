@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -202,32 +203,36 @@ func (m *Manager) ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, captur
 }
 
 // observeAt is ObserveSnapshotAt, or ObserveRunsAt when runsOnly.
+// It holds the observe lock (obsMu), which Wake's looks take too: the
+// observations of the looks since the last pass come first in its result,
+// and a session a look read from a snapshot newer than snap is left alone.
 func (m *Manager) observeAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time, runsOnly bool) ([]Observation, error) {
+	m.obsMu.Lock()
+	defer m.obsMu.Unlock()
 	sessions, err := m.d.Store.LiveSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("agents: observe: %w", err)
 	}
 	m.nextObserveTick(sessions)
+	m.forgetHooks(sessions)
 	active, err := m.d.Store.ActiveRuns(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("agents: observe: %w", err)
 	}
-	inflight := map[int64][]store.Run{} // session id -> pending/submitted/working runs, oldest first
-	for _, r := range active {
-		if r.SessionID != nil && r.State != store.RunEnded {
-			inflight[*r.SessionID] = append(inflight[*r.SessionID], r)
-		}
-	}
+	inflight := inflightRuns(active) // session id -> pending/submitted/working runs, oldest first
 	panes := paneIndex(snap)
 	now := m.now()
 
-	var out []Observation
+	out := m.takeWoken()
 	var errs []error
 	for _, s := range sessions {
 		if runsOnly && !slices.ContainsFunc(inflight[s.ID], turnInFlight) {
 			continue
 		}
-		o, err := m.observeOne(ctx, s, snap, panes, inflight[s.ID], now, capturedAt)
+		if m.staleFor(s.ID, capturedAt) {
+			continue // a hook's look read the session from a newer snapshot
+		}
+		o, err := m.observeOne(ctx, s, snap, panes, inflight[s.ID], now, capturedAt, nil)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -240,8 +245,12 @@ func (m *Manager) observeAt(ctx context.Context, snap herdr.Snapshot, capturedAt
 	return out, errors.Join(errs...)
 }
 
+// observeOne observes session s from snap (see ObserveSnapshotAt). hint is
+// an agent's Stop hook (Wake; nil on a pass) that may count as the second
+// idle reading of the run in flight (stopEndsTurn): with it, an idle
+// reading ends the run at once.
 func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Snapshot, panes map[string]herdr.Pane,
-	runs []store.Run, now, capturedAt time.Time) (Observation, error) {
+	runs []store.Run, now, capturedAt time.Time, hint *agenthooks.Event) (Observation, error) {
 	role := Role(s.Role)
 	o := Observation{Role: role, PRID: s.PRID, Session: s}
 	if len(runs) > 0 {
@@ -324,6 +333,8 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 		s, o.Session = fresh, fresh
 	}
+	// A Stop hook of this turn is the second reading (Wake).
+	hookEnd := hint != nil && idle && !held && o.Run != nil && turnInFlight(*o.Run) && m.stopEndsTurn(s, sid, *o.Run, *hint)
 	if sid == "" && promptedTurnEnded(s, prev, prevAt, idle) {
 		m.sessionIDMissing(ctx, s)
 	}
@@ -382,7 +393,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 		if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 			o.Session = fresh
 		}
-	case idle && s.IdleTicks >= CompletionIdleTicks && !first.IsZero() && !capturedAt.Before(first.Add(m.endGap(s.ID, o.Run))):
+	case idle && (hookEnd || (s.IdleTicks >= CompletionIdleTicks && !first.IsZero() && !capturedAt.Before(first.Add(m.endGap(s.ID, o.Run))))):
 		var done *store.Run
 		for _, r := range runs {
 			if r.State != store.RunSubmitted && r.State != store.RunWorking {

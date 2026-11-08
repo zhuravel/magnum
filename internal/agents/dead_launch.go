@@ -151,7 +151,7 @@ func (m *Manager) splitReplacement(ctx context.Context, snap herdr.Snapshot, ses
 		return "", nil
 	}
 	cwd := cmp.Or(store.Deref(src.Cwd), paneIndex(snap)[pane].Cwd)
-	p, err := m.d.Herdr.PaneSplit(ctx, pane, herdr.SplitOptions{Direction: herdr.SplitDown, Cwd: cwd, Env: src.Env, Focus: false})
+	p, err := m.d.Herdr.PaneSplit(ctx, pane, herdr.SplitOptions{Direction: herdr.SplitDown, Cwd: cwd, Env: m.hookEnv(src.Env), Focus: false})
 	if err != nil {
 		return "", err
 	}

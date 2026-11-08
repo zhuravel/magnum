@@ -287,8 +287,18 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 // resolve (none, or one Deps.IdentityEnv cannot make) is an error: its pane
 // would keep the posting identity's env and push and reply as the App
 // rather than as the operator. Another role's unresolved identity leaves
-// env as it is.
+// env as it is. With Deps.HookSocket set, the env also names the hook socket
+// and binary (hookEnv), and never without it.
 func (m *Manager) paneEnv(env map[string]string, role config.Role) (map[string]string, error) {
+	out, err := m.roleEnv(env, role)
+	if err != nil {
+		return nil, err
+	}
+	return m.hookEnv(out), nil
+}
+
+// roleEnv is paneEnv without the hook env (hookEnv).
+func (m *Manager) roleEnv(env map[string]string, role config.Role) (map[string]string, error) {
 	var extra map[string]string
 	if m.d.Config != nil {
 		extra = m.d.Config.RoleEnv(role)

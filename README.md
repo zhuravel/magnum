@@ -5997,6 +5997,35 @@ critic = true           # an agent applies, rejects or re-curates each curation 
   your login shell's `PATH`, see [Configuration](#configuration)); through `mise exec` only while an App
   identity reads its key from an environment variable (`private_key_env` without `private_key_file`).
 
+### Agent hooks
+
+An agent's own hooks can tell the daemon that a turn ended, or that the agent waits on a permission prompt,
+within a second or two instead of on the next observe pass. The pieces:
+
+- **The pane env.** Every pane a daemon with a hook listener starts gets `MAGNUM_HOOK_SOCKET`, the daemon's
+  socket (`run/hooks.sock` for the review daemon, `run/factory-hooks.sock` for the factory, under the state
+  directory, `~/.local/state/magnum` by default), and `MAGNUM_HOOK_BIN`, the magnum binary. The path stays the
+  same across restarts. A socket path of 104 bytes or more cannot be a Unix socket (a deep `MAGNUM_HOME`): then
+  no pane gets the variables, and the daemon polls as before. A pane keeps the env it was made with, so a pane
+  made before the daemon listened stays on polling until it is renewed.
+- **The script.** `hooks/magnum-agent-hook.sh` (embedded in the binary, header `# managed by magnum`,
+  `MAGNUM_HOOK_ID`, `MAGNUM_HOOK_VERSION=1`) runs `magnum hook-event <agent> <event>` with the hook's payload on
+  stdin, for Claude Code's and Codex's Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd and
+  Interrupt. In a pane without `MAGNUM_HOOK_SOCKET` (your own sessions) it exits at its first line and reads
+  nothing.
+- **`magnum hook-event`.** It runs before the CLI proper and reads no config and no registry. It keeps the
+  session id, the transcript path, the turn, the source, the error, the tool, the subagent and the number of
+  background tasks, never the agent's last message, a prompt or a tool's input. It sends one datagram, prints
+  nothing and always exits 0 within 300 ms.
+- **The daemon.** Each event is only a hint to look at that pane now: the daemon reads herdr and the agent's
+  transcript or rollout again before it ends a run, denies a permission prompt (as `on_permission_prompt`
+  says) or records a session id, and its observe passes go on as before. A Stop ends the run only when it is
+  the session's own, from no subagent, with no background task, and the transcript (or rollout) shows the
+  turn ended after magnum's prompt; any other Stop, a late or a forged one, only makes the daemon look early.
+
+`magnum hooks install` (Claude Code's `~/.claude/settings.json`, each Codex home's `hooks.json`), its doctor
+checks and the daemons' listeners come in later releases; until then nothing runs the script.
+
 ## Webhooks relay
 
 `magnum-relay` (`cmd/magnum-relay`) is a small Go service for a server that is always on. It receives
@@ -6024,7 +6053,8 @@ the GitHub App's webhooks, which the sleeping Mac behind NAT cannot.
 | `internal/pipeline` | One review round: reviewers and the simplifier in parallel, the checkout check, judge, verification on GitHub. |
 | `internal/postreview` | `magnum post-review`, the judge's posting tool: check the review and its lines against the diff, post once, read back; and `magnum fix-reply`'s runner, which posts each reply of the fixer once, signed with the fix marker. |
 | `internal/dblock` | `magnum db-lock`: one lock per checkout, so the roles sharing a slot's databases take turns. |
-| `internal/agents` | Agent sessions in herdr: start, resume, prompt, observe, titles, trust dialogs, health classification. |
+| `internal/agents` | Agent sessions in herdr: start, resume, prompt, observe, titles, trust dialogs, health classification; an agent's hook as a hint to look at its pane now. |
+| `internal/agenthooks` | The agents' own hook events: the event, `magnum hook-event`'s parser, the datagram sender and the daemons' listener (standard library only). |
 | `internal/slots` | Pool slots and per-PR worktrees: provision, checkout, release, teardown hooks, guards. |
 | `internal/store` | The SQLite registry: PRs, slots, assignments, sessions, runs, events; compare-and-set transitions. |
 | `internal/github`, `internal/identity` | GraphQL/REST through `gh api`; user and GitHub App identities with token refresh. |

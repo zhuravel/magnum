@@ -32,3 +32,12 @@ var PluginManifest []byte
 
 //go:embed scripts/magnum-ctl.sh
 var PluginScript []byte
+
+// AgentHookScript is hooks/magnum-agent-hook.sh: the hook script Claude Code
+// and Codex run on their Stop, StopFailure, PermissionRequest,
+// SessionStart, SessionEnd and Interrupt hooks, with its agent left to fill
+// in (agenthooks.Script renders it, agenthooks.ScriptHeader reads an
+// installed copy back).
+//
+//go:embed hooks/magnum-agent-hook.sh
+var AgentHookScript []byte

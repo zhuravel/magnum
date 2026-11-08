@@ -31,6 +31,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 
 | Package | Synopsis |
 |---|---|
+| [agenthooks](#agenthooks) | Package agenthooks carries an agent's own hook events (a Claude Code or Codex Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd or Interrupt) from a magnum pane to the daemon that started the pane. |
 | [agents](#agents) | Package agents runs magnum's review agents inside herdr: one workspace per PR with a pane per configured role (config.Role: the judge plus reviewers such as claude-review, the codex-review shell and claude-simplify), agent start (fresh or resumed) on any configured kind (config.Kind: codex, claude, droid, omp, ...), prompts, per-tick completion tracking, pane-output health classification, login preflight, quit, park and crash recovery. |
 | [app](#app) | Package app wires magnum's components from config.toml: the store, the subprocess runner (wrapped in execx.DryRun under --dry-run), the herdr, GitHub, MySQL and git clients, the identities, and the slots, inventory, agents, pipeline, cleanup and notify layers built on top of them. |
 | [attention](#attention) | Package attention explains why a PR needs the user. |
@@ -80,6 +81,203 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan), the read-only pane mirror (RunWatch), the settings screen (RunSettings), which `,` also opens over the dashboard and the board and whose field popups are huh forms (charm.land/huh/v2), and the factory's screen (RunFactory: one line per task, grouped by who it waits on, with the decision cards behind them; its data comes through FactorySource, its requests through FactoryActions, and every one that leaves the Mac, starts or stops agents or frees a copy asks y/N on the factory's own action bar, factory_actions.go). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 | [webhooks](#webhooks) | Package webhooks reads the events magnum-relay keeps of the GitHub App's webhook deliveries: GET <url>/v1/events, a long poll by cursor, with curl through execx. |
+
+## agenthooks
+
+```text
+package agenthooks // import "github.com/zhuravel/magnum/internal/agenthooks"
+
+Package agenthooks carries an agent's own hook events (a Claude Code or Codex
+Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd or Interrupt)
+from a magnum pane to the daemon that started the pane. The hook script
+(hooks/magnum-agent-hook.sh, Script) runs `magnum hook-event <agent> <event>`,
+which reads the hook's payload (ReadPayload), keeps a few of its fields
+(Parse) and sends one Unix datagram (Send) to the socket the pane's env names
+(EnvSocket). The daemon's Listener reads it (Serve) and hands it on.
+
+An event is a hint, never the source of truth: the daemon reads herdr,
+the transcript or the rollout again before it acts, and polling stays the floor.
+An agent in the pane has the env and can send any datagram, so a forged event
+costs no more than an early look.
+
+The package uses the standard library alone (no config, no registry, no other
+package of magnum's), so the hook's process stays light.
+
+CONSTANTS
+
+const (
+	AgentClaude = "claude"
+	AgentCodex  = "codex"
+)
+    The agents that send events (Event.Agent, the hook script's first argument).
+
+const (
+	NameStop              = "stop"               // the agent ended its turn
+	NameStopFailure       = "stop_failure"       // Claude: the turn ended on an API error (Event.Error)
+	NamePermissionRequest = "permission_request" // the agent waits on an approval now
+	NameSessionStart      = "session_start"      // the session's id and transcript (Event.Source: startup, resume, ...)
+	NameSessionEnd        = "session_end"        // Claude: the session ended
+	NameInterrupt         = "interrupt"          // Codex: the turn was cut
+)
+    The events (Event.Name, the hook script's second argument).
+
+const (
+	// EnvSocket is the socket of the daemon that started the pane; without
+	// it the hook script exits at once.
+	EnvSocket = "MAGNUM_HOOK_SOCKET"
+	// EnvBin is the magnum binary the hook script runs.
+	EnvBin = "MAGNUM_HOOK_BIN"
+	// EnvPane is herdr's id of the pane (Event.Pane).
+	EnvPane = "HERDR_PANE_ID"
+	// EnvCodexThread is the Codex thread the hook runs in
+	// (Event.CodexThread): a helper's differs from its session's id.
+	EnvCodexThread = "CODEX_THREAD_ID"
+)
+    The env of a magnum pane, and the agents' own env the parser reads.
+
+const (
+	// MaxDatagram bounds an event's datagram: 2 KiB, macOS's
+	// net.local.dgram.maxdgram.
+	MaxDatagram = 2 << 10
+	// SendTimeout bounds Send.
+	SendTimeout = 200 * time.Millisecond
+	// MaxPayload bounds how much of the hook's stdin ReadPayload reads.
+	MaxPayload = 64 << 10
+	// ReadTimeout bounds ReadPayload.
+	ReadTimeout = 100 * time.Millisecond
+	// HookBound bounds `magnum hook-event` as a whole: Claude does not
+	// enforce a timeout on an async hook.
+	HookBound = 300 * time.Millisecond
+	// SocketPathLimit is the length at which a Unix socket's path is too
+	// long: sun_path holds 104 bytes on macOS, its terminating NUL
+	// included.
+	SocketPathLimit = 104
+)
+    The transport's bounds.
+
+const (
+	// ScriptVersion is the version of the embedded script. It changes only
+	// with the script's file: the hooks' command lines stay the same forever
+	// (Codex keys its trust on them), so an upgrade asks for no new trust.
+	ScriptVersion = 1
+	// ScriptMarker begins the line that marks a file as magnum's own.
+	ScriptMarker = "# managed by magnum"
+)
+    The hook script's header (hooks/magnum-agent-hook.sh, embedded as
+    magnum.AgentHookScript): ScriptMarker, "# MAGNUM_HOOK_ID=<agent>" and "#
+    MAGNUM_HOOK_VERSION=<n>".
+
+const Version = 1
+    Version is the Event's V. The fields are additive under it: a later field
+    never changes the meaning of an older one, so a daemon reads an event with a
+    field it does not know as the event it knows.
+
+
+FUNCTIONS
+
+func ReadPayload(r io.Reader) []byte
+    ReadPayload reads the hook's payload from r (its stdin): at most MaxPayload
+    bytes, and only what came within ReadTimeout. An agent that keeps its end of
+    stdin open costs the hook ReadTimeout, no more; what was read by then is the
+    payload (Parse keeps the fields before a cut).
+
+func Script(template []byte, agent string) ([]byte, error)
+    Script is the hook script template (magnum.AgentHookScript) made for agent:
+    its MAGNUM_HOOK_ID names it. An agent that sends no events, and a template
+    without the placeholder, are errors.
+
+func ScriptHeader(b []byte) (agent string, version int, managed bool)
+    ScriptHeader reads a hook script's header from b (its first few KiB):
+    the agent it was made for, its version, and whether a line begins with
+    ScriptMarker (magnum's own file, which the install may overwrite). A file
+    without the marker reports no agent and version 0.
+
+func Send(path string, ev Event) error
+    Send sends ev as one datagram (at most MaxDatagram bytes; a V of 0 goes as
+    Version) to the socket at path, within SendTimeout. It never waits for a
+    daemon that is not there: a missing socket (ENOENT) and one nobody reads
+    (ECONNREFUSED) fail at once.
+
+
+TYPES
+
+type Event struct {
+	V     int    `json:"v"`     // Version
+	Agent string `json:"agent"` // AgentClaude or AgentCodex
+	Name  string `json:"name"`  // NameStop, ...
+	// SessionID is the agent's session id, TranscriptPath its transcript
+	// (Claude) or rollout (Codex) as the agent names it, TurnID the turn
+	// (Codex), Source what started the session (startup, resume, clear,
+	// compact), Error the API error a StopFailure ended on (rate_limit,
+	// overloaded, authentication_failed, billing_error, ...), ToolName the
+	// tool a permission request is for, AgentID the subagent the event is
+	// from (Claude; empty for the session's own).
+	SessionID      string `json:"session_id,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	TurnID         string `json:"turn_id,omitempty"`
+	Source         string `json:"source,omitempty"`
+	Error          string `json:"error,omitempty"`
+	ToolName       string `json:"tool_name,omitempty"`
+	AgentID        string `json:"agent_id,omitempty"`
+	// Pane is the pane's HERDR_PANE_ID, CodexThread its CODEX_THREAD_ID.
+	Pane        string `json:"pane"`
+	CodexThread string `json:"codex_thread,omitempty"`
+	// Background is how many background tasks a Claude Stop reports still
+	// running.
+	Background int `json:"background,omitempty"`
+}
+    Event is one hook event, encoded as JSON with lower-case snake keys. It
+    never has a field for the agent's last message, a prompt or a tool's input:
+    they carry PR text.
+
+func Parse(agent, name string, payload []byte, getenv func(string) string) (Event, error)
+    Parse builds the Event of hook event name of agent from its payload (the
+    JSON the agent wrote to the hook's stdin, ReadPayload) and its env (getenv:
+    EnvPane, EnvCodexThread). It keeps only session_id, transcript_path,
+    turn_id, source, error, tool_name, agent_id and the number of
+    background_tasks; every other field (the last assistant message, a prompt,
+    a tool's input, the cwd) is dropped unread. A payload cut short or that is
+    no JSON keeps the fields read before the break; a value of another type than
+    its field's is no value. An id that is too long or holds a character no id
+    has (a space, a quote, a backslash, <, >, &, anything outside printable
+    ASCII) is left out whole, the free text (the path, the error, the tool,
+    the source) loses its control characters and is cut, and the event always
+    fits one datagram (fit). An unknown agent or event, and a hook outside a
+    herdr pane (no valid HERDR_PANE_ID), are errors: there is nothing to send.
+
+type Listener struct {
+	// Has unexported fields.
+}
+    Listener reads the events sent to one socket (Listen, Serve).
+
+func Listen(path string, log *slog.Logger) (*Listener, error)
+    Listen opens the datagram socket at path for Serve. The caller holds the
+    daemon lock, so no other daemon serves path: the socket's directory is
+    made (or made again) the user's alone (0700), a socket a daemon left there
+    (it stopped, or it was killed) is removed first, and the new one is 0600.
+    A path of SocketPathLimit bytes or more, and a file at path that is no
+    socket (which is never removed), are errors. log receives Serve's lines (nil
+    = none).
+
+func (l *Listener) Close() error
+    Close closes the socket (Serve returns). Its file stays: the next Listen
+    removes it, and a hook that sends to it meanwhile fails at once.
+
+func (l *Listener) Path() string
+    Path is the socket's path.
+
+func (l *Listener) Serve(ctx context.Context, handle func(Event))
+    Serve reads the socket until ctx ends, then closes it, and hands each
+    event to handle, one at a time, on Serve's goroutine. It drops a datagram
+    over MaxDatagram, one that is no JSON object, of another V than Version,
+    or without a pane, an agent or an event this version knows, and a pane's
+    events past its rate (rateBurst at once, then one per rateEvery). The ids of
+    an event it hands on are ids (as Parse makes them) and its free text is cut,
+    since anyone with the pane's env can send one. Each event it hands on logs
+    one debug line with its name and pane, never another field. A handler that
+    panics costs its event, not the listener.
+
+```
 
 ## agents
 
@@ -523,6 +721,10 @@ const SessionIDBlind = "no session id: judges are never resumed, and a helper's 
     SessionIDBlind says what goes blind without a Codex session id: resumable
     never resumes the judge and TurnError cannot read the rollout, which the
     pipeline's check for a helper's refusal reads.
+
+const SessionIDFromHook = "hook"
+    SessionIDFromHook is EventSessionID's source of an id an agent's
+    SessionStart hook gave (Wake).
 
 const SessionIDFromRollout = "rollout"
     SessionIDFromRollout is EventSessionID's source of an id read from the
@@ -1196,6 +1398,24 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// HookSocket is the socket of the daemon's hook listener
+	// (agenthooks.Listen at paths.Layout.HookSocket or FactoryHookSocket):
+	// every pane the Manager makes (EnsureWorkspace, EnsurePane, a dead
+	// launch's replacement) gets it as MAGNUM_HOOK_SOCKET and the binary
+	// (HookBin) as MAGNUM_HOOK_BIN, so the agents' hooks there send their
+	// events to it (Wake). "" = no hooks (no listener, a socket path too
+	// long, a listener that failed): no pane gets either, and the passes
+	// alone see the agents, as before. A pane keeps the env it was made with.
+	HookSocket string
+	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
+	// (Layout.Binary). Without either, no pane gets the hook env.
+	HookBin string
+	// HookFailure receives the error a turn ended on, as an agent's
+	// StopFailure hook reports it (rate_limit, overloaded,
+	// authentication_failed, ...; Wake), with the session's row, so the
+	// engine feeds its usage, login and overload handling at once. It must
+	// not block; nil = none.
+	HookFailure func(session store.Session, errText string)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
 	// signals, and only processes of a command it proved an own run of
@@ -2456,6 +2676,45 @@ func (m *Manager) TypedDuringRun(ctx context.Context, run store.Run) bool
     Any other kind, a run without a session or a Claude session id, and a
     transcript it cannot read report false: only Claude Code keeps a transcript
     magnum reads.
+
+func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event)
+    Wake takes an event of an agent's hook (agenthooks.Listener's) as a hint
+    to look at its pane now, outside the observe passes. The pane is mapped to
+    its starting or live session by herdr_pane_id; an event of a pane no such
+    session (of an agent) records is dropped. Every look takes the observe lock
+    the passes take (obsMu), one herdr snapshot and the session's in-flight
+    runs, and goes through observeOne, as a pass would; a pass whose snapshot is
+    older than a look's leaves the session alone, and the next pass returns the
+    look's observations, so the daemon handles them as its own (the factory's
+    turn end, the engine's lost pane). A look never counts as an observe tick
+    (nextObserveTick), so the deny's pace (answerPermission) and the namer's
+    stay the passes'.
+
+      - stop and interrupt: a look now. A Stop counts as the second idle reading
+        when herdr shows the agent idle and all of these hold: its session id
+        is the session's, it comes from no subagent (agent_id empty) or Codex
+        helper (CODEX_THREAD_ID its session id), its agent is the session's
+        kind, it reports no background task, nothing holds the turn (background
+        work, a Codex rollout still writing, a deny awaiting its continuation),
+        and the transcript's turn_duration (Claude) or the rollout's
+        task_complete (Codex) is newer than the run's prompt (stopEndsTurn).
+        Then the run ends and Ended's channel closes, as on a pass. Otherwise,
+        while a run is in flight, Wake looks again at +1 s and +2 s on a
+        goroutine of its own (relookAfter; never the caller's), then leaves it
+        to the clock. A late Stop of an earlier turn, a subagent's or a forged
+        one only causes an early look.
+      - permission_request: a look now, so answerPermission denies the prompt
+        now. The hook itself decides nothing.
+      - stop_failure: a look now, and the error to Deps.HookFailure, which feeds
+        the engine's usage, login and overload handling.
+      - session_start: a row without a session id gets the event's, when it
+        passes the checks recoverSessionID's rule makes (adoptHookID). A Codex
+        session whose rollout is not written yet keeps the event and is checked
+        again at the pane's next event.
+      - session_end: a look now.
+
+    ctx bounds the later looks too: pass the daemon's, not one that ends when
+    Wake returns.
 
 func (m *Manager) WhiteboardPrompt(pr store.PR, role Role, run store.Run, in WhiteboardPromptInput) (string, error)
     WhiteboardPrompt renders the whiteboard role's prompt (its initial prompt,
@@ -21220,7 +21479,19 @@ reports and notes in ~/.local/share/magnum, logs, locks and the identities'
 gh config in ~/.local/state/magnum. A checkout layout (everything under
 <checkout>/state, gitignored) remains for development (MAGNUM_HOME).
 
+CONSTANTS
+
+const SocketPathLimit = 104
+    SocketPathLimit is the length at which a Unix socket's path is unusable:
+    macOS's sun_path holds 104 bytes, its terminating NUL included.
+
+
 FUNCTIONS
+
+func CheckSocketPath(p string) error
+    CheckSocketPath reports a path that cannot name a Unix socket: empty, or
+    SocketPathLimit bytes or more (a deep MAGNUM_HOME, a long XDG_STATE_HOME).
+    A daemon whose hook socket is unusable runs without hooks and polls.
 
 func Expand(p string) string
     Expand replaces a leading ~ with the user's home directory.
@@ -21344,6 +21615,10 @@ func (l Layout) FactoryHolds() string
     FactoryHolds is holds.json, the holds of the machine in force as the factory
     daemon last saw them (the screen draws them), beside FactoryDB.
 
+func (l Layout) FactoryHookSocket() string
+    FactoryHookSocket is the factory daemon's hook socket
+    (run/factory-hooks.sock under State), HookSocket's twin.
+
 func (l Layout) FactoryLock() string
     FactoryLock is the factory daemon's lock file under State, held for the
     daemon's whole life.
@@ -21393,6 +21668,12 @@ func (l Layout) GhConfigDir(id string) string
 
 func (l Layout) GhRoot() string
     GhRoot holds the identities' gh config directories under State.
+
+func (l Layout) HookSocket() string
+    HookSocket is the review daemon's hook socket (run/hooks.sock under State):
+    the agents' hooks in the panes it starts send their events there
+    (internal/agenthooks). The path is the same across restarts, so a pane
+    started before a daemon-restart reaches the daemon after it.
 
 func (l Layout) Learn() string
     Learn is where the learning loop keeps its inputs and outputs: the retro's

@@ -336,6 +336,35 @@ func (l Layout) FactoryShims() string { return filepath.Join(l.State(), "factory
 // FactoryLog is the factory daemon's log file in Logs.
 func (l Layout) FactoryLog() string { return filepath.Join(l.Logs(), "factory.log") }
 
+// HookSocket is the review daemon's hook socket (run/hooks.sock under
+// State): the agents' hooks in the panes it starts send their events there
+// (internal/agenthooks). The path is the same across restarts, so a pane
+// started before a daemon-restart reaches the daemon after it.
+func (l Layout) HookSocket() string { return filepath.Join(l.State(), "run", "hooks.sock") }
+
+// FactoryHookSocket is the factory daemon's hook socket
+// (run/factory-hooks.sock under State), HookSocket's twin.
+func (l Layout) FactoryHookSocket() string {
+	return filepath.Join(l.State(), "run", "factory-hooks.sock")
+}
+
+// SocketPathLimit is the length at which a Unix socket's path is unusable:
+// macOS's sun_path holds 104 bytes, its terminating NUL included.
+const SocketPathLimit = 104
+
+// CheckSocketPath reports a path that cannot name a Unix socket: empty, or
+// SocketPathLimit bytes or more (a deep MAGNUM_HOME, a long XDG_STATE_HOME).
+// A daemon whose hook socket is unusable runs without hooks and polls.
+func CheckSocketPath(p string) error {
+	switch {
+	case p == "":
+		return errors.New("paths: no socket path")
+	case len(p) >= SocketPathLimit:
+		return fmt.Errorf("paths: socket path %s is %d bytes; a Unix socket's must be under %d", p, len(p), SocketPathLimit)
+	}
+	return nil
+}
+
 // Reviews is the root of the review reports in the data directory.
 func (l Layout) Reviews() string { return filepath.Join(l.data(), "reviews") }
 

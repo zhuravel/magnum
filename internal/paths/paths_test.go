@@ -3,6 +3,8 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -413,5 +415,55 @@ func TestEnsureDirsCreatesTheFactoryDirsPrivate(t *testing.T) {
 		if !st.IsDir() || st.Mode().Perm() != 0o700 {
 			t.Errorf("%s: dir=%v mode=%v, want a 0700 directory", d, st.IsDir(), st.Mode().Perm())
 		}
+	}
+}
+
+// Each daemon has its hook socket under the state dir's run/: the path is
+// the same across restarts, so a pane started before a daemon-restart still
+// reaches the daemon after it.
+func TestTheHookSocketsLiveUnderTheStateDirsRun(t *testing.T) {
+	user := realTemp(t)
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	checkout := filepath.Join(realTemp(t), "magnum")
+	for _, tc := range []struct {
+		name  string
+		env   map[string]string
+		state string
+	}{
+		{"MAGNUM_HOME", map[string]string{"MAGNUM_HOME": checkout}, filepath.Join(checkout, "state")},
+		{"XDG", nil, filepath.Join(user, ".local/state/magnum")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := resolve(env(tc.env), "", user)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := l.HookSocket(), filepath.Join(tc.state, "run", "hooks.sock"); got != want {
+				t.Errorf("HookSocket = %q, want %q", got, want)
+			}
+			if got, want := l.FactoryHookSocket(), filepath.Join(tc.state, "run", "factory-hooks.sock"); got != want {
+				t.Errorf("FactoryHookSocket = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A Unix socket's path holds at most 103 bytes (macOS's sun_path is 104
+// with its NUL): a path of 104 bytes or more is reported unusable, naming
+// its length.
+func TestCheckSocketPathRefuses104Bytes(t *testing.T) {
+	ok := "/" + strings.Repeat("s", 102)
+	if err := CheckSocketPath(ok); err != nil {
+		t.Errorf("CheckSocketPath(%d bytes) = %v, want usable", len(ok), err)
+	}
+	for _, n := range []int{104, 200} {
+		p := "/" + strings.Repeat("s", n-1)
+		err := CheckSocketPath(p)
+		if err == nil || !strings.Contains(err.Error(), strconv.Itoa(n)+" bytes") {
+			t.Errorf("CheckSocketPath(%d bytes) = %v, want an error naming its length", n, err)
+		}
+	}
+	if err := CheckSocketPath(""); err == nil {
+		t.Error("CheckSocketPath(\"\") = no error")
 	}
 }

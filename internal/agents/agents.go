@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -236,6 +237,24 @@ type Deps struct {
 	// it): Codex did not save the hook trust magnum answered
 	// (EventHooksTrustUnsaved). It must not block; nil = none.
 	Toast func(ctx context.Context, key, title, body string)
+	// HookSocket is the socket of the daemon's hook listener
+	// (agenthooks.Listen at paths.Layout.HookSocket or FactoryHookSocket):
+	// every pane the Manager makes (EnsureWorkspace, EnsurePane, a dead
+	// launch's replacement) gets it as MAGNUM_HOOK_SOCKET and the binary
+	// (HookBin) as MAGNUM_HOOK_BIN, so the agents' hooks there send their
+	// events to it (Wake). "" = no hooks (no listener, a socket path too
+	// long, a listener that failed): no pane gets either, and the passes
+	// alone see the agents, as before. A pane keeps the env it was made with.
+	HookSocket string
+	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
+	// (Layout.Binary). Without either, no pane gets the hook env.
+	HookBin string
+	// HookFailure receives the error a turn ended on, as an agent's
+	// StopFailure hook reports it (rate_limit, overloaded,
+	// authentication_failed, ...; Wake), with the session's row, so the
+	// engine feeds its usage, login and overload handling at once. It must
+	// not block; nil = none.
+	HookFailure func(session store.Session, errText string)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
 	// signals, and only processes of a command it proved an own run of
@@ -310,6 +329,22 @@ type Manager struct {
 	// hooksTrustMu serializes the check that tells the operator once per
 	// hooks.json that Codex did not save a hook trust (hooksTrustSaved).
 	hooksTrustMu sync.Mutex
+	// obsMu is the observe lock: an observe pass (observeAt) and each of
+	// Wake's looks hold it, so one snapshot is applied at a time. Under it:
+	// lookedAt, when the snapshot of each session's last look was taken (a
+	// pass with an older one leaves the session alone, staleFor); woken,
+	// the looks' observations the next pass returns; hookIDs, the
+	// SessionStart events whose Codex rollout was not written yet
+	// (adoptHookID).
+	obsMu    sync.Mutex
+	lookedAt map[int64]time.Time
+	woken    []Observation
+	hookIDs  map[int64]agenthooks.Event
+	// relooks marks the sessions with Wake's later looks scheduled, with
+	// the Stop they may count (nil: none; under mu); wakes counts those
+	// goroutines.
+	relooks map[int64]*agenthooks.Event
+	wakes   sync.WaitGroup
 }
 
 // New returns a Manager.
@@ -323,7 +358,8 @@ func New(d Deps) *Manager {
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
-		jobs: map[string]ownedShell{}}
+		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, hookIDs: map[int64]agenthooks.Event{},
+		relooks: map[int64]*agenthooks.Event{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

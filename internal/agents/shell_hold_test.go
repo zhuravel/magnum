@@ -264,7 +264,7 @@ func TestAnObserveTickNeverLosesARepointedShellSession(t *testing.T) {
 			} else {
 				after, _ := e.h.Snapshot(e.ctx)
 				later := e.clock.Now().Add(time.Minute) // past LostGrace from the move
-				if _, err := e.m.observeOne(e.ctx, stale, after, paneIndex(after), nil, later, later); err != nil {
+				if _, err := e.m.observeOne(e.ctx, stale, after, paneIndex(after), nil, later, later, nil); err != nil {
 					t.Fatal(err)
 				}
 			}

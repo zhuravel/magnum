@@ -126,7 +126,8 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/postreview` | `magnum post-review`, the judge's posting tool: no config, no registry, only gh and git |
 | `internal/dblock` | `magnum db-lock`, the roles' turns on a checkout's databases: one flock per checkout, no registry |
 | `internal/steps` | resumable multi-step side effects |
-| `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles |
+| `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles; Wake, an agent's hook as a hint to look at its pane now |
+| `internal/agenthooks` | the agents' own hook events (stdlib only): the event, `magnum hook-event`'s parser, the datagram sender, the daemons' listener; the hook script's header (`hooks/magnum-agent-hook.sh`) |
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |
 | `internal/notes` | repository notes: limits, states and snapshots, the lock, curation proposals and their checks |
 | `internal/store`, `sqlitetest` | SQLite registry, migrations under `migrations/`, compare-and-set transitions; tests' private in-memory SQLite databases, loaded from a migrated image (`storetest`'s and `registrytest`'s registries, the store's own tests) |
