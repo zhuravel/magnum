@@ -257,11 +257,15 @@ type Deps struct {
 	HookBin string
 	// HookFailure receives the class of API error a Claude turn ended on,
 	// as the session's own StopFailure hook names it and its screen, read
-	// again, shows it (Wake): the session's row, the class (never the
-	// agent's text) and the screen's verdict (its ResetAt for a limit), so
-	// the engine feeds its usage, login and overload handling at once. It
-	// runs on the goroutine that called Wake (the listener's), so it must
-	// not block, and Wake's caller must hold no lock it takes; nil = none.
+	// again (at once, and a second later when it did not show it yet),
+	// shows it (Wake): the session's row, the class (never the hook's text)
+	// and the screen's verdict (its ResetAt for a limit; its Detail is the
+	// screen's line, as the engine's own health check reads it), so the
+	// engine feeds its usage, login and overload handling at once. It comes
+	// once per failure (a class per prompt of the session), on the goroutine
+	// that called Wake (the listener's) or on the one that read the screen
+	// again, so it must not block, and Wake's caller must hold no lock it
+	// takes; nil = none.
 	HookFailure func(session store.Session, failure StopFailure, screen Health)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
@@ -341,18 +345,20 @@ type Manager struct {
 	// Wake's looks hold it, so one snapshot is applied at a time. Under it:
 	// lookedAt, when the snapshot of each session's last look came back (a
 	// pass that started before leaves the session alone, staleFor);
-	// wokenEnds and wokenLast, the looks' observations the next pass
-	// returns (every end and loss, each session's newest other one);
+	// woken, the looks' observations the next pass returns (keepWoken);
 	// hookIDs, the SessionStart events whose transcript or rollout was not
 	// written yet (adoptHookID).
-	obsMu     sync.Mutex
-	lookedAt  map[int64]time.Time
-	wokenEnds []Observation
-	wokenLast map[int64]Observation
-	hookIDs   map[int64]agenthooks.Event
-	// looks is each session's look merge state, relooks its later looks
-	// under way (both under mu); wakes counts those goroutines (WaitWakes).
+	obsMu    sync.Mutex
+	lookedAt map[int64]time.Time
+	woken    map[int64]*woken
+	hookIDs  map[int64]agenthooks.Event
+	// looks is each session's look merge state, failing its StopFailure
+	// reads', failed the failure HookFailure was last given, relooks its
+	// later looks under way (all under mu); wakes counts the goroutines of
+	// the later looks and reads (WaitWakes).
 	looks   map[int64]*lookMark
+	failing map[int64]*lookMark
+	failed  map[int64]failKey
 	relooks map[int64]*relook
 	wakes   sync.WaitGroup
 }
@@ -368,8 +374,9 @@ func New(d Deps) *Manager {
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
-		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, wokenLast: map[int64]Observation{},
-		hookIDs: map[int64]agenthooks.Event{}, looks: map[int64]*lookMark{}, relooks: map[int64]*relook{}}
+		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, woken: map[int64]*woken{},
+		hookIDs: map[int64]agenthooks.Event{}, looks: map[int64]*lookMark{}, failing: map[int64]*lookMark{}, failed: map[int64]failKey{},
+		relooks: map[int64]*relook{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

@@ -875,7 +875,7 @@ func TestArgvNeverPassesASessionThatCouldBeAFlag(t *testing.T) {
 			t.Errorf("SessionArgOK(%q) = false", id)
 		}
 	}
-	for _, id := range []string{"", "-x", "--x", "a b", "a=b c", "é", strings.Repeat("a", 257)} {
+	for _, id := range []string{"", "-x", "--x", "a b", "a=b c", "é", strings.Repeat("a", 257), "=foo", ".x", "/x", ":x", "@x", "+x", "_x"} {
 		if SessionArgOK(id) {
 			t.Errorf("SessionArgOK(%q) = true", id)
 		}

@@ -490,7 +490,11 @@ func (m *Manager) ResumeID(ctx context.Context, prID int64, role Role) (string, 
 // resumeCandidate selects the parked or lost resumable sessions of role
 // that ran its configured agent kind (any kind when role is not
 // configured), in a working directory that still exists (dirGone) when
-// Deps.SkipGoneDirs is on.
+// Deps.SkipGoneDirs is on, whose session id a resume may pass
+// (config.SessionArgOK): ResumeID passes over one an agent may have planted
+// (herdr's report is taken as it comes), so the caller takes its own fresh
+// path, with its own first prompt, rather than telling a fresh agent to go
+// on where it stopped.
 func (m *Manager) resumeCandidate(role Role) func(store.Session) bool {
 	kind := ""
 	if spec, ok := m.roleSpec(role); ok && !spec.IsShell() {
@@ -498,6 +502,7 @@ func (m *Manager) resumeCandidate(role Role) func(store.Session) bool {
 	}
 	return func(s store.Session) bool {
 		return (s.State == store.SessionParked || s.State == store.SessionLost) && m.resumable(s) &&
+			config.SessionArgOK(store.Deref(s.SessionID)) &&
 			(kind == "" || m.sessionKind(s) == kind) && !(m.d.SkipGoneDirs && dirGone(store.Deref(s.Cwd)))
 	}
 }

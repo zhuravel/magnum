@@ -151,10 +151,12 @@ func (m *Manager) hookBin() string {
 //     turn, a subagent's or a forged one only causes an early look.
 //   - stop_failure: a look now, then, when the event is the session's own
 //     (a Claude session, its session id, no subagent's) and the screen read
-//     again shows such a failure (CheckHealth, StopFailure.shownBy), the
-//     failure's class and the screen's verdict to Deps.HookFailure, which
-//     feeds the engine's usage, login and overload handling. The agent's
-//     error text never goes on, nor into a log.
+//     again shows such a failure (CheckHealth, StopFailure.shownBy; read once
+//     more a second later when it does not yet), the failure's class and the
+//     screen's verdict to Deps.HookFailure, once per failure, which feeds the
+//     engine's usage, login and overload handling (hookFailure). The
+//     StopFailures of one session merge as its looks do. The agent's error
+//     text never goes on, nor into a log.
 //   - session_start: a row without a session id gets the event's, a UUID,
 //     once the agent's own file proves it (adoptHookID): the Claude
 //     transcript where magnum reads the slot's sessions, whose first record
@@ -252,15 +254,16 @@ type lookMark struct {
 	queued bool
 }
 
-// lookDue marks a look of session id as waiting, unless one waits already
-// or the last ended within lookMerge.
-func (m *Manager) lookDue(id int64) bool {
+// markDue marks a look (marks: looks) or a StopFailure's read (failing) of
+// session id as under way, unless one is under way already or the last
+// ended within lookMerge.
+func (m *Manager) markDue(marks map[int64]*lookMark, id int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	mark := m.looks[id]
+	mark := marks[id]
 	if mark == nil {
 		mark = &lookMark{}
-		m.looks[id] = mark
+		marks[id] = mark
 	}
 	if mark.queued || !mark.at.IsZero() && m.now().Sub(mark.at) < lookMerge {
 		return false
@@ -269,11 +272,12 @@ func (m *Manager) lookDue(id int64) bool {
 	return true
 }
 
-// lookEnded records that the look of session id lookDue let through ended.
-func (m *Manager) lookEnded(id int64) {
+// markEnded records that the work markDue let through for session id
+// ended.
+func (m *Manager) markEnded(marks map[int64]*lookMark, id int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if mark := m.looks[id]; mark != nil {
+	if mark := marks[id]; mark != nil {
 		mark.queued, mark.at = false, m.now()
 	}
 }
@@ -282,10 +286,10 @@ func (m *Manager) lookEnded(id int64) {
 // lock (see Wake), with Stop hint (nil: none) able to count as its second
 // idle reading.
 func (m *Manager) look(ctx context.Context, id int64, hint *agenthooks.Event) (Observation, lookResult) {
-	if !m.lookDue(id) {
+	if !m.markDue(m.looks, id) {
 		return Observation{}, lookMerged
 	}
-	defer m.lookEnded(id)
+	defer m.markEnded(m.looks, id)
 	m.obsMu.Lock()
 	defer m.obsMu.Unlock()
 	s, err := m.d.Store.SessionByID(ctx, id)
@@ -323,28 +327,74 @@ func (m *Manager) look(ctx context.Context, id int64, hint *agenthooks.Event) (O
 	return o, lookDone
 }
 
-// keepWoken keeps a look's observation for the next pass (under obsMu):
-// every run's end and session's loss, and each session's newest other
-// observation, its readings without a kind too (their SecondReadingAt).
+// wokenKinds bounds the observations with a kind besides the run ends and
+// losses that the looks keep for one session until the next pass.
+const wokenKinds = 4
+
+// woken is what the looks of one session saw since the last pass: every
+// observation with a kind, in order (kinds), and the newest reading.
+type woken struct {
+	kinds []Observation
+	last  Observation
+}
+
+// final reports whether kind ends a run or a session: such an observation
+// is never merged nor dropped.
+func final(kind ObservationKind) bool { return kind == ObsCompleted || kind == ObsLost }
+
+// keepWoken keeps a look's observation for the next pass (under obsMu),
+// per session: every observation with a kind, which may happen once (a
+// run's end, a session's loss, the start of a typing cooldown, a dialog),
+// the same kind in a row once (the newest, with the first's
+// CooldownUntil), at most wokenKinds of them besides the ends and losses,
+// the oldest dropped first; and the newest reading, for its
+// SecondReadingAt when it has no kind.
 func (m *Manager) keepWoken(o Observation) {
-	if o.Kind == ObsCompleted || o.Kind == ObsLost {
-		m.wokenEnds = append(m.wokenEnds, o)
-		delete(m.wokenLast, o.Session.ID)
+	w := m.woken[o.Session.ID]
+	if w == nil {
+		w = &woken{}
+		m.woken[o.Session.ID] = w
+	}
+	w.last = o
+	if o.Kind == "" {
 		return
 	}
-	m.wokenLast[o.Session.ID] = o
+	if n := len(w.kinds); n > 0 && !final(o.Kind) && w.kinds[n-1].Kind == o.Kind {
+		if first := w.kinds[n-1].CooldownUntil; !first.IsZero() {
+			o.CooldownUntil = first
+		}
+		w.kinds[n-1] = o
+		return
+	}
+	w.kinds = append(w.kinds, o)
+	if final(o.Kind) {
+		return
+	}
+	kept := 0
+	for _, k := range w.kinds {
+		if !final(k.Kind) {
+			kept++
+		}
+	}
+	if kept > wokenKinds { // one over: the oldest that may go goes
+		i := slices.IndexFunc(w.kinds, func(k Observation) bool { return !final(k.Kind) })
+		w.kinds = slices.Delete(w.kinds, i, i+1)
+	}
 }
 
 // takeWoken returns the observations of Wake's looks since the last pass,
-// the ends first, then each session's newest, and forgets them (under
-// obsMu).
+// session by session (each one's kinds, then its newest reading when it
+// has no kind), and forgets them (under obsMu).
 func (m *Manager) takeWoken() []Observation {
-	out := m.wokenEnds
-	for _, id := range slices.Sorted(maps.Keys(m.wokenLast)) {
-		out = append(out, m.wokenLast[id])
+	var out []Observation
+	for _, id := range slices.Sorted(maps.Keys(m.woken)) {
+		w := m.woken[id]
+		out = append(out, w.kinds...)
+		if w.last.Kind == "" {
+			out = append(out, w.last)
+		}
 	}
-	m.wokenEnds = nil
-	clear(m.wokenLast)
+	clear(m.woken)
 	return out
 }
 
@@ -405,19 +455,66 @@ func (m *Manager) laterLooks(ctx context.Context, id int64, st *relook) {
 	}
 }
 
+// failRetry is how long after a StopFailure whose screen does not show the
+// failure yet hookFailure reads the screen again: Claude may draw the error
+// after its hook ran.
+const failRetry = time.Second
+
+// failKey is one failure HookFailure was given for a session: its class
+// and the session's prompt it ended (last_prompt_at, else started_at).
+type failKey struct {
+	failure StopFailure
+	prompt  time.Time
+}
+
 // hookFailure hands a StopFailure of session id to Deps.HookFailure (see
-// Wake): only the session's own, the class from the fixed list, and only
-// when the screen, read again, shows such a failure. Its logs never carry
-// the agent's error text.
+// Wake): only the session's own, the class from the fixed list, only when
+// the screen, read again, shows such a failure, and once per failure (a
+// class per prompt of the session). StopFailures of one session merge as
+// its looks do (lookMerge, or another's read under way); a screen that
+// does not show the failure yet is read again failRetry later, on a
+// goroutine of its own (WaitWakes waits for it). Its logs never carry the
+// agent's error text.
 func (m *Manager) hookFailure(ctx context.Context, id int64, ev agenthooks.Event) {
 	if m.d.HookFailure == nil {
 		return
 	}
-	s, err := m.d.Store.SessionByID(ctx, id)
-	if err != nil || !isLive(s) {
+	if !m.markDue(m.failing, id) {
 		return
 	}
-	sid := store.Deref(s.SessionID)
+	if m.checkFailure(ctx, id, ev, false) != failUnseen {
+		m.markEnded(m.failing, id)
+		return
+	}
+	m.wakes.Go(func() {
+		defer m.markEnded(m.failing, id)
+		if m.sleep(ctx, failRetry) == nil {
+			m.checkFailure(ctx, id, ev, true)
+		}
+	})
+}
+
+// failCheck is what checkFailure made of a StopFailure.
+type failCheck int
+
+const (
+	failDone   failCheck = iota // passed to HookFailure, or never will be (not the session's, passed already)
+	failUnseen                  // the session's own, but the screen does not show it (yet)
+)
+
+// checkFailure reads session id's row and screen for StopFailure ev and
+// passes it to HookFailure when they prove it (see hookFailure); last says
+// whether no read follows, which logs a screen that does not show it.
+func (m *Manager) checkFailure(ctx context.Context, id int64, ev agenthooks.Event, last bool) failCheck {
+	s, err := m.d.Store.SessionByID(ctx, id)
+	if err != nil || !isLive(s) {
+		return failDone
+	}
+	failure, sid := classifyStopFailure(ev.Error), store.Deref(s.SessionID)
+	key := failKey{failure: failure, prompt: s.StartedAt}
+	if s.LastPromptAt != nil {
+		key.prompt = *s.LastPromptAt
+	}
 	why := ""
 	switch {
 	case m.sessionKind(s) != KindClaude || ev.Agent != agenthooks.AgentClaude:
@@ -426,21 +523,39 @@ func (m *Manager) hookFailure(ctx context.Context, id int64, ev agenthooks.Event
 		why = "a subagent's"
 	case sid == "" || ev.SessionID != sid:
 		why = "not of the session's id"
+	case m.failedAlready(s.ID, key):
+		return failDone
 	}
-	failure := classifyStopFailure(ev.Error)
-	if why == "" {
-		h, err := m.CheckHealth(ctx, s)
-		switch {
-		case err != nil:
-			why = "its screen cannot be read: " + err.Error()
-		case !failure.shownBy(h.Kind):
-			why = fmt.Sprintf("its screen shows %s", h.Kind)
-		default:
-			m.d.HookFailure(s, failure, h)
-			return
-		}
+	if why != "" {
+		m.logAt(slog.LevelDebug, "agents: %s (session %d): a StopFailure hook (%s) goes nowhere: %s", s.Role, s.ID, failure, why)
+		return failDone
+	}
+	h, err := m.CheckHealth(ctx, s)
+	switch {
+	case err == nil && failure.shownBy(h.Kind):
+		m.mu.Lock()
+		m.failed[s.ID] = key
+		m.mu.Unlock()
+		m.d.HookFailure(s, failure, h)
+		return failDone
+	case !last:
+		return failUnseen
+	case err != nil:
+		why = "its screen cannot be read: " + err.Error()
+	default:
+		why = fmt.Sprintf("its screen shows %s", h.Kind)
 	}
 	m.logAt(slog.LevelDebug, "agents: %s (session %d): a StopFailure hook (%s) goes nowhere: %s", s.Role, s.ID, failure, why)
+	return failDone
+}
+
+// failedAlready reports whether HookFailure was given failure key of
+// session id.
+func (m *Manager) failedAlready(id int64, key failKey) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k, ok := m.failed[id]
+	return ok && k.failure == key.failure && k.prompt.Equal(key.prompt)
 }
 
 // stopEndsTurn reports whether Stop ev counts as the second idle reading of
@@ -800,9 +915,16 @@ func (m *Manager) forgetHooks(live []store.Session) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for id, mark := range m.looks {
-		if !keep[id] && !mark.queued {
-			delete(m.looks, id)
+	for _, marks := range []map[int64]*lookMark{m.looks, m.failing} {
+		for id, mark := range marks {
+			if !keep[id] && !mark.queued {
+				delete(marks, id)
+			}
+		}
+	}
+	for id := range m.failed {
+		if !keep[id] {
+			delete(m.failed, id)
 		}
 	}
 }

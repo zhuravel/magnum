@@ -697,25 +697,28 @@ func (k Kind) Argv(a LaunchArgs) []string {
 }
 
 // SessionArgOK reports whether a session id may go into a resume's args:
-// 1 to 256 bytes of letters, digits and . _ : / @ + = -, the first no "-".
+// 1 to 256 bytes of letters, digits and . _ : / @ + = -, the first a letter
+// or a digit (a leading "=" is zsh's EQUALS expansion in a pasted line).
 // An id an agent's hook planted (`--dangerously-skip-permissions`,
 // `--settings=x.json`) would be read as a flag after `--resume` or as an
 // option of `codex resume`, which takes the id as a positional argument and
 // has no "=" form; such an id is never passed.
 func SessionArgOK(id string) bool {
-	if id == "" || len(id) > 256 || id[0] == '-' {
+	if id == "" || len(id) > 256 || !alnum(id[0]) {
 		return false
 	}
 	for i := range len(id) {
 		switch c := id[i]; {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case strings.IndexByte("._:/@+=-", c) >= 0:
+		case alnum(c), strings.IndexByte("._:/@+=-", c) >= 0:
 		default:
 			return false
 		}
 	}
 	return true
 }
+
+// alnum reports whether c is an ASCII letter or digit.
+func alnum(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' }
 
 // DefaultCodexToolOutputLimit is the codex kind's tool_output_limit: about
 // 256 KiB at Codex's four bytes a token, room for today's 97 KB notes and

@@ -1082,3 +1082,183 @@ func TestTheHookStateOfASessionNoLongerLiveIsForgotten(t *testing.T) {
 		t.Fatal("the merge state of the parked session stays")
 	}
 }
+
+// The re-review's N1: a role whose newest session recorded an id a resume
+// may not pass resumes an older session's good id, else none, so its caller
+// takes its own fresh path (and its own first prompt) instead of telling a
+// fresh agent to go on where it stopped.
+func TestResumeIDPassesOverAnIDThatCouldBeAFlag(t *testing.T) {
+	e := newEnv(t)
+	add := func(id string) {
+		t.Helper()
+		if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleClaude), AgentName: new("x"),
+			AgentKind: new(KindClaude), SessionID: new(id), State: store.SessionParked}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("--settings=x.json")
+	if id, err := e.m.ResumeID(e.ctx, e.pr.ID, RoleClaude); err != nil || id != "" {
+		t.Fatalf("ResumeID = %q, %v; want none", id, err)
+	}
+	add(claudeSID)
+	add("--dangerously-skip-permissions")
+	if id, err := e.m.ResumeID(e.ctx, e.pr.ID, RoleClaude); err != nil || id != claudeSID {
+		t.Fatalf("ResumeID = %q, %v; want the older good id", id, err)
+	}
+}
+
+// The re-review's N2: a look that began someone's typing cooldown, then a
+// look a second later that saw the agent idle: the next pass gets both, the
+// cooldown's start (the engine's agent.human_active event, the factory's
+// sign that you typed) and the newest reading.
+func TestALooksTypingCooldownComesWithTheNextPass(t *testing.T) {
+	e := newEnv(t)
+	e.started()
+	e.clock.Add(10 * time.Minute) // past the start grace
+	staleAt := e.clock.Now()
+	stale, _ := e.h.Snapshot(e.ctx)
+	e.clock.Add(time.Second)
+	e.h.setAgentStatus(claudeAgent, herdr.StatusWorking)
+	e.wake(e.hookEv(RoleClaude, agenthooks.NameSessionEnd, ""))
+	e.h.setAgentStatus(claudeAgent, herdr.StatusIdle)
+	e.clock.Add(time.Second)
+	e.wake(e.hookEv(RoleClaude, agenthooks.NameSessionEnd, ""))
+	obs, err := e.m.ObserveSnapshotAt(e.ctx, stale, staleAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := claudeObs(obs)
+	if len(got) != 2 || got[0].Kind != ObsHumanActive || got[0].CooldownUntil.IsZero() || got[1].Kind != "" || got[1].Status != herdr.StatusIdle {
+		t.Fatalf("claude observations = %+v, want the cooldown's start, then the idle reading", got)
+	}
+}
+
+// The buffer keeps, per session, every observation with a kind (the same
+// kind in a row once, with the first's cooldown), at most wokenKinds of
+// them besides the run ends and losses, which it never drops, then the
+// newest reading when it has no kind; one pass takes them all.
+func TestTheLookBufferKeepsOneTimeObservationsBoundedPerSession(t *testing.T) {
+	e := newEnv(t)
+	until := e.clock.Now().Add(time.Hour)
+	ob := func(id int64, kind ObservationKind, cooldown bool) Observation {
+		o := Observation{Kind: kind, Session: store.Session{ID: id}}
+		if cooldown {
+			o.CooldownUntil = until
+		}
+		return o
+	}
+	e.m.obsMu.Lock()
+	defer e.m.obsMu.Unlock()
+	e.m.keepWoken(ob(1, ObsCompleted, false))
+	for i := range 10 {
+		kind := ObsBlocked
+		if i%2 == 1 {
+			kind = ObsHumanActive
+		}
+		e.m.keepWoken(ob(1, kind, false))
+	}
+	e.m.keepWoken(ob(1, "", false))
+	e.m.keepWoken(ob(2, ObsHumanActive, true))
+	e.m.keepWoken(ob(2, ObsHumanActive, false))
+	e.m.keepWoken(ob(2, ObsLost, false))
+	e.m.keepWoken(ob(3, ObsCompleted, false)) // two runs of the session end: both stay
+	e.m.keepWoken(ob(3, ObsCompleted, false))
+	e.m.keepWoken(ob(4, "", false)) // a reading the newer dialog replaces
+	e.m.keepWoken(ob(4, ObsBlocked, false))
+	var kinds []string
+	for _, o := range e.m.takeWoken() {
+		kinds = append(kinds, fmt.Sprintf("%d:%s:%v", o.Session.ID, cmpOr(string(o.Kind), "-"), !o.CooldownUntil.IsZero()))
+	}
+	want := []string{"1:completed:false", "1:blocked:false", "1:human_active:false", "1:blocked:false", "1:human_active:false", "1:-:false",
+		"2:human_active:true", "2:lost:false", "3:completed:false", "3:completed:false", "4:blocked:false"}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("buffer = %q\nwant     %q", kinds, want)
+	}
+	if rest := e.m.takeWoken(); len(rest) != 0 {
+		t.Fatalf("a second take = %+v, want nothing", rest)
+	}
+}
+
+func cmpOr(s, or string) string {
+	if s == "" {
+		return or
+	}
+	return s
+}
+
+// The re-review's N5: Claude may draw the error after its hook ran. A
+// StopFailure whose screen does not show it yet reads the screen again a
+// second later, on a goroutine of its own.
+func TestAStopFailureReadsTheScreenAgainASecondLater(t *testing.T) {
+	e := newEnv(t)
+	f := e.claudeFailed("⏺ Reading the diff.\n> \n")
+	e.sleepMoves = true
+	var once sync.Once
+	e.onSleep = func() {
+		once.Do(func() {
+			e.h.mu.Lock()
+			e.h.reads[claudeAgent] = claudeLimitScreen
+			e.h.mu.Unlock()
+		})
+	}
+	ev := e.hookEv(RoleClaude, agenthooks.NameStopFailure, claudeSID)
+	ev.Error = "rate_limit"
+	e.wake(ev)
+	if got := f.all(); !slices.Equal(got, []string{"claude-review rate_limit usage_limit"}) {
+		t.Fatalf("HookFailure got %q, want one call after the second read", got)
+	}
+	if n := countWaits(e.slept, time.Second); n != 1 {
+		t.Fatalf("waits = %v, want one second", e.slept)
+	}
+}
+
+// A failure reaches HookFailure once: more StopFailures of the same class
+// for the same prompt go nowhere; one after the next prompt is a new
+// failure.
+func TestAStopFailureReachesHookFailureOncePerFailure(t *testing.T) {
+	e := newEnv(t)
+	f := e.claudeFailed(claudeLimitScreen)
+	ev := e.hookEv(RoleClaude, agenthooks.NameStopFailure, claudeSID)
+	ev.Error = "rate_limit"
+	for range 3 {
+		e.clock.Add(time.Second)
+		e.wake(ev)
+	}
+	if got := f.all(); len(got) != 1 {
+		t.Fatalf("HookFailure got %q, want one call", got)
+	}
+	s := e.session(RoleClaude)
+	if err := e.st.UpdateSession(e.ctx, s.ID, func(u *store.SessionUpdate) { u.Set("last_prompt_at", e.clock.Now()) }); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Add(time.Second)
+	e.wake(ev)
+	if got := f.all(); len(got) != 2 {
+		t.Fatalf("HookFailure got %q, want a second call after a new prompt", got)
+	}
+}
+
+// StopFailures of one session merge like its looks: one while another's
+// screen read (or its read a second later) is under way, or within
+// lookMerge of the last, reads nothing.
+func TestStopFailuresOfOneSessionMerge(t *testing.T) {
+	e := newEnv(t)
+	e.claudeFailed("⏺ Reading the diff.\n> \n") // the failure never shows
+	reads := func() int { return len(e.h.callsWith("AgentRead " + claudeAgent)) }
+	ev := e.hookEv(RoleClaude, agenthooks.NameStopFailure, claudeSID)
+	ev.Error = "overloaded"
+	n := reads()
+	e.sleepMoves = true
+	var once sync.Once
+	e.onSleep = func() { once.Do(func() { e.m.Wake(e.ctx, ev) }) } // a second one during the wait
+	e.wake(ev)
+	if got := reads() - n; got != 2 {
+		t.Fatalf("%d screen reads, want 2: the first and the one a second later", got)
+	}
+	e.onSleep = nil
+	e.clock.Add(lookMerge - time.Millisecond)
+	e.wake(ev)
+	if got := reads() - n; got != 2 {
+		t.Fatalf("%d screen reads within %s of the last, want still 2", got, lookMerge)
+	}
+}

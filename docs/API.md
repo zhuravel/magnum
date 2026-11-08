@@ -1419,11 +1419,15 @@ type Deps struct {
 	HookBin string
 	// HookFailure receives the class of API error a Claude turn ended on,
 	// as the session's own StopFailure hook names it and its screen, read
-	// again, shows it (Wake): the session's row, the class (never the
-	// agent's text) and the screen's verdict (its ResetAt for a limit), so
-	// the engine feeds its usage, login and overload handling at once. It
-	// runs on the goroutine that called Wake (the listener's), so it must
-	// not block, and Wake's caller must hold no lock it takes; nil = none.
+	// again (at once, and a second later when it did not show it yet),
+	// shows it (Wake): the session's row, the class (never the hook's text)
+	// and the screen's verdict (its ResetAt for a limit; its Detail is the
+	// screen's line, as the engine's own health check reads it), so the
+	// engine feeds its usage, login and overload handling at once. It comes
+	// once per failure (a class per prompt of the session), on the goroutine
+	// that called Wake (the listener's) or on the one that read the screen
+	// again, so it must not block, and Wake's caller must hold no lock it
+	// takes; nil = none.
 	HookFailure func(session store.Session, failure StopFailure, screen Health)
 	// Signal sends sig to process pid, or to the process group -pid when
 	// pid is negative (the daemon passes syscall.Kill). Only StopShell
@@ -2723,12 +2727,14 @@ func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event)
         looks again at +1 s and +2 s on a goroutine of its own (relookAfter;
         never the caller's), then leaves it to the clock. A late Stop of an
         earlier turn, a subagent's or a forged one only causes an early look.
-      - stop_failure: a look now, then, when the event is the session's own
-        (a Claude session, its session id, no subagent's) and the screen
-        read again shows such a failure (CheckHealth, StopFailure.shownBy),
-        the failure's class and the screen's verdict to Deps.HookFailure,
-        which feeds the engine's usage, login and overload handling. The agent's
-        error text never goes on, nor into a log.
+      - stop_failure: a look now, then, when the event is the session's own (a
+        Claude session, its session id, no subagent's) and the screen read again
+        shows such a failure (CheckHealth, StopFailure.shownBy; read once more a
+        second later when it does not yet), the failure's class and the screen's
+        verdict to Deps.HookFailure, once per failure, which feeds the engine's
+        usage, login and overload handling (hookFailure). The StopFailures of
+        one session merge as its looks do. The agent's error text never goes on,
+        nor into a log.
       - session_start: a row without a session id gets the event's, a UUID,
         once the agent's own file proves it (adoptHookID): the Claude transcript
         where magnum reads the slot's sessions, whose first record names the id
@@ -5011,8 +5017,9 @@ func RoleSkillPath(r Role, layout paths.Layout) string
     without a checkout), and EmbeddedFixSkill where a judge gets EmbeddedSkill.
 
 func SessionArgOK(id string) bool
-    SessionArgOK reports whether a session id may go into a resume's args: 1 to
-    256 bytes of letters, digits and . _ : / @ + = -, the first no "-". An id an
+    SessionArgOK reports whether a session id may go into a resume's args:
+    1 to 256 bytes of letters, digits and . _ : / @ + = -, the first a letter or
+    a digit (a leading "=" is zsh's EQUALS expansion in a pasted line). An id an
     agent's hook planted (`--dangerously-skip-permissions`, `--settings=x.json`)
     would be read as a flag after `--resume` or as an option of `codex resume`,
     which takes the id as a positional argument and has no "=" form; such an id
