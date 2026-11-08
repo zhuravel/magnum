@@ -60,7 +60,8 @@ func newFixSyncCmd(c *Context) *cobra.Command {
 			"It fetches the branch and the base from origin. When every commit the branch gained since --from is a merge on "+
 			"its first-parent chain, and the PR's own diff against the base (from their merge base to the head) has the same "+
 			"patch id at --from and at the branch's tip, it replays the fixer's commits (--from to HEAD, none of them a merge, "+
-			"none of them on GitHub) onto the tip and prints \"replayed N commits onto <sha>; HEAD is <sha>\": the fixer runs "+
+			"none of them on GitHub; a commit of them the branch has, the base merge the fixer pushed alone, moves --from to "+
+			"it) onto the tip and prints \"replayed N commits onto <sha>; HEAD is <sha>\": the fixer runs "+
 			"the specs of the changed files again and pushes, never with force. Anything else changes nothing and prints "+
 			"\"refused: <reason>\": a commit that is not a merge (someone works on the branch), a merge that changed the PR's "+
 			"own diff, a rewritten branch, a merge among the fixer's own commits, uncommitted changes to tracked files, an "+
@@ -149,8 +150,7 @@ func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string
 		return fmt.Sprintf("could not read HEAD: %v", err), fixSyncRefused
 	}
 	still := "; HEAD is still " + textx.ShortSHA(head)
-	own, why := fixSyncOwn(ctx, g, dir, from, head)
-	if why != "" {
+	if why := fixSyncStart(ctx, g, dir, from, head); why != "" {
 		return why + still, fixSyncRefused
 	}
 	for _, b := range []string{branch, base} {
@@ -161,6 +161,18 @@ func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string
 	tip, err := g.RevParse(ctx, dir, "refs/remotes/origin/"+branch)
 	if err != nil {
 		return fmt.Sprintf("could not read the branch's tip: %v%s", err, still), fixSyncRefused
+	}
+	switch pushed, err := fixSyncPushed(ctx, g, dir, from, head, tip); {
+	case err != nil:
+		return fmt.Sprintf("could not compare your commits with the branch's tip: %v%s", err, still), fixSyncRefused
+	case pushed == head:
+		return "the branch has every commit of yours already: nothing to replay" + still, fixSyncRefused
+	default:
+		from = pushed
+	}
+	own, why := fixSyncOwn(ctx, g, dir, from, head)
+	if why != "" {
+		return why + still, fixSyncRefused
 	}
 	if why := fixSyncGained(ctx, g, dir, from, head, tip, base); why != "" {
 		return why + still, fixSyncRefused
@@ -205,19 +217,47 @@ func fixSync(ctx context.Context, g *gitx.Client, dir, from, branch, base string
 		textx.ShortSHA(now)), 0
 }
 
-// fixSyncOwn lists the fixer's commits, from..head, or says why they
-// cannot be replayed (why): head must descend from from with at least one
-// commit on top, none of them a merge (a merge the fixer made, the base
-// merge of a conflicting PR, would be made again without its resolutions).
-func fixSyncOwn(ctx context.Context, g *gitx.Client, dir, from, head string) (own []gitx.ListedCommit, why string) {
+// fixSyncStart says why the fixer has nothing fix-sync replays, before it
+// fetches ("" when it may have): head must descend from from with at
+// least one commit on top.
+func fixSyncStart(ctx context.Context, g *gitx.Client, dir, from, head string) string {
 	switch ok, err := g.IsAncestor(ctx, dir, from, head); {
 	case err != nil:
-		return nil, fmt.Sprintf("could not compare HEAD with the start head: %v", err)
+		return fmt.Sprintf("could not compare HEAD with the start head: %v", err)
 	case !ok:
-		return nil, fmt.Sprintf("HEAD %s does not descend from the start head %s", textx.ShortSHA(head), textx.ShortSHA(from))
+		return fmt.Sprintf("HEAD %s does not descend from the start head %s", textx.ShortSHA(head), textx.ShortSHA(from))
 	case head == from:
-		return nil, "you have no commit to replay: HEAD is the start head"
+		return "you have no commit to replay: HEAD is the start head"
 	}
+	return ""
+}
+
+// fixSyncPushed is the newest of the fixer's commits on head's first-parent
+// chain since from that tip, the branch's tip on GitHub, has already (the
+// base merge the fix skill pushes alone, before the fixes), else from: the
+// commits a replay takes start after it, so a merge that is on GitHub is
+// never made again.
+func fixSyncPushed(ctx context.Context, g *gitx.Client, dir, from, head, tip string) (string, error) {
+	chain, err := g.CommitsAfter(ctx, dir, from, head, true)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range chain { // newest first
+		switch on, err := g.IsAncestor(ctx, dir, c.SHA, tip); {
+		case err != nil:
+			return "", err
+		case on:
+			return c.SHA, nil
+		}
+	}
+	return from, nil
+}
+
+// fixSyncOwn lists the fixer's commits, from..head, or says why they
+// cannot be replayed (why): none of them may be a merge (a merge the
+// fixer made and did not push, the base merge of a conflicting PR, would
+// be made again without its resolutions).
+func fixSyncOwn(ctx context.Context, g *gitx.Client, dir, from, head string) (own []gitx.ListedCommit, why string) {
 	own, err := g.CommitsAfter(ctx, dir, from, head, false)
 	if err != nil {
 		return nil, fmt.Sprintf("could not list your commits: %v", err)

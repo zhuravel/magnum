@@ -559,8 +559,11 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 		// A merge without a conflict commits itself.
 		"If the merge applies without a conflict, git commits it itself: go on with step 4.",
 		"5. Finish a merge whose conflicts you resolved with `git commit --no-edit`; a merge that applied cleanly has its commit already.",
-		// A failed push leaves the base merge off GitHub: it goes to the author.
-		"and the base merge, when you made one, as `- conflict: <path>, <path>: the merge is not on GitHub (the push failed)`",
+		// A failed push of the base merge alone leaves it off GitHub: it goes
+		// to the author; a merge that went out first is on GitHub, and the
+		// fix-sync line replays the fixes after it.
+		"and the base merge, when its own push failed, as `- conflict: <path>, <path>: the merge is not on GitHub (the push failed)`",
+		"so a push of them that GitHub rejects because the branch moved is replayed after the merge by the fix-sync line",
 		// A merge it resolved and pushed is no call: the side it kept is a note
 		// on the merge's line (magnum drops a conflict entry the push holds).
 		"A merge you resolved and pushed goes under `## Pushed` alone, never under `## Needs you`: " +

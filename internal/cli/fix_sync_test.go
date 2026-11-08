@@ -195,6 +195,40 @@ func TestFixSyncReplaysTheFixersCommitOntoABaseMergeTheBranchGained(t *testing.T
 	}
 }
 
+// The fixer pushes its base merge alone, before its fixes (the fix skill's
+// base merge, step 6), so the merge is on GitHub when a later push of the
+// fixes is rejected because someone merged the base again ("Update
+// branch"). The fix-sync line names the head the fixer started from,
+// below that merge: fix-sync starts after the fixer's commits that GitHub's
+// branch has, and replays the fixes alone onto the branch's new tip, never
+// the merge again.
+func TestFixSyncStartsAfterTheMergeTheFixerPushedAlone(t *testing.T) {
+	s := newSyncRepo(t)
+	s.commit(s.origin, "docs/main.md", "main moves\n", "main moves on")
+	s.git(s.slot, "fetch", "--quiet", "origin", "main")
+	s.git(s.slot, "merge", "--quiet", "--no-edit", "FETCH_HEAD")
+	merge := s.git(s.slot, "rev-parse", "HEAD")
+	s.git(s.slot, "push", "--quiet", "origin", "HEAD:feature")
+	s.commit(s.slot, "config.rb", strings.Replace(strings.Replace(syncConfig, "a\n", "A\n", 1), "h\n", "H\n", 1), "Fix the last line")
+	update := s.updateBranch("docs/more.md", "more\n")
+
+	code, out, errb := s.fixSync(t)
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	head := s.git(s.slot, "rev-parse", "HEAD")
+	if want := "replayed 1 commit onto " + textx.ShortSHA(update) + "; HEAD is " + textx.ShortSHA(head); out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+	if got := s.git(s.slot, "rev-parse", "HEAD~1"); got != update {
+		t.Errorf("HEAD~1 = %s, want the branch's tip %s", got, update)
+	}
+	if got := s.git(s.slot, "rev-parse", "HEAD~2"); got != merge {
+		t.Errorf("HEAD~2 = %s, want the fixer's pushed merge %s", got, merge)
+	}
+	s.wantUnchanged(t, head)
+}
+
 // A commit on the branch that is not a merge is someone's work on it:
 // fix-sync changes nothing and says why, and the fixer stops as before.
 func TestFixSyncRefusesWhenTheBranchGainedACommitOfItsOwn(t *testing.T) {
