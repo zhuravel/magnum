@@ -14,7 +14,8 @@ import (
 // ownPRSentence is what the fix prompt of the operator's own PR says about
 // its description (RoleData.OwnPR).
 const ownPRSentence = " The PR is the operator's own: when a finding or another reviewer's item names its description, " +
-	"edit the description as the skill's description fix (section 5) says, instead of leaving it under Needs you."
+	"or a commit you push makes a line of it untrue, edit the description as the skill's description fix (section 5) says, " +
+	"instead of leaving it under Needs you."
 
 // ownPRFixPrompt renders a gh fixer's prompt, of the operator's own PR or not.
 func ownPRFixPrompt(t *testing.T, own bool) string {
@@ -42,8 +43,8 @@ func ownPRFixPrompt(t *testing.T, own bool) string {
 // GitHub by hand (2026-11-07). The fix prompt of the operator's own PR (the
 // job's check, FixPromptInput.OwnPR) now lets the fixer edit the
 // description when a finding or another reviewer's item names it, as the
-// skill says, in its one paragraph, and no further: a line its own fix made
-// untrue was not part of what the operator approved. A prompt without that
+// skill says, in its one paragraph, and, since the operator approved it on
+// 2026-11-08, a line a commit it pushes makes untrue. A prompt without that
 // word grants no edit. The goldens of the fix prompt are an own PR's, as
 // every fix job's is.
 func TestTheFixPromptOfAnOwnPRLetsTheFixerEditItsDescription(t *testing.T) {
@@ -81,7 +82,7 @@ func TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"- Change only what a finding or an external item names, or the same defect in the PR's own lines: the code, " +
-			"or the PR description when a finding or an external item names it (section 5).",
+			"or the PR description when a finding or an external item names it or a commit you push makes a line of it untrue (section 5).",
 		"Reply at most once to each item, and never edit, hide or delete anyone else's comment. " +
 			"The PR description is not such a comment: it is the author's, whom you act for, and section 5 says when you change it.",
 		"- whether the PR is the operator's own, which lets you edit its description (section 5)",
@@ -93,10 +94,9 @@ func TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt(t *testing.T) {
 		"- An item that asks to change the PR description is a description finding (section 3): fix it as section 5 says when it is right.",
 		"### The PR description",
 		"The prompt says whether the PR is the operator's own. Only then may you change its description (its body, never its title), " +
-			"and only where a finding or an external item names it: the review body's `Description: ✗` line, a comment about a deploy section, " +
-			"a reviewer who asks to change a phrase or a claim of it.",
-		"A line of it that one of your fixes made untrue, which no finding or item names, stays the author's: put it under `## Needs you`.",
-		"2. In the copy, change only the lines that the findings and items name.",
+			"and only where a finding or an external item names it (the review body's `Description: ✗` line, a comment about a deploy section, " +
+			"a reviewer who asks to change a phrase or a claim of it)",
+		"2. In the copy, change only the lines that the findings and items name and the lines your commits made untrue.",
 		"When the prompt does not say so, change nothing in the description: put each such finding or item under `## Needs you` " +
 			"with `not fixed. the prompt does not say that the PR is the operator's own`.",
 		"Make every change to the description in one edit, after the push. When the push failed, change nothing in it.",
@@ -118,14 +118,39 @@ func TestTheFixSkillEditsAnOwnPRsDescriptionAndKeepsTheRestOfIt(t *testing.T) {
 	}
 	for _, gone := range []string{
 		"or the PR description when a finding names it (section 5)",
-		"makes a line of it untrue",
 		"or that your fixes made untrue",
+		"A line of it that one of your fixes made untrue, which no finding or item names, stays the author's",
 		"goes into that fix's reply",
 		"add `; the description now <what changed>` at its end",
 		"A finding about the PR description (a deploy section, a claim the description makes): read the body",
 	} {
 		if strings.Contains(skill, gone) {
 			t.Errorf("the fix skill still says %q", gone)
+		}
+	}
+}
+
+// Fixer runs left the operator a Test Plan row whose count the
+// fixer's own commit had moved (19 checks, 21 after it), and a body that
+// still claimed the old behaviour after a fixer commit changed it: the skill
+// let the fixer edit only lines a finding or an item named. On an own PR
+// (approved by the operator on 2026-11-08) it now also corrects a line a
+// commit it pushes in the run made untrue, when a command shows the fact (a
+// count, what the code its commit changed does), with the same guards (the
+// diff of the copy, the read before the write, never the title); a line no
+// command settles stays the author's under Needs you.
+func TestTheFixSkillCorrectsTheDescriptionLinesItsOwnCommitsMadeUntrue(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"or where a commit you push makes a line of it untrue: a fact a command shows, such as a count (run the command again) " +
+			"or what the code your commit changed does (its spec shows it). Correct such a line to what the command shows.",
+		"A line your commits made untrue that no command settles (a reason, a plan, a decision) stays the author's: put it under `## Needs you`.",
+		"2. In the copy, change only the lines that the findings and items name and the lines your commits made untrue.",
+		"its body, never its title",
+		"Right before you write, read the body again",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
 		}
 	}
 }

@@ -3189,8 +3189,9 @@ only then does the fixer edit the PR's description, never its title, and only fo
 reviewer's item that names the description (the review body's `Description: ✗` line, a comment about a deploy
 section that lists the head's migrations, a reviewer who asks to change a phrase), instead of leaving it to you
 under `Needs you`. Such an item is fixed when it is right, unscored like a simplification; one that needs what
-only you know (why, a decision, a plan, a link) stays yours, and so does a line that one of its own fixes made
-untrue while nothing names it. It makes one edit after the push (none when the push failed), as the gh login or the fixer App it
+only you know (why, a decision, a plan, a link) stays yours. A line that a commit it pushes in the run made untrue
+is the fixer's to correct too, when a command shows the fact (a count it runs again, what the code its commit
+changed does); one that no command settles (a reason, a plan) stays yours under `Needs you`. It makes one edit after the push (none when the push failed), as the gh login or the fixer App it
 pushes as: it saves the body beside its report, changes only those lines in a copy and checks with `diff`
 that nothing else moved, never touches a hidden `<!-- … -->` marker or the block it marks (the factory's
 Known list) nor a checklist line of the PR template, reads the body again right before it writes it with

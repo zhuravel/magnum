@@ -706,7 +706,7 @@ func TestTheFixSkillFixesTheSameDefectInThePRsOwnLines(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
 		"- Change only what a finding or an external item names, or the same defect in the PR's own lines: " +
-			"the code, or the PR description when a finding or an external item names it (section 5).",
+			"the code, or the PR description when a finding or an external item names it or a commit you push makes a line of it untrue (section 5).",
 		"2. Before you run the specs, look for the same defect in the rest of this PR's own lines (`gh pr diff {number}`): " +
 			"the other members of the set the finding's code belongs to that the PR adds beside it",
 		"(sibling rules, call sites, branches, parallel copies and untested guards of the same kind).",
@@ -878,8 +878,8 @@ func TestTheFixPromptOfAReviewThatFoundNothingHandsOverTheOtherReviewersAlone(t 
 
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
-		"When the prompt says that the review found nothing to fix, the base merge (when the prompt names a conflict) and the external items are this run's whole work: " +
-			"merge the base, then judge, fix and answer the items alone.",
+		"When the prompt says that the review found nothing to fix, the base merge (when the prompt names a conflict), the review body's `Description: ✗` line " +
+			"and the external items are this run's whole work: merge the base, then judge, fix and answer them alone.",
 		"When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, " +
 			"each as section 7 writes its entry, with that reason.",
 	} {
