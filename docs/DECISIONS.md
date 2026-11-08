@@ -15771,6 +15771,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARoundAfterAJudgeGaveUpGivesItsJudgeTheMarkerWhenNoLateReviewLanded,
   TestARoundOfAnotherJudgeAdoptsTheLateReview; TestAJudgeAtWorkAfterItsRoundGaveUpOnItsResultIsSomeoneTyping
   keeps the rejected rule out.
+- **A judge's late review puts its PR back in line at once** (2026-11-08, the self-healing audit's R31). The
+  round that adopts a judge's late review must start for the PR to leave needs attention, and nothing started
+  one on 2026-11-05 until the push; the operator's own PR interval of 2 hours would have held a plain retry
+  past it too. The engine's health check (`checkLateResults`) now puts a PR a round parked with
+  `agents.JudgeNoResult` back where it waits for a round once the judge's result file holds a posted review
+  for one of that round's judge runs (`pipeline.LateReview`), within the judge's timeout of the round's end
+  and on the head the round reviewed: its attention cleared, its attempts as they were, one
+  `round.late_result` info event, and a record (kv `pr.<id>.late_result`, deleted when its next round ends)
+  that lets the throttle and the candidates' backstop through at once (`eligibility.PRFacts.LateAt`; only a
+  snooze holds it, as for a completion). Rejected: having the engine verify and settle the review itself (the
+  review's follow-ups, findings, duplicates, the footer and a stale CHANGES_REQUESTED, live in the pipeline's
+  adoption); and a forced round (it would run through `magnum pause` and a mute). Tests, failing first:
+  TestAJudgesLateReviewPutsThePRBackInLineForTheRoundThatAdoptsIt, TestAJudgesResultAfterItsTimeoutLeavesThePRParked,
+  TestThrottleTheRoundOfALateResultWaitsOnlyForASnooze.
 
 ## The factory (2026-11-03)
 

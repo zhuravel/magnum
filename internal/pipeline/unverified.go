@@ -120,6 +120,18 @@ func (rd *round) findUnverified(ctx context.Context) *unverifiedRuns {
 	return u
 }
 
+// LateReview is the review the judge's result file at path says the judge
+// posted for one of runIDs, the runs of a round that ended without its
+// result (agents.JudgeNoResult): its late, complete result, which the next
+// round on the head adopts (findUnverified); ok is false for none.
+func LateReview(path string, runIDs ...string) (reviewID int64, ok bool) {
+	res, found := readResultFile(path)
+	if !found || res.Status != statusPosted || !slices.Contains(runIDs, res.RunID) {
+		return 0, false
+	}
+	return res.ReviewID, true
+}
+
 // lateResult is the judge's result file of run (one of a round that ended
 // without the judge's result) when it was written for one of ids: what the
 // judge wrote after its round ended; the zero result otherwise.

@@ -2243,10 +2243,12 @@ its transcript shows a prompt typed after Magnum's last prompt to it, a claude a
 prompt in flight counts as someone typing into its pane (prompts to the PR wait `human_cooldown`, and an
 `agent.human_active` event says until when), and otherwise not. A judge whose round ended without its
 result, also after a nudge, may still post that round's review, as when you resume it in its pane; its
-session at work after the round follows those rules (a codex judge's counts as you typing). The next round
-on that head looks for a review of that round the judge posted late and adopts it, prompting nothing; one
-that finds no such review on GitHub gives its judge that round's marker, so a review the judge still posts
-with it is not posted twice. A
+session at work after the round follows those rules (a codex judge's counts as you typing). When its
+result file holds a posted review of that round on the PR's head within the judge's `timeout` of the
+round's end, the PR leaves needs attention at once, past the re-review interval and the push quiet period
+(one `round.late_result` event), and its next round adopts the review, prompting nothing; a round on that
+head that finds no such review on GitHub gives its judge that round's marker, so a review the judge still
+posts with it is not posted twice. A
 reviewer's report starts with its run's marker (`<!-- magnum:run=<run id> -->`, which the prompts ask for
 and codex-review's line prints before the output), a report file already there when its role is prompted
 is set aside (`<name>.prev`), a report without its run's marker counts as missing, and a continued round

@@ -78,6 +78,11 @@ type PRFacts struct {
 	// reports, was queued; zero = none is due. Throttle then holds the PR
 	// only for its snooze, as for CIRedAt: no code changed.
 	CompleteAt time.Time
+	// LateAt is when the judge's late result for the PR's head landed: the
+	// review it posted after its round ended without its result, which the
+	// next round adopts, prompting nothing; zero = none. Throttle then
+	// holds the PR only for its snooze, as for CIRedAt.
+	LateAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it

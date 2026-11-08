@@ -116,3 +116,22 @@ func TestThrottleACompletionWaitsOnlyForASnooze(t *testing.T) {
 	f.SnoozedUntil = now.Add(time.Hour)
 	wantDecision(t, Throttle(d, f, now), false, now.Add(time.Hour), ReasonSnoozed)
 }
+
+// The round that adopts a judge's late review (LateAt: the judge posted the
+// head's review after its round ended without its result) prompts nothing:
+// the quiet period, the re-review interval (the operator's own 2 hours on
+// 2026-11-05) and the daily cap do not hold it; a snooze does.
+func TestThrottleTheRoundOfALateResultWaitsOnlyForASnooze(t *testing.T) {
+	d := replyDaemon()
+	d.MaxRoundsPerPRPerDay = 2
+	d.OwnMinRereviewInterval.Duration = 2 * time.Hour
+	f := PRFacts{ReviewedSHA: reviewed, HeadChangedAt: ago(time.Minute), PendingSince: ago(time.Minute), Own: true,
+		LastRoundStartedAt: ago(30 * time.Minute), RoundsToday: 2}
+	if got := Throttle(d, f, now); got.Ready {
+		t.Fatalf("without a late result: %+v, want the quiet period, the interval or the cap", got)
+	}
+	f.LateAt = ago(10 * time.Second)
+	wantDecision(t, Throttle(d, f, now), true, now, "")
+	f.SnoozedUntil = now.Add(time.Hour)
+	wantDecision(t, Throttle(d, f, now), false, now.Add(time.Hour), ReasonSnoozed)
+}

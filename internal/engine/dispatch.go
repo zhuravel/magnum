@@ -331,7 +331,8 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 // holds back although the throttle lets them through, and that the
 // candidates in have lack: a requested round (pendingRequest) skips all of
 // those rules, and so do a reply round (replyTrigger), a judge check of
-// red CI (ciRedWait) and a completion (completionWait), while a head that
+// red CI (ciRedWait), a completion (completionWait) and the round that
+// adopts the judge's late review (lateResultWait), while a head that
 // arrived during the PR's last review (arrivedDuringReview) skips the
 // interval. They are read again without the
 // backstop and kept when eligibility.Throttle, under their watch, says ready.
@@ -353,7 +354,8 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 		if _, requested := e.pendingRequest(ctx, pr); !requested && !arrivedDuringReview(pr) {
 			_, _, replied := e.replyTrigger(ctx, pr)
 			_, red := e.ciRedWait(ctx, pr)
-			if _, completes := e.completionWait(ctx, pr); !replied && !red && !completes {
+			_, late := e.lateResultWait(ctx, pr)
+			if _, completes := e.completionWait(ctx, pr); !replied && !red && !completes && !late {
 				continue
 			}
 		}

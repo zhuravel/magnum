@@ -169,7 +169,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		// The next dispatch of the PR repairs a slot left busy (slotGate).
 		e.log.Warn("round finished: slot back to held", "slot", job.slot.Name, "err", err)
 	}
-	e.delKV(ctx, store.KVPRFresh(job.pr.ID))
+	e.delKV(ctx, store.KVPRFresh(job.pr.ID), kvPRLateResult(job.pr.ID)) // late_result.go: this round adopted it, or ran without it
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
 		e.log.Warn("round finished and PR is gone", "pr", job.pr.ID, "err", err)

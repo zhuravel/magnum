@@ -83,6 +83,9 @@ const (
 //   - A completion (CompleteAt set, no request): the clean review of the
 //     reviewed head went without some reviewers' reports, which run again
 //     on that head: as for CI red, only the snooze holds it.
+//   - A late result (LateAt set, no request): the judge posted the head's
+//     review after its round ended without its result, and the next round
+//     adopts it: as for CI red, only the snooze holds it.
 //   - Forced bypasses all of it: always ready.
 //
 // A zero timestamp or zero duration never blocks. When several rules hold the
@@ -121,7 +124,7 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		return decide()
 	}
 	hold(f.SnoozedUntil, RuleSnoozed, ReasonSnoozed)
-	if !f.CIRedAt.IsZero() || !f.CompleteAt.IsZero() {
+	if !f.CIRedAt.IsZero() || !f.CompleteAt.IsZero() || !f.LateAt.IsZero() {
 		return decide()
 	}
 	if !f.RepliedAt.IsZero() {

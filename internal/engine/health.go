@@ -465,7 +465,9 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 // checkCodexHooksTrust's to renew and end. It also reads the agent CLIs'
 // versions (checkCLIVersions), says when PRs' launches end the same way
 // and holds their kind (noteSharedFailures), settles the probes of held
-// kinds (checkKindHolds) and samples the machine's memory (checkMemory).
+// kinds (checkKindHolds), puts back in line the PRs whose judge's late
+// review landed (checkLateResults) and samples the machine's memory
+// (checkMemory).
 func (e *Engine) health(ctx context.Context) {
 	now := e.now()
 	for _, tool := range e.kinds() {
@@ -523,6 +525,7 @@ func (e *Engine) health(ctx context.Context) {
 	e.checkCLIVersions(ctx)   // cli_version.go
 	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names
 	e.checkKindHolds(ctx)     // kind_hold.go: the probes of the kinds a shared failure holds
+	e.checkLateResults(ctx)   // late_result.go: a judge's review posted after its round gave up
 	e.checkMemory(ctx)        // memory.go: at most once a minute
 }
 
