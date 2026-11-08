@@ -1955,10 +1955,18 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
 
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error)
     Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
-    it was taken. The daemon calls ObserveSnapshotAt itself, once per tick,
-    with the snapshot that tick also counts working agents from, and on its
-    observe clock between the ticks while a run is in flight (polling is the
+    it was taken. The daemon calls ObserveSnapshotAt itself, once per tick, with
+    the snapshot that tick also counts working agents from, and ObserveRunsAt on
+    its observe clock between the ticks while a run is in flight (polling is the
     completion signal).
+
+func (m *Manager) ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]Observation, error)
+    ObserveRunsAt is ObserveSnapshotAt for the sessions with a run submitted
+    or at work alone: the review daemon's observe clock, there to see their
+    turns end every few seconds, reads and writes no other session's row (a
+    pass over them all would write each one's idle count as often); the tick's
+    pass observes every session. It counts as an observe tick all the same
+    (nextObserveTick).
 
 func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]Observation, error)
     ObserveSnapshot is ObserveSnapshotAt with the capture time now (a snapshot
@@ -1974,8 +1982,9 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         agent_session.value becomes session_id; a starting session becomes
         live. working + a submitted run -> run working (working_seen_at).
         idle_ticks >= CompletionIdleTicks, this reading CompletionGap or more
-        after the streak's first (see idleStreak), + a submitted/working run ->
-        run ended, ObsCompleted, and Ended's channel closed; short of the gap,
+        after the streak's first (see idleStreak; denyContinueGap while a deny
+        awaits its continuation, endGap), + a submitted/working run -> run
+        ended, ObsCompleted, and Ended's channel closed; short of the gap,
         SecondReadingAt says when the reading that may end it is due.
         working with no pending/submitted/working run (outside a short grace
         after start/prompt) -> ObsHumanActive (CooldownUntil set when it begins
@@ -2533,10 +2542,13 @@ type Observation struct {
 	// since), when that cooldown ends; zero when the tick only extended a
 	// cooldown already running, and when human_cooldown is 0 (none).
 	CooldownUntil time.Time
-	// SecondReadingAt is, for an idle session whose run in flight this
-	// reading did not end, the earliest time a reading may end it (the
-	// streak's first idle reading plus CompletionGap); zero otherwise. The
-	// review daemon's observe clock takes its next reading then.
+	// SecondReadingAt is, for an idle reading short of the gap (the
+	// streak's first idle reading plus CompletionGap, or denyContinueGap
+	// while a deny awaits its continuation, is still ahead) of a session
+	// with a run in flight, when the reading that may end the run is due;
+	// zero otherwise, a reading neither idle nor busy (herdr's "unknown")
+	// included. The review daemon's observe clock takes its next reading
+	// then.
 	SecondReadingAt time.Time
 }
     Observation is the result of one tick for one starting/live session.
@@ -8926,6 +8938,9 @@ type AdoptPayload struct {
 
 type Agents interface {
 	ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]agents.Observation, error)
+	// ObserveRunsAt is ObserveSnapshotAt for the sessions with a run
+	// submitted or at work alone: the observe clock's pass.
+	ObserveRunsAt(ctx context.Context, snap herdr.Snapshot, capturedAt time.Time) ([]agents.Observation, error)
 	EnsureWorkspace(ctx context.Context, pr store.PR, slotPath string, env map[string]string, label string, roles []config.Role) (agents.Workspace, error)
 	EnsurePane(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, role config.Role) (agents.Workspace, error)
 	StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error

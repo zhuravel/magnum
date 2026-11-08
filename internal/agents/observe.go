@@ -64,11 +64,12 @@ type Observation struct {
 	// cooldown already running, and when human_cooldown is 0 (none).
 	CooldownUntil time.Time
 	// SecondReadingAt is, for an idle reading short of the gap (the
-	// streak's first idle reading plus CompletionGap is still ahead) of a
-	// session with a run in flight, when the reading that may end the run
-	// is due; zero otherwise, a reading neither idle nor busy (herdr's
-	// "unknown") included. The review daemon's observe clock takes its
-	// next reading then.
+	// streak's first idle reading plus CompletionGap, or denyContinueGap
+	// while a deny awaits its continuation, is still ahead) of a session
+	// with a run in flight, when the reading that may end the run is due;
+	// zero otherwise, a reading neither idle nor busy (herdr's "unknown")
+	// included. The review daemon's observe clock takes its next reading
+	// then.
 	SecondReadingAt time.Time
 }
 

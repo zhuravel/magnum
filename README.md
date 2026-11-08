@@ -2212,10 +2212,12 @@ check `ignore_checks` names is left out of the file, so a head whose only failed
 none, and its review says nothing of them. A blind replay never gets the file.
 
 A session role's turn ends when herdr shows its agent idle on two readings in a row, the second at least 3
-seconds after the first (a status that flickers idle for a moment ends nothing). Besides each tick, which
-reads herdr after the GitHub poll, the daemon reads it every `[daemon] observe_interval` (default `"5s"`)
-while a run is submitted or at work, one herdr snapshot each time and none while no run is in flight, and
-takes the second reading as soon as it may end the turn: a turn's end is seen about 5 to 10 seconds after
+seconds after the first (a status that flickers idle for a moment ends nothing; 10 seconds while the
+message after a denied prompt still waits for a screen it may type into). Besides each tick, which reads
+herdr after the GitHub poll, the daemon reads it every `[daemon] observe_interval` (default `"5s"`) while a
+run is submitted or at work, one herdr snapshot each time and none while no run is in flight, looks only at
+the agents of those runs (the tick looks at every agent, and reports a dialog that waits for you), and
+takes the second reading as soon as it may end the turn: a turn's end is seen about 8 to 12 seconds after
 the agent stopped instead of a minute or more, and the round's next stage starts as soon as it is (its
 wait wakes on the run's end instead of its next 10-second look). A pass slower than the interval is a
 warning in the daemon's log, at most once a minute; `observe_interval = "0"` leaves the reading to the

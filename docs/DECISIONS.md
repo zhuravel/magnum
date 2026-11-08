@@ -3404,14 +3404,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the first tick that saw idle (~24 s on average) plus a whole tick more (~47 s). Now `Run` starts an
   observe clock beside the ticks (`observe_clock.go`): every `[daemon] observe_interval` (default `"5s"`;
   `"0"` turns it off, otherwise 2 s to `poll_interval`) it takes one herdr snapshot and feeds
-  `agents.ObserveSnapshotAt` with it, handling the observations as the tick does. The two-reading rule
+  `agents.ObserveRunsAt` with it: the sessions with a run submitted or at work alone, whose observations it
+  handles as the tick does but for a dialog's (`ObsBlocked`), which the tick reports. A pass over every
+  live session, as the tick's, writes each one's row (its idle count): with 18 live sessions that was
+  about 18 commits every 5 s while any run was in flight, against one tick's worth every ~47 s, on a
+  machine whose SSD writes are watched, and a session waiting on a dialog logged its warning, and asked
+  the notification table twice, every 5 s. The two-reading rule
   stays, but the second reading must come `agents.CompletionGap` (3 s) after the streak's first, a time gap
   rather than "one tick later", so the faster clock does not weaken the flicker guard (the Manager keeps
   when each session's streak began; a streak a restart cut starts at the row's idle `agent_status_at`, so
   a fresh Manager ends a turn on its first reading as before), and the observation names when that
-  reading is due (`SecondReadingAt`), which the clock waits for instead of a whole interval. The rollout and
+  reading is due (`SecondReadingAt`), which the clock waits for instead of a whole interval. It names it
+  only on an idle reading short of the gap: an idle reading followed by herdr's "unknown" kept the
+  streak, and a due time already past had the clock, which waits at least a second, read herdr every
+  second for as long as herdr could not tell the status. While a deny of the run still awaits its
+  continuation (`continueAfterDeny`, which waits for a screen it may type into: no dialog, an empty
+  composer), the gap is 10 s (`denyContinueGap`): the tick a minute later gave it a whole tick for another
+  look, the 3 s gap gave it one, and a second look the lagging screen failed ended the run unfinished, the
+  report-lost case of 2026-10-08; at 10 s the clock looks two or three times. The rollout and
   transcript vetoes are unchanged; readings 10 s or more apart (the factory's own clock, a replay's, the
-  retro's, the tick's) meet the gap on the second reading, so the factory's behaviour does not change. The
+  retro's, the tick's) meet both gaps on the second reading, so the factory's behaviour does not change. The
   tick keeps its own pass, so it works with the clock off or slow; both take the observe lock
   (`lockObserve`), so one snapshot is applied at a time, in the order taken (a snapshot read before another
   and applied after it would record an older status), and the pass that waits says so at debug level. A
@@ -3424,7 +3436,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   denied on one pass is denied again, if the screen still shows it, two passes later, 10 s instead of
   about a minute and still well past the screen's lag. The end then wakes what waits for it: `agents.Manager.Ended` hands out a channel
   the observe pass closes when it next ends a run or marks a session lost (then a new one), which
-  `pipeline.Runner.Ended` passes to the turn's wait; the wait takes it before each read of its run and
+  `pipeline.Runner.Ended` passes to the turn's wait; the wait takes it before each read of its run (an end
+  that lands as it takes it is in the row it reads; one after closes the channel it took) and
   sleeps its 10 s poll only until it closes, so an end between the read and the sleep is not lost, and
   another run's end only has it read again. Expected: stop to `ended_at` about 8 to 12 s (from 72; up to 5 s
   to the first idle reading, 3 s to the second, herdr's own 1 to 4 s), and the next stage's prompt within a
@@ -3445,11 +3458,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLoadReadsObserveInterval, TestTheObserveClockEndsARunOneIntervalAndTheGapAfterTheStop,
   TestNoObservePassRunsWithNoRunInFlight, TestTheDaemonObservesBetweenItsTicks,
   TestTheObserveClockIsOffWhereNothingIsObserved, TestTheTickAndTheObserveClockNeverObserveAtOnce (it
-  fails with the lock taken out), TestASlowObservePassWarnsAtMostOnceAMinute and
-  TestNameJudgeWaitsTitleRetryBetweenAttempts; for guards no test held,
+  fails with the lock taken out), TestASlowObservePassWarnsAtMostOnceAMinute,
+  TestNameJudgeWaitsTitleRetryBetweenAttempts, TestAReadingNeitherIdleNorBusyNamesNoSecondReading,
+  TestADenyAwaitingItsContinuationHoldsTheRunsEndLonger, TestObservingTheRunsInFlightLeavesTheOtherSessionsAlone
+  and TestTheObserveClockReadsTheRunsInFlightAndLeavesDialogsToTheTick; for guards no test held,
   TestAnIdleStreakFromBeforeARestartKeepsItsFirstReading, TestReadingsFartherApartThanTheGapEndATurnOnTheSecond,
-  TestReadingsThatEndNothingCloseNothing and TestTheTickObservesAloneWithTheClockOff. Two permission tests
-  took both idle readings at the same instant and now move the clock by the gap between them.
+  TestReadingsTenSecondsApartEndARunWithoutItsContinuationOnTheSecond, TestReadingsThatEndNothingCloseNothing,
+  TestTheTickObservesAloneWithTheClockOff, TestAPromptBeginsANewIdleStreak (it fails with idleStreak's
+  `ticks > 0` check taken out: the last turn's streak would end the new one a second after the prompt)
+  and TestTheWaiterTakesItsChannelBeforeItReadsItsRun (it fails with the take moved after the read, which
+  TestAnEndBeforeTheWaiterSleepsIsNotLost, ending the run at the wait's look at the clock, does not tell
+  apart). Two permission tests took both idle readings at the same instant and now move the clock
+  between them, by the gap or, where the composer holds text, by the deny's.
 
 ## Screens and commands
 
