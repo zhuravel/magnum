@@ -126,3 +126,28 @@ func TestReadingsFartherApartThanTheGapEndATurnOnTheSecond(t *testing.T) {
 		t.Fatalf("second idle reading 10s after the first = %+v, want completed", o)
 	}
 }
+
+// A reading neither idle nor busy (herdr's "unknown", or no status at all)
+// keeps the streak, but it is not the reading the gap waits for: it names no
+// second reading, whose time has passed, or the observe clock would read
+// herdr every second for as long as herdr cannot tell the agent's status.
+func TestAReadingNeitherIdleNorBusyNamesNoSecondReading(t *testing.T) {
+	e := newEnv(t)
+	id := e.judgeAtWork()
+
+	e.h.setAgentStatus(judgeAgent, herdr.StatusIdle)
+	e.clock.Add(time.Second)
+	if o := e.observe()[RoleJudge]; o.Kind != "" || o.SecondReadingAt.IsZero() {
+		t.Fatalf("first idle reading = %+v, want the second reading due", o)
+	}
+	e.h.setAgentStatus(judgeAgent, herdr.StatusUnknown)
+	for i := range 3 {
+		e.clock.Add(5 * time.Second)
+		if o := e.observe()[RoleJudge]; o.Kind != "" || !o.SecondReadingAt.IsZero() {
+			t.Fatalf("unknown reading %d = kind %q, second reading due %v; want neither", i+1, o.Kind, o.SecondReadingAt)
+		}
+	}
+	if r := e.run1(id); r.State != store.RunWorking {
+		t.Fatalf("run after unknown readings = %s, want working", r.State)
+	}
+}

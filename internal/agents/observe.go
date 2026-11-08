@@ -62,10 +62,12 @@ type Observation struct {
 	// since), when that cooldown ends; zero when the tick only extended a
 	// cooldown already running, and when human_cooldown is 0 (none).
 	CooldownUntil time.Time
-	// SecondReadingAt is, for an idle session whose run in flight this
-	// reading did not end, the earliest time a reading may end it (the
-	// streak's first idle reading plus CompletionGap); zero otherwise. The
-	// review daemon's observe clock takes its next reading then.
+	// SecondReadingAt is, for an idle reading short of the gap (the
+	// streak's first idle reading plus CompletionGap is still ahead) of a
+	// session with a run in flight, when the reading that may end the run
+	// is due; zero otherwise, a reading neither idle nor busy (herdr's
+	// "unknown") included. The review daemon's observe clock takes its
+	// next reading then.
 	SecondReadingAt time.Time
 }
 
@@ -379,8 +381,9 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			o.Kind, o.Run = ObsCompleted, done
 		}
 	}
-	if o.Kind == "" && !first.IsZero() && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
-		o.SecondReadingAt = first.Add(CompletionGap)
+	if due := first.Add(CompletionGap); o.Kind == "" && idle && !first.IsZero() && capturedAt.Before(due) &&
+		o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
+		o.SecondReadingAt = due // an idle reading short of the gap: the one that may end the turn is due then
 	}
 	return o, nil
 }
