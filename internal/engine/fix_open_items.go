@@ -107,15 +107,23 @@ func quietMarked(markers []string, body string) bool {
 // latest comment's id and time, whether that latest comment is magnum's
 // rebuttal (a reply of magnum's whose marker says rebuttal or that has
 // none), and whether it was answered: a reply by the PR author, or a
-// fix-marked reply by one of magnum's logins.
+// fix-marked reply by one of magnum's logins, the latest of them made at
+// AnsweredAt.
 type magnumThread struct {
-	RootID   int64     `json:"root_id"`
-	URL      string    `json:"url,omitempty"`
-	ReviewID int64     `json:"review_id,omitempty"`
-	LatestID int64     `json:"latest_id"`
-	LatestAt time.Time `json:"latest_at"`
-	Rebuttal bool      `json:"rebuttal,omitempty"`
-	Answered bool      `json:"answered,omitempty"`
+	RootID     int64     `json:"root_id"`
+	URL        string    `json:"url,omitempty"`
+	ReviewID   int64     `json:"review_id,omitempty"`
+	LatestID   int64     `json:"latest_id"`
+	LatestAt   time.Time `json:"latest_at"`
+	Rebuttal   bool      `json:"rebuttal,omitempty"`
+	Answered   bool      `json:"answered,omitempty"`
+	AnsweredAt time.Time `json:"answered_at,omitzero"`
+}
+
+// answeredSince reports whether mt was answered after at (a read recorded
+// before AnsweredAt was kept says answered, whenever it was).
+func (mt magnumThread) answeredSince(at time.Time) bool {
+	return mt.Answered && (mt.AnsweredAt.IsZero() || mt.AnsweredAt.After(at))
 }
 
 // resolvedThread is another reviewer's thread that a fixer login resolved:
@@ -148,9 +156,11 @@ func magnumThreadsOf(threads []github.Thread, own []string, author string) []mag
 			_, kind, marked := postreview.ParseReplyMarker(latest.Body)
 			mt.Rebuttal = !marked || kind == postreview.ReplyRebuttal
 		}
-		mt.Answered = slices.ContainsFunc(all[1:], func(c github.ThreadComment) bool {
-			return byAuthor(c.AuthorLogin, c.AuthorType) || (postreview.IsFixReply(c.Body) && isOwn(c.AuthorLogin, c.AuthorType))
-		})
+		for _, c := range all[1:] {
+			if byAuthor(c.AuthorLogin, c.AuthorType) || (postreview.IsFixReply(c.Body) && isOwn(c.AuthorLogin, c.AuthorType)) {
+				mt.Answered, mt.AnsweredAt = true, later(mt.AnsweredAt, c.CreatedAt)
+			}
+		}
 		out = append(out, mt)
 	}
 	return out
@@ -325,7 +335,7 @@ func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, c
 			}
 		}
 	}
-	if sum != nil && reviewWork(*sum, len(optional), described) {
+	if sum != nil && reviewWork(*sum, optionalSplit(mine, sum, optional), described) {
 		out = append(out, openItem{Key: reviewKey(sum.RunID), Class: classMagnum, Kind: itemFindings, URL: sum.URL})
 	}
 	if conflict.sha != "" && head != "" {

@@ -267,17 +267,43 @@ func (j *fixJob) work() string {
 // its own: new findings (P0 to P3), simplifications, or earlier findings it
 // keeps open, the optional P3s among them (rule A1: an optional finding
 // counts as open until a fix or a fix-marked reply), but for calls of its
-// P3s, new or kept open, that a fixer left the operator as optional calls
-// (fix_optional.go): the operator's, never the fixer's again; or, described,
-// its body's `Description: ✗` line (reviewDescribes), which the fixer of the
-// operator's own PR fixes (skills/magnum-fix/SKILL.md, section 5). prepareFix
-// starts a job on such a review without asking the other reviewers (calls 0:
-// a start asked for may hand the fixer a call again), and autofix = "open"
-// counts the review as an item (openItemsOf) by the same rule with the calls
-// its read shows open, so the look never starts what prepareFix refuses.
-func reviewWork(sum store.ReviewSummary, calls int, described bool) bool {
-	p3 := sum.Counts[3] + openP3(sum)
-	return described || sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+max(p3-calls, 0) > 0
+// P3s that a fixer left the operator as optional calls (fix_optional.go):
+// the operator's, never the fixer's again. A call counts against the P3s
+// of its own review alone (calls.fresh against sum's new P3s, calls.kept
+// against the earlier ones sum keeps open), so a call of an earlier review
+// never hides a P3 a later review posts. described: its body's
+// `Description: ✗` line (reviewDescribes), which the fixer of the
+// operator's own PR fixes (skills/magnum-fix/SKILL.md, section 5), is work
+// too. prepareFix starts a job on such a review without asking the other
+// reviewers (no calls: a start asked for may hand the fixer a call again),
+// and autofix = "open" counts the review as an item (openItemsOf) by the
+// same rule with the calls its read shows open, so the look never starts
+// what prepareFix refuses.
+func reviewWork(sum store.ReviewSummary, calls p3Calls, described bool) bool {
+	p3 := max(sum.Counts[3]-calls.fresh, 0) + max(openP3(sum)-calls.kept, 0)
+	return described || sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+p3 > 0
+}
+
+// p3Calls counts the operator's open optional calls against a review's
+// P3s (reviewWork): fresh are those in threads of the review's own new
+// P3s, kept those of an earlier review's, which it may keep open.
+type p3Calls struct{ fresh, kept int }
+
+// optionalSplit counts the optional calls whose threads optional holds
+// (by their first comment's id) against sum (p3Calls): a call whose thread
+// mine places in sum's review is fresh, any other kept.
+func optionalSplit(mine []magnumThread, sum *store.ReviewSummary, optional map[int64]bool) p3Calls {
+	var c p3Calls
+	for _, mt := range mine {
+		switch {
+		case !optional[mt.RootID]:
+		case sum != nil && mt.ReviewID != 0 && mt.ReviewID == sum.ReviewID:
+			c.fresh++
+		default:
+			c.kept++
+		}
+	}
+	return c
 }
 
 // descriptionLineRe finds a review body's `Description: ✗` line: a claim of
@@ -631,7 +657,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// request may keep earlier findings open with neither, fixRemains). A
 	// read GitHub refuses for the rate limit holds the job as the floor does.
 	described := e.reviewDescribed(repo, pr.Number, sum.SHA)
-	alone := prev.Cycle == 0 && !reviewWork(sum, 0, described)
+	alone := prev.Cycle == 0 && !reviewWork(sum, p3Calls{}, described)
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
 	// for it only when nothing else would start the job.

@@ -252,7 +252,8 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
 		var optional map[int64]bool
 		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
-			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine)
+			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.sum)
+			f.optionalP3 = optionalSplit(l.Read.Mine, f.sum, optional)
 		}
 		f.described = f.sum != nil && e.reviewDescribed(repo, pr.Number, f.sum.SHA) // fix.go: the review's Description line is work
 		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA, optional,

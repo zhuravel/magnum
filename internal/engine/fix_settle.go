@@ -124,8 +124,8 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	var answered map[string]bool
 	var built map[int64]bool
-	rep.NeedsYou = e.settleOptional(ctx, job, rep.Optional, rep.NeedsYou) // fix_optional.go: a P3 author's call is yours, and holds nothing
-	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read)   // fix_decide.go: a decision it did not build goes back to you
+	rep.NeedsYou = e.settleOptional(ctx, job, rep.Optional, rep.NeedsYou, read) // fix_optional.go: a P3 author's call is yours, and holds nothing
+	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read)         // fix_decide.go: a decision it did not build goes back to you
 	if pushed {
 		rep.NeedsYou = e.dropMergedConflicts(ctx, job, rep.NeedsYou, target)
 	}

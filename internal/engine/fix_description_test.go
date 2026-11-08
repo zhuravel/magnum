@@ -79,7 +79,7 @@ func TestAReviewsDescriptionLineIsTheFixersWork(t *testing.T) {
 		}
 	}
 	sum := cleanSum()
-	if reviewWork(*sum, 0, false) || !reviewWork(*sum, 0, true) {
+	if reviewWork(*sum, p3Calls{}, false) || !reviewWork(*sum, p3Calls{}, true) {
 		t.Error("reviewWork does not count the description line")
 	}
 	read := readFor(nil, nil, nil, nil, nil)

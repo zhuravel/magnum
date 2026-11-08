@@ -398,7 +398,10 @@ func TestAnEditedRemarkIsNewWorkAgain(t *testing.T) {
 // that was handed its review it is no finding skipped without a word, and a
 // later review that keeps it open (the operator pushed meanwhile) starts no
 // loop on it. Another open P3 beside it is still work, and so is the call's
-// thread once it is no optional call.
+// thread once it is no optional call. A call counts only against the P3s
+// of its own review or the earlier ones a later review keeps open, never
+// against a later review's new P3s: the operator took the call with a push,
+// and the re-review of it posts a new P3, which is work.
 func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
 	sum := cleanSum()
 	sum.Counts[3] = 1
@@ -412,7 +415,7 @@ func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
 		t.Errorf("no optional call: items = %v, want the review and the skipped finding", got)
 	}
 	later := cleanSum()
-	later.RunID, later.OpenCounts = "r2", &[4]int{0, 0, 0, 1}
+	later.RunID, later.ReviewID, later.OpenCounts = "r2", 102, &[4]int{0, 0, 0, 1}
 	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); len(got) != 0 {
 		t.Errorf("a later review keeping the call open: items = %v, want none", got)
 	}
@@ -420,7 +423,16 @@ func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
 	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); !slices.Equal(got, []string{"review:r2"}) {
 		t.Errorf("another open P3 beside the call: items = %v, want the review", got)
 	}
-	if reviewWork(*later, 2, false) || !reviewWork(*later, 1, false) || !reviewWork(*later, 0, false) {
+	later.Counts[3], later.OpenCounts = 1, &[4]int{0, 0, 0, 0}
+	if got := itemKeys(openItemsOf(itemsInput{read: read, sum: later, head: fixHead, optional: optional})); !slices.Equal(got, []string{"review:r2"}) {
+		t.Errorf("a new P3 of a review that keeps the call no more: items = %v, want the review", got)
+	}
+	later.Counts[3], later.OpenCounts = 0, &[4]int{0, 0, 0, 2}
+	if reviewWork(*later, p3Calls{kept: 2}, false) || !reviewWork(*later, p3Calls{kept: 1}, false) || !reviewWork(*later, p3Calls{}, false) {
 		t.Error("reviewWork does not leave out the optional calls among the open P3s")
+	}
+	later.Counts[3], later.OpenCounts = 1, &[4]int{0, 0, 0, 0}
+	if !reviewWork(*later, p3Calls{kept: 1}, false) || reviewWork(*later, p3Calls{fresh: 1}, false) {
+		t.Error("reviewWork leaves a later review's new P3 out for an earlier review's call, or keeps its own call in")
 	}
 }

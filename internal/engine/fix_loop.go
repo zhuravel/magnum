@@ -217,8 +217,10 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	// fix.go: the re-review's `Description: ✗` line is the next cycle's work
 	described := res.Outcome == pipeline.OutcomePosted && e.reviewDescribed(job.repo, job.pr.Number, cmp.Or(res.TargetSHA, st.Head))
 	remains, optional := fixRemains(res) || described, 0
+	fctx := github.WithOp(ctx, opFix)
+	read := e.threadsReader(fctx, job) // one GitHub read, made only when a look below needs it
 	if !remains {
-		optional = e.optionalLeft(ctx, job, res)
+		optional = e.optionalLeft(ctx, job, res, read)
 	}
 	left := textx.Count(found, "finding", "findings") + " left"
 	switch open := roundOpenProblems(res); {
@@ -235,8 +237,6 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 	paused := e.pauseContinues(ctx, job.pr, res.Outcome)
 	needs, answered, carried := st.NeedsYou, st.answered(), st.Carried
 	if !paused && (len(needs) > 0 || len(carried) > 0) { // what magnum's threads show now, the re-review's read of them first
-		fctx := github.WithOp(ctx, opFix)
-		read := e.threadsReader(fctx, job)
 		if len(needs) > 0 {
 			needs, answered = e.freshNeedsYou(fctx, job, needs, answered, res.ReportDir, read)
 		}
@@ -712,7 +712,7 @@ func fixRemains(res pipeline.RoundResult) bool {
 // would only list them again. 0 under any other value,
 // whose loops end on them as before, and when the summary cannot be read
 // or is not that re-review's.
-func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.RoundResult) int {
+func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.RoundResult, read func() ([]github.Thread, error)) int {
 	if w := e.cfg.WatchFor(job.repo.FullName()); w == nil || e.cfg.AutofixFor(w) != config.AutofixOpen || res.Outcome != pipeline.OutcomePosted {
 		return 0
 	}
@@ -721,7 +721,7 @@ func (e *Engine) optionalLeft(ctx context.Context, job *fixJob, res pipeline.Rou
 	if err != nil || !ok || sum.SHA != cmp.Or(res.TargetSHA, job.state.Head) || res.ReviewID != 0 && sum.ReviewID != res.ReviewID {
 		return 0
 	}
-	return sum.Simplifications + max(openP3(sum)-e.openOptionalAt(ctx, job, res.ReportDir), 0)
+	return sum.Simplifications + max(openP3(sum)-e.openOptionalAt(ctx, job, read), 0)
 }
 
 // roundOpenProblems is how many earlier P0 to P2 findings a round's review

@@ -413,8 +413,10 @@ type openFacts struct {
 	// so it stops no start (rule 2).
 	decided bool
 	// optional are the operator's optional calls the whole read shows open
-	// (openOptional, fix_optional.go): no work, and named at the merge.
-	optional []optionalCall
+	// (openOptional, fix_optional.go): no work, and named at the merge;
+	// optionalP3 counts them against sum's P3s (optionalSplit).
+	optional   []optionalCall
+	optionalP3 p3Calls
 	// described: magnum's review that stands at the head has a
 	// `Description: ✗` line (reviewDescribes), which is review work.
 	described bool
@@ -523,7 +525,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenUnknown, "reading GitHub"), nil, needs
 	}
 	onlyRebuttals := len(work) > 0 && !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) &&
-		!reviewWork(*f.sum, len(f.optional), f.described)
+		!reviewWork(*f.sum, f.optionalP3, f.described)
 	if len(needs) > 0 && (len(work) == 0 || onlyRebuttals || !personsAlone(needs)) { // rule 8; a person's items alone wait beside work (rule 9)
 		v.leftovers = true
 		return say(OpenNeedsYou, needsWords(needs)), nil, needs
