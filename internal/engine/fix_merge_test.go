@@ -393,3 +393,81 @@ func TestAConflictDoesNotStartAFixWhoseOtherReviewersReadHitTheRateLimit(t *test
 		t.Errorf("the held fix looked at the base: fetches %v, merge checks %v", fetches, merges)
 	}
 }
+
+// On a PR of the operator's the fixer merged the base, pushed the merge and
+// still listed the conflict under Needs you, to say which side it kept; the
+// re-review of the merged head found nothing, and the loop's end asked the
+// operator to merge the base by hand all the same. A conflict entry whose
+// base tip (the one the prompt named) is an ancestor of the head the fixer
+// pushed is that merge, on GitHub: the settle drops it (fix.conflict_merged
+// says so), it asks nothing, and the clean re-review ends the loop as done.
+// A push that does not hold the tip (the fixer aborted the merge and pushed
+// a fix) keeps the call.
+func TestAConflictTheFixerMergedAndPushedAsksNothing(t *testing.T) {
+	const entry = "conflict: app/models/offer.rb: kept the base's label for the offer card"
+	for _, tc := range []struct {
+		name   string
+		head   string
+		pushed string
+		merged bool
+	}{
+		{name: "the merge is in the push", head: fixMergeHead, merged: true,
+			pushed: "d3d3d3d Merge c0c0c0c: `bin/rspec spec/models/offer_spec.rb` passed"},
+		{name: "the merge was aborted", head: fixPushed, pushed: "b2b2b2b Fix the total (review comment 4100000001)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			git.conflict("app/models/offer.rb")
+			git.ancestors = map[string]bool{fixBaseTip + ".." + fixMergeHead: true}
+			fixer(h, git, tc.head, func(run store.Run) string {
+				return fixReport(run.ID, tc.pushed, "1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "- "+entry)
+			})
+			h.fix(FixPayload{})
+			h.handle()
+			report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+			st, ok := h.fixStateOf(2)
+			if !ok || st.Phase != FixPhaseReviewing || st.Head != tc.head {
+				t.Fatalf("loop = %+v, %v; want it waiting for the re-review of %s", st, ok, tc.head)
+			}
+			call := "fix: merge the base by hand and decide the conflict in app/models/offer.rb: " + prPage + "; details: " + report
+			if tc.merged {
+				if len(st.NeedsYou) != 0 {
+					t.Errorf("the loop keeps %q for its end", st.NeedsYou)
+				}
+				if ev, ok := h.fixEvent("fix.needs_you"); ok {
+					t.Errorf("fix.needs_you = %q, want none", ev.Message)
+				}
+				if ev, ok := h.fixEvent("fix.conflict_merged"); !ok || !strings.Contains(ev.Message, "c0c0c0c") || !strings.Contains(ev.Message, "d3d3d3d") {
+					t.Errorf("fix.conflict_merged = %q, %v; want it to name the tip and the pushed head", ev.Message, ok)
+				}
+			} else {
+				if !slices.Equal(st.NeedsYou, []string{entry}) {
+					t.Errorf("the loop keeps %q, want the conflict", st.NeedsYou)
+				}
+				if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != call+"; the re-review of b2b2b2b runs first" {
+					t.Errorf("fix.needs_you = %q, %v; want the conflict's call", ev.Message, ok)
+				}
+			}
+
+			reviewWith(h, findings(map[string]int{}, "COMMENTED"))
+			h.advance(time.Minute)
+			reqPoll(h, prSpec{n: 2, head: tc.head, author: "zhuravel"})
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on after the re-review")
+			}
+			if !tc.merged {
+				if cur := h.wantState(2, store.PRNeedsAttention); deref(cur.LastError) != call {
+					t.Errorf("last_error = %q\nwant %q", deref(cur.LastError), call)
+				}
+				return
+			}
+			h.wantState(2, store.PRReviewed)
+			if _, ok := h.fixEvent("fix.done"); !ok {
+				t.Error("no fix.done after the clean re-review of the merge")
+			}
+			h.flush()
+			h.wantToasts("needs attention", 0)
+		})
+	}
+}

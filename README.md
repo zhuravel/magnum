@@ -3272,7 +3272,11 @@ forced as usual. A conflict that needs a product decision is aborted (`git merge
 `Needs you` as `conflict: <paths>: <the decision it needs>`, which asks you to "merge the base by hand and
 decide the conflict in <paths>: <the PR's link>" (the first 20 paths named, "and N more" counting the rest, as the prompt does); so is a merge whose specs stay red after the resolution
 (the fixer never pushes it), and one a failed push left off GitHub. The older words count such an entry as
-a conflict ("1 finding and 1 conflict need your call"). A fixer stopped in the middle of the merge (a
+a conflict ("1 finding and 1 conflict need your call"). A merge the fixer resolved and pushed is no call: the
+skill lists it under `Pushed` alone, with `; kept <side> in <path>` where a conflict kept one side's change,
+and a `conflict:` entry the fixer writes all the same asks nothing once the pushed head holds the base's tip
+it was given (`git merge-base --is-ancestor` in the slot): the settle drops it, a `fix.conflict_merged` event
+says so, and the re-review of the merged head decides the loop. A fixer stopped in the middle of the merge (a
 timeout, `magnum abort`, a crash) leaves it in progress, and git refuses every switch then, so the settle's
 resync of the slot and a release abort it first (`git merge --abort`, a `slot.aborted` event that names the merge, after a `slot.discarded` event for the tracked changes it drops; they abort a rebase or cherry-pick the same way). A base
 that cannot be fetched never blocks the fix: a `fix.conflict_unchecked` warning says why, and the fixer

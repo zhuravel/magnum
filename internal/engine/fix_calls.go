@@ -16,7 +16,8 @@ package engine
 // finding the fixer did not fix asks for the author's decision. A conflict
 // of the base merge that the fixer aborted ("conflict: <paths>: …", no id)
 // asks the author to merge the base by hand on the PR's page and decide it
-// (attention.ConflictCall). Each is a
+// (attention.ConflictCall); one the push holds the merged tip of asks
+// nothing, and the settle drops it (dropMergedConflicts). Each is a
 // call with the thread's link (attention.FixCall), and the message names the
 // calls one by one with the report last (needsYouText). An entry magnum
 // cannot read so (no such words, the description finding, another

@@ -3658,6 +3658,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARefusedReadOfTheDispatchedRunsIsSaidOnceAndTheWaitEndsAsWithNoRun, written with the fix, fails
   with its event taken out.
 
+- **A conflict the fixer merged and pushed asks nothing** (2026-11-08, the audit of what waits on the
+  operator, approved by the operator; keeps "The fixer merges the base when the PR conflicts with it"). On an
+  own PR (2026-11-07) the fixer merged the base, resolved its conflicts, pushed the merge with its fixes and
+  still listed the conflict under `Needs you`, to say which side it had kept; the re-review of the merged head
+  found nothing, and the loop's end asked the operator to "merge the base by hand and decide the conflict in
+  …" all the same, since magnum reads every `conflict:` entry as an aborted merge and never reads its reason.
+  The skill's base merge now says that a merge it resolved and pushed goes under `Pushed` alone, never under
+  `Needs you`, with `; kept <the base's or the PR's side> in <path>` on the merge's line where a conflict kept
+  one side's change. The settle drops a `conflict:` entry when the base's tip the job gave the fixer
+  (`fixJob.conflict.sha`) is an ancestor of the head it confirmed pushed (`dropMergedConflicts`, `IsAncestor`
+  in the slot, which holds both), and a `fix.conflict_merged` info event names the tip and the head: the
+  merge is on GitHub, and the re-review of that head judges the merged code. A job given no conflict, a push
+  without the tip (the fixer aborted the merge and pushed its fixes) and a look that fails keep the entry, so
+  `conflict:` still means an aborted merge. Rejected: reading the entry's reason for a merge (the fixer's
+  words are never read); dropping every conflict entry of a run that pushed (an aborted merge beside pushed
+  fixes still needs the operator). Tests, failing first: TestAConflictTheFixerMergedAndPushedAsksNothing in
+  engine and a case of TestTheFixSkillMergesTheBaseWhenThePRConflicts in agents.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

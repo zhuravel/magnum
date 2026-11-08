@@ -548,6 +548,10 @@ func TestTheFixSkillMergesTheBaseWhenThePRConflicts(t *testing.T) {
 		"5. Finish a merge whose conflicts you resolved with `git commit --no-edit`; a merge that applied cleanly has its commit already.",
 		// A failed push leaves the base merge off GitHub: it goes to the author.
 		"and the base merge, when you made one, as `- conflict: <path>, <path>: the merge is not on GitHub (the push failed)`",
+		// A merge it resolved and pushed is no call: the side it kept is a note
+		// on the merge's line (magnum drops a conflict entry the push holds).
+		"A merge you resolved and pushed goes under `## Pushed` alone, never under `## Needs you`: " +
+			"when a conflict kept one side's change over the other's, add `; kept <the base's or the PR's side> in <path>` to its line.",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)

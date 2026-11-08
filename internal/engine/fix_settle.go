@@ -46,7 +46,9 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // be put back fails the job. Then the report decides: none, one of
 // another run or a broken one, or a failed push, fails the job; a push goes
 // on to the re-review (fixReReview), with the findings left to the author
-// kept for that round's end (spec: the push deserves its re-review);
+// kept for that round's end (spec: the push deserves its re-review), but
+// for a conflict of the base merge whose tip the push holds, which the
+// fixer merged after all (dropMergedConflicts);
 // findings left to the author without a push end the loop as needs
 // attention (a fix the fixer left as unanswered in another reviewer's
 // thread that GitHub shows its reply in is none: dropFixerAnswered; nor is a
@@ -123,6 +125,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	var answered map[string]bool
 	var built map[int64]bool
 	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read) // fix_decide.go: a decision it did not build goes back to you
+	if pushed {
+		rep.NeedsYou = e.dropMergedConflicts(ctx, job, rep.NeedsYou, target)
+	}
 	if len(rep.NeedsYou) > 0 {
 		rep.NeedsYou = e.dropFixerAnswered(ctx, job, rep.NeedsYou, read)                // fix_external.go
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
@@ -289,6 +294,42 @@ func (e *Engine) fixPushDescends(ctx context.Context, job *fixJob, seen, head st
 		e.log.Warn("fix: whether the push descends from the PR's head", "subject", job.subject(), "head", textx.ShortSHA(seen), "err", err)
 	}
 	return ok && err == nil
+}
+
+// dropMergedConflicts is entries, the fixer's "## Needs you", without its
+// conflicts of the base merge when the base's tip the job's fixer was given
+// to merge (fixJob.conflict) is an ancestor of head, the head the settle
+// confirmed it pushed: the merge is on GitHub, so the conflict asks the
+// author for nothing, and the re-review of head judges the merged code. A
+// side the fixer kept in that merge stays in its report. A job given no
+// conflict, a push without the tip (the fixer aborted the merge and pushed
+// its fixes) or a look that fails (logged) keeps every entry. A
+// fix.conflict_merged event counts what went.
+func (e *Engine) dropMergedConflicts(ctx context.Context, job *fixJob, entries []string, head string) []string {
+	tip := job.conflict.sha
+	isConflict := func(entry string) bool {
+		n, ok := readNeedsYouEntry(entry)
+		return ok && n.place == conflictPlace
+	}
+	if tip == "" || e.d.Git == nil || !slices.ContainsFunc(entries, isConflict) {
+		return entries
+	}
+	merged, err := e.d.Git.IsAncestor(ctx, job.slot.Path, tip, head)
+	if err != nil {
+		e.log.Warn("fix: whether the push holds the base's tip the fixer merged", "subject", job.subject(), "tip", textx.ShortSHA(tip), "err", err)
+		return entries
+	}
+	if !merged {
+		return entries
+	}
+	kept := slices.DeleteFunc(slices.Clone(entries), isConflict)
+	dropped := len(entries) - len(kept)
+	data := job.eventData()
+	data["conflict_sha"], data["head"], data["dropped"] = tip, head, dropped
+	e.event(ctx, "info", job.subject(), "fix.conflict_merged", fmt.Sprintf("%s merged %s at %s and pushed it in %s: its %s %s nothing",
+		job.role.Name, job.conflict.base, textx.ShortSHA(tip), textx.ShortSHA(head), textx.Plural(dropped, "conflict entry", "conflict entries"),
+		textx.Plural(dropped, "asks", "ask")), data)
+	return kept
 }
 
 // eventData is the data every fix event carries: the run, the role, the
