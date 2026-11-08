@@ -1551,6 +1551,12 @@ type FixPromptInput struct {
 	ConflictBase, ConflictSHA                                                                   string
 	ConflictPaths                                                                               []string
 	OwnPR                                                                                       bool
+	// MergeOnly: the run merges the PR's parent alone (the conflict above),
+	// with no review, finding or other reviewer's item. MergedBase and
+	// MergedSHA are the base whose tip magnum merged into the PR before the
+	// run ("" = none): the head the fixer starts from is that merge.
+	MergeOnly             bool
+	MergedBase, MergedSHA string
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
@@ -3262,6 +3268,13 @@ type RoleData struct {
 	ConflictBase, ConflictSHA string
 	ConflictPaths             []string
 	ConflictFiles             int
+	// MergeOnly, MergedBase and MergedSHA are the fix prompt's too: the run
+	// merges the PR's parent alone (the conflict above) with no review to
+	// fix; magnum merged the tip MergedSHA of the base MergedBase into the
+	// PR before the run, so the head the fixer starts from is that merge.
+	// false and "" otherwise.
+	MergeOnly             bool
+	MergedBase, MergedSHA string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -8801,6 +8814,10 @@ const EventSharedFailure = "agents.shared_failure"
     within sharedFailureQuiet: the PRs, the roles and the line (data last_line,
     prs, roles); its subject is tool:<kind> when the roles share one agent kind.
 
+const FixModeMerge = "merge"
+    FixModeMerge is the mode of a fix request and loop that merges the PR's
+    parent alone (FixPayload.Mode, FixState.Mode).
+
 const FormerDismissMessage = "magnum: superseded by the review of %s posted as %s (this PR's reviewer changed)"
     FormerDismissMessage is the reason a dismissed review of a former identity
     shows on GitHub; the arguments are the new review's commit (short) and the
@@ -10435,6 +10452,7 @@ type FixPayload struct {
 	Done   bool          `json:"done,omitempty"`
 	Seen   string        `json:"seen,omitempty"`
 	Decide []FixDecision `json:"decide,omitempty"`
+	Mode   string        `json:"mode,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it
@@ -10443,8 +10461,10 @@ type FixPayload struct {
     fix_done.go; Seen is the attention you saw, the PR's last_error when you
     asked, and a PR whose attention changed since is refused). None of Off,
     On and Done starts a loop. Decide posts your replies in the threads the
-    fixer left you, as you, then starts the loop, whose fixer builds them as
-    your decisions (fix_decide.go); it goes without Off, On and Done.
+    fixer left you, as you, then starts the loop, whose fixer builds them
+    as your decisions (fix_decide.go); it goes without Off, On and Done.
+    Mode FixModeMerge merges the PR's parent alone (fix_parent.go), with DryRun
+    and nothing else.
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".
@@ -10501,6 +10521,7 @@ type FixState struct {
 	OthersUnread string     `json:"others_unread,omitempty"`
 	Carried      []FixCarry `json:"carried,omitempty"`
 	Waits        []string   `json:"waits,omitempty"`
+	Mode         string     `json:"mode,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -10538,8 +10559,9 @@ type FixState struct {
     them while cycles are left. Waits are the keys of other reviewers' items
     (fix_open_items.go) that an earlier loop was handed and that wait for the
     author, a person's, beside which autofix = "open" started this loop on work
-    never handed (rule 9): every cycle's external file marks them waiting,
-    and the fixer leaves them alone (writeExternal).
+    never handed (rule 9): every cycle's external file marks them waiting, and
+    the fixer leaves them alone (writeExternal). Mode is what the loop does: ""
+    fixes findings, FixModeMerge merges the PR's parent alone (fix_parent.go).
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
@@ -17057,6 +17079,16 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     the lowest live one). When a later page fails it still carries what the
     earlier pages reported, so the caller can pause on a low budget.
 
+func (c *Client) RecentRuns(ctx context.Context, owner, repo, workflow string) ([]WorkflowRun, error)
+    RecentRuns lists the newest runs of the workflow file workflow ("ci.yml")
+    of owner/repo, of any event and branch, newest first, each with its commit,
+    branch and event: GET /repos/{o}/{r}/actions/workflows/{file}/runs,
+    one page of recentRunsPage. The caller picks a branch's runs out of it,
+    so no branch name reaches the command line, which a failed call logs.
+    The identity needs read access to the repository's Actions (an App: Actions:
+    read). A workflow that is not a plain file name of .github/workflows
+    (ValidWorkflowFile) is refused before any call.
+
 func (c *Client) ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (ReviewCommentReply, error)
     ReplyToReviewComment posts body as a reply in the thread whose first comment
     is commentID (POST /repos/{o}/{r}/pulls/{n}/comments/{id}/replies) as the
@@ -17621,11 +17653,16 @@ type WorkflowRun struct {
 	Conclusion string
 	URL        string
 	CreatedAt  time.Time
+	HeadSHA    string
+	HeadBranch string
+	Event      string
 }
-    WorkflowRun is a run of a workflow as DispatchedRuns and CommitRuns list it:
-    its id, its status (queued, waiting, requested, pending, in_progress or
-    completed), its conclusion once completed (success, failure, cancelled,
-    timed_out, ...), its page and when GitHub created it.
+    WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns and
+    RecentRuns list it: its id, its status (queued, waiting, requested, pending,
+    in_progress or completed), its conclusion once completed (success, failure,
+    cancelled, timed_out, ...), its page and when GitHub created it; RecentRuns
+    also says the commit, the branch and the event it ran for (the branch is a
+    PR's text: never logged).
 
 func (r WorkflowRun) Done() bool
     Done reports whether r ended (completed, whatever its conclusion).
@@ -17863,6 +17900,16 @@ func (c *Client) CommitTime(ctx context.Context, dir, rev string) (time.Time, er
     CommitTime is the committer time of revision rev in the repository at dir
     (git show -s --format=%ct, to the second).
 
+func (c *Client) CommitTree(ctx context.Context, dir, tree string, parents []string, message string, who Signature) (string, error)
+    CommitTree writes the commit of tree with parents (the first is the
+    branch it goes on: a merge's are the PR's head, then the base's tip) and
+    message, by who as author and committer whatever the environment or the
+    repository says, unsigned (commit.gpgsign=false), and returns its id:
+    `git commit-tree <tree> -p <parent>... -F -`, the message on stdin. No ref,
+    index or work tree changes. A tree or parent that is no revision, no parent,
+    or a signature with an empty, multi-line or bracketed part is refused before
+    git runs.
+
 func (c *Client) CommitsAfter(ctx context.Context, dir, from, to string, firstParent bool) ([]ListedCommit, error)
     CommitsAfter lists the commits of to that from lacks (`git rev-list
     --parents from..to`), newest first, each with its parents. With firstParent,
@@ -18051,6 +18098,13 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) err
     are, staged ones staged: the merge never stashes them (--no-autostash,
     whatever merge.autoStash says, as RebaseOnto).
 
+func (c *Client) MergeTree(ctx context.Context, dir, head, base string) (tree string, conflicts []string, err error)
+    MergeTree is MergeConflicts with the merge itself: the id of the tree `git
+    merge-tree --write-tree head base` writes for a clean merge (no conflicts),
+    else no tree and the conflicting paths, sorted. It writes the merge's
+    objects and no ref, index or work tree, so CommitTree can make the merge
+    commit of that tree with nothing checked out.
+
 func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
     ModifiedPaths is ChangedPaths without the files head adds: the paths that
     exist at the merge base and that head modifies, deletes or changes the type
@@ -18108,6 +18162,10 @@ func (c *Client) PushLeaseGitHub(ctx context.Context, dir, owner, repo, sha, bra
     PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS
     (GitHubHTTPSURL).
 
+func (c *Client) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error
+    PushLeaseGitHubAs is PushLeaseViaAs to github.com/<owner>/<repo> over HTTPS
+    (GitHubHTTPSURL).
+
 func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect string) error
     PushLeaseVia is PushLease to url instead of origin, with gh as git's only
     credential helper (`git -c credential.helper= -c credential.helper='!gh auth
@@ -18117,6 +18175,12 @@ func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect
     anything is pushed (ErrNotDescendant). `magnum push` pushes a fixer App's
     commits so, as the App, whatever form origin has and whichever helper the
     operator's config names.
+
+func (c *Client) PushLeaseViaAs(ctx context.Context, dir, url, sha, branch, expect string, env map[string]string) error
+    PushLeaseViaAs is PushLeaseVia with env over the push, never over a key
+    of gitx's own: the daemon's push as a fixer App, whose GH_CONFIG_DIR (with
+    GH_TOKEN and GITHUB_TOKEN blanked, identity.Source.Env) holds the token gh
+    answers git with. No value of env is ever logged.
 
 func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
     RebaseOnto replays the commits of the branch checked out at dir that
@@ -18404,6 +18468,10 @@ func ParseRemote(raw string) (Remote, bool)
 
 func (r Remote) FullName() string
     FullName returns "owner/repo".
+
+type Signature struct{ Name, Email string }
+    Signature is who a commit is by: the name and email of its author, who is
+    its committer too.
 
 type Status struct {
 	Tracked   int // entries with changes to tracked files (modified, added, deleted, renamed, conflicted)
