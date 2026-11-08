@@ -279,17 +279,19 @@ type Deps struct {
 	Git    Git
 	GitHub GitHub
 	// Mirror is the repository's mirror dir; ok false = not configured or
-	// its volume is absent (dir, when not "", says which: MirrorDir). It
-	// puts every repository at <mirror_dir>/<owner>/<name>.git, as MirrorDir
-	// does: a deploy finds every effect under that mirror_dir (Step, Cancel).
+	// its volume is absent (dir, when not "", says which: MirrorDir).
 	Mirror func(repo string) (dir string, ok bool)
 	// GitEnv is the environment of the fetch (the poll identity's git env:
 	// its GH_CONFIG_DIR, the credential helper's login); gh is git's only
 	// credential helper, so the operator's own credentials never answer
 	// implicitly. Nil, or nil for a repository, and nothing is fetched.
-	GitEnv func(repo string) map[string]string
-	Now    func() time.Time
-	Log    *slog.Logger
+	// MirrorRoot is mirror_dir, where a deploy finds every effect (Step and
+	// Cancel scan <mirror_dir>/*/*.deploys); ok false = not configured or
+	// its volume is not mounted, and nothing is scanned (MirrorRoot).
+	MirrorRoot func() (dir string, ok bool)
+	GitEnv     func(repo string) map[string]string
+	Now        func() time.Time
+	Log        *slog.Logger
 
 	// The deploy's (deploy.go).
 

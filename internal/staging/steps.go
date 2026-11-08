@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // errHook is what a test's hook returns to stop a Step as a killed process
@@ -129,25 +130,43 @@ func (r *stepRun) begin(step string, polling bool, text string) error {
 // ok writes the step's ok and moves the effect to next.
 func (r *stepRun) ok(next, text string) error {
 	step := r.j.Step
-	r.j.Step, r.j.Phase, r.j.Why, r.j.Fails = next, "", "", 0
+	r.j.Step, r.j.Phase, r.j.Why = next, "", ""
+	r.clearFails()
 	r.event(step, PhaseOK, text)
 	return r.save()
 }
 
-// retry records a failure of step: phase fail and why, the step runs again
-// at the next Step. The maxFails-th in a row ends the effect: failed before
-// the push, nothing pushed; done, not confirmed, after it (the push stands).
+// retryWaits are the waits after a step's failures in a row before it
+// tries again; the last repeats.
+var retryWaits = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute}
+
+// retry records a passing failure of step: phase fail and why, and the
+// next try's time (RetryAt, retryWaits), which Why names. A failure
+// failBudget or more after the first of the run ends the effect: failed
+// before the push, nothing pushed; done, not confirmed, after it (the push
+// stands).
 func (r *stepRun) retry(ctx context.Context, step, why string) error {
+	now := r.c.d.Now()
+	if r.j.Fails == 0 || r.j.FailingSince.IsZero() {
+		r.j.FailingSince = now
+	}
 	r.j.Fails++
-	if r.j.Fails >= maxFails {
-		gave := fmt.Sprintf("%s failed %d times: %s", step, r.j.Fails, why)
+	if failing := now.Sub(r.j.FailingSince); failing >= failBudget {
+		gave := fmt.Sprintf("%s failed for %s (%d tries): %s", step, minutes(failing.Truncate(time.Minute)), r.j.Fails, why)
+		r.j.RetryAt = time.Time{}
 		if !r.j.PushedAt.IsZero() {
 			return r.endWith(ctx, EffectDone, PhaseFail, NotConfirmed+": "+gave+"; the push stands")
 		}
 		return r.end(ctx, EffectFailed, gave+"; nothing was pushed")
 	}
-	r.j.Phase, r.j.Why = PhaseFail, fmt.Sprintf("%s (try %d of %d)", why, r.j.Fails, maxFails)
+	r.j.RetryAt = now.Add(retryWaits[min(r.j.Fails, len(retryWaits))-1])
+	r.j.Phase, r.j.Why = PhaseFail, fmt.Sprintf("%s (try %d failed; next try at %s)", why, r.j.Fails, r.j.RetryAt.Format("15:04:05"))
 	return r.save()
+}
+
+// clearFails forgets the step's failures in a row.
+func (r *stepRun) clearFails() {
+	r.j.Fails, r.j.FailingSince, r.j.RetryAt = 0, time.Time{}, time.Time{}
 }
 
 // wait says why the step waits (CI, Jenkins, the resolver): no failure, so
@@ -156,7 +175,8 @@ func (r *stepRun) wait(why string) error {
 	if r.j.Why == why && r.j.Fails == 0 {
 		return nil
 	}
-	r.j.Why, r.j.Fails = why, 0
+	r.j.Why = why
+	r.clearFails()
 	if r.j.Phase == PhaseFail {
 		r.j.Phase = PhaseBegin
 	}
@@ -587,7 +607,8 @@ func (r *stepRun) remerge(ctx context.Context, tip, why string) error {
 	}
 	step := r.j.Step
 	r.j.Remerges++
-	r.j.Tip, r.j.Merge, r.j.MergeTree, r.j.Conflicts, r.j.Conflicted, r.j.Fails = tip, "", "", nil, 0, 0
+	r.j.Tip, r.j.Merge, r.j.MergeTree, r.j.Conflicts, r.j.Conflicted = tip, "", "", nil, 0
+	r.clearFails()
 	r.j.Step, r.j.Phase = StepMerge, ""
 	r.j.Why = fmt.Sprintf("%s (to %s): merging again (try %d)", why, short(tip), 1+r.j.Remerges)
 	r.event(step, PhaseFail, r.j.Why)

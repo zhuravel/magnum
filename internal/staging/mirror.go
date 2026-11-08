@@ -55,6 +55,23 @@ func mirrorDir(volumes, root string) func(repo string) (string, bool) {
 	}
 }
 
+// MirrorRoot is Deps.MirrorRoot over [staging] mirror_dir root, beside
+// MirrorDir: root itself, ok false for no root, a root that is /Volumes or a
+// volume's root, and a root under /Volumes/<volume> while that volume is
+// not mounted (then with root). It creates nothing.
+func MirrorRoot(root string) func() (dir string, ok bool) { return mirrorRoot(volumesDir, root) }
+
+// mirrorRoot is MirrorRoot with the volumes' directory (tests use their
+// own).
+func mirrorRoot(volumes, root string) func() (string, bool) {
+	return func() (string, bool) {
+		if root == "" || volumeRoot(volumes, root) {
+			return "", false
+		}
+		return filepath.Clean(root), volumeMounted(volumes, root)
+	}
+}
+
 // volumeRoot reports whether root is the volumes' directory itself or a
 // volume's root (/Volumes/<name>): a mirror_dir there would write into the
 // directory a volume mounts on.

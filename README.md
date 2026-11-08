@@ -5008,10 +5008,13 @@ stops only the watching: **a deploy never reverts a push**, and neither does a f
 (revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
 events, at least once (an event a crash cut is recorded when the deploy resumes).
 
-No deploy holds its env for ever: a failure that comes back 3 times in a row at a step (a fetch, a git command, a
-read of GitHub or of the resolver, a push) ends it, failed before the push, `pushed, not confirmed` after it; a
-resolver that works over 2 hours fails it; a merge the mirror lacks fails it at once. Either daemon resumes a deploy
-the other started, from the journals under `mirror_dir`, at its next tick. Keep `mirror_dir` out of every directory an
+No deploy holds its env for ever. A passing failure at a step (a fetch, a git command, a read of GitHub or of the
+resolver, a push) tries again after 30 seconds, then 1, 2, 4 and 8 minutes, and the deploy's why names the next
+try's time; a step still failing 15 minutes after its first failure ends the deploy, failed before the push,
+`pushed, not confirmed` after it (so a short GitHub or network outage costs no redeploy). A definite failure ends it
+at once: a merge the mirror lacks or that verify refuses, the allowlist, the commit identity, the push's refusal.
+A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from the journals
+under `mirror_dir`, at its next tick. Keep `mirror_dir` out of every directory an
 agent can write (the review slots, the factory's copies): the push checks the merge again from git, but the journals
 and the mirror are what a deploy works from.
 

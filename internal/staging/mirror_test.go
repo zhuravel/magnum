@@ -37,6 +37,9 @@ func TestAnAbsentVolumeGivesUnknownAndCreatesNothing(t *testing.T) {
 			if _, ok := mirrorDir(volumes, filepath.Join(filepath.Dir(volumes), "volumes", vol, "magnum-staging"))("acme/app"); ok {
 				t.Errorf("%s spelled in lower case: the volume's check passed", root)
 			}
+			if got, ok := mirrorRoot(volumes, root)(); ok || got != root {
+				t.Errorf("MirrorRoot = %q, %v; want %q, false while the volume is not mounted", got, ok, root)
+			}
 			dir, ok := mirror("acme/App")
 			if ok {
 				t.Fatalf("Mirror(acme/App) = %q, true; want false while the volume is not mounted", dir)
@@ -83,14 +86,23 @@ func TestMirrorDirIsOwnerRepoUnderTheRoot(t *testing.T) {
 			t.Errorf("Mirror(%q) = %q, true; want no mirror", bad, dir)
 		}
 	}
+	if got, ok := mirrorRoot(filepath.Join(t.TempDir(), "Volumes"), root)(); !ok || got != root {
+		t.Errorf("MirrorRoot = %q, %v; want %q, true", got, ok, root)
+	}
 	if dir, ok := mirrorDir("/Volumes", "")("acme/app"); ok || dir != "" {
 		t.Errorf("no mirror_dir: %q, %v; want none", dir, ok)
+	}
+	if got, ok := mirrorRoot("/Volumes", "")(); ok || got != "" {
+		t.Errorf("no mirror_dir: MirrorRoot = %q, %v; want none", got, ok)
 	}
 	volumes := filepath.Join(t.TempDir(), "Volumes")
 	for _, root := range []string{volumes, filepath.Join(volumes, "Work"), volumes + "/", filepath.Join(filepath.Dir(volumes), "volumes", "Work"),
 		filepath.Join(filepath.Dir(volumes), "VOLUMES")} {
 		if dir, ok := mirrorDir(volumes, root)("acme/app"); ok || dir != "" {
 			t.Errorf("mirror_dir %s, the volumes or a volume's root: %q, %v; want none", root, dir, ok)
+		}
+		if got, ok := mirrorRoot(volumes, root)(); ok || got != "" {
+			t.Errorf("mirror_dir %s, the volumes or a volume's root: MirrorRoot = %q, %v; want none", root, got, ok)
 		}
 	}
 }

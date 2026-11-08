@@ -20196,6 +20196,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestACancelledCIRunIsKeptInTheEndState, TestNoMirrorLockAcrossGitHubTheResolverOrPushEnv,
     TestAnEventCutByACrashIsDeliveredOnResume and TestACancelFromAnotherClientEndsTheEffectTheFirstHolds (the
     review's P4, which passed before).
+  - Two rulings after fix round 1. The retry budget: three failures in a row (a few ticks) cost the operator a
+    redeploy for a short outage, so a passing failure now tries again after 30 s, 1, 2, 4 and 8 minutes
+    (`RetryAt`, named in Why; a Step before it does nothing), and the step's failure ends the effect only once it
+    has failed for `failBudget`, 15 minutes after the first failure of the run: failed before the push, done,
+    "pushed, not confirmed", after it. Definite failures still end it at once: a merge the mirror lacks or that
+    `checkMerge` refuses, the allowlist, the identity, PushEnv's refusal. The mirror root: Step's and Cancel's
+    scan reads `Deps.MirrorRoot`, set by `staging.MirrorRoot(mirror_dir)` beside `MirrorDir` (ok false while unset
+    or its volume is not mounted, and nothing is scanned), in place of asking `Mirror` for a placeholder
+    repository. Tests: TestATransientFailureBacksOffAndEndsAfterFifteenMinutes (the waits 30 s to 8 min, no work
+    before the next try, the end after 15 minutes at plan, merge, verify, push, watch and confirm),
+    TestAShortOutageIsRiddenOut (four failures over 3 minutes, then done), TestTheScanUsesTheMirrorRootAlone, and
+    MirrorRoot's rows in TestAnAbsentVolumeGivesUnknownAndCreatesNothing and TestMirrorDirIsOwnerRepoUnderTheRoot;
+    each failed before its change.
 
 ## Learned rules
 

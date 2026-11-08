@@ -129,35 +129,33 @@ const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 // bart is a second staging env.
 var bart = Env{Name: "bart", Branch: "staging-bart"}
 
-// I2. A failure that recurs maxFails times at a step ends the effect,
-// naming the step: failed before the push, "pushed, not confirmed" after
-// it (the push stands). The env is released, and the end is the one fail
-// event. No looping failure holds the env for ever.
-func TestEveryRetryEndsAfterThreeFailures(t *testing.T) {
+// The retry backoff's ruling: a transient failure at a step tries again
+// after 30 s, 1, 2, 4 and 8 minutes, the journal's Why naming the next
+// try's time; a Step before that time does nothing; the failure ends the
+// effect only once it has failed for failBudget, failed before the push,
+// done, "pushed, not confirmed", after it (the push stands). The env is
+// released, and the end is the one fail event.
+func TestATransientFailureBacksOffAndEndsAfterFifteenMinutes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		at     string // the step the failure starts at
-		break_ func(w *deployWorld, c *Client, id EffectID)
+		break_ func(w *deployWorld)
 		state  string
 	}{
-		{"the PR's pull ref is gone", StepPlan, func(w *deployWorld, _ *Client, _ EffectID) {
+		{"the PR's pull ref is gone", StepPlan, func(w *deployWorld) {
 			gitIn(w.t, w.r, w.origin, "update-ref", "-d", "refs/pull/1/head")
 		}, EffectFailed},
-		{"merge-tree fails", StepMerge, func(w *deployWorld, _ *Client, _ EffectID) { w.run.failing("merge-tree") }, EffectFailed},
-		{"the fetch fails at verify", StepVerify, func(w *deployWorld, _ *Client, _ EffectID) { w.run.failing("fetch") }, EffectFailed},
-		{"the default branch cannot be read at push", StepPush, func(w *deployWorld, _ *Client, _ EffectID) {
-			w.run.failing("symbolic-ref")
-		}, EffectFailed},
-		{"the tip's history cannot be read at push", StepPush, func(w *deployWorld, _ *Client, _ EffectID) {
-			w.run.failing("merge-base")
-		}, EffectFailed},
-		{"ci.yml's runs cannot be read", StepWatch, func(w *deployWorld, _ *Client, _ EffectID) {
+		{"merge-tree fails", StepMerge, func(w *deployWorld) { w.run.failing("merge-tree") }, EffectFailed},
+		{"the fetch fails at verify", StepVerify, func(w *deployWorld) { w.run.failing("fetch") }, EffectFailed},
+		{"the default branch cannot be read at push", StepPush, func(w *deployWorld) { w.run.failing("symbolic-ref") }, EffectFailed},
+		{"the tip's history cannot be read at push", StepPush, func(w *deployWorld) { w.run.failing("merge-base") }, EffectFailed},
+		{"ci.yml's runs cannot be read", StepWatch, func(w *deployWorld) {
 			w.gh.mu.Lock()
 			w.gh.runsErr = errors.New("502 from GitHub")
 			w.gh.mu.Unlock()
 		}, EffectDone},
-		{"the deployments cannot be read", StepConfirm, func(w *deployWorld, _ *Client, _ EffectID) {
+		{"the deployments cannot be read", StepConfirm, func(w *deployWorld) {
 			w.gh.mu.Lock()
 			w.gh.deployErr["void"] = errors.New("502 from GitHub")
 			w.gh.mu.Unlock()
@@ -178,19 +176,43 @@ func TestEveryRetryEndsAfterThreeFailures(t *testing.T) {
 			if ended(e) {
 				t.Fatalf("ended before %s: %+v", tc.at, e)
 			}
-			tc.break_(w, c, id)
+			tc.break_(w)
 			events := w.eventCount()
-			for range maxFails + 2 {
+			start := w.deps.Now()
+			var waits []time.Duration
+			for range 20 {
 				if err := c.Step(context.Background()); err != nil {
 					t.Fatalf("Step: %v", err)
 				}
+				if e = w.effect(c, id); ended(e) {
+					break
+				}
+				j := w.journalOf(id)
+				if !j.RetryAt.After(w.deps.Now()) || !strings.Contains(e.Why, "next try at "+j.RetryAt.Format("15:04:05")) {
+					t.Fatalf("after a failure: %+v, retry at %s; want a later try named in Why", e, j.RetryAt)
+				}
+				seq := j.Seq
+				if err := c.Step(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if w.journalOf(id).Seq != seq {
+					t.Fatal("a Step before the next try's time ran the step")
+				}
+				waits = append(waits, j.RetryAt.Sub(w.deps.Now()))
+				w.advance(j.RetryAt.Sub(w.deps.Now()))
 			}
-			e = w.effect(c, id)
-			if e.State != tc.state || e.Step != tc.at || !strings.Contains(e.Why, tc.at+" failed 3 times") {
-				t.Errorf("after %d failing Steps: %+v, want %s at %s, %q", maxFails+2, e, tc.state, tc.at, tc.at+" failed 3 times")
+			want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute}
+			if !slices.Equal(waits, want) {
+				t.Errorf("the waits between tries: %v, want %v", waits, want)
 			}
-			if tc.state == EffectDone && !strings.HasPrefix(e.Why, NotConfirmed) {
-				t.Errorf("after the push: %q, want pushed, not confirmed", e.Why)
+			if failing := w.deps.Now().Sub(start); failing < failBudget {
+				t.Errorf("ended after %s of failing, want at least %s", failing, failBudget)
+			}
+			if e.State != tc.state || e.Step != tc.at || !strings.Contains(e.Why, tc.at+" failed for") {
+				t.Errorf("ended: %+v, want %s at %s, %q", e, tc.state, tc.at, tc.at+" failed for")
+			}
+			if tc.state == EffectDone && (!strings.HasPrefix(e.Why, NotConfirmed) || !strings.Contains(e.Why, "the push stands")) {
+				t.Errorf("after the push: %q, want pushed, not confirmed, the push stands", e.Why)
 			}
 			if _, held := c.heldFor(w.mirror, "void"); held {
 				t.Error("the env is still held")
@@ -202,6 +224,39 @@ func TestEveryRetryEndsAfterThreeFailures(t *testing.T) {
 				w.noPushSince(0, w.tip)
 			}
 		})
+	}
+}
+
+// A short outage costs no redeploy: the fetch fails four times (over 3
+// minutes), the effect tries again after its waits, and it goes on to done
+// with its failures forgotten.
+func TestAShortOutageIsRiddenOut(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	c := w.client()
+	defer c.Close()
+	id := w.deploy(c, 1)
+	w.drive(c, id, at(StepVerify))
+	w.run.failing("fetch")
+	for range 4 {
+		if err := c.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if e := w.effect(c, id); ended(e) {
+			t.Fatalf("a short outage ended the effect: %+v", e)
+		}
+		if at := w.journalOf(id).RetryAt; at.After(w.deps.Now()) {
+			w.advance(at.Sub(w.deps.Now()))
+		}
+	}
+	w.run.mu.Lock()
+	w.run.fail = nil
+	w.run.mu.Unlock()
+	if e := w.finish(c, id); e.State != EffectDone || !strings.HasPrefix(e.Why, "live") {
+		t.Fatalf("after the outage: %+v, want done, live", e)
+	}
+	if j := w.journalOf(id); j.Fails != 0 || !j.RetryAt.IsZero() {
+		t.Errorf("fails %d, retry at %s; want them forgotten", j.Fails, j.RetryAt)
 	}
 }
 
@@ -217,9 +272,10 @@ func TestAResolverThatNeverAnswersEndsTheEffect(t *testing.T) {
 		c := w.client()
 		defer c.Close()
 		id := w.deploy(c, 2)
+		start := w.deps.Now()
 		e := w.drive(c, id, ended)
-		if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "merge failed 3 times") {
-			t.Errorf("ended: %+v, want failed at merge, 3 times", e)
+		if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "merge failed for") || w.deps.Now().Sub(start) < failBudget {
+			t.Errorf("ended: %+v after %s, want failed at merge after %s", e, w.deps.Now().Sub(start), failBudget)
 		}
 		if got := res.cancels(); !slices.Equal(got, []string{"job-1"}) {
 			t.Errorf("cancels: %q, want job-1", got)
@@ -749,4 +805,42 @@ func TestACancelFromAnotherClientEndsTheEffectTheFirstHolds(t *testing.T) {
 		t.Error("a still holds the env")
 	}
 	w.noPushSince(0, w.tip)
+}
+
+// The mirror root: Step and Cancel scan Deps.MirrorRoot alone. Without it,
+// a fresh client finds no effect, whatever Mirror says; with it, it finds
+// them all.
+func TestTheScanUsesTheMirrorRootAlone(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	first := w.client()
+	id := w.deploy(first, 1)
+	w.drive(first, id, at(StepPush))
+	kill(first)
+	noRoot := w.deps
+	noRoot.MirrorRoot = nil
+	blind := New(noRoot)
+	defer blind.Close()
+	if err := blind.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if j := w.journalOf(id); j.Step != StepPush || j.Phase != "" {
+		t.Errorf("a client without MirrorRoot ran the effect: %s %q", j.Step, j.Phase)
+	}
+	if err := blind.Cancel(context.Background(), id); err == nil {
+		t.Error("a client without MirrorRoot found the effect to cancel")
+	}
+	unmounted := w.deps
+	unmounted.MirrorRoot = func() (string, bool) { return filepath.Dir(filepath.Dir(w.mirror)), false }
+	if err := New(unmounted).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if j := w.journalOf(id); j.Step != StepPush || j.Phase != "" {
+		t.Errorf("a client whose root is not mounted ran the effect: %s %q", j.Step, j.Phase)
+	}
+	seeing := w.client()
+	defer seeing.Close()
+	if e := w.finish(seeing, id); e.State != EffectDone {
+		t.Errorf("with MirrorRoot: %+v, want done", e)
+	}
 }

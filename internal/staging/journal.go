@@ -80,8 +80,12 @@ type journal struct {
 	// Held: the mirror may hold one of the effect's refs (mergeRef,
 	// resolvedRef); they go when it ends.
 	Held bool `json:"held,omitempty"`
-	// Fails counts the step's failures in a row; maxFails ends the effect.
-	Fails int `json:"fails,omitempty"`
+	// Fails counts the step's failures in a row, the first at FailingSince;
+	// RetryAt is when the step tries again (retryWaits), and failBudget
+	// after FailingSince the next failure ends the effect.
+	Fails        int       `json:"fails,omitempty"`
+	FailingSince time.Time `json:"failing_since"`
+	RetryAt      time.Time `json:"retry_at"`
 	// PushedAt is when the branch first held the merge.
 	PushedAt time.Time `json:"pushed_at"`
 	// RunURL is ci.yml's run on the merge; CIAt when watch let it go, CINote

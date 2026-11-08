@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -53,10 +52,14 @@ import (
 //     it done; none ConfirmAfterCI after CI passed ends it done, "pushed,
 //     not confirmed".
 //
-// A failure that comes back maxFails times in a row at a step ends the
-// effect (failed before the push, "pushed, not confirmed" after it), and a
-// resolver's job or ci.yml that runs too long ends its wait: no effect holds
-// its env for ever. A cancel stops an effect at once and it never pushes
+// A passing failure at a step (a fetch, a git command, a read of GitHub or
+// of the resolver, a push) tries again after 30 s, 1, 2, 4 and 8 minutes; a
+// step still failing failBudget after its first failure ends the effect
+// (failed before the push, "pushed, not confirmed" after it). A definite
+// failure (a merge the mirror lacks or that verify refuses, the allowlist,
+// the commit identity, PushEnv's refusal) ends it at once, and a resolver's
+// job or ci.yml that runs too long ends its wait: no effect holds its env
+// for ever. A cancel stops an effect at once and it never pushes
 // after; a cancel after the push stops only the watching: a deploy never
 // reverts a push.
 //
@@ -148,10 +151,10 @@ const (
 	maxIdent = 200
 	// maxWhy bounds a Why taken from another component (the resolver).
 	maxWhy = 200
-	// maxFails is how many times in a row a step may fail (a fetch, a git
-	// command, a read of GitHub or of the resolver, a push) before the
-	// effect ends.
-	maxFails = 3
+	// failBudget is how long a step may keep failing (a fetch, a git
+	// command, a read of GitHub or of the resolver, a push), trying again
+	// after each of retryWaits, before its next failure ends the effect.
+	failBudget = 15 * time.Minute
 	// resolveWait is how long a resolver's job may run before the effect
 	// fails, the job cancelled.
 	resolveWait = 2 * time.Hour
@@ -731,26 +734,21 @@ func (c *Client) claim(ctx context.Context, repo, dir string, root *os.Root, env
 	return j.ID, true, nil
 }
 
-// probeRepo is the repository Client.root names to Deps.Mirror to learn
-// mirror_dir: MirrorDir puts every repository's mirror at
-// <mirror_dir>/<owner>/<name>.git.
-const probeRepo = "magnum/probe"
-
-// root is mirror_dir, from Deps.Mirror; "" when there is none or its
+// root is mirror_dir, Deps.MirrorRoot's; "" when there is none or its
 // volume is not mounted.
 func (c *Client) root() string {
-	if c.d.Mirror == nil {
+	if c.d.MirrorRoot == nil {
 		return ""
 	}
-	dir, ok := c.d.Mirror(probeRepo)
+	dir, ok := c.d.MirrorRoot()
 	if !ok || dir == "" {
 		return ""
 	}
-	return filepath.Dir(filepath.Dir(dir))
+	return dir
 }
 
 // deployRepos lists the repositories that have a deploys dir under
-// mirror_dir, from their journals: each journal's repository must name, by
+// mirror_dir (Deps.MirrorRoot), from their journals: each journal's repository must name, by
 // Deps.Mirror, the deploys dir it was found in (a journal elsewhere is passed
 // over). A fresh client finds every effect so, whoever started it.
 func (c *Client) deployRepos() []string {
@@ -865,8 +863,8 @@ func (c *Client) advance(ctx context.Context, repo, dir string, root *os.Root, i
 	if err != nil {
 		return false, err
 	}
-	if j.State != EffectRunning {
-		return j.live(), nil
+	if j.State != EffectRunning || j.RetryAt.After(c.d.Now()) {
+		return j.live(), nil // queued, or waiting for its next try
 	}
 	_, g, err := c.deployDeps(repo)
 	if err != nil {

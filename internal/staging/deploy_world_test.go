@@ -206,10 +206,11 @@ func newDeployWorld(t *testing.T) *deployWorld {
 
 	w.mirror = filepath.Join(t.TempDir(), "staging", "acme", "app.git")
 	w.deps = Deps{
-		Git:    newGit(w.run, func(string) string { return "file://" + w.origin }),
-		GitHub: w.gh,
-		Mirror: func(string) (string, bool) { return w.mirror, true },
-		GitEnv: func(string) map[string]string { return map[string]string{} },
+		Git:        newGit(w.run, func(string) string { return "file://" + w.origin }),
+		GitHub:     w.gh,
+		Mirror:     func(string) (string, bool) { return w.mirror, true },
+		MirrorRoot: func() (string, bool) { return filepath.Dir(filepath.Dir(w.mirror)), true },
+		GitEnv:     func(string) map[string]string { return map[string]string{} },
 		Now: func() time.Time {
 			w.mu.Lock()
 			defer w.mu.Unlock()
@@ -353,6 +354,9 @@ func (w *deployWorld) drive(c *Client, id EffectID, until func(Effect) bool) Eff
 		if until(e) {
 			return e
 		}
+		if j := w.journalAt(id); j != nil && j.RetryAt.After(w.deps.Now()) {
+			w.advance(j.RetryAt.Sub(w.deps.Now())) // ride out the backoff
+		}
 		if err := c.Step(context.Background()); err != nil {
 			w.t.Fatalf("Step: %v (at %s %s: %s)", err, e.Step, e.State, e.Why)
 		}
@@ -360,6 +364,17 @@ func (w *deployWorld) drive(c *Client, id EffectID, until func(Effect) bool) Eff
 	e := w.effect(c, id)
 	w.t.Fatalf("effect %s never got there: %s %s %q", id, e.Step, e.State, e.Why)
 	return e
+}
+
+// journalAt is effect id's journal, nil when it cannot be read.
+func (w *deployWorld) journalAt(id EffectID) *journal {
+	root, err := openDeploys(w.mirror, false)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	j, _ := readJournal(root, id)
+	return j
 }
 
 // ended is a drive's until: the effect ended.
