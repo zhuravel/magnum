@@ -398,15 +398,20 @@ func (m factoryModel) undoHints(r FactoryRow, reviewOnR bool) []hint {
 // A mute holds only the rounds nobody forced (a fix loop's re-review is
 // forced) and stops autofix's new loops, never a loop at work's next
 // cycle; a snooze holds every fix start, a loop at work's next cycle
-// included, though not the re-review it forced; a review's findings go to
-// autofix, unless fix is off. autofix is the watch's (FactoryPRFacts),
-// with fix on.
+// included, though not the re-review it forced: a re-review that still
+// finds work then ends the loop for your attention (continueFixLoop); a
+// review's findings go to autofix, unless fix is off, and while a fix loop
+// works magnum refuses the review (requestReview). autofix is the watch's
+// (FactoryPRFacts), with fix on.
 func factoryLoopEffect(a rowAct, row actRow, pr FactoryPR) string {
 	autofix := pr.Facts != nil && pr.Facts.Autofix && !pr.FixOff
+	const nextCycle = "the fix loop at work on the factory's PR runs no next cycle: if its re-review still finds work, the loop ends and the PR needs you"
 	switch a {
 	case actReview, actFresh:
 		switch {
 		case row.merged():
+		case pr.Fixing:
+			return "magnum refuses a review while its fix loop works on the factory's PR (K stops the loop)"
 		case pr.FixOff:
 			return "fix is off for the factory's PR: what it finds stays yours"
 		case autofix && pr.Off == "":
@@ -432,9 +437,9 @@ func factoryLoopEffect(a rowAct, row actRow, pr FactoryPR) string {
 				return "autofix may start fix loops on the factory's PR again"
 			}
 		case pr.Fixing && autofix:
-			return "the fix loop at work on the factory's PR stops before its next cycle, and autofix starts no other until then"
+			return nextCycle + ", and autofix starts no other until then"
 		case pr.Fixing:
-			return "the fix loop at work on the factory's PR stops before its next cycle"
+			return nextCycle
 		case autofix:
 			return "autofix starts no fix loop on the factory's PR until then"
 		}

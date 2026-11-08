@@ -165,9 +165,13 @@ func TestROnATaskCardRetriesWhereItCanElseReviews(t *testing.T) {
 // On a task's PR the question also says what y does to the factory's own
 // loop, in magnum's engine's terms: a mute stops autofix's new loops but
 // not a loop at work (its re-reviews are forced, and a mute holds only the
-// rounds nobody forced); a snooze stops a loop at work before its next
-// cycle (every fix start refuses a snoozed PR); a review's findings may go
-// to autofix, unless fix is off.
+// rounds nobody forced); a snooze lets a loop at work finish its cycle but
+// start no next one (every fix start refuses a snoozed PR), so a re-review
+// that still finds work ends the loop and leaves the PR needing you; a
+// review's findings may go to autofix, unless fix is off, and while a fix
+// loop works magnum refuses the review (requestReview). Before, r there
+// promised autofix the findings of a review magnum refuses, and z said the
+// loop just stops.
 func TestThePRKeysSayWhatTheyDoToTheFactorysLoop(t *testing.T) {
 	h := testPublished(t, 200, 40)
 	h.facts("PR-12321", FactoryPRFacts{State: "reviewed", GHState: "OPEN", Autofix: true})
@@ -180,8 +184,16 @@ func TestThePRKeysSayWhatTheyDoToTheFactorysLoop(t *testing.T) {
 	}
 	h.press("n", "z")
 	if got, want := h.m.bar.question(), "Snooze PR-12321's #4531 for 2h: no automatic review starts on it until 16:09 (r and review "+
-		"requests still run); the fix loop at work on the factory's PR stops before its next cycle, and autofix starts no other until then?"; got != want {
+		"requests still run); the fix loop at work on the factory's PR runs no next cycle: if its re-review still finds work, the loop "+
+		"ends and the PR needs you, and autofix starts no other until then?"; got != want {
 		t.Errorf("z asks %q, want %q", got, want)
+	}
+	for _, k := range []string{"r", "R"} {
+		h.press("n", k)
+		if got := h.m.bar.question(); !strings.HasSuffix(got, "; magnum refuses a review while its fix loop works on the factory's PR (K stops the loop)?") ||
+			strings.Contains(got, "autofix") {
+			t.Errorf("%s under magnum's fix loop asks %q, want that magnum refuses it", k, got)
+		}
 	}
 	h.press("n")
 

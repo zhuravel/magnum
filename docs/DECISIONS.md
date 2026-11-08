@@ -18158,9 +18158,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     engine: a mute holds only the rounds nobody forced (the store's schedule picks `muted = 0 OR forced = 1`) and
     stops autofix's new loops (`startFix` refuses a muted PR for autofix's first cycle, and the open look leaves it
     alone), so a fix loop at work goes on, its forced re-reviews too; a snooze holds no forced round either, but
-    every fix start refuses a snoozed PR (`prepareFix`), so a loop at work stops before its next cycle; a review's
-    findings may go to autofix, unless fix is off. Each clause is said only where the row's facts make it true (the
-    watch runs autofix, a loop works on the PR).
+    every fix start refuses a snoozed PR (`prepareFix`), so a loop at work finishes its cycle but runs no next one:
+    a re-review that still finds work ends the loop for your attention (`continueFixLoop`, `endLoopForAttention`)
+    and the PR needs you; a review's findings may go to autofix, unless fix is off, and while a fix loop works
+    magnum refuses a review (`requestReview`), which `r` and `R` say instead. Each clause is said only where the
+    row's facts make it true (the watch runs autofix, a loop works on the PR).
   - The card rule: on a task card that offers a retry (`TaskCard.Retry`), `r` stays the retry and its hints say
     `r retry`; there the review is on `R` alone, and the questions name no key for it. Elsewhere on the card and on
     home `r` is the review. Nothing is added to the ready card or the question card.
