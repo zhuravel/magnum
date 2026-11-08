@@ -366,6 +366,7 @@ type hookGroup struct {
 	span     jsonSpan
 	list     *jsonArray
 	handlers []hookHandler
+	matcher  string // the raw JSON of its last "matcher" ("" for none), which Codex hashes with its hooks
 }
 
 // hookHandler is one handler of a group, at its place.
@@ -561,6 +562,9 @@ func readHookGroup(doc []byte, g int, sp jsonSpan, codex bool) (hookGroup, *twic
 	ours := false // a handler of any of its "hooks" names magnum's script
 	var twice *twiceError
 	for _, m := range obj.members {
+		if m.key == "matcher" {
+			grp.matcher = string(doc[m.val.start:m.val.end])
+		}
 		if m.key != "hooks" {
 			continue
 		}
@@ -985,17 +989,21 @@ func jsonQuote(s string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// hookDefinition is what Codex hashes of a command hook, as magnum reads it
-// (its type, command, timeout and async, and whether it has other keys,
+// hookDefinition is what Codex hashes of a command hook in its group, as
+// magnum reads it (the group's matcher, as raw JSON or "" for none; the
+// hook's type, command, timeout and async, and whether it has other keys,
 // which Codex hashes too): two hooks with one definition hash the same.
-func hookDefinition(typ, command string, timeout, async any, extra bool) string {
-	return fmt.Sprintf("type=%q command=%q timeout=%v async=%v extra=%v", typ, command, timeout, async, extra)
+func hookDefinition(matcher, typ, command string, timeout, async any, extra bool) string {
+	if matcher == "" {
+		matcher = "none"
+	}
+	return fmt.Sprintf("matcher=%s type=%q command=%q timeout=%v async=%v extra=%v", matcher, typ, command, timeout, async, extra)
 }
 
 // entryDefinition is the definition of magnum's handler for e as the
-// install writes it.
+// install writes it, in a group of its own with no matcher.
 func entryDefinition(e hookEntry) string {
-	return hookDefinition("command", e.Command, float64(e.Timeout), true, false)
+	return hookDefinition("", "command", e.Command, float64(e.Timeout), true, false)
 }
 
 // codexOwnHooks are magnum's handlers in the Codex hooks.json doc, at
@@ -1007,9 +1015,11 @@ func codexOwnHooks(doc []byte) ([]agents.OwnCodexHook, error) {
 	}
 	var out []agents.OwnCodexHook
 	for _, ev := range d.events {
-		for _, h := range ev.handlers() {
-			if h.magnum {
-				out = append(out, agents.OwnCodexHook{Place: h.place(ev.name), Definition: hookDefinition(h.typ, h.command, h.timeout, h.async, h.extra)})
+		for _, g := range ev.groups {
+			for _, h := range g.handlers {
+				if h.magnum {
+					out = append(out, agents.OwnCodexHook{Place: h.place(ev.name), Definition: hookDefinition(g.matcher, h.typ, h.command, h.timeout, h.async, h.extra)})
+				}
 			}
 		}
 	}

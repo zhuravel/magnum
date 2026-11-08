@@ -6279,9 +6279,11 @@ within a second or two instead of on the next observe pass. The pieces:
   the hold's toast name it). An append can land on a place whose trust entry a hook that once stood
   there left (Codex never removes one): the install records that entry too, so the place reads untrusted until
   Codex trusts magnum's hook. An uninstall remembers the trust of magnum's own hooks it removes, so a reinstall of
-  the identical hooks at the same places keeps it and reads current. For an install from before magnum recorded
-  such entries, `magnum hooks install codex --assume-untrusted` records them on your word that you chose no Trust
-  all since; `--forget-stale` undoes it for good. Live Claude sessions pick the hooks up at once; Claude has no per-hook trust.
+  the identical hooks (same group matcher too) at the same places keeps it and reads current: an uninstall and a
+  reinstall keep what status read before. For an install from before magnum recorded such entries, `magnum hooks
+  install codex --assume-untrusted` records them on your word that you chose no Trust all since, also right after
+  an uninstall; `--forget-stale` undoes it for good, and the two together are refused. `--dry-run` shows the trust
+  entries an install would record. Live Claude sessions pick the hooks up at once; Claude has no per-hook trust.
 - **`magnum hooks uninstall`** removes magnum's entries (a group with nothing else in it, and a key or `hooks`
   object it leaves empty) and the scripts; an install and an uninstall give the file back byte for byte. When
   magnum's Codex entry is not the last of its event, the removal moves the later hooks to new places, where

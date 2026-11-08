@@ -477,6 +477,9 @@ func runHooks(c *Context, verb string, f hooksFlags, pos []string) int {
 	case len(pos) == 1:
 		which = pos[0]
 	}
+	if f.forget && f.assumeUntrusted {
+		return inspUsage(c, "hooks", "--forget-stale and --assume-untrusted contradict each other: give one", hooksUsage)
+	}
 	cmdName := "hooks " + verb
 	home, err := hooksSys.UserHome()
 	if err != nil {
@@ -719,7 +722,7 @@ func hooksInstall(c *Context, targets []hookTarget, f hooksFlags) int {
 		case p.script == nil && p.settings == nil:
 			fmt.Fprintf(out, "%s: nothing to change in %s\n", label, inspTilde(p.t.dir))
 		case dry:
-			hooksPrintInstallPlan(out, p)
+			hooksPrintInstallPlan(out, p, f.assumeUntrusted)
 			continue
 		}
 		if p.script != nil {
@@ -741,7 +744,7 @@ func hooksInstall(c *Context, targets []hookTarget, f hooksFlags) int {
 				code = 1
 				continue
 			}
-			if err := recordAppendedTrust(p); err != nil {
+			if err := recordAppendedTrust(p, f.assumeUntrusted); err != nil {
 				fmt.Fprintf(c.Stderr, "magnum hooks install: %s: %v; run `magnum hooks install codex --assume-untrusted` once Codex's files are readable\n", label, err)
 				code = 1
 			}
@@ -799,26 +802,36 @@ func recordStaleTrust(p hookInstall) error {
 // with magnum's own trust of the identical hook, still with that hash
 // (agents.TakeOwnCodexTrust), is magnum's valid trust and records nothing.
 // It runs after the write, when the hooks stand at those places, since a
-// reader removes a record whose place holds no hook.
-func recordAppendedTrust(p hookInstall) error {
+// reader removes a record whose place holds no hook. With assume
+// (--assume-untrusted, the operator's word), the memory is still taken, and
+// so forgotten, but the place is recorded anyway.
+func recordAppendedTrust(p hookInstall, assume bool) error {
 	if p.t.agent != agenthooks.AgentCodex {
 		return nil
 	}
+	places := appendedTrustPlaces(p, assume, agents.TakeOwnCodexTrust)
+	if len(places) == 0 {
+		return nil
+	}
+	return agents.RecordStaleCodexTrust(p.t.dir, places)
+}
+
+// appendedTrustPlaces are the places of p's appended Codex entries whose
+// trust entry a record holds, but those own (agents.TakeOwnCodexTrust or,
+// for a dry run, HasOwnCodexTrust) finds magnum's own, unless assume.
+func appendedTrustPlaces(p hookInstall, assume bool, own func(string, agents.OwnCodexHook) bool) []string {
 	var places []string
 	for _, ch := range p.changes {
 		if ch.rewrote {
 			continue
 		}
 		i := slices.IndexFunc(p.t.entries(), func(e hookEntry) bool { return e.Event == ch.event })
-		if i >= 0 && agents.TakeOwnCodexTrust(p.t.dir, agents.OwnCodexHook{Place: ch.place, Definition: entryDefinition(p.t.entries()[i])}) {
+		if i >= 0 && own(p.t.dir, agents.OwnCodexHook{Place: ch.place, Definition: entryDefinition(p.t.entries()[i])}) && !assume {
 			continue
 		}
 		places = append(places, ch.place)
 	}
-	if len(places) == 0 {
-		return nil
-	}
-	return agents.RecordStaleCodexTrust(p.t.dir, places)
+	return places
 }
 
 // assumeUntrusted records, with --assume-untrusted, the trust entries at
@@ -881,8 +894,26 @@ func hookChangeNames(changes []hookChange) (added, rewrote []string) {
 	return added, rewrote
 }
 
-// hooksPrintInstallPlan prints what the install of p would write.
-func hooksPrintInstallPlan(out io.Writer, p hookInstall) {
+// hooksPrintInstallPlan prints what the install of p would write, and,
+// for Codex, the trust entries it would record as stale: those already at
+// the places it appends to (but magnum's own an uninstall remembered,
+// unless assume) and at those it rewrites anew.
+func hooksPrintInstallPlan(out io.Writer, p hookInstall, assume bool) {
+	defer func() {
+		if p.t.agent != agenthooks.AgentCodex || p.settings == nil {
+			return
+		}
+		places := appendedTrustPlaces(p, assume, agents.HasOwnCodexTrust)
+		for _, ch := range p.changes {
+			if ch.rewrote && ch.newTrust {
+				places = append(places, ch.place)
+			}
+		}
+		if recorded := agents.CodexTrustEntries(p.t.dir, places); len(recorded) > 0 {
+			fmt.Fprintf(out, "dry-run: %s: would record the trust entries already at %s as stale (Codex trusts other hooks there)\n",
+				p.t.label(), strings.Join(recorded, ", "))
+		}
+	}()
 	label := p.t.label()
 	if p.script != nil {
 		fmt.Fprintf(out, "dry-run: %s: would write %s (v%d, mode 0755)\n", label, inspTilde(p.script.path), agenthooks.ScriptVersion)

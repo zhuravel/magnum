@@ -858,14 +858,18 @@ func TestHooksAReinstallRecordsStaleWhenItsOwnTrustNoLongerFits(t *testing.T) {
 		"a changed hash": func(f *hooksFixture) {
 			f.trustPlaces("sha256:another", "stop:0:0", "session_start:0:0", "permission_request:0:0", "interrupt:0:0")
 		},
+		"a changed matcher": func(f *hooksFixture) {}, // set up below: magnum's Stop group had a matcher, which Codex hashes
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newHooksFixture(t)
 			if code := f.run("hooks", "install", "codex"); code != 0 {
 				t.Fatal(f.Err)
 			}
-			if name == "a changed definition" {
+			switch name {
+			case "a changed definition":
 				f.write(f.codexHooks(), strings.Replace(f.read(f.codexHooks()), `"timeout": 5`, `"timeout": 9`, 1)) // Stop drifted, and Codex trusted it so
+			case "a changed matcher":
+				f.write(f.codexHooks(), strings.Replace(f.read(f.codexHooks()), `"hooks": [`, `"matcher": "startup", "hooks": [`, 1)) // the first group is Stop's
 			}
 			// The trust Codex keeps at magnum's places, and at stop:1:0 that of a hook that once stood there.
 			f.trustPlaces("sha256:valid", append(f.magnumPlaces(), "stop:1:0")...)
@@ -881,5 +885,53 @@ func TestHooksAReinstallRecordsStaleWhenItsOwnTrustNoLongerFits(t *testing.T) {
 				t.Fatalf("status = %d %q, want a stale Stop", code, f.Out)
 			}
 		})
+	}
+}
+
+// --assume-untrusted is the operator's word and overrides the memory of
+// magnum's own trust an uninstall left: the install right after the
+// uninstall records the appended places anyway, and drops the memory.
+func TestHooksAssumeUntrustedOverridesTheOwnTrustMemory(t *testing.T) {
+	f := newHooksFixture(t)
+	if code := f.run("hooks", "install", "codex"); code != 0 {
+		t.Fatal(f.Err)
+	}
+	f.trustPlaces("sha256:old", f.magnumPlaces()...) // old entries, unrecorded, that read trusted
+	if code := f.run("hooks", "uninstall", "codex", "--yes"); code != 0 || agents.OwnCodexTrustCount(f.codex) != 4 {
+		t.Fatalf("uninstall = %d, %d memories\n%s%s", code, agents.OwnCodexTrustCount(f.codex), f.Out, f.Err)
+	}
+	if code := f.run("hooks", "install", "codex", "--assume-untrusted"); code != 0 || !strings.Contains(f.Out.String(), "codex: untrusted (v1)") {
+		t.Fatalf("install --assume-untrusted = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if n, m := agents.StaleCodexTrustCount(f.codex), agents.OwnCodexTrustCount(f.codex); n != 4 || m != 0 {
+		t.Fatalf("records = %d, memories = %d; want 4 and 0", n, m)
+	}
+}
+
+// --forget-stale and --assume-untrusted say opposite things, so together
+// they are refused, with nothing changed.
+func TestHooksForgetStaleAndAssumeUntrustedAreRefusedTogether(t *testing.T) {
+	f := newHooksFixture(t)
+	if code := f.run("hooks", "install", "codex", "--forget-stale", "--assume-untrusted"); code != 2 ||
+		strings.Count(strings.TrimSpace(f.Err.String()), "\n") != 1 || !strings.Contains(f.Err.String(), "--forget-stale and --assume-untrusted contradict each other") {
+		t.Fatalf("both = %d\n%s", code, f.Err)
+	}
+	if f.read(f.codexHooks()) != "" || f.read(f.codexScript()) != "" {
+		t.Fatal("the refused run wrote something")
+	}
+}
+
+// A dry run shows the trust an append would record as stale, beside the
+// entries it would add, and records nothing.
+func TestHooksDryRunShowsTheTrustAnAppendWouldRecord(t *testing.T) {
+	f := newHooksFixture(t)
+	f.write(f.codexHooks(), `{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/homebrew/bin/moshi-hook codex-hook"}]}]}}`)
+	f.trustPlaces("sha256:old", "stop:0:0", "stop:1:0", "interrupt:0:0")
+	if code := f.run("hooks", "install", "codex", "--dry-run"); code != 0 ||
+		!strings.Contains(f.Out.String(), "dry-run: codex: would record the trust entries already at stop:1:0, interrupt:0:0 as stale") {
+		t.Fatalf("dry run = %d\n%s%s", code, f.Out, f.Err)
+	}
+	if agents.StaleCodexTrustCount(f.codex) != 0 || strings.Contains(f.read(f.codexHooks()), hookScriptName) {
+		t.Fatal("the dry run recorded or wrote something")
 	}
 }

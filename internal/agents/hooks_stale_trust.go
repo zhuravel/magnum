@@ -207,8 +207,8 @@ func removeStale(r staleRecord, keep func() bool) {
 
 // OwnCodexHook is one of magnum's Codex hooks at its place in a hooks.json
 // ("stop:0:0"): Definition is what Codex hashes of it as magnum reads it
-// (the CLI's form of its type, command, timeout, async and extra keys), so
-// two hooks with one Definition hash the same.
+// (the CLI's form of its group's matcher and its type, command, timeout,
+// async and extra keys), so two hooks with one Definition hash the same.
 type OwnCodexHook struct{ Place, Definition string }
 
 // ownTrust is a memory of magnum's own trust: the hook of Definition stood
@@ -283,7 +283,31 @@ func RememberOwnCodexTrust(home string, hooks []OwnCodexHook) error {
 // identical hook (RememberOwnCodexTrust) and still with that hash: an
 // install appending that hook there then records no stale trust. The
 // memory is forgotten either way: it serves one install.
-func TakeOwnCodexTrust(home string, hook OwnCodexHook) bool {
+func TakeOwnCodexTrust(home string, hook OwnCodexHook) bool { return ownTrustHolds(home, hook, true) }
+
+// HasOwnCodexTrust is TakeOwnCodexTrust that forgets nothing: a dry run's
+// look.
+func HasOwnCodexTrust(home string, hook OwnCodexHook) bool { return ownTrustHolds(home, hook, false) }
+
+// CodexTrustEntries are those of places of the Codex home home's hooks.json
+// whose [hooks.state] entry has a trusted_hash: what a record would hold.
+func CodexTrustEntries(home string, places []string) []string {
+	f := codexHookPaths(home)
+	state, err := readCodexHookState(f.configFile)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range places {
+		if _, e, ok := f.entry(state, p); ok && e.TrustedHash != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ownTrustHolds is TakeOwnCodexTrust, forgetting the memory with take.
+func ownTrustHolds(home string, hook OwnCodexHook, take bool) bool {
 	dir := ownTrustDir()
 	if dir == "" {
 		return false
@@ -294,7 +318,9 @@ func TakeOwnCodexTrust(home string, hook OwnCodexHook) bool {
 	if err != nil {
 		return false
 	}
-	_ = os.Remove(file)
+	if take {
+		_ = os.Remove(file)
+	}
 	var o ownTrust
 	if json.Unmarshal(b, &o) != nil || o.Hooks != f.hooksFile || o.Place != hook.Place || o.Definition != hook.Definition {
 		return false

@@ -4121,17 +4121,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a reader removes a record whose place holds no hook; hooks.json need not exist before), so status, doctor and the
   hold read the place untrusted ("its trust is of the hook that stood there before") until Codex writes a new
   hash. An entry without a hash already reads untrusted and needs no record. The one exception is magnum's own
-  trust: an uninstall remembers, for each of magnum's Codex hooks it removes, its definition (type, command,
-  timeout, async and whether it has other keys, which Codex hashes too), its place and the place's hash, when the
-  place reads trusted (`agents.RememberOwnCodexTrust`, one file per place under `codex-stale-trust/own/`); a later
+  trust: an uninstall remembers, for each of magnum's Codex hooks it removes, its definition (its group's matcher,
+  and its type, command, timeout, async and whether it has other keys, all of which Codex hashes), its place and the
+  place's hash, when the place reads trusted (`agents.RememberOwnCodexTrust`, one file per place under `codex-stale-trust/own/`); a later
   append of the identical definition at that place, while the entry still has that hash, is magnum's valid trust
   and records nothing (`agents.TakeOwnCodexTrust`). A changed definition, place or hash records stale, as any
   append; a memory is forgotten once used, and a reader forgets one whose place's hash changed. So an uninstall
   and a reinstall of the identical hooks read current with no hold. For an install from before this (the Mac's),
   the record is missing and no file can tell those old entries from the operator's Trust all: `magnum hooks
   install codex --assume-untrusted` records the trust entries at magnum's places on the operator's word (that no
-  Trust all came since the install), and only there, never in config.toml; a wrong word holds new Codex sessions
-  until `--forget-stale`, which is final (no run records them again). A reader that read hooks.json before an
+  Trust all came since the install), and only there, never in config.toml; it overrides the memory of magnum's own
+  trust in the same run (the place is recorded, and the memory dropped), since an uninstall before it remembers the
+  very entries the word is about. A wrong word holds new Codex sessions until `--forget-stale`, which is final (no
+  run records them again); the two flags together contradict each other and are refused. A dry run shows the trust
+  entries it would record beside the entries it would add. A reader that read hooks.json before an
   install wrote it never removes the install's new record: before it removes a record whose place holds no hook,
   it reads hooks.json again and keeps the record when the file changed. Rejected: a re-run heuristic that took
   config.toml unchanged since magnum's script as proof that every entry at magnum's places is old (a rewrite of
@@ -4143,8 +4146,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestHooksAnAppendOntoAPlaceWithAnOldTrustEntryReadsUntrusted, TestHooksAnInstallIntoANewHooksJSONRecordsTheOldTrustAtItsPlaces
   (all four places), TestDoctorWarnsForAnAppendOntoAnOldTrustEntry, TestHooksAssumeUntrustedRecordsOnlyMagnumsPlaces,
   TestHooksAReRunAfterTheScriptIsWrittenAgainRecordsNothing (the review's probes), TestHooksAnUninstallAndAReinstallOfTheIdenticalHookKeepItsTrust
-  (the review's probe), TestHooksAReinstallRecordsStaleWhenItsOwnTrustNoLongerFits (a changed definition, place
-  and hash), TestOwnCodexTrustIsRememberedOnlyWhereItReadsTrusted, TestAReaderThatReadAnOlderHooksJSONKeepsTheNewRecord
+  (the review's probe), TestHooksAReinstallRecordsStaleWhenItsOwnTrustNoLongerFits (a changed definition, place,
+  hash and matcher), TestHooksAssumeUntrustedOverridesTheOwnTrustMemory, TestHooksForgetStaleAndAssumeUntrustedAreRefusedTogether,
+  TestHooksDryRunShowsTheTrustAnAppendWouldRecord, TestOwnCodexTrustIsRememberedOnlyWhereItReadsTrusted, TestAReaderThatReadAnOlderHooksJSONKeepsTheNewRecord
   and TestRecordStaleCodexTrustNeedsNoHooksJSON.
 
 ## Screens and commands

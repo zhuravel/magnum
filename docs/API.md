@@ -865,6 +865,10 @@ func CodexSessionHomes(cfg *config.Config, home func(config.Role) string) (homes
     dialogs, the hooks review among them. A shell role's `codex review` shows
     none.
 
+func CodexTrustEntries(home string, places []string) []string
+    CodexTrustEntries are those of places of the Codex home home's hooks.json
+    whose [hooks.state] entry has a trusted_hash: what a record would hold.
+
 func CommandAnchor(marker string) string
     CommandAnchor is text that only the pane's echo of a shell line built with
     marker contains (the done printf's format, which the output shows with a
@@ -921,6 +925,10 @@ func ForgetStaleCodexTrust(home string) (int, error)
     hooks.json and says how many it removed: a place magnum recorded that Codex
     will never trust anew (it trusts the hook as it is) then reads trusted
     again. Without a records directory there is none.
+
+func HasOwnCodexTrust(home string, hook OwnCodexHook) bool
+    HasOwnCodexTrust is TakeOwnCodexTrust that forgets nothing: a dry run's
+    look.
 
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
@@ -2977,9 +2985,9 @@ const (
 
 type OwnCodexHook struct{ Place, Definition string }
     OwnCodexHook is one of magnum's Codex hooks at its place in a hooks.json
-    ("stop:0:0"): Definition is what Codex hashes of it as magnum reads it
-    (the CLI's form of its type, command, timeout, async and extra keys),
-    so two hooks with one Definition hash the same.
+    ("stop:0:0"): Definition is what Codex hashes of it as magnum reads it (the
+    CLI's form of its group's matcher and its type, command, timeout, async and
+    extra keys), so two hooks with one Definition hash the same.
 
 type PreviousReview struct {
 	ID          int64
