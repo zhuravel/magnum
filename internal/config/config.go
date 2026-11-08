@@ -73,6 +73,7 @@ type Config struct {
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
 	Jira       Jira       `toml:"jira"`
+	Staging    Staging    `toml:"staging"`
 	Factory    Factory    `toml:"factory"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -947,7 +948,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage], [learn], [notes], [board], [webhooks], [jira] and [factory] override the committed values key by key,
+// [github], [pipeline], [usage], [triage], [learn], [notes], [board], [webhooks], [jira], [staging] and [factory] override the committed values key by key,
 // and [spend.<level>] tables merge into the base's by level, role and key (mergeSpendLevels).
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
@@ -980,6 +981,7 @@ func (c *Config) applyOverlay(path string, data []byte) (*layer, error) {
 	overlaySection(md, "board", &c.Board, &o.Board)
 	overlaySection(md, "webhooks", &c.Webhooks, &o.Webhooks)
 	overlaySection(md, "jira", &c.Jira, &o.Jira)
+	overlaySection(md, "staging", &c.Staging, &o.Staging)
 	l, err := readLayerData(path, data, false, md, o.Kinds, o.Roles)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
@@ -1121,6 +1123,7 @@ func (c *Config) expand() {
 	}
 	c.Webhooks.TokenFile = c.configPath(c.Webhooks.TokenFile)
 	c.Jira.TokenFile = c.configPath(c.Jira.TokenFile)
+	c.expandStaging()
 	c.expandFactory()
 	for i := range c.Watches {
 		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)

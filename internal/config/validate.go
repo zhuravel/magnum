@@ -282,6 +282,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateNotes()...)
 	errs = append(errs, c.validateWebhooks()...)
 	errs = append(errs, c.validateJira()...)
+	errs = append(errs, c.validateStaging()...)
 	errs = append(errs, c.validateFactory()...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":

@@ -3,7 +3,7 @@
 # config.defaults.toml (embedded in the binary); set one here only to change it. App private keys are files
 # next to the config (~/.config/magnum/keys/, chmod 600). Your config's [[watch]], [[identity]], [[pool]] and
 # [[repo]] blocks are appended to the defaults, any key it sets under [daemon], [herdr], [terminal], [board],
-# [github], [pipeline], [usage], [triage], [learn], [notes], [webhooks], [jira], [factory] or [kinds.<name>] overrides the default
+# [github], [pipeline], [usage], [triage], [learn], [notes], [webhooks], [jira], [staging], [factory] or [kinds.<name>] overrides the default
 # (the factory's roles and kinds merge by name, see config.defaults.toml), its [[role]] blocks
 # override the role of the same name key by key (other names are appended), and its [spend.<level>] tables (the
 # models and efforts of a [pipeline] spend level, per role) merge by level, role and key. `magnum roles` prints the
@@ -39,6 +39,10 @@ trackers = [                      # t on the PR board opens the first issue key 
 url = "https://talkable.atlassian.net"   # the trackers above whose template starts with it name the issue
 user = "alice@example.com"        # the Jira account's email
 token_file = "keys/jira.token"    # its API token alone on one line, chmod 600 (relative: beside this config)
+
+[staging]                         # which open PRs are live on the [[factory.repo.staging]] environments
+mirror_dir = "/Volumes/External/magnum-staging"   # the treeless mirrors on an external disk (default <state dir>/staging);
+                                  # while it is not mounted every status is unknown, and nothing is created there
 
 [[identity]]
 name = "zhuravel"

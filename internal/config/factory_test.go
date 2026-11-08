@@ -61,7 +61,8 @@ func uncommentedLines(t *testing.T) []string {
 
 // The defaults are distributable: they name no repository, so they name no
 // copy, no precheck and no staging environment (those live in the
-// repository's block).
+// repository's block). The [staging] table names none either, and its
+// mirror_dir is no disk of the operator's: never a /Volumes path.
 func TestFactoryDefaultsShipNoRepositoryAndNoStaging(t *testing.T) {
 	cfg, err := LoadWithOptions(paths.Layout{Home: repoRoot(t)}, "", LoadOptions{NoOverlay: true})
 	if err != nil {
@@ -73,7 +74,16 @@ func TestFactoryDefaultsShipNoRepositoryAndNoStaging(t *testing.T) {
 	if n := len(Defaults().Factory.Repos); n != 0 {
 		t.Fatalf("Defaults() declares %d factory repositories", n)
 	}
+	if d := Defaults().Staging.MirrorDir; d != "" {
+		t.Errorf("Defaults() sets [staging] mirror_dir %q: its default is the layout's state dir", d)
+	}
 	for _, line := range uncommentedLines(t) {
+		if line == "[staging]" {
+			continue // the mirrors' table, no environment
+		}
+		if strings.Contains(line, "/Volumes") {
+			t.Errorf("config.defaults.toml sets %q: a path on the operator's disks belongs in the user's config", line)
+		}
 		if strings.Contains(line, "factory.repo") || strings.Contains(line, "staging") {
 			t.Errorf("config.defaults.toml sets %q: a repository and its staging environments belong in the user's config", line)
 		}

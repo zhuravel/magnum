@@ -269,9 +269,12 @@ type FactoryPrecheck struct {
 }
 
 // FactoryStaging is a `staging` entry of a repository: an environment with
-// a branch the factory merges into after your approval. QA names the skill
-// that tests it ("" = no QA); After the environment whose QA must pass first.
-// The first milestone reads none of it, but it validates.
+// a branch the factory merges into after your approval. Name is also the
+// GitHub deployment environment the deploys record; Branch is a
+// staging-<name> branch (StagingBranchPattern), never master, main, the base
+// or production*. QA names the skill that tests it ("" = no QA); After the
+// environment whose QA must pass first. Config.Stagings lists a repository's;
+// internal/staging reads which PRs are live on them.
 type FactoryStaging struct {
 	Name   string `toml:"name"`
 	Branch string `toml:"branch"`
@@ -1211,7 +1214,9 @@ func validateCopyPorts(r FactoryRepo) error {
 }
 
 // validateFactoryStaging checks a repository's staging environments: a
-// unique name, a branch that is not the base, and an `after` that names
+// unique name, a branch that matches StagingBranchPattern and is never
+// master, main, the base or production* (the remote's default branch is
+// the deploy's to check: no config names it), and an `after` that names
 // another environment of the repository, with no cycle.
 func validateFactoryStaging(where string, r FactoryRepo) []error {
 	var errs []error
@@ -1229,10 +1234,10 @@ func validateFactoryStaging(where string, r FactoryRepo) []error {
 		switch {
 		case strings.TrimSpace(s.Branch) == "":
 			bad("staging %q needs a branch", s.Name)
-		case strings.ContainsFunc(s.Branch, unicode.IsSpace):
-			bad("staging %q: branch %q must be a branch name", s.Name, s.Branch)
-		case s.Branch == r.Base:
-			bad("staging %q: branch %q is the base branch, which the factory never merges into", s.Name, s.Branch)
+		case neverStaging(s.Branch, r.Base):
+			bad("staging %q: branch %q is never a staging branch (never master, main, the base or production*)", s.Name, s.Branch)
+		case !StagingBranchPattern.MatchString(s.Branch):
+			bad("staging %q: branch %q must match %s", s.Name, s.Branch, StagingBranchPattern)
 		}
 	}
 	for _, s := range r.Staging {

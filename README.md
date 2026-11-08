@@ -4134,9 +4134,11 @@ stages = [
   otherwise, which says when the installs themselves failed; one for lack of a command (`x: command not
   found`) is the writer's only when the change touches the lint's script. It holds no other task.
   A command that does not start for a reason of the moment (EAGAIN, ENOMEM) has the checks run again.
-- **Staging.** Each `[[factory.repo.staging]]` has a `name`, a `branch` (never the base), an optional `qa`
-  skill and an optional `after`, another environment of the repository whose QA must pass first (no cycles).
-  The first milestone reads none of it, but `magnum config` validates it.
+- **Staging.** Each `[[factory.repo.staging]]` has a `name` (also the GitHub deployment environment), a
+  `branch` that matches `^staging-[a-z0-9-]+$` (never master, main, the base or anything that starts with
+  production), an optional `qa` skill and an optional `after`, another environment of the repository whose QA
+  must pass first (no cycles). [Staging status](#staging-status) reads which PRs are live on them; nothing
+  deploys yet.
 
 The factory daemon is a second daemon in the same binary, with its own launchd job
 (`zhuravel.magnum.factory`), registry (`factory/factory.db` in the data directory), pid, lock and log
@@ -4893,6 +4895,37 @@ fixes = 2                                      # the writer's turns for QA's def
 
 Slice 1 captures the after side only: the before pass and the PR attachments come later. An edit of the prompts
 or a factory update reaches the daemon only after `make build && bin/magnum factory install`.
+
+### Staging status
+
+For each open PR and each `[[factory.repo.staging]]` environment of its repository, magnum can tell where the
+PR stands on that staging branch (`internal/staging`; the daemons wire it next). A staging deploy is a merge of
+the PR's head into `staging-<env>`, and the deploy job records a GitHub deployment of the environment once that
+tip is live:
+
+| State | Means |
+|---|---|
+| `latest` | the PR's head is on the branch, and the newest successful deployment holds the merge that brought it |
+| `pushed` | the head is on the branch, but no deployment confirms it yet: `ci_running`, `ci_failed_ours` (a failing job of ci.yml names a path the PR changes), `ci_failed_not_ours` (none does, or that cannot be told), `waiting_jenkins` (ci.yml passed), or `not_confirmed` (45 minutes after the push, or the deployments are not readable) |
+| `outdated` | an older commit of the PR is on the branch and the head is not; it says how many commits behind |
+| `none` | no commit of the PR is on the branch: within its last 400 first-parent commits or 90 days, whichever ends first |
+| `unknown` | the mirror is absent (its volume is not mounted), a fetch failed, or nothing has been read yet |
+
+Ancestry decides, never a comparison of SHAs: the PR is on the branch at its newest commit that a merge of
+the branch's first-parent chain brought in (a merge of master brings no PR). It reads a treeless bare mirror of
+the repository (`git clone --bare --filter=tree:0`: commits only, the trees two diffs need fetched when
+ci.yml failed), fetched at most once a minute across both daemons with the poll identity's credentials (the
+`staging-*` branches, the base and the open PRs' `refs/pull/<n>/head`), the environment's deployments (with
+their ETag) and ci.yml's runs. A token without Deployments: read makes a passed PR `pushed, not_confirmed`,
+never `none` or `latest`. It only reads; nothing is pushed.
+
+```toml
+[staging]
+mirror_dir = "/Volumes/External/magnum-staging"   # default <state dir>/staging; <mirror_dir>/<owner>/<repo>.git
+```
+
+A `mirror_dir` on an external disk that is not mounted leaves every status `unknown` ("the mirror's volume is
+not mounted"), and magnum creates nothing in its place.
 
 ## Daily use
 

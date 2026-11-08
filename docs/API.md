@@ -74,6 +74,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [sqlitetest](#sqlitetest) | Package sqlitetest keeps a test's SQLite database in memory: a private database on one connection, loaded from the image of a database a test binary migrated once, so the test writes no database file. |
+| [staging](#staging) | Package staging tells, for each open PR and each staging environment of its repository, whether the PR is live there (latest), pushed but not yet confirmed by a deployment (pushed), on staging at an older commit (outdated), absent (none), or unknown. |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
 | [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
@@ -4901,6 +4902,10 @@ var ErrSharedPrompt = errors.New("holds the blocks its prompts share and is not 
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
 
+var StagingBranchPattern = regexp.MustCompile(`^staging-[a-z0-9-]+$`)
+    StagingBranchPattern is what a [[factory.repo.staging]] branch must match:
+    a deploy (R46) pushes only to a staging-<name> branch.
+
 var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base", "empty"}
     TrivialDeltaClasses are the values of skip_trivial_deltas: a push that only
     changes comment lines, only whitespace (blank lines, re-indented code where
@@ -5132,6 +5137,7 @@ type Config struct {
 	Board      Board      `toml:"board"`
 	Webhooks   Webhooks   `toml:"webhooks"`
 	Jira       Jira       `toml:"jira"`
+	Staging    Staging    `toml:"staging"`
 	Factory    Factory    `toml:"factory"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -5544,6 +5550,11 @@ func (c *Config) Stages(w *Watch) [][]Role
     After (a stage holds the roles whose dependencies all ran in earlier stages;
     dependencies outside the watch's set are ignored), then the judge alone.
     Validation guarantees After is acyclic.
+
+func (c *Config) Stagings(repo string) []FactoryStaging
+    Stagings returns the staging environments of the [[factory.repo]] for
+    owner/name (case ignored), in the order the block lists them: a copy,
+    nil when no block or no entry names one.
 
 func (c *Config) StakesFor(fullName string) string
     StakesFor returns what repository fullName ("owner/name") puts at risk,
@@ -6093,9 +6104,12 @@ type FactoryStaging struct {
 	After  string `toml:"after"`
 }
     FactoryStaging is a `staging` entry of a repository: an environment with
-    a branch the factory merges into after your approval. QA names the skill
-    that tests it ("" = no QA); After the environment whose QA must pass first.
-    The first milestone reads none of it, but it validates.
+    a branch the factory merges into after your approval. Name is also the
+    GitHub deployment environment the deploys record; Branch is a staging-<name>
+    branch (StagingBranchPattern), never master, main, the base or production*.
+    QA names the skill that tests it ("" = no QA); After the environment whose
+    QA must pass first. Config.Stagings lists a repository's; internal/staging
+    reads which PRs are live on them.
 
 type FooterData struct {
 	SHA    string // the reviewed commit
@@ -7494,6 +7508,19 @@ type SpendRole struct {
     SpendRole is a role's entry in a [spend.<level>] table: the keys the level
     sets on the role while [pipeline] spend names it, over the role's own
     [[role]] keys and the notch mapping alike; nil = the role's value stays.
+
+type Staging struct {
+	// MirrorDir holds one treeless bare mirror per repository,
+	// <mirror_dir>/<owner>/<repo>.git; "" = <state dir>/staging (Load fills
+	// it in). Absolute after ~ expands. A path under /Volumes whose volume
+	// is not mounted leaves every staging status unknown, and nothing is
+	// created there.
+	MirrorDir string `toml:"mirror_dir"`
+}
+    Staging is the [staging] table: where magnum keeps the treeless mirrors that
+    tell which open PRs are live on a staging environment (internal/staging).
+    The environments themselves are the [[factory.repo.staging]] entries of a
+    repository (Stagings).
 
 type Terminal struct {
 	App               string `toml:"app"`      // Terminal | iTerm2 | Ghostty | WezTerm | custom | generic
@@ -25264,6 +25291,291 @@ func Open(image []byte, params string) (*sql.DB, error)
     a binary. It must be a rollback image (header bytes 18 and 19 = 1), which
     Image returns; a WAL file's bytes are refused (FileImage turns one into the
     other).
+
+```
+
+## staging
+
+```text
+package staging // import "github.com/zhuravel/magnum/internal/staging"
+
+Package staging tells, for each open PR and each staging environment of its
+repository, whether the PR is live there (latest), pushed but not yet confirmed
+by a deployment (pushed), on staging at an older commit (outdated), absent
+(none), or unknown.
+
+It reads a treeless bare mirror of the repository (`git clone --bare
+--filter=tree:0`), GitHub's deployments of each environment and ci.yml's runs.
+A staging deploy is a two-parent merge, [staging tip, PR head], pushed to
+staging-<env>; Jenkins deploys a tip once its ci.yml passes and then records a
+deployment of the environment whose ref is that tip. So a PR is on staging at
+commit X when X is the newest PR commit that is an ancestor of a second parent
+of the branch's first-parent chain (within a window), and live when the newest
+successful deployment's history holds the merge that brought it in. Ancestry
+decides, never sha equality.
+
+The package only reads: it never pushes (that is the deploy's, later), and it
+runs git only in its own mirror directory. Refresh fetches and reads GitHub at
+most once a minute per repository across processes (a flock and a state file
+beside the mirror); Status is a pure lookup over the last Refresh.
+
+CONSTANTS
+
+const (
+	// Window and WindowAge bound the first-parent walk from a branch's tip:
+	// the last Window first-parent commits, or WindowAge, whichever ends
+	// first. A PR merged before it is none.
+	Window    = 400
+	WindowAge = 90 * 24 * time.Hour
+	// ConfirmWait is how long after the push a passed ci.yml waits for a
+	// deployment before the PR is "not confirmed".
+	ConfirmWait = 45 * time.Minute
+	// RefreshEvery is how often Refresh fetches and reads GitHub for a
+	// repository at most, across every process that shares the mirror.
+	RefreshEvery = time.Minute
+	// Workflow is the workflow file whose run on a merge says its CI.
+	Workflow = "ci.yml"
+)
+    The fixed numbers of the rules.
+
+const WhyNotReadable = "deployments not readable (Deployments: read on the poll App)"
+    WhyNotReadable is EnvStatus.Why of a pushed PR whose environment's
+    deployments GitHub refuses (a 403 or 404): not readable is never "none".
+
+const WhyVolumeNotMounted = "the mirror's volume is not mounted"
+    WhyVolumeNotMounted is EnvStatus.Why while the mirror's volume (a
+    /Volumes/<name> disk) is not mounted.
+
+
+VARIABLES
+
+var ErrNotReadable = errors.New("not readable")
+    ErrNotReadable is what GitHub.DeploymentsOf's error wraps on a 403 or a 404:
+    the token may not read deployments, which never means "none".
+
+
+FUNCTIONS
+
+func MirrorDir(root string) func(repo string) (dir string, ok bool)
+    MirrorDir is Deps.Mirror over staging mirror_dir root: owner/name's
+    mirror is <root>/<owner>/<name>.git, in lower case. It reports ok false
+    for no root, a repository name that is not owner/name, and a root under
+    /Volumes/<volume> while that volume is not mounted (then with the dir,
+    which Refresh reads as WhyVolumeNotMounted). It creates nothing.
+
+
+TYPES
+
+type Client struct {
+	// Has unexported fields.
+}
+    Client answers staging status from what Refresh read. It is safe for
+    concurrent use.
+
+func New(d Deps) *Client
+    New returns a Client on d.
+
+func (c *Client) Refresh(ctx context.Context, repo string, open []int) error
+    Refresh fetches the mirror once (the staging-* tips, the base and
+    refs/pull/N/head of the open PRs, and of those another client asked for in
+    the last minutes), reads each staging environment's deployments (with their
+    ETag) and the ci.yml runs of the merges that brought the open PRs' heads in,
+    and builds the lookup data Status reads for the repository. It runs at most
+    once a minute per repository across processes (a flock in the mirror dir);
+    a call within the minute reuses the data and returns nil. It never blocks
+    longer than ctx: a Refresh that ctx cuts keeps the data it had and returns
+    ctx's error. The first one clones the mirror.
+
+func (c *Client) Status(pr PR, envs []Env) []EnvStatus
+    Status returns where pr stands on each of envs, in their order, from the
+    last Refresh of pr.Repo: no git, no network. Without a Refresh (or with one
+    that failed), each env is unknown.
+
+type Commit struct {
+	SHA     string
+	Parents []string
+	At      time.Time // committer time (FirstParent only)
+}
+    Commit is a commit as the mirror lists it.
+
+type Deployment struct {
+	ID        int64
+	SHA       string // the commit GitHub resolved the deployment's ref to
+	Ref       string // the ref as created (the deploy records the tip's sha)
+	CreatedAt time.Time
+	Success   bool // it has a success status
+}
+    Deployment is a GitHub deployment of an environment.
+
+type Deployments struct {
+	// ETag is the answer's ETag, to send as If-None-Match next time.
+	ETag string
+	// NotModified: GitHub answered 304 to the etag sent; List is empty and
+	// the last list stands.
+	NotModified bool
+	// List is the deployments, newest first (a page is enough: the newest
+	// successful one is what counts).
+	List []Deployment
+}
+    Deployments is one read of an environment's deployments.
+
+type Deps struct {
+	Git    Git
+	GitHub GitHub
+	// Mirror is the repository's mirror dir; ok false = not configured or
+	// its volume is absent (dir, when not "", says which: MirrorDir).
+	Mirror func(repo string) (dir string, ok bool)
+	// GitEnv is the environment of the fetch (the poll identity's git env:
+	// its GH_CONFIG_DIR, the credential helper's login); gh is git's only
+	// credential helper, so the operator's own credentials never answer
+	// implicitly. Nil, or nil for a repository, and nothing is fetched.
+	GitEnv func(repo string) map[string]string
+	Now    func() time.Time
+	Log    *slog.Logger
+}
+    Deps is what a Client runs on.
+
+type Detail string
+    Detail is why a pushed PR is not confirmed yet.
+
+const (
+	// DetailCIRunning: ci.yml runs on the merge (or has not started yet).
+	DetailCIRunning Detail = "ci_running"
+	// DetailCIFailedOurs: ci.yml failed, and a failing job names a path the
+	// PR changes.
+	DetailCIFailedOurs Detail = "ci_failed_ours"
+	// DetailCIFailedNotOurs: ci.yml failed, and no failing job names a path
+	// the PR changes (or that cannot be told: Why says so).
+	DetailCIFailedNotOurs Detail = "ci_failed_not_ours"
+	// DetailWaitingJenkins: ci.yml passed, and the deploy has not recorded a
+	// deployment yet, less than ConfirmWait after the push.
+	DetailWaitingJenkins Detail = "waiting_jenkins"
+	// DetailNotConfirmed: ci.yml passed but no deployment holds the merge
+	// ConfirmWait after the push, or the deployments are not readable.
+	DetailNotConfirmed Detail = "not_confirmed"
+)
+    The details of StatePushed.
+
+type Env struct{ Name, Branch string }
+    Env is a staging environment: its name, which is also the GitHub deployment
+    environment, and its branch, staging-<name>.
+
+type EnvStatus struct {
+	Env         Env
+	State       State
+	Detail      Detail
+	Tip         string    // staging-<env>'s tip
+	DeployedTip string    // the newest successful deployment's ref, "" if not readable
+	DeployedAt  time.Time // when that deployment was created
+	InTip       string    // the PR commit found in the tip: the head, or for outdated the older one
+	Behind      int       // outdated: the PR's commits after InTip that the tip lacks
+	PushedAt    time.Time // the merge commit that brought InTip in: its committer time
+	RunURL      string    // ci.yml's run on that merge commit (pushed, any detail), "" if none
+	Why         string    // unknown, not_confirmed because deployments are not readable, or what could not be told
+}
+    EnvStatus is a PR's state on one environment.
+
+type Git interface {
+	// Ensure makes dir a treeless bare mirror of repo (owner/name) unless
+	// it is one already, and returns the branch its HEAD names: the
+	// remote's default branch, the mirror's base.
+	Ensure(ctx context.Context, dir, repo string, env map[string]string) (base string, err error)
+	// Fetch fetches refspecs (forced, explicit) from the mirror's origin
+	// with the tree:0 filter. A refspec whose source the remote lacks fails
+	// with a *MissingRefError.
+	Fetch(ctx context.Context, dir string, env map[string]string, refspecs []string) error
+	// Refs lists the mirror's refs under the prefixes (such as
+	// "refs/heads/"), by full name.
+	Refs(ctx context.Context, dir string, prefixes ...string) (map[string]string, error)
+	// FirstParent lists at most limit commits of rev's first-parent chain,
+	// newest first, with their parents and committer times.
+	FirstParent(ctx context.Context, dir, rev string, limit int) ([]Commit, error)
+	// Graph lists the commits reachable from include and from none of
+	// exclude, with their parents, every commit before its parents (no
+	// times). One process, whatever the number of revisions.
+	Graph(ctx context.Context, dir string, include, exclude []string) ([]Commit, error)
+	// ChangedPaths lists the paths head changes since its merge base with
+	// base (`git diff --name-only base...head`); in a treeless mirror it
+	// fetches the two trees it needs.
+	ChangedPaths(ctx context.Context, dir string, env map[string]string, base, head string) ([]string, error)
+}
+    Git is the git the package runs, always in the mirror directory dir.
+    NewGit is the real one.
+
+func NewGit(r execx.Runner) Git
+    NewGit returns the real Git: a mirror is a treeless bare clone of
+    https://github.com/<owner>/<repo>.git.
+
+type GitHub interface {
+	// DeploymentsOf reads the environment's deployments, newest first, each
+	// with whether it has a success status, sending etag as If-None-Match
+	// ("" = none). A 403 or 404 is an error that wraps ErrNotReadable.
+	DeploymentsOf(ctx context.Context, repo, environment, etag string) (Deployments, error)
+	// RunsOf lists the runs of the workflow file (Workflow) on the commit
+	// sha, newest first; a failed one carries its failing jobs.
+	RunsOf(ctx context.Context, repo, workflow, sha string) ([]Run, error)
+}
+    GitHub is what the package reads from GitHub as the poll identity.
+
+type Job struct {
+	Name string
+	// Paths are the repository paths its failure names (its annotations,
+	// the failing spec files); nil = it names none, so whether the failure
+	// is a PR's cannot be told from it.
+	Paths []string
+}
+    Job is a failing job of a run.
+
+type MissingRefError struct{ Ref string }
+    MissingRefError is Git.Fetch's error when the remote has no Ref.
+
+func (e *MissingRefError) Error() string
+
+type PR struct {
+	Repo   string // owner/name
+	Number int
+	Head   string
+	Base   string // the base ref, for example master
+	// Commits are the PR's commits, oldest first. When nil, Status takes
+	// the ones the last Refresh derived in the mirror, rev-list
+	// Base..refs/pull/N/head, which needs Base to be the mirror's base (the
+	// remote's default branch) and Number among the PRs it fetched.
+	Commits []string
+}
+    PR is the PR Status answers for.
+
+type Run struct {
+	ID         int64
+	URL        string
+	Status     string // queued, in_progress, completed, ...
+	Conclusion string // once completed: success, failure, cancelled, timed_out, skipped, ...
+	CreatedAt  time.Time
+	// Failed are the failing jobs of a completed run that did not succeed;
+	// nil when they were not read.
+	Failed []Job
+}
+    Run is a workflow run on a commit.
+
+type State string
+    State is where a PR stands on one environment.
+
+const (
+	// StateLatest: the PR's head is on the branch, and the newest successful
+	// deployment of the environment holds the merge that brought it in.
+	StateLatest State = "latest"
+	// StatePushed: the head is on the branch, but no deployment confirms it
+	// yet; Detail says why.
+	StatePushed State = "pushed"
+	// StateOutdated: an older commit of the PR is on the branch, the head is
+	// not; Behind counts the commits after it.
+	StateOutdated State = "outdated"
+	// StateNone: no commit of the PR is on the branch within the window.
+	StateNone State = "none"
+	// StateUnknown: the mirror is absent, a fetch failed, or there was no
+	// Refresh; Why says which.
+	StateUnknown State = "unknown"
+)
+    The states.
 
 ```
 

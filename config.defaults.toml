@@ -2,7 +2,7 @@
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
 # appended, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [usage], [triage],
-# [learn], [notes], [webhooks], [jira], [factory] or [kinds.<name>] overrides the value here (the factory's roles and
+# [learn], [notes], [webhooks], [jira], [staging], [factory] or [kinds.<name>] overrides the value here (the factory's roles and
 # kinds merge by name, see its section), its [[role]] blocks override the role of the same
 # name key by key (other names are appended), and its [spend.<level>] tables merge by level, role and key. App private keys are PEM files ([[identity]] private_key_file, by
 # convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
@@ -200,6 +200,19 @@ stale_after = "90s"               # no page for this long makes the stream unhea
 # user = ""                       # the Jira account's email
 # token_file = ""                 # the account's API token alone on one line, in a file of mode 0600 (relative:
                                   # beside this config); it goes to curl on stdin, never in argv or a log
+
+# Staging status: for each open PR and each staging environment of its repository ([[factory.repo.staging]]),
+# whether the PR is live there (latest), pushed but not yet confirmed by a deployment (pushed: CI running, CI
+# failed on its own paths or not, waiting for the deploy, not confirmed), on staging at an older commit (outdated)
+# or absent (none); unknown when the mirror is absent or its fetch failed. Read from a treeless bare mirror of the
+# repository (`git clone --bare --filter=tree:0`, fetched at most once a minute: the staging-* branches, the base
+# and the open PRs' heads, with the poll identity's credentials), GitHub's deployments of the environment and
+# ci.yml's runs. It only reads: nothing is pushed.
+
+[staging]
+# mirror_dir = ""                 # one mirror per repository, <mirror_dir>/<owner>/<repo>.git; "" = <state dir>/staging.
+                                  # On an external disk ("/Volumes/<name>/magnum-staging"): while the volume is not
+                                  # mounted every status is unknown, and nothing is created in its place
 
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,

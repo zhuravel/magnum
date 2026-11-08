@@ -19630,6 +19630,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARetryAfterUnavailableStartsAFreshRun and TestADeclineStopReachesYouEvenAfterAnotherAlert stop the daemon
   before the move with a held pass (`daemonStops`), not an error: an error is a failure of the stage, whose retry
   waits a poll, while the next daemon that the same engine's next pass stands for has no failure to wait on.
+- **Staging status, the read side of staging (R27, 2026-11-08): `internal/staging` tells, per open PR and
+  per staging environment, latest, pushed (with a detail), outdated, none or unknown, and only reads.**
+  A staging deploy is a two-parent merge [staging tip, PR head] pushed to `staging-<env>`; Jenkins deploys a tip
+  once its ci.yml passes and records a deployment of the environment whose ref is that tip. So the PR is on the
+  branch at the newest of its commits that a merge of the branch's first-parent window brought in (an ancestor
+  of the merge's second parent that its first parent lacks), and live when the newest successful deployment's
+  history holds that merge. The window is the last 400 first-parent commits or 90 days, whichever ends first,
+  and what entered staging before it stays beyond it, even when a newer merge's branch holds it again (a
+  feature branch that merged staging in would otherwise bring back every PR of that time). One `rev-list
+  --first-parent` and one `rev-list --parents` per branch, one for the deployed tip and one for every open PR's
+  commits (`base..refs/pull/<n>/head`, a merge of master into the PR left out): never a process per PR, and
+  never a SHA compared alone. A pushed PR's detail comes from ci.yml's run on its merge, or on the next newer
+  merge when its own was cancelled or never ran (a push of several merges runs ci.yml on the last); a failure
+  is the PR's when a failing job names a path the PR changes (read in the treeless mirror, whose two trees git
+  fetches then), else not, with "cannot tell" in Why when a job names no path. Deployments not readable (a 403
+  or 404: Deployments: read on the poll App) leave a passed PR `not_confirmed`, never `none` or `latest`; a
+  running or failed CI still says so. The mirror is a treeless bare clone (`--filter=tree:0 --single-branch
+  --no-tags`, its HEAD the base) under `[staging] mirror_dir` (default `<state dir>/staging`), fetched with
+  forced explicit refspecs of the mirror's own refs (`staging-*`, the base, each open PR's pull ref; a pull
+  ref the remote lacks is dropped and the fetch runs again) and the poll identity's env, gh the only credential
+  helper. Refresh runs at most once a minute per repository across both daemons: a flock beside the mirror
+  and a state file there, which the other daemon reuses within the minute and which carries each daemon's open
+  PRs into the other's next fetch. Status is a pure lookup. A `mirror_dir` under `/Volumes` whose volume is not
+  mounted (absent, or a plain directory on the system disk) is unknown, "the mirror's volume is not mounted",
+  and nothing is created. `[[factory.repo.staging]]` branches now match `^staging-[a-z0-9-]+$` and are never
+  master, main, the base or production*; `Config.Stagings(repo)` lists a repository's entries. Rejected: a
+  clone of every branch (the PRs' own and the pull refs are what counts), comparing the tip or the deployment
+  with the head (a later merge moves the tip, and a deploy of a later tip holds the PR), a process per PR, a
+  deployment read failure as "none", and per-PR changed paths for every open PR (two tree fetches each; only a
+  failed run needs them). Deploy (R46) is later. Tests: TestTheStateRules (latest twice, each pushed detail,
+  the cancelled run, outdated with Behind, none, deployments not readable), TestUnknownSaysWhy,
+  TestAPRMergedBeyondTheWindowIsNone (90 days, the 400th and the 401st merge),
+  TestABranchHoldingAnOldStagingTipBringsNoPRMergedBeforeTheWindow (fails without the window's boundary in the
+  walk), TestAMasterMergeOnTheChainDoesNotPutEveryPRIn, TestCommitsNilAreTheMirrorsBaseToPullHead (fails
+  without the base left out of the PRs' commits), TestRefreshRunsAtMostOnceAMinutePerRepository and
+  TestTheFlockSerializesTwoClientsOnOneMirror (both fail with the reuse taken out),
+  TestARefreshFetchesThePRsAnotherClientAskedFor, TestAPullRefTheRemoteLacksIsDroppedFromTheFetch,
+  TestDeploymentsAreReadWithTheLastETag, TestStatusMakesNoGitOrGitHubCall, TestNoGitEnvFetchesNothing,
+  TestPRCommitsThatCannotBeReadCostOnlyThePRsWithoutCommits, TestAnAbsentVolumeGivesUnknownAndCreatesNothing,
+  TestARealTreelessMirrorTellsLatestAndPushed (a real origin in a temp dir, cloned with tree:0 over file://),
+  and in config TestAStagingBranchMustBeAStagingBranchAndNeverTheBaseOrProduction,
+  TestStagingsAreTheRepositorysEntriesInOrder and TestTheStagingMirrorDirDefaultsUnderTheStateDir.
 
 ## Learned rules
 
