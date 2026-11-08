@@ -25,13 +25,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/zhuravel/magnum/internal/escapes"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 // NearLines is how far, in lines, a comment may be from one of magnum's
-// findings on the same path and still be about it.
-const NearLines = 3
+// findings on the same path and still be about it: escapes' near rule,
+// which the factory's local round is matched by too.
+const NearLines = escapes.NearLines
 
 // Reviewed is a commit magnum posted a review of.
 type Reviewed struct {
@@ -154,6 +156,13 @@ type Candidate struct {
 	// (store.MissOutside*); "" for a candidate. The classifier never sees
 	// an outside comment, so it is not in the candidates file.
 	OutsideReason string `json:"-"`
+}
+
+// finding is the candidate as escapes places it: its path and line range,
+// at the commit its lines name (the comment's own, else the reviewed one).
+func (c Candidate) finding() escapes.Finding {
+	return escapes.Finding{Source: escapes.SourceComment, Ref: c.ID, Path: c.Path, StartLine: c.StartLine, EndLine: c.Line,
+		Head: cmp.Or(c.CommentSHA, c.ReviewedSHA)}
 }
 
 // Lines is the candidate's line range as [from, to] (nil without a line).
@@ -526,10 +535,7 @@ func nearby(fs []store.Finding, verdict string, c Candidate) []*store.Finding {
 	if c.Path == "" || c.Line <= 0 {
 		return nil
 	}
-	from := max(c.StartLine, 1)
-	if c.StartLine == 0 {
-		from = c.Line
-	}
+	at := c.finding()
 	type hit struct {
 		f *store.Finding
 		d int
@@ -540,14 +546,7 @@ func nearby(fs []store.Finding, verdict string, c Candidate) []*store.Finding {
 		if f.Verdict != verdict || f.Path != c.Path || f.Line <= 0 {
 			continue
 		}
-		d := 0
-		switch {
-		case f.Line < from:
-			d = from - f.Line
-		case f.Line > c.Line:
-			d = f.Line - c.Line
-		}
-		if d <= NearLines {
+		if d, ok := escapes.Distance(escapes.Finding{StartLine: f.Line, EndLine: f.Line}, at); ok && d <= NearLines {
 			hits = append(hits, hit{f, d})
 		}
 	}
