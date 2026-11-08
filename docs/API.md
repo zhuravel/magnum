@@ -15359,14 +15359,14 @@ package factoryread // import "github.com/zhuravel/magnum/internal/factoryread"
 
 Package factoryread is the review side's read of what the factory keeps:
 the local review round of a pull request the factory published, from its
-registry (factory.db), and the task's plan, ticket and answers, from the task's
-directory, for the review retro (DECISIONS "The review retro tags factory-origin
-misses and their stage"). It only reads: the registry is opened read only
-(mode=ro, never created, so nothing writes its file or its WAL), with a busy
-timeout, and closed after each read; a task's files are read inside an os.Root
-of its directory. It knows the factory's schema only as far as these reads need
-(pr_links, review_findings) and never migrates it: internal/factory/registry
-owns it.
+registry (factory.db), and the task's plan, ticket and answers, from the
+task's directory, for the review retro (DECISIONS "The review retro tags
+factory-origin misses and their stage"). It only reads: the registry is opened
+read only (mode=ro, never created, so nothing writes its file or its WAL),
+with a busy timeout, and closed after each read; a task's files are read inside
+an os.Root of its directory. It knows the factory's schema only as far as these
+reads need (pr_links, review_findings, review_cycles) and never migrates it:
+internal/factory/registry owns it.
 
 CONSTANTS
 
@@ -15396,8 +15396,10 @@ type Task struct {
 	ApprovedHead string
 	// Findings are the local review's findings, first seen first, each
 	// escapes.SourceLocal with Ref "<task id>/<finding id>", Round its last
-	// cycle (where the registry took its place from) and Head the task's
-	// Head.
+	// cycle (where the registry took its place from) and Head the head
+	// that cycle reviewed (review_cycles.head_before), which a later
+	// cycle's fix may have moved on from; the task's Head when the
+	// registry holds no head for that cycle.
 	Findings []escapes.Finding
 }
     Task is one factory task that published a pull request: the heads its PR
@@ -19219,14 +19221,16 @@ type Candidate struct {
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
 	// Origin is OriginFactory for a comment on a pull request the factory
-	// published that its local review round did not catch (Input.Local),
-	// "" otherwise. The classifier gives such a candidate a stage.
+	// published, on code its local review round saw, that the round did
+	// not catch (Input.Local, tagLocal), "" otherwise. The classifier gives
+	// such a candidate a stage.
 	Origin string `json:"origin,omitempty"`
 	// PostedCaught: magnum's posted round caught the comment (a finding it
 	// posted near it, or one it rejected as a duplicate of it) though the
-	// factory's local round did not. Without the factory such a comment is
-	// caught and no candidate; here it is one, recorded only as a
-	// factory-origin miss that teaches the review skill nothing.
+	// factory's local round, which saw its code, did not. Without the
+	// factory such a comment is caught and no candidate; here it is one,
+	// recorded only as a factory-origin miss that teaches the review skill
+	// nothing.
 	PostedCaught bool `json:"posted_caught,omitempty"`
 	// File is the commented file at ReviewedSHA, relative to the candidates
 	// file's directory; FileSkipped says why there is no copy. The engine
@@ -19544,15 +19548,17 @@ type Input struct {
 	IncludeBots bool
 	// Compare compares a reviewed commit with a later one (GitHub's
 	// comparison). Build asks it only for an inline comment on a commit
-	// magnum did not review, or for a local finding of the factory's at
-	// another head than a comment's (Local); nil means no comparison, so
-	// such a comment is outside and such a finding catches nothing.
+	// magnum did not review and, on a pull request the factory published
+	// (Local), for a comment on another reviewed commit than a head the
+	// factory approved and for a local finding at another head than a
+	// comment's; nil means no comparison, so such a comment is outside or
+	// not on the factory's code, and such a finding catches nothing.
 	Compare func(from, to string) (Comparison, error)
 	// Local is the factory's local review round of a pull request the
 	// factory published (nil for every other pull request): the second
-	// caught set. A candidate none of its findings caught is the factory's
-	// miss (Candidate.Origin), and so is a comment magnum's posted round
-	// caught that the local round did not (Candidate.PostedCaught).
+	// caught set. A candidate on code the round saw that none of its
+	// findings caught is the factory's miss (Candidate.Origin), and so is
+	// such a comment magnum's posted round caught (Candidate.PostedCaught).
 	Local *LocalRound
 }
     Input is everything Build reads about one pull request.
@@ -19587,8 +19593,13 @@ type Item struct {
     Item is the classifier's verdict on one candidate.
 
 type LocalRound struct {
+	// Heads are the heads the factory approved, one per task that
+	// published the pull request (factoryread.Task.Head): the code the
+	// local round passed.
+	Heads []string
 	// Findings are the round's findings (escapes.SourceLocal), each of the
-	// head its line numbers name (the head the round approved).
+	// head its line numbers name (the head of the review cycle that last
+	// saw it).
 	Findings []escapes.Finding
 }
     LocalRound is the factory's local review round of a pull request it
@@ -19672,8 +19683,8 @@ type Result struct {
 	// judge rejected as a duplicate of a comment made before that review
 	// (reasonDuplicate), Dropped the comments too short or only an
 	// approval. Neither is stored. On a pull request the factory published
-	// a comment is caught only when its local round caught it too (else it
-	// is a candidate, PostedCaught).
+	// a comment on code its local round saw is caught only when that round
+	// caught it too (else it is a candidate, PostedCaught).
 	Caught, Dropped int
 	// Rejected are the findings the judge rejected, the newest RejectedMax
 	// with a title, oldest first: the classifier names the one that
@@ -19719,13 +19730,16 @@ func Build(in Input) (Result, error)
     and agreed, so it is caught. A rejection for any other reason says the judge
     disagreed, and a comment made after the review was never read by it.
 
-    On a pull request the factory published (Input.Local), every candidate the
-    factory's local round did not catch (tagLocal) has Origin factory, a comment
-    that cannot be placed (a review body, deleted lines) included. A comment
-    magnum caught (posted near it, or rejected as its duplicate) that the local
-    round did not becomes such a candidate too, PostedCaught, instead of being
-    caught; one both rounds caught is caught. An outside comment takes no part:
-    it is about code magnum's review did not see.
+    On a pull request the factory published (Input.Local), every candidate on
+    code the factory's local round saw that the round did not catch (tagLocal)
+    has Origin factory, a comment that cannot be placed (a review body, deleted
+    lines) included. A comment magnum caught (posted near it, or rejected as
+    its duplicate) that the local round did not becomes such a candidate too,
+    PostedCaught, instead of being caught; one both rounds caught is caught. A
+    comment on code the local round never saw takes no part, and is a candidate,
+    caught or outside as on any other pull request: an outside one (on code
+    magnum's review did not see either) and one on a file that changed after the
+    factory approved it (localSaw).
 
 type Reviewed struct {
 	SHA string
