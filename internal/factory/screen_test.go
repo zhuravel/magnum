@@ -1315,3 +1315,19 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 		}
 	}
 }
+
+// The ready card's shots offer e for the QA report only when the run's
+// report is there: a walked run whose summary.md is gone says where the
+// shots come from, and no e that would answer "no QA report".
+func TestTheShotsNoteOffersEOnlyWithTheQAReport(t *testing.T) {
+	r := newScreenRig(t)
+	head := strings.Repeat("a", 40)
+	ready := r.task("PR-12466", "bug", "Passkey dates", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12466")
+	res := qaFound(head)
+	r.card(ready.ID, ReadyCardFile{Revision: 1, Head: head, Base: "base2222", Copy: "talkable.factory3",
+		Review: ReviewSummary{Exit: registry.ExitClean, Rounds: 1}, QA: &res})
+	c := r.data(screenNow).Cards[ready.ID].Ready
+	if c == nil || c.Screenshots != 3 || c.QAReport != "" || c.ScreenshotsNote != "the after side, from the copy's own server" {
+		t.Fatalf("card %+v, want the shots without e", c)
+	}
+}

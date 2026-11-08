@@ -444,9 +444,11 @@ func DefaultFactoryRoles() []Role {
 		{Name: "fx-writer", Kind: KindClaude, Model: "opus", Effort: "high", Prompt: "factory-writer.md", Timeout: Duration{90 * time.Minute},
 			Why: "write the change, test first", Doing: "writing the change"},
 		// The walker drives the factory's Chrome through the agent-browser CLI alone: no Claude in Chrome (your
-		// browser and its logins, whatever your setting) and no MCP tool (the kind's mcp_strict keeps your servers out).
+		// browser and its logins, whatever your setting), no MCP tool (the kind's mcp_strict keeps your servers out),
+		// and no shell open or osascript, bare or by path: Claude Code's shell takes its PATH from your login shell,
+		// where /usr/bin comes before the factory's shims, so only a deny rule keeps them from your browser.
 		{Name: "fx-qa", Kind: KindClaude, Effort: "high", Prompt: "factory-qa.md", Timeout: Duration{35 * time.Minute},
-			Args: []string{"--no-chrome", "--disallowedTools=mcp__*"},
+			Args: []string{"--no-chrome", "--disallowedTools=mcp__*,Bash(open:*),Bash(/usr/bin/open:*),Bash(osascript:*),Bash(/usr/bin/osascript:*)"},
 			Why:  "look at the changed pages in a browser, in the states the ticket names", Doing: "walking the pages"},
 		// The liaison talks with you about a task; no stage names it. It asks you itself (AskUserQuestion), so
 		// magnum leaves its dialogs to you.

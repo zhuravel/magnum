@@ -98,6 +98,10 @@ type QAPage struct {
 	Console string   `json:"console"`
 	Status  int      `json:"status"`
 	Checks  []string `json:"checks"`
+	// ProbePath is the path the page's probe read (qaProbePath), which the
+	// factory keeps in a run's result (QAResult.Walk) and matches a fixed
+	// defect's page by; a verdict's is never read.
+	ProbePath string `json:"probe_path,omitempty"`
 }
 
 // QADefect is one defect: its id, class, severity (P1 to P3) and page id,
@@ -119,11 +123,14 @@ type QADefect struct {
 }
 
 // QABlocked is a state or page the walker could not reach, why, and the
-// acceptance check it was for.
+// acceptance check it was for. Fingerprint is the factory's own, never the
+// walker's: that of the defect an earlier run handed the writer whose page
+// the run did not walk again (qaCheckFixes), "" for any other.
 type QABlocked struct {
-	What  string `json:"what"`
-	Why   string `json:"why"`
-	Check string `json:"check"`
+	What        string `json:"what"`
+	Why         string `json:"why"`
+	Check       string `json:"check"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // QANotShown is an acceptance check no page shows (a background job, an
@@ -468,6 +475,9 @@ func qaFileWhy(rel string, err error) string {
 		return qaWord(rel) + " is missing"
 	case errors.Is(err, errQAOutside), errors.Is(err, errQAProbeFormat):
 		return qaWord(rel) + " " + err.Error()
+	}
+	if pe, ok := errors.AsType[*fs.PathError](err); ok { // its path holds the walker's raw file name: rel names the file
+		err = pe.Err
 	}
 	return qaWord(rel) + " cannot be read (" + err.Error() + ")"
 }

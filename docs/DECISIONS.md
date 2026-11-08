@@ -18457,7 +18457,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - `innerWidth` for the sideways scroll: a classic scrollbar hides 15 pixels of overflow.
 
   Tests, failing first (none of it existed):
-  - TestDetectQAFindsTheEscapedTooltipSpan, the #785 case, with the span's attributes in either order.
+  - TestDetectQAFindsTheEscapedTooltipSpan, the escaped-tooltip case, with the span's attributes in either order.
   - TestDetectQAPassesTheSamePageRenderedRight, TestDetectQAIgnoresEscapedHTMLInsideAttributes,
     TestDetectQAIgnoresAnglePlaceholdersThatAreNoHTMLTags and
     TestDetectQAFindsAClosingTagAnAttributeOrABreakShownAsText.
@@ -18470,8 +18470,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestTheProbeScriptCarriesTheNonceAndSkipsCode.
   - The probe's page tests run `qa_probe.js` in Node against a fake DOM (`testdata/qa/probe-harness.js`,
     which follows the browser's rules the probe relies on; skipped without node on PATH, no browser):
-    TestTheProbeReadsTextUnderDisplayContents (the #785 span in a `display: contents` turbo-frame was left
-    out), TestTheProbeLeavesOutHiddenTextCodeAndEditors (a CodeMirror editor's template was a defect),
+    TestTheProbeReadsTextUnderDisplayContents (the escaped tooltip's span in a `display: contents` turbo-frame was
+    left out), TestTheProbeLeavesOutHiddenTextCodeAndEditors (a CodeMirror editor's template was a defect),
     TestTheProbeRunsAsAFunctionBody (it returned undefined) and TestTheProbeReportsItsOwnFailure (a page that
     broke it left no file).
   - New phrases in TestCheckPromptsRendersTheQAWalkersPrompt.
@@ -18933,6 +18933,50 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheReadyCardSaysWhatQAFound (the event) and TestCheckPromptsRendersTheQAWalkersPrompt,
   TestEOpensTheQAReportOnTheTaskCardAtADeclineStop, TestTheMenusAcceptAsksYN,
   TestACollapsedKnownRowNamesWhereQAsNotesAre and TestFactoryDecidePrintsTheCardsQALine.
+
+- **The final review's fixes of visual QA, slice 1: a skipped re-walk never goes on flagged, a page is the one
+  its probe read, the walker gets the DevTools port, a failed server stop is tried again, and the walker's shell
+  cannot run `open`** (2026-11-08, R55 slice 1, after the whole-branch review).
+  - A walk after a fix that skips the fixed defect's page is no state the walker cannot reach (the run that
+    found the defect reached it): `qaBlockedOnly` is false for it (`QABlocked.Fingerprint`, the factory's own,
+    marks it), so two such walks at one head no longer pass flagged. The wait names the ways out: a retry that
+    walks the page, or `magnum factory retry <id> --accept-qa`, which now also accepts such fixes at the head
+    (`qa-accepted.json` `unchecked`, the screen's `A`): the next walk there passes with them in
+    `QAResult.Unchecked`, which the card's line, KNOWN, the PR body ("Fixed by the writer, not walked again by
+    QA, accepted by you") and the report name, never as fixed. A defect the next walk still finds is not
+    accepted by it: the decline's fingerprints and the unchecked ones are kept apart.
+  - A fixed defect's page matches by the path its probe read alone, on both sides: the run's walk keeps it
+    (`QAPage.ProbePath` in `result.json`, never read from a verdict), the handed defect takes it from the
+    earlier run's walk, and `recheck.json` names it. The walker's label for a page decides nothing.
+  - The walker gets the Chrome's DevTools port (`--cdp 9333`, `AGENT_BROWSER_CDP=9333`), a form agent-browser
+    documents (a port or a WebSocket URL); the `http://127.0.0.1:<port>` URL it got before is in neither of
+    its docs. The README names agent-browser as the walker's prerequisite on the daemon's PATH.
+  - A server stop that failed in a QA teardown is tried again on each tick while the task has no QA session
+    (`retryServerStops`; QA is `startServer`'s only caller), so its heavy use is freed once a stop goes
+    through, and a qa event says so; a boot more waits for that stop (`the copy's server of the run's last boot
+    did not stop yet`) instead of starting beside it.
+  - fx-qa's args deny `Bash(open:*)`, `Bash(/usr/bin/open:*)`, `Bash(osascript:*)` and
+    `Bash(/usr/bin/osascript:*)` in its one `--disallowedTools` list (comma-separated, the `:*` form so no space
+    splits a rule): Claude Code's shell takes its PATH from your login shell, where `/usr/bin` comes before the
+    factory's shims. Whether the deny rules hold under the operator's skip-permissions wrapper is still to
+    check in a live pane; a deny rule does not stop the same program by another path or inside `sh -c`.
+  - Smaller: the qa stage's comment in `config.defaults.toml` says a defect that blocks goes to the writer; the
+    PR body prints a class or a severity outside the factory's lists as `?`; a file the factory cannot read
+    is named without the path `os.Root` quotes; the ready card's shots offer `e` only when the run's report is
+    there; `e`'s help names the QA report too; the liaison adds `--accept-qa` only on your word; the example
+    TOML's `server_stop` says a listener outside the copy is left alone; the tests and entries name the case by
+    its page, never by a PR number. Known limit, not changed: the `when` command still runs on the loop.
+  Rejected: comparing the blocked states of two walks before a flagged pass (the walker's words for a state
+  differ between walks, so an exact compare would wait on you after every walk, with no accept for such
+  states); stopping the leftover server again in the boot more itself (each failed stop may take minutes on the
+  loop, so the tick's sweep alone tries it); a `--disallowedTools` flag per rule (one list, as the CLI's help
+  shows). Tests, failing first: TestTwoWalksThatSkipAFixedDefectsPageNeverGoOnFlagged (run 3 passed flagged),
+  TestYourAcceptLetsAFixQADidNotWalkAgainGoOn (no accept took it), TestAMislabelledPageIsNoWalkOfAFixedDefectsPage
+  (the label made it fixed), TestAFixedDefectsPageIsTheOneItsProbeRead, TestAFailedServerStopOfAQATeardownIsTriedAgain
+  (one stop, the slot held), TestABootMoreWaitsForTheStopOfTheFirstBootsServer,
+  TestStartBrowserRecordsChromeAndReadsItsDevToolsPort and TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks
+  (the URL), TestTheQAWalkerLaunchesWithoutChromeOrMCPTools, TestTheVisualQASectionPrintsOnlyKnownClassesAndSeverities,
+  TestQAFileWhyLeavesTheRawNameOut and TestTheShotsNoteOffersEOnlyWithTheQAReport.
 
 ## Learned rules
 

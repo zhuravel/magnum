@@ -1,6 +1,8 @@
 package factory
 
 import (
+	"errors"
+	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -82,5 +84,43 @@ func TestTheVisualQASectionListsAtMostTwentyOfEachKind(t *testing.T) {
 	}
 	if len(s) > 32_000 {
 		t.Errorf("the section is %d bytes", len(s))
+	}
+}
+
+// A defect's class and severity reach the PR body only from the factory's
+// own lists: a result.json an agent edited in the run's folder renders "?"
+// for anything else, never its markup or a mention.
+func TestTheVisualQASectionPrintsOnlyKnownClassesAndSeverities(t *testing.T) {
+	forged := "P2 <img src=x> @alice </details>"
+	res := QAResult{Outcome: QAOutcomeClean, Head: strings.Repeat("a", 40), Pages: 1, Walked: true,
+		Walk:      []QAPage{{ID: "P1", Path: "/settings/security"}},
+		Accepted:  []QADefect{{Class: forged, Severity: forged, Page: "P1"}},
+		Known:     []QADefect{{Class: QABrokenLayout, Severity: forged, Page: "P1"}},
+		Fixed:     []QAFixed{{Run: 1, Class: forged, Severity: "P2", Path: "/settings/security"}},
+		Unchecked: []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: forged, Path: "/settings/security"}},
+	}
+	s := qaSection(res)
+	for _, bad := range []string{"<img", "@alice", "P2 <", "</details>\n- "} {
+		if strings.Contains(s, bad) {
+			t.Errorf("the section holds %q:\n%s", bad, s)
+		}
+	}
+	for _, want := range []string{"- ? ? on `/settings/security`", "- ? broken_layout on", "- P2 ? on", "- ? escaped_markup on"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the section lacks %q:\n%s", want, s)
+		}
+	}
+}
+
+// A file of the walker's that the factory cannot read is named by the
+// walker's word for it alone: the error of the read keeps its cause, never
+// the path os.Root quotes with the file's raw name.
+func TestQAFileWhyLeavesTheRawNameOut(t *testing.T) {
+	raw := "pages/\x1b[31mevil\u202e.json"
+	err := &fs.PathError{Op: "openat", Path: raw, Err: errors.New("permission denied")}
+	got := qaFileWhy(raw, err)
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "\u202e") || strings.Contains(got, "openat") ||
+		!strings.Contains(got, "permission denied") {
+		t.Errorf("qaFileWhy = %q", got)
 	}
 }

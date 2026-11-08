@@ -29,10 +29,12 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`). "+
 			"--accept-qa also accepts the QA defects that block which the writer declined with its risk, when QA's fix loop "+
 			"stopped for you on them: the next QA run at the task's head lets exactly those pass, the PR body names them as "+
-			"accepted by you, and a new head blocks them again; only you can accept a defect QA finds, never the writer. A "+
-			"plain retry walks QA again and hands a decline you did not accept to the writer once more, within its fix turns.",
+			"accepted by you, and a new head blocks them again; only you can accept a defect QA finds, never the writer. After "+
+			"a QA run that did not walk again the page of a defect the writer fixed, --accept-qa lets that fix go unchecked at "+
+			"the task's head, and the PR body names it as accepted by you. A plain retry walks QA again and hands a decline "+
+			"you did not accept to the writer once more, within its fix turns.",
 		func(pos []string) int { return runFactoryRetryCmd(c, acceptQA, pos) })
-	cmd.Flags().BoolVar(&acceptQA, "accept-qa", false, "accept the QA defects the writer declined with its risk, at the task's head")
+	cmd.Flags().BoolVar(&acceptQA, "accept-qa", false, "accept the QA defects the writer declined with its risk, or the fixes QA did not walk again, at the task's head")
 	return cmd
 }
 

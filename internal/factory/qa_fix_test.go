@@ -728,3 +728,132 @@ func TestAQARunAfterAFixWalksEvenWithNoUserFacingFile(t *testing.T) {
 		t.Fatalf("qa-summary.json %+v: the fix passed QA as not needed", sum)
 	}
 }
+
+// fixAndRecheck is run 1's walk of the security settings, labelled label,
+// that finds the tooltip's markup, the writer's fix of it, and the ticks
+// until the next run's walker has its prompt; the fix's head.
+func (r *qaRig) fixAndRecheck(task registry.Task, head, label string) string {
+	r.t.Helper()
+	r.toWalker(task)
+	r.walk(task, escapedWalk(label), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), nil)
+	fix := r.toQAAt(task, 1)
+	r.toWalker(task)
+	return fix
+}
+
+// A page counts as the fixed defect's page walked again by the path its
+// probe read alone, never by the walker's label: a walk of the help's
+// shortcuts that the walker calls /settings/security, in the same state, is
+// no walk of the security settings. It needs you as a skipped walk would,
+// and nothing is "fixed".
+func TestAMislabelledPageIsNoWalkOfAFixedDefectsPage(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12460")
+	fix := r.fixAndRecheck(task, head, "/settings/security")
+	r.walk(task, oneSecurityPage(), shortcutsProbes)
+	got := r.toYou(task)
+	if want := "not walked again after the writer's fix"; !strings.Contains(got.WaitsWhat, want) {
+		t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+	}
+	if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok {
+		t.Fatalf("qa-summary.json %+v: a mislabelled page passed the fix", sum)
+	}
+	if res := r.qaResult(task.ID, 2, fix); len(res.Fixed) != 0 || len(res.Blocked) != 1 || res.Blocked[0].Why != qaNotWalkedWhy {
+		t.Fatalf("run 2's result.json %+v, want nothing fixed and the page not walked again", res)
+	}
+}
+
+// The page a defect was found on is the one its probe read, whatever the
+// walker called it then: a run that found the tooltip's markup on a page
+// it labelled /account hands the writer /settings/security to walk again,
+// and a walk of that page in its state that finds the defect no more passes
+// with it fixed there.
+func TestAFixedDefectsPageIsTheOneItsProbeRead(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12461")
+	fix := r.fixAndRecheck(task, head, "/account")
+	var again []qaRecheck
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, filepath.Join(qaRunDir(2, fix), qaRecheckFile))), &again); err != nil ||
+		len(again) != 1 || again[0].Path != "/settings/security" {
+		t.Errorf("recheck.json %+v (%v), want the page its probe read", again, err)
+	}
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID))
+	want := []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "signed_in"}}
+	if !ok || sum.Run != 2 || !slices.Equal(sum.Fixed, want) || len(sum.Blocked) != 0 {
+		t.Fatalf("qa-summary.json %+v (%v), want run 2 clean with %+v fixed", sum, ok, want)
+	}
+	if len(sum.Walk) != 1 || sum.Walk[0].ProbePath != "/settings/security" {
+		t.Errorf("the summary's pages %+v, want the path the probe read kept", sum.Walk)
+	}
+}
+
+// A walk after a fix that skips the fixed defect's page is no state the
+// walker cannot reach (run 1 reached it), so it never goes on flagged: the
+// second such walk at the head needs you again, with no summary written,
+// and the wait names the ways out, a walk of the page or --accept-qa.
+func TestTwoWalksThatSkipAFixedDefectsPageNeverGoOnFlagged(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12462")
+	r.fixAndRecheck(task, head, "/settings/security")
+	shortcuts := QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/help/shortcuts", "A1")}}
+	r.walk(task, shortcuts, shortcutsProbes)
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, shortcuts, shortcutsProbes)
+	got := r.toYou(task)
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if sum, ok := readQASummary(dir); ok {
+		t.Fatalf("qa-summary.json %+v: two walks that skipped the fixed page passed QA flagged", sum)
+	}
+	for _, want := range []string{"not walked again after the writer's fix", fmt.Sprintf("magnum factory retry %d --accept-qa", task.ID)} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the task waits %q, want %q in it", got.WaitsWhat, want)
+		}
+	}
+	if strings.Contains(got.WaitsWhat, "flagged") {
+		t.Errorf("the task waits %q: a skipped walk of a fixed page does not go on flagged", got.WaitsWhat)
+	}
+}
+
+// Your --accept-qa lets a fix that QA did not walk again go on unchecked,
+// at the head: the screen's A offers it, the next walk there passes with
+// the fix named as accepted by you and not walked again (never as fixed),
+// and the PR body says so.
+func TestYourAcceptLetsAFixQADidNotWalkAgainGoOn(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12463")
+	fix := r.fixAndRecheck(task, head, "/settings/security")
+	shortcuts := QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/help/shortcuts", "A1")}}
+	r.walk(task, shortcuts, shortcutsProbes)
+	waiting := r.toYou(task)
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if run, a, err := qaAcceptable(dir, waiting); err != nil {
+		t.Fatalf("A is not offered for a fix QA did not walk again: %v", err)
+	} else if what, want := qaAcceptWhat(dir, run, a), "1 fix QA did not walk again at "+fix[:7]+
+		" (escaped_markup on /settings/security in the state signed_in)"; what != want {
+		t.Errorf("A accepts %q, want %q", what, want)
+	}
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone || !strings.Contains(q.Result, "1 fix it did not walk again") {
+		t.Fatalf("your accept: %+v", q)
+	}
+	r.toWalker(task)
+	r.walk(task, shortcuts, shortcutsProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	sum, ok := readQASummary(dir)
+	want := []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "signed_in"}}
+	if !ok || sum.Head != fix || !slices.Equal(sum.Unchecked, want) || len(sum.Fixed) != 0 || len(sum.Blocked) != 0 {
+		t.Fatalf("qa-summary.json %+v (%v), want a pass with %+v unchecked, accepted by you", sum, ok, want)
+	}
+	if line := qaCardLine(sum); !strings.HasPrefix(line, "passed with 1 fix not walked again, accepted by you") {
+		t.Errorf("the card's QA line %q", line)
+	}
+	section := qaSection(sum)
+	if want := "- P2 escaped_markup on `/settings/security` in the state `signed_in`: HTML markup shown as text, found by QA run 1"; !strings.Contains(section, "Fixed by the writer, not walked again by QA, accepted by you:\n\n"+want) {
+		t.Errorf("the PR body's section lacks the unchecked fix:\n%s", section)
+	}
+}

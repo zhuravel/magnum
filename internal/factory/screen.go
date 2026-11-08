@@ -682,8 +682,8 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	}
 	if v.retry { // at a stop on the writer's declines: A, and e for that run's report (its shots) first
 		dir := s.l.FactoryTaskDir(t.ID)
-		if run, stop, err := qaAcceptable(dir, t); err == nil {
-			c.AcceptQA = qaAcceptWhat(dir, run, stop)
+		if run, a, err := qaAcceptable(dir, t); err == nil {
+			c.AcceptQA = qaAcceptWhat(dir, run, a)
 			if p := filepath.Join(dir, filepath.FromSlash(run.Dir), qaReportFile); fsx.Exists(p) {
 				c.QAReport = p
 			}
@@ -964,9 +964,9 @@ func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	if q := card.QA; q != nil {
 		c.QA = qaCardLine(*q)
 		if q.Walked && q.Pages > 0 {
-			c.Screenshots, c.ScreenshotsNote = q.Shots, qaShotsNote
+			c.Screenshots, c.ScreenshotsNote = q.Shots, qaShotsSide
 			if p := filepath.Join(dir, filepath.FromSlash(q.Dir), qaReportFile); q.Dir == qaRunDir(q.Run, q.Head) && fsx.Exists(p) {
-				c.QAReport = p
+				c.QAReport, c.ScreenshotsNote = p, qaShotsNote
 			}
 		}
 		c.Leftovers = append(c.Leftovers, qaKnownLines(*q)...)

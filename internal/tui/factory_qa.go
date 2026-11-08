@@ -1,8 +1,9 @@
 package tui
 
 // Visual QA's key on the factory screen: the task card's A accepts the QA
-// defects the writer declined, which QA's fix loop stopped on, at the
-// task's head, as `magnum factory retry --accept-qa`, behind y/N. The card's
+// defects the writer declined, which QA's fix loop stopped on, or the fixes
+// a QA run did not walk again, at the task's head, as `magnum factory retry
+// --accept-qa`, behind y/N. The card's
 // AcceptQA names them; the factory sets it only where the accept goes on.
 // The ready card's e, the QA run's report, is the report key's
 // (factory_report.go).
@@ -13,7 +14,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// acceptQAKey accepts what the writer declined of QA's defects.
+// acceptQAKey accepts what QA's fix loop left you: the writer's declines,
+// or its fixes QA did not walk again.
 const acceptQAKey = "A"
 
 // askAcceptQA asks y/N for the accept of what task card c's AcceptQA names;

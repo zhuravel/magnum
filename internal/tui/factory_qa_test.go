@@ -126,7 +126,7 @@ func TestAAcceptsQAsDeclinesBehindYN(t *testing.T) {
 	if !slices.Equal(h.act.acceptsQA, []int64{5}) || len(h.act.retries) != 0 {
 		t.Errorf("accepts %v, retries %v, want one accept of task 5", h.act.acceptsQA, h.act.retries)
 	}
-	if menu := menuState(h.m.menuItems()); !menu["accept QA's declines"] {
+	if menu := menuState(h.m.menuItems()); !menu["accept for QA"] {
 		t.Errorf("the task card's menu %v, want the accept", menu)
 	}
 
@@ -143,7 +143,7 @@ func TestAAcceptsQAsDeclinesBehindYN(t *testing.T) {
 	if plain.act.calls() != 0 || plain.m.bar.asking != nil {
 		t.Error("A on a task with nothing to accept asked or ran something")
 	}
-	if menu := menuState(plain.m.menuItems()); menu["accept QA's declines"] {
+	if menu := menuState(plain.m.menuItems()); menu["accept for QA"] {
 		t.Errorf("the task card's menu %v offers the accept", menu)
 	}
 }
@@ -153,7 +153,7 @@ func TestTheHelpNamesTheQAKeys(t *testing.T) {
 	h := testFactory(t, 140, 40)
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
 	mustContain(t, help, "e the QA run's report (summary.md) in the pager, when QA walked the change (asks nothing)",
-		"A accept the QA defects the writer declined, when QA's fix loop stopped on them (y/N)")
+		"A accept the QA defects the writer declined, or the fixes QA did not walk again, at the task's head (y/N)")
 }
 
 // testQAStop is the screen with PR-12330's task card at a stop of QA's fix
@@ -199,7 +199,7 @@ func TestTheMenusAcceptAsksYN(t *testing.T) {
 	h, _ := testQAStop(t)
 	h.open("PR-12330")
 	h.feed(tea.MouseClickMsg{X: 20, Y: 10, Button: tea.MouseRight})
-	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.label == "accept QA's declines" })
+	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.label == "accept for QA" })
 	if !h.m.menu.open || i < 0 {
 		t.Fatalf("no menu with the accept: %+v", h.m.menuItems())
 	}

@@ -201,8 +201,8 @@ func TestEOpensTheFixersReportInThePager(t *testing.T) {
 func TestTheHelpAndTheMenuNameTheFixersReport(t *testing.T) {
 	h, _ := testFixer(t)
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
-	mustContain(t, help, "e the report of magnum's fixer (claude-fix.md) in the pager, on a row whose fix loop left you items (asks nothing)",
-		"e the report of magnum's fixer, when its fix loop left you items (asks nothing)",
+	mustContain(t, help, "e the fixer's report (claude-fix.md) in the pager, on a row whose fix loop left you items, else QA's summary.md (asks nothing)",
+		"e the report of magnum's fixer, when its fix loop left you items, else QA's summary.md where A is offered (asks nothing)",
 		"claude-fix:  what magnum's fixer left you on the PR, from its report (e opens it)")
 	h.press("g")
 	h.selectRow("#4602")

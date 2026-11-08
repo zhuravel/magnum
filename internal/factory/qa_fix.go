@@ -72,11 +72,23 @@ type qaDeclined struct {
 // fingerprint, at the head QA found them at.
 const qaAcceptedFile = "qa-accepted.json"
 
-// qaAccepted is qa-accepted.json.
+// qaAccepted is qa-accepted.json: at Head, the defects you let pass
+// (Fingerprints: the writer declined them), and the defects whose fix you
+// let go without QA's walk of their pages (Unchecked).
 type qaAccepted struct {
 	Head         string    `json:"head"`
 	Fingerprints []string  `json:"fingerprints"`
+	Unchecked    []string  `json:"unchecked,omitempty"`
 	At           time.Time `json:"at"`
+}
+
+// qaAccept is what --accept-qa accepts at a run's head: the fingerprints
+// of the defects the writer declined at its fix loop's stop (declined), or
+// else those of the fixes the run did not walk again (unchecked, with what
+// the run says of each).
+type qaAccept struct {
+	declined  []string
+	unchecked []QABlocked
 }
 
 // qaDefectsFile is run k's defects for the writer at head, relative to the
@@ -499,14 +511,15 @@ func (e *Engine) qaToldOfFixStop(ctx context.Context, t registry.Task, stop qaFi
 
 // acceptQA records your acceptance of the defects task t's QA fix loop
 // stopped for you on that the writer declined with its risk (the newest
-// run's fix-stop.json, at the task's head) in qa-accepted.json, with those
-// accepted at that head before, and returns what the retry's answer adds.
-// A task whose newest run did not stop so, at its head, or whose stop names
-// no declined defect, is refused: --accept-qa accepts nothing else. undo
+// run's fix-stop.json, at the task's head), or of the fixes the newest run
+// did not walk again there, in qa-accepted.json, with those accepted at
+// that head before, and returns what the retry's answer adds
+// (qaAcceptable). A task whose newest run left neither at its head is
+// refused: --accept-qa accepts nothing else. undo
 // puts the file back as it was (the retry's move failed).
 func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, undo func(), err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	run, stop, err := qaAcceptable(dir, t)
+	run, a, err := qaAcceptable(dir, t)
 	if err != nil {
 		return "", nil, err
 	}
@@ -516,9 +529,14 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 	if acc.Head != run.Head {
 		acc = qaAccepted{Head: run.Head}
 	}
-	for _, d := range stop.Declined {
-		if !slices.Contains(acc.Fingerprints, d.Fingerprint) {
-			acc.Fingerprints = append(acc.Fingerprints, d.Fingerprint)
+	for _, fp := range a.declined {
+		if !slices.Contains(acc.Fingerprints, fp) {
+			acc.Fingerprints = append(acc.Fingerprints, fp)
+		}
+	}
+	for _, b := range a.unchecked {
+		if !slices.Contains(acc.Unchecked, b.Fingerprint) {
+			acc.Unchecked = append(acc.Unchecked, b.Fingerprint)
 		}
 	}
 	acc.At = e.now()
@@ -532,48 +550,118 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 		}
 		_ = fsx.WriteFileAtomic(path, before, 0o600)
 	}
-	n := len(stop.Declined)
+	it := func(n int) string { return map[bool]string{true: "it", false: "them"}[n == 1] }
+	if n := len(a.unchecked); n > 0 {
+		e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you let %s QA did not walk again go unchecked at %s (run %d)", qaFixes(n),
+			textx.ShortSHA(run.Head), run.N))
+		return fmt.Sprintf("; QA lets %s it did not walk again pass at %s, and the PR body names %s as accepted by you", qaFixes(n),
+			textx.ShortSHA(run.Head), it(n)), undo, nil
+	}
+	n := len(a.declined)
 	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you accepted %s the writer declined at %s (run %d's stop)", plural(n, "QA defect"),
 		textx.ShortSHA(run.Head), run.N))
 	return fmt.Sprintf("; QA lets %s the writer declined pass at %s, and the PR body names %s as accepted by you", plural(n, "defect"),
-		textx.ShortSHA(run.Head), map[bool]string{true: "it", false: "them"}[n == 1]), undo, nil
+		textx.ShortSHA(run.Head), it(n)), undo, nil
 }
 
 // qaAcceptable is what --accept-qa accepts of task t (its task directory
 // dir): the newest run and its fix loop's stop at the task's head, which
-// names the defects the writer declined; an error that says why it accepts
-// nothing (no such stop at the head, one that names no decline, or one
-// whose declines you accepted at the head already: qa-accepted.json holds
-// them, and the task waits on you for another cause). The screen's A is
-// offered exactly when it holds.
-func qaAcceptable(dir string, t registry.Task) (qaRun, qaFixStop, error) {
+// names the defects the writer declined, or else the newest run at the
+// head that did not walk again the pages of fixes the writer made
+// (qaUncheckedAcceptable); an error that says why it accepts nothing (no
+// such stop at the head, one that names no decline, or one whose declines
+// you accepted at the head already: qa-accepted.json holds them, and the
+// task waits on you for another cause). The screen's A is offered exactly
+// when it holds.
+func qaAcceptable(dir string, t registry.Task) (qaRun, qaAccept, error) {
 	run, ok := readQARun(dir)
 	stop, stopped := readQAFixStop(dir, run)
+	if ok && !stopped && run.Head == t.HeadSHA {
+		if a, holds, err := qaUncheckedAcceptable(dir, t, run); holds {
+			return run, a, err
+		}
+	}
 	switch {
 	case !ok || !stopped || run.Head != t.HeadSHA:
-		return qaRun{}, qaFixStop{}, fmt.Errorf("%s does not wait on QA's fix loop at its head: --accept-qa accepts only the QA defects "+
-			"the writer declined with its risk, and a plain `magnum factory retry %d` lets it go on", TaskKey(t), t.ID)
+		return qaRun{}, qaAccept{}, fmt.Errorf("%s does not wait on QA's fix loop at its head: --accept-qa accepts only the QA defects "+
+			"the writer declined with its risk, or the writer's fixes a QA run did not walk again, and a plain `magnum factory retry %d` "+
+			"lets it go on", TaskKey(t), t.ID)
 	case len(stop.Declined) == 0:
-		return qaRun{}, qaFixStop{}, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has "+
+		return qaRun{}, qaAccept{}, fmt.Errorf("%s: the writer declined none of the defects QA run %d still finds, so --accept-qa has "+
 			"none to accept; a plain `magnum factory retry %d` walks QA again", TaskKey(t), run.N, t.ID)
 	}
 	if acc, ok := readQAAccepted(dir); ok && acc.Head == run.Head && !slices.ContainsFunc(stop.Declined, func(d qaDeclined) bool {
 		return !slices.Contains(acc.Fingerprints, d.Fingerprint)
 	}) {
-		return qaRun{}, qaFixStop{}, fmt.Errorf("%s: you accepted the defects the writer declined at %s already, and QA run %d has not "+
+		return qaRun{}, qaAccept{}, fmt.Errorf("%s: you accepted the defects the writer declined at %s already, and QA run %d has not "+
 			"walked since; a plain `magnum factory retry %d` lets it go on", TaskKey(t), textx.ShortSHA(run.Head), run.N, t.ID)
 	}
-	return run, stop, nil
+	var a qaAccept
+	for _, d := range stop.Declined {
+		if !slices.Contains(a.declined, d.Fingerprint) {
+			a.declined = append(a.declined, d.Fingerprint)
+		}
+	}
+	return run, a, nil
 }
 
-// qaAcceptWhat is what --accept-qa accepts at run's stop, as the task
+// qaUncheckedAcceptable is what --accept-qa accepts of task t at run, the
+// newest at its head when no fix loop's stop holds there: the fixes whose
+// pages the run did not walk again (its result's blocked states with a
+// fingerprint), and an error once you let all of them go at the head
+// already; holds is false for a run with none of them.
+func qaUncheckedAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, holds bool, err error) {
+	res, ok := readQAResult(dir, run)
+	if !ok || res.Outcome != QAOutcomeUnavailable {
+		return qaAccept{}, false, nil
+	}
+	for _, b := range res.Blocked {
+		if b.Fingerprint != "" {
+			a.unchecked = append(a.unchecked, b)
+		}
+	}
+	if len(a.unchecked) == 0 {
+		return qaAccept{}, false, nil
+	}
+	if acc, ok := readQAAccepted(dir); ok && acc.Head == run.Head && !slices.ContainsFunc(a.unchecked, func(b QABlocked) bool {
+		return !slices.Contains(acc.Unchecked, b.Fingerprint)
+	}) {
+		return qaAccept{}, true, fmt.Errorf("%s: you let the fixes QA did not walk again at %s go unchecked already, and QA run %d has not "+
+			"walked since; a plain `magnum factory retry %d` lets it go on", TaskKey(t), textx.ShortSHA(run.Head), run.N, t.ID)
+	}
+	return a, true, nil
+}
+
+// qaFixes is "1 fix" or "N fixes".
+func qaFixes(n int) string {
+	if n == 1 {
+		return "1 fix"
+	}
+	return fmt.Sprintf("%d fixes", n)
+}
+
+// qaAcceptWhat is what --accept-qa accepts at run's head, as the task
 // card's A names it: "1 QA defect the writer declined at abc1234 (flow on
 // /settings/security)", the classes on their pages from the run's result
-// (none named when it does not read).
-func qaAcceptWhat(dir string, run qaRun, stop qaFixStop) string {
+// (none named when it does not read); or "1 fix QA did not walk again at
+// abc1234 (escaped_markup on /settings/security in the state signed_in)".
+func qaAcceptWhat(dir string, run qaRun, a qaAccept) string {
+	if len(a.unchecked) > 0 {
+		var on []string
+		for _, h := range qaHandedBefore(dir, run.N) {
+			if slices.ContainsFunc(a.unchecked, func(b QABlocked) bool { return b.Fingerprint == h.fingerprint }) {
+				on = append(on, qaRecheckOn(h))
+			}
+		}
+		s := fmt.Sprintf("%s QA did not walk again at %s", qaFixes(len(a.unchecked)), textx.ShortSHA(run.Head))
+		if len(on) > 0 {
+			s += " (" + strings.Join(on[:min(len(on), qaListMost)], ", ") + ")"
+		}
+		return s
+	}
 	fps := map[string]bool{}
-	for _, d := range stop.Declined {
-		fps[d.Fingerprint] = true
+	for _, fp := range a.declined {
+		fps[fp] = true
 	}
 	s := fmt.Sprintf("%s the writer declined at %s", plural(len(fps), "QA defect"), textx.ShortSHA(run.Head))
 	res, _ := readQAResult(dir, run)

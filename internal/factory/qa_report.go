@@ -40,8 +40,10 @@ const (
 	// qaNoBlockWhy is why a task of a repository without [factory.repo.qa]
 	// needs no QA: no card line and no PR body section say it.
 	qaNoBlockWhy = "the repository has no [factory.repo.qa]"
-	// qaShotsNote is what the ready card's shots of a walked change are.
-	qaShotsNote = "the after side, from the copy's own server; e opens the QA report"
+	// qaShotsSide is what the ready card's shots of a walked change are, and
+	// qaShotsNote the same when the run's report is there for e to open.
+	qaShotsSide = "the after side, from the copy's own server"
+	qaShotsNote = qaShotsSide + "; e opens the QA report"
 	// qaRecheckFile is a run's list of the pages it walks again, in its
 	// folder: those of the defects earlier runs handed the writer since the
 	// newest run that passed (qaRecheck), which the walker's prompt names.
@@ -85,8 +87,10 @@ var qaClassWords = map[string]string{
 
 // qaCardLine is the ready card's QA line of res, the QA run that passed the
 // stage: "clean: 3 pages walked at abc1234, 1 note"; "passed with 1 defect
-// accepted by you and 1 state not reached: ..." when you accepted defects
-// or the walker could not reach states (they are flagged); "not needed: no
+// accepted by you and 1 state not reached: ..." when you accepted defects,
+// let a fix go that QA did not walk again ("1 fix not walked again,
+// accepted by you"), or the walker could not reach states (they are
+// flagged); "not needed: no
 // user-facing file changed"; "" for a repository without
 // [factory.repo.qa], or a run that did not pass.
 func qaCardLine(res QAResult) string {
@@ -102,6 +106,9 @@ func qaCardLine(res QAResult) string {
 	var but []string
 	if n := len(res.Accepted); n > 0 {
 		but = append(but, plural(n, "defect")+" accepted by you")
+	}
+	if n := len(res.Unchecked); n > 0 {
+		but = append(but, qaFixes(n)+" not walked again, accepted by you")
 	}
 	if n := len(res.Blocked); n > 0 {
 		but = append(but, plural(n, "state")+" not reached")
@@ -124,7 +131,7 @@ func qaWhy(res *QAResult) string {
 		return ""
 	}
 	s := " and QA found nothing that blocks"
-	if len(res.Accepted) > 0 {
+	if len(res.Accepted) > 0 || len(res.Unchecked) > 0 {
 		s += " but what you accepted"
 	}
 	if len(res.Blocked) > 0 {
@@ -134,7 +141,8 @@ func qaWhy(res *QAResult) string {
 }
 
 // qaKnownLines are the KNOWN lines of res on the ready card: QA's notes,
-// then the defects you accepted, each "qa: P3 broken_layout: <title>".
+// then the defects you accepted, each "qa: P3 broken_layout: <title>", then
+// the fixes you let go that QA did not walk again.
 func qaKnownLines(res QAResult) []string {
 	var out []string
 	for _, d := range res.Known {
@@ -142,6 +150,10 @@ func qaKnownLines(res QAResult) []string {
 	}
 	for _, d := range res.Accepted {
 		out = append(out, "qa: accepted by you: "+qaDefectLine(d))
+	}
+	for _, f := range res.Unchecked {
+		out = append(out, fmt.Sprintf("qa: accepted by you: %s %s on %s: the writer's fix, which QA did not walk again", f.Severity, f.Class,
+			cmp.Or(qaPlain(f.Path), "a page")))
 	}
 	return out
 }
@@ -185,7 +197,8 @@ func qaForCard(res QAResult) *QAResult {
 // passed at the task's head, folded as the Known list is: the card's line
 // as its summary, then in the factory's own words what QA did and found,
 // the pages walked (path and state), the defects an earlier run found and
-// the writer fixed, those you accepted (accepted by you), the notes, and
+// the writer fixed, those whose fix QA did not walk again and you let go,
+// those you accepted (accepted by you), the notes, and
 // the states the walker could not reach, flagged. "" without QA (a
 // repository without [factory.repo.qa]).
 func qaSection(res QAResult) string {
@@ -200,7 +213,7 @@ func qaSection(res QAResult) string {
 		return b.String()
 	}
 	verdict := "Nothing it found blocks."
-	switch accepted, blocked := len(res.Accepted) > 0, len(res.Blocked) > 0; {
+	switch accepted, blocked := len(res.Accepted) > 0 || len(res.Unchecked) > 0, len(res.Blocked) > 0; {
 	case accepted && blocked:
 		verdict = "Nothing it found on the pages it reached blocks but what you accepted; the states it could not reach are flagged below."
 	case accepted:
@@ -233,12 +246,16 @@ func qaSection(res QAResult) string {
 		walked = append(walked, qaCode(pg.Path)+qaInState(pg.State))
 	}
 	list(fmt.Sprintf("%s walked", plural(res.Pages, "page")), walked)
-	var fixed []string
-	for _, f := range res.Fixed {
-		fixed = append(fixed, fmt.Sprintf("%s %s on %s%s: %s, found by QA run %d", f.Severity, f.Class, qaCode(f.Path), qaInState(f.State),
-			qaClassWords[f.Class], f.Run))
+	fixes := func(fs []QAFixed) []string {
+		var out []string
+		for _, f := range fs {
+			out = append(out, fmt.Sprintf("%s %s on %s%s: %s, found by QA run %d", qaKnownSeverity(f.Severity), qaKnownClass(f.Class),
+				qaCode(f.Path), qaInState(f.State), cmp.Or(qaClassWords[f.Class], "a defect"), f.Run))
+		}
+		return out
 	}
-	list("Found by QA and fixed before this PR", fixed)
+	list("Found by QA and fixed before this PR", fixes(res.Fixed))
+	list("Fixed by the writer, not walked again by QA, accepted by you", fixes(res.Unchecked))
 	defects := func(ds []QADefect) []string {
 		var out []string
 		for _, d := range ds {
@@ -247,7 +264,8 @@ func qaSection(res QAResult) string {
 			if ok {
 				on = qaCode(pg.Path) + qaInState(pg.State)
 			}
-			out = append(out, fmt.Sprintf("%s %s on %s: %s", d.Severity, d.Class, on, qaClassWords[d.Class]))
+			out = append(out, fmt.Sprintf("%s %s on %s: %s", qaKnownSeverity(d.Severity), qaKnownClass(d.Class), on,
+				cmp.Or(qaClassWords[d.Class], "a defect")))
 		}
 		return out
 	}
@@ -264,6 +282,24 @@ func qaSection(res QAResult) string {
 	list("Not reached, flagged", blocked)
 	b.WriteString("</details>\n")
 	return b.String()
+}
+
+// qaKnownClass is class c as the PR body prints it: one of the factory's
+// classes, else "?" (the run's files are the factory's, checked on the way
+// in, but an agent could edit its folder); qaKnownSeverity is the same for a
+// severity, P1 to P3.
+func qaKnownClass(c string) string {
+	if _, ok := qaClassWords[c]; ok {
+		return c
+	}
+	return "?"
+}
+
+func qaKnownSeverity(s string) string {
+	if s == "P1" || s == "P2" || s == "P3" {
+		return s
+	}
+	return "?"
 }
 
 // qaInState is ", in the state `<state>`" for a page's state, "" for none.
@@ -298,8 +334,8 @@ func qaPlain(s string) string {
 // head and the copy's server, how it ended, each page it walked with its
 // state and its shot's absolute path, the defects that block, those you
 // accepted, the notes (each with its title and the page's quote), what an
-// earlier run found that the writer fixed, and the states it could not
-// reach. The walker's words are on one line, their control characters
+// earlier run found that the writer fixed, the fixes you let go that it did
+// not walk again, and the states it could not reach. The walker's words are on one line, their control characters
 // spaces.
 func writeQAReport(path string, run qaRun, res QAResult) error {
 	var b strings.Builder
@@ -351,12 +387,17 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 	defects("Defects that block", res.Blocking)
 	defects("Accepted by you", res.Accepted)
 	defects("Notes, none of them blocks", res.Known)
-	if len(res.Fixed) > 0 {
-		section("Found by an earlier run and fixed", len(res.Fixed))
-		for _, f := range res.Fixed {
+	fixes := func(title string, fs []QAFixed) {
+		if len(fs) == 0 {
+			return
+		}
+		section(title, len(fs))
+		for _, f := range fs {
 			fmt.Fprintf(&b, "- %s %s on %s: %s, found by run %d\n", f.Severity, f.Class, cmp.Or(qaPlain(f.Path), "a page"), qaClassWords[f.Class], f.Run)
 		}
 	}
+	fixes("Found by an earlier run and fixed", res.Fixed)
+	fixes("Fixed by the writer, not walked again, accepted by you", res.Unchecked)
 	if len(res.Blocked) > 0 {
 		section("Not reached", len(res.Blocked))
 		for _, bl := range res.Blocked {
@@ -376,8 +417,8 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 // qaHandedBefore are the defects the runs before run k handed the writer
 // (their defects files, in the task directory dir), each once, by its
 // fingerprint: the first run that found it, its class and severity from
-// that run's result, the path and state of its page as the newest run that
-// handed it saw them, and whether a run handed it after the newest run
+// that run's result, the path its probe read and the state of its page as
+// the newest run that handed it saw them (that run's walk), and whether a run handed it after the newest run
 // before k that passed (a clean or not_needed result): run k checks the fix
 // of those.
 func qaHandedBefore(dir string, k int) []qaHandedDefect {
@@ -400,7 +441,10 @@ func qaHandedBefore(dir string, k int) []qaHandedDefect {
 			continue
 		}
 		prev, _ := readQAResult(dir, run)
-		pages := qaVerdictPages(dir, run)
+		pages := map[string]QAPage{}
+		for _, pg := range prev.Walk {
+			pages[pg.ID] = pg
+		}
 		for _, it := range rf.Findings {
 			j := slices.IndexFunc(prev.Blocking, func(d QADefect) bool { return d.Fingerprint == it.Fingerprint })
 			if j < 0 {
@@ -413,7 +457,7 @@ func qaHandedBefore(dir string, k int) []qaHandedDefect {
 				i, at[d.Fingerprint] = len(out), len(out)
 				out = append(out, qaHandedDefect{QAFixed: QAFixed{Run: ref.k, Class: d.Class, Severity: d.Severity}, fingerprint: d.Fingerprint})
 			}
-			out[i].Path, out[i].State = qaClip(pg.Path), qaClip(pg.State)
+			out[i].Path, out[i].State = cmp.Or(pg.ProbePath, pg.Path), pg.State // the path its probe read (an older build kept the walker's)
 			out[i].sincePass = out[i].sincePass || ref.k > pass
 		}
 	}
@@ -448,11 +492,17 @@ func qaPageKey(path, state string) string {
 // "escaped_markup on /settings/security in the state signed_in, which QA
 // run 1 found".
 func qaRecheckWhat(h qaHandedDefect) string {
+	return fmt.Sprintf("%s, which QA run %d found", qaRecheckOn(h), h.Run)
+}
+
+// qaRecheckOn is handed defect h on its page: "escaped_markup on
+// /settings/security in the state signed_in".
+func qaRecheckOn(h qaHandedDefect) string {
 	s := h.Class + " on " + cmp.Or(qaPlain(h.Path), "a page")
 	if st := qaPlain(h.State); st != "" {
 		s += " in the state " + st
 	}
-	return fmt.Sprintf("%s, which QA run %d found", s, h.Run)
+	return s
 }
 
 // qaRunFolders are the run folders under dir/qa: their numbers and their
@@ -471,16 +521,17 @@ func qaRunFolders(dir string) []qaDefectsRef {
 	return out
 }
 
-// qaCheckFixes checks run k's result res (in the task directory dir; pages
-// are its walker's, followed the same pages by the paths their probes
-// read) against the defects earlier runs handed the writer
-// (qaHandedBefore). One the run finds again is the run's own. One whose
-// page the run walked in its state, and finds no more, is fixed
-// (res.Fixed). One handed since the newest pass whose page the run did not
-// walk again is a state it did not reach (res.Blocked): the run is no pass
-// for it, and you look, as for any state not reached. One a pass checked
-// before, which the run did not walk, is neither.
-func qaCheckFixes(dir string, k int, res *QAResult, pages, followed []QAPage) {
+// qaCheckFixes checks run's result res (in the task directory dir) against
+// the defects earlier runs handed the writer (qaHandedBefore), by the pages
+// of its walk (res.Walk) as their probes read them, never by the walker's
+// labels. One the run finds again is the run's own. One whose page the run
+// walked in its state, and finds no more, is fixed (res.Fixed). One handed
+// since the newest pass whose page the run did not walk again is a state
+// it did not reach (res.Blocked, with its fingerprint): the run is no pass
+// for it, and you look; unless you let its fix go unchecked at the run's
+// head (qa-accepted.json, --accept-qa): then it is res.Unchecked. One a pass
+// checked before, which the run did not walk, is neither.
+func qaCheckFixes(dir string, run qaRun, res *QAResult) {
 	found := map[string]bool{}
 	for _, ds := range [][]QADefect{res.Blocking, res.Known, res.Accepted} {
 		for _, d := range ds {
@@ -488,19 +539,22 @@ func qaCheckFixes(dir string, k int, res *QAResult, pages, followed []QAPage) {
 		}
 	}
 	walked := map[string]bool{}
-	for i, pg := range pages {
-		walked[qaPageKey(pg.Path, pg.State)] = true
-		if i < len(followed) {
-			walked[qaPageKey(followed[i].Path, pg.State)] = true
+	for _, pg := range res.Walk {
+		if pg.ProbePath != "" {
+			walked[qaPageKey(pg.ProbePath, pg.State)] = true
 		}
 	}
-	for _, h := range qaHandedBefore(dir, k) {
+	acc, _ := readQAAccepted(dir)
+	for _, h := range qaHandedBefore(dir, run.N) {
 		switch {
 		case found[h.fingerprint]:
 		case walked[qaPageKey(h.Path, h.State)]:
 			res.Fixed = append(res.Fixed, h.QAFixed)
-		case h.sincePass:
-			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaNotWalkedWhy})
+		case !h.sincePass:
+		case acc.Head == run.Head && slices.Contains(acc.Unchecked, h.fingerprint):
+			res.Unchecked = append(res.Unchecked, h.QAFixed)
+		default:
+			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaNotWalkedWhy, Fingerprint: h.fingerprint})
 		}
 	}
 }

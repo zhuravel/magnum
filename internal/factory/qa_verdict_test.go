@@ -48,7 +48,7 @@ func wantOneQADefect(t *testing.T, ds []QADefect, class, severity string) QADefe
 	return d
 }
 
-// The #785 case: a date's tooltip span reached the page escaped, so the
+// The escaped-tooltip case: a date's tooltip span reached the page escaped, so the
 // page shows the span's markup as text. The factory finds it in the
 // probe's text, whatever the walker said: one escaped_markup defect, P2,
 // the factory's, quoting the markup, with a fingerprint.
@@ -664,8 +664,8 @@ func runQAProbe(t *testing.T, page string, args ...string) QAProbe {
 	return p
 }
 
-// The #785 span inside a turbo-frame styled display: contents. Such a frame
-// has no box of its own, so checkVisibility() is false on it while its
+// The escaped tooltip's span inside a turbo-frame styled display: contents.
+// Such a frame has no box of its own, so checkVisibility() is false on it while its
 // content shows: the probe walks into it, and keeps a text node right
 // under a display: contents element, which the factory then finds.
 func TestTheProbeReadsTextUnderDisplayContents(t *testing.T) {

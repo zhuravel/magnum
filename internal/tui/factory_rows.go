@@ -489,7 +489,9 @@ type TaskCard struct {
 	// AcceptQA is what A accepts: the QA defects the writer declined at the
 	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
 	// declined at abc1234 (flow on /settings/security)", magnum factory
-	// retry --accept-qa); "" for none, and no A then.
+	// retry --accept-qa), or the fixes a QA run there did not walk again ("1
+	// fix QA did not walk again at abc1234 (...)"); "" for none, and no A
+	// then.
 	AcceptQA string
 	// QAReport is the report of the QA run whose stop AcceptQA names
 	// (summary.md, absolute), which e opens in the pager there; "" for none.

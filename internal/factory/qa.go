@@ -84,6 +84,10 @@ const (
 	waitQA      = "qa"
 	qaLockWhat  = "another QA runs on this Mac"
 	qaReadyWhat = "ready for the walk"
+	// qaServerStopWhat is a QA run's wait on the stop of its copy's server
+	// that failed (retryServerStops tries it again on each tick): no server
+	// of the run starts beside it.
+	qaServerStopWhat = "the copy's server of the run's last boot did not stop yet; each tick tries the stop again"
 )
 
 // The env of the walker's copy attaches its browser tool to the session's
@@ -142,7 +146,7 @@ var qaRunDirRe = regexp.MustCompile(`^([1-9][0-9]*)-[0-9a-f]+$`)
 // copy's server (its port, the repository's qa.url with it, no path, and
 // the ready path), the most pages it walks, the attempts of the stage
 // before it (the walker's turn is the first after them), the boots that
-// failed, the CDP endpoint of its browser, the probe's nonce and the
+// failed, the DevTools port of its browser (CDP), the probe's nonce and the
 // user-facing files (both "" and nil until the user-facing check ran to
 // its end), when its server last started (zero before, and after a
 // teardown with no cut: a restart cut nothing of a run with no server), and
@@ -185,27 +189,31 @@ func (run qaRun) began() time.Time {
 // accepted at the run's head (Accepted, `magnum factory retry --accept-qa`),
 // the states the walker could not reach, the pages it walked (Walk: each
 // one's id, path, state and shot, as its verdict has them, the words
-// clipped), what an earlier run handed the writer that this run walked
-// again and found no more (Fixed), and when it started and ended.
+// clipped, and the path each one's probe read), what an earlier run handed
+// the writer that this run walked again and found no more (Fixed), what it
+// handed that this run did not walk again and you let go unchecked at the
+// head (Unchecked, `magnum factory retry --accept-qa`), and when it started
+// and ended.
 type QAResult struct {
-	Version  int         `json:"version"`
-	Run      int         `json:"run"`
-	Pages    int         `json:"pages"`
-	Shots    int         `json:"shots"`
-	Dir      string      `json:"dir"`
-	Head     string      `json:"head"`
-	Outcome  string      `json:"outcome"`
-	Why      string      `json:"why"`
-	Cut      string      `json:"cut,omitempty"`
-	Walked   bool        `json:"walked,omitempty"`
-	Blocking []QADefect  `json:"blocking"`
-	Known    []QADefect  `json:"known"`
-	Accepted []QADefect  `json:"accepted,omitempty"`
-	Blocked  []QABlocked `json:"blocked"`
-	Walk     []QAPage    `json:"walk,omitempty"`
-	Fixed    []QAFixed   `json:"fixed,omitempty"`
-	Started  time.Time   `json:"started"`
-	Ended    time.Time   `json:"ended"`
+	Version   int         `json:"version"`
+	Run       int         `json:"run"`
+	Pages     int         `json:"pages"`
+	Shots     int         `json:"shots"`
+	Dir       string      `json:"dir"`
+	Head      string      `json:"head"`
+	Outcome   string      `json:"outcome"`
+	Why       string      `json:"why"`
+	Cut       string      `json:"cut,omitempty"`
+	Walked    bool        `json:"walked,omitempty"`
+	Blocking  []QADefect  `json:"blocking"`
+	Known     []QADefect  `json:"known"`
+	Accepted  []QADefect  `json:"accepted,omitempty"`
+	Blocked   []QABlocked `json:"blocked"`
+	Walk      []QAPage    `json:"walk,omitempty"`
+	Fixed     []QAFixed   `json:"fixed,omitempty"`
+	Unchecked []QAFixed   `json:"unchecked,omitempty"`
+	Started   time.Time   `json:"started"`
+	Ended     time.Time   `json:"ended"`
 }
 
 // QAFixed is a defect an earlier QA run of the task handed the writer that
@@ -423,10 +431,19 @@ func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.Factory
 }
 
 // qaBlockedOnly reports whether res is a walk that reached its pages and
-// found nothing that blocks there, but could not reach every state.
+// found nothing that blocks there, but could not reach every state. A fixed
+// defect's page the walk did not walk again (qaNotWalkedAgain) is no state
+// it could not reach (the run that found the defect reached it): such a
+// walk never goes on flagged.
 func qaBlockedOnly(res QAResult) bool {
-	return res.Outcome == QAOutcomeUnavailable && res.Walked && res.Pages > 0 && len(res.Blocking) == 0 && len(res.Blocked) > 0
+	return res.Outcome == QAOutcomeUnavailable && res.Walked && res.Pages > 0 && len(res.Blocking) == 0 && len(res.Blocked) > 0 &&
+		!slices.ContainsFunc(res.Blocked, qaNotWalkedAgain)
 }
+
+// qaNotWalkedAgain reports whether b is the page of a defect an earlier run
+// handed the writer that the run did not walk again (qaCheckFixes; the
+// why alone for a result an older build wrote).
+func qaNotWalkedAgain(b QABlocked) bool { return b.Fingerprint != "" || b.Why == qaNotWalkedWhy }
 
 // passBlocked passes the qa stage on run's result res, the n-th walk in a
 // row at its head that reached its pages, found nothing that blocks there
@@ -485,6 +502,7 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 	// walker's paths name the pages everywhere else.
 	followed := v
 	followed.Pages = slices.Clone(v.Pages)
+	probePaths := make([]string, len(v.Pages))
 	var found []QADefect
 	for i, pg := range v.Pages {
 		probe, err := readQAProbe(runPath, pg.Probe)
@@ -495,7 +513,8 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		if err != nil {
 			return QAResult{}, fmt.Errorf("QA run %d: console %s", run.N, qaFileWhy(pg.Console, err))
 		}
-		followed.Pages[i].Path = cmp.Or(qaProbePath(probe.URL), pg.Path)
+		probePaths[i] = qaProbePath(probe.URL)
+		followed.Pages[i].Path = cmp.Or(probePaths[i], pg.Path)
 		found = append(found, detectQA(followed.Pages[i], probe, console)...)
 	}
 	shots, err := countQAShots(runPath)
@@ -505,14 +524,15 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 	res.Outcome, res.Blocking, res.Known = qaOutcome(followed, found)
 	qaApplyAccepted(dir, run, &res) // what you accepted at this head blocks no more
 	res.Pages, res.Shots = len(v.Pages), shots
-	for _, pg := range v.Pages {
-		res.Walk = append(res.Walk, QAPage{ID: pg.ID, Path: qaClip(pg.Path), State: qaClip(pg.State), Shot: pg.Shot})
+	for i, pg := range v.Pages {
+		res.Walk = append(res.Walk, QAPage{ID: pg.ID, Path: qaClip(pg.Path), State: qaClip(pg.State), Shot: pg.Shot,
+			ProbePath: qaClip(probePaths[i])})
 	}
 	for _, b := range v.Blocked {
 		res.Blocked = append(res.Blocked, QABlocked{What: qaClip(b.What), Why: qaClip(b.Why), Check: qaClip(b.Check)})
 	}
 	if len(v.Pages) > 0 {
-		qaCheckFixes(dir, run.N, &res, v.Pages, followed.Pages)
+		qaCheckFixes(dir, run, &res)
 	}
 	switch {
 	case res.Outcome == QAOutcomeUnavailable:
@@ -689,13 +709,18 @@ func qaBlockedList(bs []QABlocked) string {
 // walks once more, and a second such walk goes on with the states flagged).
 // It names no page text. Defects that block come here only when their fix
 // loop let them go with no stop (qaDecide's safety net): they go to the
-// writer (qaFixPhase).
+// writer (qaFixPhase). A walk that skipped a fixed defect's page names its
+// two ways out: a walk of that page, or your --accept-qa.
 func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 	see := "; see " + filepath.Join(dir, filepath.FromSlash(res.Dir), qaResultFile)
 	switch {
 	case res.Outcome == QAOutcomeDefects:
 		n := len(res.Blocking)
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
+	case res.Outcome == QAOutcomeUnavailable && res.Walked && slices.ContainsFunc(res.Blocked, qaNotWalkedAgain):
+		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and only a walk of each such page in its state checks the "+
+			"writer's fix there, or `magnum factory retry %d --accept-qa` lets the fix go unchecked, which the PR body names as accepted "+
+			"by you", res.Why, see, t.ID, t.ID)
 	case qaBlockedOnly(res):
 		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
 			"not every state goes on with those states flagged on the card and in the PR body", res.Why, see, t.ID)
@@ -972,8 +997,9 @@ func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaR
 }
 
 // startQASession starts task t's QA session of run in copy c, in this
-// order: no hold of the machine stops launches (mayLaunch), the task's heavy
-// slot, the machine's QA lock (held by another: the task waits), the copy's
+// order: no hold of the machine stops launches (mayLaunch), no server of
+// the task's whose stop failed is left (an earlier boot's: the task waits on
+// its stop, qaServerStopWhat), the task's heavy slot, the machine's QA lock (held by another: the task waits), the copy's
 // port answers nothing yet (else QA is unavailable: another server holds
 // it), the copy's server starts, and a goroutine off the loop probes its
 // ready path every qaProbeEvery until a 2xx or 3xx or the repository's boot
@@ -988,6 +1014,10 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 			e.waitOn(ctx, t, who, what)
 		}
 		return heldError{who: who, what: what}
+	}
+	if _, ok := e.servers[t.ID]; ok { // an earlier boot's server whose stop failed goes first (retryServerStops)
+		e.waitOn(ctx, t, waitQA, qaServerStopWhat)
+		return heldError{who: waitQA, what: qaServerStopWhat}
 	}
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -1134,7 +1164,7 @@ func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess
 }
 
 // qaBrowser starts the factory's headless Chrome for session sess in its
-// run's folder, once no hold stops launches, and records its CDP endpoint,
+// run's folder, once no hold stops launches, and records its DevTools port,
 // to which the walker's copy attaches its browser tool (qaEnvCDP, in the
 // run's own session): the session is ready for the walk. A browser that does
 // not start is QA unavailable; a start that panicked runs again on the next
@@ -1163,7 +1193,7 @@ func (e *Engine) qaBrowser(ctx context.Context, t registry.Task, sess *qaSession
 	if err := writeJSON(filepath.Join(dir, qaRunFile), sess.run); err != nil {
 		return err
 	}
-	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d: the copy's server answers %s and the factory's Chrome runs at %s: %s",
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d: the copy's server answers %s and the factory's Chrome runs, its DevTools on port %s: %s",
 		sess.run.N, sess.run.Ready, cdp, qaReadyWhat))
 	e.waitOn(ctx, t, waitQA, qaReadyWhat)
 	return nil
@@ -1437,6 +1467,28 @@ func (e *Engine) sweepQA(ctx context.Context, tasks []registry.Task) {
 		case e.qaBounded(ctx, tasks[i], sessions[id]): // ended: past its cap, or under critical pressure
 		case drain && !e.qaWalking(ctx, tasks[i], sessions[id]):
 			e.endQALogged(ctx, tasks[i], "a drain holds before its walk began", qaCutDrain)
+		}
+	}
+	e.retryServerStops(ctx, tasks)
+}
+
+// retryServerStops stops again each server whose task has no QA session
+// (QA is startServer's only caller, so such a server is one a teardown
+// failed to stop), on every tick until a stop goes through: that frees its
+// heavy use, which no stage releases, and a qa event says so. A stop that
+// fails again says so in its own fail event.
+func (e *Engine) retryServerStops(ctx context.Context, tasks []registry.Task) {
+	for _, id := range slices.Sorted(maps.Keys(e.servers)) {
+		if e.qaSessionOf(id) != nil {
+			continue
+		}
+		t := registry.Task{ID: id}
+		if i := slices.IndexFunc(tasks, func(t registry.Task) bool { return t.ID == id }); i >= 0 {
+			t = tasks[i]
+		}
+		if e.stopServer(ctx, t, e.servers[id], "its QA run ended, and a stop of it failed before") == nil {
+			e.event(ctx, id, "qa", registry.PhaseOK, "the copy's server, whose stop failed at the end of its QA run, is stopped: "+
+				"the stop was tried again, and its heavy use is free")
 		}
 	}
 }

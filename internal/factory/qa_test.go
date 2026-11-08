@@ -346,7 +346,7 @@ func TestQAStartsTheServerThenWaitsForItToAnswer(t *testing.T) {
 		t.Fatalf("the browser's folder is %s, want %s", l.browserDirs[0], want)
 	}
 	run, ok := readQARun(dir)
-	if !ok || run.N != 1 || run.Dir != "qa/1-"+head[:7] || run.Head != head || run.CDP != "http://127.0.0.1:9333" || len(run.Nonce) != 32 ||
+	if !ok || run.N != 1 || run.Dir != "qa/1-"+head[:7] || run.Head != head || run.CDP != "9333" || len(run.Nonce) != 32 ||
 		run.Port != 3001 || run.URL != "http://app.example.localhost:3001" || run.Ready != "/up" || run.Started.IsZero() {
 		t.Fatalf("qa-run.json %+v (%v)", run, ok)
 	}
@@ -872,7 +872,7 @@ func TestAPanicInStartBrowserStartsItAgain(t *testing.T) {
 	r.e.d.Copies = &panickyCopies{fakeCopies: r.copies, startBrowserOnce: true}
 	task, _ := r.qaTask("PR-12423")
 	r.toWalk(task)
-	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.CDP != "http://127.0.0.1:9333" {
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.CDP != "9333" {
 		t.Fatalf("qa-run.json %+v, want the browser's endpoint", run)
 	}
 	if l := r.copies.log(); len(l.browsers) != 1 {
@@ -1059,8 +1059,9 @@ func (s *stageAtStop) StopServer(ctx context.Context, c Copy) error {
 
 // The walker's turn: the qa stage launches fx-qa alone, in the QA session's
 // copy (no tab in your browser, and its browser tool attached to the
-// factory's Chrome by its env), and its prompt names the session's CDP
-// endpoint with the flags that attach to it, the run's verdict, the probe
+// factory's Chrome by its env), and its prompt names the session's DevTools
+// port with the flags that attach to it (agent-browser's --cdp takes a port
+// or a WebSocket URL, never an http:// one), the run's verdict, the probe
 // and the acceptance checks.
 func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 	r := newQARig(t)
@@ -1075,7 +1076,7 @@ func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 		t.Fatalf("launches in %d copies, want 1", len(cs))
 	}
 	if env := cs[0].Env; cs[0].Path != r.copyDir || env["BROWSER"] != "true" || !strings.HasPrefix(env["PATH"], r.layout.FactoryShims()+":") ||
-		env["AGENT_BROWSER_CDP"] != "http://127.0.0.1:9333" || env["AGENT_BROWSER_SESSION"] != session || env["PORT"] != "3001" {
+		env["AGENT_BROWSER_CDP"] != "9333" || env["AGENT_BROWSER_SESSION"] != session || env["PORT"] != "3001" {
 		t.Fatalf("the walker launched in %s with env %v, want the QA session's copy", cs[0].Path, env)
 	}
 	if ps := r.rt.allPrompts(); slices.ContainsFunc(ps, func(p sentPrompt) bool { return p.Role != "fx-qa" }) {
@@ -1084,7 +1085,10 @@ func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 	text := r.rt.promptsTo("fx-qa")[0].Text
 	dir := r.layout.FactoryTaskDir(task.ID)
 	runDir := filepath.Join(dir, "qa", "1-"+head[:7])
-	for _, want := range []string{"http://127.0.0.1:9333", "--session " + session + " --cdp http://127.0.0.1:9333",
+	if strings.Contains(text, "http://127.0.0.1") {
+		t.Errorf("the walker's prompt hands agent-browser a URL as its CDP endpoint, a form it does not document:\n%s", text)
+	}
+	for _, want := range []string{"port 9333", "--session " + session + " --cdp 9333 ",
 		filepath.Join(runDir, "verdict.json"), filepath.Join(runDir, "probe.js"), filepath.Join(dir, "acceptance.json"),
 		"http://app.example.localhost:3001", "> " + runDir + "/pages/"} {
 		if !strings.Contains(text, want) {
@@ -1140,8 +1144,9 @@ func TestACleanWalkPassesQAAndStopsEverything(t *testing.T) {
 	r.qaFree(task.ID)
 }
 
-// The #785 page: the walker says nothing is wrong, and the factory's own
-// check of the saved page finds the tooltip's markup shown as text. QA
+// The escaped tooltip's page: the walker says nothing is wrong, and the
+// factory's own check of the saved page finds the tooltip's markup shown as
+// text. QA
 // blocks: the defect is the factory's, no summary passes the stage, the
 // qa check fails as the change's, and the writer gets the defect.
 func TestTheEscapedTooltipBlocksQAWhateverTheWalkerSays(t *testing.T) {
@@ -1598,5 +1603,77 @@ func TestAQARunsReportNamesItsPagesShotsAndStates(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(r.runDir(task.ID, 2, head), qaReportFile)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("the report's mode %v (%v), want 0600", fi.Mode(), err)
+	}
+}
+
+// A server stop that failed in a QA teardown is tried again on each tick
+// while no QA session of the task runs: once it goes through, the server's
+// heavy use is free and a qa event says so. Before, the task went on past
+// QA with the slot held, and every other task waited "heavy: …" until the
+// daemon restarted.
+func TestAFailedServerStopOfAQATeardownIsTriedAgain(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12464")
+	r.toWalker(task)
+	r.copies.mu.Lock()
+	r.copies.stopErr = errors.New("prove the server of factory1 stopped: list the TCP listeners: lsof timed out")
+	r.copies.mu.Unlock()
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if _, held := r.e.servers[task.ID]; !held || r.reload(task.ID).Stage == "qa" {
+		t.Fatalf("the walk passed with its server's stop failed: server held %v, stage %s", held, r.reload(task.ID).Stage)
+	}
+	stops := len(r.copies.log().stopped)
+	r.tick()
+	if got := len(r.copies.log().stopped); got <= stops {
+		t.Fatalf("%d server stops after a tick, as before it: the failed stop is not tried again", got)
+	}
+	r.copies.mu.Lock()
+	r.copies.stopErr = nil
+	r.copies.mu.Unlock()
+	r.tick()
+	if _, held := r.e.servers[task.ID]; held {
+		t.Fatal("the server is still held after a stop that went through")
+	}
+	r.e.heavyMu.Lock()
+	var serverUse bool
+	if slot := r.e.heavyHeld[task.ID]; slot != nil {
+		_, serverUse = slot.uses[heavyServer]
+	}
+	r.e.heavyMu.Unlock()
+	if serverUse {
+		t.Fatal("the server's heavy use is still held")
+	}
+	if got := r.eventsWith(task.ID, "qa", "tried again"); len(got) != 1 {
+		t.Errorf("qa events %q, want one that says the stop was tried again", got)
+	}
+}
+
+// A boot whose server's stop failed after the boot did not answer keeps
+// the boot more back: the task waits on that stop, which each tick tries
+// again, and no second server starts beside the first (its port would
+// answer as another app's). Once the stop goes through, the boot more
+// starts.
+func TestABootMoreWaitsForTheStopOfTheFirstBootsServer(t *testing.T) {
+	r := newQARig(t)
+	r.setProbe(func(bool, int) (int, error) { return 0, errRefused })
+	r.copies.mu.Lock()
+	r.copies.stopErr = errors.New("prove the server of factory1 stopped: list the TCP listeners: lsof timed out")
+	r.copies.mu.Unlock()
+	task, _ := r.qaTask("PR-12465")
+	r.run(8, func() bool { return r.reload(task.ID).WaitsWhat == qaServerStopWhat })
+	if got := r.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != waitQA || got.WaitsWhat != qaServerStopWhat {
+		t.Fatalf("task %s waits %q: %q, want %s: %s", got.State, got.WaitsWho, got.WaitsWhat, waitQA, qaServerStopWhat)
+	}
+	r.tick()
+	if l := r.copies.log(); len(l.started) != 1 {
+		t.Fatalf("servers started %v while the first boot's stop failed, want the first alone", l.started)
+	}
+	r.copies.mu.Lock()
+	r.copies.stopErr = nil
+	r.copies.mu.Unlock()
+	r.run(4, func() bool { return len(r.copies.log().started) == 2 })
+	if l := r.copies.log(); len(l.started) != 2 {
+		t.Fatalf("servers started %v after the stop went through, want the boot more", l.started)
 	}
 }

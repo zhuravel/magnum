@@ -37,7 +37,7 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 	cmd := newCommand("", factoryDecideUsage, "decide on a factory task's ready card",
 		"Decide on the ready card of a factory task, as the screen does: <task> is the task's id or its Jira key. "+
 			"Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS "+
-			"line, the local review's end, and the y/N sentence of a push (the branch, the copy it frees and the queued "+
+			"line, the local review's end, the QA run's line (when visual QA ran), and the y/N sentence of a push (the branch, the copy it frees and the queued "+
 			"task that then starts). push has the daemon push the head the card shows and open its PR, ready for "+
 			"review, under your login; send_back returns the task to its writer with --reason, the key of your "+
 			"reason, and --note, your note (the writer reads it from a file, never in its prompt); drop stops the "+

@@ -12714,8 +12714,9 @@ type Copies interface {
     for a task (the copy it used last first), its release, how many are free,
     the copies reserved and for which task, the copy's local server, the
     factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-    cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
-    the servers and the browsers after a restart.
+    cdp its DevTools port on 127.0.0.1, the form agent-browser's --cdp
+    documents), and the reconcile of the servers and the browsers after a
+    restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
@@ -13246,8 +13247,9 @@ type PromptData struct {
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
-	// (config.FactoryQA.PageURL of its port, no path); QACDP the CDP endpoint
-	// of the factory's headless Chrome of the run's session, the one browser
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the DevTools port
+	// of the factory's headless Chrome of the run's session (agent-browser's
+	// --cdp takes a port, never an http:// URL), the one browser
 	// the walker attaches to, and QASession the walker's own session of its
 	// browser tool (agent-browser's --session, one per run); QAProbe the
 	// probe script the walker evaluates on each page, QAVerdict the verdict it
@@ -13337,12 +13339,15 @@ type ProofRun struct {
     and whether it hung (the factory stopped it at its bound: exit -1).
 
 type QABlocked struct {
-	What  string `json:"what"`
-	Why   string `json:"why"`
-	Check string `json:"check"`
+	What        string `json:"what"`
+	Why         string `json:"why"`
+	Check       string `json:"check"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
     QABlocked is a state or page the walker could not reach, why, and the
-    acceptance check it was for.
+    acceptance check it was for. Fingerprint is the factory's own, never the
+    walker's: that of the defect an earlier run handed the writer whose page the
+    run did not walk again (qaCheckFixes), "" for any other.
 
 type QADefect struct {
 	ID          string   `json:"id"`
@@ -13390,6 +13395,10 @@ type QAPage struct {
 	Console string   `json:"console"`
 	Status  int      `json:"status"`
 	Checks  []string `json:"checks"`
+	// ProbePath is the path the page's probe read (qaProbePath), which the
+	// factory keeps in a run's result (QAResult.Walk) and matches a fixed
+	// defect's page by; a verdict's is never read.
+	ProbePath string `json:"probe_path,omitempty"`
 }
     QAPage is one page the walker captured: its id (P1), the path it loaded,
     the state it reached, its side (after), its shot, probe and console files
@@ -13414,24 +13423,25 @@ type QAProbe struct {
     ("" when none did).
 
 type QAResult struct {
-	Version  int         `json:"version"`
-	Run      int         `json:"run"`
-	Pages    int         `json:"pages"`
-	Shots    int         `json:"shots"`
-	Dir      string      `json:"dir"`
-	Head     string      `json:"head"`
-	Outcome  string      `json:"outcome"`
-	Why      string      `json:"why"`
-	Cut      string      `json:"cut,omitempty"`
-	Walked   bool        `json:"walked,omitempty"`
-	Blocking []QADefect  `json:"blocking"`
-	Known    []QADefect  `json:"known"`
-	Accepted []QADefect  `json:"accepted,omitempty"`
-	Blocked  []QABlocked `json:"blocked"`
-	Walk     []QAPage    `json:"walk,omitempty"`
-	Fixed    []QAFixed   `json:"fixed,omitempty"`
-	Started  time.Time   `json:"started"`
-	Ended    time.Time   `json:"ended"`
+	Version   int         `json:"version"`
+	Run       int         `json:"run"`
+	Pages     int         `json:"pages"`
+	Shots     int         `json:"shots"`
+	Dir       string      `json:"dir"`
+	Head      string      `json:"head"`
+	Outcome   string      `json:"outcome"`
+	Why       string      `json:"why"`
+	Cut       string      `json:"cut,omitempty"`
+	Walked    bool        `json:"walked,omitempty"`
+	Blocking  []QADefect  `json:"blocking"`
+	Known     []QADefect  `json:"known"`
+	Accepted  []QADefect  `json:"accepted,omitempty"`
+	Blocked   []QABlocked `json:"blocked"`
+	Walk      []QAPage    `json:"walk,omitempty"`
+	Fixed     []QAFixed   `json:"fixed,omitempty"`
+	Unchecked []QAFixed   `json:"unchecked,omitempty"`
+	Started   time.Time   `json:"started"`
+	Ended     time.Time   `json:"ended"`
 }
     QAResult is how a QA run ended (result.json in its folder; qa-summary.json
     in the task's directory is the one that passed the stage): its version, the
@@ -13442,9 +13452,11 @@ type QAResult struct {
     those that do not (Known), the defects that would block but you accepted at
     the run's head (Accepted, `magnum factory retry --accept-qa`), the states
     the walker could not reach, the pages it walked (Walk: each one's id, path,
-    state and shot, as its verdict has them, the words clipped), what an earlier
-    run handed the writer that this run walked again and found no more (Fixed),
-    and when it started and ended.
+    state and shot, as its verdict has them, the words clipped, and the path
+    each one's probe read), what an earlier run handed the writer that this run
+    walked again and found no more (Fixed), what it handed that this run did not
+    walk again and you let go unchecked at the head (Unchecked, `magnum factory
+    retry --accept-qa`), and when it started and ended.
 
 func (r QAResult) CardLine() string
     CardLine is the ready card's QA line of r, the QA run that passed the stage
@@ -13527,9 +13539,10 @@ type RetryPayload struct {
 	TaskID  int64
 	Surface string
 	// AcceptQA is your acceptance of the QA defects that block which the
-	// writer declined with its risk, at the task's head (`magnum factory
-	// retry --accept-qa`): the next QA run there lets them pass, and the PR
-	// body names them as accepted by you.
+	// writer declined with its risk, or of the writer's fixes a QA run did
+	// not walk again, at the task's head (`magnum factory retry
+	// --accept-qa`): the next QA run there lets them pass, and the PR body
+	// names them as accepted by you.
 	AcceptQA bool
 }
     RetryPayload is a ReqRetry: task TaskID, which waits on you, goes on at its
@@ -30332,7 +30345,9 @@ type TaskCard struct {
 	// AcceptQA is what A accepts: the QA defects the writer declined at the
 	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
 	// declined at abc1234 (flow on /settings/security)", magnum factory
-	// retry --accept-qa); "" for none, and no A then.
+	// retry --accept-qa), or the fixes a QA run there did not walk again ("1
+	// fix QA did not walk again at abc1234 (...)"); "" for none, and no A
+	// then.
 	AcceptQA string
 	// QAReport is the report of the QA run whose stop AcceptQA names
 	// (summary.md, absolute), which e opens in the pager there; "" for none.

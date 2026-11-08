@@ -1000,10 +1000,13 @@ kind = "claude"
 effort = "high"
 prompt = "factory-qa.md"
 timeout = "35m"                   # within a run's qa.cap (50m by default), which the server's boot shares
-args = ["--no-chrome", "--disallowedTools=mcp__*"]   # the factory's Chrome alone, through the agent-browser CLI: no
-                                  # Claude in Chrome (your browser and its logins, whatever your setting) and no MCP
-                                  # tool; the claude kind's mcp_strict already keeps your MCP servers out, so the role
-                                  # leaves --strict-mcp-config to the kind ([kinds.claude] mcp_off)
+args = ["--no-chrome", "--disallowedTools=mcp__*,Bash(open:*),Bash(/usr/bin/open:*),Bash(osascript:*),Bash(/usr/bin/osascript:*)"]
+                                  # the factory's Chrome alone, through the agent-browser CLI: no Claude in Chrome
+                                  # (your browser and its logins, whatever your setting), no MCP tool, and no shell
+                                  # open or osascript, bare or by path (Claude Code's shell takes its PATH from your
+                                  # login shell, where /usr/bin comes before the factory's shims); the claude kind's
+                                  # mcp_strict already keeps your MCP servers out, so the role leaves
+                                  # --strict-mcp-config to the kind ([kinds.claude] mcp_off)
 why = "look at the changed pages in a browser, in the states the ticket names"
 doing = "walking the pages"
 
@@ -1030,10 +1033,11 @@ doing = "talking with you"
 #   effect    publish pushes the approved head and opens the PR, ready for review, under your login
 #   qa        starts the copy's server and a headless Chrome; the roles walk the changed pages ([factory.repo.qa]);
 #             ends when the factory's checks of the saved pages find nothing that blocks (`end = "qa"`). Its one
-#             role (fx-qa) walks the pages through the factory's Chrome alone. A defect that blocks, a state the
-#             walker could not reach, a run past its cap or one that reached no page waits on you. At most one per
-#             kind, after a review stage and before the ready_push decision; no prompt and no when (a repository
-#             without [factory.repo.qa] skips it)
+#             role (fx-qa) walks the pages through the factory's Chrome alone. A defect that blocks goes to the
+#             writer for a fix turn, then through the review and QA again, at most `fixes` times ([factory.repo.qa]),
+#             and waits on you after the cap or a decline; a state the walker could not reach, a run past its cap or
+#             one that reached no page waits on you. At most one per kind, after a review stage and before the
+#             ready_push decision; no prompt and no when (a repository without [factory.repo.qa] skips it)
 # `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security. A publish effect
 # must come after a ready_push decision: nothing leaves the Mac without your y.
 
