@@ -394,6 +394,10 @@ type openFacts struct {
 	// start of it at the head (zero: none; fix_open_ci.go).
 	ciWorkflow string
 	ciStart    ciStart
+	// ciLow: the identity [[repo]] ci_dispatch_as names, which starts
+	// ciWorkflow, is below the GitHub budget floor (low is the poll
+	// identity's).
+	ciLow bool
 	// decided: the attention is the fixer's decision calls alone, and the
 	// whole read shows your decision in each one's thread (callsDecided),
 	// so it stops no start (rule 2).

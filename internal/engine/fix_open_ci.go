@@ -10,8 +10,9 @@ package engine
 // when they end) and until settle_max after the push, and then needs you,
 // or, where the repository's [[repo]] ci_dispatch names the workflow that
 // produces its required checks, starts that workflow on the PR's branch
-// once for the head (openStartCI) as the watch's poll identity, the
-// daemon's own client (never the fixer's pane), and waits for its run
+// once for the head (openStartCI) as [[repo]] ci_dispatch_as, else the
+// watch's poll identity, the daemon's own client of that identity (never
+// the fixer's pane), and waits for its run
 // while the head's checks run and settle_max after the start. GitHub runs
 // the workflow as the branch has it and refuses one without a
 // workflow_dispatch trigger there; a PR that changes its own workflows or
@@ -43,8 +44,9 @@ func kvPRCIStart(prID int64) string { return fmt.Sprintf("pr.%d.ci_dispatch", pr
 // ciStart is the look's start of a PR's CI workflow at Head: the workflow
 // file, when it was asked (At: written before the call, so a start whose
 // end was lost still counts), why it failed (Failed: GitHub's answer as a
-// status, "GitHub answered HTTP 422", never its message) or why magnum
-// did not start it (Refused, At zero).
+// status, "GitHub answered HTTP 422", never its message; a 403 adds
+// cannotStartWorkflows' words) or why magnum did not start it (Refused, At
+// zero).
 type ciStart struct {
 	Head     string    `json:"head"`
 	Workflow string    `json:"workflow"`
@@ -88,7 +90,8 @@ func (e *Engine) openCIStartOf(ctx context.Context, full string, pr store.PR, ci
 // head). After that they did not run, and it needs you with how to start
 // them, unless the look starts the workflow ci_dispatch names
 // (f.ciWorkflow): it asks for the start (v.dispatch) when nothing holds it,
-// waits for the end of `magnum pause` and for the GitHub budget, and waits
+// waits for the end of `magnum pause` and for the GitHub budget (the poll
+// identity's, f.low, and ci_dispatch_as's, f.ciLow), and waits
 // for the run of a start it made (f.ciStart) while the head's checks run
 // and until settle_max after the start. A start that failed, one magnum
 // refused, and one whose run never came need you.
@@ -132,7 +135,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return needsYou(fmt.Sprintf("magnum started %s at %s and no run came%s", wf, waitClock(s.At, f.now), byHand))
 	case f.pause != "":
 		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the pause ends", what, wf), f.pauseUntil)
-	case f.low:
+	case f.low || f.ciLow:
 		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the GitHub budget allows", what, wf), time.Time{})
 	}
 	v.dispatch = true
@@ -165,10 +168,12 @@ func missingWhat(missing []string) string {
 // It refuses, once per head, a PR that changes its own workflows or
 // actions or whose files GitHub did not list whole, and one whose branch
 // it does not know. Else it records the start (kvPRCIStart) before it
-// asks GitHub as the watch's poll identity, the identity the look reads
-// the PR and its budget with, and records how it ended, with an event:
+// asks GitHub as [[repo]] ci_dispatch_as, else the watch's poll identity
+// (the identity the look reads the PR and its budget with), else its
+// identity, and records how it ended, with an event naming that identity:
 // fix.open_ci_dispatch, fix.open_ci_dispatch_failed (the status only: the
-// message of GitHub's refusal can name the branch, the PR's text) or
+// message of GitHub's refusal can name the branch, the PR's text; a 403
+// says that the identity cannot start workflows, cannotStartWorkflows) or
 // fix.open_ci_dispatch_refused.
 func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, workflow, what string) (ciStart, bool) {
 	s := ciStart{Head: pr.HeadSHA, Workflow: workflow}
@@ -187,7 +192,8 @@ func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watc
 		s.Refused = "the PR's branch is not known"
 	}
 	subject, short := prSubject(repo, pr.Number), textx.ShortSHA(pr.HeadSHA)
-	data := map[string]any{"head": pr.HeadSHA, "workflow": workflow}
+	identity := cmp.Or(e.cfg.CIDispatchAs(repo.FullName()), w.PollIdentity, w.Identity)
+	data := map[string]any{"head": pr.HeadSHA, "workflow": workflow, "identity": identity}
 	if s.Refused != "" {
 		if !e.writeCIStart(ctx, pr, s) {
 			return ciStart{}, false
@@ -196,12 +202,10 @@ func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watc
 			fmt.Sprintf("%s did not run at %s; magnum does not start %s: %s", what, short, workflow, s.Refused), data)
 		return s, true
 	}
-	identity := cmp.Or(w.PollIdentity, w.Identity)
 	s.At = e.now()
 	if !e.writeCIStart(ctx, pr, s) {
 		return ciStart{}, false
 	}
-	data["identity"] = identity
 	gh := e.gh(identity)
 	d, ok := gh.(workflowDispatcher)
 	if gh == nil || !ok {
@@ -211,6 +215,9 @@ func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watc
 		var api *github.APIError
 		if errors.As(err, &api) && api.Status != 0 {
 			s.Failed = fmt.Sprintf("GitHub answered HTTP %d", api.Status)
+		}
+		if errors.Is(err, github.ErrForbidden) {
+			s.Failed += ": " + e.cannotStartWorkflows(identity)
 		}
 	}
 	e.writeCIStart(ctx, pr, s)
@@ -223,6 +230,21 @@ func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watc
 	e.event(ctx, "info", subject, "fix.open_ci_dispatch",
 		fmt.Sprintf("%s did not run at %s; magnum started %s on the PR's branch as %s", what, short, workflow, identity), data)
 	return s, true
+}
+
+// cannotStartWorkflows says why GitHub refused identity a workflow start
+// (HTTP 403, not its rate limit), in magnum's words: the identity cannot
+// start workflows, what one of its kind needs, and the key that names an
+// identity that can.
+func (e *Engine) cannotStartWorkflows(identity string) string {
+	need := "an App needs Actions: write, a gh login push access and the repo scope"
+	if id := e.cfg.IdentityByName(identity); id != nil {
+		need = "a gh login needs push access and the repo scope"
+		if id.Kind == "app" {
+			need = "an App needs Actions: write"
+		}
+	}
+	return identity + " cannot start workflows, " + need + "; set [[repo]] ci_dispatch_as to an identity that can"
 }
 
 // writeCIStart records s as pr's start of its CI workflow (kvPRCIStart),

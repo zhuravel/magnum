@@ -260,6 +260,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	}
 	f.ci = e.openCI(ctx, repo, pr)
 	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
+	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
 	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised

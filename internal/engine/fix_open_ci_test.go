@@ -2,7 +2,9 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -160,6 +162,9 @@ func TestTheLookNeverStartsTheCIWorkflowOfAPRThatChangesItsWorkflows(t *testing.
 	h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum does not start ci.yml (the PR changes its own workflows or actions)")
 	if evs := h.fixEvents("fix.open_ci_dispatch_refused"); len(evs) != 1 {
 		t.Fatalf("fix.open_ci_dispatch_refused events = %+v, want one", evs)
+	}
+	if data := h.dispatchData("fix.open_ci_dispatch_refused"); data["identity"] != "zhuravel" {
+		t.Errorf("fix.open_ci_dispatch_refused data = %v, want it to name the identity it would start as", data)
 	}
 }
 
@@ -375,4 +380,140 @@ func TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck(t *testing.T) {
 			t.Fatalf("fix.open_ci_dispatch_refused events = %+v, want one", evs)
 		}
 	})
+}
+
+// appDispatcher is talkable-app's client in the look's CI tests: the poll
+// identity's fake for every call but the start of a workflow, which it
+// records as "dispatch as talkable-app:<owner>/<repo>:<workflow>@<ref>" and
+// fails with the fake's dispatchErr.
+type appDispatcher struct{ *fakeGH }
+
+func (g appDispatcher) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref string) error {
+	g.record(fmt.Sprintf("dispatch as talkable-app:%s/%s:%s@%s", owner, repo, workflow, ref))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.dispatchErr
+}
+
+// ciDispatchedAs is ciDispatched with talkable-app's client in place
+// (appDispatcher) and [[repo]] ci_dispatch_as = as ("" leaves it unset).
+func ciDispatchedAs(t *testing.T, as string) *harness {
+	t.Helper()
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion, func(h *harness) {
+		h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", CIDispatch: "ci.yml", CIDispatchAs: as})
+		h.gh.defaultFiles = []string{"app/models/order.rb"}
+		plain := h.d.GitHub
+		h.d.GitHub = func(id string) GitHub {
+			if id == "talkable-app" {
+				return appDispatcher{h.gh}
+			}
+			return plain(id)
+		}
+	})
+	h.othersPassed(fixHead)
+	h.tick() // reviewed clean
+	return h
+}
+
+// The live case: the watch's poll identity is an App installation that
+// may only read Actions, so GitHub refused its start of the workflow.
+// [[repo]] ci_dispatch_as names the identity that starts it: the look
+// starts it through that identity's client, and fix.open_ci_dispatch names
+// it. Unset, the look starts it as the poll identity, as before.
+func TestTheLookStartsTheCIWorkflowAsCIDispatchAs(t *testing.T) {
+	for _, c := range []struct{ as, call, identity string }{
+		{"talkable-app", "dispatch as talkable-app:talkable/talkable:ci.yml@feature", "talkable-app"},
+		{"", "dispatch:talkable/talkable:ci.yml@feature", "zhuravel"},
+	} {
+		t.Run(cmp.Or(c.as, "unset"), func(t *testing.T) {
+			h := ciDispatchedAs(t, c.as)
+			h.pastSettle()
+			h.tick()
+			h.tick()
+			if calls := h.ghCalls("dispatch"); !slices.Equal(calls, []string{c.call}) {
+				t.Fatalf("dispatches = %q, want %q", calls, c.call)
+			}
+			h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+			ev, _ := h.fixEvent("fix.open_ci_dispatch")
+			if data := h.dispatchData("fix.open_ci_dispatch"); data["identity"] != c.identity || !strings.HasSuffix(ev.Message, " as "+c.identity) {
+				t.Errorf("fix.open_ci_dispatch = %q, %v; want it to name %s", ev.Message, data, c.identity)
+			}
+		})
+	}
+}
+
+// The start waits for the GitHub budget of the identity it starts as:
+// with ci_dispatch_as below the floor the look starts nothing and says it
+// waits for the budget, and it starts the workflow once the budget is back.
+func TestTheStartOfTheCIWorkflowWaitsForTheBudgetOfCIDispatchAs(t *testing.T) {
+	h := ciDispatchedAs(t, "talkable-app")
+	h.pastSettle()
+	until := h.lowBudget("talkable-app", 100, h.clock.Now().Add(20*time.Minute))
+	h.tick()
+	h.tick()
+	if calls := h.ghCalls("dispatch"); len(calls) != 0 {
+		t.Fatalf("dispatched %q below the floor of ci_dispatch_as", calls)
+	}
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: required check Completion did not run; magnum starts ci.yml once the GitHub budget allows")
+	h.advance(until.Sub(h.clock.Now()) + time.Minute)
+	h.tick()
+	h.tick()
+	if calls := h.ghCalls("dispatch"); !slices.Equal(calls, []string{"dispatch as talkable-app:talkable/talkable:ci.yml@feature"}) {
+		t.Fatalf("dispatches = %q once the budget is back", calls)
+	}
+}
+
+// GitHub refuses a start (HTTP 403) to an identity that may not start
+// workflows: an App with Actions: read only, a gh login without push
+// access. The verdict and fix.open_ci_dispatch_failed say that the identity
+// cannot start workflows, what it needs (by its kind), and that
+// ci_dispatch_as names one that can, never GitHub's message; the PR needs
+// you exactly as after any refused start (the verdict's needs and its end,
+// the PR's state and its wait), and the head is not started again.
+func TestAStartGitHubForbidsSaysTheIdentityCannotStartWorkflows(t *testing.T) {
+	failed := func(t *testing.T, as string, err error) *harness {
+		t.Helper()
+		h := ciDispatchedAs(t, as)
+		h.gh.mu.Lock()
+		h.gh.dispatchErr = err
+		h.gh.mu.Unlock()
+		h.pastSettle()
+		h.tick()
+		h.tick()
+		h.advance(10 * time.Minute)
+		h.tick()
+		if n := len(h.ghCalls("dispatch")); n != 1 {
+			t.Fatalf("dispatches = %d, want one for the head", n)
+		}
+		return h
+	}
+	unprocessable := failed(t, "talkable-app", &github.APIError{Op: "dispatch", Status: 422, Message: "Workflow does not have 'workflow_dispatch' trigger"})
+	before := unprocessable.wantOpen(OpenNeedsYou, "magnum's start of ci.yml failed (GitHub answered HTTP 422)")
+	beforeWait, beforeWaits := unprocessable.waitOf(2)
+	for _, c := range []struct{ as, identity, words string }{
+		{"talkable-app", "talkable-app", "talkable-app cannot start workflows, an App needs Actions: write"},
+		{"", "zhuravel", "zhuravel cannot start workflows, a gh login needs push access and the repo scope"},
+	} {
+		t.Run(c.identity, func(t *testing.T) {
+			h := failed(t, c.as, &github.APIError{Op: "dispatch", Status: 403, Message: "Resource not accessible by integration"})
+			fix := "; set [[repo]] ci_dispatch_as to an identity that can"
+			v := h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum's start of ci.yml failed (GitHub answered HTTP 403: "+c.words+fix+"); run it on the PR's branch")
+			if !slices.Equal(v.Needs, before.Needs) || !v.Until.Equal(before.Until) || v.Head != before.Head {
+				t.Errorf("verdict = %+v, want it as after the 422's %+v", v, before)
+			}
+			if w, ok := h.waitOf(2); ok != beforeWaits || w != beforeWait {
+				t.Errorf("wait = %+v, %v; want %+v, %v as after the 422", w, ok, beforeWait, beforeWaits)
+			}
+			if got, want := h.pr(2).State, unprocessable.pr(2).State; got != want {
+				t.Errorf("PR state = %s, want %s as after the 422", got, want)
+			}
+			ev, ok := h.fixEvent("fix.open_ci_dispatch_failed")
+			if !ok || ev.Level != "warn" || !strings.Contains(ev.Message, c.words+fix) || strings.Contains(ev.Message, "Resource not accessible") {
+				t.Fatalf("fix.open_ci_dispatch_failed = %+v, %v", ev, ok)
+			}
+			if data := h.dispatchData("fix.open_ci_dispatch_failed"); data["identity"] != c.identity {
+				t.Errorf("fix.open_ci_dispatch_failed data = %v, want it to name %s", data, c.identity)
+			}
+		})
+	}
 }
