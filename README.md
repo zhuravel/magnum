@@ -3583,7 +3583,10 @@ instead (a `workflow_dispatch` run on the PR's branch, as `[[repo]] ci_dispatch_
 identity, never the fixer's pane), once per head, recorded before the call so that nothing
 starts it twice (`fix.open_ci_dispatch`), and waits for its run while the head's checks run and for
 `settle_max` after the start ("CI at a1b2c3d: magnum started ci.yml at 14:05, as required check Completion
-did not run"); a run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
+did not run"). GitHub's rollup of the head leaves that run out, so while the start waits each poll reads the
+head's checks once, and a check the run creates passed (a new passed count in the rollup) has the poll read
+them again after the wait too: the run's check ends the wait, or the need, with nothing for you to do. A
+run that never comes, a start GitHub refuses (`fix.open_ci_dispatch_failed`: a workflow
 without a `workflow_dispatch` trigger on the branch answers HTTP 422) and a PR it will not start
 (`fix.open_ci_dispatch_refused`: one that changes its own `.github/workflows/` or `.github/actions/`, which
 would run its own CI with the repository's secrets, whose files GitHub did not list whole, or whose branch

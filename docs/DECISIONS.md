@@ -3471,6 +3471,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   apart). Two permission tests took both idle readings at the same instant and now move the clock
   between them, by the gap or, where the composer holds text, by the deny's.
 
+- **The poll sees the run of the CI workflow the look started** (2026-11-08, a read-only audit of the look's
+  verdicts; amends "The look starts the CI workflow a head's required check did not run in, where the
+  repository names it"). On talkable#11949 the look started `ci.yml` at 15:00:47 UTC and the run's Completion
+  passed at 15:06:57, yet from 15:21 the verdict said "required check Completion did not run at ...: magnum
+  started ci.yml at 17:01 and no run came; run it on the PR's branch" (the clock is local); talkable#12213
+  said the same and healed only because magnum's own status comment moved its `updatedAt`, which read its
+  checks again. The cause: the poll reads a PR's checks again (Details) when its `updatedAt`, its head, the
+  rollup's state or the rollup's failed or pending count moves (`ciCountsMoved`), and none did. GitHub's
+  rollup of the head (`statusCheckRollup`, which the poll's cheap read and Details both take) leaves out the
+  run's own `workflow_dispatch` check suite (81 runs; the rollup held 10, and the checks stored by #12213's
+  later read held none of that suite's jobs). What reaches the rollup is what the run's last job creates
+  through the Checks API in an older `pull_request` suite of the head: Completion and three test reports,
+  created completed (started and completed in the same second), so never pending. They moved the rollup's
+  passed count and its total (6 to 10), while its state stayed SUCCESS and its failed and pending counts
+  stayed 0. Two changes, each bounded. `ciCountsMoved` counts the passed count too: both sides are GitHub's
+  counts, so it reads the checks again only when GitHub's passed count moved, which a running check that
+  passes already did through its pending count; what it adds is a check created passed (a run's report, a
+  status posted as success), one more PR in the repository's one Details call; a check created skipped (a
+  comment's skipped workflow) still moves nothing. And while a start waits for its run (`ciRunAwaited`: GitHub
+  took it at the head less than `settle_max` ago, and the head's stored checks still miss a required check by
+  rule 11's own reading, `openCI`), each poll reads that PR's checks once, whatever the rollup says: a rollup
+  the poll could not read, or a run whose check its counts cannot show, no longer leaves the look waiting on
+  checks that ran. The reads end when the run shows or the wait ends, and only a repository with `ci_dispatch`
+  reads the start record. A verdict that already said no run came is the next look's to change: the poll that
+  reads the run's check makes the PR idle with nothing for you to do (#11949's stored verdict, on the first
+  poll of a build with the passed count). Nothing starts the workflow again: the start record is not touched.
+  Rejected: reading the head's check runs through REST (`/commits/{sha}/check-runs` lists the dispatch suite)
+  on every poll (one more call per open PR, where Details already holds the check the required list names);
+  counting the total too (each skipped run of a comment's workflow would read the checks again, and the
+  comment moves `updatedAt` anyway); waiting past `settle_max` (this run took 6 minutes, and the wait is the
+  operator's key). Tests, failing first: TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut,
+  TestAStartWithNoRunReadsTheHeadsChecksOncePerPollUntilItsWaitEnds,
+  TestAPassedCheckThatCameAfterTheWaitClearsNoRunCame and the "a check created passed" case of
+  TestCICountsReadTheChecksAgainOnlyWhenBothAreKnownAndFailedPendingOrPassedMoved (it was "another passed
+  check", which moved nothing); TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll, a guard that passes
+  before the fix, fails with the failed start's test taken out, and the first test's "no read once the run
+  shows" fails with the missing check's test taken out.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed
