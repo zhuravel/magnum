@@ -34,10 +34,19 @@ const (
 // background.
 var gitOptions = []string{
 	"-c", "core.hooksPath=/dev/null",
-	"-c", "credential.helper=", "-c", "credential.helper=" + gitx.GHCredentialHelper,
+	"-c", "credential.helper=", "-c", "credential.helper=" + ghHelper,
 	"-c", "protocol.ssh.allow=never",
 	"-c", "gc.autoDetach=false", "-c", "maintenance.autoDetach=false",
 }
+
+// ghHelper is gh as git's credential helper, run with the operator's real
+// HOME (realHomeVar): git itself runs with an empty one (gitHome), but gh
+// finds the identity's login through GH_CONFIG_DIR, or for a gh identity
+// through that HOME and its keychain.
+const ghHelper = `!HOME="$` + realHomeVar + `" gh auth git-credential`
+
+// realHomeVar carries the operator's HOME to ghHelper.
+const realHomeVar = "MAGNUM_STAGING_HOME"
 
 // missingRef is how git fetch names a refspec source the remote lacks.
 var missingRef = regexp.MustCompile(`couldn't find remote ref (\S+)`)
@@ -47,6 +56,8 @@ var missingRef = regexp.MustCompile(`couldn't find remote ref (\S+)`)
 type execGit struct {
 	run execx.Runner
 	url func(repo string) string
+	// home is the operator's HOME, for gh alone (ghHelper).
+	home string
 }
 
 // NewGit returns the real Git: a mirror is a treeless bare clone of
@@ -60,16 +71,37 @@ func NewGit(r execx.Runner) Git {
 
 // newGit is NewGit with the remote's URL of a repository (tests clone a
 // local file:// origin).
-func newGit(r execx.Runner, url func(repo string) string) Git { return &execGit{run: r, url: url} }
+func newGit(r execx.Runner, url func(repo string) string) Git {
+	home, _ := os.UserHomeDir()
+	return &execGit{run: r, url: url, home: home}
+}
+
+// gitHome is the HOME git runs with: an empty directory in mirror_dir
+// (beside the owners' directories), so no ~/.netrc, ~/.gitconfig or
+// includeIf of the operator's ever applies. root is mirror_dir.
+func gitHome(root string) string { return filepath.Join(root, ".home") }
+
+// configVars are the variables of environ that give git config (
+// GIT_CONFIG_COUNT with its GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, and
+// GIT_CONFIG_PARAMETERS, which -c writes): an insteadOf or a URL-scoped
+// credential helper there would reach the fetch.
+func configVars(environ []string) []string {
+	out := []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"}
+	for _, kv := range environ {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_") {
+			out = append(out, k)
+		}
+	}
+	return out
+}
 
 // cmd is `git --git-dir=<dir> <gitOptions> args...` in dir, with GIT_DIR
 // set to dir too and GIT_CEILING_DIRECTORIES at its parent: git never
 // looks for a repository, so it can never walk up into one around the
-// mirror. env (the identity's) goes under the rest, which reads no global
-// or system git config; offline commands may not fetch a missing object
-// (GIT_NO_LAZY_FETCH), and none prompts or takes optional locks.
+// mirror. dir is <mirror_dir>/<owner>/<name>.git.
 func (g *execGit) cmd(dir, label string, timeout time.Duration, mutates, network bool, env map[string]string, args ...string) execx.Cmd {
-	c := g.base(dir, label, timeout, mutates, network, env)
+	c := g.base(dir, filepath.Dir(filepath.Dir(dir)), label, timeout, mutates, network, env)
 	c.Args = slices.Concat([]string{"--git-dir=" + dir}, gitOptions, args)
 	c.Env["GIT_DIR"] = dir
 	return c
@@ -77,16 +109,28 @@ func (g *execGit) cmd(dir, label string, timeout time.Duration, mutates, network
 
 // base is a git command run in cwd with the mirror's environment and no
 // repository named (the clone's): GIT_CEILING_DIRECTORIES stops git's
-// search for one at cwd's parent.
-func (g *execGit) base(cwd, label string, timeout time.Duration, mutates, network bool, env map[string]string) execx.Cmd {
-	e := maps.Clone(env)
-	if e == nil {
-		e = map[string]string{}
+// search for one at cwd's parent. Of env (the identity's) only what is no
+// git config and no HOME is kept: GH_CONFIG_DIR and the like, gh's login.
+// Git reads no global or system config and no config from the environment,
+// runs with an empty HOME in mirror_dir root (no ~/.netrc), and never
+// prompts or runs an askpass; offline commands may not fetch a missing
+// object (GIT_NO_LAZY_FETCH), and none takes optional locks.
+func (g *execGit) base(cwd, root, label string, timeout time.Duration, mutates, network bool, env map[string]string) execx.Cmd {
+	e := map[string]string{}
+	for k, v := range env {
+		if !strings.HasPrefix(k, "GIT_CONFIG") && k != "HOME" && k != realHomeVar {
+			e[k] = v
+		}
 	}
-	e["GIT_TERMINAL_PROMPT"] = "0"
-	e["GIT_CONFIG_GLOBAL"] = "/dev/null"
-	e["GIT_CONFIG_NOSYSTEM"] = "1"
-	e["GIT_CEILING_DIRECTORIES"] = filepath.Dir(cwd)
+	home := gitHome(root)
+	// Git also runs without it: then there is no ~/.netrc either.
+	_ = os.MkdirAll(home, 0o700)
+	maps.Copy(e, map[string]string{ //nolint:gosec // G101: the names of git's askpass variables, no credential
+		"HOME": home, realHomeVar: g.home,
+		"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
+		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CEILING_DIRECTORIES": filepath.Dir(cwd),
+	})
 	if !mutates {
 		e["GIT_OPTIONAL_LOCKS"] = "0"
 	}
@@ -97,7 +141,7 @@ func (g *execGit) base(cwd, label string, timeout time.Duration, mutates, networ
 		Name:    "git",
 		Dir:     cwd,
 		Env:     e,
-		Unset:   gitx.ScrubbedEnv(),
+		Unset:   slices.Concat(gitx.ScrubbedEnv(), configVars(os.Environ())),
 		Timeout: timeout,
 		Mutates: mutates,
 		Label:   "git staging " + label,
@@ -120,25 +164,62 @@ func laidOut(dir string) bool {
 	return true
 }
 
-func (g *execGit) Base(ctx context.Context, dir string) (string, error) {
+// notARepository reports whether err is git's definite answer that the dir
+// it was named is no repository: exit 128, "not a git repository".
+func notARepository(err error) bool {
+	ee, ok := errors.AsType[*execx.ExitError](err)
+	return ok && ee.Code == 128 && strings.Contains(ee.Stderr, "not a git repository")
+}
+
+// Base answers ErrNoMirror only on a definite answer, and never once ctx is
+// done: the layout check fails, git exits 128 with "not a git repository",
+// or git calls the dir not bare. Anything else (a git that cannot run, a
+// signal, a timeout, a cancel) is a plain error that leaves the dir alone,
+// and so is a bare repository whose origin is not repo's, or that is not
+// treeless: someone's own clone, never moved or fetched into.
+func (g *execGit) Base(ctx context.Context, dir, repo string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("mirror dir %q is not absolute", dir)
 	}
 	if !laidOut(dir) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("%s is not laid out as a bare repository (HEAD, objects/, refs/): %w", dir, ErrNoMirror)
 	}
-	res, err := g.run.Run(ctx, g.cmd(dir, "is bare", readTimeout, false, false, nil, "rev-parse", "--is-bare-repository"))
-	if err != nil {
-		return "", fmt.Errorf("%s is not a bare repository to git: %w", dir, errors.Join(ErrNoMirror, err))
+	read := func(label string, args ...string) (string, error) {
+		res, err := g.run.Run(ctx, g.cmd(dir, label, readTimeout, false, false, nil, args...))
+		if cerr := ctx.Err(); cerr != nil {
+			return "", cerr
+		}
+		return strings.TrimSpace(res.Out()), err
 	}
-	if bare := strings.TrimSpace(res.Out()); bare != "true" {
+	bare, err := read("is bare", "rev-parse", "--is-bare-repository")
+	switch {
+	case notARepository(err):
+		return "", fmt.Errorf("%s is no repository to git: %w", dir, ErrNoMirror)
+	case err != nil:
+		return "", fmt.Errorf("checking %s: %w", dir, err)
+	case bare != "true":
 		return "", fmt.Errorf("%s is not a bare repository to git (bare: %q): %w", dir, bare, ErrNoMirror)
 	}
-	res, err = g.run.Run(ctx, g.cmd(dir, "head", readTimeout, false, false, nil, "symbolic-ref", "--short", "HEAD"))
+	url, err := read("origin", "config", "--get", "remote.origin.url")
+	if ctx.Err() != nil {
+		return "", err
+	}
+	if err != nil || !strings.EqualFold(url, g.url(repo)) {
+		return "", fmt.Errorf("%s is no mirror of %s: its origin is another repository's, or none", dir, repo)
+	}
+	if filter, err := read("filter", "config", "--get", "remote.origin.partialclonefilter"); err != nil || filter != "tree:0" {
+		if ctx.Err() != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s is no mirror of %s: it is not treeless (tree:0)", dir, repo)
+	}
+	base, err := read("head", "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("the mirror's HEAD: %w", err)
 	}
-	base := strings.TrimSpace(res.Out())
 	if !validBranch(base) {
 		return "", fmt.Errorf("the mirror's HEAD names no branch: %q", base)
 	}
@@ -166,7 +247,7 @@ func (g *execGit) Clone(ctx context.Context, dir, repo string, env map[string]st
 		return err
 	}
 	parent := filepath.Dir(dir)
-	cmd := g.base(parent, "clone "+repo, cloneTimeout, true, true, env)
+	cmd := g.base(parent, filepath.Dir(parent), "clone "+repo, cloneTimeout, true, true, env)
 	cmd.Args = slices.Concat([]string{"-C", parent}, gitOptions,
 		[]string{"clone", "--quiet", "--bare", "--filter=tree:0", "--single-branch", "--no-tags", "--", url, tmp})
 	if _, err := g.run.Run(ctx, cmd); err != nil {

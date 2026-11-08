@@ -10,7 +10,7 @@ import (
 
 // stateVersion is the version of the state file; a file of another version
 // is not read (the next Refresh rebuilds it).
-const stateVersion = 3
+const stateVersion = 4
 
 // state is what one Refresh of a repository read: the lookup data Status
 // answers from, and the caches the next Refresh starts from. Refresh writes
@@ -66,8 +66,8 @@ type envData struct {
 	// Boundary is the first first-parent commit past the window ("" = the
 	// chain ended inside it). Chain is the window's first-parent commits,
 	// newest first: the tips the branch had.
-	Boundary string   `json:"boundary,omitempty"`
-	Chain    []string `json:"chain,omitempty"`
+	Boundary string    `json:"boundary,omitempty"`
+	Chain    []tipData `json:"chain,omitempty"`
 	// Merges are the window's merges, newest first.
 	Merges []mergeData `json:"merges,omitempty"`
 	// In maps each commit a window merge brought in (an ancestor of its
@@ -78,6 +78,12 @@ type envData struct {
 	// its time ("" = none, or not readable).
 	DeployedTip string    `json:"deployed_tip,omitempty"`
 	DeployedAt  time.Time `json:"deployed_at"`
+}
+
+// tipData is a first-parent commit of a branch's window: a tip it had.
+type tipData struct {
+	SHA string    `json:"sha"`
+	At  time.Time `json:"at"`
 }
 
 // mergeData is a merge of a branch's window.
@@ -103,6 +109,9 @@ type runEntry struct {
 	Run    *Run      `json:"run,omitempty"`
 	ReadAt time.Time `json:"read_at"`
 	Err    string    `json:"err,omitempty"`
+	// NoPaths: read for the job names alone (a previous tip's run), so its
+	// failed jobs carry no paths.
+	NoPaths bool `json:"no_paths,omitempty"`
 }
 
 // pathsEntry is a PR head's changed paths, or why they were not read.
@@ -125,6 +134,7 @@ type deployEntry struct {
 // in Status, the caches or GitHub and git in Refresh.
 type source interface {
 	run(sha string) *runEntry            // nil = not read
+	prevRun(sha string) *runEntry        // a previous tip's: its job names suffice; nil = not read
 	paths(base, head string) *pathsEntry // nil = not read
 }
 
@@ -134,7 +144,8 @@ func pathsKey(base, head string) string { return base + "..." + head }
 // cached is the source of Status: only what the last Refresh read.
 type cached struct{ st *state }
 
-func (c cached) run(sha string) *runEntry { return c.st.Runs[sha] }
+func (c cached) run(sha string) *runEntry     { return c.st.Runs[sha] }
+func (c cached) prevRun(sha string) *runEntry { return c.st.Runs[sha] }
 func (c cached) paths(base, head string) *pathsEntry {
 	return c.st.Paths[pathsKey(base, head)]
 }
@@ -307,9 +318,15 @@ func (st *state) pushed(s *EnvStatus, base string, e *envData, mi int, dep *depl
 		s.Why = "ci.yml's run on the merge was cancelled"
 	default:
 		s.Detail = DetailCIFailedNotOurs
-		prev, prevSHA := st.previousRun(e, ri, src)
+		prev, prevSHA, prevPos := st.previousRun(e, ri, src)
+		merges := 0 // the run's: those from its merge down to the tip before
+		for _, m := range e.Merges {
+			if m.Pos >= e.Merges[ri].Pos && m.Pos < prevPos {
+				merges++
+			}
+		}
 		var ours bool
-		ours, s.Why = failureIsOurs(r.Run, src.paths(base, s.InTip), prev, prevSHA)
+		ours, s.Why = failureIsOurs(r.Run, src.paths(base, s.InTip), prev, prevSHA, merges)
 		if ours {
 			s.Detail = DetailCIFailedOurs
 		}
@@ -335,21 +352,22 @@ const prevWalk = 5
 
 // previousRun is the completed ci.yml run of the branch's tip before the
 // merge e.Merges[mi] (its first parent), or of the nearest older tip in the
-// window that has one, at most prevWalk back, with its sha: the run a new
-// failure is told against. A cancelled run, or a failed one whose jobs were
-// not read, tells nothing and is passed over; nil when none is found.
-func (st *state) previousRun(e *envData, mi int, src source) (*Run, string) {
+// window that has one, at most prevWalk back, with its sha and its index in
+// the chain: the run a new failure is told against. A cancelled run, or a
+// failed one whose jobs were not read, tells nothing and is passed over;
+// nil when none is found.
+func (st *state) previousRun(e *envData, mi int, src source) (*Run, string, int) {
 	pos := e.Merges[mi].Pos
-	for _, sha := range e.Chain[min(pos+1, len(e.Chain)):min(pos+1+prevWalk, len(e.Chain))] {
-		r := src.run(sha)
+	for i := pos + 1; i < min(pos+1+prevWalk, len(e.Chain)); i++ {
+		r := src.prevRun(e.Chain[i].SHA)
 		if r == nil || r.Run == nil || r.Run.Status != "completed" || r.Run.Conclusion == "cancelled" {
 			continue
 		}
 		if passed(r.Run) || r.Run.Failed != nil {
-			return r.Run, sha
+			return r.Run, e.Chain[i].SHA, i
 		}
 	}
-	return nil, ""
+	return nil, "", 0
 }
 
 // passed reports whether a completed run passed: success, or skipped or
@@ -365,11 +383,13 @@ func passed(r *Run) bool {
 // failureIsOurs reports whether run's failure is the PR's: a failing job
 // names a path the PR changes (p), or a job failed here that did not on
 // prev, the run of the tip before the merge (prevSHA; nil = none to tell
-// against), which a flaky job reads the same, so Why says "new against".
-// The same jobs failing on prev is not the PR's. Why says when it cannot be
+// against), and the run covers that merge alone (merges, from the run's
+// merge down to prevSHA): a flaky job reads the same, so Why says "new
+// against". Over several merges a new failure may be any of theirs, and
+// the same jobs failing on prev is not the PR's. Why says when it cannot be
 // told: the run's jobs not read, no failing job listed, the PR's paths not
 // read, or a failing job that names no path.
-func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string) (bool, string) {
+func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string, merges int) (bool, string) {
 	const cannot = "cannot tell whether the failure is the PR's: "
 	switch {
 	case run.Failed == nil:
@@ -402,9 +422,13 @@ func failureIsOurs(run *Run, p *pathsEntry, prev *Run, prevSHA string) (bool, st
 			before[job.Name] = true
 		}
 		for _, job := range run.Failed {
-			if !before[job.Name] {
-				return true, "a job failed that passed on " + short(prevSHA) + ": new against it (a flaky job reads the same)"
+			if before[job.Name] {
+				continue
 			}
+			if merges > 1 {
+				return false, fmt.Sprintf("new against %s, in a run of %d merges: cannot tell whose", short(prevSHA), merges)
+			}
+			return true, "new against " + short(prevSHA) + ": a job failed that passed there (a flaky job reads the same)"
 		}
 		return false, "the same jobs failed on " + short(prevSHA) + ", the tip before"
 	}

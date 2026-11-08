@@ -64,10 +64,13 @@ const (
 	// DetailCIRunning: ci.yml runs on the merge (or has not started yet).
 	DetailCIRunning Detail = "ci_running"
 	// DetailCIFailedOurs: ci.yml failed, and a failing job names a path the
-	// PR changes.
+	// PR changes, or a job failed that passed on the branch's tip before the
+	// merge, the merge alone in between ("new against" it: a flaky job reads
+	// the same).
 	DetailCIFailedOurs Detail = "ci_failed_ours"
-	// DetailCIFailedNotOurs: ci.yml failed, and no failing job names a path
-	// the PR changes (or that cannot be told: Why says so).
+	// DetailCIFailedNotOurs: ci.yml failed, but neither: no failing job names
+	// a path the PR changes, and the same jobs failed on the tip before, or
+	// the run covers several merges, or it cannot be told (Why says so).
 	DetailCIFailedNotOurs Detail = "ci_failed_not_ours"
 	// DetailWaitingJenkins: ci.yml passed, and the deploy has not recorded a
 	// deployment yet, less than ConfirmWait after the push.
@@ -154,9 +157,11 @@ type Commit struct {
 type Git interface {
 	// Base returns the branch the mirror's HEAD names: the remote's default
 	// branch. dir must be a bare repository of its own (HEAD, objects/ and
-	// refs/, and git calls it one); an absent dir or one that is not fails
-	// with an error that wraps ErrNoMirror, and nothing in it is repaired.
-	Base(ctx context.Context, dir string) (string, error)
+	// refs/, and git calls it one) whose origin is repo's and treeless. Only
+	// a definite answer that it is none (absent, laid out otherwise, git's
+	// "not a git repository", not bare), with ctx not done, wraps
+	// ErrNoMirror; anything else is a plain error, and the dir stays as it is.
+	Base(ctx context.Context, dir, repo string) (string, error)
 	// Clone makes dir, which must be absent, a treeless bare mirror of repo
 	// (owner/name), its HEAD the remote's default branch.
 	Clone(ctx context.Context, dir, repo string, env map[string]string) error
@@ -271,8 +276,11 @@ type Client struct {
 	mu      sync.Mutex
 	data    map[string]*state    // by repository, lower case
 	cloning map[string]time.Time // the mirrors this client clones, by dir: since when
-	// bg runs the background clones (tests wait for them).
-	bg sync.WaitGroup
+	// bg runs the background clones, on life (tests wait for them); Close
+	// ends life.
+	bg   sync.WaitGroup
+	life context.Context
+	end  context.CancelFunc
 }
 
 // New returns a Client on d.
@@ -283,7 +291,17 @@ func New(d Deps) *Client {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}}
+	life, end := context.WithCancel(context.Background())
+	return &Client{d: d, data: map[string]*state{}, cloning: map[string]time.Time{}, life: life, end: end}
+}
+
+// Close stops the client's background clones and waits for them: their
+// context ends, so execx ends each git's process group (SIGTERM, then
+// SIGKILL), and the half clone is removed. A closed client starts no clone.
+// The daemons call it when they stop.
+func (c *Client) Close() {
+	c.end()
+	c.bg.Wait()
 }
 
 // key is the repository's key in Client.data.

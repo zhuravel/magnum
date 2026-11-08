@@ -144,7 +144,7 @@ func TestTheGitHubAdapterReadsAFailedRunsJobsAndTheirAnnotationPaths(t *testing.
 	if n := len(f.CallsWithPrefix("gh", "api", "repos/acme/app/actions/runs/8/jobs?filter=latest&per_page=100")); n != 0 {
 		t.Errorf("read an older run's jobs %d times, want none", n)
 	}
-	if ours, why := failureIsOurs(&runs[0], &pathsEntry{Paths: []string{"app/a.rb"}}, nil, ""); ours || !strings.Contains(why, "cannot tell") {
+	if ours, why := failureIsOurs(&runs[0], &pathsEntry{Paths: []string{"app/a.rb"}}, nil, "", 0); ours || !strings.Contains(why, "cannot tell") {
 		t.Errorf("jest named no path: ours %v, why %q; want cannot tell", ours, why)
 	}
 	if _, err := NewGitHub(func(string) *github.Client { return nil }).RunsOf(context.Background(), "acme/app", Workflow, shaA); err == nil {

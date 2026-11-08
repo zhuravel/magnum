@@ -65,7 +65,7 @@ func (c *Config) validateStaging() []error {
 	case d == "":
 	case !filepath.IsAbs(d):
 		return []error{fmt.Errorf("staging.mirror_dir must be absolute after ~ expands, got %q", d)}
-	case clean == "/Volumes" || filepath.Dir(clean) == "/Volumes":
+	case strings.EqualFold(clean, "/Volumes") || strings.EqualFold(filepath.Dir(clean), "/Volumes"):
 		return []error{fmt.Errorf("staging.mirror_dir %q must be a directory on a volume, not /Volumes or a volume's root (/Volumes/<name>/magnum-staging)", d)}
 	}
 	return nil

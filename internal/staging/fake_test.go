@@ -29,7 +29,7 @@ type fakeGit struct {
 	// absent: there is no mirror until a Clone; clone, when set, runs inside
 	// each Clone, outside the lock, and its error fails it.
 	absent bool
-	clone  func() error
+	clone  func(ctx context.Context) error
 }
 
 func newFakeGit() *fakeGit {
@@ -60,7 +60,7 @@ func (g *fakeGit) n(method string) int {
 	return g.calls[method]
 }
 
-func (g *fakeGit) Base(_ context.Context, dir string) (string, error) {
+func (g *fakeGit) Base(_ context.Context, dir, repo string) (string, error) {
 	g.count("Base")
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -70,10 +70,10 @@ func (g *fakeGit) Base(_ context.Context, dir string) (string, error) {
 	return g.base, nil
 }
 
-func (g *fakeGit) Clone(_ context.Context, dir, repo string, env map[string]string) error {
+func (g *fakeGit) Clone(ctx context.Context, dir, repo string, env map[string]string) error {
 	g.count("Clone")
 	if f := g.clone; f != nil {
-		if err := f(); err != nil {
+		if err := f(ctx); err != nil {
 			return err
 		}
 	}
@@ -267,6 +267,25 @@ func (h *fakeGitHub) RunsOf(_ context.Context, repo, workflow, sha string) ([]Ru
 		return nil, fmt.Errorf("workflow %s, want %s", workflow, Workflow)
 	}
 	return slices.Clone(h.runs[sha]), nil
+}
+
+// runsWithoutPaths is RunsOf without the failed jobs' annotations: what a
+// previous tip's run needs (the job names only).
+func (h *fakeGitHub) runsWithoutPaths(ctx context.Context, repo, workflow, sha string) ([]Run, error) {
+	h.mu.Lock()
+	h.calls["runsWithoutPaths"]++
+	h.mu.Unlock()
+	runs, err := h.RunsOf(ctx, repo, workflow, sha)
+	h.mu.Lock()
+	h.calls["RunsOf"]--
+	h.mu.Unlock()
+	return runs, err
+}
+
+func (h *fakeGitHub) n(method string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls[method]
 }
 
 func (h *fakeGitHub) total() int {

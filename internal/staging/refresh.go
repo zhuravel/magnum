@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,7 +84,18 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		c.set(repo, &state{V: stateVersion, At: now, Err: why})
 		return errors.New("staging " + repo + ": " + why)
 	}
-	unlock, err := lockMirror(ctx, dir)
+	cloningElsewhere := func() bool {
+		st := readState(dir, c.d.Log)
+		if st == nil || !st.Cloning || now.Sub(st.At) >= cloneTimeout {
+			return false
+		}
+		c.set(repo, st)
+		return true
+	}
+	unlock, err := lockMirror(ctx, dir, cloningElsewhere)
+	if errors.Is(err, errCloning) {
+		return nil
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			// Another process holds the mirror (its clone, a slow fetch):
@@ -105,7 +117,9 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 			unlock()
 		}
 	}()
-	clearStaleLocks(dir, now, c.d.Log)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("staging %s: %w", repo, err)
+	}
 	prev := readState(dir, c.d.Log)
 	if prev != nil && fresh(prev, now) {
 		prev.want(open, now)
@@ -115,9 +129,14 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		c.set(repo, prev)
 		return prev.err(repo)
 	}
-	base, err := c.d.Git.Base(ctx, dir)
+	base, err := c.d.Git.Base(ctx, dir, repo)
 	switch {
+	case ctx.Err() != nil:
+		return fmt.Errorf("staging %s: %w", repo, ctx.Err())
 	case errors.Is(err, ErrNoMirror):
+		if c.life.Err() != nil {
+			return fmt.Errorf("staging %s: the client is closed: no clone starts", repo)
+		}
 		st, ok := c.prepareClone(repo, dir, open, prev, err, now)
 		if ok {
 			locked = false
@@ -129,6 +148,7 @@ func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error 
 		c.set(repo, st)
 		return st.err(repo)
 	}
+	clearStaleLocks(dir, now, c.d.Log)
 	st := c.build(ctx, repo, dir, env, base, open, prev, now)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("staging %s: refresh cut: %w", repo, err)
@@ -191,6 +211,7 @@ func (c *Client) prepareClone(repo, dir string, open []OpenPR, prev *state, why 
 	}
 	st.want(open, now)
 	if _, err := os.Lstat(dir); err == nil {
+		c.dropAside(dir)
 		aside := dir + ".broken-" + now.Format("20060102T150405")
 		if err := os.Rename(dir, aside); err != nil {
 			bad := &state{V: stateVersion, At: now, Err: "the mirror dir is no mirror and could not be moved aside: " + errLine(err)}
@@ -206,9 +227,23 @@ func (c *Client) prepareClone(repo, dir string, open []OpenPR, prev *state, why 
 	return st, true
 }
 
+// dropAside deletes the dirs earlier Refreshes moved aside from dir (under
+// the flock), so at most one, the next, is kept: each is a whole copy of a
+// mirror.
+func (c *Client) dropAside(dir string) {
+	aside, _ := filepath.Glob(dir + ".broken-*")
+	for _, old := range aside {
+		if err := os.RemoveAll(old); err != nil {
+			c.d.Log.Warn("staging: an old mirror dir moved aside not deleted", "dir", old, "err", errLine(err))
+			continue
+		}
+		c.d.Log.Info("staging: deleted an old mirror dir moved aside", "dir", old)
+	}
+}
+
 // startClone clones the mirror in the background, on a context of its own
-// (ctx's values, never its end, and cloneTimeout), holding the flock until
-// it is done (unlock). Done, the state says so and is never fresh, so the
+// (ctx's values, never its end, and cloneTimeout; Close ends it), holding
+// the flock until it is done (unlock). Done, the state says so and is never fresh, so the
 // next Refresh reads the mirror; failed, it says when the clone is tried
 // again.
 func (c *Client) startClone(ctx context.Context, repo, dir string, env map[string]string, unlock func(), st *state) {
@@ -224,6 +259,7 @@ func (c *Client) startClone(ctx context.Context, repo, dir string, env map[strin
 		}()
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloneTimeout)
 		defer cancel()
+		defer context.AfterFunc(c.life, cancel)()
 		err := c.d.Git.Clone(cctx, dir, repo, env)
 		now := c.d.Now()
 		next := &state{V: stateVersion, Wanted: st.Wanted, Err: "the mirror is cloned: the next Refresh reads it"}
@@ -326,8 +362,8 @@ func (st *state) prune() {
 	merges, ranges, envs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range st.Envs {
 		envs[e.Env] = true
-		for _, sha := range e.Chain {
-			merges[sha] = true // a merge's, or a tip's that a new failure is told against
+		for _, tip := range e.Chain {
+			merges[tip.SHA] = true // a merge's, or a tip's that a new failure is told against
 		}
 	}
 	for _, p := range st.PRs {
@@ -539,7 +575,7 @@ func (c *Client) envOf(ctx context.Context, dir, base, tip string, now time.Time
 	var seconds [][]string
 	for pos, f := range window {
 		onChain[f.SHA] = true
-		e.Chain = append(e.Chain, f.SHA)
+		e.Chain = append(e.Chain, tipData{SHA: f.SHA, At: f.At})
 		if len(f.Parents) >= 2 {
 			e.Merges = append(e.Merges, mergeData{SHA: f.SHA, At: f.At, Pos: pos})
 			seconds = append(seconds, f.Parents[1:])
@@ -665,25 +701,92 @@ type reader struct {
 	env  map[string]string
 	st   *state
 	now  time.Time
-	// ran and diffed are what this Refresh already read.
+	// ran and diffed are what this Refresh already read; tips are the
+	// windows' tips with when they were pushed (pushedAt).
 	ran    map[string]*runEntry
 	diffed map[string]*pathsEntry
+	tips   map[string]time.Time
+}
+
+// pathlessRuns is a GitHub that also reads a run's failed jobs without
+// their annotations: the adapter's, for a previous tip's run.
+type pathlessRuns interface {
+	runsWithoutPaths(ctx context.Context, repo, workflow, sha string) ([]Run, error)
+}
+
+// pushedAt is when the window put sha on a branch, zero when it is no tip.
+func (r *reader) pushedAt(sha string) time.Time {
+	if r.tips == nil {
+		r.tips = map[string]time.Time{}
+		for _, e := range r.st.Envs {
+			for _, tip := range e.Chain {
+				r.tips[tip.SHA] = tip.At
+			}
+		}
+	}
+	return r.tips[sha]
+}
+
+// keep reports whether prev, the last read of sha's runs, stands without a
+// new read: a completed run within runKeep (a re-run makes it run again),
+// or no run at a tip pushed over ConfirmWait ago (none is coming), within
+// runKeep too. A run in progress and a failed read are read again.
+func (r *reader) keep(sha string, prev *runEntry) bool {
+	if prev == nil || prev.Err != "" || r.now.Sub(prev.ReadAt) >= runKeep {
+		return false
+	}
+	if prev.Run != nil {
+		return prev.Run.Status == "completed"
+	}
+	at := r.pushedAt(sha)
+	return !at.IsZero() && r.now.Sub(at) >= ConfirmWait
 }
 
 func (r *reader) run(sha string) *runEntry {
+	if e, ok := r.ran[sha]; ok && !needsPaths(e) {
+		return e
+	}
+	prev := r.st.Runs[sha]
+	if r.keep(sha, prev) && !needsPaths(prev) {
+		r.ran[sha] = prev
+		return prev
+	}
+	return r.read(sha, prev, false)
+}
+
+func (r *reader) prevRun(sha string) *runEntry {
 	if e, ok := r.ran[sha]; ok {
 		return e
 	}
 	prev := r.st.Runs[sha]
-	if prev != nil && prev.Run != nil && prev.Run.Status == "completed" && r.now.Sub(prev.ReadAt) < runKeep {
+	if r.keep(sha, prev) {
 		r.ran[sha] = prev
 		return prev
 	}
+	return r.read(sha, prev, true)
+}
+
+// needsPaths reports whether e, read for the job names alone, lacks the
+// failed jobs' paths that a merge's own run needs.
+func needsPaths(e *runEntry) bool {
+	return e != nil && e.NoPaths && e.Run != nil && e.Run.Failed != nil && len(e.Run.Failed) > 0
+}
+
+// read reads sha's ci.yml runs; namesOnly asks for the failed jobs without
+// their annotations, when the GitHub can.
+func (r *reader) read(sha string, prev *runEntry, namesOnly bool) *runEntry {
 	if r.ctx.Err() != nil {
 		return prev
 	}
-	runs, err := r.c.d.GitHub.RunsOf(r.ctx, r.repo, Workflow, sha)
-	e := &runEntry{ReadAt: r.now}
+	var runs []Run
+	var err error
+	pathless, can := r.c.d.GitHub.(pathlessRuns)
+	if namesOnly && can {
+		runs, err = pathless.runsWithoutPaths(r.ctx, r.repo, Workflow, sha)
+	} else {
+		runs, err = r.c.d.GitHub.RunsOf(r.ctx, r.repo, Workflow, sha)
+	}
+	e := &runEntry{ReadAt: r.now, NoPaths: namesOnly && can}
 	switch {
 	case err != nil:
 		e.Err = errLine(err)

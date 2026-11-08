@@ -123,6 +123,24 @@ func TestTheStateRules(t *testing.T) {
 			s.git.paths[s.p2] = []string{"app/models/user.rb"}
 			return m
 		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "same jobs failed", inTip: "p2", runURL: true},
+		{name: "pushed, a new failure in a run of two merges is not the PR's to tell", set: func(s *scene) string {
+			s.gh.runs[s.s0] = []Run{run("completed", "success")}
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "cancelled")}
+			next := s.push(8*time.Minute, s.commit(time.Hour, s.m1))
+			s.gh.runs[next] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/q_spec.rb"}})}
+			s.git.paths[s.p2] = []string{"app/models/a.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "in a run of 2 merges: cannot tell whose", inTip: "p2", runURL: true},
+		{name: "pushed, in a run of two merges a failing path of the PR's is still the PR's", set: func(s *scene) string {
+			s.gh.runs[s.s0] = []Run{run("completed", "success")}
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "cancelled")}
+			next := s.push(8*time.Minute, s.commit(time.Hour, s.m1))
+			s.gh.runs[next] = []Run{run("completed", "failure", Job{Name: "rspec (2)", Paths: []string{"spec/models/a_spec.rb"}})}
+			s.git.paths[s.p2] = []string{"app/models/a.rb", "spec/models/a_spec.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedOurs, inTip: "p2", runURL: true},
 		{name: "pushed, ci failed and its jobs were not read", set: func(s *scene) string {
 			m := s.push(10*time.Minute, s.p2)
 			s.gh.runs[m] = []Run{run("completed", "failure")}

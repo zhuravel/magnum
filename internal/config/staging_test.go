@@ -132,7 +132,7 @@ func TestTheStagingMirrorDirDefaultsUnderTheStateDir(t *testing.T) {
 	_, err = Load(layout, "")
 	wantError(t, err, "staging.mirror_dir must be absolute")
 
-	for _, root := range []string{"/Volumes", "/Volumes/", "/Volumes/Work"} {
+	for _, root := range []string{"/Volumes", "/Volumes/", "/Volumes/Work", "/volumes/Work", "/VOLUMES"} {
 		if err := os.WriteFile(layout.UserConfig, []byte("[staging]\nmirror_dir = \""+root+"\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}

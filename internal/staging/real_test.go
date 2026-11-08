@@ -2,8 +2,12 @@ package staging
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +193,111 @@ func TestAMirrorDirWithoutRefsInsideARepositoryIsMovedAsideAndClonedAgain(t *tes
 	}
 	if bare := gitIn(t, r, mirror, "rev-parse", "--is-bare-repository"); bare != "true" {
 		t.Errorf("the new mirror: bare %q", bare)
+	}
+}
+
+// cloned is a client on a real treeless mirror of a fresh origin, cloned and
+// read once, with its clock, mirror dir and origin.
+func cloned(t *testing.T) (c *Client, now *time.Time, mirror, origin string, r *execx.Real) {
+	t.Helper()
+	r = hermetic(t)
+	origin, _, _, _ = newOrigin(t, r)
+	mirror = filepath.Join(t.TempDir(), "staging", "acme", "app.git")
+	clock := time.Now()
+	c = New(Deps{
+		Git:    newGit(r, func(string) string { return "file://" + origin }),
+		GitHub: newFakeGitHub(),
+		Mirror: func(string) (string, bool) { return mirror, true },
+		GitEnv: func(string) map[string]string { return map[string]string{} },
+		Now:    func() time.Time { return clock },
+	})
+	refreshCloned(t, c, OpenPR{Number: 1, Base: "master"})
+	return c, &clock, mirror, origin, r
+}
+
+// untouched fails the test when the mirror at dir moved or was cloned again:
+// no dir beside it was made, and it is still the bare repository it was.
+func untouched(t *testing.T, c *Client, r *execx.Real, mirror, head string) {
+	t.Helper()
+	if aside, _ := filepath.Glob(mirror + ".broken-*"); len(aside) != 0 {
+		t.Errorf("the mirror was moved aside: %q", aside)
+	}
+	if _, busy := c.clonesInto(mirror); busy {
+		t.Error("a clone runs")
+	}
+	if got := gitIn(t, r, mirror, "rev-parse", "HEAD"); got != head {
+		t.Errorf("the mirror's HEAD is %s, want %s: it was cloned again", got, head)
+	}
+}
+
+// The review's probe: a Refresh whose caller is already cancelled (a daemon
+// stopping mid-tick) never takes a healthy mirror for none: it returns the
+// cancel, and the mirror stays, with no clone.
+func TestACancelledRefreshLeavesTheMirrorInPlace(t *testing.T) {
+	t.Parallel()
+	c, now, mirror, _, r := cloned(t)
+	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
+	*now = now.Add(RefreshEvery)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.Refresh(ctx, "acme/app", []OpenPR{{Number: 1, Base: "master"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled Refresh: %v, want the cancel", err)
+	}
+	c.bg.Wait()
+	untouched(t, c, r, mirror, head)
+}
+
+// A git that cannot run (exec: not found, a fork that fails) is no answer
+// about the mirror: Refresh says the mirror could not be read, and the
+// mirror stays, with no clone.
+func TestAGitThatCannotRunLeavesTheMirrorInPlace(t *testing.T) {
+	t.Parallel()
+	_, now, mirror, origin, r := cloned(t)
+	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
+	broken := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"git"}, Err: fmt.Errorf("exec: %q: %w", "git", exec.ErrNotFound)}}}
+	c := New(Deps{
+		Git:    newGit(broken, func(string) string { return "file://" + origin }),
+		GitHub: newFakeGitHub(),
+		Mirror: func(string) (string, bool) { return mirror, true },
+		GitEnv: func(string) map[string]string { return map[string]string{} },
+		Now:    func() time.Time { return now.Add(RefreshEvery) },
+	})
+	err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}})
+	if err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Errorf("Refresh with no git: %v, want the mirror could not be read", err)
+	}
+	c.bg.Wait()
+	for _, call := range broken.Calls {
+		if slices.Contains(call.Args, "clone") {
+			t.Errorf("a clone was started: %q", call.Args)
+		}
+	}
+	untouched(t, c, r, mirror, head)
+}
+
+// A bare repository at the mirror's path whose origin is another repository
+// (someone's own clone, a mirror_dir set to a dir of bare clones) is no
+// mirror of this one: Refresh says so and touches nothing, never moving it
+// aside or fetching into it.
+func TestABareCloneOfAnotherRepositoryIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	_, now, mirror, _, r := cloned(t)
+	head := gitIn(t, r, mirror, "rev-parse", "HEAD")
+	refs := gitIn(t, r, mirror, "for-each-ref")
+	c := New(Deps{
+		Git:    newGit(r, func(string) string { return "https://github.com/acme/other.git" }),
+		GitHub: newFakeGitHub(),
+		Mirror: func(string) (string, bool) { return mirror, true },
+		GitEnv: func(string) map[string]string { return map[string]string{} },
+		Now:    func() time.Time { return now.Add(RefreshEvery) },
+	})
+	err := c.Refresh(context.Background(), "acme/other", []OpenPR{{Number: 1, Base: "master"}})
+	if err == nil || !strings.Contains(err.Error(), "no mirror of acme/other") {
+		t.Errorf("Refresh on another repository's clone: %v, want no mirror of acme/other", err)
+	}
+	c.bg.Wait()
+	untouched(t, c, r, mirror, head)
+	if after := gitIn(t, r, mirror, "for-each-ref"); after != refs {
+		t.Errorf("its refs changed:\n%s\nwant\n%s", after, refs)
 	}
 }

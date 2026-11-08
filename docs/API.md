@@ -16589,9 +16589,11 @@ func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int)
 func (c *Client) AnnotationPaths(ctx context.Context, owner, repo string, checkRunID int64, limit int) ([]string, error)
     AnnotationPaths lists the repository paths the annotations of
     check run id of owner/repo name, in their order without repeats:
-    GET /repos/{o}/{r}/check-runs/{id}/annotations, one page of limit (1 to
-    MaxAnnotations). An annotation tied to no file (path ".github") names none,
-    and no annotation's message is read: it may quote a PR.
+    GET /repos/{o}/{r}/check-runs/{id}/annotations, one page of limit (1
+    to MaxAnnotations). The identity needs Checks: read (an App; Actions:
+    read covers the runs and jobs only). An annotation tied to no file (path
+    ".github") names none, and no annotation's message is read: it may quote a
+    PR.
 
 func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIState, RateLimit, error)
     CIStates reads the check rollup of each pull request's head (its state
@@ -25446,6 +25448,12 @@ type Client struct {
 func New(d Deps) *Client
     New returns a Client on d.
 
+func (c *Client) Close()
+    Close stops the client's background clones and waits for them: their context
+    ends, so execx ends each git's process group (SIGTERM, then SIGKILL),
+    and the half clone is removed. A closed client starts no clone. The daemons
+    call it when they stop.
+
 func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
     Refresh fetches the mirror once (the staging-* tips, each distinct base of
     the open PRs and their refs/pull/N/head, and those another client asked for
@@ -25523,10 +25531,13 @@ const (
 	// DetailCIRunning: ci.yml runs on the merge (or has not started yet).
 	DetailCIRunning Detail = "ci_running"
 	// DetailCIFailedOurs: ci.yml failed, and a failing job names a path the
-	// PR changes.
+	// PR changes, or a job failed that passed on the branch's tip before the
+	// merge, the merge alone in between ("new against" it: a flaky job reads
+	// the same).
 	DetailCIFailedOurs Detail = "ci_failed_ours"
-	// DetailCIFailedNotOurs: ci.yml failed, and no failing job names a path
-	// the PR changes (or that cannot be told: Why says so).
+	// DetailCIFailedNotOurs: ci.yml failed, but neither: no failing job names
+	// a path the PR changes, and the same jobs failed on the tip before, or
+	// the run covers several merges, or it cannot be told (Why says so).
 	DetailCIFailedNotOurs Detail = "ci_failed_not_ours"
 	// DetailWaitingJenkins: ci.yml passed, and the deploy has not recorded a
 	// deployment yet, less than ConfirmWait after the push.
@@ -25559,9 +25570,11 @@ type EnvStatus struct {
 type Git interface {
 	// Base returns the branch the mirror's HEAD names: the remote's default
 	// branch. dir must be a bare repository of its own (HEAD, objects/ and
-	// refs/, and git calls it one); an absent dir or one that is not fails
-	// with an error that wraps ErrNoMirror, and nothing in it is repaired.
-	Base(ctx context.Context, dir string) (string, error)
+	// refs/, and git calls it one) whose origin is repo's and treeless. Only
+	// a definite answer that it is none (absent, laid out otherwise, git's
+	// "not a git repository", not bare), with ctx not done, wraps
+	// ErrNoMirror; anything else is a plain error, and the dir stays as it is.
+	Base(ctx context.Context, dir, repo string) (string, error)
 	// Clone makes dir, which must be absent, a treeless bare mirror of repo
 	// (owner/name), its HEAD the remote's default branch.
 	Clone(ctx context.Context, dir, repo string, env map[string]string) error

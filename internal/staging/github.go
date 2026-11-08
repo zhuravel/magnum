@@ -96,6 +96,18 @@ func (a ghAdapter) DeploymentsOf(ctx context.Context, repo, environment, etag st
 // jobs). Jobs that cannot be read leave Failed nil, annotations that cannot
 // be read a job's Paths empty: both read as "cannot tell".
 func (a ghAdapter) RunsOf(ctx context.Context, repo, workflow, sha string) ([]Run, error) {
+	return a.runs(ctx, repo, workflow, sha, true)
+}
+
+// runsWithoutPaths is RunsOf without the failed jobs' annotations: a
+// previous tip's run, told against by its job names alone (pathlessRuns).
+func (a ghAdapter) runsWithoutPaths(ctx context.Context, repo, workflow, sha string) ([]Run, error) {
+	return a.runs(ctx, repo, workflow, sha, false)
+}
+
+// runs reads the workflow's runs at sha, and for the newest failed one its
+// failed jobs, with their annotations' paths when withPaths.
+func (a ghAdapter) runs(ctx context.Context, repo, workflow, sha string, withPaths bool) ([]Run, error) {
 	c, owner, name, err := a.of(repo)
 	if err != nil {
 		return nil, err
@@ -113,7 +125,7 @@ func (a ghAdapter) RunsOf(ctx context.Context, repo, workflow, sha string) ([]Ru
 		}
 	}
 	if newest >= 0 && failedRun(&out[newest]) {
-		out[newest].Failed = failedJobs(ctx, c, owner, name, out[newest].ID)
+		out[newest].Failed = failedJobs(ctx, c, owner, name, out[newest].ID, withPaths)
 	}
 	return out, nil
 }
@@ -124,9 +136,10 @@ func failedRun(r *Run) bool {
 	return r.Status == "completed" && !passed(r) && r.Conclusion != "cancelled"
 }
 
-// failedJobs is the failed jobs of run id with their annotations' paths
-// (Checks: read); nil when the jobs cannot be read, empty when none failed.
-func failedJobs(ctx context.Context, c *github.Client, owner, name string, runID int64) []Job {
+// failedJobs is the failed jobs of run id, with their annotations' paths
+// (Checks: read) when withPaths; nil when the jobs cannot be read, empty
+// when none failed.
+func failedJobs(ctx context.Context, c *github.Client, owner, name string, runID int64, withPaths bool) []Job {
 	jobs, err := c.RunJobs(ctx, owner, name, runID)
 	if err != nil {
 		return nil
@@ -137,7 +150,7 @@ func failedJobs(ctx context.Context, c *github.Client, owner, name string, runID
 			continue
 		}
 		job := Job{Name: j.Name, Paths: []string{}}
-		if len(out) < maxFailedJobs {
+		if withPaths && len(out) < maxFailedJobs {
 			if paths, err := c.AnnotationPaths(ctx, owner, name, j.ID, github.MaxAnnotations); err == nil {
 				job.Paths = paths
 			}

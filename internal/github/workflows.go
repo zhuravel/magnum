@@ -225,8 +225,10 @@ const annotationNoFile = ".github"
 // AnnotationPaths lists the repository paths the annotations of check run
 // id of owner/repo name, in their order without repeats: GET
 // /repos/{o}/{r}/check-runs/{id}/annotations, one page of limit (1 to
-// MaxAnnotations). An annotation tied to no file (path ".github") names
-// none, and no annotation's message is read: it may quote a PR.
+// MaxAnnotations). The identity needs Checks: read (an App; Actions: read
+// covers the runs and jobs only). An annotation tied to no file (path
+// ".github") names none, and no annotation's message is read: it may quote
+// a PR.
 func (c *Client) AnnotationPaths(ctx context.Context, owner, repo string, checkRunID int64, limit int) ([]string, error) {
 	if err := checkRepo(owner, repo); err != nil {
 		return nil, err

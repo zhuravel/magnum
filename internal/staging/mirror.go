@@ -59,8 +59,22 @@ func mirrorDir(volumes, root string) func(repo string) (string, bool) {
 // volume's root (/Volumes/<name>): a mirror_dir there would write into the
 // directory a volume mounts on.
 func volumeRoot(volumes, root string) bool {
-	root = filepath.Clean(root)
-	return root == filepath.Clean(volumes) || filepath.Dir(root) == filepath.Clean(volumes)
+	rel, ok := under(volumes, root)
+	return ok && (rel == "." || !strings.Contains(rel, string(filepath.Separator)))
+}
+
+// under is path relative to volumes when path is volumes or under it, in
+// any case of letters: the system disk is case-insensitive, so /volumes/Work
+// is /Volumes/Work.
+func under(volumes, path string) (string, bool) {
+	volumes, path = filepath.Clean(volumes), filepath.Clean(path)
+	switch {
+	case strings.EqualFold(path, volumes):
+		return ".", true
+	case len(path) > len(volumes) && path[len(volumes)] == filepath.Separator && strings.EqualFold(path[:len(volumes)], volumes):
+		return path[len(volumes)+1:], true
+	}
+	return "", false
 }
 
 // validPart reports whether s is an owner or repository name, never . or ..
@@ -74,8 +88,8 @@ func validPart(s string) bool {
 // macOS keeps for the system volume. A plain directory there is not the
 // volume: writing into it would fill the system disk.
 func volumeMounted(volumes, path string) bool {
-	rel, err := filepath.Rel(volumes, filepath.Clean(path))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	rel, ok := under(volumes, path)
+	if !ok || rel == "." {
 		return true
 	}
 	name, _, _ := strings.Cut(rel, string(filepath.Separator))
@@ -102,13 +116,18 @@ func device(fi fs.FileInfo) uint64 {
 	return 0
 }
 
+// errCloning is lockMirror's error when another process holds the flock to
+// clone the mirror: its state stands, and nothing waits.
+var errCloning = errors.New("another process clones the mirror")
+
 // lockMirror takes the flock beside the mirror (<dir>.lock), and waits for
-// it at most as long as ctx. dir is <mirror_dir>/<owner>/<name>.git: it
+// it at most as long as ctx; when it is busy and cloning (nil = never)
+// says another process clones, it returns errCloning at once. dir is <mirror_dir>/<owner>/<name>.git: it
 // creates mirror_dir and <owner> when they are missing, through an os.Root
 // on the directory that holds mirror_dir, never anything above it: when
 // that directory is absent (an unmounted volume's root) it fails and
 // creates nothing.
-func lockMirror(ctx context.Context, dir string) (unlock func(), err error) {
+func lockMirror(ctx context.Context, dir string, cloning func() bool) (unlock func(), err error) {
 	parent := filepath.Dir(dir)
 	holder := filepath.Dir(filepath.Dir(parent))
 	rel, err := filepath.Rel(holder, parent)
@@ -139,6 +158,11 @@ func lockMirror(ctx context.Context, dir string) (unlock func(), err error) {
 			_ = f.Close()
 			return nil, err
 		}
+		if cloning != nil && cloning() {
+			_ = f.Close()
+			return nil, errCloning
+		}
+		cloning = nil // asked once: a fetch, not a clone, holds it
 		select {
 		case <-ctx.Done():
 			_ = f.Close()

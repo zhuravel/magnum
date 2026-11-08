@@ -19694,6 +19694,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     success. Data whose last good read is over 10 minutes old is unknown, "stale". The jobs not read, a pull ref
     the remote lacks, and a Refresh within the minute after a failed one (which returns that error again) each
     say so.
+  - The re-review's fixes. Base answers "no mirror" only on a definite answer with ctx not done (the layout
+    check, git's exit 128 "not a git repository", a bare value other than true); a git that cannot run, a
+    timeout or a cancel is "the mirror could not be read" and the dir stays, Refresh checks ctx right after the
+    lock, and no clone starts for a cancelled caller or a closed client. Base also checks the origin is this
+    repository's and treeless: someone's own bare clone is left alone. Only the newest dir moved aside is kept.
+    A new failure is the PR's only when the run covers its merge alone, from the run's merge down to the tip
+    told against; over several merges Why says "new against <sha>, in a run of N merges: cannot tell whose",
+    and only the paths rule can make it the PR's. `Client.Close` ends the background clone (execx ends git's
+    process group) and waits; the daemons call it when they stop. A second client finds a clone in the state
+    file at once, never waiting for the lock. A tip pushed over 45 minutes ago without a run is not read again
+    within 10 minutes, and the run a new failure is told against is read without its annotations. Git runs with
+    an empty HOME in `mirror_dir` (no `~/.netrc`), `GIT_ASKPASS` and `SSH_ASKPASS` `/usr/bin/false`, and no
+    `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS`; gh, the only
+    credential helper, gets the operator's HOME back for its own login. The stale-lock sweep runs only once Base
+    confirms the mirror. The /Volumes checks fold case.
   - Follow-ups, not done here: a PR whose own commits hold staging's history (it merged staging or another
     PR's branch) reads as outdated, and a fast-forward of a PR onto staging as none (M2); pull refs and stacked
     bases no client asks for are never pruned, and gc runs inside the fetch (M5); every staging-* branch is
@@ -19724,7 +19739,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADirWithoutRefsIsNoMirror, TestAFirstCloneRunsInTheBackgroundWhateverTheCallersContext,
   TestAFailedCloneBacksOff, TestStaleGitLocksInTheMirrorAreClearedUnderTheFlock,
   TestNothingIsCreatedAboveTheMirrorDir, TestOldDataIsStale and the state rows for a new failure against the tip
-  before, the same failure there, jobs not read and a deployment that names no sha; in github
+  before, the same failure there, jobs not read and a deployment that names no sha; for the re-review's,
+  TestACancelledRefreshLeavesTheMirrorInPlace and TestAGitThatCannotRunLeavesTheMirrorInPlace (real git; both
+  fail with any error of Base taken for no mirror), TestABareCloneOfAnotherRepositoryIsLeftAlone,
+  TestCloseStopsTheBackgroundCloneAndWaits, TestASecondClientSeesTheCloneAtOnce,
+  TestOnlyTheNewestDirMovedAsideIsKept, TestTheLockSweepNeverTouchesADirThatIsNoMirror,
+  TestTheTipsBeforeAFailedMergeCostLittle, TestConfigFromTheEnvironmentIsScrubbed and the state rows for a new
+  failure in a run of two merges and a path of the PR's in one; in github
   TestDeploymentsAreReadWithTheirETag, TestDeploymentsRefusalsAndNotReadable, TestDeploymentStatusesListsTheStates,
   TestCommitRunsListsAWorkflowsRunsAtACommit and TestRunJobsAndAnnotationPaths; in config
   TestAStagingBranchMustBeAStagingBranchAndNeverTheBaseOrProduction, TestAStagingBranchIsStagingAndTheEnvironmentsName,
