@@ -52,6 +52,23 @@ const (
 	MissOutsideClassifier     = "classifier"      // the classifier's answer for a candidate
 )
 
+// MissOriginFactory is where a miss came from (misses.origin): a comment on
+// a pull request the factory published that the factory's local review
+// round did not catch (learn.Build over escapes.Match); "" (NULL) for every
+// other comment.
+const MissOriginFactory = "factory"
+
+// Where a factory-origin miss went wrong (misses.stage), as the retro's
+// classifier placed it; "" (NULL) when it did not.
+const (
+	MissStagePlan   = "plan"   // the ticket or the operator's answers decided the point, or the factory needed to ask
+	MissStageCode   = "code"   // the plan was right, the code is wrong
+	MissStageReview = "review" // plan and code are as written: the local review should have caught it
+)
+
+// MissStages are the stages a classifier may give (MissStage*).
+var MissStages = []string{MissStagePlan, MissStageCode, MissStageReview}
+
 // Miss states (misses.state): new until a lesson was drawn from it (used) or
 // someone dropped it (dismissed).
 const (
@@ -75,6 +92,7 @@ var (
 	missRaised    = []string{MissRaisedNone, MissRaisedRejected}
 	missStates    = []string{MissNew, MissUsed, MissDismissed}
 	missScopes    = []string{MissScopeRepo, MissScopeGeneral}
+	missOrigins   = []string{MissOriginFactory}
 	// The outside reasons have no CHECK (migration 0029), so a new one
 	// needs no rebuild of the table notes_proposal_misses references.
 	missOutsideReasons = []string{MissOutsideBeforeReview, MissOutsideFileChanged, MissOutsideNotDescendant, MissOutsideNoCompare,
@@ -168,6 +186,18 @@ type Miss struct {
 	// OutsideReason says why a comment of class outside is (MissOutside*;
 	// "" for every other class, and in rows stored before migration 0029).
 	OutsideReason string `json:"outside_reason,omitempty"`
+	// Origin is MissOriginFactory for a comment on a pull request the
+	// factory published that its local review round did not catch, ""
+	// otherwise (and in rows stored before migration 0031).
+	Origin string `json:"origin,omitempty"`
+	// Stage is where a factory-origin miss went wrong as the classifier
+	// placed it (MissStage*; "" when it did not).
+	Stage string `json:"stage,omitempty"`
+	// PostedCaught: magnum's posted round caught the comment, though the
+	// factory's local round did not. Such a row is a factory-origin miss
+	// only, and teaches the review skill nothing: MissFilter leaves it out
+	// unless WithPostedCaught.
+	PostedCaught bool `json:"posted_caught,omitempty"`
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
@@ -185,7 +215,7 @@ type Miss struct {
 
 var missColumns = []string{"id", "pr_id", "source_url", "source_kind", "reviewer", "path", "line", "reviewed_sha",
 	"class", "severity", "raised", "finding_ref", "reason_code", "title", "lesson", "scope", "lines_json",
-	"match_json", "state", "created_at", "updated_at", "comment_sha", "outside_reason"}
+	"match_json", "state", "created_at", "updated_at", "comment_sha", "outside_reason", "origin", "stage", "posted_caught"}
 
 // missListColumns follow missColumns in a listing (Misses): the PR's
 // repository and number, the latest proposal the miss was given to with its
@@ -219,7 +249,8 @@ func scanMiss(sc scanner, withPR bool) (Miss, error) {
 	dest := []any{&m.ID, &m.PRID, &m.SourceURL, &m.SourceKind, &m.Reviewer, textCol(&m.Path), &line, &m.ReviewedSHA,
 		&m.Class, textCol(&m.Severity), &m.Raised, textCol(&m.FindingRef), textCol(&m.ReasonCode), textCol(&m.Title),
 		textCol(&m.Lesson), textCol(&m.Scope), jsonCol(&m.Lines), jsonCol(&m.Match), &m.State,
-		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt), textCol(&m.CommentSHA), textCol(&m.OutsideReason)}
+		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt), textCol(&m.CommentSHA), textCol(&m.OutsideReason), textCol(&m.Origin),
+		textCol(&m.Stage), &m.PostedCaught}
 	if withPR {
 		dest = append(dest, &m.Repo, &m.Number, &m.ProposalID, &proposalState, textCol(&m.Dismissed), &m.DismissedBy)
 	}
@@ -236,12 +267,15 @@ func scanMiss(sc scanner, withPR bool) (Miss, error) {
 // brings back a dismissed or used miss. Every other column takes m's value,
 // except that an unclassified m (a retro whose classifier failed) never
 // replaces a class an earlier retro set, nor what came with it (severity,
-// title, lesson, scope, lines, match, the outside reason).
+// title, lesson, scope, lines, match, the outside reason, the stage); the
+// origin and the posted catch are Build's, as the comment's commit is, and
+// always take m's value.
 // Empty Class is MissUnclassified, empty Raised is MissRaisedNone, nil Lines
 // and Match are empty lists, and "" or 0 in an optional column is stored as
 // NULL. PRID, SourceURL, SourceKind, Reviewer and ReviewedSHA are required;
 // an OutsideReason must be one of the MissOutside* reasons, and only class
-// outside has one.
+// outside has one; an Origin must be MissOriginFactory, and only a
+// factory-origin miss has a Stage (one of MissStages) or PostedCaught.
 func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 	if m.PRID == 0 || m.SourceURL == "" || m.SourceKind == "" || m.Reviewer == "" || m.ReviewedSHA == "" {
 		return Miss{}, fmt.Errorf("upsert miss %q: pr_id, source_url, source_kind, reviewer and reviewed_sha are required", m.SourceURL)
@@ -277,6 +311,9 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 			return Miss{}, fmt.Errorf("upsert miss %s: outside_reason %q on class %s: only an outside miss has one", m.SourceURL, m.OutsideReason, m.Class)
 		}
 	}
+	if err := checkMissOrigin(m); err != nil {
+		return Miss{}, fmt.Errorf("upsert miss %s: %w", m.SourceURL, err)
+	}
 	if m.Lines == nil {
 		m.Lines = []int{}
 	}
@@ -295,24 +332,45 @@ func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error) {
 	got, err := scanMiss(s.db.QueryRowContext(ctx, `
 INSERT INTO misses (pr_id, source_url, source_kind, reviewer, path, line, reviewed_sha, class, severity, raised,
   finding_ref, reason_code, title, lesson, scope, lines_json, match_json, state, created_at, updated_at, comment_sha,
-  outside_reason)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  outside_reason, origin, stage, posted_caught)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_url) DO UPDATE SET pr_id = excluded.pr_id, source_kind = excluded.source_kind,
   reviewer = excluded.reviewer, path = excluded.path, line = excluded.line, reviewed_sha = excluded.reviewed_sha,
   comment_sha = excluded.comment_sha, raised = excluded.raised, finding_ref = excluded.finding_ref,
   reason_code = excluded.reason_code, class = `+keepClass("class")+`, severity = `+keepClass("severity")+`,
   title = `+keepClass("title")+`, lesson = `+keepClass("lesson")+`, scope = `+keepClass("scope")+`,
   lines_json = `+keepClass("lines_json")+`, match_json = `+keepClass("match_json")+`,
-  outside_reason = `+keepClass("outside_reason")+`, updated_at = excluded.updated_at
+  outside_reason = `+keepClass("outside_reason")+`, origin = excluded.origin, stage = `+keepClass("stage")+`,
+  posted_caught = excluded.posted_caught, updated_at = excluded.updated_at
 RETURNING `+cols("", missColumns),
 		m.PRID, m.SourceURL, m.SourceKind, m.Reviewer, nullString(m.Path), nullInt(m.Line), m.ReviewedSHA, m.Class,
 		nullString(m.Severity), m.Raised, nullString(m.FindingRef), nullString(m.ReasonCode), nullString(m.Title),
 		nullString(m.Lesson), nullString(m.Scope), string(lines), string(match), m.State, now, now, nullString(m.CommentSHA),
-		nullString(m.OutsideReason)), false)
+		nullString(m.OutsideReason), nullString(m.Origin), nullString(m.Stage), boolInt(m.PostedCaught)), false)
 	if err != nil {
 		return Miss{}, fmt.Errorf("upsert miss %s: %w", m.SourceURL, mapErr(err))
 	}
 	return got, nil
+}
+
+// checkMissOrigin refuses an origin that is not MissOriginFactory, and a
+// stage that is none of MissStages or a stage or posted catch on a miss of
+// no origin.
+func checkMissOrigin(m Miss) error {
+	if m.Origin != "" {
+		if err := oneOf("origin", m.Origin, missOrigins); err != nil {
+			return err
+		}
+	}
+	if m.Stage != "" {
+		if err := oneOf("stage", m.Stage, MissStages); err != nil {
+			return err
+		}
+	}
+	if m.Origin == "" && (m.Stage != "" || m.PostedCaught) {
+		return fmt.Errorf("a stage or a posted catch on a miss of no origin: only a factory-origin miss has them")
+	}
+	return nil
 }
 
 // keepClass is the upsert's value of a column that comes with a miss's
@@ -335,9 +393,15 @@ type MissFilter struct {
 	// author declined, stored under its thread's link, which the declines
 	// row carries too, so no other reviewer raised it.
 	NoRoutedDeclines bool
+	// WithPostedCaught also selects the factory-origin misses magnum's
+	// posted round caught (Miss.PostedCaught), which every reader that
+	// learns from or counts the misses leaves out.
+	WithPostedCaught bool
 }
 
-// where renders the WHERE clause of f over misses aliased m ("" when f selects everything).
+// where renders the WHERE clause of f over misses aliased m ("" when f
+// selects everything): without WithPostedCaught it always leaves out the
+// misses the posted round caught.
 func (f MissFilter) where() (string, []any) {
 	var conds []string
 	var args []any
@@ -363,6 +427,9 @@ func (f MissFilter) where() (string, []any) {
 	}
 	if f.NoRoutedDeclines {
 		conds = append(conds, "NOT EXISTS (SELECT 1 FROM declines d WHERE d.source_url = m.source_url)")
+	}
+	if !f.WithPostedCaught {
+		conds = append(conds, "m.posted_caught = 0")
 	}
 	if len(conds) == 0 {
 		return "", nil

@@ -121,7 +121,7 @@ func (s *Store) VersionMeasure(ctx context.Context, v LearnVersion, next *LearnV
 		return m, fmt.Errorf("measure version %d: declines: %w", v.ID, err)
 	}
 	scopes := map[string]int{}
-	if err := counts(scopes, `SELECT m.scope, COUNT(*) FROM misses m WHERE m.class = ?3 AND EXISTS (SELECT 1 FROM (`+window+`) w
+	if err := counts(scopes, `SELECT m.scope, COUNT(*) FROM misses m WHERE m.class = ?3 AND m.posted_caught = 0 AND EXISTS (SELECT 1 FROM (`+window+`) w
   WHERE w.pr_id = m.pr_id AND w.target_sha = m.reviewed_sha) GROUP BY m.scope`, from, to, MissMiss, v.SkillSHA); err != nil {
 		return m, fmt.Errorf("measure version %d: misses: %w", v.ID, err)
 	}
