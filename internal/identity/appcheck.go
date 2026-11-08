@@ -208,11 +208,18 @@ func (c *appCheck) permissions(context.Context) (bool, error) {
 	default:
 		r.info("permission contents: " + contents)
 	}
-	if len(a.fixer) > 0 {
-		if workflows := permission(inst.Permissions, "workflows"); workflows == "none" {
-			r.info("permission workflows: none (a push that changes .github/workflows needs you: magnum push refuses it)")
-		} else {
-			r.info("permission workflows: " + workflows + " (unused: magnum push refuses a change to .github/workflows)")
+	if len(a.fixer) > 0 { // push_token.go: the daemon's own token for these merges; the pane's goes without Workflows
+		const use = "magnum's merges of a base that carries .github/workflows"
+		switch workflows := permission(inst.Permissions, "workflows"); {
+		case workflows == "write":
+			r.pass("permission workflows: write (" + use + " push with a token only the daemon holds)")
+		case permission(c.app.Permissions, "workflows") == "write":
+			r.warn(fmt.Sprintf("permission workflows: %s (%s need write: needs Workflows on the App)", workflows, use),
+				fmt.Sprintf("the App already requests write; an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
+		default:
+			r.warn(fmt.Sprintf("permission workflows: %s (%s need write: needs Workflows on the App)", workflows, use),
+				fmt.Sprintf(`open %s -> Repository permissions -> Workflows: "Read and write" -> Save changes`, appPermissionsURL(c.app)),
+				fmt.Sprintf("then an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
 		}
 	}
 	for _, p := range ciReadPermissions {

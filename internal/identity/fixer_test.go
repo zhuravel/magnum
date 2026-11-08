@@ -96,7 +96,7 @@ func fixerCheck(t *testing.T, f *fakeGitHub, probe *execx.Result, repos ...strin
 
 // The fixer pushes with the App's token: its installation needs contents
 // write as well as pull_requests write, where a reviewing App needs read.
-// Workflows write is not needed: magnum push refuses a workflow change.
+// Workflows write is not needed for that: the pane's token goes without it.
 func TestAppCheckOfAFixIdentityRequiresContentsWrite(t *testing.T) {
 	clock := newClock()
 	f := newFakeGitHub(t, clock)
@@ -108,7 +108,6 @@ func TestAppCheckOfAFixIdentityRequiresContentsWrite(t *testing.T) {
 	}
 	assertLines(t, r,
 		"FAIL permission contents: read (need write: the fixer pushes as the App)",
-		"INFO permission workflows: none (a push that changes .github/workflows needs you: magnum push refuses it)",
 	)
 
 	f.instPerms["contents"] = "write"
@@ -117,6 +116,50 @@ func TestAppCheckOfAFixIdentityRequiresContentsWrite(t *testing.T) {
 		t.Fatalf("want pass with contents write:\n%s", r)
 	}
 	assertLines(t, r, "PASS permission contents: write (the fixer pushes as the App)")
+}
+
+// The daemon pushes its own merges of a base that carries
+// .github/workflows with a token of its own with Workflows write, which
+// the pane's never has: the check passes Workflows write as that use, and
+// says of read or none that those merges need it ("needs Workflows on the
+// App"), with where to grant it, as a warning: the check still passes, and
+// such merges wait for the operator meanwhile.
+func TestAppCheckOfAFixIdentitySaysWhatWorkflowsWriteIsFor(t *testing.T) {
+	const use = "magnum's merges of a base that carries .github/workflows"
+	for _, tc := range []struct {
+		name, app, inst string
+		want            []string
+	}{
+		{name: "granted", app: "write", inst: "write", want: []string{"PASS permission workflows: write (" + use + " push with a token only the daemon holds)"}},
+		{name: "none", inst: "", want: []string{
+			"WARN permission workflows: none (" + use + " need write: needs Workflows on the App)",
+			`     fix: open ` + appSettingsURL + ` -> Repository permissions -> Workflows: "Read and write" -> Save changes`,
+			"     fix: then an owner of talkable accepts the new permissions at " + installURL,
+		}},
+		{name: "read", app: "read", inst: "read", want: []string{"WARN permission workflows: read (" + use + " need write: needs Workflows on the App)"}},
+		{name: "not accepted", app: "write", inst: "read", want: []string{
+			"WARN permission workflows: read (" + use + " need write: needs Workflows on the App)",
+			"     fix: the App already requests write; an owner of talkable accepts the new permissions at " + installURL,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGitHub(t, newClock())
+			f.id = fixerIdentity()
+			f.users = map[string]int64{"talkable[bot]": 4242}
+			f.instPerms["contents"] = "write"
+			if tc.app != "" {
+				f.appPerms["workflows"] = tc.app
+			}
+			if tc.inst != "" {
+				f.instPerms["workflows"] = tc.inst
+			}
+			r, _, _ := fixerCheck(t, f, nil, "talkable/talkable")
+			if !r.Pass {
+				t.Fatalf("want pass:\n%s", r)
+			}
+			assertLines(t, r, tc.want...)
+		})
+	}
 }
 
 // The fixer's commits carry <user_id>+<login>@users.noreply.github.com, so
