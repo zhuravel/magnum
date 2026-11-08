@@ -16658,6 +16658,99 @@ skill versions); people add theirs to the sections before it, at the end of the 
   with leave the proposal gating, then it passes once the target scores; a line named today alone; a
   non-target case stops the gate; gateMaxAge holds it; the same line on the case's own PR alone holds it at
   the third gate) and TestAGateWaitsOutAKindHoldAndAFailureUnderItIsADelay in engine.
+- **Every fix merges the PR's parent first, and magnum merges a parent by itself** (2026-11-08, the
+  operator: "merge parent resolving any conflicts, for any PR" and "the fix process should always first
+  merge parent resolving any conflicts", approved by the operator on 2026-11-08; amends "The fixer merges the
+  base when the PR conflicts with it" (2026-10-27)). The parent is the PR's base branch as GitHub names it when
+  the job starts: the guard reads the PR again as the poll identity (`jobBase`), so a retarget wins, and the
+  registry's `base_ref` stands when that read fails. The fix's merge step no longer falls back to the
+  repository's default branch (`baseConflict`, `checkFixBase`, `requestBaseCheck`, `MAGNUM_BASE_BRANCH`, the
+  push line, `fixSyncLine`): a stacked PR's parent is the branch below it, and an unknown base merges nothing
+  ("no parent merge: the PR's base branch is not known yet"). `prBase` in base_merge.go keeps its fallback: the
+  review's own-diff reading uses it. A fix loop's first cycle merges the parent before the fixer starts: a
+  conflict stays the fixer's, and a head that only lacks the base's tip is merged by the daemon, with no agent,
+  when the fix role is a fixer App (the `fix.parent` step: `git merge-tree`, `git commit-tree` with the head
+  first and the tip second, by the fix identity's bot as author and committer, a push with a lease on the head
+  as the App; then the slot and the PR row move to the merge, `fix.parent_merged`, and the prompt says the head
+  is magnum's merge, `MergedBase` and `MergedSHA`). A gh fixer gets `fix.parent_skipped` and no merge. Later
+  cycles merge only on a conflict, and a branch that is only behind never starts autofix: autofix starts on
+  findings, as before. A merge, the daemon's or the fixer's, that changes the pool's `schema_paths` sets the
+  slot's `dirty_schema`, and the daemon's loads the merged schema before the fixer starts, so its specs do not
+  fall to "not run: environment". The skill's base merge pushes the merge commit alone, before any finding,
+  and takes the team's merge-parent rules fitted to a PR branch. The merge mode (`FixPayload.Mode = "merge"`,
+  `magnum merge-parent`, the key `P` on the board, the dashboard and the factory screen's PR rows) is a fix job
+  of the merge alone: no review needs to stand on the head, the slot is claimed at the head, a clean merge is
+  the daemon's and ends the job, a conflict goes to the fix role with a prompt of the merge alone, and one that
+  needs a product decision is listed for the operator (`conflict:`). Own PRs only for now: prepareFix's
+  ownership check stays, and coworkers' PRs come in a later phase. Its y/N names who merges which tip of which
+  base into which branch and as which login, from a dry run of the daemon's (the screens run the plan first,
+  then put its sentence as the question): only the daemon knows the tip and the bot. The fix keys' and
+  refusals' "as you" now name the fixer's login (the board's `f` said "as you" since before the App switch).
+  Rejected: GitHub's update-branch API (as the App it needs the same Workflows permission, and its merge
+  commit is GitHub's, not the bot's attributed one), a rebase (it rewrites the branch other people may have
+  pulled), and merging a branch that is only behind on every cycle (one merge per loop keeps the re-reviews
+  on the PR's own changes). Tests, failing first: TestAFixOnAPRWithNoKnownBaseMergesNoParent,
+  TestAFixMergesTheBaseGitHubNamesWhenItsJobStarts, TestAMergeOfACleanParentIsTheDaemonsAndStartsNoFixer,
+  TestAMergeOfAConflictingParentGoesToTheFixerAlone, TestAMergeOfTheParentIsRefusedWhereItCannotRun,
+  TestAFixRunMergesABehindParentFirstAndTheFixerStartsFromTheMerge, TestALaterCycleMergesTheParentOnlyOnAConflict,
+  TestAParentMergeThatChangesTheSchemaLoadsItBeforeTheFixer and TestAutofixDoesNotStartForABranchThatIsOnlyBehind
+  in engine; TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge, TestMergeParentWaitSaysTheParentWasMerged
+  and TestScreenMergeParentPlansThenMerges in cli; TestPAsksWithTheDaemonsPlanBeforeMergingTheParent,
+  TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan and TestFAsksAsTheFixersLogin in tui.
+- **A merge that carries the base's workflow files goes out with a Workflows token only the daemon mints**
+  (2026-11-08, the operator's answer "Bot, with Workflows" of 2026-11-08; amends "The fixer can act as a
+  dedicated App" (2026-11-07)). Since the App switch the fixer's base merge broke on most conflicting PRs of
+  the operator's main repository: a merge carries the base's `.github/workflows` changes, `magnum push`
+  refused any change there, and GitHub refuses an App's push of one without the Workflows permission. Now
+  `magnum push` refuses only the workflow files that differ from origin's base (`gitx.DifferingPaths`, the two
+  trees alone): the fixer's own change is refused as before (exit 2, Needs you), and a base merge alone that
+  carries the base's files as the base has them is handed to magnum (exit 4, status `daemon`): the fixer
+  pushes nothing more and ends its run, and the settle pushes that merge (`pushHanded`: GitHub still has the
+  job's head, the merge's first parent is it, its second is on the base, the bot made it). Every push of such a
+  merge, the daemon's own and the handed one, goes with a token the daemon mints for the fix identity's App
+  with `workflows = "write"` added to its narrowed permissions (`identity.App.DaemonPushEnv`), in a gh config
+  dir of its own beside the App's that no pane names, revoked and removed after the push (one its caller
+  cannot release goes at the first refresh after 15 minutes), and only when every workflow file of the merge
+  is as the base tip has it: a merge that keeps the PR's own workflow changes is never pushed by the bot.
+  While the App lacks the permission GitHub refuses the mint (422, `identity.ErrWorkflowsNotGranted`), and the
+  merge is refused with "needs Workflows on the App": a merge the operator asked for, and a handed one, puts
+  the PR under Needs you ("merge it on GitHub (Update branch)"); a fix run's first cycle writes
+  `fix.parent_refused` and its fixer starts without the merge. The pane's token stays contents and
+  pull_requests write, and validate.go's fixer App rules stay as they are for it. For staging's deploy the
+  engine gives `CommitIdentity` (the fix identity's bot and its noreply email,
+  `<user_id>+<login>@users.noreply.github.com`, which GitHub links to the bot, so a merge is attributed) and
+  `StagingPushEnv`, staging's `PushEnv` over the mirror: the App's token for a merge whose workflow files are
+  the staging tip's, the daemon's Workflows token for one whose differing files are each the PR's base tip's,
+  a refusal for one that carries a workflow file differing from both, for a merge not on the target's tip,
+  and for master, main or the default branch; this branch does not wire staging. Rejected: pushing such
+  merges as the operator's gh login (an org admin that bypasses the default branch's ruleset would get a push
+  path an unattended daemon uses), and leaving every such merge to the operator (most of the operator's own
+  conflicting PRs). Tests, failing first: TestDifferingPathsNamesOnlyTheAskedPathsThatDifferBetweenTwoCommits
+  in gitx; TestPushLeavesABaseMergeThatCarriesTheBasesWorkflowsToMagnum and
+  TestPushRefusesAWorkflowFileThatDiffersFromTheBases in cli; TestADaemonPushTokenAddsWorkflowsInADirNoPaneNames,
+  TestADaemonPushTokenSaysWhenTheAppLacksWorkflows and
+  TestADaemonPushTokenLeftUnreleasedGoesAtTheNextRefreshAfterItsHold in identity;
+  TestAMergeThatBringsTheBasesWorkflowsIsPushedWithTheDaemonsOwnToken,
+  TestAMergeThatBringsTheBasesWorkflowsNeedsWorkflowsOnTheApp,
+  TestAMergeThatKeepsThePRsOwnWorkflowChangesIsNeverPushedByTheBot,
+  TestTheFixersMergeThatMagnumPushHandedOverIsPushedByTheDaemon, TestTheFixersHandedMergeNeedsWorkflowsOnTheApp,
+  TestAStagingMergeIsByTheFixIdentitysBot and TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows
+  in engine; TestTheFixSkillPushesWithThePromptsPushLine in agents.
+- **magnum starts the CI workflow after every push it makes to a PR** (2026-11-08, approved by the operator;
+  extends "The look starts the CI workflow a head's required check did not run in, where the repository names
+  it" (R47) to magnum's own pushes). The operator's main repository runs no CI on pushes to a PR (its CI
+  workflow runs on opened, on pushes to master and staging branches, and on `workflow_dispatch`), so a head
+  magnum pushed had no run until someone started one. After the daemon's merge of a parent and after a
+  fixer's push the settle confirmed (`notePush`), `ciAfterPushes` starts the repository's `ci_dispatch`
+  workflow on that head two minutes later (`ciPushGrace`), once per head, never while a run of the workflow
+  on the PR's branch is in progress (`github.RecentRuns`: the newest 50 runs with their branch, read as data,
+  never argv), skipping a head a run already ran at and dropping a head that moved on. R47's dispatch is split
+  out (`startCI`), so both keep its refusals (a PR that changes its own `.github/workflows` or
+  `.github/actions`), its `pr.<id>.ci_dispatch` record and `ci_dispatch_as`. Events `fix.push_ci_dispatch`,
+  `fix.push_ci_dispatch_failed` and `fix.push_ci_dispatch_refused`. Tests, failing first:
+  TestAPushMagnumMadeStartsTheCIWorkflowOnceAfterAGrace, TestAPushMagnumMadeWaitsForTheBranchsRunAndSkipsAHeadThatRan,
+  TestAPushMagnumMadeKeepsR47sRefusals and TestAFixersPushStartsTheCIWorkflow in engine;
+  TestRecentRunsListsAWorkflowsNewestRunsWithTheirBranch in github.
 
 ## The factory (2026-11-03)
 
