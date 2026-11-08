@@ -235,6 +235,7 @@ type retroFixture struct {
 	Output       string
 	Count        int
 	Threads      int
+	Factory      string
 }
 
 func retroFixtureWith(shas ...string) retroFixture {
@@ -445,6 +446,10 @@ func TestRenderGolden(t *testing.T) {
 	// answered: the candidates file lists them under threads.
 	retroThreads := retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
 	retroThreads.Threads = 2
+	// A retro of a pull request the factory published, with the task's
+	// files copied beside the candidates.
+	retroFactory := retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
+	retroFactory.Factory = "/data/learn/retro/20261005-070000/talkable/talkable/11920/factory"
 	// A re-review after a push that merged the base branch: the commits
 	// since the previous head carry the base branch's, so the prompts hand
 	// out the PR's own diff and compare it before and after.
@@ -771,6 +776,7 @@ func TestRenderGolden(t *testing.T) {
 		{"notes_critic_lossy", "notes-critic.md", criticFixtureWith(false, true)},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"retro_threads", "retro.md", retroThreads},
+		{"retro_factory", "retro.md", retroFactory},
 		{"skill_edit", "skill-edit.md", skillEditFixture()},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},

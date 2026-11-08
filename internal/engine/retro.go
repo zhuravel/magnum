@@ -168,6 +168,10 @@ type retroData struct {
 	Output       string   // the answer file the agent writes (learn.Output)
 	Count        int      // the candidates to classify
 	Threads      int      // magnum's own findings someone answered (learn.OwnThread)
+	// Factory is the directory of the copies of the factory task's plan,
+	// ticket and answers, on a pull request the factory published with a
+	// candidate its local round missed; "" otherwise.
+	Factory string
 }
 
 // retroQueued is a queued `magnum retro` (kvRetroQueued): what it looks at,
