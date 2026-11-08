@@ -259,7 +259,7 @@ func TestDoctorWarnsWhileARewrittenCodexEntryKeepsItsOldTrust(t *testing.T) {
 	if err := agents.RecordStaleCodexTrust(home, []string{"stop:0:0"}); err != nil {
 		t.Fatal(err)
 	}
-	if c := doctorHookCheck(t, d, "codex hooks"); c.Status != doctorWarn || !strings.Contains(c.Detail, "stop:0:0 (its trust is of the hook before magnum rewrote it)") ||
+	if c := doctorHookCheck(t, d, "codex hooks"); c.Status != doctorWarn || !strings.Contains(c.Detail, "stop:0:0 (its trust is of the hook that stood there before)") ||
 		!strings.Contains(c.Fix, codexForgetStep) {
 		t.Fatalf("stale trust = %s %q fix %q", c.Status, c.Detail, c.Fix)
 	}

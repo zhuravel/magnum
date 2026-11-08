@@ -491,3 +491,77 @@ func TestRecordStaleCodexTrustNeedsNoHooksJSON(t *testing.T) {
 		t.Fatalf("record = %v, %d records, want 1", err, recordCount(t, dir))
 	}
 }
+
+// A reader that read hooks.json before an install wrote it never removes
+// the record the install then wrote for a hook the new file holds: before
+// it removes a record whose place holds no hook, it reads hooks.json again,
+// and a file that changed since keeps the record.
+func TestAReaderThatReadAnOlderHooksJSONKeepsTheNewRecord(t *testing.T) {
+	dir := staleTrustDirFor(t)
+	before := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/moshi-hook codex-hook"}]}]}}`
+	home := writeHomeHooks(t, before, "[hooks.state.\"{hooks}:stop:1:0\"]\ntrusted_hash = \"sha256:old\"\n")
+	if err := RecordStaleCodexTrust(home, []string{"stop:1:0"}); err != nil {
+		t.Fatal(err)
+	}
+	staleTrustBeforeRemove = func() { // the install writes the hooks.json the record is for, meanwhile
+		if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(magnumHooksJSON), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { staleTrustBeforeRemove = nil })
+	if _, _, err := ReadCodexHooksTrust(home); err != nil {
+		t.Fatal(err)
+	}
+	staleTrustBeforeRemove = nil
+	if n := recordCount(t, dir); n != 1 {
+		t.Fatalf("records after the reader = %d, want the new one kept", n)
+	}
+	if tr, _, err := ReadCodexHooksTrust(home); err != nil || !slices.ContainsFunc(tr.Untrusted, func(h CodexHookAt) bool { return h.Place == "stop:1:0" && h.Stale }) {
+		t.Fatalf("after the install = %+v %v, want stop:1:0 stale", tr.Untrusted, err)
+	}
+}
+
+// Magnum's own trust is remembered only for a hook whose place reads
+// trusted (a stale record's place is no trust of magnum's), taken once for
+// the identical hook at its place with the same hash, and forgotten when
+// used or when the place's hash changes.
+func TestOwnCodexTrustIsRememberedOnlyWhereItReadsTrusted(t *testing.T) {
+	staleTrustDirFor(t)
+	home := writeHomeHooks(t, magnumHooksJSON, "[hooks.state.\"{hooks}:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n[hooks.state.\"{hooks}:stop:1:0\"]\ntrusted_hash = \"sha256:mine\"\n")
+	own := OwnCodexHook{Place: "stop:1:0", Definition: "def"}
+	if err := RememberOwnCodexTrust(home, []OwnCodexHook{own}); err != nil || OwnCodexTrustCount(home) != 1 {
+		t.Fatalf("remember = %v, %d memories", err, OwnCodexTrustCount(home))
+	}
+	if TakeOwnCodexTrust(home, OwnCodexHook{Place: "stop:1:0", Definition: "another"}) {
+		t.Fatal("another definition took magnum's own trust")
+	}
+	if OwnCodexTrustCount(home) != 0 {
+		t.Fatal("a memory outlived its use")
+	}
+	if err := RememberOwnCodexTrust(home, []OwnCodexHook{own}); err != nil {
+		t.Fatal(err)
+	}
+	if !TakeOwnCodexTrust(home, own) || OwnCodexTrustCount(home) != 0 {
+		t.Fatal("the identical hook did not take its own trust once")
+	}
+	if TakeOwnCodexTrust(home, own) {
+		t.Fatal("a memory was taken twice")
+	}
+	// A changed hash: the memory goes at the next read.
+	if err := RememberOwnCodexTrust(home, []OwnCodexHook{own}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfig(home, "[hooks.state.\"{hooks}:stop:0:0\"]\ntrusted_hash = \"sha256:a\"\n[hooks.state.\"{hooks}:stop:1:0\"]\ntrusted_hash = \"sha256:other\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadCodexHooksTrust(home); err != nil || OwnCodexTrustCount(home) != 0 {
+		t.Fatalf("a changed hash kept the memory (%v)", err)
+	}
+	// A stale place is no trust of magnum's.
+	if err := RecordStaleCodexTrust(home, []string{"stop:1:0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RememberOwnCodexTrust(home, []OwnCodexHook{own}); err != nil || OwnCodexTrustCount(home) != 0 {
+		t.Fatalf("a stale place was remembered (%v, %d)", err, OwnCodexTrustCount(home))
+	}
+}

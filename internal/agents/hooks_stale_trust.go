@@ -99,23 +99,11 @@ func RecordStaleCodexTrust(home string, places []string) error {
 // RecordOldCodexTrust records, as RecordStaleCodexTrust does, the trust
 // entries at places (magnum's entries in the Codex home home's hooks.json)
 // that no record covers yet, and says how many it recorded (with dry, how
-// many it would). It is for entries an install made before magnum recorded
-// the trust an append landed on: with a non-zero before (when magnum wrote
-// its script), only when config.toml has not changed since, so that every
-// entry in it is older than magnum's hooks; with a zero before, on the
-// operator's word. It writes nothing when config.toml changed since before.
-func RecordOldCodexTrust(home string, places []string, before time.Time, dry bool) (int, error) {
-	if !before.IsZero() {
-		fi, err := os.Stat(filepath.Join(home, "config.toml"))
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return 0, nil // no config.toml: no trust entry to record
-		case err != nil:
-			return 0, fmt.Errorf("agents: %w", err)
-		case !fi.ModTime().Before(before):
-			return 0, nil // written since: no telling whose its entries are
-		}
-	}
+// many it would). It is the operator's word (`magnum hooks install codex
+// --assume-untrusted`) for entries an install made before magnum recorded
+// the trust an append landed on: no file tells those old entries from the
+// operator's Trust all.
+func RecordOldCodexTrust(home string, places []string, dry bool) (int, error) {
 	return recordStale(home, places, true, dry)
 }
 
@@ -202,15 +190,166 @@ func readStaleTrust(dir, hooksFile string) map[string][]staleRecord {
 }
 
 // removeStale removes the record r, unless its file changed since it was
-// read (a newer write of the same record).
-func removeStale(r staleRecord) {
+// read (a newer write of the same record) or keep says, at the last moment,
+// that the reason to remove it is gone (nil: none).
+func removeStale(r staleRecord, keep func() bool) {
 	if staleTrustBeforeRemove != nil {
 		staleTrustBeforeRemove()
+	}
+	if keep != nil && keep() {
+		return
 	}
 	if fi, err := os.Lstat(r.file); err != nil || !fi.ModTime().Equal(r.mod) {
 		return
 	}
 	_ = os.Remove(r.file)
+}
+
+// OwnCodexHook is one of magnum's Codex hooks at its place in a hooks.json
+// ("stop:0:0"): Definition is what Codex hashes of it as magnum reads it
+// (the CLI's form of its type, command, timeout, async and extra keys), so
+// two hooks with one Definition hash the same.
+type OwnCodexHook struct{ Place, Definition string }
+
+// ownTrust is a memory of magnum's own trust: the hook of Definition stood
+// at Place of the hooks.json Hooks, and Codex trusted it with TrustedHash.
+type ownTrust struct {
+	Hooks       string `json:"hooks"`
+	Place       string `json:"place"`
+	Definition  string `json:"definition"`
+	TrustedHash string `json:"trusted_hash"`
+}
+
+// ownTrustDir is where the memories of magnum's own trust are kept: beside
+// the stale records, in a directory of their own the records' reader skips.
+func ownTrustDir() string {
+	if dir := staleTrustDirectory(); dir != "" {
+		return filepath.Join(dir, "own")
+	}
+	return ""
+}
+
+// ownTrustFile is the memory of the place of the hooks.json hooksFile in
+// dir: one per place, the latest uninstall's.
+func ownTrustFile(dir, hooksFile, place string) string {
+	sum := sha256.Sum256([]byte(hooksFile + "\n" + place))
+	return filepath.Join(dir, hex.EncodeToString(sum[:12])+".json")
+}
+
+// RememberOwnCodexTrust remembers, for each of hooks (magnum's own, which
+// an uninstall is about to remove from the Codex home home's hooks.json),
+// the trusted_hash at its place when the place reads trusted (it has a hash,
+// and no stale record holds that hash): Codex keeps the entry after the
+// hook goes, so an install that later puts the identical hook back at that
+// place finds magnum's own valid trust there, which TakeOwnCodexTrust tells
+// apart from a hook's that once stood there. A place with no trust, or a
+// stale one, is not remembered. Without a records directory it remembers
+// nothing.
+func RememberOwnCodexTrust(home string, hooks []OwnCodexHook) error {
+	dir := ownTrustDir()
+	if dir == "" || len(hooks) == 0 {
+		return nil
+	}
+	trust, ok, err := ReadCodexHooksTrust(home)
+	if err != nil || !ok {
+		return err
+	}
+	f := codexHookPaths(home)
+	state, err := readCodexHookState(f.configFile)
+	if err != nil {
+		return err
+	}
+	for _, h := range hooks {
+		_, e, ok := f.entry(state, h.Place)
+		if !ok || e.TrustedHash == "" || slices.ContainsFunc(trust.Untrusted, func(u CodexHookAt) bool { return u.Place == h.Place }) {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("agents: %w", err)
+		}
+		b, err := json.Marshal(ownTrust{Hooks: f.hooksFile, Place: h.Place, Definition: h.Definition, TrustedHash: e.TrustedHash})
+		if err != nil {
+			return fmt.Errorf("agents: %w", err)
+		}
+		if err := fsx.WriteFileAtomic(ownTrustFile(dir, f.hooksFile, h.Place), b, 0o600); err != nil {
+			return fmt.Errorf("agents: remember magnum's own trust of %s: %w", h.Place, err)
+		}
+	}
+	return nil
+}
+
+// TakeOwnCodexTrust reports whether the trust entry at hook's place in the
+// Codex home home is magnum's own, remembered at an uninstall for the
+// identical hook (RememberOwnCodexTrust) and still with that hash: an
+// install appending that hook there then records no stale trust. The
+// memory is forgotten either way: it serves one install.
+func TakeOwnCodexTrust(home string, hook OwnCodexHook) bool {
+	dir := ownTrustDir()
+	if dir == "" {
+		return false
+	}
+	f := codexHookPaths(home)
+	file := ownTrustFile(dir, f.hooksFile, hook.Place)
+	b, err := fsx.ReadRegular(file, 4<<10)
+	if err != nil {
+		return false
+	}
+	_ = os.Remove(file)
+	var o ownTrust
+	if json.Unmarshal(b, &o) != nil || o.Hooks != f.hooksFile || o.Place != hook.Place || o.Definition != hook.Definition {
+		return false
+	}
+	state, err := readCodexHookState(f.configFile)
+	if err != nil {
+		return false
+	}
+	_, e, ok := f.entry(state, hook.Place)
+	return ok && e.TrustedHash != "" && e.TrustedHash == o.TrustedHash
+}
+
+// OwnCodexTrustCount is how many memories of magnum's own trust the Codex
+// home home's hooks.json has.
+func OwnCodexTrustCount(home string) int {
+	return len(readOwnTrust(ownTrustDir(), filepath.Join(home, "hooks.json")))
+}
+
+// readOwnTrust reads the memories of the hooks.json hooksFile in dir: by
+// file, the memory.
+func readOwnTrust(dir, hooksFile string) map[string]ownTrust {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := map[string]ownTrust{}
+	for _, de := range entries {
+		if !strings.HasSuffix(de.Name(), ".json") {
+			continue
+		}
+		file := filepath.Join(dir, de.Name())
+		b, err := fsx.ReadRegular(file, 4<<10)
+		if err != nil {
+			continue
+		}
+		var o ownTrust
+		if json.Unmarshal(b, &o) == nil && o.Hooks == hooksFile {
+			out[file] = o
+		}
+	}
+	return out
+}
+
+// forgetChangedOwnTrust removes the memories of the hooks.json of f whose
+// place's trust entry no longer has the remembered hash, or none: the
+// trust they stood for is gone.
+func forgetChangedOwnTrust(f codexHookFiles, state map[string]codexHookEntry) {
+	for file, o := range readOwnTrust(ownTrustDir(), f.hooksFile) {
+		if _, e, ok := f.entry(state, o.Place); !ok || e.TrustedHash != o.TrustedHash {
+			_ = os.Remove(file)
+		}
+	}
 }
 
 // ForgetStaleCodexTrust removes every record of the Codex home home's

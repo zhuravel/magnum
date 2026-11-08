@@ -1041,6 +1041,10 @@ func NotesRereadLine(path string) string
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
 
+func OwnCodexTrustCount(home string) int
+    OwnCodexTrustCount is how many memories of magnum's own trust the Codex home
+    home's hooks.json has.
+
 func PaneErrorOf(msg string) string
     PaneErrorOf is the pane's error line a refused prompt's error carries (a
     run's error: Prompt appends paneError's line after "; the pane shows: "),
@@ -1130,15 +1134,14 @@ func RecordModelLimit(ctx context.Context, st *store.Store, kind, model string, 
     a failure after the limit's row was written (the repeat record, an ended
     row) leaves the limit recorded.
 
-func RecordOldCodexTrust(home string, places []string, before time.Time, dry bool) (int, error)
+func RecordOldCodexTrust(home string, places []string, dry bool) (int, error)
     RecordOldCodexTrust records, as RecordStaleCodexTrust does, the trust
     entries at places (magnum's entries in the Codex home home's hooks.json)
     that no record covers yet, and says how many it recorded (with dry,
-    how many it would). It is for entries an install made before magnum recorded
-    the trust an append landed on: with a non-zero before (when magnum wrote its
-    script), only when config.toml has not changed since, so that every entry in
-    it is older than magnum's hooks; with a zero before, on the operator's word.
-    It writes nothing when config.toml changed since before.
+    how many it would). It is the operator's word (`magnum hooks install codex
+    --assume-untrusted`) for entries an install made before magnum recorded
+    the trust an append landed on: no file tells those old entries from the
+    operator's Trust all.
 
 func RecordStaleCodexTrust(home string, places []string) error
     RecordStaleCodexTrust records, for each of places (as Codex keys its trust:
@@ -1155,6 +1158,16 @@ func RelatedStackLine(below, above []int) string
     RelatedStackLine is JudgeData.RelatedStack, and the round.related event's
     words for the stacks: "#751 stacked below this PR; #753 above it", either
     half alone ("#753 stacked above this PR"); "" without either.
+
+func RememberOwnCodexTrust(home string, hooks []OwnCodexHook) error
+    RememberOwnCodexTrust remembers, for each of hooks (magnum's own, which
+    an uninstall is about to remove from the Codex home home's hooks.json),
+    the trusted_hash at its place when the place reads trusted (it has a hash,
+    and no stale record holds that hash): Codex keeps the entry after the hook
+    goes, so an install that later puts the identical hook back at that place
+    finds magnum's own valid trust there, which TakeOwnCodexTrust tells apart
+    from a hook's that once stood there. A place with no trust, or a stale one,
+    is not remembered. Without a records directory it remembers nothing.
 
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
@@ -1253,6 +1266,13 @@ func TaggedPaneLabel(tag string, number int, r Role) string
 func TaggedTitle(tag, repo string, number int, role Role) string
     TaggedTitle is Title under a tag (Deps.Tag): "eval PR #729 codex-judge -
     talkable". An empty tag is Title.
+
+func TakeOwnCodexTrust(home string, hook OwnCodexHook) bool
+    TakeOwnCodexTrust reports whether the trust entry at hook's place in
+    the Codex home home is magnum's own, remembered at an uninstall for
+    the identical hook (RememberOwnCodexTrust) and still with that hash:
+    an install appending that hook there then records no stale trust. The memory
+    is forgotten either way: it serves one install.
 
 func Title(repo string, number int, role Role) string
     Title is the terminal title of a PR role's pane, which herdr's agents
@@ -2954,6 +2974,12 @@ const (
 	ObsLost ObservationKind = "lost"
 )
     Observation kinds; "" means nothing to act on.
+
+type OwnCodexHook struct{ Place, Definition string }
+    OwnCodexHook is one of magnum's Codex hooks at its place in a hooks.json
+    ("stop:0:0"): Definition is what Codex hashes of it as magnum reads it
+    (the CLI's form of its type, command, timeout, async and extra keys),
+    so two hooks with one Definition hash the same.
 
 type PreviousReview struct {
 	ID          int64

@@ -4119,25 +4119,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   entries": a trust entry at a place counted as trusted. Now every append records any trust entry with a hash
   already at the new place (`recordAppendedTrust`, through `agents.RecordStaleCodexTrust`, after the write, since
   a reader removes a record whose place holds no hook; hooks.json need not exist before), so status, doctor and the
-  hold read the place untrusted until Codex writes a new hash. An entry without a hash already reads untrusted and
-  needs no record. For an install from before this (the Mac's), the record is missing and cannot be rebuilt from
-  the entry alone, so an install's re-run uses a file-level heuristic (`agents.RecordOldCodexTrust`): when
-  config.toml has not been written since magnum wrote the script the run found (its mtime, read before an upgrade
-  writes a new one), no trust was written since the install, so every entry at magnum's places is older than
-  magnum's hooks and is recorded; when config.toml was written since, it records nothing, since it cannot tell.
-  The per-line form asked for ("the entry's line is older than the script") is not sound: a TOML line has no
-  time, and config.toml's mtime moves with any write (Codex's `/model`, its own trust, magnum's folder trust for
-  every slot), so on a live machine the file-level check rarely holds. `magnum hooks install codex
-  --assume-untrusted` records them on the operator's word (that no Trust all came since the install); a wrong
-  word only holds new Codex sessions until a quiet start or `--forget-stale`, which fail safe. Known false hold:
-  an uninstall and an install that put magnum's own identical hook back at the same place find its old, valid
-  entry and record it; Codex then asks nothing, and the quiet start or `--forget-stale` clears it. Rejected:
-  computing Codex's hash to tell an old entry from magnum's (its input is Codex's internal normal form), and
-  treating every trust entry at a place magnum holds as stale on each run (it would undo the operator's Trust all
-  at every install). Tests, failing first and with each guard taken out once:
-  TestHooksAnAppendOntoAPlaceWithAnOldTrustEntryReadsUntrusted, TestHooksAnInstallIntoANewHooksJSONRecordsTheOldTrustAtItsPlaces,
-  TestDoctorWarnsForAnAppendOntoAnOldTrustEntry, TestHooksAReRunRecordsOldTrustOnlyWhenItCanTell,
-  TestHooksAnUpgradeNeverTakesTheTrustSinceTheInstallForOld and TestRecordStaleCodexTrustNeedsNoHooksJSON.
+  hold read the place untrusted ("its trust is of the hook that stood there before") until Codex writes a new
+  hash. An entry without a hash already reads untrusted and needs no record. The one exception is magnum's own
+  trust: an uninstall remembers, for each of magnum's Codex hooks it removes, its definition (type, command,
+  timeout, async and whether it has other keys, which Codex hashes too), its place and the place's hash, when the
+  place reads trusted (`agents.RememberOwnCodexTrust`, one file per place under `codex-stale-trust/own/`); a later
+  append of the identical definition at that place, while the entry still has that hash, is magnum's valid trust
+  and records nothing (`agents.TakeOwnCodexTrust`). A changed definition, place or hash records stale, as any
+  append; a memory is forgotten once used, and a reader forgets one whose place's hash changed. So an uninstall
+  and a reinstall of the identical hooks read current with no hold. For an install from before this (the Mac's),
+  the record is missing and no file can tell those old entries from the operator's Trust all: `magnum hooks
+  install codex --assume-untrusted` records the trust entries at magnum's places on the operator's word (that no
+  Trust all came since the install), and only there, never in config.toml; a wrong word holds new Codex sessions
+  until `--forget-stale`, which is final (no run records them again). A reader that read hooks.json before an
+  install wrote it never removes the install's new record: before it removes a record whose place holds no hook,
+  it reads hooks.json again and keeps the record when the file changed. Rejected: a re-run heuristic that took
+  config.toml unchanged since magnum's script as proof that every entry at magnum's places is old (a rewrite of
+  the script, an upgrade or a repair of its mode, moves that time past the operator's Trust all and turned valid
+  trust into a false hold, and in a run with `--forget-stale` it recorded the forgotten entries again; a TOML
+  line has no time of its own), computing Codex's hash to tell an old entry from magnum's (its input is Codex's
+  internal normal form), and treating every trust entry at a place magnum holds as stale on each run (it would
+  undo the operator's Trust all at every install). Tests, failing first and with each guard taken out once:
+  TestHooksAnAppendOntoAPlaceWithAnOldTrustEntryReadsUntrusted, TestHooksAnInstallIntoANewHooksJSONRecordsTheOldTrustAtItsPlaces
+  (all four places), TestDoctorWarnsForAnAppendOntoAnOldTrustEntry, TestHooksAssumeUntrustedRecordsOnlyMagnumsPlaces,
+  TestHooksAReRunAfterTheScriptIsWrittenAgainRecordsNothing (the review's probes), TestHooksAnUninstallAndAReinstallOfTheIdenticalHookKeepItsTrust
+  (the review's probe), TestHooksAReinstallRecordsStaleWhenItsOwnTrustNoLongerFits (a changed definition, place
+  and hash), TestOwnCodexTrustIsRememberedOnlyWhereItReadsTrusted, TestAReaderThatReadAnOlderHooksJSONKeepsTheNewRecord
+  and TestRecordStaleCodexTrustNeedsNoHooksJSON.
 
 ## Screens and commands
 

@@ -23,6 +23,7 @@ package agents
 // without an id (sessionIDMissing).
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -565,10 +566,17 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 	}
 	t.Hooks = len(all)
 	stale := readStaleTrust(staleTrustDirectory(), f.hooksFile)
+	// changed reports, at the moment a record goes because its place holds
+	// no hook, that hooks.json changed since it was read: an install wrote
+	// the file the record is for meanwhile, so the record stays.
+	changed := func() bool {
+		raw, err := os.ReadFile(f.hooksFile)
+		return err != nil || !bytes.Equal(raw, f.raw)
+	}
 	if len(all) == 0 {
 		for _, rs := range stale {
 			for _, r := range rs {
-				removeStale(r) // no hook left for the record
+				removeStale(r, changed) // no hook left for the record
 			}
 		}
 		return t, true, nil
@@ -577,6 +585,7 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 	if err != nil {
 		return t, false, err
 	}
+	forgetChangedOwnTrust(f, state)
 	for _, h := range all {
 		_, e, ok := f.entry(state, h.Place)
 		switch {
@@ -591,8 +600,11 @@ func ReadCodexHooksTrust(home string) (t CodexHooksTrust, ok bool, err error) {
 		_, e, ok := f.entry(state, place)
 		hooked := slices.ContainsFunc(all, func(h CodexHookAt) bool { return h.Place == place })
 		for _, r := range rs {
-			if !ok || e.TrustedHash != r.hash || !hooked {
-				removeStale(r) // the operator trusted the new hook, or the entry or the hook is gone
+			switch {
+			case !ok || e.TrustedHash != r.hash:
+				removeStale(r, nil) // the operator trusted the new hook, or the entry is gone
+			case !hooked:
+				removeStale(r, changed) // the hook is gone, unless hooks.json changed since
 			}
 		}
 	}
