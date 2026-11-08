@@ -17846,43 +17846,64 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The words: a heading, `**Magnum factory**` (with `· Jira ABC-12: in code review` when the file names an issue), the
     operator's approved table (`| Step | State |`: Plan, Code, Local review, Published, Fix loop, Staging), then
     `Now: <who it waits on> · updated HH:MM UTC`, a blank line around the table so GitHub draws it and does not read
-    the Now line as a row. Every word comes from a word map over the contract's enums (one per enum type,
-    `TestEveryFactoryEnumWordHasItsWords` holds them to the contract's words), a count or a time; the env's slug
-    (`prstatus.StagingEnv` again) and the Jira key (capitals, digits, `_` and `-` only) are the two strings that
-    post, each checked again though `Read` checked them, and a word outside its map reads "not known". "You" in the
-    factory's words is "the operator" here, as in magnum's lines: the comment is read by the PR's people.
+    the Now line as a row. Every word comes from a word map over the contract's enums (one per enum type), a count or
+    a time. `TestEveryFactoryEnumWordHasItsWords` holds the maps to the contract's words, read from
+    `internal/prstatus`'s source: a word the contract gains keeps the version and `Read` takes it, so without the
+    test it would post "not known". The env's slug (`prstatus.StagingEnv` again) and the Jira key (capitals, digits,
+    `_` and `-` only) are the two strings that post, each checked again though `Read` checked them, and a word
+    outside its map reads "not known". "You" in the factory's words is "the operator" here, as in magnum's lines: the
+    comment is read by the PR's people.
   - A row with nothing to say reads `none` (no code counted, no local review, no fix loop yet, no staging deploy);
     the plan without questions reads "no questions", a fact of the plan rather than nothing. A count of 0 is left out
     of its row: a ready card an older build drew counts no commits, so "0 commits" would be false. The publish time
     always has its day; the Now line's time has it once it is not the edit's UTC day (`statusClock`, as the
-    comment's other times), which covers "older than a day". The Now line adds the task's stage when it is not the
-    published PR's, and an end that waits on nobody reads as the end alone ("merged", "the task stopped").
-  - Change detection is the digest, not the text: kv `pr.<id>.factory_status` holds the digest of the file whose
-    part the comment last carried, written with the comment's record after a write GitHub took. A new digest, or a
-    file gone or refused after one (the part drops), passes the comment's same-text check and waits for its
-    2-minute spacing like a change of magnum's lines; the same digest edits nothing, though the part's text moves
-    with now. `statusRecord.Sum` is magnum's body's alone, so the records written before need no migration and a
-    PR without a file edits as it did. The file is read only after the checks that decide whether the comment may be
-    written at all, so a file never opens a comment where magnum would post none (a draft nobody asked about, a
-    watch with the comment off, a second deletion), and a comment that ended (a close, a merge, a draft) keeps its
-    last edit, factory part included, until it resumes, as magnum's lines do. So the factory's last write after a
-    merge, which follows magnum's last edit by a tick of each daemon, does not reach the comment.
+    comment's other times), which covers "older than a day" and keeps "23:50 UTC" from reading as today just after
+    midnight. The Now line adds the task's stage when it is not the published PR's, and an end that waits on nobody
+    reads as the end alone ("merged", "the task stopped").
+  - Change detection is the part as rendered: kv `pr.<id>.factory_status` holds the sum (`statusSum`) of the part the
+    comment last carried, written with the comment's record after a write GitHub took. The part changes with the
+    file's content (its digest), once when its "updated" time gains its day at the next UTC day (as magnum's own
+    times in the body do: one edit per status, never one a day), and at the comment's end. A new sum, or a file gone
+    or refused after one (the part drops), passes the comment's same-text check and waits for its 2-minute spacing
+    like a change of magnum's lines; the same sum edits nothing, whatever the factory rewrites. `statusRecord.Sum` is
+    magnum's body's alone, so the records written before need no migration and a PR without a file edits as it did.
+    The file is read only after the checks that decide whether the comment may be written at all, so a file never
+    opens a comment where magnum would post none (a draft nobody asked about, a watch with the comment off, a PR
+    reviewed before the comment was on, a second deletion).
+  - The end: a comment that ended (a close, a merge, a draft) keeps its last edit, factory part included, until it
+    resumes, as magnum's lines do. The factory writes its own end (stage done or stopped, waiting on nobody) only
+    after it sees the merge or the close, so after magnum's last edit, which goes at once. The last edit's Now line
+    therefore says the end in magnum's words (`Now: merged`, `Now: closed`, `Now: a draft`, from GitHub's state, with
+    no time: the file's is from before the end and the header has the end's) unless the file already says the task's
+    end, and the rows stay as the file says them. The ending part differs from the open one, so a PR merged after its
+    review, whose posted line stands as it was, still gets its last edit.
+  - Deletion: an edit that finds the comment gone posts it once more only when magnum's lines changed. An edit only
+    the factory part asked for records the deletion (`statusRecord.Repost`: the comment's id 0, magnum's last body's
+    sum kept) and posts nothing; the next change of magnum's lines posts it once more, part included, even a line
+    that opens no comment (a mute's), and a last edit posts nothing, as for any deleted comment. Without it, a file
+    would bring back a comment a person deleted on a PR whose own lines no longer change.
   - A file `Read` refuses counts as missing and is logged once while its refusal stays the same (the error's words:
     the reason and the field, never the content; `Engine.changed`), and a good read or a missing file makes the
     next refusal new. The header's time and the `pr.status_comment` events stay magnum's.
-  Rejected: the part in the comment's sum (its "updated" time gains its day at the UTC day's turn, an edit a day per
-  factory PR for nothing new; the date then shows only at an edit made for another change); a re-render, or an edit,
-  when the Now line turns a day old (the same edit for nothing new); one bulk kv read per tick (the per-PR read of
-  the comment's record is already there, and the point read costs as little); a row for the Jira issue (the
-  approved table has six rows) and the task id (the factory's number, not the PR's people's); the factory's last
-  write after the close reaching the comment (the comment ends once, as for magnum's lines). Tests, failing first:
-  TestTheFactoryPartIsATableOfTheStepsAndANowLine, TestEachFactoryRowSaysItsStepInFixedWords,
-  TestTheFactoryNowLineSaysWhoThePRWaitsOn, TestTheFactoryHeadingNamesTheJiraIssue,
-  TestEveryFactoryEnumWordHasItsWords, TestNoFactoryStatusStringReachesTheCommentUnmapped,
-  TestAFactoryPRsStatusCommentCarriesTheFactoryPart, TestAnUnchangedFactoryStatusMakesNoEdit,
+  Rejected: the file's digest alone as the key (this slice's first version): it sees neither the part's time gaining
+  its day nor the end, so an unchanged status read "updated 09:41 UTC" for days, and a PR merged after its review
+  ended on the open PR's "waits on the reviewers" for good; a time always with its day (no edit at the day's turn,
+  but not the approved mock, and not how the comment's other times read); the factory's last write after the close
+  reaching the comment (the comment ends once, as for magnum's lines; the end words say what that write would); the
+  end words with the file's time (it is from before the end); one bulk kv read per tick (the per-PR read of the
+  comment's record is already there, and the point read costs as little); a row for the Jira issue (the approved
+  table has six rows) and the task id (the factory's number, not the PR's people's); word lists exported by
+  `internal/prstatus` for the enum test (an API change of the contract both daemons import, for a test). Tests,
+  failing first: TestTheFactoryPartIsATableOfTheStepsAndANowLine, TestEachFactoryRowSaysItsStepInFixedWords,
+  TestTheFactoryNowLineSaysWhoThePRWaitsOn, TestAnEndedFactoryPartsNowLineSaysTheEnd,
+  TestTheFactoryHeadingNamesTheJiraIssue, TestNoFactoryStatusStringReachesTheCommentUnmapped,
+  TestAFactoryPRsStatusCommentCarriesTheFactoryPart, TestAnUnchangedFactoryStatusEditsOnlyToDateItsTime,
   TestAChangedFactoryStatusEditsOnceUnderTheRateLimit, TestAFactoryStatusFileThatGoesAwayDropsThePart,
-  TestARefusedFactoryStatusFileIsNoPartAndOneLog, TestAClosedFactoryPRsCommentEndsWithItsFactoryPart; a guard that
-  held before: TestAFactoryStatusFileNeverOpensAComment.
+  TestARefusedFactoryStatusFileIsNoPartAndOneLog, TestAnEndedFactoryPRsCommentEndsOnATrueNowLine,
+  TestADeletedCommentIsPostedOnceMoreOnlyForMagnumsChange; guards that held before, each failing on the mutant it
+  names: TestAFactoryStatusFileNeverOpensAComment (the file read before the opening checks),
+  TestARefusedFactoryEditIsWrittenAtTheNextTry (the part's sum saved before GitHub took the edit) and
+  TestEveryFactoryEnumWordHasItsWords (a word added to the contract).
 
 ## Learned rules
 

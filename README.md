@@ -1370,22 +1370,30 @@ to say reads `none` (no code counted, no local review, no fix loop yet, no stagi
 issue only when the file has one (its key and its status: "to do", "in development", "in code review", "done",
 "another status", "status not known"). The Now line says who the PR waits on ("waits on the operator", "on Magnum",
 "on the reviewers", "on CI", "on the factory", "on nobody"), the task's end when it ended ("merged", "the task
-stopped", "the task failed"), and when the file last changed, with its day once that is not the day of the edit.
+stopped", "the task failed"), and when the file last changed, with its day once that is not the day of the edit, as
+Magnum's own times.
 
 The part never opens a comment where Magnum would post none, never changes Magnum's lines or the header's time, and
-follows the comment's own end: a PR closed or merged gets the part as the file says it at the last edit, and nothing
-after. Each tick that looks at the comment reads the file and compares its digest with the one the comment last
-carried (kv `pr.<id>.factory_status`): a new digest edits the comment as a change of Magnum's lines does, under the
-same 2-minute spacing; the same digest edits nothing, whatever the factory rewrites (so the "updated" time gains its
-day only at an edit made for another change). A file that goes away drops the part at the next edit. A file the reader
-refuses (over 64 KiB, cut short, another schema version, a word it does not know, a digest that does not match) counts
-as missing and is logged once while its refusal stays the same.
+follows the comment's own end: the last edit of a PR closed, merged or turned into a draft carries the part, written at
+once even where Magnum's own lines stand as they were (merged after its review), and nothing after it. Its rows are as
+the file says them then, and its Now line says the end in Magnum's words, `Now: merged`, `Now: closed` or `Now: a
+draft`, while the file still says the PR is open (the factory writes its own end a tick after it sees the merge, after
+that last edit); a file that already says the task's end keeps it. Each tick that looks at the comment reads the file,
+renders the part and compares its sum with the one the comment last carried (kv `pr.<id>.factory_status`): a new sum
+edits the comment as a change of Magnum's lines does, under the same 2-minute spacing, and the same sum edits nothing,
+whatever the factory rewrites. So a status edits the comment once when it changes, and once more at the next UTC day,
+when its "updated" time gains its day. A file that goes away drops the part at the next edit. A file the reader refuses
+(over 64 KiB, cut short, another schema version, a word it does not know, a digest that does not match) counts as
+missing and is logged once while its refusal stays the same. A comment a person deleted is posted once more only for a
+change of Magnum's lines, as without a factory: an edit only the part asked for that finds the comment gone posts
+nothing.
 
 Every comment ends on a true line, written at once (the 2-minute spacing below does not hold it) and only
 once: "Closed before the review of `54fc258` posted." for a PR closed without a merge, "Merged before the
 review of `54fc258` posted." for one GitHub merged first, the posted line for one merged or closed after its
 review, and "Not reviewing: the PR is a draft." for a PR that turned into a draft (with `include_drafts =
-false`) while its review was queued. A tick writes it whatever the PR's state, a release included (released
+false`) while its review was queued; on a factory PR, the factory part's Now line says the end too (above). A tick
+writes it whatever the PR's state, a release included (released
 PRs of the last 24 hours are read for it). After it nothing is written until a new head, a new review
 request, `magnum review`, a reopen or, for a draft, ready for review.
 
