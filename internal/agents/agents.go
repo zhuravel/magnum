@@ -76,6 +76,14 @@ const (
 // final status; the agent's work after that is still the run's (turnTail).
 const CompletionIdleTicks = 2
 
+// CompletionGap is how long after the first idle|done reading of a streak
+// the reading that ends the turn may come at the earliest: the review
+// daemon observes every few seconds (its observe clock), and two readings
+// a second apart would let a status that flickers idle for a moment end
+// the turn. Readings farther apart (the tick's, the factory's at 10 s) meet
+// it on the second, as before.
+const CompletionGap = 3 * time.Second
+
 // tailWait bounds how long Submit holds a prompt to a judge still finishing
 // the turn of its last run (turnTail) before it refuses with ErrBusy;
 // tailPoll is how often it asks herdr whether the agent stopped working.
@@ -244,6 +252,9 @@ type Manager struct {
 	tick   uint64
 	titles map[int64]*titleState
 	denies map[int64]*denyState
+	// idleFrom is when the first reading of each session's streak of idle
+	// readings was taken (idleStreak, CompletionGap).
+	idleFrom map[int64]time.Time
 	// liveAt is when this Manager marked each session live (markStarted, a
 	// rebind in Submit): an observe tick never judges a session lost from a
 	// snapshot taken before that (see LostGrace).
@@ -295,7 +306,7 @@ func New(d Deps) *Manager {
 		sleep = d.Sleep
 	}
 	return &Manager{d: d, sleep: sleep, wrapper: map[string]bool{}, health: map[string][]healthRule{},
-		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
+		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{}, idleFrom: map[int64]time.Time{},
 		switching: map[int64]bool{}, compacting: map[int64]bool{}, sidMissing: map[string]bool{}, rolloutWarned: map[int64]bool{},
 		recovered: map[int64]string{}, recoverLogged: map[int64]bool{}, rolloutHeld: map[string]bool{},
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},

@@ -62,6 +62,11 @@ type Observation struct {
 	// since), when that cooldown ends; zero when the tick only extended a
 	// cooldown already running, and when human_cooldown is 0 (none).
 	CooldownUntil time.Time
+	// SecondReadingAt is, for an idle session whose run in flight this
+	// reading did not end, the earliest time a reading may end it (the
+	// streak's first idle reading plus CompletionGap); zero otherwise. The
+	// review daemon's observe clock takes its next reading then.
+	SecondReadingAt time.Time
 }
 
 // LostGrace keeps an observe tick from judging a session lost from a
@@ -260,9 +265,11 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	if err != nil {
 		return o, fmt.Errorf("agents: observe session %d: %w", s.ID, err)
 	}
+	first := m.idleStreak(s.ID, busy || held, idle, s.IdleTicks, prev, prevAt, capturedAt)
 	if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 		s, o.Session = fresh, fresh
 	}
+	settled := !first.IsZero() && !capturedAt.Before(first.Add(CompletionGap))
 	if sid == "" && promptedTurnEnded(s, prev, prevAt, idle) {
 		m.sessionIDMissing(ctx, s)
 	}
@@ -321,7 +328,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 		if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 			o.Session = fresh
 		}
-	case idle && s.IdleTicks >= CompletionIdleTicks:
+	case idle && s.IdleTicks >= CompletionIdleTicks && settled:
 		var done *store.Run
 		for _, r := range runs {
 			if r.State != store.RunSubmitted && r.State != store.RunWorking {
@@ -340,7 +347,40 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			o.Kind, o.Run = ObsCompleted, done
 		}
 	}
+	if o.Kind == "" && !first.IsZero() && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
+		o.SecondReadingAt = first.Add(CompletionGap)
+	}
 	return o, nil
+}
+
+// idleStreak records a reading of session id taken at: busy (working,
+// blocked, or idle while background work or a Codex rollout keeps its turn
+// going) ends its streak of idle readings, idle adds to it. It returns when
+// the streak's first reading was taken (zero when this reading is not
+// part of one): a reading ends the turn only CompletionGap after that.
+// ticks, status and statusAt are the row's idle_ticks, agent_status and
+// agent_status_at before this reading. A streak this Manager did not see
+// begin (a daemon restart in its middle) began, at the latest, when the
+// row's idle status was recorded.
+func (m *Manager) idleStreak(id int64, busy, idle bool, ticks int, status herdr.Status, statusAt *time.Time, at time.Time) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case busy:
+		delete(m.idleFrom, id)
+		return time.Time{}
+	case !idle:
+		return m.idleFrom[id]
+	}
+	if first, ok := m.idleFrom[id]; ok && ticks > 0 {
+		return first
+	}
+	first := at
+	if ticks > 0 && statusAt != nil && statusAt.Before(at) && (status == herdr.StatusIdle || status == herdr.StatusDone) {
+		first = *statusAt
+	}
+	m.idleFrom[id] = first
+	return first
 }
 
 func recent(t, now time.Time) bool { return now.Sub(t) < humanGrace }

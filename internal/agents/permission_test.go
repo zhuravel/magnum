@@ -535,6 +535,7 @@ func TestObserveContinuesOnceAfterDeny(t *testing.T) {
 	}
 	e.h.setAgentStatus(claudeAgent, herdr.StatusIdle)
 	e.observe()
+	e.clock.Add(CompletionGap)
 	if o := e.observe()[RoleClaude]; o.Kind != ObsCompleted {
 		t.Fatalf("finish = %+v, want completed", o)
 	}
@@ -695,6 +696,7 @@ func TestObserveNoContinuationWhenNotNeeded(t *testing.T) {
 			run := e.denyThenIdle()
 			tc.setup(e)
 			e.observe()
+			e.clock.Add(CompletionGap)
 			if o := e.observe()[RoleClaude]; o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != run {
 				t.Fatalf("second idle tick = %+v, want the run completed", o)
 			}
