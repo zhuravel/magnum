@@ -179,7 +179,7 @@ func newPaneHarness(t *testing.T, mods ...func(*harness)) *paneHarness {
 	p.ag = &fakePaneAgents{}
 	var mu sync.Mutex
 	p.mk = paneClassifiers(paneDeps{
-		Config: p.cfg, Layout: p.layout, Logger: p.d.Logger, Herdr: p.hd, Store: p.st, Now: p.clock.Now,
+		Config: p.cfg, Layout: p.layout, Logger: p.d.Logger, Herdr: p.hd, Store: p.st, Now: p.clock.Now, Hooks: p.e.agentHooks,
 		Sleep: func(ctx context.Context, d time.Duration) error {
 			if p.step > 0 {
 				p.clock.Add(p.step)

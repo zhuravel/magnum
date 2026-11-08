@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // shortLayout is a layout whose hook socket path fits a Unix socket's:
@@ -247,4 +250,217 @@ func (l *recordLog) attr(level slog.Level, msg, key string) string {
 		return v
 	}
 	return ""
+}
+
+// paneSession records a live session of an agent on pane in st, under a
+// scratch PR of its own, as a pane agent's registry holds one.
+func paneSession(t *testing.T, st *store.Store, pane string) store.Session {
+	t.Helper()
+	ctx := context.Background()
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "learn:retro", Owner: "magnum", Name: "retro", WatchOwner: "magnum", Mode: store.RepoModePerPR})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "learn:retro#1", Number: 1, URL: "file:///retro",
+		HeadSHA: "r", GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: LearnAgentTag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.CreateSession(ctx, store.Session{PRID: up.PR.ID, Role: config.LearnRoleName, AgentName: new("mg-learn"),
+		AgentKind: new(agents.KindClaude), HerdrWorkspaceID: new("w2"), HerdrPaneID: new(pane), State: store.SessionLive,
+		StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// panes are the panes of the events Wake was given.
+func panes(evs []agenthooks.Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		out = append(out, ev.Pane)
+	}
+	return out
+}
+
+// Each hook event reaches the agents manager whose registry records a live
+// session on its pane: the daemon's own for a review pane, a pane agent's
+// (the retro's) for its pane while it is registered; an event of a pane no
+// registry records reaches none, and a pane agent removed gets no more,
+// once its later looks were waited for.
+func TestAHookEventReachesTheManagerThatOwnsItsPane(t *testing.T) {
+	h := newHarness(t)
+	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	paneSession(t, scratch, "w2:p1")
+	retro := &fakeAgents{st: scratch}
+	h.e.agentHooks.open(h.ctx)
+	sink := h.e.agentHooks.add("retro", scratch, retro)
+	if sink == nil {
+		t.Fatal("no pane agent registered while the daemon listens")
+	}
+
+	for _, pane := range []string{"w1:p1", "w2:p1", "w9:p9"} {
+		h.e.routeHook(h.ctx, hookEvent(pane))
+	}
+	if got := panes(h.ag.wakes()); !slices.Equal(got, []string{"w1:p1"}) {
+		t.Fatalf("the daemon's manager woke for %v, want its review pane alone", got)
+	}
+	if got := panes(retro.wakes()); !slices.Equal(got, []string{"w2:p1"}) {
+		t.Fatalf("the retro's manager woke for %v, want its pane alone", got)
+	}
+
+	h.e.agentHooks.remove(sink)
+	if n := retro.count("wait wakes"); n != 1 {
+		t.Fatalf("WaitWakes ran %d times at the pane agent's removal, want once", n)
+	}
+	h.e.routeHook(h.ctx, hookEvent("w2:p1"))
+	if n := len(retro.wakes()); n != 1 {
+		t.Fatalf("the removed pane agent's manager woke %d times, want the one before", n)
+	}
+	if n := len(h.ag.wakes()); n != 1 {
+		t.Fatalf("the daemon's manager woke %d times, want the one for its pane", n)
+	}
+}
+
+// No pane agent registers while the daemon does not listen: its manager has
+// no hook env to wake for.
+func TestNoPaneAgentRegistersWithoutAListener(t *testing.T) {
+	h := newHarness(t)
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	if s := h.e.agentHooks.add("retro", scratch, &fakeAgents{st: scratch}); s != nil {
+		t.Fatal("a pane agent registered without a listener")
+	}
+}
+
+// The retro's agent, a pane agent over its scratch registry, gets the hook
+// events of its own pane while it works, and none once it closed; the
+// daemon's own manager gets none of them.
+func TestTheRetroAgentsHookEventsReachItsOwnManager(t *testing.T) {
+	p := newPaneHarness(t)
+	p.e.agentHooks.open(p.ctx)
+	run := RetroRun{ID: "r", Dir: filepath.Join(p.layout.Learn(), "retro", "r")}
+	job := p.job(run, 7)
+	var pane string
+	p.ag.reply = func(int, string) bool {
+		live, err := p.ag.st.LiveSessions(context.Background())
+		if err != nil || len(live) != 1 {
+			t.Errorf("the scratch registry's live sessions: %v, %v", live, err)
+			return true
+		}
+		pane = store.Deref(live[0].HerdrPaneID)
+		p.e.routeHook(p.ctx, hookEvent(pane))
+		validAnswer(t, job)
+		return true
+	}
+	cl := p.classifier(run)
+	if _, err := cl.Classify(p.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if got := panes(p.ag.wakes()); len(got) != 1 || got[0] != pane || pane == "" {
+		t.Fatalf("the retro's manager woke for %v, want its pane %q", got, pane)
+	}
+	if err := cl.Close(p.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := p.ag.count("wait wakes"); n != 1 {
+		t.Fatalf("WaitWakes ran %d times at the close, want once", n)
+	}
+	p.e.routeHook(p.ctx, hookEvent(pane))
+	if n := len(p.ag.wakes()); n != 1 {
+		t.Fatalf("the closed retro's manager woke %d times, want the one before", n)
+	}
+	if n := len(p.harness.ag.wakes()); n != 0 {
+		t.Fatalf("the daemon's manager woke %d times for the retro's pane", n)
+	}
+}
+
+// The doctor's probe, a datagram named "ping", is accepted (its send
+// succeeds) and dropped: no Wake, and nothing logged above debug level; the
+// router itself logs nothing for one.
+func TestAPingIsAcceptedAndDroppedQuietly(t *testing.T) {
+	l := shortLayout(t)
+	c := claim(t, l)
+	logs := &recordLog{}
+	h := newHarness(t, func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
+	ctx, cancel := context.WithCancel(h.ctx)
+	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
+	before := logs.len()
+	for _, ping := range []agenthooks.Event{{Name: hookPing}, {Agent: agenthooks.AgentClaude, Name: hookPing, Pane: "w1:p1"}} {
+		if err := agenthooks.Send(l.HookSocket(), ping); err != nil {
+			t.Fatalf("the ping %+v was refused: %v", ping, err)
+		}
+	}
+	if err := agenthooks.Send(l.HookSocket(), hookEvent("w1:p1")); err != nil { // after the pings: Serve reads in order
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(clockGuard); len(h.ag.wakes()) == 0; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the stop after the pings never reached Wake")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := h.ag.wakes(); len(got) != 1 || got[0].Name != agenthooks.NameStop {
+		t.Fatalf("Wake got %+v, want the stop alone", got)
+	}
+	for _, r := range logs.since(before) {
+		if r.Level > slog.LevelDebug && strings.Contains(strings.ToLower(r.Message), "hook") && r.Message != hooksListeningMsg {
+			t.Errorf("a ping logged %s %q", r.Level, r.Message)
+		}
+	}
+
+	quiet := &recordLog{}
+	h.e.log = slog.New(quiet)
+	h.e.routeHook(h.ctx, agenthooks.Event{Agent: agenthooks.AgentClaude, Name: hookPing, Pane: "w1:p1"})
+	if n := quiet.len(); n != 0 || len(h.ag.wakes()) != 1 {
+		t.Fatalf("the router logged %d lines and woke %d times for a ping, want none", n, len(h.ag.wakes())-1)
+	}
+}
+
+// Each event the router hands on logs one debug line with its name, its
+// pane, the session's registry, role and run in flight, and never a field
+// of the payload (the session id, the transcript, the error).
+func TestEachHookEventLogsItsNameItsPaneAndItsRun(t *testing.T) {
+	logs := &recordLog{}
+	h := newHarness(t, func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	run := h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
+	h.e.agentHooks.open(h.ctx)
+	ev := hookEvent("w1:p1")
+	ev.Name, ev.Error, ev.TranscriptPath = agenthooks.NameStopFailure, "SECRET-ERROR", "/secret/transcript.jsonl"
+	h.e.routeHook(h.ctx, ev)
+	if n := logs.count(slog.LevelDebug, hookEventMsg); n != 1 {
+		t.Fatalf("%q logged %d times, want once", hookEventMsg, n)
+	}
+	for key, want := range map[string]string{"event": agenthooks.NameStopFailure, "pane": "w1:p1", "registry": "daemon",
+		"role": config.RoleClaudeReview, "run": run.ID} {
+		if got := logs.attr(slog.LevelDebug, hookEventMsg, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for _, r := range logs.since(0) {
+		r.Attrs(func(a slog.Attr) bool {
+			if v := a.Value.String(); strings.Contains(v, "SECRET") || strings.Contains(v, ev.SessionID) {
+				t.Errorf("%q logged %s=%q", r.Message, a.Key, v)
+			}
+			return true
+		})
+	}
+}
+
+func (l *recordLog) len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.recs)
+}
+
+// since are the records from the n-th on.
+func (l *recordLog) since(n int) []slog.Record {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.recs[min(n, len(l.recs)):])
 }

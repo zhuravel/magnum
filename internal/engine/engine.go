@@ -420,6 +420,11 @@ type Deps struct {
 	// Webhooks reads magnum-relay's events in [webhooks] shadow mode
 	// (webhooks.go, which FromApp sets); nil = no consumer.
 	Webhooks WebhookSource
+
+	// agentHooks is the router of the agents' hook events the engine
+	// serves (hooks.go), which FromApp makes before the pane agents'
+	// deps that register in it; nil = New makes one.
+	agentHooks *hookRouter
 }
 
 // Options tune Run.
@@ -777,6 +782,8 @@ type Engine struct {
 	// slow pass of the clock last warned, under observeMu.
 	observeMu     sync.Mutex
 	observeSlowAt time.Time
+
+	agentHooks *hookRouter
 }
 
 // New returns an engine over d.
@@ -820,6 +827,10 @@ func New(d Deps) *Engine {
 		cliWhich:          map[string]*probeBackoff{},
 		kick:              make(chan struct{}, 1),
 		starts:            starter{codex: make(chan struct{}, maxCodexStarts)},
+		agentHooks:        d.agentHooks,
+	}
+	if e.agentHooks == nil {
+		e.agentHooks = &hookRouter{}
 	}
 	e.rec = &Recorder{log: d.Logger, st: d.Store, now: d.Now}
 	e.toastCtx, e.toastStop = context.WithCancel(context.Background())
@@ -839,6 +850,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
 		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, UsageAt: usage.CodexAt, Runner: a.Runner,
 		MemoryRunner: a.Runner, CodexLogin: usage.CodexLogin,
+		agentHooks: &hookRouter{}, // the pane agents below register in the engine's
 	}
 	if a.Agents != nil {
 		d.CodexHome = a.Agents.CodexHome
@@ -876,7 +888,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		// live registry shares the per-model limits with the rounds.
 		pd := paneDeps{
 			Config: a.Config, Layout: a.Layout, Logger: a.Logger, Herdr: h, Keys: h.AgentSendKeys, CloseWorkspace: h.WorkspaceClose,
-			Store: a.Store,
+			Store: a.Store, Hooks: d.agentHooks,
 			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
 				return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
 					Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}})

@@ -16,15 +16,21 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 
 	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
-// hooksOffMsg is the warning of a daemon without a hook listener.
-const hooksOffMsg = "agent hooks off: the daemon polls its agents alone"
+// hooksOffMsg is the warning of a daemon without a hook listener, and
+// hooksListeningMsg the line of one with it.
+const (
+	hooksOffMsg       = "agent hooks off: the daemon polls its agents alone"
+	hooksListeningMsg = "agent hooks: listening"
+)
 
 // Claim is what a review daemon takes before it builds its App
 // (ClaimDaemon): the daemon lock and, when it got it, the hook listener on
@@ -124,10 +130,11 @@ func (e *Engine) lockDaemon(c *Claim) (unlock func(), held bool, err error) {
 }
 
 // startHooks starts serving the claim's hook listener on a goroutine of its
-// own, each event to Wake on ctx (the daemon's: Wake's later looks end with
-// it), and returns what stops it: ctx's cancel first (stop), then the wait
-// for Serve, which returns once the Wake in flight returned, then
-// WaitWakes. Without a listener it warns once why (a claim that holds the
+// own, each event to Wake on the managers whose registries record its pane
+// (routeHook) on ctx (the daemon's: Wake's later looks end with it), and
+// returns what stops it: ctx's cancel first (stop), then the wait for
+// Serve, which returns once the Wake in flight returned, then WaitWakes on
+// the daemon's manager (a pane agent's waits at its close: hookRouter.remove). Without a listener it warns once why (a claim that holds the
 // lock) and returns stop alone.
 func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Claim) func() {
 	if c == nil || c.listener == nil {
@@ -137,27 +144,188 @@ func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Cla
 		return stop
 	}
 	c.log.set(e.log.Handler())
+	e.agentHooks.open(ctx)
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		c.listener.Serve(ctx, func(ev agenthooks.Event) { e.wakeHook(ctx, ev) })
+		c.listener.Serve(ctx, func(ev agenthooks.Event) { e.routeHook(ctx, ev) })
 	}()
-	e.log.Info("agent hooks: listening", "socket", c.listener.Path())
+	e.log.Info(hooksListeningMsg, "socket", c.listener.Path())
 	return func() {
 		stop()
 		<-served
+		e.agentHooks.close()
 		if e.d.Agents != nil {
 			e.d.Agents.WaitWakes()
 		}
 	}
 }
 
-// wakeHook hands a hook event to the agents manager.
-func (e *Engine) wakeHook(ctx context.Context, ev agenthooks.Event) {
-	if e.d.Agents == nil {
+// The router's words: the doctor's probe, which only checks that the
+// socket takes a datagram (Name ping), and the debug line of each event it
+// hands on.
+const (
+	hookPing     = "ping"
+	hookEventMsg = "hook event routed"
+)
+
+// hookRouter hands the hook listener's events to the agents managers whose
+// registries record a live session on the event's pane: the daemon's own
+// (Deps.Agents over the live registry: the rounds', the fix job's and the
+// whiteboard's agents) and, while they run, the pane agents' (the retro's,
+// a notes curation's or critique's, a skill edit's), each over a scratch
+// registry of its own (retro_pane.go), which register while the daemon
+// listens. The listener's goroutine is its only caller.
+type hookRouter struct {
+	mu sync.Mutex
+	// ctx is the daemon's while it listens (open); nil: no listener, and
+	// no pane agent registers.
+	ctx   context.Context
+	sinks []*hookSink
+}
+
+// hookSink is one pane agent's manager and its registry, registered with
+// the router (add): ctx, the daemon's own while the sink is registered,
+// bounds the later looks of its Wakes, and busy counts the Wakes in
+// flight.
+type hookSink struct {
+	what string // the pane agent ("retro", "curation", ...)
+	st   *store.Store
+	mgr  hookManager
+	ctx  context.Context
+	stop context.CancelFunc
+	busy sync.WaitGroup
+}
+
+// hookManager is the part of an agents manager the router drives.
+type hookManager interface {
+	Wake(ctx context.Context, ev agenthooks.Event)
+	WaitWakes()
+}
+
+// open has the router take pane agents, whose Wakes run on ctx (the
+// daemon's), and close stops it taking more.
+func (r *hookRouter) open(ctx context.Context) {
+	r.mu.Lock()
+	r.ctx = ctx
+	r.mu.Unlock()
+}
+
+func (r *hookRouter) close() {
+	r.mu.Lock()
+	r.ctx = nil
+	r.mu.Unlock()
+}
+
+// add registers a pane agent's manager mgr over its registry st, and
+// returns what remove takes; nil (nothing registered) while the daemon does
+// not listen, or on a nil router.
+func (r *hookRouter) add(what string, st *store.Store, mgr hookManager) *hookSink {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ctx == nil {
+		return nil
+	}
+	s := &hookSink{what: what, st: st, mgr: mgr}
+	s.ctx, s.stop = context.WithCancel(r.ctx)
+	r.sinks = append(r.sinks, s)
+	return s
+}
+
+// remove takes s out of the router before its pane agent's registry
+// closes: no event reaches it after, its later looks end (its context's
+// cancel), the Wake in flight returns, and then WaitWakes waits for the
+// looks. A nil s does nothing.
+func (r *hookRouter) remove(s *hookSink) {
+	if r == nil || s == nil {
 		return
 	}
-	e.d.Agents.Wake(ctx, ev)
+	r.mu.Lock()
+	r.sinks = slices.DeleteFunc(r.sinks, func(x *hookSink) bool { return x == s })
+	r.mu.Unlock()
+	s.stop()
+	s.busy.Wait()
+	s.mgr.WaitWakes()
+}
+
+// take is the registered sinks, each counted busy (its caller marks each
+// done).
+func (r *hookRouter) take() []*hookSink {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sinks {
+		s.busy.Add(1)
+	}
+	return slices.Clone(r.sinks)
+}
+
+// routeHook hands hook event ev to Wake on every agents manager whose
+// registry records a live session on its pane (hookOwner): the daemon's own
+// on ctx, the daemon's, and each registered pane agent's on its sink's. A
+// ping (the doctor's probe) is dropped without a word, and an event of a
+// pane no registry records is dropped with a debug line naming the event
+// alone (an agent picks the pane, so it is never logged).
+func (e *Engine) routeHook(ctx context.Context, ev agenthooks.Event) {
+	if ev.Name == hookPing {
+		return
+	}
+	routed := false
+	if e.d.Agents != nil && e.hookOwner(ctx, e.st, ev, "daemon") {
+		e.d.Agents.Wake(ctx, ev)
+		routed = true
+	}
+	sinks, next := e.agentHooks.take(), 0
+	defer func() { // a Wake that panicked (the listener recovers it) leaves no sink busy
+		for _, s := range sinks[next:] {
+			s.busy.Done()
+		}
+	}()
+	for ; next < len(sinks); next++ {
+		s := sinks[next]
+		if e.hookOwner(s.ctx, s.st, ev, s.what) {
+			s.mgr.Wake(s.ctx, ev)
+			routed = true
+		}
+		s.busy.Done()
+	}
+	if !routed {
+		e.log.Debug("hook event of no magnum session dropped", "event", ev.Name)
+	}
+}
+
+// hookOwner reports whether registry st (named registry in the log) records
+// a live session on ev's pane, and logs the event's debug line then: its
+// name, the pane (a herdr id the registry recorded), the registry, the
+// session's role and row and its run in flight, never a field of the
+// payload.
+func (e *Engine) hookOwner(ctx context.Context, st *store.Store, ev agenthooks.Event, registry string) bool {
+	live, err := st.LiveSessions(ctx)
+	if err != nil {
+		e.log.Debug("hook event: the live sessions cannot be read", "event", ev.Name, "registry", registry, "err", err)
+		return false
+	}
+	var s *store.Session
+	for i := range live {
+		if ev.Pane != "" && deref(live[i].HerdrPaneID) == ev.Pane && (s == nil || live[i].ID > s.ID) {
+			s = &live[i]
+		}
+	}
+	if s == nil {
+		return false
+	}
+	run := ""
+	if active, err := st.ActiveRuns(ctx); err == nil {
+		for _, r := range active {
+			if r.SessionID != nil && *r.SessionID == s.ID {
+				run = r.ID
+			}
+		}
+	}
+	e.log.Debug(hookEventMsg, "event", ev.Name, "pane", ev.Pane, "registry", registry, "role", s.Role, "session", s.ID, "run", run)
+	return true
 }
 
 // lateHandler is a slog.Handler that drops its records until set gives it

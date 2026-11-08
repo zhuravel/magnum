@@ -100,6 +100,10 @@ type paneDeps struct {
 	// with its kind's limits (agents.CopyModelLimits), and a limit the agent
 	// hits is recorded there too. nil: a job's limits stay in the job.
 	Store *store.Store
+	// Hooks is the daemon's router of its agents' hook events (hooks.go): a
+	// pane agent's manager registers there while it runs, so the events of
+	// its pane reach it. nil, or a daemon that does not listen: none do.
+	Hooks *hookRouter
 	// Now and Sleep as in Deps (nil = the real ones); ObserveEvery and Poll
 	// default to RetroObserveEvery and learnPoll.
 	Now          func() time.Time
@@ -174,8 +178,9 @@ type paneAgent struct {
 	role    config.Role
 	st      *store.Store
 	mgr     paneAgents
-	obs     *Engine  // observes herdr for mgr
-	pr      store.PR // the scratch registry's row the agent's session hangs on
+	obs     *Engine   // observes herdr for mgr
+	hook    *hookSink // mgr in the daemon's hook router (nil: not registered)
+	pr      store.PR  // the scratch registry's row the agent's session hangs on
 	turns   int
 	// restarted: the agent started again on a fallback model once
 	// (afterTurn); a second model limit stops the job.
@@ -355,6 +360,7 @@ func (c *paneAgent) setup(ctx context.Context) error {
 	}
 	c.cfg, c.st = &cfg, st
 	c.mgr = c.d.Agents(st, &cfg, layout)
+	c.hook = c.d.Hooks.add(c.spec.what, st, c.mgr) // hooks.go: its pane's hook events wake mgr
 	c.obs = New(Deps{Config: &cfg, Layout: layout, Store: st, Logger: c.d.Logger, Now: c.d.Now, Sleep: c.d.Sleep,
 		Herdr: c.d.Herdr, Agents: c.mgr})
 	return nil
@@ -783,7 +789,7 @@ func (c *paneAgent) currentModel(ctx context.Context) string {
 	return m
 }
 
-// Close stops observing and closes the agent: a turn still in flight (a
+// Close stops observing and taking hook events and closes the agent: a turn still in flight (a
 // shutdown mid-turn) is interrupted and abandoned, then the agent is parked
 // with its workspace (agents.Manager.Park); when Park refuses a busy agent,
 // the agent, which is ours by its tagged name, is quit and its workspace
@@ -795,6 +801,8 @@ func (c *paneAgent) Close(ctx context.Context) error {
 		c.stopObserving()
 		<-c.observed
 	}
+	c.d.Hooks.remove(c.hook) // before the registry closes: no hook event wakes mgr after
+	c.hook = nil
 	if c.mgr == nil {
 		return nil
 	}
