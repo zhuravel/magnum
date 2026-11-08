@@ -151,3 +151,49 @@ func TestAReadingNeitherIdleNorBusyNamesNoSecondReading(t *testing.T) {
 		t.Fatalf("run after unknown readings = %s, want working", r.State)
 	}
 }
+
+// A prompt begins a new turn: Submit sets idle_ticks to 0, so the next idle
+// reading begins a new streak even when herdr showed the agent idle all
+// along (a short turn, or herdr's status behind the prompt), and the gap
+// counts from it, not from the last turn's streak.
+func TestAPromptBeginsANewIdleStreak(t *testing.T) {
+	e := newEnv(t)
+	first := e.judgeAtWork()
+	e.h.setAgentStatus(judgeAgent, herdr.StatusIdle)
+	e.clock.Add(10 * time.Second)
+	e.observe()
+	e.clock.Add(10 * time.Second)
+	if o := e.observe()[RoleJudge]; o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != first {
+		t.Fatalf("second idle reading of the first turn = %+v, want completed", o)
+	}
+	for range 2 { // idle between the turns: the old streak goes on
+		e.clock.Add(10 * time.Second)
+		e.observe()
+	}
+
+	e.clock.Add(time.Minute)
+	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunRereview, "review again")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.h.setAgentStatus(judgeAgent, herdr.StatusIdle) // no working reading after the prompt
+	e.clock.Add(time.Second)
+	start := e.clock.Now()
+	if o := e.observe()[RoleJudge]; o.Kind != "" || o.Session.IdleTicks != 1 {
+		t.Fatalf("first idle reading after the prompt = %+v, want the streak begun", o)
+	}
+	e.clock.Add(time.Second)
+	if o := e.observe()[RoleJudge]; o.Kind != "" {
+		t.Fatalf("second idle reading 1s after the new streak began = %+v, want no end", o)
+	}
+	if r := e.run1(id); r.State == store.RunEnded {
+		t.Fatalf("run %s ended %v, 2s after the prompt", id, r.EndedAt)
+	}
+	e.clock.Add(CompletionGap - time.Second)
+	if o := e.observe()[RoleJudge]; o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != id {
+		t.Fatalf("reading %s after the new streak began = %+v, want completed", CompletionGap, o)
+	}
+	if r := e.run1(id); r.EndedAt == nil || !r.EndedAt.Equal(start.Add(CompletionGap)) {
+		t.Fatalf("run ended %v, want %v", r.EndedAt, start.Add(CompletionGap))
+	}
+}
