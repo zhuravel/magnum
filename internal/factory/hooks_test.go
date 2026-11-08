@@ -508,10 +508,12 @@ func (h *harness) recordPasses() *passTimes {
 // The first look after a Stop can find nothing yet (herdr's status or the
 // transcript lags the hook), and the core looks again at +1 s and +2 s on
 // its own goroutine. A run's end that such a look finds closes the
-// manager's Ended, and the loop takes it at once: its pass and the tick come
-// within a second of that look, not at the next clock pass.
+// manager's Ended, and the loop takes it at once: its pass and the tick
+// come, though the observe clock is an hour away (with no floor between hook
+// passes, so the order alone is tested, not a time).
 func TestATurnALaterLookEndsReachesTheLoopAtOnce(t *testing.T) {
 	h, _ := hookHarness(t)
+	h.e.hookGap = 0
 	task := h.task("PR-12607", registry.TaskActive, "investigate")
 	ticks := h.passes(task)
 	h.runDaemon()
@@ -522,13 +524,11 @@ func TestATurnALaterLookEndsReachesTheLoopAtOnce(t *testing.T) {
 	}
 	waitFor(t, "the event's observe pass", func() bool { return len(passes.list()) == 1 })
 
-	time.Sleep(time.Second) // the core's look at +1 s ends the turn
 	h.rt.setEvents([]runtime.Event{{TaskID: task.ID, Role: "fx-repro", RunID: "r1", Kind: runtime.EventEnded}})
-	endedAt := time.Now()
-	h.rt.endTurn()
-	waitPass(t, ticks, "the later look's end led to no tick")
-	if took := time.Since(endedAt); took > time.Second {
-		t.Fatalf("the tick came %s after the later look ended the turn, want it within a second", took)
+	h.rt.endTurn() // a later look ends the turn
+	waitPass(t, ticks, "the later look's end led to no tick: it waits for the clock")
+	if n := len(passes.list()); n != 2 {
+		t.Fatalf("%d observe passes, want the event's and the one for the later look's end", n)
 	}
 }
 
@@ -587,58 +587,142 @@ func TestNoHookPassOnceTheDaemonStops(t *testing.T) {
 	}
 }
 
+// seenPasses records the loop's observe passes as it runs them
+// (Engine.passSeen): whether the hooks asked for each, and when it began.
+type seenPasses struct {
+	mu   sync.Mutex
+	hook []bool
+	at   []time.Time
+}
+
+func (p *seenPasses) counts() (hooks, clock int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, h := range p.hook {
+		if h {
+			hooks++
+		} else {
+			clock++
+		}
+	}
+	return hooks, clock
+}
+
+func (p *seenPasses) starts() []time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.at)
+}
+
+// seePasses has the engine report each pass it runs; set before Run.
+func (h *harness) seePasses() *seenPasses {
+	p := &seenPasses{}
+	h.e.passSeen = func(hook bool, at time.Time) {
+		p.mu.Lock()
+		p.hook, p.at = append(p.hook, hook), append(p.at, at)
+		p.mu.Unlock()
+	}
+	return p
+}
+
 // Hook passes come at most once a second (hookPassGap): requests that come
 // sooner after one are held by the floor and then make a single pass, so a
 // flood of events (forged ones, a turn's many subagents) costs the loop at
-// most a pass a second beside the clock's.
+// most a pass a second beside the clock's. The gap is read at the passes'
+// own starts, as the floor counts it, so a slow machine cannot shrink it.
 func TestHookPassesComeAtMostOncePerSecond(t *testing.T) {
 	h, _ := hookHarness(t)
 	task := h.task("PR-12620", registry.TaskActive, "investigate")
 	ticks := h.passes(task)
+	seen := h.seePasses()
 	h.runDaemon()
 	waitPass(t, ticks, "Run never ticked")
-	passes := h.recordPasses()
 
 	h.e.hookEvent(h.ctx, hookStop)
-	waitFor(t, "the first hook pass", func() bool { return len(passes.list()) == 1 })
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, "the first hook pass", func() bool { n, _ := seen.counts(); return n == 1 })
 	second := hookStop
 	second.Pane = "w1:p2"
 	h.e.hookEvent(h.ctx, second)
 	h.rt.askSoon()
 	h.rt.endTurn()
-	waitFor(t, "the held hook pass", func() bool { return len(passes.list()) == 2 })
-	got := passes.list()
-	if gap := got[1].Sub(got[0]); gap < 900*time.Millisecond {
+	waitFor(t, "the held hook pass", func() bool { n, _ := seen.counts(); return n == 2 })
+	got := seen.starts()
+	if gap := got[1].Sub(got[0]); gap < hookPassGap {
 		t.Fatalf("two hook passes %s apart, want at least %s", gap, hookPassGap)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if n := len(passes.list()); n != 2 {
-		t.Fatalf("%d passes, want the held requests to make one", n)
+	if n, _ := seen.counts(); n != 2 {
+		t.Fatalf("%d hook passes, want the held requests to make one", n)
 	}
 }
 
-// A hook pass leaves the observe clock at its pace: the next clock pass
-// comes when it was due, neither pushed a whole interval past the hook pass
-// (a re-look pending would wait that long) nor added right after it.
+// A hook pass leaves the observe clock at its pace. Hook events come every
+// 1.2 s for 12 s with the clock at 2 s: a hook pass that reset the clock
+// would starve it (no clock pass at all), and one that added a clock pass
+// would bring about one per event. The clock's own passes start at least
+// its interval apart, so their count stays within the time over the
+// interval; the bounds leave seconds of slack either way.
 func TestAHookPassLeavesTheObserveClockAtItsPace(t *testing.T) {
 	h, _ := hookHarness(t)
 	h.cfg.Factory.Observe = config.Duration{Duration: 2 * time.Second}
 	task := h.task("PR-12621", registry.TaskActive, "investigate")
 	ticks := h.passes(task)
+	seen := h.seePasses()
+	began := time.Now()
 	h.runDaemon()
 	waitPass(t, ticks, "Run never ticked")
-	passes := h.recordPasses()
-	waitFor(t, "the first clock pass", func() bool { return len(passes.list()) == 1 })
-	clock := passes.list()[0]
 
-	time.Sleep(time.Until(clock.Add(time.Second)))
-	h.e.hookEvent(h.ctx, hookStop)
-	waitFor(t, "the hook pass and the next clock pass", func() bool { return len(passes.list()) == 3 })
-	got := passes.list()
-	hook, next := got[1], got[2]
-	if d := next.Sub(hook); d < 500*time.Millisecond || d > 1500*time.Millisecond {
-		t.Fatalf("the clock pass came %s after the hook pass (%s after the last clock pass), want about 1 s: when it was due",
-			d, next.Sub(clock))
+	for i := range 10 {
+		ev := hookStop
+		ev.Pane = fmt.Sprintf("w1:p%d", i+1)
+		h.e.hookEvent(h.ctx, ev)
+		time.Sleep(1200 * time.Millisecond)
+	}
+	hooks, clock := seen.counts()
+	limit := int(time.Since(began)/(2*time.Second)) + 1
+	switch {
+	case hooks < 5:
+		t.Fatalf("%d hook passes for ten events 1.2 s apart: the test did not run the hooks", hooks)
+	case clock < 2:
+		t.Fatalf("%d clock passes in %s beside %d hook passes: the hook passes hold the clock back", clock,
+			time.Since(began).Round(time.Second), hooks)
+	case clock > limit:
+		t.Fatalf("%d clock passes in %s, more than its pace allows (%d): the hook passes add clock passes", clock,
+			time.Since(began).Round(time.Second), limit)
+	}
+}
+
+// A clock pass that ends a run kicks the tick, and the end it brought also
+// closes the Ended it took: the tick runs first, and the pass for that
+// Ended waits for the floor, which counts from any pass. Each round's first
+// clock pass ends a run (and moves the clock out of the way); with no rule,
+// the loop would pick the second pass before the tick in about half the
+// rounds.
+func TestAClockPassThatEndsARunTicksBeforeAnotherPass(t *testing.T) {
+	for i := range 10 {
+		h, _ := hookHarness(t)
+		h.e.hookGap = 10 * time.Second // the floor's pass stays out of the round
+		h.cfg.Factory.Observe = config.Duration{Duration: 200 * time.Millisecond}
+		task := h.task(fmt.Sprintf("PR-%d", 12630+i), registry.TaskActive, "investigate")
+		ticks := h.passes(task)
+		var first atomic.Bool
+		h.rt.mu.Lock()
+		h.rt.onObserve = func() { // on the loop's goroutine
+			if first.CompareAndSwap(false, true) {
+				h.cfg.Factory.Observe = config.Duration{Duration: time.Hour}
+				h.rt.setEvents([]runtime.Event{{TaskID: task.ID, Role: "fx-repro", RunID: "r1", Kind: runtime.EventEnded}})
+				h.rt.endTurn()
+			}
+		}
+		h.rt.mu.Unlock()
+		stop := h.runDaemon()
+		waitPass(t, ticks, "Run never ticked")
+		waitPass(t, ticks, "the clock pass's end led to no tick")
+		order := h.rt.orderList()
+		at := slices.Index(order, "observe")
+		if at < 0 || at+1 >= len(order) || order[at+1] != "tick" {
+			t.Fatalf("round %d: the loop ran %v, want the tick right after the pass that ended the run", i, order)
+		}
+		_ = stop()
 	}
 }

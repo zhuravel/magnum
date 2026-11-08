@@ -306,6 +306,9 @@ type Engine struct {
 	// test's seam).
 	observeNow chan struct{}
 	hookGap    time.Duration
+	// passSeen, when set, is told of each observe pass the loop runs:
+	// whether the hooks asked for it, and when it began (a test's seam).
+	passSeen func(hook bool, at time.Time)
 
 	// Seams: the signal subscription, the process table that names the
 	// daemon that holds the lock, whether the command that asked for a

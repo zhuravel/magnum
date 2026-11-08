@@ -119,16 +119,18 @@ const hookPassGap = time.Second
 // ask for (RunLocked): an event's request (observeNow), a StopFailure's
 // (Runtime.ObserveSoon) and a run's end that a look after the event's own
 // found (Runtime.Ended, which closes on it) each run a pass at once, but no
-// sooner than gap after the last such pass began: the floor timer holds a
-// request until then, and the requests it holds make one pass. The observe
-// clock keeps its own pace: a hook pass neither resets it (a look again at
-// +1 s or +2 s that finds nothing leaves its turn to the clock, which must
-// not be a whole interval away) nor adds a clock pass after it. Every pass,
-// the clock's too, covers the requests made before it began, so it takes
-// them and a fresh Ended (observePass).
+// sooner than gap after the last pass of either kind began: the floor timer
+// holds a request until then, and the requests it holds make one pass. So a
+// pass that ends a run, whose own end closes the Ended it took, lets the
+// tick it kicked run first. The observe clock keeps its own pace: a hook
+// pass neither resets it (a look again at +1 s or +2 s that finds nothing
+// leaves its turn to the clock, which must not be a whole interval away)
+// nor adds a clock pass after it. Every pass, the clock's too, covers the
+// requests made before it began, so it takes them and a fresh Ended
+// (observePass).
 type hookPasses struct {
 	gap   time.Duration
-	last  time.Time // when the last hook pass began (zero: none yet)
+	last  time.Time // when the last pass began (zero: none yet)
 	floor *time.Timer
 	armed bool            // the floor holds a request
 	ended <-chan struct{} // Runtime.Ended as taken before the last pass (nil: none, or closed and not taken again)
@@ -162,7 +164,8 @@ func (p *hookPasses) due(now time.Time) bool {
 // observePass runs one observe pass of the loop (hook says whether the hooks
 // asked for it): it takes the requests made before it and a fresh Ended,
 // which the pass's own end of a run closes too (one more hook pass then, a
-// gap later), and lets the floor go.
+// gap later, after the tick that end kicked), lets the floor go, and starts
+// the floor's gap.
 func (e *Engine) observePass(ctx context.Context, p *hookPasses, hook bool) {
 	select {
 	case <-e.observeNow:
@@ -179,8 +182,9 @@ func (e *Engine) observePass(ctx context.Context, p *hookPasses, hook bool) {
 	if e.d.Runtime != nil {
 		p.ended = e.d.Runtime.Ended()
 	}
-	if hook {
-		p.last = time.Now()
+	p.last = time.Now() // the floor counts from any pass: the clock's takes the requests made before it too
+	if e.passSeen != nil {
+		e.passSeen(hook, p.last)
 	}
 	e.observe(ctx)
 }

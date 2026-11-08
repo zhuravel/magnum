@@ -3956,11 +3956,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   many passes come between; one deny per session per tick stays. By clock: from 5 s to under 10 s it denies on
   the second tick, as before; from 2 s to under 5 s it waits the 10 s (up to five ticks), where it waited two;
   from 10 s on (and the retro's and the notes' panes, at 10 s) it denies on the first tick, where it waited for
-  the second. The review daemon's hook looks shortened its guard the same way, and this covers them too. Rejected: counting a hook's pass as no tick (the core's
-  ticks pace the namer and the deny's count too) and keeping the tick with a time floor beside it (two rules for
-  one wait). Tests: TestTheSamePromptIsDeniedAgainOnlyTenSecondsAfterItsDeny (passes 1, 3, 5 and 7 s after the
-  deny leave it, the one 10 s after denies again; it failed first on the tick rule), and
-  TestObserveSamePromptWaitsOneTick now moves the clock 5 s between its ticks.
+  the second. The review daemon's hook looks shortened its guard the same way, and this covers them too.
+  Rejected: counting a hook's pass as no tick (the core's ticks pace the namer and the deny's count too) and
+  keeping the tick with a time floor beside it (two rules for one wait). Tests:
+  TestTheSamePromptIsDeniedAgainOnlyTenSecondsAfterItsDeny (passes 1, 3, 5 and 7 s after the deny leave it, the
+  one 10 s after denies again; it failed first on the tick rule), and TestObserveSamePromptWaitsOneTick now moves
+  the clock 5 s between its ticks.
 
 ## Screens and commands
 
@@ -19880,8 +19881,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `kick`). Two more sources ask for one: a StopFailure its screen proves (`Runtime.ObserveSoon`), and a run's end
   that the core's looks again at +1 s and +2 s find (`Runtime.Ended`, the manager's channel, which each pass takes
   fresh before it runs and which closes on any end after that, the pass's own included, so a pass that ends a run
-  is followed by one more). Hook passes come at most once a second (`hookPassGap`: a floor timer holds the
-  requests that come sooner, and they make one pass), none once the stop signal came (it ends the loop, the
+  is followed by one more). A hook pass comes no sooner than a second after the last pass of either kind
+  (`hookPassGap`: a floor timer holds the requests that come sooner, and they make one pass), so that extra pass
+  comes a second later, after the tick its pass kicked, not in a race with it (the re-review's probe saw it run
+  first in half the rounds while the floor counted from hook passes alone); a hook that comes right after a
+  clock pass waits that second at most. None runs once the stop signal came (it ends the loop, the
   clock's pass included), and each pass takes the requests made before it began. The observe clock keeps its pace:
   a hook pass does not reset it, since a turn the looks again could not prove is the clock's, which must not be a
   whole interval away, and the clock's pass costs one snapshot even when it comes right after a hook's; resetting
@@ -19915,10 +19919,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestWithoutAUsableHookSocketTheDaemonPollsAndSaysSoOnce (a path too long; a file that is no socket, left alone),
   TestAHookEventWakesThePaneThenObservesThenTicks (through a real socket: Wake, the pass, the tick, on a context
   that outlives the event and ends with the daemon), TestABurstOfHookEventsMergesIntoOneObservePass,
-  TestAHookPingIsDropped, TestATurnALaterLookEndsReachesTheLoopAtOnce (its tick within a second of the look),
+  TestAHookPingIsDropped, TestATurnALaterLookEndsReachesTheLoopAtOnce (its tick with the clock an hour away),
   TestAStopFailuresRequestRunsAPassAtOnce, TestNoHookPassOnceTheDaemonStops (ten rounds with an event, a
-  StopFailure and an end pending at the stop), TestHookPassesComeAtMostOncePerSecond,
-  TestAHookPassLeavesTheObserveClockAtItsPace, TestShutdownWaitsForTheHookLooksWithinTheDrain (after the listener
+  StopFailure and an end pending at the stop), TestHookPassesComeAtMostOncePerSecond (the gap read at the passes'
+  own starts, `passSeen`), TestAHookPassLeavesTheObserveClockAtItsPace (counts of clock and hook passes over
+  12 s, not a time window: a reset starves the clock, an added pass exceeds its pace),
+  TestAClockPassThatEndsARunTicksBeforeAnotherPass (ten rounds; it failed in round 0 with the floor counted from
+  hook passes alone), TestShutdownWaitsForTheHookLooksWithinTheDrain (after the listener
   closed; cut once the budget is spent), TestEveryPaneNamesTheHookSocketOnceTheDaemonListens,
   TestWithoutAHookSocketNoPaneNamesOne, TestSetHookSocketNamesTheSocketInThePanesMadeAfterIt (and none after
   `SetHookSocket("")`), TestSetHookSocketIsSafeBesideAPaneStart (a data race under `-race` with the setter's lock
