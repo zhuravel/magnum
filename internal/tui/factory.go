@@ -92,6 +92,11 @@ type FactoryData struct {
 	// Alerts are the alert events, newest first: ! lists every one with its
 	// time (spec 9.F: nothing vanishes).
 	Alerts []FactoryAlert
+	// OwnUnread says this read could not list your own open PRs: their
+	// rows are missing (Blocking says why), so an owner scope whose only
+	// rows they were is kept, as the board keeps its scope on a load that
+	// failed.
+	OwnUnread bool
 }
 
 // FactoryAlert is one alert the factory raised: when, and what it said.
@@ -943,9 +948,11 @@ func (m *factoryModel) nextOwner() tea.Cmd {
 
 // keepOwner is the board's rule for an owner scope whose owner has no rows
 // (its last one left, or none at the start): home shows every owner again,
-// a change OwnerChanged hears, and the footer says why.
+// a change OwnerChanged hears, and the footer says why. A read without your
+// PRs (OwnUnread) proves no owner gone, so the scope stays, as the board's
+// does on a load that failed.
 func (m *factoryModel) keepOwner() tea.Cmd {
-	if m.owner == "" || slices.ContainsFunc(m.owners(), func(o string) bool { return sameOwner(o, m.owner) }) {
+	if m.owner == "" || m.data.OwnUnread || slices.ContainsFunc(m.owners(), func(o string) bool { return sameOwner(o, m.owner) }) {
 		return nil
 	}
 	gone := m.owner

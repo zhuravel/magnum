@@ -238,7 +238,9 @@ func (s *factoryScreenSource) readyCard(id int64) (factory.ReadyCardFile, bool) 
 // "factory" the board leaves them out. The rows' PRs carry what r, R, z, M
 // and U go by (prFacts). An agents store it cannot open is a
 // blocker line of home, with why, and the rest is drawn. A factory daemon
-// that is down (daemonDown) is home's blocker line.
+// that is down (daemonDown) is home's blocker line. A frame that could not
+// read your PRs says so (tui.FactoryData.OwnUnread), beside its blocker
+// line, so the screen keeps the owner scope their rows would show.
 func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error) {
 	reg, err := s.registryFor(false)
 	if err != nil || reg == nil && s.magnum == nil {
@@ -246,11 +248,18 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 	}
 	agents, aerr := s.agentsStore()
 	cards := map[int64]factory.ReadyCardFile{}
+	var magnum factory.Magnum
+	var own *ownReadWatch
+	if s.magnum != nil { // no wrapper around none: ScreenData reads no PRs then
+		own = &ownReadWatch{Magnum: s.magnum}
+		magnum = own
+	}
 	d, err := factory.ScreenData(ctx, reg, agents, s.now(), s.lastSeen(), factory.ScreenOptions{Config: s.c.Config, Layout: s.c.Layout,
-		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout), Magnum: s.magnum})
+		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout), Magnum: magnum})
 	if err != nil {
 		return d, err
 	}
+	d.OwnUnread = own != nil && own.failed
 	s.cards.Store(&cards)
 	s.prFacts(ctx, d.Rows)
 	if aerr != nil {
@@ -258,6 +267,20 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 		d.BlockingLong = append(slices.Clone(d.BlockingLong), "agents not read ("+textx.Clip(textx.FirstLine(aerr.Error()), 200)+")")
 	}
 	return d, nil
+}
+
+// ownReadWatch is magnum's registry as one frame reads it, noting whether
+// its read of your open PRs failed: ScreenData then draws none of them and
+// adds a blocker line, but returns no error.
+type ownReadWatch struct {
+	factory.Magnum
+	failed bool
+}
+
+func (w *ownReadWatch) OwnPRs(ctx context.Context) ([]factory.PRState, error) {
+	prs, err := w.Magnum.OwnPRs(ctx)
+	w.failed = w.failed || err != nil
+	return prs, err
 }
 
 // prFacts gives the rows' PRs what r, R, z, M and U go by

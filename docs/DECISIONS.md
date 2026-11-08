@@ -18219,7 +18219,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     widget` words are gone. Home's hints offer `O owner` while the rows span several owners.
   - `magnum factory --repo owner/name|name` shows one repository's rows by the board's rule (`repoFlag` checks the
     flag for both commands), and `O` then cycles the owners of that repository's rows. Neither screen has a key
-    that cycles repositories: the repository is picked when the screen opens, as on the board.
+    that cycles repositories: the repository is picked when the screen opens, as on the board. The flag is the
+    screen's alone: `magnum factory`'s usage line offers it as the screen's form, apart from the subcommands'
+    (`factory [--repo owner/name|name] | factory <daemon|...>`), since a subcommand refuses it (`factory --repo x
+    status` is an unknown flag) or reads it as its own (`start`'s `--repo` picks a task's repository).
   - The title says both scopes in the board's words and places, right after `magnum factory`: `all repos` or the
     repository, then `owner example`, or `all owners` while the rows span several owners; a narrow title drops
     `all repos`, `all owners` and the word `owner` before the repositories' names give way to their count, as the
@@ -18242,7 +18245,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     kept becomes every owner; the factory screen does the same and says so (`owner: all (example has no tasks or
     PRs now)`). So an owner picked on the board whose rows the factory screen does not have is every owner again
     once the factory screen opened. Keeping it for when its rows come back would give the two screens two rules for
-    one scope, and the board's rule is the one the operator knows.
+    one scope, and the board's rule is the one the operator knows. The rule runs on a whole read only, as the
+    board's does (a load that fails returns before it): a factory frame whose read of your own PRs failed (a
+    registry migrated by a newer daemon, a busy read, an unreadable pidfile) still comes back, without those rows
+    and with the blocker line `your PRs not read`, so the source says so (`FactoryData.OwnUnread`, which `Frame`
+    sets when `OwnPRs` fails) and the screen keeps its owner, writes nothing and shows the owner's rows again with
+    the next whole frame. Taking the missing rows for an owner with none cleared the scope both screens share.
   Rejected: the board's owner code copied into the factory screen (two copies drift: R29's cycle already sorted
   differently from the board's owners); a key that cycles repositories on either screen (a repository is picked at
   the start, as with the board's `--repo`); a file of the screens' own for the scope (the registry's kv already keeps
@@ -18253,7 +18261,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFactoryScreenOpensInTheOwnerAndReportsEveryChange, TestOWithNoOwnerToShowSaysSo,
   TestHomeHintsOfferOWhileTheRowsSpanSeveralOwners, TestRepoNarrowsTheFactoryScreen,
   TestTheFactoryScreenTakesTheBoardsRepoFlag, TestTheBoardAndTheFactoryScreenShareTheOwnerScope,
-  TestTheFactoryScreenWithoutMagnumsRegistryRunsWithEveryOwner, TestTheHelpOfBothScreensSaysTheOwnerScopeIsShared;
+  TestTheFactoryScreenWithoutMagnumsRegistryRunsWithEveryOwner, TestTheHelpOfBothScreensSaysTheOwnerScopeIsShared,
+  TestAFrameWithoutYourPRsKeepsTheOwnerScope, TestAFrameThatCouldNotReadYourPRsSaysSo,
+  TestTheFactoryUsageOffersRepoToTheScreenAlone;
   amended: TestAnEmptyScopeSaysWhatONextShows and TestTheWalkIgnoresTheFilterAndTheScope (over the owner scope),
   TestTheHelpListsThePRKeysTheFilterAndTheScope (`O` is the owner), TestFactoryTitleNamesEveryRepositoryOrCountsThem
   and TestFactoryRowsOfSeveralOwnersNameTheOwnerOnlyOfASharedName (`all repos` on the title); removed:

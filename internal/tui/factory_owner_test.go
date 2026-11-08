@@ -156,6 +156,33 @@ func TestTheFactoryScreenOpensInTheOwnerAndReportsEveryChange(t *testing.T) {
 	mustNotContain(t, g.title(), "owner gone")
 }
 
+// A frame that could not read your own PRs (OwnUnread: their rows are
+// missing, the blocker line says why) is no proof that the scope's owner
+// has no rows: the scope stays, OwnerChanged hears nothing, and the owner's
+// rows show again with the next whole frame, as the board keeps its scope
+// on a load that failed. Before, the fallback showed every owner and wrote
+// "" for both screens.
+func TestAFrameWithoutYourPRsKeepsTheOwnerScope(t *testing.T) {
+	var heard []string
+	h := testOwners(t, FactoryOptions{DefaultOwner: "alice", OwnerChanged: func(o string) { heard = append(heard, o) }})
+	h.src.change(func(d *FactoryData) {
+		d.Rows = slices.DeleteFunc(d.Rows, func(r FactoryRow) bool { return r.Repo == "alice/dotfiles" })
+		d.Blocking, d.OwnUnread = []string{"your PRs not read"}, true
+	})
+	h.press("ctrl+r")
+	if h.m.owner != "alice" || len(heard) != 0 {
+		t.Errorf("a frame without your PRs: owner %q, heard %q; want alice kept and nothing heard", h.m.owner, heard)
+	}
+	mustContain(t, h.title(), "owner alice")
+	mustNotContain(t, h.view(), "has no tasks or PRs now")
+
+	h.src.change(func(d *FactoryData) { *d = ownersData() })
+	h.press("ctrl+r")
+	if got := h.shownKeys(); h.m.owner != "alice" || len(heard) != 0 || !slices.Equal(got, []string{"#4603", "#4611"}) {
+		t.Errorf("the next whole frame: owner %q, rows %v, heard %q; want alice's #4603 and #4611", h.m.owner, got, heard)
+	}
+}
+
 // O on rows that name no owner says so and changes nothing.
 func TestOWithNoOwnerToShowSaysSo(t *testing.T) {
 	h := testFactory(t, 140, 40) // the fixture's rows name no repository

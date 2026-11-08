@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	factoryUsage          = "factory [--repo owner/name|name] <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
+	factoryUsage          = "factory [--repo owner/name|name] | factory <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
 	factoryInstallUsage   = "install [--now | --drain [--timeout D]] [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"

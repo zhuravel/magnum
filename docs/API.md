@@ -28223,6 +28223,11 @@ type FactoryData struct {
 	// Alerts are the alert events, newest first: ! lists every one with its
 	// time (spec 9.F: nothing vanishes).
 	Alerts []FactoryAlert
+	// OwnUnread says this read could not list your own open PRs: their
+	// rows are missing (Blocking says why), so an owner scope whose only
+	// rows they were is kept, as the board keeps its scope on a load that
+	// failed.
+	OwnUnread bool
 }
     FactoryData is one read of the factory: home's rows and chips and every
     task's cards. Rows are drawn grouped by Group (factory_rows.go); Cards are

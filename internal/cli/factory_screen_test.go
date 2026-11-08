@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -202,6 +203,28 @@ func TestTheFactoryScreenTakesTheBoardsRepoFlag(t *testing.T) {
 	}
 }
 
+// --repo is the screen's flag alone: the factory's usage line offers it as
+// the screen's form, apart from the subcommands, which do not take it
+// (`factory --repo x status` is an unknown flag, and start's own --repo
+// picks a task's repository). Before, the line put it in front of every
+// subcommand.
+func TestTheFactoryUsageOffersRepoToTheScreenAlone(t *testing.T) {
+	c, _, _ := bareContext(t)
+	cmd, _, err := newRoot(c).Find([]string{"factory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forms := strings.Split(cmd.Use, " | ")
+	for _, f := range forms {
+		if strings.Contains(f, "<daemon|") && strings.Contains(f, "--repo") {
+			t.Errorf("the subcommands' form offers --repo: %q", cmd.Use)
+		}
+	}
+	if !slices.ContainsFunc(forms, func(f string) bool { return strings.Contains(f, "--repo") && !strings.Contains(f, "<daemon|") }) {
+		t.Errorf("no form of the screen alone offers --repo: %q", cmd.Use)
+	}
+}
+
 // ownOnlyMagnum is magnum's registry with your open PRs own and nothing
 // else.
 type ownOnlyMagnum struct{ own []factory.PRState }
@@ -242,6 +265,44 @@ func TestTheFactoryScreenWithoutARegistryListsYourPRs(t *testing.T) {
 	}
 	if fileExists(dt.ctx.Layout.FactoryDB()) {
 		t.Error("the frame created the factory's registry")
+	}
+}
+
+// ownUnreadMagnum is magnum's registry when your open PRs cannot be read
+// (a registry of a newer schema, a busy read, an unreadable pidfile).
+type ownUnreadMagnum struct{ ownOnlyMagnum }
+
+func (ownUnreadMagnum) OwnPRs(context.Context) ([]factory.PRState, error) {
+	return nil, errors.New("magnum's registry is at schema 99 and this build reads 98")
+}
+
+// A frame whose read of your open PRs failed says so to the screen
+// (tui.FactoryData.OwnUnread), beside the blocker line: the screen then
+// keeps the owner scope those rows would show, where it took the missing
+// rows for an owner with none and cleared the scope both screens share. A
+// frame that read them says nothing of it.
+func TestAFrameThatCouldNotReadYourPRsSaysSo(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	cfg := *dt.ctx.Config
+	cfg.Board.OwnPRs = config.OwnPRsFactory
+	dt.ctx.Config = &cfg
+	own := factory.PRState{Ref: factory.PRRef{Repo: "example/shop", Number: 12}, ID: 5, Title: "Coupon rounding",
+		URL: "https://github.com/example/shop/pull/12", Found: true, DaemonUp: true, Watched: true, GHState: store.GHOpen,
+		State: store.PRReviewed, AuthorLogin: "zhuravel"}
+	for _, tc := range []struct {
+		magnum factory.Magnum
+		unread bool
+	}{{ownUnreadMagnum{}, true}, {ownOnlyMagnum{own: []factory.PRState{own}}, false}} {
+		src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: tc.magnum}
+		d, err := src.Frame(context.Background())
+		src.close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.OwnUnread != tc.unread || slices.Contains(d.Blocking, "your PRs not read") != tc.unread {
+			t.Errorf("%T: OwnUnread %v, blockers %q; want %v", tc.magnum, d.OwnUnread, d.Blocking, tc.unread)
+		}
 	}
 }
 
