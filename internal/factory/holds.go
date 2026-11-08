@@ -470,12 +470,18 @@ func (e *Engine) mayLaunch() (who, what string, ok bool) {
 	return "", "", true
 }
 
-// server is a copy's server the engine started for a task, and the heavy
-// slot it holds.
+// server is a copy's server the engine started for a task, the heavy slot
+// it holds, and its stops that failed in a row (fails) with when the next
+// try of retryServerStops is due (next), kept in memory with it.
 type server struct {
 	copy    Copy
 	release func()
+	fails   int
+	next    time.Time
 }
+
+// serverLeftWords start the alert a server stop's second failure sends.
+const serverLeftWords = "a QA server may still be running in "
 
 // heavyServer is the heavy use of a task's server: bound to no stage, it
 // ends when the server stops.
@@ -507,7 +513,9 @@ func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error
 // a stop). A stop that found the copy's port held by a process outside the
 // copy (portHeld) stopped and forgot the factory's server all the same: it
 // counts as stopped, and its event names the holder. A stop that failed
-// keeps the server, which the next stop tries again.
+// keeps the server, which the next stop tries again: retryServerStops
+// after a backoff of 1, 2, 4, 8, then 15 minutes (alertBackoff of its
+// fails), and its second failure in a row sends one alert, naming the copy.
 func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why string) error {
 	ctx = context.WithoutCancel(ctx)
 	err := e.d.Copies.StopServer(ctx, s.copy)
@@ -515,6 +523,15 @@ func (e *Engine) stopServer(ctx context.Context, t registry.Task, s server, why 
 	if err != nil && !isHeld {
 		e.log.Warn("stop a server", "task", t.ID, "copy", s.copy.Name, "err", err)
 		e.event(ctx, t.ID, "server", registry.PhaseFail, "stop "+s.copy.Name+": "+err.Error())
+		s.fails++
+		s.next = e.now().Add(alertBackoff(s.fails))
+		if _, ok := e.servers[t.ID]; ok {
+			e.servers[t.ID] = s
+		}
+		if s.fails == 2 {
+			e.alert(ctx, t.ID, fmt.Sprintf("%s: %s%s: its stop failed twice; the factory tries it again, every 15 minutes at most",
+				TaskKey(t), serverLeftWords, s.copy.Name))
+		}
 		return fmt.Errorf("stop %s's server: %w", s.copy.Name, err)
 	}
 	delete(e.servers, t.ID)

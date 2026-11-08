@@ -846,8 +846,15 @@ func TestYourAcceptLetsAFixQADidNotWalkAgainGoOn(t *testing.T) {
 	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
 	sum, ok := readQASummary(dir)
 	want := []QAFixed{{Run: 1, Class: QAEscapedMarkup, Severity: "P2", Path: "/settings/security", State: "signed_in"}}
-	if !ok || sum.Head != fix || !slices.Equal(sum.Unchecked, want) || len(sum.Fixed) != 0 || len(sum.Blocked) != 0 {
+	unchecked := slices.Clone(sum.Unchecked)
+	for i := range unchecked {
+		unchecked[i].Fingerprint = ""
+	}
+	if !ok || sum.Head != fix || !slices.Equal(unchecked, want) || len(sum.Fixed) != 0 || len(sum.Blocked) != 0 {
 		t.Fatalf("qa-summary.json %+v (%v), want a pass with %+v unchecked, accepted by you", sum, ok, want)
+	}
+	if !strings.Contains(sum.Why, "1 fix not walked again, accepted by you") {
+		t.Errorf("the pass's why %q leaves your accept out", sum.Why)
 	}
 	if line := qaCardLine(sum); !strings.HasPrefix(line, "passed with 1 fix not walked again, accepted by you") {
 		t.Errorf("the card's QA line %q", line)
@@ -855,5 +862,94 @@ func TestYourAcceptLetsAFixQADidNotWalkAgainGoOn(t *testing.T) {
 	section := qaSection(sum)
 	if want := "- P2 escaped_markup on `/settings/security` in the state `signed_in`: HTML markup shown as text, found by QA run 1"; !strings.Contains(section, "Fixed by the writer, not walked again by QA, accepted by you:\n\n"+want) {
 		t.Errorf("the PR body's section lacks the unchecked fix:\n%s", section)
+	}
+}
+
+// skipWalk is a walk of the help's shortcuts alone, at /help/shortcuts as
+// its probe reads it, which shows nothing that blocks.
+func skipWalk() QAVerdict {
+	return QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/help/shortcuts", "A1")}}
+}
+
+// An accept of a fix that QA did not walk again holds at its head alone: the
+// run that passed with it is no pass of that fix. A run at a new head (a
+// send-back, a base merge) walks the page again, and one there that skips it
+// waits on you; a run at the accept's head keeps the fix as accepted by you.
+func TestAnUncheckedFixAcceptedAtAHeadIsWalkedAgainAtTheNext(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12470")
+	fix := r.fixAndRecheck(task, head, "/settings/security")
+	r.walk(task, skipWalk(), shortcutsProbes)
+	r.toYou(task)
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("your accept: %+v", q)
+	}
+	r.toWalker(task)
+	r.walk(task, skipWalk(), shortcutsProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	dir := r.layout.FactoryTaskDir(task.ID)
+	sum, ok := readQASummary(dir)
+	if !ok || sum.Head != fix || len(sum.Unchecked) != 1 {
+		t.Fatalf("qa-summary.json %+v (%v), want the pass at %s with the fix accepted unchecked", sum, ok, fix)
+	}
+	next := sum.Run + 1
+	if again := qaRechecks(dir, next); len(again) != 1 || again[0].Path != "/settings/security" {
+		t.Fatalf("the next run walks again %+v, want the unchecked fix's page", again)
+	}
+	at := func(h string) QAResult {
+		res := QAResult{Walk: []QAPage{{ID: "P1", Path: "/help/shortcuts", State: "signed_in", ProbePath: "/help/shortcuts"}}}
+		qaCheckFixes(dir, qaRun{N: next, Head: h}, &res)
+		return res
+	}
+	if res := at(strings.Repeat("e", 40)); len(res.Unchecked) != 0 || len(res.Blocked) != 1 || res.Blocked[0].Fingerprint == "" ||
+		res.Blocked[0].Why != qaNotWalkedWhy {
+		t.Errorf("a run at a new head that skips the page: %+v, want it waiting on you for the fix", res)
+	}
+	if res := at(fix); len(res.Unchecked) != 1 || len(res.Blocked) != 0 {
+		t.Errorf("a run at the accept's head: %+v, want the fix still accepted by you", res)
+	}
+}
+
+// A defect the writer declined and you accepted stays accepted by you, not
+// fixed: a walk at the accept's head that skips its page passes with it
+// under "Accepted by you, not fixed", never waits on you again, never offers
+// it as a fix QA did not walk again and never says the writer fixed it. At
+// a new head the accept no longer holds: a walk that skips the page waits on
+// you for the declined defect, never for a fix.
+func TestAnAcceptedDeclineAWalkSkipsStaysAcceptedNotFixed(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12471")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	r.toYou(task)
+	if q := r.acceptQA(task.ID); q.State != registry.RequestDone {
+		t.Fatalf("your accept of the decline: %+v", q)
+	}
+	r.toWalker(task)
+	r.walk(task, skipWalk(), shortcutsProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	dir := r.layout.FactoryTaskDir(task.ID)
+	sum, ok := readQASummary(dir)
+	if !ok {
+		t.Fatalf("no qa-summary.json: the task waits %q", r.reload(task.ID).WaitsWhat)
+	}
+	if len(sum.Accepted) != 1 || sum.Accepted[0].Class != QAEscapedMarkup || len(sum.Fixed) != 0 || len(sum.Unchecked) != 0 ||
+		len(sum.Blocked) != 0 {
+		t.Fatalf("qa-summary.json %+v, want the declined defect accepted by you, nothing fixed", sum)
+	}
+	s := qaSection(sum)
+	if strings.Contains(s, "Fixed by the writer") || strings.Contains(s, "fixed before this PR") {
+		t.Errorf("the PR body says the writer fixed a defect it declined:\n%s", s)
+	}
+	if want := "Accepted by you, not fixed:\n\n- P2 escaped_markup on `/settings/security` in the state `signed_in`: HTML markup shown as text"; !strings.Contains(s, want) {
+		t.Errorf("the PR body lacks %q:\n%s", want, s)
+	}
+	res := QAResult{Walk: []QAPage{{ID: "P1", Path: "/help/shortcuts", State: "signed_in", ProbePath: "/help/shortcuts"}}}
+	qaCheckFixes(dir, qaRun{N: sum.Run + 1, Head: strings.Repeat("e", 40)}, &res)
+	if len(res.Accepted) != 0 || len(res.Unchecked) != 0 || len(res.Fixed) != 0 || len(res.Blocked) != 1 ||
+		res.Blocked[0].Why != qaDeclinedNotWalkedWhy {
+		t.Errorf("a run at a new head that skips the page: %+v, want it waiting on you for the declined defect", res)
 	}
 }

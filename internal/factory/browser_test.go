@@ -35,8 +35,8 @@ func TestStartBrowserRecordsChromeAndReadsItsDevToolsPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBrowser: %v", err)
 	}
-	if cdp != "9333" {
-		t.Fatalf("cdp = %q, want the DevTools port 9333, the form agent-browser's --cdp documents", cdp)
+	if cdp != "http://127.0.0.1:9333" {
+		t.Fatalf("cdp = %q, want http://127.0.0.1:9333 (a bare port is localhost to agent-browser)", cdp)
 	}
 	if len(r.browsers) != 1 {
 		t.Fatalf("browsers %+v, want one", r.browsers)

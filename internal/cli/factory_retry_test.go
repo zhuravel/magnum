@@ -91,3 +91,39 @@ func TestFactoryRetryAcceptQASendsYourAcceptance(t *testing.T) {
 		t.Fatalf("a plain retry: exit %d, payload %+v", code, got)
 	}
 }
+
+// `magnum factory retry --surface liaison` records the retry, and an accept
+// it carries, as the liaison's, as answer and decide do: an accept the
+// liaison runs on your word in its chat is never your input at the CLI. A
+// surface that is neither is refused before any request.
+func TestFactoryRetryRecordsTheLiaisonsSurface(t *testing.T) {
+	storetest.Serial(t)
+	var got factory.RetryPayload
+	sent := 0
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		sent++
+		if err := json.Unmarshal(q.Payload, &got); err != nil {
+			t.Error(err)
+		}
+		return registry.RequestDone, "PR-12373 goes on at qa"
+	})
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := reg.CreateTask(context.Background(), registry.Task{JiraKey: "PR-12373", Kind: "bug", Repo: "example/shop",
+		State: registry.TaskNeedsYou, Stage: "qa", WaitsWho: "you", WaitsWhat: "the writer declined 1 defect that blocks"})
+	reg.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := dt.run("factory", "retry", "PR-12373", "--accept-qa", "--surface", "liaison"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if got != (factory.RetryPayload{TaskID: task.ID, Surface: "liaison", AcceptQA: true}) {
+		t.Fatalf("payload %+v, want the liaison's accept", got)
+	}
+	if code := dt.run("factory", "retry", "PR-12373", "--surface", "board"); code == 0 || sent != 1 {
+		t.Fatalf("--surface board: exit %d, %d requests sent", code, sent)
+	}
+}

@@ -306,11 +306,15 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 // the same kind of wait the alert named (its line: what a wait's count or
 // card revision changed is the same), or, for an ended task's leftovers
 // (its copy's release refused, what a base run left in its copy), while
-// they last. An alert's text is kept redacted (Engine.event), so what it is
-// compared with is too.
+// they last; a server a QA teardown failed to stop, while it is left. An
+// alert's text is kept redacted (Engine.event), so what it is compared with
+// is too.
 func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bool {
 	line := alertLine(ev.Text)
 	same := func(text string) bool { return line == alertLine(execx.Redact(text)) }
+	if _, left := e.servers[ev.TaskID]; left && ev.TaskID != 0 && strings.Contains(ev.Text, serverLeftWords) {
+		return true
+	}
 	if ev.TaskID == 0 {
 		return slices.ContainsFunc(slices.Collect(maps.Values(e.blockers)), func(b string) bool {
 			return same("factory: " + waitsYou + ": " + b)

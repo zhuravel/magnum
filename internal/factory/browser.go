@@ -61,8 +61,10 @@ func browserArgs(profile string) []string {
 // its profile in dir/chrome (dir is the run's folder under a task's
 // directory: any other is refused), and records its pid and its start. A
 // browser an earlier run of the copy left is stopped first. It waits up to
-// browserBoot for the DevTools port, which it returns (agent-browser's
-// --cdp takes a port or a WebSocket URL); a browser that never writes it is
+// browserBoot for the DevTools port, and returns its endpoint,
+// http://127.0.0.1:<port> (agent-browser's --cdp takes it; a bare port
+// would be localhost, which the Chrome does not listen on); a browser that
+// never writes it is
 // stopped and forgotten, and the error names its log.
 func (c *copySet) StartBrowser(ctx context.Context, cp Copy, dir string) (string, error) {
 	if !c.taskFolder(dir) {
@@ -126,9 +128,11 @@ func (c *copySet) StartBrowser(ctx context.Context, cp Copy, dir string) (string
 	if err != nil {
 		return fail(fmt.Errorf("the factory's Chrome for %s (pid %d) %w; its log is %s", cp.Name, pid, err, log), rec)
 	}
-	cdp := strconv.Itoa(port) // agent-browser's --cdp takes a port or a ws:// URL, never an http:// one
-	c.phase(ctx, cp.Name, kindBrowserStart, store.PhaseOK, fmt.Sprintf("the factory's Chrome for %s runs as pid %d, its DevTools on port %s "+
-		"of 127.0.0.1; its log is %s", cp.Name, pid, cdp, log))
+	// agent-browser's --cdp takes a port, an http:// or a ws:// URL; a bare port is localhost to it, and the
+	// Chrome listens on 127.0.0.1 alone (--remote-debugging-address), so the URL names the address.
+	cdp := "http://127.0.0.1:" + strconv.Itoa(port)
+	c.phase(ctx, cp.Name, kindBrowserStart, store.PhaseOK, fmt.Sprintf("the factory's Chrome for %s runs as pid %d, its DevTools on %s; "+
+		"its log is %s", cp.Name, pid, cdp, log))
 	return cdp, nil
 }
 

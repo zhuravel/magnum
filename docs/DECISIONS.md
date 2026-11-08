@@ -18935,8 +18935,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestACollapsedKnownRowNamesWhereQAsNotesAre and TestFactoryDecidePrintsTheCardsQALine.
 
 - **The final review's fixes of visual QA, slice 1: a skipped re-walk never goes on flagged, a page is the one
-  its probe read, the walker gets the DevTools port, a failed server stop is tried again, and the walker's shell
-  cannot run `open`** (2026-11-08, R55 slice 1, after the whole-branch review).
+  its probe read, a failed server stop is tried again, and fx-qa denies `open` and `osascript`** (2026-11-08, R55
+  slice 1, after the whole-branch review).
   - A walk after a fix that skips the fixed defect's page is no state the walker cannot reach (the run that
     found the defect reached it): `qaBlockedOnly` is false for it (`QABlocked.Fingerprint`, the factory's own,
     marks it), so two such walks at one head no longer pass flagged. The wait names the ways out: a retry that
@@ -18948,9 +18948,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - A fixed defect's page matches by the path its probe read alone, on both sides: the run's walk keeps it
     (`QAPage.ProbePath` in `result.json`, never read from a verdict), the handed defect takes it from the
     earlier run's walk, and `recheck.json` names it. The walker's label for a page decides nothing.
-  - The walker gets the Chrome's DevTools port (`--cdp 9333`, `AGENT_BROWSER_CDP=9333`), a form agent-browser
-    documents (a port or a WebSocket URL); the `http://127.0.0.1:<port>` URL it got before is in neither of
-    its docs. The README names agent-browser as the walker's prerequisite on the daemon's PATH.
+  - The walker's CDP endpoint stays `http://127.0.0.1:<port>` (fix round 2 below); the README names
+    agent-browser as the walker's prerequisite on the daemon's PATH.
   - A server stop that failed in a QA teardown is tried again on each tick while the task has no QA session
     (`retryServerStops`; QA is `startServer`'s only caller), so its heavy use is freed once a stop goes
     through, and a qa event says so; a boot more waits for that stop (`the copy's server of the run's last boot
@@ -18974,9 +18973,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestYourAcceptLetsAFixQADidNotWalkAgainGoOn (no accept took it), TestAMislabelledPageIsNoWalkOfAFixedDefectsPage
   (the label made it fixed), TestAFixedDefectsPageIsTheOneItsProbeRead, TestAFailedServerStopOfAQATeardownIsTriedAgain
   (one stop, the slot held), TestABootMoreWaitsForTheStopOfTheFirstBootsServer,
-  TestStartBrowserRecordsChromeAndReadsItsDevToolsPort and TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks
-  (the URL), TestTheQAWalkerLaunchesWithoutChromeOrMCPTools, TestTheVisualQASectionPrintsOnlyKnownClassesAndSeverities,
+  TestTheQAWalkerLaunchesWithoutChromeOrMCPTools, TestTheVisualQASectionPrintsOnlyKnownClassesAndSeverities,
   TestQAFileWhyLeavesTheRawNameOut and TestTheShotsNoteOffersEOnlyWithTheQAReport.
+
+- **Fix round 2 of visual QA, slice 1: an accept holds at its head alone, a declined defect is never a fix,
+  a flagged pass needs the same checks, and the walker's shell puts the shims first** (2026-11-08, R55 slice 1,
+  after the scoped re-review).
+  - A run passes a defect only when it did not let it through on your accept alone (its `Accepted`, its
+    `Unchecked`, which now carries the fingerprint): `qaHandedBefore` takes the newest run that passed each
+    defect, not the newest clean run. So a fix you let go unchecked at head H, or a decline you accepted there,
+    is walked again at a new head (a send-back, a base merge), and a run there that skips the page waits on
+    you; a run at H keeps it as accepted by you.
+  - A handed defect knows whether the writer's newest reply declined it (`qaHistory`). A declined defect is
+    never `Fixed` nor `Unchecked`: one you accepted at the run's head that the run does not find stays
+    `Accepted` (its page as an earlier run found it, `QADefect.FoundPath` and `FoundState`, the factory's own),
+    one whose page a run skipped is blocked "not walked again after the writer declined it", and `--accept-qa`
+    there accepts it as a decline (`qa-accepted.json` `fingerprints`), never as a fix. A walk that does not find
+    a declined defect names it as nothing: no fix was made.
+  - A blocked-only walk goes on flagged only when the acceptance checks it could not reach
+    (`QABlocked.Check`, the factory's ids) are among those the blocked-only walk before it stopped on
+    (`qaSameStops`); a walk blocked on another check waits on you again.
+  - A failed server stop is tried again after 1, 2, 4, 8, then 15 minutes (`alertBackoff` of its fails, kept
+    with the server in memory), and its second failure sends one alert, naming the copy, which stands while the
+    server is left.
+  - The walker's env names `CLAUDE_ENV_FILE`, a script in the shims directory that Claude Code runs before each
+    Bash command (code.claude.com/docs/en/env-vars documents it so) and that puts the shims first on PATH again;
+    the shims gain `osascript`, refusing as `open` does. The deny rules' claims now say what they block: the bare
+    commands and their `/usr/bin` paths, not `sh -c` or an interpreter; a program that runs `/usr/bin/open` by
+    its path is past both, and the prompt forbids `osascript` and asking any program to open a URL.
+  - The walker's CDP endpoint is `http://127.0.0.1:<port>` again: agent-browser 0.41.2's `connect --help` takes
+    `http://` URLs, and a bare port is `localhost` to it, while the Chrome listens on 127.0.0.1 alone.
+  - `magnum factory retry` takes `--surface cli|liaison`, recorded as `answer` and `decide` record it, and the
+    liaison passes `--surface liaison`. The words of the retry row, the AcceptQA docs and a pass's why count a
+    fix you let go unchecked.
+  Rejected: counting a clean run as no pass at all once it accepted anything (it would walk again every fix it
+  did check); keeping a bare port (it depends on agent-browser falling back from `::1`). Tests, failing first:
+  TestAnUncheckedFixAcceptedAtAHeadIsWalkedAgainAtTheNext (the next run walked nothing again),
+  TestAnAcceptedDeclineAWalkSkipsStaysAcceptedNotFixed (it needed you, then read "Fixed by the writer"),
+  TestABlockedOnlyWalkOnAnotherCheckNeedsYouAgain, TestAFailedServerStopOfAQATeardownIsTriedAgain (no backoff,
+  no alert), TestTheQAWalkersCopyOpensNoBrowserTab (no osascript shim, no CLAUDE_ENV_FILE),
+  TestStartBrowserRecordsChromeAndReadsItsDevToolsPort (the port), TestYourAcceptLetsAFixQADidNotWalkAgainGoOn
+  (the why) and TestFactoryRetryRecordsTheLiaisonsSurface (no flag).
 
 ## Learned rules
 

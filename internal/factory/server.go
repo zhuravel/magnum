@@ -153,7 +153,7 @@ func (c *copySet) StartServer(ctx context.Context, cp Copy) error {
 			return fmt.Errorf("start the server of %s: %w", cp.Name, err)
 		}
 	}
-	if err := ensureOpenShim(c.cfg.Layout.FactoryShims()); err != nil {
+	if err := ensureShims(c.cfg.Layout.FactoryShims()); err != nil {
 		return fmt.Errorf("start the server of %s: %w", cp.Name, err)
 	}
 	if err := os.MkdirAll(c.cfg.Layout.Logs(), 0o700); err != nil {
@@ -842,7 +842,8 @@ func (c *copySet) spawnServer(ctx context.Context, dir string, env map[string]st
 
 // serverEnv is the environment a copy's server starts with: base less the
 // variables the copies never inherit (unset), with the factory's shims
-// first on its PATH (their `open` opens nothing: openShim) and BROWSER=true
+// first on its PATH (their `open` opens nothing, and their `osascript` runs
+// nothing: openShim, osascriptShim) and BROWSER=true
 // (what opens a page by $BROWSER runs `true`), so a server that opens a
 // page at its start opens no tab in your browser.
 func serverEnv(base []string, shims string, unset []string) []string {
@@ -863,14 +864,42 @@ func serverEnv(base []string, shims string, unset []string) []string {
 	return append(env, "PATH="+shims, "BROWSER=true")
 }
 
-// openShim is the factory's `open` in FactoryShims: it says on stderr what
-// it refused and exits 0, so a server whose start opens a page goes on.
-const openShim = "#!/bin/sh\nprintf 'magnum factory: refused `open %s`: a copy'\\''s server opens no browser tab\\n' \"$*\" >&2; exit 0\n"
+// qaClaudeEnvFile is the QA walker's CLAUDE_ENV_FILE in FactoryShims, the
+// script Claude Code runs before each of its Bash commands: it puts the
+// shims first on the command's PATH again.
+const qaClaudeEnvFile = ".claude-env.sh"
 
-// ensureOpenShim writes the factory's `open` (openShim) to dir, executable.
-func ensureOpenShim(dir string) error {
+// openShim is the factory's `open` in FactoryShims, and osascriptShim its
+// `osascript` (AppleScript can open a URL in your browser too): each says on
+// stderr what it refused and exits 0, so a server whose start opens a page
+// goes on.
+const (
+	openShim      = "#!/bin/sh\nprintf 'magnum factory: refused `open %s`: a copy'\\''s server opens no browser tab\\n' \"$*\" >&2; exit 0\n"
+	osascriptShim = "#!/bin/sh\nprintf 'magnum factory: refused `osascript`: a copy'\\''s server and the QA walker run no AppleScript\\n' >&2; exit 0\n"
+)
+
+// ensureShims writes the factory's `open` and `osascript` (openShim,
+// osascriptShim) to dir, executable.
+func ensureShims(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return fsx.WriteFileAtomic(filepath.Join(dir, "open"), []byte(openShim), 0o755)
+	for name, body := range map[string]string{"open": openShim, "osascript": osascriptShim} {
+		if err := fsx.WriteFileAtomic(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureQAClaudeEnv writes the QA walker's CLAUDE_ENV_FILE (qaClaudeEnvFile
+// in the shims directory dir) and returns its path: one line that puts dir
+// first on PATH, which Claude Code runs before each Bash command, so the
+// shims come first in every command and the shells it starts, whatever PATH
+// the session's shell snapshot holds.
+func ensureQAClaudeEnv(dir string) (string, error) {
+	path := filepath.Join(dir, qaClaudeEnvFile)
+	body := "# magnum factory: the QA walker's shims (open, osascript) first on each Bash command's PATH\n" +
+		"export PATH='" + strings.ReplaceAll(dir, "'", `'\''`) + "':\"$PATH\"\n"
+	return path, fsx.WriteFileAtomic(path, []byte(body), 0o600)
 }

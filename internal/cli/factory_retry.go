@@ -11,13 +11,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/factory"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 )
 
-const factoryRetryUsage = "retry <task> [--accept-qa]"
+const factoryRetryUsage = "retry <task> [--accept-qa] [--surface cli|liaison]"
 
 func newFactoryRetryCmd(c *Context) *cobra.Command {
 	var acceptQA bool
+	var where whereFlags
 	cmd := newCommand("", factoryRetryUsage, "let a factory task that waits on you go on at its stage",
 		"Let a factory task that waits on you (NEEDS YOU) go on at its stage, as the screen's retry does: <task> is "+
 			"the task's id or its Jira key, and the command waits for the daemon's answer as `start` does. The "+
@@ -32,15 +34,24 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"accepted by you, and a new head blocks them again; only you can accept a defect QA finds, never the writer. After "+
 			"a QA run that did not walk again the page of a defect the writer fixed, --accept-qa lets that fix go unchecked at "+
 			"the task's head, and the PR body names it as accepted by you. A plain retry walks QA again and hands a decline "+
-			"you did not accept to the writer once more, within its fix turns.",
-		func(pos []string) int { return runFactoryRetryCmd(c, acceptQA, pos) })
+			"you did not accept to the writer once more, within its fix turns. --surface liaison says the factory's "+
+			"liaison runs the retry for you, on your word in its chat (the default, cli, is you by hand); the factory "+
+			"records it so, as for answer and decide.",
+		func(pos []string) int { return runFactoryRetryCmd(c, acceptQA, where, pos) })
 	cmd.Flags().BoolVar(&acceptQA, "accept-qa", false, "accept the QA defects the writer declined with its risk, or the fixes QA did not walk again, at the task's head")
+	cmd.Flags().StringVar(&where.surface, "surface", cliSurface, "where you give this word: "+cliSurface+" (by hand) or "+runtime.SurfaceLiaison+
+		" (the factory's liaison, which runs it for you)")
 	return cmd
 }
 
-func runFactoryRetryCmd(c *Context, acceptQA bool, pos []string) int {
+func runFactoryRetryCmd(c *Context, acceptQA bool, where whereFlags, pos []string) int {
 	if len(pos) != 1 {
 		return inspUsage(c, "factory retry", "which task? its id or its Jira key", factoryRetryUsage)
+	}
+	surface, _, err := where.resolve()
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum factory retry: %v\n", err)
+		return 2
 	}
 	if !fsx.Exists(c.Layout.FactoryDB()) {
 		fmt.Fprintln(c.Stderr, "magnum factory retry: the factory has no task yet (`magnum factory start` makes one)")
@@ -59,6 +70,6 @@ func runFactoryRetryCmd(c *Context, acceptQA bool, pos []string) int {
 		fmt.Fprintf(c.Stderr, "magnum factory retry: %v\n", err)
 		return 1
 	}
-	return sendFactoryRequest(ctx, c, reg, "factory retry", factory.ReqRetry, factory.RetryPayload{TaskID: t.ID, Surface: "cli", AcceptQA: acceptQA},
+	return sendFactoryRequest(ctx, c, reg, "factory retry", factory.ReqRetry, factory.RetryPayload{TaskID: t.ID, Surface: surface, AcceptQA: acceptQA},
 		"it lets the task go on")
 }

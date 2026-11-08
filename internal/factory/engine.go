@@ -117,8 +117,7 @@ type Copy = runtime.Copy
 // claim for a task (the copy it used last first), its release, how many are
 // free, the copies reserved and for which task, the copy's local server,
 // the factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-// cdp its DevTools port on 127.0.0.1, the form agent-browser's --cdp
-// documents), and the reconcile of
+// cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
 // the servers and the browsers after a restart.
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)

@@ -120,7 +120,7 @@ func fullPromptData() PromptData {
 		PRBody: dir + "/pr-body.md", PRTemplate: "/copies/shop1/.github/pull_request_template.md",
 		ErrorSkill: "acme-errors", PRBodySkill: "example:create-pr",
 		DBLockCommand: "/opt/bin/magnum db-lock --checkout /copies/shop1 --role fx-repro --", Port: 3001,
-		QARun: dir + "/qa/1-abc1234", QAURL: "http://app.example.localhost:3001", QACDP: "9222",
+		QARun: dir + "/qa/1-abc1234", QAURL: "http://app.example.localhost:3001", QACDP: "http://127.0.0.1:9222",
 		QAProbe: dir + "/qa/1-abc1234/probe.js", QAVerdict: dir + "/qa/1-abc1234/verdict.json", QAChanged: dir + "/qa/1-abc1234/changed.txt",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-7-1", QAMaxPages: 12, QAMaxShots: 30}
 }

@@ -12714,9 +12714,8 @@ type Copies interface {
     for a task (the copy it used last first), its release, how many are free,
     the copies reserved and for which task, the copy's local server, the
     factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-    cdp its DevTools port on 127.0.0.1, the form agent-browser's --cdp
-    documents), and the reconcile of the servers and the browsers after a
-    restart.
+    cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
+    the servers and the browsers after a restart.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
@@ -13247,9 +13246,10 @@ type PromptData struct {
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
-	// (config.FactoryQA.PageURL of its port, no path); QACDP the DevTools port
-	// of the factory's headless Chrome of the run's session (agent-browser's
-	// --cdp takes a port, never an http:// URL), the one browser
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the DevTools
+	// endpoint of the factory's headless Chrome of the run's session
+	// (http://127.0.0.1:<port>, as agent-browser's --cdp takes it), the one
+	// browser
 	// the walker attaches to, and QASession the walker's own session of its
 	// browser tool (agent-browser's --session, one per run); QAProbe the
 	// probe script the walker evaluates on each page, QAVerdict the verdict it
@@ -13360,23 +13360,31 @@ type QADefect struct {
 	Paths       []string `json:"paths"`
 	PreExisting bool     `json:"pre_existing"`
 	Fingerprint string   `json:"fingerprint"`
+	FoundPath   string   `json:"found_path,omitempty"`
+	FoundState  string   `json:"found_state,omitempty"`
 }
     QADefect is one defect: its id, class, severity (P1 to P3) and page id,
     a title, the quote as the page shows it, the code paths suspected, who found
     it (Source: walker or factory), whether the walker thinks it was there
-    before the change (read, never trusted in slice 1), and the fingerprint the
-    factory follows it by (qaFingerprint).
+    before the change (read, never trusted in slice 1), and the fingerprint
+    the factory follows it by (qaFingerprint). FoundPath and FoundState are the
+    factory's own, never a verdict's (walkerDefect clears them): for a defect
+    you accepted that the run did not see (Page empty), the path and state of
+    the page an earlier run found it on.
 
 type QAFixed struct {
-	Run      int    `json:"run"`
-	Class    string `json:"class"`
-	Severity string `json:"severity"`
-	Path     string `json:"path"`
-	State    string `json:"state,omitempty"`
+	Run         int    `json:"run"`
+	Class       string `json:"class"`
+	Severity    string `json:"severity"`
+	Path        string `json:"path"`
+	State       string `json:"state,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
-    QAFixed is a defect an earlier QA run of the task handed the writer that the
-    run walked again, its page in its state, and no longer finds: the run that
-    found it, its class and severity, and the path and state of its page.
+    QAFixed is a defect an earlier QA run of the task handed the writer that
+    the run walked again, its page in its state, and no longer finds: the run
+    that found it, its class and severity, and the path and state of its page;
+    in Unchecked, one whose fix the run did not walk again, with its fingerprint
+    (no later run takes the pass as a check of it).
 
 type QANotShown struct {
 	Check string `json:"check"`
@@ -28761,9 +28769,11 @@ type FactoryActions interface {
 	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
-	// AcceptQA lets a task whose QA fix loop stopped on defects the writer
-	// declined go on with them accepted by you, at its head (the task
-	// card's A, as `magnum factory retry --accept-qa`).
+	// AcceptQA lets a task go on with what QA left you accepted by you, at
+	// its head: the defects the writer declined, at its fix loop's stop or
+	// whose pages a QA run did not walk again, and the writer's fixes a QA
+	// run did not walk again (the task card's A, as `magnum factory retry
+	// --accept-qa`).
 	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a

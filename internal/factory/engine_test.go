@@ -904,7 +904,7 @@ func (f *fakeCopies) StartBrowser(_ context.Context, c Copy, dir string) (string
 	defer f.mu.Unlock()
 	f.startedBrowsers = append(f.startedBrowsers, c.Name)
 	f.browserDirs = append(f.browserDirs, dir)
-	return "9333", nil
+	return "http://127.0.0.1:9333", nil
 }
 
 func (f *fakeCopies) StopBrowser(ctx context.Context, c Copy) error {

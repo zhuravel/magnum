@@ -346,7 +346,7 @@ func TestQAStartsTheServerThenWaitsForItToAnswer(t *testing.T) {
 		t.Fatalf("the browser's folder is %s, want %s", l.browserDirs[0], want)
 	}
 	run, ok := readQARun(dir)
-	if !ok || run.N != 1 || run.Dir != "qa/1-"+head[:7] || run.Head != head || run.CDP != "9333" || len(run.Nonce) != 32 ||
+	if !ok || run.N != 1 || run.Dir != "qa/1-"+head[:7] || run.Head != head || run.CDP != "http://127.0.0.1:9333" || len(run.Nonce) != 32 ||
 		run.Port != 3001 || run.URL != "http://app.example.localhost:3001" || run.Ready != "/up" || run.Started.IsZero() {
 		t.Fatalf("qa-run.json %+v (%v)", run, ok)
 	}
@@ -635,7 +635,10 @@ func TestARetryAfterUnavailableStartsAFreshRun(t *testing.T) {
 }
 
 // The QA walker's copy gives its agent no way to open a tab in your browser
-// either: BROWSER=true and the factory's `open` first on its PATH.
+// either: BROWSER=true and the factory's `open` and `osascript` first on its
+// PATH, and first again before each of its Bash commands: Claude Code
+// sources CLAUDE_ENV_FILE before each one, after its shell's snapshot put
+// /usr/bin before the shims.
 func TestTheQAWalkersCopyOpensNoBrowserTab(t *testing.T) {
 	r := newQARig(t)
 	task, _ := r.qaTask("PR-12417")
@@ -647,9 +650,19 @@ func TestTheQAWalkersCopyOpensNoBrowserTab(t *testing.T) {
 	if env := sess.copy.Env; env["BROWSER"] != "true" || !strings.HasPrefix(env["PATH"], r.layout.FactoryShims()+":") || env["PORT"] != "3001" {
 		t.Fatalf("the walker's env %v, want BROWSER=true, the shims first on its PATH and the copy's own", env)
 	}
-	fi, err := os.Stat(filepath.Join(r.layout.FactoryShims(), "open"))
-	if err != nil || fi.Mode().Perm() != 0o755 {
-		t.Fatalf("the open shim: %v, %v", fi, err)
+	for _, name := range []string{"open", "osascript"} {
+		fi, err := os.Stat(filepath.Join(r.layout.FactoryShims(), name))
+		if err != nil || fi.Mode().Perm() != 0o755 {
+			t.Fatalf("the %s shim: %v, %v", name, fi, err)
+		}
+	}
+	envFile := sess.copy.Env["CLAUDE_ENV_FILE"]
+	if envFile != filepath.Join(r.layout.FactoryShims(), qaClaudeEnvFile) {
+		t.Fatalf("the walker's CLAUDE_ENV_FILE is %q", envFile)
+	}
+	b, err := os.ReadFile(envFile)
+	if want := "export PATH='" + r.layout.FactoryShims() + "':\"$PATH\"\n"; err != nil || !strings.HasSuffix(string(b), want) {
+		t.Fatalf("CLAUDE_ENV_FILE holds %q (%v), want it to end with %q", b, err, want)
 	}
 }
 
@@ -872,7 +885,7 @@ func TestAPanicInStartBrowserStartsItAgain(t *testing.T) {
 	r.e.d.Copies = &panickyCopies{fakeCopies: r.copies, startBrowserOnce: true}
 	task, _ := r.qaTask("PR-12423")
 	r.toWalk(task)
-	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.CDP != "9333" {
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.CDP != "http://127.0.0.1:9333" {
 		t.Fatalf("qa-run.json %+v, want the browser's endpoint", run)
 	}
 	if l := r.copies.log(); len(l.browsers) != 1 {
@@ -1060,9 +1073,9 @@ func (s *stageAtStop) StopServer(ctx context.Context, c Copy) error {
 // The walker's turn: the qa stage launches fx-qa alone, in the QA session's
 // copy (no tab in your browser, and its browser tool attached to the
 // factory's Chrome by its env), and its prompt names the session's DevTools
-// port with the flags that attach to it (agent-browser's --cdp takes a port
-// or a WebSocket URL, never an http:// one), the run's verdict, the probe
-// and the acceptance checks.
+// endpoint with the flags that attach to it (http://127.0.0.1:<port>: a bare
+// port is localhost to agent-browser, and the Chrome listens on 127.0.0.1
+// alone), the run's verdict, the probe and the acceptance checks.
 func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 	r := newQARig(t)
 	task, head := r.qaTask("PR-12430")
@@ -1076,7 +1089,7 @@ func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 		t.Fatalf("launches in %d copies, want 1", len(cs))
 	}
 	if env := cs[0].Env; cs[0].Path != r.copyDir || env["BROWSER"] != "true" || !strings.HasPrefix(env["PATH"], r.layout.FactoryShims()+":") ||
-		env["AGENT_BROWSER_CDP"] != "9333" || env["AGENT_BROWSER_SESSION"] != session || env["PORT"] != "3001" {
+		env["AGENT_BROWSER_CDP"] != "http://127.0.0.1:9333" || env["AGENT_BROWSER_SESSION"] != session || env["PORT"] != "3001" {
 		t.Fatalf("the walker launched in %s with env %v, want the QA session's copy", cs[0].Path, env)
 	}
 	if ps := r.rt.allPrompts(); slices.ContainsFunc(ps, func(p sentPrompt) bool { return p.Role != "fx-qa" }) {
@@ -1085,10 +1098,7 @@ func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 	text := r.rt.promptsTo("fx-qa")[0].Text
 	dir := r.layout.FactoryTaskDir(task.ID)
 	runDir := filepath.Join(dir, "qa", "1-"+head[:7])
-	if strings.Contains(text, "http://127.0.0.1") {
-		t.Errorf("the walker's prompt hands agent-browser a URL as its CDP endpoint, a form it does not document:\n%s", text)
-	}
-	for _, want := range []string{"port 9333", "--session " + session + " --cdp 9333 ",
+	for _, want := range []string{"http://127.0.0.1:9333", "--session " + session + " --cdp http://127.0.0.1:9333 ",
 		filepath.Join(runDir, "verdict.json"), filepath.Join(runDir, "probe.js"), filepath.Join(dir, "acceptance.json"),
 		"http://app.example.localhost:3001", "> " + runDir + "/pages/"} {
 		if !strings.Contains(text, want) {
@@ -1606,11 +1616,13 @@ func TestAQARunsReportNamesItsPagesShotsAndStates(t *testing.T) {
 	}
 }
 
-// A server stop that failed in a QA teardown is tried again on each tick
-// while no QA session of the task runs: once it goes through, the server's
-// heavy use is free and a qa event says so. Before, the task went on past
-// QA with the slot held, and every other task waited "heavy: …" until the
-// daemon restarted.
+// A server stop that failed in a QA teardown is tried again while no QA
+// session of the task runs, 1, 2, 4, 8 and then 15 minutes after each
+// failure (kept with the server, in memory): once it goes through, the
+// server's heavy use is free and a qa event says so. Its second failure
+// sends one alert that a QA server may still be running in the copy.
+// Before, the task went on past QA with the slot held, and every other task
+// waited "heavy: …" until the daemon restarted.
 func TestAFailedServerStopOfAQATeardownIsTriedAgain(t *testing.T) {
 	r := newQARig(t)
 	task, _ := r.qaTask("PR-12464")
@@ -1624,14 +1636,24 @@ func TestAFailedServerStopOfAQATeardownIsTriedAgain(t *testing.T) {
 		t.Fatalf("the walk passed with its server's stop failed: server held %v, stage %s", held, r.reload(task.ID).Stage)
 	}
 	stops := len(r.copies.log().stopped)
-	r.tick()
-	if got := len(r.copies.log().stopped); got <= stops {
-		t.Fatalf("%d server stops after a tick, as before it: the failed stop is not tried again", got)
+	tryAfter := func(d time.Duration, want int) {
+		t.Helper()
+		r.clock.Add(d)
+		r.tick()
+		if got := len(r.copies.log().stopped); got != want {
+			t.Fatalf("%d server stops %s later, want %d", got, d, want)
+		}
 	}
+	tryAfter(59*time.Second, stops)
+	tryAfter(time.Second, stops+1)
+	if got := r.eventsWith(task.ID, "alert", "a QA server may still be running in factory1"); len(got) != 1 {
+		t.Fatalf("alerts %q after the second failure, want one that names the copy", got)
+	}
+	tryAfter(119*time.Second, stops+1)
 	r.copies.mu.Lock()
 	r.copies.stopErr = nil
 	r.copies.mu.Unlock()
-	r.tick()
+	tryAfter(time.Second, stops+2)
 	if _, held := r.e.servers[task.ID]; held {
 		t.Fatal("the server is still held after a stop that went through")
 	}
@@ -1646,6 +1668,9 @@ func TestAFailedServerStopOfAQATeardownIsTriedAgain(t *testing.T) {
 	}
 	if got := r.eventsWith(task.ID, "qa", "tried again"); len(got) != 1 {
 		t.Errorf("qa events %q, want one that says the stop was tried again", got)
+	}
+	if got := r.eventsWith(task.ID, "alert", "a QA server may still be running"); len(got) != 1 {
+		t.Errorf("alerts %q, want the one", got)
 	}
 }
 
@@ -1672,8 +1697,42 @@ func TestABootMoreWaitsForTheStopOfTheFirstBootsServer(t *testing.T) {
 	r.copies.mu.Lock()
 	r.copies.stopErr = nil
 	r.copies.mu.Unlock()
+	r.clock.Add(15 * time.Minute) // past the stop's backoff
 	r.run(4, func() bool { return len(r.copies.log().started) == 2 })
 	if l := r.copies.log(); len(l.started) != 2 {
 		t.Fatalf("servers started %v after the stop went through, want the boot more", l.started)
+	}
+}
+
+// A second blocked-only walk goes on flagged only when the acceptance checks
+// it could not reach are among those the walk before it stopped on (the
+// factory's own ids, which stay the same whatever the walker calls a state):
+// a walk blocked on another check is a stop you have not seen, so the task
+// waits on you again, and the walk after that one, on its checks, goes on.
+func TestABlockedOnlyWalkOnAnotherCheckNeedsYouAgain(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12472")
+	r.taskFile(task.ID, acceptanceFile, `{"checks": [`+
+		`{"id": "A1", "point": "the passkeys list says when each was added", "given": "a user with a passkey", "then": "a date", "how": "QA: /settings/security"},`+
+		`{"id": "A2", "point": "the keys list says when each was added", "given": "a user with a security key", "then": "a date", "how": "QA: /settings/security"}]}`)
+	walkBlockedOn := func(shown, blocked string) {
+		v := QAVerdict{Pages: []QAPage{qaPage(1, "P1", "/settings/security", shown)},
+			Blocked: []QABlocked{{What: "the list in the state " + blocked, Why: "no such record locally", Check: blocked}}}
+		r.toWalker(task)
+		r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	}
+	walkBlockedOn("A1", "A2")
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	walkBlockedOn("A2", "A1")
+	got := r.toYou(task)
+	if _, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); ok || !strings.Contains(got.WaitsWhat, "QA could not reach 1 state") {
+		t.Fatalf("a second walk blocked on another check went on (summary %v), or waits %q", ok, got.WaitsWhat)
+	}
+	r.retryAnswer(task.ID)
+	walkBlockedOn("A2", "A1")
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); !ok || len(sum.Blocked) != 1 || sum.Blocked[0].Check != "A1" {
+		t.Fatalf("qa-summary.json %+v (%v), want the third walk on flagged with A1", sum, ok)
 	}
 }

@@ -123,9 +123,10 @@ type PromptData struct {
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
-	// (config.FactoryQA.PageURL of its port, no path); QACDP the DevTools port
-	// of the factory's headless Chrome of the run's session (agent-browser's
-	// --cdp takes a port, never an http:// URL), the one browser
+	// (config.FactoryQA.PageURL of its port, no path); QACDP the DevTools
+	// endpoint of the factory's headless Chrome of the run's session
+	// (http://127.0.0.1:<port>, as agent-browser's --cdp takes it), the one
+	// browser
 	// the walker attaches to, and QASession the walker's own session of its
 	// browser tool (agent-browser's --session, one per run); QAProbe the
 	// probe script the walker evaluates on each page, QAVerdict the verdict it
@@ -1517,7 +1518,7 @@ func checkData(role config.Role) PromptData {
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
-		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "9222",
+		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
 		QAMaxShots: 30}

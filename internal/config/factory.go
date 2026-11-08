@@ -444,9 +444,10 @@ func DefaultFactoryRoles() []Role {
 		{Name: "fx-writer", Kind: KindClaude, Model: "opus", Effort: "high", Prompt: "factory-writer.md", Timeout: Duration{90 * time.Minute},
 			Why: "write the change, test first", Doing: "writing the change"},
 		// The walker drives the factory's Chrome through the agent-browser CLI alone: no Claude in Chrome (your
-		// browser and its logins, whatever your setting), no MCP tool (the kind's mcp_strict keeps your servers out),
-		// and no shell open or osascript, bare or by path: Claude Code's shell takes its PATH from your login shell,
-		// where /usr/bin comes before the factory's shims, so only a deny rule keeps them from your browser.
+		// browser and its logins, whatever your setting) and no MCP tool (the kind's mcp_strict keeps your servers
+		// out). The rules block open and osascript as bare commands and by their /usr/bin paths, but not inside
+		// `sh -c` or an interpreter; there the factory's shims, which the walker's CLAUDE_ENV_FILE puts first on
+		// each Bash command's PATH, refuse them, and only a program that runs /usr/bin/open by its path is past both.
 		{Name: "fx-qa", Kind: KindClaude, Effort: "high", Prompt: "factory-qa.md", Timeout: Duration{35 * time.Minute},
 			Args: []string{"--no-chrome", "--disallowedTools=mcp__*,Bash(open:*),Bash(/usr/bin/open:*),Bash(osascript:*),Bash(/usr/bin/osascript:*)"},
 			Why:  "look at the changed pages in a browser, in the states the ticket names", Doing: "walking the pages"},

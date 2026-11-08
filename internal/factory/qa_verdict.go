@@ -108,7 +108,10 @@ type QAPage struct {
 // a title, the quote as the page shows it, the code paths suspected, who
 // found it (Source: walker or factory), whether the walker thinks it was
 // there before the change (read, never trusted in slice 1), and the
-// fingerprint the factory follows it by (qaFingerprint).
+// fingerprint the factory follows it by (qaFingerprint). FoundPath and
+// FoundState are the factory's own, never a verdict's (walkerDefect clears
+// them): for a defect you accepted that the run did not see (Page empty),
+// the path and state of the page an earlier run found it on.
 type QADefect struct {
 	ID          string   `json:"id"`
 	Class       string   `json:"class"`
@@ -120,6 +123,8 @@ type QADefect struct {
 	Paths       []string `json:"paths"`
 	PreExisting bool     `json:"pre_existing"`
 	Fingerprint string   `json:"fingerprint"`
+	FoundPath   string   `json:"found_path,omitempty"`
+	FoundState  string   `json:"found_state,omitempty"`
 }
 
 // QABlocked is a state or page the walker could not reach, why, and the
@@ -388,6 +393,7 @@ func qaFingerprint(d QADefect, pagePath string) string {
 func walkerDefect(d QADefect, pagePath string) QADefect {
 	d.Source = qaSourceWalker
 	d.Title, d.Quote = qaClip(d.Title), qaClip(d.Quote)
+	d.FoundPath, d.FoundState = "", ""
 	d.Fingerprint = qaFingerprint(d, pagePath)
 	return d
 }

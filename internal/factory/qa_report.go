@@ -54,6 +54,10 @@ const (
 	// qaNotWalkedWhy is why a page to walk again is a state the run did not
 	// reach.
 	qaNotWalkedWhy = "not walked again after the writer's fix"
+	// qaDeclinedNotWalkedWhy is why the page of a defect the writer declined,
+	// which no accept of yours at the run's head covers, is a state the run
+	// did not reach.
+	qaDeclinedNotWalkedWhy = "not walked again after the writer declined it"
 )
 
 // qaRecheck is a page a run walks again, in recheck.json: the path and the
@@ -66,13 +70,15 @@ type qaRecheck struct {
 
 // qaHandedDefect is a defect an earlier run handed the writer, as
 // qaHandedBefore has it: the first run that found it, its class, severity,
-// page and state (the newest run's page), its fingerprint, and whether a run
-// handed it since the newest run that passed (sincePass: the run checks its
-// fix).
+// page and state (the newest run's page), its fingerprint, whether a run
+// handed it since the newest run that passed it (sincePass: the run checks
+// it), and whether the writer's newest reply declined it (declined: no fix
+// of it was made).
 type qaHandedDefect struct {
 	QAFixed
 	fingerprint string
 	sincePass   bool
+	declined    bool
 }
 
 // qaClassWords are the factory's own words for each class of a QA defect.
@@ -259,10 +265,11 @@ func qaSection(res QAResult) string {
 	defects := func(ds []QADefect) []string {
 		var out []string
 		for _, d := range ds {
-			pg, ok := pages[d.Page]
 			on := "a page"
-			if ok {
+			if pg, ok := pages[d.Page]; ok {
 				on = qaCode(pg.Path) + qaInState(pg.State)
+			} else if d.FoundPath != "" { // accepted by you, not seen by this run
+				on = qaCode(d.FoundPath) + qaInState(d.FoundState)
 			}
 			out = append(out, fmt.Sprintf("%s %s on %s: %s", qaKnownSeverity(d.Severity), qaKnownClass(d.Class), on,
 				cmp.Or(qaClassWords[d.Class], "a defect")))
@@ -377,6 +384,8 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 			on := "a page"
 			if pg, ok := pages[d.Page]; ok {
 				on = cmp.Or(qaPlain(pg.Path), on)
+			} else if p := qaPlain(d.FoundPath); p != "" {
+				on = p + " (not seen in this run)"
 			}
 			fmt.Fprintf(&b, "- %s %s on %s: %s\n", d.Severity, d.Class, on, cmp.Or(qaPlain(d.Title), qaClassWords[d.Class]))
 			if q := qaPlain(d.Quote); q != "" {
@@ -418,16 +427,41 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 // (their defects files, in the task directory dir), each once, by its
 // fingerprint: the first run that found it, its class and severity from
 // that run's result, the path its probe read and the state of its page as
-// the newest run that handed it saw them (that run's walk), and whether a run handed it after the newest run
-// before k that passed (a clean or not_needed result): run k checks the fix
-// of those.
+// the newest run that handed it saw them (that run's walk), whether a run
+// handed it after the newest run before k that passed it, and whether the
+// writer's newest reply declined it (qaHistory): run k checks those handed
+// since. A run passes a defect when its result is clean or not_needed and it
+// did not let the defect through on your accept alone (its Accepted, its
+// Unchecked): an accept holds at its head, so a run at a new head checks the
+// defect again.
 func qaHandedBefore(dir string, k int) []qaHandedDefect {
-	pass := 0
+	type qaPass struct {
+		k       int
+		through map[string]bool
+	}
+	var passes []qaPass
 	for _, ref := range qaRunFolders(dir) {
-		if res, ok := readQAResult(dir, qaRun{Dir: qaRunDir(ref.k, ref.head)}); ok && ref.k < k &&
-			(res.Outcome == QAOutcomeClean || res.Outcome == QAOutcomeNotNeeded) {
-			pass = max(pass, ref.k)
+		res, ok := readQAResult(dir, qaRun{Dir: qaRunDir(ref.k, ref.head)})
+		if !ok || ref.k >= k || (res.Outcome != QAOutcomeClean && res.Outcome != QAOutcomeNotNeeded) {
+			continue
 		}
+		p := qaPass{k: ref.k, through: map[string]bool{}}
+		for _, d := range res.Accepted {
+			p.through[d.Fingerprint] = true
+		}
+		for _, f := range res.Unchecked {
+			p.through[f.Fingerprint] = true
+		}
+		passes = append(passes, p)
+	}
+	passOf := func(fp string) int {
+		n := 0
+		for _, p := range passes {
+			if !p.through[fp] {
+				n = max(n, p.k)
+			}
+		}
+		return n
 	}
 	var out []qaHandedDefect
 	at := map[string]int{}
@@ -458,8 +492,12 @@ func qaHandedBefore(dir string, k int) []qaHandedDefect {
 				out = append(out, qaHandedDefect{QAFixed: QAFixed{Run: ref.k, Class: d.Class, Severity: d.Severity}, fingerprint: d.Fingerprint})
 			}
 			out[i].Path, out[i].State = cmp.Or(pg.ProbePath, pg.Path), pg.State // the path its probe read (an older build kept the walker's)
-			out[i].sincePass = out[i].sincePass || ref.k > pass
+			out[i].sincePass = out[i].sincePass || ref.k > passOf(d.Fingerprint)
 		}
+	}
+	hist := qaHistory(dir, k)
+	for i := range out {
+		out[i].declined = hist[out[i].fingerprint].declined
 	}
 	return out
 }
@@ -524,13 +562,17 @@ func qaRunFolders(dir string) []qaDefectsRef {
 // qaCheckFixes checks run's result res (in the task directory dir) against
 // the defects earlier runs handed the writer (qaHandedBefore), by the pages
 // of its walk (res.Walk) as their probes read them, never by the walker's
-// labels. One the run finds again is the run's own. One whose page the run
-// walked in its state, and finds no more, is fixed (res.Fixed). One handed
-// since the newest pass whose page the run did not walk again is a state
-// it did not reach (res.Blocked, with its fingerprint): the run is no pass
-// for it, and you look; unless you let its fix go unchecked at the run's
-// head (qa-accepted.json, --accept-qa): then it is res.Unchecked. One a pass
-// checked before, which the run did not walk, is neither.
+// labels. One the run finds again is the run's own. A decline of the
+// writer's that you accepted at the run's head, which the run does not find,
+// stays accepted by you (res.Accepted, its page as an earlier run found it).
+// A fix of the writer's whose page the run walked in its state, finding it
+// no more, is fixed (res.Fixed); a declined defect never is, as no fix was
+// made. One handed since the newest run that passed it, whose page the run
+// did not walk again, is a state it did not reach (res.Blocked, with its
+// fingerprint): the run is no pass for it, and you look; unless you let its
+// fix go unchecked at the run's head (qa-accepted.json, --accept-qa): then
+// it is res.Unchecked. One a pass checked before, which the run did not
+// walk, is neither.
 func qaCheckFixes(dir string, run qaRun, res *QAResult) {
 	found := map[string]bool{}
 	for _, ds := range [][]QADefect{res.Blocking, res.Known, res.Accepted} {
@@ -545,14 +587,24 @@ func qaCheckFixes(dir string, run qaRun, res *QAResult) {
 		}
 	}
 	acc, _ := readQAAccepted(dir)
+	accepted := func(fps []string, fp string) bool { return acc.Head == run.Head && slices.Contains(fps, fp) }
 	for _, h := range qaHandedBefore(dir, run.N) {
 		switch {
 		case found[h.fingerprint]:
+		case h.declined && accepted(acc.Fingerprints, h.fingerprint):
+			res.Accepted = append(res.Accepted, QADefect{Class: h.Class, Severity: h.Severity, Source: qaSourceFactory,
+				Fingerprint: h.fingerprint, FoundPath: h.Path, FoundState: h.State})
 		case walked[qaPageKey(h.Path, h.State)]:
-			res.Fixed = append(res.Fixed, h.QAFixed)
+			if !h.declined {
+				res.Fixed = append(res.Fixed, h.QAFixed)
+			}
 		case !h.sincePass:
-		case acc.Head == run.Head && slices.Contains(acc.Unchecked, h.fingerprint):
-			res.Unchecked = append(res.Unchecked, h.QAFixed)
+		case h.declined:
+			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaDeclinedNotWalkedWhy, Fingerprint: h.fingerprint})
+		case accepted(acc.Unchecked, h.fingerprint):
+			f := h.QAFixed
+			f.Fingerprint = h.fingerprint
+			res.Unchecked = append(res.Unchecked, f)
 		default:
 			res.Blocked = append(res.Blocked, QABlocked{What: qaRecheckWhat(h), Why: qaNotWalkedWhy, Fingerprint: h.fingerprint})
 		}

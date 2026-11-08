@@ -85,9 +85,9 @@ const (
 	qaLockWhat  = "another QA runs on this Mac"
 	qaReadyWhat = "ready for the walk"
 	// qaServerStopWhat is a QA run's wait on the stop of its copy's server
-	// that failed (retryServerStops tries it again on each tick): no server
-	// of the run starts beside it.
-	qaServerStopWhat = "the copy's server of the run's last boot did not stop yet; each tick tries the stop again"
+	// that failed (retryServerStops tries it again after its backoff): no
+	// server of the run starts beside it.
+	qaServerStopWhat = "the copy's server of the run's last boot did not stop yet; the factory tries the stop again, every 15 minutes at most"
 )
 
 // The env of the walker's copy attaches its browser tool to the session's
@@ -96,10 +96,12 @@ const (
 // factory's Chrome, never a browser the tool would start itself or yours;
 // the tool's daemon of the run's session ends once idle for qaBrowserIdle.
 const (
-	qaEnvCDP      = "AGENT_BROWSER_CDP"
-	qaEnvSession  = "AGENT_BROWSER_SESSION"
-	qaEnvIdle     = "AGENT_BROWSER_IDLE_TIMEOUT_MS"
-	qaBrowserIdle = 10 * time.Minute
+	qaEnvCDP = "AGENT_BROWSER_CDP"
+	// qaEnvClaudeEnv is the script Claude Code runs before each Bash command.
+	qaEnvClaudeEnv = "CLAUDE_ENV_FILE"
+	qaEnvSession   = "AGENT_BROWSER_SESSION"
+	qaEnvIdle      = "AGENT_BROWSER_IDLE_TIMEOUT_MS"
+	qaBrowserIdle  = 10 * time.Minute
 	// qaListMost is how many blocked states a wait on you names.
 	qaListMost = 3
 )
@@ -146,7 +148,7 @@ var qaRunDirRe = regexp.MustCompile(`^([1-9][0-9]*)-[0-9a-f]+$`)
 // copy's server (its port, the repository's qa.url with it, no path, and
 // the ready path), the most pages it walks, the attempts of the stage
 // before it (the walker's turn is the first after them), the boots that
-// failed, the DevTools port of its browser (CDP), the probe's nonce and the
+// failed, the DevTools endpoint of its browser (CDP), the probe's nonce and the
 // user-facing files (both "" and nil until the user-facing check ran to
 // its end), when its server last started (zero before, and after a
 // teardown with no cut: a restart cut nothing of a run with no server), and
@@ -219,13 +221,15 @@ type QAResult struct {
 // QAFixed is a defect an earlier QA run of the task handed the writer that
 // the run walked again, its page in its state, and no longer finds: the run
 // that found it, its class and severity, and the path and state of its
-// page.
+// page; in Unchecked, one whose fix the run did not walk again, with its
+// fingerprint (no later run takes the pass as a check of it).
 type QAFixed struct {
-	Run      int    `json:"run"`
-	Class    string `json:"class"`
-	Severity string `json:"severity"`
-	Path     string `json:"path"`
-	State    string `json:"state,omitempty"`
+	Run         int    `json:"run"`
+	Class       string `json:"class"`
+	Severity    string `json:"severity"`
+	Path        string `json:"path"`
+	State       string `json:"state,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // What cut an interrupted run (QAResult.Cut): the daemon's own stop (a
@@ -423,7 +427,7 @@ func (e *Engine) endWalk(ctx context.Context, t registry.Task, st config.Factory
 		return false, err
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	if n := qaRowAt(dir, run.Head, qaBlockedOnly); qaBlockedOnly(res) && n >= qaInARow {
+	if n := qaRowAt(dir, run.Head, qaBlockedOnly); qaBlockedOnly(res) && n >= qaInARow && qaSameStops(dir, run, res) {
 		return true, e.passBlocked(ctx, t, run, res, n)
 	}
 	e.toOperator(ctx, t, qaYouWhat(t, dir, res), "QA could not judge the change")
@@ -440,6 +444,33 @@ func qaBlockedOnly(res QAResult) bool {
 		!slices.ContainsFunc(res.Blocked, qaNotWalkedAgain)
 }
 
+// qaSameStops reports whether the acceptance checks that blocked-only run
+// res (run) could not reach are all among those the blocked-only run before
+// it at its head stopped on, the stop you saw: QABlocked.Check is the
+// factory's id, the same whatever the walker calls a state (a blocked step
+// with no check matches one with none). A run the factory cut itself in
+// between is passed over, as qaRowAt does.
+func qaSameStops(dir string, run qaRun, res QAResult) bool {
+	for _, k := range qaRunsAt(dir, run.Head) {
+		if k >= run.N {
+			continue
+		}
+		prev, ok := readQAResult(dir, qaRun{Dir: qaRunDir(k, run.Head)})
+		if ok && prev.Outcome == QAOutcomeInterrupted && prev.Cut != "" && prev.Cut != qaCutCrash {
+			continue
+		}
+		if !ok || !qaBlockedOnly(prev) {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, b := range prev.Blocked {
+			seen[b.Check] = true
+		}
+		return !slices.ContainsFunc(res.Blocked, func(b QABlocked) bool { return !seen[b.Check] })
+	}
+	return false
+}
+
 // qaNotWalkedAgain reports whether b is the page of a defect an earlier run
 // handed the writer that the run did not walk again (qaCheckFixes; the
 // why alone for a result an older build wrote).
@@ -447,8 +478,9 @@ func qaNotWalkedAgain(b QABlocked) bool { return b.Fingerprint != "" || b.Why ==
 
 // passBlocked passes the qa stage on run's result res, the n-th walk in a
 // row at its head that reached its pages, found nothing that blocks there
-// and could not reach the same kind of states (qaBlockedOnly; the first sent
-// the task to you, and your retry walked once more): qa-summary.json alone,
+// and could not reach states only of the acceptance checks the walk before
+// it stopped on (qaBlockedOnly, qaSameStops; the first sent the task to you,
+// and your retry walked once more): qa-summary.json alone,
 // clean with those states, which go on flagged on the card and in the PR
 // body, and the run's report again, as passed. The run's result.json and its failed
 // check stay as the walk ended, and no check passes: QA did not judge those
@@ -551,11 +583,15 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		res.Outcome = QAOutcomeUnavailable
 		res.Why = fmt.Sprintf("QA could not reach %s of the change: %s; the %s it reached %s nothing that blocks",
 			plural(len(res.Blocked), "state"), qaBlockedList(res.Blocked), plural(res.Pages, "page"), shows)
-	case len(res.Accepted) > 0:
-		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s; %d accepted by you)", plural(res.Pages, "page"), plural(len(res.Known), "note"),
-			len(res.Accepted))
 	default:
-		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s)", plural(res.Pages, "page"), plural(len(res.Known), "note"))
+		of := []string{plural(len(res.Known), "note")}
+		if n := len(res.Accepted); n > 0 {
+			of = append(of, fmt.Sprintf("%d accepted by you", n))
+		}
+		if n := len(res.Unchecked); n > 0 {
+			of = append(of, qaFixes(n)+" not walked again, accepted by you")
+		}
+		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s)", plural(res.Pages, "page"), strings.Join(of, "; "))
 	}
 	e.event(ctx, t.ID, "qa", registry.PhaseInfo, fmt.Sprintf("run %d: the factory's checks of %s and %s found %s that block%s, %s; %s not reached",
 		run.N, plural(res.Pages, "page"), plural(res.Shots, "shot"), plural(len(res.Blocking), "defect"), blocksS(len(res.Blocking)),
@@ -718,12 +754,13 @@ func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 		n := len(res.Blocking)
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case res.Outcome == QAOutcomeUnavailable && res.Walked && slices.ContainsFunc(res.Blocked, qaNotWalkedAgain):
-		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and only a walk of each such page in its state checks the "+
-			"writer's fix there, or `magnum factory retry %d --accept-qa` lets the fix go unchecked, which the PR body names as accepted "+
-			"by you", res.Why, see, t.ID, t.ID)
+		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and only a walk of each such page in its state checks "+
+			"the defect there, or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR body names as "+
+			"accepted by you", res.Why, see, t.ID, t.ID)
 	case qaBlockedOnly(res):
 		return fmt.Sprintf("%s%s; then `magnum factory retry %d` walks once more, and a second walk that again reaches the pages but "+
-			"not every state goes on with those states flagged on the card and in the PR body", res.Why, see, t.ID)
+			"not every state, and misses only states of the acceptance checks this one missed, goes on with those states flagged on the "+
+			"card and in the PR body", res.Why, see, t.ID)
 	case res.Outcome == QAOutcomeUnavailable && res.Walked:
 		return res.Why + see + retryHint(t)
 	case res.Outcome == QAOutcomeUnavailable:
@@ -1164,8 +1201,8 @@ func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess
 }
 
 // qaBrowser starts the factory's headless Chrome for session sess in its
-// run's folder, once no hold stops launches, and records its DevTools port,
-// to which the walker's copy attaches its browser tool (qaEnvCDP, in the
+// run's folder, once no hold stops launches, and records its DevTools
+// endpoint, to which the walker's copy attaches its browser tool (qaEnvCDP, in the
 // run's own session): the session is ready for the walk. A browser that does
 // not start is QA unavailable; a start that panicked runs again on the next
 // pass (the session has no endpoint), and the teardown stops whatever it
@@ -1193,20 +1230,28 @@ func (e *Engine) qaBrowser(ctx context.Context, t registry.Task, sess *qaSession
 	if err := writeJSON(filepath.Join(dir, qaRunFile), sess.run); err != nil {
 		return err
 	}
-	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d: the copy's server answers %s and the factory's Chrome runs, its DevTools on port %s: %s",
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("run %d: the copy's server answers %s and the factory's Chrome runs, its DevTools on %s: %s",
 		sess.run.N, sess.run.Ready, cdp, qaReadyWhat))
 	e.waitOn(ctx, t, waitQA, qaReadyWhat)
 	return nil
 }
 
 // qaWalkerCopy is copy c as the QA walker's agent runs in it: the copy's env
-// with BROWSER=true and the factory's shims (whose `open` opens nothing)
-// first on its PATH, the daemon's after, so the walker opens no tab in your
-// browser either (qaBrowser adds its browser tool's attachment), in an env
-// of its own, never the claimed copy's.
+// with BROWSER=true and the factory's shims (whose `open` opens nothing and
+// whose `osascript` runs nothing) first on its PATH, the daemon's after, and
+// CLAUDE_ENV_FILE, which puts them first again before each Bash command
+// (Claude Code's shell snapshot puts /usr/bin before them), so the walker
+// opens no tab in your browser either (qaBrowser adds its browser tool's
+// attachment), in an env of its own, never the claimed copy's. The fx-qa
+// role's deny rules stop the bare commands too; a program that calls
+// /usr/bin/open by its path is past both.
 func (e *Engine) qaWalkerCopy(c Copy) (Copy, error) {
 	shims := e.d.Layout.FactoryShims()
-	if err := ensureOpenShim(shims); err != nil {
+	if err := ensureShims(shims); err != nil {
+		return c, err
+	}
+	envFile, err := ensureQAClaudeEnv(shims)
+	if err != nil {
 		return c, err
 	}
 	env := maps.Clone(c.Env)
@@ -1214,6 +1259,7 @@ func (e *Engine) qaWalkerCopy(c Copy) (Copy, error) {
 		env = map[string]string{}
 	}
 	env["BROWSER"] = "true"
+	env[qaEnvClaudeEnv] = envFile
 	env["PATH"] = shims
 	if p := e.getenv("PATH"); p != "" {
 		env["PATH"] += ":" + p
@@ -1474,12 +1520,13 @@ func (e *Engine) sweepQA(ctx context.Context, tasks []registry.Task) {
 
 // retryServerStops stops again each server whose task has no QA session
 // (QA is startServer's only caller, so such a server is one a teardown
-// failed to stop), on every tick until a stop goes through: that frees its
-// heavy use, which no stage releases, and a qa event says so. A stop that
-// fails again says so in its own fail event.
+// failed to stop), once its backoff is past (stopServer), until a stop goes
+// through: that frees its heavy use, which no stage releases, and a qa
+// event says so. A stop that fails again says so in its own fail event, and
+// waits longer.
 func (e *Engine) retryServerStops(ctx context.Context, tasks []registry.Task) {
 	for _, id := range slices.Sorted(maps.Keys(e.servers)) {
-		if e.qaSessionOf(id) != nil {
+		if e.qaSessionOf(id) != nil || e.now().Before(e.servers[id].next) {
 			continue
 		}
 		t := registry.Task{ID: id}

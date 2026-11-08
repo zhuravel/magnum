@@ -1232,16 +1232,16 @@ func TestTheQAWalkerRoleIsAClaudeSessionOf35Minutes(t *testing.T) {
 }
 
 // qaDeniedTools is the walker's one --disallowedTools: every MCP tool, and
-// a shell's open and osascript, bare or by their path, which would reach your
-// browser whatever the factory's shims on its PATH say (Claude Code's shell
-// takes its PATH from your login shell, where /usr/bin comes first).
+// open and osascript as bare commands and by their /usr/bin paths (a deny
+// rule does not reach inside `sh -c` or an interpreter, which the factory's
+// shims cover).
 const qaDeniedTools = "--disallowedTools=mcp__*,Bash(open:*),Bash(/usr/bin/open:*),Bash(osascript:*),Bash(/usr/bin/osascript:*)"
 
 // The QA walker's launch takes no browser but the factory's Chrome: no
 // Claude in Chrome, whatever your setting, no MCP tool at all (the claude
 // kind keeps your MCP servers out already, with --strict-mcp-config, which
-// the role does not repeat), and no shell command that opens a tab in your
-// browser.
+// the role does not repeat), and no bare open or osascript, nor either by its
+// /usr/bin path.
 func TestTheQAWalkerLaunchesWithoutChromeOrMCPTools(t *testing.T) {
 	for _, cfg := range []*Config{mustLoadDefaults(t), Defaults()} {
 		r, ok := cfg.FactoryRole("fx-qa")

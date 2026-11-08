@@ -82,13 +82,13 @@ type qaAccepted struct {
 	At           time.Time `json:"at"`
 }
 
-// qaAccept is what --accept-qa accepts at a run's head: the fingerprints
-// of the defects the writer declined at its fix loop's stop (declined), or
-// else those of the fixes the run did not walk again (unchecked, with what
-// the run says of each).
+// qaAccept is what --accept-qa accepts at a run's head, by fingerprint: the
+// defects the writer declined (declined: at its fix loop's stop, or whose
+// pages the run did not walk again), and the fixes of the writer's whose
+// pages the run did not walk again (unchecked).
 type qaAccept struct {
 	declined  []string
-	unchecked []QABlocked
+	unchecked []string
 }
 
 // qaDefectsFile is run k's defects for the writer at head, relative to the
@@ -534,9 +534,9 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 			acc.Fingerprints = append(acc.Fingerprints, fp)
 		}
 	}
-	for _, b := range a.unchecked {
-		if !slices.Contains(acc.Unchecked, b.Fingerprint) {
-			acc.Unchecked = append(acc.Unchecked, b.Fingerprint)
+	for _, fp := range a.unchecked {
+		if !slices.Contains(acc.Unchecked, fp) {
+			acc.Unchecked = append(acc.Unchecked, fp)
 		}
 	}
 	acc.At = e.now()
@@ -550,18 +550,20 @@ func (e *Engine) acceptQA(ctx context.Context, t registry.Task) (what string, un
 		}
 		_ = fsx.WriteFileAtomic(path, before, 0o600)
 	}
-	it := func(n int) string { return map[bool]string{true: "it", false: "them"}[n == 1] }
-	if n := len(a.unchecked); n > 0 {
-		e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you let %s QA did not walk again go unchecked at %s (run %d)", qaFixes(n),
-			textx.ShortSHA(run.Head), run.N))
-		return fmt.Sprintf("; QA lets %s it did not walk again pass at %s, and the PR body names %s as accepted by you", qaFixes(n),
-			textx.ShortSHA(run.Head), it(n)), undo, nil
+	short := textx.ShortSHA(run.Head)
+	var events, lets []string
+	if n := len(a.declined); n > 0 {
+		events = append(events, fmt.Sprintf("accepted %s the writer declined", plural(n, "QA defect")))
+		lets = append(lets, fmt.Sprintf("%s the writer declined", plural(n, "defect")))
 	}
-	n := len(a.declined)
-	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you accepted %s the writer declined at %s (run %d's stop)", plural(n, "QA defect"),
-		textx.ShortSHA(run.Head), run.N))
-	return fmt.Sprintf("; QA lets %s the writer declined pass at %s, and the PR body names %s as accepted by you", plural(n, "defect"),
-		textx.ShortSHA(run.Head), it(n)), undo, nil
+	if n := len(a.unchecked); n > 0 {
+		events = append(events, fmt.Sprintf("let %s QA did not walk again go unchecked", qaFixes(n)))
+		lets = append(lets, qaFixes(n)+" it did not walk again")
+	}
+	n := len(a.declined) + len(a.unchecked)
+	e.event(ctx, t.ID, "qa", registry.PhaseOK, fmt.Sprintf("you %s at %s (run %d)", strings.Join(events, " and "), short, run.N))
+	return fmt.Sprintf("; QA lets %s pass at %s, and the PR body names %s as accepted by you", strings.Join(lets, " and "), short,
+		map[bool]string{true: "it", false: "them"}[n == 1]), undo, nil
 }
 
 // qaAcceptable is what --accept-qa accepts of task t (its task directory
@@ -577,7 +579,7 @@ func qaAcceptable(dir string, t registry.Task) (qaRun, qaAccept, error) {
 	run, ok := readQARun(dir)
 	stop, stopped := readQAFixStop(dir, run)
 	if ok && !stopped && run.Head == t.HeadSHA {
-		if a, holds, err := qaUncheckedAcceptable(dir, t, run); holds {
+		if a, holds, err := qaNotWalkedAcceptable(dir, t, run); holds {
 			return run, a, err
 		}
 	}
@@ -605,31 +607,40 @@ func qaAcceptable(dir string, t registry.Task) (qaRun, qaAccept, error) {
 	return run, a, nil
 }
 
-// qaUncheckedAcceptable is what --accept-qa accepts of task t at run, the
-// newest at its head when no fix loop's stop holds there: the fixes whose
+// qaNotWalkedAcceptable is what --accept-qa accepts of task t at run, the
+// newest at its head when no fix loop's stop holds there: the defects whose
 // pages the run did not walk again (its result's blocked states with a
-// fingerprint), and an error once you let all of them go at the head
-// already; holds is false for a run with none of them.
-func qaUncheckedAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, holds bool, err error) {
+// fingerprint), each a decline of the writer's (qaHistory) or a fix of its,
+// and an error once you accepted all of them at the head already; holds is
+// false for a run with none of them.
+func qaNotWalkedAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, holds bool, err error) {
 	res, ok := readQAResult(dir, run)
 	if !ok || res.Outcome != QAOutcomeUnavailable {
 		return qaAccept{}, false, nil
 	}
+	hist := qaHistory(dir, run.N)
 	for _, b := range res.Blocked {
-		if b.Fingerprint != "" {
-			a.unchecked = append(a.unchecked, b)
+		switch {
+		case b.Fingerprint == "":
+		case hist[b.Fingerprint].declined:
+			a.declined = append(a.declined, b.Fingerprint)
+		default:
+			a.unchecked = append(a.unchecked, b.Fingerprint)
 		}
 	}
-	if len(a.unchecked) == 0 {
+	if len(a.declined)+len(a.unchecked) == 0 {
 		return qaAccept{}, false, nil
 	}
-	if acc, ok := readQAAccepted(dir); ok && acc.Head == run.Head && !slices.ContainsFunc(a.unchecked, func(b QABlocked) bool {
-		return !slices.Contains(acc.Unchecked, b.Fingerprint)
-	}) {
-		return qaAccept{}, true, fmt.Errorf("%s: you let the fixes QA did not walk again at %s go unchecked already, and QA run %d has not "+
-			"walked since; a plain `magnum factory retry %d` lets it go on", TaskKey(t), textx.ShortSHA(run.Head), run.N, t.ID)
+	if acc, ok := readQAAccepted(dir); ok && acc.Head == run.Head && qaHolds(acc.Fingerprints, a.declined) && qaHolds(acc.Unchecked, a.unchecked) {
+		return qaAccept{}, true, fmt.Errorf("%s: you accepted what QA run %d did not walk again at %s already, and it has not walked "+
+			"since; a plain `magnum factory retry %d` lets it go on", TaskKey(t), run.N, textx.ShortSHA(run.Head), t.ID)
 	}
 	return a, true, nil
+}
+
+// qaHolds reports whether every one of fps is in have.
+func qaHolds(have, fps []string) bool {
+	return !slices.ContainsFunc(fps, func(fp string) bool { return !slices.Contains(have, fp) })
 }
 
 // qaFixes is "1 fix" or "N fixes".
@@ -642,34 +653,43 @@ func qaFixes(n int) string {
 
 // qaAcceptWhat is what --accept-qa accepts at run's head, as the task
 // card's A names it: "1 QA defect the writer declined at abc1234 (flow on
-// /settings/security)", the classes on their pages from the run's result
-// (none named when it does not read); or "1 fix QA did not walk again at
-// abc1234 (escaped_markup on /settings/security in the state signed_in)".
+// /settings/security)", the classes on their pages from the run's result,
+// or as an earlier run found them for a page the run did not walk again;
+// "1 fix QA did not walk again at abc1234 (escaped_markup on
+// /settings/security in the state signed_in)"; both, joined by "and".
 func qaAcceptWhat(dir string, run qaRun, a qaAccept) string {
-	if len(a.unchecked) > 0 {
-		var on []string
-		for _, h := range qaHandedBefore(dir, run.N) {
-			if slices.ContainsFunc(a.unchecked, func(b QABlocked) bool { return b.Fingerprint == h.fingerprint }) {
-				on = append(on, qaRecheckOn(h))
+	res, _ := readQAResult(dir, run)
+	handed := map[string]qaHandedDefect{}
+	for _, h := range qaHandedBefore(dir, run.N) {
+		handed[h.fingerprint] = h
+	}
+	on := func(fps []string) string {
+		var ds []QADefect
+		var out []string
+		for _, fp := range fps {
+			if i := slices.IndexFunc(res.Blocking, func(d QADefect) bool { return d.Fingerprint == fp }); i >= 0 {
+				ds = append(ds, res.Blocking[i])
+			} else if h, ok := handed[fp]; ok {
+				out = append(out, qaRecheckOn(h))
 			}
 		}
-		s := fmt.Sprintf("%s QA did not walk again at %s", qaFixes(len(a.unchecked)), textx.ShortSHA(run.Head))
-		if len(on) > 0 {
-			s += " (" + strings.Join(on[:min(len(on), qaListMost)], ", ") + ")"
+		if len(ds) > 0 {
+			out = append([]string{qaClassesAndPaths(ds, slices.Collect(maps.Values(qaVerdictPages(dir, run))))}, out...)
 		}
-		return s
+		if len(out) == 0 {
+			return ""
+		}
+		return " (" + strings.Join(out[:min(len(out), qaListMost)], ", ") + ")"
 	}
-	fps := map[string]bool{}
-	for _, fp := range a.declined {
-		fps[fp] = true
+	short := textx.ShortSHA(run.Head)
+	var parts []string
+	if n := len(a.declined); n > 0 {
+		parts = append(parts, fmt.Sprintf("%s the writer declined at %s%s", plural(n, "QA defect"), short, on(a.declined)))
 	}
-	s := fmt.Sprintf("%s the writer declined at %s", plural(len(fps), "QA defect"), textx.ShortSHA(run.Head))
-	res, _ := readQAResult(dir, run)
-	ds := slices.DeleteFunc(slices.Clone(res.Blocking), func(d QADefect) bool { return !fps[d.Fingerprint] })
-	if len(ds) > 0 {
-		s += " (" + qaClassesAndPaths(ds, slices.Collect(maps.Values(qaVerdictPages(dir, run)))) + ")"
+	if n := len(a.unchecked); n > 0 {
+		parts = append(parts, fmt.Sprintf("%s QA did not walk again at %s%s", qaFixes(n), short, on(a.unchecked)))
 	}
-	return s
+	return strings.Join(parts, " and ")
 }
 
 // qaApplyAccepted moves the defects of res that block and that you accepted
