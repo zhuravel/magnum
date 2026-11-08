@@ -653,13 +653,20 @@ func qaAcceptable(dir string, t registry.Task) (qaRun, qaAccept, error) {
 // of the writer's (qaHistory) or a fix of its; or, of a walk that reached
 // its pages and found nothing that blocks there (qaBlockedOnly), the states
 // the walker could not reach, as the result has them; and an error once you
-// accepted all of them at the head already. holds is false for a run with
+// accepted all of them at the head already, or once the run passed
+// (qa-summary.json holds it: it went on flagged, and its result stays as the
+// walk ended), when nothing is left to accept. holds is false for a run with
 // none of them: a walk that reached no page has nothing checked to go on
 // with.
 func qaRunAcceptable(dir string, t registry.Task, run qaRun) (a qaAccept, holds bool, err error) {
 	res, ok := readQAResult(dir, run)
 	if !ok || res.Outcome != QAOutcomeUnavailable {
 		return qaAccept{}, false, nil
+	}
+	if sum, ok := readQASummary(dir); ok && sum.Run == run.N && sum.Head == run.Head { // it went on flagged: its result stays as it ended
+		return qaAccept{}, true, fmt.Errorf("%s: QA run %d passed at %s already, with what it could not reach flagged on the card and in the "+
+			"PR body, so --accept-qa has nothing left to accept there; a plain `magnum factory retry %d` lets the task go on",
+			TaskKey(t), run.N, textx.ShortSHA(run.Head), t.ID)
 	}
 	hist := qaHistory(dir, run.N)
 	for _, b := range res.Blocked {

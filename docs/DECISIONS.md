@@ -19087,6 +19087,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the blocked-only cards in TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop and the help in
   TestTheHelpNamesTheQAKeys.
 
+- **Landing prep of visual QA, slice 1: no accept after a flagged pass, and a decline not found again is
+  counted apart** (2026-11-08, R55 slice 1, after the fourth scoped re-review).
+  - `qaRunAcceptable` refuses, and the screen offers no `A`, once `qa-summary.json` holds the newest run at its
+    head: a walk that went on flagged passed, its `result.json` stays as the walk ended, and an accept there
+    changed neither the card nor the PR body while its answer said it did.
+  - The qa event of a run and its report count a decline that a walk at its head did not find again apart
+    from the states the walker could not reach ("1 defect the writer declined not found again"; the report's
+    "Declined by the writer, not found again at this head"), as its wait already did.
+  - The wait of a run that leaves a fix or a decline it did not walk again beside the walker's own states says
+    that your accept takes the former alone: the states wait on you again, for a second accept.
+  Rejected: having an accept after a flagged pass rewrite the summary as accepted by you (a second path to the
+  same flagged pass, with no walk). Tests, failing first: TestNoAcceptIsOfferedAfterAFlaggedPass (the
+  reviewer's probe: the accept went through and changed nothing), the flagged card in
+  TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop, TestADeclineNotFoundAgainIsNoStateNotReachedInTheEventOrTheReport
+  and TestAMixedRunsWaitSaysTheStatesNeedASecondAccept.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -671,9 +671,14 @@ func (e *Engine) evaluateQA(ctx context.Context, t registry.Task, run qaRun) (QA
 		}
 		res.Why = fmt.Sprintf("%s walked, nothing blocks (%s)", plural(res.Pages, "page"), strings.Join(of, "; "))
 	}
-	e.event(ctx, t.ID, "qa", registry.PhaseInfo, fmt.Sprintf("run %d: the factory's checks of %s and %s found %s that block%s, %s; %s not reached",
+	notFound := qaDeclinesNotFound(res.Blocked)
+	missed := plural(len(res.Blocked)-notFound, "state") + " not reached"
+	if notFound > 0 {
+		missed += ", " + plural(notFound, "defect") + " the writer declined not found again"
+	}
+	e.event(ctx, t.ID, "qa", registry.PhaseInfo, fmt.Sprintf("run %d: the factory's checks of %s and %s found %s that block%s, %s; %s",
 		run.N, plural(res.Pages, "page"), plural(res.Shots, "shot"), plural(len(res.Blocking), "defect"), blocksS(len(res.Blocking)),
-		plural(len(res.Known), "note"), plural(len(res.Blocked), "state")))
+		plural(len(res.Known), "note"), missed))
 	return res, nil
 }
 
@@ -804,12 +809,7 @@ func qaClassesAndPaths(ds []QADefect, pages []QAPage) string {
 // of its page did not find (qaDeclinedNotFoundWhy: the page was reached);
 // both, joined, for a mix.
 func qaNotReachedWhat(bs []QABlocked) string {
-	notFound := 0
-	for _, b := range bs {
-		if b.Why == qaDeclinedNotFoundWhy {
-			notFound++
-		}
-	}
+	notFound := qaDeclinesNotFound(bs)
 	rest := len(bs) - notFound
 	switch {
 	case notFound == 0:
@@ -819,6 +819,19 @@ func qaNotReachedWhat(bs []QABlocked) string {
 	}
 	return fmt.Sprintf("QA could not reach %s of the change, and did not find again %s the writer declined at this head",
 		plural(rest, "state"), plural(notFound, "defect"))
+}
+
+// qaDeclinesNotFound counts the entries of bs that are defects the writer
+// declined which a walk at the head they were declined at did not find
+// again (qaDeclinedNotFoundWhy): no state the walker could not reach.
+func qaDeclinesNotFound(bs []QABlocked) int {
+	n := 0
+	for _, b := range bs {
+		if b.Why == qaDeclinedNotFoundWhy {
+			n++
+		}
+	}
+	return n
 }
 
 // qaBlockedList names the states bs the walker could not reach, each with
@@ -861,10 +874,16 @@ func qaYouWhat(t registry.Task, dir string, res QAResult) string {
 		n := len(res.Blocking)
 		return fmt.Sprintf("QA found %s that block%s: %s%s%s", plural(n, "defect"), blocksS(n), res.Why, see, retryHint(t))
 	case res.Outcome == QAOutcomeUnavailable && res.Walked && slices.ContainsFunc(res.Blocked, qaNotWalkedAgain):
-		return fmt.Sprintf("%s%s%s; then `magnum factory retry %d` walks once more, and a walk of each such page in its state that finds "+
+		s := fmt.Sprintf("%s%s%s; then `magnum factory retry %d` walks once more, and a walk of each such page in its state that finds "+
 			"the defect hands it to the writer (one that skips the page, or does not find the defect again at this head, stops here again), "+
 			"or `magnum factory retry %d --accept-qa` accepts it as it stands at this head, which the PR body names as accepted by you",
 			res.Why, see, qaDeclineReplies(dir, res), t.ID, t.ID)
+		if n := len(slices.DeleteFunc(slices.Clone(res.Blocked), qaNotWalkedAgain)); n > 0 { // the walker's own states beside them
+			is := map[bool]string{true: "state the walker could not reach is", false: "states the walker could not reach are"}[n == 1]
+			s += fmt.Sprintf("; the %d %s not part of that accept: once a walk is left with them alone, it waits on you again, for a "+
+				"second `magnum factory retry %d --accept-qa`", n, is, t.ID)
+		}
+		return s
 	case qaBlockedOnly(res):
 		n := len(res.Blocked)
 		them, states := "them", "the states"

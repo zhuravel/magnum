@@ -4796,15 +4796,18 @@ fixes = 2                                      # the writer's turns for QA's def
   head alone: a run at a new head walks the page again. A decline you accepted is never named as fixed,
   whatever a later walk finds. A plain retry walks QA again, and a walk that skips or misses such a page again
   stops there again. The wait on a declined defect's page names the writer's reply, with its risk or "no risk
-  named". Each wait names classes, page paths and files, never page text.
+  named"; one that also holds states the walker could not reach says that your accept takes the defects
+  alone, and the states wait on you again for a second accept. After a walk that went on flagged nothing is
+  left to accept at that head: `--accept-qa` says so, and the task card offers no `A`. Each wait names
+  classes, page paths and files, never page text.
 - **The ready card.** Its QA row says how the run that passed at its head ended: `clean: 3 pages walked at
   abc1234, 1 note`, `passed with 1 defect accepted by you and 1 state not reached: ...` (`1 state not reached,
   accepted by you` for a state you accepted), or `not needed: no user-facing file changed`. A state the walker
   could not reach is a FLAGS line (`QA did not reach: ...`, ending `, accepted by you` when you accepted it),
   QA's notes and the defects and fixes you accepted are under KNOWN (`qa: accepted by you: ...`), and
   SCREENSHOTS counts the run's shots. `e` (`e QA shots` in the footer) opens the run's report, `summary.md` in its folder, in the pager: the
-  run, its head and URL, each page with its state and its shot's absolute path, the notes and the states not
-  reached. On the task card of a task whose QA left you something to accept (the writer's declines at a stop of
+  run, its head and URL, each page with its state and its shot's absolute path, the notes, the states not
+  reached and, apart from them, the declines a walk at their head did not find again. On the task card of a task whose QA left you something to accept (the writer's declines at a stop of
   the fix loop, its fixes or declines a walk did not walk again, the states a walk could not reach), `e`
   (`e summary.md`) opens that run's report, so you see the shots first, and `A` accepts them, as `--accept-qa`
   does (y/N); a card with nothing to accept offers no `A`.

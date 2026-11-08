@@ -1077,3 +1077,46 @@ func TestAnAcceptSaysWhoAcceptedIt(t *testing.T) {
 		t.Errorf("qa-accepted.json %+v (%v), want it by the liaison", acc, ok)
 	}
 }
+
+// A decline that a walk at its head did not find again is counted as such,
+// never as a state the walker could not reach: the run's qa event and its
+// report name it apart.
+func TestADeclineNotFoundAgainIsNoStateNotReachedInTheEventOrTheReport(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12486")
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.toYou(task)
+	if got := r.eventsWith(task.ID, "qa", "run 2: the factory's checks"); len(got) != 1 ||
+		!strings.Contains(got[0], "0 states not reached, 1 defect the writer declined not found again") {
+		t.Errorf("run 2's qa event %q, want the decline counted apart", got)
+	}
+	report := r.readTask(task.ID, filepath.Join(qaRunDir(2, head), qaReportFile))
+	if !strings.Contains(report, "## Declined by the writer, not found again at this head (1)") || strings.Contains(report, "## Not reached") {
+		t.Errorf("run 2's report:\n%s", report)
+	}
+}
+
+// A run that leaves you a fix it did not walk again beside states the
+// walker could not reach says that your accept takes the fix alone: the
+// states wait on you again, for a second accept, once a walk is left with
+// them alone.
+func TestAMixedRunsWaitSaysTheStatesNeedASecondAccept(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12487")
+	r.fixAndRecheck(task, head, "/settings/security")
+	v := skipWalk()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.walk(task, v, shortcutsProbes)
+	got := r.toYou(task)
+	if want := "the 1 state the walker could not reach is not part of that accept"; !strings.Contains(got.WaitsWhat, want) ||
+		!strings.Contains(got.WaitsWhat, "a second `magnum factory retry") {
+		t.Errorf("the task waits %q, want %q and the second accept", got.WaitsWhat, want)
+	}
+}

@@ -1319,6 +1319,24 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 	}
 	blocked := blockedAt("PR-12474", false)
 	blockedAccepted := blockedAt("PR-12475", true)
+	// A ready card after a walk that went on flagged: that run passed (its
+	// summary), so nothing is left to accept at the head.
+	flagged := r.task("PR-12476", "bug", "Passkeys", registry.TaskActive, "ready", "", "")
+	flagged = r.move(flagged, registry.TaskNeedsYou, waitsYou, readyWait+" (card 1): Passkeys", func(u *registry.TaskUpdate) {
+		u.Set("head_sha", head)
+	})
+	flaggedRun := qaRun{N: 2, Head: head, Dir: qaRunDir(2, head)}
+	flaggedRes := QAResult{Version: qaResultVersion, Run: 2, Dir: flaggedRun.Dir, Head: head, Outcome: QAOutcomeUnavailable, Walked: true,
+		Pages: 1, Blocked: []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}}
+	flaggedSum := flaggedRes
+	flaggedSum.Outcome = QAOutcomeClean
+	for name, v := range map[string]any{qaRunFile: flaggedRun, filepath.Join(flaggedRun.Dir, qaResultFile): flaggedRes, qaSummaryFile: flaggedSum} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.file(flagged.ID, name, string(b))
+	}
 	d := r.data(screenNow)
 	for _, tc := range []struct {
 		task registry.Task
@@ -1326,7 +1344,7 @@ func TestTheTaskCardOffersAcceptQAOnlyAtADeclineStop(t *testing.T) {
 	}{
 		{declined, "1 QA defect the writer declined at eeeeeee (flow on /settings/security)"},
 		{atCap, ""}, {moved, ""}, {working, ""}, {accepted, ""},
-		{blocked, "1 state QA could not reach at eeeeeee (the admin's view of the page)"}, {blockedAccepted, ""},
+		{blocked, "1 state QA could not reach at eeeeeee (the admin's view of the page)"}, {blockedAccepted, ""}, {flagged, ""},
 	} {
 		got := d.Cards[tc.task.ID].Task.AcceptQA
 		_, _, guard := qaAcceptable(r.layout.FactoryTaskDir(tc.task.ID), tc.task)

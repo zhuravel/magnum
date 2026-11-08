@@ -387,8 +387,10 @@ func qaPlain(s string) string {
 // state and its shot's absolute path, the defects that block, those you
 // accepted, the notes (each with its title and the page's quote), what an
 // earlier run found that the writer fixed, the fixes you let go that it did
-// not walk again, and the states it could not reach. The walker's words are on one line, their control characters
-// spaces.
+// not walk again, the states it could not reach, and apart from them the
+// defects the writer declined that it did not find again at the head they
+// were declined at. The walker's words are on one line, their control
+// characters spaces.
 func writeQAReport(path string, run qaRun, res QAResult) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# QA run %d at %s\n\n", res.Run, textx.ShortSHA(res.Head))
@@ -452,11 +454,15 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 	}
 	fixes("Found by an earlier run and fixed", res.Fixed)
 	fixes("The writer's fixes QA did not walk again, accepted by you", res.Unchecked)
-	if len(res.Blocked) > 0 {
-		section("Not reached", len(res.Blocked))
-		for _, bl := range res.Blocked {
+	notFound := func(bl QABlocked) bool { return bl.Why == qaDeclinedNotFoundWhy }
+	blocked := func(title string, bs []QABlocked) {
+		if len(bs) == 0 {
+			return
+		}
+		section(title, len(bs))
+		for _, bl := range bs {
 			fmt.Fprintf(&b, "- %s", cmp.Or(qaPlain(bl.What), "a state"))
-			if why := qaPlain(bl.Why); why != "" {
+			if why := qaPlain(bl.Why); why != "" && !notFound(bl) {
 				fmt.Fprintf(&b, ": %s", why)
 			}
 			if c := qaPlain(bl.Check); c != "" {
@@ -468,6 +474,9 @@ func writeQAReport(path string, run qaRun, res QAResult) error {
 			b.WriteString("\n")
 		}
 	}
+	blocked("Not reached", slices.DeleteFunc(slices.Clone(res.Blocked), notFound))
+	blocked("Declined by the writer, not found again at this head", slices.DeleteFunc(slices.Clone(res.Blocked),
+		func(bl QABlocked) bool { return !notFound(bl) }))
 	return fsx.WriteFileAtomic(path, []byte(b.String()), 0o600)
 }
 

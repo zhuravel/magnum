@@ -1911,3 +1911,41 @@ func TestPressureWaitsTheBackoffOfAFailedServerStop(t *testing.T) {
 		t.Fatalf("%d server stops after the backoff, want %d", got, stops+1)
 	}
 }
+
+// After a walk that went on flagged, QA left you nothing to accept at that
+// head: the run passed, its summary names the state as flagged, and an
+// accept would change neither the card nor the PR body. So a later stop of
+// the task at the same head offers no A, and your --accept-qa is refused
+// with why, recording nothing.
+func TestNoAcceptIsOfferedAfterAFlaggedPass(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12499")
+	v := oneSecurityPage()
+	v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+	r.toWalker(task)
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.toYou(task)
+	r.retryAnswer(task.ID)
+	r.toWalker(task)
+	r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskNeedsYou, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", waitsYou)
+		u.Set("waits_what", "the pr_body role's file did not check")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := r.layout.FactoryTaskDir(task.ID)
+	if _, _, err := qaAcceptable(dir, r.reload(task.ID)); err == nil || !strings.Contains(err.Error(), "passed") {
+		t.Fatalf("A is offered after the flagged pass (%v)", err)
+	}
+	if q := r.acceptQA(task.ID); q.State == registry.RequestDone {
+		t.Fatalf("your accept after the flagged pass went through: %+v", q)
+	}
+	if got := r.eventsWith(task.ID, "qa", "you accepted"); len(got) != 0 {
+		t.Errorf("events %q: an accept was recorded", got)
+	}
+	if _, ok := readQAAccepted(dir); ok {
+		t.Error("qa-accepted.json was written")
+	}
+}
