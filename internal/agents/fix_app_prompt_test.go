@@ -78,8 +78,10 @@ func TestTheFixPromptKeepsGitPushForAGhFixer(t *testing.T) {
 // The skill pushes with the prompt's push line, whichever it is, never
 // with force: a line `magnum push` refuses (exit 2) goes under Needs you, a
 // rejected one (exit 3, fetch first) runs the fix-sync line, as a push
-// GitHub rejected because the branch moved does. The fixes go out in one
-// push after the base merge's, which went out alone first.
+// GitHub rejected because the branch moved does, and a base merge it
+// hands to magnum (exit 4: it carries the base's workflow files) ends the
+// run, for magnum to push. The fixes go out in one push after the base
+// merge's, which went out alone first.
 func TestTheFixSkillPushesWithThePromptsPushLine(t *testing.T) {
 	skill := string(magnum.FixSkill)
 	for _, want := range []string{
@@ -89,6 +91,10 @@ func TestTheFixSkillPushesWithThePromptsPushLine(t *testing.T) {
 		"When the push line is `magnum push` and it refuses the push (exit status 2, `refused: <reason>`), push nothing more: " +
 			"write `push failed: refused: <reason>` under `## Pushed`, put each finding you committed under `## Needs you`, and stop.",
 		"When it rejects the push (exit status 3, `rejected: <reason>: fetch first`), GitHub's branch moved: run the fix-sync line as below.",
+		"When it hands the push to magnum (exit status 4, `daemon: <reason>`), your base merge carries the base's own workflow files, " +
+			"which only magnum may push: push nothing more and judge no finding. List the merge under `## Pushed` (section 2), write " +
+			"`0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)` under `## Replied`, and stop: magnum pushes the merge " +
+			"when your run ends, and its re-review brings the findings back.",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("the fix skill lacks %q", want)

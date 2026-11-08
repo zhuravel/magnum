@@ -277,6 +277,80 @@ func TestPushRefusesAWorkflowChangeForAnApp(t *testing.T) {
 	}
 }
 
+// mergeMainWithWorkflow moves origin's main on with a change of
+// .github/workflows/ci.yml and has the bot merge it into the slot's HEAD,
+// as the fixer's base merge does.
+func (p *pushRepo) mergeMainWithWorkflow() string {
+	p.t.Helper()
+	p.commit(p.origin, ".github/workflows/ci.yml", "on: [push, workflow_dispatch]\n", "main changes its CI") // by Test, not the bot
+	p.git(p.slot, "fetch", "--quiet", p.origin, "+refs/heads/main:refs/remotes/origin/main")
+	p.git(p.slot, "merge", "--quiet", "--no-edit", "origin/main")
+	return p.git(p.slot, "rev-parse", "HEAD")
+}
+
+// A base merge brings the base's own workflow changes, as the base has
+// them: they are no change of the fixer's, but the pane's token may not
+// push them. magnum push pushes nothing and hands the merge to magnum
+// (exit 4, "daemon"), whose daemon pushes it with a token of its own once
+// the run ends; it never sends it under Needs you as a workflow change.
+func TestPushLeavesABaseMergeThatCarriesTheBasesWorkflowsToMagnum(t *testing.T) {
+	p := newPushRepo(t)
+	merge := p.mergeMainWithWorkflow()
+	code, o, errb := push(t, "--checkout", p.slot)
+	if code != pushDaemon || o.Status != pushStatusDaemon || o.SHA != merge || o.Expect != p.start {
+		t.Fatalf("exit %d, %+v (%s); want the merge handed to magnum", code, o, errb)
+	}
+	for _, want := range []string{"main's own workflow files (1 file)", "magnum pushes it"} {
+		if !strings.Contains(o.Message, want) {
+			t.Errorf("message = %q, want it to say %q", o.Message, want)
+		}
+	}
+	if strings.Contains(o.Message, "Needs you") {
+		t.Errorf("message = %q sends the base's workflows under Needs you", o.Message)
+	}
+	if got := p.feature(); got != p.start {
+		t.Errorf("origin's feature moved to %s", got)
+	}
+}
+
+// Only workflow files exactly as the base has them are the base's: a
+// workflow file the fixer changed, in the merge or beside it, is refused
+// as before (exit 2, Needs you), and so is a fix on top of a merge that
+// carries the base's (the merge goes alone, first).
+func TestPushRefusesAWorkflowFileThatDiffersFromTheBases(t *testing.T) {
+	t.Run("the fixer's own beside the base's", func(t *testing.T) {
+		p := newPushRepo(t)
+		p.commit(p.slot, ".github/workflows/own.yml", "on: push\n", "Add a workflow")
+		p.mergeMainWithWorkflow()
+		code, o, _ := push(t, "--checkout", p.slot)
+		if code != pushRefused || !strings.Contains(o.Message, ".github/workflows/own.yml") || !strings.Contains(o.Message, "Needs you") {
+			t.Fatalf("exit %d, %+v", code, o)
+		}
+	})
+	t.Run("the base's changed in the merge", func(t *testing.T) {
+		p := newPushRepo(t)
+		p.mergeMainWithWorkflow()
+		p.write(p.slot, ".github/workflows/ci.yml", "on: push\n")
+		p.git(p.slot, "commit", "--quiet", "--amend", "--no-edit", "-a")
+		code, o, _ := push(t, "--checkout", p.slot)
+		if code != pushRefused || !strings.Contains(o.Message, ".github/workflows/ci.yml") {
+			t.Fatalf("exit %d, %+v", code, o)
+		}
+	})
+	t.Run("a fix on top of the merge", func(t *testing.T) {
+		p := newPushRepo(t)
+		p.mergeMainWithWorkflow()
+		p.fix()
+		code, o, _ := push(t, "--checkout", p.slot)
+		if code != pushRefused || !strings.Contains(o.Message, "push the merge of main alone first") {
+			t.Fatalf("exit %d, %+v", code, o)
+		}
+		if got := p.feature(); got != p.start {
+			t.Errorf("origin's feature moved to %s", got)
+		}
+	})
+}
+
 // The App's identity is the pane's env alone: magnum push runs no git
 // config that writes, and the clone's config is byte for byte the same
 // after its push.

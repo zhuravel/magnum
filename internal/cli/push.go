@@ -42,6 +42,10 @@ const (
 	// pushRejected: the branch moved on GitHub since HEAD's base ("fetch
 	// first"): the fixer runs the fix-sync line.
 	pushRejected = 3
+	// pushDaemon: HEAD is the base merge alone, and it carries the base's
+	// own workflow files, which the pane's token may not push: magnum's
+	// daemon pushes it once the run ends (the fixer lists it and stops).
+	pushDaemon = 4
 )
 
 // Statuses of push's JSON outcome.
@@ -50,6 +54,7 @@ const (
 	pushStatusUpToDate = "up_to_date"
 	pushStatusRefused  = "refused"
 	pushStatusRejected = "rejected"
+	pushStatusDaemon   = "daemon"
 	pushStatusError    = "error"
 )
 
@@ -94,12 +99,16 @@ func newPushCmd(c *Context) *cobra.Command {
 			"argument, a pane without the bot's "+
 			"GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL, and an origin of another repository; then (exit 2) a commit on "+
 			"the first-parent chain it would add that is not the bot's, a merge of anything but the base, and, with "+
-			"MAGNUM_PUSH_NO_WORKFLOWS=1, a change under .github/workflows (list it under Needs you). HEAD that does not "+
+			"MAGNUM_PUSH_NO_WORKFLOWS=1, a change under .github/workflows that differs from the base's on origin (list "+
+			"it under Needs you). A base merge alone that carries the base's own workflow files, as the base has them, "+
+			"is exit 4 (daemon): the pane's token may not push them, and magnum's daemon pushes the merge once the run "+
+			"ends. HEAD that does not "+
 			"descend from the branch's head on GitHub, or a lease GitHub refuses, is exit 3 (\"fetch first\": run the "+
 			"fix-sync line). It reads the branch back after the push.\n\n"+
-			"It prints one JSON object on stdout (status: pushed, up_to_date, refused, rejected or error) and one line on "+
+			"It prints one JSON object on stdout (status: pushed, up_to_date, refused, rejected, daemon or error) and one line on "+
 			"stderr. Exit 0: pushed, or the branch is at HEAD already; 2: refused, fix the line or the commits and never "+
-			"run the same line again; 3: fetch first; 1: anything else, run it again. It runs no git hook, reads no config "+
+			"run the same line again; 3: fetch first; 4: magnum pushes the merge, push nothing more and end the run; "+
+			"1: anything else, run it again. It runs no git hook, reads no config "+
 			"and no registry, never talks to the daemon and writes no git config.",
 		func(pos []string) int { return runPush(c, checkout, base, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
@@ -215,9 +224,11 @@ func pushRun(checkout, base string, pos []string) (pushOutcome, int) {
 	if ok, err := g.IsAncestor(ctx, dir, expect, sha); err != nil || !ok {
 		return rejected(fmt.Sprintf("HEAD %s does not descend from %s's head %s on GitHub", textx.ShortSHA(sha), branch, textx.ShortSHA(expect)))
 	}
-	if why, err := pushOwnCommits(ctx, g, dir, expect, sha, email, login, base); err != nil {
+	commits, err := g.FirstParentIdentities(ctx, dir, expect, sha)
+	if err != nil {
 		return failed("could not read the commits to push: %v", err)
-	} else if why != "" {
+	}
+	if why := pushOwnCommits(ctx, g, dir, commits, email, login, base); why != "" {
 		return refuse("%s", why)
 	}
 	if get("MAGNUM_PUSH_NO_WORKFLOWS") == "1" {
@@ -225,8 +236,20 @@ func pushRun(checkout, base string, pos []string) (pushOutcome, int) {
 		if err != nil {
 			return failed("could not read the files the push changes: %v", err)
 		}
-		if i := slices.IndexFunc(paths, func(p string) bool { return strings.HasPrefix(p, workflowsDir) }); i >= 0 {
-			return refuse("the push changes %s, and the App may not push workflows: list it under Needs you", paths[i])
+		paths = slices.DeleteFunc(paths, func(p string) bool { return !strings.HasPrefix(p, workflowsDir) })
+		own, err := pushOwnWorkflows(ctx, g, dir, sha, base, paths)
+		switch {
+		case err != nil:
+			return failed("could not compare the workflow files with %s's: %v", base, err)
+		case len(own) > 0:
+			return refuse("the push changes %s, and the App may not push workflows: list it under Needs you", own[0])
+		case len(paths) > 0 && !pushLoneMerge(commits, expect):
+			return refuse("the push brings %s's own workflow files with other commits: push the merge of %s alone first", base, base)
+		case len(paths) > 0:
+			out.Status = pushStatusDaemon
+			out.Message = fmt.Sprintf("the merge brings %s's own workflow files (%s), which the pane's token may not push: magnum pushes it once "+
+				"your run ends; list it under ## Pushed, push nothing more and end the run", base, textx.Count(len(paths), "file", "files"))
+			return out, pushDaemon
 		}
 	}
 	if err := g.PushLeaseVia(ctx, dir, url, sha, branch, expect); err != nil {
@@ -261,34 +284,56 @@ func pushRemoteHead(ctx context.Context, g *gitx.Client, dir, url, branch string
 	return "", nil
 }
 
-// pushOwnCommits is why the commits expect..sha on sha's first-parent
-// chain may not go out as the fixer's ("" when they may): each must have
-// the pane's email as author and committer, and each merge's other parents
-// must be on origin's base already (the base merge alone: the base commits
-// it brings were on GitHub).
-func pushOwnCommits(ctx context.Context, g *gitx.Client, dir, expect, sha, email, login, base string) (string, error) {
-	commits, err := g.FirstParentIdentities(ctx, dir, expect, sha)
-	if err != nil {
-		return "", err
+// pushOwnWorkflows is which of paths, the workflow files the push
+// changes, are the fixer's own: those whose content at sha differs from
+// origin's base, as a base merge carries the base's as the base has them
+// (gitx DifferingPaths). Without a base to compare with, every one is.
+func pushOwnWorkflows(ctx context.Context, g *gitx.Client, dir, sha, base string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
 	}
+	ref := "refs/remotes/origin/" + base
+	if base == "" || !gitx.ShellSafeRef(base) {
+		return paths, nil
+	}
+	if _, err := g.RevParse(ctx, dir, ref); err != nil {
+		return paths, nil // the checkout has no base to compare with
+	}
+	return g.DifferingPaths(ctx, dir, sha, ref, paths...)
+}
+
+// pushLoneMerge reports whether commits, the push's first-parent chain
+// over expect, are one merge alone whose first parent is expect: the
+// base merge, pushed before any fix (pushOwnCommits checked its other
+// parent is on the base).
+func pushLoneMerge(commits []gitx.CommitIdentity, expect string) bool {
+	return len(commits) == 1 && len(commits[0].Parents) == 2 && commits[0].Parents[0] == expect
+}
+
+// pushOwnCommits is why commits, the commits expect..sha on sha's
+// first-parent chain, may not go out as the fixer's ("" when they may):
+// each must have the pane's email as author and committer, and each
+// merge's other parents must be on origin's base already (the base merge
+// alone: the base commits it brings were on GitHub).
+func pushOwnCommits(ctx context.Context, g *gitx.Client, dir string, commits []gitx.CommitIdentity, email, login, base string) string {
 	for _, c := range commits {
 		if !strings.EqualFold(c.AuthorEmail, email) || !strings.EqualFold(c.CommitterEmail, email) {
-			return fmt.Sprintf("commit %s is not by %s: magnum push pushes the fixer's commits alone", textx.ShortSHA(c.SHA), login), nil
+			return fmt.Sprintf("commit %s is not by %s: magnum push pushes the fixer's commits alone", textx.ShortSHA(c.SHA), login)
 		}
 		for _, p := range c.Parents[min(1, len(c.Parents)):] {
 			ok := false
 			if base != "" && gitx.ShellSafeRef(base) {
-				if ok, err = g.IsAncestor(ctx, dir, p, "refs/remotes/origin/"+base); err != nil {
-					ok = false
+				if on, err := g.IsAncestor(ctx, dir, p, "refs/remotes/origin/"+base); err == nil {
+					ok = on
 				}
 			}
 			if !ok {
 				return fmt.Sprintf("commit %s merges a branch other than %s: magnum push pushes a merge of the base alone",
-					textx.ShortSHA(c.SHA), cmp.Or(base, "the base")), nil
+					textx.ShortSHA(c.SHA), cmp.Or(base, "the base"))
 			}
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // leaseRefused reports whether a push failed because GitHub refused its
