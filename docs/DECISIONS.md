@@ -19182,7 +19182,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestARestartKeepsTheRolesThatPassed; TestThePublishChecksTheReviewAgainBeforeItPushes,
   TestAPublishCutAfterItsEffectEndedFinishesIt and TestAPublishWithoutAGhIdentityNeedsYouNamingTheKey push under
   install's drain (`pushHeld`), so they change what the publish reads before it runs, and
-  TestAPublishCutAfterThePushResumesWithoutPushingAgain takes the publish in the push's tick.
+  TestAPublishCutAfterThePushResumesWithoutPushingAgain takes the publish in the push's tick. With visual QA (R55,
+  landed first), a qa stage that passes chains the PR body's first pass into its tick, and a QA stop for you (QA
+  could not run, a state it could not reach, the writer's decline) passes nothing, so nothing chains past it
+  (TestAQAStopForYouChainsNothing, one row each). TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA counts the
+  judge's prompts from before QA (`toBodyAfter`), as its PR body turn goes out in the tick QA passes.
+  TestARetryAfterUnavailableStartsAFreshRun and TestADeclineStopReachesYouEvenAfterAnotherAlert stop the daemon
+  before the move with a held pass (`daemonStops`), not an error: an error is a failure of the stage, whose retry
+  waits a poll, while the next daemon that the same engine's next pass stands for has no failure to wait on.
 
 ## Learned rules
 

@@ -618,7 +618,7 @@ func TestARetryAfterUnavailableStartsAFreshRun(t *testing.T) {
 
 	c := newQARig(t)
 	c.setProbe(func(bool, int) (int, error) { return 0, errRefused })
-	c.e.beforeStop = func() error { return errors.New("the daemon stops before the move") }
+	c.e.beforeStop = func() error { return daemonStops } // the daemon stops before the move
 	other, otherHead := c.qaTask("PR-12416")
 	c.run(10, func() bool { return fsx.Exists(filepath.Join(c.runDir(other.ID, 1, otherHead), qaResultFile)) })
 	if got := c.reload(other.ID); got.State == registry.TaskNeedsYou {

@@ -2,7 +2,6 @@ package factory
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -450,7 +449,7 @@ func TestADeclineStopReachesYouEvenAfterAnotherAlert(t *testing.T) {
 	r.toWalker(task)
 	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
 	r.toWriter(task, 1)
-	r.e.beforeStop = func() error { return errors.New("the daemon stops before the move") }
+	r.e.beforeStop = func() error { return daemonStops } // the daemon stops before the move
 	r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
 	dir := r.layout.FactoryTaskDir(task.ID)
 	r.run(4, func() bool { return fsx.Exists(filepath.Join(r.runDir(task.ID, 1, head), qaFixStopFile)) })

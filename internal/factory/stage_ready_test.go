@@ -231,7 +231,14 @@ func (r *readyRig) cardOf(task registry.Task) (registry.Task, string) {
 // it to the card it draws next.
 func (r *readyRig) toBody(task registry.Task) {
 	r.t.Helper()
-	judged := len(r.rt.promptsTo("fx-judge"))
+	r.toBodyAfter(task, len(r.rt.promptsTo("fx-judge")))
+}
+
+// toBodyAfter is toBody for a judge that had judged prompts before: the
+// tick a stage passes in may already have sent the PR body's (the next
+// stage's first pass runs in the same tick).
+func (r *readyRig) toBodyAfter(task registry.Task, judged int) {
+	r.t.Helper()
 	r.run(16, func() bool { return len(r.rt.promptsTo("fx-judge")) > judged })
 	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rt.promptsTo("fx-judge")) == judged {
 		r.t.Fatalf("task %s at %s waits %q: %q; want the judge's PR body turn", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
@@ -1111,6 +1118,7 @@ func TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA(t *testing.T) {
 			r.cfg.Factory.Repos[0].QA = &config.FactoryQA{When: "bin/user-facing", URL: "http://app.example.localhost:{port}",
 				Ready: "/up", MaxPages: 12, Fixes: 2}
 			r.userFacing = func([]byte) (string, int) { return "", 0 } // nothing user-facing: QA passes at once
+			judged := len(r.rt.promptsTo("fx-judge"))
 			if via == "retry" {
 				r.retryAnswer(task.ID)
 			} else if q := r.decideOn(task.ID, first, ChoicePush, "", ""); q.State != registry.RequestFailed ||
@@ -1129,7 +1137,10 @@ func TestATaskPastQAWhenItsRepoGainsAQABlockGoesBackToQA(t *testing.T) {
 			if sum, ok := readQASummary(r.layout.FactoryTaskDir(task.ID)); !ok || sum.Outcome != QAOutcomeNotNeeded || sum.Head != head {
 				t.Fatalf("qa-summary.json %+v (%v), want not_needed at the head", sum, ok)
 			}
-			r.toBody(task)
+			if n := len(r.rt.promptsTo("fx-judge")); n != judged+1 {
+				t.Fatalf("the judge got %d prompts since your %s, want its PR body turn, sent in the tick QA passed", n-judged, via)
+			}
+			r.toBodyAfter(task, judged)
 			if got := r.reload(task.ID); got.Stage != "ready" || !strings.HasPrefix(got.WaitsWhat, readyWait) {
 				t.Fatalf("task at %s waits %q, want its card again", got.Stage, got.WaitsWhat)
 			}

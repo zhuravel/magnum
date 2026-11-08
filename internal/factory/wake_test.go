@@ -465,6 +465,56 @@ func TestYourWordRunsAStageThatFailedAMomentAgoAtOnce(t *testing.T) {
 	})
 }
 
+// daemonStops is a stop of the daemon in the middle of a pass, as the
+// beforeStop seam stands in for it: a stop costs the task nothing (a held
+// pass, as a drain's), never a failure of its stage, so the same engine's
+// next pass stands in for the next daemon's, which has no failure to wait
+// on either.
+var daemonStops = heldError{who: holdRestart, what: drainWhat}
+
+// A QA stop for you (QA could not run, a state it could not reach, the
+// writer's decline) moves the task to you at its qa stage and passes
+// nothing, so nothing chains past it: the PR body's stage never starts, in
+// that tick or after, until you act.
+func TestAQAStopForYouChainsNothing(t *testing.T) {
+	for _, stop := range []string{"unavailable", "blocked", "declined"} {
+		t.Run(stop, func(t *testing.T) {
+			r := newQARig(t)
+			task, head := r.qaTask("PR-12515")
+			judged := len(r.rt.promptsTo("fx-judge"))
+			want := ""
+			switch stop {
+			case "unavailable":
+				r.setProbe(func(bool, int) (int, error) { return 0, errRefused })
+				want = "QA could not run"
+			case "blocked":
+				r.toWalker(task)
+				v := oneSecurityPage()
+				v.Blocked = []QABlocked{{What: "the passkey autofill list", Why: "headless Chrome draws no autofill", Check: "A1"}}
+				r.walk(task, v, map[string]string{"P1": "clean-tooltip.json"})
+				want = "QA could not reach 1 state"
+			case "declined":
+				r.toWalker(task)
+				r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+				r.toWriter(task, 1)
+				r.writerFixesQA(task, 1, head, nil, map[string]string{"Q1": "the key is shared with the mailer"})
+				want = "the writer declined"
+			}
+			r.toYou(task)
+			r.run(3, nil) // and the ticks after it
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || got.Stage != "qa" || !strings.Contains(got.WaitsWhat, want) {
+				t.Fatalf("task %s at %s waits %q; want NEEDS YOU at qa, %q", got.State, got.Stage, got.WaitsWhat, want)
+			}
+			if slices.ContainsFunc(r.attempts(task.ID), func(a registry.Attempt) bool { return a.Stage == "pr_body" }) ||
+				len(r.rt.promptsTo("fx-judge")) != judged {
+				t.Fatalf("attempts %+v, %d prompts to the judge since QA began; want no PR body stage after the stop",
+					r.attempts(task.ID), len(r.rt.promptsTo("fx-judge"))-judged)
+			}
+		})
+	}
+}
+
 // attemptPrompts are the prompts of ps sent in attempt id.
 func attemptPrompts(ps []sentPrompt, id string) []sentPrompt {
 	return slices.DeleteFunc(slices.Clone(ps), func(p sentPrompt) bool { return p.Attempt != id })
