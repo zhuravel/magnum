@@ -648,7 +648,8 @@ func (p *factoryPainter) waitedCell(r FactoryRow) cell {
 }
 
 // ciText is the row's CI cell in a form: the board's (ciCell), its glyph
-// alone in the short form (the worst required check's, else the counts');
+// alone in the short form (the worst required check's, else the counts'),
+// with the board's ⟳ for a CI of an older commit than the head in both;
 // nothing for a row without a PR.
 func (p *factoryPainter) ciText(r FactoryRow, form factoryForm) cell {
 	ci := r.CI
@@ -662,10 +663,14 @@ func (p *factoryPainter) ciText(r FactoryRow, form factoryForm) cell {
 	if len(ci.Required) > 0 {
 		state = slices.MinFunc(ci.Required, func(a, b CheckState) int { return ciRank(a.State) - ciRank(b.State) }).State
 	}
+	c := p.base.dash()
 	if l := p.base.ciLook(state); l.glyph != "" {
-		return cell{{l.glyph, l.glyphSt}}
+		c = cell{{l.glyph, l.glyphSt}}
 	}
-	return p.base.dash()
+	if ci.Stale {
+		c = append(c, seg{" " + p.g.stale, p.base.pal.yellow})
+	}
+	return c
 }
 
 // findingsText is the row's FINDINGS cell in a form: the board's

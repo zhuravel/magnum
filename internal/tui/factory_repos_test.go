@@ -331,3 +331,29 @@ func TestFactoryPRColumnsDrawTheBoardsCells(t *testing.T) {
 		}
 	}
 }
+
+// A CI of an older commit than the head carries the board's stale mark in
+// every form, the short one too: its glyph alone would say the head's
+// checks passed when nobody has read them. Before, only the 200-column cell
+// said so ("✓ 41/41 ⟳"), and 100 to 140 columns drew a bare green ✓.
+func TestFactoryCIOfAnOlderCommitIsMarkedStaleInEveryForm(t *testing.T) {
+	f := fixtureTwoRepos()
+	f.Rows[0].CI = &CIInfo{State: "passed", Total: 41, Passed: 41, Stale: true}
+	f.Rows[1].CI = &CIInfo{State: "passed", Total: 12, Passed: 12, Stale: true, Required: []CheckState{
+		{Name: "Completion", Label: "Completion", State: "passed", Done: 1, Total: 1}}}
+	for _, w := range []int{100, 120, 140, 200} {
+		frame, _ := factoryFrameOf(f, w, factoryReposHeight, true, IconsUnicode, factoryNow)
+		lines := strings.Split(ansi.Strip(frame), "\n")
+		at := strings.Index(lines[3], "  CI  ")
+		if at < 0 {
+			t.Fatalf("%d columns: no CI column: %q", w, lines[3])
+		}
+		x := ansi.StringWidth(lines[3][:at]) + 2
+		for i, line := range factoryRowLines(t, frame, f.Rows)[:2] {
+			cell, _, _ := strings.Cut(ansi.Cut(line, x, w), "  ")
+			if !strings.Contains(cell, "⟳") {
+				t.Errorf("%d columns: %s's CI of an older commit reads %q, without ⟳: %q", w, f.Rows[i].Key, cell, line)
+			}
+		}
+	}
+}

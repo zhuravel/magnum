@@ -4030,7 +4030,8 @@ required checks (`✓ 41/41`, `◌ 25/41`, `✗ Completion +1` for the worst req
 Completion not run` for one that never ran at the head, never green); FINDINGS, what magnum's last posted review
 found (`✗ P1 P2×3`, `● P3×2`, `✔ clean`); APPR, the people's reviews GitHub counts (`✗ 1` changes requested,
 else `✔ 2` approvals, `⟳` when one is of an older commit, else `—`). Below the wide layout they draw their short
-forms (the CI's glyph, the verdict and the worst priority, `✗ P1`); on a narrow screen they outlast YOUR MOVE,
+forms (the CI's glyph, with `⟳` when its checks are an older commit's, the head's not read yet, `✓ ⟳`; the
+verdict and the worst priority, `✗ P1`); on a narrow screen they outlast YOUR MOVE,
 whose step the help line then says (`· your move: b or f`), and the CI's glyph outlasts the other two. A title
 that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding` beside
 `PR-12400` reads `Coupon rounding`). NEEDS YOU, WAITS ON OTHERS and LEFT ALONE each list their rows oldest wait

@@ -17671,7 +17671,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `Findings`, `Held`), which the factory reaches (cli imports factory), so both screens say the same of a PR: a
     required check with no run at the head is missing, never green, on both.
   - Home draws CI, FINDINGS and APPR after WAITS ON, each only when a row has its data, in the board's own cells
-    on a wide screen (`ciCell`, `findingsCell`) and in short forms below it (the CI's glyph, the verdict and the
+    on a wide screen (`ciCell`, `findingsCell`) and in short forms below it (the CI's glyph, with the board's `⟳`
+    for an older commit's checks, so a bare green ✓ never stands for a head nobody read; the verdict and the
     worst priority). Past the spec's steps they outlast YOUR MOVE, whose step the help line then names, and the
     CI's glyph outlasts the other two. From 180 columns the longest blockers give up their ends, down to 48
     cells, before the wide layout gives up for a title under 24: without it the 200-column home of two
@@ -17682,7 +17683,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   screen (the step is advice the blocker mostly says, the columns are facts the screen had none of); counts in
   the CI's short form (the glyph says the state, the counts go to 200 columns). Tests, failing first:
   TestPRStatesReadsCIReviewsAndReviewers, TestPRRowsCarryCIFindingsAndApprovals,
-  TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity, TestFactoryPRColumnsDrawTheBoardsCells; goldens
+  TestAnOwnPRWithoutAVerdictWaitsSinceItsLastActivity, TestFactoryPRColumnsDrawTheBoardsCells,
+  TestFactoryCIOfAnOlderCommitIsMarkedStaleInEveryForm; goldens
   repos-100, -120, -140 and -200.
 - **A PR's row says magnum's outcome and whom it waits on, the outcome decides its group, and "looking at" is
   said only while it is true** (2026-11-07, the 2026-11-07 audit's R4 with the audit's E #6; the operator: "'magnum:
