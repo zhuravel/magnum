@@ -63,6 +63,10 @@ type Item struct {
 	// reports the comment's problem, by meaning; "" when none does. Any
 	// class may name one.
 	Rejected string `json:"rejected,omitempty"`
+	// Stage is where a factory-origin candidate went wrong
+	// (store.MissStages): kept only on such a candidate of class miss,
+	// style or outside, and only when it is one of them.
+	Stage string `json:"stage,omitempty"`
 }
 
 // Output is the classifier's answer file: an item per candidate and a
@@ -80,7 +84,9 @@ type Output struct {
 // with 1 <= from <= to and one to MatchMax patterns of at most PatternMax
 // bytes that compile as case-insensitive Go regular expressions. Only a
 // miss keeps those fields: the other classes keep their id, class and
-// rejected finding. Likewise one thread item per own thread, no other id
+// rejected finding. A factory-origin candidate (Candidate.Origin) of class
+// miss, style or outside also keeps its stage when it is plan, code or
+// review (itemStage); any other stage is dropped, never an error. Likewise one thread item per own thread, no other id
 // and a known outcome; a declined or argued one also has a verdict, and a
 // wrong, over_ranked or missing_context verdict a lesson, a scope and
 // patterns as a miss has (checkThread), except on a thread only magnum's
@@ -93,8 +99,9 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
 		return nil, nil, fmt.Errorf("not a JSON object with an \"items\" list: %s", jsonProblem(err))
 	}
 	want := map[string]bool{}
+	factory := map[string]bool{}
 	for _, c := range cands {
-		want[c.ID] = true
+		want[c.ID], factory[c.ID] = true, c.Origin == OriginFactory
 	}
 	items := map[string]Item{}
 	seen := map[string]bool{}
@@ -121,6 +128,7 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
 			errs = append(errs, fmt.Errorf("item %s: %w", id, err))
 			continue
 		}
+		v.Stage = itemStage(it, factory[id])
 		items[id] = v
 	}
 	for _, c := range cands {
@@ -173,6 +181,18 @@ func parseThreads(got []ThreadItem, threads []OwnThread) (map[string]ThreadItem,
 		}
 	}
 	return out, errs
+}
+
+// itemStage is the stage kept of item it: one of store.MissStages, any case
+// and spacing aside, on a factory-origin candidate of class miss, style or
+// outside; "" otherwise (none given, an unknown value, a candidate not of
+// the factory, a not_issue), never guessed and never an error.
+func itemStage(it Item, factory bool) string {
+	stage := strings.ToLower(strings.TrimSpace(it.Stage))
+	if !factory || it.Class == store.MissNotIssue || !slices.Contains(store.MissStages, stage) {
+		return ""
+	}
+	return stage
 }
 
 // checkItem validates one item and returns what is kept of it.

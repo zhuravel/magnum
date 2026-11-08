@@ -3,6 +3,7 @@ package learn
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +194,42 @@ func TestAnUnplacedCommentIsTheLocalRoundsMissAndAnOutsideOneHasNoOrigin(t *test
 	}
 	if len(res.Outside) != 1 || res.Outside[0].ID != "t3" || res.Outside[0].Origin != "" {
 		t.Errorf("outside = %+v; want t3 with no origin", res.Outside)
+	}
+}
+
+// The classifier places a factory-origin candidate's miss: plan, code or
+// review. The stage is kept on such a candidate of class miss, style or
+// outside, any case and spacing aside.
+func TestParseOutputKeepsTheStageOfAFactoryOriginCandidate(t *testing.T) {
+	cands := []Candidate{{ID: "t1", Origin: OriginFactory}, {ID: "t2", Origin: OriginFactory}, {ID: "t3", Origin: OriginFactory}}
+	out := `{"items":[` + strings.Replace(goodMiss, `"scope":"general"`, `"scope":"general","stage":"plan"`, 1) +
+		`,{"id":"t2","class":"outside","stage":" Code "},{"id":"t3","class":"style","stage":"review"}]}`
+	items, _, err := ParseOutput([]byte(out), cands, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"t1": store.MissStagePlan, "t2": store.MissStageCode, "t3": store.MissStageReview} {
+		if got := items[id].Stage; got != want {
+			t.Errorf("%s: stage %q, want %q", id, got, want)
+		}
+	}
+}
+
+// A stage the classifier left out or gave a value outside plan, code and
+// review stays empty, never guessed, and is no error; a candidate that is
+// not the factory's, or a not_issue one, keeps none.
+func TestParseOutputLeavesAnUnknownMissingOrUnaskedStageEmpty(t *testing.T) {
+	cands := []Candidate{{ID: "t1", Origin: OriginFactory}, {ID: "t2", Origin: OriginFactory}, {ID: "t3"},
+		{ID: "t4", Origin: OriginFactory}}
+	out := `{"items":[` + strings.Replace(goodMiss, `"scope":"general"`, `"scope":"general","stage":"deploy"`, 1) +
+		`,{"id":"t2","class":"style"},{"id":"t3","class":"style","stage":"review"},{"id":"t4","class":"not_issue","stage":"plan"}]}`
+	items, _, err := ParseOutput([]byte(out), cands, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"t1", "t2", "t3", "t4"} {
+		if got := items[id].Stage; got != "" {
+			t.Errorf("%s: stage %q, want none", id, got)
+		}
 	}
 }
