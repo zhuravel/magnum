@@ -416,8 +416,8 @@ func withPane(a herdr.AgentInfo, paneID string) herdr.AgentInfo {
 func (m *Manager) markStarted(ctx context.Context, sess store.Session, a herdr.AgentInfo, name, kind, resume string, launched time.Time) error {
 	now := m.now()
 	sid := resume
-	if a.AgentSession != nil && a.AgentSession.Value != "" {
-		sid = a.AgentSession.Value
+	if id := reportedID(a.AgentSession); id != "" {
+		sid = id
 	}
 	err := m.d.Store.TransitionSession(ctx, sess.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
 		u.Set("agent_name", nonEmpty(name))
@@ -593,18 +593,19 @@ func (m *Manager) RecordSessionID(ctx context.Context, s store.Session) (string,
 	if err != nil {
 		return store.Deref(s.SessionID), fmt.Errorf("agents: session id of %s: %w", pane, err)
 	}
-	if p.AgentSession == nil || p.AgentSession.Value == "" {
+	id := reportedID(p.AgentSession)
+	if id == "" {
 		return store.Deref(s.SessionID), nil
 	}
-	if err := m.setSessionID(ctx, s, p.AgentSession.Value); err != nil {
+	if err := m.setSessionID(ctx, s, id); err != nil {
 		return store.Deref(s.SessionID), err
 	}
-	return p.AgentSession.Value, nil
+	return id, nil
 }
 
 func (m *Manager) setSessionID(ctx context.Context, s store.Session, id string) error {
-	if id == "" || id == store.Deref(s.SessionID) {
-		return nil
+	if !config.SessionArgOK(id) || id == store.Deref(s.SessionID) {
+		return nil // no id, or none a row may hold (reportedID)
 	}
 	m.herdrSessionID(s, id)
 	if err := m.d.Store.UpdateSession(ctx, s.ID, func(u *store.SessionUpdate) { u.Set("session_id", id) }); err != nil {

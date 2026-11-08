@@ -553,6 +553,17 @@ func (m *Manager) repoName(ctx context.Context, pr store.PR) (string, error) {
 	return repo.Name, nil
 }
 
+// reportedID is the session id herdr reports for an agent
+// (agent_session.value): "" when there is none, or when it is no id a row
+// may hold (config.SessionArgOK). An agent can make herdr report anything
+// (pane.report_agent_session), and a row's id names files and resumes.
+func reportedID(as *herdr.AgentSession) string {
+	if as == nil || !config.SessionArgOK(as.Value) {
+		return ""
+	}
+	return as.Value
+}
+
 // target is how herdr addresses a session's agent: its name, else its pane.
 func target(s store.Session) string {
 	if n := store.Deref(s.AgentName); n != "" {

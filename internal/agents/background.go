@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -375,7 +376,7 @@ func (m *Manager) readNew(s store.Session, w *bgWatch) error {
 // or resolves a symlinked checkout), the one file named <sid>.jsonl under
 // any project directory is.
 func (m *Manager) transcriptPath(s store.Session, sid string) (string, error) {
-	if strings.ContainsAny(sid, `/\`) || sid == "." || sid == ".." {
+	if !config.SessionArgOK(sid) { // no path out of the config dir, no glob that matches another session's file
 		return "", fmt.Errorf("session id %q is no file name", sid)
 	}
 	dir := m.claudeDir(s)

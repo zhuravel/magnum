@@ -290,11 +290,12 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	idle := a.AgentStatus == herdr.StatusIdle || a.AgentStatus == herdr.StatusDone
 	busy := a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked
 	sid := store.Deref(s.SessionID) // the agent's own session id (a claude agent's transcript)
-	if a.AgentSession != nil && a.AgentSession.Value != "" {
-		if sid != a.AgentSession.Value {
-			m.herdrSessionID(s, a.AgentSession.Value)
+	reported := reportedID(a.AgentSession)
+	if reported != "" {
+		if sid != reported {
+			m.herdrSessionID(s, reported)
 		}
-		sid = a.AgentSession.Value
+		sid = reported
 	}
 	if sid == "" {
 		sid = m.recoverSessionID(ctx, s, now) // herdr's session hook gave none: the Codex rollout's
@@ -319,8 +320,8 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 		if a.PaneID != "" && a.PaneID != paneID {
 			u.Set("herdr_pane_id", a.PaneID)
 		}
-		if a.AgentSession != nil && a.AgentSession.Value != "" && a.AgentSession.Value != store.Deref(s.SessionID) {
-			u.Set("session_id", a.AgentSession.Value)
+		if reported != "" && reported != store.Deref(s.SessionID) {
+			u.Set("session_id", reported)
 		}
 	})
 	if errors.Is(err, store.ErrConflict) {

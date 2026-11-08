@@ -420,11 +420,10 @@ func (m *Manager) parkCheckLive(ctx context.Context, pr store.PR, snap herdr.Sna
 			if a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked {
 				return fmt.Errorf("agents: park pr %d: %s is %s: %w", pr.Number, Role(s.Role).Label(), a.AgentStatus, ErrBusy)
 			}
-			if a.AgentSession != nil && a.AgentSession.Value != "" {
-				if err := m.setSessionID(ctx, s, a.AgentSession.Value); err != nil {
+			if v := reportedID(a.AgentSession); v != "" {
+				if err := m.setSessionID(ctx, s, v); err != nil {
 					return err
 				}
-				v := a.AgentSession.Value
 				live[i].SessionID = &v
 			}
 			continue

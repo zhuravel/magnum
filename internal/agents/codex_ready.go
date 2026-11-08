@@ -267,8 +267,8 @@ func (m *Manager) codexPromptTaken(ctx context.Context, run store.Run, sess stor
 				if a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked {
 					return true, "", screen
 				}
-				if a.AgentSession != nil && a.AgentSession.Value != "" {
-					sid = a.AgentSession.Value
+				if id := reportedID(a.AgentSession); id != "" {
+					sid = id
 				}
 			}
 		}

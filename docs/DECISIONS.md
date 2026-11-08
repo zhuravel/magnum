@@ -3524,8 +3524,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   readers find it from the id and the slot. Known limit: a `claude -p` an agent runs from the slot's root
   writes its transcript beside the session's, so when both the session's own SessionStart and herdr's report
   are lost its id can be recorded, until herdr's report puts the right one back. A resume never passes a
-  session id a CLI could read as a flag (`config.SessionArgOK`: letters, digits and `._:/@+=-`, the first a
-  letter or a digit, so neither a flag nor zsh's `=` expansion in a pasted line): ResumeID passes over such
+  session id a CLI could read as a flag (`config.SessionArgOK`: letters, digits and `._:@+=-`, the first a
+  letter or a digit, so neither a flag nor zsh's `=` expansion in a pasted line, and no `/`, `\` or glob
+  character, since the transcript's and the rollout's readers name their file by the id, which must neither
+  climb out of the agent's directory nor match another session's file; no kind's ids need them). herdr's
+  reported id goes through the same check before it is written to a row or names a file (`reportedID`): an
+  agent can make herdr report anything. ResumeID passes over such
   an id (to an older session's good one, else none), so its caller takes its own fresh path and its own
   first prompt rather than telling a fresh agent to go on where it stopped; `Kind.Argv` leaves such a resume
   out and StartAgent starts the role fresh, for every kind, since `codex resume <id>` takes the id as a
@@ -3582,8 +3586,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAHookLookWaitsForTheObservePassInFlight, TestTheLooksOfOneSessionMerge,
   TestTheHookStateOfASessionNoLongerLiveIsForgotten, TestResumeIDPassesOverAnIDThatCouldBeAFlag,
   TestALooksTypingCooldownComesWithTheNextPass, TestTheLookBufferKeepsOneTimeObservationsBoundedPerSession,
-  TestAStopFailureReadsTheScreenAgainASecondLater, TestAStopFailureReachesHookFailureOncePerFailure and
-  TestStopFailuresOfOneSessionMerge.
+  TestAStopFailureReadsTheScreenAgainASecondLater, TestAStopFailureReachesHookFailureOncePerFailure,
+  TestStopFailuresOfOneSessionMerge, TestNoReaderBuildsAPathFromAnIDThatIsNoID (it failed first: a glob id
+  read another session's transcript) and TestAReportedIDThatIsNoIDIsNeverRecorded.
 
 - **The poll sees the run of the CI workflow the look started** (2026-11-08, a read-only audit of the look's
   verdicts; amends "The look starts the CI workflow a head's required check did not run in, where the

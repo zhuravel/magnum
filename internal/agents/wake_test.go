@@ -1262,3 +1262,61 @@ func TestStopFailuresOfOneSessionMerge(t *testing.T) {
 		t.Fatalf("%d screen reads within %s of the last, want still 2", got, lookMerge)
 	}
 }
+
+// An id that is no SessionArgOK never becomes part of a path: the Claude
+// transcript's reader (a path that climbs out of the config dir, a glob
+// that would match any session's transcript) and the Codex rollout's.
+func TestNoReaderBuildsAPathFromAnIDThatIsNoID(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	tr.add(userPrompt(e.clock.Now(), "review")) // a real transcript a glob would find
+	e.started()
+	s := e.session(RoleClaude)
+	escape := filepath.Join(e.m.d.ClaudeDir, "x.jsonl") // reachable from projects/<cwd>/ by ../../x
+	if err := os.WriteFile(escape, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../../x", "a/../../x", "*", "0a1b2c3d-*", "?" + claudeSID[1:], "[0]*"} {
+		if p, err := e.m.transcriptPath(s, id); err == nil {
+			t.Errorf("transcriptPath(%q) = %s, want no path", id, p)
+		}
+		if p, err := rolloutIn(t.TempDir(), id); err == nil {
+			t.Errorf("rolloutIn(%q) = %s, want no path", id, p)
+		}
+	}
+	if p, err := e.m.transcriptPath(s, claudeSID); err != nil || p != tr.path {
+		t.Fatalf("transcriptPath(the session's id) = %q, %v; want its transcript", p, err)
+	}
+}
+
+// herdr's reported session id goes through the same check before it is
+// written to a row or read as a transcript's name: an agent can make herdr
+// report anything (pane.report_agent_session).
+func TestAReportedIDThatIsNoIDIsNeverRecorded(t *testing.T) {
+	for _, id := range []string{"a/../../x", "--settings=x.json", "*"} {
+		t.Run(id, func(t *testing.T) {
+			e := newEnv(t)
+			e.started()
+			e.h.setAgentSession(claudeAgent, id)
+			e.clock.Add(3 * time.Minute)
+			if _, err := e.m.Prompt(e.ctx, e.pr, RoleClaude, store.RunInitial, "review"); err != nil {
+				t.Fatal(err)
+			}
+			e.observe()
+			if got, err := e.m.RecordSessionID(e.ctx, e.session(RoleClaude)); err != nil || got != "" {
+				t.Errorf("RecordSessionID = %q, %v; want none", got, err)
+			}
+			if s := e.session(RoleClaude); s.SessionID != nil {
+				t.Fatalf("session_id = %q, want herdr's report refused", *s.SessionID)
+			}
+		})
+	}
+	// A good id is recorded as before.
+	e := newEnv(t)
+	e.started()
+	e.h.setAgentSession(claudeAgent, claudeSID)
+	e.observe()
+	if s := e.session(RoleClaude); store.Deref(s.SessionID) != claudeSID {
+		t.Fatalf("session_id = %v, want herdr's", s.SessionID)
+	}
+}

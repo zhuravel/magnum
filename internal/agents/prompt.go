@@ -345,8 +345,8 @@ func (m *Manager) promptedSession(ctx context.Context, sess store.Session, info 
 			u.Set("agent_status", string(info.AgentStatus))
 			u.Set("agent_status_at", now)
 		}
-		if info.AgentSession != nil && info.AgentSession.Value != "" && info.AgentSession.Value != store.Deref(sess.SessionID) {
-			u.Set("session_id", info.AgentSession.Value)
+		if id := reportedID(info.AgentSession); id != "" && id != store.Deref(sess.SessionID) {
+			u.Set("session_id", id)
 		}
 	})
 	if err != nil && !errors.Is(err, store.ErrConflict) {

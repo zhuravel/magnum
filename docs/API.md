@@ -5017,13 +5017,15 @@ func RoleSkillPath(r Role, layout paths.Layout) string
     without a checkout), and EmbeddedFixSkill where a judge gets EmbeddedSkill.
 
 func SessionArgOK(id string) bool
-    SessionArgOK reports whether a session id may go into a resume's args:
-    1 to 256 bytes of letters, digits and . _ : / @ + = -, the first a letter or
-    a digit (a leading "=" is zsh's EQUALS expansion in a pasted line). An id an
-    agent's hook planted (`--dangerously-skip-permissions`, `--settings=x.json`)
-    would be read as a flag after `--resume` or as an option of `codex resume`,
-    which takes the id as a positional argument and has no "=" form; such an id
-    is never passed.
+    SessionArgOK reports whether a session id may go into a resume's args,
+    a row or a file's name: 1 to 256 bytes of letters, digits and . _ : @ + = -,
+    the first a letter or a digit (a leading "=" is zsh's EQUALS expansion in a
+    pasted line). No "/", "\" or glob character: the readers name a transcript
+    or a rollout by the id, which must not climb out of the agent's own
+    directory nor match another session's file. An id an agent's hook planted
+    (`--dangerously-skip-permissions`, `--settings=x.json`) would be read as a
+    flag after `--resume` or as an option of `codex resume`, which takes the id
+    as a positional argument and has no "=" form; such an id is never passed.
 
 func SkillPath(skill string, layout paths.Layout) string
     SkillPath is a judge's skill as a round names it: skill with {{repo}}

@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -162,10 +163,10 @@ func rolloutIn(home, sid string) (string, error) {
 	return matches[len(matches)-1], nil
 }
 
-// rolloutID reports whether sid may name a rollout file: not empty, no
-// path or glob characters.
+// rolloutID reports whether sid may name a rollout file: an id a row may
+// hold (config.SessionArgOK), so no path or glob characters.
 func rolloutID(sid string) bool {
-	return sid != "" && !strings.ContainsAny(sid, `/\*?[`) && sid != "." && sid != ".."
+	return config.SessionArgOK(sid)
 }
 
 // helperTurnError reads the turns that the helper agents of Codex session
