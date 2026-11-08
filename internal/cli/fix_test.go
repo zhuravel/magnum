@@ -137,7 +137,7 @@ func TestFixAsksAndQueuesTheRequest(t *testing.T) {
 		if code := h.cmd("fix", "talkable#5"); code != 1 {
 			t.Fatalf("exit %d after %q: %s", code, in, h.errb.String())
 		}
-		actContains(t, h.out.String(), "Fix the findings of talkable#5 as you? [y/N]")
+		actContains(t, h.out.String(), "Fix the findings of talkable#5 as zhuravel? [y/N]")
 		actContains(t, h.errb.String(), "nothing queued")
 		if reqs := h.requests(); len(reqs) != 0 {
 			t.Fatalf("queued without a y: %+v", reqs)

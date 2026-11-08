@@ -1,0 +1,126 @@
+package cli
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+const (
+	// mergePlan is the daemon's answer to a dry run of a merge of the
+	// parent, and mergeAnswer to the merge.
+	mergePlan   = "dry run: would merge the parent of talkable/talkable#5: magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict"
+	mergeAnswer = "merging the parent of talkable/talkable#5: magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict; " +
+		"`magnum abort talkable/talkable#5` stops it"
+)
+
+// mergeDaemon answers each pending request as the daemon does: a dry run
+// with mergePlan, a merge with mergeAnswer.
+func (h *actHarness) mergeDaemon() {
+	h.onSleep = func(h *actHarness) {
+		for _, r := range h.requests() {
+			if r.State != store.RequestPending {
+				continue
+			}
+			res := mergeAnswer
+			if actDecode[engine.FixPayload](h.t, r.Payload).DryRun {
+				res = mergePlan
+			}
+			if err := h.st.CompleteRequest(h.ctx, r.ID, store.RequestDone, res); err != nil {
+				h.t.Fatal(err)
+			}
+		}
+	}
+}
+
+// `magnum merge-parent` merges the PR's base into it as the fixer App's
+// bot. On a terminal its y/N names what the daemon would do, the branch,
+// the base's tip and the bot's login, from a dry run asked first: only y
+// queues the merge, a request of kind fix in the merge mode.
+func TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	h.mergeDaemon()
+	const question = "Merge the parent of talkable/talkable#5: magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict? [y/N]"
+
+	h.stdin("n\n")
+	if code := h.cmd("merge-parent", "5"); code != 1 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.out.String(), question)
+	actContains(t, h.errb.String(), "nothing queued")
+	reqs := h.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("requests = %+v, want the dry run alone", reqs)
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !p.DryRun || p.Mode != engine.FixModeMerge || p.Number != 5 {
+		t.Fatalf("the plan's payload = %+v", p)
+	}
+
+	h.stdin("y\n")
+	h.out.Reset()
+	if code := h.cmd("merge-parent", "5"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	reqs = h.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("requests = %d, want a dry run and the merge more", len(reqs))
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[2].Payload); p.DryRun || p.Mode != engine.FixModeMerge || reqs[2].Kind != engine.ReqFix {
+		t.Fatalf("the merge's payload = %+v (%s)", p, reqs[2].Kind)
+	}
+	actContains(t, h.out.String(), question, mergeAnswer)
+}
+
+// --yes and a script ask nothing and send the merge alone; --dry-run asks
+// the daemon what would happen and asks nothing.
+func TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	h.mergeDaemon()
+	if code := h.cmd("merge-parent", "5", "--yes"); code != 0 || strings.Contains(h.out.String(), "[y/N]") {
+		t.Fatalf("--yes: exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	if reqs := h.requests(); len(reqs) != 1 || actDecode[engine.FixPayload](t, reqs[0].Payload).DryRun {
+		t.Fatalf("requests = %+v, want the merge alone", reqs)
+	}
+	h.out.Reset()
+	if code := h.cmd("merge-parent", "5", "--dry-run"); code != 0 || strings.Contains(h.out.String(), "[y/N]") {
+		t.Fatalf("--dry-run: exit %d: %s", code, h.out.String())
+	}
+	actContains(t, h.out.String(), mergePlan)
+	if code := h.cmd("merge-parent"); code != 2 {
+		t.Errorf("no PR: exit %d", code)
+	}
+}
+
+// --wait follows the merge to its end: a merge the daemon made, or the
+// fixer pushed, ends the loop with fix.ended, which is a success (exit 0,
+// "merged"), not a loop that ended otherwise.
+func TestMergeParentWaitSaysTheParentWasMerged(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	step := 0
+	h.onSleep = func(h *actHarness) {
+		switch step++; step {
+		case 1:
+			h.completePending(store.RequestDone, mergeAnswer)
+			h.setFixRow(pr, engine.FixPhaseFixing, 1)
+		case 3:
+			h.fixLoopGone(pr)
+			h.fixEvent("fix.ended", "the merge of the parent ends: merged master at c0c0c0c with no conflict: the head is e7e7e7e",
+				map[string]any{"merged_base": "master", "merged_sha": "c0c0c0c0", "head": "e7e7e7e7"})
+		}
+	}
+	if code := h.cmd("merge-parent", "5", "--wait", "--yes"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#5: merged master at c0c0c0c with no conflict: the head is e7e7e7e")
+}

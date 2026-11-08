@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -46,7 +47,10 @@ const fixEventWindow = 200
 
 type fixOpts struct {
 	off, on, done, wait, dryRun, json, yes bool
-	timeout                                time.Duration // --timeout: stop following after this long (0 = no limit)
+	// merge is `magnum merge-parent`: a merge of the PR's parent alone
+	// (engine.FixModeMerge), asked y/N with the daemon's plan.
+	merge   bool
+	timeout time.Duration // --timeout: stop following after this long (0 = no limit)
 	// decide are the --decide values as typed, decisions what they say
 	// (parseDecide).
 	decide    []string
@@ -61,7 +65,7 @@ func newFixCmd(c *Context) *cobra.Command {
 	var o fixOpts
 	cmd := newCommand(groupAct, fixUsage, "fix magnum's findings on your own PR now (--wait follows the loop to its end)",
 		"Fix magnum's findings on your own PR now. A fixer agent (the fix role, claude-fix by default) fixes the findings "+
-			"of magnum's review on the PR's current head, in the PR's slot and as you (when the pool took that slot back, the fix "+
+			"of magnum's review on the PR's current head, in the PR's slot and as the fix role's login (a fixer App's bot, or you; the question names it) (when the pool took that slot back, the fix "+
 			"claims one at the reviewed head first, as magnum open does but without the pin; with no slot free it refuses and "+
 			"says to run it again shortly): it pushes, answers the review threads "+
 			"and what other reviewers wrote that nobody answered, and writes a report. A review that found nothing and left "+
@@ -118,6 +122,22 @@ func newFixCmd(c *Context) *cobra.Command {
 	return cmd
 }
 
+// verb is the command fixMain runs as: fix, or merge-parent.
+func (o fixOpts) verb() string {
+	if o.merge {
+		return "merge-parent"
+	}
+	return "fix"
+}
+
+// usage is the command's usage line.
+func (o fixOpts) usage() string {
+	if o.merge {
+		return mergeParentUsage
+	}
+	return fixUsage
+}
+
 func runFix(c *Context, o fixOpts, pos []string) int {
 	switch {
 	case len(pos) == 0:
@@ -163,7 +183,12 @@ const (
 	fixEndAborted  = "aborted"        // magnum abort
 	fixEndEnded    = "ended"          // a failed run or re-review, a PR that closed
 	fixEndGone     = "gone"           // the row went and no event says why
+	fixEndMerged   = "merged"         // a merge of the parent (magnum merge-parent) merged and pushed it
 )
+
+// fixMergeEnds is how the end of a merge of the parent starts
+// (engine endParentMerged, parentPushed).
+const fixMergeEnds = "the merge of the parent ends: "
 
 // fixEnding is how a fix loop ended and the sentence that says so.
 type fixEnding struct {
@@ -173,7 +198,7 @@ type fixEnding struct {
 
 // code is the exit code of a command that followed the loop to this end.
 func (e fixEnding) code() int {
-	if e.Kind == fixEndClean || e.Kind == fixEndNothing {
+	if e.Kind == fixEndClean || e.Kind == fixEndNothing || e.Kind == fixEndMerged {
 		return 0
 	}
 	return 1
@@ -200,7 +225,7 @@ func fixProgress(c *Context, o fixOpts) io.Writer { return reviewProgress(c, rev
 func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts) int {
 	t, err := d.resolveRef(ctx, ref)
 	if err != nil {
-		return cmdFail(c, "fix", verbFix("fix", err))
+		return cmdFail(c, o.verb(), verbFix(o.verb(), err))
 	}
 	label := d.actLabel(t.full(), t.PR.Number)
 	out := fixJSON{PR: label, URL: t.PR.URL, DryRun: o.dryRun, State: t.PR.State}
@@ -208,6 +233,9 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		reviewDescribe(ctx, c.Stdout, d, t, label, false, o.dryRun)
 	}
 	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions}
+	if o.merge {
+		payload.Mode = engine.FixModeMerge
+	}
 	if !o.json {
 		for _, d := range o.decisions { // what goes out as you, before the y/N
 			fmt.Fprintf(c.Stdout, "  reply in thread %d: %s\n", d.Thread, d.Text)
@@ -228,10 +256,23 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		b, _ := json.Marshal(payload)
 		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); nothing is changed\n", engine.ReqFix, b)
 	}
-	if t.PR.Pinned && !o.off && !o.on && !o.done {
+	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge {
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
-	if code, ok := fixConfirm(ctx, c, d, label, o); !ok {
+	question := ""
+	if o.merge && fixAsks(d, o) && !o.json { // the y/N names what the daemon would merge, into which branch, as whom
+		plan, err := mergeParentPlan(ctx, d, payload)
+		if err != nil {
+			return fixFail(c, o, out, err)
+		}
+		rest, ok := strings.CutPrefix(plan, mergeParentDry)
+		if !ok { // nothing to merge, said as an answer
+			fmt.Fprintln(c.Stdout, plan)
+			return 0
+		}
+		question = "Merge the parent of " + rest + "?"
+	}
+	if code, ok := fixConfirm(ctx, c, d, label, fixerLogin(d.Cfg, t.full()), question, o); !ok {
 		return code
 	}
 
@@ -323,16 +364,60 @@ func fixHeldForRestart(ctx context.Context, c *Context, d *actDeps, t actTarget,
 	return true
 }
 
+// fixAsks reports whether the command asks y/N: on an interactive
+// terminal, for anything but a dry run, without --yes.
+func fixAsks(d *actDeps, o fixOpts) bool { return !o.dryRun && !o.yes && d.StdinTTY && d.StdoutTTY }
+
+// fixerLogin is the login the fixer of repo's watch pushes and replies as
+// (its fix role's identity: a fixer App's bot, or your own login), "you"
+// when the config does not say.
+func fixerLogin(cfg *config.Config, repo string) string {
+	if cfg == nil {
+		return "you"
+	}
+	if r, ok := cfg.FixRoleFor(cfg.WatchFor(repo)); ok {
+		if id := cfg.IdentityByName(r.Identity); id != nil && id.Login != "" {
+			return id.Login
+		}
+	}
+	return "you"
+}
+
+// mergeParentDry is how the daemon's answer to a dry run of a merge of the
+// parent starts (engine requestMerge); what follows names the PR, who
+// merges which tip of which base into which branch, and as whom.
+const mergeParentDry = "dry run: would merge the parent of "
+
+// mergeParentPlan asks the daemon, in a dry run, what a merge of the
+// parent of payload's PR would do, for its y/N; a refusal is the error.
+func mergeParentPlan(ctx context.Context, d *actDeps, payload engine.FixPayload) (string, error) {
+	payload.DryRun = true
+	q := d.quick()
+	q.NeedDaemon = true
+	res, err := d.reqs().send(ctx, engine.ReqFix, payload, q)
+	switch {
+	case err != nil:
+		return "", err
+	case res.Failed():
+		return "", errors.New(res.Result())
+	}
+	return res.Result(), nil
+}
+
 // fixConfirm asks y/N on an interactive terminal, naming what is about to
-// happen; ok is false when the command ends here (code is its exit code). A
-// dry run changes nothing and asks nothing, and --yes and a script skip the
-// question. --json on a terminal needs --yes: the question would land in the
-// JSON, and skipping it would apply unasked.
-func fixConfirm(ctx context.Context, c *Context, d *actDeps, label string, o fixOpts) (code int, ok bool) {
-	if o.dryRun || o.yes || !d.StdinTTY || !d.StdoutTTY {
+// happen (question, else the fix's own as login, the fixer's); ok is false
+// when the command ends here (code is its exit code). A dry run changes
+// nothing and asks nothing, and --yes and a script skip the question.
+// --json on a terminal needs --yes: the question would land in the JSON,
+// and skipping it would apply unasked.
+func fixConfirm(ctx context.Context, c *Context, d *actDeps, label, login, question string, o fixOpts) (code int, ok bool) {
+	if !fixAsks(d, o) {
 		return 0, true
 	}
-	question, declined := fmt.Sprintf("Fix the findings of %s as you?", label), "nothing queued"
+	declined := "nothing queued"
+	if question == "" {
+		question = fmt.Sprintf("Fix the findings of %s as %s?", label, login)
+	}
 	switch {
 	case o.off:
 		question, declined = fmt.Sprintf("Leave the findings of %s to you (no autofix)?", label), "nothing changed"
@@ -346,7 +431,7 @@ func fixConfirm(ctx context.Context, c *Context, d *actDeps, label string, o fix
 		question = fmt.Sprintf("Post these %d replies as you in %s and fix it?", len(o.decisions), label)
 	}
 	if o.json {
-		return actUsage(c, "fix", "--json needs --yes to apply (a terminal asks y/N first); "+declined, fixUsage), false
+		return actUsage(c, o.verb(), "--json needs --yes to apply (a terminal asks y/N first); "+declined, o.usage()), false
 	}
 	if !d.confirm(ctx, c.Stdout, question) {
 		fmt.Fprintln(c.Stderr, declined)
@@ -364,7 +449,7 @@ func fixFail(c *Context, o fixOpts, out fixJSON, err error) int {
 		_ = writeJSON(c.Stdout, out)
 		return 1
 	}
-	return cmdFail(c, "fix", err)
+	return cmdFail(c, o.verb(), err)
 }
 
 // fixFollow follows the loop the answered request started (res, queued at
@@ -500,7 +585,13 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			}
 		case "fix.needs_you", "fix.capped":
 			e = fixEnding{fixEndNeedsYou, "needs you: " + strings.TrimPrefix(msg, "fix: ")}
-		case "fix.failed", "fix.ended":
+		case "fix.ended":
+			if rest, ok := strings.CutPrefix(msg, fixMergeEnds); ok {
+				e = fixEnding{fixEndMerged, rest}
+				break
+			}
+			fallthrough
+		case "fix.failed":
 			for _, prefix := range []string{"fix loop ended: ", "the fix loop ends: "} {
 				msg = strings.TrimPrefix(msg, prefix)
 			}
