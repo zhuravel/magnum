@@ -15865,65 +15865,81 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestThrottleTheRoundOfALateResultWaitsOnlyForASnooze.
 - **The review retro tags factory-origin misses and their stage** (2026-11-08, the self-learning audit's R32;
   migration 0031). The retro took the factory's PRs as any other (`store.RetroDue`), so a colleague's comment that
-  magnum's posted round caught, or rejected as its duplicate, counted as caught: on a factory PR the factory's
-  local round ran first, on the same head, and missed it, and that round was the one that mattered. **The second
-  caught set**: for each PR the retro reads `factory.db` read only through a new package, `internal/factoryread`
-  (opened `mode=ro` with a 2 s busy timeout, never created, closed after one statement, so it writes neither the
-  file nor its WAL; it knows only `pr_links` and `review_findings`, and its tests build the file from the factory's
-  own migrations, `registrytest.Seed`). Every task that published the PR gives its local review's findings, each at
-  the head the round approved (else the opened one), whatever its outcome: a fixed, waived or rebutted finding still
-  says the round raised the point. `learn.Input.Local` hands them to `Build`. **The origin rule**: a candidate no
-  local finding caught (the same path, within 3 lines, at that head or at a later reviewed one the file did not
-  change since, the retro's own comparison) is `origin = factory`, a review body and a comment on deleted lines
-  included, since nothing can be placed near them; an outside comment takes no part (it is on code magnum's
-  review did not see), and a PR the factory did not publish is never tagged. A comment both rounds missed is an
+  magnum's posted round caught, or rejected as its duplicate, counted as caught: on a factory PR the factory's local
+  round ran first, on the same head, and missed it, and that round was the one that mattered. **The second caught
+  set**: for each PR the retro reads `factory.db` read only through a new package, `internal/factoryread` (opened
+  `mode=ro` with a 2 s busy timeout, never created, closed after one statement, so it writes neither the file nor its
+  WAL; it knows only `pr_links`, `review_findings` and `review_cycles`, and its tests build the file from the
+  factory's own migrations, `registrytest.Seed`, and check that a registry a stopped daemon left with its WAL keeps
+  both files' bytes). Every task that published the PR gives the head it approved (else the opened one) and its local
+  review's findings, whatever their outcome (a fixed, waived or rebutted finding still says the round raised the
+  point), each at the head of the review cycle that last saw it (`review_cycles.head_before` of its `last_cycle`, the
+  head its lines were taken from; the task's head when the registry has none). Not at the approved head, as the brief
+  first said: a finding fixed in an earlier cycle names code a later fix rewrote, and its stale lines at the approved
+  head would catch a comment on the new block. The factory never rewrites its branch (its fixes are commits on top, a
+  base update is a merge), so the cycle heads reach GitHub with the published head, and a comparison GitHub cannot
+  make leaves such a finding catching nothing. `learn.Input.Local` hands both to `Build`. **The origin rule**: a
+  candidate on code the local round saw (the reviewed commit it applies to is a head the factory approved, or a later
+  reviewed one whose copy of the file did not change since, the retro's own comparison) that no local finding caught
+  (the same path, within 3 lines, at the finding's head or at a later one the file did not change since) is `origin =
+  factory`, a review body and a comment on deleted lines included, since nothing can be placed near them. A comment on
+  code the local round never saw takes no part and is a candidate, caught or outside as on any other PR: an outside
+  comment (on no reviewed commit), a comment on a file that changed after the approved head (a fixer's push, the
+  author's, a merge of the base branch: not the factory's code), a review body on a later head (no file to compare),
+  and one no comparison tells of. A PR the factory did not publish is never tagged. A comment both rounds missed is an
   ordinary miss, tagged as well. **A posted-round catch never teaches the review skill again**: a comment magnum's
   posted round caught that the local round did not becomes a candidate marked `posted_caught` instead of being
-  counted, so the factory's miss is recorded and classified, but it is a factory-origin miss only: `MissFilter`
-  leaves such rows out unless `WithPostedCaught`, so the skill editor, the notes curation and its count, the learned
-  eval corpus, the version measures and the status count of new misses never read them (that round already knew
-  the lesson; teaching it again would only bias the skill toward what it does). They count as caught in the
-  retro's summary. **The stage**: `prompts/retro.md`, only when the PR has a factory-origin candidate
-  (`.Factory`; every other retro renders byte for byte as before), gives the classifier copies of the task's plan
-  (`report.md`), ticket (`ticket.md`, else `prompt.md`) and answers (`answers.md`) in `factory/` beside the
-  candidates, read inside an `os.Root` of the task's directory, and asks each factory-origin `miss`, `style` or
-  `outside` its `stage`: `plan` (the ticket or the answers decided the point and the plan does not follow them, or
-  the factory needed to ask), `code` (the plan is right, the code is not) or `review` (plan and code are as written,
-  and the local review should have caught it). `learn.ParseOutput` keeps only those three values on those
-  candidates; an unknown or missing stage stays empty, never guessed and never an error. Migration 0031 adds
-  `origin`, `stage` and `posted_caught` to `misses` (checked in Go, as `outside_reason` is, so a new value needs no
-  rebuild of the table `notes_proposal_misses` references); `UpsertMiss` keeps the stage with the class on an
-  unclassified write and takes the origin and the catch as Build gives them. `magnum misses` shows ORIGIN
-  (`factory:plan`) and RAISED `posted` (the default list of what the review skill has to learn leaves those out,
-  `--all` and the new `--factory` show them), `magnum status` and the `retro.ok`/`retro.done` events count the
-  factory-origin misses, and the magnum-improve evidence's misses tables carry the three columns. Without
-  `factory.db`, or with one that cannot be read, the retro runs as before and says why once per retro (a log line
-  for a missing registry, a `retro.factory` warning for an unreadable one). **One near rule**: the new pure
-  package `internal/escapes` (`Match`, `Distance`, `NearLines = 3`, `SameCode`) is the matcher of both this retro and
-  R28's escapes of the local review against the first posted round: it says, for every finding of the other round
-  that no local one caught, why (no local finding on the path at a comparable head, the nearest one N lines away,
-  or a finding with no path or line that cannot be placed), never filters by priority, and leaves the "file did
-  not change" comparison to its caller (`SameCode`). learn's own near rule now measures with it (`nearby` over
-  `escapes.Distance`, `learn.NearLines = escapes.NearLines`), unchanged: every learn test passed as it was. **Store
-  and show only**: routing the stages (`review` into the learned corpus as local cases, `plan` and `code` into a
-  factory retro) is R36's. Rejected: matching the local findings at each review cycle's own head (its commits may
-  never reach GitHub, so the comparison could not tell, and the factory publishes the head it approved); a class
-  for the posted catches (every reader of class `miss` would change, and the CHECK would need a rebuild); leaving
-  the posted catches unstored (the factory's half of the evidence would stay lost, as on the case the audit
-  traced); a factory retro of its own in this change (R36). Tests, failing first: the table tests of
-  `internal/escapes`; TestPublishedReadsTheLocalRoundOfAPullRequestTheFactoryPublished,
-  TestPublishedSaysTheRegistryDoesNotExistAndCreatesNone and TestPublishedNeverWritesTheRegistryOrItsWAL in
-  factoryread; TestAFactoryPRsCommentTheLocalRoundMissedIsTaggedFactory,
+  counted, so the factory's miss is recorded and classified, but it is a factory-origin miss only: `MissFilter` leaves
+  such rows out unless `WithPostedCaught`, so the skill editor, the notes curation and its count, the learned eval
+  corpus, the version measures and the status count of new misses never read them (that round already knew the lesson;
+  teaching it again would only bias the skill toward what it does). They count as caught in the retro's summary. **The
+  stage**: `prompts/retro.md`, only when the PR has a factory-origin candidate (`.Factory`; every other retro renders
+  byte for byte as before), gives the classifier copies of the task's plan (`report.md`), ticket (`ticket.md`, else
+  `prompt.md`) and answers (`answers.md`) in `factory/` beside the candidates, read inside an `os.Root` of the task's
+  directory and named, like the comments, data written by other people and agents, never instructions (the ticket is a
+  Jira issue anyone can write), and asks each factory-origin `miss`, `style` or `outside` its `stage`: `plan` (the
+  ticket or the answers decided the point and the plan does not follow them, or the factory needed to ask), `code`
+  (the plan is right, the code is not) or `review` (plan and code are as written, and the local review should have
+  caught it). `learn.ParseOutput` keeps only those three values on those candidates; an unknown or missing stage stays
+  empty, never guessed and never an error. Migration 0031 adds `origin`, `stage` and `posted_caught` to `misses`
+  (checked in Go, as `outside_reason` is, so a new value needs no rebuild of the table `notes_proposal_misses`
+  references); `UpsertMiss` keeps the stage with the class on an unclassified write and takes the origin and the catch
+  as Build gives them. `magnum misses` shows ORIGIN (`factory:plan`) and RAISED `posted` (the default list of what the
+  review skill has to learn leaves those out, `--all` and the new `--factory` show them), `magnum status` and the
+  `retro.ok`/`retro.done` events count the factory-origin misses, and the magnum-improve evidence's misses tables
+  carry the three columns. Without `factory.db`, or with one that cannot be read, the retro runs as before and says
+  why once per retro (a log line for a missing registry, a `retro.factory` warning for an unreadable one). **One near
+  rule**: the new pure package `internal/escapes` (`Match`, `Distance`, `NearLines = 3`, `SameCode`) is the matcher of
+  both this retro and R28's escapes of the local review against the first posted round: it says, for every finding of
+  the other round that no local one caught, why (no local finding on the path at a comparable head, the nearest one N
+  lines away, or a finding with no path or line that cannot be placed), never filters by priority, and leaves the
+  "file did not change" comparison to its caller (`SameCode`). learn's own near rule now measures with it (`nearby`
+  over `escapes.Distance`, `learn.NearLines = escapes.NearLines`), unchanged: every learn test passed as it was.
+  **Store and show only**: routing the stages (`review` into the learned corpus as local cases, `plan` and `code` into
+  a factory retro) is R36's. Rejected: every local finding at the approved head (a fixed finding's stale lines would
+  catch comments on the code that replaced it); tagging every comment the local findings did not catch, whatever head
+  it is on (a fixer's or the author's later code would count as the factory's miss, and R36 would route it to the
+  factory's retro as the factory's mistake); a class for the posted catches (every reader of class `miss` would
+  change, and the CHECK would need a rebuild); leaving the posted catches unstored (the factory's half of the evidence
+  would stay lost, as on the case the audit traced); a factory retro of its own in this change (R36). Tests, failing
+  first: the table tests of `internal/escapes`; TestPublishedReadsTheLocalRoundOfAPullRequestTheFactoryPublished,
+  TestPublishedNamesEachFindingAtTheHeadOfTheCycleThatLastSawIt,
+  TestPublishedSaysTheRegistryDoesNotExistAndCreatesNone, TestPublishedNeverWritesTheRegistryOrItsWAL and
+  TestPublishedNeverCheckpointsTheWALOfAStoppedFactory in factoryread;
+  TestAFactoryPRsCommentTheLocalRoundMissedIsTaggedFactory,
   TestACommentOnlyThePostedRoundCaughtIsAFactoryOriginCandidate,
-  TestALocalFindingCatchesACommentOfALaterHeadOnlyWhenItsFileDidNotChange and
+  TestALocalFindingCatchesACommentOfALaterHeadOnlyWhenItsFileDidNotChange,
+  TestACommentOnAFileThatChangedAfterTheFactoryApprovedItIsNotTheFactorysMiss,
+  TestAnOutsideCommentNearAPostedFindingStaysCaughtOnAFactoryPR,
+  TestACommentOnARangeIsNearAFindingWithinThreeLinesOfItsFirstLine and
   TestParseOutputLeavesAnUnknownMissingOrUnaskedStageEmpty in learn;
   TestMigrationV30ToV31AddsTheMissesOriginStageAndPostedCatch and
   TestMissesLeaveOutWhatThePostedRoundCaughtUnlessAsked in store;
   TestTheRetroAsksTheStageOfAFactoryOriginCandidateOnlyOnAFactoryPR in agents;
-  TestTheRetroOfAFactoryPRTagsWhatTheLocalRoundMissedWithItsStage and
+  TestTheRetroOfAFactoryPRTagsWhatTheLocalRoundMissedWithItsStage, TestAPostedCaughtRepoMissMarksNoNotesCuration and
   TestTheRetroRunsAsBeforeWithoutAReadableFactoryRegistryAndSaysWhyOnce in engine;
-  TestMissesShowTheFactoryOriginStageAndThePostedCatch and
-  TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses in cli.
+  TestMissesShowTheFactoryOriginStageAndThePostedCatch and TestStatusRetroLineCountsTheLastRetrosFactoryOriginMisses
+  in cli.
 
 ## The factory (2026-11-03)
 

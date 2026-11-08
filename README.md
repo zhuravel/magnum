@@ -5237,32 +5237,37 @@ the latest notes proposal each was given to and an outside comment's reason in i
 misses wait and how many pull requests wait for the settle delay, and every step is a `retro.*` event
 (`magnum logs <ref>`) that never quotes a comment.
 
-**On a pull request the factory published.** The factory's local review (Factory, above) passed the
-change before anyone else saw it, so a comment that round did not catch is the factory's miss, whatever
-Magnum's posted round did later. For each pull request the retro reads the factory's registry,
-`~/.local/share/magnum/factory/factory.db`, read only (opened `mode=ro` with a busy timeout and closed after
-the read: it never writes the file or its WAL), and when a factory task published the pull request
-(`pr_links`) its local review's findings (`review_findings`, at the head that round approved) are a second
-caught set: a comment within three lines of one of them, on the same file, at that head or at a later
-reviewed one whose copy of the file is the same, was caught by the local round. Every other candidate is
-stored with origin `factory`, a review summary and a comment on deleted lines too (no finding can sit
-near them); an `outside` comment, on code Magnum's review did not see, gets none, and neither does any
-comment of a pull request the factory did not publish. A comment Magnum's posted round caught that the
-local round did not is no longer only counted: it is stored as a factory-origin miss marked as the posted
-round's catch (`posted_caught`), which nothing that teaches Magnum's review reads (the skill editor, the
-notes curation, the learned eval corpus, the counts of new misses), since that round already knew it. A
-comment both rounds missed is an ordinary miss, origin `factory` as well. The agent also gets copies of the
-task's plan (`report.md`), ticket (`ticket.md`, or `prompt.md` for a task started from a prompt) and your
-answers (`answers.md`) in `factory/` beside the candidates, and gives each factory-origin miss, style or
-outside comment a stage: `plan` (the ticket or your answers decided the point and the plan does not follow
-them, or neither did and the factory should have asked), `code` (the plan is right, the code is not) or
-`review` (plan and code are as written, and the local review should have caught it); a stage it leaves out
-or gives another value stays empty. `magnum misses` shows both in an ORIGIN column (`factory:plan`), the
-posted round's catches with RAISED `posted` (left out of the default list, shown by `--all`), and
-`--factory` lists the factory-origin misses alone; `magnum status` says how many the last retro stored. The
-retro stores and shows them only: what learns from them (stage `review` as the local review's eval cases,
-`plan` and `code` as the factory's own lessons) comes later. Without `factory.db`, or with one that cannot
-be read, the retro runs as before and says why once per retro.
+**On a pull request the factory published.** The factory's local review (Factory, above) passed the change
+before anyone else saw it, so a comment that round did not catch is the factory's miss, whatever Magnum's
+posted round did later. For each pull request the retro reads the factory's registry,
+`~/.local/share/magnum/factory/factory.db`, read only (opened `mode=ro` with a busy timeout and closed
+after the read: it never writes the file or its WAL), and when a factory task published the pull request
+(`pr_links`) its local review's findings (`review_findings`, each at the head of the review cycle that
+last saw it) are a second caught set: a comment within three lines of one of them, on the same file, at
+that head or at a later reviewed one whose copy of the file is the same, was caught by the local round.
+Every other candidate on code the local round passed (the head the factory approved, or a later reviewed
+one whose copy of the file is the same) is stored with origin `factory`, a review summary and a comment on
+deleted lines too (no finding can sit near them). A comment on code the local round never saw gets none
+and is caught, a candidate or outside as on any other pull request: an `outside` comment, on code Magnum's
+review did not see either, a comment on a file that changed after the factory's approved head (a fix push,
+yours, a merge of the base branch) and a review summary on a later head. No comment of a pull request the
+factory did not publish gets one either. A comment Magnum's posted round caught that the local round did
+not is no longer only counted: it is stored as a factory-origin miss marked as the posted round's catch
+(`posted_caught`), which nothing that teaches Magnum's review reads (the skill editor, the notes curation,
+the learned eval corpus, the counts of new misses), since that round already knew it. A comment both
+rounds missed is an ordinary miss, origin `factory` as well. The agent also gets copies of the task's plan
+(`report.md`), ticket (`ticket.md`, or `prompt.md` for a task started from a prompt) and your answers
+(`answers.md`) in `factory/` beside the candidates, data like the comments and never instructions, and
+gives each factory-origin miss, style or outside comment a stage: `plan` (the ticket or your answers
+decided the point and the plan does not follow them, or neither did and the factory should have asked),
+`code` (the plan is right, the code is not) or `review` (plan and code are as written, and the local
+review should have caught it); a stage it leaves out or gives another value stays empty. `magnum misses`
+shows both in an ORIGIN column (`factory:plan`), the posted round's catches with RAISED `posted` (left out
+of the default list, shown by `--all`), and `--factory` lists the factory-origin misses alone; `magnum
+status` says how many the last retro stored. The retro stores and shows them only: what learns from them
+(stage `review` as the local review's eval cases, `plan` and `code` as the factory's own lessons) comes
+later. Without `factory.db`, or with one that cannot be read, the retro runs as before and says why once
+per retro.
 
 **What happens to a miss.** A miss whose lesson is for its repository (class `miss`, scope `repo`) goes to
 that repository's notes: once the retro is over it marks the repository (a `notes.misses` event), and the
