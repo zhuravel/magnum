@@ -460,6 +460,14 @@ const HerdrSessionHook = "herdr-agent-state.sh"
     HerdrSessionHook is the script herdr's Codex SessionStart hook runs;
     a hook whose command names it is herdr's.
 
+const JudgeNoResult = "the judge stopped without posting a review or writing its result"
+    JudgeNoResult begins the error of the judge's runs of a round that ended
+    without the judge's result, also after a nudge (the pipeline's verdict):
+    the judge may still post that round's review, which the next round on the
+    head adopts (the engine's late_result.go, the pipeline's findUnverified).
+    Its session at work after such a round is someone typing, as any agent at
+    work with no magnum prompt in flight.
+
 const LostGrace = 15 * time.Second
     LostGrace keeps an observe tick from judging a session lost from a snapshot
     that may predate its agent: a session whose started_at, agent_status_at or
@@ -7521,6 +7529,11 @@ type PRFacts struct {
 	// reports, was queued; zero = none is due. Throttle then holds the PR
 	// only for its snooze, as for CIRedAt: no code changed.
 	CompleteAt time.Time
+	// LateAt is when the judge's late result for the PR's head landed: the
+	// review it posted after its round ended without its result, which the
+	// next round adopts, prompting nothing; zero = none. Throttle then
+	// holds the PR only for its snooze, as for CIRedAt.
+	LateAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
 	// (config.SelfLogins, the board's "mine"): include_own = false skips it
@@ -7626,6 +7639,9 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
       - A completion (CompleteAt set, no request): the clean review of the
         reviewed head went without some reviewers' reports, which run again on
         that head: as for CI red, only the snooze holds it.
+      - A late result (LateAt set, no request): the judge posted the head's
+        review after its round ended without its result, and the next round
+        adopts it: as for CI red, only the snooze holds it.
       - Forced bypasses all of it: always ready.
 
     A zero timestamp or zero duration never blocks. When several rules hold
@@ -7772,6 +7788,17 @@ const (
 	FixPhaseReviewing = "reviewing"
 )
     Phases of a fix loop (FixState.Phase).
+
+const (
+	EventKindHeld        = "kind.held"
+	EventKindHoldProbe   = "kind.hold_probe"
+	EventKindHoldRenewed = "kind.hold_renewed"
+	EventKindHoldLifted  = "kind.hold_lifted"
+)
+    Kind hold events, under tool:<kind>: held (warn: the kind, the PRs and until
+    when), a round probes it (info), a probe failed and the hold goes on (warn),
+    the hold lifted (info: a good probe, with a toast, or `magnum resume
+    --tool`).
 
 const (
 
@@ -8488,6 +8515,14 @@ func KVGitHubLow(identity string) string
     the tick that found its budget below github budget_floor until the one that
     finds it recovered (noteGitHubBudget), written at once, apart from the cost
     record the flush writes once a minute.
+
+func KVKindHold(kind string) string
+    KVKindHold holds kind's hold (KindHold, JSON) while it lasts.
+
+func KVKindHoldLifted(kind string) string
+    KVKindHoldLifted holds when kind's last hold was lifted: only launch lines
+    after it hold the kind again, so the lines that held it, still within
+    sharedFailureWindow, do not hold it again at once.
 
 func KVKindVersion(kind string) string
     KVKindVersion holds what the daemon last read of agent kind kind's CLI
@@ -9997,6 +10032,20 @@ type Inventory interface {
 	UpsertSlotDatabases(ctx context.Context, inv inventory.Inventory) (inventory.SyncResult, error)
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
+
+type KindHold struct {
+	Line    string    `json:"line"`
+	PRs     int       `json:"prs"`
+	Since   time.Time `json:"since"`
+	Until   time.Time `json:"until"`
+	Probes  int       `json:"probes,omitempty"`
+	ProbePR int64     `json:"probe_pr,omitempty"`
+	ProbeAt time.Time `json:"probe_at,omitzero"`
+}
+    KindHold is one kind's hold: the pane line its launches ended with, how many
+    PRs shared it, since when it holds and until when (then a round may probe),
+    its failed probes, and the PR whose round probes it now (0: none) with when
+    that round claimed it.
 
 type KindVersion struct {
 	// Version is the first line the version command printed.
@@ -21010,6 +21059,12 @@ func KVMissingReports(prID int64) string
     a MissingReports for each of its latest judged rounds (missingRecords),
     as a JSON list by round; one written before the record kept every round is a
     lone object.
+
+func LateReview(path string, runIDs ...string) (reviewID int64, ok bool)
+    LateReview is the review the judge's result file at path says the judge
+    posted for one of runIDs, the runs of a round that ended without its result
+    (agents.JudgeNoResult): its late, complete result, which the next round on
+    the head adopts (findUnverified); ok is false for none.
 
 func OwnHistory(login, typ, reviewer string, reviewerBot bool, former []string) bool
     OwnHistory reports whether an author (login, GraphQL __typename typ) is
