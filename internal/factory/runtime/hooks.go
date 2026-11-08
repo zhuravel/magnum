@@ -20,16 +20,12 @@ import (
 
 // UseHookSocket has every pane the runtime makes from now on carry the
 // factory daemon's hook socket at path and the magnum binary
-// (agents.Deps.HookSocket: MAGNUM_HOOK_SOCKET, MAGNUM_HOOK_BIN), so its
-// agents' hooks send their events there. The daemon calls it once, under
-// its lock, when its listener is up and before its startup: it builds the
-// agents manager anew with the socket, so it must come before the runtime's
-// first use. "" keeps the panes without the hook env.
-func (r *Runtime) UseHookSocket(path string) {
-	d := r.mgrDeps
-	d.HookSocket = path
-	r.mgr = agents.New(d)
-}
+// (agents.Manager.SetHookSocket: MAGNUM_HOOK_SOCKET, MAGNUM_HOOK_BIN), so
+// its agents' hooks send their events there; a pane already made keeps its
+// env. The daemon calls it under its lock once its listener is up, before
+// its startup, so every pane it makes names the socket. "" leaves the panes
+// made from then on without the hook env.
+func (r *Runtime) UseHookSocket(path string) { r.mgr.SetHookSocket(path) }
 
 // Wake hands an event of an agent's hook to the agents manager
 // (agents.Manager.Wake), which looks at the event's pane now; the next

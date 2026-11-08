@@ -154,9 +154,6 @@ type Runtime struct {
 	reg *registry.Registry
 	log *slog.Logger
 	s   seams
-	// mgrDeps are the agents manager's collaborators, which UseHookSocket
-	// builds it anew from with the hook socket.
-	mgrDeps agents.Deps
 
 	// launchMu makes the staggered launches take turns, talkMu the liaisons'
 	// starts (Talk). A Talk also holds its task's lock (talkLock) for its
@@ -304,10 +301,9 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
 		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{},
 		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{})}
-	r.mgrDeps = agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
+	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
-		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true, HookFailure: r.hookFailure}
-	r.mgr = agents.New(r.mgrDeps)
+		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true, HookFailure: r.hookFailure})
 	return r, nil
 }
 

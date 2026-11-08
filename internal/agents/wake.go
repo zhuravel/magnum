@@ -88,10 +88,14 @@ func (f StopFailure) shownBy(kind HealthKind) bool {
 }
 
 // hookEnv sets env's hook variables (agenthooks.EnvSocket, EnvBin) from
-// Deps.HookSocket and the binary (hookBin), or removes them when there is
-// no socket or no binary; env itself is never changed.
+// Deps.HookSocket (read under mu: SetHookSocket) and the binary (hookBin),
+// or removes them when there is no socket or no binary; env itself is never
+// changed.
 func (m *Manager) hookEnv(env map[string]string) map[string]string {
-	socket, bin := m.d.HookSocket, m.hookBin()
+	m.mu.Lock()
+	socket := m.d.HookSocket
+	m.mu.Unlock()
+	bin := m.hookBin()
 	_, hasSocket := env[agenthooks.EnvSocket]
 	_, hasBin := env[agenthooks.EnvBin]
 	if (socket == "" || bin == "") && !hasSocket && !hasBin {
@@ -106,6 +110,19 @@ func (m *Manager) hookEnv(env map[string]string) map[string]string {
 	}
 	out[agenthooks.EnvSocket], out[agenthooks.EnvBin] = socket, bin
 	return out
+}
+
+// SetHookSocket sets the hook socket (Deps.HookSocket) that every pane the
+// Manager makes from now on names, with the binary, as MAGNUM_HOOK_SOCKET and
+// MAGNUM_HOOK_BIN (hookEnv): a daemon whose listener comes up after its
+// Manager was built calls it once the listener is up. "" leaves the panes
+// made from then on without the hook env; a pane already made keeps its
+// env. It takes the Manager's lock, under which the pane env reads the
+// socket, so it may run beside a start.
+func (m *Manager) SetHookSocket(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.d.HookSocket = path
 }
 
 // hookBin is the binary a pane's hook runs: Deps.HookBin, else the

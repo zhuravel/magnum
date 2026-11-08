@@ -1414,6 +1414,7 @@ type Deps struct {
 	// events to it (Wake). "" = no hooks (no listener, a socket path too
 	// long, a listener that failed): no pane gets either, and the passes
 	// alone see the agents, as before. A pane keeps the env it was made with.
+	// Manager.SetHookSocket changes it later, under the Manager's lock.
 	HookSocket string
 	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
 	// (Layout.Binary). Without either, no pane gets the hook env.
@@ -2450,6 +2451,15 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
     regex on unwrapped output, so the echoed command line itself never matches.
     The role's session (agent_kind "shell") becomes live with last_prompt_at;
     the run row is the caller's. An agent role is refused with an error.
+
+func (m *Manager) SetHookSocket(path string)
+    SetHookSocket sets the hook socket (Deps.HookSocket) that every pane the
+    Manager makes from now on names, with the binary, as MAGNUM_HOOK_SOCKET
+    and MAGNUM_HOOK_BIN (hookEnv): a daemon whose listener comes up after its
+    Manager was built calls it once the listener is up. "" leaves the panes
+    made from then on without the hook env; a pane already made keeps its env.
+    It takes the Manager's lock, under which the pane env reads the socket,
+    so it may run beside a start.
 
 func (m *Manager) ShellLaunched(runID string) bool
     ShellLaunched reports whether RunShell typed, or tried to type, the line
@@ -15843,13 +15853,13 @@ func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.
     they cannot tell their changes from that person's or that agent's.
 
 func (r *Runtime) UseHookSocket(path string)
-    UseHookSocket has every pane the runtime makes from now on carry the factory
-    daemon's hook socket at path and the magnum binary (agents.Deps.HookSocket:
-    MAGNUM_HOOK_SOCKET, MAGNUM_HOOK_BIN), so its agents' hooks send their events
-    there. The daemon calls it once, under its lock, when its listener is up
-    and before its startup: it builds the agents manager anew with the socket,
-    so it must come before the runtime's first use. "" keeps the panes without
-    the hook env.
+    UseHookSocket has every pane the runtime makes from now on carry
+    the factory daemon's hook socket at path and the magnum binary
+    (agents.Manager.SetHookSocket: MAGNUM_HOOK_SOCKET, MAGNUM_HOOK_BIN), so its
+    agents' hooks send their events there; a pane already made keeps its env.
+    The daemon calls it under its lock once its listener is up, before its
+    startup, so every pane it makes names the socket. "" leaves the panes made
+    from then on without the hook env.
 
 func (r *Runtime) Verify(ctx context.Context, runID string, ok bool, why string) error
     Verify settles an ended run: verified when ok, failed with why otherwise,

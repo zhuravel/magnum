@@ -19854,9 +19854,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the floor"). With slice 1 the next stage's prompt came about 15 to 20 s after an agent stopped: two readings of
   the 5 s observe. `RunLocked` now opens `Layout.FactoryHookSocket` (`<state>/run/factory-hooks.sock`) while the
   daemon holds `factory.lock` and before its startup touches an agent (`listenHooks`: `paths.CheckSocketPath`,
-  then `agenthooks.Listen`), and has the runtime name it in every pane from then on (`Runtime.UseHookSocket`, which
-  builds the agents manager anew with `agents.Deps.HookSocket`, since the manager keeps its Deps; the startup's
-  recovery is its first use). A path of 104 bytes or more or a listener that fails costs only the hooks: one WARN
+  then `agenthooks.Listen`), and has the runtime name it in every pane from then on (`Runtime.UseHookSocket`,
+  through the new `agents.Manager.SetHookSocket`: the manager is built before the listener is up, so the setter
+  sets `Deps.HookSocket` under the Manager's own lock, which the pane env reads it under, and an empty path leaves
+  the panes made after it without the hook env; a pane already made keeps its env). A path of 104 bytes or more or a listener that fails costs only the hooks: one WARN
   line ("the factory listens for no agent hooks: it polls its panes"), no pane names a socket, and the observe
   passes go on at their clock. The socket is served from the end of the startup (events sent meanwhile wait in
   it), and each event goes, on the listener's goroutine, to `Runtime.Wake` (`agents.Manager.Wake`) on the daemon's
@@ -19878,8 +19879,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   sends then fails at once), then `Runtime.WaitWakes`, both within what is left of the drain's wait
   (`drainWaitNow`, which `stopBackground` now shares), so a drain or `install --drain` stays as fast as before.
   Rejected: wiring the listener in the CLI's daemon builder before `runtime.New` (the lock, the listener and its
-  stop belong with `RunLocked`; the builder runs in the CLI's tests too); a setter on the agents manager (a change to the
-  core for one caller, while the runtime's manager is unused before the startup); serving before the startup (a
+  stop belong with `RunLocked`; the builder runs in the CLI's tests too); building the factory's agents manager anew with
+  the socket (code that held the old manager would lose its state without a word); serving before the startup (a
   look would race the recovery's rebinding of the panes); routing a StopFailure through the loop (the pause would
   wait for a pass, and a failure read a second later, on the manager's goroutine, would wait for the next one);
   emitting an EventPaused from the hook (the stage would take a pause for a run still in flight); pausing on a
@@ -19892,6 +19893,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestABurstOfHookEventsMergesIntoOneObservePass (five events during a pass give one more), TestAHookPingIsDropped,
   TestShutdownWaitsForTheHookLooksWithinTheDrain (after the listener closed; cut once the budget is spent),
   TestEveryPaneNamesTheHookSocketOnceTheDaemonListens, TestWithoutAHookSocketNoPaneNamesOne,
+  TestSetHookSocketNamesTheSocketInThePanesMadeAfterIt (and none after `SetHookSocket("")`),
+  TestSetHookSocketIsSafeBesideAPaneStart (it fails under `-race` with the setter's lock taken out),
   TestWakeNeverRunsUnderTheRuntimesLock (a look that names a Codex agent and a StopFailure that pauses, each under a
   ten-second bound; both deadlock with `Runtime.Wake` taking `Runtime.mu`, tried once),
   TestAStopFailureHookPausesTheKindAsItsScreenSays (every class, a model limit and a screen that shows nothing),

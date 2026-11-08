@@ -251,6 +251,7 @@ type Deps struct {
 	// events to it (Wake). "" = no hooks (no listener, a socket path too
 	// long, a listener that failed): no pane gets either, and the passes
 	// alone see the agents, as before. A pane keeps the env it was made with.
+	// Manager.SetHookSocket changes it later, under the Manager's lock.
 	HookSocket string
 	// HookBin is the magnum binary the panes' hooks run; "" = the layout's
 	// (Layout.Binary). Without either, no pane gets the hook env.
