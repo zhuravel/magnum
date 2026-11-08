@@ -4,8 +4,8 @@ package engine
 // agent CLI's version and names a launch failure shared across PRs"): on
 // 2026-10-16 four PRs' codex-judge launches died with the same pane line
 // within the hour, and each PR's attention line named only its own
-// failure. The daemon says so once and pauses nothing: the operator
-// decides.
+// failure. The daemon says so once, and holds the kind when the roles share
+// one (kind_hold.go).
 
 import (
 	"cmp"
@@ -50,6 +50,7 @@ type launchLine struct {
 	line, pr, label, role string // pr: owner/name#N (lower case), label: name#N
 	kind                  string // an overloaded round's agent kind ("" for a pane line: its role's, kindOf)
 	overloaded            bool
+	at                    time.Time // when the agent ended with the line (zero for an overloaded round)
 }
 
 // onePerPR is the first line of each PR among ls that keep takes, in the
@@ -71,8 +72,10 @@ func onePerPR(ls []launchLine, keep func(launchLine) bool) []launchLine {
 // from the pane (paneError): a launch that never came up whose pane magnum
 // closed (pr.launch_cleared's last_line), a prompt herdr refused because
 // the agent was gone (the run's error, agents.PaneErrorOf), and a lost
-// agent's pane magnum closed (pr.panes_closed's last_lines). Nothing is
-// paused.
+// agent's pane magnum closed (pr.panes_closed's last_lines). Each such
+// group gives back the attempts its line charged (refundSharedAttempts) and
+// holds its roles' agent kind when they share one (holdShared), whether
+// the line was named today or not.
 func (e *Engine) noteSharedFailures(ctx context.Context) {
 	now := e.now()
 	lines := e.launchLines(ctx, now.Add(-sharedFailureWindow))
@@ -86,12 +89,63 @@ func (e *Engine) noteSharedFailures(ctx context.Context) {
 		if said == nil {
 			said = e.sharedFailuresSaid(ctx, now.Add(-sharedFailureQuiet))
 		}
+		held := e.holdShared(ctx, line, lines, group, said[line])
 		if said[line] {
 			continue
 		}
 		said[line] = true
-		e.sayShared(ctx, line, group)
+		e.sayShared(ctx, line, group, held)
 	}
+}
+
+// groupKinds are the agent kinds of the roles of group, in role order.
+func (e *Engine) groupKinds(group []launchLine) []string {
+	var roles, kinds []string
+	for _, g := range group {
+		if g.role != "" && !slices.Contains(roles, g.role) {
+			roles = append(roles, g.role)
+		}
+	}
+	slices.Sort(roles)
+	for _, name := range roles {
+		if r, ok := e.cfg.RoleByNameOrAlias(nil, name); ok && r.AgentKind() != "" && !slices.Contains(kinds, r.AgentKind()) {
+			kinds = append(kinds, r.AgentKind())
+		}
+	}
+	return kinds
+}
+
+// holdShared holds the one agent kind the roles of group (the PRs whose
+// agents ended with line) share (holdKind), when two or more PRs' agents
+// ended with line since the kind's last hold was lifted, so the lines that
+// held it do not hold it again; it returns the held kind ("" for none: the
+// roles share no single kind, an agent session's). A kind held already
+// stays as it is. said: agents.shared_failure named line today, so the
+// hold toasts itself.
+func (e *Engine) holdShared(ctx context.Context, line string, lines, group []launchLine, said bool) string {
+	kinds := e.groupKinds(group)
+	if len(kinds) != 1 {
+		return ""
+	}
+	kind := kinds[0]
+	if _, ok := e.kindHoldOf(ctx, kind); ok {
+		return kind
+	}
+	lifted, _ := e.kvTime(ctx, KVKindHoldLifted(kind))
+	fresh := onePerPR(lines, func(l launchLine) bool { return l.line == line && l.at.After(lifted) })
+	if len(fresh) < 2 {
+		return ""
+	}
+	sortByPR(fresh)
+	labels := make([]string, 0, len(fresh))
+	for _, g := range fresh {
+		labels = append(labels, g.label)
+	}
+	e.holdKind(ctx, kind, line, labels, said)
+	if _, ok := e.kindHoldOf(ctx, kind); !ok {
+		return ""
+	}
+	return kind
 }
 
 // orderedLines are the distinct lines of ls, in the order they came.
@@ -128,11 +182,11 @@ func (e *Engine) launchLines(ctx context.Context, since time.Time) []launchLine 
 			continue
 		}
 		if data.LastLine != "" {
-			out = append(out, launchLine{line: data.LastLine, pr: pr, label: label, role: data.Role})
+			out = append(out, launchLine{line: data.LastLine, pr: pr, label: label, role: data.Role, at: ev.At})
 		}
 		for _, role := range slices.Sorted(maps.Keys(data.LastLines)) {
 			if line := data.LastLines[role]; line != "" {
-				out = append(out, launchLine{line: line, pr: pr, label: label, role: role})
+				out = append(out, launchLine{line: line, pr: pr, label: label, role: role, at: ev.At})
 			}
 		}
 	}
@@ -154,7 +208,7 @@ func (e *Engine) launchLines(ctx context.Context, since time.Time) []launchLine 
 		}
 		name := r.Repo[strings.LastIndexByte(r.Repo, '/')+1:]
 		out = append(out, launchLine{line: line, pr: strings.ToLower(fmt.Sprintf("%s#%d", r.Repo, r.Number)),
-			label: fmt.Sprintf("%s#%d", name, r.Number), role: r.Role})
+			label: fmt.Sprintf("%s#%d", name, r.Number), role: r.Role, at: at})
 	}
 	return out
 }
@@ -190,10 +244,11 @@ func (e *Engine) sharedFailuresSaid(ctx context.Context, since time.Time) map[st
 
 // sayShared records EventSharedFailure for line and the PRs of group (two
 // or more), with one urgent toast: "2 PRs' codex-judge launches end the same
-// way", the line, the PRs and a recent change of the roles' CLI.
-func (e *Engine) sayShared(ctx context.Context, line string, group []launchLine) {
+// way", the line, the PRs, a recent change of the roles' CLI and the hold
+// of held, the kind holdShared held ("" for none: nothing is paused).
+func (e *Engine) sayShared(ctx context.Context, line string, group []launchLine, held string) {
 	sortByPR(group)
-	var roles, prs, labels, kinds []string
+	var roles, prs, labels []string
 	for _, g := range group {
 		prs, labels = append(prs, g.pr), append(labels, g.label)
 		if g.role != "" && !slices.Contains(roles, g.role) {
@@ -201,11 +256,7 @@ func (e *Engine) sayShared(ctx context.Context, line string, group []launchLine)
 		}
 	}
 	slices.Sort(roles)
-	for _, name := range roles {
-		if r, ok := e.cfg.RoleByNameOrAlias(nil, name); ok && r.AgentKind() != "" && !slices.Contains(kinds, r.AgentKind()) {
-			kinds = append(kinds, r.AgentKind())
-		}
-	}
+	kinds := e.groupKinds(group)
 	whose := "agent"
 	if len(roles) > 0 {
 		whose = andList(roles)
@@ -221,12 +272,17 @@ func (e *Engine) sayShared(ctx context.Context, line string, group []launchLine)
 	if len(kinds) == 1 {
 		subject = "tool:" + kinds[0]
 	}
+	paused, toast := "nothing is paused", "Nothing is paused: look at the CLI."
+	if words := e.heldWordsFor(ctx, held); held != "" && words != "" {
+		paused = words
+		toast = heldToastWords(held) + ". Look at the CLI."
+	}
 	e.event(ctx, "warn", subject, EventSharedFailure,
-		fmt.Sprintf("%s within %s: %s (%s)%s; nothing is paused", what, humanDuration(sharedFailureWindow), line, strings.Join(labels, ", "), changed),
+		fmt.Sprintf("%s within %s: %s (%s)%s; %s", what, humanDuration(sharedFailureWindow), line, strings.Join(labels, ", "), changed, paused),
 		map[string]any{"last_line": line, "prs": prs, "roles": roles})
 	sum := sha256.Sum256([]byte(line))
 	e.urgent("shared-failure:"+hex.EncodeToString(sum[:8]), "magnum: "+what,
-		fmt.Sprintf("%s (%s)%s. Nothing is paused: look at the CLI.", textx.Clip(line, sharedToastRunes), strings.Join(labels, ", "), changed),
+		fmt.Sprintf("%s (%s)%s. %s", textx.Clip(line, sharedToastRunes), strings.Join(labels, ", "), changed, toast),
 		sharedFailureQuiet)
 }
 
@@ -295,11 +351,15 @@ func (e *Engine) sharedLaunchFailed(ctx context.Context, job *roundJob, pr store
 	subject := prSubject(job.repo, pr.Number)
 	self, label, _ := prOfSubject(subject)
 	group := onePerPR(e.launchLines(ctx, e.now().Add(-sharedFailureWindow)), func(l launchLine) bool { return l.pr != self && l.line == line })
+	sharers := len(group) + 1
+	if held := e.heldLinePRs(ctx, line); len(group) == 0 && held > 0 {
+		sharers = max(held, 2) // a kind's hold names the line, its PRs further back than the window (kind_hold.go)
+	}
 	rec := e.launchFailuresOf(ctx, pr.ID)
 	if rec.Line != line {
 		rec = launchFailures{Line: line}
 	}
-	if len(group) == 0 {
+	if sharers < 2 {
 		rec.Charged, rec.Shared = rec.Charged+1, 0
 		e.saveLaunchFailures(ctx, pr.ID, rec)
 		return false
@@ -319,12 +379,23 @@ func (e *Engine) sharedLaunchFailed(ctx context.Context, job *roundJob, pr store
 	e.refund(ctx, job, round, RefundInfra, outcome)
 	// The shared part first: a screen's one-line summary clips the end.
 	e.retryOrAttention(ctx, job, pr, from, claimableState(pr), fmt.Sprintf("%s: the launch fails the same way on %d PRs (no attempt charged; retry %d in %s): %s",
-		outcome, len(group), rec.Shared, humanDuration(wait), msg), false, e.now().Add(wait))
+		outcome, sharers, rec.Shared, humanDuration(wait), msg), false, e.now().Add(wait))
 	e.event(ctx, "info", subject, eventRoundLaunchShared,
-		fmt.Sprintf("the round's launch fails the same way on %d PRs within %s (%s): no attempt charged%s; retry %d in %s (doubling up to %s)",
-			len(group), humanDuration(sharedFailureWindow), strings.Join(labels, ", "), givenBack(back), rec.Shared, humanDuration(wait), humanDuration(retryMax)),
-		map[string]any{"prs": len(group), "retry": rec.Shared, "wait": humanDuration(wait), "attempts_back": back})
+		fmt.Sprintf("the round's launch fails the same way on %d PRs (%s): no attempt charged%s; retry %d in %s (doubling up to %s)",
+			sharers, strings.Join(labels, ", "), givenBack(back), rec.Shared, humanDuration(wait), humanDuration(retryMax)),
+		map[string]any{"prs": sharers, "retry": rec.Shared, "wait": humanDuration(wait), "attempts_back": back})
 	return true
+}
+
+// heldLinePRs is how many PRs shared line when a kind's hold that names it
+// began (0: no hold names it).
+func (e *Engine) heldLinePRs(ctx context.Context, line string) int {
+	for _, k := range e.kinds() {
+		if h, ok := e.kindHoldOf(ctx, k); ok && h.Line == line {
+			return h.PRs
+		}
+	}
+	return 0
 }
 
 // givenBack says the attempts earlier rounds on the line charged that go
@@ -342,7 +413,7 @@ func (e *Engine) saveLaunchFailures(ctx context.Context, prID int64, rec launchF
 		return
 	}
 	if err := writeKVJSON(ctx, e, kvPRLaunchFailures(prID), "launch failures", rec); err != nil {
-		e.log.Warn("record the PR's launch failures", "pr", prID, "err", err)
+		e.warnUnlessStopped(ctx, err, "record the PR's launch failures", "pr", prID)
 	}
 }
 
@@ -463,11 +534,11 @@ func kvPROverloadShared(prID int64) string { return fmt.Sprintf("pr.%d.overload_
 // its shared overloads in a row (kvPROverloadShared), so the wait doubles
 // from a minute up to retryMax; its last_error says the provider is
 // overloaded across the PRs, and one round.overload_shared info event under
-// the PR names how many share it. No kind is paused (a shared failure pauses
-// nothing, noteSharedFailures), and a PR a lone overload parked is never
-// retried: only the round's own PR moves, from the round's states. It
-// reports false, and the caller charges the attempt, for a lone overload
-// and for one whose agent kind the round did not name.
+// the PR names how many share it. No kind is paused or held (only a shared
+// launch line holds one, noteSharedFailures), and a PR a lone overload
+// parked is never retried: only the round's own PR moves, from the round's
+// states. It reports false, and the caller charges the attempt, for a lone
+// overload and for one whose agent kind the round did not name.
 func (e *Engine) sharedOverload(ctx context.Context, job *roundJob, pr store.PR, from []string, res pipeline.RoundResult, msg string) bool {
 	if res.Pause == nil || res.Pause.Tool == "" {
 		return false

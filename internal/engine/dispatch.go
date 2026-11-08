@@ -605,6 +605,9 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	if kind, why := e.kindPause(ctx, agentKinds(toRun)); why != "" { // the wait's sentence names the command (Wait.Sentence)
 		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
 	}
+	if kind, why := e.kindHoldGate(ctx, toRun, pr.ID); why != "" { // kind_hold.go: a held judge without a fallback
+		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
+	}
 	codex := codexRoles(toRun)
 	if why := e.budgetGate(job, codex); why != "" {
 		return false, 0, gate{reason: WaitBudget, text: why}
@@ -645,6 +648,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		e.event(ctx, "info", subject, "slot.claimed", "claimed "+sl.Name, nil)
 	}
 	launched = true
+	e.claimProbes(ctx, toRun, pr, fmt.Sprintf("%s#%d", repo.Name, pr.Number)) // kind_hold.go: a held kind's span is over
 	e.launch(ctx, rctx, job)
 	return true, codex, gate{}
 }

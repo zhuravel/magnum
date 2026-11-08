@@ -23,9 +23,9 @@ func launchDied(in pipeline.RoundInput, line string) pipeline.RoundResult {
 
 // sharedLaunchHarness opens #2, queued, and #3, whose author the watch
 // skips: a PR whose agents' lines count, which never runs a round here.
-func sharedLaunchHarness(t *testing.T) *harness {
+func sharedLaunchHarness(t *testing.T, mods ...func(*harness)) *harness {
 	t.Helper()
-	h := newHarness(t)
+	h := newHarness(t, mods...)
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick() // the first sync: #1 is a baseline

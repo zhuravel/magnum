@@ -828,9 +828,10 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 }
 
 // stillPausedNote names, for a plain resume's answer, each agent kind whose
-// pause it leaves, until when and the command that lifts it ("; claude is
-// still paused (usage_limit) until 14:00: `magnum resume --tool claude`
-// lifts it"); "" when none is paused.
+// pause or shared launch failure's hold (heldNote) it leaves, until when and
+// the command that lifts it ("; claude is still paused (usage_limit) until
+// 14:00: `magnum resume --tool claude` lifts it"); "" when none is paused or
+// held.
 func (e *Engine) stillPausedNote(ctx context.Context) string {
 	var b strings.Builder
 	now := e.now()
@@ -838,6 +839,7 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) { // kindPause's rule
 			fmt.Fprintf(&b, "; %s is still %s: %s", kind, strings.TrimPrefix(pausedWords(kind, p), kind+" "), resumeToolHint(kind))
 		}
+		b.WriteString(e.heldNote(ctx, kind)) // kind_hold.go
 	}
 	return b.String()
 }
@@ -851,13 +853,15 @@ func (e *Engine) stillPausedNote(ctx context.Context) string {
 // tool.resumed event, and the answer's note says what it means ("" when
 // nothing is overruled). Every resume of the kind, a pause or not, is a
 // lift (noteLift): a reviewer's failure from before it pauses the kind no
-// more at a round's settle. For codex it also overrules the hold of new
+// more at a round's settle; it also lifts a shared launch failure's hold of
+// the kind (liftKindHold). For codex it also overrules the hold of new
 // Codex sessions by hooks without a trust entry until hooks.json changes
 // (overruleHooksHold), which the answer's note says too.
 func (e *Engine) liftToolPause(ctx context.Context, tool string) string {
 	p, paused := e.toolPause(ctx, tool)
 	e.clearToolPause(ctx, tool)
 	e.noteLift(ctx, tool)
+	e.liftKindHold(ctx, tool, "lifted by magnum resume --tool "+tool) // kind_hold.go
 	note := e.overruleOnLift(ctx, tool, p, paused)
 	if tool == agents.KindCodex && e.overruleHooksHold(ctx) {
 		note += " (" + HooksOverruledNote + ")"

@@ -404,8 +404,10 @@ judge_fallback = "claude-judge"   # a judge role of another kind that takes over
                                   # never reviewed again. "claude-judge" names the second judge below, which
                                   # runs for no watch otherwise. Unless you write the key, it is off for a
                                   # watch it does not fit (whose judge is claude-judge or another Claude judge,
-                                  # or a base config without claude-judge); a value you write must fit.
-                                  # [[watch]] may override
+                                  # or a base config without claude-judge); a value you write must fit. It
+                                  # also judges, with no flag, while a launch failure shared across PRs holds
+                                  # the judge's kind (15 minutes, then until a round launches it again); with
+                                  # "" such a round waits for the hold. [[watch]] may override
 fix_role = "claude-fix"           # the fix role (fix = true) that fixes magnum's findings on your own PRs: the
                                   # fix job `magnum fix` runs it, in the PR's slot, as a role of its own that
                                   # takes no part in a review round. "" = no fix job. [[watch]] may override
@@ -776,8 +778,9 @@ aliases = ["simplify"]
 [[role]]
 name = "claude-judge"                 # a second judge, held in reserve: a watch without roles = [...] runs its first
 kind = "claude"                       # judge (codex-judge); [pipeline] judge_fallback (this role by default) switches
-judge = true                          # a PR to it after a Codex refusal, and a watch's roles may name it instead
-model = "opus"                        # Claude's safety classifier is not Codex's; "fable" for the strongest model
+judge = true                          # a PR to it after a Codex refusal, judges with no flag while a launch failure
+model = "opus"                        # shared across PRs holds codex, and a watch's roles may name it instead;
+                                      # Claude's safety classifier is not Codex's; "fable" for the strongest model
 effort = "xhigh"
 rereview_effort = "high"
 max_session_rounds = 6

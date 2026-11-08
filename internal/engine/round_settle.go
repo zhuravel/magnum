@@ -37,6 +37,7 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 	}
 	subject := prSubject(job.repo, pr.Number)
 	e.event(ctx, "warn", subject, "engine.setup_failed", "round setup failed: "+se.err.Error(), nil)
+	e.settleProbes(ctx, pr.ID, fmt.Sprintf("%s#%d", job.repo.Name, pr.Number), true) // kind_hold.go: a setup that died launching the kind
 	if job.kind != kindContinue {
 		e.delKV(ctx, KVPRDeltaCheck(pr.ID), kvPRFullPassRound(pr.ID), kvPRApprovalHoldRound(pr.ID))
 	}
@@ -194,6 +195,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		result["tool"] = res.Pause.Tool // whose overload other PRs' overloads share (overloadedRounds)
 	}
 	e.event(ctx, "info", subject, eventRoundResult, fmt.Sprintf("round %d: %s %s", res.Round, outcome, res.Event), result)
+	e.settleProbes(ctx, pr.ID, fmt.Sprintf("%s#%d", job.repo.Name, pr.Number), true) // kind_hold.go: before the reservation goes
 	// complete.go: a completion's round is one of its head's, and one that
 	// failed says so.
 	e.settleCompletion(ctx, job, in, res, outcome, cancelled)

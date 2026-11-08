@@ -15699,6 +15699,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   reviewer's role. The lines read from runs now skip a run that was submitted: only a prompt herdr refused
   (never submitted) carries its own agent's pane line. The warning names codex-judge, under `tool:codex`.
   Test, failing first: TestARunAbandonedWithItsRoundsErrorIsNotALaunchThatFailed.
+- **A launch failure shared across PRs holds its kind until a probe launches it** (2026-11-07, the
+  self-healing audit's R37, which the operator approved on 2026-11-07). This reverses "Rejected: pausing a
+  kind on a shared failure" in "The daemon records each agent CLI's version and names a launch failure shared
+  across PRs" (2026-10-17). On 2026-11-05 codex-judge launches died at the TUI bootstrap for two hours after
+  `agents.shared_failure` had named the line ("nothing is paused"), and every round that needed one died with
+  them while claude-judge, the `judge_fallback`, launched fine; on 2026-11-06 it recurred with another line.
+  The old fears were that the operator decides and that a pause could hide a transient outage behind a wait
+  nobody asked for. The operator decided for the hold, and no round waits for it when its watch has a
+  fallback; and the hold ends at its first good probe, so a transient failure costs at most one span. Now,
+  when the roles of a shared failure's PRs share one agent kind (`holdShared`, at every health check whether
+  or not the line was named today), the kind is held for `kindHoldSpan` (15 minutes; kv
+  `kind.<kind>.shared_hold`, `engine.KindHold`: the line, the PRs, since, until, the failed probes and the
+  probing PR), with a `kind.held` warning, and the shared failure's event and toast say so. `rolesForPR`
+  runs a PR without a Codex flag under the holds (`heldRoles`): an agent role of a held kind is left out (a
+  shell role, such as codex-review's `codex review`, still runs: it does not launch a TUI), and a held judge
+  is replaced by the watch's `judge_fallback` (`refusalFallback`) when it is of a kind no hold holds; a judge
+  without one keeps the roles, and dispatch waits (`kindHoldGate`, a `WaitKind` wait whose sentence names
+  `magnum resume --tool`). Once the span is over, the next round dispatch starts with the kind is its probe
+  (`claimProbes`, `kind.hold_probe`), and any other round keeps the fallback while it runs. An agent of the
+  kind that took a prompt since the probe began, after a restart of it too, lifts the hold at once, at a
+  health check while the round runs (`checkKindHolds`) or at its end (`settleProbes`, from `finish` and
+  `setupFailed`), with `kind.hold_lifted` and the toast "codex launches again". The rest waits for the
+  round's end, when every run of it is in: an agent of the kind that ended with the hold's line holds the
+  kind another span (`kind.hold_renewed`; its round charges nothing, since a hold's line counts as shared
+  for `sharedLaunchFailed`), and a round that ended with neither, a launch that died on a line of the PR's
+  own included, leaves the hold as it was and the probe to the next round, its round charged as a lone
+  failure. Each lift records its time (`kind.<kind>.shared_hold_lifted_at`), and only lines after it hold
+  the kind again. `magnum resume --tool <kind>` (the daemon's and the CLI's own) lifts the hold, a plain
+  `magnum resume` names it among the kinds it leaves, and `magnum status` lists it among the pauses; the
+  toasts say that rounds that need the kind run their `judge_fallback` or wait, since a judge without one
+  waits. Other work of the kind (the retro, the notes critic, a fix) is not held: none has a fallback, and
+  each still fails on its own as before. Rejected: a tool pause for the hold (it holds every round that uses
+  the kind instead of running the fallback, and its expiry lifts it blindly); a probe that launches the kind
+  in a pane of its own (new herdr code outside any PR, while the round's launch is the path that failed);
+  probing with every round once the span is over (with many PRs waiting, each would start a round on a
+  broken CLI); renewing the hold on any line the probe's launch dies on (a PR's own broken slot or config
+  would hold the kind for every PR and, its line now the hold's, charge that PR nothing round after round);
+  deciding a failed probe at a health check while its round runs (the judge's restart may still launch the
+  kind, and the hold would outlive that good probe by a span); and holding a kind for a group whose roles
+  span kinds (the line cannot say whose launch it is). Tests, failing first:
+  TestASharedLaunchFailureHoldsTheKindAndRunsTheFallbackJudge,
+  TestAKindHoldRenewsOnAFailedProbeAndEndsAtItsFirstGoodOne, TestAKindHoldWithoutAFallbackWaitsUntilResumed,
+  TestAProbeThatDiesOnALineOfItsOwnIsChargedAndLeavesTheHold,
+  TestAProbeWhoseKindLaunchesOnItsRestartLiftsTheHold, TestStatusShowsAKindASharedLaunchFailureHolds,
+  TestPauseAndResumeWithoutDaemon.
 
 ## The factory (2026-11-03)
 

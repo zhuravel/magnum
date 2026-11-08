@@ -464,7 +464,8 @@ func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) str
 // fallback, if the limit still holds); the hooks review's pause is
 // checkCodexHooksTrust's to renew and end. It also reads the agent CLIs'
 // versions (checkCLIVersions), says when PRs' launches end the same way
-// (noteSharedFailures) and samples the machine's memory (checkMemory).
+// and holds their kind (noteSharedFailures), settles the probes of held
+// kinds (checkKindHolds) and samples the machine's memory (checkMemory).
 func (e *Engine) health(ctx context.Context) {
 	now := e.now()
 	for _, tool := range e.kinds() {
@@ -521,6 +522,7 @@ func (e *Engine) health(ctx context.Context) {
 	e.checkBudget(ctx)
 	e.checkCLIVersions(ctx)   // cli_version.go
 	e.noteSharedFailures(ctx) // shared_failure.go: after the versions it names
+	e.checkKindHolds(ctx)     // kind_hold.go: the probes of the kinds a shared failure holds
 	e.checkMemory(ctx)        // memory.go: at most once a minute
 }
 

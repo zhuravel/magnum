@@ -49,12 +49,13 @@ func (e *Engine) refusalFallback(w *config.Watch, kind string) string {
 // rolesForPR is the roles a round of the PR runs: the watch's
 // (Config.RolesFor), or, for a PR whose flag names a fallback judge, those
 // without the flagged kind's roles and with the fallback in the judge's
-// place.
+// place; a PR without a flag runs them under the holds of their kinds
+// (heldRoles).
 func (e *Engine) rolesForPR(ctx context.Context, w *config.Watch, prID int64) []config.Role {
 	roles := e.cfg.RolesFor(w)
 	f, ok := e.codexFlag(ctx, prID)
 	if !ok {
-		return roles
+		return e.heldRoles(ctx, w, prID, roles) // kind_hold.go: a shared launch failure's hold of a kind
 	}
 	fb, ok := e.fallbackRole(f)
 	if !ok {

@@ -518,7 +518,8 @@ type gateCode struct {
 // gateWait is the wait of the reason the last dispatch gave for skipping
 // the PR, text, built from the code recorded with it (kvPRGateReason): a
 // kind pause takes its end from the pause recorded now (none for the hooks
-// review's), and is another reason when none is; a gate without a code (an
+// review's), or from the kind's hold (kindHoldOf; none while a probe runs),
+// and is another reason when neither is; a gate without a code (an
 // older daemon's) is another reason until the next dispatch records it
 // again.
 func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
@@ -540,6 +541,11 @@ func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
 			w.Reason, w.Subject = WaitKind, c.Kind
 			if p.Reason != HooksReviewPauseReason { // it ends when the hooks are trusted, not at the time the check renews
 				w.Until = p.Until
+			}
+		} else if h, ok := e.kindHoldOf(ctx, c.Kind); ok { // kind_hold.go: a shared launch failure's hold
+			w.Reason, w.Subject = WaitKind, c.Kind
+			if e.now().Before(h.Until) {
+				w.Until = h.Until
 			}
 		}
 	}
