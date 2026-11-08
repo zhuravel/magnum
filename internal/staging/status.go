@@ -1,6 +1,7 @@
 package staging
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 // stateVersion is the version of the state file; a file of another version
 // is not read (the next Refresh rebuilds it).
-const stateVersion = 1
+const stateVersion = 2
 
 // state is what one Refresh of a repository read: the lookup data Status
 // answers from, and the caches the next Refresh starts from. Refresh writes
@@ -19,22 +20,30 @@ type state struct {
 	V   int       `json:"v"`
 	At  time.Time `json:"at"` // when it was read
 	Err string    `json:"err,omitempty"`
-	// Base is the mirror's base branch: the remote's default.
+	// Base is the mirror's default branch (the remote's HEAD): the base of
+	// a PR that names none, and what the branches' walk leaves out.
 	Base string `json:"base,omitempty"`
 	// Envs are the remote's staging-* branches, by name.
 	Envs map[string]*envData `json:"envs,omitempty"`
-	// PRs are the fetched PRs' heads and commits, Base..refs/pull/N/head;
-	// PRsErr says why there are none when they could not be read.
-	PRs    map[int]*prData `json:"prs,omitempty"`
-	PRsErr string          `json:"prs_err,omitempty"`
+	// PRs are the fetched PRs' heads, bases and commits,
+	// base..refs/pull/N/head; BaseErr says, by base, why a base's PRs are
+	// not among them (refused, not fetched, not read).
+	PRs     map[int]*prData   `json:"prs,omitempty"`
+	BaseErr map[string]string `json:"base_err,omitempty"`
 	// Runs are ci.yml's runs, by merge sha; Paths the PRs' changed paths,
-	// by head; Deploys the deployments, by environment.
+	// by base...head (pathsKey); Deploys the deployments, by environment.
 	Runs    map[string]*runEntry    `json:"runs,omitempty"`
 	Paths   map[string]*pathsEntry  `json:"paths,omitempty"`
 	Deploys map[string]*deployEntry `json:"deploys,omitempty"`
-	// Wanted are the PRs each client asked for, with when: a Refresh
-	// fetches the ones asked for within wantedFor, whoever asked.
-	Wanted map[int]time.Time `json:"wanted,omitempty"`
+	// Wanted are the PRs each client asked for, with their bases and when:
+	// a Refresh fetches the ones asked for within wantedFor, whoever asked.
+	Wanted map[int]wantedPR `json:"wanted,omitempty"`
+}
+
+// wantedPR is an open PR a client asked for: its base and when.
+type wantedPR struct {
+	Base string    `json:"base,omitempty"`
+	At   time.Time `json:"at"`
 }
 
 // envData is one staging branch: its tip and the merges of its window.
@@ -67,9 +76,10 @@ type mergeData struct {
 	Deployed bool `json:"deployed,omitempty"`
 }
 
-// prData is a fetched PR: its head, and its commits oldest first.
+// prData is a fetched PR: its head, its base, and its commits oldest first.
 type prData struct {
 	Head    string   `json:"head"`
+	Base    string   `json:"base"`
 	Commits []string `json:"commits,omitempty"`
 }
 
@@ -100,15 +110,20 @@ type deployEntry struct {
 // source answers the runs and the paths a status needs: the state's caches
 // in Status, the caches or GitHub and git in Refresh.
 type source interface {
-	run(sha string) *runEntry      // nil = not read
-	paths(head string) *pathsEntry // nil = not read
+	run(sha string) *runEntry            // nil = not read
+	paths(base, head string) *pathsEntry // nil = not read
 }
+
+// pathsKey is the key of a PR's changed paths: its base and head.
+func pathsKey(base, head string) string { return base + "..." + head }
 
 // cached is the source of Status: only what the last Refresh read.
 type cached struct{ st *state }
 
-func (c cached) run(sha string) *runEntry      { return c.st.Runs[sha] }
-func (c cached) paths(head string) *pathsEntry { return c.st.Paths[head] }
+func (c cached) run(sha string) *runEntry { return c.st.Runs[sha] }
+func (c cached) paths(base, head string) *pathsEntry {
+	return c.st.Paths[pathsKey(base, head)]
+}
 
 // Status returns where pr stands on each of envs, in their order, from the
 // last Refresh of pr.Repo: no git, no network. Without a Refresh (or with
@@ -147,7 +162,7 @@ func (st *state) status(pr PR, env Env, now time.Time, src source) EnvStatus {
 	if dep.Readable {
 		s.DeployedTip, s.DeployedAt = e.DeployedTip, e.DeployedAt
 	}
-	head, commits, why := st.commitsOf(pr)
+	head, base, commits, why := st.commitsOf(pr)
 	if why != "" {
 		s.Why = why
 		return s
@@ -181,7 +196,7 @@ func (st *state) status(pr PR, env Env, now time.Time, src source) EnvStatus {
 		return s
 	}
 	s.State = StatePushed
-	st.pushed(&s, e, mi, dep, now, src)
+	st.pushed(&s, base, e, mi, dep, now, src)
 	return s
 }
 
@@ -199,34 +214,33 @@ func (st *state) deploysOf(env Env, e *envData) *deployEntry {
 	return d
 }
 
-// commitsOf is pr's head and its commits, oldest first and ending at the
-// head: pr.Commits, else the ones the Refresh derived; why says why there
-// are none.
-func (st *state) commitsOf(pr PR) (head string, commits []string, why string) {
-	head = pr.Head
+// commitsOf is pr's head, its base ("" = the mirror's default branch) and
+// its commits, oldest first and ending at the head: pr.Commits, else the
+// ones the Refresh derived on its base; why says why there are none.
+func (st *state) commitsOf(pr PR) (head, base string, commits []string, why string) {
+	head, base = pr.Head, cmp.Or(pr.Base, st.Base)
 	if pr.Commits != nil {
 		if head == "" && len(pr.Commits) > 0 {
 			head = pr.Commits[len(pr.Commits)-1]
 		}
-		return head, upTo(pr.Commits, head), ""
-	}
-	if pr.Base != "" && pr.Base != st.Base {
-		return "", nil, fmt.Sprintf("PR #%d's base %s is not the mirror's base %s: its commits need PR.Commits", pr.Number, pr.Base, st.Base)
+		return head, base, upTo(pr.Commits, head), ""
 	}
 	p := st.PRs[pr.Number]
 	switch {
-	case p == nil && st.PRsErr != "":
-		return "", nil, st.PRsErr
+	case p == nil && st.BaseErr[base] != "":
+		return "", "", nil, st.BaseErr[base]
 	case p == nil:
-		return "", nil, fmt.Sprintf("PR #%d is not fetched yet: the next Refresh that has it open fetches it", pr.Number)
+		return "", "", nil, fmt.Sprintf("PR #%d is not fetched yet: the next Refresh that has it open fetches it", pr.Number)
+	case p.Base != base:
+		return "", "", nil, fmt.Sprintf("PR #%d's commits were read on base %q, not %q: the next Refresh with its base reads them", pr.Number, p.Base, base)
 	}
 	if head == "" {
 		head = p.Head
 	}
 	if head != p.Head && !slices.Contains(p.Commits, head) {
-		return "", nil, fmt.Sprintf("PR #%d's head %s is not fetched yet: the next Refresh fetches it", pr.Number, short(head))
+		return "", "", nil, fmt.Sprintf("PR #%d's head %s is not fetched yet: the next Refresh fetches it", pr.Number, short(head))
 	}
-	return head, upTo(p.Commits, head), ""
+	return head, base, upTo(p.Commits, head), ""
 }
 
 // upTo is commits up to and with head, or commits and head when head is
@@ -240,7 +254,7 @@ func upTo(commits []string, head string) []string {
 
 // pushed fills the detail of a PR whose head the merge e.Merges[mi] brought
 // in and no deployment confirms: from ci.yml's run on it.
-func (st *state) pushed(s *EnvStatus, e *envData, mi int, dep *deployEntry, now time.Time, src source) {
+func (st *state) pushed(s *EnvStatus, base string, e *envData, mi int, dep *deployEntry, now time.Time, src source) {
 	r := st.ciRun(e, mi, src)
 	if r != nil && r.Run != nil {
 		s.RunURL = r.Run.URL
@@ -274,7 +288,7 @@ func (st *state) pushed(s *EnvStatus, e *envData, mi int, dep *deployEntry, now 
 	default:
 		s.Detail = DetailCIFailedNotOurs
 		var ours bool
-		ours, s.Why = failureIsOurs(r.Run, src.paths(s.InTip))
+		ours, s.Why = failureIsOurs(r.Run, src.paths(base, s.InTip))
 		if ours {
 			s.Detail = DetailCIFailedOurs
 		}
@@ -306,7 +320,8 @@ func passed(r *Run) bool {
 
 // failureIsOurs reports whether a failing job of run names a path the PR
 // changes; why says when that cannot be told (no failing job listed, a job
-// that names no path, or the PR's paths not read).
+// that names no path or whose annotations were not read, or the PR's paths
+// not read).
 func failureIsOurs(run *Run, p *pathsEntry) (bool, string) {
 	const cannot = "cannot tell whether the failure is the PR's: "
 	if len(run.Failed) == 0 {
@@ -321,7 +336,7 @@ func failureIsOurs(run *Run, p *pathsEntry) (bool, string) {
 	}
 	blind := false
 	for _, job := range run.Failed {
-		if job.Paths == nil {
+		if len(job.Paths) == 0 {
 			blind = true
 			continue
 		}

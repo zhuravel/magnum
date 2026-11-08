@@ -35,16 +35,22 @@ const (
 	keepDeploys = 20
 )
 
-// Refresh fetches the mirror once (the staging-* tips, the base and
-// refs/pull/N/head of the open PRs, and of those another client asked for
-// in the last minutes), reads each staging environment's deployments (with
-// their ETag) and the ci.yml runs of the merges that brought the open PRs'
-// heads in, and builds the lookup data Status reads for the repository. It
-// runs at most once a minute per repository across processes (a flock in
-// the mirror dir); a call within the minute reuses the data and returns
-// nil. It never blocks longer than ctx: a Refresh that ctx cuts keeps the data
-// it had and returns ctx's error. The first one clones the mirror.
-func (c *Client) Refresh(ctx context.Context, repo string, open []int) error {
+// Refresh fetches the mirror once (the staging-* tips, each distinct base of
+// the open PRs and their refs/pull/N/head, and those another client asked
+// for in the last minutes), reads each staging environment's deployments
+// (with their ETag) and the ci.yml runs of the merges that brought the open
+// PRs' heads in, and builds the lookup data Status reads for the
+// repository, each PR's commits derived as its Base..refs/pull/N/head. A
+// base that is no plain branch name (git check-ref-format --branch, no
+// leading '-') is refused and never reaches git; its PRs, and those of a
+// base the fetch cannot read, are unknown, Why naming the base. It runs at
+// most once a minute per repository across processes (a flock in the
+// mirror dir); a call within the minute reuses the data and returns nil.
+// It never blocks longer than ctx: a Refresh that ctx cuts keeps the data
+// it had and returns ctx's error. The first Refresh clones the mirror,
+// which takes as long as the repository's commits take to download: give
+// it a long ctx, and run Refresh outside a daemon's tick.
+func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error {
 	now := c.d.Now()
 	if st := c.get(repo); st != nil && fresh(st, now) {
 		return nil
@@ -107,23 +113,24 @@ func fresh(st *state, now time.Time) bool {
 	return age >= 0 && age < RefreshEvery
 }
 
-// want records that a client asked for the open PRs at now, and drops the
-// ones nobody asked for within wantedFor.
-func (st *state) want(open []int, now time.Time) {
+// want records that a client asked for the open PRs at now, each on its
+// base ("" = the mirror's default branch, which build fills in), and drops
+// the ones nobody asked for within wantedFor.
+func (st *state) want(open []OpenPR, now time.Time) {
 	if st.Wanted == nil {
-		st.Wanted = map[int]time.Time{}
+		st.Wanted = map[int]wantedPR{}
 	}
-	maps.DeleteFunc(st.Wanted, func(_ int, at time.Time) bool { return now.Sub(at) >= wantedFor })
-	for _, n := range open {
-		if n > 0 {
-			st.Wanted[n] = now
+	maps.DeleteFunc(st.Wanted, func(_ int, w wantedPR) bool { return now.Sub(w.At) >= wantedFor })
+	for _, pr := range open {
+		if pr.Number > 0 {
+			st.Wanted[pr.Number] = wantedPR{Base: pr.Base, At: now}
 		}
 	}
 }
 
 // build reads the repository into a new state, starting from prev's caches.
-func (c *Client) build(ctx context.Context, repo, dir string, env map[string]string, open []int, prev *state, now time.Time) *state {
-	st := &state{V: stateVersion, At: now, Envs: map[string]*envData{}, PRs: map[int]*prData{},
+func (c *Client) build(ctx context.Context, repo, dir string, env map[string]string, open []OpenPR, prev *state, now time.Time) *state {
+	st := &state{V: stateVersion, At: now, Envs: map[string]*envData{}, PRs: map[int]*prData{}, BaseErr: map[string]string{},
 		Runs: map[string]*runEntry{}, Paths: map[string]*pathsEntry{}, Deploys: map[string]*deployEntry{}}
 	if prev != nil {
 		st.Wanted, st.Runs, st.Paths, st.Deploys = prev.Wanted, nonNil(prev.Runs), nonNil(prev.Paths), nonNil(prev.Deploys)
@@ -135,8 +142,8 @@ func (c *Client) build(ctx context.Context, repo, dir string, env map[string]str
 		return st
 	}
 	st.Base = base
-	prs, err := c.fetch(ctx, dir, env, base, slices.Sorted(maps.Keys(st.Wanted)))
-	if err != nil {
+	prs := st.basesOf(base)
+	if prs, err = c.fetch(ctx, dir, env, st, prs); err != nil {
 		st.Err = "the fetch failed: " + errLine(err)
 		return st
 	}
@@ -145,12 +152,7 @@ func (c *Client) build(ctx context.Context, repo, dir string, env map[string]str
 		st.Err = "the mirror's refs could not be read: " + errLine(err)
 		return st
 	}
-	if st.PRs, err = c.derive(ctx, dir, base, prs, refs); err != nil {
-		// One PR's history too large to list costs the PRs without
-		// Commits their answer, never the environments.
-		st.PRs, st.PRsErr = map[int]*prData{}, "the PRs' commits could not be read: "+errLine(err)
-		c.d.Log.Warn("staging: the PRs' commits could not be read", "repo", repo, "err", errLine(err))
-	}
+	c.derive(ctx, dir, st, prs, refs)
 	for _, name := range slices.Sorted(maps.Keys(refs)) {
 		branch, ok := strings.CutPrefix(name, "refs/heads/")
 		if !ok || !strings.HasPrefix(branch, "staging-") {
@@ -171,7 +173,7 @@ func (c *Client) build(ctx context.Context, repo, dir string, env map[string]str
 	for _, n := range slices.Sorted(maps.Keys(st.PRs)) {
 		for _, branch := range slices.Sorted(maps.Keys(st.Envs)) {
 			e := st.Envs[branch]
-			st.status(PR{Repo: repo, Number: n, Head: st.PRs[n].Head, Base: base}, Env{Name: e.Env, Branch: branch}, now, r)
+			st.status(PR{Repo: repo, Number: n, Head: st.PRs[n].Head, Base: st.PRs[n].Base}, Env{Name: e.Env, Branch: branch}, now, r)
 		}
 	}
 	st.prune()
@@ -187,10 +189,10 @@ func nonNil[V any](m map[string]V) map[string]V {
 }
 
 // prune drops the caches nothing in st refers to any more: the runs of
-// merges no window holds, the paths of heads no fetched PR has, the
+// merges no window holds, the paths of ranges no fetched PR has, the
 // deployments of environments the remote no longer has.
 func (st *state) prune() {
-	merges, heads, envs := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	merges, ranges, envs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range st.Envs {
 		envs[e.Env] = true
 		for _, m := range e.Merges {
@@ -198,87 +200,157 @@ func (st *state) prune() {
 		}
 	}
 	for _, p := range st.PRs {
-		heads[p.Head] = true
+		ranges[pathsKey(p.Base, p.Head)] = true
 	}
 	maps.DeleteFunc(st.Runs, func(sha string, _ *runEntry) bool { return !merges[sha] })
-	maps.DeleteFunc(st.Paths, func(head string, _ *pathsEntry) bool { return !heads[head] })
+	maps.DeleteFunc(st.Paths, func(key string, _ *pathsEntry) bool { return !ranges[key] })
 	maps.DeleteFunc(st.Deploys, func(env string, _ *deployEntry) bool { return !envs[env] })
 }
 
 // pullRef is the mirror's ref of PR n's head.
 func pullRef(n int) string { return "refs/pull/" + strconv.Itoa(n) + "/head" }
 
-// refspecs are a fetch's: the staging branches, the base and the PRs'
-// heads, each forced into the same name in the mirror (its own refs only).
-func refspecs(base string, prs []int) []string {
-	out := []string{"+refs/heads/staging-*:refs/heads/staging-*", "+refs/heads/" + base + ":refs/heads/" + base}
-	for _, n := range prs {
+// basesOf is the wanted PRs by number with their bases, "" read as def (the
+// mirror's default branch); a base that is no plain branch name is refused
+// (BaseErr) and its PRs left out, so it never reaches git.
+func (st *state) basesOf(def string) map[int]string {
+	prs := map[int]string{}
+	for n, w := range st.Wanted {
+		base := cmp.Or(w.Base, def)
+		if !validBranch(base) {
+			st.BaseErr[base] = fmt.Sprintf("the base %q is not a branch name: refused", base)
+			continue
+		}
+		prs[n] = base
+	}
+	return prs
+}
+
+// refspecs are a fetch's: the staging branches, the default branch and each
+// distinct base, and the PRs' heads, each forced into the same name in the
+// mirror (its own refs only).
+func refspecs(def string, prs map[int]string) []string {
+	out := []string{"+refs/heads/staging-*:refs/heads/staging-*"}
+	for _, b := range slices.Sorted(maps.Keys(basesIn(def, prs))) {
+		out = append(out, "+refs/heads/"+b+":refs/heads/"+b)
+	}
+	for _, n := range slices.Sorted(maps.Keys(prs)) {
 		out = append(out, "+"+pullRef(n)+":"+pullRef(n))
 	}
 	return out
 }
 
-// fetch fetches the mirror, dropping the PRs whose pull ref the remote
-// lacks (at most maxMissing), and returns the PRs it fetched.
-func (c *Client) fetch(ctx context.Context, dir string, env map[string]string, base string, prs []int) ([]int, error) {
+// basesIn is the set of the default branch and the PRs' bases.
+func basesIn(def string, prs map[int]string) map[string]bool {
+	bases := map[string]bool{def: true}
+	for _, b := range prs {
+		bases[b] = true
+	}
+	return bases
+}
+
+// fetch fetches the mirror for prs (number to base). A pull ref the remote
+// lacks drops its PR, a base it lacks drops the base (BaseErr) and its PRs,
+// and the fetch runs again, at most maxMissing times; the default branch
+// missing fails it. It returns the PRs it fetched.
+func (c *Client) fetch(ctx context.Context, dir string, env map[string]string, st *state, prs map[int]string) (map[int]string, error) {
 	for range maxMissing + 1 {
-		err := c.d.Git.Fetch(ctx, dir, env, refspecs(base, prs))
+		err := c.d.Git.Fetch(ctx, dir, env, refspecs(st.Base, prs))
 		var miss *MissingRefError
 		if !errors.As(err, &miss) {
 			return prs, err
 		}
-		i := slices.IndexFunc(prs, func(n int) bool { return pullRef(n) == miss.Ref })
-		if i < 0 {
+		prs = maps.Clone(prs)
+		dropped := false
+		for n, b := range prs {
+			if pullRef(n) == miss.Ref || b != st.Base && "refs/heads/"+b == miss.Ref {
+				delete(prs, n)
+				dropped = true
+			}
+		}
+		if !dropped {
 			return prs, err
 		}
-		c.d.Log.Info("staging: the remote has no pull ref; fetching without it", "dir", dir, "ref", miss.Ref)
-		prs = slices.Delete(slices.Clone(prs), i, i+1)
+		if b, ok := strings.CutPrefix(miss.Ref, "refs/heads/"); ok {
+			st.BaseErr[b] = fmt.Sprintf("the base %q could not be fetched: the remote has no branch %s", b, b)
+		}
+		c.d.Log.Info("staging: the remote lacks a ref; fetching without it", "dir", dir, "ref", miss.Ref)
 	}
-	return prs, fmt.Errorf("the remote lacks more than %d of the PRs' pull refs", maxMissing)
+	return prs, fmt.Errorf("the remote lacks more than %d of the PRs' refs", maxMissing)
 }
 
 // derive reads each fetched PR's commits, base..refs/pull/N/head, oldest
-// first, from one graph of all their heads.
-func (c *Client) derive(ctx context.Context, dir, base string, prs []int, refs map[string]string) (map[int]*prData, error) {
-	out := map[int]*prData{}
-	var heads []string
-	for _, n := range prs {
-		if sha := refs[pullRef(n)]; sha != "" {
-			out[n] = &prData{Head: sha}
-			heads = append(heads, sha)
+// first, into st.PRs: one graph per distinct base of all its PRs' heads. A
+// base whose graph cannot be read (one PR's history too large) leaves its
+// PRs out, BaseErr naming it.
+func (c *Client) derive(ctx context.Context, dir string, st *state, prs map[int]string, refs map[string]string) {
+	byBase := map[string][]int{}
+	for n, b := range prs {
+		if refs[pullRef(n)] != "" {
+			byBase[b] = append(byBase[b], n)
 		}
 	}
-	if len(heads) == 0 {
-		return out, nil
-	}
-	slices.Sort(heads)
-	graph, err := c.d.Git.Graph(ctx, dir, slices.Compact(heads), []string{"refs/heads/" + base})
-	if err != nil {
-		return nil, err
-	}
-	parents := make(map[string][]string, len(graph))
-	for _, cm := range graph {
-		parents[cm.SHA] = cm.Parents
-	}
-	for _, p := range out {
-		mine := map[string]bool{}
-		for stack := []string{p.Head}; len(stack) > 0; {
-			sha := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			ps, listed := parents[sha]
-			if !listed || mine[sha] {
-				continue
+	for _, base := range slices.Sorted(maps.Keys(byBase)) {
+		var heads []string
+		for _, n := range byBase[base] {
+			heads = append(heads, refs[pullRef(n)])
+		}
+		slices.Sort(heads)
+		graph, err := c.d.Git.Graph(ctx, dir, slices.Compact(heads), []string{"refs/heads/" + base})
+		if err != nil {
+			st.BaseErr[base] = fmt.Sprintf("the commits of the PRs on base %q could not be read: %s", base, errLine(err))
+			c.d.Log.Warn("staging: the PRs' commits could not be read", "dir", dir, "base", base, "err", errLine(err))
+			continue
+		}
+		parents := make(map[string][]string, len(graph))
+		for _, cm := range graph {
+			parents[cm.SHA] = cm.Parents
+		}
+		for _, n := range byBase[base] {
+			p := &prData{Head: refs[pullRef(n)], Base: base}
+			mine := map[string]bool{}
+			for stack := []string{p.Head}; len(stack) > 0; {
+				sha := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				ps, listed := parents[sha]
+				if !listed || mine[sha] {
+					continue
+				}
+				mine[sha] = true
+				stack = append(stack, ps...)
 			}
-			mine[sha] = true
-			stack = append(stack, ps...)
-		}
-		for _, cm := range slices.Backward(graph) { // parents before children: oldest first
-			if mine[cm.SHA] {
-				p.Commits = append(p.Commits, cm.SHA)
+			for _, cm := range slices.Backward(graph) { // parents before children: oldest first
+				if mine[cm.SHA] {
+					p.Commits = append(p.Commits, cm.SHA)
+				}
 			}
+			st.PRs[n] = p
 		}
 	}
-	return out, nil
+}
+
+// validBranch reports whether name is a plain branch name as git
+// check-ref-format --branch takes one, never an option: no leading '-', not
+// HEAD or @, no control character, space or any of ~^:?*[\, no "..", "@{"
+// or "//", no component that starts with '.' or ends with ".lock", and no
+// '/' or '.' at either end.
+func validBranch(name string) bool {
+	switch {
+	case name == "" || name == "@" || name == "HEAD" || strings.HasPrefix(name, "-"):
+		return false
+	case strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) }):
+		return false
+	case strings.Contains(name, "..") || strings.Contains(name, "@{") || strings.Contains(name, "//"):
+		return false
+	case strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.HasSuffix(name, "."):
+		return false
+	}
+	for part := range strings.SplitSeq(name, "/") {
+		if strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 // envOf reads a staging branch at tip: its window (the last Window
@@ -474,23 +546,27 @@ func (r *reader) run(sha string) *runEntry {
 	return e
 }
 
-func (r *reader) paths(head string) *pathsEntry {
-	if e, ok := r.diffed[head]; ok {
+func (r *reader) paths(base, head string) *pathsEntry {
+	key := pathsKey(base, head)
+	if e, ok := r.diffed[key]; ok {
 		return e
 	}
-	prev := r.st.Paths[head]
+	prev := r.st.Paths[key]
 	if prev != nil && (prev.Err == "" || r.now.Sub(prev.ReadAt) < pathsRetry) {
-		r.diffed[head] = prev
+		r.diffed[key] = prev
 		return prev
 	}
 	if r.ctx.Err() != nil {
 		return prev
 	}
-	files, err := r.c.d.Git.ChangedPaths(r.ctx, r.dir, r.env, "refs/heads/"+r.st.Base, head)
+	if !validBranch(base) {
+		return nil
+	}
+	files, err := r.c.d.Git.ChangedPaths(r.ctx, r.dir, r.env, "refs/heads/"+base, head)
 	e := &pathsEntry{Paths: files, ReadAt: r.now}
 	if err != nil {
 		e = &pathsEntry{Err: errLine(err), ReadAt: r.now}
 	}
-	r.st.Paths[head], r.diffed[head] = e, e
+	r.st.Paths[key], r.diffed[key] = e, e
 	return e
 }

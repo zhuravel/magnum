@@ -109,6 +109,12 @@ func TestTheStateRules(t *testing.T) {
 			s.git.paths[s.p2] = []string{"app/models/a.rb"}
 			return m
 		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "cannot tell", inTip: "p2", runURL: true},
+		{name: "pushed, ci failed and the job's annotations were not read", set: func(s *scene) string {
+			m := s.push(10*time.Minute, s.p2)
+			s.gh.runs[m] = []Run{run("completed", "failure", Job{Name: "rspec", Paths: []string{}})}
+			s.git.paths[s.p2] = []string{"app/models/a.rb"}
+			return m
+		}, state: StatePushed, detail: DetailCIFailedNotOurs, why: "cannot tell", inTip: "p2", runURL: true},
 		{name: "pushed, ci failed and the PR's paths are not readable", set: func(s *scene) string {
 			m := s.push(10*time.Minute, s.p2)
 			s.gh.runs[m] = []Run{run("completed", "failure", Job{Name: "rspec", Paths: []string{"app/models/a.rb"}})}
@@ -202,7 +208,7 @@ func TestUnknownSaysWhy(t *testing.T) {
 	}
 
 	s.git.fetchErr = errors.New("fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host")
-	if err := c.Refresh(context.Background(), "acme/app", []int{7}); err == nil {
+	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil {
 		t.Error("a failed fetch: Refresh returned no error")
 	}
 	if got := one(c, s.pr()); got.State != StateUnknown || !strings.Contains(got.Why, "fetch failed") || !strings.Contains(got.Why, "resolve host") {
@@ -218,8 +224,8 @@ func TestUnknownSaysWhy(t *testing.T) {
 	if got := one(c, PR{Repo: "acme/app", Number: 8, Head: s.p2, Base: "master"}); got.State != StateUnknown || !strings.Contains(got.Why, "#8") {
 		t.Errorf("a PR the Refresh did not fetch: %s %q, want unknown naming it", got.State, got.Why)
 	}
-	if got := one(c, PR{Repo: "acme/app", Number: 7, Head: s.p2, Base: "release"}); got.State != StateUnknown || !strings.Contains(got.Why, "PR.Commits") {
-		t.Errorf("a PR on another base without Commits: %s %q, want unknown asking for Commits", got.State, got.Why)
+	if got := one(c, PR{Repo: "acme/app", Number: 7, Head: s.p2, Base: "release"}); got.State != StateUnknown || !strings.Contains(got.Why, `"master"`) || !strings.Contains(got.Why, `"release"`) {
+		t.Errorf("a PR asked on another base than the Refresh's, without Commits: %s %q, want unknown naming both", got.State, got.Why)
 	}
 	if got := one(c, PR{Repo: "acme/app", Number: 7, Head: s.p2, Base: "release", Commits: []string{s.p1, s.p2}}); got.State != StatePushed {
 		t.Errorf("a PR on another base with Commits: %s %q, want pushed", got.State, got.Why)

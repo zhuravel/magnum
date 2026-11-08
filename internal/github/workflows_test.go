@@ -98,8 +98,8 @@ func TestDispatchedRunsListsTheWorkflowsDispatchedRunsAtACommit(t *testing.T) {
 		t.Errorf("args = %q, mutates = %v", cmd.Args, cmd.Mutates)
 	}
 	wantRuns := []WorkflowRun{
-		{Status: "queued", URL: "https://github.com/talkable/talkable/actions/runs/4", CreatedAt: time.Date(2026, 11, 8, 15, 0, 50, 0, time.UTC)},
-		{Status: "completed", Conclusion: "cancelled", URL: "https://github.com/talkable/talkable/actions/runs/1",
+		{ID: 4, Status: "queued", URL: "https://github.com/talkable/talkable/actions/runs/4", CreatedAt: time.Date(2026, 11, 8, 15, 0, 50, 0, time.UTC)},
+		{ID: 1, Status: "completed", Conclusion: "cancelled", URL: "https://github.com/talkable/talkable/actions/runs/1",
 			CreatedAt: time.Date(2026, 11, 8, 14, 0, 0, 0, time.UTC)},
 	}
 	if !reflect.DeepEqual(runs, wantRuns) {

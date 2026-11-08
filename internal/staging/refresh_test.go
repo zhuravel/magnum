@@ -59,11 +59,11 @@ func TestTheFlockSerializesTwoClientsOnOneMirror(t *testing.T) {
 		})
 	}
 	aDone := make(chan error, 1)
-	go func() { aDone <- a.Refresh(context.Background(), "acme/app", []int{7}) }()
+	go func() { aDone <- a.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}) }()
 	<-inFetch
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	err := b.Refresh(ctx, "acme/app", []int{7})
+	err := b.Refresh(ctx, "acme/app", []OpenPR{{Number: 7, Base: "master"}})
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("b while a holds the lock: %v, want its context's deadline", err)
@@ -73,7 +73,7 @@ func TestTheFlockSerializesTwoClientsOnOneMirror(t *testing.T) {
 	}
 
 	bDone := make(chan error, 1)
-	go func() { bDone <- b.Refresh(context.Background(), "acme/app", []int{7}) }()
+	go func() { bDone <- b.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}) }()
 	select {
 	case err := <-bDone:
 		t.Fatalf("b returned (%v) while a still held the lock", err)
@@ -167,7 +167,7 @@ func TestNoGitEnvFetchesNothing(t *testing.T) {
 	dir := t.TempDir() + "/acme/app.git"
 	c := New(Deps{Git: s.git, GitHub: s.gh, Mirror: func(string) (string, bool) { return dir, true },
 		GitEnv: func(string) map[string]string { return nil }, Now: func() time.Time { return s.now }})
-	if err := c.Refresh(context.Background(), "acme/app", []int{7}); err == nil {
+	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil {
 		t.Error("Refresh without a git env: no error")
 	}
 	if s.git.total() != 0 {

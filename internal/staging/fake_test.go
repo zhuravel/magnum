@@ -319,8 +319,20 @@ func (w *world) clientAt(dir string) *Client {
 	})
 }
 
-// refresh refreshes acme/app for the open PRs and fails the test on an error.
+// refresh refreshes acme/app for the open PRs, each on master, and fails the
+// test on an error.
 func (w *world) refresh(c *Client, open ...int) {
+	w.t.Helper()
+	prs := make([]OpenPR, len(open))
+	for i, n := range open {
+		prs[i] = OpenPR{Number: n, Base: "master"}
+	}
+	w.refreshPRs(c, prs...)
+}
+
+// refreshPRs refreshes acme/app for the open PRs and fails the test on an
+// error.
+func (w *world) refreshPRs(c *Client, open ...OpenPR) {
 	w.t.Helper()
 	if err := c.Refresh(context.Background(), "acme/app", open); err != nil {
 		w.t.Fatalf("Refresh: %v", err)

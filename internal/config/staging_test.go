@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,12 +39,23 @@ func TestAStagingBranchMustBeAStagingBranchAndNeverTheBaseOrProduction(t *testin
 		}
 		wantError(t, err, append([]string{"factory repo acme/app"}, tc.want...)...)
 	}
-	for _, ok := range []string{"staging-void", "staging-bart", "staging-eu-2"} {
+	for _, ok := range []string{"void", "bart", "eu-2"} {
 		cfg := validFactoryConfig()
-		cfg.Factory.Repos[0].Staging = []FactoryStaging{{Name: "void", Branch: ok}}
+		cfg.Factory.Repos[0].Staging = []FactoryStaging{{Name: ok, Branch: "staging-" + ok}}
 		if err := cfg.Validate(); err != nil {
-			t.Errorf("branch %q: %v", ok, err)
+			t.Errorf("%s on staging-%s: %v", ok, ok, err)
 		}
+	}
+}
+
+// An environment's branch is staging-<its name>: the deploys record a
+// deployment of the environment by that name, and the status reads the
+// deployments of the environment the branch names.
+func TestAStagingBranchIsStagingAndTheEnvironmentsName(t *testing.T) {
+	for _, tc := range []struct{ name, branch string }{{"void", "staging-bart"}, {"Void", "staging-void"}, {"eu", "staging-eu-2"}} {
+		cfg := validFactoryConfig()
+		cfg.Factory.Repos[0].Staging = []FactoryStaging{{Name: tc.name, Branch: tc.branch}}
+		wantError(t, cfg.Validate(), "factory repo acme/app", fmt.Sprintf("staging %q: branch %q must be staging-%s", tc.name, tc.branch, tc.name))
 	}
 }
 

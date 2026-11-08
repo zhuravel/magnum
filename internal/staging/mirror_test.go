@@ -44,7 +44,7 @@ func TestAnAbsentVolumeGivesUnknownAndCreatesNothing(t *testing.T) {
 			s := newScene(t)
 			c := New(Deps{Git: s.git, GitHub: s.gh, Mirror: mirror,
 				GitEnv: func(string) map[string]string { return map[string]string{} }, Now: func() time.Time { return s.now }})
-			if err := c.Refresh(context.Background(), "acme/app", []int{7}); err == nil {
+			if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 7, Base: "master"}}); err == nil {
 				t.Error("Refresh on an absent volume: no error")
 			}
 			got := one(c, s.pr())

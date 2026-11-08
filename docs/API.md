@@ -6105,8 +6105,8 @@ type FactoryStaging struct {
 }
     FactoryStaging is a `staging` entry of a repository: an environment with
     a branch the factory merges into after your approval. Name is also the
-    GitHub deployment environment the deploys record; Branch is a staging-<name>
-    branch (StagingBranchPattern), never master, main, the base or production*.
+    GitHub deployment environment the deploys record; Branch is staging-<name>
+    (StagingBranchPattern), never master, main, the base or production*.
     QA names the skill that tests it ("" = no QA); After the environment whose
     QA must pass first. Config.Stagings lists a repository's; internal/staging
     reads which PRs are live on them.
@@ -16324,6 +16324,10 @@ const ComparePushCommits = 100
 const FileAtLimit = 512 << 10
     FileAtLimit caps FileAt: a larger file is not returned.
 
+const MaxAnnotations = 50
+    MaxAnnotations is the most annotations AnnotationPaths reads of one check
+    run: one page, GitHub's own limit per page being higher.
+
 const MaxIssueComments = issueCommentsPage * issueCommentsMaxPages
     MaxIssueComments is how many conversation comments IssueComments reads at
     most (issueCommentsMaxPages pages of issueCommentsPage).
@@ -16582,6 +16586,13 @@ func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int)
     more reviews than that, the later ones left out. A missing repository or
     pull request is an error matching ErrNotFound.
 
+func (c *Client) AnnotationPaths(ctx context.Context, owner, repo string, checkRunID int64, limit int) ([]string, error)
+    AnnotationPaths lists the repository paths the annotations of
+    check run id of owner/repo name, in their order without repeats:
+    GET /repos/{o}/{r}/check-runs/{id}/annotations, one page of limit (1 to
+    MaxAnnotations). An annotation tied to no file (path ".github") names none,
+    and no annotation's message is read: it may quote a PR.
+
 func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]CIState, RateLimit, error)
     CIStates reads the check rollup of each pull request's head (its state
     and counts by state, CIState) by node id. A CI run does not move a pull
@@ -16607,6 +16618,16 @@ func (c *Client) CommitChecks(ctx context.Context, owner, repo, sha string) ([]C
     checks. It reads one page of 100: a check past it is not listed. A missing
     repository or commit is an error matching ErrNotFound; a sha that is no full
     commit id is refused before any call.
+
+func (c *Client) CommitRuns(ctx context.Context, owner, repo, workflow, sha string) ([]WorkflowRun, error)
+    CommitRuns lists the runs of the workflow file workflow ("ci.yml") of
+    owner/repo at commit sha, of any event (a push to a branch, a dispatch),
+    newest first: GET /repos/{o}/{r}/actions/workflows/{file}/runs filtered
+    by head_sha, one page of commitRunsPage. A run of another commit in the
+    answer is left out. The identity needs read access to the repository's
+    Actions (an App: Actions: read). A workflow that is not a plain file name of
+    .github/workflows (ValidWorkflowFile) or a sha that is no full commit id is
+    refused before any call.
 
 func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (CompareStats, error)
     Compare reads GET /repos/{o}/{r}/compare/{base}...{head} with per_page=1:
@@ -16659,6 +16680,22 @@ func (c *Client) DeletePendingReview(ctx context.Context, owner, repo string, nu
     /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub
     refuses a submitted review (an *APIError with status 422). It is marked
     Mutates, so execx.DryRun only plans it.
+
+func (c *Client) DeploymentStatuses(ctx context.Context, owner, repo string, id int64) ([]string, error)
+    DeploymentStatuses lists the states of deployment id's
+    statuses, newest first, one page of statusesPage: GET
+    /repos/{o}/{r}/deployments/{id}/statuses. A state is success, failure,
+    error, inactive (a newer deployment replaced it), in_progress, queued or
+    pending. No description is read.
+
+func (c *Client) Deployments(ctx context.Context, owner, repo, environment, etag string) (list []Deployment, newETag string, notModified bool, err error)
+    Deployments lists the deployments of environment of owner/repo,
+    newest first, one page of deploymentsPage: GET /repos/{o}/{r}/deployments,
+    sending etag as If-None-Match ("" = none). A 304 answers notModified with
+    no list and etag as it was; else newETag is the answer's ETag. The identity
+    needs Deployments: read: without it GitHub answers 403 or 404 (ErrForbidden,
+    ErrNotFound). An empty environment, or one or an ETag with a control
+    character, is refused before any call.
 
 func (c *Client) Details(ctx context.Context, owner, repo string, numbers []int) (map[int]PRDetails, []int, error)
     Details fetches the full view of the given pull requests of owner/repo,
@@ -16828,6 +16865,11 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
     body contains marker, oldest first; an empty marker returns all of them.
     A missing repository or pull request is an error matching ErrNotFound.
 
+func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) ([]WorkflowJob, error)
+    RunJobs lists the jobs of the latest attempt of run id of owner/repo:
+    GET /repos/{o}/{r}/actions/runs/{id}/jobs?filter=latest, one page of
+    runJobsPage. No step or log is read.
+
 func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int, r ReviewRequest) (RESTReview, error)
     SubmitReview posts one review with its inline comments (POST
     /repos/{o}/{r}/pulls/{n}/reviews) as the client's identity, the request sent
@@ -16851,6 +16893,16 @@ type CompareStats struct {
 }
     CompareStats is the size of base...head as GitHub's compare API reports it
     (three-dot: what head adds on top of its merge base with base).
+
+type Deployment struct {
+	ID int64
+	// SHA is the commit GitHub resolved the deployment's ref to; Ref is the
+	// ref as created (a branch, a tag or a sha).
+	SHA, Ref    string
+	Environment string
+	CreatedAt   time.Time
+}
+    Deployment is a deployment of an environment as Deployments lists it.
 
 type DraftComment struct {
 	Path      string `json:"path"`
@@ -17296,16 +17348,26 @@ type ThreadComment struct {
 }
     ThreadComment is one comment of a review thread.
 
+type WorkflowJob struct {
+	ID         int64
+	Name       string
+	Status     string
+	Conclusion string
+}
+    WorkflowJob is a job of a workflow run as RunJobs lists it. An Actions job's
+    id is also its check run's (AnnotationPaths).
+
 type WorkflowRun struct {
+	ID         int64
 	Status     string
 	Conclusion string
 	URL        string
 	CreatedAt  time.Time
 }
-    WorkflowRun is a run of a workflow as DispatchedRuns lists it: its
-    status (queued, waiting, requested, pending, in_progress or completed),
-    its conclusion once completed (success, failure, cancelled, timed_out, ...),
-    its page and when GitHub created it.
+    WorkflowRun is a run of a workflow as DispatchedRuns and CommitRuns list it:
+    its id, its status (queued, waiting, requested, pending, in_progress or
+    completed), its conclusion once completed (success, failure, cancelled,
+    timed_out, ...), its page and when GitHub created it.
 
 func (r WorkflowRun) Done() bool
     Done reports whether r ended (completed, whatever its conclusion).
@@ -25375,16 +25437,22 @@ type Client struct {
 func New(d Deps) *Client
     New returns a Client on d.
 
-func (c *Client) Refresh(ctx context.Context, repo string, open []int) error
-    Refresh fetches the mirror once (the staging-* tips, the base and
-    refs/pull/N/head of the open PRs, and of those another client asked for in
-    the last minutes), reads each staging environment's deployments (with their
-    ETag) and the ci.yml runs of the merges that brought the open PRs' heads in,
-    and builds the lookup data Status reads for the repository. It runs at most
-    once a minute per repository across processes (a flock in the mirror dir);
-    a call within the minute reuses the data and returns nil. It never blocks
-    longer than ctx: a Refresh that ctx cuts keeps the data it had and returns
-    ctx's error. The first one clones the mirror.
+func (c *Client) Refresh(ctx context.Context, repo string, open []OpenPR) error
+    Refresh fetches the mirror once (the staging-* tips, each distinct base of
+    the open PRs and their refs/pull/N/head, and those another client asked
+    for in the last minutes), reads each staging environment's deployments
+    (with their ETag) and the ci.yml runs of the merges that brought the open
+    PRs' heads in, and builds the lookup data Status reads for the repository,
+    each PR's commits derived as its Base..refs/pull/N/head. A base that is no
+    plain branch name (git check-ref-format --branch, no leading '-') is refused
+    and never reaches git; its PRs, and those of a base the fetch cannot read,
+    are unknown, Why naming the base. It runs at most once a minute per
+    repository across processes (a flock in the mirror dir); a call within the
+    minute reuses the data and returns nil. It never blocks longer than ctx:
+    a Refresh that ctx cuts keeps the data it had and returns ctx's error.
+    The first Refresh clones the mirror, which takes as long as the repository's
+    commits take to download: give it a long ctx, and run Refresh outside a
+    daemon's tick.
 
 func (c *Client) Status(pr PR, envs []Env) []EnvStatus
     Status returns where pr stands on each of envs, in their order, from the
@@ -25512,16 +25580,23 @@ type GitHub interface {
 	// ("" = none). A 403 or 404 is an error that wraps ErrNotReadable.
 	DeploymentsOf(ctx context.Context, repo, environment, etag string) (Deployments, error)
 	// RunsOf lists the runs of the workflow file (Workflow) on the commit
-	// sha, newest first; a failed one carries its failing jobs.
+	// sha, newest first; the newest, when it failed, carries its failing
+	// jobs.
 	RunsOf(ctx context.Context, repo, workflow, sha string) ([]Run, error)
 }
     GitHub is what the package reads from GitHub as the poll identity.
 
+func NewGitHub(client func(repo string) *github.Client) GitHub
+    NewGitHub is the package's GitHub over magnum's GitHub client: client
+    gives a repository's client, the one of its poll identity (nil = none:
+    each read fails). Deployments need Deployments: read and runs Actions: read;
+    a 403 or 404 of a deployment read is ErrNotReadable.
+
 type Job struct {
 	Name string
-	// Paths are the repository paths its failure names (its annotations,
-	// the failing spec files); nil = it names none, so whether the failure
-	// is a PR's cannot be told from it.
+	// Paths are the repository paths its failure names (its check run's
+	// annotations); empty = it names none, or they could not be read, so
+	// whether the failure is a PR's cannot be told from it.
 	Paths []string
 }
     Job is a failing job of a run.
@@ -25531,15 +25606,22 @@ type MissingRefError struct{ Ref string }
 
 func (e *MissingRefError) Error() string
 
+type OpenPR struct {
+	Number int
+	Base   string
+}
+    OpenPR is an open PR a Refresh fetches: its number and its base branch (""
+    = the remote's default branch). A stacked PR's base is the branch of the PR
+    under it.
+
 type PR struct {
 	Repo   string // owner/name
 	Number int
 	Head   string
-	Base   string // the base ref, for example master
+	Base   string // the base ref, for example master ("" = the remote's default branch)
 	// Commits are the PR's commits, oldest first. When nil, Status takes
 	// the ones the last Refresh derived in the mirror, rev-list
-	// Base..refs/pull/N/head, which needs Base to be the mirror's base (the
-	// remote's default branch) and Number among the PRs it fetched.
+	// Base..refs/pull/N/head, for a PR it had open on that Base.
 	Commits []string
 }
     PR is the PR Status answers for.

@@ -205,9 +205,9 @@ stale_after = "90s"               # no page for this long makes the stream unhea
 # whether the PR is live there (latest), pushed but not yet confirmed by a deployment (pushed: CI running, CI
 # failed on its own paths or not, waiting for the deploy, not confirmed), on staging at an older commit (outdated)
 # or absent (none); unknown when the mirror is absent or its fetch failed. Read from a treeless bare mirror of the
-# repository (`git clone --bare --filter=tree:0`, fetched at most once a minute: the staging-* branches, the base
-# and the open PRs' heads, with the poll identity's credentials), GitHub's deployments of the environment and
-# ci.yml's runs. It only reads: nothing is pushed.
+# repository (`git clone --bare --filter=tree:0`, fetched at most once a minute: the staging-* branches, each open
+# PR's base and head, with the poll identity's credentials), GitHub's deployments of the environment (Deployments:
+# read) and ci.yml's runs (Actions: read). It only reads: nothing is pushed. The first read clones the mirror.
 
 [staging]
 # mirror_dir = ""                 # one mirror per repository, <mirror_dir>/<owner>/<repo>.git; "" = <state dir>/staging.

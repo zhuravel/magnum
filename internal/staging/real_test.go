@@ -83,7 +83,7 @@ func TestARealTreelessMirrorTellsLatestAndPushed(t *testing.T) {
 		Now:    func() time.Time { return now },
 	})
 	pr := PR{Repo: "acme/app", Number: 1, Head: p1, Base: "master"}
-	if err := c.Refresh(context.Background(), "acme/app", []int{1}); err != nil {
+	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}}); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 	if got := one(c, pr); got.State != StateLatest || got.InTip != p1 || got.Tip != merge {
@@ -100,7 +100,7 @@ func TestARealTreelessMirrorTellsLatestAndPushed(t *testing.T) {
 	gh.runs[merge] = []Run{{ID: 5, URL: "https://github.com/acme/app/actions/runs/5", Status: "completed", Conclusion: "failure",
 		Failed: []Job{{Name: "rubocop", Paths: []string{"app/b.rb"}}}}}
 	now = now.Add(RefreshEvery)
-	if err := c.Refresh(context.Background(), "acme/app", []int{1}); err != nil {
+	if err := c.Refresh(context.Background(), "acme/app", []OpenPR{{Number: 1, Base: "master"}}); err != nil {
 		t.Fatalf("second Refresh: %v", err)
 	}
 	if got := one(c, pr); got.State != StatePushed || got.Detail != DetailCIFailedOurs || got.DeployedTip != c1 {

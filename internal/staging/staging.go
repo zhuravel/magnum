@@ -102,16 +102,23 @@ const WhyNotReadable = "deployments not readable (Deployments: read on the poll 
 // /Volumes/<name> disk) is not mounted.
 const WhyVolumeNotMounted = "the mirror's volume is not mounted"
 
+// OpenPR is an open PR a Refresh fetches: its number and its base branch
+// ("" = the remote's default branch). A stacked PR's base is the branch of
+// the PR under it.
+type OpenPR struct {
+	Number int
+	Base   string
+}
+
 // PR is the PR Status answers for.
 type PR struct {
 	Repo   string // owner/name
 	Number int
 	Head   string
-	Base   string // the base ref, for example master
+	Base   string // the base ref, for example master ("" = the remote's default branch)
 	// Commits are the PR's commits, oldest first. When nil, Status takes
 	// the ones the last Refresh derived in the mirror, rev-list
-	// Base..refs/pull/N/head, which needs Base to be the mirror's base (the
-	// remote's default branch) and Number among the PRs it fetched.
+	// Base..refs/pull/N/head, for a PR it had open on that Base.
 	Commits []string
 }
 
@@ -209,9 +216,9 @@ type Run struct {
 // Job is a failing job of a run.
 type Job struct {
 	Name string
-	// Paths are the repository paths its failure names (its annotations,
-	// the failing spec files); nil = it names none, so whether the failure
-	// is a PR's cannot be told from it.
+	// Paths are the repository paths its failure names (its check run's
+	// annotations); empty = it names none, or they could not be read, so
+	// whether the failure is a PR's cannot be told from it.
 	Paths []string
 }
 
@@ -222,7 +229,8 @@ type GitHub interface {
 	// ("" = none). A 403 or 404 is an error that wraps ErrNotReadable.
 	DeploymentsOf(ctx context.Context, repo, environment, etag string) (Deployments, error)
 	// RunsOf lists the runs of the workflow file (Workflow) on the commit
-	// sha, newest first; a failed one carries its failing jobs.
+	// sha, newest first; the newest, when it failed, carries its failing
+	// jobs.
 	RunsOf(ctx context.Context, repo, workflow, sha string) ([]Run, error)
 }
 
