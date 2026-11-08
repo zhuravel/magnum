@@ -125,6 +125,19 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "codex had no pause" {
 		t.Fatalf("resume codex again: exit %d %q", code, h.out.String())
 	}
+	// A shared launch failure's hold of codex is lifted too, and recorded
+	// as lifted, as the daemon's resume does.
+	_ = h.st.SetKV(h.ctx, engine.KVKindHold("codex"), `{"line":"Error: x","prs":2}`)
+	h.out.Reset()
+	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "resumed codex" {
+		t.Fatalf("resume a held codex: exit %d %q", code, h.out.String())
+	}
+	if _, ok := h.kv(engine.KVKindHold("codex")); ok {
+		t.Error("the hold of codex kept")
+	}
+	if v, ok := h.kv(engine.KVKindHoldLifted("codex")); !ok || v != store.FormatTime(h.now) {
+		t.Errorf("hold lifted at %q %v", v, ok)
+	}
 	// A budget-cap pause lifted by hand overrules Codex's reading: the mark
 	// the daemon takes over at its start is written, and the answer says so.
 	_ = h.st.SetKV(h.ctx, store.KVToolPausedUntil("codex"), store.FormatTime(h.now.Add(time.Hour)))

@@ -314,6 +314,16 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 			if err != nil {
 				return "", err
 			}
+			held, err := del(engine.KVKindHold(t)) // a shared launch failure's hold, as the daemon's liftToolPause lifts it
+			if err != nil {
+				return "", err
+			}
+			if held {
+				if err := d.Store.SetKV(ctx, engine.KVKindHoldLifted(t), store.FormatTime(d.now())); err != nil {
+					return "", err
+				}
+				had = true
+			}
 			// A lift, a pause or not, as the daemon's resume records it: a
 			// reviewer's failure from before pauses the kind no more at a settle.
 			if err := d.Store.SetKV(ctx, store.KVToolPauseLiftedAt(t), store.FormatTime(d.now())); err != nil {

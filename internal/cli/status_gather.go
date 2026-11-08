@@ -596,6 +596,20 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 		r.Pauses = append(r.Pauses, p)
 	}
 	for _, tool := range rolesAllKinds(d.Config) {
+		raw, ok := kv.get(engine.KVKindHold(tool))
+		var h engine.KindHold
+		if !ok || json.Unmarshal([]byte(raw), &h) != nil {
+			continue
+		}
+		p := statusPause{Scope: tool, Reason: "shared launch failure", Detail: h.Line,
+			Fix: "rounds that need " + tool + " run their judge_fallback, or wait; the first round after the hold probes " + tool +
+				" and a good probe lifts it, one that dies on its line holds it 15m more; `magnum resume --tool " + tool + "` lifts it now"}
+		if h.Until.After(r.GeneratedAt) {
+			p.Until = &h.Until
+		}
+		r.Pauses = append(r.Pauses, p)
+	}
+	for _, tool := range rolesAllKinds(d.Config) {
 		for _, l := range agents.ModelLimits(kv.ctx, kv.st, d.Config, tool, r.GeneratedAt) {
 			until := l.Until
 			r.Pauses = append(r.Pauses, statusPause{Scope: tool, Reason: l.Model + " limited", Until: &until, Using: l.Using})

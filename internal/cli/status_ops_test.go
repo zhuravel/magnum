@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -86,5 +87,36 @@ func TestResumeWithoutDaemonClearsModelLimitsAndInfraPause(t *testing.T) {
 	}
 	if _, ok := h.kv(engine.KVInfraPausedUntil); ok {
 		t.Error("infra pause kept")
+	}
+}
+
+// A shared launch failure's hold of a kind (engine.KindHold) is a pause of
+// the kind in `magnum status`: the line its launches end with, until when
+// it holds (none once its span is over and a round probes it), and what
+// lifts it.
+func TestStatusShowsAKindASharedLaunchFailureHolds(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	hold := engine.KindHold{Line: "Error: account/read failed during TUI bootstrap", PRs: 2, Since: now.Add(-5 * time.Minute), Until: now.Add(10 * time.Minute)}
+	raw, err := json.Marshal(hold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVKindHold("claude"), string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := statusGather(ctx, d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *statusPause
+	for i, p := range r.Pauses {
+		if p.Scope == "claude" && p.Reason == "shared launch failure" {
+			got = &r.Pauses[i]
+		}
+	}
+	if got == nil || got.Detail != hold.Line || got.Until == nil || !got.Until.Equal(hold.Until) ||
+		!strings.Contains(got.Fix, "`magnum resume --tool claude` lifts it now") {
+		t.Fatalf("pauses %+v, want claude's hold", r.Pauses)
 	}
 }
