@@ -238,13 +238,14 @@ func (m *factoryModel) openMagnum(r FactoryRow) tea.Cmd {
 	return m.bar.start("Open magnum's pane of "+key, run)
 }
 
-// prKey is f, F, K or x on row r (home's, or the card's): on a row whose
+// prKey is f, F, K, x or P on row r (home's, or the card's): on a row whose
 // open PR magnum's registry has (FactoryRow.PR: your PR's, or a task's),
 // magnum's fix of what is open (f), its switch out of autofix or back in
 // (F; a PR magnum leaves alone for another reason says why and runs
-// nothing) and the stop of its fix loop (K; with no loop it says so), each
-// behind y/N and through magnum's own request paths; on a row without one
-// nothing. x is no key of home's: it drops a task, on its card, and says
+// nothing), the stop of its fix loop (K; with no loop it says so) and the
+// merge of its parent (P, home's rows: the daemon's plan first, a dry run,
+// then its sentence as the y/N), each behind y/N and through magnum's own
+// request paths; on a row without one nothing. x is no key of home's: it drops a task, on its card, and says
 // that K stops magnum's loop.
 func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 	switch {
