@@ -178,6 +178,10 @@ type fakeGH struct {
 	// dispatchErr fails DispatchWorkflow, whose calls record
 	// "dispatch:<owner>/<repo>:<workflow>@<ref>".
 	dispatchErr error
+	// runs answers DispatchedRuns by sha (newest first; absent: none);
+	// runsErr fails it. Its calls record "runs:<owner>/<repo>:<workflow>@<sha>".
+	runs    map[string][]github.WorkflowRun
+	runsErr error
 	// replyErr fails ReplyToReviewComment.
 	replyErr error
 }
@@ -187,6 +191,17 @@ func (g *fakeGH) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.dispatchErr
+}
+
+func (g *fakeGH) DispatchedRuns(ctx context.Context, owner, repo, workflow, sha string) ([]github.WorkflowRun, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("runs:%s/%s:%s@%s", owner, repo, workflow, sha))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.runsErr != nil {
+		return nil, g.runsErr
+	}
+	return slices.Clone(g.runs[sha]), nil
 }
 
 func (g *fakeGH) ReviewAnswers(ctx context.Context, ids []string) (map[string]github.ReviewAnswer, error) {

@@ -163,15 +163,27 @@ func (h *harness) detailsReads(n int) int {
 }
 
 // polls advances the clock a minute and ticks, n times, and returns how
-// many Details reads asked for PR #2 meanwhile.
-func (h *harness) polls(n int) int {
+// many Details reads asked for PR #2 meanwhile, and how many reads of the
+// CI workflow's dispatched runs there were.
+func (h *harness) polls(n int) (details, runs int) {
 	h.t.Helper()
-	before := h.detailsReads(2)
+	before, runsBefore := h.detailsReads(2), len(h.ghCalls("runs:"))
 	for range n {
 		h.advance(time.Minute)
 		h.tick()
 	}
-	return h.detailsReads(2) - before
+	return h.detailsReads(2) - before, len(h.ghCalls("runs:")) - runsBefore
+}
+
+// setRuns makes the fake GitHub list runs, newest first, as the runs a
+// workflow_dispatch started at sha.
+func (h *harness) setRuns(sha string, runs ...github.WorkflowRun) {
+	h.gh.mu.Lock()
+	defer h.gh.mu.Unlock()
+	if h.gh.runs == nil {
+		h.gh.runs = map[string][]github.WorkflowRun{}
+	}
+	h.gh.runs[sha] = runs
 }
 
 // The live case of 2026-11-08: GitHub's rollup of the head left out the
@@ -196,8 +208,8 @@ func TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut(t *testing.T
 	h.tick()
 	h.tick()
 	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
-	if n := h.polls(3); n != 0 {
-		t.Errorf("details of #2 read %d times in 3 polls after the run was seen, want none", n)
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("details of #2 read %d times and runs %d times in 3 polls after the run was seen, want none", n, runs)
 	}
 	h.advance(20 * time.Minute)
 	h.tick()
@@ -208,37 +220,110 @@ func TestTheRunOfAStartedCIWorkflowIsSeenThoughTheRollupLeavesItOut(t *testing.T
 }
 
 // While a start of the CI workflow waits for its run, each poll reads the
-// head's checks once; with no run the look waits, settle_max after the
-// start it needs you as before (the head is not started again), and the
-// reads end with the wait.
+// head's checks and the workflow's dispatched runs at the head once; with
+// no run the look waits, settle_max after the start it needs you as before
+// (the head is not started again), and the reads end with the wait. A run
+// GitHub created before the start (an earlier run of the head, cancelled)
+// is not the start's.
 func TestAStartWithNoRunReadsTheHeadsChecksOncePerPollUntilItsWaitEnds(t *testing.T) {
 	h := ciDispatched(t, "app/models/order.rb")
 	h.pastSettle()
 	h.tick()
 	h.tick()
-	if n := h.polls(3); n != 3 {
-		t.Fatalf("details of #2 read %d times in 3 polls of the wait, want 3", n)
+	h.setRuns(fixHead, github.WorkflowRun{Status: "completed", Conclusion: "cancelled", CreatedAt: h.clock.Now().Add(-2 * time.Hour)})
+	if n, runs := h.polls(3); n != 3 || runs != 3 {
+		t.Fatalf("details of #2 read %d times and runs %d times in 3 polls of the wait, want 3 each", n, runs)
 	}
 	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
 	h.advance(20 * time.Minute)
 	h.tick()
-	h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
-	if n := h.polls(3); n != 0 {
-		t.Errorf("details of #2 read %d times in 3 polls after the wait, want none", n)
+	v := h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
+	if !strings.HasSuffix(v.Why, " and no run came; run it on the PR's branch") {
+		t.Errorf("why = %q, want no run came", v.Why)
+	}
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("details of #2 read %d times and runs %d times in 3 polls after the wait, want none", n, runs)
 	}
 	if n := len(h.ghCalls("dispatch:")); n != 1 {
 		t.Fatalf("dispatches = %d, want 1", n)
 	}
 }
 
-// Only a start that waits for its run reads the head's checks on every
-// poll: an own PR of a repository with ci_dispatch whose required check
-// has not started yet (no start), and one whose start GitHub refused, get
-// no Details read while nothing of theirs moves.
+// A run magnum started shows nothing in GitHub's rollup of the head while
+// it waits for a runner or runs (its check suite is left out, and its
+// Completion is created passed when it ends), so one that ran past
+// settle_max read as no run, and the PR needed you to start a second. The
+// poll reads the workflow's runs that a dispatch started at the head: a
+// queued or running one keeps the look waiting past settle_max, the poll
+// that sees it end reads the head's checks, so its Completion makes the PR
+// idle at once, and the reads end there.
+func TestARunOfTheStartedCIWorkflowThatOutlastsTheWaitKeepsTheLookWaiting(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+	created := h.clock.Now().Add(2 * time.Second)
+	h.setRuns(fixHead, github.WorkflowRun{Status: "queued", CreatedAt: created})
+	h.advance(15 * time.Minute)
+	h.tick()
+	h.setRuns(fixHead, github.WorkflowRun{Status: "in_progress", CreatedAt: created})
+	h.advance(10 * time.Minute) // past settle_max after the start
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+	others := othersChecks()
+	h.setCounts(2, fakeCounts(others)) // the run's Completion moves none of the rollup's counts
+	h.setCI(2, "SUCCESS", append(others, ciCheck("CI", "Completion", github.CheckPassed))...)
+	h.setRuns(fixHead, github.WorkflowRun{Status: "completed", Conclusion: "success", CreatedAt: created})
+	h.advance(time.Minute)
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("details of #2 read %d times and runs %d times in 3 polls after the run ended, want none", n, runs)
+	}
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+// A run of the started workflow that ended with no run of the required
+// check at the head as GitHub's rollup lists it (a check that is a job of
+// that workflow, whose check suite the rollup leaves out, or a run
+// cancelled before its last job) is no "no run came": settle_max after the
+// start the PR needs you with how the run ended, and the reads end.
+func TestARunOfTheStartedCIWorkflowThatEndedWithoutTheCheckNeedsYou(t *testing.T) {
+	h := ciDispatched(t, "app/models/order.rb")
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.setRuns(fixHead, github.WorkflowRun{Status: "completed", Conclusion: "timed_out", CreatedAt: h.clock.Now().Add(time.Second)})
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
+	h.advance(16 * time.Minute)
+	h.tick()
+	v := h.wantOpen(OpenNeedsYou, "required check Completion did not run at a1a1a1a: magnum started ci.yml at ")
+	if !strings.HasSuffix(v.Why, " and its run ended (timed out) without it; run it on the PR's branch") {
+		t.Errorf("why = %q, want the run's end", v.Why)
+	}
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("details of #2 read %d times and runs %d times in 3 polls after the wait, want none", n, runs)
+	}
+	if n := len(h.ghCalls("dispatch:")); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+// Only a start that waits for its run reads the head's checks and the
+// workflow's dispatched runs on every poll: an own PR of a repository with
+// ci_dispatch whose required check has not started yet (no start), and one
+// whose start GitHub refused, get neither read while nothing of theirs
+// moves.
 func TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll(t *testing.T) {
 	h := ciDispatched(t, "app/models/order.rb")
-	if n := h.polls(3); n != 0 {
-		t.Errorf("no start: details of #2 read %d times in 3 polls, want none", n)
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("no start: details of #2 read %d times and runs %d times in 3 polls, want none", n, runs)
 	}
 	h.wantOpen(OpenWaits, "CI at a1a1a1a: required check Completion has not started")
 	h.gh.mu.Lock()
@@ -248,8 +333,8 @@ func TestOnlyAStartThatWaitsReadsTheHeadsChecksOnEveryPoll(t *testing.T) {
 	h.tick()
 	h.tick()
 	h.wantOpen(OpenNeedsYou, "magnum's start of ci.yml failed (GitHub answered HTTP 422)")
-	if n := h.polls(3); n != 0 {
-		t.Errorf("a failed start: details of #2 read %d times in 3 polls, want none", n)
+	if n, runs := h.polls(3); n != 0 || runs != 0 {
+		t.Errorf("a failed start: details of #2 read %d times and runs %d times in 3 polls, want none", n, runs)
 	}
 }
 
