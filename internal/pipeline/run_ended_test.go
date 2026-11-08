@@ -121,9 +121,11 @@ func TestAWaiterReturnsOnTheRunEndWithoutWaitingForItsPoll(t *testing.T) {
 }
 
 // An end that comes after the waiter read its run as at work, but before
-// it began to sleep, still wakes it: it took the channel before the read
-// (a waiter that took it as it began to sleep would get a new one, which
-// nothing closes, and sleep its whole poll).
+// it began to sleep, still wakes it: it took its channel no later than its
+// look at the clock, so the end closes the one it sleeps on (a waiter that
+// took it as it began to sleep would get a new one, which nothing closes,
+// and sleep its whole poll). TestTheWaiterTakesItsChannelBeforeItReadsItsRun
+// holds the take's place before the read.
 func TestAnEndBeforeTheWaiterSleepsIsNotLost(t *testing.T) {
 	e := newEnv(t)
 	sig := &endSignal{}
@@ -152,6 +154,35 @@ func TestAnEndBeforeTheWaiterSleepsIsNotLost(t *testing.T) {
 		}
 	case <-time.After(failGuard):
 		t.Fatal("an end before the waiter slept was lost: it sleeps its whole poll")
+	}
+}
+
+// The wait takes its channel before it reads its run, so an end that lands
+// as it takes the channel is in the row its read sees. A wait that read
+// first and took its channel after would, for an end between the two, get a
+// new channel that nothing closes and sleep its whole poll.
+func TestTheWaiterTakesItsChannelBeforeItReadsItsRun(t *testing.T) {
+	e := newEnv(t)
+	sig := &endSignal{}
+	r := e.submittedJudgeRun()
+	var once sync.Once
+	e.r.Ended = func() <-chan struct{} {
+		once.Do(func() { // the run ends as the waiter takes its first channel
+			e.endRun(r)
+			sig.wake()
+		})
+		return sig.Ended()
+	}
+	e.pollNeverEnds()
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	select {
+	case got := <-e.waitAsync(ctx, r):
+		if got.kind != waitEnded {
+			t.Fatalf("wait = kind %d, run %+v; want ended", got.kind, got.run)
+		}
+	case <-time.After(failGuard):
+		t.Fatal("an end as the waiter took its channel was lost: it sleeps its whole poll")
 	}
 }
 
