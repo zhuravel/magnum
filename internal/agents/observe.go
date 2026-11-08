@@ -132,7 +132,8 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     agent_session.value becomes session_id; a starting session becomes live.
 //     working + a submitted run -> run working (working_seen_at).
 //     idle_ticks >= CompletionIdleTicks, this reading CompletionGap or more
-//     after the streak's first (see idleStreak), + a submitted/working run ->
+//     after the streak's first (see idleStreak; denyContinueGap while a deny
+//     awaits its continuation, endGap), + a submitted/working run ->
 //     run ended, ObsCompleted, and Ended's channel closed; short of the gap,
 //     SecondReadingAt says when the reading that may end it is due.
 //     working with no pending/submitted/working run (outside a short grace
@@ -303,7 +304,6 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 		s, o.Session = fresh, fresh
 	}
-	settled := !first.IsZero() && !capturedAt.Before(first.Add(CompletionGap))
 	if sid == "" && promptedTurnEnded(s, prev, prevAt, idle) {
 		m.sessionIDMissing(ctx, s)
 	}
@@ -362,7 +362,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 		if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
 			o.Session = fresh
 		}
-	case idle && s.IdleTicks >= CompletionIdleTicks && settled:
+	case idle && s.IdleTicks >= CompletionIdleTicks && !first.IsZero() && !capturedAt.Before(first.Add(m.endGap(s.ID, o.Run))):
 		var done *store.Run
 		for _, r := range runs {
 			if r.State != store.RunSubmitted && r.State != store.RunWorking {
@@ -381,7 +381,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			o.Kind, o.Run = ObsCompleted, done
 		}
 	}
-	if due := first.Add(CompletionGap); o.Kind == "" && idle && !first.IsZero() && capturedAt.Before(due) &&
+	if due := first.Add(m.endGap(s.ID, o.Run)); o.Kind == "" && idle && !first.IsZero() && capturedAt.Before(due) &&
 		o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
 		o.SecondReadingAt = due // an idle reading short of the gap: the one that may end the turn is due then
 	}
@@ -416,6 +416,19 @@ func (m *Manager) idleStreak(id int64, busy, idle bool, ticks int, status herdr.
 	}
 	m.idleFrom[id] = first
 	return first
+}
+
+// endGap is how long after its streak's first idle reading a reading may
+// end the turn of session id: CompletionGap, or denyContinueGap while a deny
+// during run still awaits its continuation (denyState.cont: continueAfterDeny
+// has not found a screen it may type into yet).
+func (m *Manager) endGap(id int64, run *store.Run) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if st := m.denies[id]; run != nil && st != nil && st.run == run.ID && st.cont {
+		return denyContinueGap
+	}
+	return CompletionGap
 }
 
 func recent(t, now time.Time) bool { return now.Sub(t) < humanGrace }

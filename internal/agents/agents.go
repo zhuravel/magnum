@@ -84,6 +84,14 @@ const CompletionIdleTicks = 2
 // it on the second, as before.
 const CompletionGap = 3 * time.Second
 
+// denyContinueGap is CompletionGap while a deny during the run still awaits
+// its continuation (continueAfterDeny): the continuation waits for a screen
+// it may type into, which may lag herdr's idle or fail to read for a
+// moment, so the run ends only this long after the streak's first idle
+// reading, which gives it a few more looks on the observe clock. Readings
+// 10 s apart (the factory's clock) meet it on the second, as before.
+const denyContinueGap = 10 * time.Second
+
 // tailWait bounds how long Submit holds a prompt to a judge still finishing
 // the turn of its last run (turnTail) before it refuses with ErrBusy;
 // tailPoll is how often it asks herdr whether the agent stopped working.

@@ -370,7 +370,8 @@ func (m *Manager) denyResumed(sessionID int64) {
 // (so the run does not end before the agent picks the text up), sets
 // last_prompt_at and records EventDenyContinued. It reports whether the
 // message was sent; a screen it cannot judge yet is retried on the next
-// idle tick, while the run is still in flight.
+// idle readings, while the run is still in flight, which ends then only
+// denyContinueGap after its streak's first idle reading (endGap).
 func (m *Manager) continueAfterDeny(ctx context.Context, s store.Session, run store.Run, ref paneRef) bool {
 	m.mu.Lock()
 	st := m.denies[s.ID]
