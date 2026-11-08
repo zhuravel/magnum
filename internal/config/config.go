@@ -129,7 +129,11 @@ type Config struct {
 }
 
 type Daemon struct {
-	PollInterval             Duration `toml:"poll_interval"`
+	PollInterval Duration `toml:"poll_interval"`
+	// ObserveInterval is the review daemon's observe clock: how often it
+	// reads herdr for the turns of the runs in flight, between the ticks
+	// (0 = off: the tick observes alone).
+	ObserveInterval          Duration `toml:"observe_interval"`
 	MaxConcurrentReviews     int      `toml:"max_concurrent_reviews"`
 	MaxTotalWorkingCodex     int      `toml:"max_total_working_codex"`
 	PushQuietPeriod          Duration `toml:"push_quiet_period"`
@@ -1040,6 +1044,7 @@ func Defaults() *Config {
 	c := &Config{
 		Daemon: Daemon{
 			PollInterval:             Duration{30 * time.Second},
+			ObserveInterval:          Duration{5 * time.Second},
 			MaxConcurrentReviews:     3,
 			MaxTotalWorkingCodex:     5,
 			PushQuietPeriod:          Duration{5 * time.Minute},

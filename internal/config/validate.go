@@ -299,6 +299,9 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// MinObserveInterval is the shortest [daemon] observe_interval.
+const MinObserveInterval = 2 * time.Second
+
 // validateTimings checks the daemon's intervals, waits and limits that
 // nothing else checks (the burst, rereview, keep and request_debounce keys have
 // their own validators). The poll and reconcile intervals must be positive: the
@@ -307,6 +310,9 @@ func (c *Config) Validate() error {
 // waits and quiet periods may be 0 (none) but not negative, which released a
 // closed PR's slot at once or counted a push as old before it was made.
 // default_repo, when set, is the owner/name `magnum review 123` assumes.
+// observe_interval is 0 (off) or between MinObserveInterval and the poll
+// interval: a faster clock costs a herdr snapshot every pass for little,
+// and a slower one than the tick's adds nothing.
 func (d Daemon) validateTimings() []error {
 	var errs []error
 	for _, x := range []struct {
@@ -330,6 +336,10 @@ func (d Daemon) validateTimings() []error {
 		if x.d.Duration < 0 {
 			errs = append(errs, fmt.Errorf("daemon.%s must not be negative, got %s", x.key, x.d.Duration))
 		}
+	}
+	if o := d.ObserveInterval.Duration; o != 0 && (o < MinObserveInterval || (d.PollInterval.Duration > 0 && o > d.PollInterval.Duration)) {
+		errs = append(errs, fmt.Errorf("daemon.observe_interval must be 0 (off) or between %s and poll_interval (%s), got %s",
+			MinObserveInterval, d.PollInterval.Duration, o))
 	}
 	if d.MinFreeDiskGB < 0 {
 		errs = append(errs, fmt.Errorf("daemon.min_free_disk_gb must be >= 0, got %d", d.MinFreeDiskGB))

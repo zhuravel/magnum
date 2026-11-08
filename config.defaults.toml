@@ -11,6 +11,10 @@
 
 [daemon]
 poll_interval = "30s"                 # how often magnum polls GitHub and observes herdr; must be positive
+observe_interval = "5s"           # how often it also reads herdr for the turns of the runs in flight, between the
+                                  # polls (one herdr snapshot each, none while no run is in flight), so a turn's
+                                  # end is seen within seconds; "0" = off (the poll's observation alone);
+                                  # otherwise 2s to poll_interval
 max_concurrent_reviews = 3        # review rounds running at once
 max_total_working_codex = 5       # counts your own working Codex agents too
 push_quiet_period = "5m"          # a new head is reviewable only after no push for this long (0 = at once; never negative)

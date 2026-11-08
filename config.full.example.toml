@@ -12,6 +12,8 @@
 
 [daemon]
 default_repo = "talkable/talkable"    # what a bare PR number means (`magnum review 123`)
+# observe_interval = "10s"        # read herdr for the turns in flight less often than the default 5s ("0" = only at
+                                  # each poll_interval tick): a turn's end is then seen up to that much later
 
 [terminal]
 app = "iTerm2"                    # Terminal | iTerm2 | Ghostty | WezTerm | custom
