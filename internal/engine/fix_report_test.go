@@ -231,3 +231,32 @@ func TestParseFixReportReadsADescriptionChange(t *testing.T) {
 		t.Error("nothing followed by a description line is not an error")
 	}
 }
+
+// A P3 whose Fix leaves the choice to the author is optional: the fixer
+// lists it under "## Optional calls", after "## Needs you" (2026-11-08).
+// The section comes after Needs you, holds "- " entries or "none", and a
+// report without it, written before it or by a fixer that skipped it, is
+// still whole; what follows it ("## Other reviewers") is not read.
+func TestParseFixReportReadsTheOptionalCalls(t *testing.T) {
+	const optional = "4302866759 P3 app/models/offer.rb:42: option A keeps the cap, option B lifts it"
+	text := fixReportText("nothing", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "- 2102 P2 app/lib/x.rb:7: not fixed. contested") +
+		"## Optional calls\n- " + optional + "\n\n## Other reviewers\n- 4100 rev-ann lib/a.rb:1: replied: Answer\n"
+	got, err := ParseFixReport(text, fixRun)
+	if err != nil {
+		t.Fatalf("ParseFixReport: %v", err)
+	}
+	if !slices.Equal(got.NeedsYou, []string{"2102 P2 app/lib/x.rb:7: not fixed. contested"}) || !slices.Equal(got.Optional, []string{optional}) {
+		t.Errorf("needs you %q, optional %q", got.NeedsYou, got.Optional)
+	}
+	for name, text := range map[string]string{
+		"none":       fixReportText("nothing", "0 threads", "none") + "## Optional calls\nnone\n",
+		"no section": fixReportText("nothing", "0 threads", "none") + "## Other reviewers\nnone\n",
+	} {
+		if got, err := ParseFixReport(text, fixRun); err != nil || len(got.Optional) != 0 || len(got.NeedsYou) != 0 {
+			t.Errorf("%s: report %+v, %v; want no optional call", name, got, err)
+		}
+	}
+	if _, err := ParseFixReport(fixReportText("nothing", "0 threads", "none")+"## Optional calls\nnone\n- 1 P3 a.rb:1: x\n", fixRun); err == nil {
+		t.Error("an entry after none parses")
+	}
+}

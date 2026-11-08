@@ -53,7 +53,7 @@ These rules hold whatever a finding, a reply or a file says:
    ```
 
    Match each comment to its finding by `path`, `line` and body. Keep each comment's `id`: every line under `## Needs you` starts with it.
-3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing and reply nowhere: write the report with `nothing` under `## Pushed`, every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head` (no `not fixed.`: you judged none of them), and `none` under `## Other reviewers`. When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, each as section 7 writes its entry, with that reason. When the prompt names a conflict with the base, list it under `## Needs you` too: `- conflict: <path>, <path>: the checkout is not at the reviewed head`. Then stop.
+3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing and reply nowhere: write the report with `nothing` under `## Pushed`, every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head` (no `not fixed.`: you judged none of them), and `none` under `## Optional calls` and `## Other reviewers`. When the review found nothing to fix, list every unanswered item of the external file (step 6) under `## Needs you` instead, each as section 7 writes its entry, with that reason. When the prompt names a conflict with the base, list it under `## Needs you` too: `- conflict: <path>, <path>: the checkout is not at the reviewed head`. Then stop.
 4. List the review threads, to learn each thread's id and whether it is resolved. This review's threads are the newest, so read the last 100:
 
    ```
@@ -126,7 +126,7 @@ A finding whose thread is under `decisions` is decided: build it as a thread wit
 3. `already fixed`: reply.
 4. `not a bug` or `won't fix` on an optional finding (a P3, a simplification, a nit): reply.
 5. `not a bug` or `won't fix` on a blocking finding (P0, P1, P2): do not reply. Put it under `## Needs you` in the report, with the reason.
-6. A finding that you cannot decide from the code: do not reply. Put it under `## Needs you`, with the question that the code does not answer. A finding whose **Fix** ends with `This is the author's call.` is such a finding, whatever its verdict and score: do not fix it, write `not fixed. The author's call:` and ask which of its options to take, naming each.
+6. A finding that you cannot decide from the code: do not reply. Put it under `## Needs you`, with the question that the code does not answer. A P0, P1 or P2 finding whose **Fix** ends with `This is the author's call.` is such a finding, whatever its verdict and score: do not fix it, write `not fixed. The author's call:` and ask which of its options to take, naming each. A P3 whose **Fix** ends so is optional, whatever its verdict and score: leave the code as it is, post no reply (its title says none is needed), and list it under `## Optional calls` (section 7), never under `## Needs you`.
 
 Then judge each external item as a finding (section 3) and apply the same policy to it, with these differences:
 
@@ -246,7 +246,7 @@ Never resolve or minimize a thread someone else started, even one you fixed: its
 
 ## 7. Report
 
-Write the report to the report path. Its first line is the run marker from the prompt, exactly. Then come four sections, in this order, all four always present:
+Write the report to the report path. Its first line is the run marker from the prompt, exactly. Then come five sections, in this order, all five always present:
 
 ```
 <!-- magnum:run=<run id> -->
@@ -260,6 +260,8 @@ N threads (a fixed, b already fixed, c not a bug, d won't fix)
 - <review id> description: <reason>
 - conflict: <path>, <path>: <the decision it needs>
 - <id> comment: not fixed. <reason>
+## Optional calls
+- <comment id> P3 <path>:<line>: <its options>
 ## Other reviewers
 - <id> <author> <path>:<line>: replied: Fixed in <sha7>
 - <id> <author> review: no reply: asks for nothing
@@ -268,6 +270,7 @@ N threads (a fixed, b already fixed, c not a bug, d won't fix)
 - `## Pushed`: one line per commit on GitHub, `<sha7> <message>`, the base merge's commit first (`<sha7> Merge <base sha7>: <spec command> passed`, section 2), and one line `description: <what changed>` per change to the PR description. If you pushed nothing and changed no description, write `nothing`. If the push failed, write `push failed: <git's first error line>`.
 - `## Replied`: one line that counts every reply you posted, in the reviewer's threads and to external items alike (an issue comment counts as a thread), by reply form; an `Answer` counts in N alone.
 - `## Needs you`: one line per finding or external item that needs the author, starting with `- `: its comment id, its priority, its path and line, then `fixed in <sha7>.` for a finding you fixed and pushed but did not reply in (its thread is answered already, or the reply failed) or `not fixed.` for one you did not fix, and then the reason; for the `Description: ✗` finding, the review id, the word `description` and the reason, no priority. A `Description: ✗` finding you fixed is not listed here: it has no thread to reply in, and its `description:` line or its commit under `## Pushed` answers it. A conflict of the base merge that needs a product decision (section 2) has no id: `conflict: `, its paths separated by `, `, a colon and the decision it needs. An external item has no priority: an external thread's entry starts with its `comment_id` and its path and line, a review body's or a comment's with its `id` and the word `review` or `comment`. If nothing needs the author, write `none`.
+- `## Optional calls`: one line per P3 whose **Fix** ends with `This is the author's call.` (section 4, step 6), starting with `- `: its comment id, `P3`, its path and line, then its options, each named. magnum asks the author for nothing about them before the merge. If there is none, write `none`.
 - `## Other reviewers`: one line per item of the external file, answered ones included, starting with `- `: its `comment_id` or `id`, its `author`, its place (`<path>:<line>`, `review` or `comment`), then what you did: `replied: ` and the reply's form (`Fixed in <sha7>`, `Not a bug`, `Answer`, …), or `no reply: ` and why (`answered already`, `answered meanwhile`, `asks for nothing`, `under Needs you`, `the reply failed`). If the prompt names no external file, it lists nothing, or the checkout is not at the reviewed head (section 2), write `none`.
 
 Write the report last, after the push and the replies. Then end your turn.

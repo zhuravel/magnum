@@ -26,11 +26,16 @@ package engine
 //	- conflict: <path>, <path>: <the decision it needs>
 //	                              a conflict of the base merge the fixer
 //	                              aborted: no id (needsYouEntryRe)
+//	## Optional calls
+//	- <comment id> P3 <path>:<line>: <its options>   or "none"; a P3 whose
+//	                              Fix leaves the choice to the author
+//	                              (fix_optional.go)
 //
-// A fourth section, "## Other reviewers", follows: one line per item of the
-// external file (fix_external.go) and what the fixer did with it, for the
-// operator. Magnum does not read it, and a report without it (one from
-// before the external file) is still whole.
+// The optional calls may be left out: a report from before them is still
+// whole. A last section, "## Other reviewers", follows: one line per item
+// of the external file (fix_external.go) and what the fixer did with it,
+// for the operator. Magnum does not read it, and a report without it (one
+// from before the external file) is still whole.
 //
 // ParseFixReport reads it the way reportProblem reads a reviewer's report:
 // strict about the marker and the headings, lenient about whitespace.
@@ -79,6 +84,11 @@ type FixReport struct {
 	// Description are the changes to the PR description ("description:
 	// <what changed>" lines under "## Pushed"), what changed per line.
 	Description []string
+	// Optional are the optional calls the fixer left the author (the P3s
+	// whose Fix leaves the choice to the author), one entry per line of
+	// "## Optional calls" without its "- ", in the shape of a Needs you
+	// entry; none for "none" or a report without the section.
+	Optional []string
 }
 
 // The report's sections, in the order they come.
@@ -116,7 +126,7 @@ func ParseFixReport(text string, runID string) (FixReport, error) {
 	if runID == "" || got != runID {
 		return FixReport{}, ErrFixReportMarker
 	}
-	bodies, err := fixSectionBodies(string(rest))
+	bodies, optional, err := fixSectionBodies(string(rest))
 	if err != nil {
 		return FixReport{}, err
 	}
@@ -132,32 +142,53 @@ func ParseFixReport(text string, runID string) (FixReport, error) {
 	if err := rep.readNeedsYou(bodies[fixSectionNeedsYou]); err != nil {
 		return FixReport{}, err
 	}
+	if rep.Optional, err = readEntries(optionalHeading, optional); err != nil {
+		return FixReport{}, err
+	}
 	return rep, nil
 }
 
+// optionalHeading starts the section of the optional calls, which may
+// follow "## Needs you" (FixReport.Optional).
+const optionalHeading = "## Optional calls"
+
 // fixSectionBodies splits the report after its marker into the non-blank
 // lines (trimmed) under each heading, and checks that every heading came
-// once, in order, with something under it.
-func fixSectionBodies(rest string) ([fixSections][]string, error) {
-	var bodies [fixSections][]string
+// once, in order, with something under it. optional are the lines under
+// "## Optional calls" when that heading follows "## Needs you" (nil when it
+// does not), read by the same rule as Needs you's.
+func fixSectionBodies(rest string) (bodies [fixSections][]string, optional []string, err error) {
 	next := fixSectionPushed // the section whose heading is due
 	in := -1                 // the section being read, -1 before the first heading
 	gap := false             // a blank line follows the last section's list so far
+	inOptional := false      // the optional calls are being read, after Needs you
 	for line := range strings.SplitSeq(rest, "\n") {
 		line = strings.TrimSpace(line)
 		if in == fixSectionNeedsYou {
+			list := &bodies[in]
+			if inOptional {
+				list = &optional
+			}
+			if line == optionalHeading && !inOptional {
+				inOptional, gap = true, false
+				continue
+			}
 			if strings.HasPrefix(line, "## ") || (gap && line != "" && !strings.HasPrefix(line, "- ")) {
 				break // the last section ends; what follows is ignored
 			}
 			if line == "" {
-				gap = len(bodies[in]) > 0
+				gap = len(*list) > 0
 				continue
 			}
 			gap = false
+			if inOptional {
+				optional = append(optional, line)
+				continue
+			}
 		}
 		if i := slices.Index(fixHeadings[:], line); i >= 0 {
 			if i != next {
-				return bodies, fmt.Errorf("%w: found %s where %s was due", ErrFixReportPartial, fixHeadings[i], fixHeadings[next])
+				return bodies, nil, fmt.Errorf("%w: found %s where %s was due", ErrFixReportPartial, fixHeadings[i], fixHeadings[next])
 			}
 			in, next = i, next+1
 			continue
@@ -167,14 +198,14 @@ func fixSectionBodies(rest string) ([fixSections][]string, error) {
 		}
 	}
 	if next < fixSections {
-		return bodies, fmt.Errorf("%w: no %s", ErrFixReportPartial, fixHeadings[next])
+		return bodies, nil, fmt.Errorf("%w: no %s", ErrFixReportPartial, fixHeadings[next])
 	}
 	for i, b := range bodies {
 		if len(b) == 0 {
-			return bodies, fmt.Errorf("%w: %s is empty", ErrFixReportPartial, fixHeadings[i])
+			return bodies, nil, fmt.Errorf("%w: %s is empty", ErrFixReportPartial, fixHeadings[i])
 		}
 	}
-	return bodies, nil
+	return bodies, optional, nil
 }
 
 // readPushed reads the "## Pushed" lines: commits, a failed push,
@@ -204,25 +235,40 @@ func (r *FixReport) readPushed(lines []string) error {
 // readNeedsYou reads the "## Needs you" lines: bullets, or the one line
 // "none".
 func (r *FixReport) readNeedsYou(lines []string) error {
+	entries, err := readEntries(fixHeadings[fixSectionNeedsYou], lines)
+	r.NeedsYou = entries
+	return err
+}
+
+// readEntries reads the lines under heading, a list of entries: bullets
+// (their text without "- "), or the one line "none".
+func readEntries(heading string, lines []string) ([]string, error) {
+	var entries []string
 	none := false
 	for i, line := range lines {
 		entry, bullet := strings.CutPrefix(line, "- ")
 		entry = strings.TrimSpace(entry)
 		switch {
 		case none:
-			return malformedFixLine(fixSectionNeedsYou, line)
+			return nil, malformedLine(heading, line)
 		case i == 0 && strings.EqualFold(line, "none"):
 			none = true
 		case bullet && entry != "":
-			r.NeedsYou = append(r.NeedsYou, entry)
+			entries = append(entries, entry)
 		default:
-			return malformedFixLine(fixSectionNeedsYou, line)
+			return nil, malformedLine(heading, line)
 		}
 	}
-	return nil
+	return entries, nil
 }
 
 // malformedFixLine is the error for a line that does not fit its section.
 func malformedFixLine(section int, line string) error {
-	return fmt.Errorf("fix report: %s: unexpected line %q", fixHeadings[section], textx.Clip(line, maxQuotedFixLine))
+	return malformedLine(fixHeadings[section], line)
+}
+
+// malformedLine is the error for a line that does not fit the section under
+// heading.
+func malformedLine(heading, line string) error {
+	return fmt.Errorf("fix report: %s: unexpected line %q", heading, textx.Clip(line, maxQuotedFixLine))
 }

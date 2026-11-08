@@ -157,6 +157,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVPRFixOff", KVPRFixOff(id), "pr.7.fix_off"},
 		{"KVPROpen", KVPROpen(id), "pr.7.open"},
 		{"kvPRFixSeen", kvPRFixSeen(id), "pr.7.fix_seen"},
+		{"kvPROptionalCalls", kvPROptionalCalls(id), "pr.7.optional_calls"},
 		{"kvPRCIStart", kvPRCIStart(id), "pr.7.ci_dispatch"},
 		{"KVPRFixHeld", KVPRFixHeld(id), "pr.7.fix_held"},
 		{"kvPRFixContextUnknown", kvPRFixContextUnknown(id), "pr.7.fix_context_unknown"},

@@ -895,13 +895,27 @@ func TestTheFixPromptOfAReviewThatFoundNothingHandsOverTheOtherReviewersAlone(t 
 // it thinks of the finding, and always leaves it under Needs you with the
 // options as its question (2026-10-20), after the fixed words "The author's
 // call", which the engine reads to ask for the author's choice and not for
-// a decline (2026-11-08).
+// a decline (2026-11-08). A P3's is optional (2026-11-08): the fixer leaves
+// the code and posts no reply, as its title says, and lists it under
+// "## Optional calls", which holds no PR, never under Needs you.
 func TestTheFixSkillLeavesTheAuthorsCallToTheAuthor(t *testing.T) {
 	const phrase = "`This is the author's call.`"
-	want := "A finding whose **Fix** ends with " + phrase + " is such a finding, whatever its verdict and score: " +
-		"do not fix it, write `not fixed. The author's call:` and ask which of its options to take, naming each."
-	if !strings.Contains(string(magnum.FixSkill), want) {
-		t.Errorf("the fix skill lacks %q", want)
+	for _, want := range []string{
+		"A P0, P1 or P2 finding whose **Fix** ends with " + phrase + " is such a finding, whatever its verdict and score: " +
+			"do not fix it, write `not fixed. The author's call:` and ask which of its options to take, naming each.",
+		"A P3 whose **Fix** ends so is optional, whatever its verdict and score: leave the code as it is, post no reply " +
+			"(its title says none is needed), and list it under `## Optional calls` (section 7), never under `## Needs you`.",
+		"\n## Optional calls\n- <comment id> P3 <path>:<line>: <its options>\n## Other reviewers\n",
+		"- `## Optional calls`: one line per P3 whose **Fix** ends with " + phrase + " (section 4, step 6), starting with `- `: " +
+			"its comment id, `P3`, its path and line, then its options, each named. magnum asks the author for nothing about them before the merge. " +
+			"If there is none, write `none`.",
+	} {
+		if !strings.Contains(string(magnum.FixSkill), want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	if strings.Contains(string(magnum.FixSkill), "Then come four sections") {
+		t.Error("the fix skill still names four sections")
 	}
 	if !strings.Contains(string(magnum.Skill), "and ends "+phrase) {
 		t.Errorf("the review skill no longer ends such a Fix with %s, which the fix skill matches", phrase)
