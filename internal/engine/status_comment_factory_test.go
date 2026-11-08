@@ -1,11 +1,14 @@
 package engine
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/prstatus"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // factoryNow is when the render tests draw the factory part: the day of
@@ -273,5 +276,361 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 	s.Staging.Env = "Beta Env"
 	if got := factoryText(s, factoryNow); !strings.Contains(got, "\n| Staging | deployed |\n") || !strings.Contains(got, "Jira ABC-12: done") {
 		t.Errorf("an env that is no slug, or a key that is one:\n%s", got)
+	}
+}
+
+// widgetRepo is the placeholder repository of the factory part's engine
+// tests, which example's watch (withExampleWatch) covers as zhuravel.
+const widgetRepo = "example/widget"
+
+// widgetHarness is a harness with the status comment on, a watch of
+// example's repositories posting as zhuravel, and a push quiet period of two
+// days: a PR of example/widget queued in it keeps its scheduled line, so
+// only its factory part moves its comment.
+func widgetHarness(t *testing.T, mods ...func(*harness)) *harness {
+	t.Helper()
+	quiet := func(h *harness) { h.cfg.Daemon.PushQuietPeriod = config.Duration{Duration: 48 * time.Hour} }
+	return newHarness(t, append([]func(*harness){statusOn, withExampleWatch, quiet}, mods...)...)
+}
+
+// widgetQueued shows example/widget's #1 (a baseline at the first sync),
+// then #12 at statusHead, queued, and returns #12.
+func (h *harness) widgetQueued() store.PR {
+	h.t.Helper()
+	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()})
+	h.startup()
+	h.tick()
+	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()}, prSpec{n: 12, head: statusHead, updated: h.clock.Now()})
+	h.tick()
+	pr := h.widgetPR(12)
+	if pr.State != store.PRQueued {
+		h.t.Fatalf("%s#12 state = %s, want queued", widgetRepo, pr.State)
+	}
+	return pr
+}
+
+// widgetPR is example/widget#n.
+func (h *harness) widgetPR(n int) store.PR {
+	h.t.Helper()
+	repo, err := h.st.RepoByFullName(h.ctx, widgetRepo)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	pr, err := h.st.PRByRepoNumber(h.ctx, repo.ID, n)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return pr
+}
+
+// widgetStatusPath is the status file of example/widget#n.
+func (h *harness) widgetStatusPath(n int) string {
+	h.t.Helper()
+	path, err := prstatus.Path(h.layout, "example", "widget", n)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return path
+}
+
+// writeWidgetStatus writes s, updated now, as example/widget#n's status
+// file, as the factory daemon does, and returns it as Read gives it back.
+func (h *harness) writeWidgetStatus(n int, s prstatus.Status) prstatus.Status {
+	h.t.Helper()
+	s.UpdatedAt = h.clock.Now()
+	path := h.widgetStatusPath(n)
+	if _, err := prstatus.Write(path, s); err != nil {
+		h.t.Fatal(err)
+	}
+	got, ok, err := prstatus.Read(path)
+	if err != nil || !ok {
+		h.t.Fatalf("the status file reads back (%v, %v)", ok, err)
+	}
+	return got
+}
+
+// widgetEdits is how many times the comment on example/widget#12 was edited.
+func (h *harness) widgetEdits() int {
+	h.t.Helper()
+	return h.gh.count("edit_issue_comment:" + widgetRepo + ":")
+}
+
+// factoryDigest is the digest kvPRFactoryStatus holds for the PR ("" =
+// none).
+func (h *harness) factoryDigest(prID int64) string {
+	h.t.Helper()
+	v, _ := h.e.getKV(h.ctx, kvPRFactoryStatus(prID))
+	return v
+}
+
+// A PR a factory task published gets its factory part below magnum's
+// lines, which it leaves as they are, and the header's time with them; a
+// PR without a status file gets none, and nothing is kept of a part.
+func TestAFactoryPRsStatusCommentCarriesTheFactoryPart(t *testing.T) {
+	h := widgetHarness(t)
+	s := h.writeWidgetStatus(12, factoryStatus())
+	start := h.clock.Now()
+	pr := h.widgetQueued()
+
+	c := h.statusComment(12)
+	magnums, part, ok := strings.Cut(strings.TrimPrefix(c.body, statusHeader(start)), "\n\n**Magnum factory**")
+	if !ok || !strings.HasPrefix(magnums, "- [x] Review queued for `a1b2c3d`: not before ") ||
+		!strings.HasSuffix(magnums, "\n- [ ] In progress\n- [ ] Posted\n\n"+statusSelf+"\n"+statusMerge) {
+		t.Fatalf("status comment:\n%s", c.body)
+	}
+	if want := factoryText(s, h.clock.Now()); "**Magnum factory**"+part != want {
+		t.Fatalf("factory part:\n%s\nwant:\n%s", "**Magnum factory**"+part, want)
+	}
+	if got := h.factoryDigest(pr.ID); got != s.Digest {
+		t.Fatalf("%s = %q, want the file's digest %q", kvPRFactoryStatus(pr.ID), got, s.Digest)
+	}
+
+	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: start}, prSpec{n: 12, head: statusHead, updated: start},
+		prSpec{n: 13, head: statusPush, updated: h.clock.Now()})
+	h.tick()
+	other := h.statusComment(13)
+	if strings.Contains(other.body, "Magnum factory") || !strings.HasSuffix(other.body, "\n"+statusMerge) {
+		t.Fatalf("a PR without a status file:\n%s", other.body)
+	}
+	if got := h.factoryDigest(h.widgetPR(13).ID); got != "" {
+		t.Fatalf("a PR without a status file keeps the digest %q", got)
+	}
+}
+
+// A status file never opens a comment where magnum would post none: on a
+// draft nobody asked to review, and on a watch with the comment off.
+func TestAFactoryStatusFileNeverOpensAComment(t *testing.T) {
+	t.Run("a draft", func(t *testing.T) {
+		h := widgetHarness(t)
+		h.writeWidgetStatus(12, factoryStatus())
+		h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()})
+		h.startup()
+		h.tick()
+		h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()}, prSpec{n: 12, head: statusHead, draft: true, updated: h.clock.Now()})
+		h.tick()
+		h.advance(3 * time.Minute)
+		h.tick()
+		if cs := h.gh.commentsOn(12); len(cs) != 0 {
+			t.Fatalf("a draft (state %s) got %+v", h.widgetPR(12).State, cs)
+		}
+	})
+	t.Run("the comment off", func(t *testing.T) {
+		h := widgetHarness(t, func(h *harness) { h.cfg.Watches[len(h.cfg.Watches)-1].StatusComment = new(false) })
+		h.writeWidgetStatus(12, factoryStatus())
+		h.widgetQueued()
+		h.advance(3 * time.Minute)
+		h.tick()
+		if cs := h.gh.commentsOn(12); len(cs) != 0 {
+			t.Fatalf("a watch with the comment off got %+v", cs)
+		}
+	})
+}
+
+// An unchanged status file costs no edit, whatever the factory rewrites
+// and however long it stays: the next day's tick leaves the "updated" time
+// as it was written.
+func TestAnUnchangedFactoryStatusMakesNoEdit(t *testing.T) {
+	h := widgetHarness(t)
+	s := h.writeWidgetStatus(12, factoryStatus())
+	h.widgetQueued()
+	posted := h.statusComment(12)
+	for range 4 {
+		h.advance(3 * time.Minute)
+		h.writeWidgetStatus(12, factoryStatus()) // the same content: Write writes nothing
+		h.tick()
+	}
+	h.advance(24 * time.Hour)
+	h.tick()
+	if n := h.widgetEdits(); n != 0 {
+		t.Fatalf("an unchanged status file edited the comment %d times:\n%s", n, h.statusComment(12).body)
+	}
+	if c := h.statusComment(12); c.body != posted.body || !strings.Contains(c.body, "Now: waits on the reviewers · updated "+utcClock(s.UpdatedAt)) {
+		t.Fatalf("status comment:\n%s", c.body)
+	}
+}
+
+// A changed status file reaches the comment though magnum's lines did not
+// change: once, at the first tick the comment's spacing allows, and the
+// header keeps the time magnum's status last changed.
+func TestAChangedFactoryStatusEditsOnceUnderTheRateLimit(t *testing.T) {
+	h := widgetHarness(t)
+	start := h.clock.Now()
+	pr := h.widgetQueued()
+	magnums := strings.TrimPrefix(h.statusComment(12).body, statusHeader(start))
+
+	h.advance(30 * time.Second)
+	s := h.writeWidgetStatus(12, factoryStatus())
+	h.tick()
+	if n := h.widgetEdits(); n != 0 {
+		t.Fatalf("an edit %d times within 2 minutes of the post", n)
+	}
+	h.advance(90 * time.Second)
+	h.tick()
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("edits = %d, want 1", n)
+	}
+	h.advance(30 * time.Second)
+	h.tick()
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("the same status edited again: %d edits", n)
+	}
+
+	next := factoryStatus()
+	next.FixLoop = prstatus.FixLoop{State: prstatus.FixDone, Cycle: 2, Pushes: 4, ThreadsAnswered: 8}
+	next.Now.Who = prstatus.WhoYou
+	s = h.writeWidgetStatus(12, next)
+	h.advance(30 * time.Second)
+	h.tick()
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("a change within 2 minutes of the last edit edited at once: %d edits", n)
+	}
+	h.advance(time.Minute)
+	h.tick()
+	h.advance(time.Minute)
+	h.tick()
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	if n := h.widgetEdits(); n != 2 {
+		t.Fatalf("edits = %d, want 2", n)
+	}
+	if got := h.factoryDigest(pr.ID); got != s.Digest {
+		t.Fatalf("%s = %q, want %q", kvPRFactoryStatus(pr.ID), got, s.Digest)
+	}
+	var stages []string
+	for _, ev := range h.events("pr.status_comment") {
+		stages = append(stages, ev.Message)
+	}
+	if want := "status comment posted: scheduled (review of a1b2c3d)|status comment updated: scheduled (review of a1b2c3d)|" +
+		"status comment updated: scheduled (review of a1b2c3d)"; strings.Join(stages, "|") != want {
+		t.Fatalf("pr.status_comment events = %q", stages)
+	}
+}
+
+// A status file that goes away drops the factory part at the next edit,
+// and the PR keeps no digest.
+func TestAFactoryStatusFileThatGoesAwayDropsThePart(t *testing.T) {
+	h := widgetHarness(t)
+	start := h.clock.Now()
+	h.writeWidgetStatus(12, factoryStatus())
+	pr := h.widgetQueued()
+	magnums, _, _ := strings.Cut(strings.TrimPrefix(h.statusComment(12).body, statusHeader(start)), "\n\n**Magnum factory**")
+
+	if err := os.Remove(h.widgetStatusPath(12)); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(2 * time.Minute)
+	h.tick()
+	h.wantStatusSince(h.statusComment(12), start, magnums)
+	if got := h.factoryDigest(pr.ID); got != "" {
+		t.Fatalf("%s = %q after the file went", kvPRFactoryStatus(pr.ID), got)
+	}
+	h.advance(2 * time.Minute)
+	h.tick()
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("edits = %d, want 1", n)
+	}
+}
+
+// A file Read refuses is no factory part (one shown goes at the next edit)
+// and one warning while it stays refused the same way, not one a tick; a
+// new refusal is logged once more, a file that reads again brings the part
+// back, and the same refusal after it is new again.
+func TestARefusedFactoryStatusFileIsNoPartAndOneLog(t *testing.T) {
+	logs := &syncBuffer{}
+	h := widgetHarness(t, func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
+	start := h.clock.Now()
+	h.writeWidgetStatus(12, factoryStatus())
+	pr := h.widgetQueued()
+	magnums, _, _ := strings.Cut(strings.TrimPrefix(h.statusComment(12).body, statusHeader(start)), "\n\n**Magnum factory**")
+	refused := "a factory PR's status file is refused"
+
+	path := h.widgetStatusPath(12)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(b), `"questions_asked": 3`, `"questions_asked": 30`, 1)
+	if tampered == string(b) {
+		t.Fatalf("the file has no questions_asked to change:\n%s", b)
+	}
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	h.wantStatusSince(h.statusComment(12), start, magnums)
+	if n := logLines(logs, "WARN", refused); n != 1 {
+		t.Fatalf("a refused file logged %d warnings over 4 ticks, want 1:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "digest does not match") || strings.Contains(logs.String(), `"questions_asked"`) {
+		t.Fatalf("the warning says why in fixed words only:\n%s", logs.String())
+	}
+	if got := h.factoryDigest(pr.ID); got != "" {
+		t.Fatalf("%s = %q for a refused file", kvPRFactoryStatus(pr.ID), got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"v": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if n := logLines(logs, "WARN", refused); n != 2 {
+		t.Fatalf("a new refusal: %d warnings in all, want 2", n)
+	}
+
+	s := h.writeWidgetStatus(12, factoryStatus())
+	h.advance(2 * time.Minute)
+	h.tick()
+	h.wantStatusSince(h.statusComment(12), start, magnums+"\n\n"+factoryText(s, h.clock.Now()))
+	if err := os.WriteFile(path, []byte(`{"v": 2}`), 0o600); err != nil { // the refusal logged last
+		t.Fatal(err)
+	}
+	h.advance(2 * time.Minute)
+	h.tick()
+	if n := logLines(logs, "WARN", refused); n != 3 {
+		t.Fatalf("the same refusal after a good read: %d warnings in all, want 3", n)
+	}
+	h.wantStatusSince(h.statusComment(12), start, magnums)
+}
+
+// A PR closed before its review gets its last edit with the factory part
+// as the file says it then, and nothing after: a later change of the file
+// edits nothing, as a later change of magnum's own lines would not.
+func TestAClosedFactoryPRsCommentEndsWithItsFactoryPart(t *testing.T) {
+	h := widgetHarness(t)
+	h.writeWidgetStatus(12, factoryStatus())
+	h.widgetQueued()
+	h.advance(time.Minute)
+	next := factoryStatus()
+	next.Now.Who = prstatus.WhoMagnum
+	s := h.writeWidgetStatus(12, next)
+	h.gh.set(widgetRepo, prSpec{n: 1, head: "w1", updated: h.clock.Now()})
+	h.gh.closed[12] = "CLOSED"
+	h.tick()
+	h.advance(30 * time.Second)
+	h.tick()
+	h.advance(30 * time.Second)
+	h.tick()
+	if pr := h.widgetPR(12); pr.State != store.PRClosed {
+		t.Fatalf("state = %s, want closed", pr.State)
+	}
+	ended := h.statusComment(12)
+	if !strings.HasSuffix(ended.body, ")\nClosed before the review of `a1b2c3d` posted.\n\n"+factoryText(s, h.clock.Now())) {
+		t.Fatalf("the last edit:\n%s", ended.body)
+	}
+
+	last := factoryStatus()
+	last.Now = prstatus.Now{Who: prstatus.WhoNone, Stage: prstatus.StageStopped}
+	h.writeWidgetStatus(12, last)
+	for range 3 {
+		h.advance(5 * time.Minute)
+		h.tick()
+	}
+	if c := h.statusComment(12); c.edits != ended.edits || c.body != ended.body {
+		t.Fatalf("the ended comment was edited again (%d edits, %d before):\n%s", c.edits, ended.edits, c.body)
 	}
 }

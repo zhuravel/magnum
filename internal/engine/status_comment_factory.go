@@ -8,13 +8,26 @@ package engine
 // from the word maps below, a number or a time; the two strings the file
 // may carry, the env's slug and the Jira key, are checked again before they
 // post. A row with nothing to say reads "none".
+//
+// Change detection: writeStatus reads the file each time it looks at a
+// comment it may write (no more often than the tick already looks at the
+// PR) and compares the file's digest with the one the comment last carried
+// (kvPRFactoryStatus). A new digest, or a file gone or refused after one,
+// edits the comment as a change of magnum's lines does, under the same
+// spacing and only while the comment goes on (a comment that ended stays as
+// its last edit wrote it); the same digest edits nothing, though the part's
+// "updated" time would gain its day at the next edit.
 
 import (
+	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/prstatus"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -221,4 +234,48 @@ func factoryKeyOK(key string) bool {
 		}
 	}
 	return true
+}
+
+// kvPRFactoryStatus holds the digest of the status file (prstatus's
+// digest) whose factory part the PR's status comment last carried; absent:
+// none.
+func kvPRFactoryStatus(prID int64) string { return fmt.Sprintf("pr.%d.factory_status", prID) }
+
+// factoryPart is pr's factory part at now: the digest of its status file
+// and the part's text, both "" when there is none (no file, or one Read
+// refuses, which counts as missing). It reads the file, read-only, each
+// time writeStatus looks at a comment that may be written, and logs a
+// refusal once while it stays the same (a refusal names the reason and
+// the field, never the file's content).
+func (e *Engine) factoryPart(repo store.Repo, pr store.PR, now time.Time) (digest, text string) {
+	key := fmt.Sprintf("factory_status:%d", pr.ID)
+	path, err := prstatus.Path(e.d.Layout, repo.Owner, repo.Name, pr.Number)
+	var s prstatus.Status
+	ok := false
+	if err == nil {
+		s, ok, err = prstatus.Read(path)
+	}
+	if err != nil {
+		if msg := textx.FirstLine(execx.Redact(err.Error())); e.changed(key, msg) {
+			e.log.Warn("a factory PR's status file is refused: its status comment shows no factory part", "pr", pr.ID, "err", msg)
+		}
+		return "", ""
+	}
+	delete(e.lastSeen, key) // a refusal after this read is new
+	if !ok {
+		return "", ""
+	}
+	return s.Digest, factoryText(s, now)
+}
+
+// saveFactoryDigest records digest as the one the PR's comment now
+// carries, when it is not the one recorded (was).
+func (e *Engine) saveFactoryDigest(ctx context.Context, prID int64, was, digest string) {
+	switch digest {
+	case was:
+	case "":
+		e.delKV(ctx, kvPRFactoryStatus(prID))
+	default:
+		e.setKV(ctx, kvPRFactoryStatus(prID), digest)
+	}
 }

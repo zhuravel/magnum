@@ -20,7 +20,11 @@ package engine
 // verdict in a few words and fixed words for the waits, never a PR's text
 // nor an error's, and never why a PR is left out. Of auto-approval it says
 // only approvalLine's fixed words: the login magnum approves as and the
-// class of why a clean review brought no approval, never the gate's own.
+// class of why a clean review brought no approval, never the gate's own. On
+// a PR a factory task published, the comment carries the factory part below
+// those lines (status_comment_factory.go), from the status file the factory
+// daemon writes, in the comment's own fixed words: it changes neither
+// magnum's lines nor when the comment opens or ends.
 
 import (
 	"cmp"
@@ -117,7 +121,7 @@ var (
 type statusRecord struct {
 	ID       int64     `json:"id,omitempty"`       // the comment's REST id; 0 = none stands
 	Identity string    `json:"identity,omitempty"` // the identity that posted it, which edits it
-	Sum      string    `json:"sum,omitempty"`      // statusSum of the text last written, its time left out
+	Sum      string    `json:"sum,omitempty"`      // statusSum of magnum's body last written (kvPRFactoryStatus keeps the factory part's)
 	Stage    string    `json:"stage,omitempty"`    // the stage last written
 	Head     string    `json:"head,omitempty"`     // the head it was last written for
 	Kind     string    `json:"kind,omitempty"`     // statusReview, statusRereview or statusAnother, as last written
@@ -417,12 +421,13 @@ func (e *Engine) statusCommentsOn() bool {
 // noteStatusComments brings the status comment of every PR whose watch has
 // it on in line with the registry (statusFor), once per tick after
 // noteWaits recorded the waits: a PR without one gets it once its review is
-// queued or under way, one with one has it edited when its text changed,
-// at most once every statusEvery (a last edit at once), and a tick writes
-// at most statusWritesPerTick. Never in a dry run nor on a scratch registry
-// (an eval replay). A failure is the PR's alone: the tick and the rounds go
-// on. A baseline PR is read only when a review request on it was declined
-// (declinedRequests): that comment answers the request.
+// queued or under way, one with one has it edited when its text or its
+// factory part's status file changed, at most once every statusEvery (a
+// last edit at once), and a tick writes at most statusWritesPerTick. Never
+// in a dry run nor on a scratch registry (an eval replay). A failure is the
+// PR's alone: the tick and the rounds go on. A baseline PR is read only
+// when a review request on it was declined (declinedRequests): that comment
+// answers the request.
 func (e *Engine) noteStatusComments(ctx context.Context) {
 	if e.d.DryRun || e.d.Layout.Scratch != "" || !e.statusCommentsOn() {
 		return
@@ -803,8 +808,9 @@ func (e *Engine) statusResumes(ctx context.Context, pr store.PR, rec statusRecor
 }
 
 // writeStatus posts or edits pr's status comment (reads: what the tick read
-// for it) when what it says changed and its last write is statusEvery old
-// (a last edit goes at once, unless its attempt just failed), and reports
+// for it) when what it says changed, magnum's lines or the digest of the
+// PR's factory status file (factoryPart), and its last write is statusEvery
+// old (a last edit goes at once, unless its attempt just failed), and reports
 // whether it called GitHub. A comment that ended is left alone until
 // statusResumes. A draft's comment opens only for a review someone asked
 // for. An edit that finds the comment gone posts it once more, the first
@@ -837,7 +843,12 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 	}
 	body := v.body(e.cfg.Pipeline.StatusCommentNote, now)
 	sum := statusSum(body)
-	if rec.ID != 0 && sum == rec.Sum {
+	// The factory part (status_comment_factory.go) is kept apart: a new
+	// digest edits the comment as a new body does, and an unchanged one,
+	// whose text may still move with now, edits nothing.
+	shown, _ := e.getKV(ctx, kvPRFactoryStatus(pr.ID))
+	digest, part := e.factoryPart(repo, pr, now)
+	if rec.ID != 0 && sum == rec.Sum && digest == shown {
 		if v.ends { // the comment says it already: it ends as it stands
 			endStatus(&rec, pr, now)
 			e.saveStatus(ctx, pr.ID, rec)
@@ -852,7 +863,11 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 	if state != rec.State || changed.IsZero() {
 		changed = now
 	}
-	text := statusText(body, changed)
+	full := body
+	if part != "" {
+		full += "\n\n" + part
+	}
+	text := statusText(full, changed)
 	ident := pr.Identity
 	if rec.ID != 0 {
 		ident = cmp.Or(rec.Identity, pr.Identity)
@@ -907,6 +922,7 @@ func (e *Engine) writeStatus(ctx context.Context, repo store.Repo, pr store.PR, 
 		endStatus(&rec, pr, now)
 	}
 	e.saveStatus(ctx, pr.ID, rec)
+	e.saveFactoryDigest(ctx, pr.ID, shown, digest)
 	verb := "updated"
 	if posted {
 		verb = "posted"
