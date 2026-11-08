@@ -135,24 +135,26 @@ func (e *Engine) lockDaemon(c *Claim) (unlock func(), held bool, err error) {
 	return AcquireLock(e.d.Layout.Lock())
 }
 
-// startHooks starts serving the claim's hook listener on a goroutine of its
-// own, each event to Wake on the managers whose registries record its pane
-// (routeHook) on ctx (the daemon's: Wake's later looks end with it), and
-// returns what stops it (it records first whether it listens, for `magnum
-// status`: recordHooks): ctx's cancel first (stop), then the wait for
-// Serve, which returns once the Wake in flight returned, then WaitWakes on
-// the daemon's manager (a pane agent's waits at its close: hookRouter.remove).
-// Beside it, the StopFailures the hooks proved (Deps.HookFailures) are
-// handled on a goroutine of their own (onHookFailure), since the managers
-// hand them on without waiting (app.App.SendHookFailure). Without a listener it warns once why (a claim that holds the
-// lock) and returns stop alone.
+// startHooks records whether this start listens for its agents' hooks (for
+// `magnum status`: recordHooks), then serves the claim's hook listener on a
+// goroutine of its own, each event to Wake on the managers whose registries
+// record its pane (routeHook) on ctx (the daemon's: Wake's later looks end
+// with it), and the StopFailures the hooks proved (Deps.HookFailures) on
+// another (onHookFailure), since the managers hand them on without waiting
+// (app.App.SendHookFailure). It returns what stops both: ctx's cancel first
+// (stop), then the wait for Serve, which returns once the Wake in flight
+// returned, then WaitWakes on the daemon's manager (a pane agent's waits at
+// its close: hookRouter.remove), then the wait for the failures' goroutine.
+// Without a listener it warns once why (a claim that holds the lock) and
+// returns a stop that does nothing: Run's own defers stop the rest as
+// before.
 func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Claim) func() {
 	e.recordHooks(ctx, c)
 	if c == nil || c.listener == nil {
 		if why := c.Off(); why != "" {
 			e.log.Warn(hooksOffMsg, "why", why)
 		}
-		return stop
+		return func() {}
 	}
 	c.log.set(e.log.Handler())
 	e.agentHooks.open(ctx)
