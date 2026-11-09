@@ -2,10 +2,12 @@
 // blind dry-run round and scores it: what `magnum eval run` does for each
 // case, in a package the daemon can call too. Each case runs in its own
 // scratch layout (registry, reports, a copy of the notes) under the run's
-// directory and in a detached worktree of the repository's clone, with
-// agents tagged for the run, so the live registry, the PR's own agents,
-// another run's agents and the PR's reports are never touched. A candidate
-// directory (WithCandidate) replays another checkout's prompts and skill.
+// directory and in a detached worktree of the repository's clone, prepared
+// as a per-PR review checkout of the repository is (its copy_files and
+// setup, then its teardown), with agents tagged for the run, so the live
+// registry, the PR's own agents, another run's agents and the PR's reports
+// are never touched. A candidate directory (WithCandidate) replays another
+// checkout's prompts and skill.
 package evalrun
 
 import (
@@ -251,9 +253,12 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 // a time, whoever starts it (`magnum eval run`, eval-at.sh through it, the
 // daemon's gate): it holds the case's lock (lockCase) from its first check
 // to the end of its cleanup, a second replay of the case waiting for it, and
-// Started is when it took the lock. A local case (eval.KindLocal) replays its
-// round from its frozen inputs (replayLocal) after the same checks, the
-// budget's included.
+// Started is when it took the lock. Its worktree is prepared as a per-PR
+// review checkout of the repository for the PR's number and torn down
+// before it goes (addCaseWorktree): a setup that fails ends the case
+// eval.OutcomeEnvironment, never scored. A local case (eval.KindLocal)
+// replays its round from its frozen inputs (replayLocal) after the same
+// checks, the budget's included.
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun) {
 	cr := eval.CaseRun{Case: ec.Name, Kind: ec.Kind, PR: ec.PR, Head: ec.Head}
 	fail := func(outcome string, err error) eval.CaseRun {
@@ -377,33 +382,13 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	if err := a.Git.FetchCommit(ctx, mainClone, ec.Head, ec.Number); err != nil {
 		return fail(OutcomeError, err)
 	}
-	// One path per case across runs (of `magnum eval run`, or of the
-	// gate's, Options.Worktrees): the agents trust the checkout they start
-	// in (Codex's and Claude's own config files), and a new path per run
-	// would add an entry there every time. A worktree left by Keep or an
-	// interrupted run is replaced.
-	wt := caseWorktree(d, o, ec.Name)
+	wt, done, outcome, err := d.addCaseWorktree(ctx, cfg, a.Git, a.Runner, o, ec.Name, full, ec.Number, mainClone, ec.Head,
+		cmp.Or(ec.Base, pd.BaseRefName))
+	defer done()
+	if err != nil {
+		return fail(outcome, err)
+	}
 	worktrees := filepath.Dir(wt)
-	if err := os.MkdirAll(worktrees, 0o700); err != nil {
-		return fail(OutcomeError, err)
-	}
-	if _, err := os.Stat(wt); err == nil {
-		if err := a.Git.WorktreeRemove(ctx, mainClone, wt, true); err != nil {
-			return fail(OutcomeError, fmt.Errorf("replace the previous worktree %s: %w", tilde(wt), err))
-		}
-	}
-	if err := a.Git.WorktreeAdd(ctx, mainClone, wt, ec.Head, true, ""); err != nil {
-		return fail(OutcomeError, err)
-	}
-	if !o.Keep {
-		defer func() {
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			defer cancel()
-			if err := a.Git.WorktreeRemove(cctx, mainClone, wt, true); err != nil {
-				d.warn("removing worktree %s: %v", tilde(wt), err)
-			}
-		}()
-	}
 
 	round := d.evalRound
 	if round == nil {
