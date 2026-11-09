@@ -8952,6 +8952,11 @@ const SkipIgnored = "ignored"
 const StagingAll = "all"
     StagingAll asks for every staging env of the PR's repository.
 
+const StagingDeployWait = 10 * time.Minute
+    StagingDeployWait is how long a staging deploy waits for its answer: the CLI
+    waits that long, and a deploy asked longer ago is refused (nobody waits for
+    it any more).
+
 const WhiteboardCommand = "whiteboard"
     WhiteboardCommand is the Whiteboard CLI magnum runs: `whiteboard` on PATH
     (the daemon's LaunchAgent PATH has ~/.local/bin).
@@ -11723,6 +11728,12 @@ func StagingDeploysOf(values map[string]string, repo string, number int) []Stagi
 
 func (r StagingDeployRecord) Live() bool
     Live reports whether the effect still runs: queued or running.
+
+func (r StagingDeployRecord) Unconfirmed() bool
+    Unconfirmed reports whether the effect is done without a deployment that
+    holds its merge: its Why starts with staging.NotConfirmed (the deployments
+    not readable, or none after ci.yml passed), or it ended as a fail of its
+    step after the push. Pushed, not live for sure.
 
 type StagingEnv struct {
 	Env    string `json:"env"`
@@ -30124,9 +30135,15 @@ func StageDuration(d time.Duration) string
     StageDuration renders a stage's length: "12s", "18m04s", "1h02m".
 
 func StagingDeploySummary(d StagingDeploy, now time.Time) string
-    StagingDeploySummary is d in the words of the card's STAGINGS block,
-    without its effect: its state, the step and phase of its last event, and how
-    long ago that came ("running · push begin · 3m ago").
+    StagingDeploySummary is d in the words of the card's STAGINGS block, without
+    its effect: its state ("not confirmed" for a done no deployment confirms),
+    the step and phase of its last event, and how long ago that came ("running ·
+    push begin · 3m ago").
+
+func StagingDeployWords(d StagingDeploy) []string
+    StagingDeployWords are the lines under a deploy on the card and in `magnum
+    staging`: its last event's words, then why it ended, once when they are the
+    same (an end's event says its why).
 
 func StagingSummary(s StagingInfo, now time.Time) string
     StagingSummary is s in the words of the card's STAGINGS block, without the
@@ -32163,12 +32180,14 @@ type StagingCell struct {
 type StagingDeploy struct {
 	Effect, Env, Step, Phase, State, Why, Text, RunURL string
 	At                                                 time.Time
-	Live                                               bool
+	Live, Unconfirmed                                  bool
 }
-    StagingDeploy is a staging deploy of a PR on one env: its effect, the step
-    and phase of its last event, its state (queued, running, done, failed,
-    cancelled, needs you), why it ended, that event's words, ci.yml's run on its
-    merge, when the event came, and whether it still runs.
+    StagingDeploy is a staging deploy of a PR on one env: its effect,
+    the step and phase of its last event, its state (queued, running,
+    done, failed, cancelled, needs you), why it ended, that event's words,
+    ci.yml's run on its merge, when the event came, whether it still runs,
+    and whether it is a done that no deployment confirms (pushed, not confirmed:
+    engine.StagingDeployRecord.Unconfirmed).
 
 type StagingInfo struct {
 	Env string

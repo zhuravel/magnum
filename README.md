@@ -5169,14 +5169,22 @@ deploys](#staging-deploys), which the review daemon runs:
    staging-bastion and pushes; Jenkins then runs db/migrate/20261105_add_coupons.rb on void's and bastion's
    shared databases; bart is left out (already there: staging-bart holds PR #12212's head)? [y/N]
    ```
+
+   On the board and the dashboard the question wraps over the footer's lines (up to half the screen) instead of
+   being cut at its edge, `y/N` ending the last, so the migrations and the warning, which comes last, are on the
+   screen when you press y.
 3. y sends the deploy bound to that head and to what the question named: the daemon plans again and refuses a
    head that moved since, an env that no longer takes the merge, and a merge that now adds a migration or a
-   workflow change the question did not name ("ask again"). Then each env gets its effect, which the daemon steps
-   every 15 seconds on a goroutine of its own (never in the tick; its stop ends a step in flight before it closes
-   the client), and the deploy is recorded as asked by you (`staging.deploy_asked`).
+   workflow change the question did not name ("ask again"). It also refuses a deploy asked 10 minutes ago or
+   longer (the CLI's wait for the answer), which nobody waits for any more: one a daemon's stop left pending
+   for the next start, or one behind a slow plan. Then each env gets its effect, which the daemon steps every 15
+   seconds on a goroutine of its own (never in the tick; its stop ends a step in flight before it closes the
+   client), and the deploy is recorded as asked by you (`staging.deploy_asked`).
 
-`--dry-run` prints the plan per env and stops; `--yes` (and a script) asks nothing and binds the deploy to the
-head the registry has; `--json` needs `--yes` on a terminal. `magnum staging --cancel <effect>` (request kind
+`--dry-run` prints the plan per env and stops; `--yes` asks nothing and binds the deploy to the head the registry
+has, with nothing seen. Without a terminal to ask on (a pipe, a script, an agent's shell), a deploy needs `--yes`
+and is refused otherwise ("pass --yes to deploy without asking, or --dry-run to see the plan; nothing queued"), and
+`--json` needs `--yes` too. `magnum staging --cancel <effect>` (request kind
 `staging_cancel`) stops a deploy: nothing is pushed after it, and a push before it stands. A review agent's pane is
 refused. Each step's begin, ok and fail goes into the registry once (`staging.deploy` events on the PR,
 `magnum logs <pr>`, deduped by effect, journal write, step and phase, ordered by the write), and each deploy's newest
@@ -5188,7 +5196,10 @@ event is kept for the card and `magnum staging`, under its env:
                ci.yml's run on 6b6b6b6
 ```
 
-A deploy that ended stays there a day.
+A deploy that ended stays there a day; one done without a deployment that holds its merge (the poll App reads no
+deployments, or none came after ci.yml passed) reads `not confirmed`, in yellow, never a green `done`, and `--json`
+marks it `"unconfirmed": true`. When an event could not be written (the registry busy), the tick mends the
+deploy's record from its journal under `mirror_dir`, so a lost end does not read as running for ever.
 
 ## Daily use
 

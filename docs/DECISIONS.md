@@ -20625,7 +20625,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   bound to that head and to what the question named (`Seen`), and the daemon plans again and refuses a head that
   moved since the question (the registry's, and Plan's own check of the remote's pull ref), an env that no longer
   takes the merge, and a merge that now adds a migration or a workflow change the question did not name ("ask
-  again"): no migration runs on a shared database that the operator did not see. Only then `Deploy` starts the
+  again"): no migration runs on a shared database that the operator did not see, unless they passed `--yes`, which
+  binds nothing seen. Only then `Deploy` starts the
   effects; `staging_cancel` stops one. Own PRs only (the board's "mine", `ownPR`): coworkers' PRs come with their own
   gate (the author-quiet window, a notice). The PR must be open, not a fork, and its head branch not master, main or
   a staging branch. `Deploy`'s `by` stays `staging.ByCLI` (the operator's terminal, which the library's allowlist
@@ -20645,7 +20646,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   their states in the footer (1, 2, 3 toggle, a all, enter asks, any other key cancels; enter with none chosen says
   so), then asks the plan and puts its question as the y/N; the factory's task cards are left to the factory
   session. `magnum staging <pr> --deploy void,bastion|all [--dry-run] [--yes] [--json]` and `--cancel <effect>` are
-  the same paths; a script or `--yes` asks nothing and binds the deploy to the registry's head with nothing seen, as
+  the same paths; `--yes` asks nothing and binds the deploy to the registry's head with nothing seen, as
   `magnum merge-parent` does, and a review agent's pane is refused. With no `[[factory.repo.staging]]` entry (the
   operator's config today) there is no client: no Step, no request answered but "staging deploys are off", no E
   chooser (it refuses a repository without staging envs). Rejected: a deploy straight from the dry run's plan (the
@@ -20666,6 +20667,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStagingCommandShowsEachDeploysStepAndLastEvent; the tui's TestEChoosesTheStagingEnvsThenAsksWithTheDaemonsPlan,
   TestERefusesWhatHasNoStagingToDeployTo, TestDashboardEDeploysAfterTheChooserAndThePlan,
   TestTheCardShowsEachStagingDeploysStepAndLastEvent and TestStagingDeploySummaryIsTheCardsWords.
+- **Staging deploys after their review: never on nobody's word, never asked too long ago, the records mended
+  from the journals, the whole y/N on the screen** (2026-11-09, the staging wiring's review). Without a terminal to
+  ask y/N on (an agent's Bash tool in the operator's own terminal, a pipe, a script) `magnum staging <pr>
+  --deploy` deployed at once, unbound to anything seen, and `refuseInAgentPane` catches only a review agent's pane:
+  now such a deploy is a usage error unless `--yes` says so (`--dry-run` still prints the plan), as `notes
+  --restore` refuses without a terminal; the screens' E sends its deploy after its own y/N and is unchanged. A
+  deploy request a stop cut stays pending, so that a quick `daemon-restart` resumes it while the CLI still waits,
+  and `expireRequests` spares a request a daemon saw: the next start, hours later, deployed it. Now a deploy (never a
+  dry run) asked `StagingDeployWait` (10 minutes, the CLI's wait, which now uses it) or longer ago is refused, before
+  its plan and again after it (a plan can wait minutes for the mirror): "asked 11 minutes ago, longer than a deploy
+  waits for its answer". Deps.Event cannot fail, and the library counts an event delivered once it was handed on,
+  so an event the registry refused (busy past 10 s) left the deploy's record behind its effect for good, a lost end
+  reading live for ever: now the tick mends each live record whose journal (`Staging.Effects`, files under
+  `mirror_dir`, no git) has a newer Seq from the journal's state (its step, state and why; no phase or words, which
+  the journal does not keep), a repeat of an event rewrites a record missing or behind its Seq (the write after the
+  event's may have failed) but never turns one back to an earlier event of its own Seq, and a live record no
+  journal holds goes a day after its last event, as an ended one does. On the board and the dashboard, E's y/N was
+  one footer line cut at the screen's edge, so the migrations and the default branch's CI warning (the question's
+  last part) were off the screen at 170 columns while y bound them as seen: a pending question marked `wrap` (E's
+  alone) now wraps over the footer's lines, up to half the body, `y/N` ending the last, taking the body's last
+  lines (the factory card's `askLines` does the same with three lines; a long migration list needs more). E's
+  chooser now gives way in its keys (shorter, then none) before an env, measured in cells. A deploy the library
+  ended done without a deployment that holds its merge (`staging.NotConfirmed`, or a fail of its step after the
+  push) drew a green "done": `StagingDeployRecord.Unconfirmed` makes it "not confirmed" in yellow on the card and in
+  `magnum staging`, `"unconfirmed": true` in `--json`. The `not_confirmed` detail no longer claims "CI passed" (it
+  also means ci.yml's run was never read or never started, which its Why says), an age under a minute reads "just
+  now" (it read "now ago"), and an end's words, which are its Why too, show once. The mutations the review ran
+  (the refusals of a closed PR, a fork and a master, main or staging head branch; the plan off the tick; a stop
+  leaving the request pending; Close waiting for a Step in flight, whose fake now goes on a second after its ctx
+  ends; Seq in the events' key; the agent-pane refusal of `staging`) each fail a test now. Rejected: completing a
+  request the stop cut as failed (a restart within the wait should resume it, and a crash leaves it pending
+  anyway: the age bound covers both); writing the event and the record in one transaction (it mends the record's
+  lost write, not the lost event, which only the journal still has); a separate block for the plan above a short
+  y/N (the footer's wrap keeps the question one sentence, as the CLI asks it). Tests: the cli's
+  TestStagingDeployWithoutATerminalNeedsYes, TestAReviewAgentsShellCannotActForTheOperator (staging's cases),
+  TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords and TestStagingCommandShowsEachDeploysStepAndLastEvent; the
+  engine's TestAStagingDeployRefusesWhatItCannotDeployAsAsked (the PR's own refusals),
+  TestAStagingRequestRunsOffTheTickAndAStopLeavesItPending, TestAStagingDeployAskedTooLongAgoDeploysNothing,
+  TestStagingStepsRunOffTheTickAndStopBeforeTheClientCloses, TestAStagingDeploysEventsOfEachJournalWriteLand,
+  TestALiveStagingDeploysRecordCatchesUpWithItsJournal and TestAStagingDeployRecordSaysWhenItsDoneIsUnconfirmed;
+  the tui's TestEsQuestionShowsTheMigrationsAndTheWarningWhole, TestEsChooserShowsEveryEnvBeforeItsKeys,
+  TestAnUnconfirmedStagingDeployIsNotDrawnAsASuccess, TestAStagingDeploysWordsAreSaidOnce and
+  TestStagingSummaryClaimsOnlyWhatItKnows.
 
 ## Learned rules
 
