@@ -169,3 +169,15 @@ func TestEvalRunNamesALocalCaseAndItsMissingInputs(t *testing.T) {
 		t.Fatalf("output:\n%s", out)
 	}
 }
+
+// `eval run` names a local case of the loop's last round by its own task and round.
+func TestEvalCaseWhatNamesTheLastRoundOfItsTask(t *testing.T) {
+	ec := eval.Case{Name: "task-7-round-10", Kind: eval.KindLocal, PR: "talkable/talkable#900080", Head: addHead,
+		Defects: []eval.Defect{{ID: "d", Title: "t", Match: []string{"x"}}}}
+	if err := ec.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := evalCaseWhat(ec); got != "talkable/talkable#900080 (local round 10 of task 7)" {
+		t.Fatalf("evalCaseWhat = %q", got)
+	}
+}

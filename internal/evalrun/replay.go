@@ -35,8 +35,10 @@ func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, 
 		return in, OutcomeError, fmt.Errorf("case %q is a local round, which replays every role: --judge-only replays posted cases only", ec.Name)
 	}
 	if in, err = LoadLocalInputs(LocalCaseDir(d.Layout, ec.Name)); err != nil {
-		n := ec.Number - eval.LocalNumberBase
-		return in, OutcomeError, fmt.Errorf("%w; freeze the round again: magnum eval add --local-task %d --round %d --name %s", err, n/10, n%10, ec.Name)
+		if task, round, ok := LocalRoundOf(ec.Number); ok {
+			err = fmt.Errorf("%w; freeze the round again: magnum eval add --local-task %d --round %d --name %s", err, task, round, ec.Name)
+		}
+		return in, OutcomeError, err
 	}
 	if !strings.EqualFold(in.PR(), ec.PR) || in.HeadSHA != ec.Head {
 		return in, OutcomeError, fmt.Errorf("case %q names %s at %s, but its frozen inputs are round %d of task %d, %s at %s: "+

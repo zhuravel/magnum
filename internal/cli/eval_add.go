@@ -163,6 +163,9 @@ func evalCaseWhat(ec eval.Case) string {
 	if !ec.Local() {
 		return ec.PR
 	}
-	n := ec.Number - eval.LocalNumberBase
-	return fmt.Sprintf("%s (local round %d of task %d)", ec.PR, n%10, n/10)
+	task, round, ok := evalrun.LocalRoundOf(ec.Number)
+	if !ok {
+		return ec.PR + " (local)"
+	}
+	return fmt.Sprintf("%s (local round %d of task %d)", ec.PR, round, task)
 }

@@ -2,6 +2,7 @@ package evalrun
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -314,5 +315,40 @@ func TestALocalCaseIsScoredOnItsFrozenJudgesResult(t *testing.T) {
 	}
 	if _, err := os.Stat(cr.ResultFile); err != nil {
 		t.Fatalf("the recorded result file: %v", err)
+	}
+}
+
+// A synthetic PR number names its task and round back, the loop's last round (config.MaxFactoryCycles,
+// 10) included, which LocalNumber puts where the next task's tens would start; a number no round has
+// names none.
+func TestLocalRoundOfNamesTheTaskAndRoundOfASyntheticNumber(t *testing.T) {
+	for _, tc := range []struct {
+		task  int64
+		round int
+	}{{1, 1}, {1, 9}, {7, config.MaxFactoryCycles}, {8, 1}, {123, 4}} {
+		task, round, ok := LocalRoundOf(LocalNumber(tc.task, tc.round))
+		if !ok || task != tc.task || round != tc.round {
+			t.Errorf("LocalRoundOf(LocalNumber(%d, %d)) = %d, %d, %v", tc.task, tc.round, task, round, ok)
+		}
+	}
+	for _, n := range []int{0, 12212, LocalNumber(0, 9), localNumberBase + 10} {
+		if task, round, ok := LocalRoundOf(n); ok {
+			t.Errorf("LocalRoundOf(%d) = task %d, round %d; want none", n, task, round)
+		}
+	}
+}
+
+// A local case of the loop's last round whose frozen inputs are gone names the add of that round, not
+// of round 0 of the next task.
+func TestALocalCaseOfTheLastRoundNamesItsOwnAdd(t *testing.T) {
+	f := newReplayFixture(t, questionResult)
+	ec := localEvalCase(t)
+	ec.Name, ec.PR = "task-7-round-10", fmt.Sprintf("example/example#%d", LocalNumber(7, config.MaxFactoryCycles))
+	if err := ec.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cr := RunCase(context.Background(), f.d, ec, Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
+	if !strings.Contains(cr.Error, "magnum eval add --local-task 7 --round 10 --name task-7-round-10") {
+		t.Fatalf("case run %+v", cr)
 	}
 }

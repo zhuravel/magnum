@@ -117,6 +117,18 @@ const localNumberBase = eval.LocalNumberBase
 // config.MaxFactoryCycles, so no two tasks' rounds share one.
 func LocalNumber(taskID int64, round int) int { return localNumberBase + int(taskID)*10 + round }
 
+// LocalRoundOf is LocalNumber undone: the task and the round whose
+// synthetic PR number n is. Round 10 is where the next task's tens start
+// (task 7's is 900080), so the round is counted from 1, not taken as n's
+// last digit. ok is false for a number no round of a task has.
+func LocalRoundOf(n int) (taskID int64, round int, ok bool) {
+	k := n - localNumberBase - 1
+	if k < 10 { // below task 1's round 1
+		return 0, 0, false
+	}
+	return int64(k / 10), k%10 + 1, true
+}
+
 // LocalRoot is where task taskID's local rounds keep their scratch
 // directories: local-review/ in the task's directory.
 func LocalRoot(l paths.Layout, taskID int64) string {
