@@ -132,3 +132,24 @@ func TestTheStagingsAreSanitized(t *testing.T) {
 		t.Error("sanitizing changed the source row")
 	}
 }
+
+// StagingSummary is the card's words without styles or the env's name,
+// for `magnum staging`.
+func TestStagingSummaryIsTheCardsWords(t *testing.T) {
+	rows := stagingRows()
+	for i, want := range []string{
+		"live · head aaa1111 · deployed 40m ago",
+		"pushed · CI running · head aaa1111 · pushed 3m ago",
+		"pushed · CI failed on this PR's changes · head aaa1111 · pushed 2h ago",
+	} {
+		if got := StagingSummary(rows[0].Stagings[i], boardNow); got != want {
+			t.Errorf("%s: %q, want %q", rows[0].Stagings[i].Env, got, want)
+		}
+	}
+	if got := StagingSummary(rows[1].Stagings[0], boardNow); got != "an older head · old0000 · 2 commits behind · pushed 2d ago" {
+		t.Errorf("outdated: %q", got)
+	}
+	if got := StagingSummary(StagingInfo{Env: "void", State: "pushed", Detail: "waiting_jenkins"}, boardNow); got != "pushed · CI passed, waiting for Jenkins" {
+		t.Errorf("waiting for Jenkins: %q", got)
+	}
+}

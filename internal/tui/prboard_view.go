@@ -1279,20 +1279,21 @@ func (p *prbPainter) ciCell(ci *CIInfo) cell {
 // CI failed on the PR's changes is failed; one whose CI failed on what the
 // PR does not change, or cannot be told, stays pushed.
 func (p *prbPainter) stagingLook(s StagingInfo) (word string, st lipgloss.Style, words string) {
+	words = stagingStateWords(s)
 	switch normCI(s.State) {
 	case "latest":
-		return "live", p.pal.green, "live"
+		return "live", p.pal.green, words
 	case "pushed":
 		if normCI(s.Detail) == "ci_failed_ours" {
-			return "failed", p.pal.red, "pushed"
+			return "failed", p.pal.red, words
 		}
-		return "pushed", p.pal.yellow, "pushed"
+		return "pushed", p.pal.yellow, words
 	case "outdated":
-		return "outdated", p.pal.named["magenta"], "an older head"
+		return "outdated", p.pal.named["magenta"], words
 	case "none":
-		return "none", p.st.Dim, "not there"
+		return "none", p.st.Dim, words
 	}
-	return "unknown", p.st.Dim, "unknown"
+	return "unknown", p.st.Dim, words
 }
 
 // stagingCell is the STAGE column's cell: one glyph per env, in the

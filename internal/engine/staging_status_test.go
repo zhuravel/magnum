@@ -469,3 +469,37 @@ func TestStagingShownIsTheRecordWhileItHoldsElseUnknownSayingWhy(t *testing.T) {
 		t.Errorf("no envs: %v", got)
 	}
 }
+
+// StagingStale says the age in minutes or hours, and nothing while the
+// daemon's ticks are recent.
+func TestStagingStaleSaysHowOldTheLastTickIs(t *testing.T) {
+	now := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		tick time.Time
+		want string
+	}{
+		{now.Add(-staging.StaleAfter), ""},
+		{now.Add(-11 * time.Minute), "stale: the daemon's last tick is 11m old"},
+		{now.Add(-time.Hour), "stale: the daemon's last tick is 1h old"},
+		{now.Add(-90 * time.Minute), "stale: the daemon's last tick is 1h30m old"},
+		{time.Time{}, "the daemon has not run"},
+	} {
+		if got := StagingStale(c.tick, now); got != c.want {
+			t.Errorf("tick %v: %q, want %q", c.tick, got, c.want)
+		}
+	}
+}
+
+// A record's words carry no control character, and its run is kept only as
+// an https page, whether written or read.
+func TestAStagingRecordsWordsAreClean(t *testing.T) {
+	rec := stagingRecordOf("aaa1111", []staging.EnvStatus{{Env: staging.Env{Name: "void"}, State: staging.StatePushed,
+		Why: "spec/\x1b[31ma.rb", RunURL: "javascript:alert(1)"}})
+	if e := rec.Envs[0]; strings.ContainsRune(e.Why, '\x1b') || e.RunURL != "" {
+		t.Errorf("written %+v", e)
+	}
+	raw := StagingRecord{Head: "aaa1111", Envs: []StagingEnv{{Env: "void", State: "latest", Why: "a\x07b", RunURL: "https://github.com/x\x1b]8;;"}}}
+	if e := StagingShown(raw, true, []staging.Env{{Name: "void"}}, "aaa1111", time.Now(), time.Now())[0]; e.Why != "a b" || e.RunURL != "" {
+		t.Errorf("read %+v", e)
+	}
+}

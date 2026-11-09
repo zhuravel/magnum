@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
@@ -136,7 +137,7 @@ func stagingRecordOf(head string, ss []staging.EnvStatus) StagingRecord {
 		if s.State == staging.StateLatest {
 			e.DeployedAt = s.DeployedAt
 		}
-		r.Envs = append(r.Envs, e)
+		r.Envs = append(r.Envs, cleanStagingEnv(e))
 	}
 	return r
 }
@@ -399,12 +400,9 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
 	if len(envs) == 0 {
 		return nil
 	}
-	why := ""
-	switch age := now.Sub(lastTick); {
-	case lastTick.IsZero():
-		why = "the daemon has not run"
-	case age > staging.StaleAfter:
-		why = "stale: the daemon's last tick is " + strings.TrimSuffix(age.Round(time.Minute).String(), "0s") + " old"
+	why := StagingStale(lastTick, now)
+	switch {
+	case why != "":
 	case !ok:
 		why = "not read yet"
 	case rec.Head != head:
@@ -419,8 +417,45 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
 		case j < 0:
 			out[i] = StagingEnv{Env: env.Name, State: string(staging.StateUnknown), Why: "not read yet"}
 		default:
-			out[i] = rec.Envs[j]
+			out[i] = cleanStagingEnv(rec.Envs[j])
 		}
 	}
 	return out
+}
+
+// cleanStagingEnv is e with no control character in its words (a failing
+// job's paths come from the PR's files) and its run only as an https page.
+func cleanStagingEnv(e StagingEnv) StagingEnv {
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, s)
+	}
+	e.Env, e.State, e.Detail, e.InTip, e.Why = clean(e.Env), clean(e.State), clean(e.Detail), clean(e.InTip), clean(e.Why)
+	if u := clean(e.RunURL); u != e.RunURL || !strings.HasPrefix(u, "https://") || strings.ContainsAny(u, " ") {
+		e.RunURL = ""
+	}
+	return e
+}
+
+// StagingStale is why the daemon's staging records no longer follow
+// staging at now, its last tick being lastTick: "the daemon has not run"
+// (zero), "stale: the daemon's last tick is 1h old" (more than
+// staging.StaleAfter ago); "" while they do.
+func StagingStale(lastTick, now time.Time) string {
+	age := now.Sub(lastTick)
+	switch {
+	case lastTick.IsZero():
+		return "the daemon has not run"
+	case age <= staging.StaleAfter:
+		return ""
+	}
+	s := strings.TrimSuffix(age.Round(time.Minute).String(), "0s")
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return "stale: the daemon's last tick is " + s + " old"
 }

@@ -1007,47 +1007,75 @@ var stagingDetails = map[string]string{
 	"not_confirmed":      "CI passed, no deployment confirms it",
 }
 
+// StagingSummary is s in the words of the card's STAGINGS block, without
+// the env's name: its state, CI's or Jenkins' part of it, the head in the
+// tip or how far behind, and when it was deployed or pushed, relative to
+// now ("pushed · CI running · head aaa1111 · pushed 3m ago").
+func StagingSummary(s StagingInfo, now time.Time) string {
+	return strings.Join(stagingParts(s, stagingStateWords(s), now), " · ")
+}
+
+// stagingStateWords is the first of s's words: its state.
+func stagingStateWords(s StagingInfo) string {
+	switch normCI(s.State) {
+	case "latest":
+		return "live"
+	case "pushed":
+		return "pushed"
+	case "outdated":
+		return "an older head"
+	case "none":
+		return "not there"
+	}
+	return "unknown"
+}
+
+// stagingParts are s's words, state first (as given).
+func stagingParts(s StagingInfo, state string, now time.Time) []string {
+	parts := []string{state}
+	st := normCI(s.State)
+	if d := stagingDetails[normCI(s.Detail)]; d != "" && st == "pushed" {
+		parts = append(parts, d)
+	}
+	switch st {
+	case "latest", "pushed":
+		if s.InTip != "" {
+			parts = append(parts, "head "+textx.ShortSHA(s.InTip))
+		}
+	case "outdated":
+		if s.InTip != "" {
+			parts = append(parts, textx.ShortSHA(s.InTip))
+		}
+		if s.Behind == 1 {
+			parts = append(parts, "1 commit behind")
+		} else if s.Behind > 1 {
+			parts = append(parts, strconv.Itoa(s.Behind)+" commits behind")
+		}
+	}
+	switch {
+	case st == "latest" && !s.DeployedAt.IsZero():
+		parts = append(parts, "deployed "+shortAge(max(now.Sub(s.DeployedAt), 0))+" ago")
+	case (st == "latest" || st == "pushed" || st == "outdated") && !s.PushedAt.IsZero():
+		parts = append(parts, "pushed "+shortAge(max(now.Sub(s.PushedAt), 0))+" ago")
+	}
+	return parts
+}
+
 // stagingLines are the card's STAGINGS block, width cells wide: per env
-// its glyph, its name and its state, CI's or Jenkins' part of it, the head
-// in the tip or how far behind, when it was deployed or pushed; under it,
-// why it cannot be told and the CI run's page.
+// its glyph, its name and its words (stagingParts); under it, why it
+// cannot be told and the CI run's page.
 func (p *prbPainter) stagingLines(ss []StagingInfo, width int) []string {
 	nameW := 0
 	for _, s := range ss {
 		nameW = max(nameW, ansi.StringWidth(s.Env))
 	}
 	indent := spaces(ansi.StringWidth(p.g.stage["live"]) + 1 + nameW + 2)
-	sep := p.st.Dim.Render(p.g.sep)
 	var out []string
 	for _, s := range ss {
 		word, st, words := p.stagingLook(s)
-		parts := []string{st.Render(words)}
-		state := normCI(s.State)
-		if d := stagingDetails[normCI(s.Detail)]; d != "" && state == "pushed" {
-			parts = append(parts, d)
-		}
-		switch state {
-		case "latest", "pushed":
-			if s.InTip != "" {
-				parts = append(parts, "head "+textx.ShortSHA(s.InTip))
-			}
-		case "outdated":
-			if s.InTip != "" {
-				parts = append(parts, textx.ShortSHA(s.InTip))
-			}
-			if s.Behind == 1 {
-				parts = append(parts, "1 commit behind")
-			} else if s.Behind > 1 {
-				parts = append(parts, strconv.Itoa(s.Behind)+" commits behind")
-			}
-		}
-		switch {
-		case state == "latest" && !s.DeployedAt.IsZero():
-			parts = append(parts, "deployed "+shortAge(max(p.now.Sub(s.DeployedAt), 0))+" ago")
-		case (state == "latest" || state == "pushed" || state == "outdated") && !s.PushedAt.IsZero():
-			parts = append(parts, "pushed "+shortAge(max(p.now.Sub(s.PushedAt), 0))+" ago")
-		}
-		out = append(out, st.Render(p.g.stage[word])+" "+s.Env+spaces(nameW-ansi.StringWidth(s.Env))+"  "+strings.Join(parts, sep))
+		parts := stagingParts(s, st.Render(words), p.now)
+		out = append(out, st.Render(p.g.stage[word])+" "+s.Env+spaces(nameW-ansi.StringWidth(s.Env))+"  "+
+			strings.Join(parts, p.st.Dim.Render(p.g.sep)))
 		if s.Why != "" {
 			for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent), 10)).Render(s.Why), "\n") {
 				out = append(out, indent+p.st.Dim.Render(strings.TrimRight(l, " ")))
