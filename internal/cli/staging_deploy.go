@@ -143,20 +143,26 @@ func actJoinAnd(words []string) string {
 
 // stagingDeployMain deploys ref to o's envs: the plan and its y/N first on
 // a terminal (or with --dry-run, which stops there), the deploy alone with
-// --yes or from a script.
+// --yes. Without a terminal to ask on (an agent's shell, a pipe, a
+// script), a deploy needs --yes: Jenkins runs its migrations on shared
+// databases, so it never starts on nobody's word.
 func stagingDeployMain(ctx context.Context, c *Context, d *actDeps, ref string, o stagingOpts) int {
+	deploys := !o.dryRun && !o.yes
+	switch {
+	case deploys && (!d.StdinTTY || !d.StdoutTTY):
+		return actUsage(c, "staging", "a deploy asks y/N on a terminal, and there is none: pass --yes to deploy without asking, "+
+			"or --dry-run to see the plan; nothing queued", stagingUsage)
+	case deploys && o.json:
+		return actUsage(c, "staging", "--json needs --yes to deploy (a terminal asks y/N first); nothing queued", stagingUsage)
+	}
 	t, err := d.resolveRef(ctx, ref)
 	if err != nil {
 		return cmdFail(c, "staging", err)
 	}
 	label := d.actLabel(t.full(), t.PR.Number)
 	p := engine.StagingDeployPayload{PRTarget: t.prTarget(), Envs: stagingEnvsOf(o.deploy)}
-	asks := !o.dryRun && !o.yes && d.StdinTTY && d.StdoutTTY
-	if asks && o.json {
-		return actUsage(c, "staging", "--json needs --yes to deploy (a terminal asks y/N first); nothing queued", stagingUsage)
-	}
 	switch {
-	case o.dryRun || asks:
+	case o.dryRun || deploys: // a dry run, or a terminal's y/N
 		ans, err := stagingPlan(ctx, d, p)
 		if err != nil {
 			return cmdFail(c, "staging", err)
@@ -181,7 +187,7 @@ func stagingDeployMain(ctx context.Context, c *Context, d *actDeps, ref string, 
 			return 1
 		}
 		p.Envs, p.Head, p.Seen = envs, ans.Head, seen
-	default: // --yes or a script: nothing was asked, so nothing was seen
+	default: // --yes: nothing was asked, so nothing was seen
 		p.Head = t.PR.HeadSHA
 	}
 	return stagingSendDeploy(ctx, c, d, label, p, stagingWait, o.json)

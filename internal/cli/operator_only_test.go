@@ -15,7 +15,8 @@ const operatorOnlyRefusal = "run this from your own terminal: a review agent's s
 // A review agent runs in a pane whose environment carries MAGNUM_REPORT_DIR
 // and MAGNUM_PR_URL, and it reads the PR, whose text may steer it. The
 // commands that act for the operator (approve --as, unapprove, mute,
-// ignore, pause) refuse to run there and queue nothing; the ones the roles
+// ignore, pause, a staging deploy and its cancel) refuse to run there and
+// queue nothing; the ones the roles
 // run (post-review, db-lock) and the fixer's fix-reply and fix-sync are not
 // refused.
 func TestAReviewAgentsShellCannotActForTheOperator(t *testing.T) {
@@ -33,6 +34,8 @@ func TestAReviewAgentsShellCannotActForTheOperator(t *testing.T) {
 				{"mute", "5", "reviewed", "by", "hand"},
 				{"ignore", "5"},
 				{"pause", "--for", "2h"},
+				{"staging", "5", "--deploy", "void", "--yes"},
+				{"staging", "--cancel", "void-5-20261005t100000-abcd"},
 			} {
 				h.errb.Reset()
 				if code := h.cmd(args[0], args[1:]...); code != 1 {

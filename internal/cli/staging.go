@@ -55,8 +55,9 @@ func newStagingCmd(c *Context) *cobra.Command {
 			"migrations Jenkins then runs on each env's shared database, the envs left out and why (the head there already, "+
 			"a conflict: nothing is resolved yet), and a warning while the default branch's CI runs. y sends the deploy bound "+
 			"to that head; a head that moved since, or a merge that now adds what the question did not name, is refused. "+
-			"--dry-run prints the plan alone, --yes asks nothing (there --json needs --yes), and a review agent's pane is "+
-			"refused. --cancel <effect> stops a deploy (an effect `magnum staging <pr>` lists): it never pushes after, and "+
+			"--dry-run prints the plan alone, --yes asks nothing, and without a terminal to ask on (a pipe, a script, an "+
+			"agent's shell) a deploy needs --yes, as --json does; a review agent's pane is refused. --cancel <effect> "+
+			"stops a deploy (an effect `magnum staging <pr>` lists): it never pushes after, and "+
 			"a push before stands.",
 		func(pos []string) int {
 			o.deployOn = cmd.Flags().Changed("deploy")
@@ -66,7 +67,7 @@ func newStagingCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&o.json, "json", false, "print the PR (an object) or the PRs on a staging (a list) as JSON; with --deploy, the daemon's answer")
 	fs.StringVar(&o.deploy, "deploy", "", "deploy your PR to these staging `envs` (void,bastion or all), asking y/N first")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "with --deploy: print the daemon's plan per env; nothing is deployed")
-	fs.BoolVar(&o.yes, "yes", false, "with --deploy: do not ask for confirmation")
+	fs.BoolVar(&o.yes, "yes", false, "with --deploy: do not ask for confirmation (a deploy without a terminal needs it)")
 	fs.StringVar(&o.cancel, "cancel", "", "stop the staging deploy `effect` (its id, as `magnum staging <pr>` lists it)")
 	cmd.ValidArgsFunction = completeFirst(c.completePRs)
 	return cmd

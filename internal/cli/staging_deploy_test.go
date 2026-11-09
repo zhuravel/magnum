@@ -128,9 +128,31 @@ func TestStagingDeployWithNothingToDeployQueuesNothing(t *testing.T) {
 	}
 }
 
+// Without a terminal to ask y/N on (an agent's Bash tool, a pipe, a
+// script), a deploy is refused unless --yes says so: nothing is planned
+// and nothing queued, whatever the output; --dry-run still prints the plan.
+func TestStagingDeployWithoutATerminalNeedsYes(t *testing.T) {
+	h, prs := stagingHarness(t)
+	h.pid = 4242
+	h.stagingDaemon(prs[5].HeadSHA)
+	for _, tty := range []struct{ in, out bool }{{false, false}, {true, false}, {false, true}} {
+		h.d.StdinTTY, h.d.StdoutTTY = tty.in, tty.out
+		for _, args := range [][]string{{"5", "--deploy", "all"}, {"5", "--deploy", "void", "--json"}} {
+			h.errb.Reset()
+			if code := h.cmd("staging", args...); code != 2 {
+				t.Errorf("stdin tty %v, stdout tty %v, %v: exit %d, want 2: %s", tty.in, tty.out, args, code, h.errb.String())
+			}
+			actContains(t, h.errb.String(), "pass --yes", "nothing queued")
+		}
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("queued %+v without a terminal or --yes", reqs)
+	}
+}
+
 // --dry-run prints the daemon's plan per env and queues nothing more;
-// --json prints the answer. --yes (or a script) asks nothing and sends the
-// deploy alone, bound to the registry's head, with nothing seen.
+// --json prints the answer. --yes asks nothing and sends the deploy alone,
+// bound to the registry's head, with nothing seen.
 func TestStagingDeployDryRunAndYes(t *testing.T) {
 	h, prs := stagingHarness(t)
 	h.pid = 4242
