@@ -30,7 +30,11 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 			"tip already has nothing to merge. After the push magnum starts the repository's ci_dispatch workflow on it "+
 			"two minutes later.\n\n"+
 			"A terminal asks y/N first, naming who merges which tip of which base into which branch and as which login, "+
-			"from the daemon's dry run (--yes does not; there --json needs --yes), and a review agent's pane is refused. "+
+			"from the daemon's dry run, which fetches the base first. y sends the merge bound to that plan: the daemon "+
+			"refuses it, saying what moved and that nothing was merged, when the PR's head, its base, the base's tip or the "+
+			"merge's conflicts changed since, or when the question is 10 minutes old. --yes asks nothing and binds nothing: "+
+			"the daemon merges the base's tip as its fetch then brings it. Without a terminal (an agent's shell, a pipe, a "+
+			"script) a merge needs --yes, and on a terminal --json needs it too; a review agent's pane is refused. "+
 			"The daemon refuses, with the reason as its answer, a PR that is not yours or lives in a fork, a fix role that "+
 			"is no fixer App, a base it does not know, a round or fix loop in flight, a pinned PR or slot, a snooze, a person "+
 			"typing in its panes and a paused agent kind. --wait follows the merge to its end; --timeout (default 2h, 0 = no "+
@@ -41,7 +45,7 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 	fs.DurationVar(&o.timeout, "timeout", fixDefaultTimeout, "with --wait: stop following after this `duration` (0 = no limit); the merge goes on")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "ask the daemon what would happen; nothing is started or changed")
 	fs.BoolVar(&o.json, "json", false, "print the result as JSON (progress goes to stderr)")
-	fs.BoolVar(&o.yes, "yes", false, "do not ask for confirmation")
+	fs.BoolVar(&o.yes, "yes", false, "do not ask for confirmation: the merge is bound to no plan, and merges the tip the daemon's fetch brings")
 	cmd.ValidArgsFunction = completeFirst(c.completePRs)
 	return cmd
 }

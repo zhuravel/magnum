@@ -222,7 +222,14 @@ func fixProgress(c *Context, o fixOpts) io.Writer { return reviewProgress(c, rev
 // fixMain resolves the PR, asks on a terminal, hands the request to the
 // daemon, prints its answer and, with --wait, follows the loop it started.
 // The screens call it with yes set, the board and the dashboard having asked.
+// A merge of the parent without a terminal to ask on (an agent's shell, a
+// pipe, a script) needs --yes, as a staging deploy does: it never starts on
+// nobody's word.
 func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts) int {
+	if o.merge && !o.dryRun && !o.yes && (!d.StdinTTY || !d.StdoutTTY) {
+		return actUsage(c, o.verb(), "a merge of the parent asks y/N on a terminal, and there is none: pass --yes to merge without asking, "+
+			"or --dry-run to see the plan; nothing queued", o.usage())
+	}
 	t, err := d.resolveRef(ctx, ref)
 	if err != nil {
 		return cmdFail(c, o.verb(), verbFix(o.verb(), err))
@@ -270,6 +277,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 			return 0
 		}
 		question = mergeParentQuestion(plan)
+		payload.Asked = &plan.Asked // y binds the merge to what the question named
 	}
 	if code, ok := fixConfirm(ctx, c, d, label, cmp.Or(fixerLogin(d.Cfg, t.full()), "you"), question, o); !ok {
 		return code

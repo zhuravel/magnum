@@ -58,7 +58,9 @@ func (h *actHarness) mergeDaemon() {
 // `magnum merge-parent` merges the PR's base into it as the fixer App's
 // bot. On a terminal its y/N names what the daemon would do, the branch,
 // the base's tip and the bot's login, from a dry run asked first: only y
-// queues the merge, a request of kind fix in the merge mode.
+// queues the merge, a request of kind fix in the merge mode, bound to what
+// the plan asked about (the head, master at c0c0c0c, no conflict, when),
+// which the daemon checks again before it merges.
 func TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
@@ -92,12 +94,20 @@ func TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge(t *testing.T) {
 	}
 	if p := actDecode[engine.FixPayload](t, reqs[2].Payload); p.DryRun || p.Mode != engine.FixModeMerge || reqs[2].Kind != engine.ReqFix {
 		t.Fatalf("the merge's payload = %+v (%s)", p, reqs[2].Kind)
+	} else if p.Asked == nil || !sameAsked(*p.Asked, mergeAsked) {
+		t.Errorf("the merge is bound to %+v, want the plan's %+v", p.Asked, mergeAsked)
 	}
 	actContains(t, h.out.String(), question, mergeAnswer)
 }
 
-// --yes and a script ask nothing and send the merge alone; --dry-run asks
-// the daemon what would happen and asks nothing.
+// sameAsked reports whether two bindings name the same plan.
+func sameAsked(a, b engine.MergeAsked) bool {
+	return a.Head == b.Head && a.Base == b.Base && a.Tip == b.Tip && a.Conflicts == b.Conflicts && a.At.Equal(b.At)
+}
+
+// --yes asks nothing and sends the merge alone, bound to nothing (the
+// daemon merges the tip its fetch brings); --dry-run asks the daemon what
+// would happen and asks nothing.
 func TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
@@ -109,6 +119,8 @@ func TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing(t *testing.T)
 	}
 	if reqs := h.requests(); len(reqs) != 1 || actDecode[engine.FixPayload](t, reqs[0].Payload).DryRun {
 		t.Fatalf("requests = %+v, want the merge alone", reqs)
+	} else if p := actDecode[engine.FixPayload](t, reqs[0].Payload); p.Asked != nil {
+		t.Errorf("--yes bound the merge to %+v, which nobody was asked", p.Asked)
 	}
 	h.out.Reset()
 	if code := h.cmd("merge-parent", "5", "--dry-run"); code != 0 || strings.Contains(h.out.String(), "[y/N]") {
@@ -120,6 +132,37 @@ func TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing(t *testing.T)
 	}
 	if code := h.cmd("merge-parent"); code != 2 {
 		t.Errorf("no PR: exit %d", code)
+	}
+}
+
+// Without a terminal to ask on (an agent's shell, a pipe, a script) a
+// merge needs --yes, as a staging deploy does: it never starts on nobody's
+// word. --dry-run still asks the daemon's plan, and --yes sends the merge.
+func TestMergeParentWithoutATerminalNeedsYes(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.mergeDaemon()
+	for _, args := range [][]string{{"5"}, {"5", "--json"}} {
+		h.errb.Reset()
+		if code := h.cmd("merge-parent", args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2: %s%s", args, code, h.out.String(), h.errb.String())
+		}
+		actContains(t, h.errb.String(), "pass --yes to merge without asking, or --dry-run to see the plan; nothing queued")
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests = %+v, want none", reqs)
+	}
+	h.out.Reset()
+	if code := h.cmd("merge-parent", "5", "--dry-run"); code != 0 {
+		t.Fatalf("--dry-run: exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), mergePlan)
+	if code := h.cmd("merge-parent", "5", "--yes"); code != 0 {
+		t.Fatalf("--yes: exit %d: %s", code, h.errb.String())
+	}
+	if reqs := h.requests(); len(reqs) != 2 || actDecode[engine.FixPayload](t, reqs[1].Payload).DryRun {
+		t.Errorf("requests = %+v, want the plan and the merge", reqs)
 	}
 }
 
