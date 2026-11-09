@@ -663,9 +663,9 @@ func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r s
 	}
 	first := ""
 	if files, listed, err := st.PRFilesOf(ctx, r.PRID); err == nil { // a registry that cannot say says nothing of it
-		if m := engine.StagingFirst(files, listed, r.HeadSHA, shown); m != "" {
+		if ms := engine.StagingFirst(files, listed, r.HeadSHA, shown); ms != nil {
 			if pr, err := st.PRByID(ctx, r.PRID); err == nil && !engine.StagingNeverDeploys(pr) {
-				first = staging.DeployBeforeMergeWords(m)
+				first = staging.DeployBeforeMergeWords(ms)
 			}
 		}
 	}

@@ -96,7 +96,8 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // a loop works on the PR. Its move is the one its wait gives: your merge,
 // your answer, or else the move of the reason magnum's look gave (reasonMove),
 // "b opens it" when nothing says. A wait on your merge says a staging deploy
-// first where magnum's records of the PR say it needs one (deployFirst), and
+// first where magnum's records of the PR say it needs one (deployFirst; not
+// for a PR that never deploys or whose deploy of its head runs), and
 // the row and card show where the PR stands on each staging env as the review
 // daemon last told it (PRState.Stagings).
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
@@ -106,7 +107,9 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	if (st.State == store.PRNeedsAttention || st.Stalemate) && !st.Fixing && w.group != tui.GroupNeedsYou {
 		w = attentionWait(st, n)
 	}
-	w = deployFirst(w, st.Files, recordEnvs(st.Stagings))
+	if st.deploysFirst() {
+		w = deployFirst(w, st.Files, recordEnvs(st.Stagings))
+	}
 	key := s.ownKey(st.Ref)
 	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: fmt.Sprintf("#%d", n), Repo: st.Ref.Repo, Title: st.Title,
 		WaitsOn: []tui.WaitsOn{w.on}, Since: cmp.Or(w.since, st.ActivityAt, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}

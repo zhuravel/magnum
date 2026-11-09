@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,12 +11,14 @@ import (
 )
 
 // StagingFirst reads the head's own file list only, and staging's rule
-// over the envs as a reader shows them: unknown holds nothing back.
-func TestStagingFirstIsTheMigrationOfTheHeadsFilesThatNoStagingHolds(t *testing.T) {
-	files := store.PRFiles{HeadSHA: fixHead, Paths: []string{"app/a.rb", "db/schema.rb", "db/sharded_migrate/2026_b\x1b.rb"}}
+// over the envs as a reader shows them: unknown holds nothing back. It
+// lists every migration of the head in byte order, each with no control
+// character (a path is a PR's data, and any of them may carry one).
+func TestStagingFirstIsTheMigrationsOfTheHeadsFilesThatNoStagingHolds(t *testing.T) {
+	files := store.PRFiles{HeadSHA: fixHead, Paths: []string{"app/a.rb", "db/sharded_migrate/2026_b\x1b.rb", "db/schema.rb", "db/migrate/2026_a.rb", "db/migrate/2026_c\n\x07.rb"}}
 	none := []StagingEnv{{Env: "void", State: string(staging.StateNone)}, {Env: "bart", State: string(staging.StateOutdated)}}
-	if got := StagingFirst(files, true, fixHead, none); got != "db/sharded_migrate/2026_b .rb" {
-		t.Errorf("StagingFirst = %q, want the migration, its escape a space", got)
+	if got, want := StagingFirst(files, true, fixHead, none), []string{"db/migrate/2026_a.rb", "db/migrate/2026_c  .rb", "db/sharded_migrate/2026_b .rb"}; !slices.Equal(got, want) {
+		t.Errorf("StagingFirst = %q, want every migration, each escape a space", got)
 	}
 	for name, c := range map[string]struct {
 		files  store.PRFiles
@@ -32,7 +35,7 @@ func TestStagingFirstIsTheMigrationOfTheHeadsFilesThatNoStagingHolds(t *testing.
 		"a word unknown":  {files, true, fixHead, []StagingEnv{{Env: "void", State: "deploying"}, {Env: "bart", State: "none"}}},
 		"no migration":    {store.PRFiles{HeadSHA: fixHead, Paths: []string{"app/a.rb", "db/schema.rb", "db/shard_1_schema.rb"}}, true, fixHead, none},
 	} {
-		if got := StagingFirst(c.files, c.listed, c.head, c.shown); got != "" {
+		if got := StagingFirst(c.files, c.listed, c.head, c.shown); got != nil {
 			t.Errorf("%s: StagingFirst = %q, want none", name, got)
 		}
 	}
@@ -67,7 +70,7 @@ func TestTheLookLeavesAMigrationsStagingDeployToTheScreens(t *testing.T) {
 	}
 	rec, ok := h.stagingRecord(2)
 	now := h.clock.Now()
-	if got := StagingFirst(files, listed, pr.HeadSHA, StagingShown(rec, ok, StagingEnvs(h.cfg, "talkable/talkable"), pr.HeadSHA, now, now)); got != m {
+	if got := StagingFirst(files, listed, pr.HeadSHA, StagingShown(rec, ok, StagingEnvs(h.cfg, "talkable/talkable"), pr.HeadSHA, now, now)); !slices.Equal(got, []string{m}) {
 		t.Errorf("the registry's rows say the deploy first for %q, want %q", got, m)
 	}
 }

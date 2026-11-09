@@ -87,7 +87,7 @@ const approvedWhy = "nothing open at a1b2c3d · approved, merge is yours"
 // it. Before, the row said "merge #4534 on GitHub" for a PR no staging had
 // run the migration of (talkable#12203 and #12204).
 func TestAPublishedTaskWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge(t *testing.T) {
-	words := staging.DeployBeforeMergeWords(theMigration)
+	words := staging.DeployBeforeMergeWords([]string{theMigration})
 	for name, c := range map[string]struct {
 		edit func(*PRState)
 		why  string
@@ -234,7 +234,7 @@ func TestOnlyTheMergeWaitPutsTheDeployFirst(t *testing.T) {
 // head keeps the merge words. Before, your PR's envs read "not read yet".
 func TestYourPRWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge(t *testing.T) {
 	r := stagedRig(t)
-	words := staging.DeployBeforeMergeWords(theMigration)
+	words := staging.DeployBeforeMergeWords([]string{theMigration})
 	envs := func(states ...string) []engine.StagingEnv {
 		out := make([]engine.StagingEnv, len(states))
 		for i, s := range states {
@@ -352,7 +352,7 @@ var olderHead = "eeeeeee" + strings.Repeat("0", 33)
 // head's list names that the card lacks (the fixer added it) does. Before,
 // the card's paths stood at whatever head the PR had.
 func TestATasksPathsAreThoseOfThePRsHead(t *testing.T) {
-	words := staging.DeployBeforeMergeWords(theMigration)
+	words := staging.DeployBeforeMergeWords([]string{theMigration})
 	for name, c := range map[string]struct {
 		cardHead string
 		card     []string
@@ -484,5 +484,180 @@ func TestAFailedReadOfThePathsHidesNoPR(t *testing.T) {
 	ref := PRRef{Repo: "example/shop", Number: 7}
 	if got, err := NewMagnum(l, cfg).PRStates(ctx, []PRRef{ref}); err != nil || !got[ref].Found || got[ref].Files != nil {
 		t.Errorf("PRStates = %+v, %v; want #7 found, its paths not known", got[ref], err)
+	}
+}
+
+// A PR that can never deploy to a staging (its head lives in a fork, or its
+// head branch is master, main or a staging branch: the deploy's own
+// refusal) gets no deploy-first line, a task's or your own: E is not
+// offered where magnum's daemon would refuse it. The row says the merge, as
+// before the rule.
+func TestAPRThatNeverDeploysToAStagingGetsNoDeployFirstLine(t *testing.T) {
+	r := stagedRig(t)
+	task := r.publishedTask("PR-12324", 4534)
+	r.changes(task.ID, theMigration)
+	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.pr(4534, func(v *PRState) { approvedIdle(v); v.NeverDeploys = true })
+	wantMerge(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
+
+	r = stagedRig(t)
+	none := []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}, {Env: "bastion", State: "none"}}
+	r.own(91, 4601, func(v *PRState) {
+		approvedIdle(v)
+		v.Files, v.Stagings, v.NeverDeploys = []string{theMigration}, none, true
+	})
+	r.own(92, 4602, func(v *PRState) { approvedIdle(v); v.Files, v.Stagings = []string{theMigration}, none })
+	d := r.data(time.Time{})
+	if row := rowOf(t, d, "#4601"); row.DeployFirst || row.Move != "merge #4601 on GitHub" || row.WaitsOn[0].What != approvedWhy {
+		t.Errorf("your PR that never deploys: %+v, want the merge and no deploy first", row)
+	}
+	if row := rowOf(t, d, "#4602"); !row.DeployFirst || row.Move != "E deploys to a staging" {
+		t.Errorf("your PR that may deploy: %+v, want E's deploy first", row)
+	}
+}
+
+// A PR whose staging deploy of its head is live (queued or running) gets no
+// deploy-first line while it runs: E would be refused ("already
+// deploying") and the push lands by itself, as the board says it. The row
+// says the merge meanwhile; the line is back once the deploy is not live.
+func TestADeployOfThePRsHeadThatRunsTakesTheDeployFirstAway(t *testing.T) {
+	r := stagedRig(t)
+	task := r.publishedTask("PR-12324", 4534)
+	r.changes(task.ID, theMigration)
+	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = true })
+	wantMerge(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
+
+	r = stagedRig(t)
+	none := []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}, {Env: "bastion", State: "none"}}
+	r.own(91, 4601, func(v *PRState) {
+		approvedIdle(v)
+		v.Files, v.Stagings, v.DeployingHead = []string{theMigration}, none, true
+	})
+	if row := rowOf(t, r.data(time.Time{}), "#4601"); row.DeployFirst || row.Move != "merge #4601 on GitHub" || row.WaitsOn[0].What != approvedWhy {
+		t.Errorf("your PR deploying its head: %+v, want the merge and no deploy first", row)
+	}
+}
+
+// PRStates and OwnPRs say from magnum's registry whether a PR can never
+// deploy to a staging (PRState.NeverDeploys: a fork's, or a head branch
+// master, main or staging-*), as the deploy's refusal does.
+func TestPRStatesSayWhichPRsNeverDeployToAStaging(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("ab", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	for n, c := range map[int]struct {
+		ref   string
+		fork  bool
+		never bool
+	}{7: {"feature/index", false, false}, 8: {"feature/index", true, true}, 9: {"staging-void", false, true},
+		10: {"master", false, true}, 11: {"main", false, true}} {
+		magnumPR(t, st, n, head, func(g *store.GitHubPR) { g.HeadRef, g.IsCrossRepo = new(c.ref), new(c.fork) })
+	}
+	want := map[int]bool{7: false, 8: true, 9: true, 10: true, 11: true}
+	prs, err := NewMagnum(l, cfg).OwnPRs(t.Context())
+	if err != nil || len(prs) != len(want) {
+		t.Fatalf("OwnPRs = %+v, %v; want %d PRs", prs, err, len(want))
+	}
+	var refs []PRRef
+	for _, v := range prs {
+		refs = append(refs, v.Ref)
+		if v.NeverDeploys != want[v.Ref.Number] {
+			t.Errorf("OwnPRs #%d: never deploys %v, want %v", v.Ref.Number, v.NeverDeploys, want[v.Ref.Number])
+		}
+	}
+	got, err := NewMagnum(l, cfg).PRStates(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ref, v := range got {
+		if v.NeverDeploys != want[ref.Number] {
+			t.Errorf("PRStates #%d: never deploys %v, want %v", ref.Number, v.NeverDeploys, want[ref.Number])
+		}
+	}
+}
+
+// PRStates and OwnPRs say whether a staging deploy of a PR's head is live
+// (PRState.DeployingHead), from the records the board reads (the review
+// daemon's staging.deploy.* rows), in a repository with staging envs: a
+// deploy queued or running for the head is; one that stopped for you (needs
+// you), one that ended, one of an older head and another PR's are not, and
+// the line they leave stays. A repository without staging envs reads none.
+func TestPRStatesSayWhetherADeployOfThePRsHeadRuns(t *testing.T) {
+	l, st := magnumLayout(t)
+	head, older := strings.Repeat("ab", 20), strings.Repeat("cd", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	deploy := func(effect string, n int, head, state string) {
+		setKV(t, st, engine.KVStagingDeploy(effect), engine.StagingDeployRecord{Effect: effect, Repo: "example/shop", Number: n, Head: head,
+			Env: "void", Step: "merge", Phase: "begin", State: state, Seq: 2, At: time.Now()})
+	}
+	want := map[int]bool{7: true, 8: true, 9: false, 10: false, 11: false, 12: false}
+	for n := range want {
+		magnumPR(t, st, n, head, nil)
+	}
+	deploy("void-7-a", 7, head, "queued")
+	deploy("void-8-a", 8, head, "running")
+	deploy("void-9-a", 9, head, "needs you")
+	deploy("void-10-a", 10, head, "done")
+	deploy("void-11-a", 11, older, "running")
+	deploy("void-99-a", 99, head, "running") // another PR's: #12 has none
+	prs, err := NewMagnum(l, cfg).OwnPRs(t.Context())
+	if err != nil || len(prs) != len(want) {
+		t.Fatalf("OwnPRs = %+v, %v; want %d PRs", prs, err, len(want))
+	}
+	var refs []PRRef
+	for _, v := range prs {
+		refs = append(refs, v.Ref)
+		if v.DeployingHead != want[v.Ref.Number] {
+			t.Errorf("OwnPRs #%d: deploying its head %v, want %v", v.Ref.Number, v.DeployingHead, want[v.Ref.Number])
+		}
+	}
+	got, err := NewMagnum(l, cfg).PRStates(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ref, v := range got {
+		if v.DeployingHead != want[ref.Number] {
+			t.Errorf("PRStates #%d: deploying its head %v, want %v", ref.Number, v.DeployingHead, want[ref.Number])
+		}
+	}
+	if got, err = NewMagnum(l, selfConfig()).PRStates(t.Context(), refs); err != nil || got[refs[0]].DeployingHead {
+		t.Errorf("a repository without staging envs: %+v, %v; want no deploy read", got[refs[0]], err)
+	}
+}
+
+// A change of several migrations says the first (byte order) and counts the
+// rest, on the row, its help and the card; the short form stays the first
+// clause, and your own PR says the same by its list of paths.
+func TestSeveralMigrationsAreNamedByTheFirstAndCounted(t *testing.T) {
+	const second, third = "db/migrate/20261109010204_backfill_metric_rows.rb", "engines/billing/db/sharded_migrate/20261101_index.rb"
+	words := staging.DeployBeforeMergeWords([]string{theMigration, second, third})
+	if want := "deploy to a staging before the merge (it changes " + theMigration + " and 2 more migrations)"; words != want {
+		t.Fatalf("the rule's words %q, want %q", words, want)
+	}
+	r := stagedRig(t)
+	task := r.publishedTask("PR-12324", 4534)
+	r.changes(task.ID, third, "app/models/metric.rb", second, theMigration)
+	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.pr(4534, approvedIdle)
+	none := []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}, {Env: "bastion", State: "none"}}
+	r.own(91, 4601, func(v *PRState) {
+		approvedIdle(v)
+		v.Files, v.Stagings = []string{second, theMigration}, none
+	})
+	d := r.data(time.Time{})
+	row := rowOf(t, d, "PR-12324")
+	want := tui.WaitsOn{Who: tui.WaitsOnYou, What: words + " · " + approvedWhy, Short: "deploy to a staging before the merge", OnYou: true}
+	if len(row.WaitsOn) != 1 || row.WaitsOn[0] != want || row.Help != "you: "+words+" · "+approvedWhy || !row.DeployFirst {
+		t.Errorf("the row: %+v, want %+v and its help with the words", row, want)
+	}
+	if got := d.Cards[task.ID].Task.WaitingFor; got != "you: "+words+" · "+approvedWhy {
+		t.Errorf("its card waits for %q, want the words", got)
+	}
+	own := rowOf(t, d, "#4601")
+	if want := "deploy to a staging before the merge (it changes " + theMigration + " and 1 more migration) · " + approvedWhy; own.WaitsOn[0].What != want {
+		t.Errorf("your PR waits on %q, want %q", own.WaitsOn[0].What, want)
 	}
 }

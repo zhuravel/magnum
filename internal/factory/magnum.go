@@ -272,18 +272,30 @@ type PRState struct {
 	OpenRestores              bool
 	OpenHold                  time.Duration
 
-	// Files and Stagings are read only for a PR of a repository with
-	// staging envs, where the deploy before the merge can be asked
-	// (staging.DeployBeforeMerge): Files, for every such PR (fillPR), are
-	// the paths magnum's poller listed at the PR's head (pr_files; nil
-	// without a list of that head, or when it cannot be read); Stagings,
+	// NeverDeploys says the PR can never deploy to a staging, whoever asks
+	// (engine.StagingNeverDeploys: its head lives in a fork, or its head
+	// branch is master, main or staging-*): the deploy before the merge is
+	// not asked of it, E would be refused.
+	NeverDeploys bool
+
+	// Files, DeployingHead and Stagings are read only for a PR of a
+	// repository with staging envs, where the deploy before the merge can
+	// be asked (staging.DeployBeforeMerge): Files, for every such PR
+	// (fillPR), are the paths magnum's poller listed at the PR's head
+	// (pr_files; nil without a list of that head, or when it cannot be
+	// read); DeployingHead says a staging deploy of the PR's head is live,
+	// queued or running (the review daemon's staging.deploy.* records, as
+	// the board reads them; one that stopped for you, ended or is of an
+	// older head is not): the deploy before the merge is on its way, and
+	// E is refused until the push lands; Stagings,
 	// for your own PRs alone (OwnPRs: a task's are the factory daemon's
 	// own), where the PR stands on each env as the review daemon last told
 	// it (its record, engine.KVPRStaging, as engine.StagingShown shows it:
 	// the config's envs in order, unknown without a record of the head that
 	// reads, or with magnum's daemon not ticking).
-	Files    []string
-	Stagings []engine.StagingEnv
+	Files         []string
+	DeployingHead bool
+	Stagings      []engine.StagingEnv
 }
 
 // decision is GitHub's review decision of v as magnum last read it (its
@@ -447,12 +459,16 @@ func (m *magnumRegistry) stateOf(r PRRef, pid int) PRState {
 // last tick, zero with its daemon down, as no daemon decides anything now;
 // its poll interval; and now), the build magnum's daemon runs when its
 // binary on disk is newer (PRState.OldBuild), and each repository's
-// required checks as the PRs' CI reads them (requiredOf), by repository.
+// required checks as the PRs' CI reads them (requiredOf), by repository,
+// and, once a PR in a repository with staging envs asks, every staging
+// deploy's record (deploys, read by deployingHead).
 type magnumPass struct {
-	last, now time.Time
-	poll      time.Duration
-	required  map[string]store.RequiredChecks
-	oldBuild  *engine.Build
+	last, now   time.Time
+	poll        time.Duration
+	required    map[string]store.RequiredChecks
+	oldBuild    *engine.Build
+	deploys     map[string]string
+	deploysRead bool
 }
 
 // passOf reads magnum's last tick and its daemon's build from st, for its
@@ -491,6 +507,26 @@ func (m *magnumRegistry) requiredOf(ctx context.Context, st *store.Store, pass *
 	}
 	pass.required[key] = req
 	return req, nil
+}
+
+// deployingHead reports whether a staging deploy of PR pr (of repository
+// full) at its head is live, queued or running, as the board reads it
+// (deployingHead in the CLI's board): from every deploy's record
+// (engine.KVStagingDeploys), read once per pass. A deploy that stopped for
+// you is not live (E resumes it), nor is one that ended or one of an older
+// head. A read that fails is no record: the line stays, E refuses a
+// deploy that runs.
+func (m *magnumRegistry) deployingHead(ctx context.Context, st *store.Store, pass *magnumPass, full string, pr store.PR) bool {
+	if pr.HeadSHA == "" {
+		return false
+	}
+	if !pass.deploysRead {
+		pass.deploys, _ = st.KVValues(ctx, engine.KVStagingDeploys)
+		pass.deploysRead = true
+	}
+	return slices.ContainsFunc(engine.StagingDeploysOf(pass.deploys, full, pr.Number), func(r engine.StagingDeployRecord) bool {
+		return r.Live() && r.Head == pr.HeadSHA
+	})
 }
 
 // readPR fills v from st: magnum's row of v.Ref and its kv rows; a
@@ -568,8 +604,10 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 		return err
 	}
 	v.Replies = pr.PendingReplies()
-	if len(engine.StagingEnvs(m.cfg, v.Ref.Repo)) > 0 { // the deploy before the merge reads them (PRState.Files)
+	v.NeverDeploys = engine.StagingNeverDeploys(pr)
+	if len(engine.StagingEnvs(m.cfg, v.Ref.Repo)) > 0 { // the deploy before the merge reads them (PRState.Files, DeployingHead)
 		v.Files = headPaths(ctx, st, pr)
+		v.DeployingHead = m.deployingHead(ctx, st, pass, v.Ref.Repo, pr)
 	}
 	if s, err = kv(engine.KVPRStalemate(pr.ID)); err != nil {
 		return err

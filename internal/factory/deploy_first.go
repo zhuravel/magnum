@@ -1,7 +1,8 @@
 package factory
 
 // A PR that waits on your merge, changes a migration and is on no staging
-// needs a staging deploy first (staging.DeployBeforeMerge): a staging
+// needs a staging deploy first (staging.DeployBeforeMerge, which names every
+// migration it changes: the first, and how many more): a staging
 // deploy is where the migration runs before production (Jenkins migrates
 // on it), and the PR template asks for one. Its row and card on home then
 // say the deploy first, in staging's words (DeployBeforeMergeWords), and
@@ -15,7 +16,12 @@ package factory
 // the paths the poller listed at its head and the review daemon's staging
 // record. The poller keeps a PR's first 100 paths only, so a migration past
 // them gives no nudge. Only a wait on the merge changes: CI,
-// a reviewer, findings stay the next step. Nothing here runs git.
+// a reviewer, findings stay the next step. A PR that can never deploy to a
+// staging (PRState.NeverDeploys: a fork's, or a head branch master, main
+// or staging-*), and one whose deploy of its head is live (PRState.
+// DeployingHead: queued or running; one that stopped for you is not),
+// get no line, as on the board: E would be refused, and the merge words
+// stay. Nothing here runs git.
 
 import (
 	"strings"
@@ -43,11 +49,11 @@ func deployFirst(w prWait, paths []string, envs []staging.EnvStatus) prWait {
 	if !w.merge {
 		return w
 	}
-	migration, needed := staging.DeployBeforeMerge(paths, envs)
+	migrations, needed := staging.DeployBeforeMerge(paths, envs)
 	if !needed {
 		return w
 	}
-	words := staging.DeployBeforeMergeWords(migration)
+	words := staging.DeployBeforeMergeWords(migrations)
 	first := func(s string) string {
 		if s == "" {
 			return ""
@@ -63,6 +69,12 @@ func deployFirst(w prWait, paths []string, envs []staging.EnvStatus) prWait {
 	return w
 }
 
+// deploysFirst says whether PR v may take the deploy-first line at all:
+// not when it can never deploy to a staging (E would be refused) nor while
+// a deploy of its head runs (E would say it is already deploying and the
+// push lands by itself), as the board leaves the line out then.
+func (v PRState) deploysFirst() bool { return !v.NeverDeploys && !v.DeployingHead }
+
 // taskDeployFirst is deployFirst on published task v's wait w, whose PR
 // magnum's registry tells as st: its row's staging cells (staging.json, as
 // stagingCellsOf reads them: none in a repository without envs, each
@@ -72,9 +84,10 @@ func deployFirst(w prWait, paths []string, envs []staging.EnvStatus) prWait {
 // else the paths magnum's poller listed there (st.Files: magnum's fixer
 // may have pushed since), else the card's, the only change known; none
 // without either. It reads the card only for a wait on the merge in a
-// repository with staging envs.
+// repository with staging envs, of a PR that may take the line
+// (PRState.deploysFirst).
 func (s *screen) taskDeployFirst(v *taskView, st PRState, w prWait) prWait {
-	if !w.merge {
+	if !w.merge || !st.deploysFirst() {
 		return w
 	}
 	cells := stagingCellsOf(s.cfg, s.stagings, v.t, prRef(v).Number, s.down)

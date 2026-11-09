@@ -9692,16 +9692,16 @@ func StagingEnvs(cfg *config.Config, repo string) []staging.Env
     StagingEnvs is repo's staging environments (config.Stagings) as
     internal/staging names them, in config order; nil for none.
 
-func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) string
-    StagingFirst is the migration a PR at head must take to a staging before
+func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) []string
+    StagingFirst is the migrations a PR at head must take to a staging before
     its merge: staging.DeployBeforeMerge over files, the head's file list
     (store.PRFilesOf, which the poll writes from GitHub's Details), and shown,
     the envs as StagingShown shows them (unknown, and a state word this build
-    does not know, hold nothing back), its control characters spaces; "" when it
-    need not, or files is another head's or not listed (listed false). The board
-    says it in staging.DeployBeforeMergeWords on the wait on your merge the
-    look's idle verdict leaves (OpenMergeIsYours), as the factory screen does
-    from the same rows.
+    does not know, hold nothing back), every one in byte order and its control
+    characters spaces; nil when it need not, or files is another head's or not
+    listed (listed false). The board says it in staging.DeployBeforeMergeWords
+    on the wait on your merge the look's idle verdict leaves (OpenMergeIsYours),
+    as the factory screen does from the same rows.
 
 func StagingNeverDeploys(pr store.PR) bool
     StagingNeverDeploys reports whether pr can never deploy to a staging,
@@ -14522,18 +14522,30 @@ type PRState struct {
 	OpenRestores              bool
 	OpenHold                  time.Duration
 
-	// Files and Stagings are read only for a PR of a repository with
-	// staging envs, where the deploy before the merge can be asked
-	// (staging.DeployBeforeMerge): Files, for every such PR (fillPR), are
-	// the paths magnum's poller listed at the PR's head (pr_files; nil
-	// without a list of that head, or when it cannot be read); Stagings,
+	// NeverDeploys says the PR can never deploy to a staging, whoever asks
+	// (engine.StagingNeverDeploys: its head lives in a fork, or its head
+	// branch is master, main or staging-*): the deploy before the merge is
+	// not asked of it, E would be refused.
+	NeverDeploys bool
+
+	// Files, DeployingHead and Stagings are read only for a PR of a
+	// repository with staging envs, where the deploy before the merge can
+	// be asked (staging.DeployBeforeMerge): Files, for every such PR
+	// (fillPR), are the paths magnum's poller listed at the PR's head
+	// (pr_files; nil without a list of that head, or when it cannot be
+	// read); DeployingHead says a staging deploy of the PR's head is live,
+	// queued or running (the review daemon's staging.deploy.* records, as
+	// the board reads them; one that stopped for you, ended or is of an
+	// older head is not): the deploy before the merge is on its way, and
+	// E is refused until the push lands; Stagings,
 	// for your own PRs alone (OwnPRs: a task's are the factory daemon's
 	// own), where the PR stands on each env as the review daemon last told
 	// it (its record, engine.KVPRStaging, as engine.StagingShown shows it:
 	// the config's envs in order, unknown without a record of the head that
 	// reads, or with magnum's daemon not ticking).
-	Files    []string
-	Stagings []engine.StagingEnv
+	Files         []string
+	DeployingHead bool
+	Stagings      []engine.StagingEnv
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -27455,19 +27467,24 @@ var ErrNotReadable = errors.New("not readable")
 
 FUNCTIONS
 
-func DeployBeforeMerge(paths []string, envs []EnvStatus) (migration string, needed bool)
+func DeployBeforeMerge(paths []string, envs []EnvStatus) (migrations []string, needed bool)
     DeployBeforeMerge reports whether a PR whose changed files are paths must
-    go to a staging before its merge: it changes a migration (migration is the
-    first such path, in byte order), and every environment in envs was read and
-    holds none of the PR's head. An environment that is latest or pushed holds
-    the head, and one that is unknown may hold it, so either makes needed false:
-    the needs-you line says only what the mirror backs. No environments (staging
-    not configured) is never needed. The board and the factory's card share this
-    rule and its words (DeployBeforeMergeWords).
+    go to a staging before its merge: it changes a migration (migrations are
+    every such path, in byte order, each once; nil for none, even when needed
+    is false), and every environment in envs was read and holds none of the PR's
+    head. An environment that is latest or pushed holds the head, and one that
+    is unknown may hold it, so either makes needed false: the needs-you line
+    says only what the mirror backs. No environments (staging not configured) is
+    never needed. The board and the factory's card share this rule and its words
+    (DeployBeforeMergeWords).
 
-func DeployBeforeMergeWords(migration string) string
+func DeployBeforeMergeWords(migrations []string) string
     DeployBeforeMergeWords is the needs-you line of a PR that DeployBeforeMerge
-    says needs a staging deploy before its merge.
+    says needs a staging deploy before its merge: the first of its migrations
+    (byte order) by name, and how many more there are. The first clause, "deploy
+    to a staging before the merge", is the same for any count: the board stores
+    the words as they are, and the factory's short form is that clause (it cuts
+    at the first " ("). No migration is that clause alone.
 
 func MirrorDir(root string) func(repo string) (dir string, ok bool)
     MirrorDir is Deps.Mirror over staging mirror_dir root: owner/name's mirror

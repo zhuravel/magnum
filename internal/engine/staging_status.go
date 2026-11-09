@@ -440,18 +440,19 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
 	return out
 }
 
-// StagingFirst is the migration a PR at head must take to a staging
+// StagingFirst is the migrations a PR at head must take to a staging
 // before its merge: staging.DeployBeforeMerge over files, the head's file
 // list (store.PRFilesOf, which the poll writes from GitHub's Details), and
 // shown, the envs as StagingShown shows them (unknown, and a state word
-// this build does not know, hold nothing back), its control characters
-// spaces; "" when it need not, or files is another head's or not listed
-// (listed false). The board says it in staging.DeployBeforeMergeWords on
-// the wait on your merge the look's idle verdict leaves
-// (OpenMergeIsYours), as the factory screen does from the same rows.
-func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) string {
+// this build does not know, hold nothing back), every one in byte order and
+// its control characters spaces; nil when it need not, or files is another
+// head's or not listed (listed false). The board says it in
+// staging.DeployBeforeMergeWords on the wait on your merge the look's idle
+// verdict leaves (OpenMergeIsYours), as the factory screen does from the
+// same rows.
+func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) []string {
 	if !listed || files.HeadSHA != head || len(shown) == 0 {
-		return ""
+		return nil
 	}
 	envs := make([]staging.EnvStatus, len(shown))
 	for i, s := range shown {
@@ -463,10 +464,14 @@ func StagingFirst(files store.PRFiles, listed bool, head string, shown []Staging
 		}
 		envs[i] = staging.EnvStatus{Env: staging.Env{Name: s.Env}, State: st}
 	}
-	if m, needed := staging.DeployBeforeMerge(files.Paths, envs); needed {
-		return stagingClean(m)
+	ms, needed := staging.DeployBeforeMerge(files.Paths, envs)
+	if !needed {
+		return nil
 	}
-	return ""
+	for i, m := range ms { // ms is the rule's own list
+		ms[i] = stagingClean(m)
+	}
+	return ms
 }
 
 // cleanStagingEnv is e with no control character in its words (a failing

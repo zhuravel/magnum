@@ -22645,6 +22645,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and TestTheTaskCardCarriesTheLatestJiraPlan; the tui's TestTaskCardDrawsTheJiraPlanInOneLine; the stats'
   TestStatsCountTheShadowWeeksJiraPlans, each failing first. No new dependencies.
 
+- **The staging nudge names every migration, skips a PR that can never deploy, and steps aside while a deploy of the
+  head runs** (2026-11-10). The first build of the "deploy to a staging before the merge" line named one migration,
+  the first in byte order, so a PR of three migrations looked like a PR of one; offered the line (and E) for a PR whose
+  deploy magnum's daemon refuses outright (a fork's head, a head branch master, main or staging-*); and, on the
+  factory screen, kept it and E while a deploy of the head was already queued or running, where E says "already
+  deploying" (the board dropped it in 4d1d1e0a). The shared rule counts now: `staging.DeployBeforeMerge(paths, envs)`
+  returns every migration path in byte order, each once (nil for none, also when nothing is needed), and
+  `staging.DeployBeforeMergeWords(migrations)` names the first and counts the rest ("(it changes db/migrate/a.rb)",
+  "... and 1 more migration)", "... and 2 more migrations)", by `textx.Count`). The first clause, "deploy to a
+  staging before the merge", is the same for any count: the board stores the words as they are
+  (`PRBoardRow.DeployFirst`, the JSON `deploy_before_merge`) and the factory's Short cuts at the first " (".
+  `engine.StagingFirst` returns the list (nil for "not needed", as before the empty string: the board's `DeployFirst`
+  and `deployingHead` depend on it) and cleans every path of it of control characters, not only the first; the
+  board's caller (`boardStagings`) passes the list on, nothing else of the board changed.
+  - A PR that never deploys: `PRState.NeverDeploys` is `engine.StagingNeverDeploys` over magnum's row of the PR
+    (`fillPR`, no read of its own), and `PRState.deploysFirst` keeps a task's row (`taskDeployFirst`, before it reads
+    the card) and your PR's row (`ownRow`) on the merge words and the merge move, so E is not offered where the daemon
+    refuses it.
+  - A deploy under way: `PRState.DeployingHead` says a staging deploy record of the PR (`engine.KVStagingDeploys`
+    through `engine.StagingDeploysOf`, the records the board reads) is live (queued or running) and names the PR's
+    full head, the board's `deployingHead` rule; a deploy that needs you is never live, so the line stays (E resumes
+    it), and so it does for one of an older head, an ended one and another PR's. The premise of the work order was
+    that the factory already loads a task's deploy records; it does not: the factory registry has no staging effect
+    (E goes through magnum's daemon, whose records live in magnum's registry), and the screen reads those records
+    only in the CLI's `prFacts`, after `ScreenData` has built the rows. So `magnumRegistry.fillPR` reads them, in a
+    repository with staging envs only, once per opening of the registry (`magnumPass`, one `KVValues` of the
+    `staging.deploy.*` rows, the same call as the board's), for tasks' PRs and yours alike; a read that fails is no
+    record (the line stays; E refuses a deploy that runs). Rejected: stepping aside in the CLI's `prFacts`, which
+    already holds the records but runs after the row's words, move and hints are made (it would rewrite them in
+    another package); a new field on `ScreenOptions` fed by the CLI (a new reader there for the same rows).
+  - Tests, each failing first: staging's TestTheDeployBeforeMergeWordsNameTheFirstMigrationAndCountTheRest and
+    TestDeployBeforeMergeListsEveryMigrationInByteOrder; engine's
+    TestStagingFirstIsTheMigrationsOfTheHeadsFilesThatNoStagingHolds (a control character in the second path);
+    cli's TestTheBoardCountsTheMigrationsInTheDeployBeforeMergeWords (the board's words and JSON for two and three
+    migrations; the other board tests and every golden are unchanged, since each has one migration); the factory's
+    TestSeveralMigrationsAreNamedByTheFirstAndCounted, TestAPRThatNeverDeploysToAStagingGetsNoDeployFirstLine,
+    TestADeployOfThePRsHeadThatRunsTakesTheDeployFirstAway, TestPRStatesSayWhichPRsNeverDeployToAStaging (a fork,
+    staging-void, master, main) and TestPRStatesSayWhetherADeployOfThePRsHeadRuns (queued, running, needs you,
+    ended, an older head, another PR's, a repository without staging envs). No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -4474,7 +4474,9 @@ merge:** a PR that waits on your merge (approved, or no review required), change
 `db/<a folder whose name holds migrate>/`) and is on no staging (every env read, each `–` or `outdated`) needs a
 staging deploy first, where the migration runs before production: its WAITS ON and its card's WAITING FOR start
 with `you: deploy to a staging before the merge (it changes db/migrate/20261109010203_add_metric_rows.rb) ·`
-before the merge words (`deploy to a staging before the merge` on a narrow screen), its move is `E deploys to a
+before the merge words (`deploy to a staging before the merge` on a narrow screen; the words name the first
+migration in byte order and count the rest, `(it changes db/migrate/a.rb and 1 more migration)`, `… and 2 more
+migrations)`), its move is `E deploys to a
 staging` (`E deploys it`; an optional call the merge move named stays after it), and the hints offer `E deploy
 first` right after `enter` on home, after `j k` on its task card and first on your PR's card; `E` asks as ever. The
 changed files are those of the PR's head, never from a git call: a published task's are its ready card's (the
@@ -4483,7 +4485,13 @@ have pushed since), else the card's; your PR's are the files the poller listed a
 read is none, and hides no PR). One env that
 holds the head (`latest`, `CI`, `CI ✗`, `deploying`) or is not read (`?`, every cell while no factory daemon
 runs) keeps the merge as the move: the line says only what the mirror backs. CI, a reviewer or findings stay the
-next step before it. From 180 columns, once the factory daemon read a task's Jira
+next step before it. A PR that can never deploy to a staging (its head lives in a fork, or its head branch is
+`master`, `main` or `staging-*`: the deploy's own refusal) gets no line, so `E` is not offered where the daemon
+would refuse it, and neither does a PR while a staging deploy of its head runs (queued behind another deploy to
+its env, or running: `E` would say it is already deploying, and the push lands by itself): the move is the merge
+meanwhile, as on the board. A deploy of the head that stopped for you, or one of an older head, keeps the line.
+The deploys are the review daemon's records of the PR in magnum's registry (`staging.deploy.*`), read with the
+row, one read per frame. From 180 columns, once the factory daemon read a task's Jira
 issue (**Where the Jira issue stands**, below), a STATUS column after the title says where it stands:
 the status in its category's color (done green, in progress plain, to do dim) and how long the issue has held it
 (`In Code Review 13h`; the name alone when since when is not known), then `not you` or `nobody` when the issue is
@@ -5558,13 +5566,15 @@ list of them (`[]` for none), and `magnum tui --json` carries each row's `stagin
 **Before the merge.** An open PR whose head changes a migration (its file list from GitHub's Details, the first 100
 paths, names a file under a `db/*migrate*/` directory; `db/schema.rb` does not count) while every env was read and
 holds none of the head (`none` or `outdated`) has one more line on its card, wrapped on a narrow one: "deploy to a
-staging before the merge (it changes db/migrate/20261109_add_index.rb) (E deploys it)". On your own PR whose merge is
+staging before the merge (it changes db/migrate/20261109_add_index.rb) (E deploys it)"; it names the first migration
+in byte order and counts the rest ("(it changes db/migrate/20261109_add_index.rb and 1 more migration)", "… and 2 more
+migrations)"). On your own PR whose merge is
 yours (the look's idle verdict: approved, or a base that requires no review, with nothing else open) it is yellow,
 and its tag and verdict line say it needs you (`open: needs you`, "verdict: needs you · nothing open at a1b2c3d ·
 approved, merge is yours"): the deploy comes before that merge, as on the factory screen, which reads the same
 verdict; on your other PRs (no approval yet, a verdict that needs you for something else first, a stale one) it is
 dim, with the same E; on a colleague's it is dim and offers no E (E deploys only your own PRs, and the merge is the
-author's), and a `✔ needs you` there stays about your approval. A PR from a fork never deploys to a staging, so it
+author's), and a `✔ needs you` there stays about your approval. A PR from a fork, or whose head branch is `master`, `main` or `staging-*`, never deploys to a staging, so it
 has no line. The `ready` view leaves such a PR out, whoever merges it. A deploy that is pushed or live on any env, an
 env magnum cannot read (`unknown`, a stopped daemon) or a file list of an older head takes the line away on the next
 read, and so does a deploy of the head that magnum runs (queued behind another deploy to its env, or running, its

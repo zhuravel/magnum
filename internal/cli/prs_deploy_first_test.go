@@ -229,3 +229,34 @@ func TestTheBoardLeavesDeployBeforeMergeOutWhileADeployOfTheHeadRuns(t *testing.
 		t.Errorf("--needs-me lists %v, want #7 (its deploy needs you) and #8 (a deploy of an older head) alone", needs)
 	}
 }
+
+// The board names the first migration of the head (byte order) and counts
+// the rest: staging's words say "and 1 more migration" for two and "and 2
+// more migrations" for three, and the JSON carries them as they are.
+func TestTheBoardCountsTheMigrationsInTheDeployBeforeMergeWords(t *testing.T) {
+	h := newActHarness(t)
+	stagingConfig(h.d.Cfg)
+	two := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	three := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	h.setFiles(two, "alice", &store.ReviewGate{}, false, "db/migrate/20261109_b.rb", "app/models/metric.rb", "db/migrate/20261109_a.rb")
+	h.setFiles(three, "alice", &store.ReviewGate{}, false, "db/sharded_migrate/20261110_c.rb", "db/migrate/20261109_b.rb", "db/migrate/20261109_a.rb")
+	for _, pr := range []store.PR{two, three} {
+		h.setStagingRecord(pr.ID, engine.StagingRecord{Head: pr.HeadSHA, Envs: []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}}})
+	}
+	if err := h.st.SetKV(h.ctx, store.KVDaemonLastTick, store.FormatTime(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	out, err := prsOptions{}.source(prsSource(h.st, h.d.Cfg, store.BoardFilter{}, []string{"zhuravel"}, h.d.Layout))(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int]string{
+		5: "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb and 1 more migration)",
+		6: "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb and 2 more migrations)",
+	}
+	for _, r := range out {
+		if r.DeployFirst != want[r.Number] || prsJSONOf(r).DeployBeforeMerge != want[r.Number] {
+			t.Errorf("#%d: deploy first %q, JSON %q; want %q", r.Number, r.DeployFirst, prsJSONOf(r).DeployBeforeMerge, want[r.Number])
+		}
+	}
+}
