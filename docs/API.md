@@ -12889,17 +12889,18 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     Each round is its own: a fresh scratch directory under the task's
     (LocalRoot/<round>-<tag>) with its registry, reports and a copy of the
     repository notes, a new agent tag, and the synthetic PR number LocalNumber,
-    so two rounds never share an agent, a herdr workspace label or an eval
-    case lock (it holds the case lock "local-<number>" for the round).
-    It writes the title and body (description.md) and the ticket (ticket.md,
-    when c has a ticket or answers: localTicket) there, and runs engine.RunLocal
-    in the task's copy at c.HeadSHA, always with c.BaseSHA (post-review's
-    --local-base), as a gh identity (the watch's, else the first configured:
-    an App's token would be minted from GitHub), with the branch as the head
-    ref and the title with the Jira key. The round's config is d.Config (the
-    factory's review candidate, config.WithCandidate). A case it cannot run
-    is an error and nothing starts; a round that ran is a result, whatever its
-    outcome, and only the end of ctx (a drain) is an error after it started.
+    so two rounds never share an agent, a herdr workspace label or an eval case
+    lock (it holds the case lock "local-<number>" for the round). It writes
+    the title and body (description.md) and the ticket with the operator's
+    answers after it (ticket.md, when c has either: localTicket) there,
+    and runs engine.RunLocal in the task's copy at c.HeadSHA, always with
+    c.BaseSHA (post-review's --local-base), as a gh identity (the watch's,
+    else the first configured: an App's token would be minted from GitHub),
+    with the branch as the head ref and the title with the Jira key. The round's
+    config is d.Config (the factory's review candidate, config.WithCandidate).
+    A case it cannot run is an error and nothing starts; a round that ran is a
+    result, whatever its outcome, and only the end of ctx (a drain) is an error
+    after it started.
 
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
