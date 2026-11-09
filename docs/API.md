@@ -14760,6 +14760,13 @@ func NewStaging(cfg *config.Config, d staging.Deps, gitEnv func(ctx context.Cont
     git env from gitEnv on the context of the Refresh that asks for it, which
     the daemon's stop cancels (an App's token mint ends with the drain).
 
+    Its client is read only, by design: the fetch clock that wraps d.Git hides
+    the deploy's git, so the Plan and Deploy its internal/staging Client
+    carries answer staging's refusal ("this git cannot deploy") and run no git,
+    whatever git d brings. The factory daemon never deploys: the factory
+    screen's E deploys through magnum's daemon (its staging_deploy request),
+    the one deployer, whose Step loop runs every effect.
+
 type StartInput struct {
 	Key, Guidance, Prompt string
 	PR, Run               *Link
@@ -31072,6 +31079,8 @@ type FactoryActions interface {
 	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	StagingPlan(ctx context.Context, ref string, envs []string) (ActionResult, error)
+	StagingDeploy(ctx context.Context, ref string, asked StagingAsked) (ActionResult, error)
 	// AcceptQA lets a task go on with what QA left you accepted by you, at
 	// its head: the defects the writer declined, at its fix loop's stop or
 	// whose pages a QA run did not walk again, the writer's fixes a QA run
@@ -31118,6 +31127,10 @@ type FactoryActions interface {
         and M and U do, through the same calls (DashboardActions): magnum's own
         request paths, never the factory daemon. The screen asked y/N first,
         in the board's words.
+      - StagingPlan and StagingDeploy are DashboardActions': E's plan of a
+        staging deploy of PR ref to envs (a dry run, whose Ask the screen puts
+        as its y/N and whose Staging binds the deploy), then the deploy so
+        bound, through magnum's daemon, never the factory's.
 
 type FactoryAlert struct {
 	At   time.Time
@@ -31284,6 +31297,12 @@ type FactoryPR struct {
 	// them; nil when the screen read none: the keys then refuse only what
 	// the rest of the row tells, and magnum's daemon decides the rest.
 	Facts *FactoryPRFacts
+	// StagingDeploys are the PR's staging deploys magnum's daemon runs, or
+	// ran in the last day, live ones first, each as its newest event left
+	// it (engine.StagingDeployRecord, the records the board reads): the
+	// task card draws them under STAGINGS, home's rows none. nil when the
+	// screen read none.
+	StagingDeploys []StagingDeploy
 }
     FactoryPR is a row's open PR on the factory screen (your own PR's, or a
     task's), as magnum's registry tells it: what the row's keys go by.
@@ -32740,6 +32759,10 @@ type TaskCard struct {
 	// the PR's lines (each server's state and how long it has stood); none:
 	// no line.
 	Stagings []StagingCell
+	// StagingDeploys are the PR's staging deploys magnum's daemon runs or
+	// ran in the last day (its row's FactoryPR.StagingDeploys), drawn under
+	// the STAGINGS line in the board card's words; none: no lines.
+	StagingDeploys []StagingDeploy
 	// JiraStatus is where the task's Jira issue stands, as its row's
 	// JiraStatus says it; nil: not read.
 	JiraStatus *FactoryJiraStatus

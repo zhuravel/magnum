@@ -21115,6 +21115,58 @@ skill versions); people add theirs to the sections before it, at the end of the 
   retry's wait, the drain guard, the last try by the post's time, the rule of what the result depends on and the
   event's `at least` were each taken out once, and a test failed.
 
+- **The factory screen's E deploys a row's PR to staging through the review daemon's request path, as the board's
+  E does; the factory daemon stays read only** (2026-11-09, the factory screen's E). Before, E was no key of the
+  factory screen: a task's PR went to staging from the board, the dashboard or `magnum staging --deploy` alone.
+  - The path. `tui.FactoryActions` gains `StagingPlan` and `StagingDeploy`, with `DashboardActions`' signatures;
+    the cli's `factoryActions` hands both to the board's `screenActions` (`errNoBoard` without them), as it does P.
+    So a deploy asked on the factory screen is the same `staging_deploy` request the board sends: the review daemon
+    plans it, asks nothing itself, starts the effects and steps them. Nothing changed in `internal/engine`,
+    `internal/staging`'s deploy side or the factory daemon's loop.
+  - Why one deployer. The review daemon's Step loop already runs every effect and resumes them after a restart,
+    its staging client holds the deploy's parts (the fixer App's bot as committer, the push env, the allowlist),
+    and the fixer bot's pushes stay in one place. A second deployer in the factory daemon would need all of it
+    twice, and two loops would race for the same envs' claims. `factory.NewStaging`'s client stays read only by
+    design: the fetch clock that wraps the git hides the deploy's git, so its Plan and Deploy answer staging's
+    refusal; its doc says so now, and a test pins it (review finding "NewStaging's client can never deploy").
+  - The key, on home's rows and on the task card. It refuses with a note and no request, before any chooser: a row
+    without a PR in magnum's registry (`E acts on a PR in magnum's registry: PR-12302 has none there`), a PR whose
+    row has no staging cells (the board's words: its repository has no staging envs), a merged or closed one (the
+    board's refusal, from the facts the screen reads), a screen without actions (`noActions`) and an action in
+    flight. Your own PR's row has no staging cells, since the factory reads the staging servers of its tasks' PRs
+    alone; its refusal says this screen reads none of it and names `magnum staging <ref> --deploy <envs>`, rather
+    than claim the repository has no staging envs.
+  - The chooser is the board's `stagingChoice` and its line, on the footer's rule (home's and the card's); its keys
+    are one function for both bars (`stagingChoice.press`: 1 to 9 toggle, a all, enter plans, enter with none says
+    to choose one first, any other key cancels). It is fed from the row's cells converted to the board's states
+    (`stagingInfosOf`, `factory.stagingState` the other way round: CI, CI ✗ and deploying are pushed; a state it does
+    not know is unknown), and it is part of the frame's key (`stagingChoice.key`). A click closes it.
+  - The plan's question is the factory's own (`res.nextFactory`, as P's) with a new `wrap` flag: on home it takes
+    the body's last lines above the rule, as on the board (up to half the screen); on the card it wraps over the
+    footer, past the three lines other questions keep. The bar now cleans every plan's question when it goes up
+    (P's too), since it is the daemon's text. y runs `StagingDeploy` bound to the plan's envs, head and what it
+    named.
+  - Following the deploy. The factory bar re-reads no request, and the daemon plans again before it answers, which
+    can take minutes; a deploy still pending ends its text saying that it is queued and that `magnum staging <ref>`
+    (the PR's own reference) follows it. The task card shows the PR's staging deploys under STAGINGS, from the
+    records the board reads (`engine.KVStagingDeploys`), which the screen's source reads once per frame for every
+    row (`stagingDeployValues` before `prFacts`' loop, `stagingDeploysOf` per row) onto `FactoryPR.StagingDeploys`;
+    the card draws them with the board card's painter (`stagingDeployLines`, split out of `stagingLines`), cleaned
+    (`cleanStagingDeploys`). Home's rows draw none.
+  Rejected: a deployer in the factory daemon (above); a second chooser for the factory screen (two key maps to keep
+  in step); staging cells for your own PRs' rows, from the review daemon's `pr.<id>.staging` record (it would change
+  home's rows, which this change leaves as they are: a follow-up); following the deploy's request on the factory
+  bar (it follows none, by design, and the card's deploy lines show the effect once the daemon answers).
+  Tests: tui's TestFactoryEOnAHomeRowChoosesTheEnvsThenDeploysAfterThePlan,
+  TestFactoryEOnATaskCardDeploysAfterThePlan, TestFactoryERefusesWhatItCannotDeploy,
+  TestFactoryEsChooserCancelsOnAnyOtherKey, TestFactoryEsPlanErrorAsksNothing,
+  TestFactoryEsPendingDeploySaysHowToFollowIt, TestFactoryEsQuestionShowsTheMigrationsAndTheWarningWhole,
+  TestFactoryEsQuestionIsCleaned, TestTheTaskCardShowsItsPRsStagingDeploys, TestTheFactoryHelpNamesE and
+  TestFactoryEsChooserSaysTheCellsInTheBoardsStates (the board's E tests pass unchanged on the shared keys); the
+  cli's TestTheFactoryScreensStagingDeployIsTheBoards and TestTheFactoryScreenReadsItsPRsStagingDeploys; the
+  factory's TestTheFactoryStagingClientCannotDeploy, which fails once the fetch clock passes the deploy's git
+  through.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
