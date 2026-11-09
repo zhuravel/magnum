@@ -35,7 +35,8 @@ func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, 
 		return in, OutcomeError, fmt.Errorf("case %q is a local round, which replays every role: --judge-only replays posted cases only", ec.Name)
 	}
 	if in, err = LoadLocalInputs(LocalCaseDir(d.Layout, ec.Name)); err != nil {
-		return in, OutcomeError, err
+		n := ec.Number - eval.LocalNumberBase
+		return in, OutcomeError, fmt.Errorf("%w; freeze the round again: magnum eval add --local-task %d --round %d --name %s", err, n/10, n%10, ec.Name)
 	}
 	if !strings.EqualFold(in.PR(), ec.PR) || in.HeadSHA != ec.Head {
 		return in, OutcomeError, fmt.Errorf("case %q names %s at %s, but its frozen inputs are round %d of task %d, %s at %s: "+
@@ -171,11 +172,16 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 // result's findings as the factory acts on them (LocalResult.Findings,
 // each one's title before its body, so a defect's words match either; a
 // question marked), then the planned review's body from the judge's result
-// file (an InBody finding, which only a defect with body = true reads),
-// when the file has one.
+// file (an InBody finding, which only a defect with body = true reads, and
+// never noise), when the file has one. The finding the result makes of the
+// body (localBodyTitle) is that body, so it is not scored twice, nor as
+// noise.
 func localScoreResult(res LocalResult, resultFile string) eval.Result {
 	out := eval.Result{Status: pipeline.OutcomeDryRun}
 	for _, f := range res.Findings {
+		if f.Title == localBodyTitle && f.Path == "" && f.Line == 0 {
+			continue
+		}
 		body := strings.TrimSpace(f.Body)
 		if t := strings.TrimSpace(f.Title); t != "" && !strings.Contains(body, t) {
 			body = strings.TrimSpace(t + "\n\n" + body)

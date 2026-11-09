@@ -249,3 +249,34 @@ func mustRemoveAll(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+// The review's body is scored as a posted case's is, never as noise: the finding a local result makes
+// of it, when its counts hold a P0 to P2 no finding carries, is the body, which only a defect with
+// body = true reads.
+func TestALocalCasesReviewBodyIsNeverNoise(t *testing.T) {
+	const bodyOnly = `{"status":"dry_run","verdict":"blocking","findings":{"P0":0,"P1":1,"P2":0,"P3":0},"provenance":[],
+"planned_review":{"event":"REQUEST_CHANGES","body":"Blocking: the refund keeps its points, which the plan calls deliberate.","comments":[]}}`
+	for name, tc := range map[string]struct {
+		body  bool
+		found int
+	}{"a defect on a file": {false, 0}, "a defect the body may report": {true, 1}} {
+		f := newReplayFixture(t, bodyOnly)
+		ec := localEvalCase(t)
+		ec.Defects[0].Question, ec.Defects[0].Body = false, tc.body
+		cr := RunCase(context.Background(), f.d, ec, Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
+		if cr.Score == nil || cr.Score.Noise != 0 || cr.Score.Found != tc.found {
+			t.Errorf("%s: case run %+v (score %+v), want found %d and no noise", name, cr, cr.Score, tc.found)
+		}
+	}
+}
+
+// A local case whose frozen inputs are gone names the command that freezes its round again, with
+// the task and the round its synthetic number names.
+func TestALocalCaseWithoutInputsNamesTheAddThatFreezesIt(t *testing.T) {
+	f := newReplayFixture(t, questionResult)
+	mustRemoveAll(t, LocalCaseDir(f.d.Layout, "task-1-round-1"))
+	cr := RunCase(context.Background(), f.d, localEvalCase(t), Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
+	if !strings.Contains(cr.Error, "magnum eval add --local-task 1 --round 1 --name task-1-round-1") {
+		t.Fatalf("case run %+v", cr)
+	}
+}

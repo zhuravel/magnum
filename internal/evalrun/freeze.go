@@ -132,27 +132,26 @@ func SaveLocalInputs(dir string, in LocalInputs) error {
 }
 
 // LoadLocalInputs reads the frozen inputs in dir (SaveLocalInputs). A file
-// missing, or inputs that cannot be replayed, are an error that says how to
-// freeze the round again.
+// missing, or inputs that cannot be replayed, are an error (its round
+// frozen again, `magnum eval add`, makes them whole).
 func LoadLocalInputs(dir string) (LocalInputs, error) {
 	var in LocalInputs
-	again := fmt.Sprintf("freeze the round again (`magnum eval add --local-task <id> --round <n> --name %s`)", filepath.Base(dir))
 	data, err := os.ReadFile(filepath.Join(dir, localInputsFile))
 	if err != nil {
-		return in, fmt.Errorf("evalrun: local case %s has no frozen inputs in %s: %w; %s", filepath.Base(dir), tilde(dir), err, again)
+		return in, fmt.Errorf("evalrun: local case %s has no frozen inputs in %s (eval add freezes them): %w", filepath.Base(dir), tilde(dir), err)
 	}
 	if err := json.Unmarshal(data, &in); err != nil {
-		return in, fmt.Errorf("evalrun: local case %s: %s: %w; %s", filepath.Base(dir), localInputsFile, err, again)
+		return in, fmt.Errorf("evalrun: local case %s: %s: %w", filepath.Base(dir), localInputsFile, err)
 	}
 	for name, text := range map[string]*string{localPlanFile: &in.Body, localTicketMD: &in.TicketMD, localAnswersFile: &in.AnswersMD} {
 		b, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			return in, fmt.Errorf("evalrun: local case %s: %w; %s", filepath.Base(dir), err, again)
+			return in, fmt.Errorf("evalrun: local case %s: %w", filepath.Base(dir), err)
 		}
 		*text = string(b)
 	}
 	if err := in.check(); err != nil {
-		return in, fmt.Errorf("evalrun: local case %s: %w; %s", filepath.Base(dir), err, again)
+		return in, fmt.Errorf("evalrun: local case %s: %w", filepath.Base(dir), err)
 	}
 	return in, nil
 }

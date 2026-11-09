@@ -372,6 +372,11 @@ type localProvenance struct {
 	Question bool   `json:"question"`
 }
 
+// localBodyTitle is the title of the finding a local result makes of the
+// review's body (ParseLocalResult), when its counts hold a P0 to P2 that no
+// finding carries.
+const localBodyTitle = "the review's body"
+
 // titleLead is a comment title's priority, bold and brackets.
 var titleLead = regexp.MustCompile(`^\[?P[0-3]\]?:?\s*`)
 
@@ -433,7 +438,7 @@ func ParseLocalResult(data []byte) LocalResult {
 	for p := range 3 { // a P0 to P2 the counts hold and no finding carries: the body says it
 		sev := fmt.Sprintf("P%d", p)
 		if out.Counts[p] > 0 && !slices.ContainsFunc(out.Findings, func(lf LocalFinding) bool { return lf.Severity == sev }) {
-			out.Findings = append(out.Findings, LocalFinding{Severity: sev, Title: "the review's body", Body: body})
+			out.Findings = append(out.Findings, LocalFinding{Severity: sev, Title: localBodyTitle, Body: body})
 			break
 		}
 	}
