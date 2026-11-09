@@ -4985,7 +4985,8 @@ or a factory update reaches the daemon only after `make build && bin/magnum fact
 
 For each open PR and each `[[factory.repo.staging]]` environment of its repository, magnum can tell where the
 PR stands on that staging branch (`internal/staging`; the factory daemon reads it for its published tasks' PRs,
-on [its screen](#factory-writing-code-from-a-jira-key-or-a-prompt) and in their status files; the review daemon wires it next). A staging deploy is a merge of
+on [its screen](#factory-writing-code-from-a-jira-key-or-a-prompt) and in their status files, and the review daemon for every open PR, on the
+board and in `magnum staging`: [Stagings](#stagings)). A staging deploy is a merge of
 the PR's head into `staging-<name>`, and the deploy job records a GitHub deployment of the environment `<name>`
 once that tip is live (so an environment's branch is always `staging-<name>`):
 
