@@ -4,7 +4,10 @@
 // task waited on them, computed from the factory registry's evidence records
 // alone (spans, inputs, questions, decisions and review rounds) and set
 // against the baseline frozen before the first task (milestone 1's exit
-// test). Compute only reads the registry.
+// test); and, for a task with a published PR, the PR's quality: what the
+// local review missed at magnum's first posted round (the escape checks)
+// and the PR's CI failures after the publish (its CI checks). Compute only
+// reads the registry.
 package stats
 
 import (
@@ -317,7 +320,8 @@ func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Repo
 
 // ComputeAt measures the tasks of reg started at or after since (the zero
 // time: all), whole, whatever happened to them later, from their spans,
-// inputs, questions, decisions and review rounds. now ends a wait on the operator that
+// inputs, questions, decisions and review rounds, and a published task's
+// escape check, escapes and CI checks. now ends a wait on the operator that
 // is still open. It reads and never writes. Nothing here reads a transcript
 // or GitHub, so the numbers are the evidence the factory recorded.
 func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time) (Report, error) {

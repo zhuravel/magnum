@@ -8,7 +8,10 @@ package factory
 // has no stage to go back to (needs_you is a live stage's, which answer,
 // retry and ready act on); a reopen clears that wait. Unknown moves
 // nothing: a registry that cannot be read, a PR magnum does not have, its
-// daemon down.
+// daemon down. Each follow of a PR magnum has also copies its CI into the
+// task's checks (copyCI) and starts the escape check of the task's local
+// review when it is due (escapes.go), with magnum's daemon down too: both
+// read only what magnum recorded.
 
 import (
 	"context"
