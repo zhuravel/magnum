@@ -533,14 +533,15 @@ func (e *Engine) recoverStagingResolves(ctx context.Context) {
 		if j.State != resolveRunning {
 			continue
 		}
-		if j.PRID != 0 && !e.reserveSlotWork(j.PRID, resolveHeld) {
+		held := e.holdForResolve(j.PRID)
+		if !held && j.PRID != 0 {
 			e.log.Warn("staging resolver: a job's PR is held by other work at the start", "job", j.ID, "pr", j.label())
 		}
 		if !j.Cancel && j.Phase == resolvePhaseAgent && j.Run != "" {
 			e.log.Info("staging resolver: a job goes on after the restart", "job", j.ID, "pr", j.label(), "agent", j.Agent)
 			continue
 		}
-		w := &resolveWork{e: e, r: r, job: &j, git: r.git, held: true}
+		w := &resolveWork{e: e, r: r, job: &j, git: r.git, held: held, keepSlot: !held}
 		note := w.release(ctx)
 		if j.Cancel {
 			if err := r.end(ctx, e, &j, resolveFailed, whyCancelled); err != nil {

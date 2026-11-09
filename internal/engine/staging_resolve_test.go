@@ -866,3 +866,23 @@ func TestWithoutStagingEntriesNothingOfTheResolverRuns(t *testing.T) {
 		t.Errorf("the slot was touched: %v", c)
 	}
 }
+
+// A resolution that deletes the conflicted path (one side removed what the
+// other changed, and the context says it goes) is a merge without it.
+func TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.agent.onPrompt = func(a *fakeStagingAgent, _ int, _ string) {
+		if err := os.Remove(filepath.Join(a.job.Cwd, "app/a.rb")); err != nil {
+			t.Error(err)
+		}
+		a.result(t, resolveResultFile{Outcome: resolveOutcomeResolved, Specs: []string{"spec/a_spec.rb"}, SpecsResult: resolveSpecsPassed})
+	}
+	res := f.await(f.start(1))
+	if res.State != staging.ResolveDone {
+		t.Fatalf("Result = %+v, want done", res)
+	}
+	if got := f.gitIn(f.clone, "ls-tree", "-r", "--name-only", res.MergeSHA); strings.Contains(got, "app/a.rb") || !strings.Contains(got, "db/schema.rb") {
+		t.Errorf("the merge lists %q; want db/schema.rb and no app/a.rb", got)
+	}
+}

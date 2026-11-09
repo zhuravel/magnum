@@ -99,8 +99,9 @@ type resolveWork struct {
 	job   *resolveJob
 	git   resolveGit
 	agent stagingAgent
-	// held: the job holds its PR's slot-work reservation in this process.
-	held bool
+	// held: the job holds its PR's slot-work reservation in this process;
+	// keepSlot: its end leaves the slot alone (other work holds the PR).
+	held, keepSlot bool
 }
 
 // runResolveJob runs job until it ends, waits for its slot (true: the next
@@ -108,10 +109,16 @@ type resolveWork struct {
 // goes on after the restart). ctx is the job's own: Cancel ends it.
 func (e *Engine) runResolveJob(ctx, life context.Context, r *stagingResolver, job *resolveJob) (waits bool) {
 	w := &resolveWork{e: e, r: r, job: job, git: r.git}
-	if job.State == resolveRunning {
-		w.held = true // the recovery reserved its PR again (recoverStagingResolves)
+	var err error
+	if job.State == resolveRunning && !e.holdForResolve(job.PRID) {
+		// The recovery held the PR again at the start (recoverStagingResolves):
+		// other work holding it now owns the slot.
+		w.keepSlot = true
+		err = resolveFail("PR #%d is held by other work since the restart: slot %s is left as it is", job.Number, job.Slot)
+	} else {
+		w.held = job.State == resolveRunning
+		err = w.run(ctx)
 	}
-	err := w.run(ctx)
 	switch {
 	case errors.Is(err, errResolveWaits):
 		return true
@@ -552,16 +559,29 @@ func (w *resolveWork) release(ctx context.Context) string {
 			notes = append(notes, "its agent may still run: "+oneLine(err.Error(), 200))
 		}
 	}
-	if job.SlotID != 0 {
+	if job.SlotID != 0 && !w.keepSlot {
 		if why := w.putSlotBack(ctx); why != "" {
 			notes = append(notes, why)
 		}
 	}
-	if w.held || job.PRID != 0 {
+	if w.held {
 		e.endEviction(job.PRID)
 		w.held = false
 	}
 	return strings.Join(notes, "; ")
+}
+
+// holdForResolve holds PR prID for a resolver job's slot work: it takes
+// the reservation (reserveSlotWork), or finds it the job's already (the
+// recovery took it at the start); false while other work holds the PR.
+func (e *Engine) holdForResolve(prID int64) bool {
+	if prID == 0 {
+		return false
+	}
+	e.mu.Lock()
+	held := e.evicting[prID] == resolveHeld
+	e.mu.Unlock()
+	return held || e.reserveSlotWork(prID, resolveHeld)
 }
 
 // putSlotBack resyncs the job's slot to the commit it held (aborting the
