@@ -549,24 +549,27 @@ func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 }
 
 // interrupt stops the agent's turn (esc), so it neither writes late nor
-// keeps the workspace busy.
-func (c *paneAgent) interrupt(ctx context.Context, run store.Run) {
+// keeps the workspace busy. It reports whether the esc was sent.
+func (c *paneAgent) interrupt(ctx context.Context, run store.Run) bool {
 	if c.d.Keys == nil || run.SessionID == nil {
-		return
+		return false
 	}
 	s, err := c.st.SessionByID(context.WithoutCancel(ctx), *run.SessionID)
 	if err != nil {
-		return
+		return false
 	}
 	target := store.Deref(s.AgentName)
 	if target == "" {
 		target = store.Deref(s.HerdrPaneID)
 	}
-	if target != "" {
-		if err := c.d.Keys(context.WithoutCancel(ctx), target, "esc"); err != nil {
-			c.d.Logger.Warn(c.spec.what+": interrupt the agent", "run", run.ID, "err", err)
-		}
+	if target == "" {
+		return false
 	}
+	if err := c.d.Keys(context.WithoutCancel(ctx), target, "esc"); err != nil {
+		c.d.Logger.Warn(c.spec.what+": interrupt the agent", "run", run.ID, "err", err)
+		return false
+	}
+	return true
 }
 
 // finish abandons a run that will not be waited for any more.
@@ -811,7 +814,8 @@ func (c *paneAgent) detach() {
 }
 
 // Close stops observing and taking hook events and closes the agent: a turn still in flight (a
-// shutdown mid-turn) is interrupted and abandoned, then the agent is parked
+// shutdown mid-turn, a Cancel) is interrupted and abandoned, and herdr is
+// watched until it shows the agent idle (release), then the agent is parked
 // with its workspace (agents.Manager.Park); when Park refuses a busy agent,
 // the agent, which is ours by its tagged name, is quit and its workspace
 // closed. Only then is the scratch registry removed; if the agent stays,
@@ -844,20 +848,30 @@ func (c *paneAgent) Close(ctx context.Context) error {
 }
 
 // release ends the agent's runs, then parks it, else quits it and closes
-// its workspace.
+// its workspace. A turn it interrupted (esc) is waited for as a round's stop
+// waits (waitAgentsQuiet, up to abortQuietWait): herdr shows the agent at
+// work for a moment after the esc, and Park, and a Claude's Quit, refuse an
+// agent herdr shows working, so a Park right after the esc fails on an
+// agent that stops a second later. Park is then tried again while it
+// reports the agent busy (abortParkTries, 2 s apart). Without a turn in
+// flight nothing waits.
 func (c *paneAgent) release(ctx context.Context) error {
 	runs, err := c.st.RunsByPR(ctx, c.pr.ID)
 	if err != nil {
 		return err
 	}
+	interrupted := false
 	for _, r := range runs {
 		switch r.State {
 		case store.RunPending, store.RunSubmitted, store.RunWorking:
-			c.interrupt(ctx, r)
+			interrupted = c.interrupt(ctx, r) || interrupted
 			c.finish(ctx, r.ID, errors.New("the "+c.spec.what+" ended"))
 		}
 	}
-	perr := c.mgr.Park(ctx, c.pr)
+	if interrupted && c.d.Herdr != nil && !c.obs.waitAgentsQuiet(ctx, c.pr.ID) {
+		c.d.Logger.Warn(c.spec.what+": the agent still works after its interrupt", "run", c.id, "waited", abortQuietWait)
+	}
+	perr := c.park(ctx, interrupted)
 	if perr == nil {
 		return nil
 	}
@@ -882,4 +896,25 @@ func (c *paneAgent) release(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// park parks the agent (agents.Manager.Park); after an interrupt
+// (retrying), it tries again while Park reports the agent busy, at most
+// abortParkTries times, 2 s apart, as a round's stop does (parkForStop,
+// though never hard: the hard park refuses a working agent too).
+func (c *paneAgent) park(ctx context.Context, retrying bool) error {
+	tries := 1
+	if retrying {
+		tries = abortParkTries
+	}
+	var err error
+	for try := 1; try <= tries; try++ {
+		if err = c.mgr.Park(ctx, c.pr); err == nil || !errors.Is(err, agents.ErrBusy) || try == tries {
+			break
+		}
+		if c.d.Sleep(ctx, 2*time.Second) != nil {
+			break
+		}
+	}
+	return err
 }

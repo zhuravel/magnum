@@ -40,6 +40,34 @@ type fakePaneAgents struct {
 	mu      sync.Mutex
 	prompts []string
 	wg      sync.WaitGroup
+	// busy, when set (setBusy), reports whether herdr shows the agent at
+	// work: Park refuses then, as agents.Manager's parkCheckLive does, and
+	// Quit too, sending no key, as its earlyQuit does for a working Claude.
+	busy func(ctx context.Context) bool
+	// parked counts the Parks that parked.
+	parked int
+}
+
+// setBusy sets busy.
+func (f *fakePaneAgents) setBusy(fn func(ctx context.Context) bool) {
+	f.mu.Lock()
+	f.busy = fn
+	f.mu.Unlock()
+}
+
+// working reports busy's answer (false when unset).
+func (f *fakePaneAgents) working(ctx context.Context) bool {
+	f.mu.Lock()
+	fn := f.busy
+	f.mu.Unlock()
+	return fn != nil && fn(ctx)
+}
+
+// parks is how many Parks parked.
+func (f *fakePaneAgents) parks() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.parked
 }
 
 func (f *fakePaneAgents) PreflightRole(ctx context.Context, role config.Role) error {
@@ -71,13 +99,30 @@ func (f *fakePaneAgents) Park(ctx context.Context, pr store.PR) error {
 		f.record(fmt.Sprintf("park:%d", pr.ID))
 		return fmt.Errorf("agents: park pr %d: a run is in flight: %w", pr.Number, agents.ErrBusy)
 	}
-	return f.fakeAgents.Park(ctx, pr)
+	if f.working(ctx) {
+		f.record(fmt.Sprintf("park:%d", pr.ID))
+		role := "agent"
+		if ss, err := f.st.SessionsByPR(ctx, pr.ID); err == nil && len(ss) > 0 {
+			role = ss[len(ss)-1].Role
+		}
+		return fmt.Errorf("agents: park pr %d: %s is %s: %w", pr.Number, role, herdr.StatusWorking, agents.ErrBusy)
+	}
+	if err := f.fakeAgents.Park(ctx, pr); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.parked++
+	f.mu.Unlock()
+	return nil
 }
 
 func (f *fakePaneAgents) Quit(ctx context.Context, s store.Session) error {
 	f.record(fmt.Sprintf("quit:%d", s.ID))
 	if f.quitErr != nil {
 		return f.quitErr
+	}
+	if f.working(ctx) {
+		return fmt.Errorf("agents: quit session %d: %s is %s before its ctrl+c, no key sent: %w", s.ID, s.Role, herdr.StatusWorking, agents.ErrBusy)
 	}
 	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionLive, store.SessionStarting}, store.SessionClosed, nil)
 }

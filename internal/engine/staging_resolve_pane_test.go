@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,5 +151,147 @@ func TestTheStagingResolversPaneAgentWorksInTheSlotWithTheJobsEnv(t *testing.T) 
 	}
 	if err := closed.Close(h.ctx); err != nil {
 		t.Error(err)
+	}
+}
+
+// laggingHerdr is a fakeHerdr seen through herdr's lag: the agent named
+// name, at work, still shows working in the lag snapshots after its esc,
+// then idle; a deaf one shows working through any key.
+type laggingHerdr struct {
+	*fakeHerdr
+	mu   sync.Mutex
+	name string
+	lag  int
+	left int // snapshots that still show it working; -1 before the esc
+	deaf bool
+}
+
+func newLaggingHerdr(hd *fakeHerdr, lag int) *laggingHerdr {
+	return &laggingHerdr{fakeHerdr: hd, lag: lag, left: -1}
+}
+
+func (l *laggingHerdr) Snapshot(ctx context.Context) (herdr.Snapshot, error) {
+	l.mu.Lock()
+	switch {
+	case l.left == 0 && !l.deaf:
+		l.fakeHerdr.mu.Lock()
+		for i := range l.fakeHerdr.agents {
+			if l.fakeHerdr.agents[i].Name == l.name {
+				l.fakeHerdr.agents[i].AgentStatus = herdr.StatusIdle
+			}
+		}
+		l.fakeHerdr.mu.Unlock()
+	case l.left > 0:
+		l.left--
+	}
+	l.mu.Unlock()
+	return l.fakeHerdr.Snapshot(ctx)
+}
+
+// esc is the agent's esc: from now on it stops, lag snapshots later.
+func (l *laggingHerdr) esc() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.left < 0 {
+		l.left = l.lag
+	}
+}
+
+// at puts the agent at at to work in its own workspace "staging merge" (ws),
+// alone there unless foreign names another pane in it.
+func (l *laggingHerdr) at(at stagingAgentAt, ws string, foreign bool) {
+	l.mu.Lock()
+	l.name = at.Name
+	l.mu.Unlock()
+	l.fakeHerdr.mu.Lock()
+	defer l.fakeHerdr.mu.Unlock()
+	l.workspaces = append(l.workspaces, herdr.Workspace{ID: ws, Label: stagingWorkspace})
+	l.panes = append(l.panes, herdr.Pane{ID: at.Pane, WorkspaceID: ws})
+	if foreign {
+		l.panes = append(l.panes, herdr.Pane{ID: "p-yours", WorkspaceID: ws})
+	}
+	l.agents = append(l.agents, herdr.AgentInfo{Name: at.Name, PaneID: at.Pane, WorkspaceID: ws, Agent: "claude", AgentStatus: herdr.StatusWorking})
+}
+
+// shows reports whether a fresh snapshot shows the agent at work.
+func (l *laggingHerdr) shows(ctx context.Context) bool {
+	snap, err := l.Snapshot(ctx)
+	if err != nil {
+		return true
+	}
+	l.mu.Lock()
+	name := l.name
+	l.mu.Unlock()
+	a, ok := snap.AgentByName(name)
+	return ok && a.AgentStatus == herdr.StatusWorking
+}
+
+// cancelledResolver is the staging resolver's pane agent at work on its
+// turn, as `magnum staging --cancel` finds it: prompted, its agent shown at
+// work in herdr (through lh, lag snapshots behind an esc, in its own
+// "staging merge" workspace w1, with a pane of yours beside it when foreign),
+// Park and Quit refusing while herdr shows it so, and its Wait cut by the
+// Cancel. It returns the agent, its manager and the herdr lh.
+func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) (*paneStagingAgent, *fakePaneAgents, *laggingHerdr) {
+	t.Helper()
+	var ag *fakePaneAgents
+	lh := newLaggingHerdr(h.hd, lag)
+	d := stagingPaneDeps(t, h, &ag)
+	d.Herdr = lh
+	d.Keys = func(_ context.Context, _ string, keys ...string) error {
+		if slices.Contains(keys, "esc") {
+			lh.esc()
+		}
+		return nil
+	}
+	mk := d.Agents
+	d.Agents = func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+		m := mk(st, cfg, layout)
+		ag.reply = func(int, string) bool { return false } // the turn never ends on its own
+		return m
+	}
+	role, err := h.e.resolveRole("talkable/talkable", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "job")
+	a, err := paneStagingAgents(d)(stagingAgentJob{ID: "void-2-x.r1.0a0b0c0d", Dir: dir, Cwd: h.cfg.Pools[0].Path(1), Role: role,
+		Env: resolvePaneEnv(dir, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, err := a.Prompt(h.ctx, "resolve it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lh.at(at, "w1", foreign)
+	ag.setBusy(lh.shows)
+	ctx, cancel := context.WithCancel(h.ctx)
+	time.AfterFunc(5*time.Millisecond, cancel) // the Cancel
+	if _, err := a.Wait(ctx, at.Run, h.clock.Now().Add(time.Minute)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait = %v, want the Cancel's", err)
+	}
+	return a.(*paneStagingAgent), ag, lh
+}
+
+// A Cancel of the resolver's job while its agent works ends with the agent
+// parked and its scratch registry gone, though herdr still shows it at work
+// a moment after its esc: Close waits for herdr to show it idle before it
+// parks it, as a round's stop does (waitAgentsQuiet), instead of a Park and
+// a Quit a few milliseconds after the esc that both find it working.
+func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t *testing.T) {
+	h := newHarness(t)
+	a, ag, _ := cancelledResolver(t, h, 2, false)
+	if err := a.Close(context.WithoutCancel(h.ctx)); err != nil {
+		t.Fatalf("Close = %v, want the agent parked", err)
+	}
+	if ag.parks() != 1 || ag.count("quit:") != 0 {
+		t.Errorf("parked %d times, quit %d times; want one park", ag.parks(), ag.count("quit:"))
+	}
+	if _, err := os.Stat(filepath.Join(a.dir, learnScratch)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the scratch registry stays: %v", err)
+	}
+	if len(h.hd.closed) != 0 {
+		t.Errorf("closed workspaces %v: a parked agent's workspace is Park's", h.hd.closed)
 	}
 }
