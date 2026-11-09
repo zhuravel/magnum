@@ -8,13 +8,14 @@ import (
 )
 
 // roundRun creates a run of pr in round with role at t0+d on head; a
-// reviewID above zero makes it a run that posted that review.
+// reviewID above zero makes it a run that posted that review, verified 5
+// minutes after it was created (the post magnum records).
 func roundRun(t *testing.T, st *Store, prID int64, round int, role, head string, reviewID int64, d time.Duration) Run {
 	t.Helper()
 	r := Run{PRID: prID, Round: round, Role: role, Kind: RunInitial, State: RunVerified, TargetSHA: head, Identity: "talkable-app",
 		ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0.Add(d)}
 	if reviewID > 0 {
-		r.Outcome, r.ReviewID = new("posted"), new(reviewID)
+		r.Outcome, r.ReviewID, r.VerifiedAt = new("posted"), new(reviewID), new(t0.Add(d+5*time.Minute))
 	}
 	run, err := st.CreateRun(context.Background(), r)
 	if err != nil {
@@ -62,7 +63,8 @@ func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
 		t.Fatalf("FirstPostedReview = %v, %v", ok, err)
 	}
 	want := PostedReview{RunID: judge.ID, Round: 2, SHA: "h2", ReviewID: 101, CreatedAt: t0.Add(time.Hour + 10*time.Minute),
-		RoundStart: t0.Add(time.Hour), RoundTarget: start.TargetSHA, Summary: ReviewSummary{RunID: judge.ID, ReviewID: 101, SHA: "h2"}}
+		RoundStart: t0.Add(time.Hour), RoundTarget: start.TargetSHA, PostedAt: t0.Add(time.Hour + 15*time.Minute),
+		Summary: ReviewSummary{RunID: judge.ID, ReviewID: 101, SHA: "h2"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the round\n got %+v\nwant %+v", got, want)
 	}
@@ -100,6 +102,26 @@ func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
 	if got, fs, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(160*time.Minute)); err != nil || !ok || got.Round != 5 || len(fs) != 0 ||
 		!got.OK || got.Summary.Counts != [4]int{0, 1, 2, 4} {
 		t.Errorf("a round with counts and no rows: round %d, %d findings, result %v %+v, %v, %v", got.Round, len(fs), got.OK, got.Summary, ok, err)
+	}
+	// A posting run with an end and no verification posts at its end; one
+	// with neither has no post time.
+	ended, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 6, Role: RoleJudge, Kind: RunInitial, State: RunVerified, TargetSHA: "h6",
+		Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0.Add(175 * time.Minute),
+		Outcome: new("posted"), ReviewID: new(int64(105)), EndedAt: new(t0.Add(178 * time.Minute))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(172*time.Minute)); err != nil || !ok || got.RunID != ended.ID ||
+		!got.PostedAt.Equal(t0.Add(178*time.Minute)) {
+		t.Errorf("a posting run that ended unverified: %+v, %v, %v; want it posted at its end", got, ok, err)
+	}
+	if _, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 7, Role: RoleJudge, Kind: RunInitial, State: RunVerified, TargetSHA: "h7",
+		Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0.Add(179 * time.Minute),
+		Outcome: new("posted"), ReviewID: new(int64(106))}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(179*time.Minute)); err != nil || !ok || got.Round != 7 || !got.PostedAt.IsZero() {
+		t.Errorf("a posting run with no end: %+v, %v, %v; want no post time", got, ok, err)
 	}
 	if got, _, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(3*time.Hour)); err != nil || ok {
 		t.Errorf("since after every round: %+v, %v, %v; want none", got, ok, err)

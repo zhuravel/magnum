@@ -78,6 +78,10 @@ type PostedReview struct {
 	CreatedAt   time.Time
 	RoundStart  time.Time
 	RoundTarget string
+	// PostedAt is when magnum recorded the post: the run's verification of
+	// the review, else its end; zero when the run has neither, and left
+	// zero by ReviewedPRs (FirstPostedReview reads it).
+	PostedAt time.Time
 	// Summary is what the judge's result says (ParseReviewResult); OK is
 	// false when the run stored no result that parses.
 	Summary ReviewSummary

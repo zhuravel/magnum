@@ -162,11 +162,17 @@ func (r *escapeRig) local(head, path string, line int, priority string) registry
 	return f
 }
 
-// postAt makes magnum's registry hold a round that began at, reviewed
-// prHead and posted fs.
+// postAt makes magnum's registry hold a round that began and posted at,
+// reviewed prHead and posted fs.
 func (r *escapeRig) postAt(at time.Time, run string, fs ...PostedFinding) {
+	r.postRound(at, at, run, fs...)
+}
+
+// postRound makes magnum's registry hold a round that began at start,
+// reviewed prHead and posted fs at posted.
+func (r *escapeRig) postRound(start, posted time.Time, run string, fs ...PostedFinding) {
 	r.magnum.post(followRef, PostedRound{RunID: run, Round: len(r.magnum.posted[followRef]) + 1, Head: prHead, ReviewID: 9000,
-		Start: at, Findings: fs})
+		Start: start, Posted: posted, Findings: fs})
 }
 
 // check ticks and waits for the check off the loop, and returns the task's
@@ -689,8 +695,9 @@ func TestRestartsDoNotKeepAnIncompleteCheckFromStoring(t *testing.T) {
 // A failed diff the result does not depend on (the posted finding on its
 // file is caught at the same head, or no local finding is on the file of
 // an escape) neither delays nor flags the check: it is stored at its first
-// try, complete.
-func TestAFailedDiffTheResultDoesNotDependOnNeitherDelaysNorFlagsTheCheck(t *testing.T) {
+// try, complete. The comparable count it leaves is a lower bound, and the
+// event says "at least".
+func TestAFailedDiffTheResultDoesNotDependOnDelaysNorFlagsTheCheck(t *testing.T) {
 	r := newEscapeRig(t, true)
 	r.diff.set(func(d *fakeDiff) { d.broken[r.copyDir(2)] = true })
 	r.local(prHead, creditPath, 40, "P2")     // catches the posted P2 at the same head
@@ -707,6 +714,45 @@ func TestAFailedDiffTheResultDoesNotDependOnNeitherDelaysNorFlagsTheCheck(t *tes
 	}
 	if len(r.diff.asked()) == 0 {
 		t.Error("no diff was asked: the test needs one that fails")
+	}
+	if evs := r.events(r.task.ID, "escapes"); len(evs) != 1 || c.Comparable != 1 ||
+		!strings.Contains(evs[0].Text, "at least 1 finding of the local review at a comparable head") {
+		t.Errorf("comparable %d, escapes events %+v; want 1, said to be at least 1", c.Comparable, evs)
+	}
+}
+
+// An incomplete check's last try comes escapeLastTry after magnum posted
+// its round, not after the round began: a round that ran 40 minutes before
+// it posted still gets its retries, whether a file was compared at the
+// same head only or the round's findings are not recorded yet (the window
+// between the verdict and the record).
+func TestTheLastTryCountsFromThePostNotTheRoundsStart(t *testing.T) {
+	start, posted := t0.Add(time.Hour), t0.Add(time.Hour+40*time.Minute)
+	for _, tc := range []struct {
+		name string
+		post func(r *escapeRig)
+	}{
+		{"a file at the same head only", func(r *escapeRig) {
+			r.local(localHead, creditPath, 40, "P2")
+			r.postRound(start, posted, "r-judge-2", PostedFinding{ID: 71, Path: creditPath, StartLine: 41, EndLine: 41, Priority: "P2", Title: "Missed"})
+		}},
+		{"findings not recorded yet", func(r *escapeRig) {
+			r.magnum.post(followRef, PostedRound{RunID: "r-judge-2", Round: 1, Head: prHead, Start: start, Posted: posted, Counted: true,
+				Counts: [4]int{0, 1, 2, 5}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newEscapeRig(t, false)
+			tc.post(r)
+			r.clock.Set(posted)
+			if c, _, ok := r.check(); ok {
+				t.Fatalf("stored at the first try after the post: %+v", c)
+			}
+			r.clock.Add(escapeRetry)
+			if _, _, n := r.retryUntil(lastTry); n != lastTry-1 {
+				t.Errorf("stored at the %d-th retry, want the try %s after the post", n, escapeLastTry)
+			}
+		})
 	}
 }
 

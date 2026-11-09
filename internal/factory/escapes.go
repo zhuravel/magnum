@@ -34,13 +34,16 @@ package factory
 // incomplete check (no copy on disk, git failing in every copy, the diffs
 // out of their bound, a round whose findings magnum has not recorded)
 // stores nothing either and is tried again after escapeRetry; only a try
-// once magnum's round is escapeLastTry old (a time a restart keeps) stores
-// it, with the files it compared at the same head only and the findings
-// magnum did not record counted on the check (SameHeadOnly, Unrecorded), so
-// the stats tell it from a complete one. A check has escapeCheckBound; its result is written once its reads
-// ended, whatever the drain does then (context.WithoutCancel), in one
-// transaction, never twice (RecordEscapeCheck writes nothing for a task
-// checked before), and a check the daemon's stop cut writes nothing.
+// escapeLastTry after magnum posted its round (a time a restart keeps)
+// stores it, with the files it compared at the same head only and the
+// findings magnum did not record counted on the check (SameHeadOnly,
+// Unrecorded), so the stats tell it from a complete one. A failed diff the
+// result does not depend on leaves the comparable count a lower bound,
+// which the event says ("at least"). A check has escapeCheckBound; its
+// result is written once its reads ended, whatever the drain does then
+// (context.WithoutCancel), in one transaction, never twice
+// (RecordEscapeCheck writes nothing for a task checked before), and a
+// check the daemon's stop cut writes nothing.
 // Nothing of a posted finding's title is kept but the factory's hash of it
 // (titleHash); the event and the warnings carry counts and the first line
 // of an error, never a title or the PR's text (execx logs the git commands
@@ -77,9 +80,9 @@ const (
 	// escapeRetry is how long a task's next check waits after one that
 	// stored nothing (a failure, an incomplete check, a panic).
 	escapeRetry = 5 * time.Minute
-	// escapeLastTry is how old magnum's round is at an incomplete check's
-	// last try, the one that stores what it found, flagged: about five
-	// retries after the round posts, whatever restarts came between.
+	// escapeLastTry is how long after magnum posted its round an incomplete
+	// check's last try comes, the one that stores what it found, flagged:
+	// about five retries after the post, whatever restarts came between.
 	escapeLastTry = 25 * time.Minute
 )
 
@@ -201,18 +204,21 @@ func (e *Engine) startEscapeCheck(t registry.Task, ref PRRef, review string) {
 }
 
 // escapeOutcome is what one escape check found: whether magnum has a
-// posted round after the publish and when that round began, the check and
-// its escapes to store, how many escapes are unplaced, why some
-// comparisons did not run ("" when every one did: see copyDiff.why), and
-// the tries in this daemon it took (set when it is stored).
+// posted round after the publish and when magnum posted it (postedAt), the
+// check and its escapes to store, how many escapes are unplaced, why the
+// comparisons of its escapes' files did not run ("" when they all did:
+// sameHeadOnly), whether any diff failed (the comparable count is then a
+// lower bound), and the tries in this daemon it took (set when it is
+// stored).
 type escapeOutcome struct {
-	found    bool
-	started  time.Time
-	check    registry.EscapeCheck
-	escapes  []registry.Escape
-	unplaced int
-	why      string
-	tries    int
+	found      bool
+	postedAt   time.Time
+	check      registry.EscapeCheck
+	escapes    []registry.Escape
+	unplaced   int
+	why        string
+	diffFailed bool
+	tries      int
 }
 
 // complete reports whether every comparison ran and magnum recorded every
@@ -261,15 +267,28 @@ func (e *Engine) escapeCheck(ctx context.Context, t registry.Task, ref PRRef, gi
 	if diff.git != nil {
 		diff.dirs = e.escapeCopies(t)
 	}
-	out := escapeOutcome{found: true, started: round.Start}
+	out := escapeOutcome{found: true, postedAt: postedAt(round)}
 	out.check, out.escapes = localEscapes(t.ID, link, locals, cycles, round, diff.same)
 	out.check.SameHeadOnly, out.why = sameHeadOnly(out.escapes, diff.failed)
+	out.diffFailed = len(diff.failed) > 0
 	for _, es := range out.escapes {
 		if es.Reason == registry.EscapeUnplaced {
 			out.unplaced++
 		}
 	}
 	return out, nil
+}
+
+// postedAt is when magnum posted round r, from which an incomplete check's
+// last try counts: the time it recorded for the post (the posting run's
+// verification, else its end). A run that recorded neither falls back to
+// the round's start, which is earlier, so its last try comes sooner (the
+// round's own run time sooner), never later.
+func postedAt(r PostedRound) time.Time {
+	if !r.Posted.IsZero() {
+		return r.Posted
+	}
+	return r.Start
 }
 
 // publishBegan is when task t's publish began, the cutoff of magnum's
@@ -381,7 +400,8 @@ func escapePriority(p string) (string, bool) {
 // link) matched with the round's P0 to P2 findings by escapes.Match, heads
 // compared by same (nil: only equal heads), and the escapes as the
 // registry keeps them. Comparable counts the local findings placed at a
-// head comparable with the round's; Unrecorded the P0 to P2 findings the
+// head comparable with the round's, a lower bound when a comparison
+// failed (same answers false then); Unrecorded the P0 to P2 findings the
 // round's result counts when magnum recorded none of the round's findings.
 func localEscapes(taskID int64, link registry.PRLink, locals []registry.Finding, cycles []registry.Cycle, round PostedRound,
 	same func(path, a, b string) bool) (registry.EscapeCheck, []registry.Escape) {
@@ -439,7 +459,7 @@ func localEscapes(taskID int64, link registry.PRLink, locals []registry.Finding,
 
 // escapeChecked records the end of task t's escape check of its PR ref
 // (out, or the failure err): a complete check, or the last try of an
-// incomplete one (magnum's round escapeLastTry old), stored with its
+// incomplete one (escapeLastTry after magnum's post), stored with its
 // escapes and an event that counts them; an incomplete check before its
 // last try, and a failure, logged once while its cause stays the same, the
 // next try after escapeRetry; a round not found yet noted against review
@@ -451,7 +471,7 @@ func (e *Engine) escapeChecked(ctx context.Context, t registry.Task, ref PRRef, 
 		e.esc.tries[t.ID]++
 		out.tries = e.esc.tries[t.ID]
 		e.esc.mu.Unlock()
-		if !out.complete() && e.now().Sub(out.started) < escapeLastTry {
+		if !out.complete() && e.now().Sub(out.postedAt) < escapeLastTry {
 			err = fmt.Errorf("the check is incomplete: %s", out.incomplete())
 		}
 	}
@@ -512,7 +532,11 @@ func (o escapeOutcome) words(ref PRRef) string {
 	if o.unplaced > 0 {
 		s += fmt.Sprintf(", %d of them with no line to place", o.unplaced)
 	}
-	s += fmt.Sprintf("; %s of the local review at a comparable head", textx.Count(c.Comparable, "finding", "findings"))
+	atLeast := ""
+	if o.diffFailed {
+		atLeast = "at least " // a failed diff left a local finding uncounted
+	}
+	s += fmt.Sprintf("; %s%s of the local review at a comparable head", atLeast, textx.Count(c.Comparable, "finding", "findings"))
 	if c.SameHeadOnly > 0 {
 		s += fmt.Sprintf("; %s compared at the same head only (%s, after %s in this daemon)", textx.Count(c.SameHeadOnly, "file", "files"),
 			o.why, textx.Count(o.tries, "try", "tries"))

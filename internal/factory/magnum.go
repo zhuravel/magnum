@@ -811,8 +811,10 @@ func (m *magnumRegistry) FixRecords(ctx context.Context, refs []PRRef) (map[PRRe
 // PostedRound is magnum's round on a PR that posted a review
 // (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
 // magnum's runs.id), the round's number, the head it reviewed, the review's
-// id on GitHub, when the round began (its first run), and the findings it
-// posted, in the judge's order. Counts are the new findings the round's
+// id on GitHub, when the round began (its first run), when magnum recorded
+// the post (Posted: the posting run's verification, else its end; zero
+// when the run has neither), and the findings it posted, in the judge's
+// order. Counts are the new findings the round's
 // result counts, P0 to P3 (store.ReviewSummary.Counts), when Counted: a
 // result without provenance counts findings magnum recorded no row of.
 type PostedRound struct {
@@ -821,6 +823,7 @@ type PostedRound struct {
 	Head     string
 	ReviewID int64
 	Start    time.Time
+	Posted   time.Time
 	Findings []PostedFinding
 	Counts   [4]int
 	Counted  bool
@@ -872,7 +875,8 @@ func (m *magnumRegistry) FirstPostedRound(ctx context.Context, ref PRRef, since 
 		}
 		return PostedRound{}, false, err
 	}
-	out := PostedRound{RunID: rv.RunID, Round: rv.Round, Head: rv.SHA, ReviewID: rv.ReviewID, Start: rv.RoundStart, Counted: rv.OK}
+	out := PostedRound{RunID: rv.RunID, Round: rv.Round, Head: rv.SHA, ReviewID: rv.ReviewID, Start: rv.RoundStart, Posted: rv.PostedAt,
+		Counted: rv.OK}
 	if rv.OK {
 		out.Counts = rv.Summary.Counts
 	}

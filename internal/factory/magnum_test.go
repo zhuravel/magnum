@@ -933,13 +933,14 @@ func TestPRStatesSayWhatMagnumsOpenDoes(t *testing.T) {
 }
 
 // roundRun records a run of magnum's on pr in round with role at at on
-// head; a reviewID above zero makes it the run that posted that review.
+// head; a reviewID above zero makes it the run that posted that review,
+// verified 2 minutes after it was created.
 func roundRun(t *testing.T, st *store.Store, pr store.PR, round int, role, head string, reviewID int64, at time.Time) store.Run {
 	t.Helper()
 	r := store.Run{PRID: pr.ID, Round: round, Role: role, Kind: store.RunInitial, State: store.RunVerified, TargetSHA: head,
 		Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "p", CreatedAt: at}
 	if reviewID > 0 {
-		r.Outcome, r.ReviewID = new("posted"), new(reviewID)
+		r.Outcome, r.ReviewID, r.VerifiedAt = new("posted"), new(reviewID), new(at.Add(2*time.Minute))
 	}
 	run, err := st.CreateRun(t.Context(), r)
 	if err != nil {
@@ -986,8 +987,8 @@ func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.
 		t.Error("FirstPostedRound changed magnum's registry")
 	}
 	if got.RunID != judge.ID || got.Round != 2 || got.Head != "bbb222" || got.ReviewID != 501 || !got.Start.Equal(published.Add(time.Hour)) ||
-		!got.Counted || got.Counts != [4]int{0, 0, 1, 1} {
-		t.Errorf("the round %+v, want the judge's run of round 2 with its result's counts", got)
+		!got.Posted.Equal(published.Add(time.Hour+7*time.Minute)) || !got.Counted || got.Counts != [4]int{0, 0, 1, 1} {
+		t.Errorf("the round %+v, want the judge's run of round 2, posted as it was verified, with its result's counts", got)
 	}
 	if len(got.Findings) != 2 {
 		t.Fatalf("its findings %+v, want 2", got.Findings)
