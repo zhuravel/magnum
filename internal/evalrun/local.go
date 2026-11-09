@@ -114,18 +114,65 @@ type LocalFinding struct {
 // case's PR number is one, eval.LocalNumberBase).
 const localNumberBase = eval.LocalNumberBase
 
+// The bounds of the local rounds' synthetic numbers (LocalNumber).
+const (
+	// MaxLocalRound is the last round a synthetic number is kept for: two
+	// digits of it, past the loop's config.MaxFactoryCycles (a second
+	// opinion's round runs outside the loop's count).
+	MaxLocalRound = 99
+	// MaxLocalTask is the last task a synthetic number is kept for: past
+	// it, task T's rounds 1 to 10 would take a round of task T+1 or one of
+	// the numbers of rounds 11 and up.
+	MaxLocalTask = 99_999
+	// localLowRounds is the rounds numbered as they always were, 1 to 10
+	// (the loop's config.MaxFactoryCycles); rounds past it start at
+	// localHighBase.
+	localLowRounds = 10
+	localHighBase  = 9_000_000
+)
+
 // LocalNumber is the synthetic PR number of round n of task taskID's local
-// review: 900000 + task id × 10 + round. A round of the loop is 1 to
-// config.MaxFactoryCycles, so no two tasks' rounds share one.
-func LocalNumber(taskID int64, round int) int { return localNumberBase + int(taskID)*10 + round }
+// review: 900000 + task id × 10 + round for rounds 1 to 10, the numbers
+// every round ran under before a round could pass the loop's ten
+// (900011 to 1900000), and 9000000 + task id × 100 + round for rounds 11 to
+// MaxLocalRound (9000111 to 18999999), so no two tasks' rounds share one
+// (round 11 of task T would be round 1 of task T+1 by the first rule). It
+// is 0 for a task of 1 to MaxLocalTask or a round of 1 to MaxLocalRound it
+// is not: no number is kept apart for it.
+func LocalNumber(taskID int64, round int) int {
+	switch {
+	case taskID < 1 || taskID > MaxLocalTask || round < 1 || round > MaxLocalRound:
+		return 0
+	case round <= localLowRounds:
+		return localNumberBase + int(taskID)*10 + round
+	}
+	return localHighBase + int(taskID)*100 + round
+}
+
+// LocalNumberFormula is the rule LocalNumber numbers round `round` by, as
+// text: what `eval add` prints beside a local case's pr.
+func LocalNumberFormula(round int) string {
+	if round > localLowRounds {
+		return fmt.Sprintf("%d + task × 100 + round", localHighBase)
+	}
+	return fmt.Sprintf("%d + task × 10 + round", localNumberBase)
+}
 
 // LocalRoundOf is LocalNumber undone: the task and the round whose
-// synthetic PR number n is. Round 10 is where the next task's tens start
-// (task 7's is 900080), so the round is counted from 1, not taken as n's
-// last digit. ok is false for a number no round of a task has.
+// synthetic PR number n is. Below localHighBase, round 10 is where the next
+// task's tens start (task 7's is 900080), so the round is counted from 1,
+// not taken as n's last digit; from it, the round is n's last two digits
+// and must be past 10. ok is false for a number no round of a task has.
 func LocalRoundOf(n int) (taskID int64, round int, ok bool) {
+	if k := n - localHighBase; k >= 0 {
+		task, r := k/100, k%100
+		if task < 1 || task > MaxLocalTask || r <= localLowRounds {
+			return 0, 0, false
+		}
+		return int64(task), r, true
+	}
 	k := n - localNumberBase - 1
-	if k < 10 { // below task 1's round 1
+	if k < 10 || k/10 > MaxLocalTask { // below task 1's round 1, or past the last task's round 10
 		return 0, 0, false
 	}
 	return int64(k / 10), k%10 + 1, true
@@ -228,8 +275,8 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		return LocalResult{}, fmt.Errorf("evalrun: a local round needs the copy's absolute path, not %q", c.Checkout)
 	case !fullSHA.MatchString(c.BaseSHA) || !fullSHA.MatchString(c.HeadSHA):
 		return LocalResult{}, errors.New("evalrun: a local round needs the change's base and head as full commit ids")
-	case c.TaskID <= 0 || c.Round < 1 || c.Round > config.MaxFactoryCycles:
-		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its task and a round of 1 to %d (task %d, round %d)", config.MaxFactoryCycles, c.TaskID, c.Round)
+	case LocalNumber(c.TaskID, c.Round) == 0:
+		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its task (1 to %d) and a round of 1 to %d (task %d, round %d)", MaxLocalTask, MaxLocalRound, c.TaskID, c.Round)
 	case !ok || owner == "" || name == "" || strings.Contains(name, "/"):
 		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its repository as owner/name, not %q", c.Repo)
 	}

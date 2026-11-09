@@ -374,3 +374,33 @@ func TestFreezeLocalFreezesTheTasksCodexMark(t *testing.T) {
 		t.Fatalf("frozen %+v, loaded %+v, %v; want the mark", in, got, err)
 	}
 }
+
+// A round past the loop's ten (a second opinion's round 11) is frozen as any other: check takes it, and
+// the report directory of a result that does not name one is read under the round's own number,
+// 9000111, never under round 1 of task 2's 900021.
+func TestFreezeLocalFreezesARoundPastTheLoopsTen(t *testing.T) {
+	f := newFreezeFixture(t,
+		`INSERT INTO review_cycles (task_id, n, head_before, started_at) VALUES (1, 2, '`+frozenHead+`', '2026-11-05T10:00:00Z')`,
+		`INSERT INTO events (at, task_id, kind, phase, text) VALUES ('2026-11-05T10:00:00Z', 1, 'review', 'begin',
+			'round 11 (cycle 2) at `+frozenHead[:12]+`: claude-review, codex-review, claude-judge')`)
+	scratch := filepath.Join(LocalRoot(f.d.Layout, 1), "11-local-0a1b2d")
+	report := paths.Layout{Scratch: scratch}.ReviewDir("example", "example", 9000111, frozenHead)
+	writeFile(t, filepath.Join(scratch, LocalDescriptionFile), "# "+frozenTitle+"\n\n"+frozenPlan+"\n")
+	prepass, _ := json.Marshal(pipeline.Prepass{PR: "example/example#9000111", HeadSHA: frozenHead, BaseSHA: frozenBase})
+	writeFile(t, filepath.Join(report, pipeline.PrepassFile), string(prepass))
+	b, _ := json.Marshal(LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Round: 11, Number: 9000111, Scratch: scratch})
+	writeFile(t, filepath.Join(f.taskDir, LocalResultFile(2)), string(b))
+	in, _, err := FreezeLocal(context.Background(), f.d, 1, 11, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Round != 11 || in.Cycle != 2 || in.Number() != 9000111 || in.PR() != "example/example#9000111" || in.BaseSHA != frozenBase {
+		t.Fatalf("inputs %+v, PR %s", in, in.PR())
+	}
+	if err := SaveLocalInputs(LocalCaseDir(f.d.Layout, "task-1-round-11"), in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadLocalInputs(LocalCaseDir(f.d.Layout, "task-1-round-11")); err != nil {
+		t.Fatalf("a frozen round 11 does not load: %v", err)
+	}
+}

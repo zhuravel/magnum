@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,7 +25,11 @@ var (
 // talkable/talkable: the task, the cycle and its begin event in the factory's registry, the round's
 // result in the task's directory, and its scratch directory with the description, the ticket and the
 // prepass.json it read.
-func localRoundOnDisk(t *testing.T, l paths.Layout) {
+func localRoundOnDisk(t *testing.T, l paths.Layout) { t.Helper(); localRoundOnDiskAt(t, l, 1) }
+
+// localRoundOnDiskAt is localRoundOnDisk with round `round` in cycle 1 (a second opinion's round 11
+// past the loop's ten is one).
+func localRoundOnDiskAt(t *testing.T, l paths.Layout, round int) {
 	t.Helper()
 	registrytest.Seed(t, l.FactoryDB())
 	db, err := sql.Open("sqlite", l.FactoryDB()+"?_pragma=busy_timeout(5000)")
@@ -37,14 +42,14 @@ func localRoundOnDisk(t *testing.T, l paths.Layout) {
 			'Credit points count the activities', 'zhuravel-PR-12361-credit-points', 'done', '2026-11-05T08:00:00Z', '2026-11-05T08:00:00Z')`,
 		`INSERT INTO review_cycles (task_id, n, head_before, started_at) VALUES (1, 1, '` + addHead + `', '2026-11-05T09:00:00Z')`,
 		`INSERT INTO events (at, task_id, kind, phase, text) VALUES ('2026-11-05T09:00:00Z', 1, 'review', 'begin',
-			'round 1 (cycle 1) at ` + addHead[:12] + `: codex-review, codex-judge')`,
+			'round ` + strconv.Itoa(round) + ` (cycle 1) at ` + addHead[:12] + `: codex-review, codex-judge')`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatalf("fixture: %v\n%s", err, q)
 		}
 	}
-	scratch := filepath.Join(evalrun.LocalRoot(l, 1), "1-local-0a1b2c")
-	report := paths.Layout{Scratch: scratch}.ReviewDir("talkable", "talkable", evalrun.LocalNumber(1, 1), addHead)
+	scratch := filepath.Join(evalrun.LocalRoot(l, 1), strconv.Itoa(round)+"-local-0a1b2c")
+	report := paths.Layout{Scratch: scratch}.ReviewDir("talkable", "talkable", evalrun.LocalNumber(1, round), addHead)
 	write := func(path, text string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -58,7 +63,7 @@ func localRoundOnDisk(t *testing.T, l paths.Layout) {
 	write(filepath.Join(scratch, evalrun.LocalTicketFile), "# PR-12361\n\nCount the activities.\n")
 	pp, _ := json.Marshal(pipeline.Prepass{HeadSHA: addHead, BaseSHA: addBase})
 	write(filepath.Join(report, pipeline.PrepassFile), string(pp))
-	res, _ := json.Marshal(evalrun.LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Round: 1, Scratch: scratch, ReportDir: report,
+	res, _ := json.Marshal(evalrun.LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Round: round, Scratch: scratch, ReportDir: report,
 		Findings: []evalrun.LocalFinding{{Severity: "P3", Title: "Is rounding down wanted?", Path: "app/models/credit.rb", Line: 7, Question: true}}})
 	write(filepath.Join(l.FactoryTaskDir(1), evalrun.LocalResultFile(1)), string(res))
 }
@@ -180,7 +185,8 @@ func TestEvalRunNamesALocalCaseAndItsMissingInputs(t *testing.T) {
 	}
 }
 
-// `eval run` names a local case of the loop's last round by its own task and round.
+// `eval run` names a local case of the loop's last round, and of a round past it, by its own task and
+// round.
 func TestEvalCaseWhatNamesTheLastRoundOfItsTask(t *testing.T) {
 	ec := eval.Case{Name: "task-7-round-10", Kind: eval.KindLocal, PR: "talkable/talkable#900080", Head: addHead,
 		Defects: []eval.Defect{{ID: "d", Title: "t", Match: []string{"x"}}}}
@@ -189,6 +195,36 @@ func TestEvalCaseWhatNamesTheLastRoundOfItsTask(t *testing.T) {
 	}
 	if got := evalCaseWhat(ec); got != "talkable/talkable#900080 (local round 10 of task 7)" {
 		t.Fatalf("evalCaseWhat = %q", got)
+	}
+	ec.Name, ec.PR = "task-7-round-11", "talkable/talkable#9000711"
+	if err := ec.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := evalCaseWhat(ec); got != "talkable/talkable#9000711 (local round 11 of task 7)" {
+		t.Fatalf("evalCaseWhat = %q", got)
+	}
+}
+
+// `eval add --round 11` freezes a round past the loop's ten (a second opinion's) under its own number,
+// 9000111, and the case it prints names that number's rule.
+func TestEvalAddTakesARoundPastTheLoopsTen(t *testing.T) {
+	f := newInspFixture(t)
+	f.Ctx.Layout.UserConfig = filepath.Join(f.Home, "user", "config.toml")
+	localRoundOnDiskAt(t, f.Ctx.Layout, 11)
+	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "11"}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	out := f.Out.String()
+	for _, want := range []string{`name = "task-1-round-11"`, `pr = "talkable/talkable#9000111"`, "9000000 + task × 100 + round"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	for _, round := range []string{"0", "100"} {
+		f.Err.Reset()
+		if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", round}); code != 2 || !strings.Contains(f.Err.String(), "1 to 99") {
+			t.Errorf("--round %s: exit %d; stderr %s", round, code, f.Err)
+		}
 	}
 }
 

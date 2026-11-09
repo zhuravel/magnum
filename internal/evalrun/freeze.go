@@ -80,8 +80,8 @@ func (in LocalInputs) PR() string { return fmt.Sprintf("%s#%d", in.Repo, in.Numb
 func (in LocalInputs) check() error {
 	owner, name, ok := strings.Cut(in.Repo, "/")
 	switch {
-	case in.Task <= 0 || in.Round < 1 || in.Round > config.MaxFactoryCycles:
-		return fmt.Errorf("task %d, round %d: a local case needs its task and a round of 1 to %d", in.Task, in.Round, config.MaxFactoryCycles)
+	case in.Number() == 0:
+		return fmt.Errorf("task %d, round %d: a local case needs its task (1 to %d) and a round of 1 to %d", in.Task, in.Round, MaxLocalTask, MaxLocalRound)
 	case !ok || owner == "" || name == "" || strings.Contains(name, "/"):
 		return fmt.Errorf("repository %q is not owner/name", in.Repo)
 	case !fullSHA.MatchString(in.BaseSHA) || !fullSHA.MatchString(in.HeadSHA):

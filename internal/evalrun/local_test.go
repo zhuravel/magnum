@@ -72,7 +72,7 @@ const cleanResult = `{"status":"dry_run","verdict":"clean","findings":{"P0":0,"P
 
 // Each local round is its own: a fresh scratch directory under the task's,
 // a new agent tag, and the synthetic PR number 900000 + task id × 10 +
-// round, so two rounds never share a registry, an agent, a herdr
+// round (rounds 1 to 10), so two rounds never share a registry, an agent, a herdr
 // workspace label or an eval case lock.
 // A judge's result whose planned review this code does not read (a shape
 // eval.ParseResult refuses) still hands the writer the findings the

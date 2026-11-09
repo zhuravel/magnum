@@ -82,12 +82,13 @@ body = true
 # directory and prints the case for the local cases' corpus beside it,
 # learn/local/cases.toml, which `magnum eval run` reads after the learned
 # corpus. Its pr is the round's synthetic number (900000 + task × 10 +
-# round), no PR on GitHub; it has no base of its own. `question = true` asks
-# that the finding be a question for you at `severity` or stronger (P2 when
-# it gives none): the factory asks you only P0 to P2 questions, so a P3
-# question (it stays among the task's leftovers) does not find the defect,
-# nor does a finding that is no question (the writer would decide it);
-# neither counts as noise. In learn/local/cases.toml, without the "# ":
+# round; 9000000 + task × 100 + round past round 10), no PR on GitHub; it
+# has no base of its own. `question = true` asks that the finding be a
+# question for you at `severity` or stronger (P2 when it gives none): the
+# factory asks you only P0 to P2 questions, so a P3 question (it stays
+# among the task's leftovers) does not find the defect, nor does a finding
+# that is no question (the writer would decide it); neither counts as
+# noise. In learn/local/cases.toml, without the "# ":
 #
 # [[case]]
 # name = "task-1-round-1"

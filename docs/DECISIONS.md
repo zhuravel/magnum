@@ -22719,6 +22719,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Other ends' prompts are unchanged. Rejected: repeating the whole first prompt (it still holds, and the order is
   the one rule the turns missed). Tests: TestTheAnswersPromptOfAReportEndNamesItsSectionsInOrder and
   TestTheAnswersPromptOfAnotherEndNamesNoReportSection, each failing first. No new dependencies.
+- **A local round past the loop's ten takes a synthetic PR number of its own: rounds 1 to 10 keep 900000 + task × 10 +
+  round, rounds 11 to 99 take 9000000 + task × 100 + round** (2026-11-09, R36's number, for R42's second opinion).
+  `evalrun.LocalNumber(task, round)` was 900000 + task × 10 + round for every round, so round 11 of task T was round 1
+  of task T+1 (`LocalNumber(1, 11)` = 900021 = `LocalNumber(2, 1)`), and R42's second opinion, a round outside the
+  loop's count, had to skip a clean tenth round. The number keys the round's report directory (`FreezeLocal` reads a
+  past round's there when its result names none), its `local-<N>` case lock, its workspace label `eval <repo>#<N>`,
+  its URL, the per-PR environment slug of its replay (`slots.PerPREnv` through `eval.Case.Number`), the frozen case's
+  `pr` (`LocalInputs.PR`; the one case frozen so far is `talkable/talkable#900011`) and the text of a factory event
+  (`factory/recover.go`). So every number a round has run under stays: rounds 1 to 10 keep the old rule (round 10 was
+  always free, as task T+1's unused round 0), and only rounds 11 and up, which no round has run as (RunLocal, `eval
+  add` and `LocalInputs.check` refused a round past `config.MaxFactoryCycles`), move.
+  - The scheme. Rounds 11 to `MaxLocalRound` (99, the last round two digits hold) are 9000000 + task × 100 + round:
+    task 1's round 11 is 9000111, task 123's round 12 is 9012312. Both rules hold for tasks 1 to `MaxLocalTask`
+    (99,999), since no range can stay clear of the old rule's numbers while task ids have no bound: over all tasks,
+    rounds 1 to 10 take every integer from 900011 up. The ranges, 900011 to 1900000 and 9000111 to 18999999, are
+    disjoint, at or above `eval.LocalNumberBase` (so the corpus's check holds) and within int32. `LocalNumber` keeps
+    its signature and is 0 outside its domain; `RunLocal` and `LocalInputs.check` refuse a task and round it numbers
+    0, naming the bounds, and `eval add --round` takes 1 to `MaxLocalRound`. So the part of R36's entry that says
+    `--round` is 1 to `MaxFactoryCycles` no longer holds, nor does the factory entry's "900000 plus the task's id
+    times 10 plus the round" past round 10. `LocalRoundOf` reads a number at or above 9000000 as task k/100 and round
+    k%100 (refused unless the task is 1 to 99,999 and the round past 10), and below it as before, refusing a task past
+    99,999. `LocalNumberFormula(round)` is the rule's text, which `eval add` now prints beside the case's `pr`
+    (before, it always printed the first rule).
+  - Checked: every one of the 9,899,901 task and round pairs gets a number no other pair has, rounds 1 to 10 keep
+    theirs, every number decodes back to its own pair, and no number from 0 to 20,000,000 that LocalNumber does not
+    make decodes. The talkable environment's database names (`WT_BRANCH=magnum-pr-<N>`) grow by 1 or 2 characters
+    for rounds 11 and up, within MySQL's 64.
+  - Not in this change: the factory's loop still ends at round 10 and R42's second opinion still skips a clean tenth
+    round (`decideSecond`, `atCap`): the number no longer forces that, which R42's side may now drop.
+  Rejected: renumbering every round under one new rule (the frozen case's `pr`, the report directories of past rounds
+  and their locks would move); a range of its own above the old rule's for rounds 11 and up without a task bound
+  (none exists); a second key beside the number (every PR-keyed path would need it). Tests: evalrun's
+  TestRoundElevenTakesANumberNoOtherRoundHas (failing on master with round 11 of task 1 = 900021 = round 1 of task 2;
+  pairs of tasks 1 to 300, 99,998 and 99,999 with rounds 1 to 99), TestLocalNumberIsZeroOutsideItsDomain,
+  TestRunLocalRunsRoundElevenUnderItsOwnNumber (master refused round 11) and TestFreezeLocalFreezesARoundPastTheLoopsTen
+  (its report directory read under 9000111); the cli's TestEvalAddTakesARoundPastTheLoopsTen and a round-11 case in
+  TestEvalCaseWhatNamesTheLastRoundOfItsTask. TestRunLocalSeedsAFreshScratchPerRound (900071, 900072),
+  TestLocalRoundOfNamesTheTaskAndRoundOfASyntheticNumber and the freeze tests pass unchanged. No new dependencies.
 
 ## Learned rules
 

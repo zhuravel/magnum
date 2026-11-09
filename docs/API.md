@@ -12422,9 +12422,10 @@ const FlaggedFile = "flagged.json"
 
 const LocalNumberBase = 900000
     LocalNumberBase is where the synthetic PR numbers of the factory's local
-    rounds start (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round),
-    far above any PR number of the repositories magnum reviews. A local case's
-    PR number is one of them.
+    rounds start (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round
+    for rounds 1 to 10, 9000000 + task id × 100 + round past them), far above
+    any PR number of the repositories magnum reviews. A local case's PR number
+    is one of them.
 
 const RunIDFormat = "20060102-150405"
     RunIDFormat is a run id's time part: sortable, to the second.
@@ -12551,10 +12552,11 @@ type Case struct {
 	Repo   string `toml:"-"`
 	Number int    `toml:"-"`
 }
-    Case is one pull request pinned to the head that is reviewed,
-    with the defects a review must find. A local case (Kind KindLocal) is
-    one round of the factory's local review instead, before any PR existed:
-    its PR is the round's synthetic number (LocalNumberBase + task × 10 + round,
+    Case is one pull request pinned to the head that is reviewed, with the
+    defects a review must find. A local case (Kind KindLocal) is one round of
+    the factory's local review instead, before any PR existed: its PR is the
+    round's synthetic number (evalrun.LocalNumber: LocalNumberBase + task ×
+    10 + round for rounds 1 to 10, 9000000 + task × 100 + round past them,
     as the round ran under), its head the one the round reviewed, and the rest
     of what the round read (its base commit, branch, title, plan, ticket, the
     operator's answers and roles) is frozen in a directory of its own beside the
@@ -12883,6 +12885,18 @@ directory (WithCandidate) replays another checkout's prompts and skill.
 CONSTANTS
 
 const (
+	// MaxLocalRound is the last round a synthetic number is kept for: two
+	// digits of it, past the loop's config.MaxFactoryCycles (a second
+	// opinion's round runs outside the loop's count).
+	MaxLocalRound = 99
+	// MaxLocalTask is the last task a synthetic number is kept for: past
+	// it, task T's rounds 1 to 10 would take a round of task T+1 or one of
+	// the numbers of rounds 11 and up.
+	MaxLocalTask = 99_999
+)
+    The bounds of the local rounds' synthetic numbers (LocalNumber).
+
+const (
 	LocalDescriptionFile = "description.md"
 	LocalTicketFile      = pipeline.TicketFile
 )
@@ -12982,9 +12996,18 @@ func LocalIdentity(cfg *config.Config, w *config.Watch) (string, error)
     identity.
 
 func LocalNumber(taskID int64, round int) int
-    LocalNumber is the synthetic PR number of round n of task taskID's
-    local review: 900000 + task id × 10 + round. A round of the loop is 1 to
-    config.MaxFactoryCycles, so no two tasks' rounds share one.
+    LocalNumber is the synthetic PR number of round n of task taskID's local
+    review: 900000 + task id × 10 + round for rounds 1 to 10, the numbers
+    every round ran under before a round could pass the loop's ten (900011 to
+    1900000), and 9000000 + task id × 100 + round for rounds 11 to MaxLocalRound
+    (9000111 to 18999999), so no two tasks' rounds share one (round 11 of task T
+    would be round 1 of task T+1 by the first rule). It is 0 for a task of 1 to
+    MaxLocalTask or a round of 1 to MaxLocalRound it is not: no number is kept
+    apart for it.
+
+func LocalNumberFormula(round int) string
+    LocalNumberFormula is the rule LocalNumber numbers round `round` by,
+    as text: what `eval add` prints beside a local case's pr.
 
 func LocalResultFile(n int) string
     LocalResultFile is the file in a task's directory where the factory keeps
@@ -12997,8 +13020,9 @@ func LocalRoot(l paths.Layout, taskID int64) string
 
 func LocalRoundOf(n int) (taskID int64, round int, ok bool)
     LocalRoundOf is LocalNumber undone: the task and the round whose synthetic
-    PR number n is. Round 10 is where the next task's tens start (task 7's
-    is 900080), so the round is counted from 1, not taken as n's last digit.
+    PR number n is. Below localHighBase, round 10 is where the next task's tens
+    start (task 7's is 900080), so the round is counted from 1, not taken as n's
+    last digit; from it, the round is n's last two digits and must be past 10.
     ok is false for a number no round of a task has.
 
 func LocalTicket(ticketMD, answersMD string) string

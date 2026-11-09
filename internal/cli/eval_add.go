@@ -64,8 +64,8 @@ func newEvalAddCmd(c *Context) *cobra.Command {
 				return inspUsage(c, "eval add", "no arguments expected", evalAddUsage)
 			case f.task <= 0:
 				return inspUsage(c, "eval add", "--local-task names the factory task (its id, `magnum factory` lists them)", evalAddUsage)
-			case f.round < 1 || f.round > config.MaxFactoryCycles:
-				return inspUsage(c, "eval add", fmt.Sprintf("--round is the round of its local review, 1 to %d", config.MaxFactoryCycles), evalAddUsage)
+			case f.round < 1 || f.round > evalrun.MaxLocalRound:
+				return inspUsage(c, "eval add", fmt.Sprintf("--round is the round of its local review, 1 to %d", evalrun.MaxLocalRound), evalAddUsage)
 			case f.cycle < 0:
 				return inspUsage(c, "eval add", "--cycle is a review cycle's number", evalAddUsage)
 			case f.name != "" && !eval.ValidName(f.name):
@@ -137,8 +137,8 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	fmt.Fprintf(w, "\nAdd the case to %s (the local cases' corpus: not %s, which builds from before local cases refuse whole) "+
 		"with the defects the round should have found (eval.toml.example has the syntax), then replay it with "+
 		"`magnum eval run --case %s`:\n\n", inspTilde(c.Layout.LearnLocalCorpus()), evalCorpusFile, name)
-	fmt.Fprintf(w, "[[case]]\nname = %q\nkind = %q\npr = %q   # round %d of factory task %d: %d + task × 10 + round, no PR on GitHub\nhead = %q\n"+
-		"why = %q\n\n", name, eval.KindLocal, in.PR(), in.Round, in.Task, eval.LocalNumberBase, in.HeadSHA,
+	fmt.Fprintf(w, "[[case]]\nname = %q\nkind = %q\npr = %q   # round %d of factory task %d: %s, no PR on GitHub\nhead = %q\n"+
+		"why = %q\n\n", name, eval.KindLocal, in.PR(), in.Round, in.Task, evalrun.LocalNumberFormula(in.Round), in.HeadSHA,
 		fmt.Sprintf("round %d of factory task %d", in.Round, in.Task))
 	fmt.Fprintln(w, "# [[case.defect]]")
 	for _, l := range [][2]string{

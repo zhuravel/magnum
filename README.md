@@ -4724,7 +4724,9 @@ The local review (`local_review`, `type = "review"`) runs magnum's full review o
 exists: a blind dry run in the task's copy, the watch's review roles in round 1, the same without
 `[factory.local_review] later_without` (claude-simplify) after it, at most `cycles` rounds. Each round gets a
 fresh scratch directory under the task's (`local-review/`), a new agent tag and a synthetic PR number (900000
-plus the task's id times 10 plus the round), so it never meets a real PR's agents, workspace or registry. Its
+plus the task's id times 10 plus the round; past round 10, as a second opinion's round 11, 9000000 plus the
+task's id times 100 plus the round), so it never meets a real PR's agents, workspace or registry, nor another
+task's round. Its
 judge reads the change's title and body (`description.md`) and the ticket (`ticket.md`) as files and makes no
 `gh` call; the body is the factory's own plan (`report.md`), which the judge's skill reads as the factory's guess,
 not a person's intent: a behaviour the plan calls intended that neither the ticket nor your answers decide is a
@@ -7199,8 +7201,8 @@ its `prepass.json` gone, no begin event naming its roles, an `answers.md` writte
 ticket file did not hold the answers and the registry holds none to rebuild them from; and so is a name the corpus or the local cases have already. It prints the round's
 findings and the case to add to the local cases' corpus, `~/.local/share/magnum/learn/local/cases.toml` (create it
 with the first case), with the defects the round should have found, in the posted cases' syntax: `kind = "local"`,
-`pr` the round's synthetic number (`example/example#900011` for round 1 of task 1: 900000 + task × 10 + round, no
-PR on GitHub), the frozen head, and no `base`. Never put a local case in `eval.toml`: a build from before local
+`pr` the round's synthetic number (`example/example#900011` for round 1 of task 1: 900000 + task × 10 + round;
+`example/example#9000111` for its round 11: 9000000 + task × 100 + round; no PR on GitHub), the frozen head, and no `base`. Never put a local case in `eval.toml`: a build from before local
 cases reads `kind` and `question` as unknown keys and refuses the whole corpus, and such builds read it (the
 daemon's skill gate until it restarts on a build that knows them, eval-at.sh's builds of older commits). `eval
 run`, `score`, `baseline` and `add` read `cases.toml` after the learned corpus, without `--corpus`; the skill gate

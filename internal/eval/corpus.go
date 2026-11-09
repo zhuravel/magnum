@@ -24,8 +24,8 @@ type Corpus struct {
 
 // Case is one pull request pinned to the head that is reviewed, with the defects a review must find.
 // A local case (Kind KindLocal) is one round of the factory's local review instead, before any PR
-// existed: its PR is the round's synthetic number (LocalNumberBase + task × 10 + round, as the round
-// ran under), its head the one the round reviewed, and the rest of what the round read (its base
+// existed: its PR is the round's synthetic number (evalrun.LocalNumber: LocalNumberBase + task × 10 +
+// round for rounds 1 to 10, 9000000 + task × 100 + round past them, as the round ran under), its head the one the round reviewed, and the rest of what the round read (its base
 // commit, branch, title, plan, ticket, the operator's answers and roles) is frozen in a directory of
 // its own beside the learned corpus when it is added (`magnum eval add`, evalrun.LocalCaseDir), never
 // read from the factory's task directory again.
@@ -79,8 +79,9 @@ const (
 )
 
 // LocalNumberBase is where the synthetic PR numbers of the factory's local rounds start
-// (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round), far above any PR number of the
-// repositories magnum reviews. A local case's PR number is one of them.
+// (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round for rounds 1 to 10, 9000000 + task id ×
+// 100 + round past them), far above any PR number of the repositories magnum reviews. A local case's
+// PR number is one of them.
 const LocalNumberBase = 900000
 
 // Local reports whether cs is a round of the factory's local review (KindLocal).
@@ -368,7 +369,7 @@ func (cs *Case) validate(ctx string, p *problems) (named bool) {
 		p.add(ctx, "kind must be %q (or left out for a posted round), got %q", KindLocal, cs.Kind)
 	}
 	if cs.validatePR(ctx, p) && cs.Local() && cs.Number < LocalNumberBase {
-		p.add(ctx, "a local case's pr is its round's synthetic number, %d + task × 10 + round (`magnum eval add` prints it), got %q",
+		p.add(ctx, "a local case's pr is its round's synthetic number, %d + task × 10 + round (9000000 + task × 100 + round past round 10; `magnum eval add` prints it), got %q",
 			LocalNumberBase, cs.PR)
 	}
 	if cs.Local() && cs.Base != "" {
