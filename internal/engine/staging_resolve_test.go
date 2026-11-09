@@ -220,7 +220,7 @@ type fakeStagingAgent struct {
 	job      stagingAgentJob
 	prompts  []string
 	onPrompt func(a *fakeStagingAgent, n int, prompt string)
-	wait     func(until time.Time) (bool, error)
+	wait     func(ctx context.Context, until time.Time) (bool, error)
 	alive    bool // Resume finds the agent at work
 	resumed  int
 	closed   int
@@ -238,12 +238,12 @@ func (a *fakeStagingAgent) Prompt(_ context.Context, text string) (stagingAgentA
 	return stagingAgentAt{Name: "magnum-staging-agent", Pane: "p-resolve", Run: fmt.Sprintf("run-%d", n)}, nil
 }
 
-func (a *fakeStagingAgent) Wait(_ context.Context, _ string, until time.Time) (bool, error) {
+func (a *fakeStagingAgent) Wait(ctx context.Context, _ string, until time.Time) (bool, error) {
 	a.mu.Lock()
 	fn := a.wait
 	a.mu.Unlock()
 	if fn != nil {
-		return fn(until)
+		return fn(ctx, until)
 	}
 	return false, nil
 }
@@ -559,4 +559,204 @@ func TestTheStagingResolverClaimsAFreeSlotAndHandsItBack(t *testing.T) {
 	if got := h.slot("review1"); got.State != store.SlotFree {
 		t.Errorf("slot review1 is %s, want free again", got.State)
 	}
+}
+
+// working makes the fake agent's turns wait until release is closed (or the
+// job's ctx ends): an agent at work. started gets a value once a turn waits.
+func (f *resolveFixture) working() (started chan struct{}, release chan struct{}) {
+	started, release = make(chan struct{}, 4), make(chan struct{})
+	f.agent.mu.Lock()
+	f.agent.wait = func(ctx context.Context, _ time.Time) (bool, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	f.agent.mu.Unlock()
+	return started, release
+}
+
+// restart starts the daemon again on the same registry and slots, with a
+// resolver of its own (the old one's worker ended with its engine's stop).
+func (f *resolveFixture) restart() {
+	f.h.t.Helper()
+	f.h.e.stagingStop()
+	f.awaitIdle()
+	f.h.e.stagingWG.Wait()
+	f.r = &stagingResolver{git: f.git}
+	f.h.d.stagingResolver = f.r
+	f.h.e = New(f.h.d)
+	f.h.t.Cleanup(f.h.e.stagingStop)
+	f.h.startup()
+}
+
+// Cancel of a queued job fails it "cancelled" at once; of a running one,
+// stops its agent, puts its slot back, lets go of its PR and fails it
+// "cancelled".
+func TestTheStagingResolverCancelsAJob(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	started, _ := f.working()
+	id := f.start(1)
+	awaitSignal(t, started, "the agent's turn")
+	if why := f.h.e.heldReason(pr.ID); why != resolveHeld {
+		t.Errorf("the PR is held for %q while the agent works, want %q", why, resolveHeld)
+	}
+	if res, _ := f.r.Result(f.h.ctx, id); res.State != staging.ResolveRunning || !strings.Contains(res.Why, "p-resolve") || !strings.Contains(res.Why, stagingWorkspace) {
+		t.Errorf("Result while the agent works = %+v; want running, naming its pane", res)
+	}
+	queued, err := f.r.Start(f.h.ctx, staging.ResolveRequest{Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "staging-bart",
+		TargetTip: f.tip, Head: f.head, Effect: "bart-2-20261005t100000-abcd", Try: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := f.r.Result(f.h.ctx, queued); res.State != staging.ResolveRunning || !strings.Contains(res.Why, "waits for its turn") {
+		t.Errorf("the second job's Result = %+v; want it waiting for its turn: one job at a time", res)
+	}
+	if err := f.r.Cancel(f.h.ctx, queued); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := f.r.Result(f.h.ctx, queued); res.State != staging.ResolveFailed || res.Why != whyCancelled {
+		t.Errorf("the cancelled queued job = %+v, want failed, cancelled", res)
+	}
+	if err := f.r.Cancel(f.h.ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if res := f.await(id); res.State != staging.ResolveFailed || res.Why != whyCancelled {
+		t.Fatalf("the cancelled running job = %+v, want failed, cancelled", res)
+	}
+	if _, closed, _, _ := f.agent.counts(); closed != 1 {
+		t.Errorf("the agent was closed %d times, want once", closed)
+	}
+	if got := f.gitIn(f.slot, "rev-parse", "HEAD"); got != f.head || deref(f.h.slot("review1").CheckedOutSHA) != f.head {
+		t.Errorf("slot review1 is at %s, want back at the PR's head", got)
+	}
+	if !f.h.e.reserveSlotWork(pr.ID, "test") {
+		t.Error("the PR's reservation was not let go")
+	}
+	f.h.e.endEviction(pr.ID)
+}
+
+// A restart goes on with a job whose agent still runs: it holds its PR
+// again before any round, the agent's turn is waited for again and the job
+// ends done; one whose agent is gone fails, saying so, and its slot goes
+// back.
+func TestARestartGoesOnWithAResolverJobWhoseAgentRuns(t *testing.T) {
+	for _, alive := range []bool{true, false} {
+		t.Run(fmt.Sprintf("alive=%v", alive), func(t *testing.T) {
+			f := newResolveFixture(t)
+			pr := f.reviewed()
+			f.resolves("a = 2\nb = 1\n")
+			started, _ := f.working()
+			id := f.start(1)
+			awaitSignal(t, started, "the agent's turn")
+			f.agent.mu.Lock()
+			f.agent.alive, f.agent.wait = alive, nil // what the restart finds; the turn waited for now goes on
+			f.agent.mu.Unlock()
+			f.restart()
+			if _, _, detached, _ := f.agent.counts(); detached != 1 {
+				t.Errorf("the stop detached the agent %d times, want once (it goes on)", detached)
+			}
+			res := f.await(id)
+			if _, _, _, resumed := f.agent.counts(); resumed != 1 {
+				t.Errorf("the restart resumed the agent %d times, want once", resumed)
+			}
+			switch {
+			case alive && res.State != staging.ResolveDone:
+				t.Fatalf("Result after a restart whose agent runs = %+v, want done", res)
+			case !alive && (res.State != staging.ResolveFailed || !strings.Contains(res.Why, "its agent is gone")):
+				t.Fatalf("Result after a restart whose agent is gone = %+v, want failed, the agent gone", res)
+			}
+			if got := f.gitIn(f.slot, "rev-parse", "HEAD"); got != f.head {
+				t.Errorf("slot review1's HEAD is %s, want the PR's head", got)
+			}
+			if !f.h.e.reserveSlotWork(pr.ID, "test") {
+				t.Error("the PR's reservation was not let go")
+			}
+			f.h.e.endEviction(pr.ID)
+		})
+	}
+}
+
+// A restart that finds a job whose agent never got its prompt puts its
+// slot back and queues it again: it runs to its end after the restart.
+func TestARestartStartsAgainAResolverJobBeforeItsAgent(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	f.agentsMu.Lock()
+	f.agentsDown = errors.New("not yet")
+	f.agentsMu.Unlock()
+	id := f.start(1)
+	f.awaitIdle()
+	// As a crash before the prompt leaves it: running in its slot, merged.
+	if _, err := f.r.update(f.h.ctx, f.h.e, id, func(j *resolveJob) {
+		j.State, j.Phase, j.Why, j.Ended, j.PRID, j.SlotID, j.Slot, j.SlotWas, j.Began = resolveRunning, resolvePhaseAgent, "", time.Time{},
+			pr.ID, f.h.slot("review1").ID, "review1", f.head, f.h.clock.Now()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.agentsMu.Lock()
+	f.agentsDown = nil
+	f.agentsMu.Unlock()
+	f.resolves("a = 2\nb = 1\n")
+	f.restart()
+	if res := f.await(id); res.State != staging.ResolveDone {
+		t.Fatalf("Result after the restart = %+v, want done", res)
+	}
+}
+
+// A job runs at most 45 minutes from its slot on: past them its agent is
+// stopped and it fails, before the deploy's own wait of 2 hours ends it;
+// one that waited an hour for its turn and its slot fails too.
+func TestAStagingResolverJobRunsAtMost45Minutes(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	f.agent.mu.Lock()
+	f.agent.wait = func(_ context.Context, until time.Time) (bool, error) {
+		if !until.Equal(f.h.clock.Now().Add(resolveRunFor)) && until.After(f.h.clock.Now().Add(resolveRunFor)) {
+			t.Errorf("the agent may run until %s, past the job's 45 minutes", until)
+		}
+		f.h.advance(resolveRunFor + time.Minute)
+		return false, nil
+	}
+	f.agent.mu.Unlock()
+	res := f.await(f.start(1))
+	if res.State != staging.ResolveFailed || !strings.Contains(res.Why, "ran over 45 minutes") {
+		t.Fatalf("Result = %+v, want failed: ran over 45 minutes", res)
+	}
+	if _, closed, _, _ := f.agent.counts(); closed != 1 {
+		t.Errorf("the agent was closed %d times, want once", closed)
+	}
+	if resolveRunFor+resolveWaitFor >= 2*time.Hour {
+		t.Errorf("a job can take %s, not under the deploy's 2 hours", resolveRunFor+resolveWaitFor)
+	}
+
+	f.agent.mu.Lock()
+	f.agent.wait = nil
+	f.agent.mu.Unlock()
+	h := f.h
+	pr := h.pr(2)
+	h.e.mu.Lock()
+	h.e.rounds[pr.ID] = &roundHandle{cancel: func() {}}
+	h.e.mu.Unlock()
+	req := f.request(2)
+	id, err := f.r.Start(h.ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.awaitIdle()
+	h.advance(resolveWaitFor)
+	h.tick()
+	f.awaitIdle()
+	if res, _ := f.r.Result(h.ctx, id); res.State != staging.ResolveFailed || !strings.Contains(res.Why, "waited over 1 hour") {
+		t.Errorf("Result after an hour without a slot = %+v, want failed", res)
+	}
+	h.e.mu.Lock()
+	delete(h.e.rounds, pr.ID)
+	h.e.mu.Unlock()
 }
