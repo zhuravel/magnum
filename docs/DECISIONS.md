@@ -20789,46 +20789,72 @@ skill versions); people add theirs to the sections before it, at the end of the 
   2026-11-09). Before, the screen's data carried `tui.FactoryJiraStatus` (R26) and nothing drew it.
   - The column, after the title, headed STATUS: the name in its category's style (done green, in progress plain,
     new dim, as the staging cells' states), its age since Since (none when zero), then `not you` or `nobody` in the
-    accent when the issue is assigned to someone else or to nobody; the name is cut first, the column at most 26
-    cells. A dim `?` for a key no read of which worked; nothing for a row without a status (not tried yet, no Jira
-    key, your PR's row). The tone of the row still applies: a done row, a PR magnum leaves alone, are dim.
+    accent when the issue is assigned to someone else or to nobody, `assigned` when it is assigned but not known to
+    be you; the name is cut first, the column at most 26 cells. A dim `?` for a key no read of which worked; nothing
+    for a row without a status (not tried yet, no Jira key, your PR's row). The tone of the row still applies: a done
+    row, a PR magnum leaves alone, are dim.
+  - An old read. R26 keeps the facts of the last read that worked when a try fails, so a status whose last try
+    failed before the issue answered (`TriedAt` after `ReadAt`, with `LastError`: the token expired, Jira is down)
+    or that no factory daemon reads (`DaemonDown`) may no longer hold: its cell is all dim, the mark too, with a dim
+    `?` after it (`In Code Review 3d ?`), and it is no yellow fact. A read whose issue answered while a part of it
+    failed (`ReadAt` equal to `TriedAt`) is drawn as read: its name and category are this read's.
   - Where it fits. From 180 columns and only when a row has a status, the plan first tries the wide layout and the
     140-column one with the column, the title keeping 24 cells, then the layouts it tried before, unchanged. So the
     column takes its room from the wide forms (the whole blockers, the staging cells' ages, which the help line and
     the card say), never from another column or a title under 24 cells, and it is the first column a narrower screen
-    gives up; every frame without a status is the one before, byte for byte. The wide layout alone would almost
-    never hold it: at 200 columns the spec's home (three staging columns, YOUR MOVE at 28) has 21 cells to spare,
-    and a real home adds the PR's CI, FINDINGS and APPR cells.
+    gives up; every frame without a status is the one before, byte for byte. The title line and the help line span
+    the screen and share no width with the table, so in the 140-column layout with the column they keep the long
+    forms when the wide layout without it fits (`longLines`): the memory fact's swap and the help line's whole
+    question stay. The wide layout alone would almost never hold the column: at 200 columns the spec's home (three
+    staging columns, YOUR MOVE at 28) has 21 cells to spare, and a real home adds the PR's CI, FINDINGS and APPR cells.
   - The yellow fact. Jira's category done while the row's PR is open (`FactoryRow.PR`, set only for a PR magnum's
     registry has open; on the card `PRInfo`) is on you: close or merge the PR, or move the issue back. The row says it
     in its STATUS cell (the name yellow) and, without that column, as `Jira done` before what it waits on, where the
-    PR's marks (`muted`, `snoozed`) already sit, so it shows at every width. A merged task's issue, or one whose PR
-    magnum has not read, is no such fact. The card says `Jira says done while #4530 is still open` in yellow after
-    its JIRA line.
-  - The card's JIRA line, under STAGINGS, with or without the PR's lines: the key, the status and for how long, who
-    has it (`assigned to you`, `assigned to someone else`, `unassigned`), the last read's age, then `now:` and the
-    last try's failure in the error's style; a key no read of which worked says `no read of it has worked yet`.
-    What does not fit beside the line goes under it, wrapped to two lines, as GitHub's merge block goes under CI
-    (one helper, `besides`, for both). Every word is the struct's, cleaned again by the painter (`cleanJiraStatus`,
-    a copy: the row and its card share the value).
-  - The help glosses STATUS, its colors and `?`, `not you, nobody`, `Jira done` and JIRA, each within 140 columns.
+    PR's marks (`muted`, `snoozed`) already sit, so it shows at every width. A merged task's issue, one whose PR
+    magnum has not read, or an old read, is no such fact. The card says `Jira says done while #4530 is still open`
+    in yellow after its JIRA line.
+  - The card's JIRA line, under STAGINGS, with or without the PR's lines: the key, the status and for how long
+    (`since just now` under a minute or for a Since ahead of the clock: "for now" would say it holds it for a while),
+    who has it (`assigned to you`, `assigned to someone else`, `assigned (not known to be you)`, `unassigned`), the
+    last read's age, then `now:` and why the issue is not read now, in the error's style (the last try's failure, or
+    `the factory daemon is down`); a key no read of which worked says `no read of it has worked yet`. The status's
+    name is cut before its age at the edge; each later part goes under the line whole, as many on a line as its
+    wrapped width holds, one no line holds wrapped to two lines, as GitHub's merge block goes under CI (one helper,
+    `besides`, for both; one part alone lands as before). Every word is the struct's, cleaned again by the painter
+    (`cleanJiraStatus`, a copy: the row and its card share the value).
+  - The data, a small change outside the screen: `internal/factory`'s `jiraStatusOf` sets `DaemonDown` from the
+    screen's daemon-down option, as `stagingCellsOf` turns the staging cells unknown, and `YouUnknown` when the row
+    is assigned, not to you, and its failure starts with the words `trackCause` gives a failed read of the account
+    (`trackPartCause(jira.PartAccount)`, one function for both).
+  - The help glosses STATUS, its colors and `?`, `not you, nobody`, `assigned`, the old read's `?`, `Jira done` and
+    JIRA, each within 140 columns.
   - The PR's status comment (R48) already names the issue's status in its heading since R26 (`· Jira KEY: in code
     review`, every enum word tested, the key checked again); nothing was added there. Its mapping calls any
     in-progress status whose name says "review" code review (a design review too), which is R26's choice.
   - Deviations from the brief, accepted: the column comes from 180 columns, not 200, the width from which the wide
-    layout already gives up the blockers' ends; a status assigned but not known to be you (a failed `myself`, a
-    `jira.PartError`) reads `not you` until the next read, as the data does not tell it apart (the card's `now:` says
-    why).
+    layout already gives up the blockers' ends. Two cases still read `not you` for an issue not known to be yours,
+    as the row keeps only the last failure: a failed read of the account followed by a try that failed whole (the
+    cell is then dim with its `?`), and a read whose changelog and account both failed (the jira package keeps the
+    first part's error, the changelog's).
   Rejected: the column in the wide layout alone (see above); a hard gate at exactly 200 columns; the column between
   the key and the PR number, as the audit drew it (the group's label sits there, so it would have no heading); glyphs
   for the assignee (words read without the help, and need no form per icon mode); the name yellow on the card too
-  (its reason says it); the yellow fact on a PR magnum's registry does not have open (nothing tells it is open).
+  (its reason says it); the yellow fact on a PR magnum's registry does not have open (nothing tells it is open); an
+  old read by its age alone (an ended task's issue is read no more, so its age grows with nothing wrong); dropping
+  the yellow fact on every failed try (a part's failure leaves the category this read's); a column of the registry
+  for the account's failure (a migration for a fact the failure's fixed words already hold).
   Tests: tui's TestAWideScreenDrawsEachTasksJiraStatusInAColumn, TestTheStatusColumnGoesFirst,
   TestTheStatusCellIsColoredByItsCategory, TestFactoryJiraFramesNeverOverflow,
-  TestTaskCardSaysWhereItsJiraIssueStands, TestTaskCardsJiraFailureGoesUnderALineItDoesNotFit,
-  TestJiraDoneWhileThePRIsOpenIsAYellowFact, TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen and
-  TestTheHelpGlossesTheJiraStatusWords. The width gate, the title's floor, the open PR's guard (row and card) and
-  the mark's guard without the column were each taken out once, and a test failed.
+  TestTaskCardSaysWhereItsJiraIssueStands, TestAHostileJiraNameReachesNoTerminal,
+  TestTaskCardsJiraFailureGoesUnderALineItDoesNotFit, TestJiraDoneWhileThePRIsOpenIsAYellowFact,
+  TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen, TestAnOldJiraReadIsDrawnDimWithAMark,
+  TestJiraDoneOnAnOldReadIsNoYellowFact, TestAnAssigneeNotKnownToBeYouIsNotSaidToBeSomeoneElse,
+  TestTheStatusColumnLeavesTheTitleAndHelpLinesAsTheyWere, TestTaskCardsJiraLineWrapsAtItsParts and
+  TestTheHelpGlossesTheJiraStatusWords; the factory's TestTheScreenTellsAnAssigneeNotKnownToBeYou and
+  TestTheScreenSaysNoDaemonReadsTheJiraStatuses. The width gate, the title's floor, the open PR's guard (row and
+  card), the card's category guard, the mark's guard without the column, the name cut before its age, the old read's
+  two causes (row and card), `longLines`, `since just now` and the painters' cleaning (row and card) were each taken
+  out once, and a test failed.
 
 ## Learned rules
 

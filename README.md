@@ -4289,16 +4289,23 @@ Nothing deploys from the screen yet. From 180 columns, once the factory daemon r
 issue (**Where the Jira issue stands**, below), a STATUS column after the title says where it stands:
 the status in its category's color (done green, in progress plain, to do dim) and how long the issue has held it
 (`In Code Review 13h`; the name alone when since when is not known), then `not you` or `nobody` when the issue is
-assigned to someone else or to nobody; a dim `?` for a key no read of which worked, and nothing for a task the
-daemon has not read yet or without a Jira key. The column is drawn in the wide layout, else in the 140-column one, with the
+assigned to someone else or to nobody, or `assigned` when Jira answered for the issue but not for your account (so
+it is not known to be you); a dim `?` for a key no read of which worked, and nothing for a task the daemon has not
+read yet or without a Jira key. A status that may be old, because its last try failed before the issue answered
+(the token expired, Jira is down) or no factory daemon runs, is drawn all dim with a `?` after it (`In Code Review
+3d ?`). The column is drawn in the wide layout, else in the 140-column one, with the
 title at 24 cells or more: its room comes from the wide forms (the whole blockers, the staging cells' ages), never
-from another column, and it is the first column a narrower screen gives up. Jira saying the issue is done while the
+from another column, and it is the first column a narrower screen gives up; the title line and the help line keep
+the forms they have without it. Jira saying the issue is done while the
 task's PR is still open (magnum's registry has it open) is a fact on you, in yellow: the STATUS cell, or `Jira
-done` before what the row waits on when the screen draws no STATUS column. The task card's JIRA line, under
-STAGINGS, says the key, the status and for how long, who has it (`assigned to you`, `assigned to someone else`,
-`unassigned`) and the last read's age, then why the last try failed (`last read 12m ago · now: Jira did not answer
-within 20s`), under the line when it does not fit; a key no read of which worked says so (`no read of it has worked
-yet`), and Jira done while the PR is open adds `Jira says done while #4530 is still open` in yellow. The words are
+done` before what the row waits on when the screen draws no STATUS column; a status that may be old is no such
+fact. The task card's JIRA line, under
+STAGINGS, says the key, the status and for how long (`since just now` under a minute), who has it (`assigned to
+you`, `assigned to someone else`, `assigned (not known to be you)`, `unassigned`) and the last read's age, then why
+the issue is not read now (`last read 12m ago · now: Jira did not answer within 20s`, or `now: the factory daemon is
+down`); the parts that do not fit go under the line, whole, as many on a line as it holds. A key no read of which
+worked says so (`no read of it has worked yet`), and Jira done while the PR is open adds `Jira says done while
+#4530 is still open` in yellow. The words are
 the factory's read alone (the status's name, cleaned to one short line), never ticket text. A title
 that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding` beside
 `PR-12400` reads `Coupon rounding`). NEEDS YOU, WAITS ON OTHERS and LEFT ALONE each list their rows oldest wait
@@ -4735,8 +4742,9 @@ records its cause (a class of failure, such as `Jira did not answer within 20s`,
 while it stays: Jira down once for every task, a refused issue once for its task; it holds nothing up. The PR's
 status file maps the status by its category (new `to_do`, done `done`, indeterminate `in_code_review` when the
 status's name says "review", `in_development` when it says progress or development, else `other`), and has no Jira
-row before the issue's first read; the screen's data carries the status's name, since when, whether it is yours,
-and the last failure, for each task's row and card, which the screen draws in its STATUS column and the task
+row before the issue's first read; the screen's data carries the status's name, since when, whether it is yours
+(or assigned but not known to be you, when the read of your account failed), the last failure and whether a factory
+daemon runs to read it again, for each task's row and card, which the screen draws in its STATUS column and the task
 card's JIRA line (the factory's screen, above).
 
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
