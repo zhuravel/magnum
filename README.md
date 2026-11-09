@@ -6384,7 +6384,28 @@ gate's own replays of the base, an improve run's eval-at.sh). When only the judg
 needs a full replay made before the proposal whose reviewers read the candidate's prompts (its judge
 reads those reports, and no full replay is made for a guard); a case without one takes no place, and
 the next case that has one guards instead. `magnum eval guards` prints the ones a gate of every role
-would take now. A
+would take now (posted cases only: eval-at.sh replays them). A local case (`learn/local/cases.toml`, a
+round of the factory's local review) takes a guard place too, sharing the `gate_guards` places in the
+same order, and no other: no learned input names one, and as an "other" it would take a place in every
+gate at 30 minutes or more a replay. It guards on its newest replay not made by a gate's candidate that
+recorded its round's inputs (a replay from before replayed the posted reviewer prompt, which no local
+round reads) and found a defect; in a judge-only gate too, with no full replay needed, since a local
+round runs every role: it replays with every role in candidate runs of their own (`local candidate`,
+`local second`). The gate takes none when the candidate changes nothing a local round reads (its local
+inputs, `claude-review-local.md` in `claude-review.md`'s place, are the base's), when the file cannot
+be read (the gate goes on without them and says why in the review), and leaves out a case whose name
+another corpus has and one `eval run` would refuse (a task Codex must not see again, an earlier refused
+replay). A local guard the candidate lost on both replays is weighed against two replays of the base
+made after the one that chose it, never that one, even when the base made it (one local replay is a coin
+flip, and that one found the defect by being chosen): a stored one at the base's local inputs, else a
+replay now, the second only when the first found it, and the loss counts only when both found it. A
+local replay that cannot score the round (a frozen role the config no longer declares, no gh identity, a
+failed setup, a refusal, a flag) is never a loss and never a stop; another without a score skips the row
+on the candidate's first replay and stops the gate on its second or the base's, as for a posted case. A
+refused one is flagged and never replayed again, and a `learn.local_refused` warning and a toast tell you
+(the factory never reads that flag). Each local replay takes 30 to 45 minutes, so a local guard can cost
+four, about 3 hours; `daemon-restart --drain` waits for the one in flight, and only `--now` or a stop
+cuts it, which a resumed gate replays again (it reuses every scored one). A
 target whose baseline already finds its missed finding, or no longer
 reports its declined one, is no target: the candidate is not replayed on it, the next target past the cap
 takes its place, and the input is `dismissed` ("found at the baseline", "not reported at the baseline"), so
@@ -6396,7 +6417,8 @@ replay when the judge it compares against made it, else that judge replayed alon
 case's baseline is the newest stored replay with the prompts and skill of
 the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
 goes after the gate, or at the next start when a crash left it (never the checkout: the branch you have checked out and your uncommitted edits are no
-baseline); the candidate replays with the worktree, and a case it lost is replayed once more. A guard's
+baseline); the candidate replays with the worktree, and a case it lost is replayed once more (a loss counts
+for a defect both replays lost). A guard's
 baseline is taken only when needed: the candidate replays first, and one that finds every defect the
 guard's newest stored replay found passes with that replay as its baseline, whatever prompts it ran with
 (yours or an older base's; the table's note names its run and inputs), and nothing of the base is replayed. A guard the candidate
@@ -7235,7 +7257,8 @@ round that went without a reviewer's report, or whose frozen roles the config no
 `missing_role`; one with no gh identity to run as `config_error`; one whose setup failed `environment`; a refused
 one is flagged, as a posted case is: none is scored as a miss.
 `--judge-only` refuses a local case (a local round runs
-every role), and the skill gate takes none (`a local case: eval run replays it, no gate does`).
+every role), and the skill gate takes one only as a guard, with every role (see the gate above; elsewhere
+it is `a local case: eval run replays it, no gate does`).
 
 Troubleshooting lives in `magnum doctor` (`--json` stays JSON even when the registry cannot be opened: a
 build with a new migration under a running daemon is a failed `registry` check whose fix is `magnum

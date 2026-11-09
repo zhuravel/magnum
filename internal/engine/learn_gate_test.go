@@ -303,6 +303,7 @@ type fakeEval struct {
 	outcomes  map[string]string        // "<candidate>|<case>" -> an outcome with no score
 	lines     map[string]string        // "<candidate>|<case>" -> the pane line such an outcome's refused prompt shows
 	inputs    map[string][2]string     // candidate -> its inputs and reviewer inputs
+	local     map[string]string        // candidate -> the inputs a local round reads with it (evalrun.LocalReviewInputs)
 	root      string                   // the eval runs (Layout.Eval), where a judge-only replay finds its reports
 	corpus    *eval.Corpus
 	corpusErr error // the corpora cannot be read
@@ -389,6 +390,9 @@ func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cr := eval.CaseRun{Case: c.Name, PR: c.PR, Head: c.Head, Outcome: "dry_run", ReportDir: filepath.Join(o.RunDir, "cases", c.Name), JudgeOnly: o.JudgeOnly}
+	if c.Local() { // as evalrun.RunCase records a local replay: its kind and its round's inputs
+		cr.Kind, cr.Inputs = c.Kind, f.local[o.Candidate]
+	}
 	if o.JudgeOnly { // the reports of the newest full replay whose reviewers read what this one's would, as evalrun.RunCase takes them
 		runs, err := eval.ListRuns(f.root)
 		if err != nil {

@@ -49,6 +49,33 @@ func TestLearnReviewShowsTheGateAsATable(t *testing.T) {
 	}
 }
 
+// TestLearnReviewMarksALocalRow: a local guard's row is marked ~ beside its + (a round of the
+// factory's local review, replayed with every role), with a legend line, and what the gate did with
+// the local cases (GateResult.Local) gets a line of its own.
+func TestLearnReviewMarksALocalRow(t *testing.T) {
+	h := newLearnHarness(t)
+	g := engine.GateResult{State: store.LearnPassed, Mode: learn.GateJudgeOnly, Rule: "miss-3 found (0 → 1 of 1) on two replays; nothing lost, no new hit",
+		Local: "local cases left out: task-2-round-1 (Codex never works on task 2 again)",
+		Cases: []engine.GateCase{
+			{GateRow: learn.GateRow{Case: "miss-3", Target: true, Before: &eval.Score{Total: 1}, After: &eval.Score{Found: 1, Total: 1}, Confirmed: true, Rechecked: true}},
+			{GateRow: learn.GateRow{Case: "task-1-round-1", Guard: true, Local: true, Stored: true, Before: &eval.Score{Found: 1, Total: 2}, After: &eval.Score{Found: 1, Total: 2}}},
+		}}
+	b, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE learn_proposals SET gate_json = ? WHERE id = ?", string(b), h.proposal.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.d.StdinTTY = true
+	h.stdin("\n")
+	if code := h.cmd("learn", "--review"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "task-1-round-1+~", "~ a local round of the factory's review, replayed with every role",
+		"local cases: local cases left out: task-2-round-1 (Codex never works on task 2 again)")
+}
+
 // TestLearnCountsTheVersionsNotPushed: magnum pushes nothing, so the list
 // says how many landed versions origin/master does not hold.
 func TestLearnCountsTheVersionsNotPushed(t *testing.T) {

@@ -10331,6 +10331,18 @@ type Deps struct {
 	EvalInputs func(candidate string) (inputs, reviewerInputs string, err error)
 	EvalRuns   func() ([]eval.Run, error)
 	EvalCorpus func() (corpus *eval.Corpus, path string, err error)
+	// EvalLocalCorpus reads the local cases' corpus, rounds of the
+	// factory's local review (paths.Layout.LearnLocalCorpus; nil, nil when
+	// there is none), EvalLocalInputs hashes what a local round reads with
+	// candidate's prompts and skill (evalrun.LocalReviewInputs of
+	// evalrun.WithCandidate), and EvalRefused says why a case is not
+	// replayed ("" = it may be: evalrun.Refused, which names a local case of
+	// a task Codex must not see again). The gate takes a local case only as
+	// a guard (learn.Guards.Local), and none when either of the first two is
+	// nil; a nil EvalRefused leaves the refusal to the replay.
+	EvalLocalCorpus func() (*eval.Corpus, error)
+	EvalLocalInputs func(candidate string) (string, error)
+	EvalRefused     func(ctx context.Context, c eval.Case) string
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -10868,11 +10880,15 @@ type GateResult struct {
 	Cases          []GateCase `json:"cases"`
 	Runs           []string   `json:"runs,omitempty"`
 	CorpusError    string     `json:"corpus_error,omitempty"`
+	Local          string     `json:"local,omitempty"`
 }
     GateResult is what a proposal's gate decided (learn_proposals.gate_json):
     the verdict and its rule, the mode, the inputs hashes the candidate and the
     baseline replayed with (eval.Run.Inputs), every case, the eval runs the gate
-    stored and why the corpus could not be read, if it could not.
+    stored and why the corpus could not be read, if it could not; Local says why
+    the gate took no local case or left some out (withLocal: the local cases'
+    corpus cannot be read, the candidate changes nothing a local round reads,
+    a case it cannot take), "" when it says nothing.
 
 type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
@@ -21667,23 +21683,28 @@ const (
     The gate's modes (Mode).
 
 const (
-	GateRunCandidate = "candidate"
-	GateRunSecond    = "second"
-	GateRunBase      = "baseline"
-	GateRunBaseJudge = "baseline judge"
+	GateRunCandidate   = "candidate"
+	GateRunSecond      = "second"
+	GateRunBase        = "baseline"
+	GateRunBaseJudge   = "baseline judge"
+	GateRunLocal       = "local candidate"
+	GateRunLocalSecond = "local second"
+	GateRunBaseSecond  = "baseline second"
 )
     The kinds of eval run a gate makes, the end of their label (GateRunLabel):
     the candidate's first and second replays, the base's full and judge-only
-    ones.
+    ones, a local guard's two candidate replays (every role, in runs of their
+    own) and the base's second replay of a local guard the candidate lost twice.
 
 const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
 	// SkipLocal is a local case (a round of the factory's local review,
-	// eval.KindLocal), which `magnum eval run` replays and no gate does:
-	// a local round runs every role, and a gate of a skill change replays
-	// its cases judge-only.
+	// eval.KindLocal) in a place no gate gives one: a target (no learned
+	// input names one), an other, or a guard of a gate that takes no local
+	// guard (Guards.Local: `magnum eval guards`, a gate without the local
+	// cases' corpus or whose candidate changes nothing a local round reads).
 	SkipLocal = "a local case: eval run replays it, no gate does"
 	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
@@ -21791,6 +21812,12 @@ func AtBaseline(name string, before *eval.Score) string
     baseline found (SkipFoundAtBaseline) or a decline- case whose declined
     finding the baseline no longer reports (SkipNotReportedAtBaseline): nothing
     is left to improve.
+
+func BothFound(a, b *eval.Score) *eval.Score
+    BothFound is the score of two replays of a case taken as one (a local
+    guard's base, which a candidate's loss of it on both replays is weighed
+    against): a defect is found only when both found it; a and b's other fields
+    are a's. nil when either is.
 
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's
@@ -22145,11 +22172,14 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
     SelectCases picks a proposal's cases from corpus (nil = none): every target,
     in its order, first (one the corpus lacks, whose PR is flagged or in no
     watch is skipped with why, and one past limit too), then the guard places
-    (guards, on top of limit, so targets never crowd them out; a guard is never
-    a target), then the newest other cases (the corpus's last first: the learned
-    ones come after the operator's, oldest first) whose PR is watched and not
-    flagged, until limit targets and others can run. A flagged PR is never
-    replayed, watched or not, and a local case (SkipLocal) never by a gate.
+    (guards, on top of limit, so targets never crowd them out; a guard is
+    never a target), then the newest other cases (the corpus's last first: the
+    learned ones come after the operator's, oldest first) whose PR is watched
+    and not flagged, until limit targets and others can run. A flagged PR is
+    never replayed, watched or not, and a local case only in a guard place,
+    when guards.Local (else SkipLocal): it is no learned input's target,
+    and as an other it would take a place of every gate (the corpus's last) at
+    30 minutes or more a replay, whatever its baseline found.
 
 type GateRow struct {
 	Case      string      `json:"case"`
@@ -22163,13 +22193,17 @@ type GateRow struct {
 	Confirmed bool        `json:"confirmed,omitempty"`
 	Skip      string      `json:"skip,omitempty"`
 	Note      string      `json:"note,omitempty"`
+	Local     bool        `json:"local,omitempty"`
+	First     *eval.Score `json:"first,omitempty"`
 }
     GateRow is a case of the gate: its score at the baseline (the newest replay
     with master's prompts and skill) and with the candidate's, or why it was not
     compared (Skip). Retried is set once the caller replayed a lost case again,
-    After then being the second replay's: only then does a loss count. A guard
-    (Guard) keeps the newest stored replay not made by a gate's candidate as
-    its baseline (Stored, GuardsFrom: an operator's run or a gate's base,
+    After then being the second replay's and First the first's: only then does
+    a loss count, and only of a defect both lost. A local row (Local: a round
+    of the factory's local review, replayed with every role) is a guard. A
+    guard (Guard) keeps the newest stored replay not made by a gate's candidate
+    as its baseline (Stored, GuardsFrom: an operator's run or a gate's base,
     of whatever inputs), while the candidate finds what that replay found;
     one it lost twice takes the base's score (AtBase). A miss target won on
     one replay counts once a second finds it too (Confirmed, Confirm, which
@@ -22189,7 +22223,9 @@ func (r *GateRow) Confirm(second *eval.Score)
     too.
 
 func (r GateRow) Lost() []string
-    Lost names the defects the baseline found that the candidate did not.
+    Lost names the defects the baseline found that the candidate did not:
+    on both replays, once a second replaced the first (First), so two replays
+    that each lost another defect lost none twice.
 
 func (r GateRow) NewHits() []string
     NewHits names the absent defects (findings authors declined) the candidate
@@ -22213,6 +22249,7 @@ type Guards struct {
 	Found  func(c eval.Case) bool
 	Last   func(c eval.Case) time.Time
 	Replay func(c eval.Case) (eval.Replay, bool)
+	Local  bool
 }
     Guards are a gate's guard places (SelectCases): up to N cases besides
     the targets whose newest stored replay found a defect (Found), the least
@@ -22222,7 +22259,9 @@ type Guards struct {
     baseline finds nothing yet) and the newest others (mostly declined findings,
     with nothing to find) seldom are. N = 0 or a nil Found gives none. Replay,
     which GuardsFrom sets, is the stored replay Found reads, which the gate
-    takes as a guard's baseline.
+    takes as a guard's baseline. Local lets a local case (eval.KindLocal) take
+    a guard place, which the gate replays with every role; false leaves every
+    local case out (SkipLocal).
 
 func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers string) Guards
     GuardsFrom are n guard places over the stored runs (oldest first:
@@ -22250,8 +22289,11 @@ func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers 
     are its candidate's reviewer inputs (eval.Run.ReviewerInputs): its judge
     reads the reports of a full replay whose reviewers read them, and none is
     made for a guard, so a case guards it only with such a full replay among the
-    replays that decide which cases guard (eval.FullReplayFor); "" for a gate of
-    every role.
+    replays that decide which cases guard (eval.FullReplayFor); "" for a gate
+    of every role. A local case needs no such replay (the gate replays it with
+    every role), but its newest replay must have recorded its round's inputs
+    (eval.CaseRun.Inputs): one from before replayed the posted reviewer prompt,
+    no local round's.
 
 type Input struct {
 	// Author is the pull request's author in Account form

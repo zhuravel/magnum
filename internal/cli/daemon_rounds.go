@@ -32,15 +32,20 @@ func registryReadOnlyDSN(path string) string {
 }
 
 // daemonGate wires the gate of a skill proposal (engine.Deps.EvalCase,
-// EvalInputs, EvalRuns, EvalCorpus) to the eval replays `magnum eval run`
+// EvalInputs, EvalRuns, EvalCorpus, and for its local guards EvalLocalCorpus,
+// EvalLocalInputs and EvalRefused) to the eval replays `magnum eval run`
 // makes, in the daemon's process (Amendment A1: the engine cannot import
 // evalrun, which runs it): a case replays with the daemon's layout, config,
 // registry (for the PR's Codex flag) and logger, in a worktree of the
 // gate's own (paths.Layout.LearnEvalWorktrees, never `magnum eval run`'s,
 // which refuses to run while a gate does); the inputs are those of
-// the config pointed at a candidate directory; the runs and the corpora are
-// the ones `magnum eval` reads. A dry run, an eval's own app and a config
-// that did not load wire none.
+// the config pointed at a candidate directory (a local round's with the
+// local reviewer prompt: evalrun.LocalReviewInputs); the runs and the
+// corpora are the ones `magnum eval` reads, the local cases' corpus
+// (paths.Layout.LearnLocalCorpus) apart, since the gate takes its cases as
+// guards only and an error in it must not stop the gate (nil, nil when it
+// is not there). A dry run, an eval's own app and a config that did not
+// load wire none.
 func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 	return func(d *engine.Deps) {
 		if a.DryRun || a.AgentTag != "" || a.Config == nil {
@@ -63,8 +68,26 @@ func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 			return evalrun.Inputs(cfg), evalrun.ReviewerInputs(cfg), nil
 		}
 		d.EvalRuns = func() ([]eval.Run, error) { return eval.ListRuns(evalrun.RunsRoot(a.Layout)) }
+		d.EvalLocalInputs = func(candidate string) (string, error) {
+			cfg := a.Config
+			if candidate != "" {
+				var err error
+				if cfg, err = evalrun.WithCandidate(a.Config, candidate); err != nil {
+					return "", err
+				}
+			}
+			return evalrun.LocalReviewInputs(cfg), nil
+		}
+		d.EvalLocalCorpus = func() (*eval.Corpus, error) {
+			path := a.Layout.LearnLocalCorpus()
+			if !fsx.Exists(path) {
+				return nil, nil
+			}
+			return eval.LoadCorpus(path)
+		}
+		d.EvalRefused = func(ctx context.Context, ec eval.Case) string { return evalrun.Refused(ctx, deps, ec) }
 		d.EvalCorpus = func() (*eval.Corpus, string, error) {
-			user, learned, _ := evalCorpusPath(c, "") // the gate takes no local case: its corpus file stays eval run's
+			user, learned, _ := evalCorpusPath(c, "") // the local cases' corpus is EvalLocalCorpus
 			if user != "" && !fsx.Exists(user) {
 				user = ""
 			}

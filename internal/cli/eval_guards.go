@@ -55,7 +55,7 @@ func runEvalGuards(c *Context, corpusFlag string, n int) int {
 	if err := c.LoadConfig(); err != nil {
 		return cmdFail(c, "eval guards", fmt.Errorf("%w (fix config.toml; `magnum config` validates it)", err))
 	}
-	user, learned, _ := evalCorpusPath(c, corpusFlag) // the gate takes no local case
+	user, learned, _ := evalCorpusPath(c, corpusFlag) // posted cases only: eval-at.sh replays them (learn.Guards.Local stays false)
 	if corpusFlag == "" && user != "" && !fsx.Exists(user) {
 		user = ""
 	}

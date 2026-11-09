@@ -363,6 +363,18 @@ type Deps struct {
 	EvalInputs func(candidate string) (inputs, reviewerInputs string, err error)
 	EvalRuns   func() ([]eval.Run, error)
 	EvalCorpus func() (corpus *eval.Corpus, path string, err error)
+	// EvalLocalCorpus reads the local cases' corpus, rounds of the
+	// factory's local review (paths.Layout.LearnLocalCorpus; nil, nil when
+	// there is none), EvalLocalInputs hashes what a local round reads with
+	// candidate's prompts and skill (evalrun.LocalReviewInputs of
+	// evalrun.WithCandidate), and EvalRefused says why a case is not
+	// replayed ("" = it may be: evalrun.Refused, which names a local case of
+	// a task Codex must not see again). The gate takes a local case only as
+	// a guard (learn.Guards.Local), and none when either of the first two is
+	// nil; a nil EvalRefused leaves the refusal to the replay.
+	EvalLocalCorpus func() (*eval.Corpus, error)
+	EvalLocalInputs func(candidate string) (string, error)
+	EvalRefused     func(ctx context.Context, c eval.Case) string
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.

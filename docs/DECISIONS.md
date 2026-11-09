@@ -22789,6 +22789,83 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestALocalRoundReadsTheFactorysLocalReviewerPrompt and TestALocalReplayRecordsTheInputsOfTheRoundItRan, eval's
   TestALocalReplayMatchesOnTheInputsOfItsOwnRound, the cli's TestEvalBaselineMatchesALocalCaseOnItsRoundsInputs;
   `internal/factory`'s tests pass unchanged. No new dependencies.
+- **The skill gate takes a local case as a guard, replayed with every role, and counts its loss only when two fresh
+  replays of the base find what both candidate replays lost** (2026-11-09, R36 item 5). R36 left local cases out of
+  every gate (`SkipLocal`), so a proposal that changed what the factory's local rounds read (the skill, the judge
+  prompts, `claude-review-local.md`) was never measured on one. Of R36's note, the gate below keeps "replays its
+  local cases with every role, in a candidate run of their own"; it takes them as guards only, not every one; and
+  "a baseline from a stored full replay at the base's inputs (`eval.Baselines` ... works for them as is)" no longer
+  holds: the inputs hash left the local reviewer prompt out (the entry before this one), and one stored local
+  replay is no baseline (below).
+  - Which cases. A local case takes a guard place only (`learn.Guards.Local`), sharing the `gate_guards` places in the
+    same least-recently-replayed order: no learned input names one (a target that does is `SkipLocal`), and as an
+    "other" (the corpus's last) it would take a place in every gate at 30 to 47 minutes a replay (runs 135607,
+    145238 and 160501 of 2026-11-09). It guards by `GuardsFrom`'s rule, on its newest non-candidate replay that
+    recorded its round's inputs (`eval.CaseRun.Inputs`; one from before replayed the posted prompt) and found a
+    defect; a question defect counts as `eval.ScoreCase` scores it. In a judge-only gate it needs no full replay of
+    the candidate's reviewers. `magnum eval guards` and eval-at.sh stay posted-only (`Local` false). So
+    task-1-round-1 takes no place today: none of its replays recorded its round's inputs; it stays idle until a
+    replay with the local prompt finds a defect, which only `magnum eval run` makes (the gate replays the base only
+    for a guard the candidate lost twice).
+  - The file filter. The daemon reads the local cases' corpus apart (`engine.Deps.EvalLocalCorpus`, `cli.daemonGate`:
+    `eval.LoadCorpus` of `paths.Layout.LearnLocalCorpus`, nil when the file is not there) and hashes what a local
+    round reads with the base and with the candidate (`Deps.EvalLocalInputs`: `evalrun.LocalReviewInputs`). Equal
+    hashes (a proposal that changes `claude-review.md` alone, say) take no local case: the round would read what it
+    read at the base. A file that cannot be read, a hash that cannot be made, a case whose name another corpus has,
+    a posted case in the file and a case `evalrun.Refused` names (`Deps.EvalRefused`: a task the factory marked
+    never for Codex, an earlier refused replay) never stop the gate: `GateResult.Local` says what was left out and
+    why, since the operator edits that file by hand.
+  - The replays. A local case replays with every role in every mode (`judgeOnlyFor`), in candidate runs of its own
+    (`learn.GateRunLocal` "local candidate", `GateRunLocalSecond` "local second"), which `candidateRun` counts, so
+    they never make the next proposal's guard. Its stored replays are matched on its round's inputs (`candInFor`,
+    `baseInFor`), so a gate that stopped short reuses every scored one.
+  - The loss. A loss on any row now counts for a defect both candidate replays lost (`GateRow.First` keeps the first
+    replay's score): before, two replays that each lost another defect counted as "lost after a second replay".
+    A local guard lost twice is weighed against two replays of the base made after the replay that chose it, never
+    that one, even when the base made it (`storedBases`, else fresh ones, the second, `learn.GateRunBaseSecond`, only
+    when the first found a lost defect): one local replay is a coin flip (1/2, then 0/2 at the same inputs), and
+    the one that chose the guard found its defect by being chosen. A defect counts as found at the base only when
+    both found it (`learn.BothFound`). With a find rate p alike at the base and the candidate, a false fail is
+    (1-p)²p², 1 gate in 16 at p = 1/2, against (1-p)²p, 1 in 8, with one base replay, for at most one more replay.
+    A local row is a guard, compared with a stored replay (`Stored`), so its new hit never counts, as a posted
+    guard's does not, and no replay is made for one. A local guard lost at the base too gets
+    `learn.guard_lost_at_base` as a posted one does.
+  - Outcomes. In `replay`'s order: a cancel, the budget, a usage limit or a login stop the gate as before; flagged,
+    or a refused local replay, skip the row (`SkipFlagged`), and the refusal, which `evalrun` flags under the
+    synthetic PR that the factory never reads, is a `learn.local_refused` warning and a toast, once per case; an
+    unscored replay on a CLI's outage is a delay (`outageOf` first); `missing_role`, `config_error` and
+    `environment` skip a local row on any replay, the first, the second or the base's (they cannot score the round
+    on a later try either: never a loss, never a stop); any other replay without a score skips the row on the first
+    replay and stops the gate on the second or the base's (`noScore`), as for a posted case. Missing frozen inputs
+    and a gone main clone end the replay `error` in seconds, before any agent starts (`localCaseInputs`,
+    `FetchCommit`), so no pre-check is needed.
+  - Cost. A local guard can cost four replays, about 3 hours. `daemon-restart --drain` waits for the replay in
+    flight (the gate is background work), and only `--now`, a stop or a rejection cuts it; a cut replay counts toward
+    no limit, and the resumed gate takes the same guards and reuses the scored replays. `gateMaxAge` (72 h) bounds it.
+  - What you see. `magnum learn --review` marks a local row `~` with a legend line and prints `GateResult.Local`;
+    `learn.gate_start` counts `local_guards`; `magnum eval list` shows the gate's local runs.
+  - Proposal 17's hold of 2026-11-05 ("judge pane agent_not_found", 3 gates) is no live bug of the gate: each of the
+    three replays ended on the Codex CLI's bootstrap failure (`account/read failed during TUI bootstrap`) that
+    `agents.shared_failure` named at 18:22:56Z, which `outageOf` (d2975830) now makes a delay; the first such stop
+    of an outage that only the gate's replays hit still counts (their scratch registries are not read for shared
+    lines), which needs a second PR's evidence to close. The proposal stays held until it is reviewed or expires.
+  Rejected: a local case as an "other" or a target (above); one base replay deciding (twice the false fails); a
+  regression only a local guard shows holding the proposal instead (a held proposal stops the editor until you
+  review it); a second candidate replay for a local row's new hit (it can never count, so it would cost 40 minutes
+  for nothing); a key of its own (`gate_local_guards`: one local case today; if many crowd the posted guards out,
+  then); a pre-check of a case's inputs or main clone (the replay fails in seconds without them); marking the
+  factory's task never for Codex from the gate (the factory's registry is the factory's to write). Tests: learn's
+  TestSelectCasesGivesALocalCaseAGuardPlaceOnly,
+  TestGuardsFromTakesALocalCaseOnItsRoundsReplaysWithoutAFullReplayOfTheReviewers,
+  TestALossCountsOnlyForADefectBothCandidateReplaysLost and TestTheBaseScoreOfALocalGuardFindsOnlyWhatBothReplaysFound
+  (TestSelectCasesLeavesLocalCasesToEvalRun passes unchanged); the engine's
+  TestAGateReplaysALocalGuardWithEveryRoleInARunOfItsOwn (judge-only and full),
+  TestALocalGuardLostTwiceIsALossOnlyWhenTwoFreshBaseReplaysFindIt, TestALocalReplayThatCannotScoreIsNeverALossNorAStop
+  (first, second and base replays; a refusal's warning and toast),
+  TestALocalSecondReplayWithoutAScoreStopsTheGateAndTheNextReusesTheFirst, TestALocalReplayOnASharedLaunchFailureIsADelay,
+  TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and TestAGateTakesNoLocalCaseItCannotTellApart, each checked
+  against a mutation of its rule; the cli's TestDaemonGateReadsTheLocalCasesCorpusApart and
+  TestLearnReviewMarksALocalRow. The other gate tests pass unchanged. No new dependencies.
 
 ## Learned rules
 
