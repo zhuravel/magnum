@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
@@ -79,8 +80,11 @@ func (e *ConfigError) Error() string { return e.Key + ": " + e.Why }
 // Scratch are the round's synthetic PR number, its agents' tag and its
 // scratch directory; Refused the agent kind whose provider refused the
 // round (OutcomeRefused: "codex" for a Codex warning); Missing the reviewer
-// roles whose report the judge went without (a lost pane, a timeout);
-// Error why a round that did not finish ended, in the round's words.
+// roles whose report the judge went without (a lost pane, a timeout), and
+// MissingDetail the report detail of the first of them, in name order,
+// that carries its pane's error line (an agent that died at its launch:
+// agents.PaneErrorOf reads it), "" when none does; Error why a round that
+// did not finish ended, in the round's words.
 type LocalResult struct {
 	Outcome, ReportDir, Verdict string
 	ResultFile                  string
@@ -92,6 +96,7 @@ type LocalResult struct {
 	Tag, Scratch                string
 	Refused                     string
 	Missing                     []string
+	MissingDetail               string
 	Error                       string
 	// ConfigKey names what to configure when the round could not run for
 	// a configuration problem (ConfigError); "" otherwise.
@@ -390,6 +395,12 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		}
 	}
 	slices.Sort(out.Missing)
+	for _, role := range out.Missing {
+		if d := res.Reports[agents.Role(role)].Detail; agents.PaneErrorOf(d) != "" {
+			out.MissingDetail = d
+			break
+		}
+	}
 	if res.ReportDir == "" {
 		return out, nil
 	}

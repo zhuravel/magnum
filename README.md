@@ -7253,8 +7253,9 @@ starts when Codex never works on its task again (the factory's mark, frozen with
 factory's registry, read only; a registry that cannot say refuses it too) or when the PR the task published is
 flagged (an earlier replay of it was refused, or magnum's registry holds a Codex flag for it): the factory's rule
 that keeps the account from a second warning holds for replays too. A round that ran without Codex replays. A
-round that went without a reviewer's report, or whose frozen roles the config no longer declares, ends
-`missing_role`; one with no gh identity to run as `config_error`; one whose setup failed `environment`; a refused
+round that went without a reviewer's report ends `missing_role` (its error ends with the pane line an agent died
+on, when one did, as a posted replay's does); one whose frozen roles the config no longer declares, or with no gh
+identity to run as, `config_error`; one whose setup failed `environment`; a refused
 one is flagged, as a posted case is: none is scored as a miss.
 `--judge-only` refuses a local case (a local round runs
 every role), and the skill gate takes one only as a guard, with every role (see the gate above; elsewhere

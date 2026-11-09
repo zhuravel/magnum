@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -27,9 +28,9 @@ import (
 // localCaseInputs are local case ec's frozen inputs, once it may replay:
 // not judge-only (a local round runs every role), with its inputs in its
 // directory and of its own round (the case's synthetic PR and head), every
-// frozen role one cfg declares (eval.OutcomeMissingRole otherwise) and a gh
-// identity to run as (LocalIdentity; eval.OutcomeConfigError otherwise).
-// outcome is the case's outcome when err is not nil.
+// frozen role one cfg declares and a gh identity to run as (LocalIdentity):
+// eval.OutcomeConfigError otherwise, since a replay changes nothing until
+// the config does. outcome is the case's outcome when err is not nil.
 func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, o Options) (in LocalInputs, outcome string, err error) {
 	if o.JudgeOnly {
 		return in, OutcomeError, fmt.Errorf("case %q is a local round, which replays every role: --judge-only replays posted cases only", ec.Name)
@@ -51,7 +52,7 @@ func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, 
 		}
 	}
 	if len(gone) > 0 {
-		return in, eval.OutcomeMissingRole, fmt.Errorf("case %q ran with %s, which the config no longer declares: not replayed",
+		return in, eval.OutcomeConfigError, fmt.Errorf("case %q ran with %s, which the config no longer declares: not replayed",
 			ec.Name, strings.Join(gone, ", "))
 	}
 	if _, err := LocalIdentity(cfg, w); err != nil {
@@ -165,8 +166,12 @@ func prCase(pr string) (eval.Case, bool) {
 //     (eval.CaseRun.Findings).
 //
 // A refused round is flagged as a posted one is (eval.MarkFlagged); one
-// that went without a reviewer's report is eval.OutcomeMissingRole and one
-// without a judge's result unscored, with why: none is scored as a miss.
+// that went without a reviewer's report is eval.OutcomeMissingRole, its
+// error ending with the pane line an agent died on (the round's own error,
+// else a missing reviewer's report detail: LocalResult.MissingDetail), as a
+// posted replay's error carries it (agents.PaneErrorOf: the skill gate
+// tells a CLI's outage by it); one without a judge's result is unscored,
+// with why: none is scored as a miss.
 func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Watch, ec eval.Case, in LocalInputs, o Options, cr eval.CaseRun) eval.CaseRun {
 	fail := func(outcome string, err error) eval.CaseRun {
 		cr.Outcome, cr.Error = outcome, err.Error()
@@ -234,8 +239,15 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 		}
 		return cr
 	case len(res.Missing) > 0:
-		return fail(eval.OutcomeMissingRole, fmt.Errorf("the round went without the report of %s: what it would have found is unknown, so it is not scored",
-			strings.Join(res.Missing, ", ")))
+		msg := fmt.Sprintf("the round went without the report of %s: what it would have found is unknown, so it is not scored",
+			strings.Join(res.Missing, ", "))
+		if res.Error != "" {
+			msg += ": " + res.Error
+		}
+		if agents.PaneErrorOf(res.Error) == "" && res.MissingDetail != "" { // the line is read from the end
+			msg += "; " + res.MissingDetail
+		}
+		return fail(eval.OutcomeMissingRole, errors.New(msg))
 	case res.ReportDir == "" || res.Verdict == "":
 		cr.Error = cmp.Or(cr.Error, "no judge result to score")
 		return cr

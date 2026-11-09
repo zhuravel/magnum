@@ -27,13 +27,13 @@ const (
 	// the run was interrupted; `magnum eval run` records it so.
 	OutcomeSkipped = "skipped"
 	// OutcomeMissingRole: a local case's round went without a reviewer's
-	// report (a lost pane, a timeout), or its frozen roles name one the
-	// config no longer has: what it would have found is unknown, so it is
-	// not scored, never a miss.
+	// report (a lost pane, a timeout): what it would have found is unknown,
+	// so it is not scored, never a miss.
 	OutcomeMissingRole = "missing_role"
 	// OutcomeConfigError: a local case's round cannot run for a
-	// configuration problem (no gh identity to run as): not scored, and
-	// running it again changes nothing until the config does.
+	// configuration problem (no gh identity to run as, a frozen role the
+	// config no longer declares): not scored, and running it again changes
+	// nothing until the config does.
 	OutcomeConfigError = "config_error"
 	// OutcomeEnvironment: the case's worktree could not be prepared as a
 	// review checkout of its repository is (its copy_files, its setup):

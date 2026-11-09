@@ -12414,13 +12414,13 @@ const (
 	// the run was interrupted; `magnum eval run` records it so.
 	OutcomeSkipped = "skipped"
 	// OutcomeMissingRole: a local case's round went without a reviewer's
-	// report (a lost pane, a timeout), or its frozen roles name one the
-	// config no longer has: what it would have found is unknown, so it is
-	// not scored, never a miss.
+	// report (a lost pane, a timeout): what it would have found is unknown,
+	// so it is not scored, never a miss.
 	OutcomeMissingRole = "missing_role"
 	// OutcomeConfigError: a local case's round cannot run for a
-	// configuration problem (no gh identity to run as): not scored, and
-	// running it again changes nothing until the config does.
+	// configuration problem (no gh identity to run as, a frozen role the
+	// config no longer declares): not scored, and running it again changes
+	// nothing until the config does.
 	OutcomeConfigError = "config_error"
 	// OutcomeEnvironment: the case's worktree could not be prepared as a
 	// review checkout of its repository is (its copy_files, its setup):
@@ -13295,6 +13295,7 @@ type LocalResult struct {
 	Tag, Scratch                string
 	Refused                     string
 	Missing                     []string
+	MissingDetail               string
 	Error                       string
 	// ConfigKey names what to configure when the round could not run for
 	// a configuration problem (ConfigError); "" otherwise.
@@ -13310,8 +13311,10 @@ type LocalResult struct {
     its agents' tag and its scratch directory; Refused the agent kind whose
     provider refused the round (OutcomeRefused: "codex" for a Codex warning);
     Missing the reviewer roles whose report the judge went without (a lost pane,
-    a timeout); Error why a round that did not finish ended, in the round's
-    words.
+    a timeout), and MissingDetail the report detail of the first of them,
+    in name order, that carries its pane's error line (an agent that died at its
+    launch: agents.PaneErrorOf reads it), "" when none does; Error why a round
+    that did not finish ended, in the round's words.
 
 func ParseLocalResult(data []byte) LocalResult
     ParseLocalResult reads a judge's result file (the skill's section 8 JSON)

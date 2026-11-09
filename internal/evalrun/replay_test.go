@@ -175,10 +175,11 @@ func TestRunCaseReplaysALocalCaseFromItsFrozenInputs(t *testing.T) {
 }
 
 // What a local case's replay cannot score is reported, never scored as a miss: frozen roles the
-// config no longer has and a config without a gh identity stop it before any git or agent, a
-// judge-only replay is refused (a local round runs every role), a case whose inputs are gone or are
-// another round's says so, a round that went without a reviewer's report is missing_role, and a
-// refused one is flagged so that it never replays again.
+// config no longer has and a config without a gh identity stop it before any git or agent, both
+// config_error (running it again changes nothing until the config does), a judge-only replay is
+// refused (a local round runs every role), a case whose inputs are gone or are another round's says
+// so, a round that went without a reviewer's report is missing_role, and a refused one is flagged so
+// that it never replays again.
 func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 	o := func(f *replayFixture) Options {
 		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
@@ -192,7 +193,7 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 			t.Fatal(err)
 		}
 		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
-		if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil || !strings.Contains(cr.Error, "gone-review") || len(f.git.Calls) > 0 || len(f.rounds) > 0 {
+		if cr.Outcome != eval.OutcomeConfigError || cr.Score != nil || !strings.Contains(cr.Error, "gone-review") || len(f.git.Calls) > 0 || len(f.rounds) > 0 {
 			t.Fatalf("case run %+v (%d git calls, %d rounds)", cr, len(f.git.Calls), len(f.rounds))
 		}
 	})
@@ -250,6 +251,45 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 			t.Fatalf("Refused = %q, want the flag", why)
 		}
 	})
+}
+
+// A local round that went without a reviewer's report keeps the pane line its agent died on at the
+// end of its error, as a posted replay's error carries it (agents.PaneErrorOf): the round's own error,
+// a judge's that died with it, else the line of a missing reviewer's report. A CLI's outage that kills
+// every launch (a Codex bootstrap failure) is then told from a lost pane of this round alone.
+func TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn(t *testing.T) {
+	o := func(f *replayFixture) Options {
+		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
+	}
+	const judgeLine, reviewerLine = "Error: account/read failed during TUI bootstrap", "Error: the reviewer's launch failed"
+	refused := func(role, line string) string {
+		return "agents: prompt mg-" + role + ": herdr agent.prompt: agent_not_found: agent target mg-" + role + " not found; the pane shows: " + line
+	}
+	for _, tc := range []struct {
+		name, roundErr, detail, want string
+	}{
+		{"the judge's", "pipeline: judge prompt refused, also after a restart of the judge: " + refused("codex-judge", judgeLine), "", judgeLine},
+		{"the reviewer's", "", refused("codex-review", reviewerLine), reviewerLine},
+		{"the judge's over the reviewer's", "pipeline: judge prompt refused: " + refused("codex-judge", judgeLine), refused("codex-review", reviewerLine), judgeLine},
+		{"none", "", "codex-review: no report after 30m0s", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReplayFixture(t, questionResult)
+			f.answer.Error = tc.roundErr
+			if tc.roundErr != "" {
+				f.answer.Outcome = pipeline.OutcomeError
+			}
+			f.answer.Reports = map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.ReportFailed, Detail: tc.detail},
+				"claude-review": {Status: pipeline.ReportOK}}
+			cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
+			if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil || !strings.HasPrefix(cr.Error, "the round went without the report of codex-review") {
+				t.Fatalf("case run %+v", cr)
+			}
+			if got := agents.PaneErrorOf(cr.Error); got != tc.want {
+				t.Fatalf("the pane line of %q is %q, want %q", cr.Error, got, tc.want)
+			}
+		})
+	}
 }
 
 func mustRemoveAll(t *testing.T, path string) {
