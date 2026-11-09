@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
@@ -344,5 +345,36 @@ func TestACodexUsageLimitOfTheTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 				t.Fatal("the twin's findings are gone after the stage passed, want them for the judge")
 			}
 		})
+	}
+}
+
+// While a hold of the machine refuses a stage's launch (the disk below its
+// floor, after the copy's claim), the stage reads no Codex budget for it:
+// the launch waits on the hold, and once the hold lifts the budget is read
+// and the roles yield.
+func TestALaunchAHoldRefusesReadsNoCodexBudget(t *testing.T) {
+	var free atomic.Uint64
+	free.Store(40 * gb)
+	h, _ := diskHarness(t, &free)
+	h.codex.set(95, nil)
+	task := h.kindTask("PR-12414", "bug", "investigate")
+	h.tick() // the claim of the copy begins, and ends off the loop
+	h.e.waitBackground()
+	free.Store(10 * gb)
+	h.tick()
+	h.codex.mu.Lock()
+	reads := h.codex.reads
+	h.codex.mu.Unlock()
+	if n := len(h.rt.launchedRoles()); n != 0 || reads != 0 {
+		t.Fatalf("%d launches and %d reads of Codex's budget under the disk hold, want none of either", n, reads)
+	}
+	if got := h.reload(task.ID); got.WaitsWho != HoldDisk || got.Copy == "" {
+		t.Fatalf("task waits %q: %q with copy %q, want its copy taken and the launch on the disk hold", got.WaitsWho, got.WaitsWhat, got.Copy)
+	}
+
+	free.Store(40 * gb)
+	h.tick()
+	if got := h.rt.launchedRoles(); len(got) != 1 || !slices.Equal(got[0], []string{"fx-repro", "fx-cause-claude", "fx-history"}) {
+		t.Fatalf("launches %v once the hold lifted, want fx-cause-claude in fx-cause's place", got)
 	}
 }

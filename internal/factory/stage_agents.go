@@ -347,7 +347,11 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	}
 	run.copy = c
 	if a.State == registry.AttemptLaunching {
-		ys, err := e.yieldAtLaunch(ctx, t, st, run)
+		var ys []yield
+		var err error
+		if _, _, ok := e.mayLaunch(); ok { // under a hold the launch waits anyway: no read of the budget for it
+			ys, err = e.yieldAtLaunch(ctx, t, st, run)
+		}
 		if err == nil {
 			err = e.launch(ctx, t, a, c, run.runAsRoles())
 		}

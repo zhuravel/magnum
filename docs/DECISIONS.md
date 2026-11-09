@@ -21857,8 +21857,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Claude fallback holds the launch, the task waiting on the budget in the local review's words
     (`codex at 95%, at or past [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to
     run in its place, so the investigate stage waits`). A read that fails launches as before (the runtime's gate
-    reads again) and logs once until a read goes through. A held launch drops the stage's state when the yield
-    changed it, so the next pass decides again on the budget as it is then.
+    reads again) and logs once until a read goes through. A launch a hold of the machine refuses reads no budget
+    (it waits on the hold anyway), and a held launch drops the stage's state when the yield changed it, so the next
+    pass decides again on the budget as it is then.
   - A usage limit mid-run. Before, a Codex run that ended on its limit (health `usage_limit`, or a model limit no
     fallback model took) paused its role: the run abandoned as paused, the kind paused until the named reset (else
     an hour), and the role's prompt to go on sent then. No work was lost, but the stage stalled until the reset,
@@ -21906,7 +21907,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAtTheCodexSoftCapFxCauseClaudeRunsInFxCausesPlace (under, at and past the cap, a restart),
   TestAtTheCodexSoftCapFxCriticClaudeRunsInEachCriticsPlace, TestAtTheCodexSoftCapTheTwinSitsOutAndFxPointsEndsTheStage
   (with and without a restart), TestAtTheCodexSoftCapACodexRoleWithoutAFallbackWaits,
-  TestAFailedCodexBudgetReadLaunchesAsBeforeAndLogsOnce, TestWhileCodexIsPausedOnItsUsageLimitANewStagesCodexRoleYields,
+  TestAFailedCodexBudgetReadLaunchesAsBeforeAndLogsOnce, TestALaunchAHoldRefusesReadsNoCodexBudget,
+  TestWhileCodexIsPausedOnItsUsageLimitANewStagesCodexRoleYields,
   TestACodexUsageLimitHandsFxCauseToItsFallback and TestACodexUsageLimitOfTheTwinLeavesFxPointsToEndTheStage (with
   and without a restart: the files kept, no mark, no refusal's quit), TestATwinsFailedQuitWaitsOutTheCooldownFromWhenItHoldsTheStage,
   TestAFailedQuitCountsAgainAfterTheHerdrHold (a real hold: a `HerdrUp` that fails, then lifts; it replaces
