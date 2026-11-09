@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/staging"
 )
 
 const (
@@ -154,5 +156,19 @@ func TestAStagingPushIsTheBotsAndCarriesOnlyTheBasesOrTheTipsWorkflows(t *testin
 	}
 	if _, err := h.e.StagingPushEnv(func(string) (string, bool) { return "", false })(h.ctx, "talkable/talkable", stagingMerge, "staging-void"); err == nil {
 		t.Error("a push with no mirror was taken")
+	}
+}
+
+// The engine's commit identity and push env are the staging package's
+// Deps as they are: the daemon's staging wiring passes them with no
+// adapter.
+func TestTheStagingPushEnvAndCommitIdentityAreStagingsDeps(t *testing.T) {
+	h, _ := stagingHarness(t)
+	d := staging.Deps{PushEnv: h.e.StagingPushEnv(stagingMirrors), CommitIdentity: h.e.CommitIdentity}
+	if _, err := d.PushEnv(h.ctx, "talkable/talkable", stagingMerge, "staging-void"); err != nil {
+		t.Errorf("PushEnv: %v", err)
+	}
+	if name, _, err := d.CommitIdentity(h.ctx, "talkable/talkable"); err != nil || name != fixerAppLogin {
+		t.Errorf("CommitIdentity = %q, %v", name, err)
 	}
 }
