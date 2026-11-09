@@ -69,6 +69,8 @@ type fakeActions struct {
 	asked   [][]int64
 	// seen is the attention the last FixDone sent as the one you saw.
 	seen string
+	// ask is StagingPlan's question ("" = stagingAsk's).
+	ask string
 }
 
 func (f *fakeActions) record(s string) (ActionResult, error) {

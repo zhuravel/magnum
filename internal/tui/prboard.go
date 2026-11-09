@@ -992,6 +992,10 @@ const (
 // bodyHeight is the room between the summary line and the footer.
 func (m prBoardModel) bodyHeight() int { return max(m.viewHeight()-prbChrome, 3) }
 
+// askRoom is how many lines a pending question that wraps may take: the
+// rule's, and half the body's above it.
+func (m prBoardModel) askRoom() int { return 1 + m.bodyHeight()/2 }
+
 // tableHeight is how many table lines fit on screen: rows, and the
 // recently closed section's heading when it shows.
 func (m prBoardModel) tableHeight() int { return max(m.bodyHeight()-prbTableChrome, 1) }
@@ -1105,7 +1109,10 @@ func (m prBoardModel) render() string {
 	for len(body) < m.bodyHeight() {
 		body = append(body, "")
 	}
-	out = append(out, body[:m.bodyHeight()]...)
+	// A question that wraps takes the body's last lines above the rule.
+	ask, _ := m.askAbove(m.st, w-4, m.askRoom(), "   ")
+	out = append(out, body[:m.bodyHeight()-len(ask)]...)
+	out = append(out, ask...)
 	out = append(out, m.statusRule(&p, w, below), m.hintLine(w))
 	if len(out) > h { // a tiny screen keeps the footer: it asks the y/n
 		out = out[len(out)-h:]
@@ -1186,8 +1193,10 @@ func (m prBoardModel) statusRule(p *prbPainter, w, below int) string {
 	switch {
 	case m.confirm != nil:
 		// The question takes the whole rule: footerRule keeps 4 cells
-		// for its lead and the space after the message.
-		return p.footerRule(w, m.st.confirmLine(m.confirm.question, w-4), 0)
+		// for its lead and the space after the message. One that wraps
+		// ends here, its lines before above the rule (render).
+		_, last := m.askAbove(m.st, w-4, m.askRoom(), "")
+		return p.footerRule(w, last, 0)
 	case m.choose != nil: // the staging chooser takes it as a question does
 		return p.footerRule(w, m.choose.line(m.st, w-4), 0)
 	case m.leaving:

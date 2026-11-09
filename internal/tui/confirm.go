@@ -19,6 +19,10 @@ type pendingAction struct {
 	what     string     // the action's label while it runs ("fresh review talkable#7")
 	target   string     // the PR (or slot) it acts on
 	fn       actionFunc // runs on y
+	// wrap: the question wraps over the footer's lines instead of being
+	// cut at the screen's edge (askLines), since y answers all it names:
+	// a staging deploy's migrations and its warning, which comes last.
+	wrap bool
 }
 
 // confirms reports whether k answers yes to a pending action. Only y
@@ -43,6 +47,41 @@ func (st styles) confirmLine(question string, width int) string {
 		line += "  " + st.Dim.Render(confirmKeys)
 	}
 	return line
+}
+
+// askLines is the pending question q in width cells over at most room
+// lines: the one line of confirmLine, or, for a question that wraps and
+// does not fit, its words over as many lines as it needs, "y/N" ending the
+// last (only a question longer than room lines is cut, at the end of the
+// last). The caller puts the lines before the last above its footer.
+func (st styles) askLines(q *pendingAction, width, room int) []string {
+	if !q.wrap || width <= 0 || ansi.StringWidth(q.question)+len(confirmYN) <= width {
+		return []string{st.confirmLine(q.question, width)}
+	}
+	lines := wrapText(q.question, width-len(confirmYN), max(room, 1))
+	if len(lines) == 0 {
+		return []string{st.confirmLine(q.question, width)}
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines[:len(lines)-1] {
+		out[i] = st.Warn.Render(truncate(strings.TrimRight(l, " "), width))
+	}
+	out[len(out)-1] = st.confirmLine(strings.TrimRight(lines[len(lines)-1], " "), width)
+	return out
+}
+
+// askAbove is the pending question's lines above the footer's last line
+// (askLines; none when it fits on one), each after indent, and the last;
+// room is how many lines the question may take in all.
+func (b *actionBar) askAbove(st styles, width, room int, indent string) (above []string, last string) {
+	if b.confirm == nil {
+		return nil, ""
+	}
+	lines := st.askLines(b.confirm, width, room)
+	for _, l := range lines[:len(lines)-1] {
+		above = append(above, indent+l)
+	}
+	return above, lines[len(lines)-1]
 }
 
 // reviewQuestion asks before a review round of ref: what the variant

@@ -4,7 +4,8 @@ package tui
 // chooser of the PR's staging envs in the footer, each with its state (1,
 // 2, 3 toggle one, a all, enter asks, any other key cancels); enter asks
 // the daemon's plan of the envs chosen (a dry run) and puts it as one y/N,
-// whose y sends the deploy bound to the plan's head and to what it named.
+// wrapped over the footer's lines so that all it names shows, whose y
+// sends the deploy bound to the plan's head and to what it named.
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // StagingAsked is what a staging deploy's y/N binds its deploy to: the
@@ -75,7 +77,9 @@ func (c *stagingChoice) chosen() []string {
 }
 
 // line is the chooser in width cells: the PR, each env's number, mark,
-// name and state, then the keys (or that enter needs an env first).
+// name and state, then the keys (or that enter needs an env first). The
+// envs come first: the keys shorten, then go, before an env is cut, since
+// a digit toggles an env the operator must see.
 func (c *stagingChoice) line(st styles, width int) string {
 	items := make([]string, len(c.envs))
 	for i, s := range c.envs {
@@ -85,15 +89,24 @@ func (c *stagingChoice) line(st styles, width int) string {
 		}
 		items[i] = strconv.Itoa(i+1) + " " + mark + " " + s.Env + " " + stagingStateWords(s)
 	}
-	keys := "1-" + strconv.Itoa(len(c.envs)) + " toggle, a all, enter asks, other keys cancel"
+	digits := "1-" + strconv.Itoa(len(c.envs))
+	keys := []string{digits + " toggle, a all, enter asks, other keys cancel", digits + ", a all, enter asks", digits + ", a, enter"}
 	if c.empty {
-		keys = "choose an env first: " + keys
+		for i := range keys {
+			keys[i] = "choose an env first: " + keys[i]
+		}
+		keys = append(keys, "choose an env first")
 	}
 	line := "Deploy " + c.label + " to: " + strings.Join(items, " · ")
-	if width > 0 {
-		line = truncate(line, max(width-len(keys)-2, 10))
+	if width <= 0 {
+		return st.Warn.Render(line) + "  " + st.Dim.Render(keys[0])
 	}
-	return st.Warn.Render(line) + "  " + st.Dim.Render(truncate(keys, max(width-len(line)-2, 0)))
+	for _, k := range keys {
+		if ansi.StringWidth(line)+2+ansi.StringWidth(k) <= width {
+			return st.Warn.Render(line) + "  " + st.Dim.Render(k)
+		}
+	}
+	return st.Warn.Render(truncate(line, width))
 }
 
 // chooseKey handles a key while the chooser is up: a digit toggles its
@@ -136,7 +149,7 @@ func stagingRun(ref string, envs []string) (string, actionFunc) {
 		res, err := act.StagingPlan(ctx, ref, envs)
 		if err == nil && res.Ask != "" && res.Staging != nil {
 			asked := *res.Staging
-			res.next = &pendingAction{question: res.Ask, what: what, target: ref,
+			res.next = &pendingAction{question: res.Ask, what: what, target: ref, wrap: true,
 				fn: func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 					return act.StagingDeploy(ctx, ref, asked)
 				}}

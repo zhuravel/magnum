@@ -958,6 +958,10 @@ func (m dashboardModel) bodyHeight() int {
 	return max(m.viewHeight()-len(m.header(m.viewWidth()))-dashFooter, 1)
 }
 
+// askRoom is how many lines a pending question that wraps may take: the
+// status line's, and half the body's above it.
+func (m dashboardModel) askRoom() int { return 1 + m.bodyHeight()/2 }
+
 // View draws the dashboard, or returns the last frame when nothing it
 // shows changed.
 func (m dashboardModel) View() tea.View {
@@ -986,7 +990,13 @@ func (m dashboardModel) render() string {
 	}
 	header[0] = m.titleLine(w, pos)
 	status := m.statusLine(w)
+	// A question that wraps takes the body's last lines above the status.
+	ask, _ := m.askAbove(m.st, w, m.askRoom(), "")
+	if over := len(body) + len(ask) - avail; over > 0 {
+		body = body[:max(len(body)-over, 0)]
+	}
 	out := append(header, body...)
+	out = append(out, ask...)
 	out = append(out, status, m.hintLine(w))
 	if len(out) > h { // a tiny screen keeps the footer: it asks the y/N
 		if h == 1 && status != "" {
@@ -1317,8 +1327,9 @@ func (m dashboardModel) stateText(state string) string {
 func (m dashboardModel) statusLine(w int) string {
 	busy := m.busyText()
 	switch {
-	case m.confirm != nil:
-		return m.st.confirmLine(m.confirm.question, w)
+	case m.confirm != nil: // one that wraps ends here, its lines before above (render)
+		_, last := m.askAbove(m.st, w, m.askRoom(), "")
+		return last
 	case m.choose != nil:
 		return m.choose.line(m.st, w)
 	case m.leaving:
