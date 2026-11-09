@@ -86,6 +86,10 @@ type journal struct {
 	Fails        int       `json:"fails,omitempty"`
 	FailingSince time.Time `json:"failing_since"`
 	RetryAt      time.Time `json:"retry_at"`
+	// BusySince starts a run of waits for the mirror's flock; BusyFor is the
+	// time of the runs before it (busyBudget caps the sum).
+	BusySince time.Time     `json:"busy_since"`
+	BusyFor   time.Duration `json:"busy_for,omitempty"`
 	// PushedAt is when the branch first held the merge.
 	PushedAt time.Time `json:"pushed_at"`
 	// RunURL is ci.yml's run on the merge; CIAt when watch let it go, CINote

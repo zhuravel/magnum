@@ -5060,7 +5060,8 @@ try's time; a step still failing 15 minutes after its first failure ends the dep
 `pushed, not confirmed` after it (so a short GitHub or network outage costs no redeploy). A definite failure ends it
 at once: a merge the mirror lacks, that is no sha or that verify refuses, the allowlist, the commit identity, the
 push's refusal. A wait for the mirror's lock (a Refresh's fetch, a clone) is no failure: the step tries again 30
-seconds later. A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from
+seconds later, and only after 60 minutes of such waits in all does the deploy end ("the mirror stayed busy for 60
+min": failed before the push, `pushed, not confirmed` after it). A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from
 the journals under `mirror_dir`, at its next tick; a journal whose env name is no slug is passed over (logged once;
 cancel it by its id).
 

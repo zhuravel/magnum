@@ -296,3 +296,72 @@ func TestAWaitForTheMirrorsLockIsNoFailure(t *testing.T) {
 		t.Errorf("once the lock is free: %+v, want done", e)
 	}
 }
+
+// The lock waits' own cap: an effect that waits on the mirror's lock for
+// busyBudget in all ends, failed before the push ("the mirror stayed busy
+// for 60 min", nothing pushed), done, "pushed, not confirmed ... the push
+// stands", after it; the env is released either way, with one fail event.
+func TestLockWaitsEndTheEffectAfterAnHour(t *testing.T) {
+	t.Parallel()
+	for _, step := range []string{StepVerify, StepConfirm} {
+		t.Run(step, func(t *testing.T) {
+			t.Parallel()
+			w := newDeployWorld(t)
+			c := w.client()
+			defer c.Close()
+			c.lockWait = 20 * time.Millisecond
+			id := w.deploy(c, 1)
+			e := w.drive(c, id, func(e Effect) bool {
+				if e.Step == StepWatch {
+					w.passCI(e.Merge)
+				}
+				return e.Step == step || ended(e)
+			})
+			if step == StepConfirm {
+				w.deployed(e.Merge) // confirm needs the mirror to tell it holds the merge
+			}
+			unlock, err := lockMirror(context.Background(), w.mirror, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			events := w.eventCount()
+			start := w.deps.Now()
+			for !ended(w.effect(c, id)) && w.deps.Now().Sub(start) < 2*busyBudget {
+				if w.deps.Now().Sub(start) < busyBudget-time.Minute {
+					if e := w.effect(c, id); e.State != EffectRunning {
+						t.Fatalf("after %s of lock waits: %+v, want still running", w.deps.Now().Sub(start), e)
+					}
+				}
+				if err := c.Step(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				w.advance(time.Minute)
+			}
+			e = w.effect(c, id)
+			if waited := w.deps.Now().Sub(start); waited < busyBudget || waited > busyBudget+2*time.Minute {
+				t.Errorf("ended after %s of lock waits, want about %s", waited, busyBudget)
+			}
+			if !strings.Contains(e.Why, "the mirror stayed busy for 60 min") {
+				t.Errorf("ended: %+v, want the mirror stayed busy for 60 min", e)
+			}
+			switch step {
+			case StepVerify:
+				if e.State != EffectFailed || !strings.Contains(e.Why, "nothing was pushed") {
+					t.Errorf("before the push: %+v, want failed, nothing pushed", e)
+				}
+				w.noPushSince(0, w.tip)
+			case StepConfirm:
+				if e.State != EffectDone || !strings.HasPrefix(e.Why, NotConfirmed) || !strings.Contains(e.Why, "the push stands") {
+					t.Errorf("after the push: %+v, want done, pushed, not confirmed, the push stands", e)
+				}
+			}
+			if _, held := c.heldFor(w.mirror, "void"); held {
+				t.Error("the env is still held")
+			}
+			if got := w.failEvents(events); got != 1 {
+				t.Errorf("fail events: %d, want the end's alone", got)
+			}
+		})
+	}
+}

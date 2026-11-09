@@ -56,9 +56,17 @@ func (r *stepRun) run(ctx context.Context) error {
 	return r.end(ctx, EffectFailed, "the journal names an unknown step "+strconv.Quote(oneLine(r.j.Step)))
 }
 
-// git runs fn, the step's git, under the mirror's flock.
+// git runs fn, the step's git, under the mirror's flock. Once it has the
+// flock, a run of waits for it ends, and its time joins BusyFor.
 func (r *stepRun) git(ctx context.Context, fn func() error) error {
-	return r.c.underMirror(ctx, r.dir, fn)
+	err := r.c.underMirror(ctx, r.dir, func() error {
+		if !r.j.BusySince.IsZero() {
+			r.j.BusyFor += max(0, r.c.d.Now().Sub(r.j.BusySince))
+			r.j.BusySince = time.Time{}
+		}
+		return fn()
+	})
+	return err
 }
 
 // at runs the test's hook at a point of step.
@@ -297,7 +305,7 @@ func (r *stepRun) failed(ctx context.Context, step, what string, err error) erro
 	case errors.Is(err, errNoBranch):
 		return r.end(ctx, EffectFailed, "the remote has no branch "+r.branch()+"; nothing was pushed")
 	case errors.Is(err, errMirrorBusy):
-		return r.busy()
+		return r.busy(ctx)
 	}
 	return r.retry(ctx, step, what+": "+gitReason(err))
 }
@@ -306,11 +314,30 @@ func (r *stepRun) failed(ctx context.Context, step, what string, err error) erro
 // stayed busy.
 const busyRetry = 30 * time.Second
 
+// busyBudget caps the time an effect spends in all waiting for the
+// mirror's flock, which the failure budget does not count: past it, the
+// next wait ends the effect, as a failure would.
+const busyBudget = 60 * time.Minute
+
 // busy is a step that waited for the mirror's flock in vain: no failure
-// (the budget neither counts it nor starts again), the step runs again
-// after busyRetry, Why says so.
-func (r *stepRun) busy() error {
-	r.j.RetryAt = r.c.d.Now().Add(busyRetry)
+// (the failure budget neither counts it nor starts again), the step runs
+// again after busyRetry, Why says so. Once the effect has waited for the
+// flock busyBudget in all, it ends: failed before the push, done, not
+// confirmed, after it (the push stands).
+func (r *stepRun) busy(ctx context.Context) error {
+	now := r.c.d.Now()
+	if r.j.BusySince.IsZero() || r.j.BusySince.After(now) {
+		r.j.BusySince = now
+	}
+	if r.j.BusyFor+now.Sub(r.j.BusySince) >= busyBudget {
+		gave := "the mirror stayed busy for " + strconv.Itoa(int(busyBudget.Minutes())) + " min (a Refresh's fetch or a clone held its lock)"
+		r.j.RetryAt = time.Time{}
+		if !r.j.PushedAt.IsZero() {
+			return r.endWith(ctx, EffectDone, PhaseFail, NotConfirmed+": "+gave+"; the push stands")
+		}
+		return r.end(ctx, EffectFailed, gave+"; nothing was pushed")
+	}
+	r.j.RetryAt = now.Add(busyRetry)
 	r.j.Phase, r.j.Why = PhaseFail, "waiting for the mirror's lock (a Refresh's fetch or a clone holds it); next try at "+r.j.RetryAt.Format("15:04:05")
 	return r.save()
 }

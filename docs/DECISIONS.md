@@ -20377,13 +20377,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   id rule is passed over by the scan, logged once per file, with no lock named after it; Cancel still ends it by
   id. A resolver's merge accepted after a fetch that failed (an earlier try's left it in the mirror) is pointed at
   by `refs/magnum/resolved/<id>` again. A lock wait that runs out (`errMirrorBusy`) is no failure: the step tries
-  again 30 s later and the 15-minute budget neither counts it nor starts again (a separate, longer budget was the
-  other choice; a mirror busy for good is a stuck process, which the operator sees in Why). The README names the
+  again 30 s later and the 15-minute budget neither counts it nor starts again; a cap of its own keeps it from
+  holding the env for ever: once the effect has waited for the lock 60 minutes in all (`BusySince`, `BusyFor`),
+  the next wait ends it, failed before the push ("the mirror stayed busy for 60 min ...; nothing was pushed") and
+  done, "pushed, not confirmed ... the push stands", after it. The README names the
   deploys dir operator-level state: a journal there is a deploy, so no hand or agent pane writes it. Tests (each
   failed first): TestEveryEventCarriesItsJournalWritesSeq, TestAMergeThatIsNoShaFailsAtOnce,
   TestAFailingSinceInTheFutureIsTakenAsNow, TestAJournalWithAHostileEnvNameIsPassedOver (`../../evil`, a NUL,
-  `.deploys`), TestNoEventIsDeliveredUnderTheDirOrEffectFlock, TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef
-  and TestAWaitForTheMirrorsLockIsNoFailure.
+  `.deploys`), TestNoEventIsDeliveredUnderTheDirOrEffectFlock, TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef,
+  TestAWaitForTheMirrorsLockIsNoFailure and TestLockWaitsEndTheEffectAfterAnHour (at verify and at confirm, on the
+  fake clock).
 
 ## Learned rules
 
