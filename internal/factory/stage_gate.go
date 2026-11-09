@@ -239,9 +239,9 @@ func isDrop(answer string) bool {
 	return normLabel(answer) == normLabel(ReproductionOptions[len(ReproductionOptions)-1])
 }
 
-// normLabel is an option's label as answers are matched to it: trimmed,
-// lowercased, without a final period.
-func normLabel(s string) string { return strings.TrimRight(strings.ToLower(strings.TrimSpace(s)), ".") }
+// normLabel is an option's label as answers are matched to it
+// (registry.NormLabel, answers.md's rule).
+func normLabel(s string) string { return registry.NormLabel(s) }
 
 // awaitAnswers asks the questions the task's files hold that it has not
 // asked (askQuestions) and reports whether the task waits for answers: a
@@ -330,18 +330,9 @@ func (e *Engine) reportRoles(t registry.Task) []string {
 }
 
 // QuestionKey is how a question is told from the questions the task asked,
-// here and in the CLI: its text, lowercased, without backticks and double quotes, its runs of
-// spaces made one and its end punctuation trimmed (an agent's copy of a
-// question changes those), so that a question two roles raise in the same
-// words is one question, whichever role raised it.
-func QuestionKey(text string) string {
-	words := strings.Fields(questionMarks.Replace(text))
-	return strings.TrimRight(strings.ToLower(strings.Join(words, " ")), ".?!:; ")
-}
-
-// questionMarks are the marks QuestionKey drops: backticks, and straight
-// and curly double quotes.
-var questionMarks = strings.NewReplacer("`", "", `"`, "", "\u201c", "", "\u201d", "")
+// here and in the CLI (registry.QuestionKey, the rule answers.md keeps the
+// newest answer of a question asked again by).
+func QuestionKey(text string) string { return registry.QuestionKey(text) }
 
 // withRole is raisedBy with role added, when it is not one of its roles
 // already: a question two roles raised is raised by "fx-judge, fx-points".

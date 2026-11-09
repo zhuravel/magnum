@@ -151,7 +151,7 @@ const (
 const localAnswersHeading = "## The operator's answers to the factory's questions"
 
 // answeredQuestion is the heading of one answered question in answers.md as
-// the factory writes it (answersMarkdown, internal/factory/answers.go):
+// the factory writes it (registry.AnswersMarkdown, internal/factory/registry):
 // "## <question>", a blank line, then "Asked by <role> (revision N, question
 // M). ...". A line of an answer that starts with "## " is not one.
 var answeredQuestion = regexp.MustCompile(`(?m)^## (.+)\n\nAsked by `)

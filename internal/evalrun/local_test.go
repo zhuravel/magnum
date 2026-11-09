@@ -171,8 +171,8 @@ func TestRunLocalWritesTheTitleBodyAndTicketAsFiles(t *testing.T) {
 	}
 }
 
-// answersAsWritten is answers.md as the factory writes it (answersMarkdown in
-// internal/factory/answers.go): a title, the line that tells the factory's
+// answersAsWritten is answers.md as the factory writes it
+// (registry.AnswersMarkdown): a title, the line that tells the factory's
 // agents to weigh the answers against their prompt, then one section per
 // answered question, "## <question>", "Asked by ..." and the answer. The
 // second answer holds a line that starts with "## " and is no question's
