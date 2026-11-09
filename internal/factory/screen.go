@@ -38,6 +38,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -438,7 +439,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 		row.Frees = s.frees(v)
 	}
 	row.Stagings = stagingCellsOf(s.cfg, s.stagings, t, cmp.Or(v.link.Number, t.PRNumber), s.down)
-	row.JiraStatus = jiraStatusOf(s.tracking, t)
+	row.JiraStatus = jiraStatusOf(s.tracking, t, s.down)
 	row.Help = s.help(v, row)
 	cards := tui.FactoryCards{Task: s.taskCard(v, row)}
 	cards.Task.Stagings, cards.Task.JiraStatus = row.Stagings, row.JiraStatus
@@ -455,14 +456,16 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 // jiraStatusOf is where task t's Jira issue stands for the screen, from
 // its tracking row in rows: nil without a row of its key (before its first
 // try); one whose reads all failed carries the last failure alone, with no
-// name.
-func jiraStatusOf(rows map[int64]registry.Tracking, t registry.Task) *tui.FactoryJiraStatus {
+// name. An assignee whose last read of your account failed is not known to
+// be you, and down (no factory daemon runs) says no read refreshes it.
+func jiraStatusOf(rows map[int64]registry.Tracking, t registry.Task, down bool) *tui.FactoryJiraStatus {
 	tr, ok := rows[t.ID]
 	if !ok || t.JiraKey == "" || tr.JiraKey != t.JiraKey {
 		return nil
 	}
 	return &tui.FactoryJiraStatus{Name: tr.Status, Category: tr.Category, Since: tr.Since, Assigned: tr.Assigned,
-		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, TriedAt: tr.TriedAt, LastError: tr.LastError}
+		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, TriedAt: tr.TriedAt, LastError: tr.LastError, DaemonDown: down,
+		YouUnknown: tr.Assigned && !tr.AssigneeYou && strings.HasPrefix(tr.LastError, trackPartCause(jira.PartAccount))}
 }
 
 // onQuestions reports whether task v waits on your answers to its

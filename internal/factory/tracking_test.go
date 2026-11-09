@@ -36,6 +36,7 @@ type trackJira struct {
 	statuses   map[string]jira.IssueStatus
 	refused    map[string]int
 	partial    map[string]bool
+	noAccount  map[string]bool
 	down       int
 	ticketCode int
 	block      chan struct{}
@@ -49,7 +50,7 @@ type trackJira struct {
 
 func newTrackJira(t *testing.T) *trackJira {
 	t.Helper()
-	f := &trackJira{statuses: map[string]jira.IssueStatus{}, refused: map[string]int{}, partial: map[string]bool{}}
+	f := &trackJira{statuses: map[string]jira.IssueStatus{}, refused: map[string]int{}, partial: map[string]bool{}, noAccount: map[string]bool{}}
 	token := filepath.Join(t.TempDir(), "jira.token")
 	if err := os.WriteFile(token, []byte("ATATT3xFfGF0-test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -95,7 +96,7 @@ func (f *trackJira) StatusSince(ctx context.Context, key string, prior jira.Issu
 	f.asked = append(f.asked, key)
 	f.priors = append(f.priors, prior)
 	_, refused := f.refused[key]
-	fails, partial := f.down != 0 || refused, f.partial[key]
+	fails, partial, noAccount := f.down != 0 || refused, f.partial[key], f.noAccount[key]
 	s, ok := f.statuses[key]
 	block, started := f.block, f.started
 	f.mu.Unlock()
@@ -122,6 +123,11 @@ func (f *trackJira) StatusSince(ctx context.Context, key string, prior jira.Issu
 		_, err := f.client.Status(ctx, "PR-1") // a 404, as a changelog page's
 		s.Since, s.Searched = time.Time{}, false
 		return s, &jira.PartError{Part: jira.PartChangelog, Err: err}
+	}
+	if noAccount && s.Assigned {
+		_, err := f.client.Status(ctx, "PR-1") // a 404, as myself's
+		s.AssigneeYou = false
+		return s, &jira.PartError{Part: jira.PartAccount, Err: err}
 	}
 	return s, nil
 }
@@ -738,6 +744,73 @@ func TestTheScreenCarriesATasksJiraStatus(t *testing.T) {
 	for _, row := range d.Rows {
 		if row.ID == task.ID && row.JiraStatus != nil {
 			t.Errorf("a row of another key: %+v, want none", row.JiraStatus)
+		}
+	}
+}
+
+// An issue assigned while the read of your account failed reaches the
+// screen as assigned, not known to be you; one whose changelog failed keeps
+// what the read of the account said (someone else's). Before, both read as
+// someone else's.
+func TestTheScreenTellsAnAssigneeNotKnownToBeYou(t *testing.T) {
+	r := newTrackRig(t)
+	mine := r.task("PR-12360", registry.TaskNeedsYou, "investigate")
+	theirs := r.task("PR-12361", registry.TaskNeedsYou, "investigate")
+	r.jira.set("PR-12360", inReview("PR-12360"))
+	other := inReview("PR-12361")
+	other.AssigneeYou = false
+	r.jira.set("PR-12361", other)
+	r.jira.edit(func(f *trackJira) { f.noAccount["PR-12360"], f.partial["PR-12361"] = true, true })
+	r.pass()
+	r.clock.Add(45 * time.Second)
+	r.pass()
+	d, err := ScreenData(r.ctx, r.reg, nil, r.clock.Now(), time.Time{}, ScreenOptions{Config: r.cfg, Layout: r.layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range d.Rows {
+		js := row.JiraStatus
+		switch row.ID {
+		case mine.ID:
+			if js == nil || !js.Assigned || js.AssignedToYou || !js.YouUnknown ||
+				!strings.HasPrefix(js.LastError, "Jira answered for the issue but not for its account: ") {
+				t.Errorf("an issue whose account read failed: %+v, want assigned, not known to be you", js)
+			}
+			if c := d.Cards[mine.ID].Task.JiraStatus; c == nil || *c != *js {
+				t.Errorf("its card's Jira status %+v, want the row's %+v", c, js)
+			}
+		case theirs.ID:
+			if js == nil || !js.Assigned || js.AssignedToYou || js.YouUnknown ||
+				!strings.HasPrefix(js.LastError, "Jira answered for the issue but not for its changelog: ") {
+				t.Errorf("an issue whose changelog read failed: %+v, want someone else's", js)
+			}
+		}
+	}
+}
+
+// While no factory daemon runs, every task's Jira status on the screen
+// says so, on its row and its card, as its staging cells say unknown: its
+// facts are as old as their read. Before, it read as a fresh one.
+func TestTheScreenSaysNoDaemonReadsTheJiraStatuses(t *testing.T) {
+	r := newTrackRig(t)
+	task := r.task("PR-12360", registry.TaskNeedsYou, "investigate")
+	r.jira.set("PR-12360", inReview("PR-12360"))
+	r.pass()
+	for _, down := range []bool{false, true} {
+		d, err := ScreenData(r.ctx, r.reg, nil, r.clock.Now(), time.Time{}, ScreenOptions{Config: r.cfg, Layout: r.layout, DaemonDown: down})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range d.Rows {
+			if row.ID != task.ID {
+				continue
+			}
+			if js := row.JiraStatus; js == nil || js.Name != "In Review" || js.DaemonDown != down {
+				t.Errorf("the daemon down %v: the row's Jira status %+v", down, js)
+			}
+			if c := d.Cards[task.ID].Task.JiraStatus; c == nil || c.DaemonDown != down {
+				t.Errorf("the daemon down %v: the card's Jira status %+v", down, c)
+			}
 		}
 	}
 }

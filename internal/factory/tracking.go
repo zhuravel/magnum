@@ -333,7 +333,7 @@ func (e *Engine) trackCause(r trackRead) (cause string, site bool) {
 		return textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 	}
 	if pe, ok := errors.AsType[*jira.PartError](r.err); ok {
-		return "Jira answered for the issue but not for its " + pe.Part + ": " + words(pe.Err), false
+		return trackPartCause(pe.Part) + words(pe.Err), false
 	}
 	if r.st.Name != "" {
 		return words(r.err), false
@@ -345,6 +345,13 @@ func (e *Engine) trackCause(r trackRead) (cause string, site bool) {
 		return je.Error(), je.Class != jira.ClassNotFound && je.Class != jira.ClassMalformed
 	}
 	return words(r.err), false
+}
+
+// trackPartCause is how a row's failure starts when part of a read failed
+// after the issue answered (trackCause); the screen tells by it an assignee
+// not known to be you.
+func trackPartCause(part string) string {
+	return "Jira answered for the issue but not for its " + part + ": "
 }
 
 // trackFailed logs task t's failed read, once while its cause stays: the
