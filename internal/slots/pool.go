@@ -27,22 +27,27 @@ import (
 // --no-track -b <name> <path> origin/<base>`, skipped when the path is
 // already a worktree), render_mise, setup (each pool.setup command through
 // mise exec, 45m, logged to logs/provision-<name>.log), verify_marker
-// (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists)
-// and mark_free (provisioning → free, lock_sha, slot_databases).
+// (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists),
+// post_checkout (each pool.post_checkout command through mise exec, 30m,
+// logged there too: the lock_sha mark_free records is that of a run, not a
+// setup that may install less) and mark_free (provisioning → free,
+// lock_sha, slot_databases).
 //
 // A slot that is already provisioned is left alone (nil). A provisioning
 // slot resumes at the first step without an ok row; a removed or broken one
 // starts over. A new or removed slot whose path already exists is refused
-// (ErrConflict): that directory is not magnum's (adopt it instead). Failures leave the slot provisioning with last_error, except
-// failed verifications, which move it to broken (ErrVerify). Below
-// pool.min_free_disk_gb nothing is added (ErrLowDisk).
+// (ErrConflict): that directory is not magnum's (adopt it instead). Failures
+// (a failing post_checkout or its timeout too) leave the slot provisioning
+// with last_error, except failed verifications, which move it to broken
+// (ErrVerify). Below pool.min_free_disk_gb nothing is added (ErrLowDisk).
 func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) error {
 	if n <= 0 {
 		return fmt.Errorf("slots: invalid slot number %d", n)
 	}
 	name, path := pool.Slot(n), pool.Path(n)
 	if m.d.DryRun {
-		m.dryRun("provision %s at %s (worktree add, render %s, %s)", name, path, MiseLocalName(pool.MainClone), strings.Join(pool.Setup, "; "))
+		m.dryRun("provision %s at %s (%s)", name, path,
+			strings.Join(append([]string{"worktree add", "render " + MiseLocalName(pool.MainClone)}, provisionScripts(pool)...), ", "))
 		return nil
 	}
 	sl, fresh, err := m.poolRow(ctx, pool, name, path)
@@ -53,6 +58,19 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
 		return nil
 	}
 	return m.provision(ctx, sl, pool, fresh)
+}
+
+// provisionScripts is what a dry run says the provisioning runs: the setup
+// commands, then post_checkout's.
+func provisionScripts(pool config.Pool) []string {
+	var out []string
+	if len(pool.Setup) > 0 {
+		out = append(out, strings.Join(pool.Setup, "; "))
+	}
+	if len(pool.PostCheckout) > 0 {
+		out = append(out, "post_checkout "+strings.Join(pool.PostCheckout, "; "))
+	}
+	return out
 }
 
 // poolRow creates (or revives) the provisioning row for a pool slot. fresh
@@ -214,6 +232,13 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 	}); err != nil {
 		return err
 	}
+	// After the checks, so a broken setup spends no install time. The
+	// lock_sha mark_free records then says post_checkout ran, as deps's does.
+	if err := m.step(ctx, subject, "post_checkout", func(ctx context.Context) error {
+		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "post_checkout", "provision-"+sl.Name+".log", DepsTimeout)
+	}); err != nil {
+		return err
+	}
 	return m.step(ctx, subject, "mark_free", func(ctx context.Context) error {
 		lock, err := lockHash(sl.Path, pool.PostCheckout)
 		if err != nil {
@@ -366,13 +391,13 @@ func (m *Manager) NextSlotNumber(ctx context.Context, pool config.Pool) (int, er
 	}
 }
 
-// Repair re-runs provisioning (render, setup, verification) for a free,
-// broken, provisioning or lost slot; a missing worktree is added again. The
-// slot ends free, its PR and open assignment released (reason "repaired").
-// A pinned or held slot is refused (ErrHold): Unpin it first.
+// Repair re-runs provisioning (render, setup, verification, post_checkout)
+// for a free, broken, provisioning or lost slot; a missing worktree is added
+// again. The slot ends free, its PR and open assignment released (reason
+// "repaired"). A pinned or held slot is refused (ErrHold): Unpin it first.
 func (m *Manager) Repair(ctx context.Context, slot store.Slot, pool config.Pool) error {
 	if m.d.DryRun {
-		m.dryRun("repair %s (%s)", slot.Name, strings.Join(pool.Setup, "; "))
+		m.dryRun("repair %s (%s)", slot.Name, strings.Join(provisionScripts(pool), ", "))
 		return nil
 	}
 	sl, err := m.reload(ctx, slot)

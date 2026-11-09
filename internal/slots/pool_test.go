@@ -143,6 +143,66 @@ func TestProvisionPoolWritesRowFirstAndResumes(t *testing.T) {
 	}
 }
 
+// A new slot runs the pool's post_checkout once before it is free, after its
+// setup and the checks of what the setup made: the lock_sha it records says
+// post_checkout ran. Before, the setup counted as its first run, so a slot
+// whose setup installs no JS dependencies stayed without node_modules until
+// a lockfile or the commands changed (two review slots on 2026-11-08). A
+// failing post_checkout leaves the slot provisioning; the next provision
+// resumes at it without running the setup again, and the first checkout of a
+// head whose lockfiles are the base's installs nothing.
+func TestProvisioningRunsPostCheckoutBeforeTheSlotIsFree(t *testing.T) {
+	h := newHarness(t)
+	h.repo()
+	deps := h.pool.PostCheckout[0]
+	h.failScript[deps] = 1
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err == nil {
+		t.Fatal("ProvisionPool succeeded with a failing post_checkout")
+	}
+	sl := h.slot("review1")
+	if sl.State != store.SlotProvisioning || sl.LastError == nil || strings.Contains(*sl.LastError, "ghp_") {
+		t.Fatalf("after the failure: state %s last_error %v, want provisioning with the error", sl.State, store.Deref(sl.LastError))
+	}
+
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if n := len(h.scriptCalls("bin/worktree-setup")); n != 1 {
+		t.Fatalf("setup ran %d times, want once: the resume starts at post_checkout", n)
+	}
+	calls := h.scriptCalls(deps)
+	if len(calls) != 2 {
+		t.Fatalf("post_checkout ran %d times, want the failure and the resume", len(calls))
+	}
+	if c := calls[1]; c.Cmd.Timeout != DepsTimeout || !c.Cmd.Mutates || c.Dir != sl.Path || c.Env["WT_BRANCH"] != "review1" {
+		t.Fatalf("post_checkout cmd = %+v, env %v", c.Cmd, c.Env)
+	}
+	if log := readFile(t, filepath.Join(h.layout.Logs(), "provision-review1.log")); !strings.Contains(log, "post_checkout review1: "+deps) {
+		t.Fatalf("the provision log names no post_checkout:\n%s", log)
+	}
+	sl = h.slot("review1")
+	lock, err := lockHash(sl.Path, h.pool.PostCheckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sl.State != store.SlotFree || sl.LastError != nil || store.Deref(sl.LockSHA) != lock {
+		t.Fatalf("after the resume: state %s last_error %v lock_sha %s, want free with %s",
+			sl.State, store.Deref(sl.LastError), store.Deref(sl.LockSHA), lock)
+	}
+
+	pr := h.pr(h.repo().ID, 8, h.shaPR8, store.PRQueued)
+	claimed, err := h.m.Claim(h.ctx, pr, h.pool)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := h.m.Checkout(h.ctx, claimed, pr, h.pool, h.shaPR8); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	if n := len(h.scriptCalls(deps)); n != 2 {
+		t.Fatalf("post_checkout ran %d times, want no run at the checkout of a head whose lockfiles are the base's", n)
+	}
+}
+
 func TestProvisionPoolCrashResume(t *testing.T) {
 	h := newHarness(t)
 	crash := errors.New("crash")
@@ -217,10 +277,18 @@ func TestProvisionPoolVerifyFailuresBreakSlot(t *testing.T) {
 		if got := h.slot("review1"); got.State != store.SlotBroken || got.LastError == nil {
 			t.Fatalf("state=%s last_error=%v", got.State, store.Deref(got.LastError))
 		}
+		// A broken setup spends no install time.
+		if n := len(h.scriptCalls(h.pool.PostCheckout[0])); n != 0 {
+			t.Fatalf("post_checkout ran %d times before the checks of the setup", n)
+		}
 	})
 	t.Run("databases", func(t *testing.T) {
 		h := newHarness(t)
+		var scripts []string
 		h.fake.Rules = append([]execx.Rule{{Prefix: []string{"mise", "-C", h.pool.Path(1), "exec"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+			if mc, ok := parseMiseExec(c); ok {
+				scripts = append(scripts, mc.Script)
+			}
 			writeFile(t, filepath.Join(h.pool.Path(1), "tmp", ".worktree-db-slug"), "review1")
 			return execx.Result{}, nil // creates no databases
 		}}}, h.fake.Rules...)
@@ -229,6 +297,9 @@ func TestProvisionPoolVerifyFailuresBreakSlot(t *testing.T) {
 		}
 		if got := h.slot("review1"); got.State != store.SlotBroken {
 			t.Fatalf("state = %s", got.State)
+		}
+		if want := h.pool.Setup; !slices.Equal(scripts, want) {
+			t.Fatalf("scripts = %q, want %q: no post_checkout before the databases are checked", scripts, want)
 		}
 	})
 }
@@ -484,6 +555,9 @@ func TestRepair(t *testing.T) {
 	}
 	if n := len(h.scriptCalls("bin/worktree-setup")); n != 2 {
 		t.Fatalf("setup ran %d times, want 2", n)
+	}
+	if n := len(h.scriptCalls(h.pool.PostCheckout[0])); n != 1 {
+		t.Fatalf("post_checkout ran %d times, want once: the repair's, after its checks passed", n)
 	}
 	if n := len(h.run.gitCalls("worktree", "add")); n != 1 {
 		t.Fatalf("repair re-added the worktree")

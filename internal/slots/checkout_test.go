@@ -177,6 +177,8 @@ func TestCheckoutFetchedReusesTheFetch(t *testing.T) {
 
 func TestCheckoutWithoutSchemaOrLockChanges(t *testing.T) {
 	h := newHarness(t)
+	h.provisioned(1)
+	h.clearScripts() // the provisioning's own post_checkout run
 	sl, _ := h.claimedCheckout(8, h.shaPR8)
 	if sl.DirtySchema {
 		t.Fatal("dirty_schema set for a README-only PR")
@@ -192,6 +194,8 @@ func TestCheckoutWithoutSchemaOrLockChanges(t *testing.T) {
 // hash and installs nothing.
 func TestAChangedYarnLockRerunsPostCheckout(t *testing.T) {
 	h := newHarness(t)
+	h.provisioned(1)
+	h.clearScripts() // the provisioning's own post_checkout run
 	sl, pr := h.claimedCheckout(8, h.shaPR8)
 	deps := h.pool.PostCheckout[0]
 	if n := len(h.scriptCalls(deps)); n != 0 {
@@ -229,6 +233,8 @@ func TestAChangedYarnLockRerunsPostCheckout(t *testing.T) {
 // commands as they are now, installs nothing.
 func TestChangedPostCheckoutCommandsRerunIt(t *testing.T) {
 	h := newHarness(t)
+	h.provisioned(1)
+	h.clearScripts() // the provisioning's own post_checkout run
 	sl, pr := h.claimedCheckout(8, h.shaPR8)
 	if n := len(h.scriptCalls(h.pool.PostCheckout[0])); n != 0 {
 		t.Fatalf("post_checkout ran %d times before the edit", n)

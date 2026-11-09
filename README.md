@@ -1645,7 +1645,11 @@ slot through `mise exec` after a checkout or a release, within 30 minutes, when 
 or the commands themselves differ from those of their last run in that slot: Gemfile.lock,
 pnpm-lock.yaml, yarn.lock, package-lock.json, bun.lock, composer.lock, go.sum, Cargo.lock, poetry.lock
 and uv.lock at the checkout's root, one it lacks counting for nothing. So an edit to the commands reruns
-them at each slot's next checkout; a slot's `setup` counts as their first run. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
+them at each slot's next checkout. A new slot (and a repaired one) runs them once after its `setup` and the
+checks of what the setup made, before it is free, logged to `logs/provision-<slot>.log` with the setup: a
+`setup` that installs less than they do (gems but no `node_modules`) leaves no slot without the rest. One that
+fails or runs past its 30 minutes leaves the slot provisioning, and the next try starts at them, not at the
+setup. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
 from those the slot's databases were last loaded from, or the development database's
 `schema_migrations` no longer match them, the pool's `reset_db` commands run first, as a release runs
 them (through `mise exec` in the slot, not `zsh -lc`, so the checkout's local mise file does not

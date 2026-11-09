@@ -129,6 +129,7 @@ func (h *harness) foreignAgent(dir string) {
 func TestCheckoutRetryAfterDepsFailureIsNotDrift(t *testing.T) {
 	h := newHarness(t)
 	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	h.clearScripts() // the provisioning's own post_checkout run
 	work := h.ownOrigin(t)
 	head := pushPR(t, work, 8, h.shaPR8, "Gemfile.lock", "GEM v3\n")
 	deps := h.pool.PostCheckout[0]

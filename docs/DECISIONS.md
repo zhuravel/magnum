@@ -476,6 +476,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   started before the refusal would show). Mutations that drop the free-slot check, the move to held, the
   release, the pinned refusal or the stood claim, or that look for a slot before the head check, each fail
   one.
+- **A new pool slot runs post_checkout before it is free** (2026-11-09). On 2026-11-08 two slots of one
+  pool were provisioned again. The pool's setup installs gems only; its post_checkout runs `yarn install
+  --frozen-lockfile` and `yarn build:css`. mark_free recorded lock_sha, the hash of the lockfiles and of
+  those commands, which says post_checkout ran, so every later checkout whose lockfiles matched the base
+  skipped it (twelve deps steps of 1 to 11 ms over a day). Both slots had no node_modules, one had no
+  compiled CSS, and a review's browser checks failed with `Propshaft::MissingAssetError`. The "Kept" part of
+  "A slot reruns post_checkout when any lockfile it holds or the commands change" (a slot's setup counts as
+  post_checkout's first run) no longer holds. Now provisioning runs a post_checkout step between verify_dbs
+  and mark_free: each command through mise exec with the slot's env, within DepsTimeout (30 minutes), logged
+  to `provision-<slot>.log`, and mark_free records the same hash as before, which is now true. The step comes
+  after the checks, so a setup that breaks the slot spends no install time. A failure or a timeout is not
+  ErrVerify: the slot stays provisioning with last_error, the engine's provision backoff applies, and the
+  next try resumes at post_checkout without running the setup again. The disk check still runs only before
+  worktree_add. A repair runs the step too (reviveSlot resets the steps). lockHash's input and deps do not
+  change, so a slot provisioned before this build whose lock_sha is right reruns nothing, and ProvisionPool
+  on a free slot is still a no-op. A provision takes longer by post_checkout's run, on the heavy worker and
+  never on a round's path; a pool whose setup already runs the same installs runs them twice, the second a
+  fast no-op. Adopt still records the hash of a person's checkout without running post_checkout. The dry
+  runs of a provision and a repair name the post_checkout commands. Rejected: recording no lock_sha so that
+  the first checkout runs post_checkout. It puts a 30-minute install on the first round's checkout path; a
+  failure fails that round instead of the background provision, which has a backoff; and a factory copy,
+  which provisions through the same code and is never checked out, would first run it at its release, after
+  its first task. Tests, failing first: TestProvisioningRunsPostCheckoutBeforeTheSlotIsFree and TestRepair's
+  count of post_checkout; with them TestProvisionPoolVerifyFailuresBreakSlot (no post_checkout before the
+  checks), and TestCheckoutWithoutSchemaOrLockChanges, TestAChangedYarnLockRerunsPostCheckout,
+  TestChangedPostCheckoutCommandsRerunIt and TestCheckoutRetryAfterDepsFailureIsNotDrift count from after
+  the provision. Mutations that drop the step, or run it before the setup or before verify_dbs, each fail one.
 
 ## Scheduling
 
