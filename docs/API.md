@@ -50,7 +50,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registry](#registry) | Package registry is the factory's own SQLite registry: tasks, the stage attempts that run them, questions and the operator's decisions, the prompt ledger, external effects, the event log and the CLI's requests. |
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
-| [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test). |
+| [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test); and, for a task with a published PR, the PR's quality: what the local review missed at magnum's first posted round (the escape checks) and the PR's CI failures after the publish (its CI checks). |
 | [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
@@ -16565,8 +16565,10 @@ per task, the messages typed, the messages that only start a step, the answer
 batches, the card decisions, the operator's time on cards and the time a task
 waited on them, computed from the factory registry's evidence records alone
 (spans, inputs, questions, decisions and review rounds) and set against the
-baseline frozen before the first task (milestone 1's exit test). Compute only
-reads the registry.
+baseline frozen before the first task (milestone 1's exit test); and, for a task
+with a published PR, the PR's quality: what the local review missed at magnum's
+first posted round (the escape checks) and the PR's CI failures after the
+publish (its CI checks). Compute only reads the registry.
 
 VARIABLES
 
@@ -16803,9 +16805,10 @@ func Compute(ctx context.Context, reg *registry.Registry, since time.Time) (Repo
 func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time) (Report, error)
     ComputeAt measures the tasks of reg started at or after since (the zero
     time: all), whole, whatever happened to them later, from their spans,
-    inputs, questions, decisions and review rounds. now ends a wait on the
-    operator that is still open. It reads and never writes. Nothing here reads a
-    transcript or GitHub, so the numbers are the evidence the factory recorded.
+    inputs, questions, decisions and review rounds, and a published task's
+    escape check, escapes and CI checks. now ends a wait on the operator that
+    is still open. It reads and never writes. Nothing here reads a transcript or
+    GitHub, so the numbers are the evidence the factory recorded.
 
 func (r Report) Markdown() string
     Markdown renders the report for reading and for the exit test: a table of
