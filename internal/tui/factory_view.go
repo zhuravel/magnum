@@ -468,6 +468,18 @@ func (r FactoryRow) moveText(form factoryForm) string {
 	return r.Move
 }
 
+// moveOf is row r's move as layout l draws it: the form l picks, except
+// that in the wide layout a move wider than the column's floor
+// (factoryMoveWide) takes its short form, so one row's long move never
+// widens the column for all and steps the whole table down to a narrower
+// layout.
+func (l factoryLayout) moveOf(r FactoryRow) string {
+	if m := r.moveText(l.move); !l.wide || ansi.StringWidth(m) <= factoryMoveWide {
+		return m
+	}
+	return r.moveText(formShort)
+}
+
 func (r FactoryRow) helpText(form factoryForm) string {
 	switch {
 	case form == formShort && r.HelpShort != "":
@@ -928,7 +940,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 		l.keyW = max(l.keyW, ansi.StringWidth(r.keyText(l)))
 		l.titleW = max(l.titleW, ansi.StringWidth(r.titleText(l)))
 		l.waitsW = max(l.waitsW, p.waitsCell(r, l).width())
-		l.moveW = max(l.moveW, ansi.StringWidth(r.moveText(l.move)))
+		l.moveW = max(l.moveW, ansi.StringWidth(l.moveOf(r)))
 		if r.CI != nil {
 			l.ciW = max(l.ciW, len("CI"), min(p.ciText(r, l.pr).width(), ciCap))
 		}
@@ -1165,7 +1177,7 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 		ps = append(ps, placed{x.appr, l.apprW, p.apprText(r, l.pr)})
 	}
 	if l.hasMove {
-		ps = append(ps, placed{x.move, l.moveW, cell{{r.moveText(l.move), noStyle}}})
+		ps = append(ps, placed{x.move, l.moveW, cell{{l.moveOf(r), noStyle}}})
 	}
 	if l.staging {
 		for i, n := range p.names {

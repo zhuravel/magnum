@@ -6,30 +6,34 @@ package factory
 // ran, and to a pair of keys when one step was the answer. The reason is
 // read from magnum's registry alone: the fresh verdict that needs you (its
 // Needs kinds and its words), the attention and the fixer's report, the
-// stalemate. f is offered only where the fixer has work, open findings or
-// a failed check, never for a check that did not run, a stalemate or a
-// reason nothing here knows (then the PR's page is the move).
+// stalemate. f is offered only where the fixer has work, open findings it
+// can take: it reads no CI, so a check that did not run or that failed is
+// no move for it, nor is a stalemate or a reason nothing here knows (then
+// the PR's page is the move).
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// move is your move on a PR that needs you: the step in words and its
+// moveWords is your move on a PR that needs you: the step in words and its
 // short form, which fits the YOUR MOVE column of a narrow screen.
-type move struct{ long, short string }
+type moveWords struct{ long, short string }
 
 // The moves, by reason. The keys are those of the PR's card and of home's
-// row (b the PR's page, e the fixer's report, f magnum's fixer).
+// row (b the PR's page, e the fixer's report, f magnum's fixer, r magnum's
+// review, which the card's hint bar offers).
 var (
-	moveRerunCI  = move{"b opens it: re-run CI on GitHub, or push", "b re-run CI"}
-	moveFailedCI = move{"b opens its CI, f fixes it", "b CI · f fix"}
-	moveThreads  = move{"b opens the threads", "b threads"}
-	moveReport   = move{"e opens the report, b the PR", "e report · b PR"}
-	moveFixes    = move{"f fixes, b opens it", "f fix · b PR"}
-	moveOpen     = move{"b opens it", "b PR"}
+	moveRerunCI  = moveWords{"b: re-run CI on GitHub, or push", "b re-run CI"}
+	moveFailedCI = moveWords{"b opens its CI", "b CI"}
+	moveThreads  = moveWords{"b opens the threads", "b threads"}
+	moveReport   = moveWords{"e opens the report, b the PR", "e report · b PR"}
+	moveFixes    = moveWords{"f fixes, b opens it", "f fix · b PR"}
+	moveReview   = moveWords{"r reviews it", "r review"}
+	moveOpen     = moveWords{"b opens it", "b PR"}
 )
 
 // What a need of a verdict that needs you asks, as one move: a class of
@@ -40,28 +44,40 @@ const (
 	needCIMissing = "ci_missing"
 	needCIFailed  = "ci_failed"
 	needThreads   = "threads"
+	needReview    = "review"
 	needFix       = "fix"
 )
 
 // The words of magnum's engine that tell apart the reasons one kind has
-// (internal/engine, fix_open_verdict.go and fix_open_ci.go): "ci" is a
-// required check that failed or, until the engine has the kind
-// "ci_missing", one that did not run; "magnum" is a review that does not
-// stand at the head, or a reply of magnum's that waits for you; "loop" is
-// the day's loops used up, or a start the fix job refused.
+// (internal/engine, fix_open_verdict.go and fix_open_ci.go). Each class
+// matches on the words of its own reason and nothing else, so a reword of
+// the engine's falls back to the PR's page and never to a wrong key: "ci"
+// is a required check that did not run (until the engine has the kind
+// "ci_missing") or that failed; "magnum" is a review that does not stand
+// at the head, or a reply of magnum's that waits for you; "loop" is the
+// day's loops used up (a start the fix job refused says other words).
+// TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines keeps them the
+// engine's.
 const (
-	didNotRunWords = " did not run at "
-	noReviewWords  = "no review of magnum's"
-	loopsUsedWords = "f starts another"
+	didNotRunWords  = " did not run at "
+	failedWords     = " failed at "
+	noReviewWords   = "no review of magnum's"
+	replyWaitsWords = "reply waits for your answer"
+	loopsUsedWords  = "f starts another"
 )
+
+// replyWords are the words of a verdict whose need of kind "magnum" is a
+// reply of magnum's that waits for you: its sentence, or an item count.
+var replyWords = []string{replyWaitsWords, "reply of magnum's", "replies of magnum's"}
 
 // reasonMove is your move on open PR st that needs you, by why it does:
 // a required check that did not run (re-run it on GitHub, or push), one
-// that failed (open its CI, or f), magnum stopped arguing in threads (the
-// threads are yours), the fixer left you items (e opens its report), open
-// findings the fixer can take (f), else the PR's page. An attention keeps
-// its own words and takes the fixer's report when it has one.
-func reasonMove(st PRState) move {
+// that failed (open its CI), magnum stopped arguing in threads (the
+// threads are yours), the fixer left you items (e opens its report),
+// magnum's review late or missing (r reviews it), open findings the fixer
+// can take (f), else the PR's page. An attention keeps its own words and
+// takes the fixer's report when it has one.
+func reasonMove(st PRState) moveWords {
 	class := needClass(st)
 	attention := st.State == store.PRNeedsAttention
 	switch {
@@ -75,6 +91,8 @@ func reasonMove(st PRState) move {
 		return moveOpen
 	case class == needThreads, class == "" && st.Stalemate:
 		return moveThreads
+	case class == needReview:
+		return moveReview
 	case class == needFix:
 		return moveFixes
 	}
@@ -116,18 +134,24 @@ func kindClass(kind, why string) string {
 	switch kind {
 	case "ci_missing":
 		return needCIMissing
-	case "ci":
-		if strings.Contains(why, didNotRunWords) {
+	case "ci": // until the engine has the kind "ci_missing", the words tell
+		switch {
+		case strings.Contains(why, didNotRunWords):
 			return needCIMissing
+		case strings.Contains(why, failedWords):
+			return needCIFailed
 		}
-		return needCIFailed
 	case "thread":
 		return needThreads
 	case "magnum":
-		if strings.HasPrefix(why, noReviewWords) {
-			return needOther
+		switch {
+		case strings.HasPrefix(why, noReviewWords):
+			return needReview
+		case slices.ContainsFunc(replyWords, func(w string) bool { return strings.Contains(why, w) }):
+			return needThreads
 		}
-		return needThreads
+	case "magnum_late":
+		return needReview
 	case "finding", "findings":
 		return needFix
 	case "loop":

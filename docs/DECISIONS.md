@@ -22513,31 +22513,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
   card" for the same reasons. One function now maps the reason to the move (`reasonMove`, internal/factory), read
   from magnum's registry alone: the fresh verdict that needs you (its Needs kinds, classed by `needClass`, with its
   words where one kind has two reasons), the attention with the fixer's report, the stalemate. Required check that
-  did not run (kind `ci_missing`, or until the engine adds it a `ci` need whose words hold " did not run at "): "b
-  opens it: re-run CI on GitHub, or push" ("b re-run CI"), never f. One that failed: "b opens its CI, f fixes it" ("b
-  CI · f fix"). Magnum stopped arguing, a person's thread, a reply of magnum's that waits for you: "b opens the
-  threads" ("b threads"). The fixer left you items, or a fix attention with its report: "e opens the report, b the
-  PR" ("e report · b PR"; e is the card's own key for the report). Skipped or magnum's findings, or the day's fix
-  loops used up ("f starts another"): "f fixes, b opens it" ("f fix · b PR"). Anything else, magnum's review late
-  or missing, a start the fix job refused, an attention of another kind, needs of two classes, a stale verdict, a
-  kind nothing knows: "b opens it" ("b PR"), which is also ownRow's last default. f is offered only where the
-  fixer has work (open findings, a failed check). It is set where the waits that need you without a move of their
-  own are made (`verdictWait`'s needs_you, `attentionWait`), so a published task's row and your PR's row say the
-  same and a wait with its own move (a merge, an answer, `nextWait`'s "fix the CI" and "run its workflow, or
-  push", which already name their step) keeps it. The short forms fit the YOUR MOVE column's 15 cells at 100
-  columns and the long ones show whole at 140 and 200 (the longest, "b opens it: re-run CI on GitHub, or push", widens
-  the column or gives it to the short form on a crowded screen, the planner's way). Magnum's review late or missing
-  could say "r reviews it", which the card takes, but the card's hints do not offer r, so it says the PR's page.
-  Rejected: keeping "b or f" and adding a hint (it stays unclear and wrong for a check that did not run); f on every
-  reason that has findings in its words (a stalemate and a check that did not run have none for the fixer); reading
-  the move from the words alone (the kinds say the reason where they can); changing `nextWait`'s moves. Not
-  changed: the engine (the `ci_missing` kind is another change's). Tests: TestYourMoveFollowsTheReasonThePRNeedsYou
-  (every reason and its short form, f only with open findings or a failed check),
+  did not run (kind `ci_missing`, or until the engine adds it a `ci` need whose words hold " did not run at "): "b:
+  re-run CI on GitHub, or push" ("b re-run CI"). One that failed (a `ci` need whose words hold " failed at "): "b
+  opens its CI" ("b CI"). Magnum stopped arguing, a person's thread, a reply of magnum's that waits for you: "b opens
+  the threads" ("b threads"). The fixer left you items, or a fix attention with its report: "e opens the report, b
+  the PR" ("e report · b PR"; e is the card's own key for the report). Magnum's review late or missing (kinds
+  `magnum_late`, and `magnum` whose words say no review stands): "r reviews it" ("r review"). Skipped or magnum's
+  findings, or the day's fix loops used up ("f starts another"): "f fixes, b opens it" ("f fix · b PR"). Anything
+  else, a start the fix job refused, an attention of another kind, needs of two classes, a stale verdict, a kind or
+  words nothing knows: "b opens it" ("b PR"), which is also ownRow's last default. It is set where the waits that
+  need you without a move of their own are made (`verdictWait`'s needs_you, `attentionWait`), so a published task's
+  row and your PR's row say the same and a wait with its own move (a merge, an answer, `nextWait`'s "fix the CI" and
+  "run its workflow, or push", which already name their step) keeps it.
+  Review round 1 changed four rules of the first version. f is offered only for findings the fixer can take: the
+  engine's look reaches a failed required check only when it has no work, and then `f` asks y/N and the fixer
+  answers "nothing to fix" (it reads no CI; "Red required CI needs you for now"), the complaint about #447 again for
+  the other state of the check. A class now matches the words of its own reason and nothing else (a `ci` need is a
+  failed check only if its words hold " failed at "; a `magnum` need is a reply only if they hold the reply's
+  words), so a reword of the engine's falls back to "b opens it" and never to a key that does nothing; the factory's
+  tests cannot run the engine's look (its facts, ledger and GitHub reads are the engine's own test harness, and an
+  exported entry would need the engine edited), so `TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines` reads
+  the engine's source for the phrases and fails when one changes (exporting them from the engine is a follow-up
+  there). The review's "r reviews it" names a key the card offers: the PR card's hint bar now shows "r review" where
+  r acts (`actionRefusal` does not refuse it), and r asks the board's y/N on the row and on the card alike
+  (TestROnYourPRsRowAndCardReviewsAndTheCardOffersIt). In the wide layout a move wider than the column's floor
+  (28 cells, `factoryMoveWide`) takes its short form (`factoryLayout.moveOf`): a 40-cell move on one row widened the
+  column for all and dropped the whole table to the 140-column layout between 184 and 190 columns
+  (TestAWideMoveNeverStepsTheWholeTableDown). The re-run move is shortened to 31 cells, still over the floor, so the
+  wide layout shows "b re-run CI". The short forms fit the YOUR MOVE column's 15 cells at 100 columns.
+  Rejected: keeping "b or f" and adding a hint (it stays unclear and wrong for a check that did not run); f on a
+  failed check (the fixer reads no CI); matching the failed class by exclusion (a reword turned a missing check into
+  a failed one); reading the move from the words alone (the kinds say the reason where they can); changing
+  `nextWait`'s moves (they name their step, though a failed check says "fix CI" there and "b CI" with a verdict).
+  Not changed: the engine (the `ci_missing` kind and constants for the three phrases are another change's). Tests:
+  TestYourMoveFollowsTheReasonThePRNeedsYou (every reason and its short form, f only for findings),
   TestAPRWhoseRequiredCheckDidNotRunSaysToRerunCI (talkable-docs#447's case: a clean review, a required check that
-  did not run, on your PR and a task's, both kinds), TestATasksPRAndYoursSayTheSameMoveForTheSameReason and
+  did not run, on your PR and a task's, both kinds), TestATasksPRAndYoursSayTheSameMoveForTheSameReason,
   TestEveryMoveOfYourPRFitsTheMoveColumn (golden frames at 100, 140 and 200), each failing first; the goldens
   yours-*, fixer-* and repos-* changed only on the rows that said "b or f", "b opens it, f fixes" or the fixer's
-  "task card". No new dependencies.
+  "task card", and two fixture rows that stand for a task without a PR say so. No new dependencies.
 
 ## Learned rules
 

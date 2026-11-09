@@ -1352,11 +1352,15 @@ func (m factoryModel) walkHint(hs []hint) []hint {
 }
 
 // prCardHints are the hints of your PR's card c, of row r: the fix keys,
-// magnum's pane, and the pages it has.
+// the review where r acts (the move of a PR whose review magnum owes names
+// it), magnum's pane, and the pages it has.
 func (m factoryModel) prCardHints(r FactoryRow, c TaskCard) []hint {
 	hs := []hint{{"f", "fix"}, {"F", prFixOffVerb(*r.PR)}}
 	if r.PR.Fixing {
 		hs = append(hs, hint{"K", "stop"})
+	}
+	if m.act != nil && actionRefusal(actReview, m.prActRow(r, true)) == "" {
+		hs = append(hs, hint{"r", "review"})
 	}
 	hs = append(hs, m.undoHints(r, true)...)
 	if m.act != nil {

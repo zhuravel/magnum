@@ -24,6 +24,8 @@ func fixturePublished() factoryFrame {
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
 				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "2 items need you: 1 thread of a person and 1 skipped finding",
 					Short: "2 items need you", OnYou: true}},
+				// A task whose PR magnum's registry does not have (no PR field): its move is the task's. With a PR
+				// the factory words it by the reason (reasonMove): "b opens it" for these two kinds of item.
 				Move: "see the task card", MoveShort: "task card",
 				Since: factoryAgo(now, 35*time.Minute),
 				Help:  "you: 2 items need you: 1 thread of a person and 1 skipped finding",

@@ -1,6 +1,8 @@
 package factory
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,10 +16,12 @@ import (
 // The words of each move, as the operator reads them: the long form, then
 // the short form that fits the YOUR MOVE column of a narrow screen.
 const (
-	mvRerunCI       = "b opens it: re-run CI on GitHub, or push"
+	mvRerunCI       = "b: re-run CI on GitHub, or push"
 	mvRerunCIShort  = "b re-run CI"
-	mvFailedCI      = "b opens its CI, f fixes it"
-	mvFailedCIShort = "b CI · f fix"
+	mvFailedCI      = "b opens its CI"
+	mvFailedCIShort = "b CI"
+	mvReview        = "r reviews it"
+	mvReviewShort   = "r review"
 	mvThreads       = "b opens the threads"
 	mvThreadsShort  = "b threads"
 	mvReport        = "e opens the report, b the PR"
@@ -48,12 +52,13 @@ func offersF(move string) bool {
 // Your move on a PR that needs you follows the reason magnum's look gave,
 // not one fixed pair of keys: re-run a check that did not run, open the
 // CI of one that failed, open the threads magnum stopped arguing in, read
-// the fixer's report, fix open findings, else open the PR. f is offered
-// only where the fixer has work (open findings, a failed check), never for
-// a check that did not run, a stalemate or a reason nothing knows. Before,
-// every one of them said "b or f", and talkable-docs#447 (a clean review,
-// a required check that never started) sent the operator to a fixer with
-// nothing to fix.
+// the fixer's report, review a PR magnum has not reviewed, fix open
+// findings, else open the PR. f is offered only where the fixer has work
+// (open findings it can take): it reads no CI, so it is no move for a
+// failed check, a check that did not run, a stalemate or a reason nothing
+// knows. Before, every one of them said "b or f", and talkable-docs#447 (a
+// clean review, a required check that never started) sent the operator to a
+// fixer with nothing to fix.
 func TestYourMoveFollowsTheReasonThePRNeedsYou(t *testing.T) {
 	const didNotRun = "build did not run at a1b2c3d: run its workflow on the PR's branch, or push"
 	for name, c := range map[string]struct {
@@ -63,6 +68,8 @@ func TestYourMoveFollowsTheReasonThePRNeedsYou(t *testing.T) {
 		"a required check that did not run (kind ci_missing)":               {verdictNeeds(didNotRun, "ci_missing"), mvRerunCI, mvRerunCIShort},
 		"a required check that did not run (kind ci, as before ci_missing)": {verdictNeeds(didNotRun, "ci"), mvRerunCI, mvRerunCIShort},
 		"a required check that failed":                                      {verdictNeeds("required check build failed at a1b2c3d", "ci"), mvFailedCI, mvFailedCIShort},
+		"a check of the CI that failed":                                     {verdictNeeds("CI failed at a1b2c3d", "ci"), mvFailedCI, mvFailedCIShort},
+		"a ci need in words nothing knows (never f)":                        {verdictNeeds("build is red", "ci"), mvOpens, mvOpensShort},
 		"a person's thread":                                                 {verdictNeeds("1 item needs you: 1 thread of a person", "thread"), mvThreads, mvThreadsShort},
 		"magnum's reply that waits for you":                                 {verdictNeeds("magnum's reply waits for your answer: https://example.com/t", "magnum"), mvThreads, mvThreadsShort},
 		"magnum stopped arguing (verdict)":                                  {verdictNeeds("magnum stopped arguing in 2 threads", "thread", "thread"), mvThreads, mvThreadsShort},
@@ -82,8 +89,10 @@ func TestYourMoveFollowsTheReasonThePRNeedsYou(t *testing.T) {
 		"magnum's findings that wait for a fix": {verdictNeeds("magnum's reply waits for your answer", "findings"), mvFixes, mvFixesShort},
 		"the fix loops of the day used up":      {verdictNeeds("3 loops today: f starts another", "loop"), mvFixes, mvFixesShort},
 		"the fix loop refused to start":         {verdictNeeds("nothing to fix: the fixer's file lists nothing", "loop"), mvOpens, mvOpensShort},
-		"magnum's review missing":               {verdictNeeds("no review of magnum's stands at a1b2c3d: `magnum review` reviews it", "magnum"), mvOpens, mvOpensShort},
-		"magnum's review late":                  {verdictNeeds("magnum has not reviewed a1b2c3d since 09:00", "magnum_late"), mvOpens, mvOpensShort},
+		"magnum's review missing":               {verdictNeeds("no review of magnum's stands at a1b2c3d: `magnum review` reviews it", "magnum"), mvReview, mvReviewShort},
+		"magnum's review late":                  {verdictNeeds("magnum has not reviewed a1b2c3d since 09:00", "magnum_late"), mvReview, mvReviewShort},
+		"a magnum need in words nothing knows":  {verdictNeeds("something about magnum", "magnum"), mvOpens, mvOpensShort},
+		"replies of magnum's among the items":   {verdictNeeds("2 items need you: 2 replies of magnum's", "magnum", "magnum"), mvThreads, mvThreadsShort},
 		"a conflict with the base":              {verdictNeeds("1 item needs you: 1 conflict with the base", "conflict"), mvOpens, mvOpensShort},
 		"a review body":                         {verdictNeeds("1 item needs you: 1 review body of a person", "review"), mvOpens, mvOpensShort},
 		"a thread and a skipped finding":        {verdictNeeds("2 items need you", "thread", "finding"), mvOpens, mvOpensShort},
@@ -106,8 +115,8 @@ func TestYourMoveFollowsTheReasonThePRNeedsYou(t *testing.T) {
 			if got.long != c.long || got.short != c.short {
 				t.Errorf("move %q / %q, want %q / %q", got.long, got.short, c.long, c.short)
 			}
-			if fixer := c.long == mvFixes || c.long == mvFailedCI; offersF(got.long) != fixer || offersF(got.short) != fixer {
-				t.Errorf("move %q / %q: f offered %v, want it only with open findings or a failed check", got.long, got.short, offersF(got.long))
+			if fixer := c.long == mvFixes; offersF(got.long) != fixer || offersF(got.short) != fixer {
+				t.Errorf("move %q / %q: f offered %v, want it only for findings the fixer can take", got.long, got.short, offersF(got.long))
 			}
 		})
 	}
@@ -158,7 +167,7 @@ func TestATasksPRAndYoursSayTheSameMoveForTheSameReason(t *testing.T) {
 		"a thread":          {verdictNeeds("1 item needs you: 1 thread of a person", "thread"), mvThreads, mvThreadsShort},
 		"a stalemate":       {func(v *PRState) { v.OpenWatch, v.ReviewedSHA, v.Stalemate = false, prHead, true }, mvThreads, mvThreadsShort},
 		"the fixer's items": {fixerAttention(fixerNeeds...), mvReport, mvReportShort},
-		"a missing review":  {verdictNeeds("no review of magnum's stands at a1b2c3d", "magnum"), mvOpens, mvOpensShort},
+		"a missing review":  {verdictNeeds("no review of magnum's stands at a1b2c3d", "magnum"), mvReview, mvReviewShort},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newScreenRig(t)
@@ -173,5 +182,34 @@ func TestATasksPRAndYoursSayTheSameMoveForTheSameReason(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The words of the engine's verdicts that the move reads are in the engine's
+// code, in the very forms reasonMove matches. The factory's tests cannot run
+// the engine's look (its facts, ledger and GitHub reads are the engine's own
+// test harness, and an exported entry would need the engine edited), so this
+// reads the engine's source: a reword there fails here, where the move would
+// otherwise fall back to the PR's page without a word.
+func TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "engine", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	ci, verdict := read("fix_open_ci.go"), read("fix_open_verdict.go")
+	for name, c := range map[string]struct{ src, want string }{
+		"a required check that did not run": {ci, `"%s` + didNotRunWords + `%s: %s"`},
+		"a required check that failed":      {verdict, `"%s` + failedWords + `%s"`},
+		"magnum's review missing":           {verdict, `"` + noReviewWords},
+		"magnum's reply that waits":         {verdict, `"magnum's ` + replyWaitsWords},
+		"magnum's replies among the items":  {verdict, `"reply of magnum's"`},
+		"the day's loops used up":           {verdict, `"%s today: ` + loopsUsedWords + `"`},
+	} {
+		if !strings.Contains(c.src, c.want) {
+			t.Errorf("%s: the engine's code no longer holds %s, which reasonMove matches", name, c.want)
+		}
 	}
 }

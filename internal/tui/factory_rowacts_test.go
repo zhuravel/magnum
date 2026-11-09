@@ -210,6 +210,37 @@ func TestAPRKeyThatWentThroughMovesTheWalkOn(t *testing.T) {
 	h.wantPRCalls("mute example/talkable#4602")
 }
 
+// r is the review of your PR on its row and on its card, each asking the
+// board's y/N, and the card's hint bar offers it where it acts: the move of
+// a PR whose review magnum owes ("r reviews it") names a key the card shows.
+// A merged PR whose head magnum reviewed refuses it, and the bar leaves it
+// out.
+func TestROnYourPRsRowAndCardReviewsAndTheCardOffersIt(t *testing.T) {
+	h := testYours(t, 160, 40)
+	h.src.change(func(d *FactoryData) { *d = yoursCardData() })
+	h.press("ctrl+r")
+	h.facts("#4602", FactoryPRFacts{State: "reviewed", GHState: "OPEN", Head: factoryHead, Reviewed: factoryReviewed})
+	h.press("g")
+	h.selectRow("#4602")
+	h.press("r")
+	mustContain(t, h.view(), "Review #4602 now (new commits since the last review of a1b2c3d, head b2c3d4e)? y/N")
+	h.press("y", "enter")
+	if h.m.view != fvTask || h.m.task != -72 {
+		t.Fatalf("enter opened view %v of %d, want #4602's card", h.m.view, h.m.task)
+	}
+	mustContain(t, h.hintLine(), "r review", "f fix", "o magnum's pane")
+	h.press("r")
+	mustContain(t, h.view(), "Review #4602 now (new commits since the last review of a1b2c3d, head b2c3d4e)? y/N")
+	h.press("y")
+	h.wantPRCalls("review example/talkable#4602", "review example/talkable#4602")
+
+	h.press("esc")
+	h.facts("#4602", FactoryPRFacts{State: "released", GHState: "MERGED", Head: factoryHead, Reviewed: factoryHead})
+	h.press("enter")
+	mustNotContain(t, h.hintLine(), "r review")
+	mustContain(t, h.hintLine(), "f fix")
+}
+
 // On a task card that offers a retry, r stays the retry and its hints say
 // "r retry"; R is the fresh review there as anywhere, and z's question
 // names no key for the review. On a card that offers none, r is the review
