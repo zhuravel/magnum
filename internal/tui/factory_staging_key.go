@@ -18,14 +18,15 @@ import (
 )
 
 // stagingKey is E on row r (home's, or the card's): the question of r's
-// staging plan that answered away from it (held), else, on a row whose
-// open PR magnum's registry has and whose repository has staging servers,
-// the chooser of them; else a note of why, and no request.
+// staging plan that answered away from it (held), unless E refuses r now;
+// else, on a row whose open PR magnum's registry has and whose repository
+// has staging servers, the chooser of them; else a note of why, and no
+// request.
 func (m *factoryModel) stagingKey(r FactoryRow) tea.Cmd {
-	if r.PR != nil && m.bar.raiseHeld(r.ID, "E") {
-		return nil
-	}
 	row, words, why := m.stagingRow(r)
+	if cmd, held := m.raiseHeldPlan(r.ID, "E", why); held {
+		return cmd
+	}
 	switch {
 	case why != "":
 		return m.note(why)
@@ -62,6 +63,28 @@ func (m factoryModel) stagingRow(r FactoryRow) (row actRow, words []string, why 
 		}
 	}
 	return row, words, actionRefusal(actStaging, row)
+}
+
+// raiseHeldPlan is key (E or P) on row with a plan of it held: the key's
+// refusal of the row now (why, as a fresh press runs it) drops the held
+// plan with its words, and nothing runs; while another action runs it
+// waits; else the plan's question goes up. held is false when no plan of
+// the row's is held by key: the key then acts as usual.
+func (m *factoryModel) raiseHeldPlan(row int64, key, why string) (cmd tea.Cmd, held bool) {
+	i := m.bar.heldOf(&planOf{row: row, key: key})
+	switch {
+	case i < 0:
+		return nil, false
+	case why != "":
+		h := m.bar.unhold(i)
+		text := planDropText(h.q, "dropped", why)
+		m.bar.log.add(logEntry{at: m.now(), what: h.q.label, text: text})
+		return m.note(text), true
+	case m.bar.busy != "":
+		return m.bar.show("wait: "+m.bar.busy+" runs", factoryFlashWait), true
+	}
+	m.bar.raiseHeld(row, key)
+	return nil, true
 }
 
 // stagingNotRead is the state of an env no staging cell tells yet.
@@ -106,7 +129,7 @@ func (m *factoryModel) chooseKey(k string) tea.Cmd {
 		return m.note("Deploy " + c.label + " to staging: cancelled, nothing was run")
 	}
 	m.bar.choose = nil
-	p := planOf{row: m.bar.chooseRow, key: "E", name: c.label, ref: c.ref}
+	p := planOf{row: m.bar.chooseRow, view: m.view, key: "E", name: c.label, ref: c.ref}
 	return m.bar.start("Plan the staging deploy of "+c.label, m.stagingPlan(p, envs))
 }
 

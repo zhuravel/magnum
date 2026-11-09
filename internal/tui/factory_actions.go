@@ -76,26 +76,28 @@ type factoryQuestion struct {
 	// answers all it names: a staging deploy's migrations and its warning.
 	wrap bool
 	// plan says which row's plan the question is the next step of (E's
-	// staging deploy, P's merge of the parent); nil for any other question.
+	// staging deploy, P's merge of the parent), and at when the plan
+	// answered, by the screen's clock: past heldPlanFor its y sends
+	// nothing. nil for any other question.
 	plan *planOf
+	at   time.Time
 }
 
 // planOf is the row a plan's question belongs to: the row's id
-// (FactoryRow.ID), the key that planned it (E or P), the row's name for its
-// PR and the PR's reference.
+// (FactoryRow.ID), the view its key was pressed on (home, or the row's
+// card), the key that planned it (E or P), the row's name for its PR and
+// the PR's reference.
 type planOf struct {
 	row            int64
+	view           factoryView
 	key, name, ref string
 }
 
-// heldPlan is a plan's question that answered away from its row, and when
-// it answered, by the screen's clock: it waits for its key on its row
+// heldPlan is a plan's question that answered away from where its key was
+// pressed (its at says when): it waits for its key on its row
 // (factoryBar.raiseHeld), and the screen drops it once it cannot wait any
 // more (factoryModel.dropHeld).
-type heldPlan struct {
-	q  *factoryQuestion
-	at time.Time
-}
+type heldPlan struct{ q *factoryQuestion }
 
 // factoryBar is the action state the factory screen embeds. One action runs
 // at a time, in the background: the screen's navigation keys keep working
@@ -156,7 +158,18 @@ func (b *factoryBar) hold(q *factoryQuestion) {
 	if i := b.heldOf(q.plan); i >= 0 {
 		b.held = slices.Delete(b.held, i, i+1)
 	}
-	b.held = append(b.held, heldPlan{q: q, at: b.now()})
+	q.at = b.now()
+	b.held = append(b.held, heldPlan{q: q})
+}
+
+// unhold takes held plan i off the list, and gives it back.
+func (b *factoryBar) unhold(i int) heldPlan {
+	h := b.held[i]
+	b.held = slices.Delete(b.held, i, i+1)
+	if len(b.held) == 0 {
+		b.held = nil
+	}
+	return h
 }
 
 // heldOf is the index of the held plan of p's row and key; -1 for none.
@@ -178,11 +191,7 @@ func (b *factoryBar) raiseHeld(row int64, key string) bool {
 	if i < 0 || b.dropped || b.asking != nil || b.choose != nil || b.busy != "" {
 		return false
 	}
-	b.asking = b.held[i].q
-	b.held = slices.Delete(b.held, i, i+1)
-	if len(b.held) == 0 {
-		b.held = nil
-	}
+	b.asking = b.unhold(i).q
 	if b.flashKind != factoryFlashFailed {
 		b.flash = ""
 	}
@@ -190,33 +199,66 @@ func (b *factoryBar) raiseHeld(row int64, key string) bool {
 }
 
 // heldMarker is the rule's word of the held plans: the oldest's row and
-// key ("plan of PR-12345 ready: E on its row asks") and how many more;
-// "" for none.
+// the key that asks it where that key works ("plan of PR-12345 ready: E on
+// its row asks"; P on home alone), and how many more; "" for none.
 func (b *factoryBar) heldMarker() string {
 	if len(b.held) == 0 {
 		return ""
 	}
 	p := b.held[0].q.plan
-	text := "plan of " + p.name + " ready: " + p.key + " on its row asks"
+	text := "plan of " + p.name + " ready: " + heldKeyWhere(p) + " asks"
 	if n := len(b.held) - 1; n > 0 {
 		text += " (+" + strconv.Itoa(n) + " more)"
 	}
 	return text
 }
 
+// heldKeyWhere is the key of plan p's question and where it works: E on
+// its row (home's or its card), P on its row on home.
+func heldKeyWhere(p *planOf) string {
+	switch {
+	case p == nil:
+		return "its key"
+	case p.key == "P":
+		return "P on its row on home"
+	}
+	return p.key + " on its row"
+}
+
+// planDropText is the words of plan question q taken off the screen (verb:
+// dropped, taken down) for why.
+func planDropText(q *factoryQuestion, verb, why string) string {
+	return q.label + ": " + verb + ", " + why + "; nothing was run (" + heldKeyWhere(q.plan) + " plans again)"
+}
+
 // dropHeldNote is the note of held plan h dropped for why: in the action
 // log always, and in the footer only while it says nothing else, so it
 // never takes the place of another action's outcome or failure.
 func (b *factoryBar) dropHeldNote(h heldPlan, why string) tea.Cmd {
-	key := "its key"
-	if h.q.plan != nil {
-		key = h.q.plan.key
-	}
-	text := h.q.label + ": dropped, " + why + "; nothing was run (" + key + " on its row plans again)"
+	text := planDropText(h.q, "dropped", why)
 	b.log.add(logEntry{at: b.now(), what: h.q.label, text: text})
 	if b.flash != "" {
 		return nil
 	}
+	return b.show(text, factoryFlashNote)
+}
+
+// planTooOld reports whether q is a plan's question whose plan answered
+// heldPlanFor or longer before now: its y sends nothing.
+func planTooOld(q *factoryQuestion, now time.Time) bool {
+	return q != nil && q.plan != nil && !q.at.IsZero() && now.Sub(q.at) >= heldPlanFor
+}
+
+// takeDownOld takes down a plan's question that is up past heldPlanFor
+// since its plan answered, with its note (the footer it held is free).
+func (b *factoryBar) takeDownOld() tea.Cmd {
+	q := b.asking
+	if !planTooOld(q, b.now()) {
+		return nil
+	}
+	b.asking = nil
+	text := planDropText(q, "taken down", heldAgeWords())
+	b.log.add(logEntry{at: b.now(), what: q.label, text: text})
 	return b.show(text, factoryFlashNote)
 }
 
@@ -259,8 +301,11 @@ func (b *factoryBar) key(msg tea.KeyPressMsg) (cmd tea.Cmd, taken bool) {
 		return nil, false
 	}
 	b.asking = nil
-	if !confirms(msg.String()) {
+	switch {
+	case !confirms(msg.String()):
 		return b.show(q.label+": cancelled, nothing was run", factoryFlashNote), true
+	case planTooOld(q, b.now()): // the 10 minutes run until y
+		return b.show(planDropText(q, "taken down", heldAgeWords()), factoryFlashNote), true
 	}
 	return b.run(q.label, q.run), true
 }
@@ -324,7 +369,9 @@ func (b *factoryBar) update(msg tea.Msg) (cmd tea.Cmd, taken bool) {
 			q := *msg.next
 			q.sentence, q.label = cleanText(q.sentence), cleanText(q.label)
 			b.hold(&q)
-			b.flash = ""
+			if b.flashKind != factoryFlashFailed { // a failure kept in the footer stays until a key, the marker after it
+				b.flash = ""
+			}
 			return nil, true
 		}
 		return b.show(cmp.Or(lastLine(msg.text), msg.label+": done"), factoryFlashDone), true
@@ -370,6 +417,13 @@ func (b *factoryBar) askLines(width, room int) []string {
 		return nil
 	}
 	return b.st.askLines(&pendingAction{question: b.asking.sentence, wrap: b.asking.wrap}, width, room)
+}
+
+// onlyMarker reports whether the footer would say nothing but the held
+// plans' marker: no question, chooser, note or action in flight. Home's
+// refresh failure takes the rule then.
+func (b *factoryBar) onlyMarker() bool {
+	return b.asking == nil && b.choose == nil && b.flash == "" && b.busy == "" && len(b.held) > 0
 }
 
 // asksWrapped reports whether the question waiting wraps (factoryQuestion.wrap).

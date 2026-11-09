@@ -87,7 +87,7 @@ func (a *fakeFactoryActions) mergesOf() []string {
 
 const (
 	heldE      = "plan of PR-12345 ready: E on its row asks"
-	heldP      = "plan of PR-12345 ready: P on its row asks"
+	heldP      = "plan of PR-12345 ready: P on its row on home asks"
 	stagedHeld = "example/talkable#4545 void at abcdef1234 seen db/migrate/1_a.rb"
 )
 
@@ -421,5 +421,247 @@ func TestTheReadyCardFreesOnlyItsOwnPushsQuestion(t *testing.T) {
 	c.askOther = false
 	if foot := readyFooter(drawReady(c)(140, 0, true, IconsUnicode)); !strings.Contains(foot, "It frees talkable.factory3") {
 		t.Errorf("the push's question lost what it frees: %q", foot)
+	}
+}
+
+// failSource makes the screen's next reads of the factory fail with err
+// (nil: they work again).
+func (h *factoryHarness) failSource(err error) {
+	h.t.Helper()
+	h.src.mu.Lock()
+	h.src.err = err
+	h.src.mu.Unlock()
+}
+
+// A plan's question goes up at once only on the view and the row where its
+// key was pressed: E on home's row whose plan answers on that row's card,
+// E on the card whose plan answers back on home, and P on home whose plan
+// answers on the card are held, and E (P on home) on the row asks them.
+// Before, home on the row and the row's card were one place.
+func TestAPlansQuestionGoesUpAtOnceOnlyOnTheViewWhereItsKeyWasPressed(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.press("E", "1")
+	next, plan := h.m.Update(keyMsg("enter"))
+	h.m = next.(factoryModel)
+	h.press("enter") // the row's card
+	h.run(plan)
+	if h.m.view != fvTask || h.m.bar.question() != "" {
+		t.Fatalf("E on home, answered on the card: view %v asks %q, want it held", h.m.view, h.m.bar.question())
+	}
+	mustContain(t, h.view(), "plan of PR-12320's #4530 ready: E on its row asks")
+	h.press("E")
+	mustContain(t, h.view(), stagingAsk("example/talkable#4530", []string{"void"})+" y/N")
+	h.press("n")
+
+	c := testStaged(t, 160, 40)
+	c.open("PR-12320")
+	c.press("E", "1")
+	next, plan = c.m.Update(keyMsg("enter"))
+	c.m = next.(factoryModel)
+	c.press("esc") // home, the row under the cursor
+	c.run(plan)
+	if r, _ := c.m.selectedRow(); c.m.view != fvHome || r.Key != "PR-12320" || c.m.bar.question() != "" {
+		t.Fatalf("E on the card, answered on home: view %v on %s asks %q, want it held", c.m.view, r.Key, c.m.bar.question())
+	}
+	c.press("E")
+	mustContain(t, c.view(), stagingAsk("example/talkable#4530", []string{"void"})+" y/N")
+	c.press("y")
+	c.wantStaging([]string{"example/talkable#4530 void"}, []string{stagedDeploy})
+
+	p := testStaged(t, 160, 40)
+	p.press("g")
+	p.selectRow("PR-12320")
+	next, plan = p.m.Update(keyMsg("P"))
+	p.m = next.(factoryModel)
+	p.press("enter")
+	p.run(plan)
+	if p.m.bar.question() != "" {
+		t.Fatalf("P on home, answered on the card, asks %q there", p.m.bar.question())
+	}
+	mustContain(t, p.view(), "plan of PR-12320's #4530 ready: P on its row on home asks")
+	p.press("P") // no key of the card: it stays held
+	if p.m.bar.question() != "" || len(p.m.bar.held) != 1 {
+		t.Fatalf("P on the card asks %q, held %d", p.m.bar.question(), len(p.m.bar.held))
+	}
+	p.press("esc", "P")
+	mustContain(t, p.view(), mergePlanAsk("example/talkable#4530"))
+}
+
+// Home's refresh failure wins over the held plan's marker on its rule, and
+// while the refresh fails no held plan is dropped on the stale rows; once a
+// refresh works the marker is back, and a row it no longer has drops its
+// plan.
+func TestARefreshFailureWinsOverTheHeldMarker(t *testing.T) {
+	h := testPlanned(t, 140, 40)
+	plan := h.startHeld("E", "1", "enter")
+	h.press("?")
+	h.run(plan)
+	h.press("esc")
+	h.expireNote()
+	mustContain(t, h.view(), heldE)
+	h.failSource(errors.New("the registry is locked"))
+	h.press("ctrl+r")
+	h.expireNote()
+	v := h.view()
+	mustContain(t, v, "refresh failed: the registry is locked")
+	mustNotContain(t, v, heldE)
+	if len(h.m.bar.held) != 1 {
+		t.Fatalf("a failed refresh dropped the held plan")
+	}
+	h.failSource(nil)
+	h.press("ctrl+r")
+	mustContain(t, h.view(), heldE)
+	h.src.change(func(d *FactoryData) {
+		d.Rows = slices.DeleteFunc(d.Rows, func(r FactoryRow) bool { return r.Key == "PR-12345" })
+	})
+	h.press("ctrl+r")
+	if len(h.m.bar.held) != 0 {
+		t.Errorf("a refresh without the row kept its plan")
+	}
+}
+
+// A plan that answers away from its row keeps a failure the footer holds
+// (the pager's): the failure stays until a key, and the marker comes after.
+func TestAHeldPlanKeepsAFailureInTheFooter(t *testing.T) {
+	h := testPlanned(t, 140, 40)
+	plan := h.startHeld("E", "1", "enter")
+	h.press("?")
+	h.feed(factoryPagerMsg{err: errors.New("less: not found")})
+	h.run(plan)
+	v := h.view()
+	mustContain(t, v, "less: not found")
+	mustNotContain(t, v, heldE)
+	h.press("j")
+	mustContain(t, h.view(), heldE)
+}
+
+// E and P on a held plan's row run the refusal a fresh press runs: a held
+// P on a PR a fix loop now works on, and a held E on a PR whose repository
+// no longer has staging envs, are dropped with the refusal's words, and
+// nothing runs.
+func TestRaisingAHeldPlanRunsTheKeysRefusal(t *testing.T) {
+	h := testPlanned(t, 140, 40)
+	plan := h.startHeld("P")
+	h.press("?")
+	h.run(plan)
+	h.press("esc")
+	h.src.change(func(d *FactoryData) {
+		for i, r := range d.Rows {
+			if r.Key == "PR-12345" {
+				pr := *r.PR
+				pr.Fixing = true
+				d.Rows[i].PR = &pr
+			}
+		}
+	})
+	h.press("ctrl+r", "g")
+	h.selectRow("PR-12345")
+	h.press("P")
+	v := h.view()
+	mustContain(t, v, "Merge the parent of PR-12345: dropped", "nothing was run")
+	mustNotContain(t, v, "y/N")
+	h.press("y")
+	if len(h.act.mergesOf()) != 0 || len(h.m.bar.held) != 0 {
+		t.Errorf("merges %v, held %d", h.act.mergesOf(), len(h.m.bar.held))
+	}
+
+	e := testPlanned(t, 220, 40) // the refusal's words are long: the whole note fits
+	plan = e.startHeld("E", "1", "enter")
+	e.press("?")
+	e.run(plan)
+	e.press("esc")
+	e.src.change(func(d *FactoryData) {
+		for i, r := range d.Rows {
+			if r.Key == "PR-12345" {
+				d.Rows[i].Stagings = nil
+			}
+		}
+	})
+	e.press("ctrl+r", "g")
+	e.selectRow("PR-12345")
+	e.press("E")
+	v = e.view()
+	mustContain(t, v, "Deploy PR-12345 to staging: dropped", "has no staging envs", "nothing was run")
+	e.press("y")
+	e.wantStaging([]string{"example/talkable#4545 void"}, nil)
+}
+
+// The 10 minutes run until y: a plan's question that is up heldPlanFor
+// after its plan answered is taken down with a note, and a y after that
+// sends nothing, for E and for P; one raised by E on its row at 9 min 59
+// s is taken down a second later.
+func TestAPlansQuestionIsTakenDownOnceItsPlanIsTenMinutesOld(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.press("E", "1", "enter")
+	mustContain(t, h.view(), stagingAsk("example/talkable#4530", []string{"void"})+" y/N")
+	h.clock.at = h.clock.at.Add(heldPlanFor)
+	h.feed(factoryTickMsg{})
+	if q := h.m.bar.question(); q != "" {
+		t.Fatalf("the question is still up 10 min after its plan: %q", q)
+	}
+	mustContain(t, h.view(), "the plan waited 10 min", "nothing was run")
+	h.press("y")
+	h.wantStaging([]string{"example/talkable#4530 void"}, nil)
+
+	p := testStaged(t, 160, 40)
+	p.press("g")
+	p.selectRow("PR-12320")
+	p.press("P")
+	p.clock.at = p.clock.at.Add(heldPlanFor + time.Minute)
+	p.press("y") // the age is checked before the key: the y finds no question
+	if got := p.act.mergesOf(); len(got) != 0 {
+		t.Errorf("a y 11 min after the plan merged %v", got)
+	}
+
+	r := testStaged(t, 160, 40)
+	r.press("g")
+	r.selectRow("PR-12320")
+	r.press("E", "1")
+	next, plan := r.m.Update(keyMsg("enter"))
+	r.m = next.(factoryModel)
+	r.press("?")
+	r.run(plan)
+	r.press("esc")
+	r.clock.at = r.clock.at.Add(heldPlanFor - time.Second)
+	r.press("g")
+	r.selectRow("PR-12320")
+	r.press("E")
+	if r.m.bar.question() == "" {
+		t.Fatal("E at 9 min 59 s raised nothing")
+	}
+	r.clock.at = r.clock.at.Add(time.Second)
+	r.press("y")
+	r.wantStaging([]string{"example/talkable#4530 void"}, nil)
+}
+
+// P's question wraps over home's footer as E's does: at 80 cells all its
+// words show, "with no conflict" among them, before y.
+func TestPsQuestionShowsWholeOnHome(t *testing.T) {
+	h := testStaged(t, 80, 30)
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.press("P")
+	v := h.view()
+	asked := ""
+	for _, l := range strings.Split(v, "\n") {
+		if asked == "" && !strings.Contains(l, "Merge the parent of") {
+			continue
+		}
+		l = strings.TrimSpace(strings.Trim(strings.TrimSpace(l), "─"))
+		l, _, _ = strings.Cut(l, "  y confirms")
+		if asked != "" && !strings.HasSuffix(asked, "-") {
+			asked += " "
+		}
+		asked += l
+		if strings.HasSuffix(l, "y/N") {
+			break
+		}
+	}
+	if want := mergePlanAsk("example/talkable#4530") + " y/N"; asked != want {
+		t.Errorf("home asks\n%q\nwant\n%q\n%s", asked, want, v)
 	}
 }

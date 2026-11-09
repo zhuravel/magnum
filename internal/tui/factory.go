@@ -775,17 +775,17 @@ func (m *factoryModel) cardGone() tea.Cmd {
 	return m.bar.show(key+" no longer waits on that card", factoryFlashNote)
 }
 
-// planHere reports whether the operator is still where the key of plan p
-// was pressed: home with p's row under the cursor (the filter not typed),
-// or that row's card, the menu closed and no question or chooser up. The
-// plan's question goes up at once there; anywhere else it is held, for
-// its key on its row (factoryBar.raiseHeld), and never comes up by
-// itself: the recap draws its own question, the other cards and the form
-// cut one, the form and the filter take a y as text, the help and the log
-// draw one cut line, and another row's card or home on another row is not
-// where it was asked.
+// planHere reports whether the operator is still on the view and the row
+// where the key of plan p was pressed: home with p's row under the cursor
+// (the filter not typed), or that row's card, the same of the two, the
+// menu closed and no question or chooser up. The plan's question goes up
+// at once there; anywhere else it is held, for its key on its row
+// (factoryBar.raiseHeld), and never comes up by itself: the recap draws
+// its own question, the other cards and the form cut one, the form and
+// the filter take a y as text, the help and the log draw one cut line, and
+// another row, or the row's other view, is not where it was asked.
 func (m factoryModel) planHere(p planOf) bool {
-	if m.menu.open || m.bar.asking != nil || m.bar.choose != nil || m.bar.dropped {
+	if m.menu.open || m.bar.asking != nil || m.bar.choose != nil || m.bar.dropped || m.view != p.view {
 		return false
 	}
 	switch m.view {
@@ -804,15 +804,18 @@ func (m factoryModel) planHere(p planOf) bool {
 // equal). It bounds P's plans too, whose y binds nothing of the plan.
 const heldPlanFor = 10 * time.Minute
 
-// dropHeld drops each held plan that cannot wait any more, with its note
-// (factoryBar.dropHeldNote): one heldPlanFor old by the screen's clock, one
-// whose row left home, whose PR is no longer the row's open PR, or which
-// magnum's registry says is merged or closed.
+// dropHeld takes down a plan's question up past heldPlanFor since its plan
+// answered (factoryBar.takeDownOld), and drops each held plan that cannot
+// wait any more, with its note (factoryBar.dropHeldNote): one heldPlanFor
+// old by the screen's clock, one whose row left home, whose PR is no
+// longer the row's open PR, or which magnum's registry says is merged or
+// closed (none of these while a refresh fails: the rows are stale).
 func (m *factoryModel) dropHeld() tea.Cmd {
+	down := m.bar.takeDownOld()
 	if len(m.bar.held) == 0 {
-		return nil
+		return down
 	}
-	var cmds []tea.Cmd
+	cmds := []tea.Cmd{down}
 	now := m.now()
 	m.bar.held = slices.DeleteFunc(m.bar.held, func(h heldPlan) bool {
 		why := m.heldGone(h, now)
@@ -827,15 +830,20 @@ func (m *factoryModel) dropHeld() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// heldAgeWords say a plan is heldPlanFor old.
+func heldAgeWords() string {
+	return fmt.Sprintf("the plan waited %d min", int(heldPlanFor/time.Minute))
+}
+
 // heldGone is why held plan h cannot wait any more at now; "" while it can.
 func (m factoryModel) heldGone(h heldPlan, now time.Time) string {
 	p := h.q.plan
 	switch {
 	case p == nil:
 		return "it is no row's"
-	case now.Sub(h.at) >= heldPlanFor:
-		return fmt.Sprintf("the plan waited %d min", int(heldPlanFor/time.Minute))
-	case !m.haveData:
+	case planTooOld(h.q, now):
+		return heldAgeWords()
+	case !m.haveData || m.loadErr != nil: // stale rows tell nothing of a row gone or a PR merged
 		return ""
 	}
 	r, ok := m.row(p.row)
@@ -1323,6 +1331,9 @@ func (m factoryModel) homeFrame() factoryFrame {
 	}
 	f.Hints = m.homeHints()
 	f.rule = m.bar.view(max(m.viewWidth()-4, 1))
+	if m.loadErr != nil && m.bar.onlyMarker() { // the refresh failure wins over the held plans' marker
+		f.rule = ""
+	}
 	if m.bar.asksWrapped() { // a question that wraps takes the body's last lines above the rule, as on the board
 		lines := m.bar.askLines(max(m.viewWidth()-4, 1), 1+max(m.viewHeight()-factoryTop-factoryBottom, 1)/2)
 		for _, l := range lines[:len(lines)-1] {

@@ -495,3 +495,23 @@ func TestTheMenuAndTheHintsOfferE(t *testing.T) {
 		t.Errorf("the task card's menu: E %+v (found %v), want it live", it, found)
 	}
 }
+
+// The task card's deploy lines are the board card's: while the resolver
+// works on a deploy's conflict, the card says what it does, naming the
+// agent's pane, cleaned.
+func TestTheTaskCardSaysWhatTheResolverDoesForItsPRsDeploy(t *testing.T) {
+	h := testStaged(t, 200, 40)
+	h.src.change(func(d *FactoryData) {
+		stagedDeploys(d)
+		for i, r := range d.Rows {
+			if r.Key == "PR-12320" {
+				pr := *r.PR
+				pr.StagingDeploys[0].Resolver = "try 1: the agent resolves 1 conflicted path in slot review1: pane \x1b[31mw3:p1"
+				d.Rows[i].PR = &pr
+			}
+		}
+	})
+	h.press("ctrl+r")
+	h.open("PR-12320")
+	mustContain(t, h.view(), "resolver try 1: the agent resolves 1 conflicted path in slot review1: pane w3:p1")
+}

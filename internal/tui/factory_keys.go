@@ -266,20 +266,23 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		return m.ask(f, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
 			return act.Fix(ctx, pr.Ref)
 		})
-	case k == "P" && m.bar.raiseHeld(r.ID, "P"): // its plan answered away from the row: its question now
-		return nil
 	case k == "P": // the daemon's plan first (a dry run changes nothing); its question puts the merge behind y
-		if why := actionRefusal(actMergeParent, m.prActRow(r, true)); why != "" {
+		why := actionRefusal(actMergeParent, m.prActRow(r, true))
+		if cmd, held := m.raiseHeldPlan(r.ID, "P", why); held { // its plan answered away from the row
+			return cmd
+		}
+		if why != "" {
 			return m.note(why)
 		}
 		if m.act == nil {
 			return m.note(noActions)
 		}
+		view := m.view
 		return m.bar.start("Plan the merge of the parent of "+key, func(ctx context.Context) (ActionResult, error) {
 			res, err := act.MergeParent(ctx, pr.Ref, true)
 			if err == nil && res.Ask != "" {
-				res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Merge the parent of " + key,
-					plan: &planOf{row: r.ID, key: "P", name: key, ref: pr.Ref},
+				res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Merge the parent of " + key, wrap: true, // "with no conflict" shows before y
+					plan: &planOf{row: r.ID, view: view, key: "P", name: key, ref: pr.Ref},
 					run:  func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, false) }}
 			}
 			return res, err
