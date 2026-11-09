@@ -224,8 +224,11 @@ type stageRole struct {
 	nudged  bool
 	// relaunch: it runs again as its fallback after a Codex refusal (a
 	// launch, then its prompt); covered: its fallback is a role of the stage
-	// (coveredIn), so it leaves the run instead.
-	relaunch, covered bool
+	// (coveredIn), so it leaves the run instead. refused: it ran on Codex in
+	// the attempt, no run of it was verified and its fallback has had no
+	// prompt yet, so what it left in the task's directory is a refused run's,
+	// set aside on each pass (setAsideRefused) until its fallback launches.
+	relaunch, covered, refused bool
 	// ok: its end fact held at its run's end; failed: it did not after the
 	// nudge (the file), and the task waits on you; letGo: its last run held
 	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
@@ -491,6 +494,19 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 	if err != nil {
 		return nil, nil, err
 	}
+	entries, err := e.reg.LedgerOf(ctx, t.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	verified := func(name string) bool {
+		return slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == name && rr.Outcome == "verified" })
+	}
+	// ranHere: a prompt went, or may have gone, to name in the attempt.
+	ranHere := func(name string) bool {
+		return slices.ContainsFunc(entries, func(en registry.LedgerEntry) bool {
+			return en.AttemptID == a.ID && en.Role == name && en.Delivered != registry.DeliveredNo
+		})
+	}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
 		if !ok {
@@ -504,16 +520,12 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			// A run of it the runtime verified did its work before the
 			// refusal: its files stay for the judge, as on the pass that
 			// took the refusal (onAgentEvent relaunches no role that is ok).
-			if !slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == role.Name && rr.Outcome == "verified" }) {
-				run.left = append(run.left, leaving{role, runAs})
+			if !verified(role.Name) {
+				run.left = append(run.left, leaving{role, runAs, ranHere(role.Name)})
 			}
 			continue
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
-	}
-	entries, err := e.reg.LedgerOf(ctx, t.ID)
-	if err != nil {
-		return nil, nil, err
 	}
 	var evs []runtime.Event
 	for _, r := range run.roles {
@@ -536,8 +548,12 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			}
 			last = en.RunID
 		}
-		r.ok = slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == r.runAs.Name && rr.Outcome == "verified" })
+		// A run of the role itself the runtime verified before a refusal did
+		// its work, as a run of its fallback does: the live pass relaunches
+		// no role that is ok (onAgentEvent).
+		r.ok = verified(r.runAs.Name) || verified(r.role.Name)
 		r.relaunch = !r.prompted && r.runAs.Name != r.role.Name && a.State != registry.AttemptLaunching
+		r.refused = !r.ok && !r.prompted && r.runAs.Name != r.role.Name && ranHere(r.role.Name)
 		if r.ok || last == "" {
 			continue
 		}
@@ -615,24 +631,38 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 	return nil, nil
 }
 
-// leaving is a role that leaves its stage (coveredIn), and the fallback it
-// runs as there, which covers it.
-type leaving struct{ role, runAs config.Role }
+// leaving is a role that leaves its stage (coveredIn), the fallback it runs
+// as there, which covers it, and whether it ran on Codex in the attempt
+// (stageRole.refused): only such a role's files are a refused run's, to set
+// aside; a role that never ran there left none (a file of an earlier attempt
+// is not its refused run's).
+type leaving struct {
+	role, runAs config.Role
+	ran         bool
+}
 
-// leaveStage has role, which the stage's run of its fallback runAs covers
-// (coveredIn), leave stage st of task t, once a pass confirmed the quit of
-// the task's Codex sessions (agentsRun.left): what a refused run of it left in
-// the task's directory (its findings and its questions file, perhaps
-// partial) is set aside as <name>.refused (setAsideAs), out of every glob of
-// the agents' files, so the judge never reads it as a second reading; an
-// event says so, once for the role and the stage (a restart's rebuild
-// leaves it again, finding nothing to set aside and the event written). A
-// file that cannot be set aside is a fail event and a warning: the judge
-// may read it, which costs a check of its claims against the code, never
-// the task.
-func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role) {
+// leaveStage has l.role, which the stage's run of its fallback l.runAs
+// covers (coveredIn), leave stage st of task t, once a pass confirmed the
+// quit of the task's Codex sessions (agentsRun.left). What a refused run of
+// it left in the task's directory (its findings and its questions file,
+// perhaps partial) was set aside as <name>.refused at the refusal
+// (setAsideRefused), out of every glob of the agents' files, so neither the
+// judge nor the liaison reads it as a second reading; what the session wrote
+// before its quit is set aside now too, for a role that ran on Codex in the
+// attempt (l.ran: a role that did not left no file of this attempt). An
+// event says the role left, once for the role and the stage (a restart's
+// rebuild leaves it again, finding nothing to set aside and the event
+// written), naming what it set aside. A file that cannot be set aside is a
+// fail event and a warning: the judge may read it, which costs a check of
+// its claims against the code, never the task.
+func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, l leaving) {
+	role, runAs := l.role, l.runAs
 	lead := role.Name + " left the " + st.Name + " stage"
-	moved, err := setAsideAs(e.d.Layout.FactoryTaskDir(t.ID), refusedSuffix, findingsFile(role.Name), roleQuestionsFile(role.Name))
+	var moved []string
+	var err error
+	if l.ran {
+		moved, err = setAsideAs(e.d.Layout.FactoryTaskDir(t.ID), refusedSuffix, findingsFile(role.Name), roleQuestionsFile(role.Name))
+	}
 	if err != nil {
 		e.log.Warn("set aside the files of a role that left its stage", "task", t.ID, "role", role.Name, "err", err)
 		e.event(ctx, t.ID, "stage", registry.PhaseFail, lead+": its files were not set aside: "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200))
@@ -761,6 +791,7 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 		run.quitCodex = true
 		for _, x := range run.roles {
 			if x.runAs.AgentKind() == config.KindCodex && !x.ok {
+				x.refused = x.refused || x.prompted // it ran on Codex in the attempt
 				x.relaunch, x.prompted, x.next, x.nudged, x.failed = true, false, "", false, ""
 			}
 		}
@@ -1107,18 +1138,35 @@ func letGoWait(r *stageRole, p *endProblem, branch string) string {
 // promptRoles sends each role of run what it is due: the quit of the task's
 // Codex sessions after a refusal (tryQuit) and the launch of a fallback
 // first, then a role's first prompt, its nudge, the prompt to go on after a
-// pause, or your answers (which resume the stage's suspension). A role the
+// pause, or your answers (which resume the stage's suspension). What a
+// refused run left is set aside at once, and again on each pass until its
+// fallback launches or it leaves the stage (setAsideRefused), so neither the
+// judge, the gate nor the liaison reads it while the quit waits. A role the
 // stage's run of its fallback covers leaves the run, which an event says;
-// any other fallback launches once the quit went through, after what the
-// refused run left is set aside (setAsideRefused), so a refused session
-// still alive cannot write the fallback's files. A role whose questions
-// wait for your answers gets nothing. held is the first wait (a hold, a
-// pause, you in a pane, a delivery of unknown fate, the quit: quitHeld),
-// which costs the task nothing; err a needsYou, or a failure of the task.
+// any other fallback launches once the quit went through, so a refused
+// session still alive cannot write the fallback's files. A role whose
+// questions wait for your answers gets nothing. held is the first wait (a
+// hold, a pause, you in a pane, a delivery of unknown fate, the quit:
+// quitHeld), which costs the task nothing; err a needsYou, or a failure of
+// the task.
 func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
 	dir string) (held, err error) {
 	if run.quitCodex {
 		e.tryQuit(ctx, t, run)
+	}
+	for _, r := range run.roles {
+		if r.refused && !r.ok {
+			if serr := e.setAsideRefused(ctx, t, st, r.role); serr != nil {
+				return nil, serr
+			}
+		}
+	}
+	for _, l := range run.left {
+		if l.ran {
+			if serr := e.setAsideRefused(ctx, t, st, l.role); serr != nil {
+				return nil, serr
+			}
+		}
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
@@ -1130,7 +1178,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			return
 		}
 		for _, l := range run.left {
-			e.leaveStage(ctx, t, st, l.role, l.runAs)
+			e.leaveStage(ctx, t, st, l)
 		}
 		run.left = nil
 	}()
@@ -1156,15 +1204,12 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			}
 			if coveredIn(st, r.role, runAs) {
 				r.covered = true
-				run.left = append(run.left, leaving{r.role, runAs})
+				run.left = append(run.left, leaving{r.role, runAs, r.refused})
 				continue
 			}
 			if run.quitCodex {
 				quitFor = append(quitFor, runAs.Name)
 				continue
-			}
-			if serr := e.setAsideRefused(ctx, t, st, r.role, runAs); serr != nil {
-				return nil, serr
 			}
 			runAs = asStageRuns(st, runAs)
 			if lerr := e.launch(ctx, t, a, c, []config.Role{runAs}); lerr != nil {
@@ -1174,7 +1219,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				}
 				return nil, lerr
 			}
-			r.runAs, r.relaunch = runAs, false
+			r.runAs, r.relaunch, r.refused = runAs, false, false // the fallback's files are its own from here on
 		}
 		text, next := "", r.next
 		switch {
@@ -1225,7 +1270,11 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		if len(quitFor) > 0 {
 			waiting = strings.Join(quitFor, " and ")
 		}
-		w := e.quitHeld(t, run, waiting)
+		// The quit is what holds the stage when a fallback waits to launch
+		// for it, or when the leave is all that is left: only then may it go
+		// to you.
+		holds := len(quitFor) > 0 || !slices.ContainsFunc(run.roles, func(r *stageRole) bool { return !r.ok && !r.covered })
+		w := e.quitHeld(t, run, waiting, holds)
 		if !errors.Is(w, ErrHeld) {
 			return nil, w // needs you
 		}
@@ -1238,51 +1287,54 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 	return held, nil
 }
 
-// A failed quit of a task's Codex sessions that holds its stage (a
-// fallback's launch, or a role's leave, waits for it) is a wait on the
-// task's agent (quitHeld); after quitTriesLimit failed tries, or
-// quitTriesSpan since the first, the task waits on you.
-const (
-	quitTriesLimit = 3
-	quitTriesSpan  = 15 * time.Minute
-)
-
 // quitTries are the tries of a quit of a task's Codex sessions that failed
-// in one run of its stage (agentsRun.quit): how many, when the first was,
-// when the next is due (a poll after the last), the last one's error, and
-// the words its fail event said last.
+// in one run of its stage (agentsRun.quit): how many failed, and of those
+// for a cause of their own how many and when the first was (n, first); when
+// the first failed because you are in a pane of the task or typed in one
+// lately (runtime.ErrOperatorInPane, inPane), which counts no try; when the
+// next is due (a poll after the last), the last one's error, and the words
+// its fail event said last.
 type quitTries struct {
-	n           int
-	first, next time.Time
-	err         error
-	said        string
+	failed, n           int
+	first, inPane, next time.Time
+	err                 error
+	said                string
 }
 
 // tryQuit tries the quit of task t's Codex sessions a refusal left
 // (run.quitCodex), at most once a poll, so the ticks between the polls do
 // not use up its tries: one that goes through ends the quit (an ok event
-// says so after tries that failed); one that fails counts, and its fail
-// event is written once for each cause (its words).
+// says so after tries that failed); one that fails counts (quitTries), and
+// its fail event is written once for each cause, its numbers aside
+// (sameWords).
 func (e *Engine) tryQuit(ctx context.Context, t registry.Task, run *agentsRun) {
 	now := e.now()
 	q := &run.quit
-	if q.n > 0 && now.Before(q.next) {
+	if q.failed > 0 && now.Before(q.next) {
 		return
 	}
 	err := e.d.Runtime.QuitCodex(ctx, t)
 	if err == nil {
-		if q.n > 0 {
-			e.event(ctx, t.ID, "codex_never", registry.PhaseOK, "quit the task's Codex sessions after "+textx.Count(q.n, "failed try", "failed tries"))
+		if q.failed > 0 {
+			e.event(ctx, t.ID, "codex_never", registry.PhaseOK, "quit the task's Codex sessions after "+textx.Count(q.failed, "failed try", "failed tries"))
 		}
 		run.quitCodex, run.quit = false, quitTries{}
 		return
 	}
-	if q.n == 0 {
-		q.first = now
+	q.failed++
+	switch {
+	case errors.Is(err, runtime.ErrOperatorInPane):
+		if q.inPane.IsZero() {
+			q.inPane = now
+		}
+	default:
+		if q.n == 0 {
+			q.first = now
+		}
+		q.n++
 	}
-	q.n++
 	q.next, q.err = now.Add(e.poll()), err
-	if why := quitWhy(err); why != q.said {
+	if why := quitWhy(err); !sameWords(why, q.said) {
 		q.said = why
 		e.event(ctx, t.ID, "codex_never", registry.PhaseFail, "quit the task's Codex sessions: "+why)
 	}
@@ -1299,32 +1351,51 @@ func quitWhy(err error) string {
 // quitHeld is what holds task t's stage while the quit of its Codex sessions
 // has not gone through (run.quitCodex) and waiting waits for it (the
 // fallbacks to launch, or the stage, whose covered roles leave it): a
-// heldError on the task's agent, in the words of the factory's other waits
-// (you in a pane: once you leave it); after quitTriesLimit failed tries, or
-// quitTriesSpan since the first, a needsYou that says what to do.
-func (e *Engine) quitHeld(t registry.Task, run *agentsRun, waiting string) error {
+// heldError on the task's agent, in the words of the factory's other waits,
+// or a needsYou that says what to do, only when the quit is what holds the
+// stage (holds) and the factory's herdr hold, which goes to you itself, is
+// not in force:
+//   - you in a pane of the task, or your typing in one within
+//     human_cooldown (runtime.ErrOperatorInPane: the runtime cannot tell the
+//     two apart, and a snapshot herdr does not give reads the same) counts
+//     no try: the wait names when the cooldown ends, counted from the first
+//     such failure, and only a quit that still fails a poll after that goes
+//     to you;
+//   - any other cause goes to you at the stage failures' pace, after
+//     stageFailLimit failed tries or stageFailSpan since the first.
+func (e *Engine) quitHeld(t registry.Task, run *agentsRun, waiting string, holds bool) error {
 	q := run.quit
 	why := quitWhy(q.err)
-	if span := e.now().Sub(q.first); q.n >= quitTriesLimit || span >= quitTriesSpan {
+	now := e.now()
+	page := holds && e.holds[HoldHerdr] == nil
+	if errors.Is(q.err, runtime.ErrOperatorInPane) {
+		cool := e.cfg.Factory.HumanCooldown.Duration
+		until := q.inPane.Add(cool)
+		if page && !now.Before(until.Add(e.poll())) {
+			return needsYou{"the factory still cannot quit " + TaskKey(t) + "'s Codex sessions " + textx.DurationWords(now.Sub(q.inPane)) +
+				" after its first try, past human_cooldown (" + why + "), and " + waiting + " waits for that: leave the task's panes, or close " +
+				"its Codex panes in herdr (a herdr that cannot say where you are reads as you in a pane)" + retryHint(t)}
+		}
+		return heldError{who: waitAgent, what: "you're in a pane of this task, or typed in one within human_cooldown (" + textx.DurationWords(cool) +
+			"): its Codex sessions are quit once that has passed (by " + until.Local().Format("15:04") + "), and " + waiting + " waits for that"}
+	}
+	if span := now.Sub(q.first); page && (q.n >= stageFailLimit || span >= stageFailSpan) {
 		after := textx.Count(q.n, "try", "tries")
-		if q.n < quitTriesLimit {
+		if q.n < stageFailLimit {
 			after = textx.DurationWords(span)
 		}
 		return needsYou{"the factory could not quit " + TaskKey(t) + "'s Codex sessions in " + after + " (" + why + "), and " + waiting +
-			" waits for that: leave the task's panes (a pane you typed in stays yours for human_cooldown) or close its Codex panes in herdr" +
-			retryHint(t)}
+			" waits for that: close the task's Codex panes in herdr" + retryHint(t)}
 	}
-	what := "the task's Codex sessions are not quit yet (" + why + "); " + waiting + " waits for the quit, tried again each poll"
-	if errors.Is(q.err, runtime.ErrOperatorInPane) {
-		what = "you're in a Codex pane of " + TaskKey(t) + "; its Codex sessions are quit once you leave it, and " + waiting + " waits for that"
-	}
-	return heldError{who: waitAgent, what: what}
+	return heldError{who: waitAgent, what: "the task's Codex sessions are not quit yet (" + why + "); " + waiting + " waits for the quit, tried again each poll"}
 }
 
 // refusedFiles are the files of stage st a refused run of role may have
 // left, which its fallback writes again in its place: the role's findings
 // and its questions file, and in a critic stage critic.md (the stage's one
-// file: a built-in critic stage runs one role).
+// file, which the configuration's check keeps to one role). A stage that
+// ends on the report, the PR body or the proof leaves files no set-aside
+// covers (config's refusedFilesStay warns of a Codex role there).
 func refusedFiles(st config.FactoryStage, role string) []string {
 	names := []string{findingsFile(role), roleQuestionsFile(role)}
 	if st.End == config.FactoryEndCritic {
@@ -1334,22 +1405,27 @@ func refusedFiles(st config.FactoryStage, role string) []string {
 }
 
 // setAsideRefused sets aside, as <name>.refused (setAsideAs), what a refused
-// run of role left in stage st of task t (refusedFiles), perhaps partial,
-// before its codex_fallback runAs launches in its place and writes the same
-// files: its end fact then holds only on files it wrote, and neither the
-// judge (findings-*.md) nor the gate (questions-*.json) takes the refused
-// run's text for the fallback's. An event names what it set aside; a call
-// that finds nothing (a restart's, or a launch held before) writes none. A
-// file that cannot be set aside is the pass's error (the stage's failure,
-// which goes to you when it lasts), and the fallback does not launch.
-func (e *Engine) setAsideRefused(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role) error {
+// run of role left in stage st of task t (refusedFiles), perhaps partial: at
+// the refusal, again on each pass while the quit of the task's Codex
+// sessions waits (a refused session still alive may write), and last before
+// its codex_fallback launches in its place and writes the same files (or,
+// for a covered role, before it leaves the stage). Its fallback's end fact
+// then holds only on files it wrote, and neither the judge (findings-*.md),
+// the gate (questions-*.json) nor the liaison takes the refused run's text
+// for its work. It is called only for a role that ran on Codex in the
+// attempt and was not verified (stageRole.refused, leaving.ran), so a
+// verified run's files, or an earlier attempt's, stay. An event names what
+// it set aside; a call that finds nothing writes none. A file that cannot be
+// set aside is the pass's error (the stage's failure, which goes to you when
+// it lasts), and the fallback does not launch.
+func (e *Engine) setAsideRefused(ctx context.Context, t registry.Task, st config.FactoryStage, role config.Role) error {
 	moved, err := setAsideAs(e.d.Layout.FactoryTaskDir(t.ID), refusedSuffix, refusedFiles(st, role.Name)...)
 	if len(moved) > 0 {
 		e.event(ctx, t.ID, "stage", registry.PhaseInfo, role.Name+"'s refused run: set aside "+strings.Join(moved, ", ")+
-			" before its codex_fallback "+runAs.Name+" writes its own")
+			": no reader of the task's files takes them for its work or its codex_fallback's")
 	}
 	if err != nil {
-		return fmt.Errorf("set aside what %s's refused run left before %s takes its place: %w", role.Name, runAs.Name, err)
+		return fmt.Errorf("set aside what %s's refused run left: %w", role.Name, err)
 	}
 	return nil
 }

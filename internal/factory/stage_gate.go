@@ -189,7 +189,7 @@ func (e *Engine) askReproduction(ctx context.Context, t registry.Task, dir strin
 	q := reproductionQuestion()
 	if qs, p := readQuestions(dir, questionsFile, time.Time{}); p == nil {
 		if i := slices.IndexFunc(qs, isReproductionQuestion); i >= 0 {
-			q = toQuestion(qs[i], e.reportRole(t, qs[i].RaisedBy))
+			q = toQuestion(qs[i], e.reportRole(ctx, t, qs[i].RaisedBy))
 		}
 	}
 	if err := e.storeBatch(ctx, t, []registry.Question{q}, "the report names no reproduction"); err != nil {
@@ -271,10 +271,10 @@ type questionsOf struct{ name, raisedBy string }
 // questions-<role>.json by name, raised by the role its name gives, but for
 // the QA walker's and a second reader's (asksNoOne): they ask no one, so a
 // file one of them wrote anyway never reaches you.
-func (e *Engine) questionFiles(t registry.Task, dir string) ([]questionsOf, error) {
+func (e *Engine) questionFiles(ctx context.Context, t registry.Task, dir string) ([]questionsOf, error) {
 	var out []questionsOf
 	if _, err := os.Stat(filepath.Join(dir, questionsFile)); err == nil {
-		out = append(out, questionsOf{questionsFile, e.reportRole(t, "")})
+		out = append(out, questionsOf{questionsFile, e.reportRole(ctx, t, "")})
 	}
 	names, err := filepath.Glob(filepath.Join(dir, roleQuestionsFile("*")))
 	if err != nil {
@@ -309,13 +309,60 @@ func (e *Engine) asksNoOne(t registry.Task, role string) bool {
 }
 
 // reportRole is the role that raises the questions of questions.json: the
-// first role of the kind's agents stage that ends on the report, else
-// written (the file's own raised_by), else "judge".
-func (e *Engine) reportRole(t registry.Task, written string) string {
+// first role of the kind's agents stage that ends on the report, named as it
+// ran the report (reportRan), else written (the file's own raised_by), else
+// "judge".
+func (e *Engine) reportRole(ctx context.Context, t registry.Task, written string) string {
 	if roles := e.reportRoles(t); len(roles) > 0 {
-		return roles[0]
+		return e.reportRan(ctx, t, roles[0])
 	}
 	return cmp.Or(written, "judge")
+}
+
+// reportRan is role, the first of task t's report stage, as it ran the
+// report: its codex_fallback when a run of the fallback in that stage is one
+// the runtime verified and no run of role itself is (a Codex judge refused,
+// or one on a task Codex never worked on by then), else role. So the
+// questions it raises name the role whose run ended on the report, as the
+// role runs keep it, which stats tell apart as the judge's. A read that
+// fails is logged, and the name is role's.
+func (e *Engine) reportRan(ctx context.Context, t registry.Task, role string) string {
+	fb := e.cfg.Factory.CodexFallback[role]
+	if fb == "" || fb == role || !t.CodexNever {
+		return role
+	}
+	var stage string
+	for _, st := range e.cfg.Factory.Kinds[t.Kind].Stages {
+		if st.Type == config.FactoryStageAgents && st.End == config.FactoryEndReport {
+			stage = st.Name
+			break
+		}
+	}
+	as, err := e.reg.Attempts(ctx, t.ID)
+	if err != nil {
+		e.log.Warn("read the attempts of a task's report stage", "task", t.ID, "err", err)
+		return role
+	}
+	ran := map[string]bool{}
+	for _, a := range as {
+		if a.Stage != stage {
+			continue
+		}
+		rrs, err := e.reg.RoleRuns(ctx, a.ID)
+		if err != nil {
+			e.log.Warn("read the role runs of a task's report stage", "task", t.ID, "err", err)
+			return role
+		}
+		for _, rr := range rrs {
+			if rr.Outcome == "verified" {
+				ran[rr.Role] = true
+			}
+		}
+	}
+	if ran[fb] && !ran[role] {
+		return fb
+	}
+	return role
 }
 
 // reportRoles are the roles of the first agents stage of task t's kind that
@@ -377,7 +424,7 @@ func askedStates(have []registry.Question) map[string]string {
 // may still write it). asked reports whether a revision was stored.
 func (e *Engine) askQuestions(ctx context.Context, t registry.Task, strict bool) (asked bool, err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	files, err := e.questionFiles(t, dir)
+	files, err := e.questionFiles(ctx, t, dir)
 	if err != nil || len(files) == 0 {
 		return false, err
 	}

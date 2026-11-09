@@ -1147,7 +1147,7 @@ func TestACleanWalkPassesQAAndStopsEverything(t *testing.T) {
 	if qs, err := r.reg.Questions(r.ctx, task.ID); err != nil || len(qs) != 0 {
 		t.Fatalf("questions %+v (%v), want none asked", qs, err)
 	}
-	files, err := r.e.questionFiles(got, r.layout.FactoryTaskDir(task.ID))
+	files, err := r.e.questionFiles(r.ctx, got, r.layout.FactoryTaskDir(task.ID))
 	if err != nil || slices.ContainsFunc(files, func(q questionsOf) bool { return q.raisedBy == "fx-qa" }) {
 		t.Fatalf("question files %+v (%v): the walker's would reach you", files, err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/jira"
 )
 
@@ -1329,5 +1330,46 @@ func TestAnAskNamesAGitHubLogin(t *testing.T) {
 	}
 	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWho != "you" {
 		t.Fatalf("task %s waits %q: %q, want still needs_you", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+}
+
+// A Codex judge that ran the report as its Claude fallback (a task Codex
+// never works on) raises questions.json's questions under the name it ran
+// by, the name its run that ended on the report has: stats find it as the
+// judge, so a question it alone raised counts for the investigator whose
+// findings it cites, never for the judge.
+func TestAJudgeThatRanAsItsFallbackRaisesItsQuestionsUnderThatName(t *testing.T) {
+	h := newHarness(t)
+	i := slices.IndexFunc(h.cfg.Factory.Roles, func(r config.Role) bool { return r.Name == "fx-judge" })
+	claude := h.cfg.Factory.Roles[i]
+	claude.Name = "fx-judge-claude"
+	h.cfg.Factory.Roles[i].Kind = config.KindCodex
+	h.cfg.Factory.Roles = append(h.cfg.Factory.Roles, claude)
+	h.cfg.Factory.CodexFallback["fx-judge"] = "fx-judge-claude"
+	q := offQuestion
+	q.Evidence = "findings-fx-cause.md: the guard"
+	task := h.gateTask("PR-12347", "bug", q)
+	if err := h.reg.TransitionTask(h.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) { u.Set("codex_never", true) }); err != nil {
+		t.Fatal(err)
+	}
+	a, err := h.reg.BeginAttempt(h.ctx, task.ID, "judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reg.RecordRoleRun(h.ctx, registry.RoleRun{AttemptID: a.ID, Role: "fx-judge-claude", EndFact: config.FactoryEndReport,
+		Outcome: "verified"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	qs, err := h.reg.Questions(h.ctx, task.ID)
+	if err != nil || len(qs) != 1 || qs[0].RaisedBy != "fx-judge-claude" {
+		t.Fatalf("questions %+v (%v), want the judge's one raised by fx-judge-claude, as it ran", qs, err)
+	}
+	rep, err := stats.ComputeAt(h.ctx, h.reg, time.Time{}, h.clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Tasks) != 1 || rep.Tasks[0].QuestionsFrom["fx-cause"] != 1 || len(rep.Tasks[0].QuestionsFrom) != 1 {
+		t.Fatalf("stats %+v, want the question counted for fx-cause, whose findings the judge cites", rep.Tasks)
 	}
 }

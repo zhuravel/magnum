@@ -747,6 +747,48 @@ kind = "claude"
 	}
 }
 
+// A critic stage names exactly one role: its one critic.md has no role in
+// its name, so a refused critic's file could only be set aside with another
+// critic's, and a second critic's end would hold on the first one's file.
+func TestACriticStageNamesExactlyOneRole(t *testing.T) {
+	cfg := validFactoryConfig()
+	editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage {
+		s[findStage(s, "critic")].Roles = []string{"fx-critic", "fx-critic-claude"}
+		return s
+	})
+	wantError(t, cfg.Validate(), `stage "critic"`, "a critic stage names exactly one role", "got 2")
+}
+
+// A Codex role with a codex_fallback outside its stage, in a stage that ends
+// on the report, the PR body or the proof, is a warning: after a refusal its
+// fallback runs on what the refused run left there (the report, the PR body,
+// the proof and the commits on the task's branch), which the factory sets
+// aside only for a findings or a critic stage.
+func TestACodexRoleWhoseRefusedFilesStayIsAWarning(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[factory]
+codex_fallback = { fx-judge = "fx-critic-claude" }
+
+[[factory.role]]
+name = "fx-judge"
+kind = "codex"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := cfg.Warnings()
+	for _, stage := range []string{"judge", "pr_body"} {
+		if !slices.ContainsFunc(w, func(s string) bool {
+			return strings.HasPrefix(s, "factory role fx-judge runs on Codex in the bug kind's "+stage+" stage") && strings.Contains(s, "not set aside")
+		}) {
+			t.Errorf("warnings %q, want one for fx-judge in the bug kind's %s stage", w, stage)
+		}
+	}
+	if slices.ContainsFunc(mustLoadDefaults(t).Warnings(), func(s string) bool { return strings.Contains(s, "not set aside") }) {
+		t.Error("the defaults warn of a refused run's files left, want none: no built-in Codex role runs in such a stage")
+	}
+}
+
 // A user with no Codex, or who wants Claude on a role the defaults run on
 // Codex, moves the role to Claude with a [[factory.role]] that sets its kind.
 // Its codex_fallback entry then has no use: that is a warning, not an error

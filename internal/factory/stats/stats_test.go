@@ -307,6 +307,30 @@ func TestAnInvestigatorsOwnQuestionCountsForItWhateverTheJudgeCites(t *testing.T
 	}
 }
 
+// A task whose registry has no run that ended on the report (an older
+// task, or a judge whose run never settled) names no judge: the evidence
+// decides for its every question, as before the judge was told apart.
+func TestATaskWithoutAReportRunLetsTheEvidenceDecide(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	a := createTask(t, r, "PR-12393")
+	if err := r.ReplaceQuestions(ctx, a.ID, 1, []registry.Question{
+		{Text: "Can a merchant turn it off?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "findings-fx-points-codex.md: Point 3"},
+		{Text: "When does it go out?", Recommended: -1, RaisedBy: "fx-points", Evidence: "app/models/credit.rb:12"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := map[string]int{"fx-points": 1, "fx-points-codex": 1}
+	if got := only(t, rep, "PR-12393"); !maps.Equal(got.QuestionsFrom, from) {
+		t.Fatalf("questions from %v, want %v", got.QuestionsFrom, from)
+	}
+}
+
 // A step-starting message is a typed message the classifier calls a step
 // start, or the stored class does (the stored one wins), or a retry: the
 // operator starting a step by hand. The words of a start are classified like

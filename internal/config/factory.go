@@ -953,6 +953,9 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 			bad("needs roles")
 		case st.Type == FactoryStageQA && len(st.Roles) > 1:
 			bad("a qa stage names exactly one role (one walker drives the one browser tab and writes the one verdict), got %d", len(st.Roles))
+		case st.End == FactoryEndCritic && len(st.Roles) > 1:
+			bad("a critic stage names exactly one role (its one critic.md names no role: a refused critic's file could only be set aside "+
+				"with another's, and a second critic's end would hold on the first one's file), got %d", len(st.Roles))
 		}
 		for _, r := range st.Roles {
 			if _, ok := roles[r]; !ok {
@@ -1314,13 +1317,54 @@ func (c *Config) factoryStageWith(role, other string) (kind, stage string, ok bo
 	return "", "", false
 }
 
+// refusedFilesStay warns of each Codex role with a codex_fallback outside
+// its stage in an agents stage that ends on the report, the PR body or the
+// proof: after a refusal the factory sets aside a refused run's findings,
+// questions and critic.md before its fallback launches, but not what such a
+// stage leaves (report.md, acceptance.json and questions.json, which the
+// judge's amend edits in place; pr-body.md; proof.json and the commits on the
+// task's branch, which no rename undoes), so the fallback, and you, may take
+// the refused run's work for its own. No built-in Codex role runs there.
+func (c *Config) refusedFilesStay() []string {
+	var out []string
+	for _, kind := range slices.Sorted(maps.Keys(c.Factory.Kinds)) {
+		for _, st := range c.Factory.Kinds[kind].Stages {
+			var what string
+			switch {
+			case st.Type != FactoryStageAgents:
+				continue
+			case st.End == FactoryEndReport:
+				what = "report.md, acceptance.json and questions.json"
+			case st.End == FactoryEndPRBody:
+				what = "pr-body.md"
+			case st.End == FactoryEndProof:
+				what = "proof.json and its commits on the task's branch"
+			default:
+				continue
+			}
+			for _, name := range st.Roles {
+				r, ok := c.FactoryRole(name)
+				fb := c.Factory.CodexFallback[name]
+				if !ok || r.AgentKind() != KindCodex || fb == "" || slices.Contains(st.Roles, fb) {
+					continue
+				}
+				out = append(out, fmt.Sprintf("factory role %s runs on Codex in the %s kind's %s stage, which ends on %s: after a refusal its "+
+					"codex_fallback %s runs on what the refused run left there (%s), which the factory has not set aside", name, kind,
+					st.Name, st.End, fb, what))
+			}
+		}
+	}
+	return out
+}
+
 // factoryWarnings lists what is valid but probably not what you meant: a
 // Codex factory role with no fallback (after a Codex refusal its task waits
-// for you), a codex_fallback entry for a role that is not on Codex (the
-// entry hands it no work, but one whose fallback runs beside it in a stage
-// still makes it that stage's second reader, which asks no one itself),
-// and, once a repository is configured, a later_without role no [[role]]
-// has.
+// for you), one whose fallback runs after a refusal on files the factory
+// does not set aside (refusedFilesStay), a codex_fallback entry for a role
+// that is not on Codex (the entry hands it no work, but one whose fallback
+// runs beside it in a stage still makes it that stage's second reader,
+// which asks no one itself), and, once a repository is configured, a
+// later_without role no [[role]] has.
 func (c *Config) factoryWarnings() []string {
 	var out []string
 	for _, r := range c.Factory.Roles {
@@ -1328,6 +1372,7 @@ func (c *Config) factoryWarnings() []string {
 			out = append(out, fmt.Sprintf("factory role %s runs on Codex and [factory] codex_fallback names no Claude role for it: after a Codex refusal its task waits for you", r.Name))
 		}
 	}
+	out = append(out, c.refusedFilesStay()...)
 	for _, key := range slices.Sorted(maps.Keys(c.Factory.CodexFallback)) {
 		r, ok := c.FactoryRole(key)
 		if !ok || r.AgentKind() == KindCodex {

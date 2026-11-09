@@ -588,8 +588,11 @@ func relayRoles(ctx context.Context, reg *registry.Registry, id int64) (map[stri
 // the judge alone raised, never for another role's: fx-points' question that
 // the judge asks too, citing the twin's findings, is fx-points'. A question
 // of one source counts in from for that source; one of several counts in
-// shared for the sources sorted and joined with "+". The keys are role names
-// only. from and shared are nil when empty.
+// shared for the sources sorted and joined with "+". A task with no relay
+// (no run of it ended on the report: an older task, or a judge whose run
+// never settled) has no judge to tell apart, so the evidence decides for
+// its every question, else raised_by. The keys are role names only. from
+// and shared are nil when empty.
 func questionSources(qs []registry.Question, relays map[string]bool) (asked int, from, shared map[string]int) {
 	seen := map[string]bool{}
 	count := func(m *map[string]int, key string) {
@@ -612,7 +615,7 @@ func questionSources(qs []registry.Question, relays map[string]bool) (asked int,
 		}
 		roles := map[string]bool{}
 		for _, r := range raisers {
-			if !relays[r] {
+			if len(relays) > 0 && !relays[r] {
 				roles[r] = true
 			}
 		}

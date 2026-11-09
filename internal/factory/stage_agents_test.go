@@ -1287,9 +1287,9 @@ func TestACodexRefusalRunsTheRoleAsItsClaudeFallback(t *testing.T) {
 // leaves the stage with no Claude copy of it launched, fx-points goes on with
 // its one prompt, and its findings alone end the stage. What the refused run
 // wrote (a findings file, maybe partial, and a questions file) is set aside
-// as <name>.refused, out of the judge's findings-*.md, and one event says
-// so, also when a restart came between the refusal and the stage's next
-// pass, and only once.
+// as <name>.refused, out of the judge's findings-*.md, at once, and an event
+// names it; one more says the twin left the stage. Each is written once,
+// also when a restart came between the refusal and the stage's next pass.
 func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restart %v", restart), func(t *testing.T) {
@@ -1301,8 +1301,7 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 			}
 			h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export")
 			h.taskFile(task.ID, "questions-fx-points-codex.json", "[")
-			h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
-				Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
+			h.codexRefused(task, "fx-points-codex")
 			if restart {
 				h.restart()
 				h.startStage(task) // the new engine claims the copy again first
@@ -1319,20 +1318,22 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 			if n, m := len(h.rt.promptsTo("fx-points")), len(h.rt.promptsTo("fx-points-codex")); n != 1 || m != 1 {
 				t.Fatalf("fx-points got %d prompts and its twin %d, want one each: no prompt again", n, m)
 			}
-			dir := h.layout.FactoryTaskDir(task.ID)
-			for _, name := range []string{"findings-fx-points-codex.md", "questions-fx-points-codex.json"} {
-				if fsx.Exists(filepath.Join(dir, name)) || !fsx.Exists(filepath.Join(dir, name+refusedSuffix)) {
-					t.Errorf("%s is still in the task's directory, or not set aside as %s", name, name+refusedSuffix)
-				}
-			}
+			h.wantSetAside(task, "findings-fx-points-codex.md", "questions-fx-points-codex.json")
 			if restart {
 				h.restart()
 				h.startStage(task)
 			}
-			left := slices.DeleteFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool { return !strings.Contains(ev.Text, "left the") })
-			if len(left) != 1 || !strings.Contains(left[0].Text, "fx-points-codex left the investigate stage") ||
-				!strings.Contains(left[0].Text, "fx-points") || !strings.Contains(left[0].Text, "findings-fx-points-codex.md"+refusedSuffix) {
-				t.Errorf("stage events %+v, want one saying the twin left the stage to fx-points and naming what it set aside", left)
+			evs := h.events(task.ID, "stage")
+			left := slices.DeleteFunc(slices.Clone(evs), func(ev registry.Event) bool { return !strings.Contains(ev.Text, "left the") })
+			if len(left) != 1 || !strings.Contains(left[0].Text, "fx-points-codex left the investigate stage") || !strings.Contains(left[0].Text, "fx-points") {
+				t.Errorf("stage events %+v, want one saying the twin left the stage to fx-points", left)
+			}
+			set := slices.DeleteFunc(evs, func(ev registry.Event) bool {
+				return !strings.HasPrefix(ev.Text, "fx-points-codex's refused run: set aside ")
+			})
+			if len(set) != 1 || !strings.Contains(set[0].Text, "findings-fx-points-codex.md"+refusedSuffix) ||
+				!strings.Contains(set[0].Text, "questions-fx-points-codex.json"+refusedSuffix) {
+				t.Errorf("stage events %+v, want one naming what the twin's refused run left, set aside", set)
 			}
 
 			h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
@@ -1345,41 +1346,42 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 	}
 }
 
-// A refused twin's files are set aside only once the task's Codex sessions
-// are confirmed quit: while the quit fails (it is tried again once a poll),
-// the files stay and the stage does not pass, even with fx-points done, so
-// a refused session still alive cannot write a findings file after the
-// rename, and the task says it waits for the quit; once the quit goes
-// through, they are set aside, the wait ends and the stage passes.
-func TestARefusedTwinsFilesWaitForTheCodexQuit(t *testing.T) {
+// A refused twin's files are set aside at once, so neither the judge nor
+// the liaison reads them while the quit of the task's Codex sessions waits;
+// the stage does not pass until a pass confirmed the quit, even with
+// fx-points done, the task says it waits for the quit, and what a refused
+// session still alive writes meanwhile is set aside again. Once the quit
+// goes through, the wait ends and the stage passes.
+func TestARefusedTwinsFilesAreSetAsideAtOnceAndTheStageWaitsForTheQuit(t *testing.T) {
 	h := newHarness(t)
 	task := h.kindTask("PR-12335", "feature", "investigate")
 	h.startStage(task)
 	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export")
 	h.setQuitErr(errors.New("herdr: no answer"))
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
-		Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
+	h.codexRefused(task, "fx-points-codex")
 	h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
 	h.ended(task, "fx-points")
 	h.tick()
-	dir := h.layout.FactoryTaskDir(task.ID)
-	if !fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md")) {
-		t.Fatal("the twin's findings were set aside while the quit of its session failed")
-	}
+	h.wantSetAside(task, "findings-fx-points-codex.md")
 	if got := h.reload(task.ID); got.Stage != "investigate" || got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "herdr: no answer") ||
 		!strings.Contains(got.WaitsWhat, "investigate stage") {
-		t.Fatalf("task at %q waits %q: %q; want the stage held, waiting on the quit, until the twin's files are set aside",
-			got.Stage, got.WaitsWho, got.WaitsWhat)
+		t.Fatalf("task at %q waits %q: %q; want the stage held, waiting on the quit", got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export, written late")
+	h.clock.Add(time.Minute) // the next try comes a poll after the last
+	h.tick()
+	h.wantSetAside(task, "findings-fx-points-codex.md")
+	if b, err := os.ReadFile(filepath.Join(h.layout.FactoryTaskDir(task.ID), "findings-fx-points-codex.md"+refusedSuffix)); err != nil ||
+		!strings.Contains(string(b), "written late") {
+		t.Fatalf("the set-aside file reads %q (%v), want the late write set aside too", b, err)
 	}
 
 	h.setQuitErr(nil)
-	h.clock.Add(time.Minute) // the next try comes a poll after the last
+	h.clock.Add(time.Minute)
 	h.tick()
-	if fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md")) || !fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md"+refusedSuffix)) {
-		t.Fatal("the twin's findings were not set aside once the quit went through")
-	}
 	if got := h.reload(task.ID); got.Stage != "judge" || got.WaitsWho == waitAgent {
-		t.Fatalf("task at %q waits %q: %q; want the investigation passed once the twin's files are set aside, the wait ended",
+		t.Fatalf("task at %q waits %q: %q; want the investigation passed once the quit went through, the wait ended",
 			got.Stage, got.WaitsWho, got.WaitsWhat)
 	}
 }
@@ -1441,15 +1443,15 @@ func TestARefusedRolesFilesAreSetAsideBeforeItsFallbackLaunches(t *testing.T) {
 				t.Fatalf("launches %v, want fx-cause-claude launched after the set-aside", launches)
 			}
 			set := slices.DeleteFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool { return !strings.Contains(ev.Text, refusedSuffix) })
-			if len(set) != 1 || !strings.Contains(set[0].Text, "fx-cause-claude") || !strings.Contains(set[0].Text, "findings-fx-cause.md"+refusedSuffix) ||
-				!strings.Contains(set[0].Text, "questions-fx-cause.json"+refusedSuffix) {
-				t.Errorf("stage events %+v, want one naming what fx-cause's refused run left, set aside for fx-cause-claude", set)
+			if len(set) != 1 || !strings.HasPrefix(set[0].Text, "fx-cause's refused run: set aside ") ||
+				!strings.Contains(set[0].Text, "findings-fx-cause.md"+refusedSuffix) || !strings.Contains(set[0].Text, "questions-fx-cause.json"+refusedSuffix) {
+				t.Errorf("stage events %+v, want one naming what fx-cause's refused run left, set aside", set)
 			}
 			dir := h.layout.FactoryTaskDir(task.ID)
 			if fs, _ := filepath.Glob(filepath.Join(dir, "findings-*.md")); len(fs) != 0 {
 				t.Errorf("the judge's findings-*.md holds %v, want nothing of the refused run", fs)
 			}
-			if qs, err := h.e.questionFiles(h.reload(task.ID), dir); err != nil || len(qs) != 0 {
+			if qs, err := h.e.questionFiles(h.ctx, h.reload(task.ID), dir); err != nil || len(qs) != 0 {
 				t.Errorf("the gate's questions files %+v (%v), want none of the refused run", qs, err)
 			}
 
@@ -1521,68 +1523,78 @@ func TestARefusedCriticsFilesAreSetAsideBeforeFxCriticClaudeLaunches(t *testing.
 	}
 }
 
-// A Codex quit that fails holds what waits on it, and the task says so: the
-// refused role's fallback does not launch and nothing is set aside while a
-// refused session may still write, and the task waits on its agent in the
-// factory's words for a pane it may not touch, on the screen too. The quit
-// is tried again once a poll, its fail event written once for one cause.
-// After 3 failed tries the task waits on you, saying what to do; your retry
-// tries the quit again, and once it goes through the fallback launches on a
-// clean slate.
-func TestAFailedCodexQuitIsAWaitThenNeedsYouAfterThreeTries(t *testing.T) {
+// rowWait is the first wait the factory screen shows on task's row.
+func (h *harness) rowWait(task registry.Task) tui.WaitsOn {
+	h.t.Helper()
+	d, err := ScreenData(h.ctx, h.reg, nil, h.clock.Now(), time.Time{}, ScreenOptions{Config: h.cfg, Layout: h.layout})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	i := slices.IndexFunc(d.Rows, func(r tui.FactoryRow) bool { return r.ID == task.ID })
+	if i < 0 || len(d.Rows[i].WaitsOn) == 0 {
+		h.t.Fatalf("the screen's rows %+v, want the task's row with a wait", d.Rows)
+	}
+	return d.Rows[i].WaitsOn[0]
+}
+
+// quitFails are task's codex_never fail events of its quit.
+func (h *harness) quitFails(task registry.Task) []registry.Event {
+	h.t.Helper()
+	return slices.DeleteFunc(h.events(task.ID, "codex_never"), func(ev registry.Event) bool {
+		return ev.Phase != registry.PhaseFail || !strings.Contains(ev.Text, "Codex sessions")
+	})
+}
+
+// A Codex quit that fails because you are in a pane of the task, or typed in
+// one within human_cooldown, waits that cooldown out: the refused run's files
+// are set aside at once, the fallback does not launch, the task waits on its
+// agent in the factory's words for a pane it may not touch, naming the
+// cooldown's end (from the configured human_cooldown), and on the screen
+// too. Its failures count no tries: only a quit still failing a poll after
+// the cooldown has passed since the first failure goes to you, saying what
+// to do; your retry tries the quit again, and once it goes through the
+// fallback launches.
+func TestAQuitThatFailsWhileYouAreInTheTasksPanesWaitsOutTheCooldown(t *testing.T) {
 	h := newHarness(t)
+	h.cfg.Factory.HumanCooldown = config.Duration{Duration: 20 * time.Minute}
 	task := h.kindTask("PR-12340", "bug", "investigate")
 	h.startStage(task)
 	h.taskFile(task.ID, "findings-fx-cause.md", "## Cause\nThe guard")
 	h.setQuitErr(fmt.Errorf("quit fx-cause's Codex session: %w", runtime.ErrOperatorInPane))
 	h.codexRefused(task, "fx-cause")
+	first := h.clock.Now()
 	h.tick()
 
 	got := h.reload(task.ID)
-	if got.State != registry.TaskActive || got.WaitsWho != waitAgent || !strings.HasPrefix(got.WaitsWhat, "you're in a Codex pane of PR-12340") ||
-		!strings.Contains(got.WaitsWhat, "fx-cause-claude") {
-		t.Fatalf("task %s waits %q: %q; want active, waiting on its agent: you in its Codex pane, fx-cause-claude after the quit",
-			got.State, got.WaitsWho, got.WaitsWhat)
+	by := "by " + first.Add(20*time.Minute).Local().Format("15:04")
+	if got.State != registry.TaskActive || got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "a pane of this task") ||
+		strings.Contains(got.WaitsWhat, "Codex pane") || !strings.Contains(got.WaitsWhat, by) || !strings.Contains(got.WaitsWhat, "fx-cause-claude") {
+		t.Fatalf("task %s waits %q: %q; want active, waiting on its agent: a pane of this task, the cooldown's end %s, fx-cause-claude after the quit",
+			got.State, got.WaitsWho, got.WaitsWhat, by)
 	}
 	if n := len(h.rt.launchedRoles()); n != 1 {
 		t.Fatalf("%d launches, want no fallback while the refused session may still write", n)
 	}
-	dir := h.layout.FactoryTaskDir(task.ID)
-	if !fsx.Exists(filepath.Join(dir, "findings-fx-cause.md")) {
-		t.Fatal("the refused run's findings were set aside while its session may still write")
-	}
-	d, err := ScreenData(h.ctx, h.reg, nil, h.clock.Now(), time.Time{}, ScreenOptions{Config: h.cfg, Layout: h.layout})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if i := slices.IndexFunc(d.Rows, func(r tui.FactoryRow) bool { return r.ID == task.ID }); i < 0 || len(d.Rows[i].WaitsOn) == 0 ||
-		d.Rows[i].WaitsOn[0].Who != waitAgent || d.Rows[i].WaitsOn[0].What != got.WaitsWhat {
-		t.Fatalf("the screen's rows %+v, want the task's row waiting on its agent for the quit", d.Rows)
+	h.wantSetAside(task, "findings-fx-cause.md")
+	if w := h.rowWait(task); w.Who != waitAgent || w.What != got.WaitsWhat {
+		t.Fatalf("the screen's wait %+v, want the task's wait on its agent for the quit", w)
 	}
 
-	h.tick() // within the poll: no try
-	if n := len(h.rt.codexQuits()); n != 1 {
-		t.Fatalf("%d QuitCodex calls within a poll, want 1", n)
+	for range 10 { // a try a minute, none counted
+		h.clock.Add(time.Minute)
+		h.tick()
 	}
-	h.clock.Add(time.Minute)
+	h.clock.Set(first.Add(20 * time.Minute))
 	h.tick()
-	if got := h.reload(task.ID); got.State != registry.TaskActive || len(h.rt.codexQuits()) != 2 {
-		t.Fatalf("task %s after %d tries, want still active after 2", got.State, len(h.rt.codexQuits()))
+	if got := h.reload(task.ID); got.State != registry.TaskActive || len(h.rt.codexQuits()) != 12 {
+		t.Fatalf("task %s after %d tries, want still active at the cooldown's end after 12", got.State, len(h.rt.codexQuits()))
 	}
-	quitFails := func() []registry.Event {
-		return slices.DeleteFunc(h.events(task.ID, "codex_never"), func(ev registry.Event) bool {
-			return ev.Phase != registry.PhaseFail || !strings.Contains(ev.Text, "Codex sessions")
-		})
-	}
-	if fails := quitFails(); len(fails) != 1 {
-		t.Errorf("codex_never fail events %+v, want one for the one cause", fails)
-	}
-	h.clock.Add(time.Minute)
+	h.clock.Set(first.Add(20*time.Minute + 45*time.Second))
 	h.tick()
 	got = h.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || got.WaitsWho != waitsYou || !strings.Contains(got.WaitsWhat, "3 tries") ||
+	if got.State != registry.TaskNeedsYou || got.WaitsWho != waitsYou || !strings.Contains(got.WaitsWhat, "human_cooldown") ||
 		!strings.Contains(got.WaitsWhat, "leave") || !strings.Contains(got.WaitsWhat, "magnum factory retry "+strconv.FormatInt(task.ID, 10)) {
-		t.Fatalf("task %s waits %q: %q; want it on you after 3 tries, saying what to do", got.State, got.WaitsWho, got.WaitsWhat)
+		t.Fatalf("task %s waits %q: %q; want it on you a poll past the cooldown, saying what to do", got.State, got.WaitsWho, got.WaitsWhat)
 	}
 
 	h.setQuitErr(nil)
@@ -1593,32 +1605,165 @@ func TestAFailedCodexQuitIsAWaitThenNeedsYouAfterThreeTries(t *testing.T) {
 	if launches := h.rt.launchedRoles(); len(launches) != 2 || !slices.Equal(launches[1], []string{"fx-cause-claude"}) {
 		t.Fatalf("launches %v after the quit went through, want fx-cause-claude", launches)
 	}
-	h.wantSetAside(task, "findings-fx-cause.md")
 	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != "" {
 		t.Fatalf("task %s waits %q: %q; want at work, waiting on no one", got.State, got.WaitsWho, got.WaitsWhat)
 	}
 }
 
-// A Codex quit that keeps failing waits on you after 15 minutes, however
-// few its tries.
-func TestAFailedCodexQuitWaitsOnYouAfterFifteenMinutes(t *testing.T) {
+// A quit that fails for another cause is tried again once a poll, its fail
+// event written once for one cause, whatever numbers its words carry, and
+// goes to you at the stage failures' pace: after 5 failed tries, saying
+// what to do.
+func TestAQuitThatFailsForAnotherCauseGoesToYouAfterFiveTries(t *testing.T) {
 	h := newHarness(t)
 	task := h.kindTask("PR-12341", "bug", "investigate")
+	h.startStage(task)
+	try := 0
+	failing := func() {
+		try++
+		h.setQuitErr(fmt.Errorf("quit fx-cause's Codex session: herdr: pane p%d does not answer", 40+try))
+	}
+	failing()
+	h.codexRefused(task, "fx-cause")
+	h.tick()
+	if got := h.reload(task.ID); got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "not quit yet (") ||
+		!strings.Contains(got.WaitsWhat, "fx-cause-claude") {
+		t.Fatalf("task waits %q: %q, want on its agent: the quit not yet done, with why", got.WaitsWho, got.WaitsWhat)
+	}
+	h.tick() // within the poll: no try
+	if n := len(h.rt.codexQuits()); n != 1 {
+		t.Fatalf("%d QuitCodex calls within a poll, want 1", n)
+	}
+	for range 3 {
+		failing()
+		h.clock.Add(time.Minute)
+		h.tick()
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive || len(h.rt.codexQuits()) != 4 {
+		t.Fatalf("task %s after %d tries, want still active after 4", got.State, len(h.rt.codexQuits()))
+	}
+	if fails := h.quitFails(task); len(fails) != 1 {
+		t.Errorf("codex_never fail events %+v, want one for the one cause, its numbers aside", fails)
+	}
+	failing()
+	h.clock.Add(time.Minute)
+	h.tick()
+	got := h.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "5 tries") || !strings.Contains(got.WaitsWhat, "close") ||
+		!strings.Contains(got.WaitsWhat, "magnum factory retry "+strconv.FormatInt(task.ID, 10)) {
+		t.Fatalf("task %s waits %q, want it on you after 5 tries, saying what to do", got.State, got.WaitsWhat)
+	}
+}
+
+// A quit that fails for another cause goes to you after 5 minutes, however
+// few its tries.
+func TestAQuitThatFailsForAnotherCauseGoesToYouAfterFiveMinutes(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12342", "bug", "investigate")
 	h.startStage(task)
 	h.setQuitErr(errors.New("herdr: no answer"))
 	h.codexRefused(task, "fx-cause")
 	h.tick()
-	if got := h.reload(task.ID); got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "not quit yet (herdr: no answer)") {
-		t.Fatalf("task waits %q: %q, want on its agent: the quit not yet done, with why", got.WaitsWho, got.WaitsWhat)
-	}
-	h.clock.Add(15 * time.Minute)
+	h.clock.Add(5 * time.Minute)
 	h.tick()
 	got := h.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "15 minutes") || !strings.Contains(got.WaitsWhat, "herdr: no answer") {
-		t.Fatalf("task %s waits %q, want it on you after 15 minutes with the cause", got.State, got.WaitsWhat)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "5 minutes") || !strings.Contains(got.WaitsWhat, "herdr: no answer") {
+		t.Fatalf("task %s waits %q, want it on you after 5 minutes with the cause", got.State, got.WaitsWhat)
 	}
 	if n := len(h.rt.codexQuits()); n != 2 {
 		t.Fatalf("%d QuitCodex calls, want 2", n)
+	}
+}
+
+// A failed quit goes to you only when it is what holds the stage: while
+// fx-points still works, the twin's leave waiting for the quit is a wait the
+// screen shows, never a page, however many tries fail; once fx-points is
+// done and only the leave is left, the tries that failed send it to you.
+func TestATwinsFailedQuitStaysAWaitWhileFxPointsWorks(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12343", "feature", "investigate")
+	h.startStage(task)
+	h.setQuitErr(errors.New("herdr: no answer"))
+	h.codexRefused(task, "fx-points-codex")
+	h.tick()
+	for range 7 {
+		h.clock.Add(time.Minute)
+		h.tick()
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, "investigate stage") {
+		t.Fatalf("task %s waits %q: %q after 8 tries with fx-points at work, want active, waiting on the quit", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
+	h.ended(task, "fx-points")
+	h.clock.Add(time.Minute)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "investigate stage") {
+		t.Fatalf("task %s waits %q, want it on you once only the twin's leave waits for the quit", got.State, got.WaitsWhat)
+	}
+}
+
+// While the factory's herdr hold is in force, which goes to you itself, a
+// failed quit never does.
+func TestAFailedQuitNeverGoesToYouUnderTheHerdrHold(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12344", "bug", "investigate")
+	h.startStage(task)
+	h.setQuitErr(errors.New("herdr: no answer"))
+	h.codexRefused(task, "fx-cause")
+	h.e.holds[HoldHerdr] = &Hold{Kind: HoldHerdr, Reason: "the factory session does not answer", Since: h.clock.Now()}
+	for range 8 {
+		h.tick()
+		h.clock.Add(time.Minute)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive || len(h.rt.codexQuits()) < 5 {
+		t.Fatalf("task %s after %d tries under the herdr hold, want still active after 5 or more", got.State, len(h.rt.codexQuits()))
+	}
+}
+
+// A restart's rebuild counts a run the runtime verified of a Codex role
+// itself, as the live pass does: in a stage of two Codex roles, fx-history
+// verified on Codex keeps its findings, gets no fallback and no event of a
+// refused run, whether the restart comes before the pass that took fx-cause's
+// refusal or after it, while fx-cause's own files are set aside once.
+func TestARestartKeepsTheVerifiedFilesOfAnotherCodexRole(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart after the pass %v", after), func(t *testing.T) {
+			h := newHarness(t)
+			i := slices.IndexFunc(h.cfg.Factory.Roles, func(r config.Role) bool { return r.Name == "fx-history" })
+			claude := h.cfg.Factory.Roles[i]
+			claude.Name = "fx-history-claude"
+			h.cfg.Factory.Roles[i].Kind = config.KindCodex
+			h.cfg.Factory.Roles = append(h.cfg.Factory.Roles, claude)
+			h.cfg.Factory.CodexFallback["fx-history"] = "fx-history-claude"
+			task := h.kindTask("PR-12345", "bug", "investigate")
+			h.startStage(task)
+			h.taskFile(task.ID, "findings-fx-history.md", "The guard came with the copy feature in 2024 (abc1234).\n")
+			h.ended(task, "fx-history")
+			h.tick()
+			h.taskFile(task.ID, "findings-fx-cause.md", "## Cause\nThe guard")
+			h.codexRefused(task, "fx-cause")
+			if after {
+				h.tick()
+			}
+			h.restart()
+			h.startStage(task)
+
+			dir := h.layout.FactoryTaskDir(task.ID)
+			if !fsx.Exists(filepath.Join(dir, "findings-fx-history.md")) || fsx.Exists(filepath.Join(dir, "findings-fx-history.md"+refusedSuffix)) {
+				t.Fatal("the verified findings of fx-history were set aside as a refused run's")
+			}
+			h.wantSetAside(task, "findings-fx-cause.md")
+			for _, l := range h.rt.launchedRoles() {
+				if slices.Contains(l, "fx-history-claude") {
+					t.Fatalf("launches %v, want no fallback for the verified fx-history", h.rt.launchedRoles())
+				}
+			}
+			for _, ev := range h.events(task.ID, "stage") {
+				if strings.HasPrefix(ev.Text, "fx-history's refused run") {
+					t.Errorf("stage event %q, want none of a refused fx-history", ev.Text)
+				}
+			}
+		})
 	}
 }
 
