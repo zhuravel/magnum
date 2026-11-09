@@ -325,10 +325,15 @@ func TestTwoRebuttalsAndAnAnswerStopTheThread(t *testing.T) {
 // flagged that thread as a stalemate all the same, and since a stopped
 // thread stays stopped the flag never went. The judge names the stopped
 // threads whose finding it keeps open (stops_open), and the round's stops
-// are those alone: an id it names that is not stopped adds nothing. A
+// are those alone: the id of a thread that is not stopped adds nothing. A
 // result that names none, or not as a list, keeps every stop, as before;
-// an empty list keeps none, in a reply round too. The threads file and the
-// prompt still mark both threads stop.
+// an empty list keeps none, in a reply round too. A list with an entry
+// that is no thread's id in the threads file (a thread's URL, an id the
+// file does not list) decides nothing: every stop stays, with a warning,
+// since filtering on it would drop the threads the judge meant to keep. A
+// round whose judge wrote its result but posted nothing (needs attention)
+// keeps every stop too. The threads file and the prompt still mark both
+// threads stop.
 func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 	own := func(id int64, body string) github.ThreadComment {
 		return github.ThreadComment{ID: id, AuthorLogin: "talkable", AuthorType: "Bot", Body: body, URL: "https://example.test/c", CreatedAt: t0.Add(-time.Hour)}
@@ -341,6 +346,7 @@ func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 		return github.Thread{ID: id, Comments: []github.ThreadComment{own(root, "**[P2] "+id+"**"), author(root + 1), own(root+2, rebuttal),
 			author(root + 3), own(root+4, rebuttal), author(root + 5)}}
 	}
+	answered := github.Thread{ID: "PRRT_B", Comments: []github.ThreadComment{own(301, "**[P3] PRRT_B**"), author(302)}}
 	ids := func(ss []StopThread) []string {
 		out := []string{}
 		for _, s := range ss {
@@ -348,22 +354,28 @@ func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 		}
 		return out
 	}
+	both := []string{"PRRT_A", "PRRT_D"}
 	for _, tc := range []struct {
-		name  string
-		reply bool // a reply round; else a re-review that posts
-		extra map[string]any
-		want  []string
+		name     string
+		reply    bool // a reply round; else a re-review that posts
+		noReview bool // the re-review's judge writes its result but posts nothing
+		extra    map[string]any
+		want     []string
+		warns    bool // the round warns that stops_open decided nothing
 	}{
-		{name: "the judge holds one open", extra: map[string]any{"stops_open": []string{"PRRT_D", "PRRT_X"}}, want: []string{"PRRT_D"}},
+		{name: "the judge holds one open", extra: map[string]any{"stops_open": []string{"PRRT_D", "PRRT_B"}}, want: []string{"PRRT_D"}},
 		{name: "the judge settles both", extra: map[string]any{"stops_open": []string{}}, want: []string{}},
 		{name: "a reply round's judge settles both", reply: true, extra: map[string]any{"stops_open": []string{}}, want: []string{}},
-		{name: "a result without stops_open", want: []string{"PRRT_A", "PRRT_D"}},
-		{name: "a stops_open that is not a list", extra: map[string]any{"stops_open": "x"}, want: []string{"PRRT_A", "PRRT_D"}},
+		{name: "a result without stops_open", want: both},
+		{name: "a stops_open that is not a list", extra: map[string]any{"stops_open": "x"}, want: both},
+		{name: "a stops_open naming a thread by its URL", extra: map[string]any{"stops_open": []string{"https://example.test/c"}}, want: both, warns: true},
+		{name: "a stops_open with an id the file does not list", extra: map[string]any{"stops_open": []string{"PRRT_D", "PRRT_X"}}, want: both, warns: true},
+		{name: "a judge that posted nothing", noReview: true, extra: map[string]any{"stops_open": []string{}}, want: both},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			fa := captureJudge(e)
-			gh := &replyGitHub{fakeGitHub: e.gh, threads: []github.Thread{stopped("PRRT_A", 201), stopped("PRRT_D", 501)}}
+			gh := &replyGitHub{fakeGitHub: e.gh, threads: []github.Thread{stopped("PRRT_A", 201), answered, stopped("PRRT_D", 501)}}
 			e.r.GitHub = gh
 			in, outcome := e.replyInput(), OutcomeReplied
 			if tc.reply {
@@ -378,17 +390,28 @@ func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 			} else {
 				p := e.judgePosts(506, "COMMENTED", "COMMENT")
 				p.extra = tc.extra
-				e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
-				in, outcome = e.input(KindRereview), OutcomePosted
+				outcome = OutcomePosted
+				if tc.noReview {
+					p.gh, outcome = nil, OutcomeNeedsAttention
+				}
+				e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t), p.behavior(t)}
+				in = e.input(KindRereview)
 				in.Round, in.Since = 2, t0.Add(-3*time.Hour)
 				in.Previous = &PreviousReview{ID: 900, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-3 * time.Hour), Login: "talkable[bot]"}
 			}
 			res, err := e.r.RunRound(e.ctx, in)
 			if err != nil || res.Outcome != outcome {
-				t.Fatalf("RunRound = %+v, %v", res, err)
+				t.Fatalf("RunRound = %+v, %v; want %s", res, err, outcome)
 			}
 			if got := ids(res.Stops); !res.ThreadsRead || !slices.Equal(got, tc.want) {
 				t.Fatalf("threads read %v, stops %v; want %v", res.ThreadsRead, got, tc.want)
+			}
+			if res.StopsOpenGiven || res.StopsOpen != nil {
+				t.Fatalf("a round that read the threads carries stops_open %v (given %v) for the engine", res.StopsOpen, res.StopsOpenGiven)
+			}
+			warned := slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "stops_open") })
+			if warned != tc.warns {
+				t.Fatalf("warned %v, want %v: %q", warned, tc.warns, res.Warnings)
 			}
 			b, err := os.ReadFile(filepath.Join(res.ReportDir, ThreadsFile))
 			if err != nil {
@@ -398,7 +421,7 @@ func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 			if err := json.Unmarshal(b, &threads); err != nil {
 				t.Fatal(err)
 			}
-			if len(threads) != 2 || !threads[0].Stop || !threads[1].Stop {
+			if len(threads) != 3 || !threads[0].Stop || threads[1].Stop || !threads[2].Stop {
 				t.Fatalf("threads: %+v", threads)
 			}
 			if jd := fa.data(t); jd.StopThreads != 2 {
@@ -406,5 +429,96 @@ func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
 			}
 			mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "2 threads are marked `stop`", "`stops_open`")
 		})
+	}
+}
+
+// writeStoppedThreads writes the threads file a paused or unverified
+// round's addThreads left on the head: PRRT_A and PRRT_D marked stop,
+// PRRT_B answered.
+func (e *env) writeStoppedThreads() {
+	e.t.Helper()
+	threads := []agents.ReviewThread{{ID: "PRRT_A", Stop: true}, {ID: "PRRT_B"}, {ID: "PRRT_D", Stop: true}}
+	b, err := json.Marshal(threads)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.MkdirAll(e.reportDir(), 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.reportDir(), ThreadsFile), b, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// A round paused on a usage limit flagged its stopped threads before its
+// judge decided them, and the continued turn that finishes the judge's
+// work reads no threads, so the flag stayed though the judge accepted the
+// answer. The continue carries the judge's stops_open to the engine
+// (StopsOpen), checked against the threads file its paused round gave the
+// judge on this head: an entry that is no thread there, a result without
+// the field, a missing file or a turn that posted nothing carry none.
+func TestAContinuedTurnCarriesTheStopsItsJudgeHoldsOpen(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		noFile   bool
+		noReview bool
+		extra    map[string]any
+		want     []string // nil: none given
+		warns    bool
+	}{
+		{name: "the judge holds one open", extra: map[string]any{"stops_open": []string{"PRRT_D", "PRRT_B"}}, want: []string{"PRRT_D", "PRRT_B"}},
+		{name: "the judge settles both", extra: map[string]any{"stops_open": []string{}}, want: []string{}},
+		{name: "a result without stops_open"},
+		{name: "an id the file does not list", extra: map[string]any{"stops_open": []string{"PRRT_X"}}, warns: true},
+		{name: "no threads file on the head", noFile: true, extra: map[string]any{"stops_open": []string{}}},
+		{name: "a judge that posted nothing", noReview: true, extra: map[string]any{"stops_open": []string{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			if !tc.noFile {
+				e.writeStoppedThreads()
+			}
+			p := e.judgePosts(517, "COMMENTED", "COMMENT")
+			p.extra = tc.extra
+			outcome := OutcomePosted
+			if tc.noReview {
+				p.gh, outcome = nil, OutcomeNeedsAttention
+			}
+			e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t), p.behavior(t)}
+			in := e.input(KindContinue)
+			in.ContinueRunID = "r-20261003T100000-7"
+			res, err := e.r.RunRound(e.ctx, in)
+			if err != nil || res.Outcome != outcome {
+				t.Fatalf("RunRound = %+v, %v; want %s", res, err, outcome)
+			}
+			if res.ThreadsRead || res.Stops != nil {
+				t.Fatalf("a continue read the threads: %v %+v", res.ThreadsRead, res.Stops)
+			}
+			if res.StopsOpenGiven != (tc.want != nil) || !slices.Equal(res.StopsOpen, tc.want) {
+				t.Fatalf("stops open %#v given %v, want %#v", res.StopsOpen, res.StopsOpenGiven, tc.want)
+			}
+			if warned := slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "stops_open") }); warned != tc.warns {
+				t.Fatalf("warned %v, want %v: %q", warned, tc.warns, res.Warnings)
+			}
+		})
+	}
+}
+
+// The judge posted its review but GitHub could not verify it, so its round
+// ended in error with its stopped threads flagged; the next round on the
+// head adopts the review, prompting nothing, and carries that judge's
+// stops_open to the engine as a continued turn does.
+func TestAnAdoptedReviewCarriesTheStopsItsJudgeHoldsOpen(t *testing.T) {
+	e := newEnv(t)
+	e.writeStoppedThreads()
+	post := e.judgePosts(803, "COMMENTED", "COMMENT")
+	post.extra = map[string]any{"stops_open": []string{"PRRT_A"}}
+	e.unverifiedRound(post)
+	res, err := e.r.RunRound(e.ctx, e.nextRound())
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 803 {
+		t.Fatalf("adopting round: result = %+v, err = %v", res, err)
+	}
+	if res.ThreadsRead || !res.StopsOpenGiven || !slices.Equal(res.StopsOpen, []string{"PRRT_A"}) {
+		t.Fatalf("threads read %v, stops open %#v given %v", res.ThreadsRead, res.StopsOpen, res.StopsOpenGiven)
 	}
 }

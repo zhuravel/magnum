@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -381,6 +382,47 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 		out = append(out, rt)
 	}
 	return out
+}
+
+// judgedStops is the stopped threads whose finding the judge keeps open
+// (res.StopsOpen), checked against the threads file the judge was given on
+// this head (ThreadsFile in the round's dir: this round's, or the one a
+// continued turn's paused round or an adopted review's round wrote).
+// decided is false when the result names none as a list, when there is no
+// such file, or when an entry is no thread's id there (a URL or a comment
+// id in its place): filtering on that list would drop the threads the
+// judge meant to keep, so the round keeps every stop, with a warning.
+func (rd *round) judgedStops(ctx context.Context, res judgeResult) (open []string, decided bool) {
+	if !res.StopsOpenGiven {
+		return nil, false
+	}
+	known, ok := threadIDs(filepath.Join(rd.dir, ThreadsFile))
+	if !ok {
+		return nil, false
+	}
+	if n := len(slices.DeleteFunc(slices.Clone(res.StopsOpen), func(id string) bool { return slices.Contains(known, id) })); n > 0 {
+		rd.warn(ctx, "the judge's stops_open names %s that %s does not list; every stopped thread stays flagged",
+			textx.Count(n, "entry", "entries"), ThreadsFile)
+		return nil, false
+	}
+	return res.StopsOpen, true
+}
+
+// threadIDs are the ids of the threads in the threads file at path; ok is
+// false when it cannot be read.
+func threadIDs(path string) (ids []string, ok bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var ts []agents.ReviewThread
+	if json.Unmarshal(b, &ts) != nil {
+		return nil, false
+	}
+	for _, t := range ts {
+		ids = append(ids, t.ID)
+	}
+	return ids, true
 }
 
 // rebuttals counts the reviewer's rebuttals among a thread's replies (its

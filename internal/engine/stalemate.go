@@ -10,7 +10,10 @@ package engine
 // in that thread flags it again. The judge still decides the finding: a
 // stopped thread whose answer it accepts is not among the round's stops
 // (pipeline.RoundResult.Stops), so it is not flagged, and a round that
-// settles a flagged one clears the flag without marking it seen.
+// settles a flagged one clears the flag without marking it seen; a
+// continued turn or an adopted review, which read no threads, settles the
+// flag its earlier round raised before its judge decided
+// (pipeline.RoundResult.StopsOpen).
 
 import (
 	"context"
@@ -57,9 +60,15 @@ func ParseStalemate(s string) (Stalemate, bool) {
 // noteStalemates records, after a round that read the threads
 // (RoundResult.ThreadsRead), the stopped threads the operator has not seen
 // (kvPRStalemateSeen) as the PR's stalemate, with an event when it grows;
-// none left clears it.
+// none left clears it. A round that read none but carries the decision of
+// the judge an earlier round gave them to (RoundResult.StopsOpen: a
+// continued turn, an adopted review) settles that round's flag
+// (settleStalemates).
 func (e *Engine) noteStalemates(ctx context.Context, repo store.Repo, pr store.PR, res pipeline.RoundResult) {
 	if !res.ThreadsRead {
+		if res.StopsOpenGiven {
+			e.settleStalemates(ctx, pr.ID, res.StopsOpen)
+		}
 		return
 	}
 	seen := map[string]int64{}
@@ -93,6 +102,30 @@ func (e *Engine) noteStalemates(ctx context.Context, repo store.Repo, pr store.P
 		e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.stalemate",
 			fmt.Sprintf("magnum stopped arguing in %s after two rebuttals and an answer; the operator decides", stalemateWord(len(cur.Threads))),
 			map[string]any{"threads": added})
+	}
+}
+
+// settleStalemates keeps, of the PR's flag, only the threads whose finding
+// the judge keeps open (open): the round that flagged them did so before
+// its judge decided them (a usage limit paused it, GitHub could not verify
+// its review). It adds nothing and marks nothing seen, so a later round
+// whose judge holds the same answer open flags it again.
+func (e *Engine) settleStalemates(ctx context.Context, prID int64, open []string) {
+	v, ok := e.getKV(ctx, KVPRStalemate(prID))
+	st, parsed := ParseStalemate(v)
+	if !ok || !parsed {
+		return
+	}
+	n := len(st.Threads)
+	st.Threads = slices.DeleteFunc(st.Threads, func(t StalemateThread) bool { return !slices.Contains(open, t.ID) })
+	switch {
+	case len(st.Threads) == n:
+	case len(st.Threads) == 0:
+		e.delKV(ctx, KVPRStalemate(prID))
+	default:
+		if b, err := json.Marshal(st); err == nil {
+			e.setKV(ctx, KVPRStalemate(prID), string(b))
+		}
 	}
 }
 

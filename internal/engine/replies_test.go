@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -596,6 +597,90 @@ func TestAStalemateTheJudgeSettlesClearsWithoutASeenMark(t *testing.T) {
 	}
 	if evs := approvalEvents(t, h, 2, "pr.stalemate"); len(evs) != 2 {
 		t.Fatalf("stalemate events: %+v", evs)
+	}
+}
+
+// A round paused on a usage limit flags its stopped threads before its
+// judge decided them; the continued turn that finishes the judge's work
+// reads no threads but carries that judge's stops_open
+// (pipeline.RoundResult.StopsOpen): the flag keeps only the threads the
+// judge holds open, marks nothing seen and raises no event. A continue
+// whose result names none leaves the flag as it is.
+func TestAContinuedTurnSettlesTheStalemateItsPausedRoundFlagged(t *testing.T) {
+	a := pipeline.StopThread{ID: "PRRT_A", URL: "https://github.com/talkable/talkable/pull/2#discussion_r1", LastReply: 206}
+	d := pipeline.StopThread{ID: "PRRT_D", URL: "https://github.com/talkable/talkable/pull/2#discussion_r5", LastReply: 506}
+	for _, tc := range []struct {
+		name  string
+		given bool
+		open  []string
+		want  []string // the flag's threads after the continue; nil: no flag
+	}{
+		{"the judge holds one open", true, []string{"PRRT_D", "PRRT_B"}, []string{"PRRT_D"}},
+		{"the judge settles both", true, []string{}, nil},
+		{"a result without stops_open", false, nil, []string{"PRRT_A", "PRRT_D"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.reviewedPR(2, "b1")
+			resetAt := h.clock.Now().Add(5 * time.Hour)
+			h.rd.mu.Lock()
+			h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+				switch {
+				case in.Kind == pipeline.KindContinue:
+					return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: in.Round, TargetSHA: in.TargetSHA, ReviewID: 99, Event: "COMMENTED",
+						StopsOpen: tc.open, StopsOpenGiven: tc.given}, nil
+				case in.Replies == 0:
+					return h.rd.posted(h.ctx, in, 99)
+				}
+				run, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: 2, Role: store.RoleJudge, Kind: in.Kind,
+					TargetSHA: in.TargetSHA, Identity: in.PR.Identity, ReviewerLogin: magnumApp, State: store.RunPending, PromptText: "judge"})
+				if err != nil {
+					return failRound(t, err)
+				}
+				now := h.clock.Now()
+				if err := h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) {
+					u.Set("submitted_at", now)
+					u.Set("outcome", pipeline.OutcomeUsageLimit)
+					u.Set("error", "judge pane: usage limit")
+				}); err != nil {
+					return failRound(t, err)
+				}
+				return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 2, TargetSHA: in.TargetSHA, JudgeRunID: run.ID,
+					JudgePromptedAt: now, ThreadsRead: true, Stops: []pipeline.StopThread{a, d},
+					Pause: &pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: agents.KindCodex, Until: resetAt}}, nil
+			}
+			h.rd.mu.Unlock()
+			h.advance(3 * time.Hour)
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+			h.advance(3 * time.Minute)
+			h.tick()
+			pr := h.wantState(2, store.PRPaused)
+			if st, ok := ParseStalemate(mustKV(t, h, KVPRStalemate(pr.ID))); !ok || len(st.Threads) != 2 {
+				t.Fatalf("the paused round's flag: %+v", st)
+			}
+
+			h.advance(5 * time.Hour)
+			h.tick()
+			if ins := h.rd.all(); len(ins) != 3 || ins[2].Kind != pipeline.KindContinue {
+				t.Fatalf("rounds: %d, the last %+v", len(ins), ins[len(ins)-1].Kind)
+			}
+			var got []string
+			if v, ok := kvValue(h, KVPRStalemate(pr.ID)); ok {
+				st, _ := ParseStalemate(v)
+				for _, th := range st.Threads {
+					got = append(got, th.ID)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("flag after the continue: %v, want %v", got, tc.want)
+			}
+			if v, ok := kvValue(h, kvPRStalemateSeen(pr.ID)); ok {
+				t.Fatalf("stalemate_seen = %s: the judge's decision is no act of the operator", v)
+			}
+			if evs := approvalEvents(t, h, 2, "pr.stalemate"); len(evs) != 1 {
+				t.Fatalf("stalemate events: %+v", evs)
+			}
+		})
 	}
 }
 

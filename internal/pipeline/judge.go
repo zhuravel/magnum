@@ -726,15 +726,31 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 	}
 	rd.readEvidence(ctx, rd.evidenceFile) // evidence.go
 	rd.mu.Lock()
+	read := rd.res.ThreadsRead
+	rd.mu.Unlock()
+	var open []string
+	decided := false
+	if v.result != nil && (v.outcome == OutcomePosted || v.outcome == OutcomeReplied) && (read || rd.in.Kind == KindContinue) {
+		open, decided = rd.judgedStops(ctx, *v.result) // replies.go
+	}
+	rd.mu.Lock()
 	if v.review != nil {
 		rd.res.ReviewID, rd.res.ReviewURL, rd.res.ReviewCommit = v.review.id, v.review.url, v.review.commit
 		rd.res.Event = normalizeEvent(v.review.state)
 	}
 	rd.res.Replies = v.replies
-	if v.result != nil && v.result.StopsOpenGiven && (v.outcome == OutcomePosted || v.outcome == OutcomeReplied) {
+	switch {
+	case !decided:
+	case read:
 		// The stopped threads the judge settled (it accepted the answer)
-		// are no stalemate; an id it names that is not stopped adds none.
-		rd.res.Stops = slices.DeleteFunc(rd.res.Stops, func(s StopThread) bool { return !slices.Contains(v.result.StopsOpen, s.ID) })
+		// are no stalemate; the id of a thread that is not stopped adds
+		// none.
+		rd.res.Stops = slices.DeleteFunc(rd.res.Stops, func(s StopThread) bool { return !slices.Contains(open, s.ID) })
+	default:
+		// A continued turn reads no threads: its paused round flagged the
+		// stops before the judge decided them, and the engine settles that
+		// flag.
+		rd.res.StopsOpen, rd.res.StopsOpenGiven = open, true
 	}
 	if v.result != nil && v.outcome != OutcomeReplied { // a replied round's verdict stays its last review's
 		rd.res.Findings, rd.res.PreviousOpen = v.result.Findings, v.result.PreviousOpen

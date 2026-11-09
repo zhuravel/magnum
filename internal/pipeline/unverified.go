@@ -196,7 +196,13 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 	if found.leak != "" {
 		outcome, verr = OutcomeIdentityLeak, fmt.Errorf("review %d carrying the run's marker was posted as %q, not %q", found.id, found.leak, rd.login)
 	}
+	var open []string
+	decided := false
+	if outcome == OutcomePosted { // its round flagged the stops before this judge's decision was known (replies.go)
+		open, decided = rd.judgedStops(ctx, u.result)
+	}
 	rd.mu.Lock()
+	rd.res.StopsOpen, rd.res.StopsOpenGiven = open, decided
 	rd.res.Round, rd.res.JudgeRunID = u.round, u.markers[0]
 	rd.res.ReviewID, rd.res.ReviewURL, rd.res.ReviewCommit = found.id, found.url, found.commit
 	rd.res.Event = normalizeEvent(found.state)
