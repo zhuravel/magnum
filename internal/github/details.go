@@ -85,9 +85,11 @@ type PRDetails struct {
 	// computing it) or UNSTABLE; "" when GitHub did not say.
 	MergeState string
 	// Remarks are the submitted reviews and issue comments among the
-	// activity timeline's last ten items, as it lists them (oldest first);
-	// nil when GitHub returned no timeline. A reply in a review thread is a
-	// review of its own.
+	// activity timeline's last ten items, as it lists them (oldest first),
+	// and those of the last two reviews it does not list, each before the
+	// first remark submitted after it; nil when GitHub returned no
+	// timeline. A reply in a review thread is a review of its own, with no
+	// body, which the timeline never lists.
 	Remarks []Remark
 }
 
@@ -106,7 +108,7 @@ type Remark struct {
 	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
-	// Details reads them for the timeline's last two reviews only
+	// Details reads them for the last two reviews only
 	// (AnswersKnown; ReviewAnswers reads them for others, Resolve), with
 	// Comments, how many inline comments the review has (of its first ten):
 	// a comment that starts a thread answers none, so a review whose
@@ -290,7 +292,13 @@ type PRState struct {
 // and 5 points with them and 1, 1, 1, 2, 2, 3 and 4 without (2026-10-06), at
 // most one point more per batch, none for the few PRs a poll usually reads.
 // The nested connection on every timeline review instead doubled the price
-// (8 points for 40), and three reviews instead of two cost 6. The poll asks
+// (8 points for 40), and three reviews instead of two cost 6. That
+// connection was the timeline's last two reviews until 2026-11-09; it is
+// now the reviews' (reviews(last: 2)), since the timeline never lists a
+// reply in a thread (a review with no body whose comments all reply), and
+// reads each one's submission time, author and authorAssociation: the same
+// shape, two nodes with the same nested comments, and fields, which GitHub
+// does not price (not priced again by a dry run). The poll asks
 // ReviewAnswers about the reviews it needs beyond those two: 1 point a call
 // of up to 100 reviews, where the last ten reviews here would price batches
 // of 10, 20 and 40 at 2, 4 and 8 points instead of 1, 3 and 5 (dry run,
@@ -311,7 +319,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   latestOpinionatedReviews(first: 100, writersOnly: true) { totalCount pageInfo { hasNextPage } nodes { state author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
   activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation } ` + activityEvents + ` } }
-  replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id ` + reviewCommentsFields + ` } } }
+  replies: reviews(last: 2) { nodes { id submittedAt author { login __typename } authorAssociation ` + reviewCommentsFields + ` } }
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } ` + stateCountFields + ` ` + contextNodes + ` } } committedDate } } }
 }`
 
@@ -447,11 +455,16 @@ type detailsJSON struct {
 		} `json:"nodes"`
 	} `json:"activity"` // null: GitHub returned no timeline
 	// Replies are the last two reviews with the authors of the comments
-	// their inline comments reply to (Remark.Answers).
+	// their inline comments reply to (Remark.Answers): GitHub's reviews,
+	// whose list holds a reply in a thread (a review with no body whose
+	// comments all reply), which the timeline never lists.
 	Replies *struct {
 		Nodes []struct {
-			ID       string             `json:"id"`
-			Comments reviewCommentsJSON `json:"comments"`
+			ID          string             `json:"id"`
+			SubmittedAt time.Time          `json:"submittedAt"` // null while pending
+			Author      *actorJSON         `json:"author"`      // null: a ghost
+			Association string             `json:"authorAssociation"`
+			Comments    reviewCommentsJSON `json:"comments"`
 		} `json:"nodes"`
 	} `json:"replies"`
 	HeadCommit struct {
@@ -635,8 +648,10 @@ func (d detailsJSON) details() PRDetails {
 
 // remarks is PRDetails.Remarks: the activity timeline's submitted reviews
 // and issue comments, each review's answered threads and inline comment
-// count from the replies connection when it lists the review; nil without a
-// timeline.
+// count from the replies connection when it lists the review, and the
+// submitted reviews of the replies connection the timeline does not list (a
+// reply in a thread, which the timeline never lists), each placed before
+// the first remark submitted after it; nil without a timeline.
 func (d detailsJSON) remarks() []Remark {
 	if d.Activity == nil {
 		return nil
@@ -650,10 +665,12 @@ func (d detailsJSON) remarks() []Remark {
 		}
 	}
 	out := []Remark{}
+	listed := map[string]bool{} // the reviews the timeline lists
 	for _, n := range d.Activity.Nodes {
 		var r Remark
 		switch n.Typename {
 		case "PullRequestReview":
+			listed[n.ID] = true
 			if n.SubmittedAt.IsZero() {
 				continue // pending
 			}
@@ -671,6 +688,25 @@ func (d detailsJSON) remarks() []Remark {
 		}
 		r.Association = n.Association
 		out = append(out, r)
+	}
+	if d.Replies == nil {
+		return out
+	}
+	for _, n := range d.Replies.Nodes {
+		if n.ID == "" || listed[n.ID] || n.SubmittedAt.IsZero() {
+			continue // the timeline's, or pending
+		}
+		listed[n.ID] = true
+		r := Remark{Review: true, ID: n.ID, At: n.SubmittedAt, Association: n.Association}
+		r.Resolve(answers[n.ID])
+		if n.Author != nil {
+			r.Author, r.Bot = Account(n.Author.Login, n.Author.Typename), IsBot(n.Author.Typename, n.Author.Login)
+		}
+		i := slices.IndexFunc(out, func(o Remark) bool { return o.At.After(r.At) })
+		if i < 0 {
+			i = len(out)
+		}
+		out = slices.Insert(out, i, r)
 	}
 	return out
 }

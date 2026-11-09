@@ -537,10 +537,11 @@ func TestDetailsReadsTheLastActivity(t *testing.T) {
 // form and the authors' authorAssociation (which decides whether a reply in
 // magnum's threads starts a reply round); the last two reviews also say
 // whose threads their inline comments answer (a reply in a thread is a
-// review of its own) and how many inline comments they have, so a review
-// whose comments start threads of their own (no replyTo) reads apart from
-// one with a body alone. A pending review is no remark, and a PR whose
-// timeline GitHub did not return has none.
+// review of its own, which only they list: #401's PRR_1) and how many
+// inline comments they have, so a review whose comments start threads of
+// their own (no replyTo) reads apart from one with a body alone. A pending
+// review is no remark, and a PR whose timeline GitHub did not return has
+// none.
 func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_remarks.json")}}}}
 	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{401, 402, 403, 404})
@@ -550,7 +551,7 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
 	for _, want := range []string{
 		"... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation }",
-		"replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }",
+		"replies: reviews(last: 2) { nodes { id submittedAt author { login __typename } authorAssociation comments(first: 10) { nodes { replyTo { author { login __typename } } } } } }",
 	} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
@@ -587,6 +588,49 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	}
 	if r := got[404].Remarks; !reflect.DeepEqual(r, want) {
 		t.Errorf("#404 remarks:\n got %+v\nwant %+v", r, want)
+	}
+}
+
+// The live cases (2026-11-09): authors answered magnum's findings with a
+// reply in its threads, and no reply round came. GitHub stores such a reply
+// as a review with no body whose inline comments all reply to threads, and
+// its timeline never lists one, so the activity timeline missed them.
+// details_reply_only.json is in the shape GitHub answers: the timeline
+// lists magnum's review and an issue comment, the last two reviews add the
+// author's reply. That reply is a remark, in time order, with its author,
+// association and the threads it answers; a review in both lists is one
+// remark. A pending review is none, and a ghost's reply has no author.
+func TestDetailsReadsAReplyOnlyReviewTheTimelineLeavesOut(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_reply_only.json")}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{501, 502})
+	if err != nil || len(missing) != 0 || len(got) != 2 {
+		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	if want := "replies: reviews(last: 2) { nodes { id submittedAt author { login __typename } authorAssociation comments(first: 10) { nodes { replyTo { author { login __typename } } } } } }"; !strings.Contains(q, want) {
+		t.Errorf("query lacks %q: %s", want, q)
+	}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	want := []Remark{
+		{At: at("2026-11-03T10:00:00Z"), Author: "alice", Association: "MEMBER"},
+		{ID: "PRR_0", Review: true, At: at("2026-11-07T17:17:56Z"), Author: "magnum-app[bot]", Bot: true, Association: "NONE", AnswersKnown: true},
+		{ID: "PRR_9", Review: true, At: at("2026-11-09T13:12:54Z"), Author: "alice", Association: "MEMBER", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true, Comments: 1},
+	}
+	if r := got[501].Remarks; !reflect.DeepEqual(r, want) {
+		t.Errorf("#501 remarks:\n got %+v\nwant %+v", r, want)
+	}
+	want = []Remark{
+		{At: at("2026-11-03T10:00:00Z"), Author: "alice", Association: "MEMBER"},
+		{ID: "PRR_7", Review: true, At: at("2026-11-08T09:00:00Z"), Association: "NONE", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true, Comments: 1},
+	}
+	if r := got[502].Remarks; !reflect.DeepEqual(r, want) {
+		t.Errorf("#502 (a ghost's reply, a pending review) remarks:\n got %+v\nwant %+v", r, want)
 	}
 }
 
