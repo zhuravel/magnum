@@ -10418,10 +10418,9 @@ func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResu
     and the round input's Local names c's files, so the judge reads the title,
     the body and the ticket from them and nothing from GitHub, and the
     round reads no Jira issue; its panes and its readiness step get c.Env,
-    the caller's (the factory's copy's env, or an eval replay's per-PR env of
-    the synthetic number: LocalRound.Env), never one derived from the checkout.
-    A case without a full base commit or a description file, or a judge-only
-    one, never starts.
+    the caller's (the factory's copy's env, or an eval replay's case worktree's:
+    LocalRound.Env), never one derived from the checkout. A case without a full
+    base commit or a description file, or a judge-only one, never starts.
 
 func (e *Engine) StagingPushEnv(mirror func(repo string) (dir string, ok bool)) func(ctx context.Context, repo, mergeSHA, target string) (map[string]string, error)
     StagingPushEnv is the staging package's Deps.PushEnv over mirror (the dir
@@ -10462,8 +10461,15 @@ type EvalCase struct {
 	HeadRef       string // the PR's head branch ("" = not known)
 	Checkout      string // absolute path of the worktree at Head
 	MainClone     string // the clone the worktree belongs to
-	Watch         config.Watch
-	Identity      string // the posting identity whose rights the judge checks (it posts nothing)
+	// CheckoutEnv is the environment the caller prepared Checkout with
+	// (evalrun: the case worktree's per-PR env under its own workspace
+	// name, a pool's env included), which every pane and the readiness
+	// step get, so the roles use the databases its setup made; nil = the
+	// per-PR worktree env of Number (slots.PerPREnv). A local round's is
+	// LocalRound.Env.
+	CheckoutEnv map[string]string
+	Watch       config.Watch
+	Identity    string // the posting identity whose rights the judge checks (it posts nothing)
 	// Worktrees is the directory that holds every replay's worktree,
 	// Checkout among them (magnum eval: state/eval/wt). A workspace
 	// labelled as a replay of this PR whose panes all work under it is one
@@ -11067,9 +11073,9 @@ type LocalRound struct {
 	// round get, as the caller gives it: the engine derives none from the
 	// checkout. The factory gives the env of the copy the round works in,
 	// the one its own agents get there (its WT_BRANCH and env); the replay
-	// of a local eval case (evalrun.RunCase) gives the env a posted replay's
-	// per-PR worktree has for the synthetic number, so its roles never use
-	// a copy's databases.
+	// of a local eval case (evalrun.RunCase) gives the env its case
+	// worktree was prepared with (the per-PR env under the worktree's own
+	// workspace name), so its roles never use a copy's databases.
 	Env map[string]string
 }
     LocalRound is one round of the factory's local review of a change before
@@ -26333,8 +26339,7 @@ func PRWorktreePaths(watch config.Watch, repo string, number int) (mainClone, pa
 
 func PerPREnv(rc *config.Repo, number int, path, clone string) map[string]string
     PerPREnv is the environment of per-PR worktree number (path, main clone
-    clone) for its hooks and its agents: WT_BRANCH=PRSlug(number), every
-    WorkspaceNameVars entry blank, then the [[repo]] env (rc may be nil) on top.
+    clone) for its hooks and its agents: WorktreeEnv under PRSlug(number).
 
 func ReadMarker(dir string) (string, error)
     ReadMarker returns dir's MarkerFile, the database slug its setup wrote,
@@ -26380,6 +26385,11 @@ func TemplateRegexp(tmpl string) *regexp.Regexp
     TemplateRegexp matches what a slot template renders to (slot_name review{n},
     an expanded slot_path): the template anchored, its text quoted, every {n} as
     [0-9]+ (^review[0-9]+$).
+
+func WorktreeEnv(rc *config.Repo, slug, path, clone string) map[string]string
+    WorktreeEnv is the per-PR environment of a worktree (path, main clone clone)
+    under workspace name slug: WT_BRANCH=slug, every WorkspaceNameVars entry
+    blank, then the [[repo]] env (rc may be nil) with {slug} as slug on top.
 
 func WriteCheckoutFile(checkout, rel string, data []byte, perm fs.FileMode) (err error)
     WriteCheckoutFile writes data to rel inside checkout atomically (temp file
@@ -26825,16 +26835,18 @@ type PerPRPlan struct {
 }
     PerPRPlan is what magnum runs for one per-PR worktree (PlanPerPR):
     the commands' Source ("[[repo]] owner/name", WTConfigFile or "" for none),
-    the workspace name Slug (PRSlug of the number), the Setup and Teardown hooks
-    (templates expanded), the [[repo]] copy_files (Copy), the keys dropped from
-    the rendered local mise file (Strip: StripKeys of the [[repo]] strip_env)
-    and the hooks' and agents' Env (PerPREnv).
+    the workspace name Slug (PRSlug of the number for a PR's own), the Setup
+    and Teardown hooks (templates expanded), the [[repo]] copy_files (Copy),
+    the keys dropped from the rendered local mise file (Strip: StripKeys of the
+    [[repo]] strip_env) and the hooks' and agents' Env (WorktreeEnv).
 
-func PlanPerPR(rc *config.Repo, repo string, number int, path, clone, base string) (PerPRPlan, error)
-    PlanPerPR resolves the setup/teardown commands, files and environment of
-    per-PR worktree number of repo (owner/name, its [[repo]] block rc, nil for
-    none; path the worktree, clone its main clone) for a PR based on base.
-    A wt.toml that cannot be read, parsed or templated is ErrHook.
+func PlanPerPR(rc *config.Repo, repo, slug, path, clone, base string) (PerPRPlan, error)
+    PlanPerPR resolves the setup/teardown commands, files and environment of a
+    per-PR worktree of repo (owner/name, its [[repo]] block rc, nil for none;
+    path the worktree, clone its main clone) under workspace name slug
+    (PRSlug of the number for a PR's own worktree; the env is WorktreeEnv's,
+    and wt.toml's {{ branch }} is slug) for a PR based on base. A wt.toml that
+    cannot be read, parsed or templated is ErrHook.
 
 type SchemaCheck struct {
 	// Need is true when the slot's databases must be reloaded (the pool's

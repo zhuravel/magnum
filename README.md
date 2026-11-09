@@ -6856,25 +6856,35 @@ and run `magnum eval run --label "<the change>"`. Each case replays the PR at it
 watch's roles, in a scratch registry and a detached worktree under `~/.local/state/magnum/eval/<run>/`, with agents
 named apart from the PR's own and from every other run's (tagged `eval-<6 hex digits of the run id>`), in a herdr
 workspace `eval <repo>#<N>`; the roles are told not to read the PR's reviews, comments or later
-commits, and nothing is posted. A case's worktree (`~/.local/state/magnum/eval/wt/<case>`) is prepared as a
-per-PR review checkout of its repository is, so its roles can run what a real round runs: the `[[pool]]`'s
-`copy_files` from the pool's `main_clone` and its `setup` through `mise exec`, as its slots run them, or, without
-a pool, the `[[repo]]` `copy_files` from the clone and its `setup` (else the clone's `.config/wt.toml`
-`post-create` and `post-start` hooks), after the clone's local mise file is rendered into the worktree without
-the `strip_env` keys. They run with the env a per-PR worktree of the PR's number has (`WT_BRANCH=magnum-pr-<N>`,
-the other workspace names blank, the `[[repo]]` env), the env the round's panes get, so the setup makes databases
-of the case's own and the roles' specs reach them through their db-lock line, as in a slot; each command has
-the slots' timeout (45 minutes for a setup), its output goes to
-`~/.local/state/magnum/logs/eval-case-<case>.log`, and the round's readiness step (`prepare`, `ready`) runs as
-in any round. The `teardown` (or `pre-remove`) runs before the worktree is removed, after a failed or
-interrupted case too; `--keep` keeps the worktree and its databases until the next replay of the case, which
-tears it down before it replaces it. One case is prepared at a time, across `eval run` and the skill gate
-(`~/.local/state/magnum/eval/locks/prepare.lock`, a wait of up to 45 minutes for the other). A setup that
-fails ends the case `environment`, naming the command and the first line of its error output: not scored, never
-a miss. So does a posted case whose PR has its own per-PR worktree next to the clone, before anything runs: the
-two would share `magnum-pr-<N>`'s databases, and the replay's teardown would drop them. A repository with no
-`setup`, `teardown` or `copy_files` keeps a bare worktree. When a case ends, a judge still at work gets one
-ctrl+c, an agent esc, and the workspace is closed (a message names any workspace that stays open); before a case
+commits, and nothing is posted. A case's worktree (`~/.local/state/magnum/eval/wt/<case>`, the skill gate's
+under `~/.local/state/magnum/learn/eval/wt/`) is prepared as a per-PR review checkout of its repository is, so its
+roles can run what a real round runs. For a repository with a `[[pool]]`: the pool's `copy_files` from its
+`main_clone`, its `setup`, then its `post_checkout` (the installs a slot's checkout runs, which a fresh worktree
+has none of), each through `mise exec` as its slots run them. Without a pool: the `[[repo]]` `copy_files` from
+the clone and its `setup` (else the clone's `.config/wt.toml` `post-create` and `post-start` hooks). The clone's
+local mise file is rendered into the worktree without the `strip_env` keys before the setup and again after it,
+as a slot's checkout renders it before each round, so a setup that copies the main clone's file leaves no token
+behind. The commands run with a per-PR worktree's env under a workspace name of the worktree's own,
+`WT_BRANCH=magnum-eval-<N>-<6 hex digits of the worktree's path>` (the other workspace names blank, the
+`[[repo]]` env, or a pool's `[pool.env]` with `{slot}` as that name, so a value such as `FAKE_AWS` stays), and the
+round's panes and readiness step get the same env. So the setup makes databases of the worktree's own: never the
+PR's own per-PR worktree's (`magnum-pr-<N>`), another case's of the same PR, or the same case's in the gate's
+directory, and the roles' specs reach them through their db-lock line, as in a slot. Each command has the slots'
+timeout (45 minutes for a setup, 30 for `post_checkout`), and its output goes to
+`~/.local/state/magnum/logs/eval-case-<case>.log`; the round's readiness step (`prepare`, `ready`) runs as in any
+round. The `teardown` (or `pre-remove`) runs before the worktree is removed, after a failed or interrupted case
+too, but not when nothing was set up (the wait for another case's preparation ran out or was cut short, or the
+`copy_files` could not be written). `--keep` keeps the worktree and its databases until the next replay of the case
+in that directory, which tears it down before it replaces it. One case is prepared at a time, across `eval run`
+and the skill gate (`~/.local/state/magnum/eval/locks/prepare.lock`, a wait of up to 45 minutes for the other). A
+setup or `post_checkout` that fails ends the case `environment`, naming the command and the first line of its
+error output: not scored, never a miss. A repository with no `setup`, `post_checkout`, `teardown` or `copy_files`
+keeps a bare worktree. What still differs from a real round: the commands take a heavy-command lock of the
+replay's own, not the daemon's, so a gate case's setup can run beside the daemon's own provisioning; and a local
+case is prepared from the `[[pool]]` or `[[repo]]`, never from the `[[factory.repo]]` that prepared the copy its
+round ran in, so a local case of a repository only the factory prepares replays in a bare worktree, which the
+replay says. When a case ends, a judge still at work gets one ctrl+c, an agent esc, and the workspace is closed
+(a message names any workspace that stays open); before a case
 starts, an `eval <repo>#<N>` workspace of the same PR whose panes all work in the eval worktrees, which an
 earlier run left open, is closed, and a case whose agent would run anywhere but its own workspace fails before
 the first prompt. One case replays once at a time, whoever starts it (`eval run`, `eval-at.sh` through it, the
@@ -6956,10 +6966,10 @@ same `--candidate` and `--no-notes`: a detached worktree at the frozen head in t
 (`~/.local/state/magnum/eval/wt/<case>`), of the `[[factory.repo]]`'s main clone, which holds every commit its
 copies made (else the clone a posted case uses; a commit it lacks is fetched by id), and the round run again
 (`evalrun.RunLocal`) under the same synthetic number with the frozen title, plan, ticket and answers (written as
-the factory writes them now) and roles. Its panes get the environment a posted case's replay gets for that number
-(`WT_BRANCH=magnum-pr-<N>` and the `[[repo]]` env), never the copy's, whose databases a task may be using, its
-worktree is prepared and torn down as a posted case's is, for that number, and its scratch directory is the
-run's (`cases/<case>/`), never the task's. Its findings, as the factory reads them (a
+the factory writes them now) and roles. Its worktree is prepared and torn down as a posted case's is, for that
+number (`WT_BRANCH=magnum-eval-<N>-<6 hex digits>`), its panes get the env its preparation ran with, never the
+copy's, whose databases a task may be using, and its scratch directory is the run's (`cases/<case>/`), never
+the task's. Its findings, as the factory reads them (a
 question marked), and the planned review's body, from the result of the judge the round ran (its frozen roles'
 judge, `judge_fallback`'s on a task Codex refused, not the watch's), are scored as a posted case's are, kept in
 `run.json` and re-scored from there by `eval score`. A case whose round ran a Codex role is refused before anything
