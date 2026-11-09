@@ -2,12 +2,15 @@
 // the local review round of a pull request the factory published, from its
 // registry (factory.db), and the task's plan, ticket and answers, from the
 // task's directory, for the review retro (DECISIONS "The review retro tags
-// factory-origin misses and their stage"). It only reads: the registry is
-// opened read only (mode=ro, never created, so nothing writes its file or
-// its WAL), with a busy timeout, and closed after each read; a task's files
-// are read inside an os.Root of its directory. It knows the factory's
-// schema only as far as these reads need (pr_links, review_findings,
-// review_cycles) and never migrates it: internal/factory/registry owns it.
+// factory-origin misses and their stage"); and a task's local review rounds,
+// their heads, roles and the times of its answers, for the replay of a round
+// as an eval case (LocalReview, `magnum eval add --local-task`). It only
+// reads: the registry is opened read only (mode=ro, never created, so
+// nothing writes its file or its WAL), with a busy timeout, and closed after
+// each read; a task's files are read inside an os.Root of its directory. It
+// knows the factory's schema only as far as these reads need (pr_links,
+// review_findings, review_cycles, tasks, events, questions) and never
+// migrates it: internal/factory/registry owns it.
 package factoryread
 
 import (
