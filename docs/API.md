@@ -6063,9 +6063,11 @@ type Factory struct {
 	// built-in entry. An entry whose key is a role that no longer runs on
 	// Codex (a [[factory.role]] moved it to Claude) is not an error: it is
 	// not used, so read it only for a role of the Codex kind (Warnings says
-	// so). A fallback that a stage of the role runs already covers the role
-	// there: after a refusal the role leaves that stage, and the fallback's
-	// own run stands for both (fx-points-codex's fx-points).
+	// so). A fallback that a stage of the role runs already makes the role
+	// a second reader there (fx-points-codex beside fx-points): it has no
+	// questions file of its own (its open questions stay in its findings,
+	// for the judge), and after a refusal it leaves that stage, the
+	// fallback's own run standing for both.
 	CodexFallback map[string]string `toml:"codex_fallback"`
 	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
 	Kinds map[string]FactoryKind `toml:"kinds"`
@@ -17188,6 +17190,8 @@ type TaskStats struct {
 	Typed, StepStarts, Approvals, Corrections, Access int
 	UnknownOrigin                                     int
 	AnswerBatches, Decisions, ReviewRounds            int
+	Questions                                         int
+	QuestionsFrom                                     map[string]int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -17215,7 +17219,10 @@ type TaskStats struct {
     reach the ready card (zero before it does). PR is the task's PR (zero before
     it has one), FixLoops the fix loops magnum started on it (nil: not counted,
     SetFixLoops), and Quality what the PR said of the factory's work after the
-    publish (nil for a task without a PR).
+    publish (nil for a task without a PR). Questions counts the questions the
+    task asked, each once whatever revisions carried it, and QuestionsFrom them
+    by source (questionSources): how much each role, a second reader of the
+    ticket's points among them, adds to what the operator is asked.
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

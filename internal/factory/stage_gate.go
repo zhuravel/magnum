@@ -269,8 +269,8 @@ type questionsOf struct{ name, raisedBy string }
 // questionFiles are the questions files in task t's directory dir:
 // questions.json (raised by the role of the kind's report stage), then each
 // questions-<role>.json by name, raised by the role its name gives, but for
-// the QA walker's (asksNoOne): it asks no one, so a file it wrote anyway
-// never reaches you with a later role's questions.
+// the QA walker's and a second reader's (asksNoOne): they ask no one, so a
+// file one of them wrote anyway never reaches you.
 func (e *Engine) questionFiles(t registry.Task, dir string) ([]questionsOf, error) {
 	var out []questionsOf
 	if _, err := os.Stat(filepath.Join(dir, questionsFile)); err == nil {
@@ -292,19 +292,20 @@ func (e *Engine) questionFiles(t registry.Task, dir string) ([]questionsOf, erro
 }
 
 // asksNoOne reports whether role, in task t's kind, has no questions file
-// (questionsFileOf): a qa stage names it, and no other stage does.
+// (questionsFileOf): a stage names it (a qa stage, or one it is the second
+// reader of), and none gives it a questions file.
 func (e *Engine) asksNoOne(t registry.Task, role string) bool {
-	qa := false
+	named := false
 	for _, st := range e.cfg.Factory.Kinds[t.Kind].Stages {
 		if !slices.Contains(st.Roles, role) {
 			continue
 		}
-		if questionsFileOf(st, role) != "" {
+		if questionsFileOf(e.cfg, st, role) != "" {
 			return false
 		}
-		qa = true
+		named = true
 	}
-	return qa
+	return named
 }
 
 // reportRole is the role that raises the questions of questions.json: the
@@ -690,7 +691,7 @@ const (
 // once per batch, so a later turn ends on its end fact alone.
 func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, r *stageRole,
 	dir string, end *endProblem) (int, error) {
-	name := questionsFileOf(st, r.role.Name)
+	name := questionsFileOf(e.cfg, st, r.role.Name)
 	if name == "" || run.turn.gate || (end == nil && e.laterQuestionsGate(t, st)) || (end != nil && end.file == name) {
 		return askNone, nil
 	}

@@ -33,7 +33,7 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 			t.Errorf("the help glosses %q, which the screen never draws", gone)
 		}
 	}
-	for _, kept := range []string{"investigate", "judge", "critic", "questions", "reproduction", "coding", "local review",
+	for _, kept := range []string{"investigate", "judge", "critic", "narrow critic", "questions", "reproduction", "coding", "local review",
 		"pr body", "ready", "publish", "step in", "memory full: new tasks wait", "you pushed 11:02", "push + PR",
 		"VOID, BART", "latest", "CI, CI ✗", "deploying", "outdated", "– and ?"} {
 		if !words[kept] {

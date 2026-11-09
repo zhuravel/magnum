@@ -95,9 +95,11 @@ type Factory struct {
 	// built-in entry. An entry whose key is a role that no longer runs on
 	// Codex (a [[factory.role]] moved it to Claude) is not an error: it is
 	// not used, so read it only for a role of the Codex kind (Warnings says
-	// so). A fallback that a stage of the role runs already covers the role
-	// there: after a refusal the role leaves that stage, and the fallback's
-	// own run stands for both (fx-points-codex's fx-points).
+	// so). A fallback that a stage of the role runs already makes the role
+	// a second reader there (fx-points-codex beside fx-points): it has no
+	// questions file of its own (its open questions stay in its findings,
+	// for the judge), and after a refusal it leaves that stage, the
+	// fallback's own run standing for both.
 	CodexFallback map[string]string `toml:"codex_fallback"`
 	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
 	Kinds map[string]FactoryKind `toml:"kinds"`
@@ -312,10 +314,9 @@ const (
 // database or security, and "narrow" skips it for such a plan: two stages,
 // one of each, run one role on a wide plan and another on a narrow one (the
 // built-in critic at xhigh, the narrow critic at high). Prompt, for an
-// agents stage, is the prompt file
-// every role of the stage gets in place of its own role's (a stage that
-// asks a role for another file than its usual one, such as the judge's PR
-// body); empty, each role's own.
+// agents stage, is the prompt file every role of the stage gets in place of
+// its own role's (a stage that asks a role for another file than its usual
+// one, such as the judge's PR body); empty, each role's own.
 type FactoryStage struct {
 	Name     string   `toml:"name"`
 	Type     string   `toml:"type"`
@@ -490,10 +491,9 @@ func factoryNotchRoles() []Role {
 // points, read by fx-points and its Codex twin, the chore's scope) and in
 // the bug's gate on a reproduction; the rest is the same: a judge, a critic
 // for every plan (fx-critic for a wide one, fx-critic-narrow for a narrow
-// one), one batch of
-// questions, the writer, the local review, visual QA of the change's pages
-// (a repository without [factory.repo.qa] skips it), the PR body, your
-// decision, and the publish that only the decision leads to.
+// one), one batch of questions, the writer, the local review, visual QA of
+// the change's pages (a repository without [factory.repo.qa] skips it), the
+// PR body, your decision, and the publish that only the decision leads to.
 func DefaultFactoryKinds() map[string]FactoryKind {
 	kind := func(investigators []string, gates ...FactoryStage) FactoryKind {
 		stages := []FactoryStage{

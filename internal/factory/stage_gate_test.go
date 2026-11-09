@@ -262,6 +262,40 @@ func TestAQuestionTwoRolesRaiseIsAskedOnce(t *testing.T) {
 	}
 }
 
+// A second reader (a role whose codex_fallback is another role of its
+// stage: fx-points-codex beside fx-points) has no questions file: its open
+// questions stay in its findings, for the judge to ask once what they add.
+// A questions-fx-points-codex.json it, or a refused run of it, left anyway
+// is never asked, even malformed, and never stops the task: the batch holds
+// the judge's and fx-points' questions alone, the same question in two
+// readers' words asked once.
+func TestASecondReadersQuestionsFileIsNeverAsked(t *testing.T) {
+	h := newHarness(t)
+	task := h.gateTask("PR-12382", "feature", whenQuestion)
+	h.taskFile(task.ID, "questions-fx-points.json", questionsJSON(t, whoQuestion))
+	again := fileQuestion("Do advocates and their friends both get the reminder email?", 0, "advocates only", "both")
+	h.taskFile(task.ID, "questions-fx-points-codex.json", questionsJSON(t, again, offQuestion))
+	h.tick()
+
+	got := h.reload(task.ID)
+	var who []string
+	for _, q := range h.newestQuestions(task.ID) {
+		who = append(who, q.RaisedBy+": "+q.Text)
+	}
+	want := []string{"fx-judge: " + whenQuestion.Text, "fx-points: " + whoQuestion.Text}
+	if got.QuestionRev != 1 || got.WaitsWhat != "2 questions before coding" || !slices.Equal(who, want) {
+		t.Fatalf("revision %d waits %q with %q; want revision 1, 2 questions before coding: %q", got.QuestionRev, got.WaitsWhat, who, want)
+	}
+
+	broken := h.gateTask("PR-12383", "feature")
+	h.taskFile(broken.ID, "questions-fx-points-codex.json", `[{"text": "half a question"`)
+	h.tick()
+	if got := h.reload(broken.ID); got.State != registry.TaskActive || got.Stage != "coding" || got.QuestionRev != 0 {
+		t.Fatalf("a malformed questions file of the second reader left the task %s at %s waiting %q (revision %d), want it at coding",
+			got.State, got.Stage, got.WaitsWhat, got.QuestionRev)
+	}
+}
+
 // A question another role asked already is not asked again: the critic's
 // repeat of the judge's open question adds no revision, and the one answer
 // passes the gate.

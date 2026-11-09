@@ -1217,7 +1217,10 @@ func TestTheReadyCardSaysQAWasNotNeeded(t *testing.T) {
 }
 
 // Of the two critics a plan's width picks, the card shows the one that ran
-// as done and the other as skipped, saying which width skipped it.
+// as done and the other as skipped, saying which width skipped it, as the
+// task's "<stage> skipped" event records it; a task from before the narrow
+// critic (its plan narrow, the critic skipped, no narrow critic run and no
+// event of one) shows the narrow critic as skipped, inventing no width.
 func TestTheCardSaysWhichCriticThePlansWidthSkipped(t *testing.T) {
 	r := newScreenRig(t)
 	stagesOf := func(t2 registry.Task) map[string]tui.CardStage {
@@ -1228,14 +1231,23 @@ func TestTheCardSaysWhichCriticThePlansWidthSkipped(t *testing.T) {
 		}
 		return out
 	}
+	skippedEvent := func(t2 registry.Task, text string) {
+		t.Helper()
+		if err := r.reg.AppendEvent(r.ctx, t2.ID, "stage", registry.PhaseInfo, text); err != nil {
+			t.Fatal(err)
+		}
+	}
 	wide := r.task("PR-12474", "chore", "Wide", registry.TaskActive, "questions", "", "")
 	r.verified(wide, "critic", "fx-critic")
+	skippedEvent(wide, "narrow_critic skipped: the plan touches 3 files")
 	narrow := r.task("PR-12475", "chore", "Narrow", registry.TaskActive, "questions", "", "")
+	skippedEvent(narrow, "critic skipped: the plan touches 2 files, none of the database or security")
 	r.verified(narrow, "narrow_critic", "fx-critic-narrow")
+	before := r.task("PR-12476", "chore", "Before the narrow critic", registry.TaskActive, "questions", "", "")
+	skippedEvent(before, "critic skipped: the plan touches 1 file, none of the database or security")
 	for _, tc := range []struct {
-		task           registry.Task
-		ran, skipped   string
-		skippedBecause string
+		task                         registry.Task
+		ran, skipped, skippedBecause string
 	}{
 		{wide, "critic", "narrow critic", "skipped: the plan is wide"},
 		{narrow, "narrow critic", "critic", "skipped: the plan is narrow"},
@@ -1247,6 +1259,13 @@ func TestTheCardSaysWhichCriticThePlansWidthSkipped(t *testing.T) {
 		if got := st[tc.skipped]; got.State != "skipped" || got.Proof != tc.skippedBecause {
 			t.Errorf("%s: the %s stage %+v, want %s", TaskKey(tc.task), tc.skipped, got, tc.skippedBecause)
 		}
+	}
+	st := stagesOf(before)
+	if got := st["critic"]; got.State != "skipped" || got.Proof != "skipped: the plan is narrow" {
+		t.Errorf("a task from before: the critic stage %+v, want skipped: the plan is narrow", got)
+	}
+	if got := st["narrow critic"]; got.State != "skipped" || got.Proof != "skipped" {
+		t.Errorf("a task from before: the narrow critic stage %+v, want plain skipped, no width made up", got)
 	}
 }
 

@@ -21319,52 +21319,86 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the operator's levels** (R41, R43, R44, 2026-11-09). The audit's report C (F5, F6) counted one model per role.
   talkable#12213 had a narrow plan, so it skipped the critic (`when = "wide"`), and the posted round then found a P2.
   - The critic on every plan (R41). A stage's `when` takes `"narrow"` next to `"wide"`: such a stage is skipped for a
-    wide plan (`skipByWidth`, the narrow skip's mirror, with the same `<stage> skipped: <why>` event). Each built-in
-    kind has two critic stages right after the judge. `critic` (`when = "wide"`) runs fx-critic, Codex at xhigh, as
-    before. `narrow_critic` (`when = "narrow"`) runs fx-critic-narrow, a new role on Codex at high with the same
-    `factory-critic.md`. Both end on `critic`, so exactly one of them runs. A Codex refusal hands either one to
-    fx-critic-claude (Claude, high), which already ran at high, so no new Claude role was needed. The card shows the
-    critic that did not run as skipped, with the width that skipped it ("skipped: the plan is wide" is new). The tick
-    chains a task one stage further, and the skip is that stage, so a wide plan reaches the questions gate one tick
-    later than before, at most one poll (45 s). A narrow plan reaches its critic after the same one tick as before.
-    The spend notch moves fx-critic-narrow as it moves any built-in role (xhigh under `high`, medium under `low`).
+    wide plan. Each built-in kind has two critic stages right after the judge. `critic` (`when = "wide"`) runs
+    fx-critic, Codex at xhigh, as before. `narrow_critic` (`when = "narrow"`) runs fx-critic-narrow, a new role on
+    Codex at high with the same `factory-critic.md`. Both end on `critic`, so exactly one of them runs. A Codex refusal
+    hands either one to fx-critic-claude (Claude, high), which already ran at high, so no new Claude role was needed.
+    The spend notch moves fx-critic-narrow as it moves any built-in role, so under `spend = "high"` it runs at xhigh,
+    as fx-critic does: the narrow plan's critic is a notch lighter only under medium and low. That puts quality over
+    cost where the operator chose high; `fx-critic-narrow = { effort = "high" }` in `[spend.high]` keeps it lighter.
+  - The skip costs no tick. The move to the next stage (`nextStage`) skips a stage for the other width, as it skips a
+    qa stage of a repository without `[factory.repo.qa]`, reading the report and writing the same `<stage> skipped:
+    <why>` event, so the tick's one chained pass goes to the stage after it: a wide plan reaches the questions gate,
+    and a narrow plan's narrow critic launches, in the tick its previous stage passed. A task that stands at a
+    width-gated stage (from before the upgrade, or a report the move could not read) is still skipped by the stage's
+    own pass (`skipByWidth`).
+  - The card. A skipped critic says which width skipped it only when the task's `<stage> skipped` event names that
+    stage (`widthSkipped`, read once per card and only for such a stage); a task from before the narrow critic, with
+    no such event for it, shows it as plain "skipped" and invents no width.
   - A Codex twin of fx-points (R44), as a trial. The feature's investigate stage runs fx-points and fx-points-codex
     (Codex, high, the same `factory-points.md` and the same hour) in one workspace. The points prompt now keeps each
-    reader from the other's findings file, as the cause finder's prompt does. The judge's prompt merges two readings
-    of one thing (a bug's cause, a feature's points): a point, a fact or a question both raise is one, asked once,
-    and what only one names, or what they read differently, it checks against the code. The judge already read
-    `findings-*.md`, and the end fact is per role, so `findings-fx-points-codex.md` needed no new code. A refusal of
-    the twin must not block the stage. So its `codex_fallback` is fx-points, a role the stage runs already
-    (`coveredIn`). After a refusal, the twin leaves the run with a stage event, no second fx-points session starts,
-    and fx-points' run stands for both. A restart rebuilds the stage without the twin. The screen counts a role as
-    done by its fallback's run only on a task Codex never works on, because fx-points done beside a twin still at
-    work had read "2 of 2 done". The trial runs on 5 feature tasks. It is judged on the question count per task
-    (task 6 asked 28, 13 of them from fx-points) and on the take rate (`magnum factory stats`, R19). The twin is
-    kept if the plans get better without more questions, and dropped (the role and its kind entry) if it only adds
-    questions.
+    reader from the other's findings file, as the cause finder's prompt does. The twin's `codex_fallback` is fx-points,
+    a role of the same stage, which makes it a second reader (`secondReader`):
+    - It has no questions file (`questionsFileOf` gives none, so its rules say to ask no one). Two parallel readers
+      cannot read each other's questions first, so their files would ask the same question twice in their own words,
+      which the gate's text match (R11) cannot merge. Its open questions stay in its findings' `## Open questions`.
+      The judge reads `questions-fx-points.json` first, as its questions block says, and asks in `questions.json`
+      what the twin's questions add, once, and none the other files ask. A `questions-fx-points-codex.json` the twin
+      writes anyway is never asked (`asksNoOne`) and never holds up its end, even malformed (`endOf`).
+    - The judge's prompt merges two readings of one thing: a point or a fact both raise is one, and what only one
+      names, or what they read differently, it checks against the code. A question from an investigator's findings
+      cites that findings file in its `evidence`.
+    - A refusal does not block the stage. After it, the twin leaves the run (`coveredIn`), no second fx-points session
+      starts, and fx-points' run stands for both. What the refused run wrote (its findings, perhaps partial, and a
+      questions file) is set aside as `<name>.refused`, which no glob of the agents' files matches, so the judge never
+      reads a truncated reading as a second opinion (removed from its inputs, rather than marked: a marked file would
+      still cost the judge a check of each of its claims). The `<role> left the <stage> stage` event names what it set
+      aside. It is written once: after the Codex quit of the same pass, and also when a restart's rebuild leaves the
+      twin out (`leaveStage`, guarded by the task's stage events).
+    - The screen counts a role as done by its fallback's run only on a task Codex never works on, because fx-points
+      done beside a twin still at work had read "2 of 2 done".
+    - The measure. `magnum factory stats` counts each task's questions once, and by source (`questionSources`): each
+      role their `raised_by` names and each investigator whose findings file their `evidence` names. The twin's
+      share is the questions whose evidence names `findings-fx-points-codex.md`. No migration: the questions records
+      already keep both. The trial runs on 5 feature tasks. It is judged on that share against the plans it changed
+      (task 6 asked 28, 13 of them from fx-points) and on the take rate (`magnum factory stats`, R19). The twin is
+      kept if the plans get better without more questions, and dropped (the role and its kind entry) if it only adds
+      questions. The twin makes every feature's investigation wait on Codex as well: a Codex usage pause or login
+      lapse holds the stage after fx-points ends, which is Codex's cost, not the twin's reading's. R41 already puts
+      Codex on every plan's path at the critic.
   - Stronger models (R43) live in the operator's own levels, not in the built-in defaults. The audit assumed built-in
     `high` and `burn` tables. None exist: the built-in levels are the effort notch alone, they give no model to any
     role, `burn` is a level of the operator's own config, and the defaults name no Codex model. A built-in
     `[spend.high]` that named the investigators on opus would change nothing on a Mac whose Claude Code default is
     already opus. It would also override another user's own `[[factory.role]]` model line, since a level's table
-    outranks role blocks. And a Codex model in the defaults would be one an account may not have. So the README shows
-    the user's `[spend.burn]` lines: fx-judge on fable at xhigh, and the factory's Codex roles (both critics,
-    fx-cause and the twin) on the level's Codex model at xhigh. A `[spend.high]` that moves codex-judge to a lighter
-    Codex model needs no factory entry: those roles keep Codex's own model.
+    outranks role blocks. And a Codex model in the defaults would be one an account may not have. So the README gives
+    the whole recipe for a strongest level of the user's own: `[pipeline] spend` and any kind's own `spend` set to
+    it, fx-judge on fable at xhigh, the factory's Codex roles (both critics, fx-cause and the twin) on the level's
+    Codex model at xhigh, and every other factory role but fx-history at xhigh, since a level of one's own starts from
+    medium. A `[spend.high]` that moves codex-judge to a lighter Codex model needs no factory entry: those roles keep
+    Codex's own model.
+  - Rollback. A build from before this one stops on a task at `narrow_critic` ("the feature kind has no stage
+    narrow_critic") and refuses `[spend.*]` entries that name fx-critic-narrow or fx-points-codex: finish or stop
+    such tasks and take such entries out before going back.
   Rejected: an `effort` key per stage for a narrow plan (more code through the launch, the fallback's relaunch and
   the restart's rebuild; hidden from `magnum roles`; and outside the spend notch); one critic stage with no `when`
   at xhigh (the narrow plans' critic one notch lighter was the decision); a Claude fallback of the twin (a second
   Claude reading of the same points, more questions, and no second model); the twin with no fallback (a refusal
-  would wait on you, as for any Codex role without one); built-in `[spend.high]` and `[spend.burn]` tables (above).
+  would wait on you, as for any Codex role without one); the twin's own questions file, counted as its cost (the
+  duplicates would come from the setup, not its reading, and the trial would drop it for them); a refused twin's
+  findings kept and marked; built-in `[spend.high]` and `[spend.burn]` tables (above).
   Tests: config's TestEveryKindsCriticReadsAWidePlanAtXhighAndANarrowOneAtHigh,
   TestTheFeatureKindInvestigatesWithACodexTwinOfThePointsReader, TestAStageRunsForAWideOrANarrowPlan,
   TestAUserBurnLevelRaisesTheFactoryJudgeAndItsCodexRoles (a fixture shaped like the README's lines, with
   placeholder Codex models), and TestTheDefaultConfigKeepsEveryFactoryRolesModel and
   TestTheSpendLevelsNotchReachesTheFactoryRoles with the two new roles; the factory's TestEveryPlanReachesACritic
-  (in place of TestTheCriticRunsOnlyForWideChanges), TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage
-  (with and without a restart), TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn,
-  TestTheCardSaysWhichCriticThePlansWidthSkipped, TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem,
-  and TestInvestigationLaunchesTheRolesOfItsKind with the twin. No new dependencies.
+  (in place of TestTheCriticRunsOnlyForWideChanges), TestANarrowPlansJudgeLeadsStraightToTheNarrowCritic,
+  TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage (with and without a restart, the files set aside, the
+  event once), TestTheSecondReaderAsksNoOneAndEndsOnItsFindings, TestASecondReadersQuestionsFileIsNeverAsked,
+  TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn, TestTheCardSaysWhichCriticThePlansWidthSkipped
+  (a task from before included), TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem, and
+  TestInvestigationLaunchesTheRolesOfItsKind with the twin; stats' TestStatsCountTheQuestionsBySource; tui's
+  TestTheHelpListsOnlyWhatExists with the narrow critic's gloss. No new dependencies.
 
 - Broken copies repair themselves on a backoff while the factory daemon runs, and every copy of a repository broken
   with one cause is an infrastructure hold of that repository (2026-11-09; amends "Each start of the factory daemon

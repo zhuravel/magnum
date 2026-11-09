@@ -2,6 +2,8 @@ package stats_test
 
 import (
 	"encoding/json"
+	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -158,7 +160,8 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	want := stats.TaskStats{TaskID: a.ID, Key: "PR-12301", Typed: 9, StepStarts: 1, Approvals: 1, Corrections: 2, Access: 1,
 		AnswerBatches: 2, Decisions: 2, ReviewRounds: 2}
 	got.OperatorSecs, got.WaitedOnYou, got.StartToReady = 0, 0, 0
-	if got != want {
+	got.Questions, got.QuestionsFrom = 0, nil // counted apart (TestStatsCountTheQuestionsBySource)
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("task A\n got %+v\nwant %+v", got, want)
 	}
 	if other := rep.Tasks[1]; other.Typed != 1 || other.Approvals != 1 || other.AnswerBatches != 0 || other.Decisions != 0 {
@@ -193,6 +196,61 @@ func askRevision(t *testing.T, r *registry.Registry, clk *clock, taskID int64, r
 		if err := r.AnswerBatch(ctx, taskID, rev, answers); err != nil {
 			t.Fatalf("answer revision %d: %v", rev, err)
 		}
+	}
+}
+
+// The questions a task asked are counted once each (a question an open
+// revision carries over is the same question), and by source: each role
+// its raised_by names (two roles that raised it both count) and each
+// investigator whose findings file its evidence names, so a second
+// reader's share shows even when the judge asked its questions. The JSON
+// and the markdown carry them; a task that asked nothing shows none.
+func TestStatsCountTheQuestionsBySource(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	a := createTask(t, r, "PR-12390")
+	createTask(t, r, "PR-12391") // asks nothing
+	both := registry.Question{Text: "Who gets the reminder?", Recommended: -1, RaisedBy: "fx-judge, fx-points",
+		Evidence: "findings-fx-points.md and findings-fx-points-codex.md: Point 2"}
+	if err := r.ReplaceQuestions(ctx, a.ID, 1, []registry.Question{
+		{Text: "Can a merchant turn it off?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "findings-fx-points-codex.md: Point 3"},
+		{Text: "When does it go out?", Recommended: -1, RaisedBy: "fx-points", Evidence: "app/models/credit.rb:12"},
+		both,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplaceQuestions(ctx, a.ID, 2, []registry.Question{both,
+		{Text: "Does the migration lock the table?", Recommended: -1, RaisedBy: "fx-critic", Evidence: "critic.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, rep, "PR-12390")
+	want := map[string]int{"fx-judge": 2, "fx-points": 2, "fx-points-codex": 2, "fx-critic": 1}
+	if got.Questions != 4 || !maps.Equal(got.QuestionsFrom, want) {
+		t.Fatalf("questions %d from %v, want 4 from %v", got.Questions, got.QuestionsFrom, want)
+	}
+	if q := only(t, rep, "PR-12391"); q.Questions != 0 || len(q.QuestionsFrom) != 0 {
+		t.Fatalf("a task that asked nothing: %d from %v", q.Questions, q.QuestionsFrom)
+	}
+	js, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `"questions":4,"questions_from":{"fx-critic":1,"fx-judge":2,"fx-points":2,"fx-points-codex":2}`) {
+		t.Errorf("the task's JSON lacks its questions by source:\n%s", js)
+	}
+	md := rep.Markdown()
+	for _, want := range []string{"## Questions by source", "| PR-12390 | 4 | fx-critic 1, fx-judge 2, fx-points 2, fx-points-codex 2 |"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if _, section, _ := strings.Cut(md, "## Questions by source"); strings.Contains(section, "PR-12391") {
+		t.Errorf("the questions section lists a task that asked nothing:\n%s", section)
 	}
 }
 
@@ -488,7 +546,7 @@ func TestStatsCountALiaisonsAnswerAsACards(t *testing.T) {
 		t.Errorf("the liaison's task = %+v, want one answered batch and one decision, %s of the operator's time and nothing typed", liaison, want)
 	}
 	screen.TaskID, screen.Key = liaison.TaskID, liaison.Key
-	if screen != liaison {
+	if !reflect.DeepEqual(screen, liaison) {
 		t.Errorf("the liaison's task\n got %+v\nwant %+v, as the same from the screen", liaison, screen)
 	}
 }

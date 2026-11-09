@@ -53,9 +53,9 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `factory-repro.md` | `fx-repro`, the factory's reproducer of a bug (`[[factory.role]]`) | factory |
 | `factory-cause.md` | `fx-cause` and its Claude fallback `fx-cause-claude`, which find a bug's cause on their own | factory |
 | `factory-history.md` | `fx-history`, which reads the history of the code a fix will change: one list item per guard, starting with its `path:line`, with its `why:` (the ready card flags a guard the change rewrites that is older than 6 months, with that why) | factory |
-| `factory-points.md` | `fx-points` and its Codex twin `fx-points-codex` (a trial), which each test every point of a feature's ticket against the code on their own | factory |
+| `factory-points.md` | `fx-points` and its Codex twin `fx-points-codex` (a trial), which each test every point of a feature's ticket against the code on their own; the twin, a second reader, has no questions file (`.Questions` is empty, so its rules say to ask no one) and keeps its open questions in its findings | factory |
 | `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
-| `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions, among them each doubt that can change what a user sees while neither the ticket nor your answers decide it (a question, never a choice in the plan) | factory |
+| `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions, among them each doubt that can change what a user sees while neither the ticket nor your answers decide it (a question, never a choice in the plan); it merges two readings of one thing (a feature's points, read twice), asks once what a second reader's open questions add, and cites the findings file a question comes from in its `evidence` | factory |
 | `factory-liaison.md` | `fx-liaison`, the liaison that talks with you about one task: it works in the task's folder (`.TaskDir`), never in the copy; asks you with AskUserQuestion, its recommendation first and one decision at a time; records your answers and decisions with `magnum factory answer` and `decide` (`--surface liaison`, `--shown`) and lets a waiting task go on with `retry`; keeps `notes.md`; and never merges, runs a migration or touches production or a shared database. No stage names it, so none launches it, and it carries no factory-mode rules (the other factory prompts forbid AskUserQuestion) | factory |
 | `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
 | `factory-critic.md` | `fx-critic` (a wide plan, xhigh), `fx-critic-narrow` (a narrow one, high) and their Claude fallback `fx-critic-claude`, which criticize the plan | factory |
@@ -618,7 +618,10 @@ goes to you at once, naming the configuration key or the paths. Every plan gets 
 fx-critic at xhigh) runs for a plan whose Files name 3 or more files, a file under `db/` or a security path, and the
 `narrow_critic` stage (`when = "narrow"`, fx-critic-narrow at high) for any other plan; both read the plan with
 `factory-critic.md`. A feature's points have two readers on the same `factory-points.md`, fx-points and its Codex twin
-fx-points-codex (a trial), each kept from the other's findings, and the judge merges their readings.
+fx-points-codex (a trial), each kept from the other's findings. The twin is a second reader (its `codex_fallback` is
+fx-points, in the same stage): it has no questions file, so the judge merges the two readings and asks in
+`questions.json` what the twin's open questions add to fx-points' questions file, once, citing the twin's findings file
+in the question's `evidence`.
 
 A role that ends its turn with new questions in `.Questions` suspends its stage instead of a nudge: once
 you answered, it gets a prompt that names `answers.md` by its path (never its words) and goes on where it

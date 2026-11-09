@@ -1102,7 +1102,8 @@ func live(tasks []registry.Task) []registry.Task {
 // advance runs one pass of the task's current stage (an empty stage is its
 // kind's first, recorded) and moves the task to the next stage once the
 // stage passes (nextStage: a qa stage of a repository without
-// [factory.repo.qa] is skipped, a stage event says so). The last stage's own
+// [factory.repo.qa], and a stage for the other width of plan, are skipped,
+// a stage event says so). The last stage's own
 // effect ends the task. A task that
 // waits for Jira before its first stage tries Jira instead (retryJira), and
 // one whose key has no ticket.md yet (your answer linked it) reads its
@@ -1169,8 +1170,8 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 	}); err != nil {
 		return err
 	}
-	for _, name := range skipped {
-		e.event(ctx, t.ID, "stage", registry.PhaseInfo, name+" skipped: "+t.Repo+" has no [factory.repo.qa]")
+	for _, sk := range skipped {
+		e.event(ctx, t.ID, "stage", registry.PhaseInfo, sk.stage+" skipped: "+sk.why)
 	}
 	return nil
 }

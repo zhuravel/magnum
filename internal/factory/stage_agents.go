@@ -148,6 +148,10 @@ type agentsRun struct {
 	// quitCodex: a refusal left the task's Codex sessions to quit
 	// (Runtime.QuitCodex), tried again each pass until it went through.
 	quitCodex bool
+	// left are the roles the stage's run of their fallback covers
+	// (coveredIn) that a rebuild of the run left out, each to leave the
+	// stage (leaveStage) once the pass quit the task's Codex sessions.
+	left []leaving
 	// turn is how this pass runs the attempt (runTurn).
 	turn agentsTurn
 	// copy is the task's copy, this pass's; proven the head whose proof and
@@ -485,6 +489,7 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			return nil, nil, cannotRun(role, err)
 		}
 		if coveredIn(st, role, runAs) {
+			run.left = append(run.left, leaving{role, runAs})
 			continue
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
@@ -595,6 +600,70 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 		r.letGo = why == runtime.LetGoWhy
 	}
 	return nil, nil
+}
+
+// leaving is a role that leaves its stage (coveredIn), and the fallback it
+// runs as there, which covers it.
+type leaving struct{ role, runAs config.Role }
+
+// leaveStage has role, which the stage's run of its fallback runAs covers
+// (coveredIn), leave stage st of task t: what a refused run of it left in
+// the task's directory (its findings and its questions file, perhaps
+// partial) is set aside as <name>.refused (setAsideRefused), out of every glob of
+// the agents' files, so the judge never reads it as a second reading; an
+// event says so, once for the role and the stage (a restart's rebuild
+// leaves it again, finding nothing to set aside and the event written). A
+// file that cannot be set aside is a fail event and a warning: the judge
+// may read it, which costs a check of its claims against the code, never
+// the task.
+func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role) {
+	lead := role.Name + " left the " + st.Name + " stage"
+	moved, err := setAsideRefused(e.d.Layout.FactoryTaskDir(t.ID), findingsFile(role.Name), roleQuestionsFile(role.Name))
+	if err != nil {
+		e.log.Warn("set aside the files of a role that left its stage", "task", t.ID, "role", role.Name, "err", err)
+		e.event(ctx, t.ID, "stage", registry.PhaseFail, lead+": its files were not set aside: "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200))
+	}
+	if len(moved) == 0 && e.saidOnce(ctx, t, lead) {
+		return
+	}
+	text := lead + ": Codex never works on " + TaskKey(t) + " again, and its codex_fallback " + runAs.Name + " runs in the stage already"
+	if len(moved) > 0 {
+		text += "; set aside: " + strings.Join(moved, ", ")
+	}
+	e.event(ctx, t.ID, "stage", registry.PhaseInfo, text)
+}
+
+// saidOnce reports whether one of task t's stage events starts with lead (a
+// failed read counts as said: a second event costs less than a missed one
+// never would, but the read is retried at the next rebuild anyway).
+func (e *Engine) saidOnce(ctx context.Context, t registry.Task, lead string) bool {
+	evs, err := e.reg.Events(ctx, t.ID, 0)
+	if err != nil {
+		e.log.Warn("read a task's events", "task", t.ID, "err", err)
+		return false
+	}
+	return slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Kind == "stage" && strings.HasPrefix(ev.Text, lead) })
+}
+
+// setAsideRefused renames each of names in dir that exists to <name>.refused
+// (refusedSuffix), over an earlier one, and returns the new names. A name
+// already set aside (no file left) is nothing to do, so a second call
+// changes nothing.
+func setAsideRefused(dir string, names ...string) ([]string, error) {
+	var moved []string
+	var errs []error
+	for _, name := range names {
+		from := filepath.Join(dir, name)
+		if !fsx.Exists(from) {
+			continue
+		}
+		if err := os.Rename(from, from+refusedSuffix); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		moved = append(moved, name+refusedSuffix)
+	}
+	return moved, errors.Join(errs...)
 }
 
 // coveredIn reports whether role, run as runAs (Runtime.RunsAs), is covered
@@ -735,7 +804,7 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	if r.asking {
 		return "" // its questions wait for your answers already
 	}
-	p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
+	p := e.endOf(st, dir, run.since(a), r.role.Name)
 	if p == nil && run.turn.review != nil {
 		p = run.turn.review.replyProblem(dir, run.since(a))
 	}
@@ -921,7 +990,7 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		if r.failed == "" && !r.letGo {
 			continue
 		}
-		p := checkEnd(st.End, dir, run.since(a), []string{r.role.Name})
+		p := e.endOf(st, dir, run.since(a), r.role.Name)
 		if p == nil && r.letGo {
 			var err error
 			if p, err = e.beforeLetGo(ctx, t, st, r, run); err != nil { // the next pass reads again
@@ -1038,6 +1107,10 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			run.quitCodex = false
 		}
 	}
+	for _, l := range run.left {
+		e.leaveStage(ctx, t, st, l.role, l.runAs)
+	}
+	run.left = nil
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
 		return nil, err
@@ -1064,8 +1137,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			}
 			if coveredIn(st, r.role, runAs) {
 				r.covered = true
-				e.event(ctx, t.ID, "stage", registry.PhaseInfo, r.role.Name+" left the "+st.Name+" stage: Codex never works on "+
-					TaskKey(t)+" again, and its codex_fallback "+runAs.Name+" runs in the stage already")
+				e.leaveStage(ctx, t, st, r.role, runAs)
 				continue
 			}
 			runAs = asStageRuns(st, runAs)
@@ -1315,7 +1387,7 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port,
 		Magnum: execx.ShellQuote(cmp.Or(e.d.Layout.Binary(), "magnum"))}
-	if name := questionsFileOf(st, role.Name); name != "" {
+	if name := questionsFileOf(e.cfg, st, role.Name); name != "" {
 		d.Questions = in(name)
 	}
 	d.Base, d.RedRun = config.DefaultFactoryBase, e.cfg.Factory.Kinds[t.Kind].RedRun()
@@ -1439,18 +1511,44 @@ func (e *Engine) mergeMethods(ctx context.Context, repo string) string {
 }
 
 // questionsFileOf is the questions file role (as the stage names it) writes
-// in stage st: questions.json in a stage that ends on the judge's report,
-// none in a qa stage (its walker asks no one: what it cannot reach goes into
-// its verdict's blocked list, and a file it left would reach the operator
-// with a later role's questions), questions-<role>.json in any other.
-func questionsFileOf(st config.FactoryStage, role string) string {
-	switch st.End {
-	case config.FactoryEndReport:
+// in stage st of cfg: questions.json in a stage that ends on the judge's
+// report, none in a qa stage (its walker asks no one: what it cannot reach
+// goes into its verdict's blocked list, and a file it left would reach the
+// operator with a later role's questions), none for a second reader of the
+// stage (secondReader: its open questions stay in its findings, which the
+// judge reads beside the first reader's questions file, so a question the
+// two readers raise in their own words is asked once), questions-<role>.json
+// in any other.
+func questionsFileOf(cfg *config.Config, st config.FactoryStage, role string) string {
+	switch {
+	case st.End == config.FactoryEndReport:
 		return questionsFile
-	case config.FactoryEndQA:
+	case st.End == config.FactoryEndQA, secondReader(cfg, st, role):
 		return ""
 	}
 	return roleQuestionsFile(role)
+}
+
+// secondReader reports whether role is a second reader in stage st of cfg:
+// its codex_fallback is another role the stage runs (fx-points-codex beside
+// fx-points), so the two read the same thing, and the role leaves the stage
+// after a Codex refusal (coveredIn).
+func secondReader(cfg *config.Config, st config.FactoryStage, role string) bool {
+	fb := cfg.Factory.CodexFallback[role]
+	return fb != "" && fb != role && slices.Contains(st.Roles, fb)
+}
+
+// endOf is checkEnd of stage st's end fact for role, whose files are in dir
+// and newer than since; a role with no questions file (questionsFileOf) is
+// not held to one it wrote anyway, which no one reads. The questions file is
+// the last file checkEnd checks of a role, so no other problem hides behind
+// it.
+func (e *Engine) endOf(st config.FactoryStage, dir string, since time.Time, role string) *endProblem {
+	p := checkEnd(st.End, dir, since, []string{role})
+	if p != nil && p.file == roleQuestionsFile(role) && questionsFileOf(e.cfg, st, role) == "" {
+		return nil
+	}
+	return p
 }
 
 // CheckPrompts renders the prompt of every factory role ([[factory.role]]),

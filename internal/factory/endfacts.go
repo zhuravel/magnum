@@ -38,6 +38,11 @@ const (
 // role the stage names (a Codex role's Claude fallback writes the same).
 func findingsFile(role string) string { return "findings-" + role + ".md" }
 
+// refusedSuffix ends the name of a file a role's refused run left, set aside
+// when the role leaves its stage (setAsideRefused): no glob of the agents' files
+// (findings-*.md, questions-*.json) matches it.
+const refusedSuffix = ".refused"
+
 // roleQuestionsFile is the questions file of a role other than the judge's
 // (the critic's, an investigator's that cannot go on): questions-<role>.json,
 // so roles at work at once never write over each other's. The judge's

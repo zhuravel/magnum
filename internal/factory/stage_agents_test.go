@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/prompts"
 )
 
@@ -351,11 +352,14 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 }
 
 // Two investigators of one thing read it on their own (a feature's points
-// go to fx-points and its Codex twin, on the same prompt, as a bug's cause
-// goes to fx-cause apart from the others): the points prompt keeps each away
-// from the other's findings file, and the judge merges the two readings: a
-// point or a question both raise is one, asked once, and what only one of
-// them names or they read differently is checked against the code first.
+// go to fx-points and its Codex twin, on the same prompt): the points prompt
+// keeps each away from the other's findings file, and the judge merges the
+// two readings: a point or a fact both raise is one, and what only one names
+// or they read differently is checked against the code first. The second
+// reader has no questions file, so the judge asks what its open questions
+// add, once, and none the other files ask; and a question from an
+// investigator's findings names that file in its evidence, which the stats
+// count by source.
 func TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem(t *testing.T) {
 	cfg := config.Defaults()
 	d := fullPromptData()
@@ -367,8 +371,11 @@ func TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem(t *testing.T
 		}
 	}
 	judge := renderFactory(t, cfg, "factory-judge.md", d)
-	for _, want := range []string{"Two investigators may read the same thing on their own (a bug's cause, a feature's points)",
-		"a point, a fact or a question both raise is one, asked once", "check against the code"} {
+	for _, want := range []string{"Two investigators may read the same thing on their own (a feature's points, read twice)",
+		"a point or a fact both raise is one", "check against the code",
+		"An investigator that wrote no questions file of its own", "asks the operator nothing itself",
+		"what its open questions add to the questions files the other roles wrote, once, and none they ask already",
+		"names that findings file (`findings-<role>.md`) in its `evidence`"} {
 		if !strings.Contains(judge, want) {
 			t.Errorf("factory-judge.md lacks %q:\n%s", want, judge)
 		}
@@ -850,7 +857,10 @@ func reportNaming(files ...string) string {
 // Every plan gets a critic (talkable#12213, narrow, skipped it and took a
 // public P2): a narrow plan skips the wide plan's critic, saying why, and
 // reaches the narrow critic, fx-critic-narrow, in the same tick; a wide plan
-// gets fx-critic, and once it passed, skips the narrow critic, saying why.
+// gets fx-critic, and once it passed, skips the narrow critic, saying why,
+// and reaches the questions gate in the same tick: a stage the plan's width
+// skips takes no pass of its own (nextStage), whether a task meets it on
+// its way or stands at it.
 func TestEveryPlanReachesACritic(t *testing.T) {
 	h := newHarness(t)
 	chore := h.kindTask("PR-12322", "chore", "critic")
@@ -895,17 +905,39 @@ func TestEveryPlanReachesACritic(t *testing.T) {
 	}
 	h.taskFile(feature.ID, "critic.md", "The migration locks the rules table.\n")
 	h.ended(feature, "fx-critic")
-	h.tick() // the critic passes, and the chained pass skips the narrow critic
-	if got := h.reload(feature.ID); got.Stage != "questions" || len(h.rt.launchedRoles()) != 2 {
-		t.Fatalf("the feature is at %q with launches %v, want past the narrow critic, unlaunched, at questions", got.Stage, h.rt.launchedRoles())
-	}
-	h.tick()
-	if got := h.reload(feature.ID); got.Stage != "coding" {
-		t.Fatalf("the feature is at %q, want past the questions gate, at coding", got.Stage)
+	h.tick() // the critic passes, the move skips the narrow critic, and the chained pass is the questions gate's
+	if got := h.reload(feature.ID); got.Stage != "coding" || len(h.rt.launchedRoles()) != 2 {
+		t.Fatalf("the feature is at %q with launches %v, want past the narrow critic, unlaunched, and the questions gate, at coding",
+			got.Stage, h.rt.launchedRoles())
 	}
 	if evs := h.events(feature.ID, "stage"); len(evs) != 1 || !strings.HasPrefix(evs[0].Text, "narrow_critic skipped: ") ||
 		!strings.Contains(evs[0].Text, "database") {
 		t.Fatalf("stage events %+v, want one saying why the narrow critic was skipped", evs)
+	}
+}
+
+// The judge's pass of a narrow plan moves the task past the wide plan's
+// critic, saying why, and the tick's chained pass launches the narrow
+// critic at once, as a wide plan's critic launches right after its judge.
+func TestANarrowPlansJudgeLeadsStraightToTheNarrowCritic(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12325", "bug", "judge")
+	h.startStage(task)
+	h.taskFile(task.ID, "report.md", goodReport)
+	h.taskFile(task.ID, "acceptance.json", goodAcceptance)
+	h.ended(task, "fx-judge")
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "narrow_critic" {
+		t.Fatalf("task at %q, want at the narrow critic", got.Stage)
+	}
+	if got := h.rt.launchedRoles(); len(got) != 2 || !slices.Equal(got[1], []string{"fx-critic-narrow"}) {
+		t.Fatalf("launches %v, want the narrow critic launched in the judge's tick", got)
+	}
+	if evs := h.events(task.ID, "stage"); len(evs) != 1 || !strings.HasPrefix(evs[0].Text, "critic skipped: ") {
+		t.Fatalf("stage events %+v, want one saying why the wide plan's critic was skipped", evs)
+	}
+	if as := h.attempts(task.ID); slices.ContainsFunc(as, func(a registry.Attempt) bool { return a.Stage == "critic" }) {
+		t.Fatalf("attempts %+v, want none of the skipped critic", as)
 	}
 }
 
@@ -1228,9 +1260,12 @@ func TestACodexRefusalRunsTheRoleAsItsClaudeFallback(t *testing.T) {
 
 // A Codex refusal of the feature's points twin never blocks its stage: the
 // twin's fallback is fx-points, which the stage runs already, so the twin
-// leaves the stage (an event says so) with no Claude copy of it launched,
-// fx-points goes on with its one prompt, and its findings alone end the
-// stage. A restart in between rebuilds the stage without the twin.
+// leaves the stage with no Claude copy of it launched, fx-points goes on with
+// its one prompt, and its findings alone end the stage. What the refused run
+// wrote (a findings file, maybe partial, and a questions file) is set aside
+// as <name>.refused, out of the judge's findings-*.md, and one event says
+// so, also when a restart came between the refusal and the stage's next
+// pass, and only once.
 func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restart %v", restart), func(t *testing.T) {
@@ -1240,6 +1275,8 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 			if got := h.rt.launchedRoles(); len(got) != 1 || !slices.Equal(got[0], []string{"fx-points", "fx-points-codex"}) {
 				t.Fatalf("launches %v, want fx-points and its twin in one workspace", got)
 			}
+			h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export")
+			h.taskFile(task.ID, "questions-fx-points-codex.json", "[")
 			h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
 				Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
 			if restart {
@@ -1258,19 +1295,57 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 			if n, m := len(h.rt.promptsTo("fx-points")), len(h.rt.promptsTo("fx-points-codex")); n != 1 || m != 1 {
 				t.Fatalf("fx-points got %d prompts and its twin %d, want one each: no prompt again", n, m)
 			}
-			if !restart && !slices.ContainsFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool {
-				return strings.Contains(ev.Text, "fx-points-codex") && strings.Contains(ev.Text, "fx-points")
-			}) {
-				t.Errorf("stage events %+v, want one saying the twin left the stage to fx-points", h.events(task.ID, "stage"))
+			dir := h.layout.FactoryTaskDir(task.ID)
+			for _, name := range []string{"findings-fx-points-codex.md", "questions-fx-points-codex.json"} {
+				if fsx.Exists(filepath.Join(dir, name)) || !fsx.Exists(filepath.Join(dir, name+refusedSuffix)) {
+					t.Errorf("%s is still in the task's directory, or not set aside as %s", name, name+refusedSuffix)
+				}
+			}
+			if restart {
+				h.restart()
+				h.startStage(task)
+			}
+			left := slices.DeleteFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool { return !strings.Contains(ev.Text, "left the") })
+			if len(left) != 1 || !strings.Contains(left[0].Text, "fx-points-codex left the investigate stage") ||
+				!strings.Contains(left[0].Text, "fx-points") || !strings.Contains(left[0].Text, "findings-fx-points-codex.md"+refusedSuffix) {
+				t.Errorf("stage events %+v, want one saying the twin left the stage to fx-points and naming what it set aside", left)
 			}
 
-			h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\\nThe export exists in app/models/coupon_export.rb:12.\\n")
+			h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
 			h.ended(task, "fx-points")
 			h.tick()
 			if got := h.reload(task.ID); got.Stage != "judge" {
 				t.Fatalf("task at %q, want the investigation passed on fx-points' findings alone", got.Stage)
 			}
 		})
+	}
+}
+
+// The second reader of a stage (fx-points-codex, whose codex_fallback is
+// fx-points beside it) is told to ask no one: its prompt names no questions
+// file, fx-points' names its own, and a questions file the twin wrote
+// anyway, even malformed, never holds up its end: its findings end its turn.
+func TestTheSecondReaderAsksNoOneAndEndsOnItsFindings(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12333", "feature", "investigate")
+	h.startStage(task)
+	dir := h.layout.FactoryTaskDir(task.ID)
+	twin, points := h.rt.promptsTo("fx-points-codex"), h.rt.promptsTo("fx-points")
+	if len(twin) != 1 || strings.Contains(twin[0].Text, "questions-fx-points-codex.json") || !strings.Contains(twin[0].Text, "Ask no one") {
+		t.Fatalf("the twin's prompt %+v, want one that names no questions file of its own and says to ask no one", twin)
+	}
+	if len(points) != 1 || !strings.Contains(points[0].Text, filepath.Join(dir, "questions-fx-points.json")) {
+		t.Fatalf("fx-points' prompt %+v, want its questions file named", points)
+	}
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export exists.\n\n## Open questions\n- Who gets it?\n")
+	h.taskFile(task.ID, "questions-fx-points-codex.json", "not JSON")
+	h.ended(task, "fx-points-codex")
+	h.tick()
+	if n := len(h.rt.promptsTo("fx-points-codex")); n != 1 {
+		t.Fatalf("the twin got %d prompts, want no nudge about a questions file it has none of", n)
+	}
+	if vs := h.rt.verifies(); len(vs) != 1 || !vs[0].OK {
+		t.Fatalf("Verify calls %+v, want the twin's run verified", vs)
 	}
 }
 

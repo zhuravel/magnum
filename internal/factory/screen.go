@@ -301,6 +301,23 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	return v, nil
 }
 
+// widthSkipped are the stages of task t whose skip a "<stage> skipped: "
+// stage event records (engine's nextStage and skipByWidth write them); an
+// unreadable log is none, so the card claims no width it cannot show.
+func (s *screen) widthSkipped(t registry.Task) map[string]bool {
+	out := map[string]bool{}
+	evs, err := s.reg.Events(s.ctx, t.ID, 0)
+	if err != nil {
+		return out
+	}
+	for _, ev := range evs {
+		if stage, _, ok := strings.Cut(ev.Text, " skipped: "); ok && ev.Kind == "stage" {
+			out[stage] = true
+		}
+	}
+	return out
+}
+
 // unreadable is the row and the card of task t the screen could not read:
 // its wait is on you, and says why.
 func unreadable(t registry.Task, err error) (tui.FactoryRow, tui.FactoryCards) {
@@ -784,10 +801,14 @@ func (s *screen) cardAgent(x store.Session) tui.CardAgent {
 // stages are task v's stages on its card, in its kind's order: done (or
 // skipped) before the one it is at, that one working, waiting or failed,
 // and the rest to do; a published or done task has them all done. Each
-// takes the time between its spans.
+// takes the time between its spans. A stage for one width of plan that was
+// skipped names the width that skipped it only when the task's "<stage>
+// skipped" event says it was (widthSkipped): a task from before the stage
+// existed has none, and its card says only "skipped".
 func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 	t := v.t
 	kind := s.cfg.Factory.Kinds[t.Kind]
+	var skips map[string]bool // read once, at the first skipped stage for a width
 	at := stageIndex(kind, t.Stage)
 	ended := t.State == registry.TaskPublished || t.State == registry.TaskDone
 	entered, left := map[string]time.Time{}, map[string]time.Time{}
@@ -811,10 +832,14 @@ func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 			cs.State, cs.Proof, cs.Finished = "done", stageProof(st), out2
 			if st.Type == config.FactoryStageAgents && !v.tried[st.Name] {
 				cs.State, cs.Proof, cs.Finished = "skipped", "skipped", time.Time{}
-				switch st.When {
-				case config.FactoryWhenWide:
+				if st.When != "" && skips == nil {
+					skips = s.widthSkipped(t)
+				}
+				switch {
+				case !skips[st.Name]:
+				case st.When == config.FactoryWhenWide:
 					cs.Proof = "skipped: the plan is narrow"
-				case config.FactoryWhenNarrow:
+				case st.When == config.FactoryWhenNarrow:
 					cs.Proof = "skipped: the plan is wide"
 				}
 			}

@@ -2,7 +2,7 @@
 
 {{template "inputs" .}}
 
-Read every findings file ({{.Findings}}), and check each claim you rely on against the code. Two investigators may read the same thing on their own (a bug's cause, a feature's points): merge their readings, so a point, a fact or a question both raise is one, asked once in one wording, and what only one of them names, or what they read differently, you check against the code before you rely on it or ask it. Then write three files.
+Read every findings file ({{.Findings}}), and check each claim you rely on against the code. Two investigators may read the same thing on their own (a feature's points, read twice): merge their readings, so a point or a fact both raise is one, and what only one of them names, or what they read differently, you check against the code before you rely on it. An investigator that wrote no questions file of its own (its open questions are its findings' `## Open questions`) asks the operator nothing itself: ask in {{.Questions}} what its open questions add to the questions files the other roles wrote, once, and none they ask already. A question that comes from an investigator's findings names that findings file (`findings-<role>.md`) in its `evidence`. Then write three files.
 
 {{.Report}}, Markdown, with these sections in this order, each a `## ` heading:
 - `## Architecture decisions` first: each decision the change makes that a reviewer could make otherwise (a new table or column, a new dependency, a public interface, a pattern the code does not use yet), or `none`. Each decision is also a question.
