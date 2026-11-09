@@ -5504,7 +5504,10 @@ dim, with the same E; on a colleague's it is dim and offers no E (E deploys only
 author's), and a `✔ needs you` there stays about your approval. A PR from a fork never deploys to a staging, so it
 has no line. The `ready` view leaves such a PR out, whoever merges it. A deploy that is pushed or live on any env, an
 env magnum cannot read (`unknown`, a stopped daemon) or a file list of an older head takes the line away on the next
-read; nothing new reads GitHub or the mirror for it.
+read, and so does a deploy of the head that magnum runs (queued behind another deploy to its env, or running, its
+conflict resolver too), until its push lands: E says it is already deploying, so the PR does not need you meanwhile.
+A deploy of the head that stopped for you keeps the line (E resumes it), as does one of an older head. Nothing new
+reads GitHub or the mirror for it.
 
 **Deploying, on your word.** `magnum staging <pr> --deploy void,bastion` (or `all`), and `E` on the board's and the
 dashboard's row (and on the factory screen's rows and cards, the same request), deploy your own PR (coworkers' PRs get a gate of their own later) through the [staging

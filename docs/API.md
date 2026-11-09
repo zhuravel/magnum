@@ -32529,8 +32529,10 @@ type PRBoardRow struct {
 	// migration that no env of Stagings holds or may hold: "deploy to a
 	// staging before the merge (it changes db/migrate/...)"
 	// (staging.DeployBeforeMergeWords of engine.StagingFirst over the
-	// head's file list); "" otherwise, and for a PR that can never deploy
-	// to a staging (engine.StagingNeverDeploys: a fork's). The card says
+	// head's file list); "" otherwise, for a PR that can never deploy to a
+	// staging (engine.StagingNeverDeploys: a fork's), and while a deploy of
+	// the head in StagingDeploys is live (queued or running: E would say it
+	// is already deploying; one that needs you keeps the line). The card says
 	// it: in yellow where the deploy is your next step (DeployNeedsYou),
 	// else dimmed; the ready view leaves the PR out.
 	DeployFirst string

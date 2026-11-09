@@ -22484,15 +22484,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The `ready` view leaves out a PR with the line, whoever merges it: "ready to merge" and "deploy before the merge"
     on the same row said two things.
   - A deploy that is pushed or live on any env, an env that cannot be read (unknown, a stale daemon) or a file list
-    or record of another head takes the line away on the next read. Misses, never a false needs-you: a file list
-    GitHub truncated past its first 100 paths, one of an older head, or none. Tests (each failed first):
+    or record of another head takes the line away on the next read. So does a deploy of the head magnum runs, from
+    the deploys' records the board already reads (`deployingHead` over `StagingDeploys`: live, queued behind another
+    effect on its env or running, the conflict resolver's work included; heads compared whole, both full shas): E
+    then says "already deploying", and until the push lands and a staging read says pushed, the staging record says
+    none or outdated, so the first build kept `open: needs you`, the yellow line, --needs-me and `open.deploy` on a
+    PR the operator had just sent with E, for as long as the deploy waited. A deploy of the head that needs you is
+    not live and keeps the line, since E resumes it; a live deploy of an older head keeps it too. Misses, never a
+    false needs-you: a file list GitHub truncated past its first 100 paths, one of an older head, or none. Tests
+    (each failed first):
     TestStagingFirstIsTheMigrationOfTheHeadsFilesThatNoStagingHolds, TestStagingNeverDeploysAForkOrAProtectedBranch,
     TestTheLookLeavesAMigrationsStagingDeployToTheScreens (the first build said needs_you),
     TestIdleOnABaseThatRequiresNoReviewLeavesTheMergeToYou, tui's TestTheCardSaysDeployBeforeMerge,
     TestTheDeployLineWrapsOnANarrowCard and TestReadyViewRules' staging case, and cli's
     TestTheBoardSaysDeployBeforeMergeForAMigrationNoStagingHolds (an own approved PR, an own PR on a base that
     requires no review, an own unapproved PR, an own PR from a fork, a colleague's PR, a repository without staging
-    envs; a push to void and a record of another head end the line). TestPrsJSONCarriesTheVerdict expects
+    envs; a push to void and a record of another head end the line) and
+    TestTheBoardLeavesDeployBeforeMergeOutWhileADeployOfTheHeadRuns (a queued deploy and one in the merge step end
+    it; one that needs you and a live one of an older head keep it). TestPrsJSONCarriesTheVerdict expects
     `open.deploy`, and TestPRBoardHelpOverlay's screen is one line taller for the ready view's own help line. No new
   dependencies.
 

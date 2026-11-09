@@ -502,6 +502,9 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			row.Stagings, row.DeployFirst = boardStagings(ctx, st, cfg, r, stagingTick, inspNow())
 			if row.Stagings != nil {
 				row.StagingDeploys = stagingDeploysOf(deploys, r.Owner+"/"+r.Name, r.Number)
+				if deployingHead(row.StagingDeploys, r.HeadSHA) {
+					row.DeployFirst = "" // the deploy E would start already runs
+				}
 			}
 			out = append(out, row)
 		}
@@ -702,6 +705,19 @@ func stagingDeploysOf(values map[string]string, repo string, number int) []tui.S
 		out = append(out, d)
 	}
 	return out
+}
+
+// deployingHead reports whether one of ds, a PR's staging deploys
+// (stagingDeploysOf), deploys head and still runs: queued behind another
+// effect on its env, or running (the conflict resolver's work included).
+// The deploy before the merge is then on its way and E is refused ("already
+// deploying") until the push lands and a staging read says pushed, so the
+// board leaves the line out meanwhile (boardStagings' words: no needs-you,
+// no --needs-me, no deploy_before_merge). A deploy that needs you is not
+// live, it stopped for the operator, and keeps the line: E resumes it. Both
+// heads are full shas (staging's checkPR, the PR's row).
+func deployingHead(ds []tui.StagingDeploy, head string) bool {
+	return head != "" && slices.ContainsFunc(ds, func(d tui.StagingDeploy) bool { return d.Live && d.Head == head })
 }
 
 // readStagingRecord is the PR's staging record (engine.KVPRStaging); false

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +156,76 @@ func TestTheBoardSaysDeployBeforeMergeForAMigrationNoStagingHolds(t *testing.T) 
 	}
 	if needs := rows(prsOptions{NeedsMe: true}); len(needs) != 0 {
 		t.Errorf("--needs-me lists %v once void holds the head", needs)
+	}
+}
+
+// A deploy of the head that magnum runs (live: queued behind another effect
+// on the env, or running, the conflict resolver's work included) takes the
+// deploy-before-merge line away until the push lands and a staging read says
+// pushed: E is already refused ("already deploying"), so the row is no
+// needs-you, --needs-me leaves it out, and the JSON has no
+// deploy_before_merge and no open.deploy. A deploy of the head that stopped
+// for you keeps the line (E resumes it), as does a live deploy of an older
+// head.
+func TestTheBoardLeavesDeployBeforeMergeOutWhileADeployOfTheHeadRuns(t *testing.T) {
+	h := newActHarness(t)
+	stagingConfig(h.d.Cfg)
+	queued := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	resolving := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	stopped := h.seedPR("talkable/talkable", 7, store.PRReviewed)
+	older := h.seedPR("talkable/talkable", 8, store.PRReviewed)
+	const migration = "db/migrate/20261109_add_index.rb"
+	now := time.Now()
+	if err := h.st.SetKV(h.ctx, store.KVDaemonLastTick, store.FormatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+	for _, pr := range []store.PR{queued, resolving, stopped, older} {
+		h.setFiles(pr, "zhuravel", &store.ReviewGate{Decision: "APPROVED"}, false, "app/models/metric.rb", migration)
+		h.setStagingRecord(pr.ID, engine.StagingRecord{Head: pr.HeadSHA, Envs: []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}}})
+		h.setOpenVerdict(pr, engine.OpenVerdict{Verdict: engine.OpenIdle, Why: "nothing open at abc1234 · approved, merge is yours", Head: pr.HeadSHA, At: now})
+	}
+	at := now.Add(-20 * time.Minute).UTC().Truncate(time.Second)
+	deploy := func(pr store.PR, effect, head, step, phase, state string) {
+		h.setDeployRecord(engine.StagingDeployRecord{Effect: effect, Repo: "talkable/talkable", Number: pr.Number, Head: head, Env: "void",
+			Step: step, Phase: phase, State: state, Seq: 3, At: at})
+	}
+	deploy(queued, "void-5-20261109t100000-abcd", queued.HeadSHA, "claim", "begin", "queued")
+	deploy(resolving, "void-6-20261109t100000-abcd", resolving.HeadSHA, "merge", "begin", "running")
+	deploy(stopped, "void-7-20261109t100000-abcd", stopped.HeadSHA, "verify", "fail", "needs you")
+	deploy(older, "void-8-20261109t100000-abcd", "0ld0000def5678", "merge", "begin", "running")
+	rows := func(o prsOptions) map[int]tui.PRBoardRow {
+		t.Helper()
+		out, err := o.source(prsSource(h.st, h.d.Cfg, store.BoardFilter{}, []string{"zhuravel"}, h.d.Layout))(h.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		by := map[int]tui.PRBoardRow{}
+		for _, r := range out {
+			by[r.Number] = r
+		}
+		return by
+	}
+	got := rows(prsOptions{})
+	for _, n := range []int{5, 6} {
+		r := got[n]
+		if r.DeployFirst != "" || r.DeployNeedsYou() || len(r.StagingDeploys) != 1 || !r.StagingDeploys[0].Live {
+			t.Errorf("#%d deploying its head: deploy first %q, needs you %v, deploys %+v; want no line beside its live deploy",
+				n, r.DeployFirst, r.DeployNeedsYou(), r.StagingDeploys)
+		}
+		if js := prsJSONOf(r); js.DeployBeforeMerge != "" || js.Open == nil || js.Open.Deploy {
+			t.Errorf("#%d deploying its head: tui --json deploy_before_merge %q, open %+v", n, js.DeployBeforeMerge, js.Open)
+		}
+		if s := prsStateCell(r, now); strings.Contains(s, "deploy-first") {
+			t.Errorf("#%d deploying its head: printed state %q", n, s)
+		}
+	}
+	const words = "deploy to a staging before the merge (it changes " + migration + ")"
+	for _, n := range []int{7, 8} {
+		if r := got[n]; r.DeployFirst != words || !r.DeployNeedsYou() {
+			t.Errorf("#%d: deploy first %q, needs you %v; want %q and needs you", n, r.DeployFirst, r.DeployNeedsYou(), words)
+		}
+	}
+	if needs := slices.Sorted(maps.Keys(rows(prsOptions{NeedsMe: true}))); !slices.Equal(needs, []int{7, 8}) {
+		t.Errorf("--needs-me lists %v, want #7 (its deploy needs you) and #8 (a deploy of an older head) alone", needs)
 	}
 }
