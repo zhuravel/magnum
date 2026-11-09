@@ -226,7 +226,7 @@ func TestPrsJSONCarriesTheVerdict(t *testing.T) {
 		switch r["number"] {
 		case float64(20):
 			seen++
-			want := map[string]any{"verdict": "waits", "why": "settling until 21:13", "head": pr20.HeadSHA, "stale": false}
+			want := map[string]any{"verdict": "waits", "why": "settling until 21:13", "head": pr20.HeadSHA, "stale": false, "deploy": false}
 			got, _ := open.(map[string]any)
 			if len(got) != len(want) {
 				t.Errorf("#20's open = %v, want %v", open, want)

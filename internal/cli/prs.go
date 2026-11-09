@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/prview"
+	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -65,7 +66,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"actions. Elsewhere, or with --json, it prints the rows once; the JSON has snake_case keys, times in RFC 3339 "+
 			"(left out while unset) and durations in seconds.\n\n"+
 			"--view picks the rows: all, magnum (what magnum reviewed or is reviewing, or your review is requested on), mine (assigned to you or your "+
-			"review requested) or ready (approved, no changes requested, not a draft); on the live board it is the "+
+			"review requested) or ready (approved, no changes requested, not a draft, no staging deploy first); on the live board it is the "+
 			"view the board opens in. "+
 			"PRs GitHub merged or closed within [board] recent_closed (24h by default; \"0\" turns it off) follow the "+
 			"open ones, newest closed first, dimmed; \"merged · unreviewed\" (closed,merged,unreviewed in the printed "+
@@ -73,7 +74,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"\"✔ needs you\" (needs-you in the printed rows) marks a PR magnum approved on its head that GitHub still "+
 			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
 			"and \"✔ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
-			"first, the title counts them and --needs-me shows only them. "+
+			"first, the title counts them and --needs-me shows only them, and your own PRs whose merge is yours but must "+
+			"wait for a staging deploy (deploy-first in the printed rows; deploy_before_merge and open.deploy in the JSON). "+
 			"Your own open PRs carry autofix = \"open\"'s verdict as a tag before the title (open: needs you, open: waits, "+
 			"open: none for nothing open, open: looking while the verdict no longer tells the PR's state) and on the card "+
 			"(verdict: ...; open in the JSON); with [board] own_prs = \"factory\" they are left out (your drafts and closed PRs "+
@@ -92,7 +94,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 	fs.StringVar(&f.sort, "sort", string(tui.SortUpdated), "order: updated, last-review, reviewer-activity, requested, changes or state")
 	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most recently requested, most changed, most urgent); --desc=false reverses")
 	fs.BoolVar(&f.all, "all", false, "also list closed and merged PRs")
-	fs.BoolVar(&f.needsMe, "needs-me", false, "only the PRs magnum approved that still need your approval on GitHub")
+	fs.BoolVar(&f.needsMe, "needs-me", false, "only the PRs magnum approved that still need your approval on GitHub, "+
+		"or your own PRs whose merge is yours (approved, or no review required) but must go to a staging first")
 	fs.BoolVar(&f.autoApproved, "auto-approved", false, "only the PRs magnum approved as you ([[watch]] auto_approve) whose approval stands")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	fs.IntVar(&f.limit, "limit", 0, "show at most N PRs (0 = all)")
@@ -119,7 +122,9 @@ type prsOptions struct {
 	All   bool
 	Limit int
 	// NeedsMe lists only the PRs that need the operator's approval
-	// (tui.PRBoardRow.NeedsMe): --needs-me.
+	// (tui.PRBoardRow.NeedsMe) and their own PRs whose merge is theirs but
+	// waits for a staging deploy (tui.PRBoardRow.DeployNeedsYou):
+	// --needs-me.
 	NeedsMe bool
 	// AutoApproved lists only the PRs magnum approved as the operator whose
 	// approval stands (tui.PRBoardRow.AutoApproved): --auto-approved.
@@ -183,8 +188,9 @@ func ownPRsSource(cfg *config.Config, src tui.PRBoardSourceFunc, hidden *atomic.
 }
 
 // source is src narrowed to what o shows beyond the registry query: with
-// NeedsMe, the PRs that need the operator's approval; with AutoApproved,
-// those magnum approved as the operator.
+// NeedsMe, the PRs that need the operator's approval, and their own PRs
+// whose merge waits for their staging deploy (DeployNeedsYou); with
+// AutoApproved, those magnum approved as the operator.
 func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
 	if !o.NeedsMe && !o.AutoApproved {
 		return src
@@ -192,7 +198,7 @@ func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
 	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
 		rows, err := src(ctx)
 		return slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool {
-			return (o.NeedsMe && r.NeedsMe == "") || (o.AutoApproved && r.AutoApproved == nil)
+			return (o.NeedsMe && r.NeedsMe == "" && !r.DeployNeedsYou()) || (o.AutoApproved && r.AutoApproved == nil)
 		}), err
 	}
 }
@@ -493,7 +499,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 			row.ProjectNote = agents.ProjectSentences(ctx, st, r.PRID, r.HeadSHA)
-			row.Stagings = boardStagings(ctx, st, cfg, r, stagingTick, inspNow())
+			row.Stagings, row.DeployFirst = boardStagings(ctx, st, cfg, r, stagingTick, inspNow())
 			if row.Stagings != nil {
 				row.StagingDeploys = stagingDeploysOf(deploys, r.Owner+"/"+r.Name, r.Number)
 			}
@@ -580,8 +586,11 @@ func prsOpenFacts(ctx context.Context, st *store.Store, cfg *config.Config, rows
 // prsOpenVerdicts marks your own open PRs (mine: their author is one of
 // your logins) with autofix = "open"'s verdict (engine.KVPROpen), stale
 // (OpenVerdict.Stale) when magnum's last tick is four poll intervals old,
-// the PR's head moved past it or its row changed after it. A registry that
-// cannot say leaves them unmarked rather than the board.
+// the PR's head moved past it or its row changed after it, and Merge when
+// it is idle with the merge yours (engine.OpenMergeIsYours over the PR's
+// review gate, which the verdict read: a later row is stale), where the
+// board puts a staging deploy first (tui.PRBoardRow.DeployNeedsYou). A
+// registry that cannot say leaves them unmarked rather than the board.
 func prsOpenVerdicts(ctx context.Context, st *store.Store, cfg *config.Config, rows []store.BoardRow, out []tui.PRBoardRow, mine func(string) bool) {
 	var lastTick time.Time
 	if s, ok, err := st.GetKV(ctx, store.KVDaemonLastTick); err == nil && ok {
@@ -609,7 +618,8 @@ func prsOpenVerdicts(ctx context.Context, st *store.Store, cfg *config.Config, r
 			continue
 		}
 		out[i].Open = &tui.PROpen{Verdict: v.Verdict, Why: v.Why, Head: v.Head,
-			Stale: v.Stale(pr.HeadSHA, pr.UpdatedAt, lastTick, now, poll)}
+			Stale: v.Stale(pr.HeadSHA, pr.UpdatedAt, lastTick, now, poll),
+			Merge: v.Verdict == engine.OpenIdle && engine.OpenMergeIsYours(pr.ReviewGate)}
 	}
 }
 
@@ -627,15 +637,19 @@ func daemonLastTick(ctx context.Context, st *store.Store) time.Time {
 // boardStagings is where the open PR r stands on its repository's staging
 // envs, in the config's order, from the daemon's record (engine.KVPRStaging,
 // engine.StagingShown: unknown while there is none, of an older head, or
-// the daemon's last tick lastTick is stale at now); nil for a PR that is
-// not open and for a repository without staging envs.
-func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r store.BoardRow, lastTick, now time.Time) []tui.StagingInfo {
+// the daemon's last tick lastTick is stale at now), and staging's words
+// for a deploy before the merge (engine.StagingFirst over the head's file
+// list, pr_files: no read of GitHub or the mirror), "" when none is
+// needed or the PR can never deploy to a staging (engine.StagingNeverDeploys:
+// a fork's, read from its row only when the words would show); nil and ""
+// for a PR that is not open and for a repository without staging envs.
+func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r store.BoardRow, lastTick, now time.Time) ([]tui.StagingInfo, string) {
 	if r.GHState != store.GHOpen {
-		return nil
+		return nil, ""
 	}
 	envs := engine.StagingEnvs(cfg, r.Owner+"/"+r.Name)
 	if len(envs) == 0 {
-		return nil
+		return nil, ""
 	}
 	rec, ok := readStagingRecord(ctx, st, r.PRID)
 	shown := engine.StagingShown(rec, ok, envs, r.HeadSHA, lastTick, now)
@@ -644,7 +658,15 @@ func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r s
 		out[i] = tui.StagingInfo{Env: s.Env, State: s.State, Detail: s.Detail, InTip: s.InTip, Behind: s.Behind,
 			PushedAt: s.PushedAt, DeployedAt: s.DeployedAt, RunURL: s.RunURL, Why: s.Why}
 	}
-	return out
+	first := ""
+	if files, listed, err := st.PRFilesOf(ctx, r.PRID); err == nil { // a registry that cannot say says nothing of it
+		if m := engine.StagingFirst(files, listed, r.HeadSHA, shown); m != "" {
+			if pr, err := st.PRByID(ctx, r.PRID); err == nil && !engine.StagingNeverDeploys(pr) {
+				first = staging.DeployBeforeMergeWords(m)
+			}
+		}
+	}
+	return out, first
 }
 
 // stagingDeployValues is every staging deploy's record
@@ -1036,7 +1058,8 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 
 // prsStateCell is the magnum state with the flags that matter
 // ("reviewed,starred,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
-// merged before magnum reviewed its last push; "reviewed,fixing" while its
+// merged before magnum reviewed its last push; "reviewed,deploy-first" for
+// your own PR whose merge waits for its staging deploy; "reviewed,fixing" while its
 // fixer works, "fix-off" when it was switched out of autofix, "held" when
 // its latest review held its approval for a full pass), magnum open's hold
 // in place of the pin ("reviewed,open-hold→03:21") and a snooze that holds
@@ -1055,6 +1078,9 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 		s += ",needs-you"
 	case tui.NeedsMeLift:
 		s += ",lift-yours"
+	}
+	if r.DeployNeedsYou() {
+		s += ",deploy-first"
 	}
 	if r.AutoApproved != nil {
 		s += ",auto-approved"
@@ -1238,7 +1264,7 @@ func completeViews(string) []cobra.Completion {
 		tui.ViewAll:    "every PR",
 		tui.ViewMagnum: "what magnum reviewed or is reviewing, or your review is requested on",
 		tui.ViewMine:   "assigned to you or your review requested",
-		tui.ViewReady:  "approved, no changes requested, not a draft",
+		tui.ViewReady:  "approved, no changes requested, not a draft, no staging deploy first",
 	}
 	var out []cobra.Completion
 	for _, v := range tui.PRViews() {

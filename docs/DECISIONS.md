@@ -22445,6 +22445,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a record that does not), TestARowWhoseDeployComesFirstOffersEFirst (home, the task card, your PR's card, E's chooser
   and its y/N) and TestTheHelpListsEOnYourPRsCard, each failing first. No new dependencies.
 
+- **The board says to deploy your own PR to a staging before its merge when it changes a migration no staging holds,
+  from the look's idle verdict** (2026-11-09). The operator asked why their PRs that change a database migration sat
+  as "approved, merge is yours" when nothing was ever deployed to a staging; talkable's PR template asks for the
+  deploy to the staging envs before the merge. The board side reads the shared rule (`staging.DeployBeforeMerge` and
+  its words) through `engine.StagingFirst`: the head's file list (`pr_files`, which the poll writes from each Details
+  read, used only when it is the head's) and the PR's staging record as `StagingShown` shows it (unknown, and a state
+  word this build does not know, hold nothing back). `boardStagings` returns the words with the stagings, on
+  `PRBoardRow.DeployFirst`, for every open PR of a staging repository: one primary-key read of `pr_files` per such
+  PR per load, and one of the PR's row only when the words would show, to leave out a PR that can never deploy to a
+  staging (`engine.StagingNeverDeploys`, shared with the deploy's refusal: a fork's head, a head branch that is
+  master, main or a staging branch), where E would be refused. Nothing new reads GitHub, the mirror or git.
+  - The look's verdict does not change: rule 12 stays idle, "nothing open at a1b2c3d · approved, merge is yours",
+    and the board puts the deploy first on that wait on your merge, as the factory screen does (its `deployFirst` on
+    `prWait.merge`, from master's 4eef4d34). `engine.OpenMergeIsYours` is rule 12's "merge is yours" (GitHub's gate
+    approved, or read with no decision: a base that requires no review), and the board marks it on the verdict it
+    reads (`PROpen.Merge`, only for an idle one, from the PR row's gate that the verdict read; a later row makes the
+    verdict stale). `DeployNeedsYou` is the operator's next step: their own PR whose fresh verdict is idle with the
+    merge theirs while the board's read says the deploy comes first. There the card's line is yellow, "deploy to a
+    staging before the merge (it changes ...) (E deploys it)", and the tag and the card's verdict line say `needs
+    you` ("verdict: needs you · nothing open at a1b2c3d · approved, merge is yours"); `magnum tui --needs-me` lists
+    the PR and the printed STATE says `deploy-first`; the JSON carries `deploy_before_merge` on every row and
+    `open.deploy`. Rejected: rule 12 saying `needs_you` with a staging need (built first, caught in review). The factory
+    screen offers E first only on a wait on your merge, which its `verdictWait` makes from the idle approved verdict
+    alone, so a needs_you verdict took its E-first move and its "merge #n" words away for exactly the PRs both
+    sides target, silently (each side's tests build their own verdicts); its words would also have shown twice where
+    the factory adds them. Keeping the verdict idle leaves one contract, the one the factory side landed on.
+  - The idle words of a base that requires no review are now "no review required, merge is yours" (they said "no
+    approval yet"; the factory's wait already said so, from the gate and not from these words).
+  - On your other own PRs (no approval yet, a verdict that needs you for something else first, a stale verdict, no
+    verdict) the line is dim with E. A colleague's PR gets the line dim and without E: its merge is its author's,
+    and E refuses others' PRs. Its `✔ needs you` for your approval, A, the shimmer, the sort, the title's count,
+    `magnum pick` and the toast stay as they were. Rejected: a third `store.NeedsMe` kind, which would pull your own
+    PRs into A/ApproveAs, the shimmer, the sort, "need your ✓", `magnum pick` and the needs-me toast, all about an
+    approval.
+  - The line wraps on the card, as the merged-unreviewed sentence does: a live path made it 141 cells, so a cut line
+    lost E's offer and the migration's name below 145 columns.
+  - The `ready` view leaves out a PR with the line, whoever merges it: "ready to merge" and "deploy before the merge"
+    on the same row said two things.
+  - A deploy that is pushed or live on any env, an env that cannot be read (unknown, a stale daemon) or a file list
+    or record of another head takes the line away on the next read. Misses, never a false needs-you: a file list
+    GitHub truncated past its first 100 paths, one of an older head, or none. Tests (each failed first):
+    TestStagingFirstIsTheMigrationOfTheHeadsFilesThatNoStagingHolds, TestStagingNeverDeploysAForkOrAProtectedBranch,
+    TestTheLookLeavesAMigrationsStagingDeployToTheScreens (the first build said needs_you),
+    TestIdleOnABaseThatRequiresNoReviewLeavesTheMergeToYou, tui's TestTheCardSaysDeployBeforeMerge,
+    TestTheDeployLineWrapsOnANarrowCard and TestReadyViewRules' staging case, and cli's
+    TestTheBoardSaysDeployBeforeMergeForAMigrationNoStagingHolds (an own approved PR, an own PR on a base that
+    requires no review, an own unapproved PR, an own PR from a fork, a colleague's PR, a repository without staging
+    envs; a push to void and a record of another head end the line). TestPrsJSONCarriesTheVerdict expects
+    `open.deploy`, and TestPRBoardHelpOverlay's screen is one line taller for the ready view's own help line. No new
+  dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

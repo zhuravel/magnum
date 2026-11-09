@@ -128,6 +128,13 @@ type prsJSONRow struct {
 	// StagingDeploys are the PR's staging deploys magnum runs, or ran in
 	// the last day, live ones first; [] for none.
 	StagingDeploys []prsJSONStagingDeploy `json:"staging_deploys"`
+	// DeployBeforeMerge is staging's line for an open PR whose head
+	// changes a migration that no staging env holds ("deploy to a staging
+	// before the merge (it changes db/migrate/...)"); "" otherwise, and for
+	// a PR that never deploys to a staging (a fork's). It needs you where
+	// open.deploy says so (your own PR whose merge is yours), never on
+	// another's.
+	DeployBeforeMerge string `json:"deploy_before_merge"`
 }
 
 // prsJSONStagingDeploy is a staging deploy of a PR as its newest event
@@ -180,13 +187,17 @@ func prsJSONStagingOf(s tui.StagingInfo) prsJSONStaging {
 
 // prsJSONOpen is autofix = "open"'s verdict on your own PR: fixing, waits,
 // needs_you, idle, unknown or off, why in magnum's words, the head it was
-// decided at, and whether it is stale (it no longer tells the PR's state:
-// magnum is looking at the PR, never idle).
+// decided at, whether it is stale (it no longer tells the PR's state:
+// magnum is looking at the PR, never idle), and whether it needs you for a
+// staging deploy before the merge (tui.PRBoardRow.DeployNeedsYou: an idle
+// verdict whose merge is yours, tui.PROpen.Merge, on a PR whose
+// deploy_before_merge says the deploy comes first).
 type prsJSONOpen struct {
 	Verdict string `json:"verdict"`
 	Why     string `json:"why"`
 	Head    string `json:"head"`
 	Stale   bool   `json:"stale"`
+	Deploy  bool   `json:"deploy"`
 }
 
 type prsJSONApproveAs struct {
@@ -413,10 +424,11 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 			return prsJSONApproveAs{Identity: a.Identity, Login: a.Login, Refusal: a.Refusal}
 		}),
 		Open: mapPtr(r.Open, func(o tui.PROpen) prsJSONOpen {
-			return prsJSONOpen{Verdict: o.Verdict, Why: o.Why, Head: o.Head, Stale: o.Stale}
+			return prsJSONOpen{Verdict: o.Verdict, Why: o.Why, Head: o.Head, Stale: o.Stale, Deploy: r.DeployNeedsYou()}
 		}),
-		Stagings:       mapList(r.Stagings, prsJSONStagingOf),
-		StagingDeploys: mapList(r.StagingDeploys, prsJSONStagingDeployOf),
+		Stagings:          mapList(r.Stagings, prsJSONStagingOf),
+		StagingDeploys:    mapList(r.StagingDeploys, prsJSONStagingDeployOf),
+		DeployBeforeMerge: r.DeployFirst,
 	}
 }
 
