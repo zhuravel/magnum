@@ -59,7 +59,7 @@ func TestRunLoggedKeepsTheTailOfALargeOutput(t *testing.T) {
 	h.fake.Rules = append([]execx.Rule{{Prefix: []string{"seed"}, Result: execx.Result{Stdout: []byte(out),
 		Stderr: []byte(strings.Repeat("warning\n", 64<<10) + "stderr tail\n")}}}, h.fake.Rules...)
 
-	if err := h.m.runLogged(h.ctx, execx.Cmd{Name: "seed", Label: "reset_db review1: bin/rails db:seed"}, "slot-review1.log"); err != nil {
+	if err := h.m.RunLogged(h.ctx, execx.Cmd{Name: "seed", Label: "reset_db review1: bin/rails db:seed"}, "slot-review1.log"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(path)
@@ -90,7 +90,7 @@ func TestRunLoggedKeepsTheTailOfALargeOutput(t *testing.T) {
 		t.Fatalf(".1 = %d bytes, %v; want the log before the block", len(old), err)
 	}
 	// A small output is kept whole, with no cut line.
-	if err := h.m.runLogged(h.ctx, execx.Cmd{Name: "mise", Args: MiseExecArgs(h.root, nil, "true"), Label: "small"}, "small.log"); err != nil {
+	if err := h.m.RunLogged(h.ctx, execx.Cmd{Name: "mise", Args: MiseExecArgs(h.root, nil, "true"), Label: "small"}, "small.log"); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(h.layout.Logs(), "small.log")); strings.Contains(string(b), "bytes cut") {
@@ -112,7 +112,7 @@ func TestRunLoggedWritesTheBeginLineAtOnce(t *testing.T) {
 	}}}, h.fake.Rules...)
 	done := make(chan error, 1)
 	go func() {
-		done <- h.m.runLogged(h.ctx, execx.Cmd{Name: "setup", Label: "setup review1: bin/worktree-setup"}, "provision-review1.log")
+		done <- h.m.RunLogged(h.ctx, execx.Cmd{Name: "setup", Label: "setup review1: bin/worktree-setup"}, "provision-review1.log")
 	}()
 
 	<-started
@@ -145,7 +145,7 @@ func TestRunLoggedRotatesBeforeTheBeginLine(t *testing.T) {
 		Stdout: []byte(strings.Repeat("INSERT INTO t VALUES (1);\n", 3<<20/26) + "seeded\n"),
 		Stderr: []byte(strings.Repeat("warning\n", 64<<10) + "stderr tail\n")}}}, h.fake.Rules...)
 
-	if err := h.m.runLogged(h.ctx, execx.Cmd{Name: "seed", Label: "reset_db review1: bin/rails db:seed"}, "slot-review1.log"); err != nil {
+	if err := h.m.RunLogged(h.ctx, execx.Cmd{Name: "seed", Label: "reset_db review1: bin/rails db:seed"}, "slot-review1.log"); err != nil {
 		t.Fatal(err)
 	}
 	if old := readFile(t, path+".1"); old != before {

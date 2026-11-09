@@ -202,8 +202,8 @@ func TestPreparePerPRConfinedToCheckout(t *testing.T) {
 	symlink(t, outside, filepath.Join(checkout, "config", "initializers"))
 
 	m := New(Deps{LookPath: func(string) (string, error) { return "", errors.New("no mise") }})
-	p := perPRPlan{slug: PRSlug(7), copy: []string{"config/initializers/local.rb"}, strip: stripKeys(nil), env: map[string]string{"WT_BRANCH": PRSlug(7)}}
-	err := m.preparePerPR(context.Background(), store.Slot{Name: "zhuravel/widget#7", Path: checkout, MainClone: main}, p)
+	p := PerPRPlan{Slug: PRSlug(7), Copy: []string{"config/initializers/local.rb"}, Strip: StripKeys(nil), Env: map[string]string{"WT_BRANCH": PRSlug(7)}}
+	err := m.PreparePerPR(context.Background(), store.Slot{Name: "zhuravel/widget#7", Path: checkout, MainClone: main}, p)
 	if err == nil {
 		t.Fatal("copy through a symlink out of the worktree succeeded")
 	}

@@ -75,8 +75,9 @@ var WorkspaceNameVars = []string{
 // panes, and the checkout runs PR-controlled code.
 var DefaultStripEnv = []string{"GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
 
-// stripKeys is DefaultStripEnv plus extra (a strip_env), sorted and deduplicated.
-func stripKeys(extra []string) []string {
+// StripKeys is DefaultStripEnv plus extra (a strip_env), sorted and
+// deduplicated: the keys dropped from a checkout's rendered local mise file.
+func StripKeys(extra []string) []string {
 	keys := slices.Concat(DefaultStripEnv, extra)
 	slices.Sort(keys)
 	return slices.Compact(keys)
@@ -230,15 +231,18 @@ func templateVars(slug, repo, path, clone, base string) map[string]string {
 	}
 }
 
-// perPRPlan is what magnum runs for one per-PR worktree.
-type perPRPlan struct {
-	source   string // "[[repo]] owner/name", WTConfigFile or "" (no commands)
-	slug     string // PRSlug(number)
-	setup    []Hook // templates expanded
-	teardown []Hook
-	copy     []string
-	strip    []string
-	env      map[string]string
+// PerPRPlan is what magnum runs for one per-PR worktree (PlanPerPR): the
+// commands' Source ("[[repo]] owner/name", WTConfigFile or "" for none),
+// the workspace name Slug (PRSlug of the number), the Setup and Teardown
+// hooks (templates expanded), the [[repo]] copy_files (Copy), the keys
+// dropped from the rendered local mise file (Strip: StripKeys of the
+// [[repo]] strip_env) and the hooks' and agents' Env (PerPREnv).
+type PerPRPlan struct {
+	Source          string
+	Slug            string
+	Setup, Teardown []Hook
+	Copy, Strip     []string
+	Env             map[string]string
 }
 
 // repoConfig returns the [[repo]] block of repo from Deps.Repos, or nil.
@@ -251,31 +255,37 @@ func (m *Manager) repoConfig(repo string) *config.Repo {
 	return nil
 }
 
-// planPerPR resolves the setup/teardown commands, files and environment of
-// per-PR worktree number of sl.RepoFullName (path sl.Path, main clone
-// sl.MainClone) for a PR based on base. A wt.toml that cannot be read,
-// parsed or templated is ErrHook.
-func (m *Manager) planPerPR(sl store.Slot, number int, base string) (perPRPlan, error) {
-	rc := m.repoConfig(sl.RepoFullName)
-	p := perPRPlan{slug: PRSlug(number), env: PerPREnv(rc, number, sl.Path, sl.MainClone), strip: stripKeys(nil)}
+// planPerPR is PlanPerPR of per-PR worktree number of sl.RepoFullName
+// (path sl.Path, main clone sl.MainClone) with its [[repo]] block of
+// Deps.Repos.
+func (m *Manager) planPerPR(sl store.Slot, number int, base string) (PerPRPlan, error) {
+	return PlanPerPR(m.repoConfig(sl.RepoFullName), sl.RepoFullName, number, sl.Path, sl.MainClone, base)
+}
+
+// PlanPerPR resolves the setup/teardown commands, files and environment of
+// per-PR worktree number of repo (owner/name, its [[repo]] block rc, nil
+// for none; path the worktree, clone its main clone) for a PR based on
+// base. A wt.toml that cannot be read, parsed or templated is ErrHook.
+func PlanPerPR(rc *config.Repo, repo string, number int, path, clone, base string) (PerPRPlan, error) {
+	p := PerPRPlan{Slug: PRSlug(number), Env: PerPREnv(rc, number, path, clone), Strip: StripKeys(nil)}
 	if rc != nil {
-		p.copy = slices.Clone(rc.CopyFiles)
-		p.strip = stripKeys(rc.StripEnv)
+		p.Copy = slices.Clone(rc.CopyFiles)
+		p.Strip = StripKeys(rc.StripEnv)
 	}
 	switch {
 	case rc != nil && rc.HasCommands():
-		p.source = "[[repo]] " + rc.Repo
+		p.Source = "[[repo]] " + rc.Repo
 		for i, c := range rc.Setup {
-			p.setup = append(p.setup, Hook{Type: HookSetup, Name: strconv.Itoa(i + 1), Command: c})
+			p.Setup = append(p.Setup, Hook{Type: HookSetup, Name: strconv.Itoa(i + 1), Command: c})
 		}
 		for i, c := range rc.Teardown {
-			p.teardown = append(p.teardown, Hook{Type: HookTeardown, Name: strconv.Itoa(i + 1), Command: c})
+			p.Teardown = append(p.Teardown, Hook{Type: HookTeardown, Name: strconv.Itoa(i + 1), Command: c})
 		}
 		return p, nil
 	case rc != nil && !rc.WTHooksEnabled():
 		return p, nil
 	}
-	data, err := os.ReadFile(filepath.Join(sl.MainClone, WTConfigFile))
+	data, err := os.ReadFile(filepath.Join(clone, WTConfigFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return p, nil
 	}
@@ -286,7 +296,7 @@ func (m *Manager) planPerPR(sl store.Slot, number int, base string) (perPRPlan, 
 	if err != nil {
 		return p, err
 	}
-	vars := templateVars(p.slug, sl.RepoFullName, sl.Path, sl.MainClone, base)
+	vars := templateVars(p.Slug, repo, path, clone, base)
 	expand := func(hooks []Hook) ([]Hook, error) {
 		out := make([]Hook, 0, len(hooks))
 		for _, h := range hooks {
@@ -299,14 +309,14 @@ func (m *Manager) planPerPR(sl store.Slot, number int, base string) (perPRPlan, 
 		}
 		return out, nil
 	}
-	if p.setup, err = expand(append(slices.Clone(wt.PostCreate), wt.PostStart...)); err != nil {
+	if p.Setup, err = expand(append(slices.Clone(wt.PostCreate), wt.PostStart...)); err != nil {
 		return p, err
 	}
-	if p.teardown, err = expand(wt.PreRemove); err != nil {
+	if p.Teardown, err = expand(wt.PreRemove); err != nil {
 		return p, err
 	}
-	if len(p.setup) > 0 || len(p.teardown) > 0 {
-		p.source = WTConfigFile
+	if len(p.Setup) > 0 || len(p.Teardown) > 0 {
+		p.Source = WTConfigFile
 	}
 	return p, nil
 }
@@ -325,10 +335,10 @@ func (m *Manager) miseAvailable() bool {
 	return err == nil
 }
 
-// shellCmd runs script in dir with env: through `mise -C dir exec -- env
+// ShellCmd runs script in dir with env: through `mise -C dir exec -- env
 // K=V… /bin/sh -c script` when mise is available (as pool scripts do), else
 // /bin/sh -c script with env overlaid (blank values exported blank).
-func (m *Manager) shellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd {
+func (m *Manager) ShellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd {
 	if m.miseAvailable() {
 		return execx.Cmd{Name: m.mise, Args: MiseExecArgs(dir, env, script), Dir: dir, Timeout: timeout, Mutates: true, Label: label}
 	}
@@ -341,15 +351,15 @@ func (m *Manager) shellCmd(dir string, env map[string]string, script, label stri
 // or slot.hook_failed event. With keepGoing a failure is recorded and the
 // next hook still runs (teardown); otherwise the first failure is returned.
 // The joined failures are returned either way.
-func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p perPRPlan, hooks []Hook, timeout time.Duration, keepGoing bool) error {
+func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p PerPRPlan, hooks []Hook, timeout time.Duration, keepGoing bool) error {
 	subject := "slot:" + sl.Name
 	var errs []error
 	for _, h := range hooks {
 		label := fmt.Sprintf("%s %s %s: %s", h.Type, sl.Name, h.Name, h.Command)
-		err := m.runLogged(ctx, m.shellCmd(sl.Path, p.env, h.Command, label, timeout), perPRLog(p.slug))
+		err := m.RunLogged(ctx, m.ShellCmd(sl.Path, p.Env, h.Command, label, timeout), perPRLog(p.Slug))
 		if err == nil {
 			m.event(ctx, subject, "info", "slot.hook_ran",
-				fmt.Sprintf("%s hook %q (%s) ran as %s: %s", h.Type, h.Name, p.source, p.slug, h.Command))
+				fmt.Sprintf("%s hook %q (%s) ran as %s: %s", h.Type, h.Name, p.Source, p.Slug, h.Command))
 			continue
 		}
 		level := "error"
@@ -357,7 +367,7 @@ func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p perPRPlan, hook
 			level = "warn"
 		}
 		m.event(ctx, subject, level, "slot.hook_failed",
-			fmt.Sprintf("%s hook %q (%s) failed as %s: %s: %v (log: %s)", h.Type, h.Name, p.source, p.slug, h.Command, err, perPRLog(p.slug)))
+			fmt.Sprintf("%s hook %q (%s) failed as %s: %s: %v (log: %s)", h.Type, h.Name, p.Source, p.Slug, h.Command, err, perPRLog(p.Slug)))
 		errs = append(errs, fmt.Errorf("%s hook %q: %w", h.Type, h.Name, err))
 		if !keepGoing || ctx.Err() != nil {
 			break
@@ -366,14 +376,15 @@ func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p perPRPlan, hook
 	return errors.Join(errs...)
 }
 
-// preparePerPR renders the main clone's local mise file into the worktree
+// PreparePerPR renders the main clone's local mise file into the worktree
 // under its name (MiseLocalName; strip list removed, the per-PR env set;
-// trusted with mise when it is available) and copies the [[repo]]
-// copy_files that exist, at the worktree's creation and at each round's
+// trusted with mise when it is available) and copies the plan's
+// copy_files that exist (p.Copy, the [[repo]]'s), from sl.MainClone into
+// sl.Path, at the worktree's creation and at each round's
 // checkout (render_mise), every write confined to the worktree
 // (WriteCheckoutFile). Without a local mise file in the main clone nothing
 // is rendered.
-func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) error {
+func (m *Manager) PreparePerPR(ctx context.Context, sl store.Slot, p PerPRPlan) error {
 	name := MiseLocalName(sl.MainClone)
 	src, err := os.ReadFile(filepath.Join(sl.MainClone, name))
 	switch {
@@ -381,7 +392,7 @@ func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) 
 	case err != nil:
 		return fmt.Errorf("slots: read main %s: %w", name, err)
 	default:
-		out, err := RenderMiseLocal(src, p.strip, p.env)
+		out, err := RenderMiseLocal(src, p.Strip, p.Env)
 		if err != nil {
 			return err
 		}
@@ -397,20 +408,20 @@ func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) 
 			}
 		}
 	}
-	return copyIntoCheckout(sl.MainClone, sl.Path, p.copy)
+	return copyIntoCheckout(sl.MainClone, sl.Path, p.Copy)
 }
 
 // perPRDBSlug is the database slug a per-PR worktree's setup used: the
 // marker bin/worktree-setup writes (tmp/.worktree-db-slug) when ReadMarker
 // reads one, else DBSlug(slug); "" when no setup command ran.
-func perPRDBSlug(sl store.Slot, p perPRPlan) string {
-	if len(p.setup) == 0 {
+func perPRDBSlug(sl store.Slot, p PerPRPlan) string {
+	if len(p.Setup) == 0 {
 		return ""
 	}
 	if s, err := ReadMarker(sl.Path); err == nil && s != "" {
 		return s
 	}
-	return DBSlug(p.slug)
+	return DBSlug(p.Slug)
 }
 
 // teardownPerPR runs the per-PR worktree's teardown commands before it is
@@ -431,10 +442,10 @@ func (m *Manager) teardownPerPR(ctx context.Context, sl store.Slot, number int, 
 		m.event(ctx, subject, "warn", "slot.hook_failed", fmt.Sprintf("teardown skipped: %v", err))
 		return nil
 	}
-	if len(p.teardown) == 0 {
+	if len(p.Teardown) == 0 {
 		return nil
 	}
-	if err := m.runHooks(ctx, sl, p, p.teardown, TeardownTimeout, true); err != nil {
+	if err := m.runHooks(ctx, sl, p, p.Teardown, TeardownTimeout, true); err != nil {
 		m.logErr(ctx, err, "slots: teardown of %s failed (removing it anyway): %v", sl.Name, err)
 	}
 	return ctx.Err()

@@ -302,11 +302,12 @@ func MiseExecArgs(dir string, env map[string]string, script string) []string {
 	return append(args, "/bin/sh", "-c", script)
 }
 
-// runHeavy runs one heavy script in the slot through mise exec, serialized
-// with every other heavy command, and appends a redacted transcript to
+// RunHeavy runs one heavy script in dir (a slot) through mise exec with
+// env, a pool script's way, under timeout, through RunLogged: serialized
+// with every other heavy command, with a redacted transcript in
 // layout.Logs()/<logName>.
-func (m *Manager) runHeavy(ctx context.Context, dir string, env map[string]string, script, label, logName string, timeout time.Duration) error {
-	return m.runLogged(ctx, execx.Cmd{
+func (m *Manager) RunHeavy(ctx context.Context, dir string, env map[string]string, script, label, logName string, timeout time.Duration) error {
+	return m.RunLogged(ctx, execx.Cmd{
 		Name: m.mise, Args: MiseExecArgs(dir, env, script), Dir: dir,
 		Timeout: timeout, Mutates: true, Label: label,
 	}, logName)
@@ -324,15 +325,16 @@ func (m *Manager) heavyUnset() []string {
 	return slices.Compact(keys)
 }
 
-// runLogged runs a heavy command c, serialized with every other heavy
-// command and without the daemon's secrets (heavyUnset), and appends a
+// RunLogged runs a heavy command c, serialized with every other heavy
+// command of the Manager and without the daemon's secrets (heavyUnset: the
+// git variables, DefaultStripEnv and Deps.SecretEnv), and appends a
 // redacted transcript to layout.Logs()/<logName>: the begin line when the
 // command starts (`tail -f` shows which step runs), then its output, each
 // stream cut to its last logStreamTail bytes, and the end line. The rotation
 // is decided before the begin line for the largest block a command can
 // append, so a command's lines land in one file and a log stays under
 // SlotLogMax.
-func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) error {
+func (m *Manager) RunLogged(ctx context.Context, c execx.Cmd, logName string) error {
 	release, err := m.acquireHeavy(ctx)
 	if err != nil {
 		return err
@@ -439,10 +441,10 @@ func (m *Manager) appendLog(logName, text string, reserve int) {
 	}
 }
 
-// runScripts runs scripts in order through runHeavy, stopping at the first failure.
+// runScripts runs scripts in order through RunHeavy, stopping at the first failure.
 func (m *Manager) runScripts(ctx context.Context, sl store.Slot, env map[string]string, scripts []string, what, logName string, timeout time.Duration) error {
 	for _, s := range scripts {
-		if err := m.runHeavy(ctx, sl.Path, env, s, fmt.Sprintf("%s %s: %s", what, sl.Name, s), logName, timeout); err != nil {
+		if err := m.RunHeavy(ctx, sl.Path, env, s, fmt.Sprintf("%s %s: %s", what, sl.Name, s), logName, timeout); err != nil {
 			return err
 		}
 	}

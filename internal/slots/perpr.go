@@ -287,7 +287,7 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 	}
 	plan, planErr := m.planPerPR(sl, pr.Number, store.Deref(pr.BaseRef))
 	if err := m.step(ctx, subject, "render_mise", func(ctx context.Context) error {
-		return m.preparePerPR(ctx, sl, plan)
+		return m.PreparePerPR(ctx, sl, plan)
 	}); err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 		if planErr != nil {
 			return planErr
 		}
-		return m.runHooks(ctx, sl, plan, plan.setup, SetupTimeout, false)
+		return m.runHooks(ctx, sl, plan, plan.Setup, SetupTimeout, false)
 	}); err != nil {
 		if ctx.Err() != nil {
 			return err

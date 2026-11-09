@@ -103,7 +103,7 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // through mise exec, 30m, when the hash of the LockFiles and the commands
 // differs from lock_sha) and schema (dirty_schema = 1 when the PR changes
 // pool.schema_paths since its merge base with origin/<base>), for per-PR
-// slots render_mise alone (preparePerPR, as at the worktree's creation: the
+// slots render_mise alone (PreparePerPR, as at the worktree's creation: the
 // main clone's local mise file with the [[repo]] strip_env and env as the
 // daemon has them now, its copy_files); finally verify
 // (HEAD == fetched head → checked_out_sha, last_used_at). The slot state is
@@ -254,7 +254,7 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 		// that cannot be planned concerns the hooks only (planPerPR fills
 		// the env, strip and copy lists first).
 		plan, _ := m.planPerPR(sl, pr.Number, store.Deref(pr.BaseRef))
-		return m.preparePerPR(ctx, sl, plan)
+		return m.PreparePerPR(ctx, sl, plan)
 	}); err != nil {
 		return err
 	}

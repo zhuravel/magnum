@@ -158,7 +158,7 @@ func (m *Manager) renderMise(ctx context.Context, sl store.Slot, pool config.Poo
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("slots: read main %s: %w", name, err)
 	}
-	out, err := RenderMiseLocal(src, stripKeys(pool.StripEnv), pool.SlotEnv(sl.Name))
+	out, err := RenderMiseLocal(src, StripKeys(pool.StripEnv), pool.SlotEnv(sl.Name))
 	if err != nil {
 		return err
 	}

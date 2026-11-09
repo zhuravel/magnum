@@ -422,7 +422,7 @@ func TestHeavyLockHonorsContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(h.ctx, 20*time.Millisecond)
 	defer cancel()
-	err = h.m.runHeavy(ctx, h.root, nil, "bin/worktree-setup", "setup x", "", SetupTimeout)
+	err = h.m.RunHeavy(ctx, h.root, nil, "bin/worktree-setup", "setup x", "", SetupTimeout)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "heavy-command lock") {
 		t.Fatalf("err = %v, want a deadline at the lock", err)
 	}

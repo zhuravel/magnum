@@ -203,7 +203,7 @@ func TestTheSlugMarkerIsReadOnlyFromARegularFileOfItsCheckout(t *testing.T) {
 			soon(t, "the marker's readers", func() {
 				slug, err = ReadMarker(dir)
 				verr = verifyMarker(dir, "review1")
-				perPR = perPRDBSlug(store.Slot{Path: dir}, perPRPlan{slug: PRSlug(5), setup: []Hook{{Type: HookSetup, Command: "bin/setup"}}})
+				perPR = perPRDBSlug(store.Slot{Path: dir}, PerPRPlan{Slug: PRSlug(5), Setup: []Hook{{Type: HookSetup, Command: "bin/setup"}}})
 			})
 			if slug != "" || !refused(err) {
 				t.Errorf("ReadMarker = %q, %v; want a refusal", slug, err)
