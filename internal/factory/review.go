@@ -663,9 +663,11 @@ func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int) ([]str
 
 // localCase is round `round` of task t's change in copy c: the branch's
 // head and its base (bh), the title with the Jira key, the plan as the body
-// (report.md), the ticket (ticket.md, else the operator's request), the
-// watch, the round's roles and the copy's environment, the one the
-// factory's agents get in it (its panes use the copy's databases).
+// (report.md: the factory's own guess, which the judge's skill reads as no
+// person's intent), the ticket (ticket.md, else the operator's request), the
+// operator's answers to the factory's questions (answers.md, "" when it has
+// none), the watch, the round's roles and the copy's environment, the one
+// the factory's agents get in it (its panes use the copy's databases).
 func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHead, repo config.FactoryRepo, roles []string, round int) evalrun.LocalCase {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	read := func(name string) string {
@@ -680,7 +682,7 @@ func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHea
 		title = strings.TrimSpace(t.JiraKey + " " + title)
 	}
 	return evalrun.LocalCase{Checkout: c.Path, BaseSHA: bh.Base, HeadSHA: bh.Head, Branch: t.Branch, Title: title, Body: read(reportFile),
-		TicketMD: cmp.Or(read(ticketFile), read("prompt.md")), Watch: w, Roles: roles, Round: round, TaskID: t.ID, Repo: t.Repo, Base: baseOf(repo),
+		TicketMD: cmp.Or(read(ticketFile), read("prompt.md")), AnswersMD: read(answersFile), Watch: w, Roles: roles, Round: round, TaskID: t.ID, Repo: t.Repo, Base: baseOf(repo),
 		Env: maps.Clone(c.Env)}
 }
 

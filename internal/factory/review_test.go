@@ -617,6 +617,34 @@ func TestAQuestionFindingJoinsTheQuestionBatch(t *testing.T) {
 	}
 }
 
+// The local judge gets the operator's answers to the factory's questions
+// beside the ticket: localCase reads the task's answers.md into the case,
+// the only statement of intent a person made. A task the operator answered
+// nothing has no answers.md, and its case carries none.
+func TestTheLocalRoundGetsTheOperatorsAnswersFromTheTasksAnswersFile(t *testing.T) {
+	const answers = "# Your answers\n\nThe operator's answers to the questions of this task, oldest first.\n\n## Should a refund take back the points it gave?\n\nAsked by fx-judge (revision 1, question 1). The answer is the recommended option.\n\nkeep them\n"
+	for name, tc := range map[string]struct{ file, want string }{
+		"answered":   {answers, answers},
+		"unanswered": {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newReviewRig(t, result())
+			task, _ := r.reviewTask("PR-12368")
+			if tc.file != "" {
+				r.taskFile(task.ID, answersFile, tc.file)
+			}
+			r.run(4, func() bool { return len(r.rv.calls()) > 0 })
+			calls := r.rv.calls()
+			if len(calls) == 0 {
+				t.Fatal("no round ran")
+			}
+			if calls[0].AnswersMD != tc.want {
+				t.Errorf("AnswersMD = %q, want %q", calls[0].AnswersMD, tc.want)
+			}
+		})
+	}
+}
+
 // A product question you answered "change it" that the next round raises
 // again was not changed: it is a live finding the writer gets to fix, never
 // a leftover that lets the loop end clean. One answered "keep it" is a
