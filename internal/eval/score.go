@@ -74,14 +74,14 @@ func (s Score) SeverityOK() int {
 // hit (Score.AbsentHits) when the defect has no severity or the finding is at it or stronger (or has
 // none to compare); a weaker one is the finding ranked as it should be. Neither is noise, and absent
 // defects count in neither Found nor Total. A question defect (question = true) is found only by a
-// question for the operator at its severity or stronger (asks); a finding on it that is not one is
-// neither found nor noise.
+// question for the operator at its severity or stronger, P2 when it gives none (asks); a finding on it
+// that is not one is neither found nor noise.
 func ScoreCase(c Case, r Result) Score {
 	s := Score{Case: c.Name, Status: r.Status, Event: r.Event}
 	used := make([]bool, len(r.Findings))
 	for _, d := range c.Defects {
 		res := d.regexps()
-		dr := DefectResult{ID: d.ID, Title: d.Title, Want: d.Severity, Question: d.Question}
+		dr := DefectResult{ID: d.ID, Title: d.Title, Want: d.want(), Question: d.Question}
 		absent := d.absent()
 		for i, f := range r.Findings {
 			if !d.matches(res, f) {
@@ -132,11 +132,25 @@ func (d *Defect) hitsAbsent(f Finding) bool {
 }
 
 // asks reports whether f, which matches the question defect d, is the question d wants: a question for
-// the operator (Finding.Question) at d's severity or stronger (any, when d has none). A weaker
-// question, which the factory leaves among the task's leftovers instead of asking, a question
-// without a severity to compare, and a finding that is no question (the writer's to decide) are not.
+// the operator (Finding.Question) at d's severity or stronger (want: P2, the weakest the factory asks,
+// when d has none). A weaker question, which the factory leaves among the task's leftovers instead of
+// asking, a question without a severity to compare, and a finding that is no question (the writer's
+// to decide) are not.
 func (d *Defect) asks(f Finding) bool {
-	return f.Question && !f.InBody && (d.Severity == "" || f.Severity != "" && f.Severity <= d.Severity)
+	return f.Question && !f.InBody && f.Severity != "" && f.Severity <= d.want()
+}
+
+// questionSeverity is the weakest priority of a question the factory asks the operator (a P3 one stays
+// among the task's leftovers): a question defect without a severity wants it.
+const questionSeverity = "P2"
+
+// want is the weakest severity that finds d: its own, or questionSeverity for a question defect that
+// gives none.
+func (d *Defect) want() string {
+	if d.Question && d.Severity == "" {
+		return questionSeverity
+	}
+	return d.Severity
 }
 
 func (d *Defect) matches(res []*regexp.Regexp, f Finding) bool {

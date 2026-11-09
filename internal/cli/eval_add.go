@@ -116,7 +116,7 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 		{`id = "…"`, "[a-z0-9-], unique in the case"},
 		{`title = "…"`, ""},
 		{`severity = "P2"`, "the weakest priority that counts: the factory asks you only P0 to P2"},
-		{"question = true", "the finding must be a question for you, not a change the writer makes"},
+		{"question = true", "the finding must be a question for you (P2 or stronger without a severity), not a change the writer makes"},
 		{`paths = ["app/**/*.rb"]`, "globs, as a posted case's"},
 		{`match = ["…"]`, "case-insensitive regular expressions on the finding's title and body"},
 	} {

@@ -62,9 +62,10 @@ type Defect struct {
 	Body     bool     `toml:"body,omitempty"`   // a mention in the review body also counts; needs Match
 	Expect   string   `toml:"expect,omitempty"` // ExpectFound ("" too) or ExpectAbsent
 	// Question asks that the finding be a question for the operator (a local round's provenance
-	// marks it, Finding.Question) at Severity or stronger: a weaker question goes to the task's
-	// leftovers, never to the operator, and a finding that is no question has the writer decide.
-	// Only a local case's defect to find may ask it.
+	// marks it, Finding.Question) at Severity or stronger, P2 when it gives none:
+	// the factory asks the operator only P0 to P2 questions, so a P3 question goes to the task's
+	// leftovers, never to the operator, and a P3 Severity is refused; a finding that is no question
+	// has the writer decide. Only a local case's defect to find may ask it.
 	Question bool `toml:"question,omitempty"`
 
 	res []*regexp.Regexp // Match, compiled
@@ -445,6 +446,9 @@ func (d *Defect) validate(ctx string, p *problems) {
 		p.add(ctx, "question = true needs a defect to find, not an absent one")
 	case d.Question && d.Body:
 		p.add(ctx, "question = true and body = true: a mention in the review body is no question")
+	case d.Question && validSeverity(d.Severity) && d.Severity > questionSeverity:
+		p.add(ctx, "question = true with severity %q: the factory asks you only P0 to P2 questions (a %s one stays among the task's leftovers), "+
+			"so give P0 to P2 or leave it out (P2)", d.Severity, d.Severity)
 	}
 }
 

@@ -52,8 +52,8 @@ func TestACorpusReadsALocalCaseBesideAPostedOne(t *testing.T) {
 
 // A local case names its round by the synthetic number, takes its base from its frozen inputs and is
 // the only kind whose defect may ask for a question: a posted round asks none, so such a defect could
-// never be found. An absent question and a question in the review's body are refused too, and so is an
-// unknown kind.
+// never be found. An absent question, a question in the review's body and a P3 question (the factory
+// never asks one: it stays among the task's leftovers) are refused too, and so is an unknown kind.
 func TestALocalCaseAndAQuestionDefectBreakTheirOwnRules(t *testing.T) {
 	tests := []struct {
 		name, src string
@@ -65,6 +65,7 @@ func TestALocalCaseAndAQuestionDefectBreakTheirOwnRules(t *testing.T) {
 		{"a question on a posted case", strings.Replace(localCorpus, `kind = "local"`+"\n", "", 1), []string{`defect "plan-choice"`, "question = true needs a local case"}},
 		{"an absent question", strings.Replace(localCorpus, "question = true", "question = true\nexpect = \"absent\"", 1), []string{"question = true", "absent"}},
 		{"a question in the body", strings.Replace(localCorpus, "question = true", "question = true\nbody = true", 1), []string{"question = true", "body = true"}},
+		{"a P3 question", strings.Replace(localCorpus, `severity = "P2"`, `severity = "P3"`, 1), []string{`defect "plan-choice"`, "question = true", "P0 to P2", "leftovers"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,13 +162,21 @@ func TestAQuestionDefectIsFoundOnlyByAQuestionAtItsSeverity(t *testing.T) {
 	}
 }
 
-// A question defect without a severity is found by any question; the defect without question = true
-// takes a question like any other finding.
-func TestAQuestionDefectWithoutASeverityTakesAnyQuestion(t *testing.T) {
+// A question defect without a severity wants a question the factory asks the operator, P2 or
+// stronger: a P3 question or one without a severity stays among the task's leftovers, so it finds
+// nothing, and the result says it wanted a P2 question. The defect without question = true takes a
+// question like any other finding.
+func TestAQuestionDefectWithoutASeverityWantsAQuestionTheFactoryAsks(t *testing.T) {
 	cs := questionCase(t)
 	cs.Defects[0].Severity = ""
-	if s := ScoreCase(cs, Result{Findings: []Finding{{Body: "deliberate?", Severity: "P3", Question: true}}}); s.Found != 1 {
-		t.Fatalf("score %+v, want the P3 question found", s)
+	for _, tc := range []struct {
+		severity string
+		found    bool
+	}{{"P3", false}, {"", false}, {"P2", true}, {"P0", true}} {
+		s := ScoreCase(cs, Result{Findings: []Finding{{Body: "deliberate?", Severity: tc.severity, Question: true}}})
+		if d := s.Defects[0]; d.Found != tc.found || d.SeverityOK != tc.found || d.Want != "P2" || s.Noise != 0 {
+			t.Errorf("a question at %q: %+v, want found %v and a P2 question wanted", tc.severity, s, tc.found)
+		}
 	}
 	cs.Defects[0].Question, cs.Defects[0].Severity = false, "P2"
 	s := ScoreCase(cs, Result{Findings: []Finding{{Body: "deliberate?", Severity: "P1", Question: true}}})
