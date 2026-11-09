@@ -23,12 +23,20 @@ type Corpus struct {
 }
 
 // Case is one pull request pinned to the head that is reviewed, with the defects a review must find.
+// A local case (Kind KindLocal) is one round of the factory's local review instead, before any PR
+// existed: its PR is the round's synthetic number (LocalNumberBase + task × 10 + round, as the round
+// ran under), its head the one the round reviewed, and the rest of what the round read (its base
+// commit, branch, title, plan, ticket, the operator's answers and roles) is frozen in a directory of
+// its own beside the learned corpus when it is added (`magnum eval add`, evalrun.LocalCaseDir), never
+// read from the factory's task directory again.
 type Case struct {
-	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
-	PR      string   `toml:"pr"`             // owner/repo#N
-	Head    string   `toml:"head"`           // the reviewed head, 40 lower-case hex
-	Base    string   `toml:"base,omitempty"` // base branch name, optional
-	Why     string   `toml:"why,omitempty"`  // why the case is in the corpus, optional
+	Name string `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
+	Kind string `toml:"kind,omitempty"` // KindPosted ("", every case before kinds) or KindLocal
+	PR   string `toml:"pr"`             // owner/repo#N
+	Head string `toml:"head"`           // the reviewed head, 40 lower-case hex
+	Base string `toml:"base,omitempty"` // base branch name, optional; never on a local case
+	Why  string `toml:"why,omitempty"`  // why the case is in the corpus, optional
+
 	Defects []Defect `toml:"defect"`
 
 	// Owner, Repo and Number are parsed from PR.
@@ -53,9 +61,29 @@ type Defect struct {
 	Match    []string `toml:"match,omitempty"`  // case-insensitive regexps on the finding body
 	Body     bool     `toml:"body,omitempty"`   // a mention in the review body also counts; needs Match
 	Expect   string   `toml:"expect,omitempty"` // ExpectFound ("" too) or ExpectAbsent
+	// Question asks that the finding be a question for the operator (a local round's provenance
+	// marks it, Finding.Question) at Severity or stronger: a weaker question goes to the task's
+	// leftovers, never to the operator, and a finding that is no question has the writer decide.
+	// Only a local case's defect to find may ask it.
+	Question bool `toml:"question,omitempty"`
 
 	res []*regexp.Regexp // Match, compiled
 }
+
+// The kinds of case (Case.Kind): a pull request's posted round, and a round of the factory's local
+// review.
+const (
+	KindPosted = ""
+	KindLocal  = "local"
+)
+
+// LocalNumberBase is where the synthetic PR numbers of the factory's local rounds start
+// (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round), far above any PR number of the
+// repositories magnum reviews. A local case's PR number is one of them.
+const LocalNumberBase = 900000
+
+// Local reports whether cs is a round of the factory's local review (KindLocal).
+func (cs Case) Local() bool { return cs.Kind == KindLocal }
 
 // What a review is expected to do with a defect (Defect.Expect): report it, the default, or not
 // report it, a finding an author declined as wrong (a match is a false positive, Score.AbsentHits).
@@ -309,7 +337,16 @@ func (cs *Case) validate(ctx string, p *problems) (named bool) {
 	default:
 		named = true
 	}
-	cs.validatePR(ctx, p)
+	if cs.Kind != KindPosted && cs.Kind != KindLocal {
+		p.add(ctx, "kind must be %q (or left out for a posted round), got %q", KindLocal, cs.Kind)
+	}
+	if cs.validatePR(ctx, p) && cs.Local() && cs.Number < LocalNumberBase {
+		p.add(ctx, "a local case's pr is its round's synthetic number, %d + task × 10 + round (`magnum eval add` prints it), got %q",
+			LocalNumberBase, cs.PR)
+	}
+	if cs.Local() && cs.Base != "" {
+		p.add(ctx, "base is frozen with a local case's inputs (`magnum eval add`): leave it out")
+	}
 	if !headPattern.MatchString(cs.Head) {
 		p.add(ctx, "head must be a full 40-character lower-case hex SHA, got %q", cs.Head)
 	}
@@ -330,22 +367,27 @@ func (cs *Case) validate(ctx string, p *problems) (named bool) {
 			ids[d.ID] = true
 		}
 		d.validate(dctx, p)
+		if d.Question && !cs.Local() {
+			p.add(dctx, "question = true needs a local case: a posted round asks no question")
+		}
 	}
 	return named
 }
 
-func (cs *Case) validatePR(ctx string, p *problems) {
+// validatePR fills Owner, Repo and Number from PR, or adds why it cannot; it reports whether it did.
+func (cs *Case) validatePR(ctx string, p *problems) bool {
 	m := prPattern.FindStringSubmatch(cs.PR)
 	if m == nil || m[2] == "." || m[2] == ".." {
 		p.add(ctx, "pr must be owner/repo#N with N > 0, got %q", cs.PR)
-		return
+		return false
 	}
 	n, err := strconv.Atoi(m[3])
 	if err != nil {
 		p.add(ctx, "pr number in %q is out of range", cs.PR)
-		return
+		return false
 	}
 	cs.Owner, cs.Repo, cs.Number = m[1], m[2], n
+	return true
 }
 
 func (d *Defect) validate(ctx string, p *problems) {
@@ -394,6 +436,12 @@ func (d *Defect) validate(ctx string, p *problems) {
 	}
 	if d.Body && len(d.Match) == 0 {
 		p.add(ctx, "body = true needs match")
+	}
+	switch {
+	case d.Question && d.absent():
+		p.add(ctx, "question = true needs a defect to find, not an absent one")
+	case d.Question && d.Body:
+		p.add(ctx, "question = true and body = true: a mention in the review body is no question")
 	}
 }
 
