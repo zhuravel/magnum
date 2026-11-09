@@ -20,7 +20,8 @@ package engine
 // actions is never started (its CI would run its own code with the
 // repository's secrets). The start is recorded before the call
 // (kvPRCIStart), so a head is started at most once, a crash between the two
-// included.
+// included. Before it needs you or starts the workflow, rule 11 reads the
+// head's runs once and re-runs a run that started no job (ci_rerun.go).
 
 import (
 	"cmp"
@@ -140,28 +141,41 @@ func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 // the run does, past settle_max (GitHub's limits end a run), and the poll
 // that sees the run end reads the checks it left. One read of each a poll
 // for such a PR at most, none once the run's check shows, the run ended
-// and, with no run, the wait ended; it starts nothing.
+// and, with no run, the wait ended; it starts nothing. The look's re-run of
+// a run that started no job (ci_rerun.go) waits the same way in every
+// repository, ci_dispatch or not: while GitHub took it, the head's stored
+// checks miss a required check, and it is less than settle_max old or its
+// new attempt was queued or running at the last read, the poll reads the
+// head's checks and its runs (seeRerun).
 func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, prs []github.PRRadar, byNode map[string]store.PR, now time.Time) map[int]bool {
-	if e.cfg.CIDispatch(full) == "" {
-		return nil
-	}
 	owner, name, _ := strings.Cut(full, "/")
-	identity := e.ciDispatchIdentity(full, w)
+	identity, dispatch, settleMax := e.ciDispatchIdentity(full, w), e.cfg.CIDispatch(full) != "", e.openSettle().max
 	var awaited map[int]bool
 	for _, p := range prs {
 		pr, ok := byNode[p.NodeID]
 		if !ok || pr.HeadSHA != p.HeadRefOid { // a moved head's checks are read anyway; the start was the old head's
 			continue
 		}
-		s := e.ciStartAt(ctx, pr)
-		waits := now.Before(s.At.Add(e.openSettle().max)) || s.Run.running()
-		if s.At.IsZero() || s.Failed != "" || !waits || len(e.openCI(ctx, full, pr).missing) == 0 {
+		r := e.ciRerunAt(ctx, pr) // ci_rerun.go: the look's re-run waits as a start does
+		rerun := r.rerunWaits(now, settleMax)
+		var s ciStart
+		if dispatch {
+			s = e.ciStartAt(ctx, pr)
+		}
+		start := !s.At.IsZero() && s.Failed == "" && (now.Before(s.At.Add(settleMax)) || s.Run.running())
+		if !rerun && !start || len(e.openCI(ctx, full, pr).missing) == 0 {
 			continue
 		}
 		if awaited == nil {
 			awaited = map[int]bool{}
 		}
 		awaited[p.Number] = true
+		if rerun {
+			e.seeRerun(ctx, identity, owner, name, pr, r)
+		}
+		if !start {
+			continue
+		}
 		if run, ok := e.dispatchedRun(ctx, identity, owner, name, s); ok && (s.Run == nil || *s.Run != run) {
 			s.Run = &run
 			e.writeCIStart(ctx, pr, s)
@@ -216,7 +230,10 @@ func (e *Engine) dispatchedRun(ctx context.Context, identity, owner, name string
 // while the run is queued or runs (ciStart.Run) and until settle_max after
 // the start. A start that failed, one magnum refused, one whose run ended
 // without the checks (in words of the run's conclusion, runEnd) and one
-// whose run never came need you.
+// whose run never came need you. Before either, where no start was made
+// at the head, the look's read of the head's runs and its re-run of the
+// one that started no job decide (openRerunVerdict, ci_rerun.go), and the
+// re-run's attempt is waited for as a start's run is.
 func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
 	waits := func(why string, until time.Time) OpenVerdict {
@@ -240,8 +257,15 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	switch {
 	case (f.ci.running || s.Run.running()) && started:
 		return waits(startedWhy(), s.At.Add(f.settle.max))
+	case (f.ci.running || f.ciRerun.Seen.running()) && f.ciRerun.asked(): // ci_rerun.go
+		return waits(rerunWhy(f, what), f.ciRerun.At.Add(f.settle.max))
 	case f.ci.running || f.now.Before(due):
 		return waits(what+" has not started", due)
+	}
+	if s.At.IsZero() && s.Refused == "" { // ci_rerun.go: a run of the head that started no job, before any start
+		if rv, ok := openRerunVerdict(f, &v, waits, needsYou, what); ok {
+			return rv
+		}
 	}
 	const byHand = "; run it on the PR's branch"
 	switch {

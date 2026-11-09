@@ -194,6 +194,57 @@ type fakeGH struct {
 	recentErr error
 	// replyErr fails ReplyToReviewComment.
 	replyErr error
+	// headRuns answers HeadRuns by sha (newest first; absent: none);
+	// headRunsErr fails it. Its calls record "head_runs:<owner>/<repo>@<sha>".
+	// jobs answers RunJobs by run id (absent: no job), and jobsErr fails
+	// it ("run_jobs:<owner>/<repo>#<id>"). RerunRun records
+	// "rerun:<owner>/<repo>#<id>", fails with rerunErr, and else makes the
+	// run's next attempt queued in headRuns with no job, as GitHub does.
+	headRuns    map[string][]github.WorkflowRun
+	headRunsErr error
+	jobs        map[int64][]github.WorkflowJob
+	jobsErr     error
+	rerunErr    error
+}
+
+func (g *fakeGH) HeadRuns(ctx context.Context, owner, repo, sha string) ([]github.WorkflowRun, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("head_runs:%s/%s@%s", owner, repo, sha))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.headRunsErr != nil {
+		return nil, g.headRunsErr
+	}
+	return slices.Clone(g.headRuns[sha]), nil
+}
+
+func (g *fakeGH) RunJobs(ctx context.Context, owner, repo string, runID int64) ([]github.WorkflowJob, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("run_jobs:%s/%s#%d", owner, repo, runID))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.jobsErr != nil {
+		return nil, g.jobsErr
+	}
+	return slices.Clone(g.jobs[runID]), nil
+}
+
+func (g *fakeGH) RerunRun(_ context.Context, owner, repo string, runID int64) error {
+	g.record(fmt.Sprintf("rerun:%s/%s#%d", owner, repo, runID))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.rerunErr != nil {
+		return g.rerunErr
+	}
+	for _, runs := range g.headRuns {
+		for i, r := range runs {
+			if r.ID == runID {
+				runs[i].Attempt, runs[i].Status, runs[i].Conclusion = r.Attempt+1, "queued", ""
+			}
+		}
+	}
+	delete(g.jobs, runID)
+	return nil
 }
 
 func (g *fakeGH) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref string) error {

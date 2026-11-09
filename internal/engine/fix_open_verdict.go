@@ -134,6 +134,10 @@ type OpenVerdict struct {
 	// check that did not run, whose workflow the look starts (rule 11,
 	// openStartCI). None is stored.
 	leftovers, late, dispatch bool
+	// readRuns: rule 11 reads the runs at the head (openReadRuns,
+	// ci_rerun.go); rerun: it re-runs the head's run that started no job
+	// (openRerunCI). Neither is stored.
+	readRuns, rerun bool
 }
 
 // OpenNeed is one thing that needs the operator: its kind (thread, review,
@@ -408,6 +412,10 @@ type openFacts struct {
 	// start of it at the head (zero: none; fix_open_ci.go).
 	ciWorkflow string
 	ciStart    ciStart
+	// ciRerun is the look's read of the runs at the head and its re-run of
+	// the one that started no job, where a required check did not run at
+	// the head (zero: none; ci_rerun.go).
+	ciRerun ciRerun
 	// ciLow: the identity [[repo]] ci_dispatch_as names, which starts
 	// ciWorkflow, is below the GitHub budget floor (low is the poll
 	// identity's).

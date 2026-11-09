@@ -267,6 +267,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	}
 	f.ci = e.openCI(ctx, repo.FullName(), pr)
 	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
+	if len(f.ci.missing) > 0 {
+		f.ciRerun = e.ciRerunAt(ctx, pr) // ci_rerun.go
+	}
 	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
@@ -281,6 +284,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	l.Spell = l.Spell.next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
 	f.ledger = l
 	v, work, needs := decideOpen(f)
+	if !e.d.DryRun && (v.readRuns || v.rerun) { // ci_rerun.go: rule 11 reads the head's runs, re-runs the one that started no job
+		v, work = e.openCIRerun(ctx, repo, *c.w, pr, &f, v, work)
+	}
 	switch {
 	case e.d.DryRun:
 	case v.leftovers && e.openRaise(ctx, repo, pr, &l, needs): // fix_open_needs.go
