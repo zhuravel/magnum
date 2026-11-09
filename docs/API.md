@@ -21181,14 +21181,15 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
     or no search before) it GETs the issue with &expand=changelog and searches
     the changelog: its entries the answer holds, then, when they hold no
     move into the status and the changelog has more, the paged changelog
-    (/rest/api/2/issue/<KEY>/changelog, oldest first) back from the newest
-    entry the answer did not hold, at most maxChangelogPages pages. Which
-    entries the answer holds is told by their order: newest first (Jira Cloud's
-    newest 100), or oldest first. For an assigned issue it asks your account's
-    id (GET /rest/api/2/myself) the first time only: the client keeps it.
-    The credentials go to curl as Ticket's do, and a failure is an *Error of a
-    class, as Ticket's is; a failure after the issue answered is a *PartError,
-    returned with what the issue said.
+    (/rest/api/2/issue/<KEY>/changelog, oldest first) back from the newest entry
+    the answer did not hold, at most maxChangelogPages pages. Which entries the
+    answer holds is told by their order: newest first (Jira Cloud's newest 100),
+    or oldest first. The entry's author is MovedBy (prior's on the same status).
+    For an assigned issue, or a move whose entry names its author, it asks your
+    account's id (GET /rest/api/2/myself) once per read, failed or not, until
+    it answered: the client keeps it. The credentials go to curl as Ticket's do,
+    and a failure is an *Error of a class, as Ticket's is; a failure after the
+    issue answered is a *PartError, returned with what the issue said.
 
 func (c *Client) Ticket(ctx context.Context, key string) (Ticket, error)
     Ticket reads the issue key ("PS-123") from the site.

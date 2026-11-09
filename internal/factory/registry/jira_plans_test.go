@@ -8,10 +8,11 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
-// A Jira plan is the effect of its task and milestone (jira:<task>:<milestone>),
-// begun when the milestone comes and settled with its result; what the
-// factory saw of your move after it is the effect beside it (its key and
-// :seen). JiraPlans gives each plan with what was seen of it, by task and
+// A Jira plan is the effect of its task and milestone
+// (jira-plan:<task>:<milestone>), begun when the milestone comes and
+// settled with its result; what the factory saw after it, and who made
+// the move, is the effect beside it (jira-seen:<task>:<milestone>).
+// JiraPlans gives each plan with what was seen of it, by task and
 // milestone in their order, and leaves out every other effect.
 func TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem(t *testing.T) {
 	t.Parallel()

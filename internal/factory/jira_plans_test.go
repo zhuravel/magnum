@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -385,37 +386,66 @@ func TestTheOperatorsMoveIsMatchedToThePlan(t *testing.T) {
 	}
 }
 
-// A status a task's issue reaches after the task's end is no move of the
-// plans: Jira's automation moves a merged PR's issue to Done 30 seconds
-// after the merge, the last read sees Done, and both plans record no move
-// by the task's end, never "elsewhere: Done"; so does a status whose time
-// is unknown, read after the end. A move whose changelog time is before
-// the end still counts, whatever read sees it.
-func TestAMoveAfterTheTasksEndIsNoMove(t *testing.T) {
+// A merged task's plans count no move that came with the merge or after
+// it. The daemons mark the task done after the merge: the PR merges at T,
+// magnum's registry says merged, and the factory closes the task at T + 2
+// minutes. The end is the PR's merge time magnum's registry keeps, the
+// task's own time only without it; and a move into a status of the done
+// category (Jira's automation on a merged PR, or a step after the
+// factory's work) is never a move of the plans, whenever it came. Each
+// such plan records no move by the task's end, its event naming the later
+// status. A move to another status before the merge still counts.
+func TestAMergedTasksPlansCountNoMoveOfTheMerge(t *testing.T) {
 	for name, tc := range map[string]struct {
-		since func(end time.Time) time.Time
-		name  string
-		moved string
+		status, cat string
+		since       time.Duration // after the merge; 0: unknown
+		noMergedAt  bool          // magnum's registry keeps no merge time
+		moved       string
+		words       string
 	}{
-		"Jira's automation after the merge":  {func(end time.Time) time.Time { return end.Add(30 * time.Second) }, "Done", registry.SeenNone},
-		"a time unknown, read after the end": {func(time.Time) time.Time { return time.Time{} }, "Done", registry.SeenNone},
-		"a move before the end":              {func(end time.Time) time.Time { return end.Add(-30 * time.Second) }, "Blocked", registry.SeenElsewhere},
+		"the automation's Done at T + 30 s":  {"Done", "done", 30 * time.Second, false, registry.SeenNone, "a done status, with the merge or after it"},
+		"the automation's Done at T + 3 min": {"Done", "done", 3 * time.Minute, false, registry.SeenNone, "a done status, with the merge or after it"},
+		"a done status before the merge":     {"Released", "done", -30 * time.Second, false, registry.SeenNone, "a done status"},
+		"a status between the merge and the close": {"Tech QA", "indeterminate", 30 * time.Second, false, registry.SeenNone,
+			"it moved to Tech QA after the end"},
+		"a time unknown, read after the merge": {"Tech QA", "indeterminate", 0, false, registry.SeenNone, "it moved to Tech QA after the end"},
+		"a move before the merge":              {"Blocked", "indeterminate", -30 * time.Second, false, registry.SeenElsewhere, "Blocked"},
+		"no merge time: the task's close is the end": {"Tech QA", "indeterminate", 30 * time.Second, true, registry.SeenElsewhere,
+			"Tech QA"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := newShadowRig(t)
+			m := &fakeMagnum{}
+			r := newShadowRig(t, func(d *Deps) { d.Magnum = m })
 			task := r.task("PR-12360", registry.TaskActive, "coding")
 			r.jira.set("PR-12360", issueAt("PR-12360", "To Do", "new"))
 			r.jira.edit(func(f *trackJira) { f.trans["PR-12360"] = toDoWorkflow() })
 			r.pass()
-			r.publish(task.ID, 4530)
+			if err := r.reg.LinkPR(r.ctx, registry.PRLink{TaskID: task.ID, Repo: followRef.Repo, Number: followRef.Number,
+				Branch: "zhuravel-PR-12360"}); err != nil {
+				t.Fatal(err)
+			}
+			r.publish(task.ID, followRef.Number)
+			m.setPR(followRef, &PRState{Found: true, DaemonUp: true, Watched: true, OpenWatch: true, GHState: store.GHOpen, Head: prHead})
 			r.clock.Add(time.Minute)
 			r.pass()
 			r.clock.Add(time.Minute)
-			end := r.clock.Now()
-			r.merge(task.ID)
-			s := issueAt("PR-12360", tc.name, "done")
-			s.Since, s.MovedBy = tc.since(end), jira.MovedByOther
+			merged := r.clock.Now() // T: the PR merges; magnum's registry says so 2 minutes later
+			s := issueAt("PR-12360", tc.status, tc.cat)
+			s.Since, s.MovedBy = time.Time{}, jira.MovedByOther
+			if tc.since != 0 {
+				s.Since = merged.Add(tc.since)
+			}
 			r.jira.set("PR-12360", s)
+			r.clock.Add(2 * time.Minute)
+			st := PRState{Found: true, DaemonUp: true, Watched: true, GHState: store.GHMerged, Head: prHead, MergedAt: &merged, ClosedAt: &merged}
+			if tc.noMergedAt {
+				st.MergedAt = nil
+			}
+			m.setPR(followRef, &st)
+			r.pass()
+			if got := r.reload(task.ID); got.State != registry.TaskDone || !got.Updated.Equal(merged.Add(2*time.Minute)) {
+				t.Fatalf("the task: %s at %s, want done 2 minutes after the merge", got.State, got.Updated)
+			}
 			r.clock.Add(lastReadAfter)
 			r.pass()
 			r.clock.Add(45 * time.Second)
@@ -428,13 +458,13 @@ func TestAMoveAfterTheTasksEndIsNoMove(t *testing.T) {
 				if p.Seen == nil || p.Seen.Moved != tc.moved {
 					t.Errorf("the %s plan saw %+v, want %s", p.Milestone, p.Seen, tc.moved)
 				}
-			}
-			if tc.moved != registry.SeenNone {
-				return
+				if tc.moved == registry.SeenNone && (!p.Seen.At.Equal(merged) && !tc.noMergedAt) {
+					t.Errorf("the %s plan's no move is at %s, want the merge %s", p.Milestone, p.Seen.At, merged)
+				}
 			}
 			evs := r.events(task.ID, "jira_plan")
-			if last := evs[len(evs)-1]; !strings.Contains(last.Text, "ended in To Do") || !strings.Contains(last.Text, "moved to Done after the end") {
-				t.Errorf("the last event %q, want no move and the later status", last.Text)
+			if last := evs[len(evs)-1]; !strings.Contains(last.Text, tc.words) {
+				t.Errorf("the last event %q, want it to say %q", last.Text, tc.words)
 			}
 		})
 	}

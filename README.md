@@ -5032,8 +5032,11 @@ A restart between the steps reads it again and makes one plan. After a planned m
 issue in another status records the move: to the target, at its changelog time and with the lag from the plan, or
 elsewhere, and who made it, by the author of the changelog entry the status read finds (you, someone else such as a
 teammate or Jira's automation, or unknown when the entry or its time is not known). For a task that ended, only a
-move before the end counts: a status reached after it (Jira's automation moves a merged PR's issue a little later)
-records that the task ended with no move, as a task whose issue never moved does after its last read. The task
+move before the end counts. A merged task's end is its PR's merge time as magnum's registry keeps it (the daemons
+mark the task done a minute or two later), else the task's own time; and for a merged task a move into a status of
+the done category never counts, whenever it came (Jira's automation on the merge, or a step after the factory's
+work). Such a plan records that the task ended with no move, as a task whose issue never moved does after its last
+read. The task
 card's JIRA MOVE line shows the latest plan (`To Do → In Development (planned 14:02, shadow) · you moved it 14:20`;
 `moved to In Development 14:20` when the move was not yours or its author is unknown), and `magnum factory stats`
 adds one line for the shadow week: the plans, how many your own move matched with the median lag, the moves to the

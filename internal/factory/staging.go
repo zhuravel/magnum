@@ -278,16 +278,27 @@ func (e *Engine) publishedRefs(ctx context.Context, tasks []registry.Task) map[i
 		if t.State != registry.TaskPublished || t.PRNumber <= 0 {
 			continue
 		}
-		ref := PRRef{Repo: t.Repo, Number: t.PRNumber}
-		if l, err := e.reg.LinkedPR(ctx, t.ID); err == nil && l.Number > 0 {
-			ref = PRRef{Repo: cmp.Or(l.Repo, t.Repo), Number: l.Number}
-		} else if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		ref, err := e.prRefOf(ctx, t)
+		if err != nil {
 			e.log.Warn("follow a published task's PR: read its link", "task", t.ID, "err", err)
 			continue
 		}
 		refs[t.ID] = ref
 	}
 	return refs
+}
+
+// prRefOf is task t's PR (it has a number): its link's, else its number
+// in its repository; an error is a failed read of the link.
+func (e *Engine) prRefOf(ctx context.Context, t registry.Task) (PRRef, error) {
+	ref := PRRef{Repo: t.Repo, Number: t.PRNumber}
+	switch l, err := e.reg.LinkedPR(ctx, t.ID); {
+	case err == nil && l.Number > 0:
+		ref = PRRef{Repo: cmp.Or(l.Repo, t.Repo), Number: l.Number}
+	case err != nil && !errors.Is(err, registry.ErrNotFound):
+		return PRRef{}, err
+	}
+	return ref, nil
 }
 
 // unknownSince is since when each of task id's envs (its PR number pr) has

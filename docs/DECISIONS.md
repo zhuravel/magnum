@@ -22587,13 +22587,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (at its changelog time when that falls after the plan, else the read's, and the lag from the plan's read) or
   elsewhere, by its author: you, someone else (a person or Jira's automation) or unknown. The author is the
   changelog entry's, the one R26's read finds the status's Since in (its `author.accountId`, compared with
-  `myself`'s as the assignee is, kept as you or other only: `jira.IssueStatus.MovedBy` and the tracking row's new
+  `myself`'s as the assignee is, `myself` asked once per read for both, failed or not, kept as you or other only: `jira.IssueStatus.MovedBy` and the tracking row's new
   `moved_by`, migration 0008, since a later read of the same status reads no changelog and keeps the row's); a move
   whose time is unknown has its author unknown. For a task that ended, a change counts only when it came before the
-  end (its changelog time not after it, or, its time unknown, a read before the end saw it): the last read, 2
-  minutes after the end, often sees the status Jira's automation gave a merged PR's issue, which is no move of the
-  task's, so the plan records none, with the later status in its event; a task that ended with no move, once its
-  last read is no longer owed, records none. The comment is an
+  end (its changelog time not after it, or, its time unknown, a read before the end saw it). A merged task's end is
+  its PR's merge time as magnum's registry keeps it (`PRState.MergedAt`, read for the merged tasks whose plans wait
+  for what was seen, never a GitHub call), else the task's own time: the daemons mark a task done 60 to 135 seconds
+  after the merge (magnum confirms a merge on two polls a minute apart, the factory follows on its tick), and Jira's
+  automation moves the issue in between. And for a merged task a move into a status of the done category (R26's
+  read keeps it) never counts, whenever it came: it is the merge's automation, or a step after the factory's work
+  (the operator's ruling). Such a plan records none at the end, with the later status in its event; a task that
+  ended with no move, once its last read is no longer owed, records none. The comment is an
   effect per milestone (`jira-comment:<task>:<milestone>`, kind `jira_comment`, begin and ok or fail events): at
   the latest milestone of a task with its own key, `jira-comment.md` in its folder gets the factory's own words (the
   milestone, the task's id, the PR as `owner/name#N` and its link, the task's state and stage, the time in UTC),
@@ -22621,17 +22625,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   transition without a numeric id or a status left out, bad keys never reach curl), TestTransitionsIsAReadThatCarriesNoWrite
   (curl's config exactly the read's) and TestTransitionsFailuresAreAClassWithNoAnswerText (an empty list is an
   answer), TestStatusSaysWhoMovedTheIssueIntoItsStatus (you, someone else, no author, never moved, myself refused,
-  a page's entry, the same status read again); the config's TestFactoryRepoJiraKeysLoad (padded names load
+  a page's entry, the same status read again), TestOneReadAsksMyselfAtMostOnce; the config's TestFactoryRepoJiraKeysLoad (padded names load
   trimmed) and TestFactoryRepoJiraKeysAreChecked (each refused value and its words, a padded from that holds its
   target); the registry's TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem (the keys' prefixes) and
-  TestATrackingRowKeepsWhoMovedTheIssue (an older file's migration); the factory's
+  TestATrackingRowKeepsWhoMovedTheIssue (an older file's migration) and
+  TestTheMovedByMigrationKeepsAVersion7FilesTrackingRow; the factory's
   TestTheFactorysJiraOnlyReads, TestAShadowTaskPlansOneMoveAtEachMilestone,
   TestEachPlanOutcomeComesFromTheStatusAndTheTransitions (planned for you and for nobody, at the target, past it,
   someone else's, no transition, none at all, fields, a done target), TestAPlanWhoseReadFailsWaitsAndTheNextMilestoneDropsIt,
   TestABegunPlanIsDroppedWhenItsTaskEnds,
   TestTheOperatorsMoveIsMatchedToThePlan (you and someone else to the target, its time and author unknown, you
-  elsewhere, no move by the end), TestAMoveAfterTheTasksEndIsNoMove (Jira's automation 30 seconds after the merge,
-  a time unknown read after the end, a move before the end), TestAPlanThatDoesNotFitTheBudgetLetsACheaperReadGo,
+  elsewhere, no move by the end), TestAMergedTasksPlansCountNoMoveOfTheMerge (the task done 2 minutes after the
+  merge, as the daemons do: Jira's automation's Done 30 seconds and 3 minutes after the merge, a done status before
+  the merge, a status between the merge and the close, a time unknown read after the merge, a move before the merge,
+  no merge time in magnum's registry), TestAPlanThatDoesNotFitTheBudgetLetsACheaperReadGo,
   TestAPaddedMoveNamePlansAsItsTrimmedName, TestTheRestartEventSaysTheTickRunsTheJiraEffectsAgain,
   TestARestartBetweenThePlansStepsPlansOnce, TestNoPlanWithoutShadowOrTheTasksOwnJiraKey (off, no keys, another
   repository's keys, another tracker's key, [jira] off), TestTheCommentFileAtEachMilestoneHoldsTheFactorysWordsAlone

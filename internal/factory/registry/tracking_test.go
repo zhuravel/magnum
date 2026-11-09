@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // The tracking table comes with the registry's migrations, on the tests'
@@ -114,5 +116,65 @@ func TestATrackingRowKeepsWhoMovedTheIssue(t *testing.T) {
 	var col int
 	if err := old.DBForTest().QueryRowContext(ctx, "SELECT count(*) FROM pragma_table_info('tracking') WHERE name = 'moved_by'").Scan(&col); err != nil || col != 1 {
 		t.Errorf("an older file's tracking has moved_by: %d, %v", col, err)
+	}
+}
+
+// writeVersion7 writes the factory registry a version 7 binary left at
+// path: every migration up to 0007, one published task, and its tracking
+// row, which migration 0008 must keep.
+func writeVersion7(t *testing.T, path string) {
+	t.Helper()
+	ctx := t.Context()
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(OFF)&_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for v := 1; v <= 7; v++ {
+		if _, err := tx.ExecContext(ctx, registry.MigrationSQLForTest(v)); err != nil {
+			t.Fatalf("migration %d: %v", v, err)
+		}
+	}
+	ts, since := store.FormatTime(t0), store.FormatTime(t0.Add(-48*time.Hour))
+	for _, q := range []string{
+		"PRAGMA user_version = 7",
+		`INSERT INTO tasks (id, jira_key, kind, repo, title, state, pr_number, created_at, updated_at)
+			VALUES (1, 'PR-12383', 'bug', 'example/app', 'First', 'published', 4530, '` + ts + `', '` + ts + `')`,
+		`INSERT INTO tracking (task_id, jira_key, jira_status, jira_status_id, jira_category, jira_since, since_searched, assigned,
+			assignee_you, read_at, tried_at, last_error)
+			VALUES (1, 'PR-12383', 'In Review', '10002', 'indeterminate', '` + since + `', 1, 1, 1, '` + ts + `', '` + ts + `', '')`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			t.Fatalf("version 7 file: %s: %v", q, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Migration 0008 keeps the tracking rows a version 7 registry holds, every
+// fact of them, and adds who moved the issue as unknown.
+func TestTheMovedByMigrationKeepsAVersion7FilesTrackingRow(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "factory.db")
+	writeVersion7(t, path)
+	r, err := registry.Open(path, registry.Options{})
+	if err != nil {
+		t.Fatalf("Open of a version 7 file: %v", err)
+	}
+	defer r.Close()
+	if v, err := r.SchemaVersion(t.Context()); err != nil || v != registry.LatestSchemaVersion() || v < 8 {
+		t.Fatalf("SchemaVersion = %d, %v; want the latest (%d), 8 or later", v, err, registry.LatestSchemaVersion())
+	}
+	want := registry.Tracking{TaskID: 1, JiraKey: "PR-12383", Status: "In Review", StatusID: "10002", Category: "indeterminate",
+		Since: t0.Add(-48 * time.Hour), Searched: true, Assigned: true, AssigneeYou: true, ReadAt: t0, TriedAt: t0}
+	if got, err := r.Tracking(t.Context(), 1); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("the migrated row: %+v, %v\nwant %+v (moved by unknown)", got, err, want)
 	}
 }

@@ -10,7 +10,8 @@ package factory
 // start (its kind's coding stage, or a later one, began), published (its
 // PR is open), merged (done with its PR: the comment only, no move). At
 // the latest milestone a live task reached, the tick begins the move's
-// plan once (an effect, jira:<task>:<milestone>, with its begin event),
+// plan once (an effect, jira-plan:<task>:<milestone>, with its begin
+// event; jira:<task>:<milestone> stays free for a later phase's real move),
 // and the tracking's next batch reads the issue for it (trackJira: a plan
 // job, first after the ended tasks' last reads, two of the tick's Jira
 // budget): its status (the tracking's own read, whose row it writes) and,
@@ -26,11 +27,18 @@ package factory
 // finds the plan begun and reads it again: one plan, one begin, one end.
 //
 // After a planned move, the first read of the issue in another status
-// records what you did (matchPlan, an effect beside the plan's and an
-// info event): your move to the target, with its time and the lag from the
-// plan, or a move elsewhere; a task that ended with no move, after its last
-// read, records that. The card's JIRA MOVE line and `magnum factory stats`
-// read these records.
+// records what was done (matchPlan, the effect jira-seen:<task>:<milestone>
+// beside the plan's, and an info event): a move to the target or
+// elsewhere, with its time, the lag from the plan and its author (the
+// changelog entry's: you, someone else, or unknown). A task that ended
+// counts only a move before its end (a merged task's merge time, as
+// magnum's registry keeps it, else the task's own time), and a merged task
+// never a move into a status of the done category (the merge's automation,
+// or a step after the factory's work): such a plan, and one whose issue did
+// not move (after its last read), records no move by the task's end. The
+// card's JIRA MOVE line ("you moved it" for your own move alone) and
+// `magnum factory stats` (your own moves alone as matches) read these
+// records.
 //
 // The comment (jiraComments): at the latest milestone of a task of such a
 // repository with its own key, once (an effect per milestone, with its
@@ -44,6 +52,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -134,6 +143,7 @@ func (e *Engine) jiraPlans(ctx context.Context, tasks []registry.Task, rows map[
 	}
 	due := map[int64]planJob{}
 	now := e.now()
+	merges := e.mergeTimes(ctx, tasks, plans)
 	for _, t := range tasks {
 		key := e.jiraKeyOf(t)
 		if key == "" {
@@ -153,7 +163,11 @@ func (e *Engine) jiraPlans(ctx context.Context, tasks []registry.Task, rows map[
 					e.dropPlan(ctx, t, key, p, repo, row, had, why)
 				}
 			case p.Result.Outcome == registry.PlanPlanned && p.Seen == nil:
-				e.matchPlan(ctx, t, key, p, row, had, now)
+				end := t.Updated // the task's end: its merge, when magnum's registry keeps the time, else the row's
+				if at, ok := merges[t.ID]; ok && at.Before(end) {
+					end = at
+				}
+				e.matchPlan(ctx, t, key, p, row, had, now, end)
 			}
 		}
 		move, ok := repo.JiraMove(at)
@@ -233,13 +247,16 @@ func (e *Engine) dropPlan(ctx context.Context, t registry.Task, key string, p re
 // the plan read is a move, to the target or elsewhere, at the changelog's
 // time of it when that falls after the plan (and then by its author: you,
 // someone else, or unknown), else at the read, its author unknown. For a
-// task that ended, the move counts only when it came before the end: its
-// changelog time is not after the end, or, its time unknown, a read before
-// the end saw it. A status reached after the end (Jira's automation moves
-// a merged PR's issue a while after the merge) is no move: the task ended
-// with none, as one whose issue did not move records once its last read is
-// no longer owed.
-func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p registry.JiraPlan, row registry.Tracking, had bool, now time.Time) {
+// task that ended (at end: a merged task's merge time when magnum's
+// registry keeps it, else the task's own time), the move counts only when
+// it came before the end: its changelog time is not after the end, or,
+// its time unknown, a read before the end saw it. A status reached after
+// the end, and for a merged task any status of the done category (Jira's
+// automation on the merge, or a step after the factory's work), is no move
+// of the plan: the task ended with none, as one whose issue did not move
+// records once its last read is no longer owed.
+func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p registry.JiraPlan, row registry.Tracking, had bool,
+	now, end time.Time) {
 	pr := p.Result
 	ended := trackEnded(t)
 	changed := had && row.Status != "" && row.ReadAt.After(pr.At) && !strings.EqualFold(row.Status, pr.From)
@@ -247,13 +264,14 @@ func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p r
 	if known {
 		at = row.Since
 	}
-	before := !ended || (known && !at.After(t.Updated)) || (!known && !row.ReadAt.After(t.Updated))
-	none := registry.JiraSeenResult{Moved: registry.SeenNone, At: t.Updated, LagSecs: int64(max(t.Updated.Sub(pr.At), 0) / time.Second)}
+	before := !ended || (known && !at.After(end)) || (!known && !row.ReadAt.After(end))
+	doneAtMerge := ended && t.State == registry.TaskDone && t.PRNumber > 0 && row.Category == "done"
+	none := registry.JiraSeenResult{Moved: registry.SeenNone, At: end, LagSecs: int64(max(end.Sub(pr.At), 0) / time.Second)}
 	noneWords := fmt.Sprintf("%s ended in %s: no move after the plan to %s", key, pr.From, pr.To)
 	var seen registry.JiraSeenResult
 	var words string
 	switch {
-	case changed && before:
+	case changed && before && !doneAtMerge:
 		seen = registry.JiraSeenResult{Moved: registry.SeenElsewhere, To: row.Status, At: at, LagSecs: int64(at.Sub(pr.At) / time.Second)}
 		if known {
 			seen.By = row.MovedBy
@@ -271,6 +289,8 @@ func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p r
 		default:
 			words = fmt.Sprintf("%s moved to %s %s after the plan, its author unknown", key, where, lag)
 		}
+	case changed && doneAtMerge:
+		seen, words = none, noneWords+"; it moved to "+row.Status+", a done status, with the merge or after it"
 	case changed: // a status the issue reached after the task's end
 		seen, words = none, noneWords+"; it moved to "+row.Status+" after the end"
 	case ended && !e.lastReadOwed(t, row, had, now):
@@ -290,6 +310,47 @@ func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p r
 		return
 	}
 	e.event(ctx, t.ID, "jira_plan", registry.PhaseInfo, words+" (shadow)")
+}
+
+// mergeTimes are the merge times of the PRs of the merged tasks whose
+// planned moves wait for what was seen after them, by task, as magnum's
+// registry keeps them (Magnum.PRStates: a read of its registry, never a
+// GitHub call): the daemons mark a task done a minute or two after its
+// merge (magnum confirms a merge on two polls, the factory follows on its
+// tick), and Jira's automation moves the issue in between. A PR the
+// registry has no merge time for, or a read that fails, gives none: the
+// task's own time is the end then.
+func (e *Engine) mergeTimes(ctx context.Context, tasks []registry.Task, plans map[int64]map[string]registry.JiraPlan) map[int64]time.Time {
+	if e.d.Magnum == nil {
+		return nil
+	}
+	refs := map[int64]PRRef{}
+	for _, t := range tasks {
+		waits := false
+		for _, p := range plans[t.ID] {
+			waits = waits || p.Result.Outcome == registry.PlanPlanned && p.Seen == nil
+		}
+		if !waits || t.State != registry.TaskDone || t.PRNumber <= 0 {
+			continue
+		}
+		if ref, err := e.prRefOf(ctx, t); err == nil {
+			refs[t.ID] = ref
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	states, err := e.d.Magnum.PRStates(ctx, slices.Collect(maps.Values(refs)))
+	if err != nil {
+		return nil
+	}
+	out := map[int64]time.Time{}
+	for id, ref := range refs {
+		if st, ok := states[ref]; ok && st.Found && st.MergedAt != nil {
+			out[id] = *st.MergedAt
+		}
+	}
+	return out
 }
 
 // planNeedsTransitions reports whether the plan of move needs the issue's

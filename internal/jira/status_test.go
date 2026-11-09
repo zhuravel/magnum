@@ -582,3 +582,39 @@ func TestStatusSaysWhoMovedTheIssueIntoItsStatus(t *testing.T) {
 		t.Errorf("the same status read again: %+v, %v; want it still yours", again, err)
 	}
 }
+
+// One read asks myself at most once, also when it fails: an assigned
+// issue whose move into its status has an author needs your account for
+// both, and a failing myself is asked once, not once for each (a hung one
+// would run the read past its bound twice over).
+func TestOneReadAsksMyselfAtMostOnce(t *testing.T) {
+	moved := change{at: "2026-11-05T14:30:00.000+0200", fromID: "3", from: "In Progress", toID: "10002", to: "In Review", author: myAccount}
+	for name, myself := range map[string]string{
+		"myself answers": "",
+		"myself refused": `{"errorMessages":["no"]}` + "\n401",
+	} {
+		issue := statusIssue("10002", "In Review", "indeterminate", myAccount, "2026-11-01T09:00:00.000+0200", 1, moved)
+		var more map[string]string
+		if myself != "" {
+			more = map[string]string{"/rest/api/2/myself": myself}
+		}
+		c, site := statusSite(t, issue, more)
+		got, err := c.Status(t.Context(), "PS-123")
+		asked := 0
+		for _, u := range site.urls() {
+			if u == "/rest/api/2/myself" {
+				asked++
+			}
+		}
+		if asked != 1 {
+			t.Errorf("%s: myself asked %d times in one read, want once", name, asked)
+		}
+		if myself == "" && (err != nil || !got.AssigneeYou || got.MovedBy != MovedByYou) {
+			t.Errorf("%s: %+v, %v; want yours and moved by you", name, got, err)
+		}
+		var pe *PartError
+		if myself != "" && (!errors.As(err, &pe) || pe.Part != PartAccount || got.MovedBy != "" || got.AssigneeYou) {
+			t.Errorf("%s: %+v, %v; want the account's PartError, the assignee and the author not known", name, got, err)
+		}
+	}
+}

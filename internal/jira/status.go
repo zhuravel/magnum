@@ -109,8 +109,10 @@ func (c *Client) Status(ctx context.Context, key string) (IssueStatus, error) {
 // changelog (/rest/api/2/issue/<KEY>/changelog, oldest first) back from
 // the newest entry the answer did not hold, at most maxChangelogPages
 // pages. Which entries the answer holds is told by their order: newest
-// first (Jira Cloud's newest 100), or oldest first. For an assigned issue
-// it asks your account's id (GET /rest/api/2/myself) the first time only:
+// first (Jira Cloud's newest 100), or oldest first. The entry's author is
+// MovedBy (prior's on the same status). For an assigned issue, or a move
+// whose entry names its author, it asks your account's id (GET
+// /rest/api/2/myself) once per read, failed or not, until it answered:
 // the client keeps it. The credentials go to curl as Ticket's do, and a
 // failure is an *Error of a class, as Ticket's is; a failure after the
 // issue answered is a *PartError, returned with what the issue said.
@@ -125,7 +127,7 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
 		}
 		if s, ok := ans.status(key); ok && sameStatus(s, prior) {
 			s.Since, s.Searched, s.MovedBy = prior.Since, true, prior.MovedBy
-			return c.assignee(ctx, ans, s, nil)
+			return c.assignee(ans, s, nil, c.accountOnce(ctx, ans, ""))
 		}
 	}
 	ans, err := c.issue(ctx, key, true)
@@ -141,23 +143,38 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
 	}
 	since, author, searched, perr := c.since(ctx, key, ans, s)
 	s.Since, s.Searched = since, searched
-	s.MovedBy = c.movedBy(ctx, author)
-	return c.assignee(ctx, ans, s, perr)
+	me := c.accountOnce(ctx, ans, author)
+	s.MovedBy = movedBy(author, me)
+	return c.assignee(ans, s, perr, me)
+}
+
+// meRead is one read's answer of your account: its id, or why it could
+// not be read (err), or neither when the read needed none.
+type meRead struct {
+	id  string
+	err error
+}
+
+// accountOnce asks your account at most once for one read, when the read needs it
+// (an assignee to compare, or a move's author), failed or not: the
+// assignee and the author share the answer.
+func (c *Client) accountOnce(ctx context.Context, ans statusAnswer, author string) meRead {
+	if !accountPattern.MatchString(author) && assigneeOf(ans) == "" {
+		return meRead{}
+	}
+	id, err := c.account(ctx)
+	return meRead{id: id, err: err}
 }
 
 // movedBy is who the author of a move (an accountId, "" for none) is to
-// you: MovedByYou, MovedByOther, or "" when it is not known (no author, or
-// your account could not be read: no error of the read, the move's author
-// is only a hint).
-func (c *Client) movedBy(ctx context.Context, author string) string {
-	if !accountPattern.MatchString(author) {
-		return ""
-	}
-	me, err := c.account(ctx)
+// you (me): MovedByYou, MovedByOther, or "" when it is not known (no
+// author, or your account could not be read: no error of the read, the
+// move's author is only a hint).
+func movedBy(author string, me meRead) string {
 	switch {
-	case err != nil:
+	case !accountPattern.MatchString(author), me.err != nil, me.id == "":
 		return ""
-	case author == me:
+	case author == me.id:
 		return MovedByYou
 	}
 	return MovedByOther
@@ -267,25 +284,34 @@ func (c *Client) since(ctx context.Context, key string, ans statusAnswer, s Issu
 	return time.Time{}, "", true, nil
 }
 
-// assignee fills s's assignee from ans: whether it has one, and whether
-// it is you (account); a failed read of your account leaves it not known
-// to be you, with a PartError, unless perr already holds one.
-func (c *Client) assignee(ctx context.Context, ans statusAnswer, s IssueStatus, perr error) (IssueStatus, error) {
+// assigneeOf is the accountId of ans's assignee, "" for none.
+func assigneeOf(ans statusAnswer) string {
 	var a struct {
 		AccountID string `json:"accountId"`
 	}
-	if !decode(ans.Fields["assignee"], &a) || a.AccountID == "" {
+	if !decode(ans.Fields["assignee"], &a) {
+		return ""
+	}
+	return a.AccountID
+}
+
+// assignee fills s's assignee from ans: whether it has one, and whether
+// it is you (me, the read's one answer of your account); a failed read of
+// your account leaves it not known to be you, with a PartError, unless
+// perr already holds one.
+func (c *Client) assignee(ans statusAnswer, s IssueStatus, perr error, me meRead) (IssueStatus, error) {
+	a := assigneeOf(ans)
+	if a == "" {
 		return s, perr
 	}
 	s.Assigned = true
-	me, err := c.account(ctx)
-	if err != nil {
+	if me.err != nil {
 		if perr == nil {
-			perr = &PartError{Part: PartAccount, Err: err}
+			perr = &PartError{Part: PartAccount, Err: me.err}
 		}
 		return s, perr
 	}
-	s.AssigneeYou = a.AccountID == me
+	s.AssigneeYou = a == me.id
 	return s, perr
 }
 
