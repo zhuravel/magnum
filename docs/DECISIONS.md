@@ -22348,7 +22348,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   head (`second_judge` is `"never"` now, `judge_fallback` names no judge of another kind any more) is dropped
   (`dropSecond`: `dropped` in the file, one event), the clean round's summary from the file is written as that round
   would have written it, and its cycle takes the exit clean after all, so the stage passes there with no further
-  round and never a needsYou; one that began and was cut runs again as a usual round in its cycle (`secondRound`). `reviewRoles` swaps the judge for it as it does
+  round and never a needsYou, and the wait the pending opinion had (magnum's real round, a heavy slot, Codex's
+  budget) goes too unless it is on you. One that began, was cut, and lost its judge before it runs again ends the
+  same way (`dropCut`): its cut cycle ends clean at its own head with the clean round's summary from the file, one
+  event, no further round, whatever `cycles` says. The record says which cycle a drop ended in (`dropped_at`), so a
+  fresh loop's round after a pending drop is never taken for the cut opinion. A decision written before a stop is
+  finished first whatever `second_judge` says after the restart (its event, then the clean cycle's end with the loop
+  going on), and the next pass drops it if its judge is gone; and `secondRound` takes a new round for the second
+  opinion only while the newest cycle is the clean one, ended with the loop going on, at that round's head, so a
+  record that stayed live by any other path never makes a later loop's round 1 the second opinion. `reviewRoles`
+  swaps the judge for it as it does
   for a Codex-never task, but keeps the Codex reviewers, so the round waits at `[usage] codex_soft` as any round with a
   Codex role does (`reviewWait`'s `runsCodex`): the factory's existing rule for a round with Codex reviewers, kept,
   not a fallback for them. Its clean result ends the stage clean, the summary keeping the first round's leftovers at
@@ -22357,9 +22366,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the second opinion (and never passes round 10), so a clean last round still gets it and a P2 found then needs you.
   The decision, every skip for want of its judge and each round's begin event (`...; judge claude-judge (claude), a
   second opinion in place of codex-judge (codex)`) are events, and the task's wait names the judge while it runs; a
-  narrow change and `"never"` say nothing, as most tasks are narrow. A stop between a skip's event, or a cut second
-  opinion's drop event, and the step after it repeats that event once after the restart: a window accepted, as only
-  the decision's, the void's and a pending drop's events are checked (`eventOnce`). `magnum factory stats` reads each round's judge
+  narrow change and `"never"` say nothing, as most tasks are narrow. A stop between a skip's event and the step after
+  it repeats that event once after the restart: a window accepted. The decision's, the void's and both drops' events
+  go through `eventOnce` after the record's write, so a restart writes one that is missing and never repeats one. `magnum factory stats` reads each round's judge
   kind from those begin events (`review_judges`, `second_opinion`), and `factoryread` now stops a round's roles at the
   `;`. No migration: the registry's review cycles have no judge column, and the events and the task's directory are
   the records the factory already keeps. Rejected: the same judge kind twice (it repeats itself); every change
@@ -22381,7 +22390,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   between the write and its event, between the event and the cycle's end, the second opinion cut by a drain),
   TestASecondOpinionIsVoidWhenTheHeadMovesBeforeItStarts, TestASecondOpinionKeepsTheCleanRoundsDoubts,
   TestASecondOpinionThatEndedUnavailableRunsAgain, TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean (never, no
-  fallback) and TestTheReadyCardNamesTheSecondOpinion; the registry's TestCloseLoopEndsTheLoopAtARoundThatLetItGoOn;
+  fallback, each with the pending opinion waiting on magnum), TestNeverSetBeforeTheCleanCycleEndsDropsTheSecondOpinion,
+  TestACutSecondOpinionThatLostItsJudgeEndsTheStageClean and TestTheReadyCardNamesTheSecondOpinion; the registry's TestCloseLoopEndsTheLoopAtARoundThatLetItGoOn;
   the config's TestFactorySecondJudgeDefaultsToWideAndTakesOnlyItsWords; factoryread's
   TestLocalReviewReadsTheRolesOfABeginEventThatNamesItsJudge; the stats' TestStatsRecordTheJudgeKindOfEachLocalRound.
   No new dependencies.

@@ -419,9 +419,9 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	if w == nil {
 		return e.stageFailed(ctx, t, needsYou{"no [[watch]] covers " + t.Repo + ": the local review runs its review roles"})
 	}
-	so, second, err := e.secondRound(ctx, t, w, cy)
-	if err != nil {
-		return err
+	so, second, ended, err := e.secondRound(ctx, t, w, cy)
+	if err != nil || ended {
+		return err // ended: the cut second opinion's cycle ended clean, and the stage passes at the next pass
 	}
 	roles, err := e.reviewRoles(t, w, round, second)
 	if err != nil {

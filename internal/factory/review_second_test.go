@@ -477,8 +477,9 @@ func TestASecondOpinionThatEndedUnavailableRunsAgain(t *testing.T) {
 // A pending second opinion whose judge can no longer run at the clean
 // round's head (second_judge "never", or no judge_fallback of another kind)
 // does not start: one event says why, the stage ends clean on that round
-// with the summary it would have written, no further round runs, and the
-// task never needs you for it.
+// with the summary it would have written, no further round runs, the task
+// never needs you for it, and the wait the pending opinion had (on magnum's
+// real round) is gone with it.
 func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 	for _, tc := range []struct {
 		name, why string
@@ -491,9 +492,18 @@ func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 			r := newReviewRig(t, result(nitFinding), result())
 			task, head := r.wideReviewTask("PR-12407")
 			r.run(6, func() bool { return r.firstDecided(task.ID) })
+			r.magnum.set("magnum reviews example/shop#1") // the pending opinion waits on magnum's real round
+			r.run(2, nil)
+			if got := r.reload(task.ID); got.WaitsWho != waitMagnum {
+				t.Fatalf("the pending second opinion waits %q: %q, want magnum", got.WaitsWho, got.WaitsWhat)
+			}
 			tc.set(r)
 			r.run(10, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
+			r.run(2, nil)
 			got := r.reload(task.ID)
+			if got.WaitsWho != "" || got.WaitsWhat != "" {
+				t.Errorf("the task at %s waits %q: %q after the stage passed, want nothing", got.Stage, got.WaitsWho, got.WaitsWhat)
+			}
 			if got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
 				t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body after round 1 alone", got.State, got.Stage, got.WaitsWhat,
 					roundsOf(r.rv.calls()))
@@ -514,5 +524,95 @@ func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 				t.Fatalf("summary %+v, want round 1's own: clean after 1 round with its P3", sum)
 			}
 		})
+	}
+}
+
+// readSecond is the task's review-second.json.
+func (r *reviewRig) readSecond(id int64) secondOpinion {
+	r.t.Helper()
+	so, ok := readSecondOpinion(r.layout.FactoryTaskDir(id))
+	if !ok {
+		r.t.Fatal("the task has no second opinion")
+	}
+	return so
+}
+
+// "never" set while a stop left the decision written and the clean cycle
+// open drops the second opinion once the restarted daemon ends that cycle:
+// one drop event, a record that is not live, the stage passed on the clean
+// round, and a later loop's round 1 at a new head runs with round 1's roles,
+// never as the second opinion.
+func TestNeverSetBeforeTheCleanCycleEndsDropsTheSecondOpinion(t *testing.T) {
+	r := newReviewRig(t, rounds(3, result())...)
+	r.e.beforeSecond = func(at string) error {
+		if at == "end" {
+			return errors.New("the daemon stops here")
+		}
+		return nil
+	}
+	task, _ := r.wideReviewTask("PR-12408")
+	r.run(6, func() bool { return fileIn(r.layout.FactoryTaskDir(task.ID), secondOpinionFile) })
+	if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
+		t.Fatalf("cycles %+v, want round 1's still open", cs)
+	}
+	r.cfg.Factory.LocalReview.SecondJudge = config.FactorySecondJudgeNever
+	r.restart()
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
+		t.Fatalf("task at %s waits %q after %d rounds, want pr_body after 1", got.Stage, got.WaitsWhat, len(r.rv.calls()))
+	}
+	if dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run"); len(dropped) != 1 || !strings.Contains(dropped[0].Text, "never now") {
+		t.Fatalf("events %+v, want one drop", dropped)
+	}
+	if so := r.readSecond(task.ID); so.live() {
+		t.Fatalf("second opinion %+v, want it dropped", so)
+	}
+	r.cfg.Factory.LocalReview.SecondJudge = config.FactorySecondJudgeWide
+	moved := r.moveHead(task)
+	r.run(10, func() bool { return len(r.rv.calls()) >= 2 })
+	if calls := r.rv.calls(); len(calls) < 2 || !slices.Equal(calls[1].Roles, firstRoles) || calls[1].Round != 1 || calls[1].HeadSHA != moved {
+		t.Fatalf("rounds %v, want a later loop's round 1 with round 1's roles at %s", roundsOf(calls), moved)
+	}
+}
+
+// A second opinion that began, was cut, and then lost its judge ends as a
+// pending one does: its cut cycle ends clean at its own head with the clean
+// round's summary, one event says why, and no further round runs, past
+// cycles or not, so the task never needs you for it.
+func TestACutSecondOpinionThatLostItsJudgeEndsTheStageClean(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), result())
+	r.cfg.Factory.LocalReview.Cycles = 1
+	task, head := r.wideReviewTask("PR-12409")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	r.rv.mu.Lock()
+	r.rv.block = make(chan struct{})
+	r.rv.mu.Unlock()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(r.rv.calls()) < 2 && time.Now().Before(deadline) {
+		r.tick()
+		time.Sleep(time.Millisecond)
+	}
+	r.e.stopBackground() // a stop cuts the second opinion
+	r.rv.mu.Lock()
+	r.rv.block = nil
+	r.rv.mu.Unlock()
+	r.cfg.Factory.LocalReview.SecondJudge = config.FactorySecondJudgeNever
+	r.restart()
+	r.run(10, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	if got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body with no third round", got.State, got.Stage, got.WaitsWhat,
+			roundsOf(r.rv.calls()))
+	}
+	if cs := r.cycles(task.ID); len(cs) != 2 || cs[1].Exit != registry.ExitClean || cs[1].HeadBefore != head {
+		t.Fatalf("cycles %+v, want the cut cycle clean at %s", cs, head)
+	}
+	dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run")
+	if len(dropped) != 1 || !strings.Contains(dropped[0].Text, "cycle 2") || !strings.Contains(dropped[0].Text, "never now") {
+		t.Fatalf("events %+v, want one drop of the cut second opinion", dropped)
+	}
+	if sum := r.summary(task.ID); sum.Exit != registry.ExitClean || sum.Rounds != 1 || sum.SecondJudge != "" ||
+		!slices.ContainsFunc(sum.Leftovers, func(i ReviewItem) bool { return i.Title == nitFinding.Title }) {
+		t.Fatalf("summary %+v, want the clean round's", sum)
 	}
 }

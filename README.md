@@ -4790,9 +4790,9 @@ branch moves before it starts (a commit of yours while it waits), it is void (`t
 `cycles` rounds starts at the new head from round 1. A pending one whose judge can no longer run at that head
 (`second_judge` is `"never"` now, or `judge_fallback` names no judge of another kind any more) does not start either:
 an event says why, and the stage ends clean on the round it followed, with that round's own summary, no further
-round and no wait on you (one that began and was cut runs again as a usual round in its cycle). Only a second
-opinion whose round ended clean or with
-findings is the task's one; one that was void, or whose round ended unavailable (the task needed you, and you let
+round and no wait on you; one that began, was cut (a stop, `install --now`) and lost its judge before it runs again
+ends the same way, its cut round's cycle clean at its own head. Only a second opinion whose round ended clean or
+with findings is the task's one; one that was void, or whose round ended unavailable (the task needed you, and you let
 it go on), runs again at the next clean round of a wide change, and its event says `runs again`. The decision is
 written (`review-second.json` in the task's directory) before its event and the end of the clean round's cycle, so a
 restart in between runs the second opinion once and says it once. Each round's begin event names its judge and that
