@@ -16,7 +16,7 @@ import (
 // judgeResult is the judge's result (codex-judge.json, or the MAGNUM_RESULT line):
 // {status, run_id, review_id, review_url, event, findings{P0..P3},
 // provenance[{id, title, severity, path, line, sources, verdict, reason_code, nearby}],
-// previous_findings{fixed, open{P0..P3}, answered},
+// previous_findings{fixed, open{P0..P3}, answered}, stops_open[thread id],
 // environment_failures[{cmd, error}], blocker, …}.
 type judgeResult struct {
 	Status    string
@@ -45,8 +45,14 @@ type judgeResult struct {
 	// (status replied; the `replies` post-review printed), nil when the
 	// result names none.
 	Replies []resultReply
-	Raw     string // the JSON as written
-	Source  string // file | pane
+	// StopsOpen are the threads marked stop whose finding the judge keeps
+	// open (stops_open, thread ids); StopsOpenGiven is false when the
+	// result names none as a list of strings: the round then keeps every
+	// stop.
+	StopsOpen      []string
+	StopsOpenGiven bool
+	Raw            string // the JSON as written
+	Source         string // file | pane
 }
 
 // findingRecord is one entry of the result's provenance list.
@@ -89,6 +95,23 @@ func parseReplies(m json.RawMessage) []resultReply {
 		}
 	}
 	return out
+}
+
+// parseStopsOpen reads stops_open: a list of thread ids, trimmed, blanks and
+// repeats dropped (an empty list for none); given is false for a missing
+// field, null, or anything but a list of strings.
+func parseStopsOpen(m json.RawMessage) (ids []string, given bool) {
+	var list []string
+	if m == nil || json.Unmarshal(m, &list) != nil || list == nil {
+		return nil, false
+	}
+	ids = []string{}
+	for _, s := range list {
+		if s = strings.TrimSpace(s); s != "" && !slices.Contains(ids, s) {
+			ids = append(ids, s)
+		}
+	}
+	return ids, true
 }
 
 // maxTitleRunes bounds a finding's title.
@@ -304,6 +327,7 @@ func parseResult(b []byte) (judgeResult, bool) {
 	if f, ok := raw["replies"]; ok {
 		r.Replies = parseReplies(f)
 	}
+	r.StopsOpen, r.StopsOpenGiven = parseStopsOpen(raw["stops_open"])
 	if f, ok := raw["findings"]; ok {
 		var m map[string]json.RawMessage
 		if json.Unmarshal(f, &m) == nil {

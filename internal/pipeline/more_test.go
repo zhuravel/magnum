@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,31 @@ func TestParseResultReadsTheEarlierFindingsStillOpen(t *testing.T) {
 	} {
 		if r, ok := parseResult([]byte(payload)); !ok || r.PreviousOpen != nil {
 			t.Errorf("%s: PreviousOpen = %v, %v; want nil", payload, r.PreviousOpen, ok)
+		}
+	}
+}
+
+// A re-review's judge names the threads marked stop whose finding it keeps
+// open in stops_open: a list of thread ids, trimmed, without blanks or
+// repeats, an empty list when it keeps none. A result without the field, or
+// with one that is not a list of strings, names none: the round then keeps
+// every stop.
+func TestParseResultReadsTheStopsTheJudgeHoldsOpen(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		given   bool
+		want    []string
+	}{
+		{`{"status":"posted","stops_open":["PRRT_D"," PRRT_E ","","PRRT_D"]}`, true, []string{"PRRT_D", "PRRT_E"}},
+		{`{"status":"posted","stops_open":[]}`, true, []string{}},
+		{`{"status":"posted"}`, false, nil},
+		{`{"status":"posted","stops_open":null}`, false, nil},
+		{`{"status":"posted","stops_open":"x"}`, false, nil},
+		{`{"status":"posted","stops_open":["PRRT_D",3]}`, false, nil},
+	} {
+		r, ok := parseResult([]byte(tc.payload))
+		if !ok || r.StopsOpenGiven != tc.given || !slices.Equal(r.StopsOpen, tc.want) || (tc.want != nil) != (r.StopsOpen != nil) {
+			t.Errorf("%s: StopsOpen = %#v given %v, %v; want %#v given %v", tc.payload, r.StopsOpen, r.StopsOpenGiven, ok, tc.want, tc.given)
 		}
 	}
 }

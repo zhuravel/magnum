@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -317,4 +318,93 @@ func TestTwoRebuttalsAndAnAnswerStopTheThread(t *testing.T) {
 		t.Fatalf("judge data stop threads = %d", jd.StopThreads)
 	}
 	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "1 thread is marked `stop`: you rebutted twice there")
+}
+
+// The live cases (2026-11-09): a round whose judge accepted the author's
+// last answer in a stopped thread ("Fixed: …", "Answered: … accepted")
+// flagged that thread as a stalemate all the same, and since a stopped
+// thread stays stopped the flag never went. The judge names the stopped
+// threads whose finding it keeps open (stops_open), and the round's stops
+// are those alone: an id it names that is not stopped adds nothing. A
+// result that names none, or not as a list, keeps every stop, as before;
+// an empty list keeps none, in a reply round too. The threads file and the
+// prompt still mark both threads stop.
+func TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen(t *testing.T) {
+	own := func(id int64, body string) github.ThreadComment {
+		return github.ThreadComment{ID: id, AuthorLogin: "talkable", AuthorType: "Bot", Body: body, URL: "https://example.test/c", CreatedAt: t0.Add(-time.Hour)}
+	}
+	author := func(id int64) github.ThreadComment {
+		return github.ThreadComment{ID: id, AuthorLogin: "alice", AuthorType: "User", Body: "(Claude) Fixed in 1a2b3c4.", CreatedAt: t0.Add(-time.Hour)}
+	}
+	rebuttal := "One sentence.\n\n" + postreview.ReplyMarker("r-old", postreview.ReplyRebuttal)
+	stopped := func(id string, root int64) github.Thread {
+		return github.Thread{ID: id, Comments: []github.ThreadComment{own(root, "**[P2] "+id+"**"), author(root + 1), own(root+2, rebuttal),
+			author(root + 3), own(root+4, rebuttal), author(root + 5)}}
+	}
+	ids := func(ss []StopThread) []string {
+		out := []string{}
+		for _, s := range ss {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name  string
+		reply bool // a reply round; else a re-review that posts
+		extra map[string]any
+		want  []string
+	}{
+		{name: "the judge holds one open", extra: map[string]any{"stops_open": []string{"PRRT_D", "PRRT_X"}}, want: []string{"PRRT_D"}},
+		{name: "the judge settles both", extra: map[string]any{"stops_open": []string{}}, want: []string{}},
+		{name: "a reply round's judge settles both", reply: true, extra: map[string]any{"stops_open": []string{}}, want: []string{}},
+		{name: "a result without stops_open", want: []string{"PRRT_A", "PRRT_D"}},
+		{name: "a stops_open that is not a list", extra: map[string]any{"stops_open": "x"}, want: []string{"PRRT_A", "PRRT_D"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			fa := captureJudge(e)
+			gh := &replyGitHub{fakeGitHub: e.gh, threads: []github.Thread{stopped("PRRT_A", 201), stopped("PRRT_D", 501)}}
+			e.r.GitHub = gh
+			in, outcome := e.replyInput(), OutcomeReplied
+			if tc.reply {
+				e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+					result := map[string]any{"status": "replied", "run_id": markerRunID(t, text), "replies": []map[string]any{}}
+					maps.Copy(result, tc.extra)
+					if err := writeJudgeJSON(store.Deref(run.ReportPath), result); err != nil {
+						return err
+					}
+					return f.end(run.ID)
+				}}
+			} else {
+				p := e.judgePosts(506, "COMMENTED", "COMMENT")
+				p.extra = tc.extra
+				e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
+				in, outcome = e.input(KindRereview), OutcomePosted
+				in.Round, in.Since = 2, t0.Add(-3*time.Hour)
+				in.Previous = &PreviousReview{ID: 900, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-3 * time.Hour), Login: "talkable[bot]"}
+			}
+			res, err := e.r.RunRound(e.ctx, in)
+			if err != nil || res.Outcome != outcome {
+				t.Fatalf("RunRound = %+v, %v", res, err)
+			}
+			if got := ids(res.Stops); !res.ThreadsRead || !slices.Equal(got, tc.want) {
+				t.Fatalf("threads read %v, stops %v; want %v", res.ThreadsRead, got, tc.want)
+			}
+			b, err := os.ReadFile(filepath.Join(res.ReportDir, ThreadsFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var threads []agents.ReviewThread
+			if err := json.Unmarshal(b, &threads); err != nil {
+				t.Fatal(err)
+			}
+			if len(threads) != 2 || !threads[0].Stop || !threads[1].Stop {
+				t.Fatalf("threads: %+v", threads)
+			}
+			if jd := fa.data(t); jd.StopThreads != 2 {
+				t.Fatalf("judge data stop threads = %d", jd.StopThreads)
+			}
+			mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "2 threads are marked `stop`", "`stops_open`")
+		})
+	}
 }

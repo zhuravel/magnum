@@ -561,6 +561,44 @@ func TestAThreadMagnumStoppedArguingInFlagsThePRUntilTheOperatorActs(t *testing.
 	}
 }
 
+// A round whose judge settles a stopped thread (pipeline.RoundResult.Stops
+// leaves it out: the judge accepted the answer) clears the flag an earlier
+// round raised, and marks nothing seen: when a later round's judge holds the
+// same answer open again, the PR is flagged again.
+func TestAStalemateTheJudgeSettlesClearsWithoutASeenMark(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	stop := pipeline.StopThread{ID: "PRRT_A", URL: "https://github.com/talkable/talkable/pull/2#discussion_r1", LastReply: 206}
+	round := func(stops ...pipeline.StopThread) {
+		t.Helper()
+		repliedRounds(h, stops...)
+		h.advance(3 * time.Hour)
+		reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+		h.advance(3 * time.Minute)
+		h.tick()
+		h.wantState(2, store.PRReviewed)
+	}
+	round(stop)
+	pr := h.wantState(2, store.PRReviewed)
+	if _, ok := ParseStalemate(mustKV(t, h, KVPRStalemate(pr.ID))); !ok {
+		t.Fatal("the first round raised no flag")
+	}
+	round()
+	if v, ok := kvValue(h, KVPRStalemate(pr.ID)); ok {
+		t.Fatalf("stalemate = %s after the judge settled the thread", v)
+	}
+	if v, ok := kvValue(h, kvPRStalemateSeen(pr.ID)); ok {
+		t.Fatalf("stalemate_seen = %s: the judge's settling is no act of the operator", v)
+	}
+	round(stop)
+	if st, ok := ParseStalemate(mustKV(t, h, KVPRStalemate(pr.ID))); !ok || st.Threads[0].LastReply != 206 {
+		t.Fatalf("the same answer held open again: stalemate %+v", st)
+	}
+	if evs := approvalEvents(t, h, 2, "pr.stalemate"); len(evs) != 2 {
+		t.Fatalf("stalemate events: %+v", evs)
+	}
+}
+
 // reply_debounce = 0 turns reply rounds off: the replies are kept and
 // counted, nothing starts.
 func TestReplyDebounceZeroStartsNoReplyRound(t *testing.T) {

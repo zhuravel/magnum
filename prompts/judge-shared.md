@@ -142,7 +142,7 @@ Your earlier threads on this PR and the replies to them are in {{.ThreadsFile}}:
 
 {{define "threads-and-stops"}}
 {{- if .ThreadsFile}}
-{{template "threads" .}}{{if .StopThreads}} {{.StopThreads}} {{if eq .StopThreads 1}}thread is{{else}}threads are{{end}} marked `stop`: you rebutted twice there and the author answered again. Reply there no more (magnum asks the operator); decide the finding as usual.{{end}}
+{{template "threads" .}}{{if .StopThreads}} {{.StopThreads}} {{if eq .StopThreads 1}}thread is{{else}}threads are{{end}} marked `stop`: you rebutted twice there and the author answered again. Reply there no more (magnum asks the operator); decide the finding as usual. Write the `id`s of the stopped threads whose finding you keep open as `stops_open` in the result file (`[]` when the answers settle them all).{{end}}
 {{- end}}
 {{- end}}
 

@@ -731,6 +731,11 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		rd.res.Event = normalizeEvent(v.review.state)
 	}
 	rd.res.Replies = v.replies
+	if v.result != nil && v.result.StopsOpenGiven && (v.outcome == OutcomePosted || v.outcome == OutcomeReplied) {
+		// The stopped threads the judge settled (it accepted the answer)
+		// are no stalemate; an id it names that is not stopped adds none.
+		rd.res.Stops = slices.DeleteFunc(rd.res.Stops, func(s StopThread) bool { return !slices.Contains(v.result.StopsOpen, s.ID) })
+	}
 	if v.result != nil && v.outcome != OutcomeReplied { // a replied round's verdict stays its last review's
 		rd.res.Findings, rd.res.PreviousOpen = v.result.Findings, v.result.PreviousOpen
 		rd.res.HarnessUsed = v.result.HarnessUsed

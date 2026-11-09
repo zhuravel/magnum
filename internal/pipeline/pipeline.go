@@ -628,7 +628,10 @@ type RoundResult struct {
 	// ThreadsRead: the round read the reviewer's threads before the judge's
 	// prompt (re-reviews and recoveries), so Stops is what they say now.
 	// Stops are the threads marked stop (agents.ReviewThread.Stop): after
-	// two of the reviewer's rebuttals someone answered again.
+	// two of the reviewer's rebuttals someone answered again. A posted or
+	// replied round whose judge named the stopped threads it keeps open
+	// (the result's stops_open) keeps only those: the others' answers
+	// settled their findings.
 	ThreadsRead bool
 	Stops       []StopThread
 }

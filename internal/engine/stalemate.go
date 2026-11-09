@@ -7,7 +7,10 @@ package engine
 // threads file (pipeline.StopThread): the judge replies there no more,
 // post-review refuses to, and the board flags the PR for the operator until
 // they act on it (a review they ask for, a verdict, a mute); a later answer
-// in that thread flags it again.
+// in that thread flags it again. The judge still decides the finding: a
+// stopped thread whose answer it accepts is not among the round's stops
+// (pipeline.RoundResult.Stops), so it is not flagged, and a round that
+// settles a flagged one clears the flag without marking it seen.
 
 import (
 	"context"
