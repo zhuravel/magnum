@@ -421,10 +421,19 @@ type mergeRead struct {
 	workflows  []string
 }
 
-// isMigration reports whether path is a migration: a file under a
-// db/migrate directory (the root's, or an engine's).
+// isMigration reports whether path is a migration: a file under a db
+// directory's child whose name holds "migrate" (db/migrate,
+// db/sharded_migrate, db/data_migrate), the root's or an engine's. Jenkins
+// runs every such kind on a staging deploy, so naming one too many in the
+// y/N is safe, and missing one is not.
 func isMigration(path string) bool {
-	return strings.HasPrefix(path, "db/migrate/") || strings.Contains(path, "/db/migrate/")
+	parts := strings.Split(path, "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "db" && strings.Contains(parts[i+1], "migrate") {
+			return true
+		}
+	}
+	return false
 }
 
 // isWorkflow reports whether path is under .github/workflows.

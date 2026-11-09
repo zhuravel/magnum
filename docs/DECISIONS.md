@@ -21853,6 +21853,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   agents' TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent pins the new sentence; the proof is the
   same eval case replayed on this skill.
 
+- **A staging deploy counts every db migrate directory's files as migrations, not only db/migrate's** (2026-11-09).
+  Before the first real deploy (talkable#12204, which carries #12203), its dry run named no migration, although
+  #12203 adds `db/sharded_migrate/20261105011921_add_metric_indexes_to_custom_activities.rb`, which changes indexes
+  of a shared table. `isMigration` matched only `db/migrate/`, so the y/N under-reported what Jenkins would run on the
+  shared databases, and the refusal of a merge that now brings a migration the question did not name missed sharded
+  ones too. A migration is now any file the merge adds under a `db/` directory's child whose name holds `migrate`
+  (`db/migrate`, `db/sharded_migrate`, `db/data_migrate`), the root's or an engine's: Jenkins runs each kind, so a name
+  too many in the question is safe and a missing one is not. Rejected: a configurable glob per repository (no
+  repository needs another shape today; the default covers both talkable's kinds). Tests: staging's
+  TestAMigrationIsAnyFileUnderADbMigrateDirectory and TestThePlanNamesAShardedMigration (a PR in the deploy world that
+  adds only a sharded migration).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

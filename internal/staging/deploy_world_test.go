@@ -205,6 +205,8 @@ func newDeployWorld(t *testing.T) *deployWorld {
 	// PR 1: a clean change with a migration. PR 2: conflicts with s1.
 	w.pr(1, "pr1", map[string]string{"app/b.rb": "b\n", "db/migrate/20261108_create_things.rb": "create\n"})
 	w.pr(2, "pr2", map[string]string{"app/s.rb": "theirs\n"})
+	// PR 9: a clean change with a sharded migration only (talkable#12203's shape).
+	w.pr(9, "pr9", map[string]string{"app/c.rb": "c\n", "db/sharded_migrate/20261105011921_add_metric_indexes.rb": "index\n"})
 
 	w.mirror = filepath.Join(t.TempDir(), "staging", "acme", "app.git")
 	w.deps = Deps{

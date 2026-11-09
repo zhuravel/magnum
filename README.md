@@ -5223,7 +5223,7 @@ tip, the PR's head], with the message `Merge branch '<head branch>' into staging
 ci.yml's checks, the env's migrations on its shared database and the deploy. Coworkers share these branches, and
 GitHub does not refuse a force push to them, so every guard is magnum's own. First, the plan shows you, for each
 env, the tip, whether the head merges cleanly (else the conflicted paths, which the resolver merges first), the
-migrations the merge adds (files under `db/migrate/`) and whether it changes `.github/workflows`. Each env you
+migrations the merge adds (files under `db/migrate/`, `db/sharded_migrate/`, `db/data_migrate/` or any `db/` directory whose name holds `migrate`, the root's or an engine's) and whether it changes `.github/workflows`. Each env you
 confirm gets an effect, which a daemon advances one step a tick:
 
 | Step | What it does |
