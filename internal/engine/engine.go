@@ -812,6 +812,9 @@ type Engine struct {
 	stagingWG      sync.WaitGroup
 	stagingCtx     context.Context
 	stagingStop    context.CancelFunc
+	// stagingStepLogged is the cause of the failed staging Step last
+	// logged (staging_deploy.go), under stagingMu.
+	stagingStepLogged string
 }
 
 // New returns an engine over d.
@@ -952,7 +955,11 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	if !a.DryRun && a.AgentTag == "" {
 		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
 	}
-	if s := stagingFromApp(a); s != nil { // staging_status.go: only with a watched repository's staging envs
+	// staging_status.go: only with a watched repository's staging envs;
+	// staging_deploy.go: the client's engine parts, bound once the engine
+	// exists.
+	bound := &stagingBound{}
+	if s := stagingFromApp(a, bound); s != nil {
 		d.Staging = s
 	}
 	if a.Runner != nil && a.Config != nil {
@@ -975,6 +982,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		m(&d)
 	}
 	e := New(d)
+	bound.bind(e)
 	if a.Config != nil && a.GitHub != nil {
 		for _, id := range a.Config.Identities {
 			if c := a.GitHub(id.Name); c != nil {
@@ -1103,7 +1111,10 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}()
 	hooks := e.goWebhooks(ctx)         // webhooks.go: shadow mode's consumer
 	observing := e.goObserveClock(ctx) // observe_clock.go: the turns in flight, between the ticks
-	defer func() { cancel(); <-worker; <-hooks; <-observing }()
+	// staging_deploy.go: the live deploys' steps, ended before the
+	// shutdown closes the staging client.
+	stepping := e.goStagingSteps(ctx, stagingStepEvery)
+	defer func() { cancel(); <-worker; <-hooks; <-observing; <-stepping }()
 
 	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	timer := time.NewTimer(0)

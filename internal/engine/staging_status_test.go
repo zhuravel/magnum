@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,104 @@ type fakeStaging struct {
 	closed     int
 	closedBusy bool // Close ran while a Refresh still ran
 	afterStop  bool // a Refresh started after its ctx ended
+
+	// The deploy side: plan answers Plan (nil: every env clean, at
+	// fakeTip); every Plan and Deploy is recorded, and Deploy fails with
+	// deployErr. Step counts its calls (stepping: running now), waits for
+	// stepGate (or its ctx) when set and panics with stepPanics;
+	// closedStepping says Close ran while a Step still ran. Cancel records
+	// its ids and fails with cancelErr.
+	plan           func(pr staging.PR, envs []staging.Env) (staging.DeployPlan, error)
+	plans          []fakePlan
+	deploys        []fakeDeploy
+	deployErr      error
+	steps          int
+	stepping       int
+	stepGate       chan struct{}
+	stepPanics     bool
+	closedStepping bool
+	cancels        []staging.EffectID
+	cancelErr      error
+}
+
+// fakePlan is one Plan call, fakeDeploy one Deploy call.
+type (
+	fakePlan struct {
+		pr   staging.PR
+		envs []staging.Env
+	}
+	fakeDeploy struct {
+		plan staging.DeployPlan
+		by   string
+	}
+)
+
+// fakeTip is the staging tips the fake's plans name.
+const fakeTip = "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
+
+func (f *fakeStaging) Plan(_ context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error) {
+	f.mu.Lock()
+	f.plans = append(f.plans, fakePlan{pr, slices.Clone(envs)})
+	plan := f.plan
+	f.mu.Unlock()
+	if plan != nil {
+		return plan(pr, envs)
+	}
+	p := staging.DeployPlan{PR: pr}
+	for _, e := range envs {
+		p.Envs = append(p.Envs, staging.EnvPlan{Env: e, Tip: fakeTip, Clean: true})
+	}
+	return p, nil
+}
+
+func (f *fakeStaging) Deploy(_ context.Context, plan staging.DeployPlan, by string) ([]staging.EffectID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deploys = append(f.deploys, fakeDeploy{plan, by})
+	if f.deployErr != nil {
+		return nil, f.deployErr
+	}
+	ids := make([]staging.EffectID, len(plan.Envs))
+	for i, e := range plan.Envs {
+		ids[i] = staging.EffectID(fmt.Sprintf("%s-%d-20261005t100000-abcd", e.Env.Name, plan.PR.Number))
+	}
+	return ids, nil
+}
+
+func (f *fakeStaging) Step(ctx context.Context) error {
+	f.mu.Lock()
+	f.steps++
+	f.stepping++
+	gate, panics := f.stepGate, f.stepPanics
+	f.mu.Unlock()
+	defer func() { f.mu.Lock(); f.stepping--; f.mu.Unlock() }()
+	if panics {
+		panic("staging: a bug in Step")
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (f *fakeStaging) Effects(string) []staging.Effect { return nil }
+
+func (f *fakeStaging) Cancel(_ context.Context, id staging.EffectID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancels = append(f.cancels, id)
+	return f.cancelErr
+}
+
+// stepCount is how many Steps f was asked.
+func (f *fakeStaging) stepCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.steps
 }
 
 type fakeRefresh struct {
@@ -82,6 +181,9 @@ func (f *fakeStaging) Close() {
 	f.closed++
 	if f.busy > 0 {
 		f.closedBusy = true
+	}
+	if f.stepping > 0 {
+		f.closedStepping = true
 	}
 }
 
@@ -164,12 +266,12 @@ func TestNoStagingEntryForAWatchedRepositoryMakesNoStagingClient(t *testing.T) {
 	newApp := func(cfg *config.Config) *app.App {
 		return &app.App{Config: cfg, Runner: &execx.Fake{}, Logger: h.d.Logger}
 	}
-	if s := stagingFromApp(newApp(h.cfg)); s != nil {
+	if s := stagingFromApp(newApp(h.cfg), &stagingBound{}); s != nil {
 		t.Fatalf("a config without staging entries made a staging client: %T", s)
 	}
 	unwatched := *h.cfg
 	unwatched.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Staging: slices.Clone(testStagings)}}
-	if s := stagingFromApp(newApp(&unwatched)); s != nil {
+	if s := stagingFromApp(newApp(&unwatched), &stagingBound{}); s != nil {
 		t.Fatal("staging entries of a repository no [[watch]] covers made a staging client")
 	}
 	if got := StagingRepos(&unwatched); len(got) != 0 {
@@ -180,11 +282,11 @@ func TestNoStagingEntryForAWatchedRepositoryMakesNoStagingClient(t *testing.T) {
 	for _, mod := range []func(*app.App){func(a *app.App) { a.DryRun = true }, func(a *app.App) { a.AgentTag = "eval" }} {
 		a := newApp(&watched)
 		mod(a)
-		if s := stagingFromApp(a); s != nil {
+		if s := stagingFromApp(a, &stagingBound{}); s != nil {
 			t.Fatal("a dry run or a tagged App made a staging client")
 		}
 	}
-	s := stagingFromApp(newApp(&watched))
+	s := stagingFromApp(newApp(&watched), &stagingBound{})
 	if s == nil {
 		t.Fatal("staging entries of a watched repository made no staging client")
 	}

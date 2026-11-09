@@ -41,6 +41,14 @@ import (
 type Staging interface {
 	Refresh(ctx context.Context, repo string, open []staging.OpenPR) error
 	Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus
+	// The deploy side (staging_deploy.go): a plan of a PR's merge per env,
+	// the effects that deploy it on the operator's word, a step of every
+	// live effect, the effects of a repository, and a cancel.
+	Plan(ctx context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error)
+	Deploy(ctx context.Context, plan staging.DeployPlan, by string) ([]staging.EffectID, error)
+	Step(ctx context.Context) error
+	Effects(repo string) []staging.Effect
+	Cancel(ctx context.Context, id staging.EffectID) error
 	Close()
 }
 
@@ -260,11 +268,7 @@ func (e *Engine) startStagingRefresh(ctx context.Context, s Staging, repo string
 			return
 		}
 		e.stagingPanics[k]++
-		wait := stagingPanicMax
-		if n := e.stagingPanics[k]; n <= 6 {
-			wait = min(stagingPanicFirst<<(n-1), stagingPanicMax)
-		}
-		e.stagingRetryAt[k] = e.now().Add(wait)
+		e.stagingRetryAt[k] = e.now().Add(stagingBackoff(e.stagingPanics[k]))
 	})
 }
 
@@ -313,27 +317,16 @@ func (e *Engine) stopStaging(wait time.Duration) {
 	e.d.Staging.Close()
 }
 
-// stagingFromApp is the review daemon's staging client (FromApp), when a
-// watched repository has staging environments, nil otherwise, for a dry
-// run and for a tagged App (a replay, the factory's local review): its git
-// in the mirrors under [staging] mirror_dir (stagingRunner), GitHub and the
-// fetch's git env as each repository's poll identity, the envs from
-// config.Stagings. Read only here: no resolver, push or commit identity.
-func stagingFromApp(a *app.App) Staging {
+// stagingFromApp is the review daemon's staging client (FromApp) on
+// stagingDepsOf's deps, b's parts bound to the engine once it exists, when
+// a watched repository has staging environments; nil otherwise, for a dry
+// run and for a tagged App (a replay, the factory's local review).
+func stagingFromApp(a *app.App, b *stagingBound) Staging {
 	cfg := a.Config
 	if cfg == nil || a.DryRun || a.AgentTag != "" || a.Runner == nil || len(StagingRepos(cfg)) == 0 {
 		return nil
 	}
-	ids := &stagingIDs{a: a, warned: map[string]string{}}
-	return staging.New(staging.Deps{
-		Git:        staging.NewGit(stagingRunner{a.Runner}),
-		GitHub:     staging.NewGitHub(ids.client),
-		Mirror:     staging.MirrorDir(cfg.Staging.MirrorDir),
-		MirrorRoot: staging.MirrorRoot(cfg.Staging.MirrorDir),
-		GitEnv:     ids.gitEnv,
-		Stagings:   func(repo string) []staging.Env { return StagingEnvs(cfg, repo) },
-		Log:        a.Logger,
-	})
+	return staging.New(stagingDepsOf(a, b))
 }
 
 // stagingRunner runs the mirrors' git in the C locale, since
