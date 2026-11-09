@@ -214,6 +214,53 @@ func TestEvalAddSaysATasksCodexMark(t *testing.T) {
 	}
 }
 
+// `eval add` of a round whose ticket file did not hold your answers, when one came after the round
+// began, says that the answers are rebuilt from the factory's registry as they stood at the round's
+// start and how many it left out; a round with nothing answered since says nothing of answers.
+func TestEvalAddSaysTheAnswersWereRebuiltAsOfTheRoundsStart(t *testing.T) {
+	f := newInspFixture(t)
+	f.Ctx.Layout.UserConfig = filepath.Join(f.Home, "user", "config.toml")
+	localRoundOnDisk(t, f.Ctx.Layout)
+	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "1", "--name", "before-any-answer"}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); strings.Contains(out, "rebuilt") {
+		t.Fatalf("nothing answered since, output:\n%s", out)
+	}
+	db, err := sql.Open("sqlite", f.Ctx.Layout.FactoryDB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO questions (id, task_id, revision, idx, text, answer, state, raised_by, asked_at, answered_at) VALUES (1, 1, 1, 0,
+			'Count refunds?', 'only paid ones', 'answered', 'fx-judge', '2026-11-05T08:00:00Z', '2026-11-05T08:30:00Z')`,
+		`INSERT INTO question_answers (question_id, answer, at) VALUES (1, 'only paid ones', '2026-11-05T08:30:00Z')`,
+		`INSERT INTO questions (id, task_id, revision, idx, text, answer, state, raised_by, asked_at, answered_at) VALUES (2, 1, 2, 0,
+			'Round the points down?', 'yes', 'answered', 'fx-judge', '2026-11-05T09:40:00Z', '2026-11-05T10:00:00Z')`,
+		`INSERT INTO question_answers (question_id, answer, at) VALUES (2, 'yes', '2026-11-05T10:00:00Z')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Out.Reset()
+	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "1"}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	out := f.Out.String()
+	for _, want := range []string{"rebuilt from the factory's registry as they stood when the round began (2026-11-05T09:00:00Z)",
+		"leaving out 1 answer given at or after it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	in, err := evalrun.LoadLocalInputs(evalrun.LocalCaseDir(f.Ctx.Layout, "task-1-round-1"))
+	if err != nil || !strings.Contains(in.AnswersMD, "only paid ones") || strings.Contains(in.AnswersMD, "Round the points down?") {
+		t.Fatalf("frozen answers %q, %v; want only the one given before the round", in.AnswersMD, err)
+	}
+}
+
 // `eval run` reads the local cases' corpus beside the learned one, without --corpus, and names it on
 // its start line.
 func TestEvalRunReadsTheLocalCasesCorpus(t *testing.T) {

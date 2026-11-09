@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -40,11 +41,14 @@ func newEvalAddCmd(c *Context) *cobra.Command {
 		"Freeze round N of factory task ID's local review as a local eval case, so that `magnum eval run` replays it: "+
 			"a change to the review skill or the judge prompts can then be proven on a round that missed. It reads, read "+
 			"only, the factory's registry (the task's repository and branch, the head the round's cycle reviewed, the roles "+
-			"its begin event names, when each answer was given, whether Codex never works on the task again) and the "+
+			"its begin event names, the task's answered questions with each answer and its time, whether Codex never "+
+			"works on the task again) and the "+
 			"round's own files (its result in the task's "+
 			"directory; the description.md, ticket.md and prepass.json of its scratch directory: the title and plan, the "+
 			"ticket, the base it diffed from), and the operator's answers as the round could read them (those its "+
-			"ticket file held, else answers.md when nothing was answered or written since the round began). It copies "+
+			"ticket file held, else answers.md when nothing was answered or written since the round began, else the "+
+			"answers rebuilt from the registry as they stood when the round began, which it says, with how many answers "+
+			"given since it left out). It copies "+
 			"them to the case's own directory beside the learned corpus (learn/local/<name>/ in the data directory), "+
 			"never to read the task's directory again, and refuses a round it cannot freeze whole, saying what is "+
 			"missing. Then it prints the round's findings and the [[case]] to add to the local cases' corpus, "+
@@ -103,6 +107,11 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	w := c.Stdout
 	fmt.Fprintf(w, "froze round %d (cycle %d) of factory task %d on %s (%s, head %s, base %s; roles %s) in %s\n", in.Round, in.Cycle, in.Task,
 		in.Repo, in.Branch, textx.ShortSHA(in.HeadSHA), textx.ShortSHA(in.BaseSHA), strings.Join(in.Roles, ", "), inspTilde(dir))
+	if !in.AnswersAsOf.IsZero() {
+		fmt.Fprintf(w, "its ticket file did not hold your answers and they changed since it began: they are rebuilt from the factory's registry as "+
+			"they stood when the round began (%s), leaving out %s given at or after it\n", in.AnswersAsOf.UTC().Format(time.RFC3339),
+			textx.Count(in.AnswersLeftOut, "answer", "answers"))
+	}
 	if in.CodexNever {
 		var codex []string
 		for _, role := range in.Roles {
