@@ -244,6 +244,123 @@ type Report struct {
 	Baseline       *Baseline
 	FixLoopsRead   bool
 	FixLoopsUnread string
+	// JiraMoves are the factory's plans of its Jira moves over the tasks
+	// (nil when none has one): the shadow week's evidence.
+	JiraMoves *JiraMoves
+}
+
+// JiraMoves count the factory's plans of the Jira moves of a report's
+// tasks, from the records the factory writes (registry.JiraPlans): Plans
+// the plans made (settled); Planned those that planned a move, and of
+// them Matched those your move to the target followed (MedianLagSecs the
+// median lag from the plan), Elsewhere those you moved elsewhere, NotMoved
+// those whose task ended with no move, Open those nothing was seen after
+// yet; NothingToMove the plans of an issue at the target or past it;
+// CouldNot the plans the factory could not make, by outcome
+// (registry.PlanAssignedOther and the others); Pending the plans that wait
+// for their read.
+type JiraMoves struct {
+	Plans         int            `json:"plans"`
+	Planned       int            `json:"planned"`
+	Matched       int            `json:"matched"`
+	MedianLagSecs int64          `json:"median_lag_secs"`
+	Elsewhere     int            `json:"elsewhere"`
+	NotMoved      int            `json:"not_moved"`
+	Open          int            `json:"open"`
+	NothingToMove int            `json:"nothing_to_move"`
+	CouldNot      map[string]int `json:"could_not"`
+	Pending       int            `json:"pending"`
+}
+
+// jiraMoves counts the plans of the tasks ids (nil when none has one).
+func jiraMoves(plans []registry.JiraPlan, ids map[int64]bool) *JiraMoves {
+	var m JiraMoves
+	var lags []int64
+	found := false
+	for _, p := range plans {
+		if !ids[p.TaskID] {
+			continue
+		}
+		found = true
+		if p.State == registry.EffectBegin {
+			m.Pending++
+			continue
+		}
+		m.Plans++
+		switch p.Result.Outcome {
+		case registry.PlanPlanned:
+			m.Planned++
+			switch {
+			case p.Seen == nil:
+				m.Open++
+			case p.Seen.Moved == registry.SeenTarget:
+				m.Matched++
+				lags = append(lags, p.Seen.LagSecs)
+			case p.Seen.Moved == registry.SeenElsewhere:
+				m.Elsewhere++
+			default:
+				m.NotMoved++
+			}
+		case registry.PlanAlready:
+			m.NothingToMove++
+		default:
+			if m.CouldNot == nil {
+				m.CouldNot = map[string]int{}
+			}
+			m.CouldNot[cmp.Or(p.Result.Outcome, "unknown")]++
+		}
+	}
+	if !found {
+		return nil
+	}
+	if n := len(lags); n > 0 {
+		slices.Sort(lags)
+		m.MedianLagSecs = (lags[(n-1)/2] + lags[n/2]) / 2
+	}
+	return &m
+}
+
+// couldNotWords say why a plan could not be made, by outcome.
+var couldNotWords = map[string]string{
+	registry.PlanAssignedOther: "assigned to someone else",
+	registry.PlanNoTransition:  "no transition",
+	registry.PlanNeedsFields:   "fields wanted",
+	registry.PlanTargetDone:    "a done target",
+	registry.PlanUnread:        "unread",
+}
+
+// jiraMovesMarkdown is the shadow week's line of the Jira moves, when a
+// task has a plan.
+func (r Report) jiraMovesMarkdown(b *strings.Builder) {
+	m := r.JiraMoves
+	if m == nil {
+		return
+	}
+	lag := "no lag"
+	if m.Matched > 0 {
+		lag = "median lag " + fmtDuration(time.Duration(m.MedianLagSecs)*time.Second)
+	}
+	couldNot := 0
+	var reasons []string
+	for _, k := range slices.SortedFunc(maps.Keys(m.CouldNot), func(a, b string) int {
+		return strings.Compare(cmp.Or(couldNotWords[a], a), cmp.Or(couldNotWords[b], b))
+	}) {
+		couldNot += m.CouldNot[k]
+		reasons = append(reasons, fmt.Sprintf("%s %d", cmp.Or(couldNotWords[k], k), m.CouldNot[k]))
+	}
+	fmt.Fprintf(b, "\n## Jira moves\n\nJira moves in shadow: %s: %d planned (%d matched your move, %s; %d moved elsewhere; %d not moved by the "+
+		"task's end; %d open), %d with nothing to move, %d could not be made", plural(m.Plans, "plan"), m.Planned, m.Matched, lag, m.Elsewhere,
+		m.NotMoved, m.Open, m.NothingToMove, couldNot)
+	if len(reasons) > 0 {
+		fmt.Fprintf(b, " (%s)", strings.Join(reasons, ", "))
+	}
+	waits := "wait for their read"
+	if m.Pending == 1 {
+		waits = "waits for its read"
+	}
+	fmt.Fprintf(b, "; %d %s.\n", m.Pending, waits)
+	b.WriteString("\nThe factory plans each move at its milestone and writes nothing to Jira (jira_moves = \"shadow\"); a match is your move to " +
+		"the plan's target after it, its lag from the plan to your move.\n")
 }
 
 // SetFixLoops gives each task with a PR the fix loops magnum started on it
@@ -293,7 +410,8 @@ func (r Report) MarshalJSON() ([]byte, error) {
 		FixLoopsByHand *int           `json:"fix_loops_by_hand,omitempty"`
 		FixLoopsUnread string         `json:"fix_loops_unread,omitempty"`
 		Quality        *QualityTotals `json:"quality,omitempty"`
-	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread, r.Quality()})
+		JiraMoves      *JiraMoves     `json:"jira_moves,omitempty"`
+	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread, r.Quality(), r.JiraMoves})
 }
 
 // QualityTotals are the quality numbers over a report's tasks with a PR:
@@ -397,6 +515,7 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 		return Report{}, err
 	}
 	rep := Report{Since: since, Tasks: []TaskStats{}}
+	ids := map[int64]bool{}
 	for _, t := range tasks {
 		if !since.IsZero() && t.Created.Before(since) {
 			continue
@@ -406,7 +525,13 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 			return Report{}, fmt.Errorf("stats of task %d: %w", t.ID, err)
 		}
 		rep.Tasks = append(rep.Tasks, ts)
+		ids[t.ID] = true
 	}
+	plans, err := reg.JiraPlans(ctx)
+	if err != nil {
+		return Report{}, err
+	}
+	rep.JiraMoves = jiraMoves(plans, ids)
 	return rep, nil
 }
 
@@ -811,6 +936,7 @@ func (r Report) Markdown() string {
 	r.judgesMarkdown(&b)
 	r.fixLoopsMarkdown(&b)
 	r.qualityMarkdown(&b)
+	r.jiraMovesMarkdown(&b)
 	b.WriteString("\n## Against the baseline\n\n")
 	bl := r.Baseline
 	if bl == nil {

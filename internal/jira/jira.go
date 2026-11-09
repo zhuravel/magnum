@@ -16,7 +16,9 @@
 // its tasks' issues): its status, Jira's category of it, since when (from
 // its changelog, read only when the status changed since the read before)
 // and whether it is assigned to you, by account id, never a person's name
-// (status.go).
+// (status.go). Transitions reads the moves an issue's workflow offers it
+// now (the factory plans its status moves in shadow from them,
+// transitions.go). Every call is a GET: the package has no write.
 //
 // A Ticket keeps the issue's key, URL, summary, status, type, priority,
 // labels, parent, its description (cut at MaxDescription), the custom

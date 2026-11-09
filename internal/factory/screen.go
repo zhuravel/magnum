@@ -123,6 +123,9 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		if s.tracking, err = reg.Trackings(ctx); err != nil {
 			return d, err
 		}
+		if s.plans, err = reg.JiraPlans(ctx); err != nil {
+			return d, err
+		}
 	}
 	for _, t := range tasks {
 		v, err := s.read(t)
@@ -222,6 +225,8 @@ type screen struct {
 	// tracking is where the tasks' Jira issues stand as the factory daemon
 	// last read them, by task id (tracking.go).
 	tracking map[int64]registry.Tracking
+	// plans are the tasks' Jira plans, by task and milestone (jira_plans.go).
+	plans []registry.JiraPlan
 }
 
 // taskView is what the screen read of a task on home.
@@ -503,7 +508,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	row.JiraStatus = jiraStatusOf(s.tracking, t, s.down)
 	row.Help = s.help(v, row)
 	cards := tui.FactoryCards{Task: s.taskCard(v, row)}
-	cards.Task.Stagings, cards.Task.JiraStatus = row.Stagings, row.JiraStatus
+	cards.Task.Stagings, cards.Task.JiraStatus, cards.Task.JiraPlan = row.Stagings, row.JiraStatus, jiraPlanOf(s.cfg, s.plans, t)
 	if s.onQuestions(v) {
 		cards.Question = s.questionCard(v)
 	}
@@ -527,6 +532,32 @@ func jiraStatusOf(rows map[int64]registry.Tracking, t registry.Task, down bool) 
 	return &tui.FactoryJiraStatus{Name: tr.Status, Category: tr.Category, Since: tr.Since, Assigned: tr.Assigned,
 		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, TriedAt: tr.TriedAt, LastError: tr.LastError, DaemonDown: down,
 		YouUnknown: tr.Assigned && !tr.AssigneeYou && strings.HasPrefix(tr.LastError, trackPartCause(jira.PartAccount))}
+}
+
+// jiraPlanOf is task t's latest Jira plan for its card (the publish's
+// over the start's), nil for none; a plan that waits for its read takes
+// its target from the repository's move.
+func jiraPlanOf(cfg *config.Config, plans []registry.JiraPlan, t registry.Task) *tui.FactoryJiraPlan {
+	var latest *registry.JiraPlan
+	for i := range plans {
+		if plans[i].TaskID == t.ID {
+			latest = &plans[i] // JiraPlans orders a task's plans by milestone
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+	p, r := latest, latest.Result
+	out := &tui.FactoryJiraPlan{Milestone: p.Milestone, Mode: cmp.Or(r.Mode, config.JiraShadow), Outcome: r.Outcome, From: r.From, To: r.To,
+		Transition: r.Transition, Transitions: slices.Clone(r.Transitions), Cause: r.Cause, Begun: p.Begun, At: r.At}
+	if p.Seen != nil {
+		out.Moved, out.MovedTo, out.MovedAt = p.Seen.Moved, p.Seen.To, p.Seen.At
+	}
+	if repo, ok := cfg.FactoryRepo(t.Repo); ok && out.To == "" {
+		move, _ := repo.JiraMove(p.Milestone)
+		out.To = move.To
+	}
+	return out
 }
 
 // onQuestions reports whether task v waits on your answers to its

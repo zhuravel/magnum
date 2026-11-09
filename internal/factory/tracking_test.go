@@ -46,11 +46,18 @@ type trackJira struct {
 	priors     []jira.IssueStatus
 	tickets    []string
 	client     *jira.Client
+	// trans are each key's transitions (none for a key without), transErr
+	// a key's failure to read them, transAsked the keys Transitions was
+	// asked for, in order (jira_plans_test.go).
+	trans      map[string][]jira.Transition
+	transErr   map[string]error
+	transAsked []string
 }
 
 func newTrackJira(t *testing.T) *trackJira {
 	t.Helper()
-	f := &trackJira{statuses: map[string]jira.IssueStatus{}, refused: map[string]int{}, partial: map[string]bool{}, noAccount: map[string]bool{}}
+	f := &trackJira{statuses: map[string]jira.IssueStatus{}, refused: map[string]int{}, partial: map[string]bool{}, noAccount: map[string]bool{},
+		trans: map[string][]jira.Transition{}, transErr: map[string]error{}}
 	token := filepath.Join(t.TempDir(), "jira.token")
 	if err := os.WriteFile(token, []byte("ATATT3xFfGF0-test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -130,6 +137,18 @@ func (f *trackJira) StatusSince(ctx context.Context, key string, prior jira.Issu
 		return s, &jira.PartError{Part: jira.PartAccount, Err: err}
 	}
 	return s, nil
+}
+
+// Transitions answers key's preset transitions, or its preset failure,
+// and records the key.
+func (f *trackJira) Transitions(_ context.Context, key string) ([]jira.Transition, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.transAsked = append(f.transAsked, key)
+	if err := f.transErr[key]; err != nil {
+		return nil, err
+	}
+	return slices.Clone(f.trans[key]), nil
 }
 
 // set makes key's status s.

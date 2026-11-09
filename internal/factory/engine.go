@@ -154,12 +154,15 @@ type Reservation struct {
 }
 
 // Jira reads a task's ticket, searches issues by the words of a free
-// prompt, and reads where a task's issue stands after the read before
-// (tracking.go).
+// prompt, reads where a task's issue stands after the read before
+// (tracking.go) and the moves its workflow offers it, which a plan of a
+// move reads (jira_plans.go). It only reads: the factory writes nothing to
+// Jira.
 type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
 	Search(ctx context.Context, words string, limit int) ([]jira.Ticket, error)
 	StatusSince(ctx context.Context, key string, prior jira.IssueStatus) (jira.IssueStatus, error)
+	Transitions(ctx context.Context, key string) ([]jira.Transition, error)
 }
 
 // PRView is a pull request as the factory reads it back after it opened it.
@@ -970,8 +973,10 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // off the loop), the answers of the last batch of reads of the tasks' Jira
 // issues (takeTracking) and the PRs' status files (writePRStatuses), then
 // each live task's advance under its own panic guard (safely), then the
-// next batch of those reads, off the loop, with what the intake's tries
-// left of the tick's Jira budget (trackJira). During an infrastructure or a herdr hold no task advances
+// Jira comment each task's milestone would keep, in shadow (jiraComments),
+// and the next batch of those reads, off the loop, with what the intake's
+// tries left of the tick's Jira budget (trackJira), the reads of the plans
+// of the Jira moves among them (jira_plans.go). During an infrastructure or a herdr hold no task advances
 // except on the hold's tries, and while herdr does not answer no copy a
 // base run left detached is swept (sweepDetached, each under safely too);
 // a failure that a hold covers costs its task nothing. Last, the alerts
@@ -1071,7 +1076,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 			}
 		}
 	}
-	e.trackJira(ctx, tasks) // a batch off the loop reads the issues, with what the intake's tries left of the tick's Jira budget
+	e.jiraComments(ctx, tasks) // the Jira comment of each task's milestone, in shadow: a file in its folder
+	e.trackJira(ctx, tasks)    // a batch off the loop reads the issues, with what the intake's tries left of the tick's Jira budget
 	failures = append(failures, e.envFails...)
 	failures = append(failures, e.readFails...)
 	e.envFails, e.readFails = nil, nil

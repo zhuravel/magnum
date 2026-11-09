@@ -186,7 +186,7 @@ func cleanTaskCard(c TaskCard) TaskCard {
 		}
 		c.PRInfo = &pr
 	}
-	c.Issue, c.JiraStatus = cleanText(c.Issue), cleanJiraStatus(c.JiraStatus)
+	c.Issue, c.JiraStatus, c.JiraPlan = cleanText(c.Issue), cleanJiraStatus(c.JiraStatus), cleanJiraPlan(c.JiraPlan)
 	c.Stagings = slices.Clone(c.Stagings)
 	for i, s := range c.Stagings {
 		c.Stagings[i].Name, c.Stagings[i].State, c.Stagings[i].Count = cleanText(s.Name), cleanText(s.State), cleanText(s.Count)

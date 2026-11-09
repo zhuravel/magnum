@@ -4590,6 +4590,21 @@ const (
     Built-in critic values.
 
 const (
+	JiraOff    = "off"
+	JiraShadow = "shadow"
+)
+    The modes of a repository's jira_moves and jira_comment.
+
+const (
+	JiraMilestoneStart     = "start"
+	JiraMilestonePublished = "published"
+	JiraMilestoneMerged    = "merged"
+)
+    The milestones of a task at which the factory moves its Jira issue
+    (FactoryRepo.JiraMove) and writes its comment: the coding stage begins,
+    the PR is published, the PR is merged (the comment only).
+
+const (
 	FactoryProofRed   = "red"
 	FactoryProofGreen = "green"
 )
@@ -5103,6 +5118,12 @@ var ErrSharedPrompt = errors.New("holds the blocks its prompts share and is not 
 var FactorySecondJudges = []string{FactorySecondJudgeWide, FactorySecondJudgeAlways, FactorySecondJudgeNever}
     FactorySecondJudges are the values of [factory.local_review] second_judge,
     in the order the docs give.
+
+var JiraDoneNames = []string{"Done", "Closed", "Resolved", "Released"}
+    JiraDoneNames are the status names a move's target may never have: the ones
+    Jira's done category goes by. The config cannot read the site's workflow,
+    so a done status of another name is refused when the move is planned (its
+    transition's status category).
 
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
@@ -6128,6 +6149,19 @@ type FactoryInstall struct {
     FactoryInstall is an `installs` entry of a repository: Run runs when the
     file Lock differs from the copy's last install.
 
+type FactoryJiraMove struct {
+	To   string   `toml:"to"`
+	From []string `toml:"from"`
+}
+    FactoryJiraMove is one milestone's move of a task's Jira issue: the
+    status To it goes to, from one of the statuses From (only a forward move:
+    a status not in From is past it, and nothing moves). Names are Jira's,
+    matched case aside.
+
+func (m FactoryJiraMove) Moves(status string) bool
+    Moves reports whether status (a name, case aside) is one the move moves
+    from.
+
 type FactoryKind struct {
 	Stages []FactoryStage `toml:"stages"`
 	Proof  string         `toml:"proof"`
@@ -6278,11 +6312,36 @@ type FactoryRepo struct {
 	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in
 	// the copy's own server; nil = no QA for the repository.
 	QA *FactoryQA `toml:"qa"`
+	// JiraMoves is what the factory does with the status of a task's own
+	// Jira issue at the task's milestones: JiraOff (or "", the default)
+	// nothing, JiraShadow plans each move (JiraMoveStart when the coding
+	// stage begins, JiraMovePublished when the PR is published) from the
+	// issue's status and transitions, records the plan beside your own
+	// move, and writes nothing to Jira. "ask" and "auto" come after the
+	// shadow week. JiraComment is the same for the issue's one comment of
+	// the factory's (the PR and the task's state, at the start, the publish
+	// and the merge): shadow writes it to the task's folder, never to Jira.
+	JiraMoves         string          `toml:"jira_moves"`
+	JiraMoveStart     FactoryJiraMove `toml:"jira_move_start"`
+	JiraMovePublished FactoryJiraMove `toml:"jira_move_published"`
+	JiraComment       string          `toml:"jira_comment"`
 }
     FactoryRepo is a [[factory.repo]]: a repository the factory writes code in,
     with the copies of its checkout the tasks work in. The copies are a block of
     their own, never a second [[pool]] of the repository (Pool turns them into
     the Pool the slot code provisions).
+
+func (r FactoryRepo) JiraCommentShadow() bool
+    JiraCommentShadow reports whether the factory writes the repository's Jira
+    comment in shadow (to the task's folder, never to Jira).
+
+func (r FactoryRepo) JiraMove(milestone string) (FactoryJiraMove, bool)
+    JiraMove is the repository's move at milestone (JiraMilestoneStart or
+    JiraMilestonePublished), false when it has none.
+
+func (r FactoryRepo) JiraMovesShadow() bool
+    JiraMovesShadow reports whether the factory plans the repository's Jira
+    moves in shadow.
 
 func (r FactoryRepo) Pool() Pool
     Pool is the repository's copies as the Pool the slot code provisions:
@@ -14168,21 +14227,23 @@ func (e *Engine) RunLocked(ctx context.Context) error
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
     then the infrastructure hold and a MySQL ping before a pass that advances),
-    the requests, the published tasks' PRs (followPRs, whether or not the pass
-    advances), their staging status (stagingPass, whose Refreshes run off the
-    loop), the answers of the last batch of reads of the tasks' Jira issues
-    (takeTracking) and the PRs' status files (writePRStatuses), then each live
-    task's advance under its own panic guard (safely), then the next batch of
-    those reads, off the loop, with what the intake's tries left of the tick's
-    Jira budget (trackJira). During an infrastructure or a herdr hold no task
-    advances except on the hold's tries, and while herdr does not answer no copy
-    a base run left detached is swept (sweepDetached, each under safely too);
-    a failure that a hold covers costs its task nothing. Last, the alerts are
-    delivered (deliverAlerts). The returned error joins what failed, for the
-    log; each step records its own. A task's held wait is no error of the tick:
-    logHeld logs it once, at WARN only past heldWarnAfter. A task whose stage
-    failed for a cause of its own is advanced no sooner than a poll after the
-    failure (retryLater).
+    the requests, the published tasks' PRs (followPRs, whether or not the
+    pass advances), their staging status (stagingPass, whose Refreshes run
+    off the loop), the answers of the last batch of reads of the tasks'
+    Jira issues (takeTracking) and the PRs' status files (writePRStatuses),
+    then each live task's advance under its own panic guard (safely), then the
+    Jira comment each task's milestone would keep, in shadow (jiraComments),
+    and the next batch of those reads, off the loop, with what the intake's
+    tries left of the tick's Jira budget (trackJira), the reads of the plans
+    of the Jira moves among them (jira_plans.go). During an infrastructure or
+    a herdr hold no task advances except on the hold's tries, and while herdr
+    does not answer no copy a base run left detached is swept (sweepDetached,
+    each under safely too); a failure that a hold covers costs its task nothing.
+    Last, the alerts are delivered (deliverAlerts). The returned error joins
+    what failed, for the log; each step records its own. A task's held wait is
+    no error of the tick: logHeld logs it once, at WARN only past heldWarnAfter.
+    A task whose stage failed for a cause of its own is advanced no sooner than
+    a poll after the failure (retryLater).
 
 type ErrRunning struct {
 	PID  int
@@ -14287,9 +14348,12 @@ type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
 	Search(ctx context.Context, words string, limit int) ([]jira.Ticket, error)
 	StatusSince(ctx context.Context, key string, prior jira.IssueStatus) (jira.IssueStatus, error)
+	Transitions(ctx context.Context, key string) ([]jira.Transition, error)
 }
     Jira reads a task's ticket, searches issues by the words of a free prompt,
-    and reads where a task's issue stands after the read before (tracking.go).
+    reads where a task's issue stands after the read before (tracking.go)
+    and the moves its workflow offers it, which a plan of a move reads
+    (jira_plans.go). It only reads: the factory writes nothing to Jira.
 
 type LetGoPayload struct {
 	TaskID        int64
@@ -15288,6 +15352,47 @@ const (
     Input classes, set later by a classifier: what an input was for.
 
 const (
+	EffectJiraPlan    = "jira_plan"
+	EffectJiraSeen    = "jira_seen"
+	EffectJiraComment = "jira_comment"
+)
+    The factory's Jira plans (the factory's jira_plans.go) are effects, no table
+    of their own: a plan is the effect of its task and milestone (JiraPlanKey,
+    kind EffectJiraPlan), begun when the milestone comes and settled ok (a move
+    planned, or nothing to move) or fail (one the factory could not plan) with
+    its JiraPlanResult as JSON; what the factory saw of your move after it is
+    the effect beside it (JiraSeenKey, kind EffectJiraSeen, begun and settled
+    at once with its JiraSeenResult); the comment it would keep on the issue is
+    an effect per milestone (JiraCommentKey, kind EffectJiraComment). In shadow
+    mode none of them wrote anything to Jira.
+
+const (
+	PlanPlanned       = "planned"
+	PlanAlready       = "already"
+	PlanAssignedOther = "assigned_other"
+	PlanNoTransition  = "no_transition"
+	PlanNeedsFields   = "needs_fields"
+	PlanTargetDone    = "target_done"
+	PlanUnread        = "unread"
+)
+    The outcomes of a plan (JiraPlanResult.Outcome): a move planned (from a
+    status of its from list to its target, through a transition); nothing to
+    move (the status is the target, or not one the move goes from); and the
+    plans the factory could not make: the issue is assigned to someone else,
+    no transition goes to the target, the transition wants fields, the target's
+    category is done, or no read of the issue worked before the next milestone
+    or the task's end.
+
+const (
+	SeenTarget    = "target"
+	SeenElsewhere = "elsewhere"
+	SeenNone      = "none"
+)
+    The moves the factory saw after a planned move (JiraSeenResult.Moved):
+    the issue went to the plan's target, to another status, or did not move by
+    the task's end.
+
+const (
 	DeliveredUnknown   = "unknown"
 	DeliveredYes       = "yes"
 	DeliveredNo        = "no"
@@ -15432,6 +15537,15 @@ func AnswersMarkdown(qs []Question) string
     factory writes it into the task's directory, and `magnum eval add` renders
     the answers a local round read with it when it rebuilds them from the rows
     as they stood when the round began.
+
+func JiraCommentKey(id int64, milestone string) string
+    JiraCommentKey is the key of task id's Jira comment at milestone.
+
+func JiraPlanKey(id int64, milestone string) string
+    JiraPlanKey is the key of task id's plan at milestone.
+
+func JiraSeenKey(id int64, milestone string) string
+    JiraSeenKey is the key of what was seen after task id's plan at milestone.
 
 func LatestSchemaVersion() int
     LatestSchemaVersion is the highest migration version embedded in this
@@ -15665,6 +15779,54 @@ type Input struct {
     the agent's two turns before it (scrubbed, at most 1 KiB) and AgentState the
     agent's state when it arrived. Class stays empty until classified.
 
+type JiraPlan struct {
+	TaskID    int64
+	Milestone string
+	State     string
+	Begun     time.Time
+	Result    JiraPlanResult
+	Seen      *JiraSeenResult
+}
+    JiraPlan is one plan of a task's Jira move at a milestone: its effect's
+    state (EffectBegin while it waits for its read) and begin, its result (zero
+    while begun) and what was seen after it (nil before anything was).
+
+type JiraPlanResult struct {
+	Mode        string    `json:"mode"`
+	Outcome     string    `json:"outcome"`
+	From        string    `json:"from,omitempty"`
+	To          string    `json:"to"`
+	Transition  string    `json:"transition,omitempty"`
+	Transitions []string  `json:"transitions,omitempty"`
+	Cause       string    `json:"cause,omitempty"`
+	At          time.Time `json:"at,omitzero"`
+}
+    JiraPlanResult is what a settled plan holds: its mode (shadow), its outcome,
+    the status it read (From) and the target (To), the transition it would take
+    (planned), the transitions Jira offers (no transition), the read's failure
+    in the jira package's words (unread, never ticket text), and when its read
+    was. Names are Jira's: statuses and transitions, never a person.
+
+func (p JiraPlanResult) Encode() string
+    Encode is the result as its effect keeps it.
+
+type JiraSeenResult struct {
+	Moved   string    `json:"moved"`
+	To      string    `json:"to,omitempty"`
+	At      time.Time `json:"at,omitzero"`
+	LagSecs int64     `json:"lag_secs,omitempty"`
+}
+    JiraSeenResult is what the factory saw after a planned move: where the
+    issue moved (SeenTarget, SeenElsewhere, SeenNone), to which status, when
+    (the changelog's time of the move when known, else the read that saw it;
+    the task's end for none) and how long after the plan's read.
+
+func (s JiraSeenResult) Encode() string
+    Encode is the result as its effect keeps it.
+
+func (s JiraSeenResult) Lag() time.Duration
+    Lag is how long after the plan the move came.
+
 type LedgerEntry struct {
 	ID        int64
 	TaskID    int64
@@ -15871,6 +16033,9 @@ func (r *Registry) Decisions(ctx context.Context, taskID int64) ([]Decision, err
 func (r *Registry) EffectByKey(ctx context.Context, key string) (Effect, error)
     EffectByKey looks up an effect; a missing one is ErrNotFound.
 
+func (r *Registry) EffectsOfKind(ctx context.Context, kind string) ([]Effect, error)
+    EffectsOfKind returns the effects of kind, oldest first.
+
 func (r *Registry) EndCycle(ctx context.Context, id int64, headAfter, delta, exit string, tokens int64) error
     EndCycle ends a running round with the head it left, the change between
     the heads, its exit (empty when the loop goes on) and the tokens it took.
@@ -15915,6 +16080,11 @@ func (r *Registry) ForgetPayload(ctx context.Context, id int64) error
 
 func (r *Registry) Inputs(ctx context.Context, taskID int64) ([]Input, error)
     Inputs returns a task's inputs in the order they were recorded.
+
+func (r *Registry) JiraPlans(ctx context.Context) ([]JiraPlan, error)
+    JiraPlans are every task's Jira plans, by task id and then milestone (start
+    before published), each with what was seen after it. A result that does not
+    decode is left zero.
 
 func (r *Registry) LastDone(ctx context.Context, since time.Time, kinds ...string) (Request, bool, error)
     LastDone is the newest request of kinds the daemon answered done at or after
@@ -17176,6 +17346,28 @@ type FixLoops struct {
     pushes on the PR and the commits they pushed: the fix-loop commits after the
     publish, a measure of what the factory's PR still needed.
 
+type JiraMoves struct {
+	Plans         int            `json:"plans"`
+	Planned       int            `json:"planned"`
+	Matched       int            `json:"matched"`
+	MedianLagSecs int64          `json:"median_lag_secs"`
+	Elsewhere     int            `json:"elsewhere"`
+	NotMoved      int            `json:"not_moved"`
+	Open          int            `json:"open"`
+	NothingToMove int            `json:"nothing_to_move"`
+	CouldNot      map[string]int `json:"could_not"`
+	Pending       int            `json:"pending"`
+}
+    JiraMoves count the factory's plans of the Jira moves of a report's tasks,
+    from the records the factory writes (registry.JiraPlans): Plans the plans
+    made (settled); Planned those that planned a move, and of them Matched
+    those your move to the target followed (MedianLagSecs the median lag from
+    the plan), Elsewhere those you moved elsewhere, NotMoved those whose task
+    ended with no move, Open those nothing was seen after yet; NothingToMove the
+    plans of an issue at the target or past it; CouldNot the plans the factory
+    could not make, by outcome (registry.PlanAssignedOther and the others);
+    Pending the plans that wait for their read.
+
 type Labelled struct {
 	Text  string `json:"text"`
 	Class string `json:"class"`
@@ -17242,6 +17434,9 @@ type Report struct {
 	Baseline       *Baseline
 	FixLoopsRead   bool
 	FixLoopsUnread string
+	// JiraMoves are the factory's plans of its Jira moves over the tasks
+	// (nil when none has one): the shadow week's evidence.
+	JiraMoves *JiraMoves
 }
     Report is the stats of the tasks started at or after Since (the zero time:
     all of them), oldest first, and the baseline to read them against (nil when
@@ -20847,7 +21042,10 @@ a free prompt is): GET <url>/rest/api/3/search/jql, the same way. Status and
 StatusSince read where an issue stands (the factory tracks its tasks' issues):
 its status, Jira's category of it, since when (from its changelog, read only
 when the status changed since the read before) and whether it is assigned to
-you, by account id, never a person's name (status.go).
+you, by account id, never a person's name (status.go). Transitions reads the
+moves an issue's workflow offers it now (the factory plans its status moves
+in shadow from them, transitions.go). Every call is a GET: the package has no
+write.
 
 A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
 parent, its description (cut at MaxDescription), the custom fields whose name
@@ -20973,6 +21171,16 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
 func (c *Client) Ticket(ctx context.Context, key string) (Ticket, error)
     Ticket reads the issue key ("PS-123") from the site.
 
+func (c *Client) Transitions(ctx context.Context, key string) ([]Transition, error)
+    Transitions reads the moves issue key's workflow
+    offers it now, to your account (Jira lists none to an
+    account without the Transition issues permission): GET
+    /rest/api/2/issue/<KEY>/transitions?expand=transitions.fields, whose fields
+    say whether a transition's screen requires one. It only reads, as Ticket and
+    Status do, with the credentials on curl's stdin; a transition without an id
+    of digits or a status it goes to is left out, and at most maxTransitions are
+    kept. A failure is an *Error of a class.
+
 func (c *Client) WarnTokenFile() bool
     WarnTokenFile reports whether a token file problem is to be a warning:
     true the first time it is asked, false after. The daemon makes one Client at
@@ -21074,6 +21282,18 @@ func (t Ticket) Markdown() []byte
     Markdown is ticket.md: a heading with the key and the URL, then the fields
     as sections, the text as given, a cut text followed by a line saying how
     much of it was kept.
+
+type Transition struct {
+	ID, Name             string
+	To, ToID, ToCategory string
+	NeedsFields          bool
+}
+    Transition is one move an issue's workflow offers it now, as Transitions
+    reads it: its id (digits) and name, the status it goes to (its name,
+    id and Jira's category of it: new, indeterminate or done; "" for a word that
+    is not a lowercase one), and whether its screen has a required field without
+    a default, which a move through it would have to fill. Every name is on one
+    line, without control or format characters, cut at MaxStatusName bytes.
 
 ```
 
@@ -31855,6 +32075,26 @@ const (
 	// GroupDone holds the tasks that finished today.
 	GroupDone
 )
+type FactoryJiraPlan struct {
+	Milestone, Mode, Outcome string
+	From, To, Transition     string
+	Transitions              []string
+	Cause                    string
+	Begun, At                time.Time
+	Moved, MovedTo           string
+	MovedAt                  time.Time
+}
+    FactoryJiraPlan is the factory's plan of a move of a task's Jira issue at a
+    milestone ("start", "published"), in its mode ("shadow": planned and never
+    made): its outcome ("" while it waits for its read, else planned, already,
+    assigned_other, no_transition, needs_fields, target_done or unread),
+    the status it read (From) and the target (To), the transition it would take,
+    the transitions Jira offers (none to the target), the failure of an unread
+    plan (a class, never ticket text), when it began and when its read was; then
+    what the factory saw after a planned move: Moved ("target", "elsewhere",
+    "none"; "" before anything was seen), the status it moved to and when.
+    The names are Jira's statuses and transitions, never a person's.
+
 type FactoryJiraStatus struct {
 	Name, Category          string
 	Since                   time.Time
@@ -33458,8 +33698,12 @@ type TaskCard struct {
 	// JiraStatus is where the task's Jira issue stands, as its row's
 	// JiraStatus says it; nil: not read.
 	JiraStatus *FactoryJiraStatus
-	Stages     []CardStage
-	Agents     []CardAgent
+	// JiraPlan is the factory's latest plan of a move of the task's Jira
+	// issue (its repository's jira_moves in shadow), drawn as the card's
+	// JIRA MOVE line; nil: none.
+	JiraPlan *FactoryJiraPlan
+	Stages   []CardStage
+	Agents   []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

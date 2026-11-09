@@ -138,3 +138,16 @@ func (r *Registry) OpenEffects(ctx context.Context) ([]Effect, error) {
 	}
 	return es, nil
 }
+
+// EffectsOfKind returns the effects of kind, oldest first.
+func (r *Registry) EffectsOfKind(ctx context.Context, kind string) ([]Effect, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT "+effectColumns+" FROM effects WHERE kind = ? ORDER BY begun_at, key", kind)
+	if err != nil {
+		return nil, fmt.Errorf("effects of kind %s: %w", kind, err)
+	}
+	es, err := collect(rows, scanEffect)
+	if err != nil {
+		return nil, fmt.Errorf("effects of kind %s: %w", kind, err)
+	}
+	return es, nil
+}

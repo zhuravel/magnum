@@ -187,6 +187,76 @@ type FactoryRepo struct {
 	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in
 	// the copy's own server; nil = no QA for the repository.
 	QA *FactoryQA `toml:"qa"`
+	// JiraMoves is what the factory does with the status of a task's own
+	// Jira issue at the task's milestones: JiraOff (or "", the default)
+	// nothing, JiraShadow plans each move (JiraMoveStart when the coding
+	// stage begins, JiraMovePublished when the PR is published) from the
+	// issue's status and transitions, records the plan beside your own
+	// move, and writes nothing to Jira. "ask" and "auto" come after the
+	// shadow week. JiraComment is the same for the issue's one comment of
+	// the factory's (the PR and the task's state, at the start, the publish
+	// and the merge): shadow writes it to the task's folder, never to Jira.
+	JiraMoves         string          `toml:"jira_moves"`
+	JiraMoveStart     FactoryJiraMove `toml:"jira_move_start"`
+	JiraMovePublished FactoryJiraMove `toml:"jira_move_published"`
+	JiraComment       string          `toml:"jira_comment"`
+}
+
+// FactoryJiraMove is one milestone's move of a task's Jira issue: the
+// status To it goes to, from one of the statuses From (only a forward
+// move: a status not in From is past it, and nothing moves). Names are
+// Jira's, matched case aside.
+type FactoryJiraMove struct {
+	To   string   `toml:"to"`
+	From []string `toml:"from"`
+}
+
+// The modes of a repository's jira_moves and jira_comment.
+const (
+	JiraOff    = "off"
+	JiraShadow = "shadow"
+)
+
+// The milestones of a task at which the factory moves its Jira issue
+// (FactoryRepo.JiraMove) and writes its comment: the coding stage begins,
+// the PR is published, the PR is merged (the comment only).
+const (
+	JiraMilestoneStart     = "start"
+	JiraMilestonePublished = "published"
+	JiraMilestoneMerged    = "merged"
+)
+
+// JiraDoneNames are the status names a move's target may never have: the
+// ones Jira's done category goes by. The config cannot read the site's
+// workflow, so a done status of another name is refused when the move is
+// planned (its transition's status category).
+var JiraDoneNames = []string{"Done", "Closed", "Resolved", "Released"}
+
+// JiraMovesShadow reports whether the factory plans the repository's Jira
+// moves in shadow.
+func (r FactoryRepo) JiraMovesShadow() bool { return r.JiraMoves == JiraShadow }
+
+// JiraCommentShadow reports whether the factory writes the repository's
+// Jira comment in shadow (to the task's folder, never to Jira).
+func (r FactoryRepo) JiraCommentShadow() bool { return r.JiraComment == JiraShadow }
+
+// JiraMove is the repository's move at milestone (JiraMilestoneStart or
+// JiraMilestonePublished), false when it has none.
+func (r FactoryRepo) JiraMove(milestone string) (FactoryJiraMove, bool) {
+	var m FactoryJiraMove
+	switch milestone {
+	case JiraMilestoneStart:
+		m = r.JiraMoveStart
+	case JiraMilestonePublished:
+		m = r.JiraMovePublished
+	}
+	return m, strings.TrimSpace(m.To) != ""
+}
+
+// Moves reports whether status (a name, case aside) is one the move moves
+// from.
+func (m FactoryJiraMove) Moves(status string) bool {
+	return slices.ContainsFunc(m.From, func(f string) bool { return strings.EqualFold(f, status) })
 }
 
 // FactoryQA is [factory.repo.qa]: what a qa stage needs to walk the pages a
@@ -1167,11 +1237,73 @@ func (c *Config) validateFactoryRepos() []error {
 			}
 		}
 		errs = append(errs, validateFactoryStaging(where, r)...)
+		errs = append(errs, c.validateFactoryJira(where, r)...)
 		if r.QA != nil {
 			errs = append(errs, validateFactoryQA(where, r)...)
 		}
 		if c.WatchFor(r.Repo) == nil {
 			bad("no [[watch]] covers it (the local review runs the review roles of its watch)")
+		}
+	}
+	return errs
+}
+
+// validateFactoryJira checks a repository's Jira keys: jira_moves and
+// jira_comment are off or shadow (ask and auto come after the shadow
+// week); shadow moves need both moves and [jira]'s site; a move, when set,
+// has a target of one line that is no done status (JiraDoneNames) and the
+// statuses it moves from, none blank and none its target.
+func (c *Config) validateFactoryJira(where string, r FactoryRepo) []error {
+	var errs []error
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
+	for _, k := range []struct{ key, mode string }{{"jira_moves", r.JiraMoves}, {"jira_comment", r.JiraComment}} {
+		switch k.mode {
+		case "", JiraOff, JiraShadow:
+		case "ask", "auto":
+			bad("%s = %q comes after the shadow week: use \"shadow\" (or \"off\") until its plans match your own moves", k.key, k.mode)
+		default:
+			bad("%s = %q must be \"off\" or \"shadow\"", k.key, k.mode)
+		}
+	}
+	if r.JiraMovesShadow() {
+		for _, k := range []struct {
+			key  string
+			move FactoryJiraMove
+		}{{"jira_move_start", r.JiraMoveStart}, {"jira_move_published", r.JiraMovePublished}} {
+			if strings.TrimSpace(k.move.To) == "" && len(k.move.From) == 0 {
+				bad("jira_moves = \"shadow\" needs %s = { to = \"...\", from = [...] }: the factory plans a move at both milestones", k.key)
+			}
+		}
+		if !c.Jira.On() {
+			bad("jira_moves = \"shadow\" needs [jira] url, user and token_file: the factory reads the issue's status and transitions there")
+		}
+	}
+	for _, k := range []struct {
+		key  string
+		move FactoryJiraMove
+	}{{"jira_move_start", r.JiraMoveStart}, {"jira_move_published", r.JiraMovePublished}} {
+		m := k.move
+		if strings.TrimSpace(m.To) == "" && len(m.From) == 0 {
+			continue
+		}
+		to := strings.TrimSpace(m.To)
+		switch {
+		case to == "":
+			bad("%s needs to, the status the move goes to", k.key)
+		case strings.ContainsFunc(m.To, unicode.IsControl):
+			bad("%s: to %q must be one line", k.key, m.To)
+		case slices.ContainsFunc(JiraDoneNames, func(d string) bool { return strings.EqualFold(d, to) }):
+			bad("%s: to %q is a done status: the factory never closes or resolves an issue", k.key, m.To)
+		}
+		switch {
+		case len(m.From) == 0:
+			bad("%s needs from, the statuses the move goes from (only a forward move)", k.key)
+		case slices.ContainsFunc(m.From, func(f string) bool { return strings.TrimSpace(f) == "" }):
+			bad("%s: from has a blank entry", k.key)
+		case slices.ContainsFunc(m.From, func(f string) bool { return strings.ContainsFunc(f, unicode.IsControl) }):
+			bad("%s: each from status must be one line", k.key)
+		case to != "" && m.Moves(to):
+			bad("%s: from holds its target %q: a move from a status to itself", k.key, m.To)
 		}
 	}
 	return errs

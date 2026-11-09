@@ -336,7 +336,7 @@ func unknownWait(roles []string) string {
 // openEffects names each effect a stop or a crash left begun: its stage
 // runs it again, its own guard first, and never repeats a step it finds
 // done (publish: the remote branch and the PRs of the branch are read
-// before any step).
+// before any step; a Jira plan reads the issue again, jira_plans.go).
 func (e *Engine) openEffects(ctx context.Context) {
 	es, err := e.reg.OpenEffects(ctx)
 	if err != nil {
@@ -345,8 +345,13 @@ func (e *Engine) openEffects(ctx context.Context) {
 	}
 	for _, ef := range es {
 		guard := "its guard runs again before any step"
-		if ef.Kind == "publish" {
+		switch ef.Kind {
+		case "publish":
 			guard = "the remote branch and the PRs of the branch are read before any step, so nothing is pushed or opened twice"
+		case registry.EffectJiraPlan:
+			guard = "the plan reads the issue again and writes nothing to Jira (shadow), so it is made once"
+		case registry.EffectJiraComment:
+			guard = "the comment file is written again; nothing is posted to Jira (shadow)"
 		}
 		e.event(ctx, ef.TaskID, "effect", registry.PhaseInfo, fmt.Sprintf("%s was in flight when the daemon stopped: its stage runs "+
 			"it again, and %s", ef.Key, guard))

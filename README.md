@@ -4998,6 +4998,49 @@ row before the issue's first read; the screen's data carries the status's name, 
 daemon runs to read it again, for each task's row and card, which the screen draws in its STATUS column and the task
 card's JIRA line (the factory's screen, above).
 
+**Jira moves and the Jira comment, in shadow.** A `[[factory.repo]]` may let the factory plan the moves of its tasks'
+Jira issues and the one comment it would keep on each, in shadow for now: the factory plans them, records them
+beside what you do, and writes nothing to Jira (its Jira client has no write; `ask` and `auto` come after the shadow
+week, when the plans match your own moves).
+
+```toml
+[[factory.repo]]
+repo = "example/shop"
+# ...
+jira_moves = "shadow"             # off (the default) | shadow
+jira_move_start = { to = "In Development", from = ["To Do", "In Progress"] }          # when the coding stage begins
+jira_move_published = { to = "In Code Review", from = ["To Do", "In Progress", "In Development"] }   # at the publish
+jira_comment = "shadow"           # off (the default) | shadow
+```
+
+`jira_moves = "shadow"` needs both moves and `[jira]`'s site. A move goes forward only, from a status of its `from`
+list (a status not in it is past the move), and the config refuses a `from` that holds the target and a target that is
+a done status by name (Done, Closed, Resolved, Released); a target whose category Jira says is done is refused when
+the move is planned. There is no move at the merge. Only the task's own key is planned for, never a key of another
+tracker or one found in any text. When a task of the repository reaches a milestone (its kind's coding stage
+begins: start; its PR is published), the daemon begins the move's plan once (the effect `jira:<task>:<milestone>`,
+with an event for each step) and the next tracking batch reads the issue for it, within the same Jira budget: its
+status (the tracking read above, which it counts as) and, when the move could go, its transitions (`GET
+/rest/api/2/issue/<KEY>/transitions?expand=transitions.fields`, two of the tick's tries in all). The plan is then
+one of: planned, from the status to the target through a transition; nothing to move (the status is the target, or
+not in `from`); assigned to someone else (you move it); no transition to the target (it names the ones Jira offers;
+none at all when the account lacks the Transition issues permission); the transition wants fields (you move it);
+the target is done in Jira. A read that fails leaves the plan waiting, read again as the tracking reads are (10
+minutes after the try), its failure on the card's JIRA line; the next milestone or the task's end drops it (unread).
+A restart between the steps reads it again and makes one plan. After a planned move, the first read that finds the
+issue in another status records your move: to the target, at its changelog time and with the lag from the plan, or
+elsewhere; a task that ends with no move, after its last read, records that. The task card's JIRA MOVE line shows the
+latest plan (`To Do → In Development (planned 14:02, shadow) · you moved it 14:20`), and `magnum factory stats` adds
+one line for the shadow week: the plans, how many your move matched with the median lag, the moves elsewhere and
+the plans it could not make, by reason. No record, event or log line names a person: an assignee is you, someone
+else or no one.
+
+`jira_comment = "shadow"` writes the comment the factory would keep on the issue to the task's folder,
+`jira-comment.md`, once at each milestone (start, the publish and the merge; a task merged before its first comment
+gets none), rewritten each time, with its event: the factory's own words alone, the milestone, the task, the PR's
+repository and number with its link, the task's state and stage, and the time, never the PR's, the ticket's or a
+finding's text. Neither the moves nor the comment ever change a task.
+
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
 wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's
 "mine": every watch's posting identity and every `gh` identity), in a repository a `[[watch]]` covers (magnum

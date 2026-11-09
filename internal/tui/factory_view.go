@@ -419,6 +419,18 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 	return r
 }
 
+// cleanJiraPlan is a copy of jp with its words cleaned (nil for nil).
+func cleanJiraPlan(jp *FactoryJiraPlan) *FactoryJiraPlan {
+	if jp == nil {
+		return nil
+	}
+	c := *jp
+	c.Mode, c.Outcome, c.From, c.To = cleanText(c.Mode), cleanText(c.Outcome), cleanText(c.From), cleanText(c.To)
+	c.Transition, c.Cause, c.Moved, c.MovedTo = cleanText(c.Transition), cleanText(c.Cause), cleanText(c.Moved), cleanText(c.MovedTo)
+	c.Transitions = cleanAll(c.Transitions)
+	return &c
+}
+
 // cleanJiraStatus is a copy of js with its words cleaned (nil for nil):
 // the row and its task card share js, which a painter never changes.
 func cleanJiraStatus(js *FactoryJiraStatus) *FactoryJiraStatus {

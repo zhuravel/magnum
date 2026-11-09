@@ -24,7 +24,11 @@ package factory
 // one back (trackBackoff), which a batch Jira answers ends. A batch has a
 // hard deadline (trackBatchBound) and each read its own (trackBound); the
 // drain cancels a batch and waits for it within its budget, and a read it
-// cut records nothing. A failure is recorded on the row in the jira
+// cut records nothing. A task whose Jira move has a plan begun
+// (jira_plans.go) gets its read at once, first after the owed last reads,
+// with the issue's transitions when the move could go, for two of the
+// budget; the next pass settles the plan from it. A failure is recorded on
+// the row in the jira
 // package's words (a class and a code, never ticket text), the facts of the
 // read before kept (or, after the issue answered, what it said), and logged
 // once while its cause stays: a failure of the site (Jira down, the
@@ -40,6 +44,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/jira"
@@ -105,21 +110,36 @@ type trackLog struct {
 }
 
 // trackJob is one read a batch makes: the task, its issue's key, its row
-// (had: one exists, of the key) and whether it is the task's last.
+// (had: one exists, of the key), whether it is the task's last, and the
+// begun plan of a Jira move it reads for (nil for none: jira_plans.go).
 type trackJob struct {
 	t    registry.Task
 	key  string
 	row  registry.Tracking
 	had  bool
 	last bool
+	plan *planJob
 }
 
-// trackRead is a batch's read of job's issue: Jira's answer and when.
+// cost is how much of the tick's Jira budget the job takes: one read, and
+// a plan's read of the transitions.
+func (j trackJob) cost() int {
+	if j.plan != nil {
+		return 2
+	}
+	return 1
+}
+
+// trackRead is a batch's read of job's issue: Jira's answer and when, and
+// for a plan the issue's transitions (trans, transErr; none read when the
+// move could not go).
 type trackRead struct {
-	job trackJob
-	st  jira.IssueStatus
-	err error
-	at  time.Time
+	job      trackJob
+	st       jira.IssueStatus
+	err      error
+	at       time.Time
+	trans    []jira.Transition
+	transErr error
 }
 
 // answered reports whether Jira answered the read: it worked, or the issue
@@ -140,10 +160,16 @@ type trackBatch struct {
 
 // trackJira hands one batch off the loop the reads that are due (see the
 // file's comment), within the tick's Jira budget, unless a batch runs or
-// its answers wait, the site's backoff holds, or the daemon drains.
+// its answers wait, the site's backoff holds, or the daemon drains. Its
+// pass over the Jira plans (jiraPlans) runs first, whatever holds the
+// batch, when a repository plans its moves.
 func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 	now := e.now()
-	if e.d.Jira == nil || e.jiraLeft <= 0 || e.draining.Load() || e.trk.running.Load() || len(e.trk.done) > 0 || now.Before(e.trk.next) {
+	if e.d.Jira == nil || e.draining.Load() {
+		return
+	}
+	held := e.jiraLeft <= 0 || e.trk.running.Load() || len(e.trk.done) > 0 || now.Before(e.trk.next)
+	if held && !slices.ContainsFunc(e.cfg.Factory.Repos, config.FactoryRepo.JiraMovesShadow) {
 		return
 	}
 	rows, err := e.reg.Trackings(ctx)
@@ -151,7 +177,11 @@ func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 		e.trackStoreFailed(err)
 		return
 	}
-	var last, due []trackJob
+	plans := e.jiraPlans(ctx, tasks, rows) // a milestone's plan begins when it comes, whatever holds the batch
+	if held {
+		return
+	}
+	var last, planned, due []trackJob
 	tracked := 0
 	for _, t := range tasks {
 		key := e.jiraKeyOf(t)
@@ -168,7 +198,13 @@ func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 			continue
 		}
 		tracked++
-		if !j.had || !now.Before(row.TriedAt.Add(trackEvery)) {
+		isDue := !j.had || !now.Before(row.TriedAt.Add(trackEvery))
+		if p, ok := plans[t.ID]; ok && (isDue || row.TriedAt.Before(p.begun)) { // a plan reads at once, then as the refreshes do
+			j.plan = &p
+			planned = append(planned, j)
+			continue
+		}
+		if isDue {
 			due = append(due, j)
 		}
 	}
@@ -189,12 +225,21 @@ func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 		}
 		return cmp.Or(a.row.TriedAt.Compare(b.row.TriedAt), cmp.Compare(a.t.ID, b.t.ID))
 	})
-	jobs := slices.Concat(last, due[:min(pace, len(due))]) // the owed last reads first: an ended PR's last write waits for them
-	jobs = jobs[:min(e.jiraLeft, len(jobs))]
+	slices.SortStableFunc(planned, func(a, b trackJob) int { return a.plan.begun.Compare(b.plan.begun) })
+	// The owed last reads first (an ended PR's last write waits for them),
+	// then the plans (a milestone's plan is read when it comes), then the
+	// refreshes at their pace, within the budget.
+	var jobs []trackJob
+	for _, j := range slices.Concat(last, planned, due[:min(pace, len(due))]) {
+		if j.cost() > e.jiraLeft {
+			break
+		}
+		e.jiraLeft -= j.cost()
+		jobs = append(jobs, j)
+	}
 	if len(jobs) == 0 {
 		return
 	}
-	e.jiraLeft -= len(jobs)
 	e.startTrackBatch(jobs)
 }
 
@@ -233,9 +278,17 @@ func (e *Engine) startTrackBatch(jobs []trackJob) {
 				break
 			}
 			r := trackRead{job: j, st: st, err: err, at: e.now()}
+			if j.plan != nil && planNeedsTransitions(j.plan.move, st, err) {
+				rctx, rcancel := context.WithTimeout(ctx, readBound)
+				r.trans, r.transErr = e.d.Jira.Transitions(rctx, j.key)
+				rcancel()
+				if bg.Err() != nil {
+					break
+				}
+			}
 			b.reads = append(b.reads, r)
-			if !r.answered() { // the next reads would wait for a Jira that does not answer too
-				break
+			if !r.answered() || r.transErr != nil && (jiraDown(r.transErr) || errors.Is(r.transErr, context.DeadlineExceeded)) {
+				break // the next reads would wait for a Jira that does not answer too
 			}
 		}
 		if slices.ContainsFunc(b.reads, func(r trackRead) bool { return r.job.last }) {
@@ -275,6 +328,9 @@ func (e *Engine) takeTracking(ctx context.Context) {
 	for _, r := range b.reads {
 		answered = answered || r.answered()
 		e.applyRead(ctx, r)
+		if r.job.plan != nil {
+			e.settlePlan(ctx, r)
+		}
 	}
 	if answered {
 		e.trk.down, e.trk.next = 0, time.Time{}

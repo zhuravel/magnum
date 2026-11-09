@@ -272,6 +272,9 @@ func (p *cardPainter) prSection(card TaskCard) []string {
 		row("JIRA", cl)
 		out = append(out, under...)
 	}
+	if jp := card.JiraPlan; jp != nil {
+		row("JIRA MOVE", p.jiraPlanText(jp))
+	}
 	if len(out) > 0 {
 		out = append(out, "")
 	}
@@ -388,6 +391,55 @@ func (p *cardPainter) jiraFailure(js *FactoryJiraStatus) seg {
 		return seg{"now: " + js.LastError, p.st.Err}
 	}
 	return seg{}
+}
+
+// jiraPlanText is the card's JIRA MOVE line: the factory's latest plan of
+// a move of the task's Jira issue, the move and when it was planned, in
+// its mode ("To Do → In Development (planned 14:02, shadow)"), then what
+// you did after it ("you moved it 14:20"); nothing to move; why the
+// factory could not plan it, for you to move it; a plan that waits for its
+// read. The time and the mode are dim.
+func (p *cardPainter) jiraPlanText(jp *FactoryJiraPlan) cell {
+	mode := cmp.Or(jp.Mode, "shadow")
+	when := seg{"(" + p.clock(jp.At) + ", " + mode + ")", p.st.Dim}
+	to := "→ " + jp.To + ": "
+	text := func(main string, more ...seg) cell {
+		return append(cell{{main + " ", noStyle}, when}, more...)
+	}
+	switch jp.Outcome {
+	case "":
+		return cell{{to + "planning since " + p.clock(jp.Begun) + " ", noStyle}, {"(" + mode + ")", p.st.Dim}}
+	case "planned":
+		out := cell{{jp.From + " → " + jp.To + " ", noStyle}, {"(planned " + p.clock(jp.At) + ", " + mode + ")", p.st.Dim}}
+		switch jp.Moved {
+		case "target":
+			out = append(out, p.sepSeg(), seg{"you moved it " + p.clock(jp.MovedAt), noStyle})
+		case "elsewhere":
+			out = append(out, p.sepSeg(), seg{"you moved it to " + jp.MovedTo + " " + p.clock(jp.MovedAt), noStyle})
+		case "none":
+			out = append(out, p.sepSeg(), seg{"no move by the task's end", p.st.Dim})
+		}
+		return out
+	case "already":
+		if strings.EqualFold(jp.From, jp.To) {
+			return text("already " + jp.To + ": nothing to move")
+		}
+		return text(jp.From + ", past " + jp.To + ": nothing to move")
+	case "assigned_other":
+		return text(to + "assigned to someone else, move it yourself")
+	case "no_transition":
+		if len(jp.Transitions) == 0 {
+			return text(to + "Jira offers no transition, move it yourself")
+		}
+		return text(to+"no transition to it, move it yourself", p.sepSeg(), seg{"Jira offers " + strings.Join(jp.Transitions, ", "), p.st.Dim})
+	case "needs_fields":
+		return text(to + "Jira wants fields for " + jp.Transition + ", move it yourself")
+	case "target_done":
+		return text(to + "a done status, never the factory's move")
+	case "unread":
+		return cell{{to + "not planned, its read failed: " + jp.Cause + " ", noStyle}, {"(" + mode + ")", p.st.Dim}}
+	}
+	return text(to + jp.Outcome)
 }
 
 // stagingsText is the card's STAGINGS line: each staging server's name and

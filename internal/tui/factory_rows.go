@@ -261,6 +261,27 @@ type FactoryJiraStatus struct {
 	DaemonDown bool
 }
 
+// FactoryJiraPlan is the factory's plan of a move of a task's Jira issue
+// at a milestone ("start", "published"), in its mode ("shadow": planned
+// and never made): its outcome ("" while it waits for its read, else
+// planned, already, assigned_other, no_transition, needs_fields,
+// target_done or unread), the status it read (From) and the target (To),
+// the transition it would take, the transitions Jira offers (none to the
+// target), the failure of an unread plan (a class, never ticket text),
+// when it began and when its read was; then what the factory saw after a
+// planned move: Moved ("target", "elsewhere", "none"; "" before anything
+// was seen), the status it moved to and when. The names are Jira's
+// statuses and transitions, never a person's.
+type FactoryJiraPlan struct {
+	Milestone, Mode, Outcome string
+	From, To, Transition     string
+	Transitions              []string
+	Cause                    string
+	Begun, At                time.Time
+	Moved, MovedTo           string
+	MovedAt                  time.Time
+}
+
 // The data of the factory's cards (spec 9.C): the question card and its recap,
 // the ready card, the task card and the new task form. The painters
 // (factory_card.go) draw them and nothing else: the factory package builds
@@ -521,8 +542,12 @@ type TaskCard struct {
 	// JiraStatus is where the task's Jira issue stands, as its row's
 	// JiraStatus says it; nil: not read.
 	JiraStatus *FactoryJiraStatus
-	Stages     []CardStage
-	Agents     []CardAgent
+	// JiraPlan is the factory's latest plan of a move of the task's Jira
+	// issue (its repository's jira_moves in shadow), drawn as the card's
+	// JIRA MOVE line; nil: none.
+	JiraPlan *FactoryJiraPlan
+	Stages   []CardStage
+	Agents   []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string
