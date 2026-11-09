@@ -494,7 +494,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	if v.pr != nil {
 		row.Mark = v.pr.mark // magnum's fixer at work on the PR moves too
 		v.pr.cells.fill(&row)
-		row.PR = v.pr.pr
+		row.PR, row.DeployFirst = v.pr.pr, v.pr.deploy
 	}
 	if t.State == registry.TaskQueued && t.WaitsWho == waitCopy {
 		row.Frees = s.frees(v)

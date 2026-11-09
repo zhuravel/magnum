@@ -1319,8 +1319,12 @@ func (m factoryModel) taskCard() TaskCard {
 	if r.PR != nil {
 		c.StagingDeploys = r.PR.StagingDeploys
 	}
+	e, deployFirst := m.deployFirstHint(r) // the row's move: first, after j k on a task's card
 	if r.yourPR() {
 		c.Hints = m.walkHint(m.reportHints(m.prCardHints(r, c), m.task, "b", "t"))
+		if deployFirst {
+			c.Hints = slices.Insert(c.Hints, 0, e)
+		}
 		return c
 	}
 	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c), m.task, "d", "b", "t")
@@ -1331,6 +1335,9 @@ func (m factoryModel) taskCard() TaskCard {
 		c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), hint{"K", "stop magnum"})
 	}
 	c.Hints = slices.Insert(c.Hints, max(len(c.Hints)-2, 0), m.undoHints(r, !c.Retry)...) // before esc and ?
+	if deployFirst {
+		c.Hints = slices.Insert(c.Hints, min(1, len(c.Hints)), e)
+	}
 	c.Hints = m.walkHint(c.Hints)
 	return c
 }

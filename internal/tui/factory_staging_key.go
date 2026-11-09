@@ -65,6 +65,18 @@ func (m factoryModel) stagingRow(r FactoryRow) (row actRow, words []string, why 
 	return row, words, actionRefusal(actStaging, row)
 }
 
+// deployFirstHint is E's hint on row r whose staging deploy comes before
+// its merge (FactoryRow.DeployFirst), which home's hints and its card's
+// offer first, as the row's move; ok is false for any other row, and where
+// E refuses r or the screen runs no actions (E is then offered as ever, or
+// not at all).
+func (m factoryModel) deployFirstHint(r FactoryRow) (h hint, ok bool) {
+	if _, _, why := m.stagingRow(r); !r.DeployFirst || m.act == nil || why != "" {
+		return hint{}, false
+	}
+	return hint{"E", "deploy first"}, true
+}
+
 // raiseHeldPlan is key (E or P) on row with a plan of it held: the key's
 // refusal of the row now (why, as a fresh press runs it) drops the held
 // plan with its words, and nothing runs; while another action runs it

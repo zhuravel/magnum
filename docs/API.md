@@ -14432,6 +14432,16 @@ type PRState struct {
 	Replies                   []store.Reply
 	OpenRestores              bool
 	OpenHold                  time.Duration
+
+	// Files and Stagings are read for your own PRs alone (OwnPRs): the
+	// paths magnum's poller listed at the PR's head (pr_files; nil without
+	// a list of that head), and where the PR stands on each staging env
+	// of its repository as the review daemon last told it (its record,
+	// engine.KVPRStaging, as engine.StagingShown shows it: the config's
+	// envs in order, unknown without a record of the head or with
+	// magnum's daemon not ticking; none for a repository without envs).
+	Files    []string
+	Stagings []engine.StagingEnv
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
     Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
@@ -31976,6 +31986,11 @@ type FactoryRow struct {
 	JiraStatus *FactoryJiraStatus
 	// MoveShort is Move on a narrow screen.
 	MoveShort string
+	// DeployFirst says the row's PR waits on your merge, changes a
+	// migration and is on no staging (staging.DeployBeforeMerge): its move
+	// is E, a staging deploy before the merge, which home's hints and its
+	// card's offer first.
+	DeployFirst bool
 	// HelpShort and HelpLong are Help on a narrow and on a wide screen.
 	HelpShort, HelpLong string
 	// Frees is what frees a queued task ("frees when PR-12360 is pushed"):

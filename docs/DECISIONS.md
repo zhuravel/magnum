@@ -22398,6 +22398,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLocalReviewReadsTheRolesOfABeginEventThatNamesItsJudge; the stats' TestStatsRecordTheJudgeKindOfEachLocalRound.
   No new dependencies.
 
+- **The factory screen says to deploy a PR to a staging before its merge when it changes a migration and is on no
+  staging, and offers E first** (2026-11-09). talkable#12203 and #12204 sat in NEEDS YOU as "approved, merge is yours"
+  while no staging had them, and both change migrations: talkable's Jenkins runs the migrations on a staging deploy,
+  and its PR template asks for one first. The rule is internal/staging's (`DeployBeforeMerge`, `DeployBeforeMergeWords`,
+  shared with the board): a path is a migration and every env was read and holds none of the head. The screen applies
+  it to a wait on your merge only (`prWait.merge`: the look's idle approved verdict, and `nextWait`'s approved or no
+  review required), in `deployFirst`: the blocker's What, Long and help line start with the rule's words, its Short is
+  their first clause ("deploy to a staging before the merge"), the move is "E deploys to a staging" ("E deploys it"),
+  and the row says `tui.FactoryRow.DeployFirst`, so home's hints offer "E deploy first" right after enter (not again
+  last), a task card's after j k and your PR's card's first, where E acts (`deployFirstHint`); E itself and its y/N are
+  unchanged. A published task's changed paths are its ready card's (the change you pushed: one file read, only for a
+  merge wait, never a git call) and its envs its row's staging cells (staging.json mapped back, `cellEnvs`: every cell
+  unknown while no factory daemon runs says no). Your own PRs had no staging read at all ("not read yet"); magnum's
+  registry, which OwnPRs already opens read only, holds both of their facts, so `fillStaging` reads them with the row:
+  the paths the poller listed at the head (`pr_files`, only of that head) and the review daemon's staging record
+  (`engine.KVPRStaging` through `engine.StagingShown`, as the board: unknown without a record of the head or with
+  magnum's daemon not ticking). Those records also become your PR's staging cells on its row and card (no age: the
+  record keeps no first-seen time), so E's chooser lists its servers as the row says them; PRStates (the tick's and the
+  task rows' read) does not read them. The words lead the merge words rather than replace them: the What is cut at
+  the column's edge, so words after it would vanish on a 140-column screen, and the engine's verdict text is not the
+  factory's to rewrite. Rejected: putting the deploy first on any wait on you (CI failed, a reviewer's changes, no
+  reviewer asked: each is the next step before it); magnum's `pr_files` for a task's PR (the brief's source is the
+  task's own diff; an adopted PR without a ready card keeps the merge words); a new git or GitHub read per frame. Not
+  changed: the PR status comment's factory part (it says "waits on the operator", never the merge, and its Who stays
+  you), and the stats (a published PR's wait on you is the screen's, from magnum's registry, never a span the stats
+  classify). Tests: TestAPublishedTaskWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge (the verdict and magnum's row),
+  TestAStagingThatMayHoldTheHeadKeepsTheMergeWords (latest, CI, CI ✗, deploying, unknown, the factory daemon down),
+  TestATaskWithoutAMigrationKeepsTheMergeWords (no migration, no ready card, no staging envs),
+  TestOnlyTheMergeWaitPutsTheDeployFirst, TestYourPRWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge (one env latest
+  keeps the merge; the cells in the screen's words), TestOwnPRsReadTheReviewDaemonsStagingRecordAndTheHeadsPaths (a list
+  and a record of an older head, magnum's last tick an hour old, the registry unchanged) and
+  TestARowWhoseDeployComesFirstOffersEFirst (home, the task card, your PR's card, E's chooser and its y/N), each failing
+  first. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

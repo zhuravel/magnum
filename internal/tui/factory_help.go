@@ -100,7 +100,8 @@ var factoryKeyHelp = []struct {
 		{"f F K P", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop, " +
 			"merge its parent as the fixer App's bot (the daemon's plan first; y/N)"},
 		{"E", "on a row with a PR whose repository has staging servers: deploy to staging (choose, y/N): 1-9 toggle a server, " +
-			"a all, enter asks magnum's daemon for its plan, y deploys"},
+			"a all, enter asks magnum's daemon for its plan, y deploys; the move, offered first, of a PR that waits on your merge, " +
+			"changes a migration and is on no staging"},
 		{"r R", "on a row with a PR: magnum reviews it now, or afresh in new agent sessions, as the board's r and R (y/N)"},
 		{"z", "on a row with a PR: snooze its automatic reviews for 2h, or lift the snooze (y/N)"},
 		{"M U", "on a row with a PR: mute its automatic reviews, unmute them (y/N); a task's PR's question says what it does to its fix loop"},
@@ -127,7 +128,8 @@ var factoryKeyHelp = []struct {
 		{"b t", "its PR, its Jira issue in the browser (asks nothing)"},
 		{reportKey, "the report of magnum's fixer, when its fix loop left you items, else QA's summary.md where A is offered (asks nothing)"},
 		{"f F K", "on a card with a PR: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
-		{"E", "on a card with a PR and staging servers: deploy to staging (choose, y/N), as on home; its deploys show under STAGINGS"},
+		{"E", "on a card with a PR and staging servers: deploy to staging (choose, y/N), as on home, offered first where the PR's " +
+			"deploy comes before its merge; its deploys show under STAGINGS"},
 		{"a", "the next card that needs you (a walk; off one, its first)"},
 		{"", "your PR's card has the PR's keys alone: f F K r R z M U, o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
 		{"esc", "back"}}},

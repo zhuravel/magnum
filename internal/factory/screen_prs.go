@@ -42,6 +42,8 @@ import (
 // prWait is what a published task waits on, by its PR: its group and mark
 // on home, its blocker, the links of what needs you, your move, and since
 // when the PR has waited so (zero: not known, the task's last span tells).
+// merge says the move is your merge (an approval, or no review required),
+// which a staging deploy may come before (deployFirst: deploy says it does).
 // A fix attention adds the fixer's report (report, which e opens) and,
 // when the fixer left you items, those items (needs), the help line that
 // lists them (help) and the card's WAITING FOR (card); "" keeps the
@@ -63,6 +65,8 @@ type prWait struct {
 	// no open PR of it.
 	pr   *tui.FactoryPR
 	info *tui.CardPR
+	// merge and deploy: see above.
+	merge, deploy bool
 }
 
 // prCells are an open PR's cells on its row: its CI, magnum's findings and
@@ -237,7 +241,8 @@ const (
 // when the PR has waited so where magnum's registry tells it: a verdict's
 // Since (its At in a row of an older build), a loop's start, the close and
 // the grace's end, the attention's row change (magnum's row changed then
-// last).
+// last); a wait on your merge says a staging deploy first where its task's
+// change needs one (taskDeployFirst).
 func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait {
 	t := v.t
 	looking := fmt.Sprintf("looking at #%d", prRef(v).Number)
@@ -258,7 +263,7 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 		w.move, w.moveShort = fmt.Sprintf("magnum review %s#%d", ref.Repo, ref.Number), "magnum review"
 		return w
 	}
-	return publishedWait(t, prRef(v), st, s.clock())
+	return s.taskDeployFirst(v, publishedWait(t, prRef(v), st, s.clock()))
 }
 
 // prClock is when a PR's wait is read and the timings of magnum's daemon it
@@ -626,7 +631,7 @@ func nextWait(st PRState, n int, clean string, ci bool, c prClock) prWait {
 	}
 	merge := func(next string) prWait {
 		w := youWait(with(next), "approved, merge is yours", "")
-		w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
+		w.move, w.moveShort, w.merge = fmt.Sprintf("merge #%d on GitHub", n), "merge it", true
 		return w
 	}
 	g := st.Gate
@@ -847,7 +852,7 @@ func verdictWait(st PRState, n int, c prClock) prWait {
 	case engine.OpenIdle:
 		if st.Approved {
 			w := you(o.Why, short, "")
-			w.move, w.moveShort = fmt.Sprintf("merge #%d on GitHub", n), "merge it"
+			w.move, w.moveShort, w.merge = fmt.Sprintf("merge #%d on GitHub", n), "merge it", true
 			if len(o.Optional) > 0 { // the optional calls magnum's fixer left you, seen at the merge
 				w.move += " · " + engine.OptionalCallsWords(o.Optional)
 				w.links = append(w.links, o.Optional...)

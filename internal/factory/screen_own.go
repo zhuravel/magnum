@@ -100,7 +100,10 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // review it (offOf: a baseline, include_own = false, a mute; fix off is not
 // that, magnum still reviews it). An attention or a stalemate needs you
 // whatever the verdict says (a verdict decided before it is stale), unless
-// a loop works on the PR.
+// a loop works on the PR. A wait on your merge says a staging deploy first
+// where magnum's records of the PR say it needs one (deployFirst), and the
+// row and card show where the PR stands on each staging env as the review
+// daemon last told it (PRState.Stagings).
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
 	w := magnumWait(st, n, s.clock())
@@ -108,13 +111,14 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	if (st.State == store.PRNeedsAttention || st.Stalemate) && !st.Fixing && w.group != tui.GroupNeedsYou {
 		w = attentionWait(st, n)
 	}
+	w = deployFirst(w, st.Files, recordEnvs(st.Stagings))
 	key := s.ownKey(st.Ref)
 	row := tui.FactoryRow{ID: -st.ID, Key: key, GitHub: fmt.Sprintf("#%d", n), Repo: st.Ref.Repo, Title: st.Title,
 		WaitsOn: []tui.WaitsOn{w.on}, Since: cmp.Or(w.since, st.ActivityAt, st.UpdatedAt), Group: tui.GroupYours, Mark: tui.MarkWaits}
 	cellsOf(st).fill(&row)
 	trackers := s.cfg.TrackersFor(st.Ref.Repo)
 	row.Jira, _ = config.Issue(st.Title, trackers)
-	row.PR = screenPR(st)
+	row.PR, row.Stagings, row.DeployFirst = screenPR(st), recordCells(st.Stagings), w.deploy
 	switch {
 	case off != "": // magnum leaves it alone: it asks nothing
 	case w.group == tui.GroupNeedsYou:
@@ -126,7 +130,7 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	row.Help = cmp.Or(w.help, w.on.Who+": "+cmp.Or(w.on.Long, w.on.What))
 	card := tui.TaskCard{Key: key, Title: st.Title, Repo: st.Ref.Repo, PR: fmt.Sprintf("#%d", n), PRURL: cmp.Or(st.URL, githubPR(st.Ref)),
 		WaitingFor: cmp.Or(w.card, w.on.Who+": "+w.on.What), Links: w.links, FixNeeds: w.needs, FixReport: w.report,
-		PRInfo: cardPR(st, s.clock())}
+		PRInfo: cardPR(st, s.clock()), Stagings: row.Stagings}
 	card.Issue, card.IssueURL = config.Issue(st.Title, trackers)
 	return row, card
 }

@@ -84,6 +84,11 @@ type FactoryRow struct {
 	JiraStatus *FactoryJiraStatus
 	// MoveShort is Move on a narrow screen.
 	MoveShort string
+	// DeployFirst says the row's PR waits on your merge, changes a
+	// migration and is on no staging (staging.DeployBeforeMerge): its move
+	// is E, a staging deploy before the merge, which home's hints and its
+	// card's offer first.
+	DeployFirst bool
 	// HelpShort and HelpLong are Help on a narrow and on a wide screen.
 	HelpShort, HelpLong string
 	// Frees is what frees a queued task ("frees when PR-12360 is pushed"):

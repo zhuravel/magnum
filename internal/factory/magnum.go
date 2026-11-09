@@ -271,6 +271,16 @@ type PRState struct {
 	Replies                   []store.Reply
 	OpenRestores              bool
 	OpenHold                  time.Duration
+
+	// Files and Stagings are read for your own PRs alone (OwnPRs): the
+	// paths magnum's poller listed at the PR's head (pr_files; nil without
+	// a list of that head), and where the PR stands on each staging env
+	// of its repository as the review daemon last told it (its record,
+	// engine.KVPRStaging, as engine.StagingShown shows it: the config's
+	// envs in order, unknown without a record of the head or with
+	// magnum's daemon not ticking; none for a repository without envs).
+	Files    []string
+	Stagings []engine.StagingEnv
 }
 
 // decision is GitHub's review decision of v as magnum last read it (its
@@ -331,7 +341,8 @@ func (m *magnumRegistry) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]
 // (config.SelfMatch, the logins magnum's look takes as yours) and whose
 // repository a [[watch]] covers (magnum polls no other, so the row of a PR
 // there tells nothing true of it), ordered by repository and number, each
-// as PRStates reads a PR, in one opening of the registry. It reads and
+// as PRStates reads a PR, with its paths and stagings (fillStaging), in one
+// opening of the registry. It reads and
 // never writes or migrates the registry; no registry lists nothing and
 // creates none, and neither does a config with no login of yours.
 func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
@@ -376,9 +387,40 @@ func (m *magnumRegistry) OwnPRs(ctx context.Context) ([]PRState, error) {
 		if err := m.fillPR(ctx, st, &v, repo, pr, pass); err != nil {
 			return nil, fmt.Errorf("magnum's registry: %s#%d: %w", v.Ref.Repo, pr.Number, err)
 		}
+		if err := m.fillStaging(ctx, st, &v, pr, pass); err != nil {
+			return nil, fmt.Errorf("magnum's registry: %s#%d: %w", v.Ref.Repo, pr.Number, err)
+		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// fillStaging fills your PR v (magnum's row pr) with the paths magnum's
+// poller listed at its head and, in a repository with staging envs, where
+// it stands on each as the review daemon last told it (PRState.Files,
+// Stagings), as the board reads them: two reads of st, no git.
+func (m *magnumRegistry) fillStaging(ctx context.Context, st *store.Store, v *PRState, pr store.PR, pass *magnumPass) error {
+	files, ok, err := st.PRFilesOf(ctx, pr.ID)
+	if err != nil {
+		return err
+	}
+	if ok && files.HeadSHA == pr.HeadSHA {
+		v.Files = files.Paths
+	}
+	envs := engine.StagingEnvs(m.cfg, v.Ref.Repo)
+	if len(envs) == 0 {
+		return nil
+	}
+	s, found, err := st.GetKV(ctx, engine.KVPRStaging(pr.ID))
+	if err != nil {
+		return err
+	}
+	var rec engine.StagingRecord
+	if found {
+		rec, found = engine.ParseStagingRecord(s)
+	}
+	v.Stagings = engine.StagingShown(rec, found, envs, pr.HeadSHA, pass.last, pass.now)
+	return nil
 }
 
 // stateOf is what the config and magnum's daemon (pid, 0 for none) say of

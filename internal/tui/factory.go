@@ -1377,6 +1377,10 @@ func (m factoryModel) homeHints() []hint {
 		}
 		hs = m.reportHints(append(hs, m.undoHints(r, true)...), r.ID)
 	}
+	deploys, deployFirst := m.deployFirstHint(r)
+	if ok && deployFirst { // the row's move: right after enter
+		hs = slices.Insert(hs, min(1, len(hs)), deploys)
+	}
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})
 	}
@@ -1392,7 +1396,7 @@ func (m factoryModel) homeHints() []hint {
 	if len(m.owners()) > 1 { // as the board's: O has an owner to show alone
 		hs = append(hs, hint{"O", "owner"})
 	}
-	if _, _, why := m.stagingRow(r); ok && m.act != nil && why == "" { // last before ?: the first a narrow line drops
+	if _, _, why := m.stagingRow(r); ok && m.act != nil && why == "" && !deployFirst { // last before ?: the first a narrow line drops
 		hs = append(hs, hint{"E", "staging"})
 	}
 	return append(hs, hint{"?", "more"})
