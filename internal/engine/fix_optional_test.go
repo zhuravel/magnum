@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -315,4 +316,155 @@ func TestAnOptionalCallWaitsUntilYouTakeIt(t *testing.T) {
 	if got := h.e.optionalCalls(h.ctx, prID); !slices.Equal(got, calls[1:]) {
 		t.Errorf("the record = %+v, want the call you answered alone", got)
 	}
+}
+
+// earlierP3Entry is the "## Needs you" entry a fixer wrote for magnum's P3
+// author's call (optionalThread) before optional calls existed: not fixed,
+// the author's call.
+const earlierP3Entry = "- 4302866759 P3 app/models/offer.rb:42: not fixed. This is the author's call: option A keeps the cap, option B lifts it"
+
+// earlierP3Call is the call that entry made: decide magnum's P3, which the
+// fixer declined.
+const earlierP3Call = "decide magnum's P3 on app/models/offer.rb:42: the fixer declined it; reply won't fix at " +
+	prPage + "#discussion_r4302866759, or `magnum fix talkable/talkable#2` sends it back"
+
+// heldByAnEarlierP3 is the live own PR of 2026-11-08 under autofix =
+// "open": the review posted magnum's P3 author's call (optionalThread,
+// beside others, more threads), the look's loop started on it, and its
+// fixer, from before optional calls, left needs under "## Needs you"
+// (earlierP3Entry among them), so the PR needs attention with the call to
+// decide the P3. Each later run's fixer writes next's report.
+func heldByAnEarlierP3(t *testing.T, needs string, next func(h *harness, run store.Run) string, others ...github.Thread) (*harness, store.PR) {
+	t.Helper()
+	h, git := openHarness(t, findings(map[string]int{"P3": 1}, "COMMENTED"))
+	h.gh.clock = h.clock.Now
+	th := magnumsThread(optionalThread, "app/models/offer.rb", 42, h.clock.Now().Add(-time.Hour), false)
+	th.Comments[0].Body, th.Comments[0].ReviewID = optionalP3, 301 // the review the first round posts
+	h.setThreads(append([]github.Thread{th}, others...)...)
+	var mu sync.Mutex
+	runs := 0
+	fixerBy(h, git, func(run store.Run) (string, string) {
+		mu.Lock()
+		runs++
+		first := runs == 1
+		mu.Unlock()
+		writeOptionalReview(h.t, deref(run.ReportPath), optionalP3)
+		if first {
+			return "", fixReport(run.ID, "nothing", noReplies, needs)
+		}
+		return "", next(h, run)
+	})
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick() // the look starts the loop, whose fixer leaves the P3 to you
+	pr := h.wantState(2, store.PRNeedsAttention)
+	if msg := deref(pr.LastError); !strings.Contains(msg, earlierP3Call) {
+		t.Fatalf("last_error = %q, want the call to decide magnum's P3", msg)
+	}
+	h.advance(10 * time.Minute)
+	return h, pr
+}
+
+// A PR held under needs_attention by an earlier fix run's call to decide
+// magnum's P3 author's call stayed there (2026-11-08, live) after a manual
+// `magnum fix` whose fixer listed that P3 as an optional call and left
+// nothing else: the run recorded the call, which holds nothing, but the old
+// attention stood until `magnum fix --done`. Now a run with no Needs you
+// whose optional calls cover every call of the earlier attention (the same
+// threads) lifts it as its own result: the PR is back to reviewed, a
+// fix.optional_lifted event says so, and the look names the call at the
+// merge. An attention with a call the run did not cover stays as it is, and
+// a decision of yours in the P3's thread is no optional call: it goes back
+// to you unless the fixer builds it.
+func TestAnOptionalCallLiftsTheEarlierAttentionOfItsP3(t *testing.T) {
+	optionalOnly := func(_ *harness, run store.Run) string {
+		return withOptional(fixReport(run.ID, "nothing", noReplies, "none"), optionalEntry)
+	}
+	t.Run("every call covered", func(t *testing.T) {
+		h, pr := heldByAnEarlierP3(t, earlierP3Entry, optionalOnly)
+		h.fix(FixPayload{})
+		h.handle()
+		cur := h.wantState(2, store.PRReviewed)
+		if cur.LastError != nil {
+			t.Errorf("last_error = %q after the lift", deref(cur.LastError))
+		}
+		for _, key := range []string{KVPRAttention(pr.ID), kvPRFixCalls(pr.ID)} {
+			if v, ok := h.e.getKV(h.ctx, key); ok {
+				t.Errorf("%s = %q outlived the lift", key, v)
+			}
+		}
+		link := prPage + "#discussion_r4302866759"
+		if ev, ok := h.fixEvent("fix.optional_lifted"); !ok || !strings.Contains(ev.Message, "1 call of the attention as an optional call") ||
+			strings.Contains(ev.Message, "option A") {
+			t.Errorf("fix.optional_lifted = %q, %v; want the lift, never the fixer's words", ev.Message, ok)
+		}
+		if ev, ok := h.fixEvent("fix.decisions_built"); ok {
+			t.Errorf("fix.decisions_built = %q: no decision was built", ev.Message)
+		}
+		if calls := h.e.optionalCalls(h.ctx, pr.ID); len(calls) != 1 || calls[0].Thread != optionalThread {
+			t.Errorf("the PR's optional calls = %+v, want the P3's", calls)
+		}
+		for range 3 {
+			h.pastSettle()
+			h.tick()
+		}
+		if n := len(h.fixRuns(pr.ID)); n != 2 {
+			t.Errorf("fix runs = %d, want no loop on the operator's call", n)
+		}
+		h.wantOpen(OpenIdle, "1 optional call: "+link)
+	})
+	t.Run("a call not covered stays", func(t *testing.T) {
+		h, _ := heldByAnEarlierP3(t, earlierP3Entry+"\n"+leftDecision, optionalOnly, extThread(decideThread, "lib/sandbox.rb", 185,
+			time.Date(2026, 10, 5, 6, 0, 0, 0, time.UTC), "MINOR: `run` drops stderr", "rev-ann"))
+		before := deref(h.pr(2).LastError)
+		if !strings.Contains(before, decideCall) {
+			t.Fatalf("last_error = %q, want rev-ann's call beside the P3's", before)
+		}
+		h.fix(FixPayload{})
+		h.handle()
+		if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); msg != before {
+			t.Errorf("last_error = %q, want the attention as it was", msg)
+		}
+		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
+			t.Errorf("fix.optional_lifted = %q over a call the run did not cover", ev.Message)
+		}
+	})
+	// A run that could not read the threads wrote no external file, so it
+	// could not tell whether you decided in the P3's thread: no lift.
+	t.Run("no lift without the threads read", func(t *testing.T) {
+		h, _ := heldByAnEarlierP3(t, earlierP3Entry, optionalOnly)
+		before := deref(h.pr(2).LastError)
+		h.gh.mu.Lock()
+		h.gh.threadsErr = errors.New("HTTP 502")
+		h.gh.mu.Unlock()
+		h.fix(FixPayload{})
+		h.handle()
+		if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); msg != before {
+			t.Errorf("last_error = %q, want the attention as it was", msg)
+		}
+		if n := len(h.fixRuns(h.pr(2).ID)); n != 2 {
+			t.Fatalf("fix runs = %d, want the manual run", n)
+		}
+		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
+			t.Errorf("fix.optional_lifted = %q without the threads read", ev.Message)
+		}
+	})
+	t.Run("your decision is no optional call", func(t *testing.T) {
+		h, _ := heldByAnEarlierP3(t, earlierP3Entry, optionalOnly)
+		h.gh.mu.Lock()
+		h.gh.threads[2][0] = authorSays(h.gh.threads[2][0], 4302866999, "Take option A.", h.clock.Now())
+		h.gh.mu.Unlock()
+		h.fix(FixPayload{})
+		h.handle()
+		cur := h.wantState(2, store.PRNeedsAttention)
+		if msg := deref(cur.LastError); !strings.Contains(msg, "decide magnum's finding on app/models/offer.rb:42: ") {
+			t.Errorf("last_error = %q, want your decision back with you", msg)
+		}
+		if ev, ok := h.fixEvent("fix.decisions"); !ok || !strings.Contains(ev.Message, "1 decision goes back to you") {
+			t.Errorf("fix.decisions = %q, %v", ev.Message, ok)
+		}
+		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
+			t.Errorf("fix.optional_lifted = %q over your decision", ev.Message)
+		}
+	})
 }

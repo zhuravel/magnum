@@ -4150,6 +4150,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   hash and matcher), TestHooksAssumeUntrustedOverridesTheOwnTrustMemory, TestHooksForgetStaleAndAssumeUntrustedAreRefusedTogether,
   TestHooksDryRunShowsTheTrustAnAppendWouldRecord, TestOwnCodexTrustIsRememberedOnlyWhereItReadsTrusted, TestAReaderThatReadAnOlderHooksJSONKeepsTheNewRecord
   and TestRecordStaleCodexTrustNeedsNoHooksJSON.
+- **A fix run whose optional calls cover every call of the PR's earlier attention lifts it** (2026-11-09, a gap
+  found live on 2026-11-08; follows "A P3 author's call is an optional call, which holds nothing"). On an own PR
+  held under needs_attention by an earlier fix run's call to decide magnum's P3 author's call ("decide magnum's P3
+  on <place>: the fixer declined it", raised before optional calls existed), a manual `magnum fix` run listed that
+  P3 under `## Optional calls` and left nothing else: the settle recorded the optional call (`pr.<id>.optional_calls`,
+  `fix.optional`) and ended the loop as one that replied, but the PR stayed needs_attention with the old attention
+  until `magnum fix --done`, though the call it asked for now holds nothing. Now `settleOptional` also returns the
+  threads of the run's optional calls, and the settle's lift (`liftDecided`, which lifted an attention of decision
+  calls once the run built each) counts a call as covered when the run built its decision or left its thread as an
+  optional call: a run with no Needs you entries, no carried calls and no push, over an attention of the fixer's
+  decision calls alone (`attention.FixDecisionCalls`) that it covered every one of (the same threads), puts the PR
+  back to reviewed with the same compare-and-set as before (head, reviewed head, the attention's words), drops the
+  attention's rows and says so in a `fix.optional_lifted` event ("claude-fix left 1 call of the attention as an
+  optional call, which holds nothing before the merge: the review of <sha> stands, with no new round"; a lift of
+  built decisions alone is still `fix.decisions_built`). The optional calls stay recorded, so the look names them on
+  the merge move ("1 optional call: <link>"). An attention with any call the run did not cover (another reviewer's
+  decline, an older-words entry beside it, a resolution) stays as it is. A person's decision never closes on the
+  fixer's word alone: an optional call is no decision of the operator's and holds nothing (the operator's rule of
+  2026-11-08), and the entry is checked against magnum's own comment (`optionalFinding`) before it is one; an
+  author's reply in the P3's thread after the earlier call is a decision, which the run's external file lists and
+  `decisionsLeft` puts back under Needs you unless the fixer built it, so that run lifts nothing; and a run without
+  the external file (the other reviewers' items unread, so no decision was read) counts no optional call in the
+  lift. Rejected: lifting on any optional call of the run (an attention that asks more would close on it), counting
+  the optional calls recorded by earlier runs (the run did not cover them), and leaving the case to `magnum fix
+  --done` (the operator had to find out why a PR that asks nothing still held them). Tests, failing first and with
+  the unread guard taken out once: TestAnOptionalCallLiftsTheEarlierAttentionOfItsP3 (every call covered, a call not
+  covered stays, no lift without the threads read, your decision is no optional call).
 
 ## Screens and commands
 

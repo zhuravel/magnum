@@ -3495,8 +3495,11 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   closes on the fixer's word alone: once the run ends, a decision GitHub shows no reply of the fixer's in
   goes back under `Needs you` with its call, the fixer's own report notwithstanding (a `fix.decisions` event
   counts what it built and what went back); a loop that built every decision its attention asked for, and
-  left nothing, puts the PR back to reviewed (`fix.decisions_built`); and a run that fails, or the cap, keeps
-  the decision calls of the attention it replaces after its own words, made when they were (one GitHub shows
+  left nothing, puts the PR back to reviewed (`fix.decisions_built`), and so does one that left a call's P3 as an
+  optional call in place of building it (a fixer from before optional calls left magnum's P3 author's call as a call
+  to decide: `fix.optional_lifted`, and the merge names the optional call), once it covered every call of the
+  attention and read the threads (your decision in that thread still goes back to you); and a run that fails, or
+  the cap, keeps the decision calls of the attention it replaces after its own words, made when they were (one GitHub shows
   a fix-marked reply of the fixer's in since goes: it was built), so the next `magnum fix` still builds
   them. Under `autofix = "open"` a decision is new work for the look: the thread's key takes your reply, and
   an attention whose calls are all decisions you made stops no start, so the loop starts by itself once the PR
@@ -3721,7 +3724,8 @@ Magnum starts nothing.
 - `magnum logs <ref>` shows `fix.start`, `fix.conflict_unchecked`, `fix.compacted`, `fix.fresh_session`, `fix.context_unknown`,
   `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`, `fix.needs_you`, `fix.time_up`,
   `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped`, `fix.ended`, `fix.acknowledged` (`magnum fix --done`), `fix.decided`
-  (`magnum fix --decide`), `fix.decisions` and `fix.decisions_built` (Your decisions), and under `autofix = "open"`
+  (`magnum fix --decide`), `fix.decisions`, `fix.decisions_built` and `fix.optional_lifted` (Your decisions),
+  `fix.optional` (the optional calls), and under `autofix = "open"`
   `autofix.open`, `fix.open_needs_you`, `fix.open_answered`, `fix.open_magnum_late`, `fix.open_ci_dispatch`,
   `fix.open_ci_dispatch_failed` and `fix.open_ci_dispatch_refused`; the parent's merge adds `fix.parent_merged`,
   `fix.parent_skipped` (the fix role is no fixer App), `fix.parent_refused` (why the daemon pushed nothing) and

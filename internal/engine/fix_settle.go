@@ -134,9 +134,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
 	var answered map[string]bool
-	var built map[int64]bool
-	rep.NeedsYou = e.settleOptional(ctx, job, rep.Optional, rep.NeedsYou, read) // fix_optional.go: a P3 author's call is yours, and holds nothing
-	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read)         // fix_decide.go: a decision it did not build goes back to you
+	var built, optional map[int64]bool
+	rep.NeedsYou, optional = e.settleOptional(ctx, job, rep.Optional, rep.NeedsYou, read) // fix_optional.go: a P3 author's call is yours, and holds nothing
+	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read)                   // fix_decide.go: a decision it did not build goes back to you
 	if pushed {
 		rep.NeedsYou = e.dropMergedConflicts(ctx, job, rep.NeedsYou, target)
 	}
@@ -182,7 +182,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
-		e.liftDecided(ctx, job, built) // fix_decide.go: it built every decision the attention asked for
+		e.liftDecided(ctx, job, built, optional) // fix_decide.go: it built, or left as optional calls, every call the attention asked for
 		// fix_parent.go: the parent the first cycle did not merge is yours
 		if note := job.parentRefusedNote(); note != "" {
 			e.event(ctx, "warn", subject, "fix.needs_you", "fix: "+note, data)

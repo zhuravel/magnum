@@ -13,7 +13,10 @@ package engine
 // optionalSplit; magnumItemsOf), and the idle verdict names it ("1 optional
 // call: <link>") while its thread stays open and unanswered since the call
 // (optionalWaits), so the operator sees it at the merge. A P0 to P2
-// author's call still holds as a Needs you entry does.
+// author's call still holds as a Needs you entry does. A run that leaves
+// nothing else lifts the PR's earlier attention when its optional calls
+// cover every call of it (liftDecided): a fixer from before optional calls
+// left such a P3 as a call to decide, which held the PR.
 
 import (
 	"context"
@@ -82,12 +85,15 @@ func (e *Engine) setOptionalCalls(ctx context.Context, prID int64, calls []optio
 // optional. The P3s are recorded as the PR's optional calls, merged by
 // thread with those recorded before, and a fix.optional event names their
 // links, never the fixer's words. read is the settle's one read of the
-// PR's threads (threadsReader).
-func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs []string, read func() ([]github.Thread, error)) []string {
+// PR's threads (threadsReader). It returns needs and the threads of the
+// run's optional calls (the first comment's id of each), which liftDecided
+// counts against the calls of the PR's earlier attention.
+func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs []string, read func() ([]github.Thread, error)) ([]string, map[int64]bool) {
 	if len(entries) == 0 {
-		return needs
+		return needs, nil
 	}
 	var found []optionalCall
+	threads := map[int64]bool{}
 	for _, entry := range entries {
 		n, ok := readNeedsYouEntry(entry)
 		id, err := strconv.ParseInt(n.id, 10, 64)
@@ -95,10 +101,10 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 			needs = append(needs, entry)
 			continue
 		}
-		found = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()})
+		found, threads[id] = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()}), true
 	}
 	if len(found) == 0 {
-		return needs
+		return needs, nil
 	}
 	calls := e.optionalCalls(ctx, job.pr.ID)
 	for _, c := range found {
@@ -111,7 +117,7 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 	data["optional"] = len(found)
 	e.event(ctx, "info", job.subject(), "fix.optional", fmt.Sprintf("%s left you %s, which %s nothing before the merge: %s",
 		job.role.Name, optionalWords(found), textx.Plural(len(found), "holds", "hold"), strings.Join(optionalLinks(found), ", ")), data)
-	return needs
+	return needs, threads
 }
 
 // authorsCallSentence ends the Fix of a finding of magnum's whose options

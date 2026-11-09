@@ -22,7 +22,8 @@ package engine
 // A person's decision never closes on the fixer's word alone: after the run,
 // a decision GitHub shows no reply of the fixer's in goes back under Needs
 // you (decisionsLeft); a loop that built every decision its attention asked
-// for, and left nothing, lifts that attention (liftDecided); and a failed
+// for (or left a call's P3 as an optional call, which is no decision of
+// yours), and left nothing, lifts that attention (liftDecided); and a failed
 // run or the cap keeps the decision calls of the attention it replaces
 // (keepDecisions). `magnum fix --decide <thread>="<text>"` posts your reply
 // as you and starts the loop in one step (decideCheck, decidePost). Under
@@ -398,13 +399,27 @@ func (e *Engine) decisionsLeft(ctx context.Context, job *fixJob, entries []strin
 
 // liftDecided puts the job's PR back to reviewed once its loop ends with
 // nothing pushed and nothing left to the author, when the PR's attention is
-// the fixer's decision calls alone and this run built every one (built,
-// decisionsLeft): you decided each call, and GitHub shows the fixer's reply
-// that builds each. The compare-and-set holds the head, the reviewed head
-// and the attention's words, as `magnum fix --done` does; the attention's
-// rows go, and a fix.decisions_built event says so.
-func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]bool) {
-	if len(built) == 0 {
+// the fixer's decision calls alone and this run covered every one: it built
+// the call's decision (built, decisionsLeft: you decided the call, and
+// GitHub shows the fixer's reply that builds it), or it left the call's
+// thread as an optional call (optional, settleOptional: magnum's own
+// comment shows a P3 whose Fix ends with the author's call, which holds
+// nothing; a fixer from before optional calls left such a P3 as a call to
+// decide). An optional call closes no decision of yours: one you made in
+// its thread is in the run's external file, and decisionsLeft put it back
+// under Needs you unless the fixer built it; so a run without that file (the
+// other reviewers' items unread: no decision was read) counts no optional
+// call here. The compare-and-set holds the head, the reviewed head and the
+// attention's words, as `magnum fix --done` does; the attention's rows go,
+// and a fix.decisions_built event says so, or fix.optional_lifted when an
+// optional call covered a call.
+func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built, optional map[int64]bool) {
+	if len(optional) > 0 {
+		if _, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath))); !ok {
+			optional = nil
+		}
+	}
+	if len(built) == 0 && len(optional) == 0 {
 		return
 	}
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
@@ -415,7 +430,13 @@ func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]b
 		return
 	}
 	msg := deref(pr.LastError)
-	if !callsDecided(msg, func(id int64) bool { return built[id] }) {
+	left := 0 // the attention's calls the run left as optional calls, not built
+	if !callsDecided(msg, func(id int64) bool {
+		if !built[id] && optional[id] {
+			left++
+		}
+		return built[id] || optional[id]
+	}) {
 		return
 	}
 	err = e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, store.PRReviewed, func(u *store.PRUpdate) {
@@ -425,12 +446,19 @@ func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]b
 		u.Where("last_error", msg)
 	})
 	if err != nil {
-		e.log.Info("fix: the PR moved on before the lift of the decisions the fixer built", "subject", job.subject(), "err", err)
+		e.log.Info("fix: the PR moved on before the lift of the calls the fixer built or left optional", "subject", job.subject(), "err", err)
 		return
 	}
 	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRFixCalls(pr.ID))
-	e.event(ctx, "info", job.subject(), "fix.decisions_built", fmt.Sprintf("%s built every decision you made: the review of %s stands, with no new round",
-		job.role.Name, textx.ShortSHA(pr.HeadSHA)), job.eventData())
+	kind, did := "fix.decisions_built", job.role.Name+" built every decision you made"
+	if left > 0 {
+		kind, did = "fix.optional_lifted", fmt.Sprintf("%s left %s of the attention as %s, which %s nothing before the merge", job.role.Name,
+			textx.Count(left, "call", "calls"), textx.Plural(left, "an optional call", "optional calls"), textx.Plural(left, "holds", "hold"))
+		if len(built) > 0 {
+			did = job.role.Name + " built every decision you made and" + strings.TrimPrefix(did, job.role.Name)
+		}
+	}
+	e.event(ctx, "info", job.subject(), kind, fmt.Sprintf("%s: the review of %s stands, with no new round", did, textx.ShortSHA(pr.HeadSHA)), job.eventData())
 }
 
 // keepDecisions is msg, the attention a fix job raises over old, the
