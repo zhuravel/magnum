@@ -21152,27 +21152,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
     footer (up to half of it). It is cleaned when it arrives (P's too: the daemon's text). y runs `StagingDeploy`
     bound to the plan's envs, head and what it named.
   - Where a plan's question goes up (E's and P's, one rule in the factory bar). The plan runs in the background,
-    and the navigation keys work meanwhile, so it can answer anywhere. Its question goes up at once only where its
-    key was pressed (`planHere`): home with its row under the cursor (the filter not typed), or that row's card,
-    the menu closed and no other question or chooser up. Anywhere else the bar holds it (`factoryBar.held`, one per
-    row and key, oldest first), and it never comes up by itself: no y/N appears that the operator did not ask for
-    with a key on that row. E (or P) on its row puts the held question up instead of a new chooser or plan
-    (`raiseHeld`); on another row they act as usual, and the held plan stays. While the footer has nothing else to
-    say, its rule says `plan of PR-12345 ready: E on its row asks` (and how many more): the marker is the footer's
-    last word, after a note and the action in flight, so it never hides another action's outcome or failure; it is
-    in the frame's key. A held plan is dropped (`dropHeld`, before and after each update) once it is `heldPlanFor`
-    old by the screen's clock (the engine's `StagingDeployWait`, 10 minutes, which a test keeps equal: P's y binds
-    nothing of its plan, so its plan must not grow old), once its row leaves home, or once its PR is no longer the
-    row's open PR or magnum's registry says it is merged or closed. The drop's note goes to the action log, and to
-    the footer only while the footer says nothing else.
+    and the navigation keys work meanwhile, so it can answer anywhere. Its question goes up at once only on the
+    same view and the same row where its key was pressed (`planHere`, with the view kept in `planOf`): home with
+    that row under the cursor (the filter not typed), or that row's card, whichever the key was pressed on, the
+    menu closed and no other question or chooser up. Anywhere else, the row's other view included, the bar holds it
+    (`factoryBar.held`, one per row and key, oldest first), and it never comes up by itself: no y/N appears that
+    the operator did not ask for with a key on that row. E (or P) on its row puts the held question up instead of
+    a new chooser or plan (`raiseHeldPlan`), after the refusal a fresh press runs (`stagingRow`, the merge's
+    `actionRefusal`): a refused plan is dropped with the refusal's words. On another row they act as usual, and the
+    held plan stays. While the footer has nothing else to say, its rule says `plan of PR-12345 ready: E on its row
+    asks` (P's says `P on its row on home`, the one place P works), and how many more: the marker is the footer's
+    last word, after a note, a failure and the action in flight, and on home after the refresh's failure, so it
+    hides none of them; a plan that answers away from its row leaves a failure kept in the footer (the pager's, the
+    editor's) in place. The marker is in the frame's key. The 10 minutes after a plan answers (`heldPlanFor`, the
+    engine's `StagingDeployWait`, which a test keeps equal: P's y binds nothing of its plan, so its plan must not
+    grow old) run until y: a held plan is dropped then, and a question still up is taken down (`takeDownOld`,
+    before each update, and the y itself checks it), so a y after them sends nothing. A held plan is dropped as well
+    (`dropHeld`, before and after each update) once its row leaves home, or once its PR is no longer the row's
+    open PR or magnum's registry says it is merged or closed; none of these while a refresh fails, whose rows are
+    stale. The drop's note goes to the action log, and to the footer only while the footer says nothing else (a
+    drop on E's or P's own key always says why).
   - Why this rule. Round one of the review found that a plan answering on the recap took the bar under the recap's
     own "Send 2 answers?", and y deployed (or, for P, on master too, merged the parent) instead of sending the
     answers; and that the question was cut on the other cards, the help, the log and the form (the ready card even
     added its push's "It frees"). Raising a held question once home or the task card was free fixed those, but
     round two found that it then came up by itself: in the update that ended another y-confirmed action (a second y
     deployed), on another task's card, or hours later, when P's y merged a tip the question no longer described; and
-    its "plan is ready" note took the place of every later action's outcome and failure. The ready card adds what
-    its push frees to its own decision's question alone (`askOther`).
+    its "plan is ready" note took the place of every later action's outcome and failure. Round three found the
+    question going up on the row's other view, the marker hiding home's refresh failure and a kept failure, a held
+    plan raised past its key's refusal, P's marker naming a key the card does not have, a raised question with no
+    age bound, and P's question cut on home ("with no conflict" not drawn before y). The ready card adds what its
+    push frees to its own decision's question alone (`askOther`).
   - Following the deploy. The factory bar re-reads no request, and the daemon plans again before it answers, which
     can take minutes; a deploy still pending ends its text saying that it is queued and that `magnum staging <ref>`
     (the PR's own reference) follows it. The task card shows the PR's staging deploys under STAGINGS, from the
@@ -21202,11 +21212,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPlansQuestionWaitsForItsRowsKey, TestAPlansQuestionWaitsWhileTheFilterIsTyped,
   TestAHeldPlanNeverComesUpOnAnotherTasksCard, TestEAndPOnAnotherRowLeaveAHeldPlan,
   TestAHeldPlanIsDroppedWhenItCannotHold, TestAHeldPlanNeverHidesAnotherActionsOutcome,
-  TestAHeldPlanWaitsAsLongAsTheEnginesDeployWait and TestTheReadyCardFreesOnlyItsOwnPushsQuestion (the board's E
-  tests pass unchanged on the shared keys); the cli's TestTheFactoryScreensStagingDeployIsTheBoards,
-  TestTheFactoryScreenReadsItsPRsStagingDeploys and TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the
-  factory's TestTheFactoryStagingClientCannotDeploy, which fails once the fetch clock passes the deploy's git
-  through.
+  TestAHeldPlanWaitsAsLongAsTheEnginesDeployWait, TestTheReadyCardFreesOnlyItsOwnPushsQuestion,
+  TestAPlansQuestionGoesUpAtOnceOnlyOnTheViewWhereItsKeyWasPressed, TestARefreshFailureWinsOverTheHeldMarker,
+  TestAHeldPlanKeepsAFailureInTheFooter, TestRaisingAHeldPlanRunsTheKeysRefusal,
+  TestAPlansQuestionIsTakenDownOnceItsPlanIsTenMinutesOld, TestPsQuestionShowsWholeOnHome and
+  TestTheTaskCardSaysWhatTheResolverDoesForItsPRsDeploy (the board's E tests pass unchanged on the shared keys);
+  the cli's TestTheFactoryScreensStagingDeployIsTheBoards, TestTheFactoryScreenReadsItsPRsStagingDeploys and
+  TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the factory's TestTheFactoryStagingClientCannotDeploy,
+  which fails once the fetch clock passes the deploy's git through.
 
 ## Learned rules
 
