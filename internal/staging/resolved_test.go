@@ -120,6 +120,32 @@ func (w *deployWorld) onlyReadIn(src, dir string) {
 	}
 }
 
+// handOffCmds are the git subcommands the hand-off runs in the mirror,
+// merge-tree's aside: every one runs with lazy fetching off.
+var handOffCmds = []string{"read-tree", "update-index", "write-tree", "hash-object", "ls-tree", "update-ref"}
+
+// noLazyFetchInMirror fails the test unless every hand-off command run in
+// the mirror carries GIT_NO_LAZY_FETCH=1, and some ran.
+func (w *deployWorld) noLazyFetchInMirror() {
+	w.t.Helper()
+	seen := map[string]bool{}
+	for _, c := range w.run.started() {
+		sub := subcommand(c.Args)
+		if !slices.Contains(c.Args, "--git-dir="+w.mirror) || !slices.Contains(handOffCmds, sub) {
+			continue
+		}
+		seen[sub] = true
+		if c.Env["GIT_NO_LAZY_FETCH"] != "1" {
+			w.t.Errorf("%s ran in the mirror with lazy fetching on: %q", sub, c.Args)
+		}
+	}
+	for _, sub := range []string{"read-tree", "update-index", "write-tree", "hash-object"} {
+		if !seen[sub] {
+			w.t.Errorf("no %s ran in the mirror", sub)
+		}
+	}
+}
+
 // A resolved merge enters the treeless mirror without a fetch. PR 3's
 // conflicts are modify/delete (deletedConflict), so the mirror holds no
 // version of either file, and a fetch from the resolver's full clone got a
@@ -127,7 +153,8 @@ func (w *deployWorld) onlyReadIn(src, dir string) {
 // so: "could not fetch <blob> from promisor remote" there, "unresolved
 // deltas" in this world). The hand-off writes the resolver's blobs and its
 // commit into the mirror instead: the deploy pushes the resolver's merge,
-// the same sha, and the resolver's repository is only read.
+// the same sha, the resolver's repository is only read, and no command of
+// the hand-off in the mirror (merge-tree's aside) may fetch lazily.
 func TestAResolvedMergeEntersTheTreelessMirrorWithoutAFetch(t *testing.T) {
 	t.Parallel()
 	w := newResolvedWorld(t)
@@ -158,13 +185,14 @@ func TestAResolvedMergeEntersTheTreelessMirrorWithoutAFetch(t *testing.T) {
 		t.Error("the resolver's repository changed during the hand-off")
 	}
 	w.onlyReadIn(src, dir)
+	w.noLazyFetchInMirror()
 }
 
 // A resolver's merge that also changes a path no conflict names (app/a.rb)
 // is refused at its hand-off: merge-tree's tree with the resolver's
 // conflicted paths put in is not its tree. The deploy fails at merge,
-// saying so, the merge commit never enters the mirror, and nothing is
-// pushed.
+// naming the path, the merge commit never enters the mirror, and nothing
+// is pushed.
 func TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused(t *testing.T) {
 	t.Parallel()
 	w := newDeployWorld(t)
@@ -176,9 +204,9 @@ func TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused(t *testing.T) {
 	dir, merge := w.resolverRepo(2, []string{w.tip, w.heads[2]}, map[string]string{"app/s.rb": "resolved\n", "app/a.rb": "sneaked in\n"})
 	res.answer(ResolveResult{State: ResolveDone, MergeSHA: merge, Dir: dir})
 	e := w.drive(c, id, ended)
-	if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "beyond the conflicted paths") ||
+	if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "beyond the conflicted paths: app/a.rb") ||
 		!strings.Contains(e.Why, "nothing was pushed") {
-		t.Errorf("ended: %+v, want failed at merge, a change beyond the conflicted paths, nothing pushed", e)
+		t.Errorf("ended: %+v, want failed at merge, a change beyond the conflicted paths naming app/a.rb, nothing pushed", e)
 	}
 	w.noPushSince(0, w.tip)
 	if typ, err := w.deps.Git.(deployGit).objectType(context.Background(), w.mirror, merge); err != nil || typ != "" {
@@ -310,5 +338,172 @@ func TestAHandOffCutAfterItsBlobsResumesAndLeavesNoIndex(t *testing.T) {
 	w.mu.Unlock()
 	if oks != 1 {
 		t.Errorf("merge ok events: %d, want 1", oks)
+	}
+}
+
+// A resolver's merge whose parents are not [tip, head] is refused at its
+// hand-off, before anything is written into the mirror, even when its tree
+// is the right one: [tip, X], X a commit of the head's tree that only the
+// resolver's repository holds, and [head, tip]. The deploy fails at merge,
+// naming the parents; the commit never enters the mirror (whose gc and
+// fetches would trip on a parent it lacks), and nothing is pushed.
+func TestAResolvedMergeWithOtherParentsIsRefusedAtTheHandOff(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		parents func(w *deployWorld, dir string) []string
+	}{
+		{"another second parent of the head's tree", func(w *deployWorld, dir string) []string {
+			x := gitIn(w.t, w.r, dir, "commit-tree", w.heads[2]+"^{tree}", "-p", w.c1, "-m", "not the head")
+			return []string{w.tip, x}
+		}},
+		{"the parents reversed", func(w *deployWorld, _ string) []string { return []string{w.heads[2], w.tip} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newDeployWorld(t)
+			res := w.withResolver()
+			c := w.client()
+			defer c.Close()
+			id := w.deploy(c, 2)
+			w.drive(c, id, func(e Effect) bool { return len(res.requests()) == 1 || ended(e) })
+			dir, right := w.resolverRepo(2, []string{w.tip, w.heads[2]}, map[string]string{"app/s.rb": "resolved\n"})
+			args := []string{"commit-tree", right + "^{tree}", "-m", "Merge"}
+			for _, p := range tc.parents(w, dir) {
+				args = append(args, "-p", p)
+			}
+			merge := gitIn(t, w.r, dir, args...)
+			res.answer(ResolveResult{State: ResolveDone, MergeSHA: merge, Dir: dir})
+			e := w.drive(c, id, ended)
+			if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "the resolver's merge's parents are") ||
+				!strings.Contains(e.Why, "nothing was pushed") {
+				t.Errorf("ended: %+v, want failed at merge, naming the parents, nothing pushed", e)
+			}
+			w.noPushSince(0, w.tip)
+			if typ, err := w.deps.Git.(deployGit).objectType(context.Background(), w.mirror, merge); err != nil || typ != "" {
+				t.Errorf("the refused merge is in the mirror: %q, %v", typ, err)
+			}
+		})
+	}
+}
+
+// A hand-off killed in its tree's build leaves its index and the index's
+// lock in the mirror; when the effect then ends without another hand-off
+// (a cancel), both go with it.
+func TestAnIndexAKilledHandOffLeftGoesWhenTheEffectEnds(t *testing.T) {
+	t.Parallel()
+	w := newResolvedWorld(t)
+	index := resolvedIndex(w.mirror, w.id)
+	hit := false
+	w.c.hook = func(_ EffectID, step, point string) error {
+		if step != StepMerge || point != "blobs written" || hit {
+			return nil
+		}
+		hit = true
+		for _, f := range []string{index, index + ".lock"} {
+			if err := os.WriteFile(f, []byte("cut\n"), 0o644); err != nil {
+				t.Error(err)
+			}
+		}
+		return errHook
+	}
+	w.resolve(func(dir string) {
+		writeIn(t, dir, "app/big.rb", bigText("theirs, resolved"))
+		writeIn(t, dir, "app/wide.rb", bigText("wide theirs, resolved"))
+	})
+	for i := 0; !hit && i < 5; i++ {
+		if err := w.c.Step(context.Background()); err != nil && !errors.Is(err, errHook) {
+			t.Fatalf("Step: %v", err)
+		}
+	}
+	if !hit {
+		t.Fatal("the hook never stopped the hand-off after its blobs")
+	}
+	kill(w.c)
+	second := w.client()
+	defer second.Close()
+	if err := second.Cancel(context.Background(), w.id); err != nil {
+		t.Fatal(err)
+	}
+	if e := w.effect(second, w.id); e.State != EffectCancelled {
+		t.Fatalf("after the cancel: %+v", e)
+	}
+	if left, _ := filepath.Glob(filepath.Join(w.mirror, resolvedIndexPrefix+"*")); len(left) > 0 {
+		t.Errorf("left in the mirror after the effect ended: %q", left)
+	}
+}
+
+// A git without cat-file's %(objectmode) (before 2.51) cannot read the
+// resolver's entries: the deploy fails at once, saying it needs git 2.51 or
+// later, rather than trying again for 15 minutes; nothing is pushed.
+func TestAGitWithoutObjectmodeFailsTheHandOffAtOnce(t *testing.T) {
+	t.Parallel()
+	w := newResolvedWorld(t)
+	w.run.mu.Lock()
+	w.run.failArg, w.run.failStderr = "%(objectmode)", "fatal: unknown format element: objectmode\n"
+	w.run.mu.Unlock()
+	w.resolve(func(dir string) {
+		writeIn(t, dir, "app/big.rb", bigText("theirs, resolved"))
+		writeIn(t, dir, "app/wide.rb", bigText("wide theirs, resolved"))
+	})
+	if err := w.c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e := w.effect(w.c, w.id)
+	if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "git 2.51 or later") ||
+		!strings.Contains(e.Why, "nothing was pushed") {
+		t.Errorf("after one Step: %+v, want failed at merge, needing git 2.51 or later", e)
+	}
+	w.noPushSince(0, w.tip)
+}
+
+// treeChanges names each path whose entry differs between two trees and
+// nothing else: a changed file deep in a subtree, a file that took a
+// directory's place (the file and each path the directory held), a
+// directory that went with its last file (that file alone, which a
+// conflict may name), and a new directory's files; it reads only the
+// subtrees whose ids differ and stops at its limit.
+func TestTreeChangesNamesEachDifferingPath(t *testing.T) {
+	t.Parallel()
+	oid := func(c byte) string { return strings.Repeat(string(c), 40) }
+	blob := func(name string, c byte) treeEntry {
+		return treeEntry{Mode: "100644", Type: "blob", OID: oid(c), Path: name}
+	}
+	dir := func(name string, c byte) treeEntry {
+		return treeEntry{Mode: "040000", Type: "tree", OID: oid(c), Path: name}
+	}
+	trees := map[string][]treeEntry{
+		// a: app/{s.rb, deep/x.rb}, lib/only.rb, same/ (untouched), d/k.rb
+		oid('1'): {dir("app", '2'), dir("lib", '3'), dir("same", '4'), dir("d", '5')},
+		oid('2'): {blob("s.rb", 'a'), dir("deep", '6')},
+		oid('6'): {blob("x.rb", 'b')},
+		oid('3'): {blob("only.rb", 'c')},
+		oid('5'): {blob("k.rb", 'd')},
+		// b: app/{s.rb changed, deep/x.rb}, no lib/, same/, d a file, new/n.rb
+		oid('9'): {dir("app", '7'), dir("same", '4'), blob("d", 'e'), dir("new", '8')},
+		oid('7'): {blob("s.rb", 'f'), dir("deep", '6')},
+		oid('8'): {blob("n.rb", '0')},
+	}
+	var read []string
+	list := func(_ context.Context, tree string) ([]treeEntry, error) {
+		read = append(read, tree)
+		entries, ok := trees[tree]
+		if !ok {
+			return nil, fmt.Errorf("no tree %s", short(tree))
+		}
+		return entries, nil
+	}
+	got, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"app/s.rb", "d", "d/k.rb", "lib/only.rb", "new/n.rb"}; !slices.Equal(got, want) {
+		t.Errorf("changes: %q, want %q", got, want)
+	}
+	if slices.Contains(read, oid('4')) || slices.Contains(read, oid('6')) {
+		t.Errorf("read a subtree the same on both sides: %q", read)
+	}
+	if got, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 2); err != nil || len(got) != 2 {
+		t.Errorf("with a limit of 2: %q, %v", got, err)
 	}
 }

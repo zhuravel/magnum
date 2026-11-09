@@ -5363,13 +5363,16 @@ nothing is pushed.
 
 The deploy takes the resolver's merge into its mirror without a fetch: the mirror is treeless and holds hardly any
 file's content, so a fetch from the slot's full clone gets a pack it cannot unpack. It only reads the slot's clone:
-the merge commit, and the mode and content of each conflicted path in it (or that the path is gone). It writes those
-files into the mirror, rebuilds `git merge-tree`'s merge of the tip and the head with them in a temporary index
-inside the mirror's own directory, and writes the merge commit itself only when the rebuilt tree is the merge's:
-the same commit, the same sha, which verify and the push then check as before. A merge that changed any other path
-(or is not of the tip and the head) comes out with another tree and fails the deploy, "it changes a path beyond the
-conflicted paths, or merges other commits", with nothing pushed; so does a conflicted path the merge turned into a
-directory or a submodule, or a resolved file over 8 MiB.
+the merge commit, whose parents must be exactly [tip, head] before anything is written, and the mode and content of
+each conflicted path in it (or that the path is gone). It writes those files into the mirror, rebuilds `git
+merge-tree`'s merge of the tip and the head with them in a temporary index inside the mirror's own directory
+(removed after, and with the deploy when a crash left it), and writes the merge commit itself only when the rebuilt
+tree is the merge's: the same commit, the same sha, which verify and the push then check as before. Nothing in the
+hand-off fetches. A merge that changed any other path comes out with another tree and fails the deploy, naming the
+paths ("differs from merge-tree's merge of the tip and the head beyond the conflicted paths: app/a.rb"), with
+nothing pushed; so does one with other parents, a conflicted path the merge turned into a directory or a submodule,
+and a resolved file over 8 MiB. The hand-off needs git 2.51 or later (`git cat-file`'s `%(objectmode)`); an older
+git fails the deploy at once, saying so.
 
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a

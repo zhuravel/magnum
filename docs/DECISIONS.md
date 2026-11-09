@@ -22145,36 +22145,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   invalid index-pack output". The mirror is a `tree:0` partial clone: it holds commits, the trees and blobs its
   merges read, and no other blob. The slot's full clone takes the mirror's commits as haves and sends a thin pack,
   its new blobs deltified against the tip's or the head's version of the same path; at a modify/delete conflict
-  merge-tree never reads that blob, so the mirror lacks the base, and lazy fetching is off there by design. A small
-  pack went through unpack-objects instead, which writes the commit before it fails, and the old code then took the
-  loose commit as the merge in the mirror, so verify passed and the push failed for 15 minutes on the blob it lacked
-  (how the deploy world showed it). Now `handOver` only reads the resolver's repository (cat-file with no hook, no
-  lazy fetch and no optional lock; the conflicted paths go on stdin, `-Z`, never argv): its commit's raw bytes, its
-  tree, and its mode and blob at each path merge-tree's merge of the tip and the head conflicts in, or that the path
-  is gone. It writes those blobs into the mirror (`hash-object -w`, each id checked), rebuilds merge-tree's tree with
-  them in a temporary index in the mirror's own directory (`magnum-resolve-<effect>.index`, removed after, and
-  before, with its lock, when a killed run left it; `read-tree` of merge-tree's tree needs no fetch, since merge-tree
-  just read those trees, and may fetch one from origin as merge-tree would), and writes the commit's own bytes
-  (`hash-object -t commit -w`) only when the rebuilt tree is the commit's, so it is the same sha, held at
-  `refs/magnum/resolved/<effect>` as before; verify, the push and the watch go on unchanged. The equal tree is the
-  proof: merge-tree's tree differs from the rebuilt one only at the conflicted paths, so a resolver's tree that
-  differs anywhere else changed a path beyond the conflicts or merges other commits, and is refused at the merge
-  step ("it changes a path beyond the conflicted paths, or merges other commits"; verify refused such a merge
-  before, naming the paths, and keeps its own check of the same). A directory or a submodule at a conflicted path, and a
-  resolved file over execx's 8 MiB output cap, are refused too. Rejected: the fetch with lazy fetching on (index-pack
-  would fetch each missing base from origin one by one, and the mirror would take whatever objects the clone's
-  upload-pack chose), a pack without deltas (git's fetch has no switch for it, and it still brings the clone's
-  choice of objects), building the trees with `mktree` per directory (more code than the index, which merge-tree's
-  read of the trees already makes cheap), and writing only the commit and leaving the tree to verify (verify's
-  diff needs the resolver's trees in the mirror, which only the rebuild writes). `fetchResolved`, its upload-pack
-  options and TestTheResolverFetchPinsItsOptionsOnUploadPack are gone. Tests (each failed first): staging's
+  merge-tree never reads that blob, so the mirror lacks the base, and lazy fetching is off there by design. (In the
+  test world's small pack, unpack-objects wrote the commit before it failed, and the old code took that loose
+  commit as the merge, so the push failed instead.) Now `handOver` only reads the resolver's repository (cat-file
+  and ls-tree with no hook, no lazy fetch and no optional lock; the conflicted paths go on stdin, `-Z`, never
+  argv): its commit's raw bytes, whose parents must be exactly [tip, head] before anything is written, its tree,
+  and its mode and blob at each path merge-tree's merge of the tip and the head conflicts in, or that the path is
+  gone. It writes those blobs into the mirror (`hash-object -w`, each id checked), rebuilds merge-tree's tree with
+  them in a temporary index in the mirror's own directory (`magnum-resolve-<effect>.index`, removed after, before
+  when a killed run left it, and when the effect ends), and writes the commit's own bytes (`hash-object -t commit
+  -w`) only when the rebuilt tree is the commit's, so it is the same sha, held at `refs/magnum/resolved/<effect>`
+  as before; verify, the push and the watch go on unchanged. No command of the hand-off in the mirror fetches
+  lazily, `read-tree` included: merge-ort skips a subtree that is the same on all sides without reading it, but
+  each lazy fetch of the base's, the tip's or the head's root tree is `fetch --filter=blob:none`, which brings that
+  tree's whole closure, and merge-tree wrote every other tree of its result. The equal tree is the proof: the
+  rebuilt tree is merge-tree's with the conflicted paths alone swapped (checked, since `update-index` would let a
+  file take a directory's place without a word), so a resolver's tree that differs anywhere changed a path beyond
+  the conflicts, and is refused at the merge step, naming the paths as verify did ("differs from merge-tree's merge
+  of the tip and the head beyond the conflicted paths: app/a.rb"); verify keeps its own check of the same. A
+  directory or a submodule at a conflicted path, and a resolved file over execx's 8 MiB output cap, are refused too.
+  The batch check's `%(objectmode)` needs git 2.51 or later; an older git ends the deploy at once, saying so, rather
+  than after 15 minutes of tries. Rejected: the fetch with lazy fetching on (index-pack would fetch each missing
+  base from origin one by one, and the mirror would take whatever objects the clone's upload-pack chose), a pack
+  without deltas (git's fetch has no switch for it, and it still brings the clone's choice of objects), building
+  the trees with `mktree` per directory (more code than the index, which merge-tree's trees already make cheap),
+  and writing only the commit and leaving the tree to verify (verify's diff needs the resolver's trees in the
+  mirror, which only the rebuild writes). `fetchResolved`, its upload-pack options and
+  TestTheResolverFetchPinsItsOptionsOnUploadPack are gone. Tests (each failed first): staging's
   TestAResolvedMergeEntersTheTreelessMirrorWithoutAFetch (a modify/delete conflict of two 2000-line files, whose
-  blobs the mirror is checked to lack; the resolver's clone unchanged on disk and every command there a read),
-  TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused, TestTheRebuiltTreeTakesTheResolversRemovalsAndModes (a
-  removed path, an executable file, a symlink) and TestAHandOffCutAfterItsBlobsResumesAndLeavesNoIndex (killed after
-  the blob writes with the index and its lock left: the next Step hands it off, one ref, no index, one push);
-  TestAResolvedMergeTheMirrorHoldsAlreadyIsHeldByItsRef replaces the failed-fetch case. Taking out the tree check,
-  the modes, the removal, the clean-up before or after, or the src reads' no-lazy-fetch each fails one of them.
+  blobs the mirror is checked to lack; the resolver's clone unchanged on disk, every command there a read, and
+  every hand-off command in the mirror run with lazy fetching off),
+  TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused (naming app/a.rb),
+  TestAResolvedMergeWithOtherParentsIsRefusedAtTheHandOff ([tip, X] with X of the head's tree,
+  and reversed; the commit never in the mirror), TestTheRebuiltTreeTakesTheResolversRemovalsAndModes (a removed
+  path, an executable file, a symlink), TestAHandOffCutAfterItsBlobsResumesAndLeavesNoIndex (killed after the blob
+  writes with the index and its lock left: the next Step hands it off, one ref, no index, one push),
+  TestAnIndexAKilledHandOffLeftGoesWhenTheEffectEnds (the same kill, then a cancel),
+  TestAGitWithoutObjectmodeFailsTheHandOffAtOnce and TestTreeChangesNamesEachDifferingPath (the walk that names
+  the paths and checks the swap); TestAResolvedMergeTheMirrorHoldsAlreadyIsHeldByItsRef replaces the failed-fetch
+  case, and TestAResolversMergeOutsideTheRulesIsNeverPushed's parents cases now end at the merge step. Taking out
+  the tree check, the parents check, the modes, the removal, the clean-up before, after or at the end, or the
+  no-lazy-fetch of the src reads or of read-tree each fails one of them.
 
 ## Learned rules
 

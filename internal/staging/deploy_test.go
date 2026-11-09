@@ -137,9 +137,10 @@ func TestAResolversMergeIsVerifiedThenPushed(t *testing.T) {
 	}
 }
 
-// A resolver's merge whose parents are not [tip, head] fails at verify and
-// is never pushed (one that changes a path outside the conflicts is refused
-// before, at its hand-off: TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused).
+// A resolver's merge whose parents are not [tip, head] is refused at its
+// hand-off (TestAResolvedMergeWithOtherParentsIsRefusedAtTheHandOff) and
+// never pushed, as one that changes a path outside the conflicts is
+// (TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused).
 func TestAResolversMergeOutsideTheRulesIsNeverPushed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -166,8 +167,8 @@ func TestAResolversMergeOutsideTheRulesIsNeverPushed(t *testing.T) {
 			dir, merge := w.resolverRepo(2, tc.parents(w), tc.files)
 			res.answer(ResolveResult{State: ResolveDone, MergeSHA: merge, Dir: dir})
 			e := w.drive(c, id, ended)
-			if e.State != EffectFailed || e.Step != StepVerify || !strings.Contains(e.Why, tc.why) || !strings.Contains(e.Why, "nothing was pushed") {
-				t.Errorf("ended: %+v, want failed at verify, %q", e, tc.why)
+			if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, tc.why) || !strings.Contains(e.Why, "nothing was pushed") {
+				t.Errorf("ended: %+v, want failed at merge, %q", e, tc.why)
 			}
 			w.noPushSince(0, w.tip)
 			if got := gitIn(t, w.r, w.mirror, "for-each-ref", resolvedPrefix); got != "" {

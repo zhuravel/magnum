@@ -67,16 +67,19 @@ import (
 // The resolver's merge is handed off, not fetched: a fetch from its full
 // clone sends a thin pack whose deltas are against blobs the treeless
 // mirror never had, which it may not fetch lazily, so it cannot index it.
-// The hand-off only reads the resolver's repository (cat-file, no hook, no
-// lazy fetch, no optional lock): the commit, its tree, and its mode and blob
-// at each path merge-tree's merge of the tip and the head conflicts in. It
-// writes those blobs into the mirror (each id checked), builds merge-tree's
-// tree with them in a temporary index in the mirror's own directory (gone
-// after, and before when a killed run left it), and only when that tree is
-// the commit's does it write the commit's own bytes, the same sha, and hold
-// it at the effect's resolved ref. A merge whose tree differs changed a path
-// beyond the conflicts, or merged other commits: it is refused, nothing
-// pushed.
+// The hand-off only reads the resolver's repository (cat-file and ls-tree,
+// no hook, no lazy fetch, no optional lock): the commit, whose parents must
+// be [tip, head] before anything is written, its tree, and its mode and
+// blob at each path merge-tree's merge of the tip and the head conflicts
+// in. It writes those blobs into the mirror (each id checked), builds
+// merge-tree's tree with them in a temporary index in the mirror's own
+// directory (gone after, before when a killed run left it, and when the
+// effect ends), and only when that tree is the commit's does it write the
+// commit's own bytes, the same sha, and hold it at the effect's resolved
+// ref. No command of the hand-off in the mirror fetches lazily. A merge
+// whose tree differs changed a path beyond the conflicts: it is refused,
+// naming the paths, nothing pushed. It needs git 2.51 or later (cat-file's
+// %(objectmode)); an older git ends the effect at once.
 
 // EffectID names a deploy effect: <env>-<pr>-<time>-<random>, lower-case
 // letters, digits and dashes.

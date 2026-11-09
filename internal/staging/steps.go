@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,6 +257,13 @@ func (r *stepRun) endWith(ctx context.Context, state, phase, why string) error {
 	}
 	r.c.d.Log.Info("staging: a deploy ended", "repo", r.repo, "effect", r.j.ID, "env", r.j.Env.Name, "by", r.j.By,
 		"state", state, "step", r.j.Step, "merge", short(r.j.Merge))
+	// A hand-off killed in its tree's build left its index: it goes with the
+	// effect (no git, so no mirror flock; the effect's flock is held).
+	if filepath.IsAbs(r.dir) {
+		if err := dropIndex(resolvedIndex(r.dir, r.j.ID)); err != nil {
+			r.c.d.Log.Warn("staging: a hand-off's index not removed", "effect", r.j.ID, "err", errLine(err))
+		}
+	}
 	if job != "" && r.c.d.Resolver != nil {
 		if err := r.c.d.Resolver.Cancel(ctx, job); err != nil {
 			r.c.d.Log.Warn("staging: the resolver's job not cancelled", "effect", r.j.ID, "err", errLine(err))
@@ -570,19 +578,23 @@ func (r *stepRun) resolution(ctx context.Context) error {
 }
 
 // handOver puts the resolver's merge sha, a commit in its repository's git
-// dir src, into the mirror without a fetch, which cannot work: the treeless
-// mirror holds commits, the trees and blobs its merges read, and no other
-// blob; the full clone sends a thin pack whose deltas are against blobs of
-// the tip or the head it takes the mirror to hold, and the mirror never
-// fetches a missing one lazily there. So it reads, in src alone and never writing there, the commit, its
-// tree and its entry at each path merge-tree's merge of the tip and the
-// head conflicts in; it writes those blobs into the mirror, rebuilds
-// merge-tree's tree with the resolver's entries at those paths (absent
-// ones removed), and only when that tree is the commit's writes the commit
-// itself, the same bytes and so the same sha, and holds it at the effect's
-// resolved ref. The equal tree is the proof: the merge changes nothing but
-// the conflicted paths. refused says why the merge is refused; err is a
-// passing failure. The caller holds the mirror's flock.
+// dir src, into the mirror without a fetch, which cannot work: the
+// treeless mirror holds commits, the trees and blobs its merges read, and
+// no other blob; the full clone sends a thin pack whose deltas are against
+// blobs of the tip or the head it takes the mirror to hold, and the mirror
+// never fetches a missing one lazily there. So it reads, in src alone and
+// never writing there, the commit (whose parents must be [tip, head]
+// before anything is written), its tree and its entry at each path
+// merge-tree's merge of the tip and the head conflicts in. It writes those
+// blobs into the mirror, rebuilds merge-tree's tree with the resolver's
+// entries at those paths (absent ones removed), checks the rebuilt tree
+// differs from merge-tree's at those paths alone (update-index would let
+// a file take a directory's place silently), and only when it is the
+// commit's tree writes the commit itself, the same bytes and so the same
+// sha, and holds it at the effect's resolved ref. The equal tree is the
+// proof that the merge changes nothing but the conflicted paths; a tree
+// that differs is refused, naming the paths. refused says why the merge is
+// refused; err is a passing failure. The caller holds the mirror's flock.
 func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha string) (string, error) {
 	typ, err := r.g.srcType(ctx, src, r.dir, sha)
 	switch {
@@ -597,16 +609,22 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 	if err != nil {
 		return "", err
 	}
-	tree, _ := commitFields(raw)
-	if !isOID(tree) {
+	tree, parents := commitFields(raw)
+	switch want := []string{r.j.Tip, r.j.PR.Head}; {
+	case !isOID(tree):
 		return "the resolver's merge " + short(sha) + " names no tree", nil
+	case !slices.Equal(parents, want):
+		return fmt.Sprintf("the resolver's merge's parents are %s, not [tip %s, head %s]", shorts(parents), short(want[0]), short(want[1])), nil
 	}
 	base, conflicts, err := r.g.mergeTree(ctx, r.dir, env, r.j.Tip, r.j.PR.Head)
 	if err != nil {
 		return "", fmt.Errorf("merge-tree: %w", err)
 	}
 	entries, err := r.g.srcEntries(ctx, src, r.dir, sha, conflicts)
-	if err != nil {
+	switch {
+	case errors.Is(err, errGitTooOld):
+		return err.Error(), nil
+	case err != nil:
 		return "", err
 	}
 	for _, e := range entries {
@@ -638,13 +656,30 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 	if err := r.at(StepMerge, "blobs written"); err != nil {
 		return "", err
 	}
-	built, err := r.g.buildTree(ctx, r.dir, env, resolvedIndex(r.dir, r.j.ID), base, entries)
+	built, err := r.g.buildTree(ctx, r.dir, resolvedIndex(r.dir, r.j.ID), base, entries)
 	if err != nil {
 		return "", err
 	}
+	inMirror := func(ctx context.Context, t string) ([]treeEntry, error) { return r.g.lsTree(ctx, r.dir, t) }
+	changed, err := treeChanges(ctx, inMirror, inMirror, base, built, len(conflicts)+1)
+	if err != nil {
+		return "", err
+	}
+	if extra := without(changed, conflicts); len(extra) > 0 {
+		return "the resolver's entries at the conflicted paths also change merge-tree's " + listed(extra), nil
+	}
 	if built != tree {
-		return "the resolver's merge is not merge-tree's with only the conflicted paths resolved: it changes a path beyond the " +
-			"conflicted paths, or merges other commits (its tree " + short(tree) + ", rebuilt " + short(built) + ")", nil
+		why := "the resolver's merge differs from merge-tree's merge of the tip and the head beyond the conflicted paths"
+		inSrc := func(ctx context.Context, t string) ([]treeEntry, error) { return r.g.srcTree(ctx, src, r.dir, t) }
+		switch paths, err := treeChanges(ctx, inMirror, inSrc, built, tree, maxListed+1); {
+		case err != nil || len(paths) == 0:
+			why += " (its tree " + short(tree) + ", rebuilt " + short(built) + ")"
+		case len(paths) > maxListed:
+			why += ": " + listed(paths[:maxListed]) + " and more"
+		default:
+			why += ": " + listed(paths)
+		}
+		return why, nil
 	}
 	id, err := r.g.writeObject(ctx, r.dir, "commit", raw)
 	switch {
@@ -655,6 +690,73 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 	}
 	r.j.Held = true // its ref goes when the effect ends
 	return "", r.g.keepMerge(ctx, r.dir, resolvedRef(r.j.ID), sha)
+}
+
+// treeChanges walks the trees a and b from their roots, listing each with
+// its own lister, descending only where the ids differ, and returns the
+// paths whose entries differ, at most limit: a file, a symlink or a
+// submodule is named; a tree on one side alone is walked against nothing,
+// so each path under it is named (a directory that the removal of its last
+// file took away names that file).
+func treeChanges(ctx context.Context, listA, listB func(context.Context, string) ([]treeEntry, error), a, b string, limit int) ([]string, error) {
+	list := func(l func(context.Context, string) ([]treeEntry, error), t string) ([]treeEntry, error) {
+		if t == "" {
+			return nil, nil
+		}
+		return l(ctx, t)
+	}
+	var out []string
+	var walk func(a, b, prefix string) error
+	walk = func(a, b, prefix string) error {
+		if a == b || len(out) >= limit {
+			return nil
+		}
+		ea, err := list(listA, a)
+		if err != nil {
+			return err
+		}
+		eb, err := list(listB, b)
+		if err != nil {
+			return err
+		}
+		pairs := map[string]*[2]treeEntry{}
+		var names []string
+		for i, entries := range [][]treeEntry{ea, eb} {
+			for _, e := range entries {
+				if pairs[e.Path] == nil {
+					pairs[e.Path] = &[2]treeEntry{}
+					names = append(names, e.Path)
+				}
+				pairs[e.Path][i] = e
+			}
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			x, y := pairs[name][0], pairs[name][1]
+			if x == y || len(out) >= limit {
+				continue
+			}
+			if x.Type != "tree" && y.Type != "tree" {
+				out = append(out, prefix+name)
+				continue
+			}
+			if x.Type != "" && x.Type != "tree" || y.Type != "" && y.Type != "tree" {
+				out = append(out, prefix+name) // a file where the other side has a directory
+			}
+			var ta, tb string
+			if x.Type == "tree" {
+				ta = x.OID
+			}
+			if y.Type == "tree" {
+				tb = y.OID
+			}
+			if err := walk(ta, tb, prefix+name+"/"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return out, walk(a, b, "")
 }
 
 // checked is what checkMerge found: ok, why it fails the effect, why it

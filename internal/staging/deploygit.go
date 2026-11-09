@@ -50,6 +50,10 @@ var blobModes = []string{"100644", "100755", "120000"}
 // MaxOutput, which no git command's output can carry whole.
 var errObjectTooLarge = fmt.Errorf("the object is over %d MiB", execx.MaxOutput>>20)
 
+// errGitTooOld is srcEntries' error when git's cat-file lacks -Z (git 2.42)
+// or the %(objectmode) atom (git 2.51): no try with this git can pass.
+var errGitTooOld = errors.New("the hand-off needs git 2.51 or later (cat-file's %(objectmode)); this git is older")
+
 // treeEntry is a path's entry in a commit's tree: its mode, type and id;
 // an empty Type is a path the tree does not have.
 type treeEntry struct {
@@ -96,17 +100,23 @@ type deployGit interface {
 	// in src, as git stores it; errObjectTooLarge past MaxOutput.
 	srcObject(ctx context.Context, src, mirror, typ, sha string) ([]byte, error)
 	// srcEntries is the entry of each of paths in commit sha's tree in src,
-	// in paths' order; a path the tree lacks has no Type.
+	// in paths' order; a path the tree lacks has no Type. errGitTooOld when
+	// git cannot answer.
 	srcEntries(ctx context.Context, src, mirror, sha string, paths []string) ([]treeEntry, error)
+	// srcTree lists the tree tree in src (its entries, Path a name).
+	srcTree(ctx context.Context, src, mirror, tree string) ([]treeEntry, error)
+	// lsTree lists the tree tree in the mirror (its entries, Path a name),
+	// never fetching it.
+	lsTree(ctx context.Context, dir, tree string) ([]treeEntry, error)
 	// writeObject writes data into the mirror as an object of type typ
 	// (blob, commit) and returns its id.
 	writeObject(ctx context.Context, dir, typ string, data []byte) (string, error)
 	// buildTree writes the tree of base with each of entries put in at its
 	// path, or removed when it has no Type, and returns its id. It builds
 	// it in the temporary index at index, in the mirror, which goes before
-	// (a killed run's) and after. env is the fetch's: reading base may
-	// fetch a tree the mirror lacks.
-	buildTree(ctx context.Context, dir string, env map[string]string, index, base string, entries []treeEntry) (string, error)
+	// (a killed run's) and after. Nothing is fetched: base is merge-tree's
+	// tree, every subtree of which the mirror holds.
+	buildTree(ctx context.Context, dir, index, base string, entries []treeEntry) (string, error)
 	// deleteRef deletes one of the effect refs (resolved or merge); an
 	// absent one is no error.
 	deleteRef(ctx context.Context, dir, ref string) error
@@ -304,6 +314,18 @@ func resolvedIndex(dir string, id EffectID) string {
 // resolvedIndexPrefix starts the name of every hand-off's index.
 const resolvedIndexPrefix = "magnum-resolve-"
 
+// dropIndex removes the hand-off index at index and its lock, which a
+// killed run may have left; absent ones are no error.
+func dropIndex(index string) error {
+	var errs []error
+	for _, f := range []string{index + ".lock", index} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // srcCmd is `git --git-dir=<src> <gitOptions> args...` in the resolver's
 // repository, which only reads it: in src's parent with no search for a
 // repository above it, git's HOME the mirror root's (gitHome), no hook, no
@@ -359,7 +381,10 @@ func (g *execGit) srcObject(ctx context.Context, src, mirror, typ, sha string) (
 
 // srcEntries asks cat-file for <sha>:<path> of each path on stdin, NUL
 // separated: no path reaches argv or a pathspec, and any byte a path holds
-// but NUL is its own.
+// but NUL is its own. cat-file answers "missing" both for a path the tree
+// lacks and for an entry whose object src lacks; either is taken as
+// removed, and a removal the resolver did not make only ever ends in the
+// rebuilt tree's mismatch, which names the path.
 func (g *execGit) srcEntries(ctx context.Context, src, mirror, sha string, paths []string) ([]treeEntry, error) {
 	if err := checkSrc(src, sha); err != nil || len(paths) == 0 {
 		return nil, err
@@ -374,7 +399,10 @@ func (g *execGit) srcEntries(ctx context.Context, src, mirror, sha string, paths
 	c := g.srcCmd(src, mirror, "resolver entries", "cat-file", "-Z", "--batch-check=%(objectmode) %(objecttype) %(objectname)")
 	c.Stdin = in.Bytes()
 	res, err := g.run.Run(ctx, c)
+	ee, exited := errors.AsType[*execx.ExitError](err)
 	switch {
+	case exited && (strings.Contains(ee.Stderr, "unknown format element: objectmode") || strings.Contains(ee.Stderr, "unknown switch `Z'")):
+		return nil, errGitTooOld
 	case err != nil:
 		return nil, err
 	case res.Truncated:
@@ -402,6 +430,49 @@ func (g *execGit) srcEntries(ctx context.Context, src, mirror, sha string, paths
 	return out, nil
 }
 
+func (g *execGit) srcTree(ctx context.Context, src, mirror, tree string) ([]treeEntry, error) {
+	if err := checkSrc(src, tree); err != nil {
+		return nil, err
+	}
+	res, err := g.run.Run(ctx, g.srcCmd(src, mirror, "resolver tree", "ls-tree", "-z", "--end-of-options", tree))
+	if err != nil {
+		return nil, err
+	}
+	return parseTree(res)
+}
+
+func (g *execGit) lsTree(ctx context.Context, dir, tree string) ([]treeEntry, error) {
+	if err := checkRevs(tree); err != nil {
+		return nil, err
+	}
+	res, err := g.run.Run(ctx, g.cmd(dir, "tree", readTimeout, false, false, nil, "ls-tree", "-z", "--end-of-options", tree))
+	if err != nil {
+		return nil, err
+	}
+	return parseTree(res)
+}
+
+// parseTree reads `ls-tree -z`'s entries: <mode> <type> <id> TAB <name>,
+// NUL separated.
+func parseTree(res execx.Result) ([]treeEntry, error) {
+	if res.Truncated {
+		return nil, errors.New("ls-tree's output was cut")
+	}
+	var out []treeEntry
+	for rec := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if rec == "" {
+			continue
+		}
+		meta, name, ok := strings.Cut(rec, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 || !isOID(f[2]) || name == "" {
+			return nil, errors.New("ls-tree printed an entry it should not")
+		}
+		out = append(out, treeEntry{Mode: f[0], Type: f[1], OID: f[2], Path: name})
+	}
+	return out, nil
+}
+
 func (g *execGit) writeObject(ctx context.Context, dir, typ string, data []byte) (string, error) {
 	if typ != "commit" && typ != "blob" {
 		return "", fmt.Errorf("object type %q refused", typ)
@@ -419,7 +490,7 @@ func (g *execGit) writeObject(ctx context.Context, dir, typ string, data []byte)
 	return id, nil
 }
 
-func (g *execGit) buildTree(ctx context.Context, dir string, env map[string]string, index, base string, entries []treeEntry) (string, error) {
+func (g *execGit) buildTree(ctx context.Context, dir, index, base string, entries []treeEntry) (string, error) {
 	if err := checkRevs(base); err != nil {
 		return "", err
 	}
@@ -428,28 +499,22 @@ func (g *execGit) buildTree(ctx context.Context, dir string, env map[string]stri
 	}
 	// A killed run's index, or its lock, is this effect's alone: the
 	// mirror's flock serializes every git in it.
-	drop := func() error {
-		var errs []error
-		for _, f := range []string{index + ".lock", index} {
-			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				errs = append(errs, err)
-			}
-		}
-		return errors.Join(errs...)
-	}
-	if err := drop(); err != nil {
+	if err := dropIndex(index); err != nil {
 		return "", err
 	}
-	defer func() { _ = drop() }()
-	run := func(label string, timeout time.Duration, fetchEnv map[string]string, stdin []byte, args ...string) (execx.Result, error) {
-		c := g.cmd(dir, label, timeout, true, fetchEnv != nil, fetchEnv, args...)
+	defer func() { _ = dropIndex(index) }()
+	// Never a lazy fetch: the mirror holds every subtree of merge-tree's
+	// tree. merge-ort takes a subtree that is the same on all sides without
+	// reading it, but each lazy fetch of the base's, the tip's or the head's
+	// root tree is `fetch --filter=blob:none`, which brings that tree's whole
+	// closure, and every other tree in base merge-tree wrote itself.
+	run := func(label string, stdin []byte, args ...string) (execx.Result, error) {
+		c := g.cmd(dir, label, readTimeout, true, false, nil, args...)
 		c.Env["GIT_INDEX_FILE"] = index
 		c.Stdin = stdin
 		return g.run.Run(ctx, c)
 	}
-	// merge-tree read these trees a moment ago, so the mirror holds them;
-	// one it lacks is fetched from origin, as merge-tree would.
-	if _, err := run("resolved tree", mergeTimeout, env, nil, "read-tree", base); err != nil {
+	if _, err := run("resolved tree", nil, "read-tree", base); err != nil {
 		return "", err
 	}
 	var in bytes.Buffer
@@ -465,11 +530,11 @@ func (g *execGit) buildTree(ctx context.Context, dir string, env map[string]stri
 			in.WriteString(e.Mode + " " + e.OID + "\t" + e.Path + "\x00")
 		}
 	}
-	if _, err := run("resolved entries", readTimeout, nil, in.Bytes(), "update-index", "-z", "--index-info"); err != nil {
+	if _, err := run("resolved entries", in.Bytes(), "update-index", "-z", "--index-info"); err != nil {
 		return "", err
 	}
 	// --missing-ok: the mirror holds few blobs but the resolved ones.
-	res, err := run("resolved write-tree", readTimeout, nil, nil, "write-tree", "--missing-ok")
+	res, err := run("resolved write-tree", nil, "write-tree", "--missing-ok")
 	if err != nil {
 		return "", err
 	}
