@@ -115,6 +115,16 @@ type Jira struct {
 	Status JiraStatus `json:"status"`
 }
 
+// JiraOf is the Jira of a task's issue key with status: the zero Jira (no
+// issue) for a key that is not one the file takes (ABC-123), so the
+// writer's key never makes Write refuse the status.
+func JiraOf(key string, status JiraStatus) Jira {
+	if !jiraKeyRe.MatchString(key) {
+		return Jira{}
+	}
+	return Jira{Key: key, Status: status}
+}
+
 // Plan counts the questions the task asked you and the ones you answered.
 type Plan struct {
 	QuestionsAsked    int `json:"questions_asked"`
@@ -188,6 +198,27 @@ const (
 // Valid reports whether s is one of the Jira statuses.
 func (s JiraStatus) Valid() bool {
 	return oneOf(s, JiraToDo, JiraInDevelopment, JiraInCodeReview, JiraDone, JiraOther, JiraUnknown)
+}
+
+// JiraStatusOf is the file's word for an issue's status, by Jira's category
+// of it (its statusCategory key) and its name: new is to_do and done is
+// done; indeterminate is in_code_review when the name holds "review" in
+// any case, else in_development; any other category, "" included, is
+// other. A task whose issue was never read is unknown, which the writer
+// says without this.
+func JiraStatusOf(category, name string) JiraStatus {
+	switch category {
+	case "new":
+		return JiraToDo
+	case "done":
+		return JiraDone
+	case "indeterminate":
+		if strings.Contains(strings.ToLower(name), "review") {
+			return JiraInCodeReview
+		}
+		return JiraInDevelopment
+	}
+	return JiraOther
 }
 
 // Proof is what the coding stage proved: nothing yet, the spec red on the

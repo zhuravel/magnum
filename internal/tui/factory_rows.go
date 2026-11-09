@@ -78,6 +78,10 @@ type FactoryRow struct {
 	// Jira is the Jira key of a task keyed by its GitHub number, for the wide
 	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.
 	Jira string
+	// JiraStatus is where the task's Jira issue stands, as the factory
+	// daemon last read it; nil before a read of its key worked, and on a
+	// row of your own PR.
+	JiraStatus *FactoryJiraStatus
 	// MoveShort is Move on a narrow screen.
 	MoveShort string
 	// HelpShort and HelpLong are Help on a narrow and on a wide screen.
@@ -211,6 +215,22 @@ type StagingCell struct {
 	// OnYou marks a conflict that is out of fix tries, which is on the
 	// operator: the cell turns yellow.
 	OnYou bool
+}
+
+// FactoryJiraStatus is where a task's Jira issue stands, as the factory
+// daemon's last read of it that worked says it (its tracking row): the
+// status's name ("In Review", one line of at most 64 bytes), Jira's
+// category of it ("new", "indeterminate", "done"; "" for another word),
+// since when the issue holds it (zero: not known), whether it has an
+// assignee and whether that is you, when the read was, and the failure of
+// the last try since it ("" when that try was the read): a class of
+// failure in fixed words, never ticket text.
+type FactoryJiraStatus struct {
+	Name, Category          string
+	Since                   time.Time
+	Assigned, AssignedToYou bool
+	ReadAt                  time.Time
+	LastError               string
 }
 
 // The data of the factory's cards (spec 9.C): the question card and its recap,
@@ -464,8 +484,11 @@ type TaskCard struct {
 	// the PR's lines (each server's state and how long it has stood); none:
 	// no line.
 	Stagings []StagingCell
-	Stages   []CardStage
-	Agents   []CardAgent
+	// JiraStatus is where the task's Jira issue stands, as its row's
+	// JiraStatus says it; nil: not read.
+	JiraStatus *FactoryJiraStatus
+	Stages     []CardStage
+	Agents     []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

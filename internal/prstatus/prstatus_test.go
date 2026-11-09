@@ -201,6 +201,42 @@ func TestATaskWithoutAJiraIssueHasTheZeroJira(t *testing.T) {
 	}
 }
 
+// A Jira issue's status maps to the file's words by Jira's category of it:
+// new is to_do and done is done; indeterminate is in_code_review when the
+// status's name says review, in any case, else in_development; any other
+// category, an unknown one ("") included, is other. Every word it gives is
+// one Write takes.
+func TestJiraStatusOfMapsTheCategoryAndTheName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		category, name string
+		want           JiraStatus
+	}{
+		{"new", "To Do", JiraToDo},
+		{"new", "Backlog", JiraToDo},
+		{"new", "Ready for review", JiraToDo},
+		{"indeterminate", "In Progress", JiraInDevelopment},
+		{"indeterminate", "In Development", JiraInDevelopment},
+		{"indeterminate", "In Review", JiraInCodeReview},
+		{"indeterminate", "CODE REVIEW", JiraInCodeReview},
+		{"indeterminate", "Peer-reviewing", JiraInCodeReview},
+		{"done", "Done", JiraDone},
+		{"done", "Won't do", JiraDone},
+		{"done", "Reviewed", JiraDone},
+		{"undefined", "Triage", JiraOther},
+		{"", "In Review", JiraOther},
+		{"Indeterminate", "In Progress", JiraOther},
+	} {
+		got := JiraStatusOf(tc.category, tc.name)
+		if got != tc.want {
+			t.Errorf("JiraStatusOf(%q, %q) = %q, want %q", tc.category, tc.name, got, tc.want)
+		}
+		if !got.Valid() {
+			t.Errorf("JiraStatusOf(%q, %q) = %q, a word Write refuses", tc.category, tc.name, got)
+		}
+	}
+}
+
 func TestTheDigestIgnoresKeyOrderAndUpdatedAt(t *testing.T) {
 	t.Parallel()
 	path := statusPath(t)

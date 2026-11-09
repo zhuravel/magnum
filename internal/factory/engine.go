@@ -146,11 +146,12 @@ type Reservation struct {
 	Copy   string
 }
 
-// Jira reads a task's ticket, and searches issues by the words of a free
-// prompt.
+// Jira reads a task's ticket, searches issues by the words of a free
+// prompt, and reads where a task's issue stands (tracking.go).
 type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
 	Search(ctx context.Context, words string, limit int) ([]jira.Ticket, error)
+	Status(ctx context.Context, key string) (jira.IssueStatus, error)
 }
 
 // PRView is a pull request as the factory reads it back after it opened it.
@@ -394,8 +395,11 @@ type Engine struct {
 	// (retryJira).
 	jiraTries map[int64]*jiraTry
 	// jiraLeft is how many of those tries the tick may still make
-	// (jiraTriesPerTick, none after a try Jira did not answer).
+	// (jiraTriesPerTick, none after a try Jira did not answer); the reads
+	// of the tasks' issues spend what the tries leave (trackJira), and trk
+	// is what they logged of their failures.
 	jiraLeft int
+	trk      trackLog
 	// overlaps are the overlap lines the new-task previews read, by
 	// repository and key, and jiraReads Jira's answers to their reads of a
 	// key, a failure included, both kept for previewOverlapTTL
@@ -915,17 +919,19 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // the infrastructure hold and a MySQL ping before a pass that advances),
 // the requests, the published tasks' PRs (followPRs, whether or not the
 // pass advances), their staging status (stagingPass, whose Refreshes run
-// off the loop) and their status files (writePRStatuses), then each live
-// task's advance under its own panic guard (safely). During an
-// infrastructure or a herdr hold no task advances except on the hold's
-// tries, and while herdr does not answer no copy a base run left detached
-// is swept (sweepDetached, each under safely too); a failure that a hold
-// covers costs its task nothing. Last, the alerts are delivered
-// (deliverAlerts). The returned error joins what failed, for the log; each
-// step records its own. A task's held wait is no error of the tick:
-// logHeld logs it once, at WARN only past heldWarnAfter. A task whose stage
-// failed for a cause of its own is advanced no sooner than a poll after the
-// failure (retryLater).
+// off the loop), the ended tasks' last reads of their Jira issues and the
+// PRs' status files (writePRStatuses), then each live task's advance under
+// its own panic guard (safely), then the reads of the other tasks' Jira
+// issues, with what the intake's tries left of the tick's Jira budget
+// (trackJira). During an infrastructure or a herdr hold no task advances
+// except on the hold's tries, and while herdr does not answer no copy a
+// base run left detached is swept (sweepDetached, each under safely too);
+// a failure that a hold covers costs its task nothing. Last, the alerts
+// are delivered (deliverAlerts). The returned error joins what failed, for
+// the log; each step records its own. A task's held wait is no error of
+// the tick: logHeld logs it once, at WARN only past heldWarnAfter. A task
+// whose stage failed for a cause of its own is advanced no sooner than a
+// poll after the failure (retryLater).
 func (e *Engine) Tick(ctx context.Context) error {
 	now := e.now()
 	e.tickAt = now
@@ -975,6 +981,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	states := e.followPRs(ctx, tasks, refs) // its moves are compare-and-set from published: a request's stop since wins
 	stagings := e.stagingPass(tasks, refs, states)
+	e.trackJira(ctx, tasks, true) // the ended tasks' last reads of their issues, which their last status writes carry
 	e.writePRStatuses(ctx, tasks, states, stagings)
 
 	if advance {
@@ -1014,6 +1021,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			}
 		}
 	}
+	e.trackJira(ctx, tasks, false) // the issues' reads take what the intake's tries left of the tick's Jira budget
 	failures = append(failures, e.envFails...)
 	failures = append(failures, e.readFails...)
 	e.envFails, e.readFails = nil, nil

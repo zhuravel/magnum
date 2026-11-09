@@ -118,6 +118,11 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 	}
 	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks,
 		stagings: readStagingScreen(o.Layout), down: o.DaemonDown}
+	if reg != nil {
+		if s.tracking, err = reg.Trackings(ctx); err != nil {
+			return d, err
+		}
+	}
 	for _, t := range tasks {
 		v, err := s.read(t)
 		switch {
@@ -213,6 +218,9 @@ type screen struct {
 	// (ScreenOptions.DaemonDown).
 	stagings map[int64]stagingScreenTask
 	down     bool
+	// tracking is where the tasks' Jira issues stand as the factory daemon
+	// last read them, by task id (tracking.go).
+	tracking map[int64]registry.Tracking
 }
 
 // taskView is what the screen read of a task on home.
@@ -430,9 +438,10 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 		row.Frees = s.frees(v)
 	}
 	row.Stagings = stagingCellsOf(s.cfg, s.stagings, t, cmp.Or(v.link.Number, t.PRNumber), s.down)
+	row.JiraStatus = jiraStatusOf(s.tracking, t)
 	row.Help = s.help(v, row)
 	cards := tui.FactoryCards{Task: s.taskCard(v, row)}
-	cards.Task.Stagings = row.Stagings
+	cards.Task.Stagings, cards.Task.JiraStatus = row.Stagings, row.JiraStatus
 	if s.onQuestions(v) {
 		cards.Question = s.questionCard(v)
 	}
@@ -441,6 +450,17 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 		cards.Bind = tui.ReadyBinding{HeadSHA: v.card.Head, ReportHash: v.card.ReportHash, DiffHash: v.card.DiffHash}
 	}
 	return row, cards, decisions
+}
+
+// jiraStatusOf is where task t's Jira issue stands for the screen, from
+// its tracking row in rows: nil without a row of its key whose read worked.
+func jiraStatusOf(rows map[int64]registry.Tracking, t registry.Task) *tui.FactoryJiraStatus {
+	tr, ok := rows[t.ID]
+	if !ok || t.JiraKey == "" || tr.JiraKey != t.JiraKey || tr.ReadAt.IsZero() {
+		return nil
+	}
+	return &tui.FactoryJiraStatus{Name: tr.Status, Category: tr.Category, Since: tr.Since, Assigned: tr.Assigned,
+		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, LastError: tr.LastError}
 }
 
 // onQuestions reports whether task v waits on your answers to its

@@ -8,8 +8,10 @@ package factory
 // proof, the PR's link) and from magnum's registry, the PR as followPRs
 // read it (who it waits on) and the fix loops' record (Magnum.FixRecords);
 // never the text of a PR, a ticket, a question or an agent. The Jira row
-// stays empty, since the factory keeps no status of the issue and the
-// contract takes a key only with one. The stagings are the PR's staging
+// is the task's Jira issue's key and its status, mapped from its tracking
+// row's last read (tracking.go, prstatus.JiraStatusOf; unknown before a
+// read of the key worked), and empty for a task without one (your words,
+// or a key of another tracker). The stagings are the PR's staging
 // status this tick (stagingPass: each env of its repository, in the
 // config's order, the first also as the staging row); a repository without
 // staging envs has none, and its staging row stays none.
@@ -181,6 +183,9 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 	if p, ok := readProof(dir); ok {
 		s.Code.Proof, s.Code.Specs = proofOf(p, true), len(p.Specs)
 	}
+	if s.Jira, err = e.jiraStatus(ctx, j.t); err != nil {
+		return prstatus.Status{}, err
+	}
 	old, ok, err := prstatus.Read(j.path)
 	if err == nil && ok { // magnum prunes old events: a count never goes down
 		s.FixLoop.Pushes = max(s.FixLoop.Pushes, old.FixLoop.Pushes)
@@ -197,6 +202,27 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 		s.Staging, s.Stagings = old.Staging, old.Stagings
 	}
 	return s, nil
+}
+
+// jiraStatus is task t's Jira issue in the status file's words: none for a
+// task without one (jiraKeyOf), else its key and its status as the
+// tracking row of that key's last read says it (prstatus.JiraStatusOf),
+// unknown before a read of it worked.
+func (e *Engine) jiraStatus(ctx context.Context, t registry.Task) (prstatus.Jira, error) {
+	key := e.jiraKeyOf(t)
+	if key == "" {
+		return prstatus.Jira{}, nil
+	}
+	tr, err := e.reg.Tracking(ctx, t.ID)
+	switch {
+	case errors.Is(err, registry.ErrNotFound):
+		return prstatus.JiraOf(key, prstatus.JiraUnknown), nil
+	case err != nil:
+		return prstatus.Jira{}, err
+	case tr.JiraKey != key || tr.ReadAt.IsZero():
+		return prstatus.JiraOf(key, prstatus.JiraUnknown), nil
+	}
+	return prstatus.JiraOf(key, prstatus.JiraStatusOf(tr.Category, tr.Status)), nil
 }
 
 // planOf counts the questions qs asked you that stand (open or answered;

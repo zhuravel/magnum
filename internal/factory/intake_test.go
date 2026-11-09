@@ -37,6 +37,9 @@ type jiraSite struct {
 	asked    []string       // the keys of the issue reads
 	searched []string       // the JQL of the searches
 	refused  map[string]int // an HTTP status per key, which its read answers with
+	// statusReads counts the tick's reads of the tasks' statuses
+	// (tracking.go), which calls and asked leave out.
+	statusReads int
 	// searchGate, set before any search, holds each search until it closes;
 	// searching gets a value as one starts to wait.
 	searchGate chan struct{}
@@ -72,10 +75,6 @@ func (s *jiraSite) curl(c execx.Cmd) (execx.Result, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls++
-	if s.down != 0 {
-		return execx.Result{Code: s.down}, &execx.ExitError{Cmd: c, Code: s.down}
-	}
 	var raw string
 	for line := range strings.SplitSeq(string(c.Stdin), "\n") {
 		if v, ok := strings.CutPrefix(line, "url = "); ok {
@@ -85,6 +84,13 @@ func (s *jiraSite) curl(c execx.Cmd) (execx.Result, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return execx.Result{}, err
+	}
+	if u.Query().Get("fields") == "status,assignee,created" { // the tick's read of a task's issue (tracking.go): counted apart
+		return s.status(c, strings.TrimPrefix(u.Path, "/rest/api/2/issue/"))
+	}
+	s.calls++
+	if s.down != 0 {
+		return execx.Result{Code: s.down}, &execx.ExitError{Cmd: c, Code: s.down}
 	}
 	switch {
 	case strings.HasPrefix(u.Path, "/rest/api/2/issue/"):
@@ -106,6 +112,22 @@ func (s *jiraSite) curl(c execx.Cmd) (execx.Result, error) {
 		return execx.Result{Stdout: []byte(body + "\n200")}, nil
 	}
 	return execx.Result{Stdout: []byte("{}\n404")}, nil
+}
+
+// status answers the tick's read of key's status, which the counts of the
+// reads and the calls leave out (statusReads counts it): down as the site
+// is, a known issue in To Do since its creation, else 404.
+func (s *jiraSite) status(c execx.Cmd, key string) (execx.Result, error) {
+	s.statusReads++
+	if s.down != 0 {
+		return execx.Result{Code: s.down}, &execx.ExitError{Cmd: c, Code: s.down}
+	}
+	if _, ok := s.issues[key]; !ok {
+		return execx.Result{Stdout: []byte("{}\n404")}, nil
+	}
+	body := `{"key":"` + key + `","fields":{"status":{"id":"1","name":"To Do","statusCategory":{"key":"new"}},"assignee":null,` +
+		`"created":"2026-11-01T09:00:00.000+0000"},"changelog":{"startAt":0,"maxResults":0,"total":0,"histories":[]}}`
+	return execx.Result{Stdout: []byte(body + "\n200")}, nil
 }
 
 func (s *jiraSite) reads() int {

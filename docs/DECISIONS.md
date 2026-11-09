@@ -20710,6 +20710,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the tui's TestEsQuestionShowsTheMigrationsAndTheWarningWhole, TestEsChooserShowsEveryEnvBeforeItsKeys,
   TestAnUnconfirmedStagingDeployIsNotDrawnAsASuccess, TestAStagingDeploysWordsAreSaidOnce and
   TestStagingSummaryClaimsOnlyWhatItKnows.
+- **The factory tracks where each task's Jira issue stands: its status, since when and whether it is assigned
+  to you, read in the tick at most every 10 minutes within the tick's Jira budget, into a `tracking` table that
+  the PR's status file and the screen read** (R26 on the factory, 2026-11-09). Before, Jira was read only at
+  intake, and the status file's `jira` stayed empty. `jira.Client.Status` makes one GET of
+  `/rest/api/2/issue/<KEY>?fields=status,assignee,created&expand=changelog`: the status's name (one line, cut at
+  64 bytes), Jira's category of it (`statusCategory.key`, kept only as a lowercase word), and since when it holds
+  it: the latest changelog entry that moved the issue into its current status (by the status's id, by its name
+  when an entry has no id, whatever the entries' order), else the issue's creation once the whole changelog was
+  read. The issue's own changelog holds only its 100 newest entries, newest first; when none of them moved the
+  issue into its status, the older entries are read from the paged changelog (`/changelog`, oldest first), the
+  page just before them first, at most 5 pages; a move older than that leaves Since zero, not the creation, which
+  would say a wrong date. Assigned to you compares the assignee's accountId with `myself`'s, which the client asks
+  for only for an assigned issue and keeps once per process; no name or email is kept. Failures are the jira
+  package's classes, which carry no ticket text. The registry's migration 0006 adds `tracking`, one row per task
+  written whole: the key the facts are of, `jira_status`, `jira_category`, `jira_since`, `assigned`,
+  `assignee_you`, `read_at` (the read the facts are from), `tried_at` (the last try, worked or not: the pace and
+  the last read count from it) and `last_error` (that try's failure, '' after a read that worked); a failure
+  keeps the facts of the read before. Each tick tracks a task that holds a Jira issue's key (not another
+  tracker's, never read from Jira) and has not ended, and is not waiting for Jira itself (its intake's or its
+  linked key's tries read Jira): due once 10 minutes passed since its last try, those never read (or whose key
+  changed) first, then the longest unread, at most the tracked tasks over the ticks in 10 minutes a tick, rounded
+  up (one a tick up to 13 tasks at the 45-second poll), so the reads come due apart across the ticks rather than in
+  one burst every 10 minutes. The reads spend the tick's
+  `jiraLeft` (3) after the intake's tries, which run in the advance; one Jira did not answer (curl's timeout, an
+  unreachable site, a 5xx, a 429, or the read's own 30-second bound on the loop) ends the tick's reads, as an
+  intake try does. A task that ended (done, stopped, failed) gets one last read, when its row's last try came
+  before its end (`tried_at` not after `updated_at`, so a restart owes it too), in a pass before the PRs' status
+  files are written, so the PR's last write carries it; none after, and none for a task that ended before any
+  read. A failure is recorded on the row and logged once while its cause stays: the site's (Jira down, the
+  credentials, the token file) once for every task, an issue's (404, a malformed answer) once for its task; it
+  fails neither the tick nor the task. The status file's `jira` is the task's key with its status mapped by
+  category (`prstatus.JiraStatusOf`: new `to_do`, done `done`, indeterminate `in_code_review` when the name says
+  review in any case, else `in_development`, any other category `other`), `unknown` before a read of that key
+  worked (the rig without Jira, a first tick), and empty for a task without a Jira issue (your words, another
+  tracker's key) or with a key the file does not take (`prstatus.JiraOf`); the file is still written only when its
+  digest changes, so each published PR's file is written once more when this lands (its key and status join it).
+  The screen's row and task card carry `tui.FactoryJiraStatus` (name, category, since, assigned, to you, read at,
+  the last try's failure), nil before a read of the task's key worked; another session draws the STATUS column and
+  the card line, so this draws nothing. Rejected: reading Jira for every task on every tick (3 reads a tick is the
+  budget, shared with the intake), running the reads before the advance (a restart with many tracked tasks would
+  starve the intake's tries for ticks), the reads off the loop (`jiraLeft` is the loop's own, and the intake reads
+  on the loop too), the issue's creation as Since when the pages ran out, keeping the assignee's name, and a read
+  of every ended task after an upgrade (only a tracked task owes one). Tests: jira's
+  TestStatusReadsTheCurrentStatusAndSinceItsLastTransitionIntoIt (myself once; the entries' order aside; a move out
+  the issue does not show counts none), TestStatusWithoutATransitionHoldsSinceTheIssuesCreation,
+  TestATruncatedChangelogIsPagedBackFromItsNewestMissingEntry, TestAChangelogPastThePagesReadLeavesSinceUnknown,
+  TestStatusTellsWhetherTheIssueIsAssignedToYou, TestAHostileStatusNameIsOneShortLine and
+  TestStatusFailuresAreAClassWithNoTicketText (401, 404, a timeout, a malformed answer, myself's 401, a page's
+  404); the registry's TestTheTrackingMigrationAppliesOnTheTemplateAndAnOlderFile and
+  TestATasksTrackingRowKeepsItsLastReadAndItsLastTry; prstatus's TestJiraStatusOfMapsTheCategoryAndTheName; the
+  factory's TestATasksJiraStatusIsReadAgainAfterTenMinutesAndNotBefore, TestOnlyATasksJiraIssueIsTracked,
+  TestTheJiraReadsKeepWithinTheTicksBudget, TestAnEndedTaskGetsOneLastJiraRead,
+  TestAFailedJiraReadIsLoggedOnceAndFailsNothing, TestTheScreenCarriesATasksJiraStatus,
+  TestThePRStatusFileCarriesTheIssuesJiraStatus and TestAPRStatusFileWithoutAReadSaysTheKeyUnknown; tui's
+  TestATasksJiraStatusReachesTheFactoryScreensModel. Each guard of the pass, the status file's mapping, the screen's
+  key check and the client's cache, paging, order and sanitizing was taken out once, and a test failed.
 
 ## Learned rules
 

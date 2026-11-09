@@ -96,7 +96,8 @@ func (r *followRig) published(marker string) {
 // fixed words: the questions asked and answered, the commits, the proof
 // and its specs, the local review's rounds, verdict and notes left open,
 // the publish time, magnum's fix loop, no staging, and who the PR waits on.
-// The task's Jira key is left out while the factory knows no status of it.
+// The task's Jira key is there with its status unknown: no read of it
+// (the rig has no Jira).
 func TestAPublishedPRsStatusFileHoldsTheFactorysCountsAndWords(t *testing.T) {
 	r := newFollowRig(t)
 	r.published("words")
@@ -112,6 +113,7 @@ func TestAPublishedPRsStatusFileHoldsTheFactorysCountsAndWords(t *testing.T) {
 
 	got := r.mustStatus()
 	want := prstatus.Status{V: prstatus.Version, Digest: got.Digest, UpdatedAt: r.clock.Now().UTC(), TaskID: r.task.ID,
+		Jira:        prstatus.Jira{Key: "PR-12360", Status: prstatus.JiraUnknown},
 		Plan:        prstatus.Plan{QuestionsAsked: 3, QuestionsAnswered: 2},
 		Code:        prstatus.Code{Commits: 3, Proof: prstatus.ProofRedToGreen, Specs: 2},
 		LocalReview: prstatus.LocalReview{Rounds: 2, Verdict: prstatus.VerdictClean, NotesOpen: 3},
