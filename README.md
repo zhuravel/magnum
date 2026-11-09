@@ -4285,7 +4285,21 @@ backoff from 1 to 30 minutes before the next. The reads go as the repository's p
 token in the factory daemon too (into the gh config dir the review daemon writes), so the factory daemon needs the
 App's key as the review daemon does; a gh identity reads as your own login, never as a GitHub token the daemon
 inherited. Until the poll identity has Deployments: read, a pushed PR stays `deploying` and never reads `latest`.
-Nothing deploys from the screen yet. A title
+Nothing deploys from the screen yet. From 180 columns, once the factory daemon read a task's Jira
+issue (**Where the Jira issue stands**, below), a STATUS column after the title says where it stands:
+the status in its category's color (done green, in progress plain, to do dim) and how long the issue has held it
+(`In Code Review 13h`; the name alone when since when is not known), then `not you` or `nobody` when the issue is
+assigned to someone else or to nobody; a dim `?` for a key no read of which worked, and nothing for a task the
+daemon has not read yet or without a Jira key. The column is drawn in the wide layout, else in the 140-column one, with the
+title at 24 cells or more: its room comes from the wide forms (the whole blockers, the staging cells' ages), never
+from another column, and it is the first column a narrower screen gives up. Jira saying the issue is done while the
+task's PR is still open (magnum's registry has it open) is a fact on you, in yellow: the STATUS cell, or `Jira
+done` before what the row waits on when the screen draws no STATUS column. The task card's JIRA line, under
+STAGINGS, says the key, the status and for how long, who has it (`assigned to you`, `assigned to someone else`,
+`unassigned`) and the last read's age, then why the last try failed (`last read 12m ago · now: Jira did not answer
+within 20s`), under the line when it does not fit; a key no read of which worked says so (`no read of it has worked
+yet`), and Jira done while the PR is open adds `Jira says done while #4530 is still open` in yellow. The words are
+the factory's read alone (the status's name, cleaned to one short line), never ticket text. A title
 that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding` beside
 `PR-12400` reads `Coupon rounding`). NEEDS YOU, WAITS ON OTHERS and LEFT ALONE each list their rows oldest wait
 first. The help (`?`) glosses only the words the screen draws. The task
@@ -4722,7 +4736,8 @@ while it stays: Jira down once for every task, a refused issue once for its task
 status file maps the status by its category (new `to_do`, done `done`, indeterminate `in_code_review` when the
 status's name says "review", `in_development` when it says progress or development, else `other`), and has no Jira
 row before the issue's first read; the screen's data carries the status's name, since when, whether it is yours,
-and the last failure, for each task's row and card.
+and the last failure, for each task's row and card, which the screen draws in its STATUS column and the task
+card's JIRA line (the factory's screen, above).
 
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
 wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's

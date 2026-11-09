@@ -20784,6 +20784,51 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPRStatusFileSaysNoJiraWithoutAReadAndUnknownAfterFailedOnes, TestAPublishedTasksFirstReadComesFirst and
   TestABatchWhoseAnswersCannotBeTakenDropsThem; tui's
   TestATasksJiraStatusReachesTheFactoryScreensModel. Each guard was taken out once, and a test failed.
+- **The factory screen draws where each task's Jira issue stands: a STATUS column from 180 columns, the task
+  card's JIRA line, and a yellow fact when Jira says done while the task's PR is still open** (R26's screen,
+  2026-11-09). Before, the screen's data carried `tui.FactoryJiraStatus` (R26) and nothing drew it.
+  - The column, after the title, headed STATUS: the name in its category's style (done green, in progress plain,
+    new dim, as the staging cells' states), its age since Since (none when zero), then `not you` or `nobody` in the
+    accent when the issue is assigned to someone else or to nobody; the name is cut first, the column at most 26
+    cells. A dim `?` for a key no read of which worked; nothing for a row without a status (not tried yet, no Jira
+    key, your PR's row). The tone of the row still applies: a done row, a PR magnum leaves alone, are dim.
+  - Where it fits. From 180 columns and only when a row has a status, the plan first tries the wide layout and the
+    140-column one with the column, the title keeping 24 cells, then the layouts it tried before, unchanged. So the
+    column takes its room from the wide forms (the whole blockers, the staging cells' ages, which the help line and
+    the card say), never from another column or a title under 24 cells, and it is the first column a narrower screen
+    gives up; every frame without a status is the one before, byte for byte. The wide layout alone would almost
+    never hold it: at 200 columns the spec's home (three staging columns, YOUR MOVE at 28) has 21 cells to spare,
+    and a real home adds the PR's CI, FINDINGS and APPR cells.
+  - The yellow fact. Jira's category done while the row's PR is open (`FactoryRow.PR`, set only for a PR magnum's
+    registry has open; on the card `PRInfo`) is on you: close or merge the PR, or move the issue back. The row says it
+    in its STATUS cell (the name yellow) and, without that column, as `Jira done` before what it waits on, where the
+    PR's marks (`muted`, `snoozed`) already sit, so it shows at every width. A merged task's issue, or one whose PR
+    magnum has not read, is no such fact. The card says `Jira says done while #4530 is still open` in yellow after
+    its JIRA line.
+  - The card's JIRA line, under STAGINGS, with or without the PR's lines: the key, the status and for how long, who
+    has it (`assigned to you`, `assigned to someone else`, `unassigned`), the last read's age, then `now:` and the
+    last try's failure in the error's style; a key no read of which worked says `no read of it has worked yet`.
+    What does not fit beside the line goes under it, wrapped to two lines, as GitHub's merge block goes under CI
+    (one helper, `besides`, for both). Every word is the struct's, cleaned again by the painter (`cleanJiraStatus`,
+    a copy: the row and its card share the value).
+  - The help glosses STATUS, its colors and `?`, `not you, nobody`, `Jira done` and JIRA, each within 140 columns.
+  - The PR's status comment (R48) already names the issue's status in its heading since R26 (`· Jira KEY: in code
+    review`, every enum word tested, the key checked again); nothing was added there. Its mapping calls any
+    in-progress status whose name says "review" code review (a design review too), which is R26's choice.
+  - Deviations from the brief, accepted: the column comes from 180 columns, not 200, the width from which the wide
+    layout already gives up the blockers' ends; a status assigned but not known to be you (a failed `myself`, a
+    `jira.PartError`) reads `not you` until the next read, as the data does not tell it apart (the card's `now:` says
+    why).
+  Rejected: the column in the wide layout alone (see above); a hard gate at exactly 200 columns; the column between
+  the key and the PR number, as the audit drew it (the group's label sits there, so it would have no heading); glyphs
+  for the assignee (words read without the help, and need no form per icon mode); the name yellow on the card too
+  (its reason says it); the yellow fact on a PR magnum's registry does not have open (nothing tells it is open).
+  Tests: tui's TestAWideScreenDrawsEachTasksJiraStatusInAColumn, TestTheStatusColumnGoesFirst,
+  TestTheStatusCellIsColoredByItsCategory, TestFactoryJiraFramesNeverOverflow,
+  TestTaskCardSaysWhereItsJiraIssueStands, TestTaskCardsJiraFailureGoesUnderALineItDoesNotFit,
+  TestJiraDoneWhileThePRIsOpenIsAYellowFact, TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen and
+  TestTheHelpGlossesTheJiraStatusWords. The width gate, the title's floor, the open PR's guard (row and card) and
+  the mark's guard without the column were each taken out once, and a test failed.
 
 ## Learned rules
 
