@@ -245,7 +245,8 @@ func (s *screenActions) Fix(ctx context.Context, ref string) (tui.ActionResult, 
 // <ref>: magnum merges <base> at <tip> into <branch> as <bot>, with no
 // conflict?"), the y/N the screen puts before the merge, and what the plan
 // asks about as Parent; an answer that is no plan (nothing to merge) has
-// neither.
+// neither, and the words of a daemon from before the plan are the error
+// (errMergePlanPredates), as on the command's terminal.
 func (s *screenActions) MergeParentPlan(ctx context.Context, ref string) (tui.ActionResult, error) {
 	res, err := s.do(ctx, "merge-parent", func(ctx context.Context, c *Context, d *actDeps) int {
 		return fixMain(ctx, c, d, ref, fixOpts{merge: true, dryRun: true, yes: true})
@@ -254,9 +255,14 @@ func (s *screenActions) MergeParentPlan(ctx context.Context, ref string) (tui.Ac
 		return res, err
 	}
 	for _, r := range res.Requests {
-		if plan, ok := engine.ParseMergePlan(r.Result); ok && r.State == tui.RequestDone {
+		plan, ok := engine.ParseMergePlan(r.Result)
+		switch {
+		case r.State != tui.RequestDone:
+		case ok:
 			a := plan.Asked
 			res.Ask, res.Parent = mergeParentQuestion(plan), &tui.MergeAsked{Head: a.Head, Base: a.Base, Tip: a.Tip, Conflicts: a.Conflicts, At: a.At}
+		case mergePlanPredates(r.Result):
+			return res, errMergePlanPredates
 		}
 	}
 	return res, nil

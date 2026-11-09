@@ -38,7 +38,8 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 			"The daemon refuses, with the reason as its answer, a PR that is not yours or lives in a fork, a fix role that "+
 			"is no fixer App, a base it does not know, a round or fix loop in flight, a pinned PR or slot, a snooze, a person "+
 			"typing in its panes and a paused agent kind. --wait follows the merge to its end; --timeout (default 2h, 0 = no "+
-			"limit) stops following it after that long; `magnum abort` stops it. --dry-run only asks the daemon what would happen.",
+			"limit) stops following it after that long; `magnum abort` stops it. --dry-run only asks the daemon what would happen "+
+			"(with --json, the plan as \"plan\", its words as the request's result).",
 		func(pos []string) int { return runMergeParent(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.wait, "wait", false, "follow the merge until it ends: merged, needs you, aborted or ended")

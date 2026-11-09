@@ -213,9 +213,13 @@ type fixJSON struct {
 	DryRun  bool               `json:"dry_run,omitempty"`
 	Payload *engine.FixPayload `json:"payload,omitempty"`
 	Request *actRequestJSON    `json:"request,omitempty"`
-	State   string             `json:"state"`
-	End     *fixEnding         `json:"end,omitempty"` // with --wait: how the loop ended
-	Error   string             `json:"error,omitempty"`
+	// Plan is the daemon's plan of a merge of the parent (its answer to
+	// `magnum merge-parent --dry-run`, or to any merge under a daemon run
+	// with --dry-run); Request's result is then the plan's words.
+	Plan  *engine.MergePlan `json:"plan,omitempty"`
+	State string            `json:"state"`
+	End   *fixEnding        `json:"end,omitempty"` // with --wait: how the loop ended
+	Error string            `json:"error,omitempty"`
 }
 
 // fixProgress is where progress lines go: stdout, or stderr with --json.
@@ -270,7 +274,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	}
 	question := ""
 	if o.merge && fixAsks(d, o) && !o.json { // the y/N names what the daemon would merge, into which branch, as whom
-		plan, answer, err := mergeParentPlan(ctx, d, payload)
+		plan, answer, err := mergeParentPlan(ctx, c.Stderr, d, payload)
 		if err != nil {
 			return fixFail(c, o, out, err)
 		}
@@ -303,15 +307,22 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		res.printNotes(c.Stderr)
 		return fixFail(c, o, out, errors.New(res.Result()))
 	}
+	// a merge's plan, the answer to a dry run or to any merge under a daemon
+	// run with --dry-run, shows its words, not its JSON line, and starts
+	// nothing
+	plan, planned := engine.ParseMergePlan(res.Result())
+	if planned = planned && o.merge && !res.Pending(); planned {
+		out.Plan, rv.Result = &plan, plan.Text
+	}
 	if !o.json {
-		if plan, ok := engine.ParseMergePlan(res.Result()); ok && o.merge && o.dryRun && !res.Pending() { // its words, not its JSON line
+		if planned {
 			res.printNotes(c.Stderr)
 			fmt.Fprintln(c.Stdout, actClean(plan.Text))
 		} else {
 			res.print(c.Stdout, c.Stderr)
 		}
 	}
-	if !o.wait || o.dryRun || o.off || o.on || o.done || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
+	if !o.wait || o.dryRun || planned || o.off || o.on || o.done || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
 		if o.json {
 			if pr, err := d.Store.PRByID(ctx, t.PR.ID); err == nil {
 				out.State = pr.State
@@ -404,25 +415,46 @@ const mergeParentDry = "dry run: would merge the parent of "
 
 // mergeParentPlan asks the daemon, in a dry run, what a merge of the
 // parent of payload's PR would do, for its y/N: its plan, or answer, the
-// daemon's words when it has none (nothing to merge); a refusal, or an
-// answer still pending, is the error.
-func mergeParentPlan(ctx context.Context, d *actDeps, payload engine.FixPayload) (plan engine.MergePlan, answer string, err error) {
+// daemon's words when it has none (nothing to merge); a refusal, an answer
+// still pending, or the words of a daemon from before the plan
+// (errMergePlanPredates) is the error. Without a plan it prints the
+// request's notes (a build skew) on ew; with one the merge's request does,
+// after the y.
+func mergeParentPlan(ctx context.Context, ew io.Writer, d *actDeps, payload engine.FixPayload) (plan engine.MergePlan, answer string, err error) {
 	payload.DryRun = true
 	q := d.quick()
 	q.NeedDaemon = true
 	res, err := d.reqs().send(ctx, engine.ReqFix, payload, q)
-	switch {
-	case err != nil:
+	if err != nil {
 		return engine.MergePlan{}, "", err
+	}
+	if plan, ok := engine.ParseMergePlan(res.Result()); ok && res.Req.State == store.RequestDone {
+		return plan, "", nil
+	}
+	res.printNotes(ew)
+	switch {
 	case res.Failed():
 		return engine.MergePlan{}, "", errors.New(res.Result())
 	case res.Pending():
 		return engine.MergePlan{}, "", fmt.Errorf("the daemon has not planned the merge within %s (request %d): ask again later", q.Wait, res.ID())
-	}
-	if plan, ok := engine.ParseMergePlan(res.Result()); ok {
-		return plan, "", nil
+	case mergePlanPredates(res.Result()):
+		return engine.MergePlan{}, "", errMergePlanPredates
 	}
 	return engine.MergePlan{}, actClean(res.Result()), nil
+}
+
+// errMergePlanPredates refuses the answer to a dry run of a merge of the
+// parent from a daemon whose build predates the merge's plan
+// (engine.MergePlan): its words alone name nothing the y could bind the
+// merge to.
+var errMergePlanPredates = errors.New("this daemon predates the merge's plan: restart it (`magnum daemon-restart`), then ask again; nothing queued")
+
+// mergePlanPredates reports whether result, the answer to a dry run of a
+// merge of the parent, is the words of a daemon from before the plan: the
+// plan's words with no plan before them.
+func mergePlanPredates(result string) bool {
+	_, ok := engine.ParseMergePlan(result)
+	return !ok && strings.HasPrefix(strings.TrimSpace(result), mergeParentDry)
 }
 
 // mergeParentQuestion is the y/N of plan: "Merge the parent of <PR>:

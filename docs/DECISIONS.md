@@ -16827,15 +16827,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`fixAskedMoved`, `fix.ended`). The plan fetches the base first now (it read the base as last fetched): its
   question named a stale tip otherwise, and the first y after any move of the base was refused. `magnum
   merge-parent --yes` binds nothing and merges the tip its fetch brings, as before; without a terminal the
-  command needs `--yes`, as `magnum staging --deploy` does (it merged unasked). Rejected: merging the tip the
+  command needs `--yes`, as `magnum staging --deploy` does (it merged unasked). The binding reaches the daemon's
+  own push: a fixer's merge of a conflict that `magnum push` hands over (it brings the base's workflow files) is
+  pushed with the daemon's Workflows token only when it merges the tip the question named (`pushHanded`; the
+  fixer may fetch the base again and merge a later tip). A daemon run with `--dry-run` fetches nothing for the
+  plan (`Deps.DryRun`, as on master) and answers every merge with it; the command and the screens print a plan's
+  words wherever it answers, never its JSON line, and `--dry-run --json` gives it as `plan`, `request.result`
+  keeping its words. A daemon from before the plan answers the dry run with its words alone, which bind nothing:
+  the command and `P` refuse it and say to restart the daemon (the skew rule of 2026-10-05 saw no new field in
+  the plan's payload), where they took it for the final answer. Rejected: merging the tip the
   question named after the base moved past it (the PR would stay behind the base the operator meant to merge; a
-  staging deploy refuses a moved head the same way), and comparing the conflicting paths themselves (the same
-  head and tip give the same paths, and the question names their count). Tests, failing first:
+  staging deploy refuses a moved head the same way), comparing the conflicting paths themselves (the same
+  head and tip give the same paths, and the question names their count), and checking the fixer's own push of a
+  merge of another tip at the settle (the pane pushed it, it is on GitHub already, and nothing is left to refuse).
+  Tests, failing first:
   TestAMergePlanAnswersTheHeadTheParentAndTheTipItAsksAbout, TestAMergeBoundToItsQuestionMergesWhatItAskedAbout,
   TestAMergeBoundToItsQuestionIsRefusedWhenWhatItAskedAboutMoved,
-  TestAMergeWhoseBaseMovesBeforeItsJobMergesNothing and TestAFixWithAMergesBindingIsRefused in engine;
-  TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge,
-  TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing, TestMergeParentWithoutATerminalNeedsYes and
+  TestAMergeWhoseBaseMovesBeforeItsJobMergesNothing, TestAFixWithAMergesBindingIsRefused,
+  TestADryRunDaemonsMergeOfTheParentFetchesNothing and TestABoundMergesHandedMergeOfAnotherTipIsNotPushed in
+  engine; TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge,
+  TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing, TestMergeParentWithoutATerminalNeedsYes,
+  TestMergeParentRefusesThePlanOfADaemonThatPredatesIt, TestMergeParentAnsweredWithAPlanPrintsItsWords,
+  TestMergeParentDryRunJSONGivesThePlan and
   TestScreenMergeParentPlansThenMerges in cli; TestPAsksWithTheDaemonsPlanBeforeMergingTheParent,
   TestDashboardPMergesTheParentAfterThePlan and TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan in tui.
 

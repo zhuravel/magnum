@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 const (
@@ -231,5 +232,96 @@ func TestScreenMergeParentPlansThenMerges(t *testing.T) {
 	}
 	if res, err := acts.MergeParentPlan(ctx, "talkable#5"); err == nil || res.Ask != "" || res.Parent != nil {
 		t.Errorf("a refused plan = %+v, %v; want the error and no question", res, err)
+	}
+}
+
+// mergePredates is the refusal of a plan from a daemon whose build
+// predates the merge's plan.
+const mergePredates = "this daemon predates the merge's plan: restart it (`magnum daemon-restart`), then ask again; nothing queued"
+
+// A daemon from before the merge's plan answers the dry run with its words
+// alone, which name no plan the y could be bound to: `magnum merge-parent`
+// asks no y/N then and queues nothing, says to restart the daemon and
+// warns of its older build; the screens' P makes it the action's error,
+// with no question.
+func TestMergeParentRefusesThePlanOfADaemonThatPredatesIt(t *testing.T) {
+	h := newActHarness(t)
+	h.c.Version, h.d.Version = "v0.9.0", "v0.9.0"
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	recordBuild(t, h.st, engine.Build{Version: "v0.8.0", StartedAt: h.now.Add(-time.Hour)})
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, mergePlan) }
+	h.stdin("y\n")
+	if code := h.cmd("merge-parent", "5"); code != 1 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.errb.String(), mergePredates, "warning: daemon runs v0.8.0 since ")
+	if strings.Contains(h.out.String(), "[y/N]") {
+		t.Errorf("asked y/N on an old daemon's plan:\n%s", h.out.String())
+	}
+	if reqs := h.requests(); len(reqs) != 1 {
+		t.Fatalf("requests = %+v, want the plan alone", reqs)
+	}
+
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	res, err := acts.MergeParentPlan(context.Background(), "talkable#5")
+	if err == nil || !strings.Contains(err.Error(), mergePredates) || res.Ask != "" || res.Parent != nil {
+		t.Errorf("the screens' plan = %+v, %v; want the error %q and no question", res, err, mergePredates)
+	}
+}
+
+// A daemon run with --dry-run answers the merge the y sends with its plan
+// too: `magnum merge-parent` and the screens' P print the plan's words,
+// never its JSON line.
+func TestMergeParentAnsweredWithAPlanPrintsItsWords(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, mergePlanResult(h.t)) }
+	h.stdin("y\n")
+	if code := h.cmd("merge-parent", "5"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	if _, after, _ := strings.Cut(h.out.String(), "[y/N]"); strings.Contains(h.out.String(), `{"ref"`) || !strings.Contains(after, mergePlan) {
+		t.Errorf("the merge's answer, want the plan's words after the y/N and no JSON line:\n%s", h.out.String())
+	}
+
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	a := mergeAsked
+	res, err := acts.MergeParent(context.Background(), "talkable#5", tui.MergeAsked{Head: a.Head, Base: a.Base, Tip: a.Tip, At: a.At})
+	if err != nil || strings.Contains(res.Text, `{"ref"`) || !strings.Contains(res.Text, mergePlan) {
+		t.Errorf("the screens' merge = %q, %v; want the plan's words and no JSON line", res.Text, err)
+	}
+}
+
+// `magnum merge-parent --dry-run --json` gives the plan as JSON (plan: the
+// PR, what its y/N asks about and its words), and its request's result is
+// the plan's words, never JSON inside a string.
+func TestMergeParentDryRunJSONGivesThePlan(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.mergeDaemon()
+	if code := h.cmd("merge-parent", "5", "--dry-run", "--json"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	var out struct {
+		Request struct {
+			Result string `json:"result"`
+		} `json:"request"`
+		Plan *engine.MergePlan `json:"plan"`
+	}
+	if err := json.Unmarshal(h.out.Bytes(), &out); err != nil {
+		t.Fatalf("%v: %s", err, h.out.String())
+	}
+	if out.Request.Result != mergePlan {
+		t.Errorf("request.result = %q, want the plan's words %q", out.Request.Result, mergePlan)
+	}
+	if p := out.Plan; p == nil || p.Ref != "talkable/talkable#5" || !sameAsked(p.Asked, mergeAsked) || p.Text != mergePlan {
+		t.Errorf("plan = %+v, want talkable/talkable#5 asking about %+v", p, mergeAsked)
 	}
 }
