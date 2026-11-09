@@ -550,8 +550,16 @@ func TestUnchangedStagingStatesWriteNothing(t *testing.T) {
 	f.set("bart", staging.EnvStatus{State: staging.StatePushed, Detail: staging.DetailCIFailedOurs})
 	n = writes.Load()
 	r.clock.Add(45 * time.Second)
+	// The tick that writes bart's change starts a Refresh of its own before
+	// it writes the cells; that Refresh reads only once the tick has
+	// returned, so the cell takes the read that saw the change, never this
+	// later one, however the goroutines are scheduled.
+	release := make(chan struct{})
+	f.setFields(func(f *fakeStaging) { f.block = release })
 	r.tick()
+	close(release)
 	r.settle()
+	f.setFields(func(f *fakeStaging) { f.block = nil })
 	r.clock.Add(45 * time.Second)
 	r.tick()
 	r.settle()
