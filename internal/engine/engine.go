@@ -813,8 +813,11 @@ type Engine struct {
 	stagingCtx     context.Context
 	stagingStop    context.CancelFunc
 	// stagingStepLogged is the cause of the failed staging Step last
-	// logged (staging_deploy.go), under stagingMu.
+	// logged (staging_deploy.go), under stagingMu; stagingEventMu keeps a
+	// deploy's events one at a time (staging_events.go: its record keeps
+	// the newest).
 	stagingStepLogged string
+	stagingEventMu    sync.Mutex
 }
 
 // New returns an engine over d.

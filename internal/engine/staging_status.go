@@ -172,6 +172,7 @@ func (e *Engine) stagings(ctx context.Context) {
 	if len(repos) == 0 {
 		return
 	}
+	e.pruneStagingDeploys(ctx) // staging_events.go
 	records, err := e.st.KVValues(ctx, "pr.*.staging")
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "staging: read the records")

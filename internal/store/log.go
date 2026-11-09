@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +14,11 @@ import (
 // Level to "info"; Kind and Message are required. Callers must redact
 // secrets (execx.Redact) before putting command output into Message.
 func (s *Store) AppendEvent(ctx context.Context, e Event) (int64, error) {
+	return s.appendEvent(ctx, s.db, e)
+}
+
+// appendEvent is AppendEvent on q.
+func (s *Store) appendEvent(ctx context.Context, q querier, e Event) (int64, error) {
 	if e.Kind == "" || e.Message == "" {
 		return 0, errors.New("append event: kind and message are required")
 	}
@@ -22,7 +29,7 @@ func (s *Store) AppendEvent(ctx context.Context, e Event) (int64, error) {
 	if e.Level == "" {
 		e.Level = "info"
 	}
-	res, err := s.db.ExecContext(ctx, "INSERT INTO events (at, level, subject, kind, step, phase, message, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+	res, err := q.ExecContext(ctx, "INSERT INTO events (at, level, subject, kind, step, phase, message, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		FormatTime(at), e.Level, e.Subject, e.Kind, e.Step, e.Phase, e.Message, mustDB(e.Data))
 	if err != nil {
 		return 0, fmt.Errorf("append event %s: %w", e.Kind, err)
@@ -118,4 +125,44 @@ WHERE subject = ? AND kind = ? AND step = ? AND phase = ?
 		return false, fmt.Errorf("step %s/%s: %w", subject, step, err)
 	}
 	return n > 0, nil
+}
+
+// AppendEventOnce is AppendEvent unless an event of e's subject, kind, step
+// and phase already carries key, in its data's "key" (set here, beside e's
+// own data fields): a delivery that comes at least once is written once. It
+// reports whether it wrote e.
+func (s *Store) AppendEventOnce(ctx context.Context, e Event, key string) (bool, error) {
+	if key == "" {
+		return false, errors.New("append event once: the key is required")
+	}
+	data := map[string]any{}
+	if len(e.Data) > 0 {
+		if err := json.Unmarshal(e.Data, &data); err != nil {
+			return false, fmt.Errorf("append event once %s: its data is no object: %w", e.Kind, err)
+		}
+	}
+	data["key"] = key
+	b, err := json.Marshal(data)
+	if err != nil {
+		return false, fmt.Errorf("append event once %s: %w", e.Kind, err)
+	}
+	e.Data = b
+	added := false
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var n int
+		// The subject's index (events_subject_id) bounds the scan to its events.
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE subject IS ? AND kind = ? AND step IS ? AND phase IS ?
+  AND json_extract(data_json, '$.key') = ?`, e.Subject, e.Kind, e.Step, e.Phase, key).Scan(&n); err != nil {
+			return fmt.Errorf("append event once %s: %w", e.Kind, err)
+		}
+		if n > 0 {
+			return nil
+		}
+		if _, err := s.appendEvent(ctx, tx, e); err != nil {
+			return err
+		}
+		added = true
+		return nil
+	})
+	return added, err
 }

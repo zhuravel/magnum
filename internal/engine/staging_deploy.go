@@ -78,6 +78,7 @@ func stagingDepsOf(a *app.App, b *stagingBound) staging.Deps {
 		Stagings:       func(repo string) []staging.Env { return StagingEnvs(cfg, repo) },
 		CommitIdentity: b.commitIdentity,
 		PushEnv:        b.pushEnv,
+		Event:          b.event,
 		Log:            a.Logger,
 	}
 }

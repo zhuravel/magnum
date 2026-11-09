@@ -42,8 +42,8 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	switch {
 	case d.Resolver != nil:
 		t.Error("the staging client has a resolver: a conflict must end the effect until one comes")
-	case d.MirrorRoot == nil || d.PushEnv == nil || d.CommitIdentity == nil || d.Stagings == nil || d.GitEnv == nil || d.Mirror == nil:
-		t.Fatal("the staging client lacks a part of the deploy: mirror root, push env, commit identity, envs, git env or mirror")
+	case d.MirrorRoot == nil || d.PushEnv == nil || d.CommitIdentity == nil || d.Stagings == nil || d.GitEnv == nil || d.Mirror == nil || d.Event == nil:
+		t.Fatal("the staging client lacks a part of the deploy: mirror root, push env, commit identity, envs, git env, mirror or events")
 	}
 	if root, ok := d.MirrorRoot(); root != "/mirrors" || !ok {
 		t.Errorf("MirrorRoot = %q, %v; want /mirrors", root, ok)
@@ -57,7 +57,15 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	if _, err := d.PushEnv(h.ctx, "talkable/talkable", stagingMerge, "staging-void"); err == nil {
 		t.Error("PushEnv answered before the engine was bound")
 	}
+	d.Event(testEffect(1, staging.StepClaim, staging.EffectRunning), staging.StepClaim, staging.PhaseOK, "")
+	if got := len(h.events("staging.deploy")); got != 0 {
+		t.Errorf("%d events before the engine was bound", got)
+	}
 	bound.bind(h.e)
+	d.Event(testEffect(1, staging.StepClaim, staging.EffectRunning), staging.StepClaim, staging.PhaseOK, "")
+	if got := len(h.events("staging.deploy")); got != 1 {
+		t.Errorf("%d events once bound, want 1", got)
+	}
 	if name, _, err := d.CommitIdentity(h.ctx, "talkable/talkable"); err != nil || name != fixerAppLogin {
 		t.Errorf("CommitIdentity = %q, %v; want the fixer App's bot %s", name, err, fixerAppLogin)
 	}
