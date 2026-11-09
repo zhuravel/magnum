@@ -3,7 +3,8 @@ package engine
 // The review daemon's deploy side of internal/staging, on the operator's
 // word: the staging client's parts the engine gives it (the fixer App's bot
 // as the merges' author and the pushes' identity, the events into the
-// registry), and the Step of every live deploy, on a goroutine of its own
+// registry, the resolver of a conflict: staging_resolve.go), and the Step
+// of every live deploy, on a goroutine of its own
 // every stagingStepEvery (a deploy's git can take minutes), which the
 // daemon's stop ends before it closes the client. Nothing of it runs
 // without a watched repository's staging envs.

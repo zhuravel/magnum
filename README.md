@@ -5146,6 +5146,26 @@ it); time with no try (a sleeping Mac, a daemon down) does not count. A resolver
 the journals under `mirror_dir`, at its next tick; a journal whose env name is no slug is passed over (logged once;
 cancel it by its id).
 
+**The resolver.** A merge that conflicts at the merge step (the plan already refuses an env that conflicts when
+you ask; this is one whose tip moved since) goes to the review daemon's resolver, at most 2 tries per deploy. Each
+try is a job in the registry (`staging.resolve.<job>`), so it outlives a restart. It works in a review slot of the
+repository, which has its databases and gems: the PR's own slot when no round, open, fix or whiteboard holds it,
+else a free slot of the pool (a slot a round holds is never taken and never waited on; the job "waits for a slot"
+and the next tick looks again). There, detached at the branch's tip, `git merge --no-commit --no-ff <head>`
+leaves the conflicts, and the fix role's agent (its kind, model and effort, `prompts/staging-resolve.md`) resolves
+them in a magnum pane of the herdr workspace "staging merge", which the job's why names while it works: it keeps
+both sides' intent, edits only the conflicted paths, runs their specs through the db-lock line and gives up, with
+the reason, when the two sides contradict each other, a file is binary, both sides renamed it, or the specs cannot
+run or stay red. Its pane has no GitHub token and no git credentials: it never commits or pushes. magnum makes the
+merge commit itself, [tip, head] by the fixer App's bot with the clean merge's message, and checks it as verify
+will: no conflict marker left, nothing else changed in the slot, the tree differing from merge-tree's only in the
+conflicted paths. The slot goes back to the commit it held (a slot taken from the pool goes back to the pool),
+clean and with no guard hold. One job runs at a time; one runs at most 45 minutes from its slot on and waits at
+most an hour for its turn and its slot, so the deploy's own 2-hour wait never ends it first. A restart goes on
+with a job whose agent still runs; one whose agent is gone fails, saying so. The resolver takes your own PRs only,
+as the deploy does. The merge stays at `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the
+deploy ended, a day at most.
+
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a
 deploy: the daemon runs it without asking, its migrations included. The push checks the merge again from git (what

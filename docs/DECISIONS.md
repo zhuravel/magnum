@@ -20855,6 +20855,78 @@ skill versions); people add theirs to the sections before it, at the end of the 
   card), the card's category guard, the mark's guard without the column, the name cut before its age, the old read's
   two causes (row and card), `longLines`, `since just now` and the painters' cleaning (row and card) were each taken
   out once, and a test failed.
+- **The staging resolver: a deploy's conflict resolved in a review slot by the fix role's agent, committed and
+  checked by the daemon** (2026-11-09, the staging wiring, part 3; the operator: "Staging conflicts: resolve on any
+  PR", coworkers' PRs still behind their own gate). The review daemon's staging client gets its `Resolver`
+  (`engine.stagingResolver`), so a deploy whose merge conflicts hands the conflict to a job instead of ending
+  "conflict: resolver not configured". Start answers at once with a job id; each job is a row in the registry
+  (`staging.resolve.<job>`: the effect, the PR, the target and its tip, the head, the try, the state and why, where
+  it runs, the agent's pane and run, the merge, the times), the source of truth, so Result and Cancel answer across
+  a restart, and a job the journal does not hold answers failed, "unknown job". **Where:** a review slot of the PR's
+  repository, since only a slot has the repository's development environment (its databases and gems), and the
+  agent must run the resolved files' specs: nothing unverified goes to a shared staging. It is taken as the fix and
+  whiteboard jobs take one: the PR is held with a slot-work reservation (`reserveSlotWork`, as an eviction holds
+  it), the PR's own slot when no round, open, fix or whiteboard job holds the PR (claimed or held, unpinned, no
+  guard hold, nobody in it: `Slots.Guard` and the shell hold), else a free pool slot reserved for the PR
+  (`Slots.Reserve`; none free asks the pool for one, `needSlot`, as fix and open do). A slot it cannot use now is a
+  wait ("waits for a slot", the tick looks again), never an eviction of a round's slot nor a wait on it; a
+  repository without a pool fails. The slot goes back clean, with no guard hold: `Slots.Resync` puts it at the tip
+  (recorded as the checkout, so the guard sees no drift while the agent works) and back at the commit it held after
+  (its abort step ends the merge in progress); a slot claimed from the pool is resynced to the tip it recorded,
+  then handed back. A slot is safe this way because the job runs only while nothing else may touch the PR's slot
+  and changes neither its databases' schema (the specs load the test schema themselves; the dev database is left
+  alone, so no `dirty_schema`) nor its dependencies: a merge that needs gems the slot lacks makes the agent give up
+  (`not_run`), which is the honest answer, since nothing else in the daemon could run the specs either. In it,
+  detached at the tip, `git merge --no-commit --no-ff <head>` leaves the conflicts, which must be the paths
+  `git merge-tree --write-tree <tip> <head>` names (the deploy's verify compares with that tree). **The agent:**
+  the watch's fix role (kind, model, effort, launch, fallbacks) with no identity, skill or prompt of the fixer's, in a
+  magnum pane of its own (herdr workspace "staging merge", one job at a time, its pane named in the job's why while
+  it runs), driven as the skill editor is (`paneAgent`: a scratch registry and an observer in the job's directory
+  under the state dir), with `prompts/staging-resolve.md` (rendered by `CheckPrompts`, loaded at the start): the
+  fix skill's merge rules, only the conflicted paths edited, the specs through the db-lock line, never a stage,
+  commit, push or `gh`, and give up with the reason on contradictory logic, a binary file, rename/rename, specs that
+  cannot run or stay red; the second try's prompt carries the first's why as data. Its pane gets no GitHub
+  credentials and none of the operator's: empty `GH_TOKEN` and `GITHUB_TOKEN`, an empty `GH_CONFIG_DIR`, no global
+  or system git config (no credential helper), no askpass and no SSH agent, beside the slot's own env; the
+  checkout's project config is left out of the session (it has no base the start can compare with, so it is
+  declined, as for every pane agent). It writes a result file, read strictly: resolved or gave up, why, the specs
+  it ran and their result; a missing or invalid one gets one nudge. **Why the daemon commits:** the agent never
+  holds an identity, so the commit is made where the bot's is: the tree is merge-tree's with each conflicted path as
+  the work tree holds it (`gitx.WriteTreeFrom`, through an index of its own, whatever the agent did to the slot's),
+  the parents exactly [tip, head], the bot (`engine.CommitIdentity`) as author and committer, the clean merge's
+  message. **The checks**, before it answers done: no conflict marker in a conflicted path; the work tree changes
+  nothing else (`gitx.WorkTreeDiff` against the resolved tree: the specs ran on what the merge holds); the tree
+  differs from merge-tree's only in the conflicted paths; the commit's parents and tree are what was asked. Done
+  answers the merge and `Dir`, the slot's main clone (the slot is its worktree, so the objects are there), where
+  `refs/magnum/staging-resolved/<effect>` keeps the merge until the effect is no longer live (the tick reads
+  `Staging.Effects`), a day at most; an ended job's row and directory go two days after its end. **The bounds:** one
+  job at a time per daemon, the oldest first (the others "wait for their turn"); a job runs at most 45 minutes from
+  its slot on (its agent is stopped: "ran over 45 minutes") and waits at most an hour for its turn and its slot, so
+  the deploy's own 2-hour wait never ends it first. A restart holds each running job's PR again before any round
+  (`recoverStagingResolves`, beside `recoverFixes`): a job whose agent still runs goes on (the agent is let go at
+  the stop, never stopped), one whose agent is gone fails, "its agent is gone", one before its agent starts again,
+  queued; Cancel stops the agent, puts the slot back, lets go of the PR, and the job reads failed "cancelled". The
+  resolver refuses a coworker's PR as the deploy does. With no `[[factory.repo.staging]]` entry there is no staging
+  client, so no resolver: no job runs, no row is touched. The plan's y/N still refuses an env that conflicts at the
+  plan ("a resolver comes later"): the resolver serves a conflict that appears when the tip moves after the plan,
+  until the words and the plan's refusal change in their own step. Rejected: a worktree of the main clone made for
+  the job (no databases or gems, so no specs, and a second checkout of a pool's clone the inventory does not know);
+  the factory's copies (another daemon's, outside the review daemon's slot rules); evicting an idle PR's slot only
+  for the resolver (the pool's own `needSlot` decides, as for fix and open); the agent committing (it would need an
+  identity in its pane); marking the slot's schema dirty (the reset it triggers costs a release up to 30 minutes for
+  a database the job never touched). Tests: the engine's
+  TestTheStagingResolverResolvesAConflictInThePRsSlotAndCommitsAsTheBot,
+  TestTheStagingResolverAnswersUnknownJobsAndRefusesBadRequests,
+  TestTheStagingClientsResolverRefusesUntilTheEngineIsBound, TestTheStagingResolversChecksFailAJobAndPutTheSlotBack,
+  TestTheStagingResolverWaitsForASlotARoundHolds, TestTheStagingResolverClaimsAFreeSlotAndHandsItBack,
+  TestTheStagingResolverCancelsAJob, TestARestartGoesOnWithAResolverJobWhoseAgentRuns,
+  TestARestartStartsAgainAResolverJobBeforeItsAgent, TestAStagingResolverJobRunsAtMost45Minutes,
+  TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded, TestWithoutStagingEntriesNothingOfTheResolverRuns,
+  TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath, TestTheStagingClientDeploysAsTheFixerApp
+  and TestCheckPromptsCatchesFieldsThisBuildLacks (the prompt's cases); gitx's
+  TestAStagingMergeIsResolvedInTheWorkTreeAndWrittenApartFromItsIndex,
+  TestWriteTreeFromLeavesOutAPathTheWorkTreeDeleted and TestMergeNoCommitOfACleanMergeAndOfNoRevision; the agents'
+  TestRenderGolden (staging_resolve, staging_resolve_second_try).
 
 ## Learned rules
 
