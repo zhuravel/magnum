@@ -241,6 +241,10 @@ func (m ownOnlyMagnum) FixRecords(context.Context, []factory.PRRef) (map[factory
 	return map[factory.PRRef]factory.FixRecord{}, nil
 }
 
+func (m ownOnlyMagnum) FirstPostedRound(context.Context, factory.PRRef, time.Time) (factory.PostedRound, bool, error) {
+	return factory.PostedRound{}, false, nil
+}
+
 // Without the factory's registry (no task was ever started) the screen
 // still lists your own open PRs from magnum's registry, and creates
 // nothing: with [board] own_prs = "factory" the board leaves them out, so

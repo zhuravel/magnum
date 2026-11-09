@@ -69,18 +69,68 @@ func (f *fakeReviewer) calls() []evalrun.LocalCase {
 // daemon up), prErr fails PRStates, and reads counts the PRStates calls;
 // own are your own open PRs OwnPRs lists, ownErr fails it, and ownReads
 // counts its calls; fix are the PRs' fix records (a ref it lacks has the
-// zero record), and fixErr fails FixRecords.
+// zero record), and fixErr fails FixRecords; posted are the PRs' rounds
+// that posted a review, in the order they began, which FirstPostedRound
+// reads (postedReads counts its calls, postedErr fails it, and postedGate,
+// when set, holds it until the test closes it).
 type fakeMagnum struct {
-	mu       sync.Mutex
-	busy     string
-	prs      map[PRRef]PRState
-	prErr    error
-	reads    int
-	own      []PRState
-	ownErr   error
-	ownReads int
-	fix      map[PRRef]FixRecord
-	fixErr   error
+	mu          sync.Mutex
+	busy        string
+	prs         map[PRRef]PRState
+	prErr       error
+	reads       int
+	own         []PRState
+	ownErr      error
+	ownReads    int
+	fix         map[PRRef]FixRecord
+	fixErr      error
+	posted      map[PRRef][]PostedRound
+	postedReads int
+	postedErr   error
+	postedGate  chan struct{}
+}
+
+func (f *fakeMagnum) FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error) {
+	f.mu.Lock()
+	f.postedReads++
+	gate := f.postedGate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return PostedRound{}, false, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.postedErr != nil {
+		return PostedRound{}, false, f.postedErr
+	}
+	for _, r := range f.posted[ref] {
+		if !r.Start.Before(since) {
+			r.Findings = slices.Clone(r.Findings)
+			return r, true, nil
+		}
+	}
+	return PostedRound{}, false, nil
+}
+
+// post makes magnum's registry hold round r of ref, after its others.
+func (f *fakeMagnum) post(ref PRRef, r PostedRound) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posted == nil {
+		f.posted = map[PRRef][]PostedRound{}
+	}
+	f.posted[ref] = append(f.posted[ref], r)
+}
+
+// postedCalls is how many times FirstPostedRound was asked.
+func (f *fakeMagnum) postedCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.postedReads
 }
 
 func (f *fakeMagnum) FixRecords(_ context.Context, refs []PRRef) (map[PRRef]FixRecord, error) {

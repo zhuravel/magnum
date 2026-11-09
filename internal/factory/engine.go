@@ -202,13 +202,16 @@ func (m MergeMethods) String() string {
 // local round takes a free round or waits; and what its registry says of
 // the factory's PRs (PRStates: the row, the verdict, the loop), which the
 // screen draws and the tick follows, of their fix loops over time
-// (FixRecords), which the PRs' status files count, and of your own open
-// PRs (OwnPRs), which the screen lists.
+// (FixRecords), which the PRs' status files count, of your own open PRs
+// (OwnPRs), which the screen lists, and of its first round on a PR that
+// posted a review since a time (FirstPostedRound), which the escape check
+// of a published task's local review reads (escapes.go).
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 	OwnPRs(ctx context.Context) ([]PRState, error)
 	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
+	FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error)
 }
 
 // LocalReviewer runs one round of magnum's review on a task's change in its

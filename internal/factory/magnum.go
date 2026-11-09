@@ -6,7 +6,9 @@ package factory
 // tick read the factory's PRs there too (PRStates): magnum's row, its
 // autofix = "open" verdict, its fix loop, its stalemate and its attention;
 // the tick their fix loops' record (FixRecords), for the PRs' status
-// files; and the screen your own open PRs (OwnPRs), for home's rows. The
+// files, and magnum's first posted round on a published PR
+// (FirstPostedRound), for the escape check of its task's local review; and
+// the screen your own open PRs (OwnPRs), for home's rows. The
 // factory reads magnum's registry and never writes or migrates it: it
 // opens it query_only, so a write through its handle fails, and a registry
 // of another schema than this build's is an error, and its file stays as
@@ -787,4 +789,72 @@ func (m *magnumRegistry) FixRecords(ctx context.Context, refs []PRRef) (map[PRRe
 		out[r] = f.rec
 	}
 	return out, nil
+}
+
+// PostedRound is magnum's round on a PR that posted a review
+// (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
+// magnum's runs.id), the round's number, the head it reviewed, the review's
+// id on GitHub, when the round began (its first run), and the findings it
+// posted, in the judge's order.
+type PostedRound struct {
+	RunID    string
+	Round    int
+	Head     string
+	ReviewID int64
+	Start    time.Time
+	Findings []PostedFinding
+}
+
+// PostedFinding is one finding a posted round posted: magnum's id of it
+// (findings.id), its path and its lines (magnum keeps one line, so
+// StartLine and EndLine are both it; 0 for a finding in the review's body),
+// its priority as the judge wrote it, and its title. The title is the
+// judge's words about the PR, data only: the escape check keeps nothing of
+// it but the factory's hash (titleHash), and nothing writes it to the
+// factory's registry, a log, an event or a message.
+type PostedFinding struct {
+	ID                 int64
+	Path               string
+	StartLine, EndLine int
+	Priority, Title    string
+}
+
+// FirstPostedRound reads, in one opening of magnum's registry, its first
+// round on PR ref that posted a review and began at or after since (the
+// task's publish), with the findings it posted, every priority
+// (store.FirstPostedReview: one query): false while there is none, and for
+// a repository, a PR or a registry magnum does not have (nothing is
+// created). It reads and never writes or migrates the registry, as
+// PRStates; a read that fails is an error.
+func (m *magnumRegistry) FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error) {
+	st, err := m.open()
+	if st == nil || err != nil {
+		return PostedRound{}, false, err
+	}
+	defer st.Close()
+	repo, err := st.RepoByFullName(ctx, ref.Repo)
+	if errors.Is(err, store.ErrNotFound) {
+		return PostedRound{}, false, nil
+	} else if err != nil {
+		return PostedRound{}, false, fmt.Errorf("magnum's registry: %w", err)
+	}
+	pr, err := st.PRByRepoNumber(ctx, repo.ID, ref.Number)
+	if errors.Is(err, store.ErrNotFound) {
+		return PostedRound{}, false, nil
+	} else if err != nil {
+		return PostedRound{}, false, fmt.Errorf("magnum's registry: %w", err)
+	}
+	rv, fs, ok, err := st.FirstPostedReview(ctx, pr.ID, since)
+	if err != nil || !ok {
+		if err != nil {
+			err = fmt.Errorf("magnum's registry: %w", err)
+		}
+		return PostedRound{}, false, err
+	}
+	out := PostedRound{RunID: rv.RunID, Round: rv.Round, Head: rv.SHA, ReviewID: rv.ReviewID, Start: rv.RoundStart}
+	for _, f := range fs {
+		out.Findings = append(out.Findings, PostedFinding{ID: f.ID, Path: f.Path, StartLine: f.Line, EndLine: f.Line, Priority: f.Severity,
+			Title: f.Title})
+	}
+	return out, true, nil
 }

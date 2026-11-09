@@ -909,3 +909,83 @@ func TestPRStatesSayWhatMagnumsOpenDoes(t *testing.T) {
 		t.Errorf("replies %+v, want rev-ann's in magnum's thread and alice's, both after magnum's review", v.Replies)
 	}
 }
+
+// roundRun records a run of magnum's on pr in round with role at at on
+// head; a reviewID above zero makes it the run that posted that review.
+func roundRun(t *testing.T, st *store.Store, pr store.PR, round int, role, head string, reviewID int64, at time.Time) store.Run {
+	t.Helper()
+	r := store.Run{PRID: pr.ID, Round: round, Role: role, Kind: store.RunInitial, State: store.RunVerified, TargetSHA: head,
+		Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "p", CreatedAt: at}
+	if reviewID > 0 {
+		r.Outcome, r.ReviewID = new("posted"), new(reviewID)
+	}
+	run, err := st.CreateRun(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// FirstPostedRound reads magnum's first round on a PR that posted a review
+// and began at or after a time (the publish), with the findings it posted
+// (magnum's id of each, its path, its line as the start and the end, its
+// priority and its title), and writes nothing: a round that began before
+// the time counts not, and a PR, a repository or a registry magnum does not
+// have has no round, and nothing is created.
+func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	pr := magnumPR(t, st, 7, strings.Repeat("ab", 20), nil)
+	published := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	before := roundRun(t, st, pr, 1, store.RoleJudge, "aaa111", 500, published.Add(-time.Minute))
+	if err := st.RecordFindings(ctx, before.ID, pr.ID, 1, []store.Finding{{FindingID: "F1", Title: "Before", Severity: "P1", Path: "app/a.rb",
+		Line: 1, Verdict: store.FindingPosted}}); err != nil {
+		t.Fatal(err)
+	}
+	roundRun(t, st, pr, 2, "claude-review", "bbb222", 0, published.Add(time.Hour))
+	judge := roundRun(t, st, pr, 2, store.RoleJudge, "bbb222", 501, published.Add(time.Hour+5*time.Minute))
+	if err := st.RecordFindings(ctx, judge.ID, pr.ID, 2, []store.Finding{
+		{FindingID: "F1", Title: "The refund misses the cap", Severity: "P2", Path: "app/models/credit.rb", Line: 42, Verdict: store.FindingPosted},
+		{FindingID: "F2", Title: "A body note", Severity: "P3", Verdict: store.FindingPosted},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMagnum(l, openWatchConfig())
+	ref := PRRef{"example/shop", 7}
+	was := registryBytes(t, l)
+	got, ok, err := m.FirstPostedRound(ctx, ref, published)
+	if err != nil || !ok {
+		t.Fatalf("FirstPostedRound = %v, %v", ok, err)
+	}
+	if !bytes.Equal(was, registryBytes(t, l)) {
+		t.Error("FirstPostedRound changed magnum's registry")
+	}
+	if got.RunID != judge.ID || got.Round != 2 || got.Head != "bbb222" || got.ReviewID != 501 || !got.Start.Equal(published.Add(time.Hour)) {
+		t.Errorf("the round %+v, want the judge's run of round 2", got)
+	}
+	if len(got.Findings) != 2 {
+		t.Fatalf("its findings %+v, want 2", got.Findings)
+	}
+	f, body := got.Findings[0], got.Findings[1]
+	if f.ID == 0 || f.Path != "app/models/credit.rb" || f.StartLine != 42 || f.EndLine != 42 || f.Priority != "P2" || f.Title != "The refund misses the cap" {
+		t.Errorf("the placed finding %+v", f)
+	}
+	if body.Path != "" || body.StartLine != 0 || body.EndLine != 0 || body.Priority != "P3" {
+		t.Errorf("the body finding %+v", body)
+	}
+	if early, ok, err := m.FirstPostedRound(ctx, ref, published.Add(-time.Hour)); err != nil || !ok || early.Round != 1 {
+		t.Errorf("since before round 1: %+v, %v, %v", early, ok, err)
+	}
+	for _, r := range []PRRef{{"example/shop", 8}, {"other/site", 7}} {
+		if _, ok, err := m.FirstPostedRound(ctx, r, published); err != nil || ok {
+			t.Errorf("%s#%d magnum lacks: %v, %v; want no round", r.Repo, r.Number, ok, err)
+		}
+	}
+	none := paths.Layout{Home: t.TempDir()}
+	if _, ok, err := NewMagnum(none, nil).FirstPostedRound(ctx, ref, published); err != nil || ok {
+		t.Errorf("no registry: %v, %v; want no round", ok, err)
+	}
+	if fsx.Exists(none.DB()) {
+		t.Error("FirstPostedRound created magnum's registry")
+	}
+}
