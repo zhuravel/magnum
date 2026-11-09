@@ -17,6 +17,7 @@ import (
 // stagingPaneDeps are pane agent deps over a fakePaneAgents (made new for
 // each manager the agent makes) on h's herdr and clock.
 func stagingPaneDeps(t *testing.T, h *harness, ag **fakePaneAgents) paneDeps {
+	t.Helper()
 	return paneDeps{Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Store: h.st, Now: h.clock.Now, Hooks: h.e.agentHooks,
 		Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
 		ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: h.hd.WorkspaceClose,
