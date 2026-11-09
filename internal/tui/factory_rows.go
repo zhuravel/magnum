@@ -453,10 +453,12 @@ type ReadyCard struct {
 	// none, and no e then.
 	QA, QAReport string
 
-	// The screen's own state: the note on the rule (styled) and the line
-	// typed in the footer.
-	rule  string
-	input *cardInput
+	// The screen's own state: the note on the rule (styled), the line
+	// typed in the footer, and whether the question up (Ask) is another's
+	// than the card's own decision (no "It frees" after it).
+	rule     string
+	input    *cardInput
+	askOther bool
 }
 
 // CardFile is one changed file of a ready card.

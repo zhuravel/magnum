@@ -87,10 +87,14 @@ type factoryBar struct {
 	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	st   styles
 
-	asking  *factoryQuestion // the question awaiting y/N
-	choose  *stagingChoice   // E's chooser of a PR's staging envs, before its plan (staging_key.go); nil when none is up
-	busy    string           // the label of the action in flight
-	dropped bool             // the screen quits: no question is asked or answered any more
+	asking *factoryQuestion // the question awaiting y/N
+	choose *stagingChoice   // E's chooser of a PR's staging envs, before its plan (staging_key.go); nil when none is up
+	// held is a plan's question (E's, P's) that waits for a view that
+	// draws it whole and has no question of its own: the screen raises it
+	// (raise) on home or the task card, so y confirms only what is drawn.
+	held    *factoryQuestion
+	busy    string // the label of the action in flight
+	dropped bool   // the screen quits: no question is asked or answered any more
 
 	flash     string
 	flashKind factoryFlashKind
@@ -118,7 +122,16 @@ func newFactoryBar(ctx context.Context, log *ActionLog, now func() time.Time, ti
 // never starts a push. An action already running ends with the screen's
 // context, and the log keeps its outcome.
 func (b *factoryBar) drop() {
-	b.asking, b.choose, b.dropped = nil, nil, true
+	b.asking, b.choose, b.held, b.dropped = nil, nil, nil, true
+}
+
+// raise puts the held question up, for y/N; a failure kept in the footer
+// stays beside it, as ask keeps one.
+func (b *factoryBar) raise() {
+	b.asking, b.held = b.held, nil
+	if b.flashKind != factoryFlashFailed {
+		b.flash = ""
+	}
 }
 
 // applyStyles switches the bar to st, once the terminal reports its background.
@@ -221,10 +234,10 @@ func (b *factoryBar) update(msg tea.Msg) (cmd tea.Cmd, taken bool) {
 		if msg.err != nil {
 			return b.show(msg.label+" failed: "+errLine(msg.err), factoryFlashFailed), true
 		}
-		if msg.next != nil && !b.dropped { // a plan: its question goes up, cleaned (the daemon's words), and y runs the next step
+		if msg.next != nil && !b.dropped { // a plan: its question, cleaned (the daemon's words), is held for the screen to raise
 			q := *msg.next
 			q.sentence, q.label = cleanText(q.sentence), cleanText(q.label)
-			b.asking, b.flash = &q, ""
+			b.held, b.flash = &q, ""
 			return nil, true
 		}
 		return b.show(cmp.Or(lastLine(msg.text), msg.label+": done"), factoryFlashDone), true

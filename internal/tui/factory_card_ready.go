@@ -78,7 +78,7 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 		// The push's y/N says what it frees; a drop's is the spec's own
 		// sentence, which names the copy ("Drop PR-12360: free
 		// talkable.factory3, keep the branch?").
-		if c.Frees != "" && c.Cursor == readyPush {
+		if c.Frees != "" && c.Cursor == readyPush && !c.askOther { // the card's own decision, never another's question
 			frees = "It frees " + c.Frees + "."
 		}
 		foot = p.askLines(c.Ask, frees)

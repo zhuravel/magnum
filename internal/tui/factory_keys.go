@@ -1139,6 +1139,7 @@ func (m factoryModel) readyCard() (ReadyCard, bool) {
 		c.Unread = nil // 1a's pager shows the whole diff: every file was opened
 	}
 	c.Ask = m.bar.question()
+	c.askOther = c.Ask != "" && (m.asked == nil || m.asked.kind != followDecide) // not the card's own push or drop
 	if rs.reasons {
 		c.Reasons = reasonWords(factorySendBackReasons)
 	}

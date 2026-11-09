@@ -584,6 +584,7 @@ func (m factoryModel) tickCmd() tea.Cmd {
 func (m factoryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.update(msg)
 	m.keepRecapAsking()
+	m.raiseHeld()
 	if a := m.startAnim(); a != nil {
 		cmd = tea.Batch(cmd, a)
 	}
@@ -614,6 +615,9 @@ func (m *factoryModel) update(msg tea.Msg) tea.Cmd {
 		f := m.inflight
 		m.inflight = nil
 		cmd, _ := m.bar.update(msg)
+		if q := m.bar.held; q != nil && !m.raiseHeld() { // the plan answered where its question cannot be drawn whole
+			cmd = m.bar.show(q.label+": the plan is ready, and its y/N comes up on home or the task card", factoryFlashNote)
+		}
 		return tea.Batch(cmd, m.followed(f, msg.err))
 	case factoryExpireMsg:
 		cmd, _ := m.bar.update(msg)
@@ -768,6 +772,24 @@ func (m *factoryModel) cardGone() tea.Cmd {
 	key := m.taskKey(m.task)
 	m.goHome()
 	return m.bar.show(key+" no longer waits on that card", factoryFlashNote)
+}
+
+// raiseHeld puts a plan's held question up (factoryBar.held) where the
+// screen draws a question whole and nothing else claims the keys: on home
+// (its filter not typed) or the task card, the menu closed, no other
+// question, chooser or action. Anywhere else it waits: the recap draws its
+// own question, the question and ready cards and the new task's form
+// three lines of one (the ready card's push adds what it frees), the form
+// and the filter take keys as text, the help and the log one cut line. It
+// reports whether it raised one.
+func (m *factoryModel) raiseHeld() bool {
+	b := &m.bar
+	if b.held == nil || (m.view != fvHome && m.view != fvTask) || (m.view == fvHome && m.filtering) || m.menu.open ||
+		b.asking != nil || b.choose != nil || b.busy != "" || b.dropped {
+		return false
+	}
+	b.raise()
+	return true
 }
 
 // keepRecapAsking keeps the recap's question up: the recap is one y for the
