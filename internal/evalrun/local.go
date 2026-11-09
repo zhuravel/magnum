@@ -122,9 +122,8 @@ const (
 )
 
 // localAnswersHeading is the one heading over the operator's answers in the
-// ticket file. The judge's skill and the factory's docs name it, so it is
-// fixed: the engine reads the ticket file as data and needs no field for
-// the answers.
+// ticket file. It is fixed (the README and the design log name it): the
+// engine reads the ticket file as data and needs no field for the answers.
 const localAnswersHeading = "## The operator's answers to the factory's questions"
 
 // localTicket is the text of a local round's ticket file: the ticket, then,
@@ -161,12 +160,12 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // repository notes, a new agent tag, and the synthetic PR number
 // LocalNumber, so two rounds never share an agent, a herdr workspace label
 // or an eval case lock (it holds the case lock "local-<number>" for the
-// round). It writes the title and body (description.md) and the ticket
-// (ticket.md, when c has a ticket or answers: localTicket) there, and runs engine.RunLocal in the task's
-// copy at c.HeadSHA, always with c.BaseSHA (post-review's --local-base), as
-// a gh identity (the watch's, else the first configured: an App's token
-// would be minted from GitHub), with the branch as the head ref and the
-// title with the Jira key. The round's config is d.Config (the factory's
+// round). It writes the title and body (description.md) and the ticket with
+// the operator's answers after it (ticket.md, when c has either: localTicket)
+// there, and runs engine.RunLocal in the task's copy at c.HeadSHA, always
+// with c.BaseSHA (post-review's --local-base), as a gh identity (the
+// watch's, else the first configured: an App's token would be minted from
+// GitHub), with the branch as the head ref and the title with the Jira key. The round's config is d.Config (the factory's
 // review candidate, config.WithCandidate). A case it cannot run is an
 // error and nothing starts; a round that ran is a result, whatever its
 // outcome, and only the end of ctx (a drain) is an error after it started.
