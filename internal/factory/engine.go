@@ -515,6 +515,14 @@ type Engine struct {
 	// tests.
 	stg          stagingReads
 	stagingWrite func(path string, b []byte) error
+	// esc is the record of the escape checks that run off the loop
+	// (escapes.go); its mutex guards it. ciSeen is, per published task, the
+	// head and result of the PR's CI the follow last wrote to its checks,
+	// and ciErr the failed write it last logged ("" after one that worked):
+	// the loop's own (copyCI).
+	esc    escapeChecks
+	ciSeen map[int64]string
+	ciErr  string
 	// beforeStop runs between the end of a loop's cycle that needs you
 	// (unavailable, the cap) and the task's move to you; an error stops
 	// there (a test's seam: the daemon stopping in between). nil in a
@@ -590,6 +598,8 @@ func New(d Deps) *Engine {
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
 		stg:          newStagingReads(),
+		esc:          newEscapeChecks(),
+		ciSeen:       map[int64]string{},
 		agentRuns:    map[int64]*agentsRun{},
 		qaSessions:   map[int64]*qaSession{},
 		run:          Guard(d.Run, d.Config),

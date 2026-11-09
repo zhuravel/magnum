@@ -63,7 +63,12 @@ func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task, refs map[
 			continue
 		}
 		st, ok := states[ref]
-		if !ok || !st.Found || !st.DaemonUp {
+		if !ok || !st.Found {
+			continue
+		}
+		e.copyCI(ctx, t, st)             // what magnum recorded holds with its daemon down
+		e.followEscapes(ctx, t, ref, st) // off the loop
+		if !st.DaemonUp {
 			continue
 		}
 		if err := e.followPR(ctx, t, ref, st, now); err != nil && !errors.Is(err, registry.ErrConflict) {
@@ -113,4 +118,44 @@ func (e *Engine) followPR(ctx context.Context, t registry.Task, ref PRRef, st PR
 		e.event(ctx, t.ID, "pr", registry.PhaseOK, fmt.Sprintf("PR #%d reopened: the task waits on magnum again", n))
 	}
 	return nil
+}
+
+// copyCI writes the CI of published task t's PR, as magnum's registry last
+// read it (st.CI at st.Head: tui.CIInfo, by the repository's required
+// checks), to the task's checks once per head and result (kind ci, source
+// github, RecordGitHubCI): a passed or a failed head's, never a pending,
+// skipped or absent one's, nor CI that describes an older commit than the
+// head (Stale). A head that failed and then passed after a rerun writes
+// both. The cause stays "": nothing magnum reads of a PR's CI says a
+// failure is not the PR's own (the staging status's not ours is of the
+// staging branch's ci.yml run, not of the PR's checks). The last head and
+// result written per task are kept, so a tick that sees them again writes
+// nothing; a failed write is logged once while it stays the same.
+func (e *Engine) copyCI(ctx context.Context, t registry.Task, st PRState) {
+	ci := st.CI
+	if ci == nil || ci.Stale || st.Head == "" {
+		return
+	}
+	var result string
+	switch ci.State {
+	case "passed":
+		result = registry.CheckPass
+	case "failed":
+		result = registry.CheckFail
+	default:
+		return
+	}
+	seen := st.Head + " " + result
+	if e.ciSeen[t.ID] == seen {
+		return
+	}
+	if _, err := e.reg.RecordGitHubCI(ctx, t.ID, st.Head, result, ""); err != nil {
+		if msg := textx.FirstLine(execx.Redact(err.Error())); msg != e.ciErr {
+			e.ciErr = msg
+			e.log.Warn("copy a published task's PR CI to its checks", "task", t.ID, "err", msg)
+		}
+		return
+	}
+	e.ciErr = ""
+	e.ciSeen[t.ID] = seen
 }

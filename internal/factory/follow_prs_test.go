@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // followRef is the PR the follow tests' task published.
@@ -281,5 +282,58 @@ func TestAStopWhileHerdrIsDownParksOnceHerdrIsUp(t *testing.T) {
 	h.tick()
 	if parked := h.rt.parked(); !slices.Equal(parked, []int64{task.ID}) {
 		t.Errorf("parks %v once herdr is up, want the stopped task's", parked)
+	}
+}
+
+// ciIs makes magnum's registry say the open PR is at head with its CI in
+// state (stale: of an older commit than the head).
+func (r *followRig) ciIs(head, state string, stale bool) {
+	v := PRState{Found: true, DaemonUp: true, Watched: true, OpenWatch: true, GHState: store.GHOpen, Head: head,
+		CI: &tui.CIInfo{State: state, Stale: stale}}
+	r.magnum.setPR(followRef, &v)
+}
+
+// The PR's CI after the publish goes into the task's checks, kind ci from
+// source github, once per head and result: a failure, then a pass of the
+// same head after a rerun, both; a second tick writes no duplicate, and a
+// pending head, CI of an older commit than the head and a PR without CI
+// write nothing. No row has a cause: nothing says a failure is not ours.
+func TestThePRsCIAfterThePublishIsCopiedOncePerHeadAndResult(t *testing.T) {
+	r := newFollowRig(t)
+	next, older := "d00d"+strings.Repeat("1", 36), "beef"+strings.Repeat("2", 36)
+	for _, step := range []struct {
+		head, state string
+		stale       bool
+	}{
+		{prHead, "failed", false},
+		{prHead, "failed", false},
+		{prHead, "pending", false},
+		{prHead, "passed", false},
+		{prHead, "passed", false},
+		{older, "failed", true}, // CI of a commit before this head
+		{next, "pending", false},
+		{next, "none", false},
+		{next, "skipped", false},
+		{next, "failed", false},
+		{prHead, "failed", false}, // the older head again: its row stands
+	} {
+		r.ciIs(step.head, step.state, step.stale)
+		r.tick()
+	}
+	r.prIs(store.GHOpen, time.Time{}) // magnum read no CI
+	r.tick()
+	cs, err := r.reg.Checks(r.ctx, r.task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range cs {
+		if c.Kind != registry.CheckCI || c.Source != "github" || c.Cause != "" || c.AttemptID != "" {
+			t.Errorf("check %+v, want a CI check of GitHub's with no cause", c)
+		}
+		got = append(got, c.HeadSHA[:4]+" "+c.Result)
+	}
+	if want := []string{"a1b2 fail", "a1b2 pass", "d00d fail"}; !slices.Equal(got, want) {
+		t.Errorf("CI checks %q, want %q", got, want)
 	}
 }

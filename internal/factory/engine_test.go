@@ -999,6 +999,7 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	for _, f := range edit {
 		f(&d)
 	}
+	h.reg, h.rt.reg = d.Registry, d.Registry // an edit may give the test a registry of its own, a file's
 	h.deps = d
 	h.e = New(d)
 	t.Cleanup(h.e.stopBackground) // no claim or overlap outlives the test
