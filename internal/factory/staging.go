@@ -62,6 +62,13 @@ type Staging interface {
 // or one that took another process's read, fetches nothing), and its
 // fetch's git env from gitEnv on the context of the Refresh that asks for it,
 // which the daemon's stop cancels (an App's token mint ends with the drain).
+//
+// Its client is read only, by design: the fetch clock that wraps d.Git
+// hides the deploy's git, so the Plan and Deploy its internal/staging
+// Client carries answer staging's refusal ("this git cannot deploy") and
+// run no git, whatever git d brings. The factory daemon never deploys: the
+// factory screen's E deploys through magnum's daemon (its staging_deploy
+// request), the one deployer, whose Step loop runs every effect.
 func NewStaging(cfg *config.Config, d staging.Deps, gitEnv func(ctx context.Context, repo string) map[string]string) Staging {
 	now := d.Now
 	if now == nil {
