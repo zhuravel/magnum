@@ -756,3 +756,29 @@ func TestTheEditorAndTheGateTreatThePartialsFileAsAJudgePrompt(t *testing.T) {
 		t.Errorf("an edit of %s listed as edited: %q", file, problems)
 	}
 }
+
+// A local case (a round of the factory's local review) is never a gate's: not one of the newest
+// other cases, not a guard however its last replay scored, and a target named like one is skipped.
+// A gate replays its cases judge-only for a skill change, which a local round cannot be (it runs every
+// role), so a local case would stop the gate; `magnum eval run` replays it.
+func TestSelectCasesLeavesLocalCasesToEvalRun(t *testing.T) {
+	corpus := gateCorpus()
+	local := eval.Case{Name: "task-1-round-1", Kind: eval.KindLocal, PR: "talkable/talkable#900011", Head: gateHead,
+		Defects: []eval.Defect{{ID: "d", Title: "t", Question: true, Match: []string{"x"}}}}
+	corpus.Cases = append(corpus.Cases, local)
+	all := func(string) bool { return true }
+	none := func(string) bool { return false }
+	guards := Guards{N: 2, Found: func(c eval.Case) bool { return true }}
+	got := SelectCases(corpus, []string{"task-1-round-1"}, all, none, 3, guards)
+	if got[0].Case.Name != "task-1-round-1" || got[0].Skip != SkipLocal {
+		t.Fatalf("a local target: %q, want it skipped as %q", names(got), SkipLocal)
+	}
+	for _, gc := range got[1:] {
+		if gc.Case.Local() {
+			t.Fatalf("cases %q took the local case", names(got))
+		}
+	}
+	if n := len(got); n != 1+2+3 {
+		t.Fatalf("cases %q, want the skipped target, two guards and three others", names(got))
+	}
+}

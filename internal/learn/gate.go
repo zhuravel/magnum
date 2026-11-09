@@ -70,6 +70,11 @@ const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
+	// SkipLocal is a local case (a round of the factory's local review,
+	// eval.KindLocal), which `magnum eval run` replays and no gate does:
+	// a local round runs every role, and a gate of a skill change replays
+	// its cases judge-only.
+	SkipLocal = "a local case: eval run replays it, no gate does"
 	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
 	SkipFoundAtBaseline       = store.LearnDismissedFound
@@ -259,7 +264,8 @@ func (g Guards) pick(cases []eval.Case, seen map[string]bool, skip func(eval.Cas
 // a guard is never a target), then the newest other cases (the corpus's
 // last first: the learned ones come after the operator's, oldest first)
 // whose PR is watched and not flagged, until limit targets and others can
-// run. A flagged PR is never replayed, watched or not.
+// run. A flagged PR is never replayed, watched or not, and a local case
+// (SkipLocal) never by a gate.
 func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int, guards Guards) []GateCase {
 	var cases []eval.Case
 	if corpus != nil {
@@ -267,6 +273,8 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
 	}
 	skip := func(c eval.Case) string {
 		switch {
+		case c.Local():
+			return SkipLocal
 		case flagged != nil && flagged(c.PR):
 			return SkipFlagged
 		case watched != nil && !watched(c.PR):
