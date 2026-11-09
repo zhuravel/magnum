@@ -5345,8 +5345,9 @@ tick looks again, and the jobs after it go on meanwhile; a job waits an hour at 
 branch's tip, `git merge --no-commit --no-ff <head>` leaves the conflicts. A binary file or a file both sides
 renamed to two paths fails the job at once, naming them: git leaves no marker there for the checks below to find,
 and no merge keeps both sides. Otherwise the fix role's agent (its kind, model and effort,
-`prompts/staging-resolve.md`) resolves them in a magnum pane of the herdr workspace "staging merge", which the
-job's why names while it works (the card and `magnum staging` show it under the deploy, `resolver try 1: ...`): it
+`prompts/staging-resolve.md`) resolves them in a magnum pane of the herdr workspace "staging merge", labelled after
+the deploy (`learn talkable#12204 void claude-fix`, and the agent's title ends ` - staging`), which the job's why
+names while it works (the card and `magnum staging` show it under the deploy, `resolver try 1: ...`): it
 keeps both sides' intent, edits only the conflicted paths, runs their specs through the db-lock line and gives
 up, with the reason, when the two sides contradict each other or the specs cannot run or stay red. Its pane's
 environment carries no GitHub token and no gh login of yours, and leaves git no way to push: no credential
@@ -5361,7 +5362,11 @@ from the pool goes back to the pool), clean and with no guard hold. One job runs
 runs at most 45 minutes from its slot on and waits at most an hour for its turn and its slot, so the deploy's own
 2-hour wait never ends it first (so of a deploy to three envs whose merges all conflict, the third job can fail
 for its wait behind two that take their time). A restart goes on with a job whose agent still runs; one whose
-agent is gone fails, saying so. The resolver takes your own PRs only, as the deploy does. The merge stays at
+agent is gone fails, saying so. A cancel of the deploy while the agent works (`magnum staging --cancel <effect>`)
+interrupts its turn (esc), waits up to 20 seconds for herdr to show it idle and parks it, which closes its workspace;
+an agent still at work then is ended with its workspace when that holds its pane alone, before the slot goes back.
+With a pane of yours in that workspace the agent stays, and the job's why names its pane and why it stays. The
+resolver takes your own PRs only, as the deploy does. The merge stays at
 `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the deploy ended, a day at most. A conflict
 the resolver cannot resolve (it gave up, a check failed, it ran over its time) fails the deploy with its why, and
 nothing is pushed.

@@ -22276,6 +22276,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   MySQL down at the check: the claim's error, the copy provisioning, no post_checkout). A mutation that drops the
   verify_dbs condition fails its MySQL case. No new dependencies.
 
+- **A Cancel of the staging resolver parks its agent after herdr shows it idle, ends one still at work with its own
+  workspace, and names the pane and why when it cannot; the pane and the agent's title name the deploy** (2026-11-09).
+  The resolver's first real Cancel (a void deploy of talkable#12204, cancelled while its agent had just started) ended
+  "cancelled; its agent may still run: ... agents: park…", and the agent's pane stayed open until the next job's start
+  found it two hours later. `paneAgent.release` sent esc to the turn and called Park a few milliseconds later; Park
+  refuses an agent herdr shows working (`parkCheckLive`), and so does a Claude's Quit (`earlyQuit`, no key sent), and
+  herdr still showed the agent working for a moment after the esc. A round's stop already waits for this (abort.go:
+  `waitAgentsQuiet`, then Park retried while busy). Now `release` does the same for every pane agent: after an esc it
+  waits up to `abortQuietWait` (20 s) for herdr to show the agent idle over its scratch engine, then tries Park up to
+  `abortParkTries` times, 2 s apart, while it reports busy; with no turn in flight nothing waits, and Detach (the
+  daemon's stop) still lets go at once. The resolver alone (`paneSpec.closeBusy`, set in `stagingPaneSpec`) ends an
+  agent that Park and Quit still refuse by closing its own "staging merge" workspace (`ownWorkspace`, the rule
+  `clearLeftover` uses: the label, its pane alone), since the job's slot goes back right after its Close and nothing
+  may write there then; with a pane of yours in the workspace the agent stays. The retro, the curator, the critic and
+  the editor keep their contract of never forcing a close. The job's Why lost the cause to its 200-character clip,
+  because Close's wrapper put the 186 characters of the workspace and the registry path first: Close now gives the
+  cause first, then the workspace and the path, and the Why names the pane ("its agent may still run in pane w26:p1:
+  ..."). Every resolver job's pane was also titled "learn PR #1 claude-fix - staging": its scratch row is number 1 of
+  magnum/staging, and the pane agents' manager had no `OwnerName`. The job now hands its deploy to its agent
+  (`stagingAgentJob.Title` from `resolveJob.agentOwner`: the repository's name, the PR's number, the env of its
+  staging-<env> branch), `setup` seeds it as the scratch row's title, and `learnAgentDeps` names a row's agents by
+  that title (`scratchOwner`), so the pane is "learn talkable#12204 void claude-fix" and the title adds " - staging";
+  rows without one (the retro's and the notes jobs') keep "PR #1". Rejected: a herdr name or a workspace label per
+  job (clearLeftover finds an earlier job's leftover only by the fixed tagged name and the exact label); dropping
+  "learn" from the title (`Deps.Tag` also feeds the hashed herdr name, so it would need a tag of its own for titles);
+  forcing the close for every pane agent; ParkHard as a last try (it refuses a working agent too); keeping the slot
+  when the agent stays (the slot rules are internal/slots', and with the forced close the agent stays only beside a
+  pane of yours). A Close after an interrupt now takes up to 20 s longer, a daemon stop that closes a retro mid-turn
+  too. Tests: TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc (herdr two snapshots behind
+  the esc, Park and Quit refusing while it shows the agent working; on master Close failed as in the run),
+  TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorkspace (its own workspace closed; with a
+  pane of yours, and for a spec that never forces, the workspace stays and Close gives the cause before the path),
+  TestACancelledResolverJobWhoseAgentStaysNamesItsPaneAndWhy, TestTheStagingResolversAgentIsNamedAfterItsDeploy (a real
+  manager over learnAgentDeps: the pane label and the --name title name the deploy, the herdr name stays
+  mg-1-claude-fix-3a7c43), TestAStagingResolverJobsAgentIsNamedAfterItsDeploy and
+  TestTheStagingResolverClearsTheAgentAnEarlierJobLeft; TestPaneClassifierCloseKeepsTheRegistryWhenTheAgentStays and
+  the other pane agents' tests pass unchanged. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
