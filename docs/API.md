@@ -18364,9 +18364,11 @@ type PRDetails struct {
 	// computing it) or UNSTABLE; "" when GitHub did not say.
 	MergeState string
 	// Remarks are the submitted reviews and issue comments among the
-	// activity timeline's last ten items, as it lists them (oldest first);
-	// nil when GitHub returned no timeline. A reply in a review thread is a
-	// review of its own.
+	// activity timeline's last ten items, as it lists them (oldest first),
+	// and those of the last two reviews it does not list, each before the
+	// first remark submitted after it; nil when GitHub returned no
+	// timeline. A reply in a review thread is a review of its own, with no
+	// body, which the timeline never lists.
 	Remarks []Remark
 }
     PRDetails is what the poller stores for a pull request whose radar row
@@ -18473,7 +18475,7 @@ type Remark struct {
 	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
-	// Details reads them for the timeline's last two reviews only
+	// Details reads them for the last two reviews only
 	// (AnswersKnown; ReviewAnswers reads them for others, Resolve), with
 	// Comments, how many inline comments the review has (of its first ten):
 	// a comment that starts a thread answers none, so a review whose

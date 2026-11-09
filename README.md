@@ -805,7 +805,9 @@ A review of the author's whose inline comments start threads of their own (the f
 review tool, say) or answer another reviewer's is no reply. The poll's read says which for the last two
 reviews; for every other review since Magnum's latest review of the PR (up to ten) it asks GitHub in one
 more call for the batch (1 point, none when nothing needs it), and a review it could not ask about counts
-as before. Anyone else's reply in a thread (in a public repository anyone may
+as before. A reply in a thread is a review with no body, which GitHub's timeline never lists: the poll
+finds it among the PR's last two reviews, so a reply with two newer reviews after it and no push starts
+nothing (the next round's judge still reads it in the threads). Anyone else's reply in a thread (in a public repository anyone may
 reply), a bot's without that association, a teammate's review elsewhere or a bot's top-level comment
 starts nothing; the next round's judge reads them anyway. When such replies came on a head Magnum reviewed, the PR waits
 `[daemon] reply_debounce` (default `"3m"`, `"0"` turns it off) after the last one and at least

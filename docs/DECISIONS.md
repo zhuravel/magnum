@@ -16961,6 +16961,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   contract). Tests, failing first: pipeline's TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen (a posted
   re-review and a reply round; absent and malformed keep both) and TestParseResultReadsTheStopsTheJudgeHoldsOpen;
   engine's TestAStalemateTheJudgeSettlesClearsWithoutASeenMark pins that the engine half needed no change.
+- **A reply in a thread is read from the PR's reviews, not its timeline** (2026-11-09, amends "An author's own
+  inline threads are not replies"). Authors answered magnum's findings in its threads on two PRs (a P1 settled
+  by the merge order, a declined simplification, a fix in a companion PR) and no reply round came:
+  `pending_replies` stayed 0, and no PR in the registry had ever stored a thread reply. GitHub stores a reply in
+  a thread as a review with no body whose inline comments all reply, and
+  `timelineItems(itemTypes: [PULL_REQUEST_REVIEW])` never lists such a review (on those PRs the timeline held 29
+  of 104 and 18 of 78 reviews; the missing ones were exactly the reply-only ones), while Details built its
+  remarks from the activity timeline alone and its replies connection was that timeline's last two reviews. The
+  unit fixture hid it: it put a reply-only review into the timeline, a shape GitHub never returns. The replies
+  connection is now `reviews(last: 2)` with each review's `submittedAt`, author and `authorAssociation`, and
+  `remarks()` adds each submitted review of it the timeline does not list, resolved with its answers, before the
+  first remark submitted after it (the timeline's own order stays, so `replies_json` is not rewritten by a
+  reordering); a review in both lists is one remark, a pending one none, a ghost's has no author.
+  `resolveAnswers`, `repliesOf`, the 12031 rule, the trusted-replier rule and magnum's own replies being dropped
+  are unchanged. `ActivityAt` takes those reviews' submission times too: `latestReviews` leaves out the PR author,
+  so the last activity stayed at magnum's review two days before the author's reply. The same shape (two nodes,
+  the same nested comments) and fields only, which GitHub does not price; no dry run priced it again. Limits: only
+  the last two reviews are read, so a reply with two newer reviews after it and no push is still missed; the first
+  polls after the deploy start reply rounds for the replies that waited (the debounce holds), and an App fixer's
+  replies in magnum's threads count for the first time. Rejected: a scalar `reviews(last: 10)` beside the two
+  resolved ones (another connection, to be priced first; `resolveAnswers` would resolve them); reading every
+  review's comments (the doubled price of the nested connection on every timeline review). Tests, failing first:
+  github's TestDetailsReadsAReplyOnlyReviewTheTimelineLeavesOut and TestTheLastActivityCountsAReplyTheTimelineLeavesOut;
+  `details_remarks.json` no longer lists its reply-only review in the timeline, and its expectations pass unchanged.
 
 - **A comment that left optional findings only needs the operator as a clean one does** (2026-11-09, amends
   "PRs Magnum approved that still need the operator's approval", 2026-10-06, after an audit of PRs waiting on
