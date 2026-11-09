@@ -36,10 +36,13 @@ type StagingSeen struct {
 }
 
 // stagingChoice is E's chooser of the row's staging envs: on says which
-// are chosen; empty says enter came with none.
+// are chosen; empty says enter came with none. words are each env's state
+// in the screen's own words (the factory screen's: "CI 12/41", "not read
+// yet"); nil: the board's (stagingStateWords).
 type stagingChoice struct {
 	ref, label string
 	envs       []StagingInfo
+	words      []string
 	on         []bool
 	empty      bool
 }
@@ -87,7 +90,11 @@ func (c *stagingChoice) line(st styles, width int) string {
 		if c.on[i] {
 			mark = "[x]"
 		}
-		items[i] = strconv.Itoa(i+1) + " " + mark + " " + s.Env + " " + stagingStateWords(s)
+		words := stagingStateWords(s)
+		if i < len(c.words) {
+			words = c.words[i]
+		}
+		items[i] = strconv.Itoa(i+1) + " " + mark + " " + s.Env + " " + words
 	}
 	digits := "1-" + strconv.Itoa(len(c.envs))
 	keys := []string{digits + " toggle, a all, enter asks, other keys cancel", digits + ", a all, enter asks", digits + ", a, enter"}

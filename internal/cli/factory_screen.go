@@ -290,12 +290,17 @@ func (w *ownReadWatch) OwnPRs(ctx context.Context) ([]factory.PRState, error) {
 // frame, read only and never migrated (a registry of another schema than
 // this build's is not read), and whether its watch runs autofix; and its
 // staging deploys (tui.FactoryPR.StagingDeploys, the board's records), from
-// one read of every deploy's record per frame, not one per row. A PR the
-// registry has no row of, and a registry that is not there or cannot be
-// read, leave its facts unread: the keys then refuse only on what the rest
-// of the row tells, and magnum's daemon decides the rest.
+// one read of every deploy's record per frame, not one per row; and, from
+// the config alone, the staging envs of its repository (stagingEnvs). A PR
+// the registry has no row of, and a registry that is not there or cannot
+// be read, leave its facts unread: the keys then refuse only on what the
+// rest of the row tells, and magnum's daemon decides the rest.
 func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow) {
-	if !slices.ContainsFunc(rows, func(r tui.FactoryRow) bool { return r.PR != nil }) || !fsx.Exists(s.c.Layout.DB()) {
+	if !slices.ContainsFunc(rows, func(r tui.FactoryRow) bool { return r.PR != nil }) {
+		return
+	}
+	s.stagingEnvs(rows)
+	if !fsx.Exists(s.c.Layout.DB()) {
 		return
 	}
 	st, err := store.OpenWith(s.c.Layout.DB(), store.Options{QueryOnly: true, BeforeMigrate: func(from, to int) error {
@@ -322,6 +327,29 @@ func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow
 			pr.Facts = f
 		}
 		rows[i].PR = &pr
+	}
+}
+
+// stagingEnvs gives the rows' PRs the staging envs the config names for
+// their repositories (tui.FactoryPR.StagingEnvs, config.Stagings), in its
+// order, which E's chooser lists on a row without staging cells (the
+// factory daemon has not written them yet, or reads none: your own PR's);
+// none for a repository without any.
+func (s *factoryScreenSource) stagingEnvs(rows []tui.FactoryRow) {
+	for i, r := range rows {
+		if r.PR == nil {
+			continue
+		}
+		full, _, _ := strings.Cut(r.PR.Ref, "#")
+		var envs []string
+		for _, e := range s.c.Config.Stagings(full) {
+			envs = append(envs, e.Name)
+		}
+		if envs != nil {
+			pr := *r.PR
+			pr.StagingEnvs = envs
+			rows[i].PR = &pr
+		}
 	}
 }
 

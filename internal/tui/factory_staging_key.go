@@ -12,34 +12,80 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
 // stagingKey is E on row r (home's, or the card's): on a row whose open PR
-// magnum's registry has and whose staging servers the screen shows, the
+// magnum's registry has and whose repository has staging servers, the
 // chooser of them; else a note of why, and no request.
 func (m *factoryModel) stagingKey(r FactoryRow) tea.Cmd {
-	if r.PR == nil {
-		return m.note("E acts on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
-	}
-	row := m.prActRow(r, true)
-	row.stagings = stagingInfosOf(r.Stagings)
-	if len(row.stagings) == 0 && r.yourPR() { // the factory reads the staging servers of its tasks' PRs alone
-		return m.note(row.label + " is your PR: this screen reads no staging servers of it (`magnum staging " +
-			cleanText(r.PR.Ref) + " --deploy <envs>` deploys it)")
-	}
-	if why := actionRefusal(actStaging, row); why != "" {
-		return m.note(why)
-	}
+	row, words, why := m.stagingRow(r)
 	switch {
+	case why != "":
+		return m.note(why)
 	case m.act == nil:
 		return m.note(noActions)
 	case m.bar.busy != "": // as the bar refuses a question while an action runs
 		return m.bar.show("wait: "+m.bar.busy+" runs", factoryFlashWait)
 	}
 	m.bar.choose = newStagingChoice(row)
+	m.bar.choose.words = words
 	return nil
+}
+
+// stagingRow is what E's chooser lists of row r: the board's row of its PR
+// with its staging envs, and each env's state in the screen's words. The
+// envs are the row's staging cells (stagingInfosOf, stagingWords); a row
+// without cells yet (the factory daemon has not written them, or reads
+// none: your own PR's) has the envs the config names for the PR's
+// repository (FactoryPR.StagingEnvs), each not read yet, which the review
+// daemon plans all the same. why is E's refusal of the row ("" for none):
+// no PR in magnum's registry, else the board's (no staging envs in the
+// config, a PR merged or closed).
+func (m factoryModel) stagingRow(r FactoryRow) (row actRow, words []string, why string) {
+	if r.PR == nil {
+		return actRow{}, nil, "E acts on a PR in magnum's registry: " + cleanText(r.Key) + " has none there"
+	}
+	row = m.prActRow(r, true)
+	if len(r.Stagings) > 0 {
+		row.stagings, words = stagingInfosOf(r.Stagings), m.stagingWords(r.Stagings)
+	} else {
+		for _, env := range r.PR.StagingEnvs {
+			row.stagings = append(row.stagings, StagingInfo{Env: cleanText(env), State: "unknown", Why: stagingNotRead})
+			words = append(words, stagingNotRead)
+		}
+	}
+	return row, words, actionRefusal(actStaging, row)
+}
+
+// stagingNotRead is the state of an env no staging cell tells yet.
+const stagingNotRead = "not read yet"
+
+// stagingWords are cells' states in the factory screen's own words, as the
+// row's cell and the task card's STAGINGS line say them in their long form
+// (stageCell: "latest", "CI 12/41", "CI ✗", "deploying"), without the
+// cell's age; none and unknown in words.
+func (m factoryModel) stagingWords(cells []StagingCell) []string {
+	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
+	out := make([]string, len(cells))
+	for i, c := range cells {
+		c.State, c.Count, c.Seen = cleanText(c.State), cleanText(c.Count), time.Time{}
+		var b strings.Builder
+		for _, sg := range p.stageCell(c, formLong) {
+			b.WriteString(sg.text)
+		}
+		switch w := b.String(); {
+		case c.State == "none":
+			out[i] = "none"
+		case w == "?":
+			out[i] = "unknown"
+		default:
+			out[i] = w
+		}
+	}
+	return out
 }
 
 // chooseKey is a key while E's chooser is up (stagingChoice.press): enter

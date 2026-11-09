@@ -94,7 +94,7 @@ func TestFactoryEOnAHomeRowChoosesTheEnvsThenDeploysAfterThePlan(t *testing.T) {
 	h.press("g")
 	h.selectRow("PR-12320")
 	h.press("E")
-	mustContain(t, h.view(), "Deploy PR-12320's #4530 to: 1 [ ] void live · 2 [ ] bart pushed · 3 [ ] bastion not there", "enter asks")
+	mustContain(t, h.view(), "Deploy PR-12320's #4530 to: 1 [ ] void latest · 2 [ ] bart CI · 3 [ ] bastion none", "enter asks")
 	h.press("enter")
 	mustContain(t, h.view(), "choose an env first")
 	h.wantStaging(nil, nil)
@@ -127,7 +127,7 @@ func TestFactoryEOnATaskCardDeploysAfterThePlan(t *testing.T) {
 		t.Fatalf("enter on PR-12320 opened view %v of %d, want its task card", h.m.view, h.m.task)
 	}
 	h.press("E")
-	mustContain(t, h.view(), "Deploy PR-12320's #4530 to: 1 [ ] void live")
+	mustContain(t, h.view(), "Deploy PR-12320's #4530 to: 1 [ ] void latest")
 	h.press("1", "2")
 	mustContain(t, h.view(), "1 [x] void", "2 [x] bart")
 	h.press("enter")
@@ -142,9 +142,8 @@ func TestFactoryEOnATaskCardDeploysAfterThePlan(t *testing.T) {
 
 // E refuses, before any chooser and with no request: a row without a PR
 // in magnum's registry (in the words the fix keys use), a PR whose
-// repository has no staging servers, your own PR (whose row the factory
-// reads no staging servers of), a merged PR, and a screen without
-// actions.
+// repository has no staging servers in the config (no cells, and no
+// FactoryPR.StagingEnvs), a merged PR, and a screen without actions.
 func TestFactoryERefusesWhatItCannotDeploy(t *testing.T) {
 	h := testStaged(t, 160, 40)
 	h.press("g")
@@ -171,7 +170,7 @@ func TestFactoryERefusesWhatItCannotDeploy(t *testing.T) {
 	y.selectRow("#4602")
 	y.press("E")
 	v := y.view()
-	mustContain(t, v, "#4602 is your PR: this screen reads no staging servers of it", "magnum staging example/talkable#4602 --deploy")
+	mustContain(t, v, "#4602's repository has no staging envs ([[factory.repo.staging]] in config.toml)")
 	mustNotContain(t, v, "Deploy #4602 to")
 	y.wantStaging(nil, nil)
 
@@ -361,6 +360,75 @@ func TestTheFactoryHelpNamesE(t *testing.T) {
 			t.Errorf("the help's %s lacks E:\n%s", sec, strings.Join(helpSection(t, help, sec), "\n"))
 		}
 	}
+}
+
+// configEnvs gives the PR of the row keyed key the staging envs the config
+// names for its repository (FactoryPR.StagingEnvs, the cli source's
+// config.Stagings), and reads the factory again.
+func (h *factoryHarness) configEnvs(key string, envs ...string) {
+	h.t.Helper()
+	found := false
+	h.src.change(func(d *FactoryData) {
+		for i, r := range d.Rows {
+			if r.Key == key && r.PR != nil {
+				pr := *r.PR
+				pr.StagingEnvs = envs
+				d.Rows[i].PR, found = &pr, true
+			}
+		}
+	})
+	if !found {
+		h.t.Fatalf("no row %s with a PR", key)
+	}
+	h.press("ctrl+r")
+}
+
+// A row with a PR but no staging cells yet (the factory daemon has not
+// written them, or never reads them: your own PR's row), whose repository
+// has staging envs in the config, opens the chooser on the config's envs,
+// each not read yet: the review daemon plans them anyway. Only a
+// repository with none in the config says it has none. Before, every such
+// row said its repository had no staging envs, and your own PR's that the
+// screen read none of it.
+func TestFactoryEOnARowWithoutCellsChoosesTheConfigsEnvs(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.configEnvs("PR-12324", "void", "bart\x1b[31m")
+	h.press("g")
+	h.selectRow("PR-12324")
+	h.press("E")
+	mustContain(t, h.view(), "Deploy PR-12324's #4534 to: 1 [ ] void not read yet · 2 [ ] bart not read yet")
+	h.press("2", "enter")
+	h.wantStaging([]string{"example/talkable#4534 bart"}, nil)
+	mustContain(t, h.view(), stagingAsk("example/talkable#4534", []string{"bart"})+" y/N")
+
+	y := testYours(t, 160, 40)
+	y.configEnvs("#4602", "void")
+	y.press("g")
+	y.selectRow("#4602")
+	y.press("E")
+	mustContain(t, y.view(), "Deploy #4602 to: 1 [ ] void not read yet")
+	y.press("1", "enter", "y")
+	y.wantStaging([]string{"example/talkable#4602 void"}, []string{"example/talkable#4602 void at abcdef1234 seen db/migrate/1_a.rb"})
+}
+
+// E's chooser says each server's state in the factory screen's own words,
+// as the row's cell and the card's STAGINGS line say it (CI with its
+// count, CI ✗, deploying), without the cell's age; none and unknown in
+// words.
+func TestFactoryEsChooserKeepsTheFactorysStateWords(t *testing.T) {
+	h := testStaged(t, 200, 40)
+	h.src.change(func(d *FactoryData) {
+		for i, r := range d.Rows {
+			if r.Key == "PR-12320" {
+				d.Rows[i].Stagings = []StagingCell{{Name: "void", State: "ci", Count: "12/41", Seen: factoryNow}, {Name: "bart", State: "ci-fail"},
+					{Name: "bastion", State: "deploying"}, {Name: "rc", State: "outdated"}, {Name: "demo", State: "unknown"}}
+			}
+		}
+	})
+	h.press("ctrl+r", "g")
+	h.selectRow("PR-12320")
+	h.press("E")
+	mustContain(t, h.view(), "1 [ ] void CI 12/41 · 2 [ ] bart CI ✗ · 3 [ ] bastion deploying · 4 [ ] rc outdated · 5 [ ] demo unknown")
 }
 
 // E's chooser lists the factory's cells in the board's states, the way

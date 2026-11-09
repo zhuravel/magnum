@@ -142,6 +142,12 @@ type FactoryPR struct {
 	// task card draws them under STAGINGS, home's rows none. nil when the
 	// screen read none.
 	StagingDeploys []StagingDeploy
+	// StagingEnvs are the staging envs the config names for the PR's
+	// repository ([[factory.repo.staging]], config.Stagings), in its order:
+	// on a row without staging cells (none read yet, or your own PR's, whose
+	// the factory reads none of) E's chooser lists them, each not read yet,
+	// and the review daemon plans them. nil: the repository has none.
+	StagingEnvs []string
 }
 
 // FactoryPRFacts are what the board's row actions (review, fresh review,

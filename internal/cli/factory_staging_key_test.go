@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -125,5 +126,48 @@ func TestTheFactoryScreenReadsItsPRsStagingDeploys(t *testing.T) {
 	}
 	if ds := deploys["talkable/talkable#6"]; len(ds) != 0 {
 		t.Errorf("#6's deploys %+v, want none: the records are #5's and #7's", ds)
+	}
+}
+
+// The screen's rows carry the staging envs the config names for their
+// PRs' repositories (tui.FactoryPR.StagingEnvs, config.Stagings), which E's
+// chooser lists on a row without staging cells: your own PR's in a staging
+// repository, in the config's order, and none for a repository without
+// any. The config is all it reads: without magnum's registry the rows
+// still carry them.
+func TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	cfg := *dt.ctx.Config
+	stagingConfig(&cfg)
+	dt.ctx.Config = &cfg
+	own := func(repo string, n int, id int64) factory.PRState {
+		return factory.PRState{Ref: factory.PRRef{Repo: repo, Number: n}, ID: id, Title: "a PR", Found: true, DaemonUp: true,
+			Watched: true, GHState: store.GHOpen, State: store.PRReviewed, AuthorLogin: "zhuravel"}
+	}
+	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own("talkable/talkable", 5, 15),
+		own("example/shop", 6, 16)}}}
+	defer src.close()
+	d, err := src.Frame(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs := map[string][]string{}
+	for _, r := range d.Rows {
+		if r.PR != nil {
+			envs[r.PR.Ref] = r.PR.StagingEnvs
+		}
+	}
+	if len(envs) != 2 {
+		t.Fatalf("rows with a PR %v, want #5 and #6", envs)
+	}
+	if got := envs["talkable/talkable#5"]; !slices.Equal(got, []string{"void", "bart"}) {
+		t.Errorf("#5's staging envs %q, want the config's void and bart", got)
+	}
+	if got := envs["example/shop#6"]; got != nil {
+		t.Errorf("#6's staging envs %q, want none: its repository has none", got)
+	}
+	if fsx.Exists(dt.ctx.Layout.DB()) {
+		t.Error("the frame made magnum's registry")
 	}
 }
