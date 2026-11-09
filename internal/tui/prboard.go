@@ -283,6 +283,7 @@ type prbFrameKey struct {
 	refreshedAt              int64
 	spin                     string
 	confirm, busy            string
+	choose                   string // the staging chooser's state (stagingChoice.key)
 	leaving, switching       bool
 	flash                    string
 	flashErr, flashInfo      bool
@@ -318,6 +319,7 @@ func (m prBoardModel) frameKey() prbFrameKey {
 	if m.confirm != nil {
 		k.confirm = m.confirm.question
 	}
+	k.choose = m.choose.key()
 	return k
 }
 
@@ -718,6 +720,9 @@ func (m prBoardModel) updateKey(msg tea.KeyPressMsg) (prBoardModel, tea.Cmd) {
 		return m, cmd
 	case m.confirm != nil:
 		cmd, started := m.answer(k)
+		return m.withSpinner(cmd, started)
+	case m.choose != nil:
+		cmd, started := m.chooseKey(k)
 		return m.withSpinner(cmd, started)
 	case m.menu.open:
 		return m.menuKey(k)
@@ -1183,6 +1188,8 @@ func (m prBoardModel) statusRule(p *prbPainter, w, below int) string {
 		// The question takes the whole rule: footerRule keeps 4 cells
 		// for its lead and the space after the message.
 		return p.footerRule(w, m.st.confirmLine(m.confirm.question, w-4), 0)
+	case m.choose != nil: // the staging chooser takes it as a question does
+		return p.footerRule(w, m.choose.line(m.st, w-4), 0)
 	case m.leaving:
 		msg = m.spin.View() + " " + m.st.Warn.Render(m.busyText())
 	case m.flash != "":

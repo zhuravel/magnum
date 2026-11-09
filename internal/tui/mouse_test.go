@@ -364,11 +364,12 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"open whiteboard":    false, // nor a whiteboard
 		"star":               true,
 		"merge parent":       true,
+		"deploy to staging":  false, // nor staging envs
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 25 {
+	if len(m.menuItems()) != 26 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 
@@ -615,6 +616,7 @@ func TestDashboardMouse(t *testing.T) {
 		"review": false, "fresh review": false, "simplify review": false, "kill review": false, "ignore": false,
 		"open pane": false, "browser": false, "pin": true, "unpin": false, "release": true,
 		"mute": false, "unmute": false, "reset column widths": false, "fix findings": false, "fix off": false, "merge parent": false,
+		"deploy to staging": false,
 	}
 	if !m.menu.open || m.cursor != 1 || !maps.Equal(got, want) {
 		t.Fatalf("empty slot menu (open %v cursor %d):\n got %v\nwant %v", m.menu.open, m.cursor, got, want)

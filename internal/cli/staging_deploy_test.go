@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
@@ -190,5 +192,63 @@ func TestStagingCancelAndTheFlagsThatGoTogether(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2: %s", c.args, code, h.errb.String())
 		}
 		actContains(t, h.errb.String(), c.want)
+	}
+}
+
+// The screens' E runs the command's own path: its plan hands back the
+// question (Ask) and the binding (Staging: the envs that take the merge,
+// the head, what the question named), and the deploy the screen then
+// asked y/N for queues the deploy alone, so bound, never asking again; a
+// plan with nothing to deploy is the screen's error, with no question.
+func TestScreenStagingDeployPlansThenDeploysBoundToThePlan(t *testing.T) {
+	h, prs := stagingHarness(t)
+	h.pid = 4242
+	h.stagingDaemon(prs[5].HeadSHA)
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	ctx := context.Background()
+
+	res, err := acts.StagingPlan(ctx, "talkable#5", []string{"void", "bart"})
+	if err != nil || !strings.HasPrefix(res.Ask, "Deploy talkable#5's head abc1234 to void: fixer-app[bot] merges it into staging-void") ||
+		res.Staging == nil || !slices.Equal(res.Staging.Envs, []string{"void"}) || res.Staging.Head != prs[5].HeadSHA ||
+		len(res.Staging.Seen) != 1 || !slices.Equal(res.Staging.Seen[0].Migrations, []string{stagingMigration}) {
+		t.Fatalf("the plan = %+v, %v", res, err)
+	}
+	if res, err = acts.StagingDeploy(ctx, "talkable#5", *res.Staging); err != nil || res.Ask != "" ||
+		!strings.Contains(res.Text, "deploying talkable/talkable#5 at abc1234 to void") {
+		t.Fatalf("the deploy = %+v, %v", res, err)
+	}
+	reqs := h.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want the plan and the deploy", len(reqs))
+	}
+	if p := actDecode[engine.StagingDeployPayload](t, reqs[1].Payload); p.DryRun || p.Head != prs[5].HeadSHA || !slices.Equal(p.Envs, []string{"void"}) ||
+		len(p.Seen) != 1 || p.Seen[0].Env != "void" {
+		t.Fatalf("the deploy's payload %+v", p)
+	}
+	if res, err := acts.StagingPlan(ctx, "talkable#5", []string{"bart"}); err == nil || res.Ask != "" || !strings.Contains(err.Error(), "nothing to deploy") {
+		t.Errorf("a plan with nothing to deploy = %+v, %v", res, err)
+	}
+}
+
+// The dashboard's rows carry their open PR's staging status, as the board's
+// do, for E's chooser; none without staging envs.
+func TestTheDashboardRowsCarryTheirPRsStagings(t *testing.T) {
+	h, prs := stagingHarness(t)
+	if err := h.st.SetKV(h.ctx, store.KVDaemonLastTick, store.FormatTime(time.Now())); err != nil { // the dashboard reads the wall clock
+		t.Fatal(err)
+	}
+	pr := prs[5]
+	r := statusReport{Queue: []statusPRLine{{Repo: "talkable/talkable", Number: 5, rec: &pr}}}
+	data := statusDashData(r, "talkable/talkable")
+	statusDashStagings(h.ctx, statusDeps{Store: h.st, Config: h.d.Cfg}, r, &data)
+	if s := data.Queue[0].Stagings; len(s) != 2 || s[0].Env != "void" || s[0].State != "latest" || s[1].Env != "bart" {
+		t.Fatalf("the queue row's stagings %+v", s)
+	}
+	h.d.Cfg.Factory.Repos = nil
+	data = statusDashData(r, "talkable/talkable")
+	statusDashStagings(h.ctx, statusDeps{Store: h.st, Config: h.d.Cfg}, r, &data)
+	if s := data.Queue[0].Stagings; s != nil {
+		t.Fatalf("without staging envs: %+v", s)
 	}
 }

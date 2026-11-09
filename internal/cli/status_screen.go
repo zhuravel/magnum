@@ -78,9 +78,40 @@ func statusDashSource(d statusDeps, o statusOptions) tui.SourceFunc {
 			return tui.StatusData{}, err
 		}
 		data := statusDashData(r, defRepo)
+		statusDashStagings(ctx, d, r, &data)
 		data.Rounds.Progress = statusDashProgress(ctx, d, data.Rounds.ActivePRs)
 		data.Facts = screenFacts(ctx, d)
 		return data, nil
+	}
+}
+
+// statusDashStagings fills each queue row's and slot row's staging status
+// (data, as statusDashData made it from r) as the board reads it
+// (stagingShown): for the open PRs of the repositories with staging envs,
+// which E's chooser lists.
+func statusDashStagings(ctx context.Context, d statusDeps, r statusReport, data *tui.StatusData) {
+	cfg := d.Config
+	if cfg == nil || d.Store == nil || len(engine.StagingRepos(cfg)) == 0 {
+		return
+	}
+	lastTick, now := daemonLastTick(ctx, d.Store), inspNow()
+	of := func(repo string, pr *store.PR) []tui.StagingInfo {
+		envs := engine.StagingEnvs(cfg, repo)
+		if pr == nil || pr.GHState != store.GHOpen || len(envs) == 0 {
+			return nil
+		}
+		return stagingShown(ctx, d.Store, envs, *pr, lastTick, now)
+	}
+	lines := append(slices.Clone(r.Queue), r.Closing...)
+	for i := range data.Queue {
+		if i < len(lines) {
+			data.Queue[i].Stagings = of(lines[i].Repo, lines[i].rec)
+		}
+	}
+	for i := range data.Slots {
+		if i < len(r.Slots) {
+			data.Slots[i].PRStagings = of(r.Slots[i].Slot.RepoFullName, r.Slots[i].PR)
+		}
 	}
 }
 

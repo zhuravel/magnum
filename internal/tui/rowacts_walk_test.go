@@ -35,12 +35,14 @@ func TestEveryRowActionRunsItsOwnCall(t *testing.T) {
 		actStar:           "star talkable#7",
 		actFixDone:        "fix --done talkable#7",
 		actMergeParent:    "merge-parent --dry-run talkable#7",
+		actStaging:        "staging talkable#7 --deploy void --dry-run",
 	}
 	if len(want) != len(rowActDefs) {
 		t.Fatalf("the test knows %d row actions, rowActDefs %d", len(want), len(rowActDefs))
 	}
 	r := actRow{ok: true, ref: "talkable#7", label: "talkable#7", ghState: "OPEN", now: boardNow,
-		url: "https://github.com/talkable/talkable/pull/7", issue: "PS-1", issueURL: "https://tracker.example.com/PS-1"}
+		url: "https://github.com/talkable/talkable/pull/7", issue: "PS-1", issueURL: "https://tracker.example.com/PS-1",
+		stagings: []StagingInfo{{Env: "void", State: "none"}}}
 	for a := range rowAct(len(rowActDefs)) {
 		what, fn := actionRun(a, r)
 		if !strings.HasPrefix(what, rowActDefs[a].what) {

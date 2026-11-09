@@ -70,6 +70,7 @@ type actionBar struct {
 	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 
 	confirm    *pendingAction // the action awaiting y/N
+	choose     *stagingChoice // E's chooser of staging envs, up before its y/N
 	busy       string         // the action in flight
 	busyTarget string         // the PR (or slot) it acts on
 	leaving    bool           // the user quit (or switched): close once busy ends
@@ -263,7 +264,7 @@ func (b *actionBar) clock() time.Time {
 // Bubble Tea hands it before it handles tea.Quit go to leavingKey: a y
 // typed after ctrl+c starts no action on a context about to end.
 func (b *actionBar) leave(switching bool) tea.Cmd {
-	b.switching, b.confirm = switching, nil
+	b.switching, b.confirm, b.choose = switching, nil, nil
 	if b.busy == "" {
 		b.leaving = true
 		return tea.Quit

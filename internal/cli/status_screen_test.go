@@ -77,7 +77,7 @@ func TestStatusDashData(t *testing.T) {
 
 	wantSlot := tui.SlotRow{Name: "review1", Folder: inspTilde(f.Home + "/talkable.review1"), PRRef: "talkable#11920", PRState: store.PRReviewed,
 		SlotState: "held [foreign_agent]", State: store.SlotHeld, DBs: "1/2 300M", Disk: "1.0G", URL: "https://github.com/talkable/talkable/pull/11920", PRGHState: store.GHOpen}
-	if len(got.Slots) != 1 || got.Slots[0] != wantSlot {
+	if len(got.Slots) != 1 || !reflect.DeepEqual(got.Slots[0], wantSlot) {
 		t.Errorf("slots %+v\nwant %+v", got.Slots, wantSlot)
 	}
 

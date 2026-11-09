@@ -36,6 +36,7 @@ func boardActHints(judge string) []hint {
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix as the fixer / fix off or on (asks y/N)"},
 		{"d / P", "fix loop's calls done / merge base (asks y/N)"},
+		{"E", "deploy to staging (choose, y/N)"},
 		{"o", "open the " + judgeName(judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
 		{"p / u", "pin / unpin / acknowledge a hold"}, {"*", "star or unstar: starred PRs lead their section"},

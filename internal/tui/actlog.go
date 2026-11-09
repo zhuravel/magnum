@@ -29,6 +29,9 @@ type ActionResult struct {
 	// (MergeParent's dry run), which the screen puts as y/N before it
 	// merges. "" for none.
 	Ask string
+	// Staging is what a staging deploy's plan (StagingPlan) binds its
+	// deploy to, which y sends (StagingDeploy); nil for none.
+	Staging *StagingAsked
 	// next and nextFactory are that next step on the board and the
 	// dashboard (actionRun), and on the factory screen (prKey): the screen
 	// asks Ask y/N, and y runs it.

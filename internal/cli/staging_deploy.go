@@ -22,6 +22,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // stagingWait bounds the wait for the daemon's answer to a plan, a deploy
@@ -183,7 +184,14 @@ func stagingDeployMain(ctx context.Context, c *Context, d *actDeps, ref string, 
 	default: // --yes or a script: nothing was asked, so nothing was seen
 		p.Head = t.PR.HeadSHA
 	}
-	res, err := stagingSend(ctx, d, engine.ReqStagingDeploy, p)
+	return stagingSendDeploy(ctx, c, d, label, p, stagingWait, o.json)
+}
+
+// stagingSendDeploy queues the deploy p of label, waits for the daemon's
+// answer at most wait and prints it (asJSON: as JSON); a request still
+// pending says how to follow it.
+func stagingSendDeploy(ctx context.Context, c *Context, d *actDeps, label string, p engine.StagingDeployPayload, wait time.Duration, asJSON bool) int {
+	res, err := d.reqs().send(ctx, engine.ReqStagingDeploy, p, reqSend{Wait: wait, Poll: d.quickPoll(), NeedDaemon: true})
 	if err != nil {
 		if errors.Is(err, errNoDaemon) {
 			err = fmt.Errorf("%s: nothing was queued: %w", label, err)
@@ -195,13 +203,13 @@ func stagingDeployMain(ctx context.Context, c *Context, d *actDeps, ref string, 
 	case res.Failed():
 		res.printNotes(c.Stderr)
 		return cmdFail(c, "staging", errors.New(res.Result()))
-	case ok && o.json:
+	case ok && asJSON:
 		return stagingWriteJSON(c, ans)
 	case ok:
 		res.printNotes(c.Stderr)
 		fmt.Fprintln(c.Stdout, actClean(ans.Text))
 		return 0
-	case o.json:
+	case asJSON:
 		_ = writeJSON(c.Stdout, res.view())
 		return res.jsonCode()
 	}
@@ -236,4 +244,54 @@ func stagingCancelMain(ctx context.Context, c *Context, d *actDeps, id string, o
 		return res.jsonCode()
 	}
 	return res.print(c.Stdout, c.Stderr)
+}
+
+// StagingPlan asks the daemon's plan of a staging deploy of ref to envs
+// (magnum staging --deploy --dry-run) for the screens' E: the plan printed,
+// its y/N as the result's Ask and the deploy's binding as Staging (the envs
+// that take the merge, the head, what the question names); a plan with
+// nothing to deploy fails, saying why per env.
+func (s *screenActions) StagingPlan(ctx context.Context, ref string, envs []string) (tui.ActionResult, error) {
+	var ask string
+	var asked *tui.StagingAsked
+	res, err := s.do(ctx, "staging", func(ctx context.Context, c *Context, d *actDeps) int {
+		t, err := d.resolveRef(ctx, ref)
+		if err != nil {
+			return cmdFail(c, "staging", err)
+		}
+		label := d.actLabel(t.full(), t.PR.Number)
+		ans, err := stagingPlan(ctx, d, engine.StagingDeployPayload{PRTarget: t.prTarget(), Envs: envs})
+		if err != nil {
+			return cmdFail(c, "staging", err)
+		}
+		stagingPrintPlan(c.Stdout, label, ans)
+		q, deploy, seen, ok := StagingQuestion(label, ans)
+		if !ok {
+			return cmdFail(c, "staging", fmt.Errorf("nothing to deploy: %s", q))
+		}
+		ask, asked = q, &tui.StagingAsked{Envs: deploy, Head: ans.Head}
+		for _, sn := range seen {
+			asked.Seen = append(asked.Seen, tui.StagingSeen{Env: sn.Env, Migrations: sn.Migrations, Workflows: sn.Workflows})
+		}
+		return 0
+	})
+	res.Ask, res.Staging = ask, asked
+	return res, err
+}
+
+// StagingDeploy queues the deploy the screen's y/N bound (StagingPlan's
+// Staging), waiting for the daemon's answer as quick requests do: one still
+// pending is followed on the screen.
+func (s *screenActions) StagingDeploy(ctx context.Context, ref string, asked tui.StagingAsked) (tui.ActionResult, error) {
+	return s.do(ctx, "staging", func(ctx context.Context, c *Context, d *actDeps) int {
+		t, err := d.resolveRef(ctx, ref)
+		if err != nil {
+			return cmdFail(c, "staging", err)
+		}
+		p := engine.StagingDeployPayload{PRTarget: t.prTarget(), Envs: asked.Envs, Head: asked.Head, Seen: []engine.StagingSeen{}}
+		for _, sn := range asked.Seen {
+			p.Seen = append(p.Seen, engine.StagingSeen{Env: sn.Env, Migrations: sn.Migrations, Workflows: sn.Workflows})
+		}
+		return stagingSendDeploy(ctx, c, d, d.actLabel(t.full(), t.PR.Number), p, d.quick().Wait, false)
+	})
 }

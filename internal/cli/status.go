@@ -34,7 +34,8 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"--watch on a terminal opens the live dashboard, refreshed every 2s: j/k select a slot or PR, enter "+
 			"(or o) opens its judge pane, r reviews (R fresh, i with /simplify), K kills the PR's running or queued "+
 			"review, I ignores the PR (kill, mute, free its slot), f fixes its findings as the fixer's login (F takes it out of "+
-			"autofix or puts it back), P merges its base into it as the fixer App's bot (asking y/N with the daemon's plan), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
+			"autofix or puts it back), P merges its base into it as the fixer App's bot (asking y/N with the daemon's plan), "+
+			"E deploys your PR to its staging envs (1-3 choose them, a all, enter asks y/N with the daemon's plan), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
 			"ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
 			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
 			"worktrees, ! shows the action log, m turns the mouse off and on (wheel, click, double click to open, "+

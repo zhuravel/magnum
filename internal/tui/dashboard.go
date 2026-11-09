@@ -134,6 +134,8 @@ type SlotRow struct {
 	// PR: a PR whose fixer works is reviewed, so it shows on its slot's row
 	// and in no queue.
 	PRFixLoop, PRFixOff bool
+	// PRStagings is PRRow's Stagings for the slot's PR.
+	PRStagings []StagingInfo
 }
 
 // PRRow is one queued (or closing) PR; Ref is what actions receive.
@@ -154,6 +156,9 @@ type PRRow struct {
 	// fix role's identity: a fixer App's bot, or yours), which f's
 	// question names; "" when the config does not say.
 	Fixer string
+	// Stagings is where the open PR stands on its repository's staging
+	// envs (PRBoardRow.Stagings), which E's chooser lists; nil without.
+	Stagings []StagingInfo
 }
 
 // AttentionRow is something that needs the user.
@@ -233,6 +238,14 @@ type DashboardActions interface {
 	// dry, it only asks the daemon what would happen and returns the plan
 	// as the result's Ask, the y/N the screen puts before the merge.
 	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
+	// StagingPlan asks the daemon's plan of a staging deploy of the
+	// operator's own PR to envs (magnum staging --deploy --dry-run) and
+	// returns its y/N as the result's Ask and its binding as Staging (the
+	// envs that take the merge, the head, what the question names); an
+	// answer with nothing to deploy is an error. StagingDeploy sends the
+	// deploy so bound, once the screen's y/N said yes (E).
+	StagingPlan(ctx context.Context, ref string, envs []string) (ActionResult, error)
+	StagingDeploy(ctx context.Context, ref string, asked StagingAsked) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
 	// --done); the board's d, which asked first. seen is the digest of the
@@ -417,6 +430,7 @@ type dashFrameKey struct {
 	loadErr              string
 	spin                 string
 	confirm, busy        string
+	choose               string // the staging chooser's state (stagingChoice.key)
 	leaving, switching   bool
 	flash                string
 	flashErr, flashInfo  bool
@@ -444,6 +458,7 @@ func (m dashboardModel) frameKey() dashFrameKey {
 	if m.confirm != nil {
 		k.confirm = m.confirm.question
 	}
+	k.choose = m.choose.key()
 	return k
 }
 
@@ -578,6 +593,9 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (dashboardModel, tea.Cmd)
 	case m.confirm != nil:
 		cmd, started := m.answer(k)
 		return m.withSpinner(cmd, started)
+	case m.choose != nil:
+		cmd, started := m.chooseKey(k)
+		return m.withSpinner(cmd, started)
 	case m.menu.open:
 		return m.menuKey(k)
 	}
@@ -697,10 +715,13 @@ func (m dashboardModel) actRow() actRow {
 		row.inSlot = true
 		row.pinned = s.Pinned
 		row.pinKnown = row.pinned || ref == ""
-		row.fixLoop, row.fixOff = s.PRFixLoop, s.PRFixOff
+		row.fixLoop, row.fixOff, row.stagings = s.PRFixLoop, s.PRFixOff, s.PRStagings
 	}
 	if q, ok := m.queueRow(ref); ok {
 		row.fixLoop, row.fixOff, row.fixer = row.fixLoop || q.FixLoop, row.fixOff || q.FixOff, q.Fixer
+		if q.Stagings != nil {
+			row.stagings = q.Stagings
+		}
 	}
 	if ref == "" {
 		row.slot, row.label, row.none = r.slot.Name, "slot "+r.slot.Name, "slot "+r.slot.Name+" holds no PR"
@@ -1298,6 +1319,8 @@ func (m dashboardModel) statusLine(w int) string {
 	switch {
 	case m.confirm != nil:
 		return m.st.confirmLine(m.confirm.question, w)
+	case m.choose != nil:
+		return m.choose.line(m.st, w)
 	case m.leaving:
 		return truncate(m.spin.View()+" "+m.st.Warn.Render(busy), w)
 	case m.flash != "":
@@ -1358,6 +1381,7 @@ func dashboardKeys(judge string) []hint {
 		{"i", "review with /simplify (asks y/N)"},
 		{"f", "fix the PR's findings as the fixer's login (asks y/N)"},
 		{"P", "merge the PR's base into it as the fixer App's bot (asks y/N with the daemon's plan)"},
+		{"E", "deploy your PR to staging: 1-3 toggle an env, a all, enter asks y/N with the daemon's plan"},
 		{"F", "leave its findings to you: no autofix (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 		{"p / u", "pin / unpin (the slot when it holds no PR)"},
@@ -1476,11 +1500,13 @@ func sanitizeStatus(d StatusData) StatusData {
 		r.Name, r.Folder, r.PRRef, r.PRState = cleanText(r.Name), cleanText(r.Folder), cleanText(r.PRRef), cleanText(r.PRState)
 		r.SlotState, r.DBs, r.Disk, r.URL = cleanText(r.SlotState), cleanText(r.DBs), cleanText(r.Disk), cleanText(r.URL)
 		r.PRGHState, r.State = cleanText(r.PRGHState), cleanText(r.State)
+		r.PRStagings = cleanStagings(r.PRStagings)
 	})
 	d.Queue = cleanEach(d.Queue, func(r *PRRow) {
 		r.Ref, r.Title, r.Author, r.State = cleanText(r.Ref), cleanText(r.Title), cleanText(r.Author), cleanText(r.State)
 		r.Next, r.Age, r.URL, r.GHState = cleanText(r.Next), cleanText(r.Age), cleanText(r.URL), cleanText(r.GHState)
 		r.Review, r.Fixer = cleanReviewFacts(r.Review), cleanText(r.Fixer)
+		r.Stagings = cleanStagings(r.Stagings)
 	})
 	d.Attention = cleanEach(d.Attention, func(a *AttentionRow) {
 		a.Subject, a.Kind, a.Message, a.Fix = cleanText(a.Subject), cleanText(a.Kind), cleanText(a.Message), cleanText(a.Fix)

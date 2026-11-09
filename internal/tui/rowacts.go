@@ -49,6 +49,7 @@ const (
 	actStar
 	actFixDone
 	actMergeParent
+	actStaging
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -86,6 +87,7 @@ var rowActDefs = [...]rowActDef{
 	actStar:           {"*", "star", "star", "star"},
 	actFixDone:        {"d", "fixer's calls done", "done", "fix --done"},
 	actMergeParent:    {"P", "merge parent", "parent", "merge-parent"},
+	actStaging:        {"E", "deploy to staging", "staging", "staging deploy"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
@@ -93,9 +95,9 @@ var rowActDefs = [...]rowActDef{
 // shows and hides the manual worktrees, as its t switches to the board, and
 // a star orders the board's rows, not the dashboard's queue.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actMergeParent, actAbort, actIgnore, actApprove, actRequestChanges,
-		actUnapprove, actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
-	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actMergeParent, actAbort, actIgnore,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actMergeParent, actStaging, actAbort, actIgnore, actApprove,
+		actRequestChanges, actUnapprove, actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
+	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actMergeParent, actStaging, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
 
@@ -207,6 +209,10 @@ type actRow struct {
 	// openHold, how long the restore holds the PR (PRBoardRow.OpenHold).
 	restores bool
 	openHold time.Duration
+	// stagings is where the PR stands on its repository's staging envs
+	// (PRBoardRow.Stagings, PRRow.Stagings; nil for a repository without
+	// any, or when the screen does not know), which E's chooser lists.
+	stagings []StagingInfo
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -453,6 +459,15 @@ func actionRefusal(a rowAct, r actRow) string {
 		}
 	case actFixDone:
 		return fixDoneRefusal(r)
+	// The daemon decides the rest: whose PR it is, its head, each env's
+	// merge.
+	case actStaging:
+		switch {
+		case len(r.stagings) == 0:
+			return l + "'s repository has no staging envs ([[factory.repo.staging]] in config.toml)"
+		case r.merged() || r.closed() || r.ended():
+			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to deploy"
+		}
 	}
 	return ""
 }
@@ -750,6 +765,12 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 			return act.FixDone(ctx, target, seen)
 		}
+	case actStaging: // the screens' chooser (rowAction) picks the envs first; here every env of the row
+		envs := make([]string, len(r.stagings))
+		for i, s := range r.stagings {
+			envs[i] = s.Env
+		}
+		return stagingRun(target, envs)
 	case actStar:
 		star := !r.starred
 		if !star {
@@ -783,6 +804,10 @@ func (b *actionBar) rowAction(a rowAct, r actRow) (cmd tea.Cmd, started bool) {
 	}
 	if why := actionRefusal(a, r); why != "" {
 		return b.setFlash(why, true), false
+	}
+	if a == actStaging { // the envs first, then the daemon's plan and its y/N
+		b.choose = newStagingChoice(r)
+		return nil, false
 	}
 	if q := actionQuestion(a, r); q != "" {
 		b.confirm = &pendingAction{question: q, what: what, target: r.target(), fn: fn}
@@ -914,7 +939,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		hold: r.SlotHold, holdSlot: r.Slot, inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
 		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != "",
-		attentionKind: r.AttentionKind, seen: r.AttentionSum, fixer: r.Fixer}
+		attentionKind: r.AttentionKind, seen: r.AttentionSum, fixer: r.Fixer, stagings: r.Stagings}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}
