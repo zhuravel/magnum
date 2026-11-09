@@ -4787,9 +4787,11 @@ round skip it with one event that says why (`no second opinion after round 1 (cy
 `"never"` skip it without a word. The second opinion holds only at the head its clean round reviewed: when the
 branch moves before it starts (a commit of yours while it waits), it is void (`the second opinion after round 1
 (cycle 1) is void: the branch moved from ... to ...`), the clean round's loop ends there, and a fresh loop of up to
-`cycles` rounds starts at the new head from round 1. A pending one whose judge can no longer run (`second_judge` is
-`"never"` now, or `judge_fallback` names no judge of another kind any more) does not start either: an event says why,
-and the next round runs as a usual round, never a wait on you. Only a second opinion whose round ended clean or with
+`cycles` rounds starts at the new head from round 1. A pending one whose judge can no longer run at that head
+(`second_judge` is `"never"` now, or `judge_fallback` names no judge of another kind any more) does not start either:
+an event says why, and the stage ends clean on the round it followed, with that round's own summary, no further
+round and no wait on you (one that began and was cut runs again as a usual round in its cycle). Only a second
+opinion whose round ended clean or with
 findings is the task's one; one that was void, or whose round ended unavailable (the task needed you, and you let
 it go on), runs again at the next clean round of a wide change, and its event says `runs again`. The decision is
 written (`review-second.json` in the task's directory) before its event and the end of the clean round's cycle, so a

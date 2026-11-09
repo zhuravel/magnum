@@ -474,11 +474,12 @@ func TestASecondOpinionThatEndedUnavailableRunsAgain(t *testing.T) {
 	}
 }
 
-// A pending second opinion whose judge can no longer run (second_judge
-// "never", or no judge_fallback of another kind) does not start: one event
-// says why, the next round runs as a usual round, and the task never needs
-// you for it.
-func TestAPendingSecondOpinionWithoutItsJudgeRunsAUsualRound(t *testing.T) {
+// A pending second opinion whose judge can no longer run at the clean
+// round's head (second_judge "never", or no judge_fallback of another kind)
+// does not start: one event says why, the stage ends clean on that round
+// with the summary it would have written, no further round runs, and the
+// task never needs you for it.
+func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 	for _, tc := range []struct {
 		name, why string
 		set       func(r *reviewRig)
@@ -487,22 +488,30 @@ func TestAPendingSecondOpinionWithoutItsJudgeRunsAUsualRound(t *testing.T) {
 		{"no fallback", "judge_fallback names no judge of another kind", func(r *reviewRig) { r.cfg.Pipeline.JudgeFallback = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newReviewRig(t, rounds(2, result())...)
-			task, _ := r.wideReviewTask("PR-12407")
+			r := newReviewRig(t, result(nitFinding), result())
+			task, head := r.wideReviewTask("PR-12407")
 			r.run(6, func() bool { return r.firstDecided(task.ID) })
 			tc.set(r)
 			r.run(10, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
 			got := r.reload(task.ID)
-			calls := r.rv.calls()
-			if got.Stage != "pr_body" || len(calls) != 2 || !slices.Equal(calls[1].Roles, laterRoles) {
-				t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body after a usual round 2", got.State, got.Stage, got.WaitsWhat, roundsOf(calls))
+			if got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
+				t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body after round 1 alone", got.State, got.Stage, got.WaitsWhat,
+					roundsOf(r.rv.calls()))
+			}
+			if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitClean || cs[0].HeadBefore != head {
+				t.Fatalf("cycles %+v, want round 1's clean", cs)
 			}
 			dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run")
-			if len(dropped) != 1 || !strings.Contains(dropped[0].Text, tc.why) || !strings.Contains(dropped[0].Text, "round 2 runs as a usual round") {
+			if len(dropped) != 1 || !strings.Contains(dropped[0].Text, tc.why) || !strings.Contains(dropped[0].Text, "ends clean on round 1") {
 				t.Fatalf("events %+v, want one saying %q", dropped, tc.why)
 			}
-			if sum := r.summary(task.ID); sum.SecondJudge != "" || sum.Rounds != 2 {
-				t.Fatalf("summary %+v, want no second opinion named", sum)
+			if skips := r.reviewEvents(task.ID, "", "no second opinion"); len(skips) != 0 {
+				t.Fatalf("events %+v, want no skip beside the drop", skips)
+			}
+			sum := r.summary(task.ID)
+			if sum.Exit != registry.ExitClean || sum.Rounds != 1 || sum.Head != head || sum.SecondJudge != "" ||
+				!slices.ContainsFunc(sum.Leftovers, func(i ReviewItem) bool { return i.Title == nitFinding.Title }) {
+				t.Fatalf("summary %+v, want round 1's own: clean after 1 round with its P3", sum)
 			}
 		})
 	}

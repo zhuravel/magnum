@@ -302,7 +302,7 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	var last *registry.Cycle
 	if len(cycles) > 0 {
 		last = &cycles[len(cycles)-1]
-		if ended, err := e.voidMoved(ctx, t, *last); err != nil {
+		if ended, err := e.settleSecond(ctx, t, *last); err != nil {
 			return false, err
 		} else if ended {
 			last.Exit = registry.ExitClean // the clean round's loop ended there after all
@@ -1457,9 +1457,14 @@ func (e *Engine) endLoop(ctx context.Context, t registry.Task, cy registry.Cycle
 	if err := e.endCycle(ctx, cy, cy.HeadBefore, sum.Exit); err != nil {
 		return false, err
 	}
-	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("the local review ended %s after %s: %d left, %d declined, %d doubts",
-		sum.Exit, plural(sum.Rounds, "round"), len(sum.Leftovers), len(sum.Declined), len(sum.Doubts)))
+	e.event(ctx, t.ID, "review", registry.PhaseOK, endedText(sum))
 	return true, nil
+}
+
+// endedText is the event of a loop's end with summary sum.
+func endedText(sum ReviewSummary) string {
+	return fmt.Sprintf("the local review ended %s after %s: %d left, %d declined, %d doubts", sum.Exit, plural(sum.Rounds, "round"),
+		len(sum.Leftovers), len(sum.Declined), len(sum.Doubts))
 }
 
 // markCodexNever marks task t never for Codex again (a refusal of a local
