@@ -570,12 +570,14 @@ func (e *Engine) parentPushed(ctx context.Context, job *fixJob, head, needs stri
 // FixModeMerge): prepareMerge's refusals, then the job (startMerge), and
 // the answer says who merges what: the daemon a clean merge, the fix role
 // a conflict. A head that has the base's tip already is answered so, with
-// no job. A dry run answers what would run and fetches nothing.
+// no job. A dry run, the plan its y/N names (fix_parent_bind.go), fetches
+// the base too, so that it names the tip the base has now, and answers
+// what would run as a MergePlan.
 func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool) (string, error) {
 	if e.draining(ctx) {
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
-	job, nothing, err := e.prepareMerge(ctx, pr, !dry)
+	job, nothing, err := e.prepareMerge(ctx, pr, true)
 	switch {
 	case err != nil:
 		return "", err
@@ -585,7 +587,7 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool) (strin
 	id, _, _ := e.fixerSignature(job.role.Identity)
 	what := job.mergeWords(id.Login)
 	if dry {
-		return fmt.Sprintf("dry run: would merge the parent of %s: %s", job.label(), what), nil
+		return MergePlan{Ref: job.label(), Asked: job.planned(e.now()), Text: fmt.Sprintf("dry run: would merge the parent of %s: %s", job.label(), what)}.result()
 	}
 	if err := e.startMerge(ctx, job); err != nil {
 		return "", err

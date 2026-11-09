@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
@@ -17,8 +19,25 @@ const (
 		"`magnum abort talkable/talkable#5` stops it"
 )
 
+// mergeAsked is what the daemon's plan (mergePlan) asks about: the PR's
+// head, master at c0c0c0c, no conflict, planned at mergePlannedAt.
+var mergeAsked = engine.MergeAsked{Head: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", Base: "master",
+	Tip: "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0", At: time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)}
+
+// mergePlanResult is the daemon's answer to the dry run, as the engine
+// writes it: the plan as JSON on its first line, then its words
+// (mergePlan).
+func mergePlanResult(t *testing.T) string {
+	t.Helper()
+	b, err := json.Marshal(engine.MergePlan{Ref: "talkable/talkable#5", Asked: mergeAsked, Text: mergePlan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n" + mergePlan
+}
+
 // mergeDaemon answers each pending request as the daemon does: a dry run
-// with mergePlan, a merge with mergeAnswer.
+// with mergePlanResult, a merge with mergeAnswer.
 func (h *actHarness) mergeDaemon() {
 	h.onSleep = func(h *actHarness) {
 		for _, r := range h.requests() {
@@ -27,7 +46,7 @@ func (h *actHarness) mergeDaemon() {
 			}
 			res := mergeAnswer
 			if actDecode[engine.FixPayload](h.t, r.Payload).DryRun {
-				res = mergePlan
+				res = mergePlanResult(h.t)
 			}
 			if err := h.st.CompleteRequest(h.ctx, r.ID, store.RequestDone, res); err != nil {
 				h.t.Fatal(err)
@@ -96,6 +115,9 @@ func TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing(t *testing.T)
 		t.Fatalf("--dry-run: exit %d: %s", code, h.out.String())
 	}
 	actContains(t, h.out.String(), mergePlan)
+	if strings.Contains(h.out.String(), `{"ref"`) {
+		t.Errorf("--dry-run printed the plan's JSON line:\n%s", h.out.String())
+	}
 	if code := h.cmd("merge-parent"); code != 2 {
 		t.Errorf("no PR: exit %d", code)
 	}

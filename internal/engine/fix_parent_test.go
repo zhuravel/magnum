@@ -254,8 +254,8 @@ func TestAMergeOfACleanParentIsTheDaemonsAndStartsNoFixer(t *testing.T) {
 	dry := h.fix(FixPayload{Mode: FixModeMerge, DryRun: true})
 	h.handle()
 	const what = "magnum merges master at c0c0c0c into feature as " + fixerAppLogin + ", with no conflict"
-	if res := h.wantDone(dry); res != "dry run: would merge the parent of talkable/talkable#2: "+what {
-		t.Errorf("dry run = %q", res)
+	if plan := h.wantPlan(dry); plan.Text != "dry run: would merge the parent of talkable/talkable#2: "+what {
+		t.Errorf("dry run = %q", plan.Text)
 	}
 	if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
 		t.Fatalf("the dry run merged: %v %v", commits, pushes)

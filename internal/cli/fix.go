@@ -261,16 +261,15 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	}
 	question := ""
 	if o.merge && fixAsks(d, o) && !o.json { // the y/N names what the daemon would merge, into which branch, as whom
-		plan, err := mergeParentPlan(ctx, d, payload)
+		plan, answer, err := mergeParentPlan(ctx, d, payload)
 		if err != nil {
 			return fixFail(c, o, out, err)
 		}
-		rest, ok := strings.CutPrefix(plan, mergeParentDry)
-		if !ok { // nothing to merge, said as an answer
-			fmt.Fprintln(c.Stdout, plan)
+		if answer != "" { // nothing to merge, said as an answer
+			fmt.Fprintln(c.Stdout, answer)
 			return 0
 		}
-		question = "Merge the parent of " + rest + "?"
+		question = mergeParentQuestion(plan)
 	}
 	if code, ok := fixConfirm(ctx, c, d, label, cmp.Or(fixerLogin(d.Cfg, t.full()), "you"), question, o); !ok {
 		return code
@@ -295,7 +294,12 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		return fixFail(c, o, out, errors.New(res.Result()))
 	}
 	if !o.json {
-		res.print(c.Stdout, c.Stderr)
+		if plan, ok := engine.ParseMergePlan(res.Result()); ok && o.merge && o.dryRun && !res.Pending() { // its words, not its JSON line
+			res.printNotes(c.Stderr)
+			fmt.Fprintln(c.Stdout, actClean(plan.Text))
+		} else {
+			res.print(c.Stdout, c.Stderr)
+		}
 	}
 	if !o.wait || o.dryRun || o.off || o.on || o.done || fixHeldForRestart(ctx, c, d, t, label, o) { // no loop was started (yet)
 		if o.json {
@@ -383,25 +387,39 @@ func fixerLogin(cfg *config.Config, repo string) string {
 	return ""
 }
 
-// mergeParentDry is how the daemon's answer to a dry run of a merge of the
-// parent starts (engine requestMerge); what follows names the PR, who
+// mergeParentDry is how the words of the daemon's plan of a merge of the
+// parent start (engine.MergePlan's Text); what follows names the PR, who
 // merges which tip of which base into which branch, and as whom.
 const mergeParentDry = "dry run: would merge the parent of "
 
 // mergeParentPlan asks the daemon, in a dry run, what a merge of the
-// parent of payload's PR would do, for its y/N; a refusal is the error.
-func mergeParentPlan(ctx context.Context, d *actDeps, payload engine.FixPayload) (string, error) {
+// parent of payload's PR would do, for its y/N: its plan, or answer, the
+// daemon's words when it has none (nothing to merge); a refusal, or an
+// answer still pending, is the error.
+func mergeParentPlan(ctx context.Context, d *actDeps, payload engine.FixPayload) (plan engine.MergePlan, answer string, err error) {
 	payload.DryRun = true
 	q := d.quick()
 	q.NeedDaemon = true
 	res, err := d.reqs().send(ctx, engine.ReqFix, payload, q)
 	switch {
 	case err != nil:
-		return "", err
+		return engine.MergePlan{}, "", err
 	case res.Failed():
-		return "", errors.New(res.Result())
+		return engine.MergePlan{}, "", errors.New(res.Result())
+	case res.Pending():
+		return engine.MergePlan{}, "", fmt.Errorf("the daemon has not planned the merge within %s (request %d): ask again later", q.Wait, res.ID())
 	}
-	return res.Result(), nil
+	if plan, ok := engine.ParseMergePlan(res.Result()); ok {
+		return plan, "", nil
+	}
+	return engine.MergePlan{}, actClean(res.Result()), nil
+}
+
+// mergeParentQuestion is the y/N of plan: "Merge the parent of <PR>:
+// magnum merges master at c0c0c0c into feature as fixer-app[bot], with no
+// conflict?".
+func mergeParentQuestion(plan engine.MergePlan) string {
+	return "Merge the parent of " + actClean(strings.TrimPrefix(plan.Text, mergeParentDry)) + "?"
 }
 
 // fixConfirm asks y/N on an interactive terminal, naming what is about to

@@ -253,8 +253,8 @@ func (s *screenActions) MergeParent(ctx context.Context, ref string, dry bool) (
 		return res, err
 	}
 	for _, r := range res.Requests {
-		if rest, ok := strings.CutPrefix(r.Result, mergeParentDry); ok && r.State == tui.RequestDone {
-			res.Ask = "Merge the parent of " + rest + "?"
+		if plan, ok := engine.ParseMergePlan(r.Result); ok && r.State == tui.RequestDone {
+			res.Ask = mergeParentQuestion(plan)
 		}
 	}
 	return res, nil
