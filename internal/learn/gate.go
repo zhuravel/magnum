@@ -3,9 +3,10 @@ package learn
 // The gate of a skill proposal (DECISIONS "The gate replays the learned
 // cases"): the eval cases a proposal is scored on (SelectCases: the learned
 // cases of the inputs it noted, its targets, then up to [learn] gate_guards
-// guards, cases whose newest replay found a defect, then the newest other
-// cases that can be replayed, the targets and the others up to [learn]
-// gate_cases), whether the judge alone replays them (Mode: only the judge
+// guards, cases whose newest replay found a defect, a local round of the
+// factory's review among them when the gate takes them (Guards.Local), then
+// the newest other cases that can be replayed, the targets and the others
+// up to [learn] gate_cases), whether the judge alone replays them (Mode: only the judge
 // skill and the judge prompts changed) and what the replays say against the
 // baseline's (Judge: passed, held or failed). The engine runs the replays
 // (internal/engine/learn_gate.go).
@@ -36,12 +37,17 @@ const (
 
 // The kinds of eval run a gate makes, the end of their label (GateRunLabel):
 // the candidate's first and second replays, the base's full and judge-only
-// ones.
+// ones, a local guard's two candidate replays (every role, in runs of their
+// own) and the base's second replay of a local guard the candidate lost
+// twice.
 const (
-	GateRunCandidate = "candidate"
-	GateRunSecond    = "second"
-	GateRunBase      = "baseline"
-	GateRunBaseJudge = "baseline judge"
+	GateRunCandidate   = "candidate"
+	GateRunSecond      = "second"
+	GateRunBase        = "baseline"
+	GateRunBaseJudge   = "baseline judge"
+	GateRunLocal       = "local candidate"
+	GateRunLocalSecond = "local second"
+	GateRunBaseSecond  = "baseline second"
 )
 
 // gateRunPrefix opens the label of every eval run a gate makes.
@@ -56,12 +62,14 @@ func GateRunLabel(id int64, kind string) string {
 }
 
 // candidateRun reports whether r is a gate's replay of its candidate, of any
-// proposal (a GateRunCandidate or GateRunSecond run, by its label): it read a
-// proposal's prompts and skill, which may never land.
+// proposal (a GateRunCandidate, GateRunSecond, GateRunLocal or
+// GateRunLocalSecond run, by its label): it read a proposal's prompts and
+// skill, which may never land.
 func candidateRun(r eval.Run) bool {
 	rest, ok := strings.CutPrefix(r.Label, gateRunPrefix)
 	id, kind, cut := strings.Cut(rest, ": ")
-	return ok && cut && id != "" && strings.Trim(id, "0123456789") == "" && (kind == GateRunCandidate || kind == GateRunSecond)
+	return ok && cut && id != "" && strings.Trim(id, "0123456789") == "" &&
+		slices.Contains([]string{GateRunCandidate, GateRunSecond, GateRunLocal, GateRunLocalSecond}, kind)
 }
 
 // Why SelectCases leaves a target out, and why the gate does once it has
@@ -71,9 +79,10 @@ const (
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
 	// SkipLocal is a local case (a round of the factory's local review,
-	// eval.KindLocal), which `magnum eval run` replays and no gate does:
-	// a local round runs every role, and a gate of a skill change replays
-	// its cases judge-only.
+	// eval.KindLocal) in a place no gate gives one: a target (no learned
+	// input names one), an other, or a guard of a gate that takes no local
+	// guard (Guards.Local: `magnum eval guards`, a gate without the local
+	// cases' corpus or whose candidate changes nothing a local round reads).
 	SkipLocal = "a local case: eval run replays it, no gate does"
 	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
@@ -148,12 +157,15 @@ type GateCase struct {
 // (their baseline finds nothing yet) and the newest others (mostly declined
 // findings, with nothing to find) seldom are. N = 0 or a nil Found gives
 // none. Replay, which GuardsFrom sets, is the stored replay Found reads,
-// which the gate takes as a guard's baseline.
+// which the gate takes as a guard's baseline. Local lets a local case
+// (eval.KindLocal) take a guard place, which the gate replays with every
+// role; false leaves every local case out (SkipLocal).
 type Guards struct {
 	N      int
 	Found  func(c eval.Case) bool
 	Last   func(c eval.Case) time.Time
 	Replay func(c eval.Case) (eval.Replay, bool)
+	Local  bool
 }
 
 // GuardsFrom are n guard places over the stored runs (oldest first:
@@ -183,17 +195,20 @@ type Guards struct {
 // (eval.Run.ReviewerInputs): its judge reads the reports of a full replay
 // whose reviewers read them, and none is made for a guard, so a case guards
 // it only with such a full replay among the replays that decide which
-// cases guard (eval.FullReplayFor); "" for a gate of every role.
+// cases guard (eval.FullReplayFor); "" for a gate of every role. A local
+// case needs no such replay (the gate replays it with every role), but its
+// newest replay must have recorded its round's inputs (eval.CaseRun.Inputs):
+// one from before replayed the posted reviewer prompt, no local round's.
 func GuardsFrom(runs []eval.Run, n int, skip string, since time.Time, reviewers string) Guards {
 	before := eval.RunsBefore(runs, since)
 	nonCandidate := slices.DeleteFunc(slices.Clone(before), candidateRun)
 	newest := func(c eval.Case) (eval.Replay, bool) { return eval.NewestReplay(nonCandidate, c, skip) }
 	return Guards{N: n, Replay: newest,
 		Found: func(c eval.Case) bool {
-			if r, ok := newest(c); !ok || r.Case.Score.Found == 0 {
+			if r, ok := newest(c); !ok || r.Case.Score.Found == 0 || c.Local() && r.Inputs == "" {
 				return false
 			}
-			if reviewers == "" {
+			if reviewers == "" || c.Local() {
 				return true
 			}
 			_, fc, ok := eval.FullReplayFor(nonCandidate, c.Name, c.Head, &eval.Run{ReviewerInputs: reviewers})
@@ -228,10 +243,18 @@ func lastReplayed(runs []eval.Run, c eval.Case, skip string) time.Time {
 }
 
 // pick is g's guard places among cases, none of them seen (a target)
-// or skipped (skip: a flagged or unwatched PR), which it marks seen.
+// or skipped (skip: a flagged or unwatched PR; a local case unless
+// g.Local), which it marks seen.
 func (g Guards) pick(cases []eval.Case, seen map[string]bool, skip func(eval.Case) string) []GateCase {
 	if g.N <= 0 || g.Found == nil {
 		return nil
+	}
+	posted := skip
+	skip = func(c eval.Case) string {
+		if c.Local() && !g.Local {
+			return SkipLocal
+		}
+		return posted(c)
 	}
 	type candidate struct {
 		c    eval.Case
@@ -265,7 +288,10 @@ func (g Guards) pick(cases []eval.Case, seen map[string]bool, skip func(eval.Cas
 // last first: the learned ones come after the operator's, oldest first)
 // whose PR is watched and not flagged, until limit targets and others can
 // run. A flagged PR is never replayed, watched or not, and a local case
-// (SkipLocal) never by a gate.
+// only in a guard place, when guards.Local (else SkipLocal): it is no
+// learned input's target, and as an other it would take a place of every
+// gate (the corpus's last) at 30 minutes or more a replay, whatever its
+// baseline found.
 func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int, guards Guards) []GateCase {
 	var cases []eval.Case
 	if corpus != nil {
@@ -273,8 +299,6 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
 	}
 	skip := func(c eval.Case) string {
 		switch {
-		case c.Local():
-			return SkipLocal
 		case flagged != nil && flagged(c.PR):
 			return SkipFlagged
 		case watched != nil && !watched(c.PR):
@@ -293,6 +317,9 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
 		g := GateCase{Case: eval.Case{Name: name}, Target: true, Skip: SkipNotInCorpus}
 		if i := slices.IndexFunc(cases, func(c eval.Case) bool { return c.Name == name }); i >= 0 {
 			g.Case, g.Skip = cases[i], skip(cases[i])
+			if cases[i].Local() {
+				g.Skip = SkipLocal
+			}
 		}
 		if g.Skip == "" && runnable >= limit {
 			g.Skip = skipOverCap(limit)
@@ -307,7 +334,7 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
 		if runnable >= limit {
 			break
 		}
-		if seen[c.Name] || skip(c) != "" {
+		if seen[c.Name] || c.Local() || skip(c) != "" {
 			continue
 		}
 		seen[c.Name] = true
@@ -336,8 +363,10 @@ func Mode(files []string) string {
 // GateRow is a case of the gate: its score at the baseline (the newest
 // replay with master's prompts and skill) and with the candidate's, or why
 // it was not compared (Skip). Retried is set once the caller replayed a
-// lost case again, After then being the second replay's: only then does a
-// loss count. A guard (Guard) keeps the newest stored replay not made by a
+// lost case again, After then being the second replay's and First the
+// first's: only then does a loss count, and only of a defect both lost. A
+// local row (Local: a round of the factory's local review, replayed with
+// every role) is a guard. A guard (Guard) keeps the newest stored replay not made by a
 // gate's candidate as its baseline (Stored, GuardsFrom: an operator's run or
 // a gate's base, of whatever inputs), while the candidate finds what that
 // replay found; one it lost twice takes the base's score (AtBase). A miss
@@ -356,6 +385,8 @@ type GateRow struct {
 	Confirmed bool        `json:"confirmed,omitempty"`
 	Skip      string      `json:"skip,omitempty"`
 	Note      string      `json:"note,omitempty"`
+	Local     bool        `json:"local,omitempty"`
+	First     *eval.Score `json:"first,omitempty"`
 }
 
 // compared reports whether r has both scores and was not skipped.
@@ -396,18 +427,45 @@ func (r *GateRow) Confirm(second *eval.Score) {
 // fails whatever it improved.
 func (r GateRow) unchecked() bool { return r.WonOnce() && !r.Rechecked && !r.Confirmed }
 
-// Lost names the defects the baseline found that the candidate did not.
+// Lost names the defects the baseline found that the candidate did not:
+// on both replays, once a second replaced the first (First), so two replays
+// that each lost another defect lost none twice.
 func (r GateRow) Lost() []string {
 	if !r.compared() {
 		return nil
 	}
 	var out []string
 	for _, d := range r.Before.Defects {
-		if d.Found && !slices.ContainsFunc(r.After.Defects, func(a eval.DefectResult) bool { return a.ID == d.ID && a.Found }) {
+		if d.Found && !foundIn(r.After, d.ID) && (r.First == nil || !foundIn(r.First, d.ID)) {
 			out = append(out, d.ID)
 		}
 	}
 	return out
+}
+
+// foundIn reports whether s found defect id.
+func foundIn(s *eval.Score, id string) bool {
+	return s != nil && slices.ContainsFunc(s.Defects, func(d eval.DefectResult) bool { return d.ID == id && d.Found })
+}
+
+// BothFound is the score of two replays of a case taken as one (a local
+// guard's base, which a candidate's loss of it on both replays is weighed
+// against): a defect is found only when both found it; a and b's other
+// fields are a's. nil when either is.
+func BothFound(a, b *eval.Score) *eval.Score {
+	if a == nil || b == nil {
+		return nil
+	}
+	out := *a
+	out.Defects, out.Found = slices.Clone(a.Defects), 0
+	for i := range out.Defects {
+		d := &out.Defects[i]
+		d.Found = d.Found && foundIn(b, d.ID)
+		if d.Found {
+			out.Found++
+		}
+	}
+	return &out
 }
 
 // NewHits names the absent defects (findings authors declined) the
