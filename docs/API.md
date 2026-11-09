@@ -27522,7 +27522,9 @@ type ResolveRequest struct {
 type ResolveResult struct{ State, MergeSHA, Why, Dir string }
     ResolveResult is a job's state. Done: MergeSHA is the merge, a commit in the
     local repository at Dir (an absolute path, its git dir or its work tree),
-    which Deploy fetches into the mirror; the resolver keeps the commit there
+    which Deploy only reads: it writes the merge's blobs at the conflicted paths
+    and its commit into the mirror once merge-tree's tree with those blobs is
+    the commit's, never fetching from Dir. The resolver keeps the commit there
     until the effect is past verify or cancelled. Why also carries what the
     resolver checked.
 

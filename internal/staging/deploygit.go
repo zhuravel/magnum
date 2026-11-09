@@ -1,9 +1,11 @@
 package staging
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,21 +33,28 @@ var stagingBranchRe = regexp.MustCompile(`^staging-[a-z0-9-]+$`)
 var pushSpecRe = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64}):refs/heads/(staging-[a-z0-9-]+)$`)
 
 // The refs that hold an effect's merge in the mirror for its life, so no
-// gc or prune takes it before the push: a resolver's merge is fetched into
-// refs/magnum/resolved/<effect>, a clean merge is kept at
-// refs/magnum/deploy/<effect>. Both go when the effect ends.
+// gc or prune takes it before the push: a resolver's merge, once its
+// objects are written into the mirror (handOver), is kept at
+// refs/magnum/resolved/<effect>, a clean merge at refs/magnum/deploy/<effect>.
+// Both go when the effect ends.
 const (
 	resolvedPrefix = "refs/magnum/resolved/"
 	mergePrefix    = "refs/magnum/deploy/"
 )
 
-// uploadPack is the upload-pack the resolver fetch runs on the resolver's
-// repository, with its own command-line options: git's local transport
-// drops the fetch's -c options (GIT_CONFIG_PARAMETERS) for that child, which
-// would otherwise read only that repository's config. Command-line config
-// wins over it: no hooks, and any sha may be fetched (the merge is on no
-// branch there).
-const uploadPack = "git -c core.hooksPath=/dev/null -c uploadpack.allowAnySHA1InWant=true upload-pack"
+// blobModes are the modes a resolved path may have in the resolver's merge:
+// a file, an executable file, a symlink.
+var blobModes = []string{"100644", "100755", "120000"}
+
+// errObjectTooLarge is srcObject's error for an object over execx's
+// MaxOutput, which no git command's output can carry whole.
+var errObjectTooLarge = fmt.Errorf("the object is over %d MiB", execx.MaxOutput>>20)
+
+// treeEntry is a path's entry in a commit's tree: its mode, type and id;
+// an empty Type is a path the tree does not have.
+type treeEntry struct {
+	Mode, Type, OID, Path string
+}
 
 // change is a path a tree changes against another, with git's status letter
 // (A added, D deleted, M modified, T type changed).
@@ -54,9 +63,10 @@ type change struct {
 	Path   string
 }
 
-// deployGit is the git a deploy runs beyond Git's reads, always in the
-// mirror (execGit; Git implementations without it cannot deploy). Every
-// revision is a full sha.
+// deployGit is the git a deploy runs beyond Git's reads, in the mirror but
+// for the src reads of a resolver's repository, which never write there
+// (execGit; Git implementations without it cannot deploy). Every revision
+// is a full sha.
 type deployGit interface {
 	// mergeTree is `git merge-tree --write-tree` of tip and head: the
 	// merged tree (with conflict markers in the conflicted files) and the
@@ -78,9 +88,25 @@ type deployGit interface {
 	keepMerge(ctx context.Context, dir, ref, sha string) error
 	// isAncestor reports whether a is b or an ancestor of b.
 	isAncestor(ctx context.Context, dir, a, b string) (bool, error)
-	// fetchResolved fetches the commit sha from the local repository at src
-	// (a git dir checkResolverDir passed) into ref.
-	fetchResolved(ctx context.Context, dir, src, sha, ref string) error
+	// srcType is the type of the object sha in the resolver's repository at
+	// src (a git dir checkResolverDir passed, beside mirror), "" when it
+	// lacks it.
+	srcType(ctx context.Context, src, mirror, sha string) (string, error)
+	// srcObject is the content of the object sha of type typ (commit, blob)
+	// in src, as git stores it; errObjectTooLarge past MaxOutput.
+	srcObject(ctx context.Context, src, mirror, typ, sha string) ([]byte, error)
+	// srcEntries is the entry of each of paths in commit sha's tree in src,
+	// in paths' order; a path the tree lacks has no Type.
+	srcEntries(ctx context.Context, src, mirror, sha string, paths []string) ([]treeEntry, error)
+	// writeObject writes data into the mirror as an object of type typ
+	// (blob, commit) and returns its id.
+	writeObject(ctx context.Context, dir, typ string, data []byte) (string, error)
+	// buildTree writes the tree of base with each of entries put in at its
+	// path, or removed when it has no Type, and returns its id. It builds
+	// it in the temporary index at index, in the mirror, which goes before
+	// (a killed run's) and after. env is the fetch's: reading base may
+	// fetch a tree the mirror lacks.
+	buildTree(ctx context.Context, dir string, env map[string]string, index, base string, entries []treeEntry) (string, error)
 	// deleteRef deletes one of the effect refs (resolved or merge); an
 	// absent one is no error.
 	deleteRef(ctx context.Context, dir, ref string) error
@@ -192,9 +218,17 @@ func (g *execGit) commitInfo(ctx context.Context, dir, sha string) (string, []st
 	if err != nil {
 		return "", nil, err
 	}
-	var tree string
-	var parents []string
-	for line := range strings.Lines(string(res.Stdout)) {
+	tree, parents := commitFields(res.Stdout)
+	if !isOID(tree) {
+		return "", nil, fmt.Errorf("commit %s names no tree", short(sha))
+	}
+	return tree, parents, nil
+}
+
+// commitFields reads a commit object's tree and parents, in order, from its
+// header.
+func commitFields(raw []byte) (tree string, parents []string) {
+	for line := range strings.Lines(string(raw)) {
 		line = strings.TrimSuffix(line, "\n")
 		if line == "" {
 			break // the end of the header: the message follows
@@ -206,10 +240,7 @@ func (g *execGit) commitInfo(ctx context.Context, dir, sha string) (string, []st
 			parents = append(parents, v)
 		}
 	}
-	if !isOID(tree) {
-		return "", nil, fmt.Errorf("commit %s names no tree", short(sha))
-	}
-	return tree, parents, nil
+	return tree, parents
 }
 
 func (g *execGit) objectType(ctx context.Context, dir, sha string) (string, error) {
@@ -264,26 +295,189 @@ func effectRef(ref string) bool {
 	return false
 }
 
-func (g *execGit) fetchResolved(ctx context.Context, dir, src, sha, ref string) error {
-	if !isOID(sha) {
-		return fmt.Errorf("%q is no sha", sha)
-	}
-	if !strings.HasPrefix(ref, resolvedPrefix) || !effectRef(ref) {
-		return fmt.Errorf("ref %q is none of the resolved refs", ref)
-	}
+// resolvedIndex is the temporary index of effect id's hand-off, in the
+// mirror's own directory (dir): never the operator's, never the resolver's.
+func resolvedIndex(dir string, id EffectID) string {
+	return filepath.Join(dir, resolvedIndexPrefix+string(id)+".index")
+}
+
+// resolvedIndexPrefix starts the name of every hand-off's index.
+const resolvedIndexPrefix = "magnum-resolve-"
+
+// srcCmd is `git --git-dir=<src> <gitOptions> args...` in the resolver's
+// repository, which only reads it: in src's parent with no search for a
+// repository above it, git's HOME the mirror root's (gitHome), no hook, no
+// lazy fetch and no optional lock.
+func (g *execGit) srcCmd(src, mirror, label string, args ...string) execx.Cmd {
+	c := g.base(filepath.Dir(src), filepath.Dir(filepath.Dir(mirror)), label, readTimeout, false, false, nil)
+	c.Args = slices.Concat([]string{"--git-dir=" + src}, gitOptions, args)
+	c.Env["GIT_DIR"] = src
+	return c
+}
+
+// checkSrc refuses a src that is no absolute path (checkResolverDir's git
+// dir) and a sha that is no full sha.
+func checkSrc(src, sha string) error {
 	if !filepath.IsAbs(src) || strings.HasPrefix(src, "-") {
 		return fmt.Errorf("the resolver's repository %q is no absolute path", src)
 	}
-	// A local path only: protocol.file.allow for this call alone, protocol
-	// v2 pinned (no v0 server path), no hooks on either side (gitOptions
-	// here, uploadPack's own options there), no submodules; the mirror never
-	// lazily fetches here.
-	c := g.cmd(dir, "fetch resolved", fetchTimeout, true, false, nil)
-	c.Args = slices.Concat([]string{"--git-dir=" + dir}, gitOptions, []string{"-c", "protocol.file.allow=always", "-c", "protocol.version=2",
-		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--upload-pack=" + uploadPack,
-		"--", src, sha + ":" + ref})
-	_, err := g.run.Run(ctx, c)
-	return err
+	return checkRevs(sha)
+}
+
+func (g *execGit) srcType(ctx context.Context, src, mirror, sha string) (string, error) {
+	if err := checkSrc(src, sha); err != nil {
+		return "", err
+	}
+	c := g.srcCmd(src, mirror, "resolver object type", "cat-file", "-t", sha)
+	c.Probe = true
+	res, err := g.run.Run(ctx, c)
+	switch {
+	case err == nil:
+		return strings.TrimSpace(res.Out()), nil
+	case exitCode(err) > 0 && ctx.Err() == nil:
+		return "", nil
+	}
+	return "", err
+}
+
+func (g *execGit) srcObject(ctx context.Context, src, mirror, typ, sha string) ([]byte, error) {
+	if err := checkSrc(src, sha); err != nil {
+		return nil, err
+	}
+	if typ != "commit" && typ != "blob" {
+		return nil, fmt.Errorf("object type %q refused", typ)
+	}
+	res, err := g.run.Run(ctx, g.srcCmd(src, mirror, "resolver "+typ, "cat-file", typ, sha))
+	switch {
+	case err != nil:
+		return nil, err
+	case res.Truncated:
+		return nil, errObjectTooLarge
+	}
+	return res.Stdout, nil
+}
+
+// srcEntries asks cat-file for <sha>:<path> of each path on stdin, NUL
+// separated: no path reaches argv or a pathspec, and any byte a path holds
+// but NUL is its own.
+func (g *execGit) srcEntries(ctx context.Context, src, mirror, sha string, paths []string) ([]treeEntry, error) {
+	if err := checkSrc(src, sha); err != nil || len(paths) == 0 {
+		return nil, err
+	}
+	var in bytes.Buffer
+	for _, p := range paths {
+		if p == "" || strings.ContainsRune(p, 0) {
+			return nil, fmt.Errorf("path %q refused", p)
+		}
+		in.WriteString(sha + ":" + p + "\x00")
+	}
+	c := g.srcCmd(src, mirror, "resolver entries", "cat-file", "-Z", "--batch-check=%(objectmode) %(objecttype) %(objectname)")
+	c.Stdin = in.Bytes()
+	res, err := g.run.Run(ctx, c)
+	switch {
+	case err != nil:
+		return nil, err
+	case res.Truncated:
+		return nil, errors.New("cat-file's output was cut")
+	}
+	recs := strings.Split(strings.TrimSuffix(string(res.Stdout), "\x00"), "\x00")
+	if len(recs) != len(paths) {
+		return nil, fmt.Errorf("cat-file answered %d of %d paths", len(recs), len(paths))
+	}
+	out := make([]treeEntry, len(paths))
+	for i, rec := range recs {
+		out[i].Path = paths[i]
+		if rec == sha+":"+paths[i]+" missing" {
+			continue
+		}
+		switch f := strings.Fields(rec); {
+		case len(f) == 2 && f[1] == "submodule" && isOID(f[0]): // a gitlink, whose commit src need not hold
+			out[i].Mode, out[i].Type, out[i].OID = "160000", "commit", f[0]
+		case len(f) == 3 && isOID(f[2]):
+			out[i].Mode, out[i].Type, out[i].OID = f[0], f[1], f[2]
+		default:
+			return nil, fmt.Errorf("cat-file's answer for path %d is no entry", i+1)
+		}
+	}
+	return out, nil
+}
+
+func (g *execGit) writeObject(ctx context.Context, dir, typ string, data []byte) (string, error) {
+	if typ != "commit" && typ != "blob" {
+		return "", fmt.Errorf("object type %q refused", typ)
+	}
+	c := g.cmd(dir, "write "+typ, readTimeout, true, false, nil, "hash-object", "-w", "--no-filters", "-t", typ, "--stdin")
+	c.Stdin = data
+	res, err := g.run.Run(ctx, c)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(res.Out())
+	if !isOID(id) {
+		return "", fmt.Errorf("hash-object printed %q, no id", short(id))
+	}
+	return id, nil
+}
+
+func (g *execGit) buildTree(ctx context.Context, dir string, env map[string]string, index, base string, entries []treeEntry) (string, error) {
+	if err := checkRevs(base); err != nil {
+		return "", err
+	}
+	if filepath.Dir(index) != dir || !strings.HasPrefix(filepath.Base(index), resolvedIndexPrefix) {
+		return "", fmt.Errorf("index %q is not the mirror's", index)
+	}
+	// A killed run's index, or its lock, is this effect's alone: the
+	// mirror's flock serializes every git in it.
+	drop := func() error {
+		var errs []error
+		for _, f := range []string{index + ".lock", index} {
+			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	if err := drop(); err != nil {
+		return "", err
+	}
+	defer func() { _ = drop() }()
+	run := func(label string, timeout time.Duration, fetchEnv map[string]string, stdin []byte, args ...string) (execx.Result, error) {
+		c := g.cmd(dir, label, timeout, true, fetchEnv != nil, fetchEnv, args...)
+		c.Env["GIT_INDEX_FILE"] = index
+		c.Stdin = stdin
+		return g.run.Run(ctx, c)
+	}
+	// merge-tree read these trees a moment ago, so the mirror holds them;
+	// one it lacks is fetched from origin, as merge-tree would.
+	if _, err := run("resolved tree", mergeTimeout, env, nil, "read-tree", base); err != nil {
+		return "", err
+	}
+	var in bytes.Buffer
+	for _, e := range entries {
+		switch {
+		case strings.ContainsRune(e.Path, 0):
+			return "", fmt.Errorf("path %q refused", e.Path)
+		case e.Type == "":
+			in.WriteString("0 " + strings.Repeat("0", len(base)) + "\t" + e.Path + "\x00") // mode 0 removes it
+		case e.Type != "blob" || !slices.Contains(blobModes, e.Mode) || !isOID(e.OID):
+			return "", fmt.Errorf("entry %s %s refused", e.Mode, e.Type)
+		default:
+			in.WriteString(e.Mode + " " + e.OID + "\t" + e.Path + "\x00")
+		}
+	}
+	if _, err := run("resolved entries", readTimeout, nil, in.Bytes(), "update-index", "-z", "--index-info"); err != nil {
+		return "", err
+	}
+	// --missing-ok: the mirror holds few blobs but the resolved ones.
+	res, err := run("resolved write-tree", readTimeout, nil, nil, "write-tree", "--missing-ok")
+	if err != nil {
+		return "", err
+	}
+	tree := strings.TrimSpace(res.Out())
+	if !isOID(tree) {
+		return "", fmt.Errorf("write-tree printed %q, no tree", short(tree))
+	}
+	return tree, nil
 }
 
 func (g *execGit) deleteRef(ctx context.Context, dir, ref string) error {
@@ -409,10 +603,7 @@ func (g *execGit) checkResolverDir(ctx context.Context, dir, mirror string) (str
 		if same(gd, mirror) {
 			return "", errors.New("the resolver's repository is the mirror itself")
 		}
-		c := g.base(filepath.Dir(gd), filepath.Dir(filepath.Dir(mirror)), "resolver repository", readTimeout, false, false, nil)
-		c.Args = slices.Concat([]string{"--git-dir=" + gd}, gitOptions, []string{"rev-parse", "--git-dir"})
-		c.Env["GIT_DIR"] = gd
-		if _, err := g.run.Run(ctx, c); err == nil {
+		if _, err := g.run.Run(ctx, g.srcCmd(gd, mirror, "resolver repository", "rev-parse", "--git-dir")); err == nil {
 			return gd, nil
 		}
 	}

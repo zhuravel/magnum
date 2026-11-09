@@ -37,7 +37,7 @@ import (
 //     .github/workflows paths, the plan did not show, it stops: needs you.
 //     Clean, `git commit-tree` makes [tip, head] with the bot as author and
 //     committer (CommitIdentity); a conflict goes to the Resolver (at most 2
-//     tries), whose merge is fetched into the mirror.
+//     tries), whose merge enters the mirror by its objects, never a fetch.
 //  4. verify: the merge is a commit whose parents are exactly [tip, head]
 //     and whose tree is a fresh merge-tree's of them, or differs from it
 //     only in its conflicted paths; the head is still the plan's; a tip that
@@ -64,10 +64,19 @@ import (
 // after; a cancel after the push stops only the watching: a deploy never
 // reverts a push.
 //
-// The resolver fetch runs upload-pack on the resolver's repository with its
-// own options (uploadPack) and protocol v2: git's local transport drops the
-// fetch's -c options for that child, and v2 runs no v0-only server path
-// such as core.alternateRefsCommand.
+// The resolver's merge is handed off, not fetched: a fetch from its full
+// clone sends a thin pack whose deltas are against blobs the treeless
+// mirror never had, which it may not fetch lazily, so it cannot index it.
+// The hand-off only reads the resolver's repository (cat-file, no hook, no
+// lazy fetch, no optional lock): the commit, its tree, and its mode and blob
+// at each path merge-tree's merge of the tip and the head conflicts in. It
+// writes those blobs into the mirror (each id checked), builds merge-tree's
+// tree with them in a temporary index in the mirror's own directory (gone
+// after, and before when a killed run left it), and only when that tree is
+// the commit's does it write the commit's own bytes, the same sha, and hold
+// it at the effect's resolved ref. A merge whose tree differs changed a path
+// beyond the conflicts, or merged other commits: it is refused, nothing
+// pushed.
 
 // EffectID names a deploy effect: <env>-<pr>-<time>-<random>, lower-case
 // letters, digits and dashes.
@@ -236,9 +245,11 @@ type ResolveRequest struct {
 
 // ResolveResult is a job's state. Done: MergeSHA is the merge, a commit in
 // the local repository at Dir (an absolute path, its git dir or its work
-// tree), which Deploy fetches into the mirror; the resolver keeps the
-// commit there until the effect is past verify or cancelled. Why also
-// carries what the resolver checked.
+// tree), which Deploy only reads: it writes the merge's blobs at the
+// conflicted paths and its commit into the mirror once merge-tree's tree
+// with those blobs is the commit's, never fetching from Dir. The resolver
+// keeps the commit there until the effect is past verify or cancelled. Why
+// also carries what the resolver checked.
 type ResolveResult struct{ State, MergeSHA, Why, Dir string }
 
 // PushEnv is called right before each push of mergeSHA to target

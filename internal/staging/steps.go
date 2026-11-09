@@ -518,8 +518,8 @@ func (r *stepRun) resolve(ctx context.Context) error {
 }
 
 // resolution reads the resolver's job: running waits (at most
-// resolveWait), failed fails, done fetches its merge into the mirror for
-// verify; a merge that is no commit fails at once.
+// resolveWait), failed fails, done hands its merge off into the mirror
+// (handOver) for verify; a merge handOver refuses fails at once.
 func (r *stepRun) resolution(ctx context.Context) error {
 	if r.c.d.Resolver == nil {
 		return r.end(ctx, EffectFailed, "conflict: resolver not configured: "+listed(r.j.Conflicts))
@@ -543,6 +543,10 @@ func (r *stepRun) resolution(ctx context.Context) error {
 	if !isOID(res.MergeSHA) {
 		return r.end(ctx, EffectFailed, "the resolver's merge is no sha")
 	}
+	env, err := r.c.gitEnv(r.repo)
+	if err != nil {
+		return r.retry(ctx, StepMerge, err.Error())
+	}
 	var refused string
 	err = r.git(ctx, func() error {
 		src, err := r.g.checkResolverDir(ctx, res.Dir, r.dir)
@@ -550,38 +554,107 @@ func (r *stepRun) resolution(ctx context.Context) error {
 			refused = "the resolver's merge is refused: " + oneLine(errLine(err))
 			return nil
 		}
-		ref := resolvedRef(r.j.ID)
-		r.j.Held = true // its ref goes when the effect ends
-		ferr := r.g.deleteRef(ctx, r.dir, ref)
-		if ferr == nil {
-			ferr = r.g.fetchResolved(ctx, r.dir, src, res.MergeSHA, ref)
-		}
-		typ, err := r.g.objectType(ctx, r.dir, res.MergeSHA)
-		switch {
-		case err != nil:
-			return err
-		case typ == "":
-			refused = "the resolver's merge is not in the mirror"
-			if ferr != nil {
-				refused += ": " + gitReason(ferr)
-			}
-		case typ != "commit":
-			refused = "the resolver's merge " + short(res.MergeSHA) + " is not a commit (a " + typ + ")"
-		default:
-			// Held at its ref whatever the fetch did: one that failed while
-			// an earlier try's left the merge in the mirror left no ref.
-			return r.g.keepMerge(ctx, r.dir, ref, res.MergeSHA)
-		}
-		return nil
+		refused, err = r.handOver(ctx, env, src, res.MergeSHA)
+		return err
 	})
 	switch {
+	case errors.Is(err, errHook):
+		return err
 	case err != nil:
-		return r.failed(ctx, StepMerge, "the resolver's merge could not be read", err)
+		return r.failed(ctx, StepMerge, "the resolver's merge could not be handed off", err)
 	case refused != "":
 		return r.end(ctx, EffectFailed, refused+"; nothing was pushed")
 	}
 	r.j.Merge, r.j.Job = res.MergeSHA, ""
-	return r.ok(StepVerify, "resolved merge "+short(res.MergeSHA)+" on "+short(r.j.Tip))
+	return r.ok(StepVerify, "resolved merge "+short(res.MergeSHA)+" on "+short(r.j.Tip)+", rebuilt in the mirror")
+}
+
+// handOver puts the resolver's merge sha, a commit in its repository's git
+// dir src, into the mirror without a fetch, which cannot work: the treeless
+// mirror holds commits, the trees and blobs its merges read, and no other
+// blob; the full clone sends a thin pack whose deltas are against blobs of
+// the tip or the head it takes the mirror to hold, and the mirror never
+// fetches a missing one lazily there. So it reads, in src alone and never writing there, the commit, its
+// tree and its entry at each path merge-tree's merge of the tip and the
+// head conflicts in; it writes those blobs into the mirror, rebuilds
+// merge-tree's tree with the resolver's entries at those paths (absent
+// ones removed), and only when that tree is the commit's writes the commit
+// itself, the same bytes and so the same sha, and holds it at the effect's
+// resolved ref. The equal tree is the proof: the merge changes nothing but
+// the conflicted paths. refused says why the merge is refused; err is a
+// passing failure. The caller holds the mirror's flock.
+func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha string) (string, error) {
+	typ, err := r.g.srcType(ctx, src, r.dir, sha)
+	switch {
+	case err != nil:
+		return "", err
+	case typ == "":
+		return "the resolver's repository does not hold its merge " + short(sha), nil
+	case typ != "commit":
+		return "the resolver's merge " + short(sha) + " is not a commit (a " + typ + ")", nil
+	}
+	raw, err := r.g.srcObject(ctx, src, r.dir, "commit", sha)
+	if err != nil {
+		return "", err
+	}
+	tree, _ := commitFields(raw)
+	if !isOID(tree) {
+		return "the resolver's merge " + short(sha) + " names no tree", nil
+	}
+	base, conflicts, err := r.g.mergeTree(ctx, r.dir, env, r.j.Tip, r.j.PR.Head)
+	if err != nil {
+		return "", fmt.Errorf("merge-tree: %w", err)
+	}
+	entries, err := r.g.srcEntries(ctx, src, r.dir, sha, conflicts)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		switch {
+		case e.Type == "":
+			continue // removed: buildTree takes it out
+		case e.Type == "tree":
+			return "the resolver's merge holds a directory at the conflicted path " + safePath(e.Path), nil
+		case e.Type == "commit":
+			return "the resolver's merge holds a submodule at the conflicted path " + safePath(e.Path), nil
+		case e.Type != "blob" || !slices.Contains(blobModes, e.Mode):
+			return fmt.Sprintf("the resolver's merge holds a %s of mode %s at the conflicted path %s", oneLine(e.Type), oneLine(e.Mode), safePath(e.Path)), nil
+		}
+		data, err := r.g.srcObject(ctx, src, r.dir, "blob", e.OID)
+		switch {
+		case errors.Is(err, errObjectTooLarge):
+			return "the resolved " + safePath(e.Path) + ": " + err.Error(), nil
+		case err != nil:
+			return "", err
+		}
+		id, err := r.g.writeObject(ctx, r.dir, "blob", data)
+		switch {
+		case err != nil:
+			return "", err
+		case id != e.OID:
+			return "the resolved " + safePath(e.Path) + " is " + short(id) + " in the mirror, not the resolver's " + short(e.OID), nil
+		}
+	}
+	if err := r.at(StepMerge, "blobs written"); err != nil {
+		return "", err
+	}
+	built, err := r.g.buildTree(ctx, r.dir, env, resolvedIndex(r.dir, r.j.ID), base, entries)
+	if err != nil {
+		return "", err
+	}
+	if built != tree {
+		return "the resolver's merge is not merge-tree's with only the conflicted paths resolved: it changes a path beyond the " +
+			"conflicted paths, or merges other commits (its tree " + short(tree) + ", rebuilt " + short(built) + ")", nil
+	}
+	id, err := r.g.writeObject(ctx, r.dir, "commit", raw)
+	switch {
+	case err != nil:
+		return "", err
+	case id != sha:
+		return "the resolver's merge is " + short(id) + " in the mirror, not " + short(sha), nil
+	}
+	r.j.Held = true // its ref goes when the effect ends
+	return "", r.g.keepMerge(ctx, r.dir, resolvedRef(r.j.ID), sha)
 }
 
 // checked is what checkMerge found: ok, why it fails the effect, why it

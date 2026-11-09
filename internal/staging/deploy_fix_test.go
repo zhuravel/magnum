@@ -616,37 +616,6 @@ func TestPRPathsAreSanitizedInWhyAndEvents(t *testing.T) {
 	}
 }
 
-// M7. The resolver fetch pins protocol v2 and hands upload-pack, the child
-// that reads the resolver's repository, its own command-line options
-// (no hooks, any sha), which git's local transport would otherwise drop.
-func TestTheResolverFetchPinsItsOptionsOnUploadPack(t *testing.T) {
-	t.Parallel()
-	rec := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"git"}}}}
-	g := newGit(rec, func(string) string { return "file:///origin" }).(*execGit)
-	mirror := filepath.Join(t.TempDir(), "acme", "app.git")
-	sha := strings.Repeat("a", 40)
-	if err := g.fetchResolved(context.Background(), mirror, "/tmp/resolver/.git", sha, resolvedRef("void-1-20261108t120000-abcdef01")); err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.Calls) != 1 {
-		t.Fatalf("calls: %d", len(rec.Calls))
-	}
-	args := rec.Calls[0].Args
-	if !slices.Contains(args, "protocol.version=2") {
-		t.Errorf("no protocol v2 pinned: %q", args)
-	}
-	i := slices.IndexFunc(args, func(a string) bool { return strings.HasPrefix(a, "--upload-pack=") })
-	if i < 0 {
-		t.Fatalf("no --upload-pack: %q", args)
-	}
-	up := args[i]
-	for _, want := range []string{"git ", "-c core.hooksPath=/dev/null", "-c uploadpack.allowAnySHA1InWant=true", " upload-pack"} {
-		if !strings.Contains(up, want) {
-			t.Errorf("--upload-pack %q lacks %q", up, want)
-		}
-	}
-}
-
 // M8. A cancelled ci.yml run on the merge goes on to confirm, and the end
 // state says it was cancelled.
 func TestACancelledCIRunIsKeptInTheEndState(t *testing.T) {

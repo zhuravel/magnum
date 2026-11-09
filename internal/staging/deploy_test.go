@@ -98,7 +98,7 @@ func TestAConflictWithoutAResolverFailsNamingThePaths(t *testing.T) {
 }
 
 // A resolver's job that runs, then is done with a merge in its own
-// repository: the merge is fetched into the mirror, verified (its tree
+// repository: the merge is rebuilt in the mirror, verified (its tree
 // differs from merge-tree's only in the conflicted path) and pushed; the
 // request named the effect, the target and its tip, the head and try 1,
 // and the resolved ref is gone once the effect ended.
@@ -137,8 +137,9 @@ func TestAResolversMergeIsVerifiedThenPushed(t *testing.T) {
 	}
 }
 
-// A resolver's merge that changes a path outside the conflicts, or whose
-// parents are not [tip, head], fails at verify and is never pushed.
+// A resolver's merge whose parents are not [tip, head] fails at verify and
+// is never pushed (one that changes a path outside the conflicts is refused
+// before, at its hand-off: TestAResolvedMergeThatChangesAnUnconflictedPathIsRefused).
 func TestAResolversMergeOutsideTheRulesIsNeverPushed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -147,8 +148,6 @@ func TestAResolversMergeOutsideTheRulesIsNeverPushed(t *testing.T) {
 		files   map[string]string
 		why     string
 	}{
-		{"a path outside the conflicts", func(w *deployWorld) []string { return []string{w.tip, w.heads[2]} },
-			map[string]string{"app/s.rb": "resolved\n", "app/a.rb": "sneaked in\n"}, "outside the conflicts: app/a.rb"},
 		{"the parents reversed", func(w *deployWorld) []string { return []string{w.heads[2], w.tip} },
 			map[string]string{"app/s.rb": "resolved\n"}, "parents are"},
 		{"one parent", func(w *deployWorld) []string { return []string{w.tip} },
@@ -206,7 +205,7 @@ func TestAResolversFailureOrForeignRepositoryFailsTheEffect(t *testing.T) {
 		{"a merge it does not hold", func(w *deployWorld) ResolveResult {
 			dir, _ := w.resolverRepo(2, []string{w.tip, w.heads[2]}, map[string]string{"app/s.rb": "x\n"})
 			return ResolveResult{State: ResolveDone, MergeSHA: strings.Repeat("ab", 20), Dir: dir}
-		}, "the resolver's merge is not in the mirror"},
+		}, "the resolver's repository does not hold its merge abababababab"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -23,10 +23,10 @@ type countingRunner struct {
 	pushes, commits int
 	beforePush      func()
 	// fail, when set, fails each command whose git subcommand (the first
-	// argument after the mirror's options) it names, as git exiting 128;
-	// failWith fails each command with an argument that holds it.
-	fail     map[string]bool
-	failWith string
+	// argument after the mirror's options) it names, as git exiting 128.
+	fail map[string]bool
+	// cmds are the commands started, in order.
+	cmds []execx.Cmd
 }
 
 // subcommand is a mirror command's git subcommand: the first argument past
@@ -55,7 +55,8 @@ func (r *countingRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, er
 	case sub == "commit-tree":
 		r.commits++
 	}
-	failed := r.fail[sub] || r.failWith != "" && slices.ContainsFunc(c.Args, func(a string) bool { return strings.Contains(a, r.failWith) })
+	failed := r.fail[sub]
+	r.cmds = append(r.cmds, c)
 	r.mu.Unlock()
 	if failed {
 		return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: "fatal: injected " + sub + " failure\n"}
@@ -76,6 +77,13 @@ func (r *countingRunner) failing(subs ...string) {
 	for _, s := range subs {
 		r.fail[s] = true
 	}
+}
+
+// started is the commands started so far.
+func (r *countingRunner) started() []execx.Cmd {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.cmds)
 }
 
 func (r *countingRunner) pushed() int {
@@ -246,8 +254,14 @@ func newDeployWorld(t *testing.T) *deployWorld {
 // as refs/pull/<n>/head.
 func (w *deployWorld) pr(n int, branch string, files map[string]string) string {
 	w.t.Helper()
+	return w.prOn(n, branch, w.c1, files)
+}
+
+// prOn is pr with the branch made on the commit base.
+func (w *deployWorld) prOn(n int, branch, base string, files map[string]string) string {
+	w.t.Helper()
 	git := func(args ...string) string { w.t.Helper(); return gitIn(w.t, w.r, w.work, args...) }
-	git("checkout", "-q", "-b", branch, w.c1)
+	git("checkout", "-q", "-b", branch, base)
 	for name, text := range files {
 		writeIn(w.t, w.work, name, text)
 	}
@@ -444,9 +458,20 @@ func (w *deployWorld) noPushSince(n int, tip string) {
 
 // resolverRepo is a clone of the origin where a resolver resolved PR n's
 // conflict with staging-void at tip: the merge [parents...] of the tree
-// the index holds once files are written (and deleted removed), not on any
-// branch. It returns the repository and the merge.
+// the index holds once files are written, not on any branch. It returns
+// the repository and the merge.
 func (w *deployWorld) resolverRepo(n int, parents []string, files map[string]string) (string, string) {
+	w.t.Helper()
+	return w.resolverRepoWith(n, parents, func(dir string) {
+		for name, text := range files {
+			writeIn(w.t, dir, name, text)
+		}
+	})
+}
+
+// resolverRepoWith is resolverRepo with the work tree's resolution made by
+// edit (a file removed, a mode changed, a symlink), all of it staged.
+func (w *deployWorld) resolverRepoWith(n int, parents []string, edit func(dir string)) (string, string) {
 	w.t.Helper()
 	dir := filepath.Join(w.t.TempDir(), "repo")
 	git := func(args ...string) string { w.t.Helper(); return gitIn(w.t, w.r, dir, args...) }
@@ -455,9 +480,7 @@ func (w *deployWorld) resolverRepo(n int, parents []string, files map[string]str
 	git("checkout", "-q", "--detach", "origin/staging-void")
 	// The merge stops on the conflict (exit 1): the files resolve it.
 	_, _ = w.r.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"-C", dir, "merge", "--no-commit", "--no-ff", w.heads[n]}})
-	for name, text := range files {
-		writeIn(w.t, dir, name, text)
-	}
+	edit(dir)
 	git("add", "-A")
 	tree := git("write-tree")
 	args := []string{"commit-tree", tree, "-m", "Merge branch 'pr" + fmt.Sprint(n) + "' into staging-void"}

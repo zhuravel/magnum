@@ -5287,7 +5287,7 @@ confirm gets an effect, which a daemon advances one step a tick:
 |---|---|
 | claim | takes the env: one deploy per repository and env runs at a time, across both daemons; another waits, `queued` |
 | plan | reads the tip and the PR's head again; a head that moved since the plan fails it, and a head the branch already holds ends it `done`, "already there", with no merge |
-| merge | `git merge-tree` of the tip and the head in the mirror; clean, `git commit-tree` with the bot as author and committer; a conflict goes to the resolver agent (at most 2 tries), whose merge is fetched into the mirror |
+| merge | `git merge-tree` of the tip and the head in the mirror; clean, `git commit-tree` with the bot as author and committer; a conflict goes to the resolver agent (at most 2 tries), whose merge is rebuilt in the mirror from its resolved files (no fetch) and taken only when it comes out the same commit |
 | verify | the merge is a commit whose parents are exactly [tip, head] and whose tree is a fresh merge-tree's of them, or differs from it only in the conflicted paths, and the head is still the plan's; a tip that moved on merges again |
 | push | asks the push's credentials and rules (a merge that changes `.github/workflows` may be refused there), checks everything verify checked again from what the remote and the mirror say right then (never from the journal alone), then `git push origin <sha>:refs/heads/staging-<name>`; a rejection because a coworker pushed first merges again |
 | watch | ci.yml's run on the merge: a failure fails the deploy, with the run's link; a cancelled run (a later push's run holds the merge) or one still running 2 hours after the push goes on, and the end says so |
@@ -5360,6 +5360,16 @@ agent is gone fails, saying so. The resolver takes your own PRs only, as the dep
 `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the deploy ended, a day at most. A conflict
 the resolver cannot resolve (it gave up, a check failed, it ran over its time) fails the deploy with its why, and
 nothing is pushed.
+
+The deploy takes the resolver's merge into its mirror without a fetch: the mirror is treeless and holds hardly any
+file's content, so a fetch from the slot's full clone gets a pack it cannot unpack. It only reads the slot's clone:
+the merge commit, and the mode and content of each conflicted path in it (or that the path is gone). It writes those
+files into the mirror, rebuilds `git merge-tree`'s merge of the tip and the head with them in a temporary index
+inside the mirror's own directory, and writes the merge commit itself only when the rebuilt tree is the merge's:
+the same commit, the same sha, which verify and the push then check as before. A merge that changed any other path
+(or is not of the tip and the head) comes out with another tree and fails the deploy, "it changes a path beyond the
+conflicted paths, or merges other commits", with nothing pushed; so does a conflicted path the merge turned into a
+directory or a submodule, or a resolved file over 8 MiB.
 
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a

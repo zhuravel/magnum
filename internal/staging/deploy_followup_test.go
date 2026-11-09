@@ -235,9 +235,9 @@ func TestNoEventIsDeliveredUnderTheDirOrEffectFlock(t *testing.T) {
 }
 
 // Minor 6. A resolver's merge the mirror has already (an earlier try's
-// fetch) while this fetch fails is held again at refs/magnum/resolved/<id>,
-// so a prune before the push cannot take it.
-func TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef(t *testing.T) {
+// hand-off) is written again and held at refs/magnum/resolved/<id>, so a
+// prune before the push cannot take it.
+func TestAResolvedMergeTheMirrorHoldsAlreadyIsHeldByItsRef(t *testing.T) {
 	t.Parallel()
 	w := newDeployWorld(t)
 	res := w.withResolver()
@@ -249,9 +249,6 @@ func TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef(t *testing.T) {
 	// The mirror holds the merge already, on no ref.
 	gitIn(t, w.r, w.mirror, "fetch", "-q", dir, merge+":refs/probe/x")
 	gitIn(t, w.r, w.mirror, "update-ref", "-d", "refs/probe/x")
-	w.run.mu.Lock()
-	w.run.failWith = merge + ":" + resolvedPrefix // the resolver fetch alone
-	w.run.mu.Unlock()
 	res.answer(ResolveResult{State: ResolveDone, MergeSHA: merge, Dir: dir})
 	e := w.drive(c, id, at(StepVerify))
 	if e.State != EffectRunning || e.Merge != merge {
