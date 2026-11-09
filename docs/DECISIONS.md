@@ -21343,14 +21343,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     outside any checkout, since it holds a ticket and answers); an existing case is never overwritten.
   - `eval add`. Flags `--local-task`, `--round` (1 to `MaxFactoryCycles`), `--cycle` (when the task's loops ran the
     round more than once; else refused naming the cycles) and `--name` (default `task-<id>-round-<n>`; a name the
-    corpus has is refused). It prints what it froze, the round's findings and the `[[case]]` with a commented defect
-    template, for the operator's `eval.toml`: a case needs a defect, and a template that loaded as is would be a
-    silently wrong one. The learned corpus is not the place: the daemon rewrites it from the registry.
+    corpus has is refused). It prints what it froze (and the factory's Codex mark of the task, below), the round's
+    findings and the `[[case]]` with a commented defect template, for the local cases' own corpus,
+    `paths.Layout.LearnLocalCorpus` (`learn/local/cases.toml`, beside their inputs): a case needs a defect, and a
+    template that loaded as is would be a silently wrong one. Not `eval.toml`: the corpus parser is strict, so a build
+    from before local cases refuses a whole corpus that holds one (`kind`, `question`), and such builds read
+    `eval.toml` (the daemon's skill gate until it restarts on a build that knows them, eval-at.sh's builds of older
+    commits for a before/after proof). `eval.LoadCorpora(user, others...)` reads it after the learned corpus for `eval
+    run`, `score`, `baseline` and `add` (a name in two files refused, naming both); the gate and `eval guards` never
+    read it. The learned corpus is not the place either: the daemon rewrites it from the registry.
   - Question defects. `Defect.Question` (only on a local case's defect to find: a posted round asks none, and an
     absent question or one in the body is refused) is found only by a finding marked a question
-    (`eval.Finding.Question`, from `LocalFinding.Question`) at the defect's severity or stronger (`Defect.asks`): the
-    factory asks the operator only P0 to P2 questions and leaves a P3 among the task's leftovers, so a P3 question
-    must not find a P2 defect. A finding that matches but is no question, or too weak, is neither found nor noise,
+    (`eval.Finding.Question`, from `LocalFinding.Question`) at the defect's severity or stronger (`Defect.asks`), P2
+    when it gives none (`Defect.want`): the factory asks the operator only P0 to P2 questions (`blockingSeverity`) and
+    leaves a P3 among the task's leftovers, so a P3 question must never find a question defect, and `severity = "P3"`
+    with `question = true` is refused. A finding that matches but is no question, or too weak, is neither found nor noise,
     as an absent defect's weaker finding is. `DefectResult.Question` and the report say `wanted a P2 question`.
   - The replay. `RunCase` takes the case's lock, flags and candidate as for a posted case; then a local case needs
     its inputs of its own round (the case's pr and head), every frozen role still declared (`missing_role`
@@ -21364,13 +21371,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `[[repo]]` env). The copy's env, the factory's own choice, would point the replay's roles at a copy's databases
     that a task may be using. `RunLocal` also takes the `local-<N>` lock, so a replay never meets the factory
     running the same round. Its findings are scored on what the factory acts on (`LocalResult.Findings`, title
-    before body so a defect's words match either, and the planned review's body as an `InBody` finding, which the
+    before body so a defect's words match either, and the planned review's body as an `InBody` finding, read from
+    the result file of the judge the round ran, `LocalResult.ResultFile`: the frozen roles' judge, which on a task
+    Codex refused is `judge_fallback`'s, not the watch's; the
     result's own finding of the body gives way to, so the body is never noise) with `eval.ScoreCase`: one score
     shape for both kinds. `CaseRun.Kind` and `CaseRun.Findings` keep them, and `eval
     score` re-scores a local case from them (`Rescore`), not from the result file, which `eval.ParseResult` would read
     without the question marks; a run whose case changed kind keeps its score and says so. A round that went without
-    a reviewer's report is `missing_role`, a refused one is flagged (`eval.MarkFlagged`), and a local case's live
-    Codex flag is never looked up (its synthetic PR is in no registry): none is scored as a miss.
+    a reviewer's report is `missing_role`, a refused one is flagged (`eval.MarkFlagged`): none is scored as a miss.
+    The add hint of a case without inputs names its task and round with `LocalRoundOf` (`LocalNumber` undone: round
+    10 is where the next task's tens start).
+  - Codex. Its synthetic PR is in no registry, so `Refused` checks a local case for Codex's sake instead
+    (`localCodexRefusal`), before anything starts: when its frozen roles run Codex (an agent or a shell role whose
+    tool is Codex) on a task the factory marked never for Codex again (`tasks.codex_never`, set when Codex refused
+    the task, since a second warning puts the account at stake), frozen with the case (`LocalInputs.CodexNever`) or
+    read since (`factoryread.TaskCodex`, read only), or whose published PR (`pr_links`) an earlier replay was refused
+    on or magnum's registry holds a Codex flag for (`liveFlag`), it is `flagged`. A factory registry that cannot say
+    refuses it too, as `liveFlag`'s does; one that is not there, or does not hold the task, adds nothing to the
+    frozen mark. A round that ran without Codex replays.
   - The gate (item 5 of R36, not built). `learn.SelectCases` skips a local case (`SkipLocal`): a gate of a skill
     change replays judge-only, which a local round cannot, so a local guard or "other" case would stop every such
     gate. Follow-up: a gate whose candidate changes what a local round reads (the skill, the judge prompts) replays
@@ -21383,22 +21401,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   judge read; recomputing the base (`git merge-base` with today's base branch: the head may be merged since, which
   makes the merge base the head itself); a `repo` field instead of the synthetic `pr` (every PR-keyed path would need
   a second key); the copy's env for the replay (above); a P3 question as a found P2 question (it never reaches the
-  operator); re-parsing a local case's result file to re-score it (the question marks are in the provenance the
-  posted parse does not read); local cases in this branch's gate (above).
+  operator), and a question defect without a severity found by any question (the same miss); re-parsing a local
+  case's result file to re-score it (the question marks are in the provenance the posted parse does not read);
+  local cases in this branch's gate (above); local cases in `eval.toml`, with a note that older builds refuse it
+  (the gate of a daemon not yet restarted would stop on every proposal, and eval-at.sh at an older base could not
+  run its posted cases); the watch's judge for the result file (a round of a task Codex refused ran another);
+  replaying a Codex-marked task's round with `judge_fallback` in its Codex judge's place, as the factory's
+  `reviewRoles` would now (the replay would no longer be the round that ran, so it proves nothing about it).
   Tests: eval's TestACorpusReadsALocalCaseBesideAPostedOne, TestALocalCaseAndAQuestionDefectBreakTheirOwnRules,
   TestACorpusWithoutKindsLoadsAndWritesAsBefore, TestAQuestionDefectIsFoundOnlyByAQuestionAtItsSeverity,
-  TestAQuestionDefectWithoutASeverityTakesAnyQuestion, TestTheReportSaysAQuestionDefectWantsAQuestion,
-  TestRescoreScoresALocalCaseFromItsRecordedFindings and TestTheExampleCorpusHasALocalCaseThatWantsAQuestion;
-  factoryread's TestLocalReviewReadsATasksRoundsTheirRolesAndItsAnswerTimes,
-  TestLocalReviewLeavesACycleWithoutItsBeginEventUnnamed and TestLocalReviewSaysWhatIsMissingAndWritesNothing;
+  TestAQuestionDefectWithoutASeverityWantsAQuestionTheFactoryAsks, TestTheReportSaysAQuestionDefectWantsAQuestion,
+  TestRescoreScoresALocalCaseFromItsRecordedFindings, TestTheExampleCorpusShowsALocalCaseForItsOwnFile and
+  TestLoadCorporaReadsTheLocalCasesFileAfterTheOthers; factoryread's
+  TestLocalReviewReadsATasksRoundsTheirRolesAndItsAnswerTimes, TestLocalReviewLeavesACycleWithoutItsBeginEventUnnamed,
+  TestLocalReviewSaysWhatIsMissingAndWritesNothing and TestTaskCodexReadsTheFactorysCodexMarkAndThePublishedPR;
   evalrun's TestFreezeLocalFreezesWhatTheRoundRead, TestFreezeLocalTakesTheAnswersTheRoundsTicketFileHeld,
   TestFreezeLocalOfARoundWithoutATicketFile, TestFreezeLocalRefusesARoundItCannotFreezeWhole,
   TestRunCaseReplaysALocalCaseFromItsFrozenInputs, TestRunCaseReportsALocalCaseItCannotScore,
-  TestALocalCasesReviewBodyIsNeverNoise and TestALocalCaseWithoutInputsNamesTheAddThatFreezesIt; the cli's
-  TestEvalAddFreezesALocalRoundAndPrintsItsCase, TestEvalAddRefusesWhatItCannotFreeze and
-  TestEvalRunNamesALocalCaseAndItsMissingInputs; learn's TestSelectCasesLeavesLocalCasesToEvalRun. The comments of
-  `engine.LocalRound` and `pipeline.Local` now say the ticket file holds the answers too. No new dependencies; the
-  factory's code did not change.
+  TestALocalCasesReviewBodyIsNeverNoise, TestALocalCaseWithoutInputsNamesTheAddThatFreezesIt,
+  TestALocalCaseIsScoredOnItsFrozenJudgesResult, TestLocalRoundOfNamesTheTaskAndRoundOfASyntheticNumber,
+  TestALocalCaseOfTheLastRoundNamesItsOwnAdd, TestALocalReplayCopiesTheNotesUnlessToldNot,
+  TestALocalReplayFetchesAMissingCommitByID, TestALocalCaseOfATaskCodexMustNotSeeIsNotReplayedWithCodex and
+  TestFreezeLocalFreezesTheTasksCodexMark; the cli's TestEvalAddFreezesALocalRoundAndPrintsItsCase,
+  TestEvalAddRefusesWhatItCannotFreeze, TestEvalAddSaysATasksCodexMark, TestEvalRunNamesALocalCaseAndItsMissingInputs,
+  TestEvalCaseWhatNamesTheLastRoundOfItsTask and TestEvalRunReadsTheLocalCasesCorpus; learn's
+  TestSelectCasesLeavesLocalCasesToEvalRun. The comments of `engine.LocalRound` and `pipeline.Local` now say the
+  ticket file holds the answers too, and those of `engine.LocalRound.Env`, `engine.RunLocal`, the engine's
+  `slotEnv` and `evalrun.LocalCase` that the round's env is the caller's (the copy's for the factory's rounds, the
+  per-PR env of the synthetic number for a replay). No new dependencies; the factory's code did not change.
 
 - Broken copies repair themselves on a backoff while the factory daemon runs, and every copy of a repository broken
   with one cause is an infrastructure hold of that repository (2026-11-09; amends "Each start of the factory daemon
