@@ -3,6 +3,7 @@ package factory
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -860,7 +861,7 @@ func TestATaskRowWithAPRCarriesItForTheFixKeys(t *testing.T) {
 		switch {
 		case want == nil && row.PR != nil:
 			t.Errorf("%s carries a PR %+v, want none", key, *row.PR)
-		case want != nil && (row.PR == nil || *row.PR != *want):
+		case want != nil && (row.PR == nil || !reflect.DeepEqual(*row.PR, *want)):
 			t.Errorf("%s carries %+v, want %+v", key, row.PR, *want)
 		}
 	}

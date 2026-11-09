@@ -47,7 +47,14 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 	}
 	body, cursor := p.taskBody(c)
 	foot := []string{p.hintsLine(orHints(c.Hints, p.taskHints(c)))}
-	if c.Ask != "" {
+	switch {
+	case c.Ask != "" && c.askWrap: // all it names shows, over up to half the screen (all of it without a height), as the board's
+		most := 0
+		if height > 0 {
+			most = max(height/2, askMaxLines)
+		}
+		foot = p.askLinesIn(most, c.Ask)
+	case c.Ask != "":
 		foot = p.askLines(c.Ask)
 	}
 	start := scroll
@@ -215,7 +222,8 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 // CI, findings and approvals in the board's cells, as home's columns draw
 // them, the CI with why GitHub blocks the merge and the failed jobs'
 // pages under it (ciLinkRows); then STAGINGS, the PR on each staging
-// server (stagingsText), and JIRA, where its issue stands (jiraText), why
+// server (stagingsText) and under it the PR's staging deploys
+// (stagingDeployRows), and JIRA, where its issue stands (jiraText), why
 // its last read failed and Jira done while the PR is open (jiraDoneOpen),
 // with or without the PR's lines; a blank line after them.
 func (p *cardPainter) prSection(card TaskCard) []string {
@@ -250,7 +258,14 @@ func (p *cardPainter) prSection(card TaskCard) []string {
 		row("THREADS", words(nil, c.Threads))
 		row("FIX LOOP", words(nil, c.FixLoop))
 	}
-	row("STAGINGS", p.stagingsText(card.Stagings))
+	cells := p.stagingsText(card.Stagings)
+	row("STAGINGS", cells)
+	if len(card.StagingDeploys) > 0 {
+		if cells.width() == 0 { // no server's cell: the label stands over the deploys alone
+			out = append(out, p.line(at(1, x-1, seg{"STAGINGS", p.st.Section})))
+		}
+		out = append(out, p.stagingDeployRows(x, card.StagingDeploys)...)
+	}
 	if js := card.JiraStatus; js != nil {
 		more := append(p.jiraParts(js), p.jiraFailure(js), p.jiraDoneOpen(card))
 		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js, p.width-1-x), more...)
@@ -391,6 +406,20 @@ func (p *cardPainter) stagingsText(cells []StagingCell) cell {
 			continue
 		}
 		out = append(out, p.stageCell(c, formLong)...)
+	}
+	return out
+}
+
+// stagingDeployRows are the PR's staging deploys under the card's STAGINGS
+// line, from column x, in the board card's words and colors
+// (prbPainter.stagingDeployLines): each deploy's effect, state, last step
+// and how long ago, its last event's words or why it ended, its CI run.
+func (p *cardPainter) stagingDeployRows(x int, ds []StagingDeploy) []string {
+	b := p.base
+	b.now = p.now
+	var out []string
+	for _, d := range ds {
+		out = append(out, b.stagingDeployLines(d, spaces(x), p.width-1)...)
 	}
 	return out
 }

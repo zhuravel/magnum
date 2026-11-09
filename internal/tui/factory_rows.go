@@ -136,6 +136,12 @@ type FactoryPR struct {
 	// them; nil when the screen read none: the keys then refuse only what
 	// the rest of the row tells, and magnum's daemon decides the rest.
 	Facts *FactoryPRFacts
+	// StagingDeploys are the PR's staging deploys magnum's daemon runs, or
+	// ran in the last day, live ones first, each as its newest event left
+	// it (engine.StagingDeployRecord, the records the board reads): the
+	// task card draws them under STAGINGS, home's rows none. nil when the
+	// screen read none.
+	StagingDeploys []StagingDeploy
 }
 
 // FactoryPRFacts are what the board's row actions (review, fresh review,
@@ -495,6 +501,10 @@ type TaskCard struct {
 	// the PR's lines (each server's state and how long it has stood); none:
 	// no line.
 	Stagings []StagingCell
+	// StagingDeploys are the PR's staging deploys magnum's daemon runs or
+	// ran in the last day (its row's FactoryPR.StagingDeploys), drawn under
+	// the STAGINGS line in the board card's words; none: no lines.
+	StagingDeploys []StagingDeploy
 	// JiraStatus is where the task's Jira issue stands, as its row's
 	// JiraStatus says it; nil: not read.
 	JiraStatus *FactoryJiraStatus
@@ -544,7 +554,8 @@ type TaskCard struct {
 	// hints.
 	Ask string
 
-	rule string // the screen's note on the rule (styled)
+	rule    string // the screen's note on the rule (styled)
+	askWrap bool   // Ask wraps over as many of the footer's lines as it needs (factoryQuestion.wrap)
 }
 
 // CardPR is what a PR is, on its card (your PR's, or a published task's),

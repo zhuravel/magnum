@@ -69,6 +69,10 @@ type factoryQuestion struct {
 	sentence string // as the bar asks it, ending in "?"
 	label    string // the action's name in the footer and the log: the sentence without its "?"
 	run      factoryAction
+	// wrap: the question wraps over the footer's lines instead of being
+	// cut at the screen's edge, as the board's pendingAction.wrap, since y
+	// answers all it names: a staging deploy's migrations and its warning.
+	wrap bool
 }
 
 // factoryBar is the action state the factory screen embeds. One action runs
@@ -84,6 +88,7 @@ type factoryBar struct {
 	st   styles
 
 	asking  *factoryQuestion // the question awaiting y/N
+	choose  *stagingChoice   // E's chooser of a PR's staging envs, before its plan (staging_key.go); nil when none is up
 	busy    string           // the label of the action in flight
 	dropped bool             // the screen quits: no question is asked or answered any more
 
@@ -113,7 +118,7 @@ func newFactoryBar(ctx context.Context, log *ActionLog, now func() time.Time, ti
 // never starts a push. An action already running ends with the screen's
 // context, and the log keeps its outcome.
 func (b *factoryBar) drop() {
-	b.asking, b.dropped = nil, true
+	b.asking, b.choose, b.dropped = nil, nil, true
 }
 
 // applyStyles switches the bar to st, once the terminal reports its background.
@@ -128,7 +133,7 @@ func (b *factoryBar) applyStyles(st styles) { b.st = st }
 // question on the bar is what waits, and it stays drawn.
 func (b *factoryBar) ask(sentence string, run factoryAction) tea.Cmd {
 	switch {
-	case run == nil || b.dropped || b.asking != nil:
+	case run == nil || b.dropped || b.asking != nil || b.choose != nil:
 		return nil
 	case b.busy != "":
 		return b.show("wait: "+b.busy+" runs", factoryFlashWait)
@@ -162,8 +167,13 @@ func (b *factoryBar) key(msg tea.KeyPressMsg) (cmd tea.Cmd, taken bool) {
 }
 
 // cancel answers a question up with no, as any key but y does (a click
-// while it waits); it reports whether there was one.
+// while it waits), and closes E's chooser up; it reports whether there was
+// either.
 func (b *factoryBar) cancel() (tea.Cmd, bool) {
+	if c := b.choose; c != nil {
+		b.choose = nil
+		return b.show("Deploy "+c.label+" to staging: cancelled, nothing was run", factoryFlashNote), true
+	}
 	if b.asking == nil {
 		return nil, false
 	}
@@ -177,7 +187,7 @@ func (b *factoryBar) cancel() (tea.Cmd, bool) {
 // and the log as any other's.
 func (b *factoryBar) start(label string, run factoryAction) tea.Cmd {
 	switch {
-	case run == nil || b.dropped || b.asking != nil:
+	case run == nil || b.dropped || b.asking != nil || b.choose != nil:
 		return nil
 	case b.busy != "":
 		return b.show("wait: "+b.busy+" runs", factoryFlashWait)
@@ -211,8 +221,10 @@ func (b *factoryBar) update(msg tea.Msg) (cmd tea.Cmd, taken bool) {
 		if msg.err != nil {
 			return b.show(msg.label+" failed: "+errLine(msg.err), factoryFlashFailed), true
 		}
-		if msg.next != nil && !b.dropped { // a plan: its question goes up, and y runs the next step
-			b.asking, b.flash = msg.next, ""
+		if msg.next != nil && !b.dropped { // a plan: its question goes up, cleaned (the daemon's words), and y runs the next step
+			q := *msg.next
+			q.sentence, q.label = cleanText(q.sentence), cleanText(q.label)
+			b.asking, b.flash = &q, ""
 			return nil, true
 		}
 		return b.show(cmp.Or(lastLine(msg.text), msg.label+": done"), factoryFlashDone), true
@@ -238,14 +250,30 @@ func (b *factoryBar) show(text string, kind factoryFlashKind) tea.Cmd {
 	return b.tick(flashFor, func(time.Time) tea.Msg { return factoryExpireMsg{seq: seq} })
 }
 
-// view is the footer line in width cells: the question, else the note, else
-// the action in flight; "" when there is none.
+// view is the footer line in width cells: the question, else E's chooser,
+// else the note, else the action in flight; "" when there is none.
 func (b *factoryBar) view(width int) string {
-	if b.asking != nil {
+	switch {
+	case b.asking != nil:
 		return b.st.confirmLine(b.asking.sentence, width)
+	case b.choose != nil:
+		return b.choose.line(b.st, width)
 	}
 	return b.note(width)
 }
+
+// askLines are the question's lines in width cells, over at most room
+// lines (the board's askLines): one, unless it wraps and does not fit on
+// one, "y/N" ending the last; none when no question waits.
+func (b *factoryBar) askLines(width, room int) []string {
+	if b.asking == nil {
+		return nil
+	}
+	return b.st.askLines(&pendingAction{question: b.asking.sentence, wrap: b.asking.wrap}, width, room)
+}
+
+// asksWrapped reports whether the question waiting wraps (factoryQuestion.wrap).
+func (b *factoryBar) asksWrapped() bool { return b.asking != nil && b.asking.wrap }
 
 // question is the sentence waiting for y/N; "" when none waits.
 func (b *factoryBar) question() string {

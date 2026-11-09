@@ -21,7 +21,7 @@ func (m *factoryModel) updateMouse(msg tea.MouseMsg) tea.Cmd {
 	ev := msg.Mouse()
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
-		if m.bar.asking == nil && !m.menu.open {
+		if m.bar.asking == nil && m.bar.choose == nil && !m.menu.open {
 			m.wheel(ev.Button)
 		}
 	case tea.MouseClickMsg:
@@ -57,12 +57,12 @@ func (m *factoryModel) wheel(b tea.MouseButton) {
 	}
 }
 
-// click is a button going down: it answers a question with no, works the
-// menu, selects or opens a row, or opens the menu.
+// click is a button going down: it answers a question with no (and closes
+// E's chooser), works the menu, selects or opens a row, or opens the menu.
 func (m *factoryModel) click(ev tea.Mouse) tea.Cmd {
 	m.filtering = false // a click hands the keys back from the filter, which it keeps
 	switch {
-	case m.bar.asking != nil:
+	case m.bar.asking != nil || m.bar.choose != nil:
 		cmd, _ := m.bar.cancel()
 		m.asked = nil
 		return cmd

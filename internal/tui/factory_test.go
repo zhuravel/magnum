@@ -117,6 +117,15 @@ type fakeFactoryActions struct {
 	acceptsQA []int64         // the tasks AcceptQA was asked for
 	plans     []string        // the PRs MergeParent's dry run was asked for
 	merges    []string        // the PRs MergeParent merged the parent of
+	// stagingPlans are StagingPlan's calls ("<ref> <env,env>"),
+	// stagingDeploys StagingDeploy's ("<ref> <env,env> at <head> seen
+	// <migration>"); stagingAsk, when set, is the plan's question,
+	// stagingPlanErr its error, and stagingPending makes the deploy's
+	// request still pending (factory_staging_key_test.go).
+	stagingPlans, stagingDeploys []string
+	stagingAsk                   string
+	stagingPlanErr               error
+	stagingPending               bool
 	// prActs are the board's row actions the screen ran on PRs, as
 	// "<call> <ref>" ("review owner/name#12", "fresh owner/name#12",
 	// "snooze 2h0m0s owner/name#12", "unsnooze", "mute", "unmute").

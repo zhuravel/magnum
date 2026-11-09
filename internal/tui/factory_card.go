@@ -191,6 +191,7 @@ func cleanTaskCard(c TaskCard) TaskCard {
 	for i, s := range c.Stagings {
 		c.Stagings[i].Name, c.Stagings[i].State, c.Stagings[i].Count = cleanText(s.Name), cleanText(s.State), cleanText(s.Count)
 	}
+	c.StagingDeploys = cleanStagingDeploys(c.StagingDeploys)
 	c.Stages = slices.Clone(c.Stages)
 	for i, s := range c.Stages {
 		c.Stages[i].Name, c.Stages[i].State, c.Stages[i].Proof = cleanText(s.Name), cleanText(s.State), cleanText(s.Proof)
@@ -390,6 +391,11 @@ func (p *cardPainter) hintsLine(hs []hint) string {
 // does not lose the words that say what it frees (only a question longer
 // than three lines of the screen is cut, at the end of its third).
 func (p *cardPainter) askLines(sentences ...string) []string {
+	return p.askLinesIn(askMaxLines, sentences...)
+}
+
+// askLinesIn is askLines over at most most lines (0: as many as it needs).
+func (p *cardPainter) askLinesIn(most int, sentences ...string) []string {
 	sentences = slices.DeleteFunc(sentences, func(s string) bool { return s == "" })
 	w := p.width - 1
 	one := strings.Join(sentences, " ")
@@ -398,7 +404,7 @@ func (p *cardPainter) askLines(sentences ...string) []string {
 	}
 	lines := sentences
 	if len(lines) != 2 || ansi.StringWidth(lines[0]) > w || ansi.StringWidth(lines[1])+len(confirmYN) > w {
-		lines = wrapText(one, w-len(confirmYN), askMaxLines)
+		lines = wrapText(one, w-len(confirmYN), most)
 	}
 	out := make([]string, len(lines))
 	for i, l := range lines {

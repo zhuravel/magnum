@@ -195,6 +195,10 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     its lift) and M and U do, through the same calls (DashboardActions):
 //     magnum's own request paths, never the factory daemon. The screen
 //     asked y/N first, in the board's words.
+//   - StagingPlan and StagingDeploy are DashboardActions': E's plan of a
+//     staging deploy of PR ref to envs (a dry run, whose Ask the screen
+//     puts as its y/N and whose Staging binds the deploy), then the deploy
+//     so bound, through magnum's daemon, never the factory's.
 type FactoryActions interface {
 	Start(ctx context.Context, text, kind, repo string, wordsOnly bool) (ActionResult, error)
 	Preview(ctx context.Context, text, repo string) (NewTaskForm, error)
@@ -219,6 +223,8 @@ type FactoryActions interface {
 	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	StagingPlan(ctx context.Context, ref string, envs []string) (ActionResult, error)
+	StagingDeploy(ctx context.Context, ref string, asked StagingAsked) (ActionResult, error)
 	// AcceptQA lets a task go on with what QA left you accepted by you, at
 	// its head: the defects the writer declined, at its fix loop's stop or
 	// whose pages a QA run did not walk again, the writer's fixes a QA run
@@ -1084,6 +1090,7 @@ type factoryFrameKey struct {
 	width, height int
 	dark          bool
 	question      string
+	choose        string // E's chooser up (stagingChoice.key), as on the board
 	note          string
 	noteKind      factoryFlashKind
 	busy          string
@@ -1096,7 +1103,7 @@ type factoryFrameKey struct {
 
 func (m factoryModel) frameKey() factoryFrameKey {
 	return factoryFrameKey{view: m.view, width: m.width, height: m.height, dark: m.st.dark,
-		question: m.bar.question(), note: m.bar.flash, noteKind: m.bar.flashKind, busy: m.bar.busy,
+		question: m.bar.question(), choose: m.bar.choose.key(), note: m.bar.flash, noteKind: m.bar.flashKind, busy: m.bar.busy,
 		logGen: m.bar.log.generation(), mouseOn: m.mouseOn, menu: m.menu, clock: clockKey(m.opts.Now),
 		data: fingerprint(m.payload())}
 }
@@ -1171,8 +1178,14 @@ func (m factoryModel) render() string {
 	return frame
 }
 
-// rule is the bar's note for a card's rule; "" when it has none.
-func (m factoryModel) rule() string { return m.bar.note(max(m.viewWidth()-4, 1)) }
+// rule is the bar's note for a card's rule, or E's chooser while it is up;
+// "" when it has neither.
+func (m factoryModel) rule() string {
+	if c := m.bar.choose; c != nil {
+		return c.line(m.bar.st, max(m.viewWidth()-4, 1))
+	}
+	return m.bar.note(max(m.viewWidth()-4, 1))
+}
 
 // homeFrame is home as the painter draws it.
 func (m factoryModel) homeFrame() factoryFrame {
@@ -1223,6 +1236,13 @@ func (m factoryModel) homeFrame() factoryFrame {
 	}
 	f.Hints = m.homeHints()
 	f.rule = m.bar.view(max(m.viewWidth()-4, 1))
+	if m.bar.asksWrapped() { // a question that wraps takes the body's last lines above the rule, as on the board
+		lines := m.bar.askLines(max(m.viewWidth()-4, 1), 1+max(m.viewHeight()-factoryTop-factoryBottom, 1)/2)
+		for _, l := range lines[:len(lines)-1] {
+			f.ask = append(f.ask, "   "+l)
+		}
+		f.rule = lines[len(lines)-1]
+	}
 	switch {
 	case !m.haveData && m.loadErr != nil:
 		f.status = m.st.Err.Render("could not read the factory: " + errLine(m.loadErr))

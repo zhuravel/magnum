@@ -1118,8 +1118,7 @@ func (p *prbPainter) stagingDeployStyle(d StagingDeploy) lipgloss.Style {
 // stagingLines are the card's STAGINGS block, width cells wide: per env
 // its glyph, its name and its words (stagingParts); under it, why it
 // cannot be told and the CI run's page, then each of the env's deploys
-// (ds): its effect and words (StagingDeploySummary), its last event's
-// words or why it ended, and its CI run's page.
+// (ds, stagingDeployLines).
 func (p *prbPainter) stagingLines(ss []StagingInfo, ds []StagingDeploy, width int) []string {
 	nameW := 0
 	for _, s := range ss {
@@ -1141,19 +1140,28 @@ func (p *prbPainter) stagingLines(ss []StagingInfo, ds []StagingDeploy, width in
 			out = append(out, indent+"run "+p.st.Accent.Render(s.RunURL))
 		}
 		for _, d := range ds {
-			if d.Env != s.Env {
-				continue
-			}
-			out = append(out, indent+p.stagingDeployStyle(d).Render("deploy "+d.Effect+": "+StagingDeploySummary(d, p.now)))
-			for _, words := range StagingDeployWords(d) {
-				for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent)-2, 10)).Render(words), "\n") {
-					out = append(out, indent+"  "+p.st.Dim.Render(strings.TrimRight(l, " ")))
-				}
-			}
-			if d.RunURL != "" {
-				out = append(out, indent+"  run "+p.st.Accent.Render(d.RunURL))
+			if d.Env == s.Env {
+				out = append(out, p.stagingDeployLines(d, indent, width)...)
 			}
 		}
+	}
+	return out
+}
+
+// stagingDeployLines are deploy d's lines in a STAGINGS block, each after
+// indent, its words wrapped within width cells: its effect and words
+// (StagingDeploySummary), its last event's words or why it ended, and its
+// CI run's page. The board's card draws them under their env, the factory
+// screen's task card under its STAGINGS line.
+func (p *prbPainter) stagingDeployLines(d StagingDeploy, indent string, width int) []string {
+	out := []string{indent + p.stagingDeployStyle(d).Render("deploy "+d.Effect+": "+StagingDeploySummary(d, p.now))}
+	for _, words := range StagingDeployWords(d) {
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent)-2, 10)).Render(words), "\n") {
+			out = append(out, indent+"  "+p.st.Dim.Render(strings.TrimRight(l, " ")))
+		}
+	}
+	if d.RunURL != "" {
+		out = append(out, indent+"  run "+p.st.Accent.Render(d.RunURL))
 	}
 	return out
 }

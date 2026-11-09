@@ -70,8 +70,12 @@ type factoryFrame struct {
 	Digest *Digest
 
 	// rule is the screen's own note on the status rule (styled): a question,
-	// a refusal or an action's outcome; it takes the place of Flash.
+	// E's chooser, a refusal or an action's outcome; it takes the place of
+	// Flash. ask are the lines above it of a question that wraps (styled,
+	// indented: the lines before its last, which is rule): they take the
+	// body's last lines.
 	rule string
+	ask  []string
 	// status takes the place of the empty home's one line (styled): the
 	// screen is loading, or could not read the factory.
 	status string
@@ -1677,7 +1681,7 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	narrowedEmpty := empty && p.f.all != nil && len(p.counted) > 0 // the chips still count what it hides
 	bodyH := 0
 	if height > 0 {
-		bodyH = max(height-factoryTop-factoryBottom, 1)
+		bodyH = max(height-factoryTop-factoryBottom-len(p.f.ask), 1)
 	}
 	bands := p.bands()
 	if height > 0 {
@@ -1757,6 +1761,7 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 	if p.f.input != "" { // the filter as it is typed
 		help = truncate(" "+p.st.Accent.Render(p.f.input), p.width)
 	}
+	lines = append(lines, p.f.ask...)
 	lines = append(lines, p.base.footerRule(p.width, msg, below), help, p.hintsLine())
 	if height > 0 && len(lines) > height {
 		lines = lines[:height]

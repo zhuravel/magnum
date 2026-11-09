@@ -109,36 +109,49 @@ func (c *stagingChoice) line(st styles, width int) string {
 	return st.Warn.Render(truncate(line, width))
 }
 
-// chooseKey handles a key while the chooser is up: a digit toggles its
-// env, a toggles them all, enter asks the daemon's plan of the envs chosen
-// (none: it says to choose one first), any other key cancels.
-func (b *actionBar) chooseKey(k string) (cmd tea.Cmd, started bool) {
-	c := b.choose
+// press is a key while the chooser is up, on the board's bar and the
+// factory screen's alike: a digit toggles its env, a toggles them all,
+// enter with none chosen says to choose one first, and up says the
+// chooser stays; enter with envs chosen gives them (up false: plan them),
+// any other key none (up false: cancelled).
+func (c *stagingChoice) press(k string) (envs []string, up bool) {
 	c.empty = false
 	switch {
 	case len(k) == 1 && k[0] >= '1' && k[0] <= '9':
 		if i := int(k[0] - '1'); i < len(c.on) {
 			c.on[i] = !c.on[i]
 		}
-		return nil, false
+		return nil, true
 	case k == "a":
 		all := !slices.Contains(c.on, false)
 		for i := range c.on {
 			c.on[i] = !all
 		}
-		return nil, false
+		return nil, true
 	case k == "enter":
-		envs := c.chosen()
-		if len(envs) == 0 {
-			c.empty = true
-			return nil, false
-		}
+		envs = c.chosen()
+		c.empty = len(envs) == 0
+		return envs, c.empty
+	}
+	return nil, false
+}
+
+// chooseKey handles a key while the chooser is up (press): enter asks the
+// daemon's plan of the envs chosen, any other key but a digit and a
+// cancels.
+func (b *actionBar) chooseKey(k string) (cmd tea.Cmd, started bool) {
+	c := b.choose
+	envs, up := c.press(k)
+	switch {
+	case up:
+		return nil, false
+	case envs == nil:
 		b.choose = nil
-		what, fn := stagingRun(c.ref, envs)
-		return b.start(what+" plan", c.ref, fn)
+		return b.note(rowActDefs[actStaging].what + " cancelled"), false
 	}
 	b.choose = nil
-	return b.note(rowActDefs[actStaging].what + " cancelled"), false
+	what, fn := stagingRun(c.ref, envs)
+	return b.start(what+" plan", c.ref, fn)
 }
 
 // stagingRun is what enter runs on ref's chosen envs: the daemon's plan,

@@ -75,6 +75,8 @@ func (m *factoryModel) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 		cmd = m.menuKey(k)
 	case m.bar.asking != nil:
 		cmd = m.answerKey(msg)
+	case m.bar.choose != nil: // E's chooser takes every key, as a question does
+		cmd = m.chooseKey(k)
 	default:
 		m.bar.key(msg) // a failure kept in the footer ends with any key
 		cmd = m.viewKey(msg)
@@ -541,6 +543,10 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "f", "F", "K", "x", "P":
 		if r, ok := m.selectedRow(); ok {
 			return m.prKey(k, r), true
+		}
+	case "E":
+		if r, ok := m.selectedRow(); ok {
+			return m.stagingKey(r), true
 		}
 	case "r", "R", "z", "M", "U":
 		if r, ok := m.selectedRow(); ok {
@@ -1298,10 +1304,13 @@ func (m factoryModel) taskCard() TaskCard {
 	}
 	c.Cursor = m.taskCursor(c)
 	c.Spinner = m.anim
-	c.Ask = m.bar.question()
+	c.Ask, c.askWrap = m.bar.question(), m.bar.asksWrapped()
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
 	r, _ := m.row(m.task)
+	if r.PR != nil {
+		c.StagingDeploys = r.PR.StagingDeploys
+	}
 	if r.yourPR() {
 		c.Hints = m.walkHint(m.reportHints(m.prCardHints(r, c), m.task, "b", "t"))
 		return c
@@ -1415,6 +1424,11 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 			return m.note("f, F and K act on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true
 		}
 		return m.prKey(k, r), true
+	case k == "E":
+		if r.ID == 0 {
+			return m.note("E acts on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true
+		}
+		return m.stagingKey(r), true
 	case r.yourPR() && k == "x":
 		return m.note("x drops a task: " + m.taskKey(task) + " is your PR (K stops magnum's loop)"), true
 	case r.yourPR() && k == "d":

@@ -8,11 +8,11 @@ package cli
 // once, so the adapter records none. Stepping into a pane, the time you saw
 // home and the terminal's focus carry no words and no decision: they record
 // no input. The screen asks y/N before each action; the adapter confirms
-// nothing itself. f, F, K, o, r, R, z, M and U on a row with a PR (your
-// own PR's, or a task's) are not the factory's: they run the board's own
-// code (screenActions: magnum's fix, fix off, abort, review, snooze, mute
-// and unmute requests in magnum's registry, and magnum's open), never the
-// factory daemon's.
+// nothing itself. f, F, K, P, E, o, r, R, z, M and U on a row with a PR
+// (your own PR's, or a task's) are not the factory's: they run the board's
+// own code (screenActions: magnum's fix, fix off, abort, merge-parent,
+// staging deploy, review, snooze, mute and unmute requests in magnum's
+// registry, and magnum's open), never the factory daemon's.
 
 import (
 	"cmp"
@@ -54,8 +54,8 @@ type factoryActions struct {
 	pid           int
 	focusPane     func(ctx context.Context, target string) error
 	revealSession func(ctx context.Context) (string, error)
-	// board runs f, F, K, o, r, R, z, M and U on a row with a PR: the PR
-	// board's actions.
+	// board runs f, F, K, P, E, o, r, R, z, M and U on a row with a PR:
+	// the PR board's actions.
 	board *screenActions
 }
 
@@ -357,6 +357,27 @@ func (a *factoryActions) Unmute(ctx context.Context, ref string) (tui.ActionResu
 		return tui.ActionResult{}, errNoBoard
 	}
 	return a.board.Unmute(ctx, ref)
+}
+
+// StagingPlan asks magnum's daemon for its plan of a staging deploy of PR
+// ref to envs, as the board's E does (magnum staging --deploy --dry-run):
+// its y/N as Ask, the deploy's binding as Staging. The factory daemon
+// never deploys: E goes through magnum's request path alone.
+func (a *factoryActions) StagingPlan(ctx context.Context, ref string, envs []string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.StagingPlan(ctx, ref, envs)
+}
+
+// StagingDeploy queues the staging deploy of PR ref that the screen's y/N
+// bound (StagingPlan's Staging), as the board's E does; one still pending
+// is the screen's to say how to follow.
+func (a *factoryActions) StagingDeploy(ctx context.Context, ref string, asked tui.StagingAsked) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.StagingDeploy(ctx, ref, asked)
 }
 
 // errNoBoard is the refusal of a key on a PR's row by a screen built

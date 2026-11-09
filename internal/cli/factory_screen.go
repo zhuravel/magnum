@@ -288,7 +288,9 @@ func (w *ownReadWatch) OwnPRs(ctx context.Context) ([]factory.PRState, error) {
 // PR (with the replies its judge has not re-decided), its snooze while it
 // holds and its Codex flag, read from magnum's registry in one opening per
 // frame, read only and never migrated (a registry of another schema than
-// this build's is not read), and whether its watch runs autofix. A PR the
+// this build's is not read), and whether its watch runs autofix; and its
+// staging deploys (tui.FactoryPR.StagingDeploys, the board's records), from
+// one read of every deploy's record per frame, not one per row. A PR the
 // registry has no row of, and a registry that is not there or cannot be
 // read, leave its facts unread: the keys then refuse only on what the rest
 // of the row tells, and magnum's daemon decides the rest.
@@ -304,6 +306,7 @@ func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow
 	}
 	defer st.Close()
 	now := s.now()
+	deploys := stagingDeployValues(ctx, st, s.c.Config) // every staging deploy's record, in one read
 	for i, r := range rows {
 		if r.PR == nil {
 			continue
@@ -313,29 +316,38 @@ func (s *factoryScreenSource) prFacts(ctx context.Context, rows []tui.FactoryRow
 		if err != nil {
 			continue
 		}
-		repo, err := st.RepoByFullName(ctx, full)
-		if err != nil {
-			continue
+		pr := *r.PR
+		pr.StagingDeploys = stagingDeploysOf(deploys, full, n)
+		if f := s.prFactsOf(ctx, st, full, n, now); f != nil {
+			pr.Facts = f
 		}
-		pr, err := st.PRByRepoNumber(ctx, repo.ID, n)
-		if err != nil {
-			continue
-		}
-		f := &tui.FactoryPRFacts{State: pr.State, GHState: pr.GHState, Head: pr.HeadSHA, Reviewed: store.Deref(pr.ReviewedSHA),
-			Muted: pr.Muted, MergedUnreviewed: pr.MergedUnreviewed(), FlagDismissed: pr.FlagDismissed(), Replies: len(pr.PendingReplies())}
-		if v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(pr.ID)); err == nil && ok {
-			if z, ok := engine.ParseSnooze(v); ok && z.Active(now) {
-				f.SnoozedUntil = z.Until
-			}
-		}
-		if flag, ok := codexFlagOf(ctx, st, pr.ID); ok { // codex_flag.go, as the board reads it
-			f.CodexFlag = flag.Short()
-		}
-		if w := s.c.Config.WatchFor(repo.FullName()); w != nil {
-			f.Autofix = config.AutofixStarts(s.c.Config.AutofixFor(w))
-		}
-		withFacts := *r.PR
-		withFacts.Facts = f
-		rows[i].PR = &withFacts
+		rows[i].PR = &pr
 	}
+}
+
+// prFactsOf are what the keys go by of PR full#n (prFacts); nil when
+// magnum's registry has no row of it or cannot say.
+func (s *factoryScreenSource) prFactsOf(ctx context.Context, st *store.Store, full string, n int, now time.Time) *tui.FactoryPRFacts {
+	repo, err := st.RepoByFullName(ctx, full)
+	if err != nil {
+		return nil
+	}
+	pr, err := st.PRByRepoNumber(ctx, repo.ID, n)
+	if err != nil {
+		return nil
+	}
+	f := &tui.FactoryPRFacts{State: pr.State, GHState: pr.GHState, Head: pr.HeadSHA, Reviewed: store.Deref(pr.ReviewedSHA),
+		Muted: pr.Muted, MergedUnreviewed: pr.MergedUnreviewed(), FlagDismissed: pr.FlagDismissed(), Replies: len(pr.PendingReplies())}
+	if v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(pr.ID)); err == nil && ok {
+		if z, ok := engine.ParseSnooze(v); ok && z.Active(now) {
+			f.SnoozedUntil = z.Until
+		}
+	}
+	if flag, ok := codexFlagOf(ctx, st, pr.ID); ok { // codex_flag.go, as the board reads it
+		f.CodexFlag = flag.Short()
+	}
+	if w := s.c.Config.WatchFor(repo.FullName()); w != nil {
+		f.Autofix = config.AutofixStarts(s.c.Config.AutofixFor(w))
+	}
+	return f
 }
