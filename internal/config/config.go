@@ -804,8 +804,11 @@ type Repo struct {
 
 	// CIDispatchAs names the [[identity]] that starts the CIDispatch
 	// workflow (see Config.CIDispatchAs): one that can, where the watch's
-	// poll identity cannot (an App with Actions: read only). "" (the
-	// default) starts it as the poll identity.
+	// poll identity cannot (an App with Actions: read only). With or
+	// without CIDispatch, it also names who reads the runs at an own PR's
+	// head and re-runs, once per head, a run that started no job (the
+	// look's rule 11, under autofix = "open"). "" (the default) does both
+	// as the poll identity.
 	CIDispatchAs string `toml:"ci_dispatch_as"`
 }
 
@@ -1373,7 +1376,8 @@ func (c *Config) CIDispatch(fullName string) string {
 
 // CIDispatchAs returns the identity the [[repo]] block of repository
 // fullName ("owner/name", any case) names to start its CIDispatch workflow
-// (ci_dispatch_as), "" when none does: the look starts it as the watch's
+// and to re-run a run of an own PR's head that started no job
+// (ci_dispatch_as), "" when none does: the look does both as the watch's
 // poll identity, else its identity.
 func (c *Config) CIDispatchAs(fullName string) string {
 	if r := c.RepoFor(fullName); r != nil {

@@ -502,9 +502,7 @@ func (c *Config) validateRepos() []error {
 		}
 		id := c.IdentityByName(r.CIDispatchAs)
 		switch {
-		case r.CIDispatchAs == "":
-		case r.CIDispatch == "":
-			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q without ci_dispatch: it names who starts the ci_dispatch workflow, and without one magnum starts no workflow; set ci_dispatch or remove ci_dispatch_as", r.Repo, r.CIDispatchAs))
+		case r.CIDispatchAs == "": // alone it names who re-runs a run that started no job (the look's rule 11)
 		case id == nil:
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q names no [[identity]]", r.Repo, r.CIDispatchAs))
 		case id.Kind == "app" && len(id.TokenPermissions) > 0 && id.TokenPermissions["actions"] != "write":

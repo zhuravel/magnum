@@ -72,9 +72,11 @@ ci_dispatch = "ci.yml"
 	}
 }
 
-// ci_dispatch_as must name a configured [[identity]], and it means nothing
-// without ci_dispatch (it names who starts that workflow): either fails to
-// load, naming the block and why. It applies to a repository with a
+// ci_dispatch_as must name a configured [[identity]], with or without
+// ci_dispatch: one that names none fails to load, naming the block and why.
+// Alone it names who re-runs a run of an own PR's head that started no job
+// (the look's rule 11): the live repository's poll identity of 2026-11-09
+// was an App with Actions: read only. It applies to a repository with a
 // [[pool]], as ci_dispatch does.
 func TestABadCIDispatchAsFailsValidation(t *testing.T) {
 	cfg := validPipelineConfig()
@@ -82,8 +84,14 @@ func TestABadCIDispatchAsFailsValidation(t *testing.T) {
 	wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "ghost"`, "no [[identity]]")
 
 	cfg = validPipelineConfig()
+	cfg.Repos = []Repo{{Repo: "acme/app", CIDispatchAs: "ghost"}}
+	wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "ghost"`, "no [[identity]]")
+
+	cfg = validPipelineConfig()
 	cfg.Repos = []Repo{{Repo: "acme/app", CIDispatchAs: "me"}}
-	wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "me" without ci_dispatch`, "magnum starts no workflow")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("ci_dispatch_as without ci_dispatch: %v", err)
+	}
 
 	cfg = validPipelineConfig()
 	cfg.Pools = []Pool{{Repo: "acme/app", MainClone: "/p/app", SlotName: "r{n}", SlotPath: "/p/app.r{n}", Max: 1}}

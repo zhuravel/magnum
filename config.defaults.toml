@@ -1417,8 +1417,10 @@ stages = [
 #                                         # read only); it needs Actions: write (an App, in its token_permissions
 #                                         # too where it sets them: validation refuses an App whose
 #                                         # token_permissions leave it out, such as a fixer App) or push access
-#                                         # and the repo scope (a gh login); needs ci_dispatch; default: the
-#                                         # watch's poll identity
+#                                         # and the repo scope (a gh login); with or without ci_dispatch, it
+#                                         # also reads the runs at an own PR's head and re-runs, once per head, a
+#                                         # run that started no job (autofix = "open"); default: the watch's poll
+#                                         # identity
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"
