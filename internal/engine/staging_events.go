@@ -120,7 +120,11 @@ func (b *stagingBound) event(eff staging.Effect, step, phase, text string) {
 
 // stagingEvent writes one event of a deploy's effect into the registry,
 // once per (effect, Seq, step, phase), and makes it the effect's record
-// when its Seq is the newest the record has seen.
+// when its Seq is the newest the record has seen. A repeat writes no event
+// but rewrites a record missing or behind its Seq: the write after the
+// event's may have failed. An event the registry refused is not delivered
+// again; the tick mends its record from the journal
+// (tendStagingDeploys).
 func (e *Engine) stagingEvent(eff staging.Effect, step, phase, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), stagingEventWait)
 	defer cancel()
@@ -148,36 +152,92 @@ func (e *Engine) stagingEvent(eff staging.Effect, step, phase, text string) {
 		e.warnUnlessStopped(ctx, err, "staging: a deploy's event not recorded", "effect", eff.ID)
 		return
 	}
-	if !added {
-		return // a repeat: written, and recorded, before
+	if added {
+		e.log.Log(ctx, execx.EventLevel(level), msg, "subject", subject, "kind", "staging.deploy")
 	}
-	e.log.Log(ctx, execx.EventLevel(level), msg, "subject", subject, "kind", "staging.deploy")
 	k := KVStagingDeploy(string(eff.ID))
 	if v, ok := e.getKV(ctx, k); ok {
-		if prev, ok := parseStagingDeployRecord(v); ok && prev.Seq > eff.Seq {
-			return // an older write's event: the record keeps the newer
+		// An older write's event leaves the newer record; a repeat also
+		// leaves one of its own Seq, which may hold a later event of it.
+		if prev, ok := parseStagingDeployRecord(v); ok && (prev.Seq > eff.Seq || (!added && prev.Seq == eff.Seq)) {
+			return
 		}
 	}
-	rec := StagingDeployRecord{Effect: string(eff.ID), Repo: eff.Repo, Number: eff.PR.Number, Head: eff.PR.Head, Env: eff.Env.Name, By: eff.By,
+	e.putStagingDeploy(ctx, k, stagingDeployRecordOf(eff, step, phase, text, e.now()))
+}
+
+// stagingDeployRecordOf is eff's record at the event step, phase and text
+// (its words made safe already), which came at now when eff says not when.
+func stagingDeployRecordOf(eff staging.Effect, step, phase, text string, now time.Time) StagingDeployRecord {
+	return StagingDeployRecord{Effect: string(eff.ID), Repo: eff.Repo, Number: eff.PR.Number, Head: eff.PR.Head, Env: eff.Env.Name, By: eff.By,
 		Step: step, Phase: phase, State: eff.State, Why: stagingClean(eff.Why), Text: text, Merge: eff.Merge, RunURL: eff.RunURL,
-		Seq: eff.Seq, At: cmp.Or(eff.Updated, e.now())}
+		Seq: eff.Seq, At: cmp.Or(eff.Updated, now)}
+}
+
+// putStagingDeploy writes rec as the record k, redacted.
+func (e *Engine) putStagingDeploy(ctx context.Context, k string, rec StagingDeployRecord) {
 	if b, err := json.Marshal(rec); err == nil {
 		e.setKV(ctx, k, execx.Redact(string(b)))
 	}
 }
 
-// pruneStagingDeploys drops the records of the deploys that ended more
-// than stagingDeployKeep before now (the tick's).
-func (e *Engine) pruneStagingDeploys(ctx context.Context) {
+// tendStagingDeploys keeps the deploys' records true to their journals
+// (the tick's): Deps.Event cannot fail, so an event the registry refused
+// (busy past stagingEventWait) is never delivered again, and its record
+// stays behind its effect, a lost end reading live for ever. Each live
+// record whose effect's journal (s.Effects, read once per repository: files
+// under mirror_dir, no git) has a newer Seq takes the journal's state; a
+// live one no journal holds, and an ended one, is dropped stagingDeployKeep
+// after its last event.
+func (e *Engine) tendStagingDeploys(ctx context.Context, s Staging) {
 	values, err := e.st.KVValues(ctx, KVStagingDeploys)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "staging: read the deploys' records")
 		return
 	}
 	now := e.now()
+	journals := map[string][]staging.Effect{} // by lower-case repository
 	for _, k := range slices.Sorted(maps.Keys(values)) {
-		if r, ok := parseStagingDeployRecord(values[k]); ok && !r.Live() && now.Sub(r.At) > stagingDeployKeep {
+		r, ok := parseStagingDeployRecord(values[k])
+		if !ok {
+			continue
+		}
+		old := now.Sub(r.At) > stagingDeployKeep
+		if !r.Live() || KVStagingDeploy(r.Effect) != k {
+			if old {
+				e.delKV(ctx, k)
+			}
+			continue
+		}
+		repo := strings.ToLower(r.Repo)
+		effs, read := journals[repo]
+		if !read {
+			effs = s.Effects(r.Repo)
+			journals[repo] = effs
+		}
+		switch i := slices.IndexFunc(effs, func(f staging.Effect) bool { return string(f.ID) == r.Effect }); {
+		case i >= 0 && effs[i].Seq > r.Seq:
+			e.mendStagingDeploy(ctx, k, effs[i], now)
+		case i < 0 && old:
 			e.delKV(ctx, k)
 		}
 	}
+}
+
+// mendStagingDeploy rewrites the record k from its effect's journal (eff),
+// unless an event made it as new meanwhile: its state, step and why, no
+// event's words (the journal keeps none) nor phase.
+func (e *Engine) mendStagingDeploy(ctx context.Context, k string, eff staging.Effect, now time.Time) {
+	e.stagingEventMu.Lock()
+	defer e.stagingEventMu.Unlock()
+	v, ok := e.getKV(ctx, k)
+	if !ok {
+		return
+	}
+	if prev, ok := parseStagingDeployRecord(v); !ok || prev.Seq >= eff.Seq {
+		return
+	}
+	e.log.Info("staging: a deploy's record caught up with its journal: an event of it was not recorded",
+		"effect", eff.ID, "seq", eff.Seq, "state", eff.State)
+	e.putStagingDeploy(ctx, k, stagingDeployRecordOf(eff, stagingClean(eff.Step), "", "", now))
 }

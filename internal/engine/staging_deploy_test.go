@@ -77,7 +77,8 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 // Step runs on a goroutine of its own, once at the start and then every
 // interval, never in the tick: a deploy's git (a fetch, a merge, a push)
 // can take minutes. The daemon's stop ends the Step in flight (its ctx) and
-// waits for it before it closes the client.
+// waits for it before it closes the client, also when the Step goes on a
+// while after its ctx ended (a push in flight finishes first).
 func TestStagingStepsRunOffTheTickAndStopBeforeTheClientCloses(t *testing.T) {
 	f := &fakeStaging{}
 	h := newHarness(t, withStagings(f))
@@ -91,7 +92,7 @@ func TestStagingStepsRunOffTheTickAndStopBeforeTheClientCloses(t *testing.T) {
 		t.Fatal("the staging Steps did not stop with their ctx")
 	}
 
-	f = &fakeStaging{stepGate: make(chan struct{})}
+	f = &fakeStaging{stepGate: make(chan struct{}), stepLinger: time.Second}
 	h = newHarness(t, withStagings(f))
 	h.open(prSpec{n: 1, head: "aaa1111"})
 	ctx, cancel = context.WithCancel(h.ctx)
