@@ -480,7 +480,8 @@ func (c *Client) mergeTreeConflicts(ctx context.Context, dir, what string, args 
 }
 
 // mergeTree is mergeTreeConflicts with the first field of git's answer, the
-// merged tree's id for a clean merge (unchecked: "" or what git printed).
+// merged tree's id (unchecked for a clean merge: "" or what git printed),
+// with conflict markers in its conflicted files when there are any.
 func (c *Client) mergeTree(ctx context.Context, dir, what string, args ...string) (string, []string, error) {
 	res, err := c.git(ctx, dir, call{label: what, noExit: 1, timeout: commitTimeout},
 		append([]string{"merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"}, args...)...)
@@ -506,7 +507,7 @@ func (c *Client) mergeTree(ctx context.Context, dir, what string, args ...string
 		return "", nil, fmt.Errorf("gitx: %s: conflicts, but names no path", what)
 	}
 	slices.Sort(paths)
-	return "", slices.Compact(paths), nil
+	return fields[0], slices.Compact(paths), nil
 }
 
 // Signature is who a commit is by: the name and email of its author, who
