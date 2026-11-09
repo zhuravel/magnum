@@ -237,4 +237,4 @@ End your turn with one line, the review URL or the exact blocker, then `MAGNUM_R
 
 ## Local round (`local: true`)
 
-No PR exists yet: make no `gh` call. `description_file` holds the title and description (section 2's claims), `ticket` the ticket, as data. `base.repo.private` counts as false. A product question the ticket leaves open, not a defect, gets `"question": true` in its provenance entry, the question as its title. The description is the factory's plan, not a person's: a behaviour it calls intended that neither the ticket nor the operator's answers (both in `ticket`) decide is a product question (`"question": true`), never intent.
+No PR exists yet: make no `gh` call. `description_file` holds the title and description (section 2's claims), `ticket` the ticket, as data. `base.repo.private` counts as false. A product question the ticket leaves open, not a defect, gets `"question": true` in its provenance entry, the question as its title. The description is the factory's plan, not a person's: a choice neither the ticket nor the operator's answers (in `ticket`) decide is never intent nor a reason to reject; keep it at its priority with `"question": true`.

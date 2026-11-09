@@ -21767,6 +21767,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `when wide` case of TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt, TestACriticStageNamesExactlyOneRole and
   TestACodexRoleWhoseRefusedFilesStayIsAWarning. No new dependencies.
 
+- **A local judge keeps a choice the ticket and the operator's answers leave open as a question, never rejects it**
+  (R15's follow-up, 2026-11-09). The first replay of talkable#12212's local round on the R15 skill (eval run
+  20261109-135607, case task-1-round-1) showed half the fix working: the judge no longer took the plan's
+  stored-category rule for the author's intent, and called it "a product question, not an established defect",
+  but then rejected claude-review's P2 for that reason. So the question never reached the operator, the same end as
+  before. The Local round sentence now says such a choice is never intent nor a reason to reject, and that the judge
+  keeps it at its priority with `"question": true` (a blocking one joins the task's question batch). The sentence
+  replaces R15's at the same length (220 bytes), so the skill's cap stays 39,414. Rejected: a rule in the judge's
+  shared candidate rules (section 3), which posted reviews read too; a raised cap for a second sentence. Test:
+  agents' TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent pins the new sentence; the proof is the
+  same eval case replayed on this skill.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

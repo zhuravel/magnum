@@ -113,15 +113,17 @@ func TestTheSkillSaysWhatALocalRoundTakesInPlaceOfGitHub(t *testing.T) {
 }
 
 // The description a local judge reads is the factory's own plan, not a
-// person's: a behaviour the plan calls intended that neither the ticket nor
-// the operator's answers decide is a product question for the operator,
-// never the author's intent that section 2 respects. On a factory PR
+// person's: a choice that neither the ticket nor the operator's answers
+// decide is a product question for the operator, never the author's intent
+// that section 2 respects, and never a reason to reject the candidate: the
+// judge keeps it at its priority as a question (a replay of talkable#12212's
+// local round named it a product question and then rejected it). On a factory PR
 // (talkable#12212) the judge deferred to a product behaviour
 // the plan had chosen and nobody had decided, and a colleague found it in
 // public. The rule is in the Local round section, so magnum's GitHub reviews
 // and the review daemon's rounds read no such rule.
 func TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent(t *testing.T) {
-	const rule = "The description is the factory's plan, not a person's: a behaviour it calls intended that neither the ticket nor the operator's answers (both in `ticket`) decide is a product question (`\"question\": true`), never intent."
+	const rule = "The description is the factory's plan, not a person's: a choice neither the ticket nor the operator's answers (in `ticket`) decide is never intent nor a reason to reject; keep it at its priority with `\"question\": true`."
 	skillSays(t, []string{rule}, nil)
 	_, local, ok := strings.Cut(string(magnum.Skill), "\n## Local round (`local: true`)")
 	if !ok || !strings.Contains(local, rule) {
