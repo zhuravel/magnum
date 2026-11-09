@@ -16671,19 +16671,19 @@ func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error
     and no conversation of theirs is resumed (a restart or a recovery of a Codex
     role refuses on such a task, mayRestart). Each session's runs in flight are
     abandoned first, and the session is quit hard (agents.Manager.QuitHard):
-    a Codex agent at work on the task must stop. A session whose pane you are in
-    is left for a later call (ErrOperatorInPane in the error), and a quit that
-    fails does not stop the others; the errors come back joined. A task that
-    never launched has nothing to quit.
+    a Codex agent at work on the task must stop. A session whose pane you are
+    in is left for a later call (ErrOperatorInPane in the error), its runs
+    abandoned all the same, and a quit that fails does not stop the others;
+    the errors come back joined. A task that never launched has nothing to quit.
 
 func (r *Runtime) QuitRole(ctx context.Context, t registry.Task, role, why string) error
     QuitRole quits the live sessions of task t's role (as it runs), whatever its
     kind, because why: a qa stage's walker whose run was cut (its browser and
     its server stopped) must not go on driving them, nor hold the Mac's memory.
-    Its runs in flight are abandoned first, and each session is quit hard, as
-    QuitCodex quits; its conversation stays resumable. A session whose pane you
-    are in is left (ErrOperatorInPane in the error); a task that never launched
-    has nothing to quit.
+    Its runs in flight are abandoned first, and each session is quit hard,
+    as QuitCodex quits; its conversation stays resumable. A session whose pane
+    you are in is left (ErrOperatorInPane in the error), its runs abandoned all
+    the same; a task that never launched has nothing to quit.
 
 func (r *Runtime) Reconcile(ctx context.Context, e registry.LedgerEntry) (string, error)
     Reconcile settles the delivery of ledger entry e from its agent's

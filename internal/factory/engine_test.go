@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -136,8 +137,11 @@ type fakeRuntime struct {
 	// manager's; soonCh is ObserveSoon's (askSoon sends on it).
 	endedCh chan struct{}
 	soonCh  chan struct{}
-	// pauses are the agent kinds' pauses in force, as Paused answers them.
-	pauses map[string]*runtime.WaitError
+	// pauses are the agent kinds' pauses in force, as Paused answers them;
+	// noRecord the roles whose launch record Launch loses (the runtime only
+	// logs a failed write).
+	pauses   map[string]*runtime.WaitError
+	noRecord map[string]bool
 }
 
 // Paused is the pause in force of agent kind, nil for none.
@@ -300,13 +304,15 @@ func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.At
 		names, prompts = append(names, r.Name), append(prompts, r.Prompt)
 	}
 	f.launchRoles, f.launchPrompts = append(f.launchRoles, names), append(f.launchPrompts, prompts)
-	err, reg := f.launchErr, f.reg
+	err, reg, lost := f.launchErr, f.reg, maps.Clone(f.noRecord)
 	f.mu.Unlock()
 	if err != nil || reg == nil || a.ID == "" {
 		return err
 	}
 	for _, r := range roles { // a failure is the runtime's log line, never the launch's
-		_ = reg.RecordRoleRun(ctx, registry.RoleRun{AttemptID: a.ID, Role: r.Name, CLI: r.AgentKind(), Launched: time.Now()})
+		if !lost[r.Name] {
+			_ = reg.RecordRoleRun(ctx, registry.RoleRun{AttemptID: a.ID, Role: r.Name, CLI: r.AgentKind(), Launched: time.Now()})
+		}
 	}
 	if err := reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil); err != nil &&
 		!errors.Is(err, registry.ErrConflict) {
@@ -375,11 +381,17 @@ func (f *fakeRuntime) RunsAs(t registry.Task, role config.Role) (config.Role, er
 	return config.Role{}, errors.New(role.Name + " has no codex_fallback")
 }
 
-// QuitRole records the call, "<task key>/<role>".
-func (f *fakeRuntime) QuitRole(_ context.Context, t registry.Task, role, _ string) error {
+// QuitRole records the call, "<task key>/<role>", and, as the runtime does,
+// abandons the role's runs in flight with why.
+func (f *fakeRuntime) QuitRole(_ context.Context, t registry.Task, role, why string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.roleQuits = append(f.roleQuits, TaskKey(t)+"/"+role)
+	for _, p := range f.sent {
+		if cur, ok := f.runState[p.RunID]; ok && p.TaskID == t.ID && p.Role == role && (cur.state == store.RunWorking || cur.state == store.RunPending) {
+			f.setRunLocked(p.RunID, store.RunAbandoned, why)
+		}
+	}
 	return nil
 }
 

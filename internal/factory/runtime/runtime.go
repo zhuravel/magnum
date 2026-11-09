@@ -1519,8 +1519,8 @@ func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.
 // session's runs in flight are abandoned first, and the session is quit
 // hard (agents.Manager.QuitHard): a Codex agent at work on the task must
 // stop. A session whose pane you are in is left for a later call
-// (ErrOperatorInPane in the error), and a quit that fails does not stop the
-// others; the errors come back joined. A task that never launched has
+// (ErrOperatorInPane in the error), its runs abandoned all the same, and a
+// quit that fails does not stop the others; the errors come back joined. A task that never launched has
 // nothing to quit.
 func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error {
 	return r.quitSessions(ctx, t, "Codex", func(s store.Session) bool { return store.Deref(s.AgentKind) == agents.KindCodex },
@@ -1532,15 +1532,18 @@ func (r *Runtime) QuitCodex(ctx context.Context, t registry.Task) error {
 // and its server stopped) must not go on driving them, nor hold the Mac's
 // memory. Its runs in flight are abandoned first, and each session is quit
 // hard, as QuitCodex quits; its conversation stays resumable. A session
-// whose pane you are in is left (ErrOperatorInPane in the error); a task
-// that never launched has nothing to quit.
+// whose pane you are in is left (ErrOperatorInPane in the error), its runs
+// abandoned all the same; a task that never launched has nothing to quit.
 func (r *Runtime) QuitRole(ctx context.Context, t registry.Task, role, why string) error {
 	return r.quitSessions(ctx, t, role, func(s store.Session) bool { return s.Role == role }, why)
 }
 
 // quitSessions quits task t's starting and live sessions that match (what
 // names them in errors and the log), each run in flight abandoned first
-// with why, and leaves those whose pane you are in.
+// with why, and leaves those whose pane you are in. Their runs are
+// abandoned too: the caller waits for them no more, an abandon is the
+// agents store's (no key reaches your pane), and a run left in flight would
+// have the watchdog take its steps in a pane the factory gave up.
 func (r *Runtime) quitSessions(ctx context.Context, t registry.Task, what string, match func(store.Session) bool, why string) error {
 	pr, err := r.ownerRow(ctx, t.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -1558,11 +1561,11 @@ func (r *Runtime) quitSessions(ctx context.Context, t registry.Task, what string
 		if (s.State != store.SessionStarting && s.State != store.SessionLive) || !match(s) {
 			continue
 		}
+		r.abandonRuns(ctx, pr, s.Role, why)
 		if r.operatorIn(ctx, &roleState{taskID: t.ID, role: config.Role{Name: s.Role}}) {
 			errs = append(errs, fmt.Errorf("quit %s's %s session: %w", s.Role, what, ErrOperatorInPane))
 			continue
 		}
-		r.abandonRuns(ctx, pr, s.Role, why)
 		if err := r.mgr.QuitHard(ctx, s); err != nil {
 			errs = append(errs, fmt.Errorf("quit %s's %s session: %w", s.Role, what, err))
 			continue

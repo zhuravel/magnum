@@ -1810,6 +1810,33 @@ func TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce(t *testing.T) {
 	h.wantSetAside(task, "findings-fx-cause.md")
 }
 
+// A refusal whose pass ends on the stage's suspension (another role's
+// questions wait for your answers) sets the refused run's files aside in
+// that pass too.
+func TestARefusalInAPassThatSuspendsTheStageSetsItsFilesAsideAtOnce(t *testing.T) {
+	h := newHarness(t)
+	bug := h.cfg.Factory.Kinds["bug"] // no later questions gate: an investigator's questions suspend its stage
+	bug.Stages = slices.DeleteFunc(slices.Clone(bug.Stages), func(st config.FactoryStage) bool {
+		return st.Type == config.FactoryStageGate && st.Gate == config.FactoryGateNoOpenQuestions
+	})
+	h.cfg.Factory.Kinds["bug"] = bug
+	task := h.kindTask("PR-12400", "bug", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-cause.md", "## Cause\nThe guard")
+	h.taskFile(task.ID, "findings-fx-repro.md", "bin/rspec spec/models/campaign_copy_spec.rb:12 fails\n")
+	h.taskFile(task.ID, "questions-fx-repro.json", questionsJSON(t, whoQuestion))
+	h.observeEvents(
+		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventEnded},
+		runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: h.lastRun("fx-cause"), Kind: runtime.EventRefused,
+			Reason: "codex: flagged for possible cybersecurity risk"},
+	)
+	h.tick()
+	if got := h.reload(task.ID); got.QuestionRev == 0 {
+		t.Fatalf("task %s waits %q: %q with no questions asked, want the stage suspended on fx-repro's", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	h.wantSetAside(task, "findings-fx-cause.md")
+}
+
 // A restart's rebuild counts a run the runtime verified of a Codex role
 // itself, as the live pass does: in a stage of two Codex roles, fx-history
 // verified on Codex keeps its findings, gets no fallback and no event of a

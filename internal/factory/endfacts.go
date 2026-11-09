@@ -49,6 +49,11 @@ const refusedSuffix = ".refused"
 // questions that reach the operator.
 const unaskedSuffix = ".unasked"
 
+// staleSuffix ends the name of a file an earlier attempt of a role left,
+// set aside when the role sits out an attempt (yieldAtLaunch): the judge's
+// findings-*.md never takes it for this attempt's reading.
+const staleSuffix = ".stale"
+
 // roleQuestionsFile is the questions file of a role other than the judge's
 // (the critic's, an investigator's that cannot go on): questions-<role>.json,
 // so roles at work at once never write over each other's. The judge's

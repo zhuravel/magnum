@@ -1113,8 +1113,8 @@ func TestQuitCodexQuitsOnlyTheTasksCodexSessions(t *testing.T) {
 
 // A QA run that is cut stops its walker: QuitRole quits the live sessions of
 // that one role of the task, whatever its kind, and abandons its runs in
-// flight; the task's other roles go on, and a session whose pane you are in
-// waits for you to leave.
+// flight, also of a session whose pane you are in, which itself waits for
+// you to leave; the task's other roles go on.
 func TestQuitRoleQuitsOnlyThatRolesSessions(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro", "fx-cause")
@@ -1126,7 +1126,10 @@ func TestQuitRoleQuitsOnlyThatRolesSessions(t *testing.T) {
 	if err := g.r.QuitRole(g.ctx, g.task, "fx-repro", "its QA run was cut"); !errors.Is(err, ErrOperatorInPane) {
 		t.Fatalf("QuitRole with you in the pane = %v, want ErrOperatorInPane", err)
 	}
-	g.session("fx-repro") // still live
+	g.session("fx-repro")                                          // still live
+	if run := g.storeRun(repro); run.State != store.RunAbandoned { // no one waits for it: the registry's, no key in your pane
+		t.Fatalf("fx-repro's run is %s with you in its pane, want abandoned all the same", run.State)
+	}
 	if err := g.st.UpdatePR(g.ctx, g.owner().ID, func(u *store.PRUpdate) { u.Set("human_active_at", g.clock.Now().Add(-time.Hour)) }); err != nil {
 		t.Fatal(err)
 	}

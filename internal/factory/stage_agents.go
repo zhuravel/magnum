@@ -160,8 +160,11 @@ type agentsRun struct {
 	// fallback that runs in a refused role's place waits for the quit
 	// too, for the same reason (promptRoles).
 	left []leaving
-	// turn is how this pass runs the attempt (runTurn).
-	turn agentsTurn
+	// turn is how this pass runs the attempt (runTurn). decided: the
+	// attempt's yield to Codex's budget is chosen (yieldAtLaunch: recorded,
+	// or a role of it launched before), never chosen again.
+	turn    agentsTurn
+	decided bool
 	// copy is the task's copy, this pass's; proven the head whose proof and
 	// precheck passed (the coding stage's end fact), for the stage's pass.
 	copy   Copy
@@ -230,14 +233,16 @@ type stageRole struct {
 	// directory is a refused run's, set aside on each pass (setAsideRefused)
 	// until its fallback launches.
 	relaunch, covered, refused bool
-	// limited: a run of it on Codex hit Codex's usage limit in the attempt,
-	// and its codex_fallback takes its place (handOver): what that run wrote
-	// stays, its work so far, which the fallback's first prompt names
-	// (limitNote). limit is the limit's words, for the event of the handover
-	// ("" in a restart's rebuild once the fallback launched: its event was
-	// written).
-	limited bool
-	limit   string
+	// yielded: it runs as its codex_fallback in the attempt for Codex's
+	// budget, while Codex may still work on the task: it yielded at the
+	// launch (yieldAtLaunch), or was handed over after Codex's usage limit
+	// (handOver), as the attempt's stage events record it (attemptYields).
+	// limited: a run of the role itself on Codex in the attempt left its
+	// files, which stay, its work so far, and which the fallback's first
+	// prompt names (limitNote). placeSince is when the fallback's first prompt
+	// went: its end holds only on files written since (roleEnd).
+	yielded, limited bool
+	placeSince       time.Time
 	// ok: its end fact held at its run's end; failed: it did not after the
 	// nudge (the file), and the task waits on you; letGo: its last run held
 	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
@@ -347,22 +352,16 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	}
 	run.copy = c
 	if a.State == registry.AttemptLaunching {
-		var ys []yield
 		var err error
 		if _, _, ok := e.mayLaunch(); ok { // under a hold the launch waits anyway: no read of the budget for it
-			ys, err = e.yieldAtLaunch(ctx, t, st, run)
+			err = e.yieldAtLaunch(ctx, t, st, a, run)
 		}
 		if err == nil {
 			err = e.launch(ctx, t, a, c, run.runAsRoles())
 		}
 		if err != nil {
-			if len(ys) > 0 {
-				delete(e.agentRuns, t.ID) // the next pass decides the yield afresh: Codex's budget moves
-			}
+			delete(e.agentRuns, t.ID) // the next pass rebuilds it: the roles a part-launch started and the yield recorded decide
 			return false, err
-		}
-		for _, y := range ys {
-			e.sayYield(ctx, t, st, y)
 		}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
@@ -537,6 +536,11 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 	launched := func(name string) bool {
 		return ranHere(name) || slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == name })
 	}
+	// The attempt's yields to Codex's budget are its stage events
+	// (attemptYields): once one is recorded, or a role launched, the choice
+	// stands (yieldAtLaunch).
+	yields := e.attemptYields(ctx, t, st, a)
+	run.decided = len(yields) > 0 || len(done) > 0
 	yielded := map[string]bool{}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
@@ -552,22 +556,23 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			// refusal: its files stay for the judge, as on the pass that
 			// took the refusal (onAgentEvent relaunches no role that is ok).
 			if !verified(role.Name) {
-				run.left = append(run.left, leaving{role, runAs, ranHere(role.Name), ""})
+				run.left = append(run.left, leaving{role, runAs, ranHere(role.Name), false})
 			}
 			continue
 		}
-		// A Codex role whose fallback the attempt launched ran as that
-		// fallback: it yielded at the launch (and never launched itself), or
-		// a run of it hit Codex's usage limit (handOver). A twin, whose
-		// fallback the stage launches anyway, sat out only when it never
-		// launched; a usage limit of it its own last run says (lastRunEvent).
-		if fb, ok := e.codexFallback(role); ok && runAs.Name == role.Name && a.State != registry.AttemptLaunching && launched(fb.Name) {
-			switch {
-			case !slices.Contains(st.Roles, fb.Name):
-				runAs, yielded[role.Name] = fb, true
-			case !launched(role.Name):
+		// A Codex role whose yield the attempt recorded runs as its fallback
+		// (at the launch, or after a handover), or sits out, whatever the
+		// budget says now and whichever launches the runtime managed to
+		// record.
+		if y, ok := yields[role.Name]; ok && runAs.Name == role.Name {
+			if y.sitsOut {
 				continue
 			}
+			fb, ok := e.cfg.FactoryRole(y.fallback)
+			if !ok {
+				return nil, nil, cannotRun(role, fmt.Errorf("its yield to Codex's budget names %s, which is no [[factory.role]]", y.fallback))
+			}
+			runAs, yielded[role.Name] = fb, true
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
 	}
@@ -578,6 +583,9 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		for _, en := range entries {
 			if en.AttemptID != a.ID || en.Role != r.runAs.Name || en.Delivered == registry.DeliveredNo {
 				continue
+			}
+			if yielded[r.role.Name] && !r.prompted { // the fallback's first prompt: its end counts from here
+				r.placeSince = en.Sent
 			}
 			r.prompted = true
 			r.runs[en.RunID] = true
@@ -597,11 +605,13 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		// no role that is ok (onAgentEvent).
 		r.ok = verified(r.runAs.Name) || verified(r.role.Name)
 		if yielded[r.role.Name] {
-			// Its fallback launched in the attempt already: no relaunch, and
+			// Its fallback runs in its place: relaunched unless the attempt
+			// proves it launched (a launch of a live agent adopts it), and
 			// nothing the role wrote is a refused run's. A run of the role
-			// itself there hit its usage limit: its files stay, for the
-			// fallback's first prompt to name.
-			r.limited = ranHere(r.role.Name)
+			// itself there left its files, for the fallback's first prompt to
+			// name.
+			r.yielded, r.limited = true, ranHere(r.role.Name)
+			r.relaunch = a.State != registry.AttemptLaunching && !launched(r.runAs.Name)
 		} else {
 			r.relaunch = !r.prompted && r.runAs.Name != r.role.Name && a.State != registry.AttemptLaunching
 			r.refused = !r.ok && !r.prompted && r.runAs.Name != r.role.Name && ranHere(r.role.Name)
@@ -687,13 +697,11 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 // as there, which covers it, and whether it ran on Codex in the attempt
 // (stageRole.refused): only such a role's files are a refused run's, to set
 // aside; a role that never ran there left none (a file of an earlier attempt
-// is not its refused run's). limit is the words of the usage limit a run of
-// it hit, for a role that sits out the stage after it ("" after a refusal):
-// its files stay.
+// is not its refused run's). kept: it sits out after a handover to Codex's
+// usage limit (handOver, whose event says so), no refusal: its files stay.
 type leaving struct {
 	role, runAs config.Role
-	ran         bool
-	limit       string
+	ran, kept   bool
 }
 
 // leaveStage has l.role, which the stage's run of its fallback l.runAs
@@ -712,8 +720,7 @@ type leaving struct {
 // its claims against the code, never the task.
 func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, l leaving) {
 	role, runAs := l.role, l.runAs
-	if l.limit != "" { // a usage limit, no refusal: its files stay for the judge
-		e.sayYield(ctx, t, st, yield{role: role.Name, fallback: runAs.Name, sitsOut: true, limited: true, why: l.limit})
+	if l.kept { // a usage limit, no refusal: its files stay for the judge, and its handover said so
 		return
 	}
 	lead := role.Name + " left the " + st.Name + " stage"
@@ -779,15 +786,59 @@ func coveredIn(st config.FactoryStage, role, runAs config.Role) bool {
 	return runAs.Name != role.Name && slices.Contains(st.Roles, runAs.Name)
 }
 
+// pauseHandOver hands Codex role r of attempt a of task t's stage st to its
+// Claude codex_fallback when its prompt, never sent (no run id), waits on
+// Codex's usage pause (serr: another run hit the limit), never leaving it to
+// wait for the reset; it reports whether it did (handOver).
+func (e *Engine) pauseHandOver(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, r *stageRole, id string,
+	serr error) bool {
+	w, ok := errors.AsType[*runtime.WaitError](serr)
+	if !ok || id != "" || w.Who != waitUsage || r.runAs.AgentKind() != config.KindCodex {
+		return false
+	}
+	if _, fb := e.codexFallback(r.role); !fb {
+		return false
+	}
+	e.handOver(ctx, t, st, a, r, "Codex is paused on its usage limit ("+w.What+")", w.What)
+	return true
+}
+
 // relaunchAs is the role role r runs as once relaunched: its Claude
-// codex_fallback after its usage limit (handOver), while Codex may still work
-// on the task, else the role Runtime.RunsAs names (its fallback on a task
-// Codex never works on again).
+// codex_fallback for Codex's budget (stageRole.yielded: a handover, or a
+// yield a restart's rebuild relaunches), while Codex may still work on the
+// task, else the role Runtime.RunsAs names (its fallback on a task Codex
+// never works on again).
 func (e *Engine) relaunchAs(t registry.Task, r *stageRole) (config.Role, error) {
-	if fb, ok := e.codexFallback(r.role); ok && r.limited {
+	if fb, ok := e.codexFallback(r.role); ok && r.yielded {
 		return fb, nil
 	}
 	return e.d.Runtime.RunsAs(t, r.role)
+}
+
+// firstPrompt notes that role r's first prompt of the attempt went at
+// sent: for a role whose fallback runs in its place (yielded), the start of
+// the fallback's own turn, from which its end counts (placeSince, roleEnd).
+func (r *stageRole) firstPrompt(sent time.Time) {
+	if r.yielded && r.placeSince.IsZero() {
+		r.placeSince = sent
+	}
+}
+
+// roleEnd is role r's end fact in stage st (endOf), its files in dir newer
+// than since, the attempt's start, and, for a role whose fallback runs in
+// its place for Codex's budget (stageRole.yielded), newer than the
+// fallback's first prompt too (placeSince): what the role's own Codex run
+// left is no end of the fallback's turn, which gets its nudge for a file it
+// did not write, in words that say what the file is.
+func (e *Engine) roleEnd(st config.FactoryStage, dir string, since time.Time, r *stageRole) *endProblem {
+	p := e.endOf(st, dir, since, r.role.Name)
+	if p != nil || !r.yielded || !r.placeSince.After(since) {
+		return p
+	}
+	if p = e.endOf(st, dir, r.placeSince, r.role.Name); p != nil && strings.HasPrefix(p.why, "older than this stage") {
+		p.why = "what " + r.role.Name + "'s run on Codex left before your turn: write it whole in your turn, as your prompt asks"
+	}
+	return p
 }
 
 // cannotRun is the needsYou of a role that may not run on its task
@@ -851,7 +902,7 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 		if _, fb := e.codexFallback(r.role); who == waitUsage && r.runAs.AgentKind() == config.KindCodex && !r.ok && fb {
 			// Codex's usage limit, no refusal: its fallback takes the role
 			// now, never at the limit's reset, and what the run wrote stays.
-			e.handOver(ctx, *t, r, what)
+			e.handOver(ctx, *t, st, a, r, r.role.Name+"'s run hit Codex's usage limit ("+what+")", what)
 			return ""
 		}
 		r.next, r.pause = nextContinue, ev.Reason
@@ -906,6 +957,9 @@ func withReason(what, reason string) string {
 func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, r *stageRole,
 	runID, dir string) string {
 	t := *tp
+	if r.yielded && r.runAs.AgentKind() == config.KindCodex {
+		return "" // handed over, its fallback not launched yet: a late end of a Codex run of it is no end of the role
+	}
 	if !r.runs[runID] && !e.ledgerRun(ctx, t, a, r, runID) {
 		return ""
 	}
@@ -926,7 +980,7 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	if r.asking {
 		return "" // its questions wait for your answers already
 	}
-	p := e.endOf(st, dir, run.since(a), r.role.Name)
+	p := e.roleEnd(st, dir, run.since(a), r)
 	if p == nil && run.turn.review != nil {
 		p = run.turn.review.replyProblem(dir, run.since(a))
 	}
@@ -1112,7 +1166,7 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		if r.failed == "" && !r.letGo {
 			continue
 		}
-		p := e.endOf(st, dir, run.since(a), r.role.Name)
+		p := e.roleEnd(st, dir, run.since(a), r)
 		if p == nil && r.letGo {
 			var err error
 			if p, err = e.beforeLetGo(ctx, t, st, r, run); err != nil { // the next pass reads again
@@ -1269,11 +1323,8 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			}
 			if coveredIn(st, r.role, runAs) {
 				r.covered = true
-				limit := "" // a refusal's leave sets aside what the role wrote; a usage limit's keeps it
-				if r.limited && !r.refused {
-					limit = r.limit
-				}
-				run.left = append(run.left, leaving{r.role, runAs, r.refused, limit})
+				// A refusal's leave sets aside what the role wrote; a handover's keeps it.
+				run.left = append(run.left, leaving{r.role, runAs, r.refused, r.yielded && !r.refused})
 				continue
 			}
 			if run.quitCodex {
@@ -1289,18 +1340,15 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				return nil, lerr
 			}
 			r.runAs, r.relaunch, r.refused = runAs, false, false // the fallback's files are its own from here on
-			if r.limited && r.limit != "" {
-				e.sayYield(ctx, t, st, yield{role: r.role.Name, fallback: runAs.Name, limited: true, why: r.limit})
-			}
 		}
-		text, next := "", r.next
+		text, next, first := "", r.next, !r.prompted
 		switch {
 		case !r.prompted:
 			if text, err = e.renderRole(ctx, t, st, r.role, r.runAs, c); err != nil {
 				return nil, err
 			}
 			if r.limited {
-				text += e.limitNote(t, st, r.role)
+				text += e.limitNote(t, st, r.role, run.since(a))
 			}
 		case next == nextNudge:
 			text = nudgeText(dir, r.problem)
@@ -1313,8 +1361,12 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		default:
 			continue
 		}
+		sent := e.now()
 		id, serr := e.d.Runtime.Send(ctx, t, a, r.runAs, text)
 		if id != "" {
+			if first {
+				r.firstPrompt(sent)
+			}
 			r.runs[id] = true
 			r.prompted = true
 			switch next {
@@ -1329,6 +1381,9 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			r.next, r.problem, r.pause = "", nil, ""
 		}
 		if serr == nil {
+			continue
+		}
+		if e.pauseHandOver(ctx, t, st, a, r, id, serr) {
 			continue
 		}
 		switch w := e.sendRefused(ctx, t, r, serr); {

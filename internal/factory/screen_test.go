@@ -415,11 +415,13 @@ func TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn(t *testing.T) 
 
 // A task's card says on its AGENTS line which role ran in whose place and
 // why, as the task's stage events record each yield to Codex's budget or
-// usage limit: fx-cause-claude in fx-cause's place, a twin that sat out,
-// those of one cause under it once. A role whose codex_fallback ran in its
-// place in the stage's attempt (it never launched) counts as done once the
-// fallback is, as on a task Codex never works on. A task with no such event
-// has no note.
+// usage limit in the newest attempt of its stage: fx-cause-claude in
+// fx-cause's place, a twin that sat out, those of one cause under it once;
+// a yield of an attempt a retry replaced says nothing. A role whose
+// codex_fallback runs in its place in the current attempt, as its event
+// says, counts as done once the fallback is, as on a task Codex never works
+// on, also when the role itself launched before its usage limit. A task with
+// no such event has no note.
 func TestTheCardSaysWhichRoleRanInWhosePlaceAndWhy(t *testing.T) {
 	r := newScreenRig(t)
 	r.at(9 * time.Minute)
@@ -431,29 +433,40 @@ func TestTheCardSaysWhichRoleRanInWhosePlaceAndWhy(t *testing.T) {
 	}
 	bug := r.task("PR-12411", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
 	r.session(bug, "fx-repro", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
-	r.session(bug, "fx-cause-claude", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-3*time.Minute))
+	r.session(bug, "fx-cause", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-5*time.Minute)) // it ran until its limit
+	r.session(bug, "fx-cause-claude", "idle", screenNow.Add(-5*time.Minute), screenNow.Add(-3*time.Minute))
 	r.verified(bug, "investigate", "fx-cause-claude")
-	stageEvent(bug, "fx-cause-claude runs in fx-cause's place in the investigate stage: codex at 95%, at or past [usage] codex_soft 80%, "+
-		"and magnum's reviews come first")
+	stageEvent(bug, "fx-cause-claude runs in fx-cause's place in attempt 1 of the investigate stage: fx-cause's run hit Codex's usage "+
+		"limit (codex limit until 16:00); what it wrote stays, for fx-cause-claude to go on from and write whole")
 	feature := r.task("PR-12412", "feature", "Credit expiry reminder", registry.TaskActive, "critic", "", "")
 	r.session(feature, "fx-points", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-6*time.Minute))
 	r.session(feature, "fx-critic-claude", "working", screenNow.Add(-4*time.Minute), screenNow.Add(-20*time.Second))
-	stageEvent(feature, "fx-points-codex sits out the investigate stage: its run hit Codex's usage limit (codex limit until 16:00); "+
-		"fx-points ends it alone, and what fx-points-codex wrote stays for the judge")
-	stageEvent(feature, "fx-critic-claude runs in fx-critic's place in the critic stage: codex at 95%, at or past [usage] codex_soft 80%, "+
-		"and magnum's reviews come first")
+	stageEvent(feature, "fx-points-codex sits out attempt 1 of the investigate stage: its run hit Codex's usage limit (codex limit "+
+		"until 16:00); fx-points ends it alone, and what fx-points-codex wrote stays for the judge")
+	stageEvent(feature, "fx-critic-claude runs in fx-critic's place in attempt 1 of the critic stage: codex at 95%, at or past [usage] "+
+		"codex_soft 80%, and magnum's reviews come first")
 	plain := r.task("PR-12413", "bug", "Referral link drops its code", registry.TaskActive, "investigate", "", "")
 	r.session(plain, "fx-cause", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
+	retried := r.task("PR-12423", "bug", "Coupon email sends twice", registry.TaskActive, "investigate", "", "")
+	r.session(retried, "fx-cause", "working", screenNow.Add(-2*time.Minute), screenNow.Add(-20*time.Second))
+	for range 2 {
+		if _, err := r.reg.BeginAttempt(r.ctx, retried.ID, "investigate"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stageEvent(retried, "fx-cause-claude runs in fx-cause's place in attempt 1 of the investigate stage: codex at 95%, at or past "+
+		"[usage] codex_soft 80%, and magnum's reviews come first")
 
 	d := r.data(screenNow)
 	for _, tc := range []struct {
 		task registry.Task
 		want string
 	}{
-		{bug, "fx-cause-claude in fx-cause's place: codex at 95%, at or past [usage] codex_soft 80%"},
+		{bug, "fx-cause-claude in fx-cause's place: fx-cause's run hit Codex's usage limit (codex limit until 16:00)"},
 		{feature, "fx-points-codex sat out: its run hit Codex's usage limit (codex limit until 16:00); " +
 			"fx-critic-claude in fx-critic's place: codex at 95%, at or past [usage] codex_soft 80%"},
 		{plain, ""},
+		{retried, ""},
 	} {
 		if got := d.Cards[tc.task.ID].Task.AgentsNote; got != tc.want {
 			t.Errorf("%s's AGENTS note %q, want %q", TaskKey(tc.task), got, tc.want)

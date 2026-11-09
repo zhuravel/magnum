@@ -246,10 +246,13 @@ type taskView struct {
 	// ("" for none, and for a task of your words).
 	reporter string
 	retry    bool
-	// launched are the roles its current stage's newest attempt launched (a
-	// RoleRun of it) and those with a live session: a Codex role that never
-	// launched beside its fallback yielded to it.
-	launched map[string]bool
+	// yields are its roles' yields to Codex's budget in the newest attempt of
+	// each stage, as its stage events record them (attemptYields' records),
+	// oldest first, for a task at work or waiting on you; inPlace the roles of
+	// its current stage's attempt among them, whose fallback runs in their
+	// place, or that sit out.
+	yields  []yieldRecord
+	inPlace map[string]bool
 	// pr is what a published task waits on by its PR in magnum's registry
 	// (readPRs); nil without a read of it.
 	pr *prWait
@@ -263,7 +266,7 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	if t.State == registry.TaskStopped || (t.State == registry.TaskDone && !sameDay(t.Updated, s.now)) {
 		return nil, nil
 	}
-	v := &taskView{t: t, tried: map[string]bool{}, done: map[string]bool{}, launched: map[string]bool{}, letGo: map[string]string{}}
+	v := &taskView{t: t, tried: map[string]bool{}, done: map[string]bool{}, inPlace: map[string]bool{}, letGo: map[string]string{}}
 	if t.PRNumber > 0 || t.State == registry.TaskPublished {
 		l, err := s.reg.LinkedPR(s.ctx, t.ID)
 		if err != nil && !errors.Is(err, registry.ErrNotFound) {
@@ -329,21 +332,31 @@ func (s *screen) widthSkipped(t registry.Task) map[string]bool {
 	return out
 }
 
-// yieldNote is the AGENTS line's remark of task t's card: which of its
-// roles ran in whose place, or sat out, and why, as its stage events say
-// (the package's yieldNote over its newest stageEventsRead), for a task at
-// work or waiting on you; "" for any other, and for a log it cannot read.
-func (s *screen) yieldNote(t registry.Task) string {
-	switch t.State {
+// readYields reads task v's yields to Codex's budget (v.yields, v.inPlace)
+// from its newest stageEventsRead stage events, for a task at work or
+// waiting on you: those of each stage's newest attempt (newest; a yield of
+// an attempt a retry replaced is history, and a stage with no attempt the
+// screen read keeps its own). A log it cannot read is none.
+func (s *screen) readYields(v *taskView, newest map[string]int) {
+	switch v.t.State {
 	case registry.TaskActive, registry.TaskWaiting, registry.TaskNeedsYou:
 	default:
-		return ""
+		return
 	}
-	evs, err := s.reg.TaskEvents(s.ctx, t.ID, "stage", stageEventsRead)
+	evs, err := s.reg.TaskEvents(s.ctx, v.t.ID, "stage", stageEventsRead)
 	if err != nil {
-		return ""
+		return
 	}
-	return yieldNote(evs)
+	for _, ev := range evs {
+		y, ok := parseYield(ev.Text)
+		if !ok || y.n < newest[y.stage] {
+			continue
+		}
+		v.yields = append(v.yields, y)
+		if y.stage == v.t.Stage {
+			v.inPlace[y.role] = true
+		}
+	}
 }
 
 // unreadable is the row and the card of task t the screen could not read:
@@ -366,8 +379,10 @@ func (s *screen) readAgents(v *taskView) error {
 		return err
 	}
 	var cur string
+	newest := map[string]int{} // each stage's newest attempt
 	for _, a := range as {
 		v.tried[a.Stage] = true
+		newest[a.Stage] = max(newest[a.Stage], a.N)
 		if a.Stage == v.t.Stage {
 			cur = a.ID
 		}
@@ -378,12 +393,12 @@ func (s *screen) readAgents(v *taskView) error {
 			return err
 		}
 		for _, rr := range runs {
-			v.launched[rr.Role] = true
 			if rr.Outcome == "verified" || !rr.Verified.IsZero() {
 				v.done[rr.Role] = true
 			}
 		}
 	}
+	s.readYields(v, newest)
 	if s.agents != nil {
 		ss, err := runtime.TaskSessions(s.ctx, s.agents, v.t.ID)
 		if err != nil {
@@ -395,9 +410,6 @@ func (s *screen) readAgents(v *taskView) error {
 		}
 		for _, x := range newest {
 			v.agents = append(v.agents, x)
-			if x.State == store.SessionLive || x.State == store.SessionStarting {
-				v.launched[x.Role] = true
-			}
 		}
 		slices.SortFunc(v.agents, func(a, b store.Session) int {
 			return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.ID, a.ID))
@@ -608,13 +620,13 @@ func (s *screen) agentBlocker(v *taskView, workingOnly bool) (tui.WaitsOn, bool)
 	finished := 0
 	for _, r := range roles {
 		// A fallback's run stands for its role only on a task Codex never
-		// works on, or in an attempt that launched the fallback and never
-		// the role (it yielded to Codex's budget): before a refusal the
-		// fallback may be another role of the stage at work beside it
-		// (fx-points-codex's fx-points). A role that yielded is no role
-		// still to run: its fallback runs in its place.
+		// works on, or in an attempt whose events record that the role
+		// yielded to Codex's budget (its fallback runs in its place, or it
+		// sits out): before a refusal the fallback may be another role of the
+		// stage at work beside it (fx-points-codex's fx-points). A role that
+		// yielded is no role still to run.
 		fb := s.cfg.Factory.CodexFallback[r]
-		yielded := fb != "" && !v.launched[r] && v.launched[fb]
+		yielded := v.inPlace[r]
 		switch {
 		case v.done[r] || ((v.t.CodexNever || yielded) && v.done[fb]):
 			finished++
@@ -786,7 +798,7 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	for _, x := range v.agents {
 		c.Agents = append(c.Agents, s.cardAgent(x))
 	}
-	c.AgentsNote = s.yieldNote(t)
+	c.AgentsNote = yieldNote(v.yields)
 	c.Report = s.report(t)
 	return c
 }
