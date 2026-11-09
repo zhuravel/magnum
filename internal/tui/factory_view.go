@@ -742,7 +742,7 @@ func jiraAssignee(js *FactoryJiraStatus) string {
 // its PR is still open (magnum's registry has it open: r.PR), a fact on the
 // operator, drawn yellow: close or merge the PR, or move the issue back.
 func (r FactoryRow) jiraDoneOpen() bool {
-	return r.JiraStatus != nil && r.JiraStatus.Category == "done" && r.PR != nil && !r.yourPR()
+	return r.JiraStatus != nil && r.JiraStatus.Category == "done" && r.PR != nil
 }
 
 // statusText is the row's STATUS cell in w cells (0: whole): its Jira

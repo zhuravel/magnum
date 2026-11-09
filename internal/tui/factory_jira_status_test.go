@@ -124,9 +124,10 @@ func TestAWideScreenDrawsEachTasksJiraStatusInAColumn(t *testing.T) {
 }
 
 // The STATUS column is the first column a screen gives up: below 180
-// columns, and on a wider one that cannot hold it beside every other
-// column with a title of 24 cells (here a long blocker), the frame is the
-// one without any Jira status, every other column where it was.
+// columns, however much room the rows leave, and on a wider one that
+// cannot hold it beside every other column with a title of 24 cells (here
+// a long blocker), the frame is the one without any Jira status, every
+// other column where it was.
 func TestTheStatusColumnGoesFirst(t *testing.T) {
 	for _, w := range []int{100, 120, 140, 179} {
 		with, _ := factoryFrameOf(fixtureJira(), w, factoryHomeHeight, true, IconsUnicode, factoryNow)
@@ -135,9 +136,42 @@ func TestTheStatusColumnGoesFirst(t *testing.T) {
 			t.Errorf("%d columns: the Jira statuses changed the frame:\n%s\nwant:\n%s", w, ansi.Strip(with), ansi.Strip(without))
 		}
 	}
+	// One short row would hold the column at any width: below 180 it has none.
+	one := fixtureOne()
+	one.Rows[0].JiraStatus = &FactoryJiraStatus{Name: "In Progress", Category: "indeterminate", Assigned: true, AssignedToYou: true,
+		ReadAt: factoryNow, TriedAt: factoryNow}
+	for _, w := range []int{100, 140, 179} {
+		with, _ := factoryFrameOf(one, w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+		without, _ := factoryFrameOf(fixtureOne(), w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+		if with != without {
+			t.Errorf("%d columns, one row: the Jira status changed the frame:\n%s", w, ansi.Strip(with))
+		}
+	}
+	if frame, _ := factoryFrameOf(one, 180, factoryHomeHeight, true, IconsUnicode, factoryNow); !strings.Contains(ansi.Strip(frame), "In Progress") {
+		t.Errorf("180 columns, one row: no STATUS column:\n%s", ansi.Strip(frame))
+	}
 	long := func(f factoryFrame) factoryFrame {
 		f.Rows[3].WaitsOn[0].What, f.Rows[3].WaitsOn[0].Long = "finding the cause in the coupon export's batch job, 2 of 3 agents done", ""
 		return f
+	}
+	// Wherever the column shows, the title keeps 24 cells, a blocker of the
+	// 140-column form 10 cells longer than the spec's too.
+	longer := fixtureJira()
+	longer.Rows[3].WaitsOn[0].What = "finding the cause in the export job, 2 of 3 done"
+	for name, f := range map[string]factoryFrame{"spec": fixtureJira(), "longer": longer, "long": long(fixtureJira())} {
+		for w := factoryStatusFrom; w <= 230; w++ {
+			frame, _ := factoryFrameOf(f, w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+			lines := strings.Split(ansi.Strip(frame), "\n")
+			at := strings.Index(lines[3], " STATUS ")
+			if at < 0 {
+				continue
+			}
+			row := factoryRowLines(t, frame, f.Rows)[0]
+			if title := ansi.StringWidth(lines[3][:at]) + 1 - 2 - ansi.StringWidth(row[:strings.Index(row, "Deploy list")]); title < factoryKeepTitle {
+				t.Errorf("%s at %d columns: the STATUS column leaves the title %d cells, under %d:\n%s", name, w, title, factoryKeepTitle,
+					ansi.Strip(frame))
+			}
+		}
 	}
 	for _, w := range []int{180, 190, 200} {
 		f := long(fixtureJira())
