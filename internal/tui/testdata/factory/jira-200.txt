@@ -1,4 +1,4 @@
- magnum factory · all repos · talkable                                                                                                                            memory full: new tasks wait · ↻ 14:09 
+ magnum factory · all repos · talkable                                                                                                                 memory full: new tasks wait (swap 91%) · ↻ 14:09 
  ● 3 tasks need you, 5 decisions · 3 wait on others, 1 at work · 1 done today                                                                                                     1 rule to approve (L) 
 
  NEEDS YOU                                                      STATUS                      WAITS ON                                      YOUR MOVE                 VOID      BART      BASTION   WAITED
@@ -14,5 +14,5 @@
  DONE TODAY
   ✓ PR-12302  #4519   Remove old sync job                       Done 50m                    nothing: merged 13:20 · not rated yet                                   QA ✓      latest    QA ✓
 ── ✓ 14:02 you said MFA done → bart deploy resumed ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- alice on #4512: "Do we need the deploy list for archived campaigns too?" · reply drafted · also: agent fixing 2 conflicts in bart, 10m
+ alice on #4512, 2h ago: "Do we need the deploy list for archived campaigns too, or only for live ones?" · reply drafted · also: agent fixing 2 conflicts in bart, try 1 of 2, 10m
  enter read and reply · a oldest ask · o pane fixing bart · n new task · ? more

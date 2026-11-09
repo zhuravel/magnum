@@ -121,6 +121,14 @@ func TestAWideScreenDrawsEachTasksJiraStatusInAColumn(t *testing.T) {
 			t.Errorf("the STATUS column cost the wide screen its %s column: %q", col, header)
 		}
 	}
+	// A long name with an age and someone else's mark gives up its end, never
+	// the age or the mark.
+	js := f.Rows[5].JiraStatus
+	js.Since, js.AssignedToYou = factoryAgo(factoryNow, 75*time.Hour), false
+	frame, _ = factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	if cells, _ = statusCells(t, frame, f.Rows); !strings.HasSuffix(cells["PR-12388"], "… 3d not you") {
+		t.Errorf("a long name's STATUS cell reads %q, want its name cut before \"3d not you\"", cells["PR-12388"])
+	}
 }
 
 // The STATUS column is the first column a screen gives up: below 180
@@ -259,8 +267,20 @@ func TestTaskCardSaysWhereItsJiraIssueStands(t *testing.T) {
 			"PR-12320 · In Code Review for 13h · assigned to you · last read 12m ago · now: Jira did not answer within 30s"},
 		"never read": {&FactoryJiraStatus{TriedAt: tried, LastError: "Jira refused the account (HTTP 403)"},
 			"PR-12320 · no read of it has worked yet · now: Jira refused the account (HTTP 403)"},
-		"a hostile name": {&FactoryJiraStatus{Name: "In \x1b[31mReview\x1b]8;;https://example.com\x07", Category: "indeterminate",
+		"a hostile name": {&FactoryJiraStatus{Name: hostileJiraName, Category: "indeterminate",
 			Assigned: true, AssignedToYou: true, ReadAt: read, TriedAt: read}, "PR-12320 · In Review · assigned to you · last read 12m ago"},
+		"moved under a minute ago": {&FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Assigned: true, AssignedToYou: true,
+			Since: factoryAgo(cardTaskNow, 20*time.Second), ReadAt: read, TriedAt: read},
+			"PR-12320 · In Code Review since just now · assigned to you · last read 12m ago"},
+		"Jira's clock ahead": {&FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Assigned: true, AssignedToYou: true,
+			Since: cardTaskNow.Add(5 * time.Minute), ReadAt: read, TriedAt: read},
+			"PR-12320 · In Code Review since just now · assigned to you · last read 12m ago"},
+		"no daemon reads it": {&FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Assigned: true, AssignedToYou: true,
+			Since: factoryAgo(cardTaskNow, 13*time.Hour), ReadAt: read, TriedAt: read, DaemonDown: true},
+			"PR-12320 · In Code Review for 13h · assigned to you · last read 12m ago · now: the factory daemon is down"},
+		"assigned, not known to be you": {&FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Assigned: true, YouUnknown: true,
+			Since: factoryAgo(cardTaskNow, 13*time.Hour), ReadAt: read, TriedAt: read},
+			"PR-12320 · In Code Review for 13h · assigned (not known to be you) · last read 12m ago"},
 	} {
 		card := fixtureJiraCard()
 		card.JiraStatus = c.js
@@ -273,6 +293,31 @@ func TestTaskCardSaysWhereItsJiraIssueStands(t *testing.T) {
 	card.JiraStatus = nil
 	if strings.Contains(plainCard(drawTask(card, 0), 140), "JIRA ") {
 		t.Error("a task whose key was never tried draws a JIRA line")
+	}
+}
+
+// hostileJiraName is a status name that carries a color and a link: the
+// jira package cleans it, and the painters clean it again.
+const hostileJiraName = "In \x1b[31mReview\x1b]8;;https://example.com\x07"
+
+// The painters clean a status's name themselves: no escape of it reaches
+// the terminal, from the card's JIRA line or the row's STATUS cell.
+func TestAHostileJiraNameReachesNoTerminal(t *testing.T) {
+	card := fixtureJiraCard()
+	card.JiraStatus.Name = hostileJiraName
+	f := fixtureJira()
+	f.Rows[0].JiraStatus.Name = hostileJiraName
+	f.Cursor = -1 // the selected row is drawn in reverse video, without its own styles
+	row, _ := factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	for what, raw := range map[string]string{"the card": drawTask(card, 0)(140, 0, true, IconsUnicode), "the row": row} {
+		if !strings.Contains(ansi.Strip(raw), "In Review") {
+			t.Errorf("%s does not draw the name:\n%s", what, ansi.Strip(raw))
+		}
+		for _, esc := range []string{"\x1b[31mReview", "\x1b]8;;https://example.com"} {
+			if strings.Contains(raw, esc) {
+				t.Errorf("%s carries the name's escape %q to the terminal", what, esc)
+			}
+		}
 	}
 }
 
@@ -377,6 +422,11 @@ func TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen(t *testing.T) {
 	if l := cardLineWith(t, plainCard(drawTask(card, 0), 140), "JIRA "); !strings.HasSuffix(strings.TrimSpace(l), "last read 12m ago · "+reason) {
 		t.Errorf("the JIRA line is %q, want the reason after it", l)
 	}
+	card.JiraStatus.Name, card.JiraStatus.Category = "In Code Review", "indeterminate"
+	if frame := plainCard(drawTask(card, 0), 140); strings.Contains(frame, "Jira says done") {
+		t.Errorf("a card whose issue is in progress says Jira is done:\n%s", frame)
+	}
+	card.JiraStatus.Name, card.JiraStatus.Category = "Done", "done"
 	card.PRInfo = nil
 	if frame := plainCard(drawTask(card, 0), 140); strings.Contains(frame, "Jira says done") {
 		t.Errorf("a card without an open PR says Jira is done while it is open:\n%s", frame)
@@ -392,13 +442,166 @@ func TestTheHelpGlossesTheJiraStatusWords(t *testing.T) {
 		"STATUS  the task's Jira status and how long the issue has held it (In Code Review 13h), on a screen of 180 columns or more",
 		"Done, To Do, ?  STATUS's colors: done green, in progress plain, to do dim; ? no read of the issue worked yet (its card says why)",
 		"not you, nobody  after the status: the issue is assigned to someone else, or to nobody",
+		"assigned  after the status: assigned, not known to be you (Jira answered for the issue, not for your account)",
+		"In Code Review 3d ?  all dim, ? after it: its last try failed or the factory daemon is down, so it may be old (no Jira done of it)",
 		"Jira done  yellow: Jira says done while the task's PR is still open (in STATUS when shown): merge or close it, or move the issue back",
-		"JIRA  on the task card: the issue's key, status and for how long, who has it, the last read's age; now: why the last try failed")
+		"JIRA  on the task card: the issue key, status and for how long, who has it, the last read's age; now: why it is not read now")
 	for l := range strings.SplitSeq(ansi.Strip(strings.Join(h.m.helpContent(140), "\n")), "\n") {
-		if strings.HasPrefix(l, "STATUS ") || strings.HasPrefix(l, "Jira done ") || strings.HasPrefix(l, "JIRA ") || strings.HasPrefix(l, "Done, To Do") {
+		if strings.HasPrefix(l, "STATUS ") || strings.HasPrefix(l, "Jira done ") || strings.HasPrefix(l, "JIRA ") || strings.HasPrefix(l, "Done, To Do") ||
+			strings.HasPrefix(l, "assigned ") || strings.HasPrefix(l, "In Code Review 3d ?") || strings.HasPrefix(l, "not you, nobody ") {
 			if strings.HasSuffix(l, "…") {
 				t.Errorf("at 140 columns the help cuts %q", l)
 			}
+		}
+	}
+}
+
+// A status whose last try failed before the issue answered (its read is
+// older than the try), or that no factory daemon reads, is the last read's
+// that worked and may no longer hold: its STATUS cell is dim, the mark
+// too, with a dim ? after it, never green. A read whose issue answered
+// while a part of it failed is drawn as it was read. Before, a read of three
+// days ago looked like this minute's.
+func TestAnOldJiraReadIsDrawnDimWithAMark(t *testing.T) {
+	f := fixtureJira()
+	f.Cursor = -1 // the selected row is drawn in reverse video
+	for i := range f.Rows {
+		switch js := f.Rows[i].JiraStatus; f.Rows[i].ID {
+		case 1: // the token expired three days ago
+			js.Since, js.ReadAt = factoryAgo(factoryNow, 80*time.Hour), factoryAgo(factoryNow, 72*time.Hour)
+			js.TriedAt, js.LastError = factoryAgo(factoryNow, 3*time.Minute), "Jira refused the credentials (HTTP 401)"
+		case 2: // the issue answered, its changelog did not
+			js.LastError = "Jira answered for the issue but not for its changelog: Jira has no such issue, or the account cannot see it (HTTP 404)"
+		case 3:
+			js.DaemonDown = true
+		}
+	}
+	frame, _ := factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	cells, ok := statusCells(t, frame, f.Rows)
+	if !ok {
+		t.Fatalf("200 columns draw no STATUS column:\n%s", ansi.Strip(frame))
+	}
+	for key, want := range map[string]string{"PR-12310": "In Code Review 3d ?", "PR-12345": "To Do 2d nobody", "PR-12360": "Released 3h not you ?"} {
+		if got := cells[key]; got != want {
+			t.Errorf("%s's STATUS cell reads %q, want %q", key, got, want)
+		}
+	}
+	st := newStyles(true)
+	for _, want := range []string{st.Dim.Render("In Code Review"), st.Dim.Render("Released"), st.Dim.Render("not you"), st.Dim.Render(" ?")} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("the frame lacks the old read's dim %q", ansi.Strip(want))
+		}
+	}
+	if strings.Contains(frame, st.OK.Render("Released")) || strings.Contains(frame, st.Accent.Render("not you")) {
+		t.Error("an old read keeps its category's green or its mark's accent")
+	}
+}
+
+// Jira done on an old read (its last try failed before the issue answered,
+// or no daemon reads it) is no yellow fact: not on the row at any width,
+// not on the card. Before, a done read of last week stayed yellow.
+func TestJiraDoneOnAnOldReadIsNoYellowFact(t *testing.T) {
+	for name, old := range map[string]func(js *FactoryJiraStatus){
+		"the last try failed": func(js *FactoryJiraStatus) {
+			js.TriedAt, js.LastError = factoryAgo(factoryNow, time.Minute), "Jira did not answer within 30s"
+		},
+		"the daemon is down": func(js *FactoryJiraStatus) { js.DaemonDown = true },
+	} {
+		f := fixtureJiraDone()
+		old(f.Rows[4].JiraStatus)
+		for _, w := range []int{100, 140, 200} {
+			frame, _ := factoryFrameOf(f, w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+			if strings.Contains(ansi.Strip(frame), "Jira done") || slices.Contains(warnRuns(t, frame), "Done") {
+				t.Errorf("%s, %d columns: the old read is a yellow fact: %q", name, w, warnRuns(t, frame))
+			}
+		}
+		card := fixtureJiraCard()
+		card.JiraStatus.Name, card.JiraStatus.Category = "Done", "done"
+		old(card.JiraStatus)
+		card.PRInfo = &CardPR{State: "open · head a1b2c3d"}
+		if frame := plainCard(drawTask(card, 0), 140); strings.Contains(frame, "Jira says done") {
+			t.Errorf("%s: the card says Jira is done while the PR is open:\n%s", name, frame)
+		}
+	}
+}
+
+// An issue assigned while the read of your account failed is assigned, not
+// known to be you: its STATUS cell says "assigned", never "not you".
+// Before, it read as someone else's.
+func TestAnAssigneeNotKnownToBeYouIsNotSaidToBeSomeoneElse(t *testing.T) {
+	f := fixtureJira()
+	js := f.Rows[0].JiraStatus
+	js.Name, js.AssignedToYou, js.YouUnknown = "In Review", false, true
+	js.LastError = "Jira answered for the issue but not for its account: Jira refused the account (HTTP 403)"
+	frame, _ := factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	if cells, _ := statusCells(t, frame, f.Rows); cells["PR-12310"] != "In Review 13h assigned" {
+		t.Errorf("the STATUS cell reads %q, want \"In Review 13h assigned\"", cells["PR-12310"])
+	}
+}
+
+// A STATUS column in the 140-column layout leaves the title line and the
+// help line as the frame without it has them, whole where it says them
+// whole: they span the screen and share no width with the table. Before,
+// the column cut the memory fact's swap and the help line's question.
+func TestTheStatusColumnLeavesTheTitleAndHelpLinesAsTheyWere(t *testing.T) {
+	line := func(frame, sub string) string {
+		for l := range strings.SplitSeq(ansi.Strip(frame), "\n") {
+			if strings.Contains(l, sub) {
+				return l
+			}
+		}
+		return ""
+	}
+	shown := false
+	for w := factoryStatusFrom; w <= 240; w++ {
+		with, _ := factoryFrameOf(fixtureJira(), w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+		without, _ := factoryFrameOf(fixtureHome(), w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+		_, has := statusCells(t, with, fixtureJira().Rows)
+		shown = shown || has
+		for _, sub := range []string{"magnum factory", "Do we need the deploy list"} {
+			if got, want := line(with, sub), line(without, sub); got != want {
+				t.Errorf("%d columns: the STATUS column changed the line\n%q\nwant\n%q", w, got, want)
+			}
+		}
+	}
+	if !shown {
+		t.Error("no width from 180 to 240 drew the STATUS column")
+	}
+	frame, _ := factoryFrameOf(fixtureJira(), 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	mustContain(t, ansi.Strip(frame), "memory full: new tasks wait (swap 91%)", `alice on #4512, 2h ago: "Do we need the deploy list for archived campaigns too, or only for live ones?"`)
+}
+
+// The JIRA line's parts go under it whole when the card is narrow, as many
+// on a line as it holds: at 80 columns who has the issue and the last read's
+// age are never cut, nor at 100 with a long status name. Before, the line was
+// cut at the screen's edge.
+func TestTaskCardsJiraLineWrapsAtItsParts(t *testing.T) {
+	read := factoryAgo(cardTaskNow, 12*time.Minute)
+	for name, c := range map[string]struct {
+		width      int
+		js         *FactoryJiraStatus
+		first, two string
+	}{
+		"yours at 80": {80, fixtureJiraCard().JiraStatus, "PR-12320 · In Code Review for 13h · assigned to you", "last read 12m ago"},
+		"someone else's at 80": {80, &FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Since: factoryAgo(cardTaskNow, 50*time.Hour),
+			Assigned: true, ReadAt: read, TriedAt: read}, "PR-12320 · In Code Review for 2d · assigned to someone else", "last read 12m ago"},
+		"a long name at 100": {100, &FactoryJiraStatus{Name: "Waiting for the release train to the EU region and beyond", Category: "indeterminate",
+			Since: factoryAgo(cardTaskNow, 13*time.Hour), Assigned: true, AssignedToYou: true, ReadAt: read, TriedAt: read},
+			"PR-12320 · Waiting for the release train to the EU region and beyond for 13h", "assigned to you · last read 12m ago"},
+	} {
+		card := fixtureJiraCard()
+		card.JiraStatus = c.js
+		lines := strings.Split(plainCard(drawTask(card, 0), c.width), "\n")
+		i := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, " JIRA ") })
+		if i < 0 || i+1 >= len(lines) {
+			t.Fatalf("%s: no JIRA line:\n%s", name, strings.Join(lines, "\n"))
+		}
+		x := strings.Index(lines[i], "PR-12320")
+		if got := strings.TrimSpace(lines[i][x:]); got != c.first {
+			t.Errorf("%s: the JIRA line reads %q, want %q", name, got, c.first)
+		}
+		if got := lines[i+1]; strings.TrimSpace(got) != c.two || strings.Index(got, c.two) != x {
+			t.Errorf("%s: under the JIRA line %q, want %q from its column", name, got, c.two)
 		}
 	}
 }

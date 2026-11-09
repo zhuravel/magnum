@@ -11,8 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -252,7 +252,8 @@ func (p *cardPainter) prSection(card TaskCard) []string {
 	}
 	row("STAGINGS", p.stagingsText(card.Stagings))
 	if js := card.JiraStatus; js != nil {
-		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js), p.jiraFailure(js), p.jiraDoneOpen(card))
+		more := append(p.jiraParts(js), p.jiraFailure(js), p.jiraDoneOpen(card))
+		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js, p.width-1-x), more...)
 		row("JIRA", cl)
 		out = append(out, under...)
 	}
@@ -263,71 +264,115 @@ func (p *cardPainter) prSection(card TaskCard) []string {
 }
 
 // besides is cl with each of more after it, one by one, while the line
-// from column x holds them, and the rest under it, each wrapped to at most
-// two lines in its own style; a seg without text is left out.
+// from column x holds them, and the rest on the lines under it, as many on
+// a line as its wrapped width holds, joined by the separator; one that no
+// line holds is wrapped to at most two lines of its own, in its own style.
+// A seg without text is left out.
 func (p *cardPainter) besides(x int, cl cell, more ...seg) (cell, []string) {
 	var under []string
+	var cur cell // the line under cl being filled
+	flush := func() {
+		if len(cur) > 0 {
+			under = append(under, p.line(placed{x, p.width - x, cur}))
+			cur = nil
+		}
+	}
+	room := p.wrapW(x)
 	for _, m := range more {
 		switch {
 		case m.text == "":
 			continue
-		case len(under) == 0:
+		case len(under) == 0 && len(cur) == 0:
 			if with := append(slices.Clone(cl), p.sepSeg(), m); with.width() <= p.width-1-x {
 				cl = with
 				continue
 			}
+		case len(cur) > 0:
+			if with := append(slices.Clone(cur), p.sepSeg(), m); with.width() <= room {
+				cur = with
+				continue
+			}
 		}
-		under = append(under, p.textRows(x, m.st, wrapText(m.text, p.wrapW(x), 2))...)
+		flush()
+		switch lines := wrapText(m.text, room, 2); len(lines) {
+		case 1:
+			cur = cell{{lines[0], m.st}}
+		default:
+			under = append(under, p.textRows(x, m.st, lines)...)
+		}
 	}
+	flush()
 	return cl, under
 }
 
-// jiraText is the card's JIRA line for the issue key: its status in its
-// category's style and since when ("In Code Review for 13h"), who has it,
-// and the last read's age; for a key no read of which worked, that it
-// never did.
-func (p *cardPainter) jiraText(key string, js *FactoryJiraStatus) cell {
-	out := cell{{key, p.st.Accent}}
-	add := func(text string, st lipgloss.Style) { out = append(out, p.sepSeg(), seg{text, st}) }
+// jiraText is the start of the card's JIRA line for the issue key, in
+// room cells: its status in its category's style and since when ("In Code
+// Review for 13h", "since just now" under a minute), the name cut first;
+// for a key no read of which worked, that it never did.
+func (p *cardPainter) jiraText(key string, js *FactoryJiraStatus, room int) cell {
+	out := cell{{key, p.st.Accent}, p.sepSeg()}
 	if js.Name == "" {
-		add("no read of it has worked yet", noStyle)
-		return out
+		return append(out, seg{"no read of it has worked yet", noStyle})
 	}
-	add(js.Name, jiraStyle(p.st, js))
-	if !js.Since.IsZero() {
-		out = append(out, seg{" for " + shortAge(max(p.now.Sub(js.Since), 0)), noStyle})
+	var since cell
+	switch d := max(p.now.Sub(js.Since), 0); {
+	case js.Since.IsZero():
+	case d < time.Minute: // "for now" would say it holds the status for a while
+		since = cell{{" since just now", noStyle}}
+	default:
+		since = cell{{" for " + shortAge(d), noStyle}}
 	}
+	name := cell{{js.Name, jiraStyle(p.st, js)}}
+	if w := out.width() + name.width() + since.width(); w > room {
+		name = name.fit(max(room-out.width()-since.width(), 1))
+	}
+	return append(append(out, name...), since...)
+}
+
+// jiraParts are the JIRA line's parts after the status: who has the issue
+// (you, someone else, nobody, or someone not known to be you) and the last
+// read's age.
+func (p *cardPainter) jiraParts(js *FactoryJiraStatus) []seg {
+	if js.Name == "" {
+		return nil
+	}
+	who := "unassigned"
 	switch {
 	case js.AssignedToYou:
-		add("assigned to you", noStyle)
+		who = "assigned to you"
+	case js.Assigned && js.YouUnknown:
+		who = "assigned (not known to be you)"
 	case js.Assigned:
-		add("assigned to someone else", noStyle)
-	default:
-		add("unassigned", noStyle)
+		who = "assigned to someone else"
 	}
+	parts := []seg{{who, noStyle}}
 	if !js.ReadAt.IsZero() {
-		add("last read "+agoText(p.now.Sub(js.ReadAt)), p.st.Dim)
+		parts = append(parts, seg{"last read " + agoText(p.now.Sub(js.ReadAt)), p.st.Dim})
 	}
-	return out
+	return parts
 }
 
 // jiraDoneOpen is the card's yellow fact when Jira says the issue is done
 // while the task's PR is still open (PRInfo: magnum's registry has it open),
-// as its row says it; none otherwise.
+// as its row says it; none otherwise, nor on an old read (old).
 func (p *cardPainter) jiraDoneOpen(c TaskCard) seg {
-	if c.JiraStatus.Category != "done" || c.PRInfo == nil {
+	if c.JiraStatus.Category != "done" || c.PRInfo == nil || c.JiraStatus.old() {
 		return seg{}
 	}
 	return seg{"Jira says done while " + cmp.Or(c.PR, "the PR") + " is still open", p.st.Warn}
 }
 
-// jiraFailure is why the last try of the issue failed ("now: Jira did not
-// answer within 30s"), in the failure's style; none when it worked.
+// jiraFailure is why the issue is not read now ("now: Jira did not answer
+// within 30s"), in the failure's style: no factory daemon runs, or the
+// last try failed; none when it worked.
 func (p *cardPainter) jiraFailure(js *FactoryJiraStatus) seg {
-	if js.LastError == "" {
-		return seg{}
+	switch {
+	case js.DaemonDown:
+		return seg{"now: the factory daemon is down", p.st.Err}
+	case js.LastError != "":
+		return seg{"now: " + js.LastError, p.st.Err}
 	}
-	return seg{"now: " + js.LastError, p.st.Err}
+	return seg{}
 }
 
 // stagingsText is the card's STAGINGS line: each staging server's name and

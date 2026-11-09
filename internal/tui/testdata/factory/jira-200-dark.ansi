@@ -1,4 +1,4 @@
- [1;94mmagnum factory[m[37m · [mall repos[37m · [mtalkable                                                                                                                            memory full: new tasks wait[37m · [m[37m↻ 14:09[m 
+ [1;94mmagnum factory[m[37m · [mall repos[37m · [mtalkable                                                                                                                 memory full: new tasks wait (swap 91%)[37m · [m[37m↻ 14:09[m 
  [1;93m● 3 tasks need you[m[37m, 5 decisions[m[37m · [m[37m3 wait on others, 1 at work[m[37m · [m[37m1 done today[m                                                                                                     [1;93m1 rule to approve (L)[m 
 
  [1;96mNEEDS YOU[m                                                      [1;37mSTATUS[m                      [1;37mWAITS ON[m                                      [1;37mYOUR MOVE[m                 [1;37mVOID[m      [1;37mBART[m      [1;37mBASTION[m   [1;37mWAITED[m
@@ -14,5 +14,5 @@
  [1;96mDONE TODAY[m
   [37m✓[m [37mPR-12302[m  [37m#4519[m   [37mRemove old sync job[m                       [37mDone[m[37m 50m[m                    [37mnothing:[m[37m merged 13:20 · not rated yet[m                                   [92mQA ✓[m      [92mlatest[m    [92mQA ✓[m
 [90m──[m [92m✓ 14:02 you said MFA done → bart deploy resumed[m [90m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[m
- alice on #4512: "Do we need the deploy list for archived campaigns too?" · reply drafted · also: agent fixing 2 conflicts in bart, 10m
+ alice on #4512, 2h ago: "Do we need the deploy list for archived campaigns too, or only for live ones?" · reply drafted · also: agent fixing 2 conflicts in bart, try 1 of 2, 10m
  [1;94menter[m [37mread and reply[m[37m · [m[1;94ma[m [37moldest ask[m[37m · [m[1;94mo[m [37mpane fixing bart[m[37m · [m[1;94mn[m [37mnew task[m[37m · [m[1;94m?[m [37mmore[m

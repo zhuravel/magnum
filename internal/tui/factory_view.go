@@ -143,6 +143,9 @@ type factoryLayout struct {
 	repoCap               int // the repository's widest cell
 	hideStaging, hideMove bool
 	status                bool // a STATUS column, when a row has a Jira status
+	// longLines keeps the title line's and the help line's long forms in a
+	// layout that is not wide: the wide one fits without its STATUS column.
+	longLines bool
 
 	// measured
 	staging, hasMove                        bool
@@ -727,30 +730,41 @@ func jiraStyle(st styles, js *FactoryJiraStatus) lipgloss.Style {
 }
 
 // jiraAssignee is the STATUS cell's mark of who has the issue: "" for you,
-// "not you" for someone else, "nobody" for nobody.
+// "not you" for someone else, "nobody" for nobody, "assigned" for an
+// assignee not known to be you (YouUnknown).
 func jiraAssignee(js *FactoryJiraStatus) string {
 	switch {
 	case js.AssignedToYou:
 		return ""
+	case js.Assigned && js.YouUnknown:
+		return "assigned"
 	case js.Assigned:
 		return "not you"
 	}
 	return "nobody"
 }
 
+// old reports whether js's facts may no longer hold: its last try failed
+// before the issue answered (so they are an older read's), or no factory
+// daemon runs to read it again.
+func (js *FactoryJiraStatus) old() bool {
+	return js.DaemonDown || js.LastError != "" && js.TriedAt.After(js.ReadAt)
+}
+
 // jiraDoneOpen reports whether Jira says the task's issue is done while
 // its PR is still open (magnum's registry has it open: r.PR), a fact on the
 // operator, drawn yellow: close or merge the PR, or move the issue back.
+// An old read (old) is no such fact: the issue may have moved since.
 func (r FactoryRow) jiraDoneOpen() bool {
-	return r.JiraStatus != nil && r.JiraStatus.Category == "done" && r.PR != nil
+	return r.JiraStatus != nil && r.JiraStatus.Category == "done" && r.PR != nil && !r.JiraStatus.old()
 }
 
 // statusText is the row's STATUS cell in w cells (0: whole): its Jira
 // issue's status in its category's style (yellow when it is done while its
 // PR is open: jiraDoneOpen), how long the issue has held it
 // (none when that is not known) and who has it when it is not you, the
-// name cut first; a dim ? when no read of it worked; nothing for a row
-// without a Jira status.
+// name cut first; an old read (old) all dim, with a dim ? after it; a dim
+// ? when no read of it worked; nothing for a row without a Jira status.
 func (p *factoryPainter) statusText(r FactoryRow, w int) cell {
 	js := r.JiraStatus
 	switch {
@@ -759,15 +773,26 @@ func (p *factoryPainter) statusText(r FactoryRow, w int) cell {
 	case js.Name == "":
 		return cell{{"?", p.st.Dim}}
 	}
+	old := js.old()
 	var tail cell
 	if !js.Since.IsZero() {
 		tail = append(tail, seg{" " + shortAge(max(p.now.Sub(js.Since), 0)), p.st.Dim})
 	}
 	if who := jiraAssignee(js); who != "" {
-		tail = append(tail, seg{" ", noStyle}, seg{who, p.tone(r, p.st.Accent)})
+		st := p.tone(r, p.st.Accent)
+		if old {
+			st = p.st.Dim
+		}
+		tail = append(tail, seg{" ", noStyle}, seg{who, st})
+	}
+	if old {
+		tail = append(tail, seg{" ?", p.st.Dim})
 	}
 	style := jiraStyle(p.st, js)
-	if r.jiraDoneOpen() {
+	switch {
+	case old:
+		style = p.st.Dim
+	case r.jiraDoneOpen():
 		style = p.st.Warn
 	}
 	name := cell{{js.Name, p.tone(r, style)}}
@@ -955,7 +980,9 @@ func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 // layout and the 140-column one with a STATUS column, the title keeping
 // factoryKeepTitle cells: the column takes its room from the wide forms
 // (which the help line and the card say), never from another column, and
-// it is the first column the screen gives up.
+// it is the first column the screen gives up. The title line and the help
+// line span the screen, so they keep the forms the layout without the
+// column gives them (longLines).
 func (p *factoryPainter) plan() factoryLayout {
 	full := factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, pr: formLong, keyGap: 2,
 		stageGap: 2, repoCap: factoryRepoWide}
@@ -982,6 +1009,7 @@ func (p *factoryPainter) plan() factoryLayout {
 			return l
 		}
 		if l, ok := p.fitStep(mid, factoryKeepTitle); ok {
+			_, l.longLines = p.fitWide(full)
 			return l
 		}
 	}
@@ -1212,7 +1240,7 @@ func (p *factoryPainter) headerLine(label string, columns bool, above int) strin
 
 func (p *factoryPainter) helpForm() factoryForm {
 	switch {
-	case p.lay.wide:
+	case p.lay.wide || p.lay.longLines:
 		return formLong
 	case p.lay.waits == formShort:
 		return formShort
@@ -1223,7 +1251,7 @@ func (p *factoryPainter) helpForm() factoryForm {
 func (p *factoryPainter) titleLine() string {
 	st := p.st
 	blocking := p.f.Blocking
-	if p.lay.wide && len(p.f.BlockingLong) > 0 {
+	if (p.lay.wide || p.lay.longLines) && len(p.f.BlockingLong) > 0 {
 		blocking = p.f.BlockingLong
 	}
 	fact := strings.Join(blocking, st.Dim.Render(p.g.sep))

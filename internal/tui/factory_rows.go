@@ -227,12 +227,21 @@ type StagingCell struct {
 // none worked), when the last try was, and its failure ("" when it
 // worked): a class of failure in fixed words, never ticket text. The row
 // and its task card share one value: a painter reads it, never changes it.
+// A failed try after the read (TriedAt after ReadAt), or DaemonDown, leaves
+// facts that may no longer hold: the painters say so.
 type FactoryJiraStatus struct {
 	Name, Category          string
 	Since                   time.Time
 	Assigned, AssignedToYou bool
-	ReadAt, TriedAt         time.Time
-	LastError               string
+	// YouUnknown says the issue is assigned but not known to be you: the
+	// read of your account failed after the issue answered, so
+	// AssignedToYou is false without saying someone else has it.
+	YouUnknown      bool
+	ReadAt, TriedAt time.Time
+	LastError       string
+	// DaemonDown says no factory daemon runs to read the issue again: the
+	// facts are as old as ReadAt.
+	DaemonDown bool
 }
 
 // The data of the factory's cards (spec 9.C): the question card and its recap,
