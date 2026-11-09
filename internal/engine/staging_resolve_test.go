@@ -13,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -927,5 +929,24 @@ func TestASecondTrysPromptCarriesTheFirstTrysWhy(t *testing.T) {
 	}
 	if strings.Contains(f.agent.prompts[0], "second try") {
 		t.Error("the first try's prompt says it is the second")
+	}
+}
+
+// While the fix role's agent kind is paused (a usage limit, a logout) the
+// job does not start its agent: it fails at once, saying why, its slot put
+// back, so the deploy does not wait 45 minutes for an agent that cannot run.
+func TestAStagingResolverJobFailsWhileItsAgentKindIsPaused(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.h.e.PauseTool(f.h.ctx, pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: "claude", Until: f.h.clock.Now().Add(time.Hour)})
+	res := f.await(f.start(1))
+	if res.State != staging.ResolveFailed || !strings.Contains(res.Why, "claude paused") {
+		t.Fatalf("Result while claude is paused = %+v, want failed, saying claude is paused", res)
+	}
+	if prompts, _, _, _ := f.agent.counts(); prompts != 0 {
+		t.Error("the agent was prompted while its kind is paused")
+	}
+	if got := f.gitIn(f.slot, "rev-parse", "HEAD"); got != f.head {
+		t.Errorf("slot review1's HEAD is %s, want the PR's head back", got)
 	}
 }

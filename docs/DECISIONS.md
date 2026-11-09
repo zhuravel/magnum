@@ -20906,7 +20906,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the deploy's own 2-hour wait never ends it first. A restart holds each running job's PR again before any round
   (`recoverStagingResolves`, beside `recoverFixes`): a job whose agent still runs goes on (the agent is let go at
   the stop, never stopped), one whose agent is gone fails, "its agent is gone", one before its agent starts again,
-  queued; Cancel stops the agent, puts the slot back, lets go of the PR, and the job reads failed "cancelled". The
+  queued; Cancel stops the agent, puts the slot back, lets go of the PR, and the job reads failed "cancelled". A
+  job whose agent kind is paused (a usage limit, a logout) fails before it takes a slot, saying so. The
   resolver refuses a coworker's PR as the deploy does. With no `[[factory.repo.staging]]` entry there is no staging
   client, so no resolver: no job runs, no row is touched. The plan's y/N still refuses an env that conflicts at the
   plan ("a resolver comes later"): the resolver serves a conflict that appears when the tip moves after the plan,
@@ -20925,6 +20926,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded, TestWithoutStagingEntriesNothingOfTheResolverRuns,
   TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath,
   TestTheStagingResolverWaitsWhileThePRsRoundIsPaused, TestASecondTrysPromptCarriesTheFirstTrysWhy,
+  TestAStagingResolverJobFailsWhileItsAgentKindIsPaused,
   TestTheStagingClientDeploysAsTheFixerApp
   and TestCheckPromptsCatchesFieldsThisBuildLacks (the prompt's cases); gitx's
   TestAStagingMergeIsResolvedInTheWorkTreeAndWrittenApartFromItsIndex,

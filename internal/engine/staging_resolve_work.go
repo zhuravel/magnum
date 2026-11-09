@@ -245,6 +245,13 @@ func (w *resolveWork) take(ctx context.Context) error {
 		}
 		return errResolveWaits
 	}
+	role, err := e.resolveRole(job.Repo, resolveRunFor)
+	if err != nil {
+		return err
+	}
+	if why := e.kindPauseReason(ctx, []string{role.AgentKind()}); why != "" {
+		return resolveFail("its agent cannot start: %s", why)
+	}
 	if slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused {
 		// A paused round's sessions go on in its slot later.
 		return wait(fmt.Sprintf("PR #%d's round is in progress (%s)", pr.Number, pr.State))
