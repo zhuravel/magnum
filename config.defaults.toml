@@ -1356,7 +1356,11 @@ stages = [
 #                                         # "open" magnum starts it (a workflow_dispatch run on the PR's branch, as
 #                                         # ci_dispatch_as, else the watch's poll identity) once per head on an own
 #                                         # PR whose required check did not run at the head, once nothing runs
-#                                         # there and past settle_max; never on a PR that changes
+#                                         # there and past settle_max; and, whatever autofix is, 2 minutes after
+#                                         # each push magnum made to a PR (its merge of the PR's parent, a
+#                                         # fixer's push), once per head, never while a run of the workflow on
+#                                         # the PR's branch is in progress, and not for a head it ran at
+#                                         # already; never on a PR that changes
 #                                         # .github/workflows/ or .github/actions/; GitHub refuses a workflow
 #                                         # without a workflow_dispatch trigger; it also makes a required_checks
 #                                         # entry with no run at the head count as not run; default: none (you

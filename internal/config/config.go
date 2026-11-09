@@ -794,8 +794,12 @@ type Repo struct {
 	// that produces the repository's required checks, for a CI that runs
 	// only when a PR opens: under autofix = "open" magnum starts it, at most
 	// once per head, on an own PR whose required check did not run at its
-	// head (see Config.CIDispatch), and a RequiredChecks entry with no run
-	// at a head counts as not run there. "" (the default) starts nothing.
+	// head (see Config.CIDispatch); whatever autofix is, it starts it 2
+	// minutes after each push magnum made to a PR (its merge of the PR's
+	// parent, a fixer's push), once per head, never while a run of the
+	// workflow on the PR's branch is in progress (engine's ciAfterPushes);
+	// and a RequiredChecks entry with no run at a head counts as not run
+	// there. "" (the default) starts nothing.
 	CIDispatch string `toml:"ci_dispatch"`
 
 	// CIDispatchAs names the [[identity]] that starts the CIDispatch
@@ -1359,7 +1363,7 @@ func (c *Config) RequiredChecks(fullName string) []string {
 // fullName ("owner/name", any case) names as the one that produces its
 // required checks (ci_dispatch), "" when none does: autofix = "open"
 // starts it once per head on an own PR whose required check did not run
-// at its head.
+// at its head, and the engine 2 minutes after each push it made to a PR.
 func (c *Config) CIDispatch(fullName string) string {
 	if r := c.RepoFor(fullName); r != nil {
 		return r.CIDispatch
