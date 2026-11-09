@@ -738,7 +738,9 @@ func (d detailsJSON) reviewGate() *ReviewGate {
 
 // activityAt is PRDetails.ActivityAt: the latest of the activity timeline's
 // items, the latest reviews (the timeline may list a review where it was
-// begun, so it can fall out of the last ten), the description edit, the
+// begun, so it can fall out of the last ten), the last two reviews (a reply
+// in a thread, which the timeline never lists and latestReviews leaves out
+// when the PR author wrote it), the description edit, the
 // merge, the close, the opening and the head commit, whose committer date
 // is no push time but never after one: capped at updatedAt, which every push
 // moves, in case the committer's clock ran ahead. Zero when the timeline is
@@ -753,6 +755,11 @@ func (d detailsJSON) activityAt() time.Time {
 	}
 	for _, r := range d.LatestReviews.Nodes {
 		at = latest(at, r.SubmittedAt)
+	}
+	if d.Replies != nil {
+		for _, r := range d.Replies.Nodes {
+			at = latest(at, r.SubmittedAt)
+		}
 	}
 	if nodes := d.HeadCommit.Nodes; len(nodes) > 0 {
 		c := nodes[len(nodes)-1].Commit.CommittedDate

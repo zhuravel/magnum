@@ -634,6 +634,23 @@ func TestDetailsReadsAReplyOnlyReviewTheTimelineLeavesOut(t *testing.T) {
 	}
 }
 
+// A reply in a thread is activity (PRDetails.ActivityAt) though neither the
+// timeline nor latestReviews (which leaves out the PR author) lists it: the
+// live PR's last activity stayed at magnum's review two days before the
+// author's reply. A pending review is no activity.
+func TestTheLastActivityCountsAReplyTheTimelineLeavesOut(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_reply_only.json")}}}}
+	got, _, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{501, 502})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range map[int]string{501: "2026-11-09T13:12:54Z", 502: "2026-11-08T09:00:00Z"} {
+		if at := got[n].ActivityAt.Format(time.RFC3339); at != want {
+			t.Errorf("#%d activity = %s, want %s", n, at, want)
+		}
+	}
+}
+
 func TestCheckStateNormalization(t *testing.T) {
 	runs := map[string][][2]string{ // want -> status, conclusion
 		CheckPassed:  {{"COMPLETED", "SUCCESS"}, {"COMPLETED", "NEUTRAL"}},
