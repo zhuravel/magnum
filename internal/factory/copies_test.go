@@ -498,7 +498,7 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 		run := len(r.scripts)
 		stderr := strings.NewReplacer("{copy}", slot, "{dir}", mc.Dir, "{port}", mc.Env["PORT"],
 			"{time}", r.clock.Now().Add(time.Duration(run)*time.Second).UTC().Format(time.RFC3339),
-			"{took}", fmt.Sprintf("%dms", 100+run), "{tmp}", filepath.Join(os.TempDir(), fmt.Sprintf("worktree-setup.%d.log", run)),
+			"{took}", fmt.Sprintf("%dms", run*run*run+1), "{tmp}", filepath.Join(os.TempDir(), fmt.Sprintf("worktree-setup.%d.log", run)),
 		).Replace(cmp.Or(r.stderrFor[slot], r.setupStderr, "setup failed"))
 		r.mu.Unlock()
 		return execx.Result{Code: 1, Stderr: []byte(stderr)}, &execx.ExitError{Cmd: c, Code: 1, Stderr: stderr}

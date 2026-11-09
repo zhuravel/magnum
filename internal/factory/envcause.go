@@ -61,7 +61,10 @@ var rubyPlaceRe = regexp.MustCompile("^(?:from\\s+)?\\S+:\\d+:in\\s+[`'][^`']*':
 // error's message without the place a Ruby error starts with, redacted (a
 // token or a key is masked), its control characters turned into spaces,
 // valid UTF-8, at most outputLineRunes runes.
-func cleanLine(line string) string {
+func cleanLine(line string) string { return cleanLineMax(line, outputLineRunes) }
+
+// cleanLineMax is cleanLine at most n runes long.
+func cleanLineMax(line string, n int) string {
 	if msg := rubyPlaceRe.ReplaceAllString(line, ""); msg != "" {
 		line = msg
 	}
@@ -71,7 +74,7 @@ func cleanLine(line string) string {
 		}
 		return r
 	}, strings.ToValidUTF8(execx.Redact(line), "�"))
-	return textx.Clip(strings.TrimSpace(s), outputLineRunes)
+	return textx.Clip(strings.TrimSpace(s), n)
 }
 
 // lastLine is the last line of a failed command's stderr out that may say
@@ -85,9 +88,12 @@ func lastLine(out string) string {
 }
 
 // firstLine is the first such line of out, cleaned; "" for none.
-func firstLine(out string) string {
+func firstLine(out string) string { return firstLineMax(out, outputLineRunes) }
+
+// firstLineMax is firstLine at most n runes long.
+func firstLineMax(out string, n int) string {
 	if lines := meaningfulLines(out); len(lines) > 0 {
-		return cleanLine(lines[0])
+		return cleanLineMax(lines[0], n)
 	}
 	return ""
 }

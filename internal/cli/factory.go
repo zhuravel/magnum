@@ -216,9 +216,12 @@ type factoryDaemonJSON struct {
 	Work    []factoryWorkJSON `json:"work,omitempty"`
 }
 
-// factoryHoldJSON is a hold of the machine the running factory daemon keeps.
+// factoryHoldJSON is a hold of the machine the running factory daemon keeps:
+// repo names the repository an infrastructure hold of its copies holds
+// alone (none: the whole machine).
 type factoryHoldJSON struct {
 	Kind   string    `json:"kind"`
+	Repo   string    `json:"repo,omitempty"`
 	Reason string    `json:"reason"`
 	Since  time.Time `json:"since"`
 }
@@ -294,7 +297,7 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 	if asJSON {
 		out := factoryStatusJSON{Daemon: factoryDaemonJSON{Running: pid > 0, PID: pid}, Tasks: []factoryTaskJSON{}}
 		for _, h := range holds {
-			out.Daemon.Holds = append(out.Daemon.Holds, factoryHoldJSON{Kind: h.Kind, Reason: h.Reason, Since: h.Since})
+			out.Daemon.Holds = append(out.Daemon.Holds, factoryHoldJSON{Kind: h.Kind, Repo: h.Repo, Reason: h.Reason, Since: h.Since})
 		}
 		for _, w := range work {
 			out.Daemon.Work = append(out.Daemon.Work, factoryWorkJSON{Kind: w.Kind, Task: w.Task, What: w.What, Since: w.Since})

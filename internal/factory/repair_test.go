@@ -269,3 +269,42 @@ func TestScreenDataShowsARepositorysInfraHoldAsABlocker(t *testing.T) {
 		t.Errorf("blocking long %q, want %q", d.BlockingLong, want)
 	}
 }
+
+// When every copy of a repository now breaks with another shared cause, the
+// hold says so: an event names the new cause, the hold's reason is it, and
+// a NEEDS YOU already raised names it too, with one more alert, as it is
+// news for you.
+func TestANewSharedCauseUpdatesTheRepositorysHoldAndItsNeedsYou(t *testing.T) {
+	h := newHarness(t)
+	first := "bin/worktree-setup exited 1: redis-server: command not found"
+	then := "bin/worktree-setup exited 1: createdb: could not connect to the server"
+	h.copies.setOutages(Outage{Repo: "example/shop", Cause: first})
+	h.tick()
+	h.clock.Add(holdNeedsYou)
+	h.tick()
+	if got := h.e.Blocking(); len(got) != 1 || !strings.Contains(got[0], first) {
+		t.Fatalf("blocking %v, want the first cause", got)
+	}
+
+	h.copies.setOutages(Outage{Repo: "example/shop", Cause: then})
+	h.tick()
+	if hold := h.e.holds[repoHoldKey("example/shop")]; hold == nil || !strings.HasSuffix(hold.Reason, then) {
+		t.Fatalf("the hold %+v, want the new cause", hold)
+	}
+	if !slices.ContainsFunc(h.events(0, "hold"), func(ev registry.Event) bool {
+		return ev.Phase == registry.PhaseInfo && strings.Contains(ev.Text, then)
+	}) {
+		t.Fatalf("hold events %+v, want one that names the new cause", h.events(0, "hold"))
+	}
+	if got := h.e.Blocking(); len(got) != 1 || !strings.Contains(got[0], then) || strings.Contains(got[0], first) {
+		t.Fatalf("blocking %v, want the new cause alone", got)
+	}
+	if n := len(h.events(0, "alert")); n != 2 {
+		t.Fatalf("%d alerts, want one for each cause", n)
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	if n := len(h.events(0, "alert")); n != 2 {
+		t.Fatalf("%d alerts after another tick, want still 2", n)
+	}
+}

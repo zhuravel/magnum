@@ -21337,21 +21337,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and refuses one a claim adds or repairs (`adding`), one another repair works on, one whose row still names an
     owner row (a pinned break keeps its PR), a pinned or held one and one not due (`errNotDue`). A backoff repair that
     cannot run to its end (the stop, a fetch that cannot reach origin, a short disk) puts the copy back as broken
-    with the reason it broke with: the stop counts no try, any other cause counts one.
+    with the reason it broke with: the stop counts no try, any other cause counts one. A stop between the two writes
+    of the slot code's revive (its fields reset, then its move to provisioning) leaves the copy broken with no
+    reason; the repair's end, the start's in a claim too, puts the reason back (`keepReason`). The wait names a copy
+    no repair takes (pinned, held, still a task's) instead of promising it a repair. `magnum factory install` is
+    never held back by a backoff repair, which the wait itself suggests: plain install says it cuts the repair and
+    goes on, and `--drain` waits for none (the restart cuts it, the copy stays broken as it was, and the restarted
+    daemon repairs it again after its guard); `factory status --json` keeps a hold's repository (`repo`).
   - Once per cause. Each try writes a `factory.copy_repair` begin and an ok or a fail event (the start's repair too,
     which wrote one info event before). `factory.copy_broken`, the copy's warning, comes only when the cause differs
     from the one the copy last broke with (its signature, below), and a fail with the same cause is at INFO; the
     engine logs a failed backoff repair at WARN once per cause of each copy, and a repair that worked at INFO.
-  - The infrastructure hold of a repository. A copy's signature (`copySignature`) is its stored reason (its
-    `last_error`) past what failed ("setup failed twice", "its repair failed") and without its setup's log, with the
-    copy's own words (its path, its name wherever it stands, as in its databases, its slug, the env values only it has)
-    and what changes from run to run (dates, times, durations, temporary files under /tmp, /var/folders and the
-    daemon's TMPDIR) put as placeholders. When every copy a repository may have (max_copies, two at least) is broken,
+  - The infrastructure hold of a repository. A copy's signature (`copySignature`) is what failed and its failing
+    line, past what failed ("setup failed twice", "its repair failed") and without its setup's log, with the copy's
+    own words (its path, its name wherever it stands, as in its databases, its slug, the env values only it has, the
+    longest first, since a URL holds its port and the env's map has no order) and what changes from run to run
+    (dates, times, durations, temporary files whose path starts at /tmp, /var/folders or the daemon's TMPDIR, never
+    the copy's own `tmp/`) put as placeholders, then cut to the reason's 200 runes. `markBroken` reads it from the
+    whole line (up to 4,000 runes), before the reason's cut, and keeps it in the kv table beside the reason it
+    belongs to (`factory.copy.<copy>.cause`): words that change in length before the cut no longer split one cause.
+    A reason with no kept cause (another build's, the slot code's) gives the signature of the reason itself. When every copy a repository may have (max_copies, two at least) is broken,
     or being repaired, with one signature, `Copies.Outages` names it, and the engine keeps a `Hold` of kind `infra`
     with the new `Repo` field under its own key (`copyHolds`): one begin event with the cause, holds.json for the
     screen (`infra down: <repo>'s tasks wait for a copy`, the cause on a wide screen), and after 30 minutes the NEEDS
     YOU blocker with one alert that `escalate` gives the machine's infrastructure hold. It lifts itself (`lift`) once
-    the repository has a copy again, or its copies no longer share the cause. It holds no stage and no launch
+    the repository has a copy again, or its copies no longer share the cause. After a restart a copy counts only once
+    its start's repair had its turn (a claim's, or the backoff's first try), so a restart, which may be the fix, raises
+    no hold that its first repair then lifts. Another shared cause changes the reason with an info event and clears
+    the NEEDS YOU, which `escalate` raises again in the same tick with the new cause and one more alert. It holds no
+    stage and no launch
     (`mayLaunch` leaves it out): the repository's tasks wait for a copy anyway, at no cost, and both the start's repair
     in their claims and the backoff's go on. A copy being repaired keeps its cause, so the hold does not lift and
     come back with each try. The tasks' waits name the next repair, never the cause again: "copy: 0 busy, 3 broken
@@ -21366,16 +21380,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   says nothing of a shared cause); the review engine's `depsSignature` as it is (it keeps a command's last stderr
   line, where a copy's reason keeps brokenWhy's first, and it reads the error, where the signature reads the stored
   reason, so a copy broken under an earlier daemon compares too); an overall time bound on a repair (each setup
-  command has `slots.SetupTimeout`, and a repository may have several). `magnum factory install` lists a repair in
-  flight with its words ("repair of the broken copy factory2") under its generic line; its own words for the kind
-  are internal/cli's, which this change leaves alone. Tests: TestABrokenCopyIsRepairedAfter10MinutesThen30ThenEveryHour,
+  command has `slots.SetupTimeout`, and a repository may have several); a prefix match of two cut signatures (it
+  is no equality, and three copies can disagree past the shortest); a heavy lock per repository in the slot code
+  (the factory and the review daemon share that code, and the review daemon's heavy commands are serialized on
+  purpose). The slot code takes its heavy lock per command, so a backoff repair holds it between its steps no
+  longer than a claim's setup does: a failing setup for seconds, one that hangs for up to its 45 minutes, while the
+  other repositories' new copies and releases wait. Tests: TestABrokenCopyIsRepairedAfter10MinutesThen30ThenEveryHour,
   TestTheWaitForABrokenCopyNamesItsNextRepair, TestTheBackoffRepairsNoCopyAClaimWorksOnOrATaskHolds,
   TestAStopCutsABackoffRepairAndLeavesTheCopyAsItWas, TestEveryCopyBrokenTheSameWayIsAnOutageUntilOneIsRepaired,
   TestCopiesBrokenTwoWaysOrWithACopyLeftAreNoOutage, TestAFailedRepairWarnsOncePerCause,
   TestACopysSignatureKeepsTheCauseAndDropsItsOwnWords, TestReplaceWordReplacesOnlyAWholeWord,
   TestABackoffRepairRunsOffTheLoopOneAtATimeAndNeverUnderTheDiskHoldOrADrain,
   TestEveryCopyOfARepositoryBrokenTheSameWayRaisesOneInfraHoldThatARepairLifts,
-  TestAFailedBackoffRepairLogsOncePerCause and TestScreenDataShowsARepositorysInfraHoldAsABlocker; the waits of
+  TestAFailedBackoffRepairLogsOncePerCause, TestScreenDataShowsARepositorysInfraHoldAsABlocker,
+  TestACopysSignatureIsTheSameEveryTimeForEnvValuesThatOverlap, TestACopysSignatureKeepsTheCopysOwnTmpPaths,
+  TestAStopBetweenTheRevivesWritesKeepsTheCopysReason, TestALongCauseIsOneOutageWhateverItsCutLeaves,
+  TestTheWaitPromisesNoRepairOfACopyNoRepairTakes, TestARestartRaisesNoOutageBeforeTheStartsRepair and
+  TestANewSharedCauseUpdatesTheRepositorysHoldAndItsNeedsYou; the cli's TestFactoryInstallCutsABackoffRepairAndGoesOn,
+  TestFactoryInstallDrainWaitsForNoBackoffRepair and TestFactoryStatusJSONKeepsTheRepositoryOfAHold; the waits of
   TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken and TestEachStartRepairsABrokenCopyOnce name the next repair.
   The copies' test rig's fake commands now end with their context, as real ones do.
 

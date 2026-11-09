@@ -479,3 +479,88 @@ func TestFactoryStatusShowsTheDrainAndTheWorkInFlight(t *testing.T) {
 		t.Fatalf("daemon %+v, want the drain's hold and the round", got.Daemon)
 	}
 }
+
+// factoryRepair is a backoff repair of a broken copy that runs.
+var factoryRepair = factory.WorkItem{Kind: factory.WorkRepair, What: "repair of the broken copy factory2", Since: time.Now().Add(-3 * time.Minute)}
+
+// A backoff repair of a broken copy never holds install back, which the
+// copy's wait itself suggests: the restart cuts it, the copy stays broken as
+// it was, and the restarted daemon repairs it again after its guard. Install
+// says so and goes on; other work still holds it back, named without the
+// repair.
+func TestFactoryInstallCutsABackoffRepairAndGoesOn(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	writeFactoryWork(t, dt.ctx.Layout, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{factoryRepair}})
+	if code := dt.run("factory", "install"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	actContains(t, dt.stdout.String(), "cuts the repair of the broken copy factory2 (since "+inspClock(time.Now(), factoryRepair.Since)+
+		"): the copy stays broken as it was, and the restarted factory daemon repairs it again")
+	if reloads(dt) != 1 {
+		t.Fatalf("bootstrap calls %d, want the job reloaded once", reloads(dt))
+	}
+
+	dt, _ = factoryInstallTest(t)
+	writeFactoryWork(t, dt.ctx.Layout, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{factoryRound, factoryRepair}})
+	if code := dt.run("factory", "install"); code != 1 {
+		t.Fatalf("exit %d with a round in flight, want 1; stderr %s", code, dt.stderr)
+	}
+	actContains(t, dt.stderr.String(), "magnum factory install: 1 local review round(s) in flight: local review round 2 of PR-12340")
+	if strings.Contains(dt.stderr.String(), "repair of the broken copy") {
+		t.Fatalf("the refusal names the backoff repair: %s", dt.stderr)
+	}
+}
+
+// --drain waits for no backoff repair: once the daemon holds the drain and
+// nothing else runs, it reloads, and the restart cuts the repair.
+func TestFactoryInstallDrainWaitsForNoBackoffRepair(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{factoryRepair}})
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
+		v, _ := factory.ReadDrain(l)
+		writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{factoryRepair}})
+		return nil
+	}
+	if code := dt.run("factory", "install", "--drain"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	actContains(t, dt.stdout.String(), "drained after 5s: nothing in flight", "cuts the repair of the broken copy factory2")
+	if reloads(dt) != 1 {
+		t.Fatalf("bootstrap calls %d, want the job reloaded once", reloads(dt))
+	}
+}
+
+// `magnum factory status --json` keeps the repository of a repository's
+// infrastructure hold, which holds that repository alone.
+func TestFactoryStatusJSONKeepsTheRepositoryOfAHold(t *testing.T) {
+	dt, _ := factoryInstallTest(t)
+	l := dt.ctx.Layout
+	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{}})
+	b, err := json.Marshal([]factory.Hold{{Kind: factory.HoldInfra, Repo: "example/shop", Since: time.Now(),
+		Reason: "every copy of example/shop broke the same way: bin/worktree-setup exited 1: redis-server: command not found"},
+		{Kind: factory.HoldDisk, Reason: "1.0 GB free under /work, needs 15 GB", Since: time.Now()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsx.WriteFileAtomic(l.FactoryHolds(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := dt.run("factory", "status", "--json"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	var got struct {
+		Daemon struct {
+			Holds []map[string]any `json:"holds"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(dt.stdout.Bytes(), &got); err != nil {
+		t.Fatalf("%v: %s", err, dt.stdout)
+	}
+	if len(got.Daemon.Holds) != 2 || got.Daemon.Holds[0]["repo"] != "example/shop" {
+		t.Fatalf("holds %+v, want the infra hold of example/shop", got.Daemon.Holds)
+	}
+	if _, ok := got.Daemon.Holds[1]["repo"]; ok {
+		t.Fatalf("the disk hold %+v names a repository", got.Daemon.Holds[1])
+	}
+}

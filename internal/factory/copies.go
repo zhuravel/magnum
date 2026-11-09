@@ -323,7 +323,7 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 		wait = fmt.Sprintf("all %d busy", busy)
 	}
 	if broken > 0 {
-		wait += fmt.Sprintf(", %d broken (%s)", broken, c.nextRepairWords(list, broken))
+		wait += fmt.Sprintf(", %d broken (%s)", broken, c.nextRepairWords(list))
 	}
 	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
 		if !names[pool.Slot(n)] {
@@ -402,8 +402,13 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 	if sl.State != store.SlotProvisioning { // a verification failure: the slot code said why
 		stored = store.Deref(sl.LastError)
 	}
+	// The cause is the whole line's, its own and changing words taken out
+	// before the cut (a reason keeps outputLineRunes runes): kept beside the
+	// reason, so the copies broken by one cause read the same.
 	repo, _, _ := c.repoOf(name)
-	b := c.broke(sl, copySignature(repo, sl, stored), backoff)
+	sig := copySignature(repo, sl, what+": "+brokenWhyMax(cause, wholeLineRunes))
+	c.saveCause(ctx, name, stored, sig)
+	b := c.broke(sl, sig, backoff)
 	b.why = why
 	if sl.State == store.SlotProvisioning {
 		if err := c.st.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
@@ -421,15 +426,22 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 // exited (its label) and the first line of its stderr that says why, past
 // mise's warnings that come first (a copy's untrusted config: they named
 // no failure); else the error's first line (a verification's).
-func brokenWhy(cause error) string {
+func brokenWhy(cause error) string { return brokenWhyMax(cause, outputLineRunes) }
+
+// wholeLineRunes bounds the line a broken copy's cause is read from
+// (brokenWhyMax), far past the cut of its reason.
+const wholeLineRunes = 4000
+
+// brokenWhyMax is brokenWhy with its line at most n runes long.
+func brokenWhyMax(cause error, n int) string {
 	if ee, ok := errors.AsType[*execx.ExitError](cause); ok {
 		why := fmt.Sprintf("%s exited %d", cmp.Or(ee.Cmd.Label, firstWord(ee.Cmd.String())), ee.Code)
-		if line := firstLine(ee.Stderr); line != "" {
+		if line := firstLineMax(ee.Stderr, n); line != "" {
 			why += ": " + line
 		}
 		return why
 	}
-	return cleanLine(textx.FirstLine(cause.Error()))
+	return cleanLineMax(textx.FirstLine(cause.Error()), n)
 }
 
 // repairable is a broken copy of repo whose start's repair is still owed
@@ -451,7 +463,7 @@ func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo) (stor
 			continue
 		}
 		if _, ok := copyNumber(repo, sl.Name); ok {
-			c.startRepair(repo, sl)
+			c.startRepair(ctx, repo, sl)
 			return sl, true, nil
 		}
 	}
@@ -487,7 +499,7 @@ func (c *copySet) repair(ctx context.Context, repo config.FactoryRepo, sl store.
 		return c.unrepaired(ctx, sl, err)
 	}
 	c.phase(ctx, sl.Name, "factory.copy_repair", store.PhaseFail, "its repair did not run to its end: "+textx.FirstLine(err.Error()))
-	return err
+	return errors.Join(err, c.keepReason(ctx, sl))
 }
 
 // prepare is the claim protocol, in order: the task's branch created at

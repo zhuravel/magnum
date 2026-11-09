@@ -20,6 +20,7 @@ package factory
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -130,17 +131,54 @@ func (c *copySet) broke(sl store.Slot, cause string, backoff bool) copyBroke {
 // start's is spent, no claim or other repair takes the copy (adding), and
 // the copy is down with the cause it broke with while the repair runs
 // (Outages). The caller holds mu.
-func (c *copySet) startRepair(repo config.FactoryRepo, sl store.Slot) {
+func (c *copySet) startRepair(ctx context.Context, repo config.FactoryRepo, sl store.Slot) {
 	r := c.repairs[sl.Name]
 	if r == nil {
 		r = &copyRepairs{}
 		c.repairs[sl.Name] = r
 	}
 	r.started, r.running = true, true
-	if cause := copySignature(repo, sl, store.Deref(sl.LastError)); cause != "" {
+	if cause := c.causeOf(ctx, repo, sl); cause != "" {
 		r.cause = cause
 	}
 	c.adding[sl.Name] = true
+}
+
+// causeKey is the kv key of copy name's cause: the signature markBroken read
+// from the whole line, beside the reason it belongs to.
+func causeKey(name string) string { return "factory.copy." + name + ".cause" }
+
+// brokeCause is a broken copy's cause as causeKey keeps it.
+type brokeCause struct {
+	Reason string `json:"reason"`
+	Cause  string `json:"cause"`
+}
+
+// saveCause keeps cause, copy name's signature, beside reason, the
+// last_error it broke with. A failed write keeps none: causeOf then reads
+// the reason.
+func (c *copySet) saveCause(ctx context.Context, name, reason, cause string) {
+	if b, err := json.Marshal(brokeCause{Reason: reason, Cause: cause}); err == nil {
+		_ = c.st.SetKV(context.WithoutCancel(ctx), causeKey(name), string(b))
+	}
+}
+
+// causeOf is the cause broken copy sl of repo broke with: the one
+// markBroken kept for its reason, read from the whole line, else (a reason
+// another build or the slot code wrote) its reason's signature; "" for no
+// reason.
+func (c *copySet) causeOf(ctx context.Context, repo config.FactoryRepo, sl store.Slot) string {
+	reason := store.Deref(sl.LastError)
+	if reason == "" {
+		return ""
+	}
+	if v, ok, err := c.st.GetKV(ctx, causeKey(sl.Name)); err == nil && ok {
+		var k brokeCause
+		if json.Unmarshal([]byte(v), &k) == nil && k.Reason == reason && k.Cause != "" {
+			return k.Cause
+		}
+	}
+	return copySignature(repo, sl, reason)
 }
 
 // endRepair notes that the repair of copy name ended.
@@ -193,13 +231,7 @@ func (c *copySet) repairFailed(ctx context.Context, name string, b copyBroke, te
 // stop counts no try (the next start repairs the copy); any other failure
 // counts one, and the backoff tries it again.
 func (c *copySet) unrepaired(ctx context.Context, sl store.Slot, err error) error {
-	// A repair that stopped before the slot code revived the copy left it
-	// broken: the compare-and-set finds nothing to put back.
-	var put error
-	if terr := c.st.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
-		func(u *store.SlotUpdate) { u.Set("last_error", store.Deref(sl.LastError)) }); terr != nil && !errors.Is(terr, store.ErrConflict) {
-		put = fmt.Errorf("put %s back as broken: %w", sl.Name, terr)
-	}
+	put := c.putBack(ctx, sl)
 	if errors.Is(ctx.Err(), context.Canceled) {
 		c.phase(ctx, sl.Name, "factory.copy_repair", store.PhaseFail,
 			"the daemon stopped during its repair: it stays broken as it was, and the next start repairs it")
@@ -219,6 +251,41 @@ func (c *copySet) unrepaired(ctx context.Context, sl store.Slot, err error) erro
 	return err
 }
 
+// putBack puts copy sl back as broken with the reason it broke with (sl's)
+// after a backoff repair that did not run to its end: from provisioning,
+// where the slot code's revive moved it, or from broken with no reason, as
+// a stop between the revive's two writes (its fields reset, then its move)
+// leaves it (keepReason). A repair that stopped before the revive left it
+// as it was.
+func (c *copySet) putBack(ctx context.Context, sl store.Slot) error {
+	err := c.st.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
+		func(u *store.SlotUpdate) { u.Set("last_error", store.Deref(sl.LastError)) })
+	if errors.Is(err, store.ErrConflict) {
+		return c.keepReason(ctx, sl)
+	}
+	if err != nil {
+		return fmt.Errorf("put %s back as broken: %w", sl.Name, err)
+	}
+	return nil
+}
+
+// keepReason writes the reason copy sl broke with (sl's) back to it when a
+// repair left it broken with none: a stop between the two writes of the
+// slot code's revive. Its cause, the wait's words and its repository's hold
+// read that reason.
+func (c *copySet) keepReason(ctx context.Context, sl store.Slot) error {
+	ctx = context.WithoutCancel(ctx)
+	cur, err := c.st.SlotByID(ctx, sl.ID)
+	if err != nil || cur.State != store.SlotBroken || store.Deref(cur.LastError) != "" || store.Deref(sl.LastError) == "" {
+		return err
+	}
+	if err := c.st.TransitionSlot(ctx, sl.ID, []string{store.SlotBroken}, "",
+		func(u *store.SlotUpdate) { u.Set("last_error", store.Deref(sl.LastError)) }); err != nil && !errors.Is(err, store.ErrConflict) {
+		return fmt.Errorf("put the reason of %s back: %w", sl.Name, err)
+	}
+	return nil
+}
+
 // repairAtWords say when a broken copy's next repair comes: "the next
 // repair at 15:40", or "its repair is due" once it has come.
 func repairAtWords(next, now time.Time) string {
@@ -229,32 +296,69 @@ func repairAtWords(next, now time.Time) string {
 }
 
 // nextRepairWords say, in a wait for a copy, when the first of the broken
-// copies in list comes back, and that a restart repairs them now. The
+// copies in list that a repair takes comes back, and that a restart repairs
+// them now, and name each copy no repair takes and why (unrepairable). The
 // caller holds mu.
-func (c *copySet) nextRepairWords(list []store.Slot, broken int) string {
+func (c *copySet) nextRepairWords(list []store.Slot) string {
 	var next time.Time
+	var none []string
+	repairable := 0
 	for _, sl := range list {
-		if r := c.repairs[sl.Name]; sl.State == store.SlotBroken && r != nil && !r.next.IsZero() && (next.IsZero() || r.next.Before(next)) {
+		if sl.State != store.SlotBroken {
+			continue
+		}
+		if why := unrepairable(sl); why != "" {
+			none = append(none, sl.Name+" is "+why)
+			continue
+		}
+		repairable++
+		if r := c.repairs[sl.Name]; r != nil && !r.next.IsZero() && (next.IsZero() || r.next.Before(next)) {
 			next = r.next
 		}
 	}
-	if next.IsZero() {
-		them := "them"
-		if broken == 1 {
-			them = "it"
-		}
-		return "a restart repairs " + them + ": magnum factory install"
+	var parts []string
+	switch {
+	case !next.IsZero():
+		parts = append(parts, repairAtWords(next, c.now())+", or a restart: magnum factory install")
+	case repairable > 0:
+		parts = append(parts, "a restart repairs "+pronoun(repairable)+": magnum factory install")
 	}
-	return repairAtWords(next, c.now()) + ", or a restart: magnum factory install"
+	if len(none) > 0 {
+		parts = append(parts, strings.Join(none, ", ")+": no repair takes "+pronoun(len(none)))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// pronoun is "it" for one, "them" for more.
+func pronoun(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
+}
+
+// unrepairable is why no repair takes broken copy sl ("" for none): it is
+// pinned, held (hold_reason), or its row still names a task's owner row (a
+// pinned break keeps its PR). slots.Repair refuses the first two, and the
+// backoff all three.
+func unrepairable(sl store.Slot) string {
+	switch {
+	case sl.Pinned:
+		return "pinned"
+	case sl.HoldReason != nil:
+		return "held (" + *sl.HoldReason + ")"
+	case sl.PRID != nil:
+		return "still a task's"
+	}
+	return ""
 }
 
 // dueLocked reports whether broken copy sl's backoff repair is due at now:
 // its try has come, no claim or repair works on it (adding, running), and
-// no task holds it (its row names no owner row: a pinned break keeps its
-// PR) nor a pin or a hold. The caller holds mu.
+// nothing keeps it from a repair (unrepairable). The caller holds mu.
 func (c *copySet) dueLocked(sl store.Slot, r *copyRepairs, now time.Time) bool {
-	return sl.State == store.SlotBroken && r != nil && !r.running && !c.adding[sl.Name] && sl.PRID == nil && !sl.Pinned &&
-		sl.HoldReason == nil && !r.next.IsZero() && !now.Before(r.next)
+	return sl.State == store.SlotBroken && r != nil && !r.running && !c.adding[sl.Name] && unrepairable(sl) == "" &&
+		!r.next.IsZero() && !now.Before(r.next)
 }
 
 // RepairDue is the broken copy whose backoff repair is due now, the one
@@ -283,7 +387,7 @@ func (c *copySet) RepairDue(ctx context.Context) (string, error) {
 				continue
 			}
 			if r == nil {
-				r = &copyRepairs{cause: copySignature(repo, sl, store.Deref(sl.LastError))}
+				r = &copyRepairs{cause: c.causeOf(ctx, repo, sl)}
 				c.repairs[sl.Name] = r
 			}
 			if r.next.IsZero() && !r.running { // first seen, or a claim's repair that stopped before it began
@@ -318,7 +422,7 @@ func (c *copySet) Repair(ctx context.Context, name string) error {
 		}
 		return errNotDue
 	}
-	c.startRepair(repo, sl)
+	c.startRepair(ctx, repo, sl)
 	c.mu.Unlock()
 	defer c.endRepair(name)
 	return c.repair(ctx, repo, sl, true)
@@ -333,7 +437,7 @@ func (c *copySet) Outages(ctx context.Context) ([]Outage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("the copies of %s: %w", repo.Repo, err)
 		}
-		if cause := c.outage(repo, list); cause != "" {
+		if cause := c.outage(ctx, repo, list); cause != "" {
 			out = append(out, Outage{Repo: repo.Repo, Cause: cause})
 		}
 	}
@@ -343,8 +447,10 @@ func (c *copySet) Outages(ctx context.Context) ([]Outage, error) {
 // outage is the cause every copy of repo in list broke with ("" for none):
 // each copy the repository may have (max_copies, 2 at least: one copy says
 // nothing of a shared cause) is broken, or provisioning under a repair,
-// which keeps the cause it broke with, and all read the same.
-func (c *copySet) outage(repo config.FactoryRepo, list []store.Slot) string {
+// which keeps the cause it broke with (causeOf), and all read the same. A
+// copy whose start's repair has not had its turn yet (it broke under an
+// earlier daemon, and this start may be its fix) makes none.
+func (c *copySet) outage(ctx context.Context, repo config.FactoryRepo, list []store.Slot) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cause, n := "", 0
@@ -354,9 +460,10 @@ func (c *copySet) outage(repo config.FactoryRepo, list []store.Slot) string {
 		}
 		sig := ""
 		switch r := c.repairs[sl.Name]; {
+		case r == nil || !r.started:
 		case sl.State == store.SlotBroken:
-			sig = copySignature(repo, sl, store.Deref(sl.LastError))
-		case sl.State == store.SlotProvisioning && r != nil && r.running:
+			sig = c.causeOf(ctx, repo, sl)
+		case sl.State == store.SlotProvisioning && r.running:
 			sig = r.cause
 		}
 		if sig == "" || (cause != "" && sig != cause) {
@@ -370,30 +477,36 @@ func (c *copySet) outage(repo config.FactoryRepo, list []store.Slot) string {
 	return cause
 }
 
+// tempPathStart is where a temporary file's path starts: at the start of
+// the text or after a space, a quote, a parenthesis, "=" or ":", never
+// inside another path (the copy's own tmp/ stays).
+const tempPathStart = `(^|[\s'"(=:])`
+
 // The words of a cause that change from copy to copy or from run to run,
 // which a signature leaves out: the times, dates and durations, and the
 // paths of temporary files (the system's, signatureTemps, and those under
-// the daemon's TMPDIR, tempDirRe).
+// the daemon's TMPDIR, tempDirRe), each from where a path starts.
 var (
 	signatureTimes = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b|` +
 		`\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?\b|\b(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+\b`)
-	signatureTemps = regexp.MustCompile(`(?:/private)?/(?:tmp|var/folders)/[^\s'"():;,]*`)
+	signatureTemps = regexp.MustCompile(tempPathStart + `(?:/private)?/(?:tmp|var/folders)/[^\s'"():;,]*`)
 	tempDirRe      = sync.OnceValue(func() *regexp.Regexp {
 		tmp := filepath.Clean(os.TempDir())
 		if tmp == "/" || tmp == "." {
 			return nil
 		}
-		return regexp.MustCompile(regexp.QuoteMeta(tmp) + `/[^\s'"():;,]*`)
+		return regexp.MustCompile(tempPathStart + regexp.QuoteMeta(tmp) + `/[^\s'"():;,]*`)
 	})
 )
 
-// copySignature is the cause a broken copy's reason (text: its last
-// error, as markBroken or the slot code wrote it) words: brokenWhy's line,
-// past what failed (whatSetupTwice, whatRepairFailed) and without its
-// setup's log, with the copy's own words (its path, its name wherever it
-// stands, as in its databases, its database slug, and the env values only
-// it has, its port among them) and what changes from run to run (times,
-// durations, temporary files) put as placeholders. Two copies broken by one
+// copySignature is the cause a broken copy's reason (text: what failed and
+// brokenWhy's line, whole as markBroken reads it or cut as the reason keeps
+// it) words: past what failed (whatSetupTwice, whatRepairFailed) and
+// without its setup's log, with the copy's own words (its path, its name
+// wherever it stands, as in its databases, its database slug, and the env
+// values only it has, its port among them, the longest first) and what
+// changes from run to run (times, durations, temporary files) put as
+// placeholders, then cut to outputLineRunes runes. Two copies broken by one
 // cause read the same, and two causes do not; "" for no reason.
 func copySignature(repo config.FactoryRepo, sl store.Slot, text string) string {
 	s := strings.Join(strings.Fields(text), " ")
@@ -415,17 +528,26 @@ func copySignature(repo config.FactoryRepo, sl store.Slot, text string) string {
 	}
 	if n, ok := copyNumber(repo, sl.Name); ok {
 		env := copyEnv(repo, n)
+		var vals []string
 		for k, tmpl := range repo.Env {
 			if v := env[k]; (strings.Contains(tmpl, "{") || k == RedisOffsetEnv) && len(v) >= 3 {
-				s = replaceWord(s, v, "<copy>")
+				vals = append(vals, v)
 			}
+		}
+		// Longest first, as the copy's own words: a URL holds its port, and
+		// the map's order is Go's to choose.
+		slices.Sort(vals)
+		vals = slices.Compact(vals)
+		slices.SortStableFunc(vals, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+		for _, v := range vals {
+			s = replaceWord(s, v, "<copy>")
 		}
 	}
 	if re := tempDirRe(); re != nil {
-		s = re.ReplaceAllString(s, "<tmp>")
+		s = re.ReplaceAllString(s, "${1}<tmp>")
 	}
-	s = signatureTemps.ReplaceAllString(s, "<tmp>")
-	return signatureTimes.ReplaceAllString(s, "<time>")
+	s = signatureTemps.ReplaceAllString(s, "${1}<tmp>")
+	return textx.Clip(signatureTimes.ReplaceAllString(s, "<time>"), outputLineRunes)
 }
 
 // replaceWord replaces w in s with by where it stands as a word of its own:
@@ -561,7 +683,9 @@ func repoHoldKey(repo string) string { return HoldInfra + ":" + repo }
 // copyHolds keeps an infrastructure hold of each repository whose every
 // copy broke with one cause (Copies.Outages): raised once, with the cause
 // in its reason, and lifted once the repository has a copy again (or its
-// copies no longer share the cause). It is the machine's hold that says the
+// copies no longer share the cause). Another shared cause changes its
+// reason with an event, and a NEEDS YOU it raised comes again with the new
+// cause (escalate, in the same tick). It is the machine's hold that says the
 // cause once, for the screen (holds.json), the events and, past 30 minutes,
 // a NEEDS YOU blocker with one alert (escalate). It holds no stage and no
 // launch (mayLaunch leaves it out): the repository's tasks wait for a copy
@@ -582,7 +706,12 @@ func (e *Engine) copyHolds(ctx context.Context, now time.Time) {
 		in[key] = true
 		reason := "every copy of " + o.Repo + " broke the same way: " + o.Cause
 		if h := e.holds[key]; h != nil {
-			h.Reason = reason
+			if h.Reason != reason { // another shared cause: said once, and a NEEDS YOU raised comes again with it
+				h.Reason = reason
+				e.log.Warn("infrastructure hold of a repository: its copies now break another way", "repo", o.Repo, "cause", o.Cause)
+				e.event(ctx, 0, "hold", registry.PhaseInfo, "infra: the cause changed: "+reason)
+				e.clearBlocker(ctx, key)
+			}
 			continue
 		}
 		e.holds[key] = &Hold{Kind: HoldInfra, Repo: o.Repo, Reason: reason, Since: now}

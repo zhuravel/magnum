@@ -7,7 +7,9 @@ package cli
 // while anything runs, unless --now; with --drain it asks the daemon for a
 // drain (factory.WriteDrain) and waits until the daemon holds it and
 // nothing runs, as daemon-restart and install do for the review daemon
-// (daemon_drain.go).
+// (daemon_drain.go). A backoff repair of a broken copy holds neither back:
+// the restart cuts it, the copy stays broken as it was, and the restarted
+// daemon repairs it again after its guard (cutRepairs says so).
 
 import (
 	"context"
@@ -51,9 +53,10 @@ func factoryDaemonPID(ctx context.Context, c *Context, run execx.Runner) (int, e
 
 // factoryInFlight reads what the factory daemon pid runs that a restart
 // would cut, from its record: the local review rounds and the other work
-// ("precheck of PR-12345 (since 15:04)"), and the record itself (its
-// drain). A record that is missing or another daemon's is
-// errNoFactoryRecord: the caller cannot tell, and fails closed.
+// ("precheck of PR-12345 (since 15:04)"), none of it a backoff repair
+// (cutRepairs), and the record itself (its drain). A record that is
+// missing or another daemon's is errNoFactoryRecord: the caller cannot
+// tell, and fails closed.
 func factoryInFlight(c *Context, pid int) (inFlight, factory.WorkRecord, error) {
 	rec, ok, err := factory.ReadWork(c.Layout)
 	switch {
@@ -65,17 +68,42 @@ func factoryInFlight(c *Context, pid int) (inFlight, factory.WorkRecord, error) 
 	now := time.Now()
 	var out inFlight
 	for _, w := range rec.Work {
-		what := w.What
-		if !w.Since.IsZero() {
-			what += " (since " + inspClock(now, w.Since) + ")"
-		}
-		if w.Kind == factory.WorkRound {
+		what := factoryWorkWords(now, w)
+		switch w.Kind {
+		case factory.WorkRepair:
+		case factory.WorkRound:
 			out.rounds = append(out.rounds, what)
-		} else {
+		default:
 			out.work = append(out.work, what)
 		}
 	}
 	return out, rec, nil
+}
+
+// factoryWorkWords is work w in words, with since when it runs.
+func factoryWorkWords(now time.Time, w factory.WorkItem) string {
+	if w.Since.IsZero() {
+		return w.What
+	}
+	return w.What + " (since " + inspClock(now, w.Since) + ")"
+}
+
+// cutRepairs says which backoff repairs of broken copies the restart that
+// follows cuts, from the factory daemon's record: a repair holds no install
+// back, since the copy stays broken as it was and the restarted daemon
+// repairs it again after its guard.
+func cutRepairs(c *Context) {
+	rec, ok, err := factory.ReadWork(c.Layout)
+	if err != nil || !ok {
+		return
+	}
+	now := time.Now()
+	for _, w := range rec.Work {
+		if w.Kind == factory.WorkRepair {
+			fmt.Fprintf(c.Stdout, "magnum factory install: cuts the %s: the copy stays broken as it was, and the restarted factory "+
+				"daemon repairs it again\n", factoryWorkWords(now, w))
+		}
+	}
 }
 
 // factoryCutShort says what restarting the factory daemon now does to the
@@ -135,7 +163,11 @@ func guardFactoryRestart(ctx context.Context, c *Context, run execx.Runner, f re
 	case pid == 0:
 		return noLift, true
 	case f.drain:
-		return drainFactory(ctx, c, run, pid, f.timeout)
+		lift, ok := drainFactory(ctx, c, run, pid, f.timeout)
+		if ok {
+			cutRepairs(c)
+		}
+		return lift, ok
 	}
 	running, rec, err := factoryInFlight(c, pid)
 	switch {
@@ -143,6 +175,7 @@ func guardFactoryRestart(ctx context.Context, c *Context, run execx.Runner, f re
 		factoryCannotTell(c, pid, err)
 		return noLift, false
 	case running.none():
+		cutRepairs(c)
 		return noLift, true
 	}
 	fmt.Fprintf(c.Stderr, "magnum factory install: %s in flight: %s\n%s\nfix: `magnum factory install --drain` starts nothing new and "+

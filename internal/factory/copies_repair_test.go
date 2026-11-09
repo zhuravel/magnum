@@ -396,6 +396,43 @@ func TestACopysSignatureKeepsTheCauseAndDropsItsOwnWords(t *testing.T) {
 	}
 }
 
+// Env values that hold one another (a port, and a URL on that port) give
+// one cause one signature, however Go orders the env's map: the longest
+// value goes first, as the copy's own words do.
+func TestACopysSignatureIsTheSameEveryTimeForEnvValuesThatOverlap(t *testing.T) {
+	repo := config.FactoryRepo{Repo: "talkable/talkable", CopyName: "factory{n}", Copies: "/work/talkable.factory{n}",
+		Env: map[string]string{"PORT": "30{n}0", "APP_URL": "http://localhost:30{n}0", "API_HOST": "localhost:30{n}0",
+			"REDIS_DB_OFFSET": "{n*16}", "B": "b{n}", "C": "c{n}", "D": "d{n}", "E": "e{n}"}}
+	slot := func(n int) store.Slot {
+		name := repo.Pool().Slot(n)
+		return store.Slot{Name: name, Path: repo.Pool().Path(n)}
+	}
+	why := func(n int) string {
+		return "setup failed twice: bin/worktree-setup exited 1: could not reach http://localhost:" + copyEnv(repo, n)["PORT"] + "/up"
+	}
+	want := copySignature(repo, slot(1), why(1))
+	if !strings.Contains(want, "could not reach <copy>/up") {
+		t.Fatalf("signature %q, want the URL as the copy's own word", want)
+	}
+	for i := range 200 {
+		if got := copySignature(repo, slot(1+i%3), why(1+i%3)); got != want {
+			t.Fatalf("call %d gave %q, want %q every time", i, got, want)
+		}
+	}
+}
+
+// The copy's own temporary files stay in its signature, which names them:
+// only a path that starts at /tmp or /var/folders is a temporary file.
+func TestACopysSignatureKeepsTheCopysOwnTmpPaths(t *testing.T) {
+	repo := config.FactoryRepo{Repo: "talkable/talkable", CopyName: "factory{n}", Copies: "/work/talkable.factory{n}"}
+	sl := store.Slot{Name: "factory1", Path: "/work/talkable.factory1"}
+	got := copySignature(repo, sl, "setup failed twice: bin/worktree-setup exited 1: /work/talkable.factory1/tmp/cache/bootsnap: "+
+		"Permission denied, see /tmp/setup.42.log (file:/private/var/folders/x/T/y.sock)")
+	if want := "bin/worktree-setup exited 1: <copy>/tmp/cache/bootsnap: Permission denied, see <tmp> (file:<tmp>)"; got != want {
+		t.Fatalf("signature %q, want %q", got, want)
+	}
+}
+
 // replaceWord replaces a word where it stands alone, never inside another
 // word, and ends whatever the replacement holds.
 func TestReplaceWordReplacesOnlyAWholeWord(t *testing.T) {
@@ -409,5 +446,101 @@ func TestReplaceWordReplacesOnlyAWholeWord(t *testing.T) {
 		if got := replaceWord(tc.s, tc.w, tc.by); got != tc.want {
 			t.Errorf("replaceWord(%q, %q) = %q, want %q", tc.s, tc.w, got, tc.want)
 		}
+	}
+}
+
+// A stop that lands between the two writes of the slot code's revive (the
+// reset of the copy's fields, then its move to provisioning) leaves the copy
+// broken with no reason; the repair's end puts its reason back, so its
+// cause and its repository's hold stay.
+func TestAStopBetweenTheRevivesWritesKeepsTheCopysReason(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	r.setupStderr = "redis-server: command not found"
+	r.breakAll("factory1")
+	before := r.slot("factory1")
+	if err := r.st.UpdateSlotFields(r.ctx, before.ID, func(u *store.SlotUpdate) { u.Set("last_error", nil) }); err != nil {
+		t.Fatal(err) // what the revive's first write leaves
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	cancel()
+	if err := r.c.unrepaired(ctx, before, ctx.Err()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unrepaired = %v, want the stop", err)
+	}
+	if sl := r.slot("factory1"); sl.State != store.SlotBroken || store.Deref(sl.LastError) != store.Deref(before.LastError) {
+		t.Fatalf("factory1 = %s (%q), want broken with %q", sl.State, store.Deref(sl.LastError), store.Deref(before.LastError))
+	}
+}
+
+// A cause whose line is longer than a reason keeps (outputLineRunes) is one
+// cause for every copy, whatever the length of the words that change from
+// copy to copy before the cut.
+func TestALongCauseIsOneOutageWhateverItsCutLeaves(t *testing.T) {
+	r := newCopiesRig(t, 3)
+	r.setupStderr = "createdb talkable_test__{copy} at {time} ({took}): " + strings.Repeat("the role is not there, ", 12) +
+		"redis-server: command not found"
+	r.breakAll("factory1", "factory2", "factory3")
+	reasons := map[string]bool{}
+	for _, n := range []string{"factory1", "factory2", "factory3"} {
+		reasons[strings.TrimSuffix(strings.Split(store.Deref(r.slot(n).LastError), " (its setup's log")[0], "…")] = true
+	}
+	if len(reasons) != 3 {
+		t.Fatalf("the reasons %v, want three cuts: the test needs a cut that falls at three places", reasons)
+	}
+	if outs, err := r.c.Outages(r.ctx); err != nil || len(outs) != 1 {
+		t.Fatalf("Outages = %+v, %v; want one: one cause", outs, err)
+	}
+	r.c = r.newCopies() // the cause is the store's: a restart reads it the same
+	r.failSetup["factory1"], r.failSetup["factory2"], r.failSetup["factory3"] = 1, 1, 1
+	if _, err := r.c.Claim(r.ctx, r.task("PR-2")); !errors.Is(err, ErrNoCopy) {
+		t.Fatalf("Claim = %v, want ErrNoCopy", err)
+	}
+	if outs, err := r.c.Outages(r.ctx); err != nil || len(outs) != 1 {
+		t.Fatalf("Outages after a restart = %+v, %v; want one", outs, err)
+	}
+}
+
+// A copy no repair takes (pinned, held, or still a task's) makes no promise
+// of a repair in the wait: the wait names why instead.
+func TestTheWaitPromisesNoRepairOfACopyNoRepairTakes(t *testing.T) {
+	r := newCopiesRig(t, 2)
+	r.breakAll("factory1", "factory2")
+	one, two := r.slot("factory1"), r.slot("factory2")
+	if err := r.st.UpdateSlotFields(r.ctx, one.ID, func(u *store.SlotUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.UpdateSlotFields(r.ctx, two.ID, func(u *store.SlotUpdate) { u.Set("hold_reason", slots.HoldDirtyWorktree) }); err != nil {
+		t.Fatal(err)
+	}
+	r.clock.Add(time.Hour)
+	_, err := r.c.Claim(r.ctx, r.task("PR-2"))
+	want := "copy: 0 busy, 2 broken (factory1 is pinned, factory2 is held (" + slots.HoldDirtyWorktree + "): no repair takes them)"
+	if !errors.Is(err, ErrNoCopy) || err.Error() != want {
+		t.Fatalf("Claim = %v, want %s", err, want)
+	}
+}
+
+// A restart raises no repository hold before the start's repair has had its
+// turn: the copies broke under an earlier daemon, and the restart may be the
+// fix. Once the start's repairs failed the same way, the hold is back.
+func TestARestartRaisesNoOutageBeforeTheStartsRepair(t *testing.T) {
+	r := newCopiesRig(t, 2)
+	r.setupStderr = "redis-server: command not found"
+	r.breakAll("factory1", "factory2")
+	if outs, _ := r.c.Outages(r.ctx); len(outs) != 1 {
+		t.Fatalf("Outages = %+v, want one", outs)
+	}
+	r.c = r.newCopies()
+	if _, err := r.c.RepairDue(r.ctx); err != nil { // the first tick sees the copies broken
+		t.Fatal(err)
+	}
+	if outs, err := r.c.Outages(r.ctx); err != nil || len(outs) != 0 {
+		t.Fatalf("Outages after a restart = %+v, %v; want none before the start's repair", outs, err)
+	}
+	r.failSetup["factory1"], r.failSetup["factory2"] = 1, 1
+	if _, err := r.c.Claim(r.ctx, r.task("PR-2")); !errors.Is(err, ErrNoCopy) {
+		t.Fatalf("Claim = %v, want ErrNoCopy after the start's repairs failed", err)
+	}
+	if outs, err := r.c.Outages(r.ctx); err != nil || len(outs) != 1 {
+		t.Fatalf("Outages after the start's repairs failed = %+v, %v; want one", outs, err)
 	}
 }
