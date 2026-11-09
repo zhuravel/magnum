@@ -45,8 +45,8 @@ func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
 	}
 	record(earlyJudge, []Finding{{FindingID: "F1", Title: "An early finding", Severity: "P1", Path: "app/a.rb", Line: 3, Verdict: FindingPosted}})
 	_ = early
-	roundRun(t, st, other.ID, 1, RoleJudge, "o1", 300, 20*time.Minute) // another PR's
-	start := roundRun(t, st, pr.ID, 2, RoleClaude, "h1", 0, time.Hour) // round 2 began on h1
+	roundRun(t, st, other.ID, 1, RoleJudge, "o1", 300, 20*time.Minute)     // another PR's
+	start := roundRun(t, st, pr.ID, 2, RoleClaude, "h1", 0, time.Hour)     // round 2 began on h1
 	roundRun(t, st, pr.ID, 2, RoleJudge, "h2", 0, time.Hour+5*time.Minute) // a judge run that failed
 	judge := roundRun(t, st, pr.ID, 2, RoleJudge, "h2", 101, time.Hour+10*time.Minute)
 	record(judge, []Finding{

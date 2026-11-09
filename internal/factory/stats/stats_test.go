@@ -695,7 +695,7 @@ func TestStatsShowTheFixLoopsOnTheTasksPRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"pr":"example/app#4530","fix_loops":{"by_hand":1,"by_autofix":2}`, `"fix_loops_by_hand":1`} {
+	for _, want := range []string{`"pr":"example/app#4530","fix_loops":{"by_hand":1,"by_autofix":2,"pushes":0,"commits":0}`, `"fix_loops_by_hand":1`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("the JSON lacks %s:\n%s", want, js)
 		}
@@ -708,5 +708,123 @@ func TestStatsShowTheFixLoopsOnTheTasksPRs(t *testing.T) {
 	if !strings.Contains(md, "magnum's registry was not read (magnum's registry is at schema 40 and this build needs 41): no fix loop is counted") ||
 		strings.Contains(md, "by hand on factory PRs") {
 		t.Errorf("an unread registry:\n%s", md)
+	}
+}
+
+// publish links task's PR number and moves the task to published.
+func publish(t *testing.T, r *registry.Registry, task registry.Task, number int) {
+	t.Helper()
+	ctx := t.Context()
+	if err := r.LinkPR(ctx, registry.PRLink{TaskID: task.ID, Repo: "example/app", Number: number, Branch: "zhuravel-" + task.JiraKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.TransitionTask(ctx, task.ID, nil, registry.TaskPublished, func(u *registry.TaskUpdate) { u.Set("pr_number", number) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The quality part counts, per task with a PR and in total, what the local
+// review missed at magnum's first posted round (by priority, those with no
+// line apart, or "not yet" before such a round), the fixers' pushes and
+// commits after the publish (from magnum's registry, SetFixLoops), and the
+// PR's CI failures after the publish (GitHub's ci checks), those not ours
+// apart; in the markdown and in the JSON. A task without a PR has none.
+func TestStatsShowTheQualityOfThePublishedPRs(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	checked, waiting := createTask(t, r, "PR-12330"), createTask(t, r, "PR-12331")
+	createTask(t, r, "PR-12332")
+	publish(t, r, checked, 4530)
+	publish(t, r, waiting, 4531)
+	cy, err := r.BeginCycle(ctx, checked.ID, "abc123", "skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	near, err := r.SeeFinding(ctx, cy.ID, registry.Finding{Fingerprint: "app/a.rb:10:x", Path: "app/a.rb", StartLine: 10, EndLine: 10, Priority: "P2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.RecordEscapeCheck(ctx, registry.EscapeCheck{TaskID: checked.ID, RunID: "r-1", Round: 1, HeadSHA: "abc123", Posted: 5, Comparable: 1},
+		[]registry.Escape{
+			{FindingID: 1, Path: "app/b.rb", StartLine: 3, EndLine: 3, Priority: "P2", Reason: registry.EscapeNoLocal},
+			{FindingID: 2, Path: "app/a.rb", StartLine: 20, EndLine: 20, Priority: "P1", Reason: registry.EscapeFar, NearestID: near.ID, Distance: 10},
+			{FindingID: 3, Priority: "P0", Reason: registry.EscapeUnplaced},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ci := range [][3]string{{"abc123", registry.CheckFail, ""}, {"abc123", registry.CheckPass, ""}, {"def456", registry.CheckFail, "not_ours"},
+		{"fed789", registry.CheckFail, ""}} {
+		if _, err := r.RecordGitHubCI(ctx, checked.ID, ci[0], ci[1], ci[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.RecordCheck(ctx, registry.Check{TaskID: checked.ID, HeadSHA: "abc123", Kind: registry.CheckSpec, Result: registry.CheckFail,
+		Source: "factory"}); err != nil { // the factory's own precheck: no CI after the publish
+		t.Fatal(err)
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := only(t, rep, "PR-12330").Quality
+	if q == nil || q.Escapes == nil || *q.Escapes != (stats.Escapes{Posted: 5, P0: 1, P1: 1, P2: 1, Unplaced: 1}) || q.Escapes.Total() != 3 ||
+		q.CIFailed != 2 || q.CINotOurs != 1 {
+		t.Errorf("the checked task's quality %+v (escapes %+v)", q, q.Escapes)
+	}
+	if q := only(t, rep, "PR-12331").Quality; q == nil || q.Escapes != nil || q.CIFailed != 0 {
+		t.Errorf("the task with no posted round yet: %+v, want its escapes not yet", q)
+	}
+	if q := only(t, rep, "PR-12332").Quality; q != nil {
+		t.Errorf("a task without a PR has quality %+v", q)
+	}
+
+	rep.SetFixLoops(map[stats.PR]stats.FixLoops{{Repo: "example/app", Number: 4530}: {ByAutofix: 1, Pushes: 2, Commits: 3}}, "")
+	md := rep.Markdown()
+	for _, want := range []string{
+		"## The quality of the published PRs",
+		"| Task | PR | Escapes at the first posted round | Fix pushes after the publish | CI failures after the publish |",
+		"| PR-12330 | example/app#4530 | 3 of 5 posted (P0 1, P1 1, P2 1; 1 with no line) | 2 (3 commits) | 2, and 1 not ours |",
+		"| PR-12331 | example/app#4531 | not yet | 0 (0 commits) | 0 |",
+		"In total over 2 PRs: 3 escapes at 1 checked PR (P0 1, P1 1, P2 1; 1 with no line), 1 not yet; 2 fix pushes (3 commits); " +
+			"2 CI failures after the publish, and 1 not ours.",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "| PR-12332 | example") {
+		t.Errorf("a task without a PR has a quality row:\n%s", md)
+	}
+	js, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"pr":"example/app#4530","fix_loops":{"by_hand":0,"by_autofix":1,"pushes":2,"commits":3},` +
+			`"quality":{"escapes":{"posted":5,"p0":1,"p1":1,"p2":1,"unplaced":1,"total":3},"ci_failed":2,"ci_failed_not_ours":1}}`,
+		`"pr":"example/app#4531","fix_loops":{"by_hand":0,"by_autofix":0,"pushes":0,"commits":0},` +
+			`"quality":{"escapes":null,"ci_failed":0,"ci_failed_not_ours":0}}`,
+		`"quality":{"prs":2,"checked":1,"not_yet":1,"posted":5,"escapes":3,"p0":1,"p1":1,"p2":1,"unplaced":1,"ci_failed":2,"ci_failed_not_ours":1,` +
+			`"fix_pushes":2,"fix_commits":3}`,
+	} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("the JSON lacks %s:\n%s", want, js)
+		}
+	}
+	if strings.Contains(string(js), `"key":"PR-12332","typed":0,"step_starts":0,"approvals":0,"corrections":0,"access":0,"unknown_origin":0,`+
+		`"answer_batches":0,"decisions":0,"review_rounds":0,"operator_secs":0,"waited_on_you_secs":0,"start_to_ready_secs":0,"quality"`) {
+		t.Errorf("a task without a PR has quality in the JSON:\n%s", js)
+	}
+
+	unread := rep
+	unread.SetFixLoops(nil, "magnum's registry is at schema 40 and this build needs 41")
+	md = unread.Markdown()
+	if !strings.Contains(md, "| PR-12330 | example/app#4530 | 3 of 5 posted (P0 1, P1 1, P2 1; 1 with no line) | - | 2, and 1 not ours |") ||
+		!strings.Contains(md, "1 not yet; fix pushes not read; 2 CI failures") {
+		t.Errorf("an unread magnum registry leaves the fix pushes unknown:\n%s", md)
+	}
+	if js, _ := json.Marshal(unread); strings.Contains(string(js), "fix_pushes") {
+		t.Errorf("an unread magnum registry counts fix pushes:\n%s", js)
 	}
 }

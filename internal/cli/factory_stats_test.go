@@ -682,3 +682,99 @@ func TestStatsCountsManualFixStartsOnFactoryPRs(t *testing.T) {
 		}
 	}
 }
+
+// Stats shows the quality of the factory's published PRs, in the markdown
+// and in --json: what the local review missed at magnum's first posted
+// round (from the factory's registry), the fixers' pushes and commits on
+// the PR (from magnum's registry, read only) and the CI failures after the
+// publish; a published task magnum posted no round on yet reads "not yet".
+func TestFactoryStatsShowsTheQualityOfThePublishedPRs(t *testing.T) {
+	storetest.Serial(t)
+	dt := newDaemonGroupTest(t)
+	checked := seedStatsTask(t, dt, "PR-12340", time.Time{}, nil, 0)
+	waiting := seedStatsTask(t, dt, "PR-12341", time.Time{}, nil, 0)
+	reg, err := registry.Open(dt.ctx.Layout.FactoryDB(), registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i, task := range []registry.Task{checked, waiting} {
+		n := 4540 + i
+		if err := reg.LinkPR(ctx, registry.PRLink{TaskID: task.ID, Repo: "example/shop", Number: n, Branch: "zhuravel-" + task.JiraKey}); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.TransitionTask(ctx, task.ID, nil, registry.TaskPublished, func(u *registry.TaskUpdate) { u.Set("pr_number", n) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := reg.RecordEscapeCheck(ctx, registry.EscapeCheck{TaskID: checked.ID, RunID: "r-1", Round: 1, HeadSHA: "abc123", Posted: 2},
+		[]registry.Escape{{FindingID: 7, Path: "app/models/credit.rb", StartLine: 40, EndLine: 40, Priority: "P2", Reason: registry.EscapeNoLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.RecordGitHubCI(ctx, checked.ID, "abc123", registry.CheckFail, ""); err != nil {
+		t.Fatal(err)
+	}
+	reg.Close()
+	st := storetest.OpenFile(t, dt.ctx.Layout.DB())
+	if _, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_shop", Owner: "example", Name: "shop", Mode: store.RepoModePerPR}); err != nil {
+		t.Fatal(err)
+	}
+	subject := "pr:example/shop#4540"
+	for _, ev := range []struct {
+		kind string
+		data map[string]any
+	}{{"fix.start", map[string]any{"cycle": 1, "by": engine.AutofixBy}}, {"fix.pushed", map[string]any{"cycle": 1, "commits": 2}}} {
+		data, err := json.Marshal(ev.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AppendEvent(ctx, store.Event{Subject: &subject, Kind: ev.kind, Message: ev.kind, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := dt.run("factory", "stats"); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	out := dt.stdout.String()
+	for _, want := range []string{
+		"## The quality of the published PRs",
+		"| PR-12340 | example/shop#4540 | 1 of 2 posted (P0 0, P1 0, P2 1) | 1 (2 commits) | 1 |",
+		"| PR-12341 | example/shop#4541 | not yet | 0 (0 commits) | 0 |",
+		"In total over 2 PRs: 1 escape at 1 checked PR (P0 0, P1 0, P2 1), 1 not yet; 1 fix push (2 commits); 1 CI failure after the publish.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, out)
+		}
+	}
+	dt.stdout.Reset()
+	if code := dt.run("factory", "stats", "--json"); code != 0 {
+		t.Fatalf("--json: exit %d, stderr: %s", code, dt.stderr)
+	}
+	var rep struct {
+		Tasks []struct {
+			Key      string          `json:"key"`
+			FixLoops *stats.FixLoops `json:"fix_loops"`
+			Quality  *struct {
+				Escapes *struct {
+					Posted int `json:"posted"`
+					P2     int `json:"p2"`
+					Total  int `json:"total"`
+				} `json:"escapes"`
+				CIFailed int `json:"ci_failed"`
+			} `json:"quality"`
+		} `json:"tasks"`
+		Quality *stats.QualityTotals `json:"quality"`
+	}
+	if err := json.Unmarshal(dt.stdout.Bytes(), &rep); err != nil {
+		t.Fatalf("%v:\n%s", err, dt.stdout)
+	}
+	if len(rep.Tasks) != 2 || rep.Tasks[0].Quality == nil || rep.Tasks[0].Quality.Escapes == nil || rep.Tasks[0].Quality.Escapes.Total != 1 ||
+		rep.Tasks[0].Quality.Escapes.Posted != 2 || rep.Tasks[0].Quality.CIFailed != 1 || rep.Tasks[0].FixLoops == nil ||
+		rep.Tasks[0].FixLoops.Commits != 2 || rep.Tasks[1].Quality == nil || rep.Tasks[1].Quality.Escapes != nil {
+		t.Errorf("the JSON's tasks:\n%s", dt.stdout)
+	}
+	if q := rep.Quality; q == nil || q.Checked != 1 || q.NotYet != 1 || q.Escapes != 1 || q.P2 != 1 || q.CIFailed != 1 || q.FixPushes == nil ||
+		*q.FixPushes != 1 || *q.FixCommits != 2 {
+		t.Errorf("the JSON's totals %+v:\n%s", q, dt.stdout)
+	}
+}

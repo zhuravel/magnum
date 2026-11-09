@@ -489,6 +489,28 @@ func TestFixLoopsCountsTheLoopsOfAPRByWhoStartedThem(t *testing.T) {
 	}
 }
 
+// FixLoopsOf counts the fixers' pushes on a PR too, and the commits they
+// pushed (an event that names no count is one commit): the fix-loop commits
+// after the publish that `magnum factory stats` shows.
+func TestFixLoopsCountTheFixersPushesAndCommits(t *testing.T) {
+	l, st := magnumLayout(t)
+	magnumPR(t, st, 7, strings.Repeat("ab", 20), nil)
+	fixStart(t, st, 7, 1, engine.AutofixBy)
+	fixEvent(t, st, 7, "fix.pushed", map[string]any{"cycle": 1, "commits": 2})
+	fixStart(t, st, 7, 2, engine.AutofixBy)
+	fixEvent(t, st, 7, "fix.pushed", map[string]any{"cycle": 2, "commits": 1})
+	fixEvent(t, st, 7, "fix.pushed", map[string]any{"cycle": 2})
+	fixEvent(t, st, 7, "fix.replied", map[string]any{"cycle": 2, "commits": 9})
+	seven := PRRef{"example/shop", 7}
+	got, err := FixLoopsOf(t.Context(), l, []PRRef{seven})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (FixLoops{ByAutofix: 1, Pushes: 3, Commits: 4}); got[seven] != want {
+		t.Errorf("%+v, want %+v", got[seven], want)
+	}
+}
+
 // fixEvent records a fix event of magnum's of kind on PR #n of
 // example/shop, with data.
 func fixEvent(t *testing.T, st *store.Store, n int, kind string, data map[string]any) {

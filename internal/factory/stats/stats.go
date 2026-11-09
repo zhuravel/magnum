@@ -44,13 +44,15 @@ const cardCap = 30 * time.Minute
 // time to measure). WaitedOnYou is how long the task waited on the operator,
 // asleep or not (its spans that wait on "you"). StartToReady is how long it
 // took to reach the ready card (zero before it does). PR is the task's PR
-// (zero before it has one), and FixLoops the fix loops magnum started on it
-// (nil: not counted, SetFixLoops).
+// (zero before it has one), FixLoops the fix loops magnum started on it
+// (nil: not counted, SetFixLoops), and Quality what the PR said of the
+// factory's work after the publish (nil for a task without a PR).
 type TaskStats struct {
 	TaskID   int64
 	Key      string
 	PR       PR
 	FixLoops *FixLoops
+	Quality  *Quality
 
 	Typed, StepStarts, Approvals, Corrections, Access int
 	UnknownOrigin                                     int
@@ -77,10 +79,52 @@ func (p PR) String() string {
 
 // FixLoops counts the fix loops magnum started on a PR: by hand (`magnum
 // fix`, f on the board) and by autofix. The loops started by hand are the
-// "no manual start" measure: the target is zero.
+// "no manual start" measure: the target is zero. Pushes and Commits are the
+// fixers' pushes on the PR and the commits they pushed: the fix-loop
+// commits after the publish, a measure of what the factory's PR still
+// needed.
 type FixLoops struct {
 	ByHand    int `json:"by_hand"`
 	ByAutofix int `json:"by_autofix"`
+	Pushes    int `json:"pushes"`
+	Commits   int `json:"commits"`
+}
+
+// Quality is what a task's published PR said of the factory's work after
+// the publish: Escapes what the local review missed at magnum's first
+// posted round on the PR (nil: not yet, magnum has posted no round since
+// the publish), CIFailed the failed CI on the PR's heads (GitHub's ci
+// checks, one per head and result) but those marked not ours, and
+// CINotOurs those apart.
+type Quality struct {
+	Escapes   *Escapes `json:"escapes"`
+	CIFailed  int      `json:"ci_failed"`
+	CINotOurs int      `json:"ci_failed_not_ours"`
+}
+
+// Escapes counts what the local review missed at magnum's first posted
+// round on a task's PR (the registry's escape check): Posted is how many
+// P0 to P2 findings that round posted, P0, P1 and P2 the escapes by
+// priority (the P0 to P2 findings no local finding caught), and Unplaced
+// those of them with no line any local finding could be near (a finding of
+// the review's body, say).
+type Escapes struct {
+	Posted, P0, P1, P2, Unplaced int
+}
+
+// Total is the escapes of every priority.
+func (e Escapes) Total() int { return e.P0 + e.P1 + e.P2 }
+
+// MarshalJSON writes the counts with fixed keys, and their total.
+func (e Escapes) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Posted   int `json:"posted"`
+		P0       int `json:"p0"`
+		P1       int `json:"p1"`
+		P2       int `json:"p2"`
+		Unplaced int `json:"unplaced"`
+		Total    int `json:"total"`
+	}{e.Posted, e.P0, e.P1, e.P2, e.Unplaced, e.Total()})
 }
 
 // IsTyped reports whether an input of the kind holds the operator's own
@@ -131,8 +175,9 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		StartToReady  int64     `json:"start_to_ready_secs"`
 		PR            string    `json:"pr,omitempty"`
 		FixLoops      *FixLoops `json:"fix_loops,omitempty"`
+		Quality       *Quality  `json:"quality,omitempty"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
-		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.PR.String(), t.FixLoops})
+		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.PR.String(), t.FixLoops, t.Quality})
 }
 
 func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.Second) }
@@ -191,12 +236,71 @@ func (r Report) MarshalJSON() ([]byte, error) {
 		byHand = &n
 	}
 	return json.Marshal(struct {
-		Since          *time.Time  `json:"since"`
-		Tasks          []TaskStats `json:"tasks"`
-		Baseline       *Baseline   `json:"baseline"`
-		FixLoopsByHand *int        `json:"fix_loops_by_hand,omitempty"`
-		FixLoopsUnread string      `json:"fix_loops_unread,omitempty"`
-	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread})
+		Since          *time.Time     `json:"since"`
+		Tasks          []TaskStats    `json:"tasks"`
+		Baseline       *Baseline      `json:"baseline"`
+		FixLoopsByHand *int           `json:"fix_loops_by_hand,omitempty"`
+		FixLoopsUnread string         `json:"fix_loops_unread,omitempty"`
+		Quality        *QualityTotals `json:"quality,omitempty"`
+	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread, r.Quality()})
+}
+
+// QualityTotals are the quality numbers over a report's tasks with a PR:
+// how many PRs, how many were checked for escapes and how many are not yet,
+// the P0 to P2 findings the checked ones' first posted rounds posted, the
+// escapes in all and by priority with those with no line apart, the CI
+// failures after the publish with those not ours apart, and, when
+// SetFixLoops read them, the fixers' pushes and their commits (nil: not
+// read).
+type QualityTotals struct {
+	PRs        int  `json:"prs"`
+	Checked    int  `json:"checked"`
+	NotYet     int  `json:"not_yet"`
+	Posted     int  `json:"posted"`
+	Escapes    int  `json:"escapes"`
+	P0         int  `json:"p0"`
+	P1         int  `json:"p1"`
+	P2         int  `json:"p2"`
+	Unplaced   int  `json:"unplaced"`
+	CIFailed   int  `json:"ci_failed"`
+	CINotOurs  int  `json:"ci_failed_not_ours"`
+	FixPushes  *int `json:"fix_pushes,omitempty"`
+	FixCommits *int `json:"fix_commits,omitempty"`
+}
+
+// Quality totals the report's tasks with a PR (Quality); nil when no task
+// has one.
+func (r Report) Quality() *QualityTotals {
+	var q QualityTotals
+	pushes, commits := 0, 0
+	for _, t := range r.Tasks {
+		if t.Quality == nil {
+			continue
+		}
+		q.PRs++
+		q.CIFailed += t.Quality.CIFailed
+		q.CINotOurs += t.Quality.CINotOurs
+		if t.FixLoops != nil {
+			pushes += t.FixLoops.Pushes
+			commits += t.FixLoops.Commits
+		}
+		e := t.Quality.Escapes
+		if e == nil {
+			q.NotYet++
+			continue
+		}
+		q.Checked++
+		q.Posted += e.Posted
+		q.Escapes += e.Total()
+		q.P0, q.P1, q.P2, q.Unplaced = q.P0+e.P0, q.P1+e.P1, q.P2+e.P2, q.Unplaced+e.Unplaced
+	}
+	if q.PRs == 0 {
+		return nil
+	}
+	if r.FixLoopsRead {
+		q.FixPushes, q.FixCommits = &pushes, &commits
+	}
+	return &q
 }
 
 func nonNilTasks(ts []TaskStats) []TaskStats {
@@ -262,12 +366,16 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	} else if err != nil && !errors.Is(err, registry.ErrNotFound) {
 		return TaskStats{}, err
 	}
+	var quality *Quality
 	if pr.Number <= 0 {
 		pr = PR{}
+	} else if quality, err = qualityOf(ctx, reg, t.ID); err != nil {
+		return TaskStats{}, err
 	}
 	batches, onQuestions := answeredBatches(questions)
-	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, AnswerBatches: batches, Decisions: len(decisions), ReviewRounds: len(cycles),
-		OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now), StartToReady: startToReady(spans)}
+	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, Quality: quality, AnswerBatches: batches, Decisions: len(decisions),
+		ReviewRounds: len(cycles), OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
+		StartToReady: startToReady(spans)}
 	for _, in := range inputs {
 		switch {
 		case in.Kind == registry.InputPaneTyped && in.Origin != registry.OriginHerdr:
@@ -294,6 +402,50 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 		}
 	}
 	return ts, nil
+}
+
+// qualityOf is what task id's PR said of the factory's work after the
+// publish, from the registry: its escape check and escapes (none stored:
+// not yet), and its failed CI checks of GitHub's, those not ours apart.
+func qualityOf(ctx context.Context, reg *registry.Registry, id int64) (*Quality, error) {
+	q := &Quality{}
+	switch c, err := reg.EscapeCheck(ctx, id); {
+	case err == nil:
+		es, err := reg.Escapes(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		q.Escapes = &Escapes{Posted: c.Posted}
+		for _, e := range es {
+			switch e.Priority {
+			case "P0":
+				q.Escapes.P0++
+			case "P1":
+				q.Escapes.P1++
+			case "P2":
+				q.Escapes.P2++
+			}
+			if e.Reason == registry.EscapeUnplaced {
+				q.Escapes.Unplaced++
+			}
+		}
+	case !errors.Is(err, registry.ErrNotFound):
+		return nil, err
+	}
+	checks, err := reg.Checks(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range checks {
+		switch {
+		case c.Kind != registry.CheckCI || c.Source != registry.SourceGitHub || c.Result != registry.CheckFail:
+		case c.Cause == registry.CauseNotOurs:
+			q.CINotOurs++
+		default:
+			q.CIFailed++
+		}
+	}
+	return q, nil
 }
 
 // taskKey names a task as the factory's screens do: its Jira key, else
@@ -434,6 +586,7 @@ func (r Report) Markdown() string {
 		b.WriteString("\nOrigin unknown: turns typed in a pane that nothing proves you typed, kept for evaluation only and never counted as typed.\n")
 	}
 	r.fixLoopsMarkdown(&b)
+	r.qualityMarkdown(&b)
 	b.WriteString("\n## Against the baseline\n\n")
 	bl := r.Baseline
 	if bl == nil {
@@ -481,6 +634,94 @@ func (r Report) fixLoopsMarkdown(b *strings.Builder) {
 	}
 	fmt.Fprintf(b, "\nFix loops started by hand on factory PRs: %d. A loop you start by hand (f on the board, `magnum fix`) is one "+
 		"autofix did not start: the target is zero. Counted from magnum's events, which it keeps for [daemon] keep_events.\n", r.fixLoopsByHand())
+}
+
+// qualityMarkdown is the section of the published PRs' quality, when a
+// task has a PR: per task, the escapes at magnum's first posted round ("not
+// yet" before one), the fixers' pushes after the publish ("-" when magnum's
+// registry was not read) and the CI failures after the publish, those not
+// ours apart; then the totals, and what an escape is.
+func (r Report) qualityMarkdown(b *strings.Builder) {
+	q := r.Quality()
+	if q == nil {
+		return
+	}
+	b.WriteString("\n## The quality of the published PRs\n\n")
+	b.WriteString("| Task | PR | Escapes at the first posted round | Fix pushes after the publish | CI failures after the publish |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, t := range r.Tasks {
+		if t.Quality == nil {
+			continue
+		}
+		pushes := "-"
+		if r.FixLoopsRead && t.FixLoops != nil {
+			pushes = fmt.Sprintf("%d (%s)", t.FixLoops.Pushes, plural(t.FixLoops.Commits, "commit"))
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", t.Key, t.PR, escapesWords(t.Quality.Escapes), pushes,
+			ciWords(t.Quality.CIFailed, t.Quality.CINotOurs))
+	}
+	fmt.Fprintf(b, "\nIn total over %s: %s at %d checked %s", plural(q.PRs, "PR"), plural(q.Escapes, "escape"), q.Checked, word(q.Checked, "PR"))
+	if q.Escapes > 0 {
+		fmt.Fprintf(b, " (%s)", byPriority(q.P0, q.P1, q.P2, q.Unplaced))
+	}
+	fmt.Fprintf(b, ", %d not yet; ", q.NotYet)
+	if q.FixPushes != nil {
+		fmt.Fprintf(b, "%s (%s); ", plural(*q.FixPushes, "fix push"), plural(*q.FixCommits, "commit"))
+	} else {
+		b.WriteString("fix pushes not read; ")
+	}
+	fmt.Fprintf(b, "%s after the publish", plural(q.CIFailed, "CI failure"))
+	if q.CINotOurs > 0 {
+		fmt.Fprintf(b, ", and %d not ours", q.CINotOurs)
+	}
+	b.WriteString(".\n\nAn escape is a P0 to P2 finding of magnum's first round on the PR that posted a review after the publish, which no " +
+		"finding of the local review caught: none on its file within 3 lines, at a head where the file reads the same (a P3 is optional and " +
+		"never an escape). Not yet: magnum has posted no round on the PR since the publish. The fix pushes are those of magnum's fixers on " +
+		"the PR, counted from magnum's events; the CI failures are the failed heads of the PR's CI as magnum last read it, one per head.\n")
+}
+
+// escapesWords is a task's escapes in the quality table: "not yet" before
+// a check, "none of 4 posted", or "2 of 4 posted (P0 0, P1 1, P2 1)".
+func escapesWords(e *Escapes) string {
+	switch {
+	case e == nil:
+		return "not yet"
+	case e.Total() == 0:
+		return fmt.Sprintf("none of %d posted", e.Posted)
+	}
+	return fmt.Sprintf("%d of %d posted (%s)", e.Total(), e.Posted, byPriority(e.P0, e.P1, e.P2, e.Unplaced))
+}
+
+// byPriority is escapes by priority, those with no line after.
+func byPriority(p0, p1, p2, unplaced int) string {
+	s := fmt.Sprintf("P0 %d, P1 %d, P2 %d", p0, p1, p2)
+	if unplaced > 0 {
+		s += fmt.Sprintf("; %d with no line", unplaced)
+	}
+	return s
+}
+
+// ciWords is a task's CI failures after the publish: "2", or "2, and 1 not
+// ours".
+func ciWords(failed, notOurs int) string {
+	if notOurs == 0 {
+		return strconv.Itoa(failed)
+	}
+	return fmt.Sprintf("%d, and %d not ours", failed, notOurs)
+}
+
+// plural is "1 thing" or "n things" ("es" after an s or an h).
+func plural(n int, thing string) string { return strconv.Itoa(n) + " " + word(n, thing) }
+
+// word is thing, in the plural unless n is 1.
+func word(n int, thing string) string {
+	switch {
+	case n == 1:
+		return thing
+	case strings.HasSuffix(thing, "s"), strings.HasSuffix(thing, "h"):
+		return thing + "es"
+	}
+	return thing + "s"
 }
 
 // against says where count lies against d's middle half.

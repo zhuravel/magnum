@@ -646,20 +646,28 @@ func fixerText(s string) string {
 }
 
 // FixLoops counts the fix loops magnum started on a PR: by hand (`magnum
-// fix`, f on the board) and by autofix.
+// fix`, f on the board) and by autofix; and the fixers' pushes on it
+// (fix.pushed) and the commits they pushed.
 type FixLoops struct {
 	ByHand, ByAutofix int
+	Pushes, Commits   int
 }
 
-// fixStartKind is the event magnum writes as a fix loop's cycle starts.
-const fixStartKind = "fix.start"
+// fixStartKind is the event magnum writes as a fix loop's cycle starts,
+// fixPushedKind the one as its fixer's push lands.
+const (
+	fixStartKind  = "fix.start"
+	fixPushedKind = "fix.pushed"
+)
 
 // FixLoopsOf counts, per PR of refs, the fix loops magnum's registry in
 // layout l recorded: its fix.start events of cycle 1 (a later cycle is the
-// same loop), by who started each (engine.AutofixBy, or by hand), over the
-// whole history the registry keeps ([daemon] keep_events). A PR it has no
-// event of counts zero. It reads and never writes or migrates the
-// registry, as PRStates; no registry counts nothing and creates none.
+// same loop), by who started each (engine.AutofixBy, or by hand), and its
+// fix.pushed events with the commits each names (one that names none is
+// one commit: a push carries at least one), over the whole history the
+// registry keeps ([daemon] keep_events). A PR it has no event of counts
+// zero. It reads and never writes or migrates the registry, as PRStates;
+// no registry counts nothing and creates none.
 func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]FixLoops, error) {
 	out := make(map[PRRef]FixLoops, len(refs))
 	st, err := (&magnumRegistry{l: l}).open()
@@ -682,8 +690,15 @@ func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]Fi
 		var c FixLoops
 		for _, ev := range evs {
 			var d struct {
-				Cycle int    `json:"cycle"`
-				By    string `json:"by"`
+				Cycle   int    `json:"cycle"`
+				By      string `json:"by"`
+				Commits int    `json:"commits"`
+			}
+			if ev.Kind == fixPushedKind {
+				_ = json.Unmarshal(ev.Data, &d) // a push that names no count is one commit
+				c.Pushes++
+				c.Commits += max(d.Commits, 1)
+				continue
 			}
 			if ev.Kind != fixStartKind || json.Unmarshal(ev.Data, &d) != nil || d.Cycle != 1 {
 				continue
@@ -735,7 +750,7 @@ func (f *fixFold) add(ev store.Event) {
 			f.rec.Loops++
 		}
 		f.rec.Cycle, f.rec.LeftToYou = max(d.Cycle, 0), false
-	case "fix.pushed":
+	case fixPushedKind:
 		f.rec.Pushes++
 	case "fix.replied":
 		f.rec.Threads += max(d.Threads, 0)

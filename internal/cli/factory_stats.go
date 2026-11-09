@@ -57,6 +57,11 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 			"count), how long the task waited on you (asleep or not), how long it took to reach its ready card, and the fix "+
 			"loops magnum started on its PR, by hand (f on the board, `magnum fix`) and by autofix, with the total you started by hand "+
 			"(the target is zero; read from magnum's registry, never written or migrated, over the events it keeps). "+
+			"For each task with a published PR it also shows the PR's quality, per task and in total: the escapes, the P0 to P2 "+
+			"findings of magnum's first round on the PR that posted a review after the publish which no finding of the local review "+
+			"caught (none on the file within 3 lines, at a head where the file reads the same), by priority, or \"not yet\" before such "+
+			"a round; the commits magnum's fixers pushed on the PR (from magnum's registry); and the PR's CI failures after the "+
+			"publish, one per head, those not ours apart. "+
 			"The numbers come from the evidence records of the factory's "+
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+
 			"factory daemon of an older build runs on it). The default output is markdown, which sets each task "+
@@ -120,9 +125,9 @@ func runFactoryStatsCmd(c *Context, f factoryStatsFlags, pos []string) int {
 }
 
 // countFixLoops gives rep's tasks the fix loops magnum started on their
-// PRs (factory.FixLoopsOf: magnum's registry, read and never written or
-// migrated); a registry it cannot read is the report's note, and the rest
-// of the report stands.
+// PRs and its fixers' pushes and commits there (factory.FixLoopsOf:
+// magnum's registry, read and never written or migrated); a registry it
+// cannot read is the report's note, and the rest of the report stands.
 func countFixLoops(ctx context.Context, l paths.Layout, rep *stats.Report) {
 	var refs []factory.PRRef
 	for _, t := range rep.Tasks {
@@ -137,7 +142,8 @@ func countFixLoops(ctx context.Context, l paths.Layout, rep *stats.Report) {
 	}
 	loops := make(map[stats.PR]stats.FixLoops, len(got))
 	for ref, n := range got {
-		loops[stats.PR{Repo: ref.Repo, Number: ref.Number}] = stats.FixLoops{ByHand: n.ByHand, ByAutofix: n.ByAutofix}
+		loops[stats.PR{Repo: ref.Repo, Number: ref.Number}] = stats.FixLoops{ByHand: n.ByHand, ByAutofix: n.ByAutofix, Pushes: n.Pushes,
+			Commits: n.Commits}
 	}
 	rep.SetFixLoops(loops, "")
 }

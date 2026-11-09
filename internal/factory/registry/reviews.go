@@ -306,6 +306,11 @@ const (
 	CheckPass    = "pass"
 	CheckFail    = "fail"
 	CheckSkipped = "skipped"
+
+	// SourceGitHub is a check GitHub ran (its CI on the task's PR), and
+	// CauseNotOurs a failure that is not of the task's change.
+	SourceGitHub = "github"
+	CauseNotOurs = "not_ours"
 )
 
 var (
