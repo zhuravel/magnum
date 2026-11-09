@@ -20866,8 +20866,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   repository, since only a slot has the repository's development environment (its databases and gems), and the
   agent must run the resolved files' specs: nothing unverified goes to a shared staging. It is taken as the fix and
   whiteboard jobs take one: the PR is held with a slot-work reservation (`reserveSlotWork`, as an eviction holds
-  it), the PR's own slot when no round, open, fix or whiteboard job holds the PR (claimed or held, unpinned, no
-  guard hold, nobody in it: `Slots.Guard` and the shell hold), else a free pool slot reserved for the PR
+  it), the PR's own slot when no round (in flight or paused), open, fix or whiteboard job holds the PR (claimed or
+  held, unpinned, no guard hold, nobody in it: `Slots.Guard` and the shell hold), else a free pool slot reserved for the PR
   (`Slots.Reserve`; none free asks the pool for one, `needSlot`, as fix and open do). A slot it cannot use now is a
   wait ("waits for a slot", the tick looks again), never an eviction of a round's slot nor a wait on it; a
   repository without a pool fails. The slot goes back clean, with no guard hold: `Slots.Resync` puts it at the tip
@@ -20885,7 +20885,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   under the state dir), with `prompts/staging-resolve.md` (rendered by `CheckPrompts`, loaded at the start): the
   fix skill's merge rules, only the conflicted paths edited, the specs through the db-lock line, never a stage,
   commit, push or `gh`, and give up with the reason on contradictory logic, a binary file, rename/rename, specs that
-  cannot run or stay red; the second try's prompt carries the first's why as data. Its pane gets no GitHub
+  cannot run or stay red; the second try's prompt (the branch's tip moved after the first try's merge) carries how
+  the first ended, as data. Its pane gets no GitHub
   credentials and none of the operator's: empty `GH_TOKEN` and `GITHUB_TOKEN`, an empty `GH_CONFIG_DIR`, no global
   or system git config (no credential helper), no askpass and no SSH agent, beside the slot's own env; the
   checkout's project config is left out of the session (it has no base the start can compare with, so it is
@@ -20922,7 +20923,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheStagingResolverCancelsAJob, TestARestartGoesOnWithAResolverJobWhoseAgentRuns,
   TestARestartStartsAgainAResolverJobBeforeItsAgent, TestAStagingResolverJobRunsAtMost45Minutes,
   TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded, TestWithoutStagingEntriesNothingOfTheResolverRuns,
-  TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath, TestTheStagingClientDeploysAsTheFixerApp
+  TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath,
+  TestTheStagingResolverWaitsWhileThePRsRoundIsPaused, TestASecondTrysPromptCarriesTheFirstTrysWhy,
+  TestTheStagingClientDeploysAsTheFixerApp
   and TestCheckPromptsCatchesFieldsThisBuildLacks (the prompt's cases); gitx's
   TestAStagingMergeIsResolvedInTheWorkTreeAndWrittenApartFromItsIndex,
   TestWriteTreeFromLeavesOutAPathTheWorkTreeDeleted and TestMergeNoCommitOfACleanMergeAndOfNoRevision; the agents'

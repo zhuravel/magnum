@@ -239,6 +239,16 @@ func (w *resolveWork) take(ctx context.Context) error {
 	case pr.IsCrossRepo:
 		return resolveFail("%s comes from a fork", job.label())
 	}
+	wait := func(why string) error {
+		if err := w.say(ctx, "waits for a slot: "+why); err != nil {
+			return err
+		}
+		return errResolveWaits
+	}
+	if slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused {
+		// A paused round's sessions go on in its slot later.
+		return wait(fmt.Sprintf("PR #%d's round is in progress (%s)", pr.Number, pr.State))
+	}
 	full := repo.FullName()
 	pool := e.cfg.PoolFor(full)
 	slot, has, err := e.slotOf(ctx, pr.ID)
@@ -247,12 +257,6 @@ func (w *resolveWork) take(ctx context.Context) error {
 	}
 	if !has && pool == nil {
 		return resolveFail("%s has no review slot pool ([[pool]]): no checkout with its development environment to run the specs in", full)
-	}
-	wait := func(why string) error {
-		if err := w.say(ctx, "waits for a slot: "+why); err != nil {
-			return err
-		}
-		return errResolveWaits
 	}
 	if !e.reserveSlotWork(pr.ID, resolveHeld) {
 		return wait(fmt.Sprintf("PR #%d's slot is busy: %s", pr.Number, e.heldReason(pr.ID)))

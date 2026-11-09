@@ -318,8 +318,9 @@ func cmpPane(pane string) string {
 	return pane
 }
 
-// lastWhy is why the effect's try 1 failed, for try 2's prompt ("" for a
-// first try).
+// lastWhy is the Why the effect's try 1 ended with (resolved, and the
+// branch's tip moved since; or failed), for try 2's prompt ("" for a first
+// try, or when the journal no longer holds it).
 func (w *resolveWork) lastWhy(ctx context.Context) string {
 	if w.job.Try < 2 {
 		return ""
@@ -329,12 +330,12 @@ func (w *resolveWork) lastWhy(ctx context.Context) string {
 		return ""
 	}
 	why := ""
-	for _, j := range jobs {
-		if j.Effect == w.job.Effect && j.Try == w.job.Try-1 && j.State == resolveFailed {
+	for _, j := range jobs { // the oldest first: the latest ended try 1 wins
+		if j.Effect == w.job.Effect && j.Try == w.job.Try-1 && !j.live() {
 			why = j.Why
 		}
 	}
-	return oneLine(why, 200)
+	return oneLine(why, 300)
 }
 
 // stagingPaneSpec is the resolver's pane agent for role.

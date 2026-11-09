@@ -207,10 +207,8 @@ func (f *resolveFixture) job(id string) resolveJob {
 // resolves makes the fake agent resolve app/a.rb with text and write a
 // result that ran spec/a_spec.rb, passed.
 func (f *resolveFixture) resolves(text string) {
-	f.agent.onPrompt = func(a *fakeStagingAgent, n int, prompt string) {
-		if n == 1 {
-			writeFile(f.h.t, a.job.Cwd, "app/a.rb", text)
-		}
+	f.agent.onPrompt = func(a *fakeStagingAgent, _ int, _ string) {
+		writeFile(f.h.t, a.job.Cwd, "app/a.rb", text)
 		a.result(f.h.t, resolveResultFile{Outcome: resolveOutcomeResolved, Specs: []string{"spec/a_spec.rb"}, SpecsResult: resolveSpecsPassed})
 	}
 }
@@ -885,5 +883,49 @@ func TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath(t *tes
 	}
 	if got := f.gitIn(f.clone, "ls-tree", "-r", "--name-only", res.MergeSHA); strings.Contains(got, "app/a.rb") || !strings.Contains(got, "db/schema.rb") {
 		t.Errorf("the merge lists %q; want db/schema.rb and no app/a.rb", got)
+	}
+}
+
+// A PR whose round is paused (its sessions wait to go on in its slot) or in
+// flight is never touched either: the job waits for a slot.
+func TestTheStagingResolverWaitsWhileThePRsRoundIsPaused(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, `UPDATE prs SET state = ? WHERE id = ?`, store.PRPaused, pr.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := f.start(1)
+	f.awaitIdle()
+	res, err := f.r.Result(f.h.ctx, id)
+	if err != nil || res.State != staging.ResolveRunning || !strings.Contains(res.Why, "waits for a slot") || !strings.Contains(res.Why, store.PRPaused) {
+		t.Fatalf("Result while the PR's round is paused = %+v, %v; want running, waits for a slot", res, err)
+	}
+	if c := f.h.sl.all(); slices.ContainsFunc(c, func(s string) bool { return strings.HasPrefix(s, "resync:") }) {
+		t.Errorf("the slot was touched under a paused round: %v", c)
+	}
+}
+
+// A second try (the branch's tip moved after the first try's merge, and the
+// merge conflicts again) carries the first try's why in its prompt.
+func TestASecondTrysPromptCarriesTheFirstTrysWhy(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	first := f.await(f.start(1))
+	if first.State != staging.ResolveDone {
+		t.Fatalf("the first try = %+v, want done", first)
+	}
+	if res := f.await(f.start(2)); res.State != staging.ResolveDone {
+		t.Fatalf("the second try = %+v, want done", res)
+	}
+	if prompts, _, _, _ := f.agent.counts(); prompts != 2 {
+		t.Fatalf("%d prompts, want one per try", prompts)
+	}
+	p := f.agent.prompts[1]
+	if !strings.Contains(p, "second try") || !strings.Contains(p, first.Why) {
+		t.Errorf("the second try's prompt does not carry the first's why %q:\n%s", first.Why, p)
+	}
+	if strings.Contains(f.agent.prompts[0], "second try") {
+		t.Error("the first try's prompt says it is the second")
 	}
 }

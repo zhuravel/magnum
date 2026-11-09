@@ -812,7 +812,7 @@ func TestRenderGolden(t *testing.T) {
 		{"retro_factory", "retro.md", retroFactory},
 		{"skill_edit", "skill-edit.md", skillEditFixture()},
 		{"staging_resolve", "staging-resolve.md", stagingResolveFixture(1, "")},
-		{"staging_resolve_second_try", "staging-resolve.md", stagingResolveFixture(2, "the agent gave up: spec/models/featurable_spec.rb fails after the merge")},
+		{"staging_resolve_second_try", "staging-resolve.md", stagingResolveFixture(2, "resolved app/models/concerns/featurable.rb, db/schema.rb in slot review3 (try 1): specs passed: spec/models/featurable_spec.rb")},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}
