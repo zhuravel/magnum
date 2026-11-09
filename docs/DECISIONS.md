@@ -22829,16 +22829,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (1-p)²p², 1 gate in 16 at p = 1/2, against (1-p)²p, 1 in 8, with one base replay, for at most one more replay.
     A local row is a guard, compared with a stored replay (`Stored`), so its new hit never counts, as a posted
     guard's does not, and no replay is made for one. A local guard lost at the base too gets
-    `learn.guard_lost_at_base` as a posted one does.
+    `learn.guard_lost_at_base` as a posted one does, naming the inputs its base replays ran with (the round's, not
+    the posted base inputs: `lostAtBase`'s message, `inputs` field and toast key).
+  - Order. The local guards replay last (`localGuards`), after every other row, its second replay, its base and the
+    wins' second replays, and only when `learn.Judge` on the other rows does not fail the proposal: a guard can only
+    add a loss, so in a failing gate (most are: no target improved, a win not found again, a regression) its up to
+    four replays with every role would cost 2 to 3 hours and change nothing. Its row keeps its place and says
+    `not replayed: the gate fails on its other cases`. A revert replays them anyway: it is held for the operator
+    whatever the gate finds, and the operator reads its guards.
   - Outcomes. In `replay`'s order: a cancel, the budget, a usage limit or a login stop the gate as before; flagged,
     or a refused local replay, skip the row (`SkipFlagged`), and the refusal, which `evalrun` flags under the
     synthetic PR that the factory never reads, is a `learn.local_refused` warning and a toast, once per case; an
-    unscored replay on a CLI's outage is a delay (`outageOf` first); `missing_role`, `config_error` and
-    `environment` skip a local row on any replay, the first, the second or the base's (they cannot score the round
-    on a later try either: never a loss, never a stop); any other replay without a score skips the row on the first
-    replay and stops the gate on the second or the base's (`noScore`), as for a posted case. Missing frozen inputs
-    and a gone main clone end the replay `error` in seconds, before any agent starts (`localCaseInputs`,
-    `FetchCommit`), so no pre-check is needed.
+    unscored replay on a CLI's outage is a delay (`outageOf` first); `config_error` (no gh identity, and now a
+    frozen role the config no longer declares, below) skips a local row on any replay, the first, the second or the
+    base's, since no replay scores the round until the config changes: never a loss, never a stop; any other
+    replay without a score, `missing_role` and `environment` included, skips the row on the first replay and stops
+    the gate on the second or the base's (`noScore`), as for a posted case. A second or a base replay runs only
+    after the candidate's first scored and lost a defect, so a lost reviewer's report there (a pane that died, a
+    report timeout) or a worktree that could not be prepared (another case's preparation held `prepareLock` past
+    `prepareWait`, a setup or post_checkout that failed this time) is almost always transient, and leaving the row
+    out would throw away a loss already seen once. Missing frozen inputs and a gone main clone end the replay
+    `error` in seconds, before any agent starts (`localCaseInputs`, `FetchCommit`), so no pre-check is needed.
+  - evalrun's outcomes, for that rule. A local case whose frozen roles name one the config no longer declares now
+    ends `config_error`, not `missing_role` (`localCaseInputs`): it is a configuration problem that a replay cannot
+    change, as no gh identity is, so the part of R36's entry ("A round of the factory's local review is an eval
+    case") that says "every frozen role still declared (`missing_role` otherwise)" no longer holds; `missing_role` is now only a round that went without a
+    reviewer's report. That error now ends with the round's own error, and when that carries no pane line, with the
+    report detail of the first missing reviewer whose detail does (`LocalResult.MissingDetail`): before, it dropped
+    both, so `agents.PaneErrorOf` found no line and `outageOf` could not tell a CLI's outage (a Codex bootstrap
+    failure that killed codex-review and codex-judge) from a pane this round lost.
   - Cost. A local guard can cost four replays, about 3 hours. `daemon-restart --drain` waits for the replay in
     flight (the gate is background work), and only `--now`, a stop or a rejection cuts it; a cut replay counts toward
     no limit, and the resumed gate takes the same guards and reuses the scored replays. `gateMaxAge` (72 h) bounds it.
@@ -22854,18 +22873,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   review it); a second candidate replay for a local row's new hit (it can never count, so it would cost 40 minutes
   for nothing); a key of its own (`gate_local_guards`: one local case today; if many crowd the posted guards out,
   then); a pre-check of a case's inputs or main clone (the replay fails in seconds without them); marking the
-  factory's task never for Codex from the gate (the factory's registry is the factory's to write). Tests: learn's
+  factory's task never for Codex from the gate (the factory's registry is the factory's to write); leaving a local
+  row out whenever a replay ends `missing_role` or `environment` (the first draft of this change: on a second or a
+  base replay it passed a proposal whose candidate had lost the defect once); telling the permanent `missing_role`
+  apart by its missing report directory (an outcome says it, and the gate's fakes need not mimic the directory);
+  replaying the local guards of a failing gate (above). Tests: learn's
   TestSelectCasesGivesALocalCaseAGuardPlaceOnly,
   TestGuardsFromTakesALocalCaseOnItsRoundsReplaysWithoutAFullReplayOfTheReviewers,
   TestALossCountsOnlyForADefectBothCandidateReplaysLost and TestTheBaseScoreOfALocalGuardFindsOnlyWhatBothReplaysFound
   (TestSelectCasesLeavesLocalCasesToEvalRun passes unchanged); the engine's
   TestAGateReplaysALocalGuardWithEveryRoleInARunOfItsOwn (judge-only and full),
-  TestALocalGuardLostTwiceIsALossOnlyWhenTwoFreshBaseReplaysFindIt, TestALocalReplayThatCannotScoreIsNeverALossNorAStop
-  (first, second and base replays; a refusal's warning and toast),
-  TestALocalSecondReplayWithoutAScoreStopsTheGateAndTheNextReusesTheFirst, TestALocalReplayOnASharedLaunchFailureIsADelay,
+  TestALocalGuardLostTwiceIsALossOnlyWhenTwoFreshBaseReplaysFindIt (and the local inputs its lost-at-base warning
+  names), TestALocalReplayThatCannotScoreIsNeverALossNorAStop (every outcome on the first replay, `config_error` on
+  the second and the base's; a refusal's warning and toast), TestALocalReplayThatLostAReportLaterStopsTheGate
+  (`missing_role` and `environment` on the second and the base's replay),
+  TestALocalSecondReplayWithoutAScoreStopsTheGateAndTheNextReusesTheFirst,
+  TestAResumedGateReusesTheBasesStoredReplayOfALocalGuard, TestALocalGuardTakesTheTwoBaseReplaysMadeLast,
+  TestALocalGuardsDefectsFoundByOneBaseReplayEachAreLostAtTheBase, TestAGateThatFailsOnItsOtherCasesReplaysNoLocalGuard
+  (and a revert's that does), TestALocalReplayOnASharedLaunchFailureIsADelay,
   TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and TestAGateTakesNoLocalCaseItCannotTellApart, each checked
-  against a mutation of its rule; the cli's TestDaemonGateReadsTheLocalCasesCorpusApart and
-  TestLearnReviewMarksALocalRow. The other gate tests pass unchanged. No new dependencies.
+  against a mutation of its rule (the stored base replays' inputs, their cap of two, their order by replay time,
+  `BothFound`, the failing gate's skip and its revert exception among them); evalrun's
+  TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn and the `config_error` of a role the config lacks
+  in TestRunCaseReportsALocalCaseItCannotScore, each failing first; the cli's
+  TestDaemonGateReadsTheLocalCasesCorpusApart and TestLearnReviewMarksALocalRow. The other gate tests pass unchanged.
+  No new dependencies.
 
 ## Learned rules
 

@@ -411,6 +411,9 @@ func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) e
 		if line := f.lines[key]; line != "" {
 			cr.Error = "pipeline: judge prompt refused, also after a restart of the judge: agents: prompt mg-codex-judge: " +
 				"herdr agent.prompt: agent_not_found: agent target mg-codex-judge not found; the pane shows: " + line
+			if out == eval.OutcomeMissingRole { // a local round's, which keeps the round's error after its own (evalrun's replayLocal)
+				cr.Error = "the round went without the report of codex-review: what it would have found is unknown, so it is not scored: " + cr.Error
+			}
 		}
 		return cr
 	}

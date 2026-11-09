@@ -6398,10 +6398,14 @@ another corpus has and one `eval run` would refuse (a task Codex must not see ag
 replay). A local guard the candidate lost on both replays is weighed against two replays of the base
 made after the one that chose it, never that one, even when the base made it (one local replay is a coin
 flip, and that one found the defect by being chosen): a stored one at the base's local inputs, else a
-replay now, the second only when the first found it, and the loss counts only when both found it. A
-local replay that cannot score the round (a frozen role the config no longer declares, no gh identity, a
-failed setup, a refusal, a flag) is never a loss and never a stop; another without a score skips the row
-on the candidate's first replay and stops the gate on its second or the base's, as for a posted case. A
+replay now, the second only when the first found it, and the loss counts only when both found it. The
+local guards replay after every other case, and not at all in a gate that fails on its other cases (a guard
+can only add a loss; the row says `not replayed: the gate fails on its other cases`), but for a revert's,
+which waits for you whatever it finds. A local replay that cannot score the round until the config changes
+(`config_error`: a frozen role the config no longer declares, no gh identity), a refusal or a flag is never
+a loss and never a stop; another without a score (a lost reviewer's report, a worktree whose setup failed or
+another case's preparation held up, an error) skips the row on the candidate's first replay and stops the
+gate on its second or the base's, as for a posted case. A
 refused one is flagged and never replayed again, and a `learn.local_refused` warning and a toast tell you
 (the factory never reads that flag). Each local replay takes 30 to 45 minutes, so a local guard can cost
 four, about 3 hours; `daemon-restart --drain` waits for the one in flight, and only `--now` or a stop
@@ -6426,7 +6430,8 @@ lost on both replays takes the base's score: the newest stored replay with the b
 that baseline or was made after it (one an earlier gate of the proposal made, say), else a replay of the
 base now. A defect the base finds and the candidate lost twice fails the proposal;
 one the base lost too is not the proposal's loss: the row is skipped ("lost at the base too"), and a
-`learn.guard_lost_at_base` warning (the case, the run that last found it, the base's inputs hash) and a
+`learn.guard_lost_at_base` warning (the case, the run that last found it, the inputs hash the base's
+replays ran with, a local case's round's own) and a
 toast, once per proposal and case, say the review at master no longer finds what it did, a drift of a
 model, the notes, the code or a hand edit. A miss target the candidate found more of than the baseline is
 replayed once more too, and the win counts only when the second replay finds more than the baseline as

@@ -59,8 +59,14 @@ const localRef = "20261002-120000"
 // nothing. local scripts the local case's candidate replays.
 func localGateFixture(t *testing.T, files []string, local ...*eval.Score) (*gateFixture, *localSeams, eval.Case) {
 	t.Helper()
-	lc := eval.Case{Name: "task-1-round-1", Kind: eval.KindLocal, PR: "talkable/talkable#900011", Head: retroShaA,
-		Defects: []eval.Defect{{ID: "q", Title: "the plan's choice", Question: true, Match: []string{"stored"}}}}
+	return localGateFixtureOf(t, files, []eval.Defect{{ID: "q", Title: "the plan's choice", Question: true, Match: []string{"stored"}}}, local...)
+}
+
+// localGateFixtureOf is localGateFixture with the local case's defects, every one of which its
+// guarding replay found.
+func localGateFixtureOf(t *testing.T, files []string, defects []eval.Defect, local ...*eval.Score) (*gateFixture, *localSeams, eval.Case) {
+	t.Helper()
+	lc := eval.Case{Name: "task-1-round-1", Kind: eval.KindLocal, PR: "talkable/talkable#900011", Head: retroShaA, Defects: defects}
 	seams := &localSeams{corpus: &eval.Corpus{Cases: []eval.Case{lc}}}
 	f := newGateFixture(t, files, func(h *harness) {
 		h.cfg.Learn.GateGuards = 1
@@ -70,7 +76,11 @@ func localGateFixture(t *testing.T, files []string, local ...*eval.Score) (*gate
 	f.ev.local = seams.inputs
 	f.ev.corpus = &eval.Corpus{Cases: []eval.Case{f.target}}
 	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name)})
-	s := found([]string{"q"})
+	var ids []string
+	for _, d := range defects {
+		ids = append(ids, d.ID)
+	}
+	s := found(ids)
 	s.Case = lc.Name
 	r := eval.Run{ID: localRef, Inputs: "in-master", ReviewerInputs: "rev-master", Commit: "abc1234",
 		Cases: []eval.CaseRun{{Case: lc.Name, Kind: eval.KindLocal, PR: lc.PR, Head: lc.Head, Outcome: "dry_run", Score: s, Inputs: "local-master",
@@ -175,14 +185,151 @@ func TestALocalGuardLostTwiceIsALossOnlyWhenTwoFreshBaseReplaysFindIt(t *testing
 			if tc.state == store.LearnPassed && row.Skip != learn.SkipLostAtBase {
 				t.Fatalf("row %+v, want it lost at the base", row)
 			}
+			if tc.state == store.LearnPassed { // the warning names the inputs the base's replays ran with: its round's
+				evs := f.h.events("learn.guard_lost_at_base")
+				if data := f.h.eventData("learn.guard_lost_at_base"); len(evs) != 1 || !strings.Contains(evs[0].Message, "(inputs local-master)") ||
+					!strings.Contains(data, `"inputs":"local-master"`) {
+					t.Fatalf("lost at the base %+v, data %s; want the base's local inputs", evs, data)
+				}
+			}
 		})
 	}
 }
 
-// A local replay that ends in a way that cannot score its round (a frozen role the config no longer
-// declares, no gh identity, a setup that failed, a refusal, a flag, an error such as frozen inputs
-// that are gone) is never a loss and never a stop: its row is skipped with why and the proposal is
-// decided on its other cases, whether it is the candidate's first replay, its second or the base's.
+// A gate resumed after a stop between the base's two replays of a local guard reuses the first,
+// which it stored at the base's local inputs, and replays only the second: the loss is decided on
+// both.
+func TestAResumedGateReusesTheBasesStoredReplayOfALocalGuard(t *testing.T) {
+	f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
+	f.ev.script(f.base, lc.Name, found([]string{"q"}))
+	f.ev.after = func(c evalCall) {
+		if c.Case == lc.Name && c.Opts.Candidate == f.base {
+			f.ev.fail(f.base, lc.Name, "error") // the base's second replay
+		}
+	}
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnGating {
+		t.Fatalf("proposal %s %q, want gating", p.State, p.Reason)
+	}
+	if n := countCalls(f.ev.callsFor(f.base), lc.Name); n != 2 {
+		t.Fatalf("base replays %d, want two", n)
+	}
+	f.ev.mu.Lock()
+	f.ev.after = nil
+	f.ev.mu.Unlock()
+	f.ev.fail(f.base, lc.Name, "")
+	f.h.advance(gateRetryAfter + time.Minute)
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "task-1-round-1 lost q after a second replay") {
+		t.Fatalf("proposal %s %q", p.State, p.Reason)
+	}
+	if n := countCalls(f.ev.callsFor(f.base), lc.Name); n != 3 {
+		t.Fatalf("base replays %d, want the next gate to replay the second alone", n)
+	}
+	if n := countCalls(f.ev.callsFor(f.wt), lc.Name); n != 2 {
+		t.Fatalf("candidate replays %d, want both reused", n)
+	}
+	if got := f.replaysByKind(); got["baseline"] != 1 || got[learn.GateRunBaseSecond] != 2 {
+		t.Fatalf("replays %v", got)
+	}
+}
+
+// A local guard lost twice takes the base's two stored replays at its local inputs replayed last
+// (by when they were replayed, not by their run's id), no more, and makes no replay of the base.
+func TestALocalGuardTakesTheTwoBaseReplaysMadeLast(t *testing.T) {
+	f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
+	day := f.p.CreatedAt.Add(time.Hour).Truncate(24 * time.Hour)
+	for _, r := range []struct {
+		id string
+		at time.Duration
+		s  *eval.Score
+	}{ // run ids in another order than their replays
+		{"20261005-180000", 23 * time.Hour, found([]string{"q"})},
+		{"20261005-190000", 21 * time.Hour, found(nil, "q")},
+		{"20261005-200000", 22 * time.Hour, found([]string{"q"})},
+	} {
+		r.s.Case = lc.Name
+		run := eval.Run{ID: r.id, Inputs: "in-master", ReviewerInputs: "rev-master", Commit: "abc1234", Started: day.Add(r.at),
+			Cases: []eval.CaseRun{{Case: lc.Name, Kind: eval.KindLocal, PR: lc.PR, Head: lc.Head, Outcome: "dry_run", Score: r.s,
+				Inputs: "local-master", Started: day.Add(r.at), ReportDir: filepath.Join(f.h.layout.Eval(), r.id, "cases", lc.Name)}}}
+		if err := eval.SaveRun(filepath.Join(f.h.layout.Eval(), r.id), run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "task-1-round-1 lost q after a second replay") {
+		t.Fatalf("proposal %s %q", p.State, p.Reason)
+	}
+	if got := f.replaysByKind(); got["baseline"] != 0 || got[learn.GateRunBaseSecond] != 0 {
+		t.Fatalf("replays %v, want none of the base", got)
+	}
+	if row := localRow(t, f, lc); row.BaselineRun != "20261005-200000" || !strings.HasSuffix(row.Note, "runs 20261005-180000 and 20261005-200000") {
+		t.Fatalf("row %+v, want the base's replays of 23:00 and 22:00", row)
+	}
+}
+
+// A defect counts as found at the base only when both of the base's replays found it: a local guard
+// the candidate lost two defects of, each found by one base replay alone, is lost at the base.
+func TestALocalGuardsDefectsFoundByOneBaseReplayEachAreLostAtTheBase(t *testing.T) {
+	f, _, lc := localGateFixtureOf(t, gateFullFiles, []eval.Defect{{ID: "a", Title: "a", Match: []string{"a"}}, {ID: "b", Title: "b", Match: []string{"b"}}},
+		found(nil, "a", "b"))
+	f.ev.script(f.base, lc.Name, found([]string{"a"}, "b"), found([]string{"b"}, "a"))
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal %s %q", p.State, p.Reason)
+	}
+	if got := f.replaysByKind(); got["baseline"] != 1 || got[learn.GateRunBaseSecond] != 1 {
+		t.Fatalf("replays %v", got)
+	}
+	if row := localRow(t, f, lc); row.Skip != learn.SkipLostAtBase {
+		t.Fatalf("row %+v, want it lost at the base", row)
+	}
+}
+
+// A local guard can only add a loss, so a gate its other cases fail already replays none: its
+// replays with every role, up to four of 30 to 47 minutes, could not change the verdict. A revert,
+// which waits for the operator whatever the gate finds, still replays it.
+func TestAGateThatFailsOnItsOtherCasesReplaysNoLocalGuard(t *testing.T) {
+	t.Run("failed", func(t *testing.T) {
+		f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
+		f.ev.script(f.wt, f.target.Name, found(nil, f.target.Name))
+		f.h.tick()
+		if p := f.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "no target improved") {
+			t.Fatalf("proposal %s %q", p.State, p.Reason)
+		}
+		if n, b := countCalls(f.ev.callsFor(f.wt), lc.Name), countCalls(f.ev.callsFor(f.base), lc.Name); n != 0 || b != 0 {
+			t.Fatalf("local replays %d of the candidate, %d of the base; want none", n, b)
+		}
+		if row := localRow(t, f, lc); !row.Guard || !row.Local || !strings.Contains(row.Skip, "fails") {
+			t.Fatalf("row %+v, want it skipped, saying why", row)
+		}
+	})
+	t.Run("a revert", func(t *testing.T) {
+		f, _, lc := localGateFixture(t, gateFullFiles, found([]string{"q"}))
+		f.ev.script(f.wt, f.target.Name, found(nil, f.target.Name))
+		v, err := f.h.st.CreateLearnVersion(f.h.ctx, store.LearnVersion{LandedSHA: learnMaster, SkillSHA: "skill", PromptsSHA: "prompts"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.h.st.DB().ExecContext(f.h.ctx, "UPDATE learn_proposals SET reverts = ? WHERE id = ?", v.ID, f.p.ID); err != nil {
+			t.Fatal(err)
+		}
+		f.h.tick()
+		if p := f.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, "revert") {
+			t.Fatalf("proposal %s %q", p.State, p.Reason)
+		}
+		if n := countCalls(f.ev.callsFor(f.wt), lc.Name); n != 1 {
+			t.Fatalf("local replays %d, want the revert's guard replayed", n)
+		}
+	})
+}
+
+// A local candidate's first replay that ends without a score (a frozen role the config no longer
+// declares or no gh identity, config_error; a lost reviewer's report; a setup that failed; a
+// refusal, a flag, an error such as frozen inputs that are gone) is never a loss and never a stop:
+// its row is skipped with why and the proposal is decided on its other cases, as a posted guard's
+// is. config_error, which a replay cannot change until the config does, skips the row on the
+// candidate's second replay and the base's too.
 func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
 	for _, outcome := range []string{eval.OutcomeMissingRole, eval.OutcomeConfigError, eval.OutcomeEnvironment, "refused", eval.OutcomeFlagged, "error"} {
 		t.Run("first "+outcome, func(t *testing.T) {
@@ -202,7 +349,7 @@ func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
 			}
 		})
 	}
-	for _, outcome := range []string{eval.OutcomeMissingRole, eval.OutcomeConfigError, eval.OutcomeEnvironment} {
+	for _, outcome := range []string{eval.OutcomeConfigError} {
 		t.Run("second "+outcome, func(t *testing.T) {
 			f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
 			f.ev.after = func(c evalCall) {
@@ -229,6 +376,37 @@ func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
 				t.Fatalf("row %+v", row)
 			}
 		})
+	}
+}
+
+// A local replay that lost a reviewer's report (a lost pane, a timeout) or whose worktree could not
+// be prepared (another case's preparation held the lock, a setup that failed) after the candidate's
+// first replay scored and lost a defect is no evidence the loss is not the candidate's: on the
+// candidate's second replay or the base's it stops the gate as a posted case's does, the stop
+// counted, and the proposal stays gating for the next gate.
+func TestALocalReplayThatLostAReportLaterStopsTheGate(t *testing.T) {
+	for _, outcome := range []string{eval.OutcomeMissingRole, eval.OutcomeEnvironment} {
+		for _, which := range []string{"second", "base"} {
+			t.Run(which+" "+outcome, func(t *testing.T) {
+				f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
+				if which == "base" {
+					f.ev.fail(f.base, lc.Name, outcome)
+				} else {
+					f.ev.after = func(c evalCall) {
+						if c.Case == lc.Name && c.Opts.Candidate == f.wt {
+							f.ev.fail(f.wt, lc.Name, outcome)
+						}
+					}
+				}
+				f.h.tick()
+				if p := f.proposal(); p.State != store.LearnGating || len(f.h.events("learn.gate_waiting")) != 1 {
+					t.Fatalf("proposal %s %q, want gating", p.State, p.Reason)
+				}
+				if s, ok := f.h.e.gateStopsOf(f.h.ctx, f.p.ID); !ok || s.Stops != 1 {
+					t.Fatalf("stops %+v, %v; want one counted", s, ok)
+				}
+			})
+		}
 	}
 }
 

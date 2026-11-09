@@ -54,9 +54,14 @@ package engine
 // in candidate runs of its own (learn.GateRunLocal, GateRunLocalSecond), and
 // is matched on its round's inputs. A loss counts only once two replays of
 // the base made after the one that chose it found what both candidate
-// replays lost (localBase): one local replay is a coin flip. A local replay
-// that cannot score its round (a role gone, no identity, a failed setup, a
-// refusal, a flag) is never a loss nor a stop.
+// replays lost (localBase): one local replay is a coin flip. The local
+// guards replay last, and only when the gate does not fail without them
+// (localGuards): a guard can only add a loss. A local replay that ends
+// config_error (a role gone, no identity), a refusal or a flag is never a
+// loss nor a stop; one that lost a reviewer's report or whose worktree
+// could not be prepared is no score, as for a posted case: the row is left
+// out on the candidate's first replay, and the gate stops on its second or
+// the base's.
 
 import (
 	"cmp"
@@ -452,12 +457,13 @@ type gateRun struct {
 
 // runGate is the gate of proposal p: its worktree (reused, else added
 // again from its branch), a worktree of its base, the cases, a baseline
-// and a candidate replay of each (a second one of a lost case), the
-// verdict and the proposal's next state. It returns an error when the gate
-// stopped short and p stays gating: a drain or a pause before a replay
-// (gateHold), a replay at the soft cap or a usage limit, a replay without a
-// score that the verdict needs (noScore), a shutdown, an unreadable
-// registry, inputs or runs, a verdict the registry did not take.
+// and a candidate replay of each (a second one of a lost case; the local
+// guards last, only when the gate does not fail without them:
+// localGuards), the verdict and the proposal's next state. It returns an
+// error when the gate stopped short and p stays gating: a drain or a pause
+// before a replay (gateHold), a replay at the soft cap or a usage limit, a
+// replay without a score that the verdict needs (noScore), a shutdown, an
+// unreadable registry, inputs or runs, a verdict the registry did not take.
 func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	g := &gateWork{e: e, ctx: ctx, octx: context.WithoutCancel(ctx), p: p}
 	if why := e.gateUnavailable(); why != "" {
@@ -520,7 +526,14 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		map[string]any{"proposal": p.ID, "cases": len(cases), "guards": guards, "local_guards": locals, "mode": mode})
 
 	defer g.finishRuns()
+	var held []heldGuard // the local guards, replayed last (localGuards)
+	var others []int     // the other rows
 	for i, gc := range cases {
+		if gc.Guard && gc.Case.Local() && gc.Skip == "" { // its place in the rows is kept
+			held = append(held, heldGuard{row: len(g.res.Cases), gc: gc})
+			g.res.Cases = append(g.res.Cases, GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Guard: true, Local: true}})
+			continue
+		}
 		row, stop, err := g.caseRow(gc)
 		if stop {
 			return err
@@ -528,18 +541,77 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		if row.TargetGate() == store.LearnTargetBaseline { // no target: the next one past the cap takes its place
 			learn.PromoteTarget(cases, i)
 		}
+		others = append(others, len(g.res.Cases))
 		g.res.Cases = append(g.res.Cases, row)
 	}
-	if stop, err := g.retryLost(cases); stop {
+	if stop, err := g.retryLost(cases, others); stop {
 		return err
 	}
-	if stop, err := g.guardsAtBase(cases); stop {
+	if stop, err := g.guardsAtBase(cases, others); stop {
 		return err
 	}
 	if stop, err := g.confirmWins(cases); stop {
 		return err
 	}
+	if stop, err := g.localGuards(cases, held); stop {
+		return err
+	}
 	return g.decide()
+}
+
+// heldGuard is a local guard runGate replays last (localGuards): its row
+// of the result and its case.
+type heldGuard struct {
+	row int
+	gc  learn.GateCase
+}
+
+// skipFailsWithout is why a local guard of a gate its other cases fail is
+// not replayed (localGuards).
+const skipFailsWithout = "not replayed: the gate fails on its other cases, and a guard can only add a loss"
+
+// localGuards replays the local guards held, last: each one's row
+// (caseRow), the candidate's second replay of one it lost (retryLost) and
+// the base's (guardsAtBase, localBase). A guard can only add a loss
+// (learn.Judge), and a local one costs up to four replays with every role
+// of 30 to 47 minutes each, so in a gate the other cases fail already
+// (their targets did not improve, a win its second replay did not find
+// again, a regression) none is replayed: its row is skipped
+// (skipFailsWithout). A revert, which waits for the operator whatever the
+// gate finds, replays them, since the operator reads its guards. Stop when
+// the gate ends there, with what runGate returns.
+func (g *gateWork) localGuards(cases []learn.GateCase, held []heldGuard) (bool, error) {
+	if len(held) == 0 {
+		return false, nil
+	}
+	if learn.Judge(g.rows()).State == learn.GateFailed && g.p.Reverts == 0 {
+		for _, h := range held {
+			g.res.Cases[h.row].Skip = skipFailsWithout
+		}
+		return false, nil
+	}
+	rows := make([]int, 0, len(held))
+	for _, h := range held {
+		row, stop, err := g.caseRow(h.gc)
+		if stop {
+			return true, err
+		}
+		g.res.Cases[h.row] = row
+		rows = append(rows, h.row)
+	}
+	if stop, err := g.retryLost(cases, rows); stop {
+		return true, err
+	}
+	return g.guardsAtBase(cases, rows)
+}
+
+// rows are the gate's rows so far.
+func (g *gateWork) rows() []learn.GateRow {
+	rows := make([]learn.GateRow, len(g.res.Cases))
+	for i, c := range g.res.Cases {
+		rows[i] = c.GateRow
+	}
+	return rows
 }
 
 // gateWork is one gate's state (runGate): the proposal, what its base and
@@ -774,9 +846,13 @@ func (g *gateWork) replay(slot **gateRun, label, dir string, judgeOnly bool, in,
 			out.stop, out.held = stop, true
 			break
 		}
-		if c.Local() && slices.Contains([]string{eval.OutcomeMissingRole, eval.OutcomeConfigError, eval.OutcomeEnvironment}, cr.Outcome) {
-			// It cannot score the round, now or on a later try: never a loss, never a stop.
-			out.skip = fmt.Sprintf("the %s replay ended %s, which scores no round: %s", label, cr.Outcome, why)
+		if c.Local() && cr.Outcome == eval.OutcomeConfigError {
+			// A frozen role the config no longer declares, no gh identity: no
+			// replay scores the round until the config changes, so never a
+			// loss, never a stop. A lost reviewer's report (missing_role) or a
+			// worktree that could not be prepared (environment) can pass on a
+			// later try, so they are no score, as for a posted case.
+			out.skip = fmt.Sprintf("the %s replay ended %s, which scores no round until the config changes: %s", label, cr.Outcome, why)
 			break
 		}
 		out.missing = fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why)
@@ -974,12 +1050,12 @@ func (g *gateWork) second(c eval.Case, row *GateCase) (score *eval.Score, run, s
 	return rp.score, rp.run, rp.skip, false, nil
 }
 
-// retryLost replays a case the candidate lost once more before the loss
-// counts (second), keeping the first replay's score (learn.GateRow.First:
-// a loss counts for a defect both lost); stop when the gate ends there,
-// with what runGate returns.
-func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
-	for i := range g.res.Cases {
+// retryLost replays a case of rows (indexes of the gate's rows) the
+// candidate lost once more before the loss counts (second), keeping the
+// first replay's score (learn.GateRow.First: a loss counts for a defect
+// both lost); stop when the gate ends there, with what runGate returns.
+func (g *gateWork) retryLost(cases []learn.GateCase, rows []int) (bool, error) {
+	for _, i := range rows {
 		row := &g.res.Cases[i]
 		if len(row.Lost()) == 0 {
 			continue
@@ -1009,9 +1085,10 @@ func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
 // (learn.GateRow.AtBase: not the candidate's loss) with a
 // learn.guard_lost_at_base warning and a toast (lostAtBase). A local guard
 // takes two replays of the base instead (localBase). Stop when the gate
-// ends there, with what runGate returns.
-func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
-	for i := range g.res.Cases {
+// ends there, with what runGate returns. rows are the indexes of the
+// gate's rows it looks at.
+func (g *gateWork) guardsAtBase(cases []learn.GateCase, rows []int) (bool, error) {
+	for _, i := range rows {
 		row := &g.res.Cases[i]
 		if !row.Guard || !row.Stored || !row.Retried || row.Skip != "" || len(row.Lost()) == 0 {
 			continue
@@ -1046,7 +1123,7 @@ func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 			continue
 		}
 		row.Note = fmt.Sprintf("a guard the candidate lost twice: run %s found what it lost, and the base's replay, run %s, lost it too", ref, run)
-		g.lostAtBase(row.Case, ref)
+		g.lostAtBase(row.Case, ref, g.baseIn)
 	}
 	return false, nil
 }
@@ -1063,9 +1140,10 @@ func (g *gateWork) guardsAtBase(cases []learn.GateCase) (bool, error) {
 // candidate lost. A defect counts as found at the base only when both
 // found it (learn.BothFound), so a candidate no worse than the base fails
 // on a defect found half the time in 1 gate in 16, not in 1 in 8. A base
-// replay that cannot score the round leaves the row out; one without a
-// score for another reason stops the gate (a loss could be the
-// candidate's). Stop when the gate ends there, with what runGate returns.
+// replay that ends config_error leaves the row out (replay); one without a
+// score for another reason, a lost reviewer's report included, stops the
+// gate (a loss could be the candidate's). Stop when the gate ends there,
+// with what runGate returns.
 func (g *gateWork) localBase(c eval.Case, row *GateCase) (bool, error) {
 	ref, lost := row.BaselineRun, row.Lost()
 	var scores []*eval.Score
@@ -1110,7 +1188,7 @@ func (g *gateWork) localBase(c eval.Case, row *GateCase) (bool, error) {
 		said = "the base's replays, runs " + strings.Join(runs, " and ") + ", did not both find it"
 	}
 	row.Note = fmt.Sprintf("a local guard the candidate lost twice: run %s found what it lost, and %s", ref, said)
-	g.lostAtBase(row.Case, ref)
+	g.lostAtBase(row.Case, ref, g.baseInFor(c))
 	return false, nil
 }
 
@@ -1186,10 +1264,11 @@ func (g *gateWork) storedBase(c eval.Case, reports string) (*eval.Score, string)
 // proposal's base too: the review at master no longer finds what it did,
 // whatever the proposal changes (a model, a notes or a code change, a hand
 // edit of a prompt). One warn event learn.guard_lost_at_base (the case, the
-// run, the base's inputs) and one toast per proposal and case, the
-// registry reserving the pair (a gate resumed after a stop decides the
-// guard again); neither names more than the case.
-func (g *gateWork) lostAtBase(name, ref string) {
+// run, the inputs the base's replays ran with: baseIn, a local case's
+// round's own) and one toast per proposal and case, the registry reserving
+// the pair (a gate resumed after a stop decides the guard again); neither
+// names more than the case.
+func (g *gateWork) lostAtBase(name, ref, baseIn string) {
 	e := g.e
 	switch first, err := e.st.ShouldSend(g.octx, fmt.Sprintf("learn:guard-lost:%d:%s", g.p.ID, name), gateMaxAge); {
 	case err != nil:
@@ -1200,9 +1279,9 @@ func (g *gateWork) lostAtBase(name, ref string) {
 	}
 	e.event(g.octx, "warn", learnSubject, "learn.guard_lost_at_base", fmt.Sprintf("guard case %s: the candidate of skill proposal %d "+
 		"lost twice what run %s found, and the base lost it too (inputs %s): not the proposal's loss, but the review at master no longer "+
-		"finds it", name, g.p.ID, ref, g.baseIn), map[string]any{"proposal": g.p.ID, "case": name, "run": ref, "inputs": g.baseIn})
+		"finds it", name, g.p.ID, ref, baseIn), map[string]any{"proposal": g.p.ID, "case": name, "run": ref, "inputs": baseIn})
 	title := fmt.Sprintf("eval case %s is lost at master", name)
-	e.info(notify.Item{Key: "learn-guard-lost:" + name + ":" + g.baseIn, Title: title, Line: title,
+	e.info(notify.Item{Key: "learn-guard-lost:" + name + ":" + baseIn, Title: title, Line: title,
 		Body: fmt.Sprintf("Run %s found it; the gate of skill proposal %d replayed it at master, which lost it too. "+
 			"`magnum eval run --case %s` measures it again.", ref, g.p.ID, name)})
 }
@@ -1215,11 +1294,7 @@ func (g *gateWork) lostAtBase(name, ref string) {
 // candidate does not find them, so they never count toward a dismissal).
 // Stop when the gate ends there, with what runGate returns.
 func (g *gateWork) confirmWins(cases []learn.GateCase) (bool, error) {
-	rows := make([]learn.GateRow, len(g.res.Cases))
-	for i, c := range g.res.Cases {
-		rows[i] = c.GateRow
-	}
-	if len(learn.Regressions(rows)) > 0 {
+	if len(learn.Regressions(g.rows())) > 0 {
 		return false, nil
 	}
 	for i := range g.res.Cases {
@@ -1249,11 +1324,7 @@ func (g *gateWork) confirmWins(cases []learn.GateCase) (bool, error) {
 // decides) and moves p to the verdict's state (gateDecide).
 func (g *gateWork) decide() error {
 	res, p := &g.res, g.p
-	rows := make([]learn.GateRow, len(res.Cases))
-	for i, c := range res.Cases {
-		rows[i] = c.GateRow
-	}
-	v := learn.Judge(rows)
+	v := learn.Judge(g.rows())
 	res.State, res.Rule = v.State, v.Rule
 	if p.Reverts != 0 { // a revert lands only on the operator's y (learn_revert.go)
 		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("a revert of skill version %d waits for the operator whatever the gate found "+
