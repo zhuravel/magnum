@@ -13833,18 +13833,19 @@ func (e *Engine) Tick(ctx context.Context) error
     then the infrastructure hold and a MySQL ping before a pass that advances),
     the requests, the published tasks' PRs (followPRs, whether or not the pass
     advances), their staging status (stagingPass, whose Refreshes run off the
-    loop), the ended tasks' last reads of their Jira issues and the PRs' status
-    files (writePRStatuses), then each live task's advance under its own panic
-    guard (safely), then the reads of the other tasks' Jira issues, with what
-    the intake's tries left of the tick's Jira budget (trackJira). During an
-    infrastructure or a herdr hold no task advances except on the hold's tries,
-    and while herdr does not answer no copy a base run left detached is swept
-    (sweepDetached, each under safely too); a failure that a hold covers costs
-    its task nothing. Last, the alerts are delivered (deliverAlerts). The
-    returned error joins what failed, for the log; each step records its own.
-    A task's held wait is no error of the tick: logHeld logs it once, at WARN
-    only past heldWarnAfter. A task whose stage failed for a cause of its own is
-    advanced no sooner than a poll after the failure (retryLater).
+    loop), the answers of the last batch of reads of the tasks' Jira issues
+    (takeTracking) and the PRs' status files (writePRStatuses), then each live
+    task's advance under its own panic guard (safely), then the next batch of
+    those reads, off the loop, with what the intake's tries left of the tick's
+    Jira budget (trackJira). During an infrastructure or a herdr hold no task
+    advances except on the hold's tries, and while herdr does not answer no copy
+    a base run left detached is swept (sweepDetached, each under safely too);
+    a failure that a hold covers costs its task nothing. Last, the alerts are
+    delivered (deliverAlerts). The returned error joins what failed, for the
+    log; each step records its own. A task's held wait is no error of the tick:
+    logHeld logs it once, at WARN only past heldWarnAfter. A task whose stage
+    failed for a cause of its own is advanced no sooner than a poll after the
+    failure (retryLater).
 
 type ErrRunning struct {
 	PID  int
@@ -13943,10 +13944,10 @@ func ReadHolds(l paths.Layout) ([]Hold, error)
 type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
 	Search(ctx context.Context, words string, limit int) ([]jira.Ticket, error)
-	Status(ctx context.Context, key string) (jira.IssueStatus, error)
+	StatusSince(ctx context.Context, key string, prior jira.IssueStatus) (jira.IssueStatus, error)
 }
     Jira reads a task's ticket, searches issues by the words of a free prompt,
-    and reads where a task's issue stands (tracking.go).
+    and reads where a task's issue stands after the read before (tracking.go).
 
 type LetGoPayload struct {
 	TaskID        int64
@@ -15780,11 +15781,13 @@ func (u *TaskUpdate) Set(col string, v any)
 type Tracking struct {
 	TaskID  int64
 	JiraKey string
-	// Status is the status's name, Category Jira's category of it (new,
-	// indeterminate, done; "" unknown) and Since when the issue moved into
-	// it (zero: unknown).
-	Status, Category string
-	Since            time.Time
+	// Status is the status's name, StatusID its id, Category Jira's
+	// category of it (new, indeterminate, done; "" unknown), Since when the
+	// issue moved into it (zero: unknown) and Searched whether the changelog
+	// was searched for that (jira.IssueStatus's).
+	Status, StatusID, Category string
+	Since                      time.Time
+	Searched                   bool
 	// Assigned says the issue has an assignee, AssigneeYou that it is you.
 	Assigned, AssigneeYou bool
 	// ReadAt is the read the facts are from, zero before one worked;
@@ -20049,10 +20052,11 @@ an event or an error; --disable, the first argument, keeps a ~/.curlrc out.
 The token is read from a file only its owner can open.
 
 Search finds issues by the words of their title (the factory asks which issue
-a free prompt is): GET <url>/rest/api/3/search/jql, the same way. Status reads
-where an issue stands (the factory's tick tracks its tasks' issues): its status,
-Jira's category of it, since when (from its changelog) and whether it is
-assigned to you, by account id, never a person's name (status.go).
+a free prompt is): GET <url>/rest/api/3/search/jql, the same way. Status and
+StatusSince read where an issue stands (the factory tracks its tasks' issues):
+its status, Jira's category of it, since when (from its changelog, read only
+when the status changed since the read before) and whether it is assigned to
+you, by account id, never a person's name (status.go).
 
 A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
 parent, its description (cut at MaxDescription), the custom fields whose name
@@ -20089,6 +20093,13 @@ const (
 )
     The bounds of a search: the most words it asks for (the first of the text)
     and the most issues it reads (the API's own page limit).
+
+const (
+	PartChangelog = "changelog" // a page of the changelog: Since is unknown
+	PartAccount   = "account"   // your account's id (myself): the assignee is not known to be you
+)
+    The parts of a read whose failure leaves the issue's own answer standing
+    (PartError).
 
 const MaxReporter = 64
     MaxReporter is the cut of a reporter's display name, in bytes.
@@ -20147,15 +20158,26 @@ func (c *Client) Search(ctx context.Context, words string, limit int) ([]Ticket,
     out. The credentials go to curl as Ticket's do.
 
 func (c *Client) Status(ctx context.Context, key string) (IssueStatus, error)
-    Status reads where issue key ("PS-123") stands: one GET of
-    /rest/api/2/issue/<KEY>?fields=status,assignee,created&expand=changelog,
-    then, when the changelog's newest entries hold no move into the
-    status and the changelog has older ones, its paged changelog
+    Status reads where issue key ("PS-123") stands, its changelog searched for
+    since when: StatusSince with no read before.
+
+func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus) (IssueStatus, error)
+    StatusSince reads where issue key stands after a read that gave prior.
+    When prior's changelog was searched (prior.Searched), it first makes
+    one GET of /rest/api/2/issue/<KEY>?fields=status,assignee,created,
+    a small answer: a status that is still prior's (by its id, else by its name)
+    keeps prior's Since, and no changelog is read. Otherwise (a new status,
+    or no search before) it GETs the issue with &expand=changelog and searches
+    the changelog: its entries the answer holds, then, when they hold no
+    move into the status and the changelog has more, the paged changelog
     (/rest/api/2/issue/<KEY>/changelog, oldest first) back from the newest
-    missing entry, at most maxChangelogPages pages; and, for an assigned issue,
-    your account's id (GET /rest/api/2/myself) the first time only: the client
-    keeps it. The credentials go to curl as Ticket's do, and a failure is an
-    *Error of a class, as Ticket's is.
+    entry the answer did not hold, at most maxChangelogPages pages. Which
+    entries the answer holds is told by their order: newest first (Jira Cloud's
+    newest 100), or oldest first. For an assigned issue it asks your account's
+    id (GET /rest/api/2/myself) the first time only: the client keeps it.
+    The credentials go to curl as Ticket's do, and a failure is an *Error of a
+    class, as Ticket's is; a failure after the issue answered is a *PartError,
+    returned with what the issue said.
 
 func (c *Client) Ticket(ctx context.Context, key string) (Ticket, error)
     Ticket reads the issue key ("PS-123") from the site.
@@ -20197,22 +20219,42 @@ type Field struct {
 
 type IssueStatus struct {
 	Key, Name, Category string
+	// StatusID is the status's id ("" when Jira gave none): StatusSince
+	// tells a status that did not change by it.
+	StatusID string
 	// Since is when the issue moved into its status: the latest entry of
 	// its changelog that did, else its creation when no entry moved its
-	// status; zero when the move is older than the pages Status reads, or
-	// Jira gave no time Status can parse.
-	Since time.Time
+	// status; zero when the move is older than the pages Status reads, a
+	// page could not be read, or Jira gave no time Status can parse.
+	// Searched says the changelog was searched for it (the whole of it, or
+	// the pages up to their bound): false after a page that failed.
+	Since    time.Time
+	Searched bool
 	// AssigneeYou says the issue is assigned to you, Assigned that it is
 	// assigned to anyone.
 	AssigneeYou bool
 	Assigned    bool
 }
-    IssueStatus is where an issue stands in Jira: its key, its status's
-    name (on one line, cut at MaxStatusName bytes) and Jira's category of it
-    (statusCategory's key: new, indeterminate or done; "" for a word that is not
-    a lowercase one), since when it holds it, and whether it has an assignee and
-    that assignee is you (the account of the client's credentials). No person's
-    name or email is kept.
+    IssueStatus is where an issue stands in Jira: its key, its status's name (on
+    one line, without control or format characters, cut at MaxStatusName bytes)
+    and id, Jira's category of it (statusCategory's key: new, indeterminate or
+    done; "" for a word that is not a lowercase one), since when it holds it,
+    and whether it has an assignee and that assignee is you (the account of the
+    client's credentials). No person's name or email is kept.
+
+type PartError struct {
+	Part string
+	Err  error
+}
+    PartError is a failure of a read after the issue itself answered:
+    Status returns what the issue said with it. Err is the part's own failure
+    (an *Error of a class, or the context's), and the message names the part and
+    that class, never the answer's body.
+
+func (e *PartError) Error() string
+
+func (e *PartError) Unwrap() error
+    Unwrap is the part's own failure.
 
 type Ticket struct {
 	Key string // "PS-123"
@@ -24415,10 +24457,12 @@ const (
 
 func JiraStatusOf(category, name string) JiraStatus
     JiraStatusOf is the file's word for an issue's status, by Jira's category
-    of it (its statusCategory key) and its name: new is to_do and done is done;
-    indeterminate is in_code_review when the name holds "review" in any case,
-    else in_development; any other category, "" included, is other. A task whose
-    issue was never read is unknown, which the writer says without this.
+    of it (its statusCategory key) and its name, case aside: new is to_do and
+    done is done; indeterminate is in_code_review when the name holds "review",
+    in_development when it holds one of devWords, else other (a QA, a deploy,
+    a block: "in development" would tell the reviewer something false);
+    any other category, "" included, is other. A task whose issue was never read
+    is unknown, which the writer says without this.
 
 func (s JiraStatus) Valid() bool
     Valid reports whether s is one of the Jira statuses.
@@ -30849,17 +30893,19 @@ type FactoryJiraStatus struct {
 	Name, Category          string
 	Since                   time.Time
 	Assigned, AssignedToYou bool
-	ReadAt                  time.Time
+	ReadAt, TriedAt         time.Time
 	LastError               string
 }
     FactoryJiraStatus is where a task's Jira issue stands, as the factory
-    daemon's last read of it that worked says it (its tracking row):
-    the status's name ("In Review", one line of at most 64 bytes), Jira's
-    category of it ("new", "indeterminate", "done"; "" for another word),
+    daemon's last read of it that worked says it (its tracking row): the
+    status's name ("In Review": one line of at most 64 bytes, without control
+    or format characters; "" while no read worked, when LastError says why),
+    Jira's category of it ("new", "indeterminate", "done"; "" for another word),
     since when the issue holds it (zero: not known), whether it has an assignee
-    and whether that is you, when the read was, and the failure of the last try
-    since it ("" when that try was the read): a class of failure in fixed words,
-    never ticket text.
+    and whether that is you, when the read was (zero: none worked), when the
+    last try was, and its failure ("" when it worked): a class of failure in
+    fixed words, never ticket text. The row and its task card share one value:
+    a painter reads it, never changes it.
 
 type FactoryMark int
     FactoryMark is the one-cell mark before a row: what the task is doing now.
@@ -30976,7 +31022,7 @@ type FactoryRow struct {
 	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.
 	Jira string
 	// JiraStatus is where the task's Jira issue stands, as the factory
-	// daemon last read it; nil before a read of its key worked, and on a
+	// daemon last read it; nil before the first try of its key, and on a
 	// row of your own PR.
 	JiraStatus *FactoryJiraStatus
 	// MoveShort is Move on a narrow screen.

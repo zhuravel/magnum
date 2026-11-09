@@ -16,11 +16,13 @@ import (
 type Tracking struct {
 	TaskID  int64
 	JiraKey string
-	// Status is the status's name, Category Jira's category of it (new,
-	// indeterminate, done; "" unknown) and Since when the issue moved into
-	// it (zero: unknown).
-	Status, Category string
-	Since            time.Time
+	// Status is the status's name, StatusID its id, Category Jira's
+	// category of it (new, indeterminate, done; "" unknown), Since when the
+	// issue moved into it (zero: unknown) and Searched whether the changelog
+	// was searched for that (jira.IssueStatus's).
+	Status, StatusID, Category string
+	Since                      time.Time
+	Searched                   bool
 	// Assigned says the issue has an assignee, AssigneeYou that it is you.
 	Assigned, AssigneeYou bool
 	// ReadAt is the read the facts are from, zero before one worked;
@@ -30,12 +32,13 @@ type Tracking struct {
 	LastError       string
 }
 
-const trackingColumns = "task_id, jira_key, jira_status, jira_category, jira_since, assigned, assignee_you, read_at, tried_at, last_error"
+const trackingColumns = "task_id, jira_key, jira_status, jira_status_id, jira_category, jira_since, since_searched, assigned, " +
+	"assignee_you, read_at, tried_at, last_error"
 
 func scanTracking(sc scanner) (Tracking, error) {
 	var t Tracking
-	err := sc.Scan(&t.TaskID, &t.JiraKey, &t.Status, &t.Category, timeCol{&t.Since}, &t.Assigned, &t.AssigneeYou,
-		timeCol{&t.ReadAt}, timeCol{&t.TriedAt}, &t.LastError)
+	err := sc.Scan(&t.TaskID, &t.JiraKey, &t.Status, &t.StatusID, &t.Category, timeCol{&t.Since}, &t.Searched, &t.Assigned,
+		&t.AssigneeYou, timeCol{&t.ReadAt}, timeCol{&t.TriedAt}, &t.LastError)
 	return t, err
 }
 
@@ -45,8 +48,8 @@ func (r *Registry) SetTracking(ctx context.Context, t Tracking) error {
 	if t.TriedAt.IsZero() {
 		return errors.New("tracking: a row needs the time of its try")
 	}
-	_, err := r.db.ExecContext(ctx, "INSERT OR REPLACE INTO tracking ("+trackingColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		t.TaskID, t.JiraKey, t.Status, t.Category, timeArg(t.Since), t.Assigned, t.AssigneeYou && t.Assigned,
+	_, err := r.db.ExecContext(ctx, "INSERT OR REPLACE INTO tracking ("+trackingColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		t.TaskID, t.JiraKey, t.Status, t.StatusID, t.Category, timeArg(t.Since), t.Searched, t.Assigned, t.AssigneeYou && t.Assigned,
 		timeArg(t.ReadAt), store.FormatTime(t.TriedAt), t.LastError)
 	if err != nil {
 		return fmt.Errorf("tracking of task %d: %w", t.TaskID, mapErr(err))

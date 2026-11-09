@@ -79,7 +79,7 @@ type FactoryRow struct {
 	// screen's JIRA cell. Empty: the Key, unless the Key is the GitHub number.
 	Jira string
 	// JiraStatus is where the task's Jira issue stands, as the factory
-	// daemon last read it; nil before a read of its key worked, and on a
+	// daemon last read it; nil before the first try of its key, and on a
 	// row of your own PR.
 	JiraStatus *FactoryJiraStatus
 	// MoveShort is Move on a narrow screen.
@@ -219,17 +219,19 @@ type StagingCell struct {
 
 // FactoryJiraStatus is where a task's Jira issue stands, as the factory
 // daemon's last read of it that worked says it (its tracking row): the
-// status's name ("In Review", one line of at most 64 bytes), Jira's
-// category of it ("new", "indeterminate", "done"; "" for another word),
-// since when the issue holds it (zero: not known), whether it has an
-// assignee and whether that is you, when the read was, and the failure of
-// the last try since it ("" when that try was the read): a class of
-// failure in fixed words, never ticket text.
+// status's name ("In Review": one line of at most 64 bytes, without
+// control or format characters; "" while no read worked, when LastError
+// says why), Jira's category of it ("new", "indeterminate", "done"; "" for
+// another word), since when the issue holds it (zero: not known), whether
+// it has an assignee and whether that is you, when the read was (zero:
+// none worked), when the last try was, and its failure ("" when it
+// worked): a class of failure in fixed words, never ticket text. The row
+// and its task card share one value: a painter reads it, never changes it.
 type FactoryJiraStatus struct {
 	Name, Category          string
 	Since                   time.Time
 	Assigned, AssignedToYou bool
-	ReadAt                  time.Time
+	ReadAt, TriedAt         time.Time
 	LastError               string
 }
 

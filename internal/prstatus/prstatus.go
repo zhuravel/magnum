@@ -201,25 +201,34 @@ func (s JiraStatus) Valid() bool {
 }
 
 // JiraStatusOf is the file's word for an issue's status, by Jira's category
-// of it (its statusCategory key) and its name: new is to_do and done is
-// done; indeterminate is in_code_review when the name holds "review" in
-// any case, else in_development; any other category, "" included, is
-// other. A task whose issue was never read is unknown, which the writer
-// says without this.
+// of it (its statusCategory key) and its name, case aside: new is to_do and
+// done is done; indeterminate is in_code_review when the name holds
+// "review", in_development when it holds one of devWords, else other (a QA,
+// a deploy, a block: "in development" would tell the reviewer something
+// false); any other category, "" included, is other. A task whose issue
+// was never read is unknown, which the writer says without this.
 func JiraStatusOf(category, name string) JiraStatus {
+	name = strings.ToLower(name)
 	switch category {
 	case "new":
 		return JiraToDo
 	case "done":
 		return JiraDone
 	case "indeterminate":
-		if strings.Contains(strings.ToLower(name), "review") {
+		switch {
+		case strings.Contains(name, "review"):
 			return JiraInCodeReview
+		case slices.ContainsFunc(devWords, func(w string) bool { return strings.Contains(name, w) }):
+			return JiraInDevelopment
 		}
-		return JiraInDevelopment
 	}
 	return JiraOther
 }
+
+// devWords are the words of an in-progress status's name that say the
+// work is being written: "In Progress", "In Development", "In Dev",
+// "Doing", "Implementing", "Work in progress".
+var devWords = []string{"progress", "develop", "in dev", "doing", "coding", "implement", "work"}
 
 // Proof is what the coding stage proved: nothing yet, the spec red on the
 // base, red on the base and green at the head, or (a kind whose proof is

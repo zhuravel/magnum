@@ -37,7 +37,8 @@ func TestTheTrackingMigrationAppliesOnTheTemplateAndAnOlderFile(t *testing.T) {
 }
 
 // A task's tracking row keeps the last read of its issue that worked (the
-// key it is of, the status's name and category, since when, the assignee)
+// key it is of, the status's name, id and category, since when and whether
+// the changelog was searched for it, the assignee)
 // and the last try, which a failure moves with its cause while the facts
 // stay; a write replaces the whole row, one row per task, and a row of a
 // task that does not exist is refused.
@@ -50,8 +51,8 @@ func TestATasksTrackingRowKeepsItsLastReadAndItsLastTry(t *testing.T) {
 	if _, err := r.Tracking(ctx, task.ID); !errors.Is(err, registry.ErrNotFound) {
 		t.Fatalf("Tracking before a read: %v, want ErrNotFound", err)
 	}
-	read := registry.Tracking{TaskID: task.ID, JiraKey: "PR-12380", Status: "In Review", Category: "indeterminate",
-		Since: t0.Add(-48 * time.Hour), Assigned: true, AssigneeYou: true, ReadAt: t0, TriedAt: t0}
+	read := registry.Tracking{TaskID: task.ID, JiraKey: "PR-12380", Status: "In Review", StatusID: "10002", Category: "indeterminate",
+		Since: t0.Add(-48 * time.Hour), Searched: true, Assigned: true, AssigneeYou: true, ReadAt: t0, TriedAt: t0}
 	if err := r.SetTracking(ctx, read); err != nil {
 		t.Fatal(err)
 	}

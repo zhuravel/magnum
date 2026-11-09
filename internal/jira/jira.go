@@ -12,10 +12,11 @@
 //
 // Search finds issues by the words of their title (the factory asks which
 // issue a free prompt is): GET <url>/rest/api/3/search/jql, the same way.
-// Status reads where an issue stands (the factory's tick tracks its tasks'
-// issues): its status, Jira's category of it, since when (from its
-// changelog) and whether it is assigned to you, by account id, never a
-// person's name (status.go).
+// Status and StatusSince read where an issue stands (the factory tracks
+// its tasks' issues): its status, Jira's category of it, since when (from
+// its changelog, read only when the status changed since the read before)
+// and whether it is assigned to you, by account id, never a person's name
+// (status.go).
 //
 // A Ticket keeps the issue's key, URL, summary, status, type, priority,
 // labels, parent, its description (cut at MaxDescription), the custom

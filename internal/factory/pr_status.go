@@ -9,9 +9,11 @@ package factory
 // read it (who it waits on) and the fix loops' record (Magnum.FixRecords);
 // never the text of a PR, a ticket, a question or an agent. The Jira row
 // is the task's Jira issue's key and its status, mapped from its tracking
-// row's last read (tracking.go, prstatus.JiraStatusOf; unknown before a
-// read of the key worked), and empty for a task without one (your words,
-// or a key of another tracker). The stagings are the PR's staging
+// row's last read (tracking.go, prstatus.JiraStatusOf; unknown while no
+// read of the key worked), and empty with [jira] off, for a task without
+// one (your words, or a key of another tracker) and before the key's first
+// try. An ended task's last write waits for its issue's last read, up to
+// lastReadBound after its end (lastReadPending). The stagings are the PR's staging
 // status this tick (stagingPass: each env of its repository, in the
 // config's order, the first also as the staging row); a repository without
 // staging envs has none, and its staging row stays none.
@@ -152,6 +154,9 @@ func (e *Engine) statusTaskOf(ctx context.Context, t registry.Task) (statusTask,
 			e.statusFinal[t.ID] = true
 			return statusTask{}, false
 		}
+		if e.lastReadPending(ctx, t) { // the last write carries the issue's last read, up to lastReadBound after the end
+			return statusTask{}, false
+		}
 	}
 	return statusTask{t: t, ref: ref, link: link, path: path}, true
 }
@@ -204,22 +209,25 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 	return s, nil
 }
 
-// jiraStatus is task t's Jira issue in the status file's words: none for a
-// task without one (jiraKeyOf), else its key and its status as the
-// tracking row of that key's last read says it (prstatus.JiraStatusOf),
-// unknown before a read of it worked.
+// jiraStatus is task t's Jira issue in the status file's words: none with
+// [jira] off, for a task without one (jiraKeyOf), and before a first try
+// of its key, so the comment's first edit names a status; else its key and
+// its status as the tracking row of that key's last read says it
+// (prstatus.JiraStatusOf), unknown while no read of it worked.
 func (e *Engine) jiraStatus(ctx context.Context, t registry.Task) (prstatus.Jira, error) {
 	key := e.jiraKeyOf(t)
-	if key == "" {
+	if key == "" || e.d.Jira == nil {
 		return prstatus.Jira{}, nil
 	}
 	tr, err := e.reg.Tracking(ctx, t.ID)
 	switch {
 	case errors.Is(err, registry.ErrNotFound):
-		return prstatus.JiraOf(key, prstatus.JiraUnknown), nil
+		return prstatus.Jira{}, nil
 	case err != nil:
 		return prstatus.Jira{}, err
-	case tr.JiraKey != key || tr.ReadAt.IsZero():
+	case tr.JiraKey != key:
+		return prstatus.Jira{}, nil
+	case tr.ReadAt.IsZero():
 		return prstatus.JiraOf(key, prstatus.JiraUnknown), nil
 	}
 	return prstatus.JiraOf(key, prstatus.JiraStatusOf(tr.Category, tr.Status)), nil

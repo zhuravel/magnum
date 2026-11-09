@@ -453,14 +453,16 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 }
 
 // jiraStatusOf is where task t's Jira issue stands for the screen, from
-// its tracking row in rows: nil without a row of its key whose read worked.
+// its tracking row in rows: nil without a row of its key (before its first
+// try); one whose reads all failed carries the last failure alone, with no
+// name.
 func jiraStatusOf(rows map[int64]registry.Tracking, t registry.Task) *tui.FactoryJiraStatus {
 	tr, ok := rows[t.ID]
-	if !ok || t.JiraKey == "" || tr.JiraKey != t.JiraKey || tr.ReadAt.IsZero() {
+	if !ok || t.JiraKey == "" || tr.JiraKey != t.JiraKey {
 		return nil
 	}
 	return &tui.FactoryJiraStatus{Name: tr.Status, Category: tr.Category, Since: tr.Since, Assigned: tr.Assigned,
-		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, LastError: tr.LastError}
+		AssignedToYou: tr.AssigneeYou, ReadAt: tr.ReadAt, TriedAt: tr.TriedAt, LastError: tr.LastError}
 }
 
 // onQuestions reports whether task v waits on your answers to its

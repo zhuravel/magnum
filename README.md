@@ -4689,8 +4689,9 @@ and it still needs your attention, `done`, or `off`, with the cycle, the fixers'
 replied in, never fewer than the file had, since magnum prunes old events); and now, who the PR waits on (`you`,
 `magnum`, `reviewers`, `ci` or `none`, as the task's row says) and the stage (`published`, then `done`, `stopped` or
 `failed`); and the Jira issue, its key and its status (below) in the file's words: `to_do`, `in_development`,
-`in_code_review`, `done`, `other` (a category Jira gives that is none of its three), or `unknown` before a read of
-the issue worked; a task of your words, or of another tracker's key, has none. The stagings are the PR on
+`in_code_review`, `done`, `other` (any other status, a QA one say, or a category Jira gives that is none of its
+three), or `unknown` while no read of the issue worked; a task of your words, or of another tracker's key, has none,
+and so has every task with `[jira]` off or before its issue's first read. The stagings are the PR on
 each staging env of its repository, in the config's order (`stagings`: each an `env`, its name when it is a slug,
 and a `state`: `deployed` for `latest`, `failed` when ci.yml failed on the PR's own change, `deploying` for the
 rest of `pushed`, ci.yml red on another change included, `none` for `outdated` and `none`; an env whose status
@@ -4703,20 +4704,25 @@ registry cannot be read (the file keeps its last content); a write that fails is
 and holds nothing up.
 
 **Where the Jira issue stands.** Besides the ticket at the start, the daemon reads where each task's Jira issue
-stands, in its tick, into the factory registry (`factory.db`'s `tracking`): the status's name, Jira's category of it
-(new, indeterminate, done), since when the issue holds it (its changelog's last move into that status, else its
-creation), and whether it is assigned, and to you (the account of `[jira] user`). One read is one GET of the issue
-with those fields and its changelog (up to 5 more pages of it only when its 100 newest entries hold no move into the
-status), plus `myself` once per daemon for an assigned issue; nothing is written to Jira. A task is read
-while it holds a Jira issue's key (a key of another tracker never is) and has not ended: at most every 10 minutes,
-those never read first, at a pace that keeps them all within the 10 minutes and spreads them over the ticks, from
-the tick's 3 tries of Jira that the starts waiting for Jira leave; a read Jira does not answer ends the tick's reads.
-A task that ended gets one last read, which its PR's last status file write carries, and none after. A read that
-fails keeps the last facts and records its cause (a class of failure, such as `Jira did not answer within 20s`,
-never ticket text), logged once while it stays: Jira down once for every task, a refused issue once for its task;
-it holds nothing up. The PR's status file maps the status by its category (new `to_do`, done `done`, indeterminate
-`in_code_review` when the status's name says "review", in any case, else `in_development`), and the screen's data
-carries the status's name, since when, and whether it is yours, for each task's row and card.
+stands into the factory registry (`factory.db`'s `tracking`): the status's name, Jira's category of it (new,
+indeterminate, done), since when the issue holds it (its changelog's last move into that status, else its
+creation), and whether it is assigned, and to you (the account of `[jira] user`). The reads run off the daemon's
+loop, one batch at a time, so a slow or hung Jira never holds a tick: a tick hands the batch the reads that are due,
+and the next tick writes what it read. A read is one small GET of the issue's status, assignee and creation; only
+when the status changed does it read the issue's changelog too (and up to 5 more pages of it when its newest entries
+hold no move into the status), plus `myself` once per daemon for an assigned issue; nothing is written to Jira. A
+task is read while it holds a Jira issue's key (a key of another tracker never is) and has not ended: at most every
+10 minutes, those never read first, at a pace that spreads the reads over the ticks, from the tick's 3 tries of Jira
+that the starts waiting for Jira leave. A read Jira does not answer ends its batch, and a batch Jira does not answer
+at all holds the next one back 1, 2, 4, 8, then 15 minutes, until Jira answers. A task that ended gets one last read
+2 minutes after its end (when a merge's own Jira automation has moved the issue), tried again until 5 minutes after
+it; its PR's last status file write waits for that read, up to then. A read that fails keeps the last facts and
+records its cause (a class of failure, such as `Jira did not answer within 20s`, never ticket text), logged once
+while it stays: Jira down once for every task, a refused issue once for its task; it holds nothing up. The PR's
+status file maps the status by its category (new `to_do`, done `done`, indeterminate `in_code_review` when the
+status's name says "review", `in_development` when it says progress or development, else `other`), and has no Jira
+row before the issue's first read; the screen's data carries the status's name, since when, whether it is yours,
+and the last failure, for each task's row and card.
 
 **Your own PRs on the screen.** Home also lists your own open PRs from magnum's registry, whether the factory
 wrote them or you did: every PR GitHub has open, not a draft, whose author is one of your logins (the board's

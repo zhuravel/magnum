@@ -203,8 +203,11 @@ func TestATaskWithoutAJiraIssueHasTheZeroJira(t *testing.T) {
 
 // A Jira issue's status maps to the file's words by Jira's category of it:
 // new is to_do and done is done; indeterminate is in_code_review when the
-// status's name says review, in any case, else in_development; any other
-// category, an unknown one ("") included, is other. Every word it gives is
+// status's name says review, in any case, in_development when it says
+// development or progress (devWords), and other for the rest of the work
+// in between (QA, a deploy, a block), which "in development" would tell
+// the reviewer falsely; any other category, an unknown one ("") included,
+// is other. Every word it gives is
 // one Write takes.
 func TestJiraStatusOfMapsTheCategoryAndTheName(t *testing.T) {
 	t.Parallel()
@@ -220,6 +223,15 @@ func TestJiraStatusOfMapsTheCategoryAndTheName(t *testing.T) {
 		{"indeterminate", "In Review", JiraInCodeReview},
 		{"indeterminate", "CODE REVIEW", JiraInCodeReview},
 		{"indeterminate", "Peer-reviewing", JiraInCodeReview},
+		{"indeterminate", "Doing", JiraInDevelopment},
+		{"indeterminate", "In Dev", JiraInDevelopment},
+		{"indeterminate", "Implementing", JiraInDevelopment},
+		{"indeterminate", "Work in progress", JiraInDevelopment},
+		{"indeterminate", "In QA", JiraOther},
+		{"indeterminate", "Testing", JiraOther},
+		{"indeterminate", "Ready to Deploy", JiraOther},
+		{"indeterminate", "Blocked", JiraOther},
+		{"indeterminate", "On Hold", JiraOther},
 		{"done", "Done", JiraDone},
 		{"done", "Won't do", JiraDone},
 		{"done", "Reviewed", JiraDone},

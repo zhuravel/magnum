@@ -156,8 +156,8 @@ func TestStatusReadsTheCurrentStatusAndSinceItsLastTransitionIntoIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := IssueStatus{Key: "PS-123", Name: "In Review", Category: "indeterminate",
-		Since: time.Date(2026, 11, 5, 12, 30, 0, 0, time.UTC), AssigneeYou: true, Assigned: true}
+	want := IssueStatus{Key: "PS-123", Name: "In Review", Category: "indeterminate", StatusID: "10002",
+		Since: time.Date(2026, 11, 5, 12, 30, 0, 0, time.UTC), Searched: true, AssigneeYou: true, Assigned: true}
 	if !got.Since.Equal(want.Since) {
 		t.Errorf("Since = %v, want %v: the latest move into the status", got.Since, want.Since)
 	}
@@ -305,18 +305,19 @@ func TestStatusTellsWhetherTheIssueIsAssignedToYou(t *testing.T) {
 }
 
 // Every value of the answer is data: the status's name comes on one line
-// (control characters, escapes among them, as spaces) cut at MaxStatusName
-// bytes on a character, a category that is not a lowercase word is
+// (control characters, escapes among them, as spaces; format characters,
+// the bidi overrides and zero-width spaces among them, dropped) cut at
+// MaxStatusName bytes on a character, a category that is not a lowercase word is
 // unknown (""), and a key that is not one never reaches curl.
 func TestAHostileStatusNameIsOneShortLine(t *testing.T) {
-	hostile := "In\nReview\x1b[31m\u0007 " + strings.Repeat("ü", MaxStatusName)
+	hostile := "In\nRe\u202eview\u200b\x1b[31m\u0007\u2066 " + strings.Repeat("ü", MaxStatusName)
 	issue := statusIssue("10002", hostile, "IN-PROGRESS\nrm", "", "2026-11-01T09:00:00.000+0200", 0)
 	c, site := statusSite(t, issue, nil)
 	got, err := c.Status(t.Context(), "PS-123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Name) > MaxStatusName || !utf8.ValidString(got.Name) || strings.ContainsAny(got.Name, "\n\x1b\u0007") ||
+	if len(got.Name) > MaxStatusName || !utf8.ValidString(got.Name) || strings.ContainsAny(got.Name, "\n\x1b\u0007\u202e\u200b\u2066") ||
 		!strings.HasPrefix(got.Name, "In Review [31m") {
 		t.Errorf("Name = %q (%d bytes), want one valid line of at most %d bytes", got.Name, len(got.Name), MaxStatusName)
 	}
@@ -341,11 +342,9 @@ func TestAHostileStatusNameIsOneShortLine(t *testing.T) {
 
 // A refusal (401, 404), a timeout and an answer that is not an issue's are
 // errors of a class, whose message carries no ticket text, the user or the
-// token: on the issue's read, on myself's and on a changelog page's.
+// token.
 func TestStatusFailuresAreAClassWithNoTicketText(t *testing.T) {
 	const secret = `{"errorMessages":["Issue PS-123 does not exist or you do not have permission to see it: Payouts"]}`
-	assigned := statusIssue("3", "Payouts review", "indeterminate", "557058:0000", "2026-11-01T09:00:00.000+0200", 0)
-	truncated := statusIssue("3", "Payouts review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 150, edits(100)...)
 	for _, tc := range []struct {
 		name  string
 		rule  execx.Rule
@@ -356,9 +355,6 @@ func TestStatusFailuresAreAClassWithNoTicketText(t *testing.T) {
 		{"timeout", execx.Rule{Result: execx.Result{Code: 28, Stderr: []byte("curl: (28) Operation timed out: Payouts")}}, ClassTimeout},
 		{"not an issue", execx.Rule{Result: execx.Result{Stdout: []byte(`{"key":"PS-123","names":{"x":"Payouts"}}` + "\n200")}}, ClassMalformed},
 		{"no changelog", execx.Rule{Result: execx.Result{Stdout: []byte(`{"key":"PS-123","fields":{"status":{"name":"Payouts"}}}` + "\n200")}}, ClassMalformed},
-		{"myself 401", execx.Rule{Fn: (&recorded{answers: map[string]string{statusPath("PS-123"): assigned + "\n200",
-			"/rest/api/2/myself": secret + "\n401"}}).curl}, ClassUnauthorized},
-		{"page 404", execx.Rule{Fn: (&recorded{answers: map[string]string{statusPath("PS-123"): truncated + "\n200"}}).curl}, ClassNotFound},
 	} {
 		tc.rule.Prefix = []string{"curl"}
 		c, _ := withRule(t, tc.rule)
@@ -373,5 +369,152 @@ func TestStatusFailuresAreAClassWithNoTicketText(t *testing.T) {
 				t.Errorf("%s: %q carries %q", tc.name, err, leak)
 			}
 		}
+	}
+}
+
+// statusOnly is GET /rest/api/2/issue/PS-123?fields=status,assignee,created's
+// answer: the issue's status, assignee and creation, no changelog.
+func statusOnly(id, name, category, assignee string) string {
+	fields := map[string]any{"status": map[string]any{"id": id, "name": name, "statusCategory": map[string]any{"key": category}},
+		"created": "2026-11-01T09:00:00.000+0200", "assignee": nil}
+	if assignee != "" {
+		fields["assignee"] = map[string]any{"accountId": assignee}
+	}
+	b, _ := json.Marshal(map[string]any{"key": "PS-123", "fields": fields})
+	return string(b) + "\n200"
+}
+
+// fieldsPath is the URL of an issue's read without its changelog.
+func fieldsPath(key string) string {
+	return "/rest/api/2/issue/" + key + "?fields=status,assignee,created"
+}
+
+// After a read that searched the changelog, StatusSince reads the issue's
+// status, assignee and creation alone (no changelog, a small answer): the
+// same status keeps the read's Since; a new status, or a read whose Since
+// was not searched, reads the issue again with its changelog.
+func TestStatusSinceKeepsAKnownStatusWithoutReadingItsChangelog(t *testing.T) {
+	prior := IssueStatus{Key: "PS-123", Name: "In Review", Category: "indeterminate", StatusID: "10002",
+		Since: time.Date(2026, 11, 5, 12, 30, 0, 0, time.UTC), Searched: true}
+	moved := statusIssue("3", "In Progress", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 1,
+		change{at: "2026-11-08T10:00:00.000+0000", fromID: "10002", from: "In Review", toID: "3", to: "In Progress"})
+	c, site := statusSite(t, moved, map[string]string{fieldsPath("PS-123"): statusOnly("10002", "In Review", "indeterminate", myAccount)})
+	got, err := c.StatusSince(t.Context(), "PS-123", prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Since.Equal(prior.Since) || !got.Searched || got.Name != "In Review" || !got.AssigneeYou {
+		t.Errorf("the same status: %+v, want the prior Since kept and the assignee read", got)
+	}
+	if urls := site.urls(); !slices.Equal(urls, []string{fieldsPath("PS-123"), "/rest/api/2/myself"}) {
+		t.Errorf("curl asked %q, want the issue without its changelog (and myself)", urls)
+	}
+	c, site = statusSite(t, moved, map[string]string{fieldsPath("PS-123"): statusOnly("3", "In Progress", "indeterminate", "")})
+	if got, err = c.StatusSince(t.Context(), "PS-123", prior); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "In Progress" || got.StatusID != "3" || !got.Since.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) || !got.Searched {
+		t.Errorf("a new status: %+v, want its move read from the changelog", got)
+	}
+	if urls := site.urls(); !slices.Equal(urls, []string{fieldsPath("PS-123"), statusPath("PS-123")}) {
+		t.Errorf("curl asked %q, want the issue, then the issue with its changelog", urls)
+	}
+	unsearched := prior
+	unsearched.Searched, unsearched.Since = false, time.Time{}
+	c, site = statusSite(t, moved, nil)
+	if _, err = c.StatusSince(t.Context(), "PS-123", unsearched); err != nil {
+		t.Fatal(err)
+	}
+	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123")}) {
+		t.Errorf("a prior read whose Since was not searched: curl asked %q, want the issue with its changelog alone", urls)
+	}
+}
+
+// A changelog whose move into the status is past the pages read is
+// searched once: the read says so (Searched, Since zero), and the next
+// read of the same status reads no page again.
+func TestAChangelogPastThePagesIsNotSearchedAgainForTheSameStatus(t *testing.T) {
+	total := 100 + (maxChangelogPages+1)*100
+	issue := statusIssue("10002", "In Review", "indeterminate", "", "2026-10-01T09:00:00.000+0200", total, edits(100)...)
+	more := map[string]string{fieldsPath("PS-123"): statusOnly("10002", "In Review", "indeterminate", "")}
+	for start := total - 200; start >= 0; start -= 100 {
+		more[fmt.Sprintf("/rest/api/2/issue/PS-123/changelog?maxResults=100&startAt=%d", start)] = pagedAnswer(start, total, edits(100)...)
+	}
+	c, site := statusSite(t, issue, more)
+	first, err := c.Status(t.Context(), "PS-123")
+	if err != nil || !first.Searched || !first.Since.IsZero() {
+		t.Fatalf("the first read: %+v, %v; want searched, Since unknown", first, err)
+	}
+	n := len(site.urls())
+	if _, err := c.StatusSince(t.Context(), "PS-123", first); err != nil {
+		t.Fatal(err)
+	}
+	if urls := site.urls()[n:]; !slices.Equal(urls, []string{fieldsPath("PS-123")}) {
+		t.Errorf("the next read asked %q, want the issue alone", urls)
+	}
+}
+
+// Once the issue answered, a changelog page or myself that fails loses
+// none of what the issue said: Status returns its status and assignee with
+// a PartError naming the part (its Since unknown and not searched, or its
+// assignee not known to be you), which carries the class of the part's
+// failure and no ticket text.
+func TestAFailedPageOrMyselfKeepsTheIssuesFacts(t *testing.T) {
+	const secret = `{"errorMessages":["Payouts: you do not have permission"]}`
+	truncated := statusIssue("3", "In Progress", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 150, edits(100)...)
+	c, _ := statusSite(t, truncated, nil) // the page answers 404
+	got, err := c.Status(t.Context(), "PS-123")
+	var pe *PartError
+	var je *Error
+	if !errors.As(err, &pe) || pe.Part != PartChangelog || !errors.As(err, &je) || je.Class != ClassNotFound {
+		t.Fatalf("a page's 404: %v, want a PartError of the changelog, not found", err)
+	}
+	if got.Name != "In Progress" || got.Category != "indeterminate" || got.StatusID != "3" || !got.Since.IsZero() || got.Searched {
+		t.Errorf("a page's 404: %+v, want the status kept, Since unknown and not searched", got)
+	}
+	assigned := statusIssue("3", "In Progress", "indeterminate", "557058:0000", "2026-11-01T09:00:00.000+0200", 0)
+	c, _ = statusSite(t, assigned, map[string]string{"/rest/api/2/myself": secret + "\n401"})
+	got, err = c.Status(t.Context(), "PS-123")
+	if !errors.As(err, &pe) || pe.Part != PartAccount || !errors.As(err, &je) || je.Class != ClassUnauthorized {
+		t.Fatalf("myself's 401: %v, want a PartError of the account, unauthorized", err)
+	}
+	if got.Name != "In Progress" || !got.Assigned || got.AssigneeYou || !got.Searched {
+		t.Errorf("myself's 401: %+v, want the status kept, assigned, not known to be you", got)
+	}
+	if strings.Contains(err.Error(), "Payouts") || strings.Contains(err.Error(), testToken) {
+		t.Errorf("%q carries ticket text or the token", err)
+	}
+}
+
+// An issue whose own changelog came oldest first (its 100 oldest entries,
+// not its newest) is paged from the newest missing entry back, so its
+// newest move is never left out; a move among its own entries counts once
+// no newer entry moved the status.
+func TestAnEmbeddedChangelogOldestFirstIsPagedFromItsNewestEntry(t *testing.T) {
+	oldest := append([]change{{at: "2026-09-01T08:00:00.000+0000", fromID: "1", from: "To Do", toID: "10002", to: "In Review"}}, edits(99)...)
+	for i := range oldest[1:] {
+		oldest[i+1].at = fmt.Sprintf("2026-09-%02dT08:00:00.000+0000", 2+i%27)
+	}
+	issue := statusIssue("10002", "In Review", "indeterminate", "", "2026-08-01T09:00:00.000+0200", 150, oldest...)
+	newest := append(edits(49), change{at: "2026-10-30T08:00:00.000+0000", fromID: "3", from: "In Progress", toID: "10002", to: "In Review"})
+	c, site := statusSite(t, issue, map[string]string{
+		"/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=100": pagedAnswer(100, 150, newest...),
+	})
+	got, err := c.Status(t.Context(), "PS-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Since.Equal(time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)) {
+		t.Errorf("Since = %v, want the newest move, on the page after the embedded entries", got.Since)
+	}
+	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123"), "/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=100"}) {
+		t.Errorf("curl asked %q", urls)
+	}
+	// Newer entries that move no status leave the answer's own move the latest.
+	c, _ = statusSite(t, issue, map[string]string{
+		"/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=100": pagedAnswer(100, 150, edits(50)...),
+	})
+	if got, err = c.Status(t.Context(), "PS-123"); err != nil || !got.Since.Equal(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)) {
+		t.Errorf("no newer move: %+v, %v; want the answer's own move", got, err)
 	}
 }

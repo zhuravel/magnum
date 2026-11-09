@@ -9,38 +9,69 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // MaxStatusName is the cut of a status's name, in bytes.
 const MaxStatusName = 64
 
 // The bounds of the changelog Status reads past the issue's own answer,
-// which holds only its newest entries (Jira cuts it at 100): the pages of
-// the paged changelog, each of at most changelogPage entries (the
-// endpoint's own limit).
+// which holds only some of its entries (Jira Cloud cuts it at the 100
+// newest): the pages of the paged changelog, each of at most changelogPage
+// entries (the endpoint's own limit).
 const (
 	maxChangelogPages = 5
 	changelogPage     = 100
 )
 
 // IssueStatus is where an issue stands in Jira: its key, its status's name
-// (on one line, cut at MaxStatusName bytes) and Jira's category of it
-// (statusCategory's key: new, indeterminate or done; "" for a word that is
-// not a lowercase one), since when it holds it, and whether it has an
-// assignee and that assignee is you (the account of the client's
-// credentials). No person's name or email is kept.
+// (on one line, without control or format characters, cut at
+// MaxStatusName bytes) and id, Jira's category of it (statusCategory's
+// key: new, indeterminate or done; "" for a word that is not a lowercase
+// one), since when it holds it, and whether it has an assignee and that
+// assignee is you (the account of the client's credentials). No person's
+// name or email is kept.
 type IssueStatus struct {
 	Key, Name, Category string
+	// StatusID is the status's id ("" when Jira gave none): StatusSince
+	// tells a status that did not change by it.
+	StatusID string
 	// Since is when the issue moved into its status: the latest entry of
 	// its changelog that did, else its creation when no entry moved its
-	// status; zero when the move is older than the pages Status reads, or
-	// Jira gave no time Status can parse.
-	Since time.Time
+	// status; zero when the move is older than the pages Status reads, a
+	// page could not be read, or Jira gave no time Status can parse.
+	// Searched says the changelog was searched for it (the whole of it, or
+	// the pages up to their bound): false after a page that failed.
+	Since    time.Time
+	Searched bool
 	// AssigneeYou says the issue is assigned to you, Assigned that it is
 	// assigned to anyone.
 	AssigneeYou bool
 	Assigned    bool
 }
+
+// The parts of a read whose failure leaves the issue's own answer standing
+// (PartError).
+const (
+	PartChangelog = "changelog" // a page of the changelog: Since is unknown
+	PartAccount   = "account"   // your account's id (myself): the assignee is not known to be you
+)
+
+// PartError is a failure of a read after the issue itself answered: Status
+// returns what the issue said with it. Err is the part's own failure (an
+// *Error of a class, or the context's), and the message names the part and
+// that class, never the answer's body.
+type PartError struct {
+	Part string
+	Err  error
+}
+
+func (e *PartError) Error() string {
+	return "Jira answered for the issue but not for its " + e.Part + ": " + e.Err.Error()
+}
+
+// Unwrap is the part's own failure.
+func (e *PartError) Unwrap() error { return e.Err }
 
 // categoryPattern is a status category's key as Status keeps it.
 var categoryPattern = regexp.MustCompile(`^[a-z]{1,32}$`)
@@ -49,89 +80,182 @@ var categoryPattern = regexp.MustCompile(`^[a-z]{1,32}$`)
 // "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077").
 var accountPattern = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,128}$`)
 
-// Status reads where issue key ("PS-123") stands: one GET of
-// /rest/api/2/issue/<KEY>?fields=status,assignee,created&expand=changelog,
-// then, when the changelog's newest entries hold no move into the status
-// and the changelog has older ones, its paged changelog
-// (/rest/api/2/issue/<KEY>/changelog, oldest first) back from the newest
-// missing entry, at most maxChangelogPages pages; and, for an assigned
-// issue, your account's id (GET /rest/api/2/myself) the first time only:
-// the client keeps it. The credentials go to curl as Ticket's do, and a
-// failure is an *Error of a class, as Ticket's is.
+// Status reads where issue key ("PS-123") stands, its changelog searched
+// for since when: StatusSince with no read before.
 func (c *Client) Status(ctx context.Context, key string) (IssueStatus, error) {
+	return c.StatusSince(ctx, key, IssueStatus{})
+}
+
+// StatusSince reads where issue key stands after a read that gave prior.
+// When prior's changelog was searched (prior.Searched), it first makes one
+// GET of /rest/api/2/issue/<KEY>?fields=status,assignee,created, a small
+// answer: a status that is still prior's (by its id, else by its name)
+// keeps prior's Since, and no changelog is read. Otherwise (a new status,
+// or no search before) it GETs the issue with &expand=changelog and
+// searches the changelog: its entries the answer holds, then, when they
+// hold no move into the status and the changelog has more, the paged
+// changelog (/rest/api/2/issue/<KEY>/changelog, oldest first) back from
+// the newest entry the answer did not hold, at most maxChangelogPages
+// pages. Which entries the answer holds is told by their order: newest
+// first (Jira Cloud's newest 100), or oldest first. For an assigned issue
+// it asks your account's id (GET /rest/api/2/myself) the first time only:
+// the client keeps it. The credentials go to curl as Ticket's do, and a
+// failure is an *Error of a class, as Ticket's is; a failure after the
+// issue answered is a *PartError, returned with what the issue said.
+func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus) (IssueStatus, error) {
 	if !keyPattern.MatchString(key) {
 		return IssueStatus{}, fmt.Errorf("%q is not a Jira issue key", key)
 	}
-	body, err := c.get(ctx, "/rest/api/2/issue/"+key+"?fields=status,assignee,created&expand=changelog", "jira status")
+	if prior.Searched {
+		ans, err := c.issue(ctx, key, false)
+		if err != nil {
+			return IssueStatus{}, err
+		}
+		if s, ok := ans.status(key); ok && sameStatus(s, prior) {
+			s.Since, s.Searched = prior.Since, true
+			return c.assignee(ctx, ans, s, nil)
+		}
+	}
+	ans, err := c.issue(ctx, key, true)
 	if err != nil {
 		return IssueStatus{}, err
 	}
-	var ans struct {
-		Key       string                     `json:"key"`
-		Fields    map[string]json.RawMessage `json:"fields"`
-		Changelog *struct {
-			Total     int               `json:"total"`
-			Histories []json.RawMessage `json:"histories"`
-		} `json:"changelog"`
+	s, ok := ans.status(key)
+	if !ok {
+		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: an issue without a status")
 	}
+	if ans.Changelog == nil {
+		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: an issue without its changelog")
+	}
+	since, searched, perr := c.since(ctx, key, ans, s)
+	s.Since, s.Searched = since, searched
+	return c.assignee(ctx, ans, s, perr)
+}
+
+// statusAnswer is the part of an issue's answer Status reads.
+type statusAnswer struct {
+	Key       string                     `json:"key"`
+	Fields    map[string]json.RawMessage `json:"fields"`
+	Changelog *struct {
+		Total     int               `json:"total"`
+		Histories []json.RawMessage `json:"histories"`
+	} `json:"changelog"`
+}
+
+// issue GETs key's status, assignee and creation, with its changelog when
+// changelog is set; one with no fields object is malformed.
+func (c *Client) issue(ctx context.Context, key string, changelog bool) (statusAnswer, error) {
+	path := "/rest/api/2/issue/" + key + "?fields=status,assignee,created"
+	if changelog {
+		path += "&expand=changelog"
+	}
+	body, err := c.get(ctx, path, "jira status")
+	if err != nil {
+		return statusAnswer{}, err
+	}
+	var ans statusAnswer
 	if err := json.Unmarshal(body, &ans); err != nil || ans.Fields == nil {
-		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: not an issue")
+		return statusAnswer{}, failed(ClassMalformed, 0, "Jira's answer is malformed: not an issue")
 	}
-	var status struct {
+	return ans, nil
+}
+
+// status is the answer's status (key, name, id, category), false for an
+// answer with no status of a name.
+func (a statusAnswer) status(asked string) (IssueStatus, bool) {
+	var st struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Category struct {
 			Key string `json:"key"`
 		} `json:"statusCategory"`
 	}
-	if !decode(ans.Fields["status"], &status) || statusName(status.Name) == "" {
-		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: an issue without a status")
+	if !decode(a.Fields["status"], &st) || statusName(st.Name) == "" {
+		return IssueStatus{}, false
 	}
-	if ans.Changelog == nil {
-		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: an issue without its changelog")
+	s := IssueStatus{Key: asked, Name: statusName(st.Name), StatusID: oneLine(st.ID, 64)}
+	if keyPattern.MatchString(a.Key) { // an issue moved to another project answers with its new key
+		s.Key = a.Key
 	}
-	s := IssueStatus{Key: key, Name: statusName(status.Name)}
-	if keyPattern.MatchString(ans.Key) { // an issue moved to another project answers with its new key
-		s.Key = ans.Key
+	if categoryPattern.MatchString(st.Category.Key) {
+		s.Category = st.Category.Key
 	}
-	if categoryPattern.MatchString(status.Category.Key) {
-		s.Category = status.Category.Key
+	return s, true
+}
+
+// sameStatus reports whether s is prior's status: by its id when both have
+// one, else by its name, case aside.
+func sameStatus(s, prior IssueStatus) bool {
+	if s.StatusID != "" && prior.StatusID != "" {
+		return s.StatusID == prior.StatusID
 	}
-	into := func(h history) bool { return h.into(status.ID, s.Name) }
-	since, found := latest(ans.Changelog.Histories, into)
-	if !found {
-		// The issue's answer holds the newest entries: the missing ones are
-		// the paged changelog's first total-len(histories), oldest first.
-		end := ans.Changelog.Total - len(ans.Changelog.Histories)
-		for page := 0; page < maxChangelogPages && end > 0 && !found; page++ {
-			start := max(end-changelogPage, 0)
-			vals, err := c.changelog(ctx, key, start, end-start)
-			if err != nil {
-				return IssueStatus{}, err
-			}
-			since, found = latest(vals, into)
-			end = start
+	return strings.EqualFold(s.Name, prior.Name)
+}
+
+// since searches the changelog of ans for the latest move into s's status:
+// its time, and whether the search ended (the whole changelog read, or the
+// pages up to their bound); a page that fails ends it unsearched, with a
+// PartError.
+func (c *Client) since(ctx context.Context, key string, ans statusAnswer, s IssueStatus) (time.Time, bool, error) {
+	into := func(h history) bool { return h.into(s.StatusID, s.Name) }
+	hs := ans.Changelog.Histories
+	held, heldFound := latest(hs, into)
+	// The entries the answer did not hold, as the paged changelog numbers
+	// them (oldest first): before the answer's when it gave the newest
+	// first, after them when it gave the oldest first, when a move among
+	// its own entries is not the latest until the newer ones are read.
+	lo, hi := 0, ans.Changelog.Total-len(hs)
+	oldest := oldestFirst(hs)
+	if oldest {
+		lo, hi = len(hs), ans.Changelog.Total
+	}
+	if heldFound && (!oldest || hi <= lo) {
+		return held, true, nil
+	}
+	for page := 0; page < maxChangelogPages && hi > lo; page++ {
+		start := max(hi-changelogPage, lo)
+		vals, err := c.changelog(ctx, key, start, hi-start)
+		if err != nil {
+			return time.Time{}, false, &PartError{Part: PartChangelog, Err: err}
 		}
-		if !found && end <= 0 { // the whole changelog read: the status never moved
-			var created string
-			if decode(ans.Fields["created"], &created) {
-				since = jiraTime(created)
-			}
+		if at, found := latest(vals, into); found {
+			return at, true, nil
 		}
+		hi = start
 	}
-	s.Since = since
-	var assignee struct {
+	switch {
+	case hi > lo: // the pages ran out first: the move is older than them
+		return time.Time{}, true, nil
+	case heldFound: // the answer's own entries came oldest first, and none newer moved the status
+		return held, true, nil
+	}
+	var created string
+	if decode(ans.Fields["created"], &created) { // the whole changelog read: the status never moved
+		return jiraTime(created), true, nil
+	}
+	return time.Time{}, true, nil
+}
+
+// assignee fills s's assignee from ans: whether it has one, and whether
+// it is you (account); a failed read of your account leaves it not known
+// to be you, with a PartError, unless perr already holds one.
+func (c *Client) assignee(ctx context.Context, ans statusAnswer, s IssueStatus, perr error) (IssueStatus, error) {
+	var a struct {
 		AccountID string `json:"accountId"`
 	}
-	if decode(ans.Fields["assignee"], &assignee) && assignee.AccountID != "" {
-		s.Assigned = true
-		me, err := c.account(ctx)
-		if err != nil {
-			return IssueStatus{}, err
-		}
-		s.AssigneeYou = assignee.AccountID == me
+	if !decode(ans.Fields["assignee"], &a) || a.AccountID == "" {
+		return s, perr
 	}
-	return s, nil
+	s.Assigned = true
+	me, err := c.account(ctx)
+	if err != nil {
+		if perr == nil {
+			perr = &PartError{Part: PartAccount, Err: err}
+		}
+		return s, perr
+	}
+	s.AssigneeYou = a.AccountID == me
+	return s, perr
 }
 
 // changelog reads n entries of key's paged changelog from start on.
@@ -221,6 +345,21 @@ func latest(raws []json.RawMessage, match func(history) bool) (time.Time, bool) 
 	return at, found
 }
 
+// oldestFirst reports whether the entries raws come oldest first: the
+// first one whose time parses is before the last one.
+func oldestFirst(raws []json.RawMessage) bool {
+	var times []time.Time
+	for _, raw := range raws {
+		var h history
+		if decode(raw, &h) {
+			if t := jiraTime(h.Created); !t.IsZero() {
+				times = append(times, t)
+			}
+		}
+	}
+	return len(times) > 1 && times[0].Before(times[len(times)-1])
+}
+
 // jiraTime parses a time as Jira writes one ("2026-11-05T14:30:00.000+0200",
 // or RFC 3339), in UTC; zero when it does not parse.
 func jiraTime(s string) time.Time {
@@ -232,8 +371,19 @@ func jiraTime(s string) time.Time {
 	return time.Time{}
 }
 
-// statusName is a status's name as Status keeps it: on one line, cut at
-// MaxStatusName bytes on a character, trimmed.
-func statusName(s string) string {
-	return strings.TrimSpace(cut(line(s), MaxStatusName))
+// statusName is a status's name as Status keeps it: its format characters
+// (the bidi overrides and isolates, zero-width spaces) dropped, on one
+// line, cut at MaxStatusName bytes on a character, trimmed.
+func statusName(s string) string { return oneLine(s, MaxStatusName) }
+
+// oneLine is s without format characters, on one line, cut at n bytes on
+// a character, trimmed.
+func oneLine(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(cut(line(s), n))
 }
