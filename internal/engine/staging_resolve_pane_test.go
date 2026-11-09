@@ -229,22 +229,64 @@ func (l *laggingHerdr) shows(ctx context.Context) bool {
 	return ok && a.AgentStatus == herdr.StatusWorking
 }
 
+// sleepTally adds up the waits the agent's Sleeps ask for from its esc on.
+type sleepTally struct {
+	mu    sync.Mutex
+	on    bool
+	total time.Duration
+}
+
+func (s *sleepTally) arm() {
+	s.mu.Lock()
+	s.on = true
+	s.mu.Unlock()
+}
+
+func (s *sleepTally) add(d time.Duration) {
+	s.mu.Lock()
+	if s.on {
+		s.total += d
+	}
+	s.mu.Unlock()
+}
+
+func (s *sleepTally) sum() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.total
+}
+
+// cancelled is the staging resolver's pane agent cancelledResolver made:
+// its manager ag, the herdr lh and what it waited after its esc.
+type cancelled struct {
+	*paneStagingAgent
+	ag    *fakePaneAgents
+	lh    *laggingHerdr
+	slept *sleepTally
+}
+
 // cancelledResolver is the staging resolver's pane agent at work on its
 // turn, as `magnum staging --cancel` finds it: prompted, its agent shown at
 // work in herdr (through lh, lag snapshots behind an esc, in its own
 // "staging merge" workspace w1, with a pane of yours beside it when foreign),
 // Park and Quit refusing while herdr shows it so, and its Wait cut by the
-// Cancel. A lag below 0 keeps it at work through the esc. It returns the
-// agent, its manager and the herdr lh.
-func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) (*paneStagingAgent, *fakePaneAgents, *laggingHerdr) {
+// Cancel. A lag below 0 keeps it at work through the esc.
+func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) cancelled {
 	t.Helper()
 	var ag *fakePaneAgents
 	lh := newLaggingHerdr(h.hd, lag)
+	slept := &sleepTally{}
 	d := stagingPaneDeps(t, h, &ag)
 	d.Herdr = lh
+	sleep := d.Sleep
+	d.Sleep = func(ctx context.Context, wait time.Duration) error {
+		slept.add(wait)
+		return sleep(ctx, wait)
+	}
 	d.Keys = func(_ context.Context, _ string, keys ...string) error {
 		if slices.Contains(keys, "esc") {
 			lh.esc()
+			slept.arm()
 		}
 		return nil
 	}
@@ -275,28 +317,42 @@ func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) (*paneSt
 	if _, err := a.Wait(ctx, at.Run, h.clock.Now().Add(time.Minute)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Wait = %v, want the Cancel's", err)
 	}
-	return a.(*paneStagingAgent), ag, lh
+	return cancelled{paneStagingAgent: a.(*paneStagingAgent), ag: ag, lh: lh, slept: slept}
 }
 
 // A Cancel of the resolver's job while its agent works ends with the agent
 // parked and its scratch registry gone, though herdr still shows it at work
-// a moment after its esc: Close waits for herdr to show it idle before it
-// parks it, as a round's stop does (waitAgentsQuiet), instead of a Park and
-// a Quit a few milliseconds after the esc that both find it working.
+// for a while after its esc: Close waits for herdr to show it idle before
+// it tries Park, as a round's stop does (waitAgentsQuiet), instead of a Park
+// and a Quit a few milliseconds after the esc that both find it working. So
+// one Park parks it, a moment after the esc as when herdr lags for longer
+// than Park's tries (abortParkTries) would bridge, where the forced close
+// would otherwise end it.
 func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t *testing.T) {
-	h := newHarness(t)
-	a, ag, _ := cancelledResolver(t, h, 2, false)
-	if err := a.Close(context.WithoutCancel(h.ctx)); err != nil {
-		t.Fatalf("Close = %v, want the agent parked", err)
-	}
-	if ag.parks() != 1 || ag.count("quit:") != 0 {
-		t.Errorf("parked %d times, quit %d times; want one park", ag.parks(), ag.count("quit:"))
-	}
-	if _, err := os.Stat(filepath.Join(a.dir, learnScratch)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the scratch registry stays: %v", err)
-	}
-	if len(h.hd.closed) != 0 {
-		t.Errorf("closed workspaces %v: a parked agent's workspace is Park's", h.hd.closed)
+	for _, tc := range []struct {
+		name string
+		lag  int // the snapshots that still show it working after its esc
+	}{
+		{name: "a moment", lag: 2},
+		{name: "longer than Park's tries", lag: abortParkTries + 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			c := cancelledResolver(t, h, tc.lag, false)
+			if err := c.Close(context.WithoutCancel(h.ctx)); err != nil {
+				t.Fatalf("Close = %v, want the agent parked", err)
+			}
+			if c.ag.parks() != 1 || c.ag.count("park:") != 1 || c.ag.count("quit:") != 0 {
+				t.Errorf("parked %d times in %d tries, quit %d times; want one Park, after herdr showed it idle",
+					c.ag.parks(), c.ag.count("park:"), c.ag.count("quit:"))
+			}
+			if _, err := os.Stat(filepath.Join(c.dir, learnScratch)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the scratch registry stays: %v", err)
+			}
+			if len(h.hd.closed) != 0 {
+				t.Errorf("closed workspaces %v: a parked agent's workspace is Park's", h.hd.closed)
+			}
+		})
 	}
 }
 
@@ -319,7 +375,7 @@ func TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorksp
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			a, _, _ := cancelledResolver(t, h, -1, tc.foreign)
+			a := cancelledResolver(t, h, -1, tc.foreign)
 			if tc.never {
 				a.spec.closeBusy = false
 			}
