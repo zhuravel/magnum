@@ -108,8 +108,9 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	fmt.Fprintf(w, "froze round %d (cycle %d) of factory task %d on %s (%s, head %s, base %s; roles %s) in %s\n", in.Round, in.Cycle, in.Task,
 		in.Repo, in.Branch, textx.ShortSHA(in.HeadSHA), textx.ShortSHA(in.BaseSHA), strings.Join(in.Roles, ", "), inspTilde(dir))
 	if !in.AnswersAsOf.IsZero() {
-		fmt.Fprintf(w, "its ticket file did not hold your answers and they changed since it began: they are rebuilt from the factory's registry as "+
-			"they stood when the round began (%s), leaving out %s given at or after it\n", in.AnswersAsOf.UTC().Format(time.RFC3339),
+		fmt.Fprintf(w, "the round's ticket file did not hold your answers, and answers came or answers.md was written since it began: they are "+
+			"rebuilt from the factory's registry as they stood when the round began (%s), leaving out %s given at or after it\n",
+			in.AnswersAsOf.UTC().Format(time.RFC3339),
 			textx.Count(in.AnswersLeftOut, "answer", "answers"))
 	}
 	if in.CodexNever {

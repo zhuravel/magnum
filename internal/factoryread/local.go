@@ -108,8 +108,9 @@ var roundBegins = regexp.MustCompile(`^round ([1-9][0-9]*) \(cycle ([1-9][0-9]*)
 // LocalReview reads task taskID of the registry at path, read only and in
 // one transaction (one snapshot of what the factory writes): the task, its
 // review cycles with their round and roles (LocalRound), and its answered
-// questions with their answers (LocalQuestion). A registry that does not exist is ErrNoRegistry, a task it does not
-// hold ErrNoTask; one that cannot be read is another error.
+// questions with their answers (LocalQuestion). A registry that does not
+// exist is ErrNoRegistry, a task it does not hold ErrNoTask; one that cannot
+// be read is another error.
 func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, error) {
 	out := LocalTask{ID: taskID}
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
