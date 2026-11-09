@@ -354,20 +354,22 @@ var olderHead = "eeeeeee" + strings.Repeat("0", 33)
 func TestATasksPathsAreThoseOfThePRsHead(t *testing.T) {
 	words := staging.DeployBeforeMergeWords(theMigration)
 	for name, c := range map[string]struct {
-		card  []string
-		files []string
-		first bool
+		cardHead string
+		card     []string
+		files    []string
+		first    bool
 	}{
-		"a migration the card names and the head's list does not": {[]string{theMigration}, []string{"app/models/metric.rb"}, false},
-		"a migration the head's list names and the card lacks":    {[]string{"app/models/metric.rb"}, []string{"app/models/metric.rb", theMigration}, true},
-		"no list of the head: the card's paths":                   {[]string{theMigration}, nil, true},
-		"no ready card (an adopted PR): the head's list":          {nil, []string{theMigration}, true},
+		"a migration the card names and the head's list does not": {olderHead, []string{theMigration}, []string{"app/models/metric.rb"}, false},
+		"a migration the head's list names and the card lacks":    {olderHead, []string{"app/models/metric.rb"}, []string{"app/models/metric.rb", theMigration}, true},
+		"no list of the head: the card's paths":                   {olderHead, []string{theMigration}, nil, true},
+		"no ready card (an adopted PR): the head's list":          {olderHead, nil, []string{theMigration}, true},
+		"a card of the head wins over the head's list":            {prHead, []string{theMigration}, []string{"app/models/metric.rb"}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := stagedRig(t)
 			task := r.publishedTask("PR-12324", 4534)
 			if c.card != nil {
-				r.changesAt(task.ID, olderHead, c.card...)
+				r.changesAt(task.ID, c.cardHead, c.card...)
 			}
 			r.stagingFile(task.ID, 4534, "none", "none", "none")
 			r.pr(4534, func(v *PRState) {

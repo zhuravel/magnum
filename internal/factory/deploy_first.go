@@ -7,11 +7,14 @@ package factory
 // say the deploy first, in staging's words (DeployBeforeMergeWords), and
 // their move is E, the staging deploy, offered first
 // (tui.FactoryRow.DeployFirst), with the y/N E already asks. A published
-// task's changed paths are its ready card's, the change you pushed, and its
-// envs its row's staging cells, as the factory daemon last read them
-// (staging.json); your own PR's are magnum's records of it, read with its
-// row (Magnum.OwnPRs): the paths the poller listed at its head and the
-// review daemon's staging record. Only a wait on the merge changes: CI,
+// task's changed paths are those of its PR's head: its ready card's when the
+// card is of that head, else the paths magnum's poller listed at the head
+// (PRState.Files), else the card's (taskDeployFirst); its envs are its row's
+// staging cells, as the factory daemon last read them (staging.json). Your
+// own PR's are magnum's records of it, read with its row (Magnum.OwnPRs):
+// the paths the poller listed at its head and the review daemon's staging
+// record. The poller keeps a PR's first 100 paths only, so a migration past
+// them gives no nudge. Only a wait on the merge changes: CI,
 // a reviewer, findings stay the next step. Nothing here runs git.
 
 import (

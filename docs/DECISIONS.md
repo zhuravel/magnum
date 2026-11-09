@@ -22425,7 +22425,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   PR's card. The words lead the merge words rather than replace them: the What is cut at the column's edge, so words
   after it would vanish on a 140-column screen, and the engine's verdict text is not the factory's to rewrite. With
   several migrations the words name the first one alone, the shared rule's words (a count is a later change of the
-  rule, with the board's side). Rejected: putting the deploy first on any wait on you (CI failed, a reviewer's
+  rule, with the board's side). The poller keeps a PR's first 100 paths, so on a PR of more files a migration past
+  them gives no nudge, a known gap (factory PRs are small), and a list of the head still wins over a card of an older head.
+  Rejected: putting the deploy first on any wait on you (CI failed, a reviewer's
   changes, no reviewer asked: each is the next step before it); the ready card's paths at any head (a fixer's
   migration would go unasked, a removed one asked); failing OwnPRs on a failed read of the paths or the record (every
   one of your PRs would leave home); a new git or GitHub read per frame. Not
@@ -22438,7 +22440,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   keeps the merge; the cells in the screen's words), TestOwnPRsReadTheReviewDaemonsStagingRecordAndTheHeadsPaths (a list
   and a record of an older head, magnum's last tick an hour old, the registry unchanged),
   TestATasksPathsAreThoseOfThePRsHead (a card of an older head whose migration the head's list lacks, a migration the
-  head's list adds, no list, no ready card), TestTheDeployFirstMoveKeepsTheOptionalCalls,
+  head's list adds, no list, no ready card, a card of the head over the head's list), TestTheDeployFirstMoveKeepsTheOptionalCalls,
   TestThePathsAreReadOnlyInARepositoryWithStagingEnvs, TestAFailedReadOfThePathsHidesNoPR (a list that does not decode,
   a record that does not), TestARowWhoseDeployComesFirstOffersEFirst (home, the task card, your PR's card, E's chooser
   and its y/N) and TestTheHelpListsEOnYourPRsCard, each failing first. No new dependencies.

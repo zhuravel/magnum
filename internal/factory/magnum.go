@@ -308,9 +308,12 @@ type ReviewAsk struct {
 // tick, never per task. It reads and never writes: the prs rows, the kv
 // rows of the verdict, the fix loop, the held fix, the stalemate, the
 // attention and the approval hold, magnum's last posted review of each PR, each
-// repository's required checks, and magnum's last tick. No registry finds nothing and creates none; one of a
+// repository's required checks, the paths the poller listed at each PR's
+// head (pr_files, in a repository with staging envs only), and magnum's last
+// tick. No registry finds nothing and creates none; one of a
 // schema this build does not know is an error (refuseMagnumMigration), as
-// is any read that fails, and the caller then knows nothing of the PRs.
+// is any read that fails, and the caller then knows nothing of the PRs,
+// but for the paths: a failed read of them is no list.
 func (m *magnumRegistry) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error) {
 	pid, err := engine.DaemonPID(m.l)
 	if err != nil {
