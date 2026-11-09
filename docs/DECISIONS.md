@@ -20926,7 +20926,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded, TestWithoutStagingEntriesNothingOfTheResolverRuns,
   TestTheStagingResolverCommitsAResolutionThatDeletesTheConflictedPath,
   TestTheStagingResolverWaitsWhileThePRsRoundIsPaused, TestASecondTrysPromptCarriesTheFirstTrysWhy,
-  TestAStagingResolverJobFailsWhileItsAgentKindIsPaused,
+  TestAStagingResolverJobFailsWhileItsAgentKindIsPaused, TestTheStagingResolversPaneAgentWorksInTheSlotWithTheJobsEnv,
   TestTheStagingClientDeploysAsTheFixerApp
   and TestCheckPromptsCatchesFieldsThisBuildLacks (the prompt's cases); gitx's
   TestAStagingMergeIsResolvedInTheWorkTreeAndWrittenApartFromItsIndex,
