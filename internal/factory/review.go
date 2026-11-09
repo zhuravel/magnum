@@ -19,9 +19,11 @@ package factory
 // twice after its fix is a doubt, and when only doubts block, the loop ends
 // on the oscillation and the stage passes; one the writer declined with
 // its risk blocks no more; a product question joins the task's question
-// batch. Every round is a cycle of the registry with its findings, and
-// what a round left lives in the task's directory, so a restart at any
-// point runs a round again only when it left no result.
+// batch. A clean round of a Codex judge on a wide change gets the task's
+// one second opinion first (review_second.go). Every round is a cycle of
+// the registry with its findings, and what a round left lives in the task's
+// directory, so a restart at any point runs a round again only when it left
+// no result.
 
 import (
 	"cmp"
@@ -80,6 +82,7 @@ func (r localReviewer) Round(ctx context.Context, c evalrun.LocalCase) (evalrun.
 const (
 	reviewSummaryFile  = "review-summary.json"
 	reviewDeclinedFile = "review-declined.json"
+	secondOpinionFile  = "review-second.json"
 )
 
 func reviewRoundFile(n int) string { return fmt.Sprintf("local-review-%d.json", n) }
@@ -204,6 +207,10 @@ type ReviewSummary struct {
 	Declined  []ReviewItem `json:"declined"`
 	Doubts    []ReviewItem `json:"doubts"`
 	Missing   []string     `json:"missing,omitempty"`
+	// SecondJudge and SecondRound are the judge and the round of the loop's
+	// second opinion (review-second.json), "" and 0 for a loop without one.
+	SecondJudge string `json:"second_judge,omitempty"`
+	SecondRound int    `json:"second_round,omitempty"`
 }
 
 // localRound is a round that runs off the loop: its cycle (id and number),
@@ -389,8 +396,10 @@ func loopCycles(cs []registry.Cycle) []registry.Cycle {
 // round that runs again: a restart, a hang, a refusal) or in a new one,
 // once it may: not while the daemon drains (a stop's drain, or install's),
 // and after the waits of the lowest priority (reviewWait) and a heavy slot.
-// Its roles are the watch's (reviewRoles), its case the change at the
-// task's proven head (localCase); the round runs off the loop (launchRound).
+// Its roles are the watch's (reviewRoles), the judge_fallback in the
+// judge's place for the task's second opinion (secondRound), its case the
+// change at the task's proven head (localCase); the round runs off the loop
+// (launchRound).
 func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *registry.Cycle, round int) error {
 	if e.startsHeld() {
 		return nil
@@ -405,7 +414,11 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	if w == nil {
 		return e.stageFailed(ctx, t, needsYou{"no [[watch]] covers " + t.Repo + ": the local review runs its review roles"})
 	}
-	roles, err := e.reviewRoles(t, w, round)
+	so, second, err := e.secondRound(ctx, t, cy)
+	if err != nil {
+		return err
+	}
+	roles, err := e.reviewRoles(t, w, round, second)
 	if err != nil {
 		return e.stageFailed(ctx, t, err)
 	}
@@ -477,7 +490,7 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 			return err
 		}
 	}
-	e.launchRound(ctx, t, *cy, lc, release)
+	e.launchRound(ctx, t, *cy, lc, e.judgeOf(roles, so, second), release)
 	return nil
 }
 
@@ -642,22 +655,27 @@ func (e *Engine) codexUsage(ctx context.Context) (usage.Snapshot, error) {
 // reviewRoles are the roles round `round` of task t's local review runs:
 // the watch's review roles, without [factory.local_review] later_without
 // after round 1. On a task Codex never works on again, no Codex role runs,
-// and magnum's judge_fallback takes the Codex judge's place; a judge that
-// cannot be replaced so is a needsYou.
-func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int) ([]string, error) {
+// and magnum's judge_fallback takes the Codex judge's place; in a second
+// opinion (second), the fallback takes it too, and the Codex reviewers
+// stay. A judge that cannot be replaced so is a needsYou.
+func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int, second bool) ([]string, error) {
 	var out []string
 	for _, r := range e.cfg.RolesFor(w) {
 		if round > 1 && slices.ContainsFunc(e.cfg.Factory.LocalReview.LaterWithout, r.Matches) {
 			continue
 		}
-		if t.CodexNever && r.AgentKind() == config.KindCodex {
+		if r.AgentKind() == config.KindCodex && (t.CodexNever || (second && r.Judge)) {
 			if !r.Judge {
 				continue // Codex never sees the task again
 			}
-			fb, ok := e.cfg.JudgeFallbackFor(w)
-			if !ok || !fb.IsAgent() || fb.AgentKind() == config.KindCodex {
+			fb, ok := e.otherJudge(w)
+			switch {
+			case !ok && t.CodexNever:
 				return nil, needsYou{"Codex never works on " + TaskKey(t) + " again and the review's judge " + r.Name +
 					" runs on Codex: set [pipeline] judge_fallback (or the watch's) to a judge of another kind"}
+			case !ok:
+				return nil, needsYou{"the second opinion of " + TaskKey(t) + "'s local review runs a judge of another kind in place of " + r.Name +
+					": set [pipeline] judge_fallback (or the watch's) to one"}
 			}
 			r = fb
 		}
@@ -666,6 +684,60 @@ func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int) ([]str
 		}
 	}
 	return out, nil
+}
+
+// otherJudge is the watch w's judge_fallback when it is an agent of another
+// kind than Codex: the judge that takes a Codex judge's place.
+func (e *Engine) otherJudge(w *config.Watch) (config.Role, bool) {
+	fb, ok := e.cfg.JudgeFallbackFor(w)
+	return fb, ok && fb.IsAgent() && fb.AgentKind() != config.KindCodex
+}
+
+// roundJudge is the judge of a local round as its events and its wait name
+// it: its role and agent kind, and for a second opinion the judge it takes
+// the place of, with its kind.
+type roundJudge struct {
+	name, kind, replaces, replacesKind string
+}
+
+// judgeOf is the judge among roles, a round's, in its place of so's judge
+// when second.
+func (e *Engine) judgeOf(roles []string, so secondOpinion, second bool) roundJudge {
+	var j roundJudge
+	for _, name := range roles {
+		if r, ok := e.cfg.RoleByNameOrAlias(nil, name); ok && r.Judge {
+			j.name, j.kind = r.Name, cmp.Or(r.AgentKind(), "shell")
+			break
+		}
+	}
+	if second && j.name != "" && j.name != so.Replaces {
+		j.replaces, j.replacesKind = so.Replaces, so.ReplacesKind
+	}
+	return j
+}
+
+// begin is the end of the round's begin event: "; judge <role> (<kind>)",
+// and for a second opinion the judge it takes the place of; "" without a
+// judge. factoryread reads the roles before it, the stats the judge.
+func (j roundJudge) begin() string {
+	if j.name == "" {
+		return ""
+	}
+	s := fmt.Sprintf("; judge %s (%s)", j.name, j.kind)
+	if j.replaces != "" {
+		s += fmt.Sprintf(", a second opinion in place of %s (%s)", j.replaces, j.replacesKind)
+	}
+	return s
+}
+
+// wait is the end of the task's wait while a second opinion runs (" (a
+// second opinion: <role>, on <kind>, in place of <judge>)"), "" for
+// another round.
+func (j roundJudge) wait() string {
+	if j.replaces == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (a second opinion: %s, on %s, in place of %s)", j.name, j.kind, j.replaces)
 }
 
 // localCase is round `round` of task t's change in copy c: the branch's
@@ -695,22 +767,23 @@ func (e *Engine) localCase(t registry.Task, w config.Watch, c Copy, bh branchHea
 
 // launchRound runs local round lc of cycle cy off the loop, holding the
 // heavy slot (release frees it), on the engine's context and within
-// roundCap, while the task waits saying the round runs and the record of
-// the work a restart would cut names it. Its result goes to the task's
-// directory as local-review-<n>.json, however it ended: a round over its
-// cap as a timeout, one that could not run as an error, a panic too. A
-// drain, or the factory stopping it (sweepRounds), writes nothing: the
-// round runs again in its cycle.
-func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.Cycle, lc evalrun.LocalCase, release func()) {
+// roundCap, while the task waits saying the round runs (and, for a second
+// opinion, with which judge: judge) and the record of the work a restart
+// would cut names it; its begin event names its roles and its judge. Its
+// result goes to the task's directory as local-review-<n>.json, however it
+// ended: a round over its cap as a timeout, one that could not run as an
+// error, a panic too. A drain, or the factory stopping it (sweepRounds),
+// writes nothing: the round runs again in its cycle.
+func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.Cycle, lc evalrun.LocalCase, judge roundJudge, release func()) {
 	rctx, cancel := context.WithTimeout(e.bgCtx, e.roundCap)
 	r := &localRound{cycle: cy.ID, n: cy.N, round: lc.Round, done: make(chan struct{}), cancel: cancel}
 	e.reviewMu.Lock()
 	e.reviews[t.ID] = r
 	e.reviewMu.Unlock()
 	endWork := e.beginWork(WorkRound, t.ID, fmt.Sprintf("local review round %d of %s", lc.Round, TaskKey(t)))
-	e.waitOn(ctx, t, waitReview, fmt.Sprintf("round %d of the local review runs", lc.Round))
-	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("round %d (cycle %d) at %s: %s", lc.Round, cy.N, short(lc.HeadSHA),
-		strings.Join(lc.Roles, ", ")))
+	e.waitOn(ctx, t, waitReview, fmt.Sprintf("round %d of the local review runs%s", lc.Round, judge.wait()))
+	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("round %d (cycle %d) at %s: %s%s", lc.Round, cy.N, short(lc.HeadSHA),
+		strings.Join(lc.Roles, ", "), judge.begin()))
 	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewRoundFile(cy.N))
 	e.bg.Go(func() {
 		defer endWork()
@@ -816,7 +889,7 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 			return false, e.stageFailed(ctx, t, needsYou{why})
 		}
 	}
-	return e.decideRound(ctx, t, st, cy, loop, res)
+	return e.decideRound(ctx, t, st, c, cy, loop, res)
 }
 
 // roundLeft is what a round left in task t's copy c that keeps its result
@@ -985,11 +1058,13 @@ func roundTries(dir string, n int, why string) int {
 //     found is unknown;
 //   - else its findings are recorded (seeFindings) and what blocks decides:
 //     nothing (or only findings the writer declined with their risk) ends
-//     the loop clean, only doubts on an oscillation (the stage passes for
+//     the loop clean, unless the task's second opinion runs first
+//     (decideSecond), only doubts on an oscillation (the stage passes for
 //     both, with the summary for the ready card), anything else at the cap
-//     needs you, and before it the writer gets the findings (fixPhase), the
-//     product questions among them asked first.
-func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
+//     (cycles rounds besides the second opinion) needs you, and before it
+//     the writer gets the findings (fixPhase), the product questions among
+//     them asked first.
+func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult) (bool, error) {
 	round := len(loop)
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
@@ -1075,7 +1150,6 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 			return slices.ContainsFunc(live, func(l ReviewItem) bool { return l.ID == i.ID })
 		})
 	}
-	cycles := max(1, e.cfg.Factory.LocalReview.Cycles)
 	// Every finding the writer declined with its risk, whichever round
 	// raised it: the ready card and the PR body's "Known" name them.
 	all := slices.SortedFunc(maps.Values(declined), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
@@ -1086,11 +1160,11 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 		// (the judge disagreeing with itself) is no blocker, but stays told;
 		// a doubt is told among the doubts, once.
 		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
-		return e.endLoop(ctx, t, cy, sum)
+		return e.endClean(ctx, t, c, cy, loop, sum)
 	case len(live)+len(questions) == 0:
 		sum.Exit = registry.ExitOscillation
-		return e.endLoop(ctx, t, cy, sum)
-	case round >= cycles:
+		return e.endLoop(ctx, t, cy, withSecond(dir, loop, sum))
+	case e.atCap(dir, loop, round):
 		return false, e.stopForYou(ctx, t, cy, registry.ExitCap, fmt.Sprintf("%s after %s", plural(len(live)+len(questions)+len(doubts), "blocking finding"),
 			plural(round, "review round")), "the local review's cap")
 	}

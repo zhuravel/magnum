@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"net/url"
 	"reflect"
 	"slices"
@@ -571,6 +572,40 @@ func TestFactoryLocalReviewDefaultsToThreeRoundsWithoutSimplifyLater(t *testing.
 	wantError(t, cfg.Validate(), "factory.local_review.later_without", "twice")
 	cfg.Factory.LocalReview.LaterWithout = []string{"Not A Role"}
 	wantError(t, cfg.Validate(), "factory.local_review.later_without", "Not A Role")
+}
+
+// The second-opinion round of the local review runs on wide changes by
+// default; second_judge takes "wide", "always" or "never" and refuses any
+// other word, naming the three; a user's lone key merges into the built-in
+// table.
+func TestFactorySecondJudgeDefaultsToWideAndTakesOnlyItsWords(t *testing.T) {
+	for _, lr := range []FactoryLocalReview{Defaults().Factory.LocalReview, mustLoadDefaults(t).Factory.LocalReview} {
+		if lr.SecondJudge != FactorySecondJudgeWide {
+			t.Errorf("second_judge = %q, want %q", lr.SecondJudge, FactorySecondJudgeWide)
+		}
+	}
+	for _, ok := range FactorySecondJudges {
+		cfg := validFactoryConfig()
+		cfg.Factory.LocalReview.SecondJudge = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("second_judge = %q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "sometimes", "Wide"} {
+		cfg := validFactoryConfig()
+		cfg.Factory.LocalReview.SecondJudge = bad
+		wantError(t, cfg.Validate(), "factory.local_review.second_judge", `"wide", "always" or "never"`, fmt.Sprintf("%q", bad))
+	}
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+`
+[factory.local_review]
+second_judge = "always"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr := cfg.Factory.LocalReview; lr.SecondJudge != FactorySecondJudgeAlways || lr.Cycles != 3 {
+		t.Errorf("local_review = %+v, want second_judge always and the built-in cycles", lr)
+	}
 }
 
 func mustLoadDefaults(t *testing.T) *Config {

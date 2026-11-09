@@ -988,3 +988,68 @@ func TestStatsShowTheQualityOfThePublishedPRs(t *testing.T) {
 		t.Errorf("an unread magnum registry counts fix pushes:\n%s", js)
 	}
 }
+
+// The stats record which judge kind each round of a task's local review ran
+// with, from the round's newest begin event (a round run again in its cycle
+// counts by its last run), and which round was the second opinion: in the
+// JSON and in the markdown. A round whose begin event names no judge (an
+// older build's) is unknown, and a task none of whose rounds names one has
+// none.
+func TestStatsRecordTheJudgeKindOfEachLocalRound(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	a, old := createTask(t, r, "PR-12340"), createTask(t, r, "PR-12341")
+	for _, task := range []registry.Task{a, a, a, old} {
+		if _, err := r.BeginCycle(ctx, task.ID, "abc1234abc1234", "skill"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ev := range []struct {
+		task        int64
+		phase, text string
+	}{
+		{a.ID, registry.PhaseBegin, "round 1 (cycle 1) at abc1234: codex-judge, claude-review, codex-review; judge codex-judge (codex)"},
+		{a.ID, registry.PhaseBegin, "round 2 (cycle 2) at abc1234: codex-judge, claude-review, codex-review; judge codex-judge (codex)"},
+		{a.ID, registry.PhaseInfo, "round 2 (cycle 2) at abc1234: codex-judge; judge codex-judge (codex)"},
+		{a.ID, registry.PhaseBegin, "round 2 (cycle 2) at abc1234: claude-judge, claude-review, codex-review; judge claude-judge (claude), " +
+			"a second opinion in place of codex-judge (codex)"},
+		{old.ID, registry.PhaseBegin, "round 1 (cycle 1) at abc1234: codex-judge, claude-review"},
+	} {
+		if err := r.AppendEvent(ctx, ev.task, "review", ev.phase, ev.text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, rep, "PR-12340"); !slices.Equal(got.ReviewJudges, []string{"codex", "claude", ""}) || got.SecondOpinion != 2 || got.ReviewRounds != 3 {
+		t.Errorf("judges %q, second opinion %d after %d rounds; want codex, claude (round 2's last run, the second opinion) and one unknown",
+			got.ReviewJudges, got.SecondOpinion, got.ReviewRounds)
+	}
+	if got := only(t, rep, "PR-12341"); got.ReviewJudges != nil || got.SecondOpinion != 0 {
+		t.Errorf("an older task's judges %q, second opinion %d; want none", got.ReviewJudges, got.SecondOpinion)
+	}
+	js, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `"review_rounds":3,`) || !strings.Contains(string(js), `"review_judges":["codex","claude",""],"second_opinion":2`) ||
+		strings.Count(string(js), "review_judges") != 1 {
+		t.Errorf("the JSON:\n%s", js)
+	}
+	md := rep.Markdown()
+	for _, want := range []string{
+		"## The local review's judges",
+		"| Task | Rounds | Judge kinds |",
+		"| PR-12340 | 3 | codex, claude (the second opinion), unknown |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "| PR-12341 | 1 |") {
+		t.Errorf("a task with no judge named has a row:\n%s", md)
+	}
+}

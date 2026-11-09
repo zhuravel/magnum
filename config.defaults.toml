@@ -909,6 +909,13 @@ kind_by_jira_type = { Bug = "bug", Story = "feature", Task = "chore" }   # the J
 cycles = 3                        # at most this many rounds (1 to 10); round 1 runs the review roles of the
                                   # repository's [[watch]], so a factory repository needs one
 later_without = ["claude-simplify"]   # the review roles that run in round 1 only
+second_judge = "wide"             # a second opinion: after a clean round whose judge runs on Codex, one more round
+                                  # of the same roles with the watch's judge_fallback (a judge of another kind) in
+                                  # the judge's place, once per task, before the stage ends: "wide" on a change of
+                                  # 3 or more files, the database's (db/) or a security path, "always" on every
+                                  # change, "never". It runs past cycles when the clean round was the last; one with
+                                  # findings goes to the writer like any round, within cycles. A watch whose judge is
+                                  # not on Codex, or no judge_fallback of another kind, skips it with an event
 
 [factory.kind_words]              # the words of a free prompt that suggest a kind of task (you can change it before the start)
 bug = ["bug", "fix", "broken", "crash", "error", "regression", "fails"]

@@ -637,6 +637,27 @@ func TestScreenDataFillsTheFlagsAndTheLeftovers(t *testing.T) {
 	}
 }
 
+// The ready card's reason to push names the local review's second opinion,
+// its round and its judge, when the loop ran one.
+func TestTheReadyCardNamesTheSecondOpinion(t *testing.T) {
+	r := newScreenRig(t)
+	clean := r.task("PR-12402", "bug", "Points of refunds", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12402")
+	r.card(clean.ID, ReadyCardFile{Revision: 1, Head: "ffff1111aaaa", Base: "b", Copy: "talkable.factory2",
+		Review: ReviewSummary{Exit: registry.ExitClean, Rounds: 2, SecondJudge: "claude-judge", SecondRound: 2}})
+	back := r.task("PR-12403", "bug", "Points of exports", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12403")
+	r.card(back.ID, ReadyCardFile{Revision: 1, Head: "eeee2222bbbb", Base: "b", Copy: "talkable.factory3",
+		Review: ReviewSummary{Exit: registry.ExitOscillation, Rounds: 3, SecondJudge: "claude-judge", SecondRound: 2}})
+	cards := r.data(screenNow).Cards
+	if c := cards[clean.ID].Ready; c == nil ||
+		!strings.HasPrefix(c.Why, "the local review ended clean after 2 rounds (round 2 a second opinion by claude-judge) and the factory's proof holds at ffff111") {
+		t.Errorf("a clean loop's card %+v", c)
+	}
+	if c := cards[back.ID].Ready; c == nil ||
+		c.Why != "the local review went back and forth after 3 rounds (round 2 a second opinion by claude-judge): read KNOWN, then push" {
+		t.Errorf("an oscillation's card %+v", c)
+	}
+}
+
 // A queued row names what frees it: the oldest queued task waits for the
 // push of a task at its ready card, the others for it to start first.
 func TestScreenDataNamesWhatFreesAQueuedTask(t *testing.T) {

@@ -89,8 +89,9 @@ func takesRecommendation(q registry.Question, answer string) bool {
 // LocalRound is one cycle of a task's local review (review_cycles): its
 // number, the head it reviewed (head_before) and when it began, with the
 // loop's round and the roles the cycle's newest begin event names (the
-// factory's "round 1 (cycle 1) at <short head>: <role>, <role>"; a round
-// that ran again in its cycle names the roles of its last run). Round is 0
+// factory's "round 1 (cycle 1) at <short head>: <role>, <role>", and "; judge
+// <role> (<kind>)" after them; a round that ran again in its cycle names the
+// roles of its last run). Round is 0
 // and Roles nil when no begin event of the cycle reads so for its head.
 type LocalRound struct {
 	Cycle   int
@@ -102,8 +103,9 @@ type LocalRound struct {
 
 // roundBegins is the text of the factory's event at the start of a local
 // round (internal/factory/review.go, launchRound): the loop's round, the
-// cycle, the head's first digits and the roles.
-var roundBegins = regexp.MustCompile(`^round ([1-9][0-9]*) \(cycle ([1-9][0-9]*)\) at ([0-9a-f]{7,64}): (.+)$`)
+// cycle, the head's first digits and the roles, then, from a build with the
+// second opinion on, its judge ("; judge <role> (<kind>)...").
+var roundBegins = regexp.MustCompile(`^round ([1-9][0-9]*) \(cycle ([1-9][0-9]*)\) at ([0-9a-f]{7,64}): ([^;]+)(?:; .*)?$`)
 
 // LocalReview reads task taskID of the registry at path, read only and in
 // one transaction (one snapshot of what the factory writes): the task, its

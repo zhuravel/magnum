@@ -22322,6 +22322,50 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheStagingResolverClearsTheAgentAnEarlierJobLeft; TestPaneClassifierCloseKeepsTheRegistryWhenTheAgentStays and the
   other pane agents' tests pass unchanged. No new dependencies.
 
+- **A clean local round of a Codex judge on a wide change gets a second opinion: one more round with the watch's
+  `judge_fallback` in the judge's place, once per task, outside `cycles`** (2026-11-09, R42). Two runs of the same
+  review roles on the same head disagreed on a P2 in 2 of 4 PRs, and replays of talkable#12212's local round kept a
+  product question once and rejected it the next time; the loop exits at its first clean round, so that noise
+  reached the card. The value is in the other judge kind: the same judge again mostly repeats itself. So after a
+  round that ends clean (`decideRound`'s clean case), `decideSecond` runs a second opinion when
+  `[factory.local_review] second_judge` (new, `"wide"` by default, `"always"`, `"never"`; the check refuses any other
+  word) allows it for the change the round reviewed (`changeWidth`, the rule of `wideChange`, over the files the head
+  changes against its merge base with the repository's base: 3 or more, `db/`, a security path), the watch's judge
+  runs on Codex, a judge of another kind takes its place (`otherJudge`: `judge_fallback`, the same check
+  `reviewRoles` makes for a task Codex never works on), Codex works on the task (else its rounds ran with that judge
+  already), and the round is not the tenth (round 11 would take the next task's synthetic PR number). It writes
+  `review-second.json` (the clean cycle, its head, the judges and their kinds, the clean round's leftovers) before it
+  ends the clean cycle with the loop going on, so the next round is the second opinion (`secondRound`: the cycle
+  after the clean one) and a restart between the write and that end, or after it, runs it once; the file is also
+  what keeps it to once per task, across fix turns and later loops. `reviewRoles` swaps the judge for it as it does
+  for a Codex-never task, but keeps the Codex reviewers, so the round waits at `[usage] codex_soft` as any round with a
+  Codex role does (`reviewWait`'s `runsCodex`): the factory's existing rule for a round with Codex reviewers, kept,
+  not a fallback for them. Its clean result ends the stage clean, the summary keeping the first round's leftovers at
+  that head and naming the second opinion (`second_judge`, `second_round`), which the ready card's reason says; one
+  with findings goes to the writer and the next round with the usual roles, and the cap counts `cycles` rounds besides
+  the second opinion (and never passes round 10), so a clean last round still gets it and a P2 found then needs you.
+  The decision, every skip for want of its judge and each round's begin event (`...; judge claude-judge (claude), a
+  second opinion in place of codex-judge (codex)`) are events, and the task's wait names the judge while it runs; a
+  narrow change and `"never"` say nothing, as most tasks are narrow. `magnum factory stats` reads each round's judge
+  kind from those begin events (`review_judges`, `second_opinion`), and `factoryread` now stops a round's roles at the
+  `;`. No migration: the registry's review cycles have no judge column, and the events and the task's directory are
+  the records the factory already keeps. Rejected: the same judge kind twice (it repeats itself); every change
+  (you approved wide changes only; `"always"` is there for whoever wants more); counting it in
+  `cycles` (a clean last round would get none, the case the noise matters most in); a second opinion after an
+  oscillation (that is not a clean round); swapping the Codex reviewers too (the value is the judge, and Codex's
+  review is half the reviewers); a skip event on every narrow change (noise on most tasks, and it broke the exact
+  event lists of the put-back tests); a column on `review_cycles` (a migration for what the begin event already
+  says). Tests (each failed first): factory's TestACleanRoundOnAWideChangeGetsASecondOpinionFromTheOtherJudge (the
+  roles, the head, the cycles, the summary with round 1's P3, the decision event, the begin events and the wait),
+  TestASecondOpinionThatFindsAP2GoesToTheWriterAndTheNextRound, TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows
+  (clean, and at the cap), TestTheSecondOpinionFollowsSecondJudge (narrow, always, never),
+  TestNoSecondOpinionWithoutAJudgeOfTheOtherKind (a claude judge, no fallback, Codex never),
+  TestTheSecondOpinionWaitsAtTheCodexSoftCap, TestARestartBeforeTheSecondOpinionStartsItOnce (after the clean cycle,
+  between the write and its end, the second opinion cut by a drain) and TestTheReadyCardNamesTheSecondOpinion; the
+  config's TestFactorySecondJudgeDefaultsToWideAndTakesOnlyItsWords; factoryread's
+  TestLocalReviewReadsTheRolesOfABeginEventThatNamesItsJudge; the stats' TestStatsRecordTheJudgeKindOfEachLocalRound.
+  No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

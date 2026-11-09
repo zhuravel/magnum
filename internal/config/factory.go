@@ -116,6 +116,10 @@ type FactoryLocalReview struct {
 	Cycles int `toml:"cycles"`
 	// LaterWithout names the review roles that run in round 1 only.
 	LaterWithout []string `toml:"later_without"`
+	// SecondJudge says when a clean round of a Codex judge is followed by
+	// one more round with the watch's judge_fallback in its place, once per
+	// task: on a wide change (FactorySecondJudgeWide), always or never.
+	SecondJudge string `toml:"second_judge"`
 }
 
 // FactoryRepo is a [[factory.repo]]: a repository the factory writes code
@@ -360,6 +364,18 @@ const (
 	FactoryWhenNarrow = "narrow"
 )
 
+// The values of [factory.local_review] second_judge: where the local
+// review's second opinion runs (FactoryLocalReview.SecondJudge).
+const (
+	FactorySecondJudgeWide   = "wide"
+	FactorySecondJudgeAlways = "always"
+	FactorySecondJudgeNever  = "never"
+)
+
+// FactorySecondJudges are the values of [factory.local_review]
+// second_judge, in the order the docs give.
+var FactorySecondJudges = []string{FactorySecondJudgeWide, FactorySecondJudgeAlways, FactorySecondJudgeNever}
+
 // FactoryStageTypes, FactoryEndFacts, FactoryGates, FactoryDecisions and
 // FactoryEffects list what a stage may name, in the order the docs give.
 var (
@@ -412,7 +428,7 @@ func DefaultFactory() Factory {
 		Poll:           Duration{45 * time.Second},
 		HumanCooldown:  Duration{15 * time.Minute},
 		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
-		LocalReview:    FactoryLocalReview{Cycles: 3, LaterWithout: []string{RoleClaudeSimplify}},
+		LocalReview:    FactoryLocalReview{Cycles: 3, LaterWithout: []string{RoleClaudeSimplify}, SecondJudge: FactorySecondJudgeWide},
 		Roles:          DefaultFactoryRoles(),
 		CodexFallback: map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude", "fx-critic-narrow": "fx-critic-claude",
 			"fx-points-codex": "fx-points"},
@@ -756,6 +772,10 @@ func (l FactoryLocalReview) validate() []error {
 	var errs []error
 	if l.Cycles < 1 || l.Cycles > MaxFactoryCycles {
 		errs = append(errs, fmt.Errorf("factory.local_review.cycles must be between 1 and %d, got %d", MaxFactoryCycles, l.Cycles))
+	}
+	if !slices.Contains(FactorySecondJudges, l.SecondJudge) {
+		errs = append(errs, fmt.Errorf("factory.local_review.second_judge must be %q, %q or %q, got %q",
+			FactorySecondJudgeWide, FactorySecondJudgeAlways, FactorySecondJudgeNever, l.SecondJudge))
 	}
 	seen := map[string]bool{}
 	for _, name := range l.LaterWithout {

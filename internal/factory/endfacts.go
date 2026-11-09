@@ -493,7 +493,11 @@ var securityWords = map[string]bool{
 // wideChange reports whether a plan that touches files is wide (spec 6.2):
 // 3 or more files, a file of the database (db/) or a security path. why
 // says which, or why not.
-func wideChange(files []string) (wide bool, why string) {
+func wideChange(files []string) (wide bool, why string) { return changeWidth("the plan", files) }
+
+// changeWidth is wideChange of what ("the plan", "the change") touching
+// files, which why names it by.
+func changeWidth(what string, files []string) (wide bool, why string) {
 	for _, f := range files {
 		if strings.HasPrefix(f, "db/") || strings.Contains(f, "/db/") {
 			return true, f + " is the database's"
@@ -506,11 +510,11 @@ func wideChange(files []string) (wide bool, why string) {
 		}
 	}
 	if len(files) >= wideFiles {
-		return true, fmt.Sprintf("the plan touches %d files", len(files))
+		return true, fmt.Sprintf("%s touches %d files", what, len(files))
 	}
 	noun := "files"
 	if len(files) == 1 {
 		noun = "file"
 	}
-	return false, fmt.Sprintf("the plan touches %d %s, none of the database or security", len(files), noun)
+	return false, fmt.Sprintf("%s touches %d %s, none of the database or security", what, len(files), noun)
 }

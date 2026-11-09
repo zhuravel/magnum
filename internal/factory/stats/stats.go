@@ -59,7 +59,11 @@ const cardCap = 30 * time.Minute
 // source, and QuestionsShared those of several by the sources joined with
 // "+" (questionSources): what each role, a second reader of the ticket's
 // points among them, adds alone to what the operator is asked, and what two
-// readers raise both.
+// readers raise both. ReviewJudges is the agent kind of the judge each
+// round of the local review ran with, by cycle ("" for a round whose begin
+// event names no judge: an older build's; nil when no round names one), and
+// SecondOpinion the cycle of the task's second opinion (0 for none), from
+// the rounds' begin events (roundJudges).
 type TaskStats struct {
 	TaskID   int64
 	Key      string
@@ -72,6 +76,8 @@ type TaskStats struct {
 	AnswerBatches, Decisions, ReviewRounds            int
 	Questions                                         int
 	QuestionsFrom, QuestionsShared                    map[string]int
+	ReviewJudges                                      []string
+	SecondOpinion                                     int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -209,6 +215,8 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		AnswerBatches   int            `json:"answer_batches"`
 		Decisions       int            `json:"decisions"`
 		ReviewRounds    int            `json:"review_rounds"`
+		ReviewJudges    []string       `json:"review_judges,omitempty"`
+		SecondOpinion   int            `json:"second_opinion,omitempty"`
 		OperatorSecs    int64          `json:"operator_secs"`
 		WaitedOnYou     int64          `json:"waited_on_you_secs"`
 		StartToReady    int64          `json:"start_to_ready_secs"`
@@ -219,7 +227,7 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		FixLoops        *FixLoops      `json:"fix_loops,omitempty"`
 		Quality         *Quality       `json:"quality,omitempty"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
-		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.Questions, t.QuestionsFrom,
+		t.ReviewRounds, t.ReviewJudges, t.SecondOpinion, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.Questions, t.QuestionsFrom,
 		t.QuestionsShared, t.PR.String(), t.FixLoops, t.Quality})
 }
 
@@ -439,11 +447,15 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	if err != nil {
 		return TaskStats{}, err
 	}
+	judges, second, err := roundJudges(ctx, reg, t.ID, cycles)
+	if err != nil {
+		return TaskStats{}, err
+	}
 	batches, onQuestions := answeredBatches(questions)
 	asked, from, shared := questionSources(questions, relays)
 	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, Quality: quality, AnswerBatches: batches, Decisions: len(decisions),
 		Questions: asked, QuestionsFrom: from, QuestionsShared: shared,
-		ReviewRounds: len(cycles), OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
+		ReviewRounds: len(cycles), ReviewJudges: judges, SecondOpinion: second, OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
 		StartToReady: startToReady(spans)}
 	for _, in := range inputs {
 		switch {
@@ -575,6 +587,47 @@ func relayRoles(ctx context.Context, reg *registry.Registry, id int64) (map[stri
 		}
 	}
 	return relays, nil
+}
+
+// roundJudge is the begin event of a local round that names its judge
+// (internal/factory/review.go, launchRound: "round 2 (cycle 2) at <head>:
+// <roles>; judge claude-judge (claude), a second opinion in place of ..."):
+// its cycle, its judge's agent kind, and whether it is a second opinion.
+var roundJudge = regexp.MustCompile(`^round [1-9][0-9]* \(cycle ([1-9][0-9]*)\) at [0-9a-f]{7,64}: [^;]+; judge [a-z][a-z0-9_-]* ` +
+	`\(([a-z][a-z0-9_-]*)\)(, a second opinion in place of )?`)
+
+// roundJudges are the judge kinds of task id's local rounds, by cycle
+// (TaskStats.ReviewJudges: nil when no begin event names a judge), and the
+// cycle of its second opinion (0 for none), each from its cycle's newest
+// begin event.
+func roundJudges(ctx context.Context, reg *registry.Registry, id int64, cycles []registry.Cycle) ([]string, int, error) {
+	evs, err := reg.TaskEvents(ctx, id, "review", 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	kinds, seconds := map[int]string{}, map[int]bool{}
+	for _, ev := range evs {
+		m := roundJudge.FindStringSubmatch(ev.Text)
+		if ev.Phase != registry.PhaseBegin || m == nil {
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		kinds[n], seconds[n] = m[2], m[3] != ""
+	}
+	if len(kinds) == 0 {
+		return nil, 0, nil
+	}
+	out, second := make([]string, len(cycles)), 0
+	for i, c := range cycles {
+		out[i] = kinds[c.N]
+		if seconds[c.N] {
+			second = c.N
+		}
+	}
+	return out, second, nil
 }
 
 // questionSources counts the task's questions qs once each, by their text
@@ -755,6 +808,7 @@ func (r Report) Markdown() string {
 		b.WriteString("\nOrigin unknown: turns typed in a pane that nothing proves you typed, kept for evaluation only and never counted as typed.\n")
 	}
 	r.questionsMarkdown(&b)
+	r.judgesMarkdown(&b)
 	r.fixLoopsMarkdown(&b)
 	r.qualityMarkdown(&b)
 	b.WriteString("\n## Against the baseline\n\n")
@@ -795,6 +849,34 @@ func (r Report) questionsMarkdown(b *strings.Builder) {
 	if head {
 		b.WriteString("\nA question counts once per task. Its sources are the investigators whose findings file its evidence names, else the roles " +
 			"that raised it: one source counts for that role alone (what it adds), several count apart as shared.\n")
+	}
+}
+
+// judgesMarkdown is the section of the judge kinds each task's local
+// rounds ran with (TaskStats.ReviewJudges), the second opinion named, for
+// the tasks whose rounds name any; none, no section.
+func (r Report) judgesMarkdown(b *strings.Builder) {
+	head := false
+	for _, t := range r.Tasks {
+		if t.ReviewJudges == nil {
+			continue
+		}
+		if !head {
+			b.WriteString("\n## The local review's judges\n\n| Task | Rounds | Judge kinds |\n|---|---|---|\n")
+			head = true
+		}
+		kinds := make([]string, len(t.ReviewJudges))
+		for i, k := range t.ReviewJudges {
+			kinds[i] = cmp.Or(k, "unknown")
+			if i+1 == t.SecondOpinion {
+				kinds[i] += " (the second opinion)"
+			}
+		}
+		fmt.Fprintf(b, "| %s | %d | %s |\n", t.Key, t.ReviewRounds, strings.Join(kinds, ", "))
+	}
+	if head {
+		b.WriteString("\nEach round's judge by its agent kind, in order; the second opinion is the round after a clean one with the judge of the " +
+			"other kind (`[factory.local_review] second_judge`); unknown: a round from before the factory named its judge.\n")
 	}
 }
 

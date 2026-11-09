@@ -4626,6 +4626,14 @@ const (
     FactoryStage may name.
 
 const (
+	FactorySecondJudgeWide   = "wide"
+	FactorySecondJudgeAlways = "always"
+	FactorySecondJudgeNever  = "never"
+)
+    The values of [factory.local_review] second_judge: where the local review's
+    second opinion runs (FactoryLocalReview.SecondJudge).
+
+const (
 	DefaultPrecheckCap   = 10 * time.Minute
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
@@ -5091,6 +5099,10 @@ var ErrSharedPrompt = errors.New("holds the blocks its prompts share and is not 
     ErrSharedPrompt means a prompt name is a partials file (SharedPrompt,
     the judge prompts', or FactorySharedPrompt, the factory prompts'), which
     holds blocks for its prompts and is never a prompt of its own.
+
+var FactorySecondJudges = []string{FactorySecondJudgeWide, FactorySecondJudgeAlways, FactorySecondJudgeNever}
+    FactorySecondJudges are the values of [factory.local_review] second_judge,
+    in the order the docs give.
 
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
@@ -6134,6 +6146,10 @@ type FactoryLocalReview struct {
 	Cycles int `toml:"cycles"`
 	// LaterWithout names the review roles that run in round 1 only.
 	LaterWithout []string `toml:"later_without"`
+	// SecondJudge says when a clean round of a Codex judge is followed by
+	// one more round with the watch's judge_fallback in its place, once per
+	// task: on a wide change (FactorySecondJudgeWide), always or never.
+	SecondJudge string `toml:"second_judge"`
 }
     FactoryLocalReview is [factory.local_review]. Round 1 runs the review roles
     of the repository's [[watch]]; later rounds run without LaterWithout.
@@ -14935,6 +14951,10 @@ type ReviewSummary struct {
 	Declined  []ReviewItem `json:"declined"`
 	Doubts    []ReviewItem `json:"doubts"`
 	Missing   []string     `json:"missing,omitempty"`
+	// SecondJudge and SecondRound are the judge and the round of the loop's
+	// second opinion (review-second.json), "" and 0 for a loop without one.
+	SecondJudge string `json:"second_judge,omitempty"`
+	SecondRound int    `json:"second_round,omitempty"`
 }
     ReviewSummary is review-summary.json: how the local review ended (exit
     clean or oscillation), after how many rounds, at which head (the one its
@@ -17275,6 +17295,8 @@ type TaskStats struct {
 	AnswerBatches, Decisions, ReviewRounds            int
 	Questions                                         int
 	QuestionsFrom, QuestionsShared                    map[string]int
+	ReviewJudges                                      []string
+	SecondOpinion                                     int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -17305,9 +17327,13 @@ type TaskStats struct {
     work after the publish (nil for a task without a PR). Questions counts
     the questions the task asked, each once whatever revisions carried it;
     QuestionsFrom counts those of one source by that source, and QuestionsShared
-    those of several by the sources joined with "+" (questionSources): what each
-    role, a second reader of the ticket's points among them, adds alone to what
-    the operator is asked, and what two readers raise both.
+    those of several by the sources joined with "+" (questionSources): what
+    each role, a second reader of the ticket's points among them, adds alone to
+    what the operator is asked, and what two readers raise both. ReviewJudges
+    is the agent kind of the judge each round of the local review ran with,
+    by cycle ("" for a round whose begin event names no judge: an older build's;
+    nil when no round names one), and SecondOpinion the cycle of the task's
+    second opinion (0 for none), from the rounds' begin events (roundJudges).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in
@@ -17397,9 +17423,10 @@ type LocalRound struct {
     LocalRound is one cycle of a task's local review (review_cycles):
     its number, the head it reviewed (head_before) and when it began,
     with the loop's round and the roles the cycle's newest begin event names
-    (the factory's "round 1 (cycle 1) at <short head>: <role>, <role>"; a round
-    that ran again in its cycle names the roles of its last run). Round is 0 and
-    Roles nil when no begin event of the cycle reads so for its head.
+    (the factory's "round 1 (cycle 1) at <short head>: <role>, <role>", and ";
+    judge <role> (<kind>)" after them; a round that ran again in its cycle names
+    the roles of its last run). Round is 0 and Roles nil when no begin event of
+    the cycle reads so for its head.
 
 type LocalTask struct {
 	ID                           int64

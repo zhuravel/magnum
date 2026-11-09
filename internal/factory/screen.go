@@ -1101,12 +1101,22 @@ func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	case len(c.Failed) > 0:
 		c.Recommended, c.Why = 1, "a check failed at this head: send it back to fix it"
 	case rev.Exit == registry.ExitOscillation:
-		c.Recommended, c.Why = 0, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", plural(rev.Rounds, "round"))
+		c.Recommended, c.Why = 0, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", reviewRounds(rev))
 	default:
 		c.Recommended, c.Why = 0, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
-			plural(max(rev.Rounds, 1), "round"), short(card.Head), qaWhy(card.QA))
+			reviewRounds(rev), short(card.Head), qaWhy(card.QA))
 	}
 	return c
+}
+
+// reviewRounds is the local review's rounds for the ready card ("2
+// rounds"), with its second opinion's round and judge when it ran one.
+func reviewRounds(rev ReviewSummary) string {
+	s := plural(max(rev.Rounds, 1), "round")
+	if rev.SecondJudge != "" {
+		s += fmt.Sprintf(" (round %d a second opinion by %s)", rev.SecondRound, rev.SecondJudge)
+	}
+	return s
 }
 
 // failedChecks are the checks the factory ran itself at head that failed

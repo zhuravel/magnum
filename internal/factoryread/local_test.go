@@ -153,6 +153,24 @@ func TestLocalReviewReadsATasksAnswersAsTheyStoodAtATime(t *testing.T) {
 	}
 }
 
+// A begin event that names its round's judge after the roles (since the second opinion: "; judge
+// <role> (<kind>)", and the judge it takes the place of) gives the roles alone.
+func TestLocalReviewReadsTheRolesOfABeginEventThatNamesItsJudge(t *testing.T) {
+	path := fixture(t, localTask("1"), startedCycle("1", "1", opened, "2026-11-05T09:00:00Z"),
+		startedCycle("1", "2", opened, "2026-11-05T10:00:00Z"),
+		event("1", "review", "begin", "round 1 (cycle 1) at aaaaaaaaaaaa: codex-judge, claude-review, codex-review; judge codex-judge (codex)"),
+		event("1", "review", "begin", "round 2 (cycle 2) at aaaaaaaaaaaa: claude-judge, claude-review, codex-review; judge claude-judge (claude), "+
+			"a second opinion in place of codex-judge (codex)"))
+	got, err := LocalReview(context.Background(), path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rounds) != 2 || got.Rounds[0].Round != 1 || !slices.Equal(got.Rounds[0].Roles, []string{"codex-judge", "claude-review", "codex-review"}) ||
+		got.Rounds[1].Round != 2 || !slices.Equal(got.Rounds[1].Roles, []string{"claude-judge", "claude-review", "codex-review"}) {
+		t.Fatalf("rounds %+v, want each round's roles without its judge's words", got.Rounds)
+	}
+}
+
 // A cycle no begin event names (its event in another shape, or for another head) has round 0 and no
 // roles: the replay refuses to freeze it rather than guess them.
 func TestLocalReviewLeavesACycleWithoutItsBeginEventUnnamed(t *testing.T) {
