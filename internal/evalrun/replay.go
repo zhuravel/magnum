@@ -22,7 +22,6 @@ import (
 	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
-	"github.com/zhuravel/magnum/internal/slots"
 )
 
 // localCaseInputs are local case ec's frozen inputs, once it may replay:
@@ -151,11 +150,14 @@ func prCase(pr string) (eval.Case, bool) {
 //     (addCaseWorktree), a setup that fails being the case's
 //     eval.OutcomeEnvironment;
 //   - a LocalCase of the frozen inputs in that worktree, with the
-//     environment a posted replay's per-PR worktree has for the round's
-//     synthetic number (slots.PerPREnv: WT_BRANCH=magnum-pr-<N> and the
-//     [[repo]] env), never the factory copy's, whose databases a task may be
+//     environment its preparation ran with, a posted replay's for the
+//     round's synthetic number under the worktree's own workspace name
+//     (caseSlug: WT_BRANCH=magnum-eval-<N>-<hex> and the [[repo]] env, or
+//     the pool's), never the factory copy's, whose databases a task may be
 //     using; its scratch directory under the run's case directory, never the
-//     factory's task directory; the notes as o says;
+//     factory's task directory; the notes as o says (a case whose
+//     [[factory.repo]] prepares its copies while its review checkout has
+//     nothing to prepare is said to replay in a bare worktree);
 //   - RunLocal, then the round's findings (LocalResult.Findings, a
 //     question marked, and the planned review's body from the result file
 //     of the judge the round ran, LocalResult.ResultFile) scored as a
@@ -191,18 +193,26 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 				tilde(mainClone), err))
 		}
 	}
-	wt, done, outcome, err := d.addCaseWorktree(ctx, cfg, git, run, o, ec.Name, in.Repo, in.Number(), mainClone, in.HeadSHA,
+	prep, done, outcome, err := d.addCaseWorktree(ctx, cfg, git, run, o, ec.Name, in.Repo, in.Number(), mainClone, in.HeadSHA,
 		cmp.Or(in.Base, config.DefaultFactoryBase))
 	defer done()
 	if err != nil {
 		return fail(outcome, err)
+	}
+	wt := prep.wt
+	if fr, ok := cfg.FactoryRepo(in.Repo); ok && prep.bare() && (len(fr.CopyFiles) > 0 || len(fr.Setup) > 0) {
+		// The round ran in a copy [[factory.repo]] prepared; the review
+		// checkout this worktree stands for has nothing to prepare.
+		d.warn("case %s: its round ran in a factory copy that [[factory.repo]] %s prepared (copy_files, setup), while a review checkout of it "+
+			"has nothing to prepare (no [[pool]] or [[repo]] copy_files or setup, no .config/wt.toml hooks): the replay's worktree is bare, "+
+			"so a spec run can fail where the round's passed", ec.Name, in.Repo)
 	}
 	if !o.NoNotes {
 		cr.Notes = notesHashes(d.Layout, ec.Owner, ec.Repo) // the live notes the round copies as it starts
 	}
 	lc := LocalCase{Checkout: wt, BaseSHA: in.BaseSHA, HeadSHA: in.HeadSHA, Branch: in.Branch, Title: in.Title, Body: in.Body,
 		TicketMD: in.TicketMD, AnswersMD: in.AnswersMD, Watch: *w, Roles: slices.Clone(in.Roles), Round: in.Round, TaskID: in.Task,
-		Repo: in.Repo, Base: in.Base, Env: slots.PerPREnv(cfg.RepoFor(in.Repo), in.Number(), wt, mainClone),
+		Repo: in.Repo, Base: in.Base, Env: prep.plan.Env,
 		ScratchRoot: filepath.Join(o.RunDir, "cases", ec.Name), NoNotes: o.NoNotes}
 	ld := d
 	ld.Config = cfg

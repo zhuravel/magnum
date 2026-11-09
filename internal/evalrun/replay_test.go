@@ -113,7 +113,8 @@ func localEvalCase(t *testing.T) eval.Case {
 // factory's main clone at the frozen head, under the same case worktree path as a posted case,
 // removed after; the round's engine gets that worktree, the frozen base, head, branch, title, plan,
 // ticket with the answers, roles and synthetic number, the per-PR environment a posted replay's
-// worktree gets (never the factory copy's, whose databases a task may be using), a scratch
+// worktree gets, under the case worktree's own workspace name (never the factory copy's, whose
+// databases a task may be using, nor a synthetic PR's magnum-pr-<N>), a scratch
 // directory under the run's (never the factory's task directory); and the round's findings are
 // scored with the posted cases' scoring, a question finding the P2 question the defect wants. The
 // run keeps the findings it scored.
@@ -151,8 +152,8 @@ func TestRunCaseReplaysALocalCaseFromItsFrozenInputs(t *testing.T) {
 	if ticket, _ := os.ReadFile(lr.TicketFile); string(ticket) != LocalTicket(frozenTicket, answersAsWritten) {
 		t.Errorf("ticket.md %q, want the ticket and the answers", ticket)
 	}
-	if lr.Env["WT_BRANCH"] != "magnum-pr-900011" {
-		t.Errorf("env %v, want the per-PR worktree's for the synthetic number", lr.Env)
+	if !strings.HasPrefix(lr.Env["WT_BRANCH"], localSlugPrefix) {
+		t.Errorf("env %v, want the per-PR env under the case worktree's own name", lr.Env)
 	}
 	if !within(filepath.Join(o.RunDir, "cases", ec.Name), r.layout.Scratch) {
 		t.Errorf("scratch %s, want it under the run's case directory", r.layout.Scratch)

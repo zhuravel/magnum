@@ -382,12 +382,13 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	if err := a.Git.FetchCommit(ctx, mainClone, ec.Head, ec.Number); err != nil {
 		return fail(OutcomeError, err)
 	}
-	wt, done, outcome, err := d.addCaseWorktree(ctx, cfg, a.Git, a.Runner, o, ec.Name, full, ec.Number, mainClone, ec.Head,
+	prep, done, outcome, err := d.addCaseWorktree(ctx, cfg, a.Git, a.Runner, o, ec.Name, full, ec.Number, mainClone, ec.Head,
 		cmp.Or(ec.Base, pd.BaseRefName))
 	defer done()
 	if err != nil {
 		return fail(outcome, err)
 	}
+	wt := prep.wt
 	worktrees := filepath.Dir(wt)
 
 	round := d.evalRound
@@ -399,7 +400,7 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 		Owner: ec.Owner, Repo: ec.Repo, Number: ec.Number, URL: cmp.Or(pd.URL, fmt.Sprintf("https://github.com/%s/pull/%d", full, ec.Number)),
 		Head: ec.Head, BaseRef: cmp.Or(ec.Base, pd.BaseRefName), DefaultBranch: cmp.Or(ec.Base, pd.BaseRefName),
 		Title: pd.Title, Author: pd.AuthorLogin, AuthorType: pd.AuthorType,
-		Checkout: wt, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
+		Checkout: wt, CheckoutEnv: prep.plan.Env, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
 		JudgeOnly: o.JudgeOnly, Reports: reports,
 	})
 	cr.ReportDir = res.ReportDir
