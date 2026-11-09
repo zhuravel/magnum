@@ -177,3 +177,42 @@ func TestFactoryHomeNamesPInItsHelpAndOnARowWithoutAPR(t *testing.T) {
 	mustContain(t, v, "f, F, K and P act on a PR in magnum's registry: PR-12371 has none there")
 	mustNotContain(t, v, "y/N")
 }
+
+// P's question on the board and the dashboard wraps over the footer's
+// lines, as E's does, so that a narrow screen still shows all that the
+// plan names (the tip, the bot, whether it conflicts) before y merges.
+func TestPsQuestionShowsThePlanWholeOnANarrowScreen(t *testing.T) {
+	whole := func(t *testing.T, view string, w int, want string) {
+		t.Helper()
+		for i, l := range strings.Split(view, "\n") {
+			if ansi.StringWidth(l) > w {
+				t.Errorf("%d columns: line %d is %d cells wide: %q", w, i, ansi.StringWidth(l), l)
+			}
+		}
+		if got := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(view), "─", " ")), " "); !strings.Contains(got, want+" y/N") {
+			t.Errorf("%d columns: the question is not shown whole, want %q in:\n%s", w, want, view)
+		}
+	}
+	for _, w := range []int{80, 120} {
+		m, _, act := newBoard(t, w, 40, PRBoardOptions{})
+		m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{actPR(nil)}})
+		m, _ = boardAct(t, m, "P")
+		if m.confirm == nil {
+			t.Fatalf("%d columns: no question (calls %v)", w, act.calls)
+		}
+		whole(t, viewOf(m), w, mergePlanAsk("talkable/talkable#5"))
+		if lines := strings.Split(viewOf(m), "\n"); len(lines) != 40 {
+			t.Errorf("%d columns: the board is %d lines high, want 40", w, len(lines))
+		}
+
+		data := dashData()
+		data.Queue[0].State, data.Queue[0].Next = "reviewed", "watching for new pushes"
+		d, _, dact := newDash(t, w, 40)
+		d, _ = send(t, d, dashDataMsg{data: data})
+		d, _ = dashAct(t, d, "j", "j", "P")
+		if d.confirm == nil {
+			t.Fatalf("%d columns: no question on the dashboard (calls %v)", w, dact.calls)
+		}
+		whole(t, viewOf(d), w, mergePlanAsk("talkable#7"))
+	}
+}

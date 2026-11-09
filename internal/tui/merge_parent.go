@@ -32,7 +32,7 @@ func mergeParentRun(ref string) (string, actionFunc) {
 		res, err := act.MergeParentPlan(ctx, ref)
 		if err == nil && res.Ask != "" && res.Parent != nil {
 			asked := *res.Parent
-			res.next = &pendingAction{question: res.Ask, what: what, target: ref,
+			res.next = &pendingAction{question: res.Ask, what: what, target: ref, wrap: true,
 				fn: func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 					return act.MergeParent(ctx, ref, asked)
 				}}
