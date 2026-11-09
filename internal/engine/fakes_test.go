@@ -2558,6 +2558,7 @@ func (h *harness) stop() {
 		e.gateWG.Wait()
 		h.runs.Wait()
 		e.memWG.Wait()
+		e.stagingWG.Wait()
 		close(done)
 	}()
 	select {

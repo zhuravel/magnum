@@ -425,6 +425,12 @@ type Deps struct {
 	// listens (onHookFailure); nil = none.
 	HookFailures <-chan app.HookFailure
 
+	// Staging reads where each open PR of a repository with staging envs
+	// stands on them (internal/staging's read side, staging_status.go);
+	// FromApp makes one when a watched repository has [[factory.repo.staging]]
+	// entries. nil = none: nothing of staging runs.
+	Staging Staging
+
 	// agentHooks is the router of the agents' hook events the engine
 	// serves (hooks.go), which FromApp makes before the pane agents'
 	// deps that register in it; nil = New makes one.
@@ -788,6 +794,20 @@ type Engine struct {
 	observeSlowAt time.Time
 
 	agentHooks *hookRouter
+
+	// The staging status (staging_status.go): the repositories whose
+	// Refresh runs now and those whose Refresh returned once in this
+	// daemon, by lower-case name, and the cause of each one's failed
+	// Refresh last logged, under stagingMu; stagingWG waits for the
+	// Refreshes in flight, which stagingStop ends (the stop, before the
+	// tick's context ends under Options.Once).
+	stagingMu     sync.Mutex
+	stagingBusy   map[string]bool
+	stagingRead   map[string]bool
+	stagingLogged map[string]string
+	stagingWG     sync.WaitGroup
+	stagingCtx    context.Context
+	stagingStop   context.CancelFunc
 }
 
 // New returns an engine over d.
@@ -832,12 +852,16 @@ func New(d Deps) *Engine {
 		kick:              make(chan struct{}, 1),
 		starts:            starter{codex: make(chan struct{}, maxCodexStarts)},
 		agentHooks:        d.agentHooks,
+		stagingBusy:       map[string]bool{},
+		stagingRead:       map[string]bool{},
+		stagingLogged:     map[string]string{},
 	}
 	if e.agentHooks == nil {
 		e.agentHooks = &hookRouter{}
 	}
 	e.rec = &Recorder{log: d.Logger, st: d.Store, now: d.Now}
 	e.toastCtx, e.toastStop = context.WithCancel(context.Background())
+	e.stagingCtx, e.stagingStop = context.WithCancel(context.Background())
 	if d.Notifier != nil && !d.DryRun {
 		// Informational toasts (reviews posted, new repositories) share one
 		// batch; its summary title counts each kind.
@@ -921,6 +945,9 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	}
 	if !a.DryRun && a.AgentTag == "" {
 		d.LookPath = exec.LookPath // the daemon's own agent CLIs (cli_version.go)
+	}
+	if s := stagingFromApp(a); s != nil { // staging_status.go: only with a watched repository's staging envs
+		d.Staging = s
 	}
 	if a.Runner != nil && a.Config != nil {
 		// The session revealed is the panes': it shows the PR's agents.
@@ -1158,6 +1185,7 @@ func (e *Engine) shutdown() {
 		}
 	}
 	e.stopToasts()
+	e.stopStaging(10 * time.Second) // staging_status.go: its Refreshes saw the stop; then its clones
 	e.log.Info("magnum daemon stopped")
 }
 
@@ -1213,6 +1241,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.health(ctx)
 	e.handleRequests(ctx)
 	e.closeGrace(ctx)
+	e.stagings(ctx) // staging_status.go: the open PRs' staging status; each Refresh runs off the tick
 	// github_floor.go: the work the GitHub budget held, once it recovered,
 	// before dispatch gives the PR to another round.
 	e.continueBudgetHeld(ctx)
