@@ -11,7 +11,9 @@ package engine
 // y/N; the deploy then plans again, refuses a head that moved since the
 // question, an env that cannot take the merge now and a merge that adds
 // what the question did not name, and starts the effects, which Step
-// advances. Own PRs only for now; a request of kind staging_cancel stops an
+// advances. An env whose merge conflicts takes the deploy too: the merge
+// step hands the conflict to the resolver (staging_resolve.go, at most
+// StagingResolveTries jobs), and the question says so. Own PRs only for now; a request of kind staging_cancel stops an
 // effect. The answer is StagingDeployAnswer as JSON on its first line and
 // its words on the last.
 
@@ -96,24 +98,31 @@ type StagingDeployAnswer struct {
 }
 
 // StagingPlanEnv is one env's plan (staging.EnvPlan): its branch and tip,
-// whether the head merges cleanly, else the conflicted paths, the
-// migrations the merge adds, whether it changes .github/workflows, and why
-// the env takes no merge (the head there already, no branch). The paths
-// are made safe for a terminal.
+// whether the head merges cleanly, else the conflicted paths and whether
+// the review daemon's resolver merges them (Resolves: then the env takes
+// the deploy), the migrations the merge adds, whether it changes
+// .github/workflows, and why the env takes no merge (the head there
+// already, no branch). The paths are made safe for a terminal.
 type StagingPlanEnv struct {
 	Env        string   `json:"env"`
 	Branch     string   `json:"branch"`
 	Tip        string   `json:"tip,omitempty"`
 	Clean      bool     `json:"clean"`
 	Conflicts  []string `json:"conflicts,omitempty"`
+	Resolves   bool     `json:"resolves,omitempty"`
 	Migrations []string `json:"migrations,omitempty"`
 	Workflows  bool     `json:"workflows,omitempty"`
 	Why        string   `json:"why,omitempty"`
 }
 
-// Deployable reports whether the env takes the merge: it is clean and
-// nothing stops it.
-func (p StagingPlanEnv) Deployable() bool { return p.Clean && p.Why == "" }
+// StagingResolveTries is how many resolver jobs a deploy's conflict gets
+// at most (internal/staging's bound): a conflict that comes back after a
+// moved tip gets one more.
+const StagingResolveTries = maxResolveTry
+
+// Deployable reports whether the env takes the merge: nothing stops it,
+// and it is clean or the resolver merges its conflicts.
+func (p StagingPlanEnv) Deployable() bool { return p.Why == "" && (p.Clean || p.Resolves) }
 
 // ParseStagingDeployAnswer reads a staging deploy request's answer (its
 // first line); false when it is none (a refusal's words).
@@ -226,7 +235,7 @@ func (e *Engine) requestStagingDeploy(ctx context.Context, p StagingDeployPayloa
 	ans := StagingDeployAnswer{Ref: label, Head: pr.HeadSHA, DryRun: p.DryRun, Pusher: id.Login, AskedBy: asked,
 		MasterCI: e.masterCIRunning(ctx, repo)}
 	for _, ep := range plan.Envs {
-		ans.Envs = append(ans.Envs, stagingPlanEnvOf(ep))
+		ans.Envs = append(ans.Envs, stagingPlanEnvOf(ep, e.d.stagingResolver != nil))
 	}
 	if p.DryRun {
 		ans.Text = "dry run: would merge " + label + " at " + textx.ShortSHA(pr.HeadSHA) + " as " + id.Login + " into " + stagingPlanWords(ans.Envs)
@@ -327,8 +336,9 @@ func stagingChosen(repo string, envs []staging.Env, names []string) ([]staging.E
 	return slices.DeleteFunc(slices.Clone(envs), func(e staging.Env) bool { return !want[e.Name] }), nil
 }
 
-// stagingPlanEnvOf is ep as the answer carries it, its words made safe.
-func stagingPlanEnvOf(ep staging.EnvPlan) StagingPlanEnv {
+// stagingPlanEnvOf is ep as the answer carries it, its words made safe;
+// resolver says the daemon has the resolver, which merges a conflict.
+func stagingPlanEnvOf(ep staging.EnvPlan, resolver bool) StagingPlanEnv {
 	clean := func(ps []string) []string {
 		out := make([]string, len(ps))
 		for i, p := range ps {
@@ -337,7 +347,8 @@ func stagingPlanEnvOf(ep staging.EnvPlan) StagingPlanEnv {
 		return out
 	}
 	return StagingPlanEnv{Env: ep.Env.Name, Branch: ep.Env.Branch, Tip: ep.Tip, Clean: ep.Clean && ep.Why == "",
-		Conflicts: clean(ep.Conflicts), Migrations: clean(ep.Migrations), Workflows: ep.Workflows, Why: stagingClean(ep.Why)}
+		Conflicts: clean(ep.Conflicts), Resolves: resolver && ep.Why == "" && !ep.Clean && len(ep.Conflicts) > 0,
+		Migrations: clean(ep.Migrations), Workflows: ep.Workflows, Why: stagingClean(ep.Why)}
 }
 
 // stagingPlanWords says what each env would get, in one line.
@@ -350,16 +361,19 @@ func stagingPlanWords(envs []StagingPlanEnv) string {
 }
 
 // StagingPlanSays is what one env's plan says in words: why it takes no
-// merge, its conflicts, or a clean merge with the migrations it adds and
-// its workflow changes.
+// merge, its conflicts (and that the resolver merges them first), or a
+// clean merge, with the migrations it adds and its workflow changes.
 func StagingPlanSays(ep StagingPlanEnv) string {
 	switch {
 	case ep.Why != "":
 		return ep.Why
-	case len(ep.Conflicts) > 0:
+	case len(ep.Conflicts) > 0 && !ep.Resolves:
 		return "conflicts in " + listedPaths(ep.Conflicts)
 	}
 	out := "clean"
+	if len(ep.Conflicts) > 0 {
+		out = "conflicts in " + listedPaths(ep.Conflicts) + ": " + StagingResolverWords
+	}
 	if n := len(ep.Migrations); n > 0 {
 		out += ", adds " + textx.Count(n, "migration", "migrations") + ": " + listedPaths(ep.Migrations)
 	}
@@ -378,9 +392,13 @@ func listedPaths(ps []string) string {
 	return strings.Join(ps[:shown], ", ") + fmt.Sprintf(" and %d more", len(ps)-shown)
 }
 
+// StagingResolverWords say, in a few words, what becomes of a conflict at
+// a deploy: the question and the plan name them.
+const StagingResolverWords = "the resolver merges it first (at most 2 tries)"
+
 // stagingPlanRefusal says why a deploy of envs does not run as asked: an
-// env that cannot take the merge now (the head there already, a conflict:
-// no resolver yet), and, once something was asked (seen), an env the
+// env that cannot take the merge now (the head there already, a conflict
+// without a resolver), and, once something was asked (seen), an env the
 // question did not show, or a merge that now adds a migration or changes
 // .github/workflows where the question did not say so.
 func stagingPlanRefusal(envs []StagingPlanEnv, seen []StagingSeen) string {
@@ -388,9 +406,9 @@ func stagingPlanRefusal(envs []StagingPlanEnv, seen []StagingSeen) string {
 		switch {
 		case ep.Why != "":
 			return ep.Env + ": " + ep.Why + ": nothing was deployed"
-		case len(ep.Conflicts) > 0:
-			return ep.Env + " conflicts in " + listedPaths(ep.Conflicts) + ": nothing was deployed (merge it by hand; a resolver comes later)"
-		case !ep.Clean:
+		case len(ep.Conflicts) > 0 && !ep.Resolves:
+			return ep.Env + " conflicts in " + listedPaths(ep.Conflicts) + ": nothing was deployed (no resolver here to merge it: merge it by hand)"
+		case !ep.Clean && !ep.Resolves:
 			return ep.Env + " does not merge cleanly: nothing was deployed"
 		}
 	}

@@ -6,9 +6,10 @@ package cli
 // review daemon answers off its tick). A terminal first asks the daemon's
 // plan (a dry run: a merge in its mirror, nothing pushed) and puts it as
 // one y/N (StagingQuestion): the envs that take the merge, the head, the
-// fixer App's bot that pushes, the migrations Jenkins then runs on each
-// env's shared database, the envs left out and why, and a warning while
-// the default branch's CI runs. y sends the deploy bound to that head and
+// fixer App's bot that pushes, the envs whose merge conflicts (the
+// resolver merges it first, at most 2 tries), the migrations Jenkins then
+// runs on each env's shared database, the envs left out and why, and a
+// warning while the default branch's CI runs. y sends the deploy bound to that head and
 // to what the question named; the daemon refuses a head that moved since.
 
 import (
@@ -77,13 +78,14 @@ func lastLineOf(s string) string {
 
 // StagingQuestion is the y/N before a staging deploy of label as the
 // daemon planned it (ans): the envs that take the merge and the head, who
-// merges and pushes, the migrations Jenkins then runs on each env's shared
+// merges and pushes, each env whose merge conflicts and that the resolver
+// merges it first, the migrations Jenkins then runs on each env's shared
 // database, a merge that changes .github/workflows, the envs left out and
 // why, and the default branch's CI while it runs. It also gives the
 // deploy's binding: those envs and what the question named of each; false
 // when no env takes the merge, the question then saying why for each.
 func StagingQuestion(label string, ans engine.StagingDeployAnswer) (question string, envs []string, seen []engine.StagingSeen, ok bool) {
-	var branches, parts, left, why []string
+	var branches, parts, left, why, resolved []string
 	type migs struct {
 		list string
 		envs []string
@@ -96,6 +98,11 @@ func StagingQuestion(label string, ans engine.StagingDeployAnswer) (question str
 			continue
 		}
 		envs, branches = append(envs, ep.Env), append(branches, actClean(ep.Branch))
+		if len(ep.Conflicts) > 0 { // the resolver merges it: its words without the migrations, named below
+			c := ep
+			c.Migrations, c.Workflows = nil, false
+			resolved = append(resolved, actClean(ep.Env)+" "+actClean(engine.StagingPlanSays(c)))
+		}
 		seen = append(seen, engine.StagingSeen{Env: ep.Env, Migrations: slices.Clone(ep.Migrations), Workflows: ep.Workflows})
 		if len(ep.Migrations) > 0 {
 			list := actClean(strings.Join(ep.Migrations, ", "))
@@ -111,6 +118,7 @@ func StagingQuestion(label string, ans engine.StagingDeployAnswer) (question str
 	}
 	parts = append(parts, fmt.Sprintf("Deploy %s's head %s to %s: %s merges it into %s and pushes", label, textx.ShortSHA(ans.Head),
 		actJoinAnd(envs), actClean(ans.Pusher), actJoinAnd(branches)))
+	parts = append(parts, resolved...)
 	for _, g := range groups {
 		dbs := "database"
 		if len(g.envs) > 1 {

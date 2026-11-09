@@ -112,6 +112,38 @@ func TestStagingDeployAsksWithTheDaemonsPlanThenQueuesTheDeploy(t *testing.T) {
 	}
 }
 
+// An env whose merge conflicts takes the deploy when the daemon's resolver
+// merges it: the y/N names it with the others and says, in a few words,
+// that the resolver merges it first (at most 2 tries); its migrations are
+// named as a clean env's are, and the deploy is bound to it. One without
+// the resolver is left out, naming the paths.
+func TestTheStagingQuestionSaysTheResolverMergesAConflict(t *testing.T) {
+	ans := engine.StagingDeployAnswer{Ref: "talkable/talkable#5", Head: "abc1234abc1234abc1234abc1234abc1234abc12", Pusher: "fixer-app[bot]",
+		Envs: []engine.StagingPlanEnv{
+			{Env: "void", Branch: "staging-void", Tip: "7c7c7c7", Clean: true},
+			{Env: "bastion", Branch: "staging-bastion", Tip: "8d8d8d8", Conflicts: []string{"db/schema.rb", "app/models/coupon.rb"}, Resolves: true,
+				Migrations: []string{stagingMigration}},
+		}}
+	q, envs, seen, ok := StagingQuestion("talkable#5", ans)
+	if !ok || !slices.Equal(envs, []string{"void", "bastion"}) || len(seen) != 2 || seen[1].Env != "bastion" ||
+		!slices.Equal(seen[1].Migrations, []string{stagingMigration}) {
+		t.Fatalf("StagingQuestion = %q, %v, %+v, %v", q, envs, seen, ok)
+	}
+	actContains(t, q, "Deploy talkable#5's head abc1234 to void and bastion",
+		"bastion conflicts in db/schema.rb, app/models/coupon.rb: the resolver merges it first (at most 2 tries)",
+		"Jenkins then runs "+stagingMigration+" on bastion's shared database")
+	if strings.Contains(q, "left out") {
+		t.Errorf("a conflict the resolver merges is left out: %q", q)
+	}
+
+	ans.Envs[1].Resolves = false
+	q, envs, _, ok = StagingQuestion("talkable#5", ans)
+	if !ok || !slices.Equal(envs, []string{"void"}) {
+		t.Fatalf("StagingQuestion without a resolver = %q, %v, %v", q, envs, ok)
+	}
+	actContains(t, q, "bastion is left out (conflicts in db/schema.rb, app/models/coupon.rb)")
+}
+
 // A plan where no env takes the merge asks nothing and queues nothing: it
 // says why for each.
 func TestStagingDeployWithNothingToDeployQueuesNothing(t *testing.T) {

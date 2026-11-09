@@ -52,8 +52,11 @@ func newStagingCmd(c *Context) *cobra.Command {
 			"into each staging-<env> branch as the fixer App's bot (a two-parent merge, never a force-push, never production, "+
 			"master or main) and follows the env's CI and deployment. A terminal asks y/N first, from the daemon's plan (a "+
 			"dry run that merges in its mirror and pushes nothing): the envs that take the merge, the head, the bot, the "+
-			"migrations Jenkins then runs on each env's shared database, the envs left out and why (the head there already, "+
-			"a conflict: nothing is resolved yet), and a warning while the default branch's CI runs. y sends the deploy bound "+
+			"migrations Jenkins then runs on each env's shared database, each env whose merge conflicts, the envs left out "+
+			"and why (the head there already), and a warning while the default branch's CI runs. A merge that conflicts "+
+			"goes to the review daemon's resolver, at most 2 tries: an agent resolves it in a review slot and runs the "+
+			"resolved files' specs, and the bot commits the merge, which the deploy checks again before it pushes; a "+
+			"conflict it cannot resolve fails the deploy, nothing pushed. y sends the deploy bound "+
 			"to that head; a head that moved since, or a merge that now adds what the question did not name, is refused. "+
 			"--dry-run prints the plan alone, --yes asks nothing, and without a terminal to ask on (a pipe, a script, an "+
 			"agent's shell) a deploy needs --yes, as --json does; a review agent's pane is refused. --cancel <effect> "+

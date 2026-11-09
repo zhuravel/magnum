@@ -172,3 +172,18 @@ func TestHelpOfTheJobsTheGitHubFloorHoldsNamesTheFloor(t *testing.T) {
 		}
 	}
 }
+
+// `magnum staging --help` says what becomes of a deploy whose merge
+// conflicts: the review daemon's resolver merges it first (at most 2
+// tries), so the deploy goes on; it said nothing was resolved.
+func TestStagingHelpSaysTheResolverMergesAConflict(t *testing.T) {
+	help := strings.Join(strings.Fields(commandHelp(t, "staging")), " ")
+	for _, want := range []string{"merge that conflicts goes to the review daemon's resolver", "at most 2 tries"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("magnum staging --help does not say %q", want)
+		}
+	}
+	if strings.Contains(help, "nothing is resolved") {
+		t.Error("magnum staging --help still says nothing is resolved")
+	}
+}

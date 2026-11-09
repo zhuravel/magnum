@@ -146,6 +146,55 @@ func TestAStagingDeployStartsTheEffectsOfTheEnvsAsked(t *testing.T) {
 	}
 }
 
+// With the review daemon's resolver, an env whose merge conflicts at the
+// plan takes the deploy too: the dry run says that the resolver merges it
+// first (at most 2 tries), beside the migrations the merge adds, and the
+// deploy starts its effect, whose merge step hands the conflict to the
+// resolver. A daemon without one refuses it, naming the paths.
+func TestAConflictAtThePlanGoesToTheResolver(t *testing.T) {
+	f := &fakeStaging{plan: func(pr staging.PR, envs []staging.Env) (staging.DeployPlan, error) {
+		p, err := mixedPlan(pr, envs)
+		for i := range p.Envs {
+			if p.Envs[i].Env == envBastion {
+				p.Envs[i].Migrations = []string{"db/migrate/20261106_add_codes.rb"}
+			}
+		}
+		return p, err
+	}}
+	h := deployHarness(t, f, func(h *harness) { h.d.stagingResolver = &stagingResolver{} })
+	ans := deployAnswer(t, h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"bastion"}, DryRun: true}))
+	if len(ans.Envs) != 1 {
+		t.Fatalf("envs %+v", ans.Envs)
+	}
+	b := ans.Envs[0]
+	if b.Clean || !b.Resolves || !b.Deployable() || len(b.Conflicts) != 2 {
+		t.Fatalf("bastion %+v: a conflict the resolver merges takes the deploy", b)
+	}
+	if says := StagingPlanSays(b); !strings.HasPrefix(says, "conflicts in db/schema.rb, app/models/") ||
+		!strings.Contains(says, "the resolver merges it first (at most 2 tries)") || !strings.Contains(says, "adds 1 migration: db/migrate/20261106_add_codes.rb") {
+		t.Errorf("bastion's plan says %q", says)
+	}
+	ans = deployAnswer(t, h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"bastion"}, Head: fixHead,
+		Seen: []StagingSeen{{Env: "bastion", Migrations: []string{"db/migrate/20261106_add_codes.rb"}}}}))
+	if len(f.deploys) != 1 || len(f.deploys[0].plan.Envs) != 1 || f.deploys[0].plan.Envs[0].Env != envBastion || !slices.Equal(ans.Effects, []string{"bastion-2-20261005t100000-abcd"}) {
+		t.Fatalf("deploys %+v, answer %+v: the conflicted env's effect starts", f.deploys, ans)
+	}
+
+	f = &fakeStaging{plan: mixedPlan}
+	h = deployHarness(t, f)
+	ans = deployAnswer(t, h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"bastion"}, DryRun: true}))
+	if b := ans.Envs[0]; b.Resolves || b.Deployable() {
+		t.Fatalf("bastion %+v without a resolver", b)
+	}
+	r := h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"bastion"}, Head: fixHead})
+	if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "bastion conflicts in db/schema.rb") || !strings.Contains(deref(r.Result), "no resolver") {
+		t.Fatalf("%s %q: without a resolver a conflict is refused, naming the paths", r.State, deref(r.Result))
+	}
+	if len(f.deploys) != 0 {
+		t.Fatalf("deployed %+v", f.deploys)
+	}
+}
+
 // What a deploy refuses before it deploys anything: staging off (no
 // client), a coworker's PR (own PRs only for now), a PR merged or closed,
 // one from a fork, one whose head branch is master, main or a staging
