@@ -5052,8 +5052,9 @@ holds the merge). A cancel stops a deploy at once and nothing is pushed after it
 stops only the watching: **a deploy never reverts a push**, and neither does a failed CI or a missing deployment
 (revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
 events, at least once: each event waits in the deploy's journal until it is delivered, so an event a crash cut
-is recorded when the deploy resumes; a repeat carries the same effect, journal write, step and phase, which the
-registry dedupes on, and the journal write's number, not the arrival, orders them.
+is recorded when the deploy resumes, or at the next tick when that run ended the deploy; a repeat carries the same
+effect, journal write, step and phase, which the registry dedupes on, and the journal write's number, not the
+arrival, orders them.
 
 No deploy holds its env for ever. A passing failure at a step (a fetch, a git command, a read of GitHub or of the
 resolver, a push) tries again after 30 seconds, then 1, 2, 4 and 8 minutes, and the deploy's why names the next

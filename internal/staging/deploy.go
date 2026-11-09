@@ -855,6 +855,12 @@ func (c *Client) stepRepo(ctx context.Context, repo string) error {
 	for _, j := range readJournals(root) {
 		switch {
 		case !strings.EqualFold(j.Repo, repo):
+		case !j.live() && (len(j.Pending) > 0 || j.Held):
+			// An ended run's outbox (a kill before its flush) and its refs
+			// (a mirror busy at its end).
+			if err := c.settle(ctx, repo, dir, root, j.ID); err != nil {
+				c.d.Log.Warn("staging: an ended deploy not settled", "repo", repo, "effect", j.ID, "err", errLine(err))
+			}
 		case j.live() && !envNameRe.MatchString(j.Env.Name):
 			// Never a lock named after it: Cancel still ends it by id.
 			c.noteOnce(deploysDir(dir)+"/"+journalName(j.ID), "staging: a live deploy journal passed over: its env's name fails the id rule",
@@ -920,7 +926,11 @@ func (c *Client) advanceLocked(ctx context.Context, repo, dir string, root *os.R
 		return nil, false, err
 	}
 	if j.State != EffectRunning || j.RetryAt.After(c.d.Now()) {
-		return nil, j.live(), nil // queued, or waiting for its next try
+		// Queued, or waiting for its next try: its outbox goes out all the
+		// same.
+		r := &stepRun{c: c, repo: repo, dir: dir, root: root, j: j}
+		r.loaded()
+		return r, j.live(), nil
 	}
 	_, g, err := c.deployDeps(repo)
 	if err != nil {
@@ -941,6 +951,66 @@ func (c *Client) advanceLocked(ctx context.Context, repo, dir string, root *os.R
 		r.dropRefs(ctx)
 	}
 	return r, j.live(), err
+}
+
+// settle delivers an ended effect's outbox (the events of a run a kill cut
+// before its flush) and drops the refs its end could not (the mirror was
+// busy): it reads the journal under the effect's flock, delivers what this
+// client has not after the unlock, then, under the flock again and with the
+// effect still ended, drops the refs (a short wait for the mirror's flock;
+// a busy mirror leaves them for the next Step) and the delivered events with
+// one write that changes nothing else: not the step, the state, the why,
+// the Seq or the time.
+func (c *Client) settle(ctx context.Context, repo, dir string, root *os.Root, id EffectID) error {
+	r, err := c.endedRun(ctx, repo, dir, root, id)
+	if r == nil {
+		return err
+	}
+	r.flush()
+	f, _, err := flockIn(ctx, root, effectLockName(id), true)
+	if err != nil {
+		return err
+	}
+	defer unflock(f)
+	j, err := readJournal(root, id)
+	if err != nil || j.live() {
+		return err
+	}
+	changed := false
+	if j.Held && r.g != nil {
+		if err := c.underMirrorFor(ctx, dir, cmp.Or(c.busyLockWait, busyLockWait), func() error {
+			return errors.Join(r.g.deleteRef(ctx, dir, mergeRef(id)), r.g.deleteRef(ctx, dir, resolvedRef(id)))
+		}); err == nil {
+			j.Held, changed = false, true
+		}
+	}
+	sent := c.sentUpTo(id)
+	kept := slices.DeleteFunc(slices.Clone(j.Pending), func(ev pendingEvent) bool { return ev.Seq > 0 && ev.Seq <= sent })
+	if len(kept) != len(j.Pending) {
+		j.Pending, changed = kept, true
+	}
+	if !changed {
+		return nil
+	}
+	return writeJournal(root, j)
+}
+
+// endedRun reads ended effect id under its flock for settle; nil when it
+// is live (its runner delivers it).
+func (c *Client) endedRun(ctx context.Context, repo, dir string, root *os.Root, id EffectID) (*stepRun, error) {
+	f, _, err := flockIn(ctx, root, effectLockName(id), true)
+	if err != nil {
+		return nil, err
+	}
+	defer unflock(f)
+	j, err := readJournal(root, id)
+	if err != nil || j.live() {
+		return nil, err
+	}
+	_, g, _ := c.deployDeps(repo)
+	r := &stepRun{c: c, repo: repo, dir: dir, root: root, g: g, j: j}
+	r.loaded()
+	return r, nil
 }
 
 // Effects lists repo's effects, the newest first, from their journals:
@@ -1031,7 +1101,7 @@ func (c *Client) cancelLocked(ctx context.Context, repo, dir string, root *os.Ro
 	r.loaded()
 	err = r.end(ctx, EffectCancelled, why)
 	if err == nil && j.Held {
-		r.dropRefs(ctx) // when the mirror's lock is busy, the refs wait for the next end of a step
+		r.dropRefs(ctx) // when the mirror's lock is busy, the scan drops them later (settle)
 	}
 	return r, j.Env.Name, err
 }

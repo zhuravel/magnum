@@ -3,6 +3,7 @@ package staging
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -118,28 +119,19 @@ func TestAResumedNeedsYouCarriesItsSeqOn(t *testing.T) {
 	}
 	w.drive(c, id, at(StepMerge))
 	all := events()
-	old := map[[2]string]keyed{}
+	type key struct {
+		seq         int
+		step, phase string
+	}
+	old := map[key]keyed{}
 	for _, e := range all[:first] {
-		old[[2]string{e.step + e.phase, itoa3(e.seq)}] = e
+		old[key{e.seq, e.step, e.phase}] = e
 	}
 	for _, e := range all[first:] {
-		if o, ok := old[[2]string{e.step + e.phase, itoa3(e.seq)}]; ok {
+		if o, ok := old[key{e.seq, e.step, e.phase}]; ok {
 			t.Errorf("key (%s, %d, %s, %s) of the first run (by %s, %q) again in the second (by %s, %q)", e.id, e.seq, e.step, e.phase, o.by, o.text, e.by, e.text)
 		}
 	}
-}
-
-func itoa3(n int) string { return strings.Repeat("0", max(0, 3-len(itoaN(n)))) + itoaN(n) }
-
-func itoaN(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for ; n > 0; n /= 10 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-	}
-	return string(b)
 }
 
 // Minor A (the review's R3). An edited BusyFor (negative, or near the
@@ -317,13 +309,17 @@ func TestEachFlushDeliversInSeqOrder(t *testing.T) {
 	b := w.client()
 	defer b.Close()
 	w.drive(b, id, at(StepPush))
+	type key struct {
+		seq         int
+		step, phase string
+	}
 	var seqs, firsts []int
-	seen := map[[3]string]bool{}
+	seen := map[key]bool{}
 	for i, e := range events() {
 		if i >= before {
 			seqs = append(seqs, e.seq)
 		}
-		k := [3]string{itoa3(e.seq), e.step, e.phase}
+		k := key{e.seq, e.step, e.phase}
 		if !seen[k] {
 			seen[k] = true
 			firsts = append(firsts, e.seq)
@@ -337,5 +333,158 @@ func TestEachFlushDeliversInSeqOrder(t *testing.T) {
 	}
 	if len(seqs) == 0 || seqs[0] > firsts[before-1] {
 		t.Errorf("b delivered %v after a's %v: no event of a's cut write again", seqs, firsts[:before])
+	}
+}
+
+// Important 1 of the second review (its S1). A run that ends the effect,
+// killed right after the end's write and before its flush: the scan of a
+// fresh client delivers the ended journal's outbox, both events, then
+// clears the outbox with one write that leaves the step, the state and
+// the why as they were; later Steps write the ended journal no more.
+func TestAnEndingRunsEventsAreDeliveredFromItsOutbox(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	events := w.recordKeyed()
+	a := w.client()
+	id := w.deploy(a, 1)
+	w.drive(a, id, at(StepVerify))
+	w.editJournal(id, func(j *journal) { j.Merge = "" })
+	saves := 0
+	a.hook = func(hid EffectID, step, point string) error {
+		if hid == id && step == StepVerify && point == "saved" {
+			if saves++; saves == 2 {
+				return errHook // killed right after the end's write
+			}
+		}
+		return nil
+	}
+	_ = a.Step(context.Background())
+	kill(a)
+	cut := w.journalOf(id)
+	if cut.State != EffectFailed || len(cut.Pending) != 2 {
+		t.Fatalf("the cut: %s with %d events in the outbox, want failed with verify's two", cut.State, len(cut.Pending))
+	}
+	b := w.client()
+	defer b.Close()
+	for range 3 {
+		if err := b.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.advance(time.Minute)
+	}
+	phases := map[string]bool{}
+	for _, e := range events() {
+		if e.step == StepVerify && e.id == id {
+			phases[e.phase] = true
+		}
+	}
+	if !phases[PhaseBegin] || !phases[PhaseFail] {
+		t.Errorf("verify's events delivered: %v, want its begin and its end", phases)
+	}
+	after := w.journalOf(id)
+	if len(after.Pending) != 0 || after.Step != cut.Step || after.State != cut.State || after.Why != cut.Why || after.Seq != cut.Seq || !after.Updated.Equal(cut.Updated) {
+		t.Errorf("after the delivery: %s %s %q seq %d, %d in the outbox; want the cut's %s %s %q seq %d, the outbox empty",
+			after.Step, after.State, after.Why, after.Seq, len(after.Pending), cut.Step, cut.State, cut.Why, cut.Seq)
+	}
+	n := len(events())
+	for range 3 {
+		if err := b.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.journalOf(id); len(events()) != n || !got.Updated.Equal(after.Updated) {
+		t.Errorf("an ended effect with an empty outbox was delivered or written again")
+	}
+}
+
+// Important 1 of the second review (its S1c). A Cancel killed in its flush
+// (Event panics at its first delivery): a fresh client's scan delivers the
+// cancel's event from the cancelled journal's outbox.
+func TestACancelKilledInItsFlushIsDeliveredLater(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	var mu sync.Mutex
+	var got []string
+	panicNext := false
+	w.deps.Event = func(e Effect, step, phase, text string) {
+		mu.Lock()
+		p := panicNext
+		panicNext = false
+		mu.Unlock()
+		if p {
+			panic("killed in the flush")
+		}
+		mu.Lock()
+		got = append(got, step+"/"+phase+"@"+strconv.Itoa(e.Seq)+" "+e.State)
+		mu.Unlock()
+	}
+	a := w.client()
+	id := w.deploy(a, 1)
+	w.drive(a, id, at(StepVerify))
+	kill(a)
+	b := w.client()
+	mu.Lock()
+	panicNext = true
+	mu.Unlock()
+	func() {
+		defer func() { _ = recover() }()
+		_ = b.Cancel(context.Background(), id)
+	}()
+	kill(b)
+	c := w.client()
+	defer c.Close()
+	for range 3 {
+		if err := c.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.ContainsFunc(got, func(s string) bool {
+		return strings.HasSuffix(s, " "+EffectCancelled) && strings.Contains(s, PhaseFail)
+	}) {
+		t.Errorf("delivered after the cut: %v, want the cancel's event", got)
+	}
+	if j := w.journalOf(id); len(j.Pending) != 0 {
+		t.Errorf("the cancelled journal's outbox still holds %d events", len(j.Pending))
+	}
+}
+
+// Minor 2 of the second review (its S5). A Cancel during a run of lock
+// waits cannot drop the effect's refs while the mirror is busy; the scan
+// drops them once the mirror's flock is free, so none is left for good.
+func TestTheRefsOfAnEffectEndedWhileTheMirrorWasBusyAreDroppedLater(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	c := w.client()
+	defer c.Close()
+	c.lockWait, c.busyLockWait = 300*time.Millisecond, 20*time.Millisecond
+	id := w.deploy(c, 1)
+	w.drive(c, id, at(StepVerify))
+	unlock, err := lockMirror(context.Background(), w.mirror, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Step(context.Background()); err != nil { // one busy try: BusyAt set
+		t.Fatal(err)
+	}
+	if err := c.Cancel(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if j := w.journalOf(id); j.State != EffectCancelled || !j.Held {
+		t.Fatalf("cancelled under a busy mirror: %s, held %v; want cancelled and its refs still held", j.State, j.Held)
+	}
+	unlock()
+	for range 3 {
+		if err := c.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.advance(time.Minute)
+	}
+	if refs := gitIn(t, w.r, w.mirror, "for-each-ref", "--format=%(refname)", "refs/magnum/"); refs != "" {
+		t.Errorf("refs left in the mirror: %s", refs)
+	}
+	if j := w.journalOf(id); j.Held || j.State != EffectCancelled {
+		t.Errorf("after the scan: %s, held %v; want cancelled, nothing held", j.State, j.Held)
 	}
 }

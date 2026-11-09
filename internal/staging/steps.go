@@ -129,7 +129,7 @@ func (r *stepRun) flush() {
 	sent := r.c.sentUpTo(r.j.ID)
 	box := slices.Clone(r.written)
 	slices.SortStableFunc(box, func(a, b pendingEvent) int { return cmp.Compare(a.Seq, b.Seq) })
-	for _, ev := range box {
+	for i, ev := range box {
 		if ev.Seq <= sent {
 			continue
 		}
@@ -142,7 +142,9 @@ func (r *stepRun) flush() {
 		if r.c.d.Event != nil {
 			r.c.d.Event(e, ev.Step, ev.Phase, ev.Text)
 		}
-		r.c.delivered(r.j.ID, ev.Seq)
+		if i == len(box)-1 || box[i+1].Seq != ev.Seq {
+			r.c.delivered(r.j.ID, ev.Seq) // once the write's last event went out
+		}
 	}
 	r.written = nil
 }

@@ -323,8 +323,10 @@ type Deps struct {
 	// when the effect next loads: at least once. A repeat (a crash, or another
 	// client loading the same write) has the same key, (e.ID, e.Seq, step,
 	// phase), which the registry dedupes on; e is the effect as that write
-	// left it. Each client delivers in Seq order, but two clients' deliveries
-	// may interleave: order a deploy's events by Seq, never by arrival. A
+	// left it. Each flush delivers in Seq order, but two flushes can
+	// interleave (two clients, or a Step beside a Cancel or a Deploy of one
+	// client): order a deploy's events by Seq, never by arrival. An ended
+	// deploy's outbox is delivered by the next Step's scan (settle). A
 	// failure the step tries again records none; the end it leads to records
 	// one.
 	Event func(e Effect, step, phase, text string)

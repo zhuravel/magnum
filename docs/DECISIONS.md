@@ -20408,6 +20408,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLockCapAtThePushPushesNothingAfter, TestTimeWithoutStepsIsNoLockWait,
   TestABusyMirrorWaitsTheWholeLockWaitOnlyOnce and TestEachFlushDeliversInSeqOrder;
   TestEveryEventCarriesItsJournalWritesSeq now checks that each repeated key is the same event.
+- **An ended deploy's outbox is delivered too, and its refs dropped once the mirror is free** (2026-11-09, R46
+  follow-up, fix round 2 after its re-review: 1 Important, 2 Minor). A run that ends the effect (verify's refusal,
+  a budget or the lock cap, done, needs you, a Cancel) left its outbox in a journal that no load read again, so a
+  kill before its flush lost the run's events for good, the end included (the re-review's S1 and S1c). Each Step's
+  scan now settles an ended journal whose outbox holds events, or which still holds refs: it reads it under the
+  effect's flock, delivers what this client has not after the unlock, then, under the flock again and with the
+  effect still ended, drops its refs (a short wait for the mirror's flock: a busy mirror leaves them for the next
+  Step) and the delivered events with one write that changes nothing else (not the step, the state, the why, the
+  Seq or the time); an ended journal with an empty outbox and no refs is passed over as before. So a Cancel during a
+  run of lock waits, whose own ref drop waited only `busyLockWait`, no longer leaves its refs for good (S5). An
+  effect waiting out a backoff delivers its outbox too. Seq order (Minor 1): the smaller change, the doc; it now says
+  each flush delivers in Seq order and two flushes can interleave (two clients, or a Step beside a Cancel or a
+  Deploy of one client), so order by Seq, never by arrival; strict order per client was the other choice (S2 shows
+  7, 8, 9, 7, 8 from one client). A flush records a write delivered once its last event went out. Tests (each failed
+  first): TestAnEndingRunsEventsAreDeliveredFromItsOutbox, TestACancelKilledInItsFlushIsDeliveredLater and
+  TestTheRefsOfAnEffectEndedWhileTheMirrorWasBusyAreDroppedLater.
 
 ## Learned rules
 
