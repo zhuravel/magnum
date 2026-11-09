@@ -349,6 +349,34 @@ func TestTheTaskCardShowsItsPRsStagingDeploys(t *testing.T) {
 	}
 }
 
+// A task card folds its PR's ended deploy that a later deploy of the same
+// env and head follows into one dim line, as the board's card does; the
+// later deploy is drawn in full.
+func TestTheTaskCardFoldsAnEarlierFailedDeployOfTheSameEnvAndHead(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.src.change(func(d *FactoryData) {
+		stagedDeploys(d)
+		for i, r := range d.Rows {
+			if r.PR == nil || r.Key != "PR-12324" {
+				continue
+			}
+			pr := *r.PR
+			failed := pr.StagingDeploys[0]
+			failed.Head, failed.Why = "aaa1111bbbb2222", "conflict: the resolver did not start: no pane to run it in"
+			done := StagingDeploy{Effect: "bart-4534-20261103t130000-beef", Env: "bart", Head: failed.Head, Step: "confirm", Phase: "ok",
+				State: "done", At: factoryAgo(factoryNow, time.Hour)}
+			pr.StagingDeploys = []StagingDeploy{done, failed}
+			d.Rows[i].PR = &pr
+		}
+	})
+	h.press("ctrl+r", "g")
+	h.open("PR-12324")
+	v := h.view()
+	mustContain(t, v, "deploy bart-4534-20261103t130000-beef: done · confirm ok · 1h ago",
+		"deploy bart-4534-20261103t120000-abcd: an earlier try failed")
+	mustNotContain(t, v, "the resolver did not start", "failed · watch fail")
+}
+
 // The help names E on home and on the task card, in the board's words.
 func TestTheFactoryHelpNamesE(t *testing.T) {
 	h := testStaged(t, 160, 40)

@@ -363,3 +363,15 @@ func TestLockWaitsEndTheEffectAfterAnHour(t *testing.T) {
 		})
 	}
 }
+
+// A conflict's words count its paths in the singular for one: "conflict in
+// 1 path", "conflict in 2 paths".
+func TestAConflictCountsItsPathsInTheSingularForOne(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int]string{1: "conflict in 1 path", 2: "conflict in 2 paths", 0: "conflict in 0 paths"} {
+		r := &stepRun{j: &journal{Conflicted: n}}
+		if got := r.conflict(); got != want {
+			t.Errorf("conflict() of %d paths = %q, want %q", n, got, want)
+		}
+	}
+}

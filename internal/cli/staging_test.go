@@ -160,3 +160,44 @@ func TestStagingCommandShowsEachDeploysStepAndLastEvent(t *testing.T) {
 		t.Errorf("the end's words are printed %d times:\n%s", n, out)
 	}
 }
+
+// A deploy that failed and that a later deploy of the same env and head
+// followed is one line in `magnum staging <pr>` ("an earlier try failed",
+// with its effect), as on the cards: its long words and its run page are not
+// printed, the later deploy's are. --json keeps both records, and a failed
+// deploy of another head is printed in full.
+func TestStagingCommandFoldsAnEarlierFailedDeployOfTheSameEnvAndHead(t *testing.T) {
+	h, prs := stagingHarness(t)
+	h.d.Now = func() time.Time { return h.now }
+	head := prs[6].HeadSHA
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-6-20261005t100000-aaaa", Repo: "talkable/talkable", Number: 6, Head: head,
+		Env: "bart", Step: "merge", Phase: "fail", State: "failed", Why: "conflict: the resolver did not start: no pane to run it in",
+		Text: "conflict: the resolver did not start: no pane to run it in", RunURL: "https://github.com/talkable/talkable/actions/runs/71", Seq: 6,
+		At: h.now.Add(-2 * time.Hour)})
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-6-20261005t110000-bbbb", Repo: "talkable/talkable", Number: 6, Head: head,
+		Env: "bart", Step: "confirm", Phase: "ok", State: "done", Seq: 12, At: h.now.Add(-time.Hour)})
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "void-6-20261005t090000-cccc", Repo: "talkable/talkable", Number: 6, Head: "0ld0000",
+		Env: "void", Step: "watch", Phase: "fail", State: "failed", Why: "ci.yml failed on the merge", Seq: 9, At: h.now.Add(-3 * time.Hour)})
+	out, _ := h.stagingRun(0, "talkable#6")
+	actContains(t, out, "deploy bart-6-20261005t110000-bbbb: done · confirm ok · 1h ago",
+		"deploy bart-6-20261005t100000-aaaa: an earlier try failed",
+		"deploy void-6-20261005t090000-cccc: failed · watch fail · 3h ago", "ci.yml failed on the merge")
+	for _, gone := range []string{"the resolver did not start", "actions/runs/71", "merge fail"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("the folded deploy still prints %q:\n%s", gone, out)
+		}
+	}
+	raw, _ := h.stagingRun(0, "talkable#6", "--json")
+	var got stagingJSON
+	if err := json.Unmarshal([]byte(raw), &got); err != nil || len(got.Deploys) != 3 {
+		t.Fatalf("--json %+v (%v), want all three records\n%s", got, err, raw)
+	}
+	by := map[string]prsJSONStagingDeploy{}
+	for _, d := range got.Deploys {
+		by[d.Effect] = d
+	}
+	if d := by["bart-6-20261005t100000-aaaa"]; d.State != "failed" || d.Step != "merge" || d.Head != head ||
+		d.Why != "conflict: the resolver did not start: no pane to run it in" || d.RunURL == "" {
+		t.Errorf("--json lost the folded record: %+v", d)
+	}
+}

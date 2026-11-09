@@ -1100,6 +1100,39 @@ func StagingDeployWords(d StagingDeploy) []string {
 	return out
 }
 
+// StagingDeploysFolded says for each of ds whether it folds into one line
+// (StagingFoldedLine) on the card and in `magnum staging`: a deploy that
+// ended failed or cancelled, and that a later deploy of the same env and
+// head follows, one whose last event came after its own. The later one
+// speaks for the env then, whatever it is (running, failed too, done), so
+// the earlier one's long words are not said again. A deploy that is not
+// over, one that needs you, a done one and a deploy with no known head
+// never fold. Only the views fold: the action log, `magnum staging --json`
+// and engine.StagingDeploysOf keep every record.
+func StagingDeploysFolded(ds []StagingDeploy) []bool {
+	out := make([]bool, len(ds))
+	for i, d := range ds {
+		if d.Head == "" || (d.State != "failed" && d.State != "cancelled") {
+			continue
+		}
+		out[i] = slices.ContainsFunc(ds, func(o StagingDeploy) bool {
+			return o.Effect != d.Effect && o.Env == d.Env && o.Head == d.Head && o.At.After(d.At)
+		})
+	}
+	return out
+}
+
+// StagingFoldedLine is the one line of a deploy that StagingDeploysFolded
+// folds: its effect and that an earlier try ended, "deploy <effect>: an
+// earlier try failed" (or "was cancelled").
+func StagingFoldedLine(d StagingDeploy) string {
+	end := "failed"
+	if d.State == "cancelled" {
+		end = "was cancelled"
+	}
+	return "deploy " + d.Effect + ": an earlier try " + end
+}
+
 // stagingDeployStyle is how a deploy's line is drawn: a live one as
 // pending, a failed one as a failure, a done one as passed when a
 // deployment confirms it and as pending when none does, the rest dim.
@@ -1139,11 +1172,24 @@ func (p *prbPainter) stagingLines(ss []StagingInfo, ds []StagingDeploy, width in
 		if s.RunURL != "" {
 			out = append(out, indent+"run "+p.st.Accent.Render(s.RunURL))
 		}
-		for _, d := range ds {
-			if d.Env == s.Env {
-				out = append(out, p.stagingDeployLines(d, indent, width)...)
-			}
+		out = append(out, p.stagingDeploysLines(slices.DeleteFunc(slices.Clone(ds), func(d StagingDeploy) bool { return d.Env != s.Env }), indent, width)...)
+	}
+	return out
+}
+
+// stagingDeploysLines are the lines of ds, one env's or a PR's deploys, each
+// after indent, its words wrapped within width cells: a deploy that a later
+// one supersedes (StagingDeploysFolded) as the one dim line
+// StagingFoldedLine says, the others as stagingDeployLines draws them.
+func (p *prbPainter) stagingDeploysLines(ds []StagingDeploy, indent string, width int) []string {
+	var out []string
+	folded := StagingDeploysFolded(ds)
+	for i, d := range ds {
+		if folded[i] {
+			out = append(out, indent+p.st.Dim.Render(StagingFoldedLine(d)))
+			continue
 		}
+		out = append(out, p.stagingDeployLines(d, indent, width)...)
 	}
 	return out
 }

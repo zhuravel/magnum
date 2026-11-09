@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func TestAStagingDeploysWordsAreSaidOnce(t *testing.T) {
 // its words reach the screen cleaned.
 func TestTheCardSaysWhatTheResolverDoesForAConflictedDeploy(t *testing.T) {
 	r := deployRow()
-	r.StagingDeploys[0].Step, r.StagingDeploys[0].Text = "merge", "conflict in 1 paths: the resolver works on it (try 1)"
+	r.StagingDeploys[0].Step, r.StagingDeploys[0].Text = "merge", "conflict in 1 path: the resolver works on it (try 1)"
 	r.StagingDeploys[0].Resolver = `try 1: the agent resolves 1 conflicted path in slot review1: pane w3:p1 of the herdr workspace "staging merge"`
 	m := iconBoard(t, IconsUnicode, 160, 90, r)
 	m, _ = send(t, m, keyMsg("enter"))
@@ -121,5 +122,99 @@ func TestTheCardSaysWhatTheResolverDoesForAConflictedDeploy(t *testing.T) {
 	r.StagingDeploys[0].Resolver = "try 1: pane \x1b[31mw3:p1"
 	if got := sanitizeRow(r).StagingDeploys[0].Resolver; got != "try 1: pane w3:p1" {
 		t.Errorf("sanitized resolver words %q", got)
+	}
+}
+
+// foldRow is #31 of stagingRows with two deploys to bastion of its head: a
+// first that failed at its merge, then a second that is done.
+func foldRow() PRBoardRow {
+	r := stagingRows()[0]
+	r.StagingDeploys = []StagingDeploy{
+		{Effect: "bastion-31-20261005t110000-bbbb", Env: "bastion", Head: r.HeadSHA, Step: "confirm", Phase: "ok", State: "done", At: ago(time.Hour)},
+		{Effect: "bastion-31-20261005t100000-aaaa", Env: "bastion", Head: r.HeadSHA, Step: "merge", Phase: "fail", State: "failed",
+			Why: "conflict: the resolver did not start: no pane to run it in", RunURL: "https://github.com/talkable/talkable/actions/runs/71", At: ago(2 * time.Hour)},
+	}
+	return r
+}
+
+// An ended deploy that a later deploy of the same env and head follows is
+// one dim line on the card: "an earlier try failed" with its effect, its
+// long words and its run page not drawn; the later deploy is drawn in
+// full.
+func TestAnEarlierFailedDeployFoldsIntoOneDimLineOnTheCard(t *testing.T) {
+	m := iconBoard(t, IconsUnicode, 160, 90, foldRow())
+	m, _ = send(t, m, keyMsg("enter"))
+	v := viewOf(m)
+	mustContain(t, v, "deploy bastion-31-20261005t110000-bbbb: done · confirm ok · 1h ago",
+		"deploy bastion-31-20261005t100000-aaaa: an earlier try failed")
+	mustNotContain(t, v, "the resolver did not start", "failed · merge fail", "actions/runs/71")
+	if n := strings.Count(v, "bastion-31-20261005t100000-aaaa"); n != 1 {
+		t.Errorf("the folded deploy is named %d times, want once:\n%s", n, v)
+	}
+
+	// The fold is dim, as the deploy's words are.
+	pal := newPRBPalette(defaultStyles)
+	p := p0(pal)
+	rows := foldRow().StagingDeploys
+	lines := p.stagingDeploysLines(rows, "  ", 120)
+	want := "  " + p.st.Dim.Render("deploy bastion-31-20261005t100000-aaaa: an earlier try failed")
+	if !slices.Contains(lines, want) {
+		t.Errorf("the fold is not one dim line:\n%q\nwant %q", lines, want)
+	}
+	if len(lines) != 2 {
+		t.Errorf("lines %q, want the done deploy's one and the fold's", lines)
+	}
+}
+
+// A cancelled deploy folds the same way, in its own words.
+func TestAnEarlierCancelledDeployFoldsAndSaysSo(t *testing.T) {
+	r := foldRow()
+	r.StagingDeploys[1].State, r.StagingDeploys[1].Why = "cancelled", "cancelled by the operator"
+	m := iconBoard(t, IconsUnicode, 160, 90, r)
+	m, _ = send(t, m, keyMsg("enter"))
+	v := viewOf(m)
+	mustContain(t, v, "deploy bastion-31-20261005t100000-aaaa: an earlier try was cancelled")
+	mustNotContain(t, v, "cancelled by the operator")
+}
+
+// A failed deploy nothing follows, or that only another head or another env
+// follows, or that is not over, is drawn in full, as it was.
+func TestAFailedDeployNothingSupersedesIsDrawnInFull(t *testing.T) {
+	failed := foldRow().StagingDeploys[1]
+	later := foldRow().StagingDeploys[0]
+	for name, ds := range map[string][]StagingDeploy{
+		"nothing later":  {failed},
+		"another head":   {failed, func() StagingDeploy { l := later; l.Head = "ccc3333ddddd4444"; return l }()},
+		"another env":    {failed, func() StagingDeploy { l := later; l.Env = "void"; return l }()},
+		"an earlier one": {failed, func() StagingDeploy { l := later; l.At = failed.At.Add(-time.Minute); return l }()},
+		"no head known": {func() StagingDeploy { f := failed; f.Head = ""; return f }(),
+			func() StagingDeploy { l := later; l.Head = ""; return l }()},
+	} {
+		if got := StagingDeploysFolded(ds); slices.Contains(got, true) {
+			t.Errorf("%s: folded %v, want none", name, got)
+		}
+		r := stagingRows()[0]
+		r.StagingDeploys = ds
+		m := iconBoard(t, IconsUnicode, 160, 90, r)
+		m, _ = send(t, m, keyMsg("enter"))
+		mustContain(t, viewOf(m), "deploy bastion-31-20261005t100000-aaaa: failed · merge fail · 2h ago", "the resolver did not start")
+		mustNotContain(t, viewOf(m), "an earlier try")
+	}
+}
+
+// Only an ended deploy folds: a later deploy leaves a live one and one that
+// needs you in full, and a done one stands as it was.
+func TestOnlyAFailedOrCancelledDeployFolds(t *testing.T) {
+	later := foldRow().StagingDeploys[0]
+	for _, state := range []string{"queued", "running", "done", "needs you"} {
+		d := foldRow().StagingDeploys[1]
+		d.State, d.Live = state, state == "queued" || state == "running"
+		if got := StagingDeploysFolded([]StagingDeploy{later, d}); got[0] || got[1] {
+			t.Errorf("an earlier %s deploy folds: %v", state, got)
+		}
+	}
+	d := foldRow().StagingDeploys[1]
+	if got := StagingDeploysFolded([]StagingDeploy{later, d}); got[0] || !got[1] {
+		t.Errorf("folded %v, want the failed one only", got)
 	}
 }

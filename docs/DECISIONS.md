@@ -22200,6 +22200,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the src reads or of read-tree, the version check, the atom match, `--full-tree` or the walk's budget each fails
   one of them.
 
+- **A staging deploy that ended and that a later deploy of its env and head superseded is one dim line on the cards and
+  in `magnum staging <pr>`, and a conflict counts its paths in the singular for one** (2026-11-09). talkable#12204's
+  first bastion deploy failed in a hand-off bug that was fixed, and a second deploy of the same env and head then
+  succeeded; the card kept the first one's long error under bastion for a day, next to a green deploy. The rule is
+  `tui.StagingDeploysFolded`, pure data in one place that the board's card, the factory task card (both through
+  `prbPainter.stagingDeploysLines`) and the text of `magnum staging` call: a deploy that is `failed` or `cancelled`
+  folds when another deploy of the same env and the same head has a last event after its own, and `StagingFoldedLine`
+  says it, "deploy <effect>: an earlier try failed" (or "was cancelled"), dim, with none of its words or its run page.
+  The later deploy may be in any state (running, failed too, done): it speaks for the env, and when it fails as well
+  it is the one drawn in full. A live deploy, one that needs you, a done one and a deploy with no known head never
+  fold. `tui.StagingDeploy` gained `Head` (the record's), and `magnum staging --json` and `magnum tui --json` print it
+  as `head`, so a script can tell the tries apart; the action log, `engine.StagingDeploysOf` and both JSONs keep every
+  record, only the screens fold. Rejected: dropping the earlier record from the registry or from `StagingDeploysOf`
+  (the action log and the JSON must say what happened, and the engine is not the screens'); ordering the tries by the
+  effect id's time (couples the tui to the id's form, and `At` is what the list already sorts by; the one case it
+  differs in, a queued deploy waiting behind a failing one, leaves the failure in full until the queued one moves,
+  which is the news then); folding by env alone (a failure of an older head is not superseded by a deploy of the new
+  one, and stays in full). The count in a conflict's words ("conflict in 1 path", "conflict in 2 paths") is
+  `textx.Count`, as everywhere else. Tests: the tui's
+  TestAnEarlierFailedDeployFoldsIntoOneDimLineOnTheCard (the later one in full, the fold dim and once, no long words
+  or run page), TestAnEarlierCancelledDeployFoldsAndSaysSo, TestAFailedDeployNothingSupersedesIsDrawnInFull (nothing
+  later, another head, another env, an earlier one, no head known), TestOnlyAFailedOrCancelledDeployFolds and
+  TestTheTaskCardFoldsAnEarlierFailedDeployOfTheSameEnvAndHead; the cli's
+  TestStagingCommandFoldsAnEarlierFailedDeployOfTheSameEnvAndHead (the text folds, `--json` keeps all three records
+  with their heads); staging's TestAConflictCountsItsPathsInTheSingularForOne. No golden changed: none held two deploys
+  of one env and head. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

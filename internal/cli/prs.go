@@ -672,7 +672,7 @@ func stagingDeployValues(ctx context.Context, st *store.Store, cfg *config.Confi
 func stagingDeploysOf(values map[string]string, repo string, number int) []tui.StagingDeploy {
 	var out []tui.StagingDeploy
 	for _, r := range engine.StagingDeploysOf(values, repo, number) {
-		d := tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
+		d := tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Head: r.Head, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
 			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live(), Unconfirmed: r.Unconfirmed()}
 		if d.Live {
 			d.Resolver = engine.StagingResolverSays(values, r.Effect)

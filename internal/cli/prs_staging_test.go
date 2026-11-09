@@ -165,7 +165,7 @@ func TestTheBoardAndTheStagingCommandSayWhatTheResolverDoes(t *testing.T) {
 	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	at := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
 	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-5-20261005t100000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
-		Env: "bart", Step: "merge", Phase: "begin", State: "running", Text: "conflict in 1 paths: the resolver works on it (try 1)", Seq: 4, At: at})
+		Env: "bart", Step: "merge", Phase: "begin", State: "running", Text: "conflict in 1 path: the resolver works on it (try 1)", Seq: 4, At: at})
 	h.setDeployRecord(engine.StagingDeployRecord{Effect: "void-5-20261005t090000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
 		Env: "void", Step: "merge", Phase: "fail", State: "failed", Why: "conflict: the resolver failed: the agent gave up", Seq: 9, At: at})
 	works := `the agent resolves 1 conflicted path in slot review1: pane w3:p1 of the herdr workspace "staging merge"`

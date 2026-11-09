@@ -412,16 +412,13 @@ func (p *cardPainter) stagingsText(cells []StagingCell) cell {
 
 // stagingDeployRows are the PR's staging deploys under the card's STAGINGS
 // line, from column x, in the board card's words and colors
-// (prbPainter.stagingDeployLines): each deploy's effect, state, last step
-// and how long ago, its last event's words or why it ended, its CI run.
+// (prbPainter.stagingDeploysLines): each deploy's effect, state, last step
+// and how long ago, its last event's words or why it ended, its CI run; a
+// deploy that a later one supersedes is one dim line (StagingDeploysFolded).
 func (p *cardPainter) stagingDeployRows(x int, ds []StagingDeploy) []string {
 	b := p.base
 	b.now = p.now
-	var out []string
-	for _, d := range ds {
-		out = append(out, b.stagingDeployLines(d, spaces(x), p.width-1)...)
-	}
-	return out
+	return b.stagingDeploysLines(ds, spaces(x), p.width-1)
 }
 
 // ciCardLinksShown bounds the failed jobs' pages under the card's CI line; a

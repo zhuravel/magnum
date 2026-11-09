@@ -256,7 +256,8 @@ func stagingWriteJSON(c *Context, v any) int {
 
 // stagingPrint prints p: its label and head, then a line per env (its name
 // and the card's words), why it cannot be told and the CI run's page
-// under it.
+// under it, then its deploys, a failed or cancelled one that a later deploy
+// of the env and head supersedes as the one line the cards fold it to.
 func stagingPrint(w io.Writer, d *actDeps, p stagingPR, now time.Time) {
 	fmt.Fprintf(w, "%s at %s\n", d.actLabel(p.full, p.number), textx.ShortSHA(p.head))
 	nameW := 0
@@ -264,6 +265,7 @@ func stagingPrint(w io.Writer, d *actDeps, p stagingPR, now time.Time) {
 		nameW = max(nameW, len(s.Env))
 	}
 	indent := strings.Repeat(" ", 2+nameW+2)
+	folded := tui.StagingDeploysFolded(p.deploys)
 	for _, s := range p.stagings {
 		fmt.Fprintf(w, "  %-*s  %s\n", nameW, s.Env, tui.StagingSummary(s, now))
 		if s.Why != "" {
@@ -272,8 +274,12 @@ func stagingPrint(w io.Writer, d *actDeps, p stagingPR, now time.Time) {
 		if s.RunURL != "" {
 			fmt.Fprintf(w, "%srun %s\n", indent, s.RunURL)
 		}
-		for _, dep := range p.deploys {
+		for i, dep := range p.deploys {
 			if dep.Env != s.Env {
+				continue
+			}
+			if folded[i] {
+				fmt.Fprintf(w, "%s%s\n", indent, tui.StagingFoldedLine(dep))
 				continue
 			}
 			fmt.Fprintf(w, "%sdeploy %s: %s\n", indent, dep.Effect, tui.StagingDeploySummary(dep, now))

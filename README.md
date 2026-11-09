@@ -5479,7 +5479,7 @@ While the resolver works on a deploy's conflict, a line under the deploy says wh
 ```
   · void     not there
              deploy void-12212-20261109t103000-1a2b: running · merge begin · 4m ago
-               conflict in 1 paths: the resolver works on it (try 1)
+               conflict in 1 path: the resolver works on it (try 1)
                resolver try 1: the agent resolves 1 conflicted path in slot review3: pane w7:p2 of the herdr workspace "staging merge"
 ```
 
@@ -5487,6 +5487,12 @@ A deploy that ended stays there a day; one done without a deployment that holds 
 deployments, or none came after ci.yml passed) reads `not confirmed`, in yellow, never a green `done`, and `--json`
 marks it `"unconfirmed": true`. When an event could not be written (the registry busy), the tick mends the
 deploy's record from its journal under `mirror_dir`, so a lost end does not read as running for ever.
+
+A deploy that failed or was cancelled and that a later deploy of the same env and the same head followed (a
+retry after a bug in the first try, say) is one dim line on the card and in `magnum staging <pr>`:
+`deploy <effect>: an earlier try failed` (`an earlier try was cancelled`), with none of its long words or its
+run page; the later deploy is drawn in full. Only the screens fold: `magnum logs` and the `--json` of
+`magnum staging` and `magnum tui` keep every record, each with the `head` it deployed.
 
 ## Daily use
 

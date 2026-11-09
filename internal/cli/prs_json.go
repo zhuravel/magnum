@@ -134,10 +134,13 @@ type prsJSONRow struct {
 // left it: its effect and env, the step and phase of that event, its state
 // (queued, running, done, failed, cancelled, needs you), why, the event's
 // words, ci.yml's run, when the event came, whether it still runs, and
-// whether it is a done no deployment confirms (pushed, not confirmed).
+// whether it is a done no deployment confirms (pushed, not confirmed). Head
+// is the PR head the effect deploys: the cards fold an ended deploy that a
+// later one of the same env and head supersedes, and the JSON keeps both.
 type prsJSONStagingDeploy struct {
 	Effect      string    `json:"effect"`
 	Env         string    `json:"env"`
+	Head        string    `json:"head"`
 	Step        string    `json:"step"`
 	Phase       string    `json:"phase"`
 	State       string    `json:"state"`
@@ -151,7 +154,7 @@ type prsJSONStagingDeploy struct {
 }
 
 func prsJSONStagingDeployOf(d tui.StagingDeploy) prsJSONStagingDeploy {
-	return prsJSONStagingDeploy{Effect: d.Effect, Env: d.Env, Step: d.Step, Phase: d.Phase, State: d.State, Why: d.Why, Text: d.Text,
+	return prsJSONStagingDeploy{Effect: d.Effect, Env: d.Env, Head: d.Head, Step: d.Step, Phase: d.Phase, State: d.State, Why: d.Why, Text: d.Text,
 		Resolver: d.Resolver, RunURL: d.RunURL, At: d.At, Live: d.Live, Unconfirmed: d.Unconfirmed}
 }
 

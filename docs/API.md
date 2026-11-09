@@ -31117,6 +31117,22 @@ func StagingDeployWords(d StagingDeploy) []string
     the same (an end's event says its why), then what the resolver does for its
     conflict ("resolver try 1: ...", naming the agent's pane).
 
+func StagingDeploysFolded(ds []StagingDeploy) []bool
+    StagingDeploysFolded says for each of ds whether it folds into one line
+    (StagingFoldedLine) on the card and in `magnum staging`: a deploy that
+    ended failed or cancelled, and that a later deploy of the same env and
+    head follows, one whose last event came after its own. The later one
+    speaks for the env then, whatever it is (running, failed too, done), so the
+    earlier one's long words are not said again. A deploy that is not over,
+    one that needs you, a done one and a deploy with no known head never fold.
+    Only the views fold: the action log, `magnum staging --json` and
+    engine.StagingDeploysOf keep every record.
+
+func StagingFoldedLine(d StagingDeploy) string
+    StagingFoldedLine is the one line of a deploy that StagingDeploysFolded
+    folds: its effect and that an earlier try ended, "deploy <effect>:
+    an earlier try failed" (or "was cancelled").
+
 func StagingSummary(s StagingInfo, now time.Time) string
     StagingSummary is s in the words of the card's STAGINGS block, without the
     env's name: its state, CI's or Jenkins' part of it, the head in the tip or
@@ -33218,7 +33234,7 @@ type StagingCell struct {
     as the reads tell it.
 
 type StagingDeploy struct {
-	Effect, Env, Step, Phase, State, Why, Text, RunURL string
+	Effect, Env, Head, Step, Phase, State, Why, Text, RunURL string
 	// Resolver is what the resolver's job does for the live deploy's
 	// conflict ("try 1: the agent resolves ... pane w3:p1 ..."); "" when
 	// none works on it.
@@ -33231,7 +33247,8 @@ type StagingDeploy struct {
     done, failed, cancelled, needs you), why it ended, that event's words,
     ci.yml's run on its merge, when the event came, whether it still runs,
     and whether it is a done that no deployment confirms (pushed, not confirmed:
-    engine.StagingDeployRecord.Unconfirmed).
+    engine.StagingDeployRecord.Unconfirmed), and the PR head it deploys (which
+    StagingDeploysFolded compares).
 
 type StagingInfo struct {
 	Env string

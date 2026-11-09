@@ -356,9 +356,10 @@ type PRBoardRow struct {
 // failed, cancelled, needs you), why it ended, that event's words, ci.yml's
 // run on its merge, when the event came, whether it still runs, and
 // whether it is a done that no deployment confirms (pushed, not
-// confirmed: engine.StagingDeployRecord.Unconfirmed).
+// confirmed: engine.StagingDeployRecord.Unconfirmed), and the PR head it
+// deploys (which StagingDeploysFolded compares).
 type StagingDeploy struct {
-	Effect, Env, Step, Phase, State, Why, Text, RunURL string
+	Effect, Env, Head, Step, Phase, State, Why, Text, RunURL string
 	// Resolver is what the resolver's job does for the live deploy's
 	// conflict ("try 1: the agent resolves ... pane w3:p1 ..."); "" when
 	// none works on it.
@@ -943,7 +944,8 @@ func cleanStagingDeploys(ds []StagingDeploy) []StagingDeploy {
 	}
 	out := make([]StagingDeploy, len(ds))
 	for i, d := range ds {
-		d.Effect, d.Env, d.Step, d.Phase, d.State = cleanText(d.Effect), cleanText(d.Env), cleanText(d.Step), cleanText(d.Phase), cleanText(d.State)
+		d.Effect, d.Env, d.Head, d.Step, d.Phase, d.State = cleanText(d.Effect), cleanText(d.Env), cleanText(d.Head), cleanText(d.Step),
+			cleanText(d.Phase), cleanText(d.State)
 		d.Why, d.Text, d.Resolver, d.RunURL = cleanText(d.Why), cleanText(d.Text), cleanText(d.Resolver), ""
 		if l := cleanLinks([]CheckLink{{URL: ds[i].RunURL}}); len(l) == 1 {
 			d.RunURL = l[0].URL

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // errHook is what a test's hook returns to stop a Step as a killed process
@@ -494,8 +496,10 @@ func (r *stepRun) merge(ctx context.Context) error {
 	return r.ok(StepVerify, "merge "+short(sha)+" on "+short(r.j.Tip))
 }
 
-// conflict is "conflict in N paths" for a Why.
-func (r *stepRun) conflict() string { return fmt.Sprintf("conflict in %d paths", r.j.Conflicted) }
+// conflict is "conflict in 1 path" or "conflict in N paths" for a Why.
+func (r *stepRun) conflict() string {
+	return "conflict in " + textx.Count(r.j.Conflicted, "path", "paths")
+}
 
 // resolve starts a resolver's job on the conflict.
 func (r *stepRun) resolve(ctx context.Context) error {
