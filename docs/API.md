@@ -13492,11 +13492,13 @@ func Fingerprint(f evalrun.LocalFinding) string
 
 func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]FixLoops, error)
     FixLoopsOf counts, per PR of refs, the fix loops magnum's registry in
-    layout l recorded: its fix.start events of cycle 1 (a later cycle is the
-    same loop), by who started each (engine.AutofixBy, or by hand), over the
-    whole history the registry keeps ([daemon] keep_events). A PR it has no
-    event of counts zero. It reads and never writes or migrates the registry,
-    as PRStates; no registry counts nothing and creates none.
+    layout l recorded: its fix.start events of cycle 1 (a later cycle is
+    the same loop), by who started each (engine.AutofixBy, or by hand),
+    and its fix.pushed events with the commits each names (one that names none
+    is one commit: a push carries at least one), over the whole history the
+    registry keeps ([daemon] keep_events). A PR it has no event of counts zero.
+    It reads and never writes or migrates the registry, as PRStates; no registry
+    counts nothing and creates none.
 
 func Guard(next execx.Runner, cfg *config.Config) execx.Runner
     Guard puts the deny list (Denied) in front of next, with the consoles of
@@ -13881,9 +13883,11 @@ func (e ErrRunning) Error() string
 
 type FixLoops struct {
 	ByHand, ByAutofix int
+	Pushes, Commits   int
 }
     FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
-    f on the board) and by autofix.
+    f on the board) and by autofix; and the fixers' pushes on it (fix.pushed)
+    and the commits they pushed.
 
 type FixRecord struct {
 	Loops, Cycle, Pushes, Threads int
@@ -14000,14 +14004,17 @@ type Magnum interface {
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 	OwnPRs(ctx context.Context) ([]PRState, error)
 	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
+	FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error)
 }
     Magnum is the review daemon as the factory sees it: busy while its real
     rounds in flight and due fill its limit (max_concurrent_reviews), so a
     local round takes a free round or waits; and what its registry says of the
     factory's PRs (PRStates: the row, the verdict, the loop), which the screen
     draws and the tick follows, of their fix loops over time (FixRecords),
-    which the PRs' status files count, and of your own open PRs (OwnPRs),
-    which the screen lists.
+    which the PRs' status files count, of your own open PRs (OwnPRs), which the
+    screen lists, and of its first round on a PR that posted a review since a
+    time (FirstPostedRound), which the escape check of a published task's local
+    review reads (escapes.go).
 
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
@@ -14182,6 +14189,34 @@ type PRView struct {
 	Draft                      bool
 }
     PRView is a pull request as the factory reads it back after it opened it.
+
+type PostedFinding struct {
+	ID                 int64
+	Path               string
+	StartLine, EndLine int
+	Priority, Title    string
+}
+    PostedFinding is one finding a posted round posted: magnum's id of it
+    (findings.id), its path and its lines (magnum keeps one line, so StartLine
+    and EndLine are both it; 0 for a finding in the review's body), its priority
+    as the judge wrote it, and its title. The title is the judge's words about
+    the PR, data only: the escape check keeps nothing of it but the factory's
+    hash (titleHash), and nothing writes it to the factory's registry, a log,
+    an event or a message.
+
+type PostedRound struct {
+	RunID    string
+	Round    int
+	Head     string
+	ReviewID int64
+	Start    time.Time
+	Findings []PostedFinding
+}
+    PostedRound is magnum's round on a PR that posted a review
+    (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
+    magnum's runs.id), the round's number, the head it reviewed, the review's id
+    on GitHub, when the round began (its first run), and the findings it posted,
+    in the judge's order.
 
 type PrecheckResult struct {
 	Passed     bool
@@ -14836,6 +14871,15 @@ const (
     Effect states: begin while the effect may be half done, then ok or fail.
 
 const (
+	EscapeNoLocal  = "no_local"
+	EscapeFar      = "far"
+	EscapeUnplaced = "unplaced"
+)
+    Why no local finding caught a posted one (Escape.Reason): none on its path
+    at a comparable head, the nearest one more than 3 lines away, or the posted
+    finding has no path or no line to place.
+
+const (
 	PhaseBegin = "begin"
 	PhaseOK    = "ok"
 	PhaseFail  = "fail"
@@ -14946,6 +14990,11 @@ const (
 	CheckPass    = "pass"
 	CheckFail    = "fail"
 	CheckSkipped = "skipped"
+
+	// SourceGitHub is a check GitHub ran (its CI on the task's PR), and
+	// CauseNotOurs a failure that is not of the task's change.
+	SourceGitHub = "github"
+	CauseNotOurs = "not_ours"
 )
     Check kinds, results, causes and sources.
 
@@ -15142,6 +15191,38 @@ func (e ErrActiveKey) Error() string
 
 func (e ErrActiveKey) Unwrap() error
     Unwrap makes errors.Is(err, ErrConflict) true.
+
+type Escape struct {
+	ID, TaskID                  int64
+	FindingID                   int64
+	Path                        string
+	StartLine, EndLine          int
+	Priority, TitleHash, Reason string
+	NearestID                   int64
+	Distance                    int
+	At                          time.Time
+}
+    Escape is one P0 to P2 finding of magnum's posted round that no finding of
+    the task's local review caught: magnum's finding (FindingID, findings.id),
+    its path and lines, its priority, the hash of its title (the factory's own,
+    as Finding.TitleHash; never the title), why (Reason), and for EscapeFar only
+    the nearest local finding (NearestID, review_findings.id) and how many lines
+    lie between them. At is the check's time.
+
+type EscapeCheck struct {
+	TaskID             int64
+	RunID              string
+	Round              int
+	HeadSHA            string
+	Posted, Comparable int
+	At                 time.Time
+}
+    EscapeCheck is the one check of a published task's local review against
+    magnum's first round on the task's PR that posted a review and began
+    after the publish (migrations/0007_escapes.sql): magnum's run that posted
+    the review (RunID, runs.id) and its Round, the head that round reviewed,
+    how many P0 to P2 findings it posted, how many of the task's local findings
+    were placed at a head comparable with it, and when the check ran.
 
 type Event struct {
 	ID     int64
@@ -15404,6 +15485,13 @@ func (r *Registry) EnqueueRequest(ctx context.Context, kind string, payload any)
     EnqueueRequest inserts a pending request with payload marshalled as JSON
     (nil = {}) and returns its id.
 
+func (r *Registry) EscapeCheck(ctx context.Context, id int64) (EscapeCheck, error)
+    EscapeCheck is task id's escape check; ErrNotFound before it ran.
+
+func (r *Registry) Escapes(ctx context.Context, id int64) ([]Escape, error)
+    Escapes are task id's escapes in the order they were stored (magnum's
+    findings' order); none before its check, or after one that found none.
+
 func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event, error)
     Events returns a task's events oldest first (taskID 0: the daemon's own);
     limit > 0 keeps only the newest limit rows.
@@ -15517,6 +15605,24 @@ func (r *Registry) RecordCheck(ctx context.Context, c Check) (int64, error)
 func (r *Registry) RecordDecision(ctx context.Context, d Decision) error
     RecordDecision stores d. Kind and Choice are required, At defaults to the
     clock, and the task must exist (ErrNotFound).
+
+func (r *Registry) RecordEscapeCheck(ctx context.Context, c EscapeCheck, es []Escape) (bool, error)
+    RecordEscapeCheck stores task c.TaskID's escape check and its escapes
+    es (each of the task, at the check's time), in one transaction, once:
+    a task checked before writes nothing more, whatever c and es hold, and false
+    says so. The check needs magnum's run and the head; each escape is of a P0
+    to P2 finding, a known reason, and a nearest finding and a distance for far
+    only (anything else is refused, and nothing is written). At defaults to the
+    clock; a task that does not exist is ErrNotFound.
+
+func (r *Registry) RecordGitHubCI(ctx context.Context, taskID int64, head, result, cause string) (bool, error)
+    RecordGitHubCI stores GitHub's CI on task taskID's PR at head as a check
+    of kind ci from source github with result (a pass or a failure; cause,
+    a failure's only, as Check.Cause), once per task, head and result:
+    the same again writes nothing, and false says so (the look and the write are
+    one transaction, which takes the registry's write lock first, so two writers
+    cannot both write it). A head that failed and then passed after a rerun has
+    both rows. A task that does not exist is ErrNotFound.
 
 func (r *Registry) RecordInput(ctx context.Context, in Input) (int64, error)
     RecordInput stores in and returns its id. The kind is required and must be
@@ -16598,13 +16704,32 @@ func (d Dist) Where(v float64) string
     Where says where v lies against the middle half of the tickets: "below" the
     first quartile, "above" the third, else "within".
 
+type Escapes struct {
+	Posted, P0, P1, P2, Unplaced int
+}
+    Escapes counts what the local review missed at magnum's first posted round
+    on a task's PR (the registry's escape check): Posted is how many P0 to P2
+    findings that round posted, P0, P1 and P2 the escapes by priority (the P0
+    to P2 findings no local finding caught), and Unplaced those of them with no
+    line any local finding could be near (a finding of the review's body, say).
+
+func (e Escapes) MarshalJSON() ([]byte, error)
+    MarshalJSON writes the counts with fixed keys, and their total.
+
+func (e Escapes) Total() int
+    Total is the escapes of every priority.
+
 type FixLoops struct {
 	ByHand    int `json:"by_hand"`
 	ByAutofix int `json:"by_autofix"`
+	Pushes    int `json:"pushes"`
+	Commits   int `json:"commits"`
 }
     FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
     f on the board) and by autofix. The loops started by hand are the "no manual
-    start" measure: the target is zero.
+    start" measure: the target is zero. Pushes and Commits are the fixers'
+    pushes on the PR and the commits they pushed: the fix-loop commits after the
+    publish, a measure of what the factory's PR still needed.
 
 type Labelled struct {
 	Text  string `json:"text"`
@@ -16625,6 +16750,39 @@ type PR struct {
 
 func (p PR) String() string
     String is "owner/name#N", "" for none.
+
+type Quality struct {
+	Escapes   *Escapes `json:"escapes"`
+	CIFailed  int      `json:"ci_failed"`
+	CINotOurs int      `json:"ci_failed_not_ours"`
+}
+    Quality is what a task's published PR said of the factory's work after the
+    publish: Escapes what the local review missed at magnum's first posted round
+    on the PR (nil: not yet, magnum has posted no round since the publish),
+    CIFailed the failed CI on the PR's heads (GitHub's ci checks, one per head
+    and result) but those marked not ours, and CINotOurs those apart.
+
+type QualityTotals struct {
+	PRs        int  `json:"prs"`
+	Checked    int  `json:"checked"`
+	NotYet     int  `json:"not_yet"`
+	Posted     int  `json:"posted"`
+	Escapes    int  `json:"escapes"`
+	P0         int  `json:"p0"`
+	P1         int  `json:"p1"`
+	P2         int  `json:"p2"`
+	Unplaced   int  `json:"unplaced"`
+	CIFailed   int  `json:"ci_failed"`
+	CINotOurs  int  `json:"ci_failed_not_ours"`
+	FixPushes  *int `json:"fix_pushes,omitempty"`
+	FixCommits *int `json:"fix_commits,omitempty"`
+}
+    QualityTotals are the quality numbers over a report's tasks with a PR:
+    how many PRs, how many were checked for escapes and how many are not yet,
+    the P0 to P2 findings the checked ones' first posted rounds posted,
+    the escapes in all and by priority with those with no line apart, the CI
+    failures after the publish with those not ours apart, and, when SetFixLoops
+    read them, the fixers' pushes and their commits (nil: not read).
 
 type Report struct {
 	Since          time.Time
@@ -16656,6 +16814,10 @@ func (r Report) Markdown() string
 func (r Report) MarshalJSON() ([]byte, error)
     MarshalJSON writes the report with fixed keys, an empty list for no tasks
     and null for no window and no baseline.
+
+func (r Report) Quality() *QualityTotals
+    Quality totals the report's tasks with a PR (Quality); nil when no task has
+    one.
 
 func (r *Report) SetFixLoops(loops map[PR]FixLoops, unread string)
     SetFixLoops gives each task with a PR the fix loops magnum started on it
@@ -16719,6 +16881,7 @@ type TaskStats struct {
 	Key      string
 	PR       PR
 	FixLoops *FixLoops
+	Quality  *Quality
 
 	Typed, StepStarts, Approvals, Corrections, Access int
 	UnknownOrigin                                     int
@@ -16737,19 +16900,20 @@ type TaskStats struct {
     one the factory needs, so it is typed and never a step start, whatever
     its words say); a message of another class, or of none, is only typed.
     UnknownOrigin counts apart the turns typed in a pane that nothing proves
-    the operator typed (any origin but registry.OriginHerdr: a turn counts as
-    the operator's only with positive proof): kept for evaluation only, they are
-    never a typed message, a step start or any class. AnswerBatches counts the
-    revisions of questions that were answered, and Decisions the decisions on
-    cards; both are counted apart. OperatorSecs is the operator's time on cards:
-    for each decision, from the card shown to the decision, and for each
-    answered revision of questions, from the questions shown to the first
-    answer, each at most cardCap (a card never shown has no time to measure).
-    WaitedOnYou is how long the task waited on the operator, asleep or not (its
-    spans that wait on "you"). StartToReady is how long it took to reach the
-    ready card (zero before it does). PR is the task's PR (zero before it has
-    one), and FixLoops the fix loops magnum started on it (nil: not counted,
-    SetFixLoops).
+    the operator typed (any origin but registry.OriginHerdr: a turn counts
+    as the operator's only with positive proof): kept for evaluation only,
+    they are never a typed message, a step start or any class. AnswerBatches
+    counts the revisions of questions that were answered, and Decisions the
+    decisions on cards; both are counted apart. OperatorSecs is the operator's
+    time on cards: for each decision, from the card shown to the decision,
+    and for each answered revision of questions, from the questions shown to
+    the first answer, each at most cardCap (a card never shown has no time to
+    measure). WaitedOnYou is how long the task waited on the operator, asleep
+    or not (its spans that wait on "you"). StartToReady is how long it took to
+    reach the ready card (zero before it does). PR is the task's PR (zero before
+    it has one), FixLoops the fix loops magnum started on it (nil: not counted,
+    SetFixLoops), and Quality what the PR said of the factory's work after the
+    publish (nil for a task without a PR).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in
@@ -29385,6 +29549,16 @@ func (s *Store) FindingsByPR(ctx context.Context, prID int64) ([]Finding, error)
 func (s *Store) FindingsSince(ctx context.Context, since time.Time) ([]Finding, error)
     FindingsSince returns the findings recorded at or after since, oldest first,
     each with its PR's repository.
+
+func (s *Store) FirstPostedReview(ctx context.Context, prID int64, since time.Time) (PostedReview, []Finding, bool, error)
+    FirstPostedReview returns the first round of PR prID that posted a review
+    and began at or after since (its first run, a reviewer's before the judge's,
+    created then; the rounds in the order they began), with the findings it
+    posted, every priority, in the judge's order: the round as ReviewedPRs
+    reads a posted review (its run is the earliest of the round that carries the
+    review; Summary is left unread), its findings the posted rows of that round
+    (findings.verdict posted). A round that began before since does not count,
+    however late it posted. One query; false when no such round exists yet.
 
 func (s *Store) ForgetHerdrIDs(ctx context.Context) (int64, error)
     ForgetHerdrIDs clears the herdr workspace, tab and pane of every session
