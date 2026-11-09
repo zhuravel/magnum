@@ -1390,10 +1390,12 @@ of 0 is left out, since a ready card an older build drew counts no commits) and 
 the head", "green at the head", "red on the base, not green at the head" or "no proof"); the local review's rounds,
 verdict ("clean", "findings left", "did not finish", "no verdict") and the notes it left open; the publish time, with
 its day; the fix loop's state ("running", "left to the operator", "done", "off"), cycle, pushes and threads answered;
-the staging deploy ("deploying", "deployed" or "failed", with the env's name only when it is a slug). A row with nothing
-to say reads `none` (no code counted, no local review, no fix loop yet, no staging deploy). The heading names the Jira
-issue only when the file has one (its key and its status: "to do", "in development", "in code review", "done",
-"another status", "status not known"). The Now line says who the PR waits on ("waits on the operator", "on Magnum",
+the staging deploy ("deploying", "deployed" or "failed", with the env's name only when it is a slug): one row per
+staging env of the repository when the file lists them (`stagings`), in the config's order and named after the env
+(`| Staging · bart | deployed |`; `Staging` alone for an env whose name is no slug), and the one row above for a file
+without them. A row with nothing to say reads `none` (no code counted, no local review, no fix loop yet, no staging
+deploy). The heading names the Jira issue only when the file has one (its key and its status: "to do", "in
+development", "in code review", "done", "another status", "status not known"). The Now line says who the PR waits on ("waits on the operator", "on Magnum",
 "on the reviewers", "on CI", "on the factory", "on nobody"), the task's end when it ended ("merged", "the task
 stopped", "the task failed"), and when the file last changed, with its day once that is not the day of the edit, as
 Magnum's own times.

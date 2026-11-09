@@ -138,6 +138,101 @@ func TestEachFactoryRowSaysItsStepInFixedWords(t *testing.T) {
 	}
 }
 
+// A repository with several staging environments gets one Staging row per
+// env the status gives (Stagings), in its order, each named by the env's
+// slug and saying that env's deploy in the fixed words; an env that is no
+// slug is a row without its name. A status without Stagings (a writer from
+// before them, a repository without staging envs) keeps the one Staging
+// row of its Staging field.
+func TestEachStagingEnvGetsItsOwnRowInTheStatussOrder(t *testing.T) {
+	s := factoryStatus()
+	s.Stagings = []prstatus.Staging{
+		{Env: "void", State: prstatus.StagingNone},
+		{Env: "bart", State: prstatus.StagingDeployed},
+		{Env: "bastion", State: prstatus.StagingDeploying},
+		{Env: "qa-2", State: prstatus.StagingFailed},
+		{State: prstatus.StagingDeployed},
+	}
+	s.Staging = s.Stagings[0]
+	want := "| Fix loop | running, cycle 2, 3 pushes, 7 threads answered |\n" +
+		"| Staging · void | none |\n" +
+		"| Staging · bart | deployed |\n" +
+		"| Staging · bastion | deploying |\n" +
+		"| Staging · qa-2 | failed |\n" +
+		"| Staging | deployed |\n" +
+		"\n" +
+		"Now: "
+	if got := factoryText(s, "", factoryNow); !strings.Contains(got, want) {
+		t.Fatalf("factory part:\n%s\nwant the rows:\n%s", got, want)
+	}
+
+	s.Stagings = []prstatus.Staging{}
+	if got := factoryText(s, "", factoryNow); !strings.Contains(got, "\n| Staging | none |\n\nNow: ") {
+		t.Fatalf("an empty Stagings, factory part:\n%s\nwant the one row of Staging", got)
+	}
+}
+
+// A change of one staging env's row alone is a change of the factory part:
+// it edits the comment once, at the first tick the spacing allows, and the
+// PR keeps the new part's sum while magnum's body's (statusRecord.Sum)
+// stays. On a comment a person deleted it posts nothing: the record waits
+// for magnum's next change (statusRecord.Repost), as for any change of the
+// part alone.
+func TestAStagingRowsChangeAloneEditsTheCommentOnce(t *testing.T) {
+	h := widgetHarness(t)
+	s := factoryStatus()
+	s.Stagings = []prstatus.Staging{{Env: "void", State: prstatus.StagingDeployed}, {Env: "bart", State: prstatus.StagingDeploying}}
+	s.Staging = s.Stagings[0]
+	s = h.writeWidgetStatus(12, s)
+	pr := h.widgetQueued()
+	posted := h.e.statusRecordOf(h.ctx, pr.ID)
+	shown := h.factoryShown(pr.ID)
+	if c := h.statusComment(12); !strings.Contains(c.body, "\n| Staging · void | deployed |\n| Staging · bart | deploying |\n") {
+		t.Fatalf("status comment:\n%s\nwant a row per staging env", c.body)
+	}
+
+	// write keeps the file's updated time: only the staging row changes.
+	write := func(s prstatus.Status) {
+		t.Helper()
+		if wrote, err := prstatus.Write(h.widgetStatusPath(12), s); err != nil || !wrote {
+			t.Fatalf("write the status file: %v, %v", wrote, err)
+		}
+	}
+	s.Stagings[1].State = prstatus.StagingDeployed
+	write(s)
+	h.advance(2 * time.Minute)
+	h.tick()
+	h.advance(time.Minute)
+	h.tick()
+	if n := h.widgetEdits(); n != 1 {
+		t.Fatalf("edits = %d, want 1 for the staging row", n)
+	}
+	c := h.statusComment(12)
+	if !strings.HasSuffix(c.body, "\n\n"+factoryText(s, "", h.clock.Now())) || !strings.Contains(c.body, "\n| Staging · bart | deployed |\n") {
+		t.Fatalf("status comment:\n%s\nwant bart's row deployed", c.body)
+	}
+	if rec := h.e.statusRecordOf(h.ctx, pr.ID); rec.Sum != posted.Sum {
+		t.Errorf("magnum's body sum = %q, want %q: its lines did not change", rec.Sum, posted.Sum)
+	}
+	if got := h.factoryShown(pr.ID); got == shown || got != statusSum(factoryText(s, "", h.clock.Now())) {
+		t.Errorf("%s = %q, want the new part's sum (was %q)", kvPRFactoryStatus(pr.ID), got, shown)
+	}
+
+	h.gh.deleteComment(c.id)
+	s.Stagings[0].State = prstatus.StagingFailed
+	write(s)
+	h.advance(2 * time.Minute)
+	h.tick()
+	h.advance(2 * time.Minute)
+	h.tick()
+	if cs := h.gh.commentsOn(12); len(cs) != 0 || h.gh.count("issue_comment:"+widgetRepo) != 1 {
+		t.Fatalf("a staging row's change on a deleted comment: %d posts, comments %+v", h.gh.count("issue_comment:"+widgetRepo), cs)
+	}
+	if rec := h.e.statusRecordOf(h.ctx, pr.ID); rec.ID != 0 || !rec.Repost || rec.Sum != posted.Sum {
+		t.Errorf("record = %+v, want it waiting for magnum's next change with magnum's sum", rec)
+	}
+}
+
 // The Now line says who the PR waits on in fixed words, the task's stage
 // when it is not the published PR's, and when the status last changed, with
 // its day once that is not the day of the edit.
@@ -352,6 +447,7 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 		s.LocalReview.Verdict = prstatus.Verdict(h)
 		s.FixLoop.State = prstatus.FixState(h)
 		s.Staging = prstatus.Staging{Env: h, State: prstatus.StagingState(h)}
+		s.Stagings = []prstatus.Staging{s.Staging, {Env: "bart", State: prstatus.StagingState(h)}}
 		s.Now = prstatus.Now{Who: prstatus.Who(h), Stage: prstatus.Stage(h)}
 		got := factoryText(s, "", factoryNow)
 		if got == "" {
@@ -362,7 +458,8 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 				t.Errorf("%q: the factory part carries %q:\n%s", h, bad, got)
 			}
 		}
-		if !strings.Contains(got, "\n| Code | 6 commits, 3 specs: not known |\n") || !strings.HasPrefix(got, "**Magnum factory**\n") {
+		if !strings.Contains(got, "\n| Code | 6 commits, 3 specs: not known |\n") || !strings.HasPrefix(got, "**Magnum factory**\n") ||
+			!strings.Contains(got, "\n| Staging | not known |\n| Staging · bart | not known |\n") {
 			t.Errorf("%q: the unknown words do not read as not known:\n%s", h, got)
 		}
 	}
@@ -371,6 +468,10 @@ func TestNoFactoryStatusStringReachesTheCommentUnmapped(t *testing.T) {
 	s.Staging.Env = "Beta Env"
 	if got := factoryText(s, "", factoryNow); !strings.Contains(got, "\n| Staging | deployed |\n") || !strings.Contains(got, "Jira ABC-12: done") {
 		t.Errorf("an env that is no slug, or a key that is one:\n%s", got)
+	}
+	s.Stagings = []prstatus.Staging{s.Staging}
+	if got := factoryText(s, "", factoryNow); !strings.Contains(got, "\n| Staging | deployed |\n") {
+		t.Errorf("a staging env that is no slug:\n%s", got)
 	}
 }
 

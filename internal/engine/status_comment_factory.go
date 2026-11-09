@@ -2,11 +2,12 @@ package engine
 
 // The factory part of the status comment: on a PR a factory task published,
 // the factory daemon keeps a status file (internal/prstatus: counts, enums,
-// times, the staging environment's slug and the Jira key, never free text),
-// and the comment renders it below magnum's lines, as a short heading, the
-// table of the factory's steps and a Now line. Every word it posts comes
-// from the word maps below, a number or a time; the two strings the file
-// may carry, the env's slug and the Jira key, are checked again before they
+// times, the staging environments' slugs and the Jira key, never free
+// text), and the comment renders it below magnum's lines, as a short
+// heading, the table of the factory's steps (a Staging row per staging env)
+// and a Now line. Every word it posts comes
+// from the word maps below, a number or a time; the strings the file may
+// carry, the envs' slugs and the Jira key, are checked again before they
 // post. A row with nothing to say reads "none". The comment's last edit
 // (a close, a merge, a draft) says the end in the Now line while the file
 // still says the PR is open: the factory writes its own end after
@@ -152,14 +153,14 @@ func factoryText(s prstatus.Status, end string, now time.Time) string {
 		head += " · Jira " + key + ": " + factoryWord(factoryJiraWords, s.Jira.Status)
 	}
 	lines := []string{head, "", "| Step | State |", "|---|---|"}
-	for _, r := range [][2]string{
+	rows := [][2]string{
 		{"Plan", factoryPlan(s.Plan)},
 		{"Code", factoryCode(s.Code)},
 		{"Local review", factoryReview(s.LocalReview)},
 		{"Published", statusDay(s.PublishedAt)},
 		{"Fix loop", factoryFix(s.FixLoop)},
-		{"Staging", factoryStaging(s.Staging)},
-	} {
+	}
+	for _, r := range append(rows, factoryStagingRows(s)...) {
 		lines = append(lines, "| "+r[0]+" | "+r[1]+" |")
 	}
 	nowLine := "Now: " + factoryNowWords(s.Now) + " · updated " + statusClock(s.UpdatedAt, now)
@@ -235,8 +236,30 @@ func factoryFix(f prstatus.FixLoop) string {
 	return strings.Join(parts, ", ")
 }
 
-// factoryStaging is the Staging row: the deploy's state, with the env's
-// name when it is a slug (prstatus.StagingEnv, checked again here).
+// factoryStagingRows are the Staging rows of s: one per entry of Stagings,
+// in their order (the config's), "Staging · <env>" with that env's deploy
+// state (the env's name only when it is a slug, prstatus.StagingEnv,
+// checked again here; "Staging" alone otherwise), or, for a status without
+// Stagings (a writer from before them, a repository without staging envs),
+// the one row of its Staging field (factoryStaging).
+func factoryStagingRows(s prstatus.Status) [][2]string {
+	if len(s.Stagings) == 0 {
+		return [][2]string{{"Staging", factoryStaging(s.Staging)}}
+	}
+	rows := make([][2]string, 0, len(s.Stagings))
+	for _, st := range s.Stagings {
+		step := "Staging"
+		if env := prstatus.StagingEnv(st.Env); env != "" {
+			step += " · " + env
+		}
+		rows = append(rows, [2]string{step, factoryWord(factoryStagingWords, st.State)})
+	}
+	return rows
+}
+
+// factoryStaging is the Staging row of a status without Stagings: the
+// deploy's state, with the env's name when it is a slug
+// (prstatus.StagingEnv, checked again here).
 func factoryStaging(st prstatus.Staging) string {
 	words := factoryWord(factoryStagingWords, st.State)
 	env := prstatus.StagingEnv(st.Env)

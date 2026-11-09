@@ -20510,6 +20510,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (the gh identity's env with the tokens blanked, the warning said again after an env that worked), and the goldens
   of TestFactoryFramesOfStagingCells (100, 200, 140 dark ANSI, 100 ASCII) and
   TestTaskCardSaysWhereItsPRStandsOnEachStaging.
+- **The status comment's factory part draws a Staging row per staging env** (2026-11-09, R48's renderer after the
+  status file gained `stagings`). The renderer drew the one Staging row of `staging`, the first env alone, so a PR of
+  a repository with several envs said nothing of the others in its comment. Now `factoryStagingRows` draws one row per
+  entry of `Stagings`, in the slice's order (the config's), as `| Staging · bart | deployed |`: the env's slug
+  (`prstatus.StagingEnv` again; `Staging` alone for one that is none) and its state in `factoryStagingWords`
+  (`none`, `deploying`, `deployed`, `failed`, "not known" outside the map). A status without `Stagings` (a writer
+  from before them, a repository without staging envs) keeps the one row of `Staging`, in its old words ("deployed to
+  `beta`"). The env's name moves into the row's step, so its state is the word alone. The comment's change detection
+  is unchanged: the sum (`kvPRFactoryStatus`) is of the rendered part, so a change of one env's row alone edits the
+  comment once under the spacing, magnum's own sum (`statusRecord.Sum`) stays, and on a comment a person deleted it
+  posts nothing (`statusRecord.Repost`). `prstatus` is not changed. Rejected: one Staging row joining the envs
+  ("deployed to `void`, deploying to `bart`"), which grows past a table cell's width with three envs and reads worse
+  than a row each. Tests, failing first: TestEachStagingEnvGetsItsOwnRowInTheStatussOrder,
+  TestAStagingRowsChangeAloneEditsTheCommentOnce and the stagings of TestNoFactoryStatusStringReachesTheCommentUnmapped.
 
 ## Learned rules
 
