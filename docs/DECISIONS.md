@@ -4222,6 +4222,76 @@ skill versions); people add theirs to the sections before it, at the end of the 
   magnum's P3 at its place, no lift without the threads read, your decision is no optional call) and
   TestMagnumsDecisionIsTheCallOfItsFindingAtItsPlace.
 
+- **The look re-runs once a run of an own PR's head that started no job** (2026-11-09, talkable-docs#447,
+  approved by the operator). The PR changed one .rst file; its run of ci.yml for the pull_request ended
+  "failure" after 50 s with zero jobs, and GitHub's page said that the run likely failed because of a workflow
+  file issue, while the same workflow passed on other PRs that day: a GitHub startup failure. A run that
+  starts no job has a check suite with no check run in it, so the PR's rollup held nothing of it, rule 11
+  found the required check build missing past settle_max with nothing running, and, the repository having no
+  ci_dispatch, the PR needed you ("run its workflow on the PR's branch, or push"); a person re-ran it by hand
+  (attempt 2 of the same run id and check suite, which passed). Nothing magnum read listed a head's runs
+  across workflows, so such a run was invisible. Now, where rule 11 reaches "did not run" and no ci_dispatch
+  start or refusal stands at the head, the look reads the head's runs once (`github.HeadRuns`, GET
+  actions/runs?head_sha=, every workflow and event, one page of 20) as startCI's identity (`ci_dispatch_as`,
+  else the poll identity, else the identity) and records the read per head (`pr.<id>.ci_rerun`, the last
+  head's), so no look reads again; a read that found a run of the head still queued, or one that failed
+  (`fix.open_ci_runs_error`, said once per distinct error), is read again settle_max after it, and in that
+  window the old words stand. A run started no job when its status is completed and its conclusion is
+  startup_failure (no jobs read), or failure or cancelled with no job in its latest attempt (`RunJobs`,
+  filter=latest); queued, waiting, pending or in-progress runs started none yet and are no failure, and any
+  such run of a .github/workflows file at the head blocks the re-run (the workflow's concurrency group, its
+  workflow and ref, would cancel one of the two), the look waiting with "run N has started no job yet".
+  Action_required, skipped and other conclusions never count. Only each .github/workflows file's newest run
+  for a pull_request and for a push is a candidate (an older run that a newer one of the same workflow and
+  event followed is no longer the head's, and its jobs are not read), and of those the newest that started no
+  job is re-run, once for the head (`github.RerunRun`, POST actions/runs/{id}/rerun, marked Mutates), the
+  record written before the call as openStartCI's is (a stored record that says re-run or refused is read
+  again before the read and before the call, so a restart, a second look or a record that could not be read
+  never re-runs twice), unless the PR changes a workflow or action file (`changesActions`: changesWorkflow, or
+  any action.yml or action.yaml) or GitHub did not list every file. The poll waits for the new attempt as for
+  a started run (`awaitCIRuns`, now in every repository: while GitHub took the re-run, a required check is
+  missing and the re-run is under settle_max old or its attempt was queued or running, each poll forces the
+  PR's Details read and reads the head's runs once, `seeRerun`), and sees it as the same run id with a higher
+  run_attempt; attempt 1 still listed is no re-run. In a ci_dispatch repository a head whose run started no
+  job is re-run instead of dispatched, and a head with no run is dispatched as before. The verdict's words,
+  which the board's needs-you line shows and the factory screen's own-PR move follows, are stable stems: the
+  transient "magnum re-runs run N of W"; "magnum does not re-run run N of W (the PR changes its own workflows
+  or actions); re-run it on GitHub" (or "(GitHub did not list every file of the PR)"); "magnum's re-run of run
+  N of W failed (GitHub answered HTTP 403: ...cannotStartWorkflows' words...); re-run it on GitHub" (another
+  status "(GitHub answered HTTP 422)", a lost call "(the call failed)"); "run N of W failed to start twice
+  (failure); re-run it on GitHub, or push" (`fix.open_ci_rerun_twice`, said once by the poll); "magnum re-ran
+  run N of W at HH:MM and it ended (success) without it; re-run it on GitHub"; "magnum re-ran run N of W at
+  HH:MM and no new attempt came; re-run it on GitHub"; and the waits "magnum re-ran run N of W at HH:MM, as
+  required check C did not run", "C did not run; magnum re-runs run N of W once the pause ends" (or "once the
+  GitHub budget allows") and "C did not run; magnum reads the head's runs once the GitHub budget allows" (no
+  read yet, below the floor, no ci_dispatch). Each needs-you keeps the need {kind ci, the PR's URL}; the run
+  id is GitHub's number and W passes ValidWorkflowFile, so the words hold no PR text. Events
+  `fix.open_ci_rerun`, `fix.open_ci_rerun_failed` (GitHub's status, never its message),
+  `fix.open_ci_rerun_refused`, `fix.open_ci_rerun_twice` and `fix.open_ci_runs_error`, whose data name the
+  head, the run, its workflow, attempt and conclusion and the identity. Validation no longer refuses
+  `ci_dispatch_as` without `ci_dispatch`: alone it names who reads and re-runs, which the live repository
+  needs (its poll identity, an App with Actions: read only, gets HTTP 403 on the re-run until `ci_dispatch_as`
+  names one that can). Rejected: a read of the head's runs per poll or per look for every own PR (budget spent
+  on PRs whose checks are fine), mapping the missing check to its workflow (it needs the workflow's YAML; a
+  re-run of another workflow ends in "it ended ... without it"), re-running a run magnum dispatched that
+  started no job (its own words stay, "its run ended (failure) without it"), widening startCI's and the
+  auto-approval gate's changesWorkflow to every action.yml (a separate decision), and re-running more than
+  once per head (a second startup failure is no longer GitHub's bad minute). A run someone re-ran by hand that
+  also started no job is re-run once more: the record bounds magnum, not people. Tests, failing first (with
+  the look's read and re-run taken out, every engine test below fails by assertion on master's words or
+  counts): TestARunThatStartedNoJobIsReRunOnceForTheHead, TestTheReRunsNewAttemptEndsTheWait,
+  TestARunThatFailsToStartTwiceNeedsYou, TestAReRunGitHubForbidsNeedsYou,
+  TestTheLookNeverReRunsAPRThatChangesItsWorkflowsOrActions, TestAQueuedRunIsNoStartThatFailed,
+  TestOnlyARunThatEndedWithNoJobStartedIsReRun, TestAnOlderRunOfAWorkflowThatRanAgainIsNotReRun,
+  TestAFailedReadOfTheHeadsRunsIsSaidOnceAndReadAgainAfterSettleMax, TestANewHeadIsReRunAfresh,
+  TestCIDispatchReRunsARunThatStartedNoJobAndDispatchesAHeadWithNone,
+  TestTheReRunWaitsForThePauseAndTheBudget, TestTheLookReRunsOnceThePauseAndTheBudgetAllow,
+  TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaiting,
+  TestAReRunWhoseAttemptNeverCameOrEndedWithoutTheCheckNeedsYou,
+  TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch,
+  TestHeadRunsListsEveryWorkflowsRunsAtACommitWithTheirAttempt, TestRerunRunPostsTheRerun and
+  TestABadCIDispatchAsFailsValidation.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

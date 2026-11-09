@@ -3781,15 +3781,48 @@ right to run workflows: an App with Actions: write (and `actions = "write"` in i
 it sets them, since every token Magnum mints for it carries those alone), or a gh login that can push to the
 repository with the `repo` scope. A poll identity that is an App installation with Actions: read only
 cannot, and GitHub answers HTTP 403: set `ci_dispatch_as = "me"` (an `[[identity]]` name) to start it as one
-that can. Validation refuses a `ci_dispatch_as` without `ci_dispatch`, one that names no `[[identity]]`, and
-an App whose `token_permissions` leave out `actions = "write"`. A fixer App is such an App: its tokens
+that can. Validation refuses a `ci_dispatch_as` that names no `[[identity]]`, and an App whose
+`token_permissions` leave out `actions = "write"`. A fixer App is such an App: its tokens
 carry contents and pull_requests write alone, and with `actions = "write"` it is no longer a valid fixer
 App, so name a gh identity or another App. A 403 that is no rate limit says so in
 `fix.open_ci_dispatch_failed` and in the verdict ("magnum's start of ci.yml failed (GitHub answered HTTP 403:
 talkable-app cannot start workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity
 that can)"); the PR needs you as for any start GitHub refuses, and the head is not started again. The three
 events name the identity in their data, the first two in their message. Without `ci_dispatch` (the default)
-Magnum starts nothing.
+Magnum starts no workflow; it only re-runs a run that started no job, as follows.
+
+GitHub sometimes fails to start a run at all: it ends `startup_failure`, or `failure` or `cancelled` after a
+few seconds with no job, and its page says that the run likely failed because of a workflow file issue, while
+the PR changes no workflow. Such a run leaves nothing in the PR's check rollup (its check suite holds no check
+run), so its required check did not run. When rule 11 reaches "did not run" at an own PR's head, Magnum reads
+the head's runs once (one REST call, `actions/runs?head_sha=`, as the identity that starts `ci_dispatch`'s
+workflow: `ci_dispatch_as`, else the poll identity), and records what it read per head (`pr.<id>.ci_rerun`),
+so no look reads them again; a read that found a run still queued, or one that failed
+(`fix.open_ci_runs_error`, said once), is read again `settle_max` later. Of the newest run of each
+`.github/workflows` file for a `pull_request` and for a `push`, one that ended `startup_failure`, or `failure`
+or `cancelled` with no job in its latest attempt (one more call reads its jobs), started no job. A run that
+waits or runs started none yet: while any run of the head has not ended, Magnum re-runs nothing ("CI at
+a1b2c3d: run 42673098082 has started no job yet"). When the PR changes no workflow or action file
+(`.github/workflows/`, `.github/actions/`, any `action.yml` or `action.yaml`) and GitHub listed all its files,
+Magnum re-runs that run once for the head (`POST actions/runs/{id}/rerun`: the same run id with a new
+`run_attempt`, of the run's own event and commit), recorded before the call so that a restart or a second look
+never re-runs it twice (`fix.open_ci_rerun`), and waits for the new attempt as for a started run ("CI at
+a1b2c3d: magnum re-ran run 42673098082 of ci.yml at 18:41, as required check build did not run"): each poll
+reads the head's checks and its runs, and an attempt still queued or running keeps the look waiting past
+`settle_max`. With `ci_dispatch` such a head is re-run, not started; a head with no run is started as above.
+The PR needs you when the new attempt started no job either ("required check build did not run at a1b2c3d: run
+42673098082 of ci.yml failed to start twice (failure); re-run it on GitHub, or push",
+`fix.open_ci_rerun_twice`), when `settle_max` after the re-run it ended without the check ("magnum re-ran run
+42673098082 of ci.yml at 18:41 and it ended (success) without it; re-run it on GitHub") or no new attempt came
+("... and no new attempt came; re-run it on GitHub"), when GitHub refused it (`fix.open_ci_rerun_failed`:
+"magnum's re-run of run 42673098082 of ci.yml failed (GitHub answered HTTP 403: talkable-app cannot start
+workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity that can); re-run it on
+GitHub"), and when Magnum will not re-run it (`fix.open_ci_rerun_refused`: "magnum does not re-run run
+42673098082 of ci.yml (the PR changes its own workflows or actions); re-run it on GitHub"). The re-run waits
+for the end of `magnum pause` and for the GitHub budget as a start does ("required check build did not run;
+magnum re-runs run 42673098082 of ci.yml once the pause ends"), and the read waits for the budget ("magnum
+reads the head's runs once the GitHub budget allows"). The identity needs the right to run workflows, as for a
+start: `ci_dispatch_as` names one with or without `ci_dispatch`. A new head starts fresh.
 
 **What you see.**
 
