@@ -19,6 +19,7 @@ Read every findings file ({{.Findings}}), and check each claim you rely on again
 - each architecture decision;
 - for a bug that did not reproduce, one question with the four options `give a hint`, `take the other cause`, `try Docker or a staging` and `drop`, one of them recommended;
 - the same question when the investigators disagree on the cause;
-- the product questions the findings leave open.
+- the product questions the findings leave open;
+- each doubt that can change what a user sees while neither the ticket nor the operator's answers decide it: it goes to the operator as a question, never into the plan as a choice.
 
 {{template "rules" .}}

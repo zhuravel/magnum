@@ -349,6 +349,24 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 	}
 }
 
+// The plan judge asks the operator about a doubt that can change what a user
+// sees while neither the ticket nor the operator's answers decide it; it
+// never settles such a doubt in the plan as a choice, which the local review
+// would then read as the factory's own intent (talkable#12212: a product
+// behaviour the plan chose and nobody decided). The rule sits where the
+// prompt lists the questions it asks.
+func TestThePlanJudgeAsksADoubtThatChangesWhatAUserSeesAndNobodyDecidedInsteadOfChoosing(t *testing.T) {
+	const rule = "- each doubt that can change what a user sees while neither the ticket nor the operator's answers decide it: it goes to the operator as a question, never into the plan as a choice."
+	text := renderFactory(t, config.Defaults(), "factory-judge.md", fullPromptData())
+	_, asked, ok := strings.Cut(text, "Ask there:\n")
+	if !ok || !strings.Contains(asked, rule) {
+		t.Errorf("the judge's list of questions to ask lacks %q:\n%s", rule, text)
+	}
+	if strings.Count(text, rule) != 1 {
+		t.Errorf("the rule appears %d times, want once", strings.Count(text, rule))
+	}
+}
+
 // renderInStage renders the prompt of role name in stage of task t's kind,
 // as the stage sends it.
 func (h *harness) renderInStage(t registry.Task, stage, name string) string {
