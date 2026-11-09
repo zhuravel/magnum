@@ -5363,8 +5363,9 @@ runs at most 45 minutes from its slot on and waits at most an hour for its turn 
 2-hour wait never ends it first (so of a deploy to three envs whose merges all conflict, the third job can fail
 for its wait behind two that take their time). A restart goes on with a job whose agent still runs; one whose
 agent is gone fails, saying so. A cancel of the deploy while the agent works (`magnum staging --cancel <effect>`)
-interrupts its turn (esc), waits up to 20 seconds for herdr to show it idle and parks it, which closes its workspace;
-an agent still at work then is ended with its workspace when that holds its pane alone, before the slot goes back.
+interrupts its turn (esc), waits up to 10 seconds for herdr to show it idle and parks it, which closes its workspace;
+while herdr still shows it at work the park is tried 3 times, 2 seconds apart. An agent still at work then, about
+14 seconds after the esc, is ended with its workspace when that holds its pane alone, before the slot goes back.
 With a pane of yours in that workspace the agent stays, and the job's why names its pane and why it stays. The
 resolver takes your own PRs only, as the deploy does. The merge stays at
 `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the deploy ended, a day at most. A conflict

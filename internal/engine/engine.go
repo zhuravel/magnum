@@ -1171,13 +1171,17 @@ func (e *Engine) lockHeld() error {
 	return nil
 }
 
+// shutdownWait is how long a daemon stop waits for its rounds, the retro,
+// the notes curation, the skill edit and gate and a memory sample to stop.
+const shutdownWait = 30 * time.Second
+
 // shutdown stops rounds (their runs stay observed, never re-sent), a
 // running retro, notes curation, skill edit and gate, waits for them and a
 // memory sample in flight (which Run's context ends, or its timeouts)
 // briefly, drops the heavy jobs still queued, flushes pending toasts and
 // gives urgent toasts still retrying a bounded time before cancelling them.
 // A GitHub write as the operator a round's goroutine started finishes within
-// that wait: its grace (writeContext) is no longer than it.
+// that wait (shutdownWait): its grace (writeContext) is no longer than it.
 func (e *Engine) shutdown() {
 	e.mu.Lock()
 	for _, h := range e.rounds {
@@ -1202,7 +1206,7 @@ func (e *Engine) shutdown() {
 	}()
 	select {
 	case <-done:
-	case <-time.After(30 * time.Second):
+	case <-time.After(shutdownWait):
 		e.log.Warn("rounds, the retro, the notes curation, the skill edit, the skill gate or the memory sample did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI

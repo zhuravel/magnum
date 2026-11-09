@@ -327,14 +327,19 @@ func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) cancelle
 // and a Quit a few milliseconds after the esc that both find it working. So
 // one Park parks it, a moment after the esc as when herdr lags for longer
 // than Park's tries (abortParkTries) would bridge, where the forced close
-// would otherwise end it.
+// would otherwise end it; and when herdr shows it working through the whole
+// wait (paneQuietWait, a check a second), Park is tried again while it
+// reports the agent busy, and its second try parks it.
 func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t *testing.T) {
+	checks := int(paneQuietWait/time.Second) + 1 // the wait's snapshots
 	for _, tc := range []struct {
-		name string
-		lag  int // the snapshots that still show it working after its esc
+		name  string
+		lag   int // the snapshots that still show it working after its esc
+		tries int // the Parks that parks it
 	}{
-		{name: "a moment", lag: 2},
-		{name: "longer than Park's tries", lag: abortParkTries + 2},
+		{name: "a moment", lag: 2, tries: 1},
+		{name: "longer than Park's tries", lag: abortParkTries + 2, tries: 1},
+		{name: "through the wait", lag: checks + 1, tries: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -342,9 +347,9 @@ func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t
 			if err := c.Close(context.WithoutCancel(h.ctx)); err != nil {
 				t.Fatalf("Close = %v, want the agent parked", err)
 			}
-			if c.ag.parks() != 1 || c.ag.count("park:") != 1 || c.ag.count("quit:") != 0 {
-				t.Errorf("parked %d times in %d tries, quit %d times; want one Park, after herdr showed it idle",
-					c.ag.parks(), c.ag.count("park:"), c.ag.count("quit:"))
+			if c.ag.parks() != 1 || c.ag.count("park:") != tc.tries || c.ag.count("quit:") != 0 {
+				t.Errorf("parked %d times in %d tries, quit %d times; want it parked in %d, after herdr showed it idle",
+					c.ag.parks(), c.ag.count("park:"), c.ag.count("quit:"), tc.tries)
 			}
 			if _, err := os.Stat(filepath.Join(c.dir, learnScratch)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("the scratch registry stays: %v", err)
@@ -400,6 +405,30 @@ func TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorksp
 				t.Fatalf("closed %v, registry %v; want its workspace w1 closed and the registry gone", h.hd.closed, serr)
 			}
 		})
+	}
+}
+
+// A pane agent's Close of an agent that stays at work through its esc
+// ends within the wait of a daemon stop, which closes a retro, a curator,
+// a critic or an editor mid-turn that way (Engine.shutdown waits
+// shutdownWait for them): its wait for herdr to show the agent idle and
+// its Park's tries, with a Quit's own ctrl+c, 1 s, ctrl+c and wait for a
+// shell (agents.QuitIdleTimeout) after them, take less than shutdownWait,
+// so the stop does not leave while the Close still ends the agent.
+func TestAPaneAgentsCloseOfAnAgentThatStaysAtWorkFitsInTheDaemonStopsWait(t *testing.T) {
+	h := newHarness(t)
+	c := cancelledResolver(t, h, -1, false)
+	c.spec.closeBusy = false // a pane agent that never forces, as the retro's
+	if err := c.Close(context.WithoutCancel(h.ctx)); err == nil {
+		t.Fatal("Close = nil, want the agent that stays at work reported")
+	}
+	if c.ag.count("park:") != abortParkTries || c.ag.count("quit:") != 1 {
+		t.Fatalf("%d Parks, %d Quits; want Park's tries, then a Quit", c.ag.count("park:"), c.ag.count("quit:"))
+	}
+	quit := time.Second + agents.QuitIdleTimeout // agents.Manager.Quit: ctrl+c, 1 s, ctrl+c, then a wait for an idle shell
+	if waited := c.slept.sum(); waited+quit >= shutdownWait {
+		t.Errorf("Close waited %v before its Quit, %v with the Quit's own; want less than the daemon stop's %v",
+			waited, waited+quit, shutdownWait)
 	}
 }
 

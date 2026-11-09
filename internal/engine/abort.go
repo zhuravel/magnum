@@ -573,7 +573,12 @@ func sessionAgent(snap herdr.Snapshot, s store.Session) (herdr.AgentInfo, bool) 
 // agent of the PR to be working or blocked; it reports whether that
 // happened.
 func (e *Engine) waitAgentsQuiet(ctx context.Context, prID int64) bool {
-	for range int(abortQuietWait / time.Second) {
+	return e.waitAgentsQuietFor(ctx, prID, abortQuietWait)
+}
+
+// waitAgentsQuietFor is waitAgentsQuiet bounded by wait, not abortQuietWait.
+func (e *Engine) waitAgentsQuietFor(ctx context.Context, prID int64, wait time.Duration) bool {
+	for range int(wait / time.Second) {
 		if e.agentsQuiet(ctx, prID) {
 			return true
 		}

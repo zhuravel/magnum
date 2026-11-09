@@ -65,6 +65,15 @@ var RetroObserveEvery = 10 * time.Second
 // and its screen is read as for any turn without an answer.
 const paneBlockedWait = 2 * time.Minute
 
+// paneQuietWait bounds a pane agent's wait at Close for herdr to show the
+// agent it interrupted idle (release). It is half a round's stop's wait
+// (abortQuietWait), so that with Park's tries after it (abortParkTries, 2 s
+// apart) and a Quit's own wait (ctrl+c, 1 s, ctrl+c, agents.QuitIdleTimeout)
+// the Close of an agent that stays at work fits in the wait of the daemon
+// stop (shutdownWait) that closes a retro, a curator, a critic or an editor
+// mid-turn: the stop does not leave while the Close still ends the agent.
+const paneQuietWait = 10 * time.Second
+
 // paneAgents is the part of *agents.Manager the retro's classifier drives.
 type paneAgents interface {
 	Agents
@@ -865,7 +874,7 @@ func (c *paneAgent) Close(ctx context.Context) error {
 
 // release ends the agent's runs, then parks it, else quits it and closes
 // its workspace. A turn it interrupted (esc) is waited for as a round's stop
-// waits (waitAgentsQuiet, up to abortQuietWait): herdr shows the agent at
+// waits (waitAgentsQuietFor, up to paneQuietWait): herdr shows the agent at
 // work for a moment after the esc, and Park, and a Claude's Quit, refuse an
 // agent herdr shows working, so a Park right after the esc fails on an
 // agent that stops a second later. Park is then tried again while it
@@ -884,8 +893,8 @@ func (c *paneAgent) release(ctx context.Context) error {
 			c.finish(ctx, r.ID, errors.New("the "+c.spec.what+" ended"))
 		}
 	}
-	if interrupted && c.d.Herdr != nil && !c.obs.waitAgentsQuiet(ctx, c.pr.ID) {
-		c.d.Logger.Warn(c.spec.what+": the agent still works after its interrupt", "run", c.id, "waited", abortQuietWait)
+	if interrupted && c.d.Herdr != nil && !c.obs.waitAgentsQuietFor(ctx, c.pr.ID, paneQuietWait) {
+		c.d.Logger.Warn(c.spec.what+": the agent still works after its interrupt", "run", c.id, "waited", paneQuietWait)
 	}
 	perr := c.park(ctx, interrupted)
 	if perr == nil {
