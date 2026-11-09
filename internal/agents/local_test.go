@@ -3,6 +3,8 @@ package agents
 import (
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum"
 )
 
 // localScratch is a local round's scratch directory, where the factory
@@ -108,6 +110,26 @@ func TestTheLocalJudgeBlockReadsFilesNotGitHub(t *testing.T) {
 func TestTheSkillSaysWhatALocalRoundTakesInPlaceOfGitHub(t *testing.T) {
 	skillSays(t, []string{"Local round (`local: true`)", "make no `gh` call", "`description_file` holds the title and description (section 2's claims)",
 		"`base.repo.private` counts as false", "gets `\"question\": true` in its provenance entry"}, nil)
+}
+
+// The description a local judge reads is the factory's own plan, not a
+// person's: a behaviour the plan calls intended that neither the ticket nor
+// the operator's answers decide is a product question for the operator,
+// never the author's intent that section 2 respects. On a factory PR
+// (talkable#12212) the judge deferred to a product behaviour
+// the plan had chosen and nobody had decided, and a colleague found it in
+// public. The rule is in the Local round section, so magnum's GitHub reviews
+// and the review daemon's rounds read no such rule.
+func TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent(t *testing.T) {
+	const rule = "The description is the factory's plan, not a person's: a behaviour it calls intended that neither the ticket nor the operator's answers (both in `ticket`) decide is a product question (`\"question\": true`), never intent."
+	skillSays(t, []string{rule}, nil)
+	_, local, ok := strings.Cut(string(magnum.Skill), "\n## Local round (`local: true`)")
+	if !ok || !strings.Contains(local, rule) {
+		t.Error("the rule is not in the Local round section")
+	}
+	if before, _, _ := strings.Cut(string(magnum.Skill), "\n## Local round (`local: true`)"); strings.Contains(before, "the factory's plan") {
+		t.Error("the factory's plan is named outside the Local round section, which only a local round reads")
+	}
 }
 
 // The local claude reviewer reviews the change in the checkout, not a PR:
