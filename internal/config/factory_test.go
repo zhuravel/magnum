@@ -223,14 +223,20 @@ func TestTheFeatureKindInvestigatesWithACodexTwinOfThePointsReader(t *testing.T)
 }
 
 // A stage's when is empty, "wide" or "narrow", and only an agents stage
-// takes one: a gate, a review, a decision or an effect runs for every plan
-// (a questions gate skipped for a width would never ask its questions), so
-// a when on one is refused, saying why; anything but the three is refused.
+// takes one: a gate, a review, a decision or an effect runs for every plan,
+// so a when on one is refused, saying why (a gate skipped for a width would
+// never check what it guards) and what to do: remove the key. Anything but
+// the three is refused.
 func TestAStageRunsForAWideOrANarrowPlan(t *testing.T) {
 	for _, stage := range []string{"questions", "reproduction", "local_review", "ready", "publish"} {
 		cfg := validFactoryConfig()
 		editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { s[findStage(s, stage)].When = FactoryWhenWide; return s })
-		wantError(t, cfg.Validate(), `stage "`+stage+`"`, `when "wide" is for agents stages only`, "runs for every plan")
+		err := cfg.Validate()
+		wantError(t, err, `stage "`+stage+`"`, `when "wide" is for agents stages only`, "runs for every plan", "remove its when")
+		gate := stage == "questions" || stage == "reproduction"
+		if got := strings.Contains(err.Error(), "never check what it guards"); got != gate {
+			t.Errorf("stage %s: the refusal %q gives a gate's reason: %v, want %v", stage, err, got, gate)
+		}
 	}
 	for _, when := range []string{"", FactoryWhenWide, FactoryWhenNarrow} {
 		cfg := validFactoryConfig()
@@ -1275,7 +1281,7 @@ func TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt(t *testing.T) {
 		"end clean":         {qa("pr_body", func(st *FactoryStage) { st.End = FactoryEndClean }), []string{`stage "qa"`, `end "clean" must be qa`}},
 		"no end":            {qa("pr_body", func(st *FactoryStage) { st.End = "" }), []string{`stage "qa"`, `end "" must be qa`}},
 		"a prompt":          {qa("pr_body", func(st *FactoryStage) { st.Prompt = "factory-qa.md" }), []string{`stage "qa"`, "prompt is for agents stages only"}},
-		"when wide":         {qa("pr_body", func(st *FactoryStage) { st.When = FactoryWhenWide }), []string{`stage "qa"`, "when"}},
+		"when wide":         {qa("pr_body", func(st *FactoryStage) { st.When = FactoryWhenWide }), []string{`stage "qa"`, "when", "remove its when"}},
 		"two roles": {qa("pr_body", func(st *FactoryStage) { st.Roles = []string{"fx-qa", "fx-writer"} }),
 			[]string{`stage "qa"`, "names exactly one role"}},
 		"after the ready card": {qa("publish"), []string{`stage "qa"`, "must come before the " + FactoryDecisionReadyPush + " decision"}},

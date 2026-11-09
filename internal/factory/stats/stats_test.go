@@ -199,21 +199,37 @@ func askRevision(t *testing.T, r *registry.Registry, clk *clock, taskID int64, r
 	}
 }
 
+// judgeRan records that role ran task id's report stage (its run's end fact
+// the report), as the runtime records a verified judge: the role whose
+// questions relay the investigators' findings.
+func judgeRan(t *testing.T, r *registry.Registry, id int64, role string) {
+	t.Helper()
+	a, err := r.BeginAttempt(t.Context(), id, "judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RecordRoleRun(t.Context(), registry.RoleRun{AttemptID: a.ID, Role: role, EndFact: "report", Outcome: "verified"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The questions a task asked are counted once each (a question an open
-// revision carries over is the same question), and by source: the
-// investigators whose findings file its evidence names (the judge cites the
-// findings a question comes from), else the roles its raised_by names. A
-// question of one source counts for that source alone, so a second reader's
-// count is what it adds; one of several sources (both readers raised it)
-// counts apart, as shared by those roles. The JSON and the markdown carry
-// them; a task that asked nothing shows none.
+// revision carries over is the same question), and by source: the roles its
+// raised_by names but the judge (the role that ran the report stage), and,
+// for a question the judge alone raised, the investigators whose findings
+// files its evidence names (the judge cites the findings a question comes
+// from), else the judge. A question of one source counts for that source
+// alone, so a second reader's count is what it adds; one of several sources
+// (both readers raised it) counts apart, as shared by those roles. The JSON
+// and the markdown carry them; a task that asked nothing shows none.
 func TestStatsCountTheQuestionsBySource(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
 	ctx := t.Context()
 	a := createTask(t, r, "PR-12390")
+	judgeRan(t, r, a.ID, "fx-judge")
 	createTask(t, r, "PR-12391") // asks nothing
-	both := registry.Question{Text: "Who gets the reminder?", Recommended: -1, RaisedBy: "fx-judge, fx-points",
+	both := registry.Question{Text: "Who gets the reminder?", Recommended: -1, RaisedBy: "fx-judge",
 		Evidence: "findings-fx-points.md and findings-fx-points-codex.md: Point 2"}
 	if err := r.ReplaceQuestions(ctx, a.ID, 1, []registry.Question{
 		{Text: "Can a merchant turn it off?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "findings-fx-points-codex.md: Point 3"},
@@ -257,6 +273,37 @@ func TestStatsCountTheQuestionsBySource(t *testing.T) {
 	}
 	if _, section, _ := strings.Cut(md, "## Questions by source"); strings.Contains(section, "PR-12391") {
 		t.Errorf("the questions section lists a task that asked nothing:\n%s", section)
+	}
+}
+
+// A question an investigator raised in its own questions file counts for
+// it, whatever findings the judge cites when it asks the same question: the
+// gate merges the two, keeps the judge's evidence and adds the investigator
+// to raised_by, so fx-points' question cited from the twin's findings is
+// fx-points', never the twin's. The evidence decides only for a question
+// the judge alone raised, and never for another role's: the critic citing
+// fx-cause's findings is the critic's.
+func TestAnInvestigatorsOwnQuestionCountsForItWhateverTheJudgeCites(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	a := createTask(t, r, "PR-12392")
+	judgeRan(t, r, a.ID, "fx-judge")
+	if err := r.ReplaceQuestions(ctx, a.ID, 1, []registry.Question{
+		{Text: "Who gets the reminder?", Recommended: -1, RaisedBy: "fx-judge, fx-points", Evidence: "findings-fx-points-codex.md: Point 2"},
+		{Text: "Can a merchant turn it off?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "findings-fx-points-codex.md: Point 3"},
+		{Text: "Does the export keep its order?", Recommended: -1, RaisedBy: "fx-critic", Evidence: "findings-fx-cause.md: the sort"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := only(t, rep, "PR-12392")
+	from := map[string]int{"fx-points": 1, "fx-points-codex": 1, "fx-critic": 1}
+	if got.Questions != 3 || !maps.Equal(got.QuestionsFrom, from) || len(got.QuestionsShared) != 0 {
+		t.Fatalf("questions %d from %v, shared %v; want 3 from %v, none shared", got.Questions, got.QuestionsFrom, got.QuestionsShared, from)
 	}
 }
 

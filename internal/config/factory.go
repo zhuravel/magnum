@@ -911,10 +911,13 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 	switch {
 	case st.When == "":
 	case st.Type == FactoryStageQA:
-		bad("when %q is not for a qa stage (the repository's qa.when says whether a change shows pages)", st.When)
+		bad("when %q is not for a qa stage (the repository's qa.when says whether a change shows pages): remove its when", st.When)
 	case st.Type != FactoryStageAgents:
-		bad("when %q is for agents stages only: a %s stage runs for every plan (a questions gate skipped for a width would never ask its questions)",
-			st.When, st.Type)
+		why := ""
+		if st.Type == FactoryStageGate {
+			why = " (a gate skipped for a width would never check what it guards: its questions, or the bug's reproduction)"
+		}
+		bad("when %q is for agents stages only: a %s stage runs for every plan%s; remove its when", st.When, st.Type, why)
 	case st.When != FactoryWhenWide && st.When != FactoryWhenNarrow:
 		bad("when %q must be empty, %q or %q", st.When, FactoryWhenWide, FactoryWhenNarrow)
 	}

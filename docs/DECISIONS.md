@@ -21659,6 +21659,75 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `internal/factory`'s tests, the end-to-end TestTheLocalRoundsTicketFileJoinsTheTasksTicketAndAnswers among them,
   pass unchanged. No new dependencies; factoryread imports `internal/factory/registry` for its types, and evalrun
   for the renderer.
+- **A refused Codex role's files never pass as its fallback's work, a failed Codex quit is a wait that goes to you,
+  and an investigator's own question counts for it** (2026-11-09, the follow-ups of the fx-defaults reviews).
+  - The fallback outside the stage. A refused Codex role whose `codex_fallback` is no role of its stage (fx-cause's
+    fx-cause-claude, either critic's fx-critic-claude) runs again as that fallback, which writes the same files. The
+    end check reads them newer than the attempt's start, so a partial `findings-fx-cause.md`, `critic.md` or
+    questions file of the refused run passed as the fallback's end when it ended its turn without writing one, and
+    reached the judge, and the gate's batch, unmarked. Now, before the fallback launches, `setAsideRefused` renames
+    what the refused run may have left (`refusedFiles`: the role's findings and questions files, and a critic
+    stage's `critic.md`) to `<name>.refused` with the twin's `setAsideAs`, and one stage event names them. Its end
+    then holds only on files it wrote, and a turn that ends without one gets its nudge. A rename that fails is the
+    pass's error (the stage's failure, which goes to you when it lasts), and the fallback does not launch. A call
+    that finds nothing, a restart's rebuild or a launch held before, writes no event. A run the runtime verified
+    before the refusal is not relaunched, so its files stay, as for the twin.
+  - The fallback waits for the quit. A refused session still alive could write those files after they were set
+    aside, so the fallback's launch now waits, like the twin's leave, until a pass confirmed the quit of the task's
+    Codex sessions. Before, it launched beside a session whose quit had failed.
+  - The quit's wait. A failed quit held the twin's stage with no wait set and wrote a fail event on every pass. Now
+    the quit is tried at most once a poll (`tryQuit`), so the ticks between the polls do not use up its tries, and
+    its `codex_never` fail event is written once per cause, with an ok event when a quit goes through after failed
+    tries. While anything waits for it (a fallback's launch, a role's leave), the stage holds on a wait on the task's
+    agent (`quitHeld`), in the words of the factory's other waits: `you're in a Codex pane of PR-1; its Codex
+    sessions are quit once you leave it, and fx-cause-claude waits for that`, or `the task's Codex sessions are not
+    quit yet (<why>); the investigate stage waits for the quit, tried again each poll`. After 3 failed tries or 15
+    minutes from the first, whichever comes first, the task waits on you: `the factory could not quit PR-1's Codex
+    sessions in 3 tries (<why>), and fx-cause-claude waits for that: leave the task's panes (a pane you typed in
+    stays yours for human_cooldown) or close its Codex panes in herdr; then magnum factory retry 1`. Your retry
+    rebuilds the stage, whose quit starts its count again. A quit nothing waits for holds nothing, as before.
+  - The count (Minor 2 of the third review). The gate merges a question two files hold into one, keeps the first
+    file's text and evidence (`questions.json` comes first) and adds the second role to `raised_by`. So
+    fx-points' own question, which the judge repeated citing only `findings-fx-points-codex.md`, counted as the
+    twin's alone. Now a question's sources are the roles its `raised_by` names other than the judge, each of which
+    asked it in its own questions file. The evidence decides only for a question the judge alone raised: the
+    investigators whose findings files it names, else the judge. `stats` finds the judge as the role whose run
+    ended on the report (`relayRoles`, from the task's role runs, whose `end_fact` the runtime has recorded since
+    migration 0002), so it reads no configuration and hardcodes no role. A critic that cites `findings-fx-cause.md`
+    keeps its question, which the evidence gave to fx-cause before. The twin's share is now the questions the judge
+    alone raised whose evidence names its findings and no other reader's. A question both readers raise counts for
+    fx-points whenever fx-points asked it in its own file, so `fx-points+fx-points-codex` counts only what the judge
+    alone raised from both findings, and the shared count is lower than the overlap. The twin's own share, the
+    trial's measure, is right in both directions.
+  - The `when` refusal names its fix. The config check's refusals of a `when` on a gate, a review, a decision, an
+    effect or a qa stage end with `remove its when`, and only a gate's gives the gate's reason (a gate skipped for a
+    width would never check what it guards: its questions, or the bug's reproduction). The README says that such a
+    config, which did nothing before, now stops every `magnum` command until the key is removed, as any refusal of
+    the config does.
+  - A flaky test. `TestUnchangedStagingStatesWriteNothing` failed once under load. The tick that writes bart's
+    change starts a staging Refresh of its own before it writes the cells. The fake Refresh is instant, so under load
+    it could end first, and bart's `Seen` took that later read instead of the read that saw the change. A probe (a
+    sleep before `saveStagings`) failed the test every time. Now that tick's Refresh waits on a channel the test
+    closes after the tick returns, so the order is fixed, and the test passes with the probe in place too. The code
+    is unchanged: a real Refresh is a fetch that takes seconds.
+  Rejected: setting aside every file the stage's end reads (`outputs`), which would take a report stage's
+  `report.md` away from an amend's fallback, and the stage's own files a refused Codex judge, writer or PR body role
+  would leave are not built-in cases; keeping and marking the refused run's files (the twin's entry above says why);
+  launching the fallback before the quit, as before (a refused session's late write would pass as its work); a quit
+  tried on every pass (the observe pass's kicks would use up 3 tries in seconds while you read the refusal); the
+  union of the evidence and the raisers for a question an investigator asked (the third review's first option: "counts
+  for fx-points" would then be shared with the twin on the judge's citation alone); `stats` taking the report roles
+  from the configuration (the CLI that calls it is another session's, and the registry already says who ran the
+  report). Tests: the factory's TestARefusedRolesFilesAreSetAsideBeforeItsFallbackLaunches (with and without a
+  restart: the files set aside, one event, the judge's findings and the gate's questions files without them, the
+  fallback's nudge for its own file), TestARefusedCriticsFilesAreSetAsideBeforeFxCriticClaudeLaunches (the wide and
+  the narrow critic), TestAFailedCodexQuitIsAWaitThenNeedsYouAfterThreeTries (the wait on the screen, no fallback
+  and no set-aside while the quit fails, one try a poll, one fail event per cause, you after 3 tries, the retry),
+  TestAFailedCodexQuitWaitsOnYouAfterFifteenMinutes, TestARefusedTwinsFilesWaitForTheCodexQuit (now with the wait
+  and a poll between tries) and TestUnchangedStagingStatesWriteNothing (run 20 times under race); stats'
+  TestAnInvestigatorsOwnQuestionCountsForItWhateverTheJudgeCites and TestStatsCountTheQuestionsBySource (the judge's
+  run recorded); config's TestAStageRunsForAWideOrANarrowPlan and the `when wide` case of
+  TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt. No new dependencies.
 
 ## Learned rules
 

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
@@ -434,8 +435,12 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	} else if quality, err = qualityOf(ctx, reg, t); err != nil {
 		return TaskStats{}, err
 	}
+	relays, err := relayRoles(ctx, reg, t.ID)
+	if err != nil {
+		return TaskStats{}, err
+	}
 	batches, onQuestions := answeredBatches(questions)
-	asked, from, shared := questionSources(questions)
+	asked, from, shared := questionSources(questions, relays)
 	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, Quality: quality, AnswerBatches: batches, Decisions: len(decisions),
 		Questions: asked, QuestionsFrom: from, QuestionsShared: shared,
 		ReviewRounds: len(cycles), OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
@@ -549,15 +554,43 @@ func classOf(in registry.Input) string {
 // names, findings-<role>.md: its role is the question's source too.
 var findingsRef = regexp.MustCompile(`findings-([A-Za-z0-9_.-]+?)\.md\b`)
 
+// relayRoles are the roles that ran task id's report stage (a role run whose
+// end fact is the report): the judge, whose questions.json relays what the
+// investigators' findings leave open, citing their findings files.
+func relayRoles(ctx context.Context, reg *registry.Registry, id int64) (map[string]bool, error) {
+	as, err := reg.Attempts(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	relays := map[string]bool{}
+	for _, a := range as {
+		rrs, err := reg.RoleRuns(ctx, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, rr := range rrs {
+			if rr.EndFact == config.FactoryEndReport {
+				relays[rr.Role] = true
+			}
+		}
+	}
+	return relays, nil
+}
+
 // questionSources counts the task's questions qs once each, by their text
 // (a revision carries an open question over word for word), and each by its
-// sources: the investigators whose findings files its evidence names (the
-// judge cites the findings a question comes from, and only relays it),
-// else the roles its raised_by names ("fx-judge, fx-points" when two roles
-// raised it). A question of one source counts in from for that source; one
-// of several counts in shared for the sources sorted and joined with "+".
-// The keys are role names only. from and shared are nil when empty.
-func questionSources(qs []registry.Question) (asked int, from, shared map[string]int) {
+// sources: the roles its raised_by names ("fx-judge, fx-points" when two
+// roles' files hold it) other than the relays (relayRoles, the judge), each
+// of which raised it in its own questions file; for a question no other
+// role raised, the investigators whose findings files its evidence names
+// (the judge cites the findings a question comes from, and only relays it),
+// else the roles its raised_by names. So the evidence decides for a question
+// the judge alone raised, never for another role's: fx-points' question that
+// the judge asks too, citing the twin's findings, is fx-points'. A question
+// of one source counts in from for that source; one of several counts in
+// shared for the sources sorted and joined with "+". The keys are role names
+// only. from and shared are nil when empty.
+func questionSources(qs []registry.Question, relays map[string]bool) (asked int, from, shared map[string]int) {
 	seen := map[string]bool{}
 	count := func(m *map[string]int, key string) {
 		if *m == nil {
@@ -571,15 +604,26 @@ func questionSources(qs []registry.Question) (asked int, from, shared map[string
 		}
 		seen[q.Text] = true
 		asked++
+		var raisers []string
+		for r := range strings.SplitSeq(q.RaisedBy, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				raisers = append(raisers, r)
+			}
+		}
 		roles := map[string]bool{}
-		for _, m := range findingsRef.FindAllStringSubmatch(q.Evidence, -1) {
-			roles[m[1]] = true
+		for _, r := range raisers {
+			if !relays[r] {
+				roles[r] = true
+			}
 		}
 		if len(roles) == 0 {
-			for r := range strings.SplitSeq(q.RaisedBy, ",") {
-				if r = strings.TrimSpace(r); r != "" {
-					roles[r] = true
-				}
+			for _, m := range findingsRef.FindAllStringSubmatch(q.Evidence, -1) {
+				roles[m[1]] = true
+			}
+		}
+		if len(roles) == 0 {
+			for _, r := range raisers {
+				roles[r] = true
 			}
 		}
 		switch names := slices.Sorted(maps.Keys(roles)); len(names) {
