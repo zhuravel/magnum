@@ -18,8 +18,10 @@ import (
 // branch) and whose PR is on no GitHub, with the change's base (BaseSHA,
 // the commit its diff starts at) and the files the judge reads in place of
 // GitHub's PR: DescriptionFile (the title and body, description.md) and
-// TicketFile (the task's ticket, ticket.md; "" = none). The factory writes
-// both before the round (evalrun.RunLocal).
+// TicketFile (ticket.md: the task's ticket, then the operator's answers to
+// the factory's questions under "## The operator's answers to the factory's
+// questions", evalrun.LocalTicket; "" = neither). The factory writes both
+// before the round (evalrun.RunLocal).
 type LocalRound struct {
 	EvalCase
 	BaseSHA                     string

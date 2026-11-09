@@ -509,8 +509,10 @@ type RoundInput struct {
 // Local is what a local round (RoundInput.Local) hands its roles as files in
 // place of GitHub's PR: DescriptionFile, the change's title and body as its
 // PR will carry them (description.md), and TicketFile, the task's ticket
-// (ticket.md: its Jira issue, or the operator's request; "" = none). Both
-// are absolute paths, written before the round; their text is data and
+// (ticket.md: its Jira issue, or the operator's request) followed by the
+// operator's answers to the factory's questions under "## The operator's
+// answers to the factory's questions" (evalrun.LocalTicket; "" = neither).
+// Both are absolute paths, written before the round; their text is data and
 // never reaches a prompt.
 type Local struct {
 	DescriptionFile, TicketFile string
