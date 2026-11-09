@@ -16,6 +16,9 @@ type Finding struct {
 	Severity       string `json:"severity,omitempty"`       // P0..P3 or ""
 	Simplification bool   `json:"simplification,omitempty"` // an optional suggestion, never a defect
 	InBody         bool   `json:"in_body,omitempty"`        // the review body rather than an inline comment
+	// Question: the judge marked it a question for the operator (a local round's provenance,
+	// evalrun.LocalFinding.Question); ParseResult never sets it, since a posted round asks none.
+	Question bool `json:"question,omitempty"`
 }
 
 // Result is what a judge result file says about one round.

@@ -32,6 +32,7 @@ type DefectResult struct {
 	By         []int  `json:"by,omitempty"`       // indexes into Result.Findings that matched
 	Severity   string `json:"severity,omitempty"` // the strongest among matching inline findings, "" if none
 	SeverityOK bool   `json:"severity_ok"`        // found, and at Want or stronger (or no Want)
+	Question   bool   `json:"question,omitempty"` // the defect wants a question for the operator (Defect.Question)
 }
 
 // Score is the outcome for one case.
@@ -72,20 +73,22 @@ func (s Score) SeverityOK() int {
 // An absent defect (expect = "absent") is matched the same way, but a finding that matches it is a
 // hit (Score.AbsentHits) when the defect has no severity or the finding is at it or stronger (or has
 // none to compare); a weaker one is the finding ranked as it should be. Neither is noise, and absent
-// defects count in neither Found nor Total.
+// defects count in neither Found nor Total. A question defect (question = true) is found only by a
+// question for the operator at its severity or stronger (asks); a finding on it that is not one is
+// neither found nor noise.
 func ScoreCase(c Case, r Result) Score {
 	s := Score{Case: c.Name, Status: r.Status, Event: r.Event}
 	used := make([]bool, len(r.Findings))
 	for _, d := range c.Defects {
 		res := d.regexps()
-		dr := DefectResult{ID: d.ID, Title: d.Title, Want: d.Severity}
+		dr := DefectResult{ID: d.ID, Title: d.Title, Want: d.Severity, Question: d.Question}
 		absent := d.absent()
 		for i, f := range r.Findings {
 			if !d.matches(res, f) {
 				continue
 			}
 			used[i] = true
-			if absent && !d.hitsAbsent(f) {
+			if absent && !d.hitsAbsent(f) || d.Question && !d.asks(f) {
 				continue
 			}
 			dr.By = append(dr.By, i)
@@ -126,6 +129,14 @@ func ScoreCase(c Case, r Result) Score {
 // unlabelled comment).
 func (d *Defect) hitsAbsent(f Finding) bool {
 	return d.Severity == "" || f.InBody || f.Severity == "" || f.Severity <= d.Severity
+}
+
+// asks reports whether f, which matches the question defect d, is the question d wants: a question for
+// the operator (Finding.Question) at d's severity or stronger (any, when d has none). A weaker
+// question, which the factory leaves among the task's leftovers instead of asking, a question
+// without a severity to compare, and a finding that is no question (the writer's to decide) are not.
+func (d *Defect) asks(f Finding) bool {
+	return f.Question && !f.InBody && (d.Severity == "" || f.Severity != "" && f.Severity <= d.Severity)
 }
 
 func (d *Defect) matches(res []*regexp.Regexp, f Finding) bool {

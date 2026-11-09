@@ -112,3 +112,85 @@ func TestACorpusWithoutKindsLoadsAndWritesAsBefore(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// questionCase is the local case of localCorpus, parsed.
+func questionCase(t *testing.T) Case {
+	t.Helper()
+	c, err := parseCorpus("", []byte(localCorpus))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.Cases[0]
+}
+
+// A question defect is found only by a question for the operator at its severity or stronger: a P3
+// question goes to the task's leftovers and a finding that is no question to the writer, so neither
+// satisfies a P2 question, and neither counts as noise, since each is on the defect.
+func TestAQuestionDefectIsFoundOnlyByAQuestionAtItsSeverity(t *testing.T) {
+	cs := questionCase(t)
+	tests := []struct {
+		name  string
+		f     Finding
+		found bool
+	}{
+		{"a P2 question", Finding{Body: "Is the deliberate rounding the operator's call?", Severity: "P2", Question: true}, true},
+		{"a P1 question", Finding{Body: "The plan calls it intended", Severity: "P1", Question: true}, true},
+		{"a P3 question", Finding{Body: "Is the deliberate rounding wanted?", Severity: "P3", Question: true}, false},
+		{"a question without a severity", Finding{Body: "deliberate?", Question: true}, false},
+		{"a P1 that is no question", Finding{Body: "The deliberate rounding is wrong", Severity: "P1"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ScoreCase(cs, Result{Findings: []Finding{tt.f}})
+			d := s.Defects[0]
+			if d.Found != tt.found || d.SeverityOK != tt.found || s.Found != map[bool]int{true: 1}[tt.found] || s.Total != 1 {
+				t.Fatalf("score %+v, want found %v", s, tt.found)
+			}
+			if !d.Question || d.Want != "P2" {
+				t.Errorf("defect result %+v, want it to say it wants a P2 question", d)
+			}
+			if s.Noise != 0 {
+				t.Errorf("noise %d: a finding on the defect is never noise", s.Noise)
+			}
+		})
+	}
+	s := ScoreCase(cs, Result{Findings: []Finding{{Path: "app/a.rb", Line: 3, Body: "unrelated", Severity: "P2", Question: true}}})
+	if s.Found != 0 || s.Noise != 1 {
+		t.Fatalf("a question on something else: %+v, want it missed and the question noise", s)
+	}
+}
+
+// A question defect without a severity is found by any question; the defect without question = true
+// takes a question like any other finding.
+func TestAQuestionDefectWithoutASeverityTakesAnyQuestion(t *testing.T) {
+	cs := questionCase(t)
+	cs.Defects[0].Severity = ""
+	if s := ScoreCase(cs, Result{Findings: []Finding{{Body: "deliberate?", Severity: "P3", Question: true}}}); s.Found != 1 {
+		t.Fatalf("score %+v, want the P3 question found", s)
+	}
+	cs.Defects[0].Question, cs.Defects[0].Severity = false, "P2"
+	s := ScoreCase(cs, Result{Findings: []Finding{{Body: "deliberate?", Severity: "P1", Question: true}}})
+	if s.Found != 1 || s.Defects[0].Question {
+		t.Fatalf("score %+v, want a plain defect found by a question", s)
+	}
+}
+
+// The markdown report says a question defect wants a question.
+func TestTheReportSaysAQuestionDefectWantsAQuestion(t *testing.T) {
+	cs := questionCase(t)
+	run := Run{ID: "20261109-120000", Cases: []CaseRun{{Case: cs.Name, Kind: KindLocal, PR: cs.PR, Head: cs.Head, Outcome: "dry_run"}}}
+	missed := ScoreCase(cs, Result{})
+	run.Cases[0].Score = &missed
+	var b strings.Builder
+	WriteMarkdown(&b, run)
+	if !strings.Contains(b.String(), "missed `plan-choice` The plan's choice of what a user sees is the operator's to make (wanted a P2 question)") {
+		t.Fatalf("report:\n%s", b.String())
+	}
+	found := ScoreCase(cs, Result{Findings: []Finding{{Body: "intended?", Severity: "P1", Question: true}}})
+	run.Cases[0].Score = &found
+	b.Reset()
+	WriteMarkdown(&b, run)
+	if !strings.Contains(b.String(), "found `plan-choice` The plan's choice of what a user sees is the operator's to make (a P1 question, wanted a P2 question)") {
+		t.Fatalf("report:\n%s", b.String())
+	}
+}

@@ -26,6 +26,7 @@ const runFile = "run.json"
 // the score.
 type CaseRun struct {
 	Case       string    `json:"case"`
+	Kind       string    `json:"kind,omitempty"` // the case's kind (Case.Kind): "" posted, KindLocal
 	PR         string    `json:"pr"`
 	Head       string    `json:"head"`
 	Outcome    string    `json:"outcome"` // dry_run, error, needs_attention, usage_limit, skipped, ...
@@ -500,11 +501,16 @@ func defectVerdict(d DefectResult) string {
 	return "missed"
 }
 
-// defectSeverity describes the severity of a defect for the markdown report.
+// defectSeverity describes the severity of a defect for the markdown report; a question defect's
+// is a question's ("wanted a P2 question").
 func defectSeverity(d DefectResult) string {
+	want := d.Want
+	if d.Question {
+		want = "a " + strings.TrimSpace(d.Want+" question")
+	}
 	switch {
-	case !d.Found && d.Want != "":
-		return " (wanted " + d.Want + ")"
+	case !d.Found && want != "":
+		return " (wanted " + want + ")"
 	case !d.Found:
 		return ""
 	}
@@ -512,13 +518,16 @@ func defectSeverity(d DefectResult) string {
 	if d.Severity != "" {
 		got = d.Severity
 	}
+	if d.Question {
+		got = "a " + strings.TrimSpace(d.Severity+" question")
+	}
 	switch {
-	case d.Want == "":
+	case want == "":
 		return " (" + got + ")"
 	case d.SeverityOK:
-		return " (" + got + ", wanted " + d.Want + ")"
+		return " (" + got + ", wanted " + want + ")"
 	default:
-		return " (" + got + ", below the wanted " + d.Want + ")"
+		return " (" + got + ", below the wanted " + want + ")"
 	}
 }
 
