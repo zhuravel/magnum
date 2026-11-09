@@ -71,8 +71,8 @@ func TestTheEscapesMigrationAppliesOnTheTemplateAndAVersion6File(t *testing.T) {
 	}
 	defer old.Close()
 	ctx := t.Context()
-	if v, err := old.SchemaVersion(ctx); err != nil || v != registry.LatestSchemaVersion() || v != 7 {
-		t.Fatalf("SchemaVersion = %d, %v; want 7, the latest (%d)", v, err, registry.LatestSchemaVersion())
+	if v, err := old.SchemaVersion(ctx); err != nil || v != registry.LatestSchemaVersion() || v < 7 {
+		t.Fatalf("SchemaVersion = %d, %v; want the latest (%d), 7 or later", v, err, registry.LatestSchemaVersion())
 	}
 	if _, err := old.EscapeCheck(ctx, 1); !errors.Is(err, registry.ErrNotFound) {
 		t.Errorf("EscapeCheck of an older task = %v, want ErrNotFound", err)

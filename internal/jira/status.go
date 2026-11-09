@@ -48,7 +48,19 @@ type IssueStatus struct {
 	// assigned to anyone.
 	AssigneeYou bool
 	Assigned    bool
+	// MovedBy is who moved the issue into its status, by the author of the
+	// changelog entry Since is of: MovedByYou (its accountId is your
+	// account's), MovedByOther (another account: a person or Jira's
+	// automation), "" when unknown (no such entry, an entry that names no
+	// author, or your account could not be read). Never a name or an id.
+	MovedBy string
 }
+
+// The authors of a move (IssueStatus.MovedBy).
+const (
+	MovedByYou   = "you"
+	MovedByOther = "other"
+)
 
 // The parts of a read whose failure leaves the issue's own answer standing
 // (PartError).
@@ -112,7 +124,7 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
 			return IssueStatus{}, err
 		}
 		if s, ok := ans.status(key); ok && sameStatus(s, prior) {
-			s.Since, s.Searched = prior.Since, true
+			s.Since, s.Searched, s.MovedBy = prior.Since, true, prior.MovedBy
 			return c.assignee(ctx, ans, s, nil)
 		}
 	}
@@ -127,9 +139,28 @@ func (c *Client) StatusSince(ctx context.Context, key string, prior IssueStatus)
 	if ans.Changelog == nil {
 		return IssueStatus{}, failed(ClassMalformed, 0, "Jira's answer is malformed: an issue without its changelog")
 	}
-	since, searched, perr := c.since(ctx, key, ans, s)
+	since, author, searched, perr := c.since(ctx, key, ans, s)
 	s.Since, s.Searched = since, searched
+	s.MovedBy = c.movedBy(ctx, author)
 	return c.assignee(ctx, ans, s, perr)
+}
+
+// movedBy is who the author of a move (an accountId, "" for none) is to
+// you: MovedByYou, MovedByOther, or "" when it is not known (no author, or
+// your account could not be read: no error of the read, the move's author
+// is only a hint).
+func (c *Client) movedBy(ctx context.Context, author string) string {
+	if !accountPattern.MatchString(author) {
+		return ""
+	}
+	me, err := c.account(ctx)
+	switch {
+	case err != nil:
+		return ""
+	case author == me:
+		return MovedByYou
+	}
+	return MovedByOther
 }
 
 // statusAnswer is the part of an issue's answer Status reads.
@@ -193,13 +224,13 @@ func sameStatus(s, prior IssueStatus) bool {
 }
 
 // since searches the changelog of ans for the latest move into s's status:
-// its time, and whether the search ended (the whole changelog read, or the
-// pages up to their bound); a page that fails ends it unsearched, with a
-// PartError.
-func (c *Client) since(ctx context.Context, key string, ans statusAnswer, s IssueStatus) (time.Time, bool, error) {
+// its time and its author's accountId ("" for none), and whether the
+// search ended (the whole changelog read, or the pages up to their bound);
+// a page that fails ends it unsearched, with a PartError.
+func (c *Client) since(ctx context.Context, key string, ans statusAnswer, s IssueStatus) (time.Time, string, bool, error) {
 	into := func(h history) bool { return h.into(s.StatusID, s.Name) }
 	hs := ans.Changelog.Histories
-	held, heldFound := latest(hs, into)
+	held, heldBy, heldFound := latest(hs, into)
 	// The entries the answer did not hold, as the paged changelog numbers
 	// them (oldest first): before the answer's when it gave the newest
 	// first, after them when it gave the oldest first, when a move among
@@ -210,30 +241,30 @@ func (c *Client) since(ctx context.Context, key string, ans statusAnswer, s Issu
 		lo, hi = len(hs), ans.Changelog.Total
 	}
 	if heldFound && (!oldest || hi <= lo) {
-		return held, true, nil
+		return held, heldBy, true, nil
 	}
 	for page := 0; page < maxChangelogPages && hi > lo; page++ {
 		start := max(hi-changelogPage, lo)
 		vals, err := c.changelog(ctx, key, start, hi-start)
 		if err != nil {
-			return time.Time{}, false, &PartError{Part: PartChangelog, Err: err}
+			return time.Time{}, "", false, &PartError{Part: PartChangelog, Err: err}
 		}
-		if at, found := latest(vals, into); found {
-			return at, true, nil
+		if at, by, found := latest(vals, into); found {
+			return at, by, true, nil
 		}
 		hi = start
 	}
 	switch {
 	case hi > lo: // the pages ran out first: the move is older than them
-		return time.Time{}, true, nil
+		return time.Time{}, "", true, nil
 	case heldFound: // the answer's own entries came oldest first, and none newer moved the status
-		return held, true, nil
+		return held, heldBy, true, nil
 	}
 	var created string
 	if decode(ans.Fields["created"], &created) { // the whole changelog read: the status never moved
-		return jiraTime(created), true, nil
+		return jiraTime(created), "", true, nil
 	}
-	return time.Time{}, true, nil
+	return time.Time{}, "", true, nil
 }
 
 // assignee fills s's assignee from ans: whether it has one, and whether
@@ -300,7 +331,10 @@ func (c *Client) account(ctx context.Context) (string, error) {
 // what it changed.
 type history struct {
 	Created string `json:"created"`
-	Items   []struct {
+	Author  struct {
+		AccountID string `json:"accountId"`
+	} `json:"author"`
+	Items []struct {
 		Field    string `json:"field"`
 		FieldID  string `json:"fieldId"`
 		To       string `json:"to"`
@@ -326,12 +360,13 @@ func (h history) into(id, name string) bool {
 	return false
 }
 
-// latest is the time of the newest entry of raws that match keeps (its
-// order aside: the issue's answer gives the newest first, a page the
-// oldest), and whether there is one; an entry of another shape, or whose
-// time does not parse, counts none.
-func latest(raws []json.RawMessage, match func(history) bool) (time.Time, bool) {
+// latest is the time and the author's accountId of the newest entry of
+// raws that match keeps (its order aside: the issue's answer gives the
+// newest first, a page the oldest), and whether there is one; an entry of
+// another shape, or whose time does not parse, counts none.
+func latest(raws []json.RawMessage, match func(history) bool) (time.Time, string, bool) {
 	var at time.Time
+	var by string
 	found := false
 	for _, raw := range raws {
 		var h history
@@ -339,10 +374,10 @@ func latest(raws []json.RawMessage, match func(history) bool) (time.Time, bool) 
 			continue
 		}
 		if t := jiraTime(h.Created); !t.IsZero() && (!found || t.After(at)) {
-			at, found = t, true
+			at, by, found = t, h.Author.AccountID, true
 		}
 	}
-	return at, found
+	return at, by, found
 }
 
 // oldestFirst reports whether the entries raws come oldest first: the

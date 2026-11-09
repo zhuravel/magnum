@@ -427,6 +427,7 @@ func cleanJiraPlan(jp *FactoryJiraPlan) *FactoryJiraPlan {
 	c := *jp
 	c.Mode, c.Outcome, c.From, c.To = cleanText(c.Mode), cleanText(c.Outcome), cleanText(c.From), cleanText(c.To)
 	c.Transition, c.Cause, c.Moved, c.MovedTo = cleanText(c.Transition), cleanText(c.Cause), cleanText(c.Moved), cleanText(c.MovedTo)
+	c.MovedBy = cleanText(c.MovedBy)
 	c.Transitions = cleanAll(c.Transitions)
 	return &c
 }

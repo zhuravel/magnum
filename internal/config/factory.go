@@ -241,7 +241,7 @@ func (r FactoryRepo) JiraMovesShadow() bool { return r.JiraMoves == JiraShadow }
 func (r FactoryRepo) JiraCommentShadow() bool { return r.JiraComment == JiraShadow }
 
 // JiraMove is the repository's move at milestone (JiraMilestoneStart or
-// JiraMilestonePublished), false when it has none.
+// JiraMilestonePublished), its names trimmed, false when it has none.
 func (r FactoryRepo) JiraMove(milestone string) (FactoryJiraMove, bool) {
 	var m FactoryJiraMove
 	switch milestone {
@@ -250,13 +250,28 @@ func (r FactoryRepo) JiraMove(milestone string) (FactoryJiraMove, bool) {
 	case JiraMilestonePublished:
 		m = r.JiraMovePublished
 	}
-	return m, strings.TrimSpace(m.To) != ""
+	m = m.trimmed()
+	return m, m.To != ""
 }
 
-// Moves reports whether status (a name, case aside) is one the move moves
-// from.
+// trimmed is m with its names trimmed of the spaces around them: a padded
+// name stands for the name inside (Load trims them, and so does every use).
+func (m FactoryJiraMove) trimmed() FactoryJiraMove {
+	out := FactoryJiraMove{To: strings.TrimSpace(m.To)}
+	if m.From != nil {
+		out.From = make([]string, len(m.From))
+		for i, f := range m.From {
+			out.From[i] = strings.TrimSpace(f)
+		}
+	}
+	return out
+}
+
+// Moves reports whether status (a name, trimmed, case aside) is one the
+// move moves from.
 func (m FactoryJiraMove) Moves(status string) bool {
-	return slices.ContainsFunc(m.From, func(f string) bool { return strings.EqualFold(f, status) })
+	status = strings.TrimSpace(status)
+	return slices.ContainsFunc(m.From, func(f string) bool { return strings.EqualFold(strings.TrimSpace(f), status) })
 }
 
 // FactoryQA is [factory.repo.qa]: what a qa stage needs to walk the pages a
@@ -736,6 +751,7 @@ func (c *Config) expandFactory() {
 		r := &f.Repos[i]
 		r.MainClone = paths.Expand(r.MainClone)
 		r.PRBodySkill = strings.TrimSpace(r.PRBodySkill)
+		r.JiraMoveStart, r.JiraMovePublished = r.JiraMoveStart.trimmed(), r.JiraMovePublished.trimmed()
 		if r.Base == "" {
 			r.Base = DefaultFactoryBase
 		}

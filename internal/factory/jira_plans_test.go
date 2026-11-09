@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -143,6 +144,14 @@ func TestAShadowTaskPlansOneMoveAtEachMilestone(t *testing.T) {
 			Transition: "Start progress", At: t0.Add(time.Minute)}}
 	if ps := r.plans(); len(ps) != 1 || !reflect.DeepEqual(ps[0], start) {
 		t.Fatalf("the start's plan: %+v\nwant %+v", ps, start)
+	}
+	// The shadow plan's key is its own: jira:<task>:<milestone> stays free
+	// for the real move a later phase makes.
+	if ef, err := r.reg.EffectByKey(r.ctx, "jira-plan:1:start"); err != nil || ef.Kind != registry.EffectJiraPlan {
+		t.Errorf("the plan's effect: %+v, %v; want jira-plan:1:start", ef, err)
+	}
+	if _, err := r.reg.EffectByKey(r.ctx, "jira:1:start"); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("jira:1:start: %v, want no effect of that key", err)
 	}
 	evs := r.events(task.ID, "jira_plan")
 	if got := phases(evs); !slices.Equal(got, []string{registry.PhaseBegin, registry.PhaseOK}) {
@@ -314,25 +323,32 @@ func TestAPlanWhoseReadFailsWaitsAndTheNextMilestoneDropsIt(t *testing.T) {
 }
 
 // After a planned move, the first read that finds the issue in another
-// status records what you did: your move to the plan's target, with its
-// time (the changelog's, else the read's) and the lag from the plan; a
-// move to another status; and, for a task that ended with no move (after
-// its last read), that it did not move. Each is recorded once, as an event.
+// status records what was done: a move to the plan's target or elsewhere,
+// with its time (the changelog's, else the read's), the lag from the plan
+// and who made it (you, someone else, or an author not known: the
+// changelog entry's author against your account, never a name); and, for
+// a task that ended with no move (after its last read), that it did not
+// move. Each is recorded once, as an event, which says "you moved" only
+// for your own move.
 func TestTheOperatorsMoveIsMatchedToThePlan(t *testing.T) {
 	for name, tc := range map[string]struct {
 		next  *jira.IssueStatus // the status after the plan; nil: none, the task ends
 		moved string
 		to    string
+		by    string
 		lag   time.Duration
 		words string
 	}{
-		"to the target": {&jira.IssueStatus{Name: "In Development", Since: t0.Add(18 * time.Minute)}, registry.SeenTarget, "In Development",
-			18 * time.Minute, "you moved PR-12360 to In Development 18m after the plan"},
-		"to the target, since unknown": {&jira.IssueStatus{Name: "In Development"}, registry.SeenTarget, "In Development", 20 * time.Minute,
-			"you moved PR-12360 to In Development 20m after the plan"},
-		"elsewhere": {&jira.IssueStatus{Name: "Blocked", Since: t0.Add(5 * time.Minute)}, registry.SeenElsewhere, "Blocked", 5 * time.Minute,
-			"you moved PR-12360 to Blocked, not In Development"},
-		"no move by the end": {nil, registry.SeenNone, "", 0, "PR-12360 ended in To Do"},
+		"you, to the target": {&jira.IssueStatus{Name: "In Development", Since: t0.Add(18 * time.Minute), MovedBy: jira.MovedByYou},
+			registry.SeenTarget, "In Development", jira.MovedByYou, 18 * time.Minute, "you moved PR-12360 to In Development 18m after the plan"},
+		"someone else, to the target": {&jira.IssueStatus{Name: "In Development", Since: t0.Add(18 * time.Minute), MovedBy: jira.MovedByOther},
+			registry.SeenTarget, "In Development", jira.MovedByOther, 18 * time.Minute,
+			"PR-12360 moved to In Development 18m after the plan, by someone else"},
+		"to the target, since and author unknown": {&jira.IssueStatus{Name: "In Development"}, registry.SeenTarget, "In Development", "",
+			20 * time.Minute, "PR-12360 moved to In Development 20m after the plan, its author unknown"},
+		"you, elsewhere": {&jira.IssueStatus{Name: "Blocked", Since: t0.Add(5 * time.Minute), MovedBy: jira.MovedByYou}, registry.SeenElsewhere,
+			"Blocked", jira.MovedByYou, 5 * time.Minute, "you moved PR-12360 to Blocked, not In Development, 5m after the plan"},
+		"no move by the end": {nil, registry.SeenNone, "", "", 0, "PR-12360 ended in To Do"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newShadowRig(t)
@@ -342,7 +358,7 @@ func TestTheOperatorsMoveIsMatchedToThePlan(t *testing.T) {
 			r.pass()
 			if tc.next != nil {
 				s := issueAt("PR-12360", tc.next.Name, "indeterminate")
-				s.Since = tc.next.Since
+				s.Since, s.MovedBy = tc.next.Since, tc.next.MovedBy
 				r.jira.set("PR-12360", s)
 				r.clock.Add(20 * time.Minute)
 			} else {
@@ -358,14 +374,139 @@ func TestTheOperatorsMoveIsMatchedToThePlan(t *testing.T) {
 			if len(ps) != 1 || ps[0].Seen == nil {
 				t.Fatalf("the plan: %+v, want what was seen of it", ps)
 			}
-			if s := ps[0].Seen; s.Moved != tc.moved || s.To != tc.to || s.Lag() != tc.lag {
-				t.Errorf("seen %+v, want %s to %q after %s", s, tc.moved, tc.to, tc.lag)
+			if s := ps[0].Seen; s.Moved != tc.moved || s.To != tc.to || s.By != tc.by || s.Lag() != tc.lag {
+				t.Errorf("seen %+v, want %s to %q by %q after %s", s, tc.moved, tc.to, tc.by, tc.lag)
 			}
 			evs := r.events(task.ID, "jira_plan")
 			if len(evs) != 3 || evs[2].Phase != registry.PhaseInfo || !strings.Contains(evs[2].Text, tc.words) {
 				t.Errorf("the plan's events: %+v, want an info event saying %q", evs, tc.words)
 			}
 		})
+	}
+}
+
+// A status a task's issue reaches after the task's end is no move of the
+// plans: Jira's automation moves a merged PR's issue to Done 30 seconds
+// after the merge, the last read sees Done, and both plans record no move
+// by the task's end, never "elsewhere: Done"; so does a status whose time
+// is unknown, read after the end. A move whose changelog time is before
+// the end still counts, whatever read sees it.
+func TestAMoveAfterTheTasksEndIsNoMove(t *testing.T) {
+	for name, tc := range map[string]struct {
+		since func(end time.Time) time.Time
+		name  string
+		moved string
+	}{
+		"Jira's automation after the merge":  {func(end time.Time) time.Time { return end.Add(30 * time.Second) }, "Done", registry.SeenNone},
+		"a time unknown, read after the end": {func(time.Time) time.Time { return time.Time{} }, "Done", registry.SeenNone},
+		"a move before the end":              {func(end time.Time) time.Time { return end.Add(-30 * time.Second) }, "Blocked", registry.SeenElsewhere},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newShadowRig(t)
+			task := r.task("PR-12360", registry.TaskActive, "coding")
+			r.jira.set("PR-12360", issueAt("PR-12360", "To Do", "new"))
+			r.jira.edit(func(f *trackJira) { f.trans["PR-12360"] = toDoWorkflow() })
+			r.pass()
+			r.publish(task.ID, 4530)
+			r.clock.Add(time.Minute)
+			r.pass()
+			r.clock.Add(time.Minute)
+			end := r.clock.Now()
+			r.merge(task.ID)
+			s := issueAt("PR-12360", tc.name, "done")
+			s.Since, s.MovedBy = tc.since(end), jira.MovedByOther
+			r.jira.set("PR-12360", s)
+			r.clock.Add(lastReadAfter)
+			r.pass()
+			r.clock.Add(45 * time.Second)
+			r.pass()
+			ps := r.plans()
+			if len(ps) != 2 {
+				t.Fatalf("plans %+v, want the start's and the publish's", ps)
+			}
+			for _, p := range ps {
+				if p.Seen == nil || p.Seen.Moved != tc.moved {
+					t.Errorf("the %s plan saw %+v, want %s", p.Milestone, p.Seen, tc.moved)
+				}
+			}
+			if tc.moved != registry.SeenNone {
+				return
+			}
+			evs := r.events(task.ID, "jira_plan")
+			if last := evs[len(evs)-1]; !strings.Contains(last.Text, "ended in To Do") || !strings.Contains(last.Text, "moved to Done after the end") {
+				t.Errorf("the last event %q, want no move and the later status", last.Text)
+			}
+		})
+	}
+}
+
+// A plan that does not fit what is left of the tick's Jira budget waits for
+// the next tick, and a cheaper read behind it still goes: of two plans and
+// a refresh with 3 tries, the first plan (2) and the refresh (1) go, and
+// the second plan goes on the next tick.
+func TestAPlanThatDoesNotFitTheBudgetLetsACheaperReadGo(t *testing.T) {
+	r := newShadowRig(t)
+	a, b := r.task("PR-12360", registry.TaskActive, "coding"), r.task("PR-12361", registry.TaskActive, "coding")
+	c := r.task("PR-12362", registry.TaskActive, "investigate") // no milestone: a refresh alone
+	r.pass()
+	if reads := r.jira.reads(); !slices.Equal(reads, []string{a.JiraKey, c.JiraKey}) {
+		t.Fatalf("the first tick read %q, want the first plan and the refresh behind the plan that did not fit", reads)
+	}
+	r.clock.Add(45 * time.Second)
+	r.pass()
+	if reads := r.jira.reads(); len(reads) != 3 || reads[2] != b.JiraKey {
+		t.Errorf("the second tick read %q, want the second plan", reads)
+	}
+}
+
+// A move's status names are matched trimmed: a target or a from status
+// with spaces around it in the config plans as the name it stands for.
+func TestAPaddedMoveNamePlansAsItsTrimmedName(t *testing.T) {
+	for name, move := range map[string]config.FactoryJiraMove{
+		"a padded target":      {To: "In Development ", From: []string{"To Do", "In Progress"}},
+		"a padded from status": {To: "In Development", From: []string{" To Do ", "In Progress"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newShadowRig(t)
+			r.cfg.Factory.Repos[0].JiraMoveStart = move
+			r.task("PR-12360", registry.TaskActive, "coding")
+			r.jira.set("PR-12360", issueAt("PR-12360", "To Do", "new"))
+			r.jira.edit(func(f *trackJira) { f.trans["PR-12360"] = toDoWorkflow() })
+			r.pass()
+			ps := r.plans()
+			if len(ps) != 1 || ps[0].Result.Outcome != registry.PlanPlanned || ps[0].Result.To != "In Development" ||
+				ps[0].Result.Transition != "Start progress" {
+				t.Errorf("the plan: %+v, want To Do planned to In Development through Start progress", ps)
+			}
+		})
+	}
+}
+
+// A restart's event of the Jira effects in flight says the tick runs them
+// again, each with its own guard: the plan reads the issue again, the
+// comment's file is written again, what was seen is recorded again from
+// the tracking row; nothing goes to Jira.
+func TestTheRestartEventSaysTheTickRunsTheJiraEffectsAgain(t *testing.T) {
+	r := newShadowRig(t)
+	task := r.task("PR-12360", registry.TaskActive, "coding")
+	for _, ef := range []struct{ key, kind, words string }{
+		{registry.JiraPlanKey(task.ID, "start"), registry.EffectJiraPlan, "the plan reads the issue again"},
+		{registry.JiraCommentKey(task.ID, "start"), registry.EffectJiraComment, "the comment file is written again"},
+		{registry.JiraSeenKey(task.ID, "start"), registry.EffectJiraSeen, "recorded again from the tracking row"},
+	} {
+		if _, _, err := r.reg.BeginEffect(r.ctx, ef.key, ef.kind, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		r.e.openEffects(r.ctx)
+		evs := r.events(task.ID, "effect")
+		last := evs[len(evs)-1].Text
+		if !strings.Contains(last, ef.key) || !strings.Contains(last, "the tick runs it again") || !strings.Contains(last, ef.words) ||
+			!strings.Contains(last, "nothing goes to Jira") || strings.Contains(last, "its stage") {
+			t.Errorf("%s: the restart's event %q", ef.kind, last)
+		}
+		if err := r.reg.EndEffect(r.ctx, ef.key, registry.EffectOK, ""); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -546,7 +687,7 @@ func TestTheTaskCardCarriesTheLatestJiraPlan(t *testing.T) {
 	r.jira.edit(func(f *trackJira) { f.trans["PR-12360"] = toDoWorkflow() })
 	r.pass()
 	r.jira.set("PR-12360", jira.IssueStatus{Key: "PR-12360", Name: "In Development", StatusID: "id-In Development", Since: t0.Add(18 * time.Minute),
-		Searched: true})
+		Searched: true, MovedBy: jira.MovedByYou})
 	r.clock.Add(20 * time.Minute)
 	r.pass()
 	r.clock.Add(45 * time.Second)
@@ -557,7 +698,7 @@ func TestTheTaskCardCarriesTheLatestJiraPlan(t *testing.T) {
 	}
 	want := &tui.FactoryJiraPlan{Milestone: config.JiraMilestoneStart, Mode: config.JiraShadow, Outcome: registry.PlanPlanned, From: "To Do",
 		To: "In Development", Transition: "Start progress", Begun: t0, At: t0, Moved: registry.SeenTarget, MovedTo: "In Development",
-		MovedAt: t0.Add(18 * time.Minute)}
+		MovedAt: t0.Add(18 * time.Minute), MovedBy: jira.MovedByYou}
 	if got := d.Cards[task.ID].Task.JiraPlan; !reflect.DeepEqual(got, want) {
 		t.Errorf("the card's plan: %+v\nwant %+v", got, want)
 	}

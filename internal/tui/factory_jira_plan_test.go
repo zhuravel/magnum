@@ -7,7 +7,8 @@ import (
 
 // The task card's JIRA MOVE line is the factory's latest plan of a move of
 // the task's Jira issue, in one line: the move planned and when (in
-// shadow), then what you did after it; nothing to move; why the factory
+// shadow), then what was done after it ("you moved it" only for your own
+// move, else where it moved); nothing to move; why the factory
 // could not plan it; a plan that waits for its read. The words are the
 // struct's and the painter's alone. A task without a plan has no line.
 func TestTaskCardDrawsTheJiraPlanInOneLine(t *testing.T) {
@@ -25,10 +26,20 @@ func TestTaskCardDrawsTheJiraPlanInOneLine(t *testing.T) {
 		want string
 	}{
 		"planned": {planned(), "To Do → In Development (planned 14:02, shadow)"},
-		"you moved it": {with(func(p *FactoryJiraPlan) { p.Moved, p.MovedTo, p.MovedAt = "target", "In Development", cardAt(14, 20) }),
-			"To Do → In Development (planned 14:02, shadow) · you moved it 14:20"},
-		"you moved it elsewhere": {with(func(p *FactoryJiraPlan) { p.Moved, p.MovedTo, p.MovedAt = "elsewhere", "Blocked", cardAt(14, 5) }),
-			"To Do → In Development (planned 14:02, shadow) · you moved it to Blocked 14:05"},
+		"you moved it": {with(func(p *FactoryJiraPlan) {
+			p.Moved, p.MovedTo, p.MovedAt, p.MovedBy = "target", "In Development", cardAt(14, 20), "you"
+		}), "To Do → In Development (planned 14:02, shadow) · you moved it 14:20"},
+		"someone else moved it": {with(func(p *FactoryJiraPlan) {
+			p.Moved, p.MovedTo, p.MovedAt, p.MovedBy = "target", "In Development", cardAt(14, 20), "other"
+		}), "To Do → In Development (planned 14:02, shadow) · moved to In Development 14:20"},
+		"moved, its author unknown": {with(func(p *FactoryJiraPlan) { p.Moved, p.MovedTo, p.MovedAt = "target", "In Development", cardAt(14, 20) }),
+			"To Do → In Development (planned 14:02, shadow) · moved to In Development 14:20"},
+		"you moved it elsewhere": {with(func(p *FactoryJiraPlan) {
+			p.Moved, p.MovedTo, p.MovedAt, p.MovedBy = "elsewhere", "Blocked", cardAt(14, 5), "you"
+		}), "To Do → In Development (planned 14:02, shadow) · you moved it to Blocked 14:05"},
+		"someone else moved it elsewhere": {with(func(p *FactoryJiraPlan) {
+			p.Moved, p.MovedTo, p.MovedAt, p.MovedBy = "elsewhere", "Blocked", cardAt(14, 5), "other"
+		}), "To Do → In Development (planned 14:02, shadow) · moved to Blocked 14:05"},
 		"no move by the end": {with(func(p *FactoryJiraPlan) { p.Moved = "none" }),
 			"To Do → In Development (planned 14:02, shadow) · no move by the task's end"},
 		"waits for its read": {&FactoryJiraPlan{Milestone: "published", Mode: "shadow", To: "In Code Review", Begun: cardAt(14, 1)},

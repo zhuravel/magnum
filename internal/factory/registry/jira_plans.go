@@ -13,14 +13,16 @@ import (
 
 // The factory's Jira plans (the factory's jira_plans.go) are effects, no
 // table of their own: a plan is the effect of its task and milestone
-// (JiraPlanKey, kind EffectJiraPlan), begun when the milestone comes and
-// settled ok (a move planned, or nothing to move) or fail (one the factory
-// could not plan) with its JiraPlanResult as JSON; what the factory saw of
-// your move after it is the effect beside it (JiraSeenKey, kind
-// EffectJiraSeen, begun and settled at once with its JiraSeenResult); the
-// comment it would keep on the issue is an effect per milestone
-// (JiraCommentKey, kind EffectJiraComment). In shadow mode none of them
-// wrote anything to Jira.
+// (JiraPlanKey, jira-plan:<task>:<milestone>, kind EffectJiraPlan), begun
+// when the milestone comes and settled ok (a move planned, or nothing to
+// move) or fail (one the factory could not plan) with its JiraPlanResult
+// as JSON; what the factory saw after it is the effect beside it
+// (JiraSeenKey, jira-seen:<task>:<milestone>, kind EffectJiraSeen, begun
+// and settled at once with its JiraSeenResult); the comment it would keep
+// on the issue is an effect per milestone (JiraCommentKey,
+// jira-comment:<task>:<milestone>, kind EffectJiraComment). In shadow mode
+// none of them wrote anything to Jira. The key jira:<task>:<milestone> is
+// none of theirs: it stays free for the real move of a later phase.
 const (
 	EffectJiraPlan    = "jira_plan"
 	EffectJiraSeen    = "jira_seen"
@@ -28,11 +30,15 @@ const (
 )
 
 // JiraPlanKey is the key of task id's plan at milestone.
-func JiraPlanKey(id int64, milestone string) string { return fmt.Sprintf("jira:%d:%s", id, milestone) }
+func JiraPlanKey(id int64, milestone string) string {
+	return fmt.Sprintf("jira-plan:%d:%s", id, milestone)
+}
 
 // JiraSeenKey is the key of what was seen after task id's plan at
 // milestone.
-func JiraSeenKey(id int64, milestone string) string { return JiraPlanKey(id, milestone) + ":seen" }
+func JiraSeenKey(id int64, milestone string) string {
+	return fmt.Sprintf("jira-seen:%d:%s", id, milestone)
+}
 
 // JiraCommentKey is the key of task id's Jira comment at milestone.
 func JiraCommentKey(id int64, milestone string) string {
@@ -88,13 +94,20 @@ func (p JiraPlanResult) Encode() string { return encode(p) }
 // JiraSeenResult is what the factory saw after a planned move: where the
 // issue moved (SeenTarget, SeenElsewhere, SeenNone), to which status, when
 // (the changelog's time of the move when known, else the read that saw
-// it; the task's end for none) and how long after the plan's read.
+// it; the task's end for none), how long after the plan's read, and who
+// moved it: "you", "other" or "" when unknown (the changelog entry's
+// author against your account, jira.IssueStatus.MovedBy), never a name or
+// an id.
 type JiraSeenResult struct {
 	Moved   string    `json:"moved"`
 	To      string    `json:"to,omitempty"`
 	At      time.Time `json:"at,omitzero"`
 	LagSecs int64     `json:"lag_secs,omitempty"`
+	By      string    `json:"by,omitempty"`
 }
+
+// Yours reports whether you made the move seen.
+func (s JiraSeenResult) Yours() bool { return s.By == "you" }
 
 // Encode is the result as its effect keeps it.
 func (s JiraSeenResult) Encode() string { return encode(s) }
@@ -137,7 +150,11 @@ func (r *Registry) JiraPlans(ctx context.Context) ([]JiraPlan, error) {
 	seen := map[string]*JiraSeenResult{}
 	var plans []JiraPlan
 	for _, e := range es {
-		id, milestone, ok := parsePlanKey(e.Key)
+		prefix := "jira-plan:"
+		if e.Kind == EffectJiraSeen {
+			prefix = "jira-seen:"
+		}
+		id, milestone, ok := parseMilestoneKey(prefix, e.Key)
 		if !ok || id != e.TaskID {
 			continue
 		}
@@ -145,7 +162,7 @@ func (r *Registry) JiraPlans(ctx context.Context) ([]JiraPlan, error) {
 		case EffectJiraSeen:
 			var s JiraSeenResult
 			if e.State == EffectOK && json.Unmarshal([]byte(e.Result), &s) == nil {
-				seen[JiraPlanKey(id, strings.TrimSuffix(milestone, ":seen"))] = &s
+				seen[JiraPlanKey(id, milestone)] = &s
 			}
 		case EffectJiraPlan:
 			p := JiraPlan{TaskID: id, Milestone: milestone, State: e.State, Begun: e.Begun}
@@ -165,14 +182,13 @@ func (r *Registry) JiraPlans(ctx context.Context) ([]JiraPlan, error) {
 	return plans, nil
 }
 
-// parsePlanKey reads jira:<id>:<milestone> (the seen's milestone keeps its
-// ":seen").
-func parsePlanKey(key string) (int64, string, bool) {
-	rest, ok := strings.CutPrefix(key, "jira:")
+// parseMilestoneKey reads <prefix><id>:<milestone>.
+func parseMilestoneKey(prefix, key string) (int64, string, bool) {
+	rest, ok := strings.CutPrefix(key, prefix)
 	if !ok {
 		return 0, "", false
 	}
 	num, milestone, ok := strings.Cut(rest, ":")
 	id, err := strconv.ParseInt(num, 10, 64)
-	return id, milestone, ok && err == nil && milestone != ""
+	return id, milestone, ok && err == nil && milestone != "" && !strings.Contains(milestone, ":")
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // Tracking is where a task's Jira issue stands as the factory daemon last
-// read it (migrations/0006_tracking.sql): the facts of the last read that
+// read it (migrations/0006_tracking.sql, and 0008 for who moved it): the facts of the last read that
 // worked, of the key JiraKey, and the last try, which a failure moves with
 // its cause while the facts stay.
 type Tracking struct {
@@ -25,6 +25,9 @@ type Tracking struct {
 	Searched                   bool
 	// Assigned says the issue has an assignee, AssigneeYou that it is you.
 	Assigned, AssigneeYou bool
+	// MovedBy is who moved the issue into Status: "you", "other", or ""
+	// when unknown (jira.IssueStatus's); never a name or an id.
+	MovedBy string
 	// ReadAt is the read the facts are from, zero before one worked;
 	// TriedAt the last try, never zero; LastError that try's failure, ""
 	// after a read that worked: a class of failure, never ticket text.
@@ -33,12 +36,12 @@ type Tracking struct {
 }
 
 const trackingColumns = "task_id, jira_key, jira_status, jira_status_id, jira_category, jira_since, since_searched, assigned, " +
-	"assignee_you, read_at, tried_at, last_error"
+	"assignee_you, read_at, tried_at, last_error, moved_by"
 
 func scanTracking(sc scanner) (Tracking, error) {
 	var t Tracking
 	err := sc.Scan(&t.TaskID, &t.JiraKey, &t.Status, &t.StatusID, &t.Category, timeCol{&t.Since}, &t.Searched, &t.Assigned,
-		&t.AssigneeYou, timeCol{&t.ReadAt}, timeCol{&t.TriedAt}, &t.LastError)
+		&t.AssigneeYou, timeCol{&t.ReadAt}, timeCol{&t.TriedAt}, &t.LastError, &t.MovedBy)
 	return t, err
 }
 
@@ -48,9 +51,9 @@ func (r *Registry) SetTracking(ctx context.Context, t Tracking) error {
 	if t.TriedAt.IsZero() {
 		return errors.New("tracking: a row needs the time of its try")
 	}
-	_, err := r.db.ExecContext(ctx, "INSERT OR REPLACE INTO tracking ("+trackingColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	_, err := r.db.ExecContext(ctx, "INSERT OR REPLACE INTO tracking ("+trackingColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		t.TaskID, t.JiraKey, t.Status, t.StatusID, t.Category, timeArg(t.Since), t.Searched, t.Assigned, t.AssigneeYou && t.Assigned,
-		timeArg(t.ReadAt), store.FormatTime(t.TriedAt), t.LastError)
+		timeArg(t.ReadAt), store.FormatTime(t.TriedAt), t.LastError, t.MovedBy)
 	if err != nil {
 		return fmt.Errorf("tracking of task %d: %w", t.TaskID, mapErr(err))
 	}

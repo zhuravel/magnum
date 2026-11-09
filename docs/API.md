@@ -6159,8 +6159,8 @@ type FactoryJiraMove struct {
     matched case aside.
 
 func (m FactoryJiraMove) Moves(status string) bool
-    Moves reports whether status (a name, case aside) is one the move moves
-    from.
+    Moves reports whether status (a name, trimmed, case aside) is one the move
+    moves from.
 
 type FactoryKind struct {
 	Stages []FactoryStage `toml:"stages"`
@@ -6337,7 +6337,7 @@ func (r FactoryRepo) JiraCommentShadow() bool
 
 func (r FactoryRepo) JiraMove(milestone string) (FactoryJiraMove, bool)
     JiraMove is the repository's move at milestone (JiraMilestoneStart or
-    JiraMilestonePublished), false when it has none.
+    JiraMilestonePublished), its names trimmed, false when it has none.
 
 func (r FactoryRepo) JiraMovesShadow() bool
     JiraMovesShadow reports whether the factory plans the repository's Jira
@@ -15356,15 +15356,18 @@ const (
 	EffectJiraSeen    = "jira_seen"
 	EffectJiraComment = "jira_comment"
 )
-    The factory's Jira plans (the factory's jira_plans.go) are effects, no table
-    of their own: a plan is the effect of its task and milestone (JiraPlanKey,
-    kind EffectJiraPlan), begun when the milestone comes and settled ok (a move
-    planned, or nothing to move) or fail (one the factory could not plan) with
-    its JiraPlanResult as JSON; what the factory saw of your move after it is
-    the effect beside it (JiraSeenKey, kind EffectJiraSeen, begun and settled
-    at once with its JiraSeenResult); the comment it would keep on the issue is
-    an effect per milestone (JiraCommentKey, kind EffectJiraComment). In shadow
-    mode none of them wrote anything to Jira.
+    The factory's Jira plans (the factory's jira_plans.go) are effects,
+    no table of their own: a plan is the effect of its task and milestone
+    (JiraPlanKey, jira-plan:<task>:<milestone>, kind EffectJiraPlan), begun when
+    the milestone comes and settled ok (a move planned, or nothing to move)
+    or fail (one the factory could not plan) with its JiraPlanResult as JSON;
+    what the factory saw after it is the effect beside it (JiraSeenKey,
+    jira-seen:<task>:<milestone>, kind EffectJiraSeen, begun and settled at
+    once with its JiraSeenResult); the comment it would keep on the issue is
+    an effect per milestone (JiraCommentKey, jira-comment:<task>:<milestone>,
+    kind EffectJiraComment). In shadow mode none of them wrote anything to Jira.
+    The key jira:<task>:<milestone> is none of theirs: it stays free for the
+    real move of a later phase.
 
 const (
 	PlanPlanned       = "planned"
@@ -15815,17 +15818,23 @@ type JiraSeenResult struct {
 	To      string    `json:"to,omitempty"`
 	At      time.Time `json:"at,omitzero"`
 	LagSecs int64     `json:"lag_secs,omitempty"`
+	By      string    `json:"by,omitempty"`
 }
     JiraSeenResult is what the factory saw after a planned move: where the
     issue moved (SeenTarget, SeenElsewhere, SeenNone), to which status, when
     (the changelog's time of the move when known, else the read that saw it;
-    the task's end for none) and how long after the plan's read.
+    the task's end for none), how long after the plan's read, and who moved it:
+    "you", "other" or "" when unknown (the changelog entry's author against your
+    account, jira.IssueStatus.MovedBy), never a name or an id.
 
 func (s JiraSeenResult) Encode() string
     Encode is the result as its effect keeps it.
 
 func (s JiraSeenResult) Lag() time.Duration
     Lag is how long after the plan the move came.
+
+func (s JiraSeenResult) Yours() bool
+    Yours reports whether you made the move seen.
 
 type LedgerEntry struct {
 	ID        int64
@@ -16493,16 +16502,19 @@ type Tracking struct {
 	Searched                   bool
 	// Assigned says the issue has an assignee, AssigneeYou that it is you.
 	Assigned, AssigneeYou bool
+	// MovedBy is who moved the issue into Status: "you", "other", or ""
+	// when unknown (jira.IssueStatus's); never a name or an id.
+	MovedBy string
 	// ReadAt is the read the facts are from, zero before one worked;
 	// TriedAt the last try, never zero; LastError that try's failure, ""
 	// after a read that worked: a class of failure, never ticket text.
 	ReadAt, TriedAt time.Time
 	LastError       string
 }
-    Tracking is where a task's Jira issue stands as the factory daemon last read
-    it (migrations/0006_tracking.sql): the facts of the last read that worked,
-    of the key JiraKey, and the last try, which a failure moves with its cause
-    while the facts stay.
+    Tracking is where a task's Jira issue stands as the factory daemon last
+    read it (migrations/0006_tracking.sql, and 0008 for who moved it): the
+    facts of the last read that worked, of the key JiraKey, and the last try,
+    which a failure moves with its cause while the facts stay.
 
 ```
 
@@ -17347,26 +17359,30 @@ type FixLoops struct {
     publish, a measure of what the factory's PR still needed.
 
 type JiraMoves struct {
-	Plans         int            `json:"plans"`
-	Planned       int            `json:"planned"`
-	Matched       int            `json:"matched"`
-	MedianLagSecs int64          `json:"median_lag_secs"`
-	Elsewhere     int            `json:"elsewhere"`
-	NotMoved      int            `json:"not_moved"`
-	Open          int            `json:"open"`
-	NothingToMove int            `json:"nothing_to_move"`
-	CouldNot      map[string]int `json:"could_not"`
-	Pending       int            `json:"pending"`
+	Plans           int            `json:"plans"`
+	Planned         int            `json:"planned"`
+	Matched         int            `json:"matched"`
+	MedianLagSecs   int64          `json:"median_lag_secs"`
+	TargetByOther   int            `json:"target_by_other"`
+	TargetByUnknown int            `json:"target_by_unknown"`
+	Elsewhere       int            `json:"elsewhere"`
+	NotMoved        int            `json:"not_moved"`
+	Open            int            `json:"open"`
+	NothingToMove   int            `json:"nothing_to_move"`
+	CouldNot        map[string]int `json:"could_not"`
+	Pending         int            `json:"pending"`
 }
     JiraMoves count the factory's plans of the Jira moves of a report's tasks,
     from the records the factory writes (registry.JiraPlans): Plans the plans
     made (settled); Planned those that planned a move, and of them Matched
-    those your move to the target followed (MedianLagSecs the median lag from
-    the plan), Elsewhere those you moved elsewhere, NotMoved those whose task
-    ended with no move, Open those nothing was seen after yet; NothingToMove the
-    plans of an issue at the target or past it; CouldNot the plans the factory
-    could not make, by outcome (registry.PlanAssignedOther and the others);
-    Pending the plans that wait for their read.
+    those your own move to the target followed (MedianLagSecs the median lag
+    from the plan), TargetByOther and TargetByUnknown those moved to the target
+    by someone else (Jira's automation among them) or by an author not known,
+    Elsewhere those moved elsewhere, NotMoved those whose task ended with no
+    move, Open those nothing was seen after yet; NothingToMove the plans of an
+    issue at the target or past it; CouldNot the plans the factory could not
+    make, by outcome (registry.PlanAssignedOther and the others); Pending the
+    plans that wait for their read.
 
 type Labelled struct {
 	Text  string `json:"text"`
@@ -21041,11 +21057,11 @@ Search finds issues by the words of their title (the factory asks which issue
 a free prompt is): GET <url>/rest/api/3/search/jql, the same way. Status and
 StatusSince read where an issue stands (the factory tracks its tasks' issues):
 its status, Jira's category of it, since when (from its changelog, read only
-when the status changed since the read before) and whether it is assigned to
-you, by account id, never a person's name (status.go). Transitions reads the
-moves an issue's workflow offers it now (the factory plans its status moves
-in shadow from them, transitions.go). Every call is a GET: the package has no
-write.
+when the status changed since the read before), whether its move into it was
+yours and whether it is assigned to you, by account id, never a person's name
+(status.go). Transitions reads the moves an issue's workflow offers it now (the
+factory plans its status moves in shadow from them, transitions.go). Every call
+is a GET: the package has no write.
 
 A Ticket keeps the issue's key, URL, summary, status, type, priority, labels,
 parent, its description (cut at MaxDescription), the custom fields whose name
@@ -21082,6 +21098,12 @@ const (
 )
     The bounds of a search: the most words it asks for (the first of the text)
     and the most issues it reads (the API's own page limit).
+
+const (
+	MovedByYou   = "you"
+	MovedByOther = "other"
+)
+    The authors of a move (IssueStatus.MovedBy).
 
 const (
 	PartChangelog = "changelog" // a page of the changelog: Since is unknown
@@ -21233,6 +21255,12 @@ type IssueStatus struct {
 	// assigned to anyone.
 	AssigneeYou bool
 	Assigned    bool
+	// MovedBy is who moved the issue into its status, by the author of the
+	// changelog entry Since is of: MovedByYou (its accountId is your
+	// account's), MovedByOther (another account: a person or Jira's
+	// automation), "" when unknown (no such entry, an entry that names no
+	// author, or your account could not be read). Never a name or an id.
+	MovedBy string
 }
     IssueStatus is where an issue stands in Jira: its key, its status's name (on
     one line, without control or format characters, cut at MaxStatusName bytes)
@@ -32081,7 +32109,7 @@ type FactoryJiraPlan struct {
 	Transitions              []string
 	Cause                    string
 	Begun, At                time.Time
-	Moved, MovedTo           string
+	Moved, MovedTo, MovedBy  string
 	MovedAt                  time.Time
 }
     FactoryJiraPlan is the factory's plan of a move of a task's Jira issue at a
@@ -32092,8 +32120,9 @@ type FactoryJiraPlan struct {
     the transitions Jira offers (none to the target), the failure of an unread
     plan (a class, never ticket text), when it began and when its read was; then
     what the factory saw after a planned move: Moved ("target", "elsewhere",
-    "none"; "" before anything was seen), the status it moved to and when.
-    The names are Jira's statuses and transitions, never a person's.
+    "none"; "" before anything was seen), the status it moved to, when,
+    and who moved it (MovedBy: "you", "other", "" unknown). The names are Jira's
+    statuses and transitions, never a person's.
 
 type FactoryJiraStatus struct {
 	Name, Category          string

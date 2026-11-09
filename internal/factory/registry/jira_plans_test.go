@@ -35,7 +35,7 @@ func TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem(t *testing.T) {
 	begin(registry.JiraPlanKey(a.ID, "published"), registry.EffectJiraPlan, a.ID) // stays begun: its read has not worked yet
 	begin(registry.JiraPlanKey(a.ID, "start"), registry.EffectJiraPlan, a.ID)
 	end(registry.JiraPlanKey(a.ID, "start"), registry.EffectOK, planned.Encode())
-	seen := registry.JiraSeenResult{Moved: registry.SeenTarget, To: "In Development", At: t0.Add(19 * time.Minute), LagSecs: 18 * 60}
+	seen := registry.JiraSeenResult{Moved: registry.SeenTarget, To: "In Development", At: t0.Add(19 * time.Minute), LagSecs: 18 * 60, By: "you"}
 	begin(registry.JiraSeenKey(a.ID, "start"), registry.EffectJiraSeen, a.ID)
 	end(registry.JiraSeenKey(a.ID, "start"), registry.EffectOK, seen.Encode())
 	clk.Add(time.Hour)
@@ -58,7 +58,15 @@ func TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("JiraPlans:\n%+v\nwant\n%+v", got, want)
 	}
-	if got[0].Seen.Lag() != 18*time.Minute {
-		t.Errorf("the lag = %s, want 18m", got[0].Seen.Lag())
+	if got[0].Seen.Lag() != 18*time.Minute || !got[0].Seen.Yours() {
+		t.Errorf("the lag = %s, yours %v; want 18m, yours", got[0].Seen.Lag(), got[0].Seen.Yours())
+	}
+	// The keys are their own: jira:<task>:<milestone> stays free for the
+	// real move of a later phase.
+	for key, want := range map[string]string{registry.JiraPlanKey(7, "start"): "jira-plan:7:start", registry.JiraSeenKey(7, "start"): "jira-seen:7:start",
+		registry.JiraCommentKey(7, "merged"): "jira-comment:7:merged"} {
+		if key != want {
+			t.Errorf("key %q, want %q", key, want)
+		}
 	}
 }

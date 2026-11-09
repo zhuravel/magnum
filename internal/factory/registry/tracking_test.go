@@ -82,3 +82,37 @@ func TestATasksTrackingRowKeepsItsLastReadAndItsLastTry(t *testing.T) {
 		t.Error("a row without its try's time was written")
 	}
 }
+
+// A tracking row keeps who moved the issue into its status (you, someone
+// else, or unknown: never a name or an id), a column of its own that an
+// older file gets with its migration, unknown on its rows; any other word
+// is refused.
+func TestATrackingRowKeepsWhoMovedTheIssue(t *testing.T) {
+	t.Parallel()
+	r := registrytest.Open(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12382")
+	for _, by := range []string{"you", "other", ""} {
+		row := registry.Tracking{TaskID: task.ID, JiraKey: "PR-12382", Status: "In Review", MovedBy: by, ReadAt: t0, TriedAt: t0}
+		if err := r.SetTracking(ctx, row); err != nil {
+			t.Fatalf("moved by %q: %v", by, err)
+		}
+		if got, err := r.Tracking(ctx, task.ID); err != nil || got.MovedBy != by {
+			t.Errorf("moved by %q: read back %+v, %v", by, got, err)
+		}
+	}
+	if err := r.SetTracking(ctx, registry.Tracking{TaskID: task.ID, JiraKey: "PR-12382", MovedBy: "Bob Example", TriedAt: t0}); err == nil {
+		t.Error("a name was written as who moved the issue")
+	}
+	path := filepath.Join(t.TempDir(), "factory.db")
+	writeVersion1(t, path)
+	old, err := registry.Open(path, registry.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	var col int
+	if err := old.DBForTest().QueryRowContext(ctx, "SELECT count(*) FROM pragma_table_info('tracking') WHERE name = 'moved_by'").Scan(&col); err != nil || col != 1 {
+		t.Errorf("an older file's tracking has moved_by: %d, %v", col, err)
+	}
+}

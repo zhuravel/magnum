@@ -551,7 +551,7 @@ func jiraPlanOf(cfg *config.Config, plans []registry.JiraPlan, t registry.Task) 
 	out := &tui.FactoryJiraPlan{Milestone: p.Milestone, Mode: cmp.Or(r.Mode, config.JiraShadow), Outcome: r.Outcome, From: r.From, To: r.To,
 		Transition: r.Transition, Transitions: slices.Clone(r.Transitions), Cause: r.Cause, Begun: p.Begun, At: r.At}
 	if p.Seen != nil {
-		out.Moved, out.MovedTo, out.MovedAt = p.Seen.Moved, p.Seen.To, p.Seen.At
+		out.Moved, out.MovedTo, out.MovedAt, out.MovedBy = p.Seen.Moved, p.Seen.To, p.Seen.At, p.Seen.By
 	}
 	if repo, ok := cfg.FactoryRepo(t.Repo); ok && out.To == "" {
 		move, _ := repo.JiraMove(p.Milestone)

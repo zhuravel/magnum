@@ -231,8 +231,8 @@ func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 	// refreshes at their pace, within the budget.
 	var jobs []trackJob
 	for _, j := range slices.Concat(last, planned, due[:min(pace, len(due))]) {
-		if j.cost() > e.jiraLeft {
-			break
+		if j.cost() > e.jiraLeft { // a plan that does not fit waits for the next tick, first again; a cheaper read behind it goes
+			continue
 		}
 		e.jiraLeft -= j.cost()
 		jobs = append(jobs, j)
@@ -306,7 +306,7 @@ func priorStatus(j trackJob) jira.IssueStatus {
 	}
 	r := j.row
 	return jira.IssueStatus{Key: j.key, Name: r.Status, StatusID: r.StatusID, Category: r.Category, Since: r.Since, Searched: r.Searched,
-		Assigned: r.Assigned, AssigneeYou: r.AssigneeYou}
+		Assigned: r.Assigned, AssigneeYou: r.AssigneeYou, MovedBy: r.MovedBy}
 }
 
 // takeTracking takes a batch's answers once it ended, without waiting for
@@ -352,7 +352,7 @@ func (e *Engine) applyRead(ctx context.Context, r trackRead) {
 	if r.err == nil || r.st.Name != "" {
 		st := r.st
 		row = registry.Tracking{TaskID: j.t.ID, JiraKey: j.key, Status: st.Name, StatusID: st.StatusID, Category: st.Category, Since: st.Since,
-			Searched: st.Searched, Assigned: st.Assigned, AssigneeYou: st.AssigneeYou, ReadAt: r.at}
+			Searched: st.Searched, Assigned: st.Assigned, AssigneeYou: st.AssigneeYou, MovedBy: st.MovedBy, ReadAt: r.at}
 	}
 	row.TriedAt, row.LastError = r.at, ""
 	if r.err == nil || r.st.Name != "" { // the issue answered: Jira is up

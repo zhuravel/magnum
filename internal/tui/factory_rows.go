@@ -270,15 +270,16 @@ type FactoryJiraStatus struct {
 // target), the failure of an unread plan (a class, never ticket text),
 // when it began and when its read was; then what the factory saw after a
 // planned move: Moved ("target", "elsewhere", "none"; "" before anything
-// was seen), the status it moved to and when. The names are Jira's
-// statuses and transitions, never a person's.
+// was seen), the status it moved to, when, and who moved it (MovedBy:
+// "you", "other", "" unknown). The names are Jira's statuses and
+// transitions, never a person's.
 type FactoryJiraPlan struct {
 	Milestone, Mode, Outcome string
 	From, To, Transition     string
 	Transitions              []string
 	Cause                    string
 	Begun, At                time.Time
-	Moved, MovedTo           string
+	Moved, MovedTo, MovedBy  string
 	MovedAt                  time.Time
 }
 

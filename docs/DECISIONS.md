@@ -22560,7 +22560,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   with the moves). A `[[factory.repo]]` gets `jira_moves` and `jira_comment` ("off", the default, or "shadow"; "ask"
   and "auto" are refused with words that say they come after the shadow week, any other word as such) and
   `jira_move_start` and `jira_move_published` (`{ to, from }`): shadow needs both moves and `[jira]`'s site, and the
-  config refuses a blank target, an empty or blank `from`, a `from` that holds the target and a target named as
+  config refuses a blank target, an empty or blank `from`, a `from` that holds the target (each name trimmed of the
+  spaces around it, at load and in every use, so `"In Development "` is the target) and a target named as
   Jira's done statuses go by (Done, Closed, Resolved, Released: the config cannot read the site's workflow); a
   target whose transition Jira gives the done category is refused when the move is planned, as a plan the factory
   could not make. The jira package gets `Transitions` (`GET /rest/api/2/issue/<KEY>/transitions?expand=transitions.fields`,
@@ -22568,7 +22569,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   its `statusCategory.key`, and with the expand each screen field's `required` and `hasDefaultValue`), a read like
   the others; the factory's `Jira` interface gains it and nothing else, so the client the daemon builds has no method
   that writes and no code path can send one (a test pins both method sets). A plan is a keyed effect
-  (`jira:<task>:<milestone>`, kind `jira_plan`), no new table: the tick begins it once at the latest milestone a
+  (`jira-plan:<task>:<milestone>`, kind `jira_plan`), no new table: the key `jira:<task>:<milestone>`, which the
+  design gives the real move, is left free for a later phase, which makes the move as an effect of its own. The tick begins it once at the latest milestone a
   live task with its own key reached (its kind's agents stage that ends in a proof, or a later stage: start; the
   task published: published), with a begin event; the tracking batch reads it as the task's tracking read (R26's
   read, the row written, the same budget at two tries a plan, first after the ended tasks' last reads, at once and
@@ -22580,36 +22582,57 @@ skill versions); people add theirs to the sections before it, at the end of the 
   trackEvery after the try; the next milestone, the task's end, the task going back before its coding stage or the
   moves turning off drop it (fail, unread, the last cause). A restart finds it begun and reads it again (one plan,
   one begin, one end), and the startup's event of the effects in flight names that guard. What you did after a
-  planned move is the effect beside it (`jira:<task>:<milestone>:seen`, kind `jira_seen`, begun and ended at once
-  with an info event): the first read of the issue in another status than the plan read is your move, to the target
+  planned move is the effect beside it (`jira-seen:<task>:<milestone>`, kind `jira_seen`, begun and ended at once
+  with an info event): the first read of the issue in another status than the plan read is a move, to the target
   (at its changelog time when that falls after the plan, else the read's, and the lag from the plan's read) or
-  elsewhere; a task that ended with no move, once its last read is no longer owed, records none. The comment is an
+  elsewhere, by its author: you, someone else (a person or Jira's automation) or unknown. The author is the
+  changelog entry's, the one R26's read finds the status's Since in (its `author.accountId`, compared with
+  `myself`'s as the assignee is, kept as you or other only: `jira.IssueStatus.MovedBy` and the tracking row's new
+  `moved_by`, migration 0008, since a later read of the same status reads no changelog and keeps the row's); a move
+  whose time is unknown has its author unknown. For a task that ended, a change counts only when it came before the
+  end (its changelog time not after it, or, its time unknown, a read before the end saw it): the last read, 2
+  minutes after the end, often sees the status Jira's automation gave a merged PR's issue, which is no move of the
+  task's, so the plan records none, with the later status in its event; a task that ended with no move, once its
+  last read is no longer owed, records none. The comment is an
   effect per milestone (`jira-comment:<task>:<milestone>`, kind `jira_comment`, begin and ok or fail events): at
   the latest milestone of a task with its own key, `jira-comment.md` in its folder gets the factory's own words (the
   milestone, the task's id, the PR as `owner/name#N` and its link, the task's state and stage, the time in UTC),
   never the PR's, the ticket's or a finding's text; a task merged before its first comment gets none (old tasks
   get no file when the key turns on), and a failed write is logged and never changes the task. The card's JIRA MOVE
-  line (`tui.TaskCard.JiraPlan`, the latest plan) and `magnum factory stats`' "Jira moves in shadow" line (and
-  `jira_moves` in its JSON: the plans made, planned with matched, the median lag, moved elsewhere, not moved and
-  open, nothing to move, could not be made by reason, waiting for a read) read these records. No record, event or
-  log line names a person: the assignee stays you, someone else or no one, as R26 keeps it. Rejected: a table of its
-  own (a migration: the effects carry the plan and the match, and the plan is the effect phase 2 will make real);
+  line (`tui.TaskCard.JiraPlan`, the latest plan: "you moved it" for your own move alone, "moved to <status>" for
+  another's or one whose author is unknown) and `magnum factory stats`' "Jira moves in shadow" line (and
+  `jira_moves` in its JSON: the plans made, planned with matched (your own moves to the target alone), the median
+  lag, the moves to the target by someone else and by an author not known apart, moved elsewhere, not moved and
+  open, nothing to move, could not be made by reason, waiting for a read) read these records. A plan that does not
+  fit what is left of the tick's Jira budget waits for the next tick, first again, and a cheaper read behind it
+  goes. The startup's event of the effects in flight says the tick runs the plan, the comment and the seen record
+  again, each with its guard. No record, event or
+  log line names a person: the assignee and a move's author stay you, someone else or no one. Rejected: a table of its
+  own (the effects carry the plan and the match; the one migration adds who moved the issue to R26's row);
   storing the match by rewriting the plan's ended effect (EndEffect only ends a begun one, and an ok effect is
   never written again); a plan of every milestone a task passed when the keys turn on (old milestones would be
   planned hours late: only the latest is, and an earlier begun one is dropped); refusing a done target only by name
   (a renamed done status would pass: the transition's category decides at plan time too); reading the transitions
-  for every plan (an issue at the target, past it or someone else's needs none). Phase 2 must not reuse the shadow
-  plan's key for its real move (an ok shadow plan would read as done): its effect needs a key of its own. Tests: the
+  for every plan (an issue at the target, past it or someone else's needs none); counting every change as your move
+  (Jira's automation and a teammate move issues too); reading the changelog after the plan for the first entry into
+  the target (the entry R26 already reads gives the author; a bounce through the target between two reads still
+  records where the issue stood). Tests: the
   jira package's TestTransitionsReadsTheMovesTheWorkflowOffers (the reference's shape, names cut and cleaned, a
   transition without a numeric id or a status left out, bad keys never reach curl), TestTransitionsIsAReadThatCarriesNoWrite
   (curl's config exactly the read's) and TestTransitionsFailuresAreAClassWithNoAnswerText (an empty list is an
-  answer); the config's TestFactoryRepoJiraKeysLoad and TestFactoryRepoJiraKeysAreChecked (each refused value and
-  its words); the registry's TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem; the factory's
+  answer), TestStatusSaysWhoMovedTheIssueIntoItsStatus (you, someone else, no author, never moved, myself refused,
+  a page's entry, the same status read again); the config's TestFactoryRepoJiraKeysLoad (padded names load
+  trimmed) and TestFactoryRepoJiraKeysAreChecked (each refused value and its words, a padded from that holds its
+  target); the registry's TestJiraPlansAreTheirEffectsWithWhatWasSeenOfThem (the keys' prefixes) and
+  TestATrackingRowKeepsWhoMovedTheIssue (an older file's migration); the factory's
   TestTheFactorysJiraOnlyReads, TestAShadowTaskPlansOneMoveAtEachMilestone,
   TestEachPlanOutcomeComesFromTheStatusAndTheTransitions (planned for you and for nobody, at the target, past it,
   someone else's, no transition, none at all, fields, a done target), TestAPlanWhoseReadFailsWaitsAndTheNextMilestoneDropsIt,
   TestABegunPlanIsDroppedWhenItsTaskEnds,
-  TestTheOperatorsMoveIsMatchedToThePlan (the target, its time unknown, elsewhere, no move by the end),
+  TestTheOperatorsMoveIsMatchedToThePlan (you and someone else to the target, its time and author unknown, you
+  elsewhere, no move by the end), TestAMoveAfterTheTasksEndIsNoMove (Jira's automation 30 seconds after the merge,
+  a time unknown read after the end, a move before the end), TestAPlanThatDoesNotFitTheBudgetLetsACheaperReadGo,
+  TestAPaddedMoveNamePlansAsItsTrimmedName, TestTheRestartEventSaysTheTickRunsTheJiraEffectsAgain,
   TestARestartBetweenThePlansStepsPlansOnce, TestNoPlanWithoutShadowOrTheTasksOwnJiraKey (off, no keys, another
   repository's keys, another tracker's key, [jira] off), TestTheCommentFileAtEachMilestoneHoldsTheFactorysWordsAlone
   and TestTheTaskCardCarriesTheLatestJiraPlan; the tui's TestTaskCardDrawsTheJiraPlanInOneLine; the stats'

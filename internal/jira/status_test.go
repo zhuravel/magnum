@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,6 +85,9 @@ type change struct {
 	fromID, from     string
 	toID, to         string
 	field, fieldName string
+	// author is the entry's author's accountId: someone else's by default,
+	// none for "-".
+	author string
 }
 
 func (ch change) json() map[string]any {
@@ -93,8 +97,12 @@ func (ch change) json() map[string]any {
 		item = map[string]any{"field": ch.field, "fieldtype": "custom", "fieldId": ch.fieldName, "from": nil, "fromString": "Payouts",
 			"to": nil, "toString": "Payouts, again"}
 	}
-	return map[string]any{"id": "1", "author": map[string]any{"accountId": "557058:0000", "displayName": "Bob Example"},
+	entry := map[string]any{"id": "1", "author": map[string]any{"accountId": cmp.Or(ch.author, "557058:0000"), "displayName": "Bob Example"},
 		"created": ch.at, "items": []any{item}}
+	if ch.author == "-" {
+		delete(entry, "author")
+	}
+	return entry
 }
 
 // statusIssue is GET /rest/api/2/issue/PS-123?fields=status,assignee,created&expand=changelog's
@@ -157,7 +165,7 @@ func TestStatusReadsTheCurrentStatusAndSinceItsLastTransitionIntoIt(t *testing.T
 		t.Fatal(err)
 	}
 	want := IssueStatus{Key: "PS-123", Name: "In Review", Category: "indeterminate", StatusID: "10002",
-		Since: time.Date(2026, 11, 5, 12, 30, 0, 0, time.UTC), Searched: true, AssigneeYou: true, Assigned: true}
+		Since: time.Date(2026, 11, 5, 12, 30, 0, 0, time.UTC), Searched: true, AssigneeYou: true, Assigned: true, MovedBy: MovedByOther}
 	if !got.Since.Equal(want.Since) {
 		t.Errorf("Since = %v, want %v: the latest move into the status", got.Since, want.Since)
 	}
@@ -234,7 +242,7 @@ func TestATruncatedChangelogIsPagedBackFromItsNewestMissingEntry(t *testing.T) {
 		t.Errorf("Since = %v, want the move found on the oldest page", got.Since)
 	}
 	want := []string{statusPath("PS-123"), "/rest/api/2/issue/PS-123/changelog?maxResults=100&startAt=50",
-		"/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=0"}
+		"/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=0", "/rest/api/2/myself"} // myself: who moved it
 	if urls := site.urls(); !slices.Equal(urls, want) {
 		t.Errorf("curl asked\n%q\nwant\n%q", urls, want)
 	}
@@ -245,8 +253,8 @@ func TestATruncatedChangelogIsPagedBackFromItsNewestMissingEntry(t *testing.T) {
 	if got, err = c.Status(t.Context(), "PS-123"); err != nil || !got.Since.Equal(time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)) {
 		t.Errorf("a move among the newest: %+v, %v", got, err)
 	}
-	if urls := site.urls(); len(urls) != 1 {
-		t.Errorf("curl asked %q, want the issue alone", urls)
+	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123"), "/rest/api/2/myself"}) {
+		t.Errorf("curl asked %q, want the issue alone (and myself, for who moved it)", urls)
 	}
 }
 
@@ -416,8 +424,8 @@ func TestStatusSinceKeepsAKnownStatusWithoutReadingItsChangelog(t *testing.T) {
 	if got.Name != "In Progress" || got.StatusID != "3" || !got.Since.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) || !got.Searched {
 		t.Errorf("a new status: %+v, want its move read from the changelog", got)
 	}
-	if urls := site.urls(); !slices.Equal(urls, []string{fieldsPath("PS-123"), statusPath("PS-123")}) {
-		t.Errorf("curl asked %q, want the issue, then the issue with its changelog", urls)
+	if urls := site.urls(); !slices.Equal(urls, []string{fieldsPath("PS-123"), statusPath("PS-123"), "/rest/api/2/myself"}) {
+		t.Errorf("curl asked %q, want the issue, then the issue with its changelog (and myself, for who moved it)", urls)
 	}
 	unsearched := prior
 	unsearched.Searched, unsearched.Since = false, time.Time{}
@@ -425,8 +433,8 @@ func TestStatusSinceKeepsAKnownStatusWithoutReadingItsChangelog(t *testing.T) {
 	if _, err = c.StatusSince(t.Context(), "PS-123", unsearched); err != nil {
 		t.Fatal(err)
 	}
-	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123")}) {
-		t.Errorf("a prior read whose Since was not searched: curl asked %q, want the issue with its changelog alone", urls)
+	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123"), "/rest/api/2/myself"}) {
+		t.Errorf("a prior read whose Since was not searched: curl asked %q, want the issue with its changelog alone (and myself)", urls)
 	}
 }
 
@@ -507,7 +515,8 @@ func TestAnEmbeddedChangelogOldestFirstIsPagedFromItsNewestEntry(t *testing.T) {
 	if !got.Since.Equal(time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)) {
 		t.Errorf("Since = %v, want the newest move, on the page after the embedded entries", got.Since)
 	}
-	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123"), "/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=100"}) {
+	if urls := site.urls(); !slices.Equal(urls, []string{statusPath("PS-123"), "/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=100",
+		"/rest/api/2/myself"}) {
 		t.Errorf("curl asked %q", urls)
 	}
 	// Newer entries that move no status leave the answer's own move the latest.
@@ -516,5 +525,60 @@ func TestAnEmbeddedChangelogOldestFirstIsPagedFromItsNewestEntry(t *testing.T) {
 	})
 	if got, err = c.Status(t.Context(), "PS-123"); err != nil || !got.Since.Equal(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)) {
 		t.Errorf("no newer move: %+v, %v; want the answer's own move", got, err)
+	}
+}
+
+// Status says who moved the issue into its status, by the author of the
+// changelog entry Since is of: you (its accountId is myself's), someone
+// else (another account, Jira's automation among them), or unknown ("":
+// the status never moved, the entry names no author, or your account
+// could not be read, which is no error of the read). No author's name or
+// id is kept. A later read of the same status keeps the read before's.
+func TestStatusSaysWhoMovedTheIssueIntoItsStatus(t *testing.T) {
+	into := func(author string) change {
+		return change{at: "2026-11-05T14:30:00.000+0200", fromID: "3", from: "In Progress", toID: "10002", to: "In Review", author: author}
+	}
+	for name, tc := range map[string]struct {
+		issue  string
+		myself string // myself's answer; "" for the site's own
+		want   string
+	}{
+		"you":          {statusIssue("10002", "In Review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 1, into(myAccount)), "", MovedByYou},
+		"someone else": {statusIssue("10002", "In Review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 1, into("")), "", MovedByOther},
+		"no author":    {statusIssue("10002", "In Review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 1, into("-")), "", ""},
+		"never moved":  {statusIssue("10002", "In Review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 0), "", ""},
+		"myself refused": {statusIssue("10002", "In Review", "indeterminate", "", "2026-11-01T09:00:00.000+0200", 1, into(myAccount)),
+			`{"errorMessages":["no"]}` + "\n401", ""},
+	} {
+		var more map[string]string
+		if tc.myself != "" {
+			more = map[string]string{"/rest/api/2/myself": tc.myself}
+		}
+		c, _ := statusSite(t, tc.issue, more)
+		got, err := c.Status(t.Context(), "PS-123")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.MovedBy != tc.want {
+			t.Errorf("%s: moved by %q, want %q", name, got.MovedBy, tc.want)
+		}
+		if s := fmt.Sprintf("%+v", got); strings.Contains(s, "Bob") || strings.Contains(s, "557058") || strings.Contains(s, myAccount) {
+			t.Errorf("%s: Status %s keeps a person", name, s)
+		}
+	}
+	// A page's entry has its author too, and the same status read again
+	// keeps who moved it.
+	issue := statusIssue("10002", "In Review", "indeterminate", "", "2026-08-01T09:00:00.000+0200", 150, edits(100)...)
+	c, _ := statusSite(t, issue, map[string]string{
+		"/rest/api/2/issue/PS-123/changelog?maxResults=50&startAt=0": pagedAnswer(0, 150, append(edits(49), into(myAccount))...),
+		fieldsPath("PS-123"): issue + "\n200",
+	})
+	got, err := c.Status(t.Context(), "PS-123")
+	if err != nil || got.MovedBy != MovedByYou {
+		t.Fatalf("a page's move: %+v, %v; want it yours", got, err)
+	}
+	again, err := c.StatusSince(t.Context(), "PS-123", got)
+	if err != nil || again.MovedBy != MovedByYou {
+		t.Errorf("the same status read again: %+v, %v; want it still yours", again, err)
 	}
 }

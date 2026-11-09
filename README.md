@@ -4978,11 +4978,12 @@ and holds nothing up.
 **Where the Jira issue stands.** Besides the ticket at the start, the daemon reads where each task's Jira issue
 stands into the factory registry (`factory.db`'s `tracking`): the status's name, Jira's category of it (new,
 indeterminate, done), since when the issue holds it (its changelog's last move into that status, else its
-creation), and whether it is assigned, and to you (the account of `[jira] user`). The reads run off the daemon's
+creation) and who moved it into that status (the changelog entry's author: you, someone else, or unknown), and
+whether it is assigned, and to you (the account of `[jira] user`). The reads run off the daemon's
 loop, one batch at a time, so a slow or hung Jira never holds a tick: a tick hands the batch the reads that are due,
 and the next tick writes what it read. A read is one small GET of the issue's status, assignee and creation; only
 when the status changed does it read the issue's changelog too (and up to 5 more pages of it when its newest entries
-hold no move into the status), plus `myself` once per daemon for an assigned issue; nothing is written to Jira. A
+hold no move into the status), plus `myself` once per daemon for an assigned issue or a move's author; nothing is written to Jira. A
 task is read while it holds a Jira issue's key (a key of another tracker never is) and has not ended: at most every
 10 minutes, those never read first, at a pace that spreads the reads over the ticks, from the tick's 3 tries of Jira
 that the starts waiting for Jira leave. A read Jira does not answer ends its batch, and a batch Jira does not answer
@@ -5018,7 +5019,7 @@ list (a status not in it is past the move), and the config refuses a `from` that
 a done status by name (Done, Closed, Resolved, Released); a target whose category Jira says is done is refused when
 the move is planned. There is no move at the merge. Only the task's own key is planned for, never a key of another
 tracker or one found in any text. When a task of the repository reaches a milestone (its kind's coding stage
-begins: start; its PR is published), the daemon begins the move's plan once (the effect `jira:<task>:<milestone>`,
+begins: start; its PR is published), the daemon begins the move's plan once (the effect `jira-plan:<task>:<milestone>`,
 with an event for each step) and the next tracking batch reads the issue for it, within the same Jira budget: its
 status (the tracking read above, which it counts as) and, when the move could go, its transitions (`GET
 /rest/api/2/issue/<KEY>/transitions?expand=transitions.fields`, two of the tick's tries in all). The plan is then
@@ -5028,12 +5029,17 @@ none at all when the account lacks the Transition issues permission); the transi
 the target is done in Jira. A read that fails leaves the plan waiting, read again as the tracking reads are (10
 minutes after the try), its failure on the card's JIRA line; the next milestone or the task's end drops it (unread).
 A restart between the steps reads it again and makes one plan. After a planned move, the first read that finds the
-issue in another status records your move: to the target, at its changelog time and with the lag from the plan, or
-elsewhere; a task that ends with no move, after its last read, records that. The task card's JIRA MOVE line shows the
-latest plan (`To Do → In Development (planned 14:02, shadow) · you moved it 14:20`), and `magnum factory stats` adds
-one line for the shadow week: the plans, how many your move matched with the median lag, the moves elsewhere and
-the plans it could not make, by reason. No record, event or log line names a person: an assignee is you, someone
-else or no one.
+issue in another status records the move: to the target, at its changelog time and with the lag from the plan, or
+elsewhere, and who made it, by the author of the changelog entry the status read finds (you, someone else such as a
+teammate or Jira's automation, or unknown when the entry or its time is not known). For a task that ended, only a
+move before the end counts: a status reached after it (Jira's automation moves a merged PR's issue a little later)
+records that the task ended with no move, as a task whose issue never moved does after its last read. The task
+card's JIRA MOVE line shows the latest plan (`To Do → In Development (planned 14:02, shadow) · you moved it 14:20`;
+`moved to In Development 14:20` when the move was not yours or its author is unknown), and `magnum factory stats`
+adds one line for the shadow week: the plans, how many your own move matched with the median lag, the moves to the
+target by someone else or an unknown author apart, the moves elsewhere and the plans it could not make, by reason.
+The status names of a move are trimmed of the spaces around them. No record, event or log line names a person: an
+assignee or a move's author is you, someone else or no one.
 
 `jira_comment = "shadow"` writes the comment the factory would keep on the issue to the task's folder,
 `jira-comment.md`, once at each milestone (start, the publish and the merge; a task merged before its first comment

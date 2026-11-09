@@ -1081,25 +1081,26 @@ func plan(t *testing.T, r *registry.Registry, id int64, milestone, state, outcom
 }
 
 // The shadow week's line reads the factory's Jira plans of the report's
-// tasks: the plans made, those planned and what you did after them (your
-// move matched, with the median lag; a move elsewhere; no move by the
-// task's end; nothing seen yet), those with nothing to move, those the
+// tasks: the plans made, those planned and what was done after them (your
+// own move to the target matched, with the median lag; a move to the target
+// by someone else or by an author not known, apart; a move elsewhere; no
+// move by the task's end; nothing seen yet), those with nothing to move, those the
 // factory could not make by reason, and those that wait for their read. A
 // report without a plan has no line, and its JSON no key.
 func TestStatsCountTheShadowWeeksJiraPlans(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
-	ids := make([]int64, 5)
+	ids := make([]int64, 7)
 	for i := range ids {
 		ids[i] = createTask(t, r, "PR-1240"+strconv.Itoa(i)).ID
 	}
-	target := func(lag time.Duration) *registry.JiraSeenResult {
-		return &registry.JiraSeenResult{Moved: registry.SeenTarget, To: "In Development", At: t0.Add(lag), LagSecs: int64(lag / time.Second)}
+	target := func(lag time.Duration, by string) *registry.JiraSeenResult {
+		return &registry.JiraSeenResult{Moved: registry.SeenTarget, To: "In Development", At: t0.Add(lag), LagSecs: int64(lag / time.Second), By: by}
 	}
 	ok, fail := registry.EffectOK, registry.EffectFail
-	plan(t, r, ids[0], "start", ok, registry.PlanPlanned, target(18*time.Minute))
+	plan(t, r, ids[0], "start", ok, registry.PlanPlanned, target(18*time.Minute, "you"))
 	plan(t, r, ids[0], "published", ok, registry.PlanPlanned, &registry.JiraSeenResult{Moved: registry.SeenElsewhere, To: "Blocked"})
-	plan(t, r, ids[1], "start", ok, registry.PlanPlanned, target(40*time.Minute))
+	plan(t, r, ids[1], "start", ok, registry.PlanPlanned, target(40*time.Minute, "you"))
 	plan(t, r, ids[1], "published", fail, registry.PlanAssignedOther, nil)
 	plan(t, r, ids[2], "start", ok, registry.PlanAlready, nil)
 	plan(t, r, ids[2], "published", ok, registry.PlanPlanned, nil)
@@ -1107,18 +1108,21 @@ func TestStatsCountTheShadowWeeksJiraPlans(t *testing.T) {
 	plan(t, r, ids[3], "published", registry.EffectBegin, "", nil)
 	plan(t, r, ids[4], "start", ok, registry.PlanPlanned, &registry.JiraSeenResult{Moved: registry.SeenNone})
 	plan(t, r, ids[4], "published", fail, registry.PlanNoTransition, nil)
+	plan(t, r, ids[5], "start", ok, registry.PlanPlanned, target(2*time.Minute, "other")) // not yours: no match
+	plan(t, r, ids[6], "start", ok, registry.PlanPlanned, target(3*time.Minute, ""))      // its author unknown: no match
 	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &stats.JiraMoves{Plans: 9, Planned: 5, Matched: 2, MedianLagSecs: 29 * 60, Elsewhere: 1, NotMoved: 1, Open: 1, NothingToMove: 1,
-		CouldNot: map[string]int{registry.PlanAssignedOther: 1, registry.PlanNoTransition: 1, registry.PlanUnread: 1}, Pending: 1}
+	want := &stats.JiraMoves{Plans: 11, Planned: 7, Matched: 2, MedianLagSecs: 29 * 60, TargetByOther: 1, TargetByUnknown: 1, Elsewhere: 1,
+		NotMoved: 1, Open: 1, NothingToMove: 1, CouldNot: map[string]int{registry.PlanAssignedOther: 1, registry.PlanNoTransition: 1,
+			registry.PlanUnread: 1}, Pending: 1}
 	if !reflect.DeepEqual(rep.JiraMoves, want) {
 		t.Fatalf("the Jira moves: %+v\nwant %+v", rep.JiraMoves, want)
 	}
-	const line = "Jira moves in shadow: 9 plans: 5 planned (2 matched your move, median lag 29m00s; 1 moved elsewhere; " +
-		"1 not moved by the task's end; 1 open), 1 with nothing to move, 3 could not be made (assigned to someone else 1, " +
-		"no transition 1, unread 1); 1 waits for its read."
+	const line = "Jira moves in shadow: 11 plans: 7 planned (2 matched your move, median lag 29m00s; 1 moved to the target by " +
+		"someone else; 1 moved to the target, its author unknown; 1 moved elsewhere; 1 not moved by the task's end; 1 open), " +
+		"1 with nothing to move, 3 could not be made (assigned to someone else 1, no transition 1, unread 1); 1 waits for its read."
 	if md := rep.Markdown(); !strings.Contains(md, "\n"+line+"\n") {
 		t.Errorf("the markdown lacks the line %q:\n%s", line, md)
 	}
@@ -1126,8 +1130,9 @@ func TestStatsCountTheShadowWeeksJiraPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"jira_moves":{"plans":9,"planned":5,"matched":2,"median_lag_secs":1740,"elsewhere":1,"not_moved":1,`+
-		`"open":1,"nothing_to_move":1,"could_not":{"assigned_other":1,"no_transition":1,"unread":1},"pending":1}`) {
+	if !strings.Contains(string(b), `"jira_moves":{"plans":11,"planned":7,"matched":2,"median_lag_secs":1740,"target_by_other":1,`+
+		`"target_by_unknown":1,"elsewhere":1,"not_moved":1,"open":1,"nothing_to_move":1,"could_not":{"assigned_other":1,"no_transition":1,`+
+		`"unread":1},"pending":1}`) {
 		t.Errorf("the JSON's jira_moves: %s", b)
 	}
 	none := openRegistry(t)

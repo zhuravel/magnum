@@ -230,29 +230,51 @@ func (e *Engine) dropPlan(ctx context.Context, t registry.Task, key string, p re
 
 // matchPlan records what was seen after task t's planned move p, once: the
 // first read after the plan that finds the issue in another status than
-// the plan read is your move, to the target or elsewhere, at the
-// changelog's time of it when that falls after the plan, else at the read;
-// a task that ended with no move records none once its last read is no
-// longer owed.
+// the plan read is a move, to the target or elsewhere, at the changelog's
+// time of it when that falls after the plan (and then by its author: you,
+// someone else, or unknown), else at the read, its author unknown. For a
+// task that ended, the move counts only when it came before the end: its
+// changelog time is not after the end, or, its time unknown, a read before
+// the end saw it. A status reached after the end (Jira's automation moves
+// a merged PR's issue a while after the merge) is no move: the task ended
+// with none, as one whose issue did not move records once its last read is
+// no longer owed.
 func (e *Engine) matchPlan(ctx context.Context, t registry.Task, key string, p registry.JiraPlan, row registry.Tracking, had bool, now time.Time) {
 	pr := p.Result
+	ended := trackEnded(t)
+	changed := had && row.Status != "" && row.ReadAt.After(pr.At) && !strings.EqualFold(row.Status, pr.From)
+	at, known := row.ReadAt, row.Since.After(pr.At) && !row.Since.After(row.ReadAt)
+	if known {
+		at = row.Since
+	}
+	before := !ended || (known && !at.After(t.Updated)) || (!known && !row.ReadAt.After(t.Updated))
+	none := registry.JiraSeenResult{Moved: registry.SeenNone, At: t.Updated, LagSecs: int64(max(t.Updated.Sub(pr.At), 0) / time.Second)}
+	noneWords := fmt.Sprintf("%s ended in %s: no move after the plan to %s", key, pr.From, pr.To)
 	var seen registry.JiraSeenResult
 	var words string
 	switch {
-	case had && row.Status != "" && row.ReadAt.After(pr.At) && !strings.EqualFold(row.Status, pr.From):
-		at := row.ReadAt
-		if row.Since.After(pr.At) && !row.Since.After(row.ReadAt) {
-			at = row.Since
-		}
+	case changed && before:
 		seen = registry.JiraSeenResult{Moved: registry.SeenElsewhere, To: row.Status, At: at, LagSecs: int64(at.Sub(pr.At) / time.Second)}
-		words = fmt.Sprintf("you moved %s to %s, not %s, %s after the plan", key, row.Status, pr.To, shortAge(seen.Lag()))
-		if strings.EqualFold(row.Status, pr.To) {
-			seen.Moved = registry.SeenTarget
-			words = fmt.Sprintf("you moved %s to %s %s after the plan", key, row.Status, shortAge(seen.Lag()))
+		if known {
+			seen.By = row.MovedBy
 		}
-	case trackEnded(t) && !e.lastReadOwed(t, row, had, now):
-		seen = registry.JiraSeenResult{Moved: registry.SeenNone, At: t.Updated, LagSecs: int64(max(t.Updated.Sub(pr.At), 0) / time.Second)}
-		words = fmt.Sprintf("%s ended in %s: no move after the plan to %s", key, pr.From, pr.To)
+		where := row.Status + ", not " + pr.To + ","
+		if strings.EqualFold(row.Status, pr.To) {
+			seen.Moved, where = registry.SeenTarget, row.Status
+		}
+		lag := shortAge(seen.Lag())
+		switch seen.By {
+		case jira.MovedByYou:
+			words = fmt.Sprintf("you moved %s to %s %s after the plan", key, where, lag)
+		case jira.MovedByOther:
+			words = fmt.Sprintf("%s moved to %s %s after the plan, by someone else", key, where, lag)
+		default:
+			words = fmt.Sprintf("%s moved to %s %s after the plan, its author unknown", key, where, lag)
+		}
+	case changed: // a status the issue reached after the task's end
+		seen, words = none, noneWords+"; it moved to "+row.Status+" after the end"
+	case ended && !e.lastReadOwed(t, row, had, now):
+		seen, words = none, noneWords
 	default:
 		return
 	}

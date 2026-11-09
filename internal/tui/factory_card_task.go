@@ -396,7 +396,9 @@ func (p *cardPainter) jiraFailure(js *FactoryJiraStatus) seg {
 // jiraPlanText is the card's JIRA MOVE line: the factory's latest plan of
 // a move of the task's Jira issue, the move and when it was planned, in
 // its mode ("To Do → In Development (planned 14:02, shadow)"), then what
-// you did after it ("you moved it 14:20"); nothing to move; why the
+// was done after it ("you moved it 14:20" for your own move, "moved to In
+// Development 14:20" for another's or one whose author is unknown);
+// nothing to move; why the
 // factory could not plan it, for you to move it; a plan that waits for its
 // read. The time and the mode are dim.
 func (p *cardPainter) jiraPlanText(jp *FactoryJiraPlan) cell {
@@ -411,12 +413,14 @@ func (p *cardPainter) jiraPlanText(jp *FactoryJiraPlan) cell {
 		return cell{{to + "planning since " + p.clock(jp.Begun) + " ", noStyle}, {"(" + mode + ")", p.st.Dim}}
 	case "planned":
 		out := cell{{jp.From + " → " + jp.To + " ", noStyle}, {"(planned " + p.clock(jp.At) + ", " + mode + ")", p.st.Dim}}
-		switch jp.Moved {
-		case "target":
+		switch yours := jp.MovedBy == "you"; {
+		case jp.Moved == "target" && yours:
 			out = append(out, p.sepSeg(), seg{"you moved it " + p.clock(jp.MovedAt), noStyle})
-		case "elsewhere":
+		case jp.Moved == "elsewhere" && yours:
 			out = append(out, p.sepSeg(), seg{"you moved it to " + jp.MovedTo + " " + p.clock(jp.MovedAt), noStyle})
-		case "none":
+		case jp.Moved == "target", jp.Moved == "elsewhere": // someone else's move, or one whose author is unknown
+			out = append(out, p.sepSeg(), seg{"moved to " + jp.MovedTo + " " + p.clock(jp.MovedAt), noStyle})
+		case jp.Moved == "none":
 			out = append(out, p.sepSeg(), seg{"no move by the task's end", p.st.Dim})
 		}
 		return out

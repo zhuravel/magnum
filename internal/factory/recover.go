@@ -344,17 +344,19 @@ func (e *Engine) openEffects(ctx context.Context) {
 		return
 	}
 	for _, ef := range es {
-		guard := "its guard runs again before any step"
+		who, guard := "its stage", "its guard runs again before any step"
 		switch ef.Kind {
 		case "publish":
 			guard = "the remote branch and the PRs of the branch are read before any step, so nothing is pushed or opened twice"
 		case registry.EffectJiraPlan:
-			guard = "the plan reads the issue again and writes nothing to Jira (shadow), so it is made once"
+			who, guard = "the tick", "the plan reads the issue again, so it is made once; nothing goes to Jira (shadow)"
 		case registry.EffectJiraComment:
-			guard = "the comment file is written again; nothing is posted to Jira (shadow)"
+			who, guard = "the tick", "the comment file is written again; nothing goes to Jira (shadow)"
+		case registry.EffectJiraSeen:
+			who, guard = "the tick", "what was seen is recorded again from the tracking row; nothing goes to Jira (shadow)"
 		}
-		e.event(ctx, ef.TaskID, "effect", registry.PhaseInfo, fmt.Sprintf("%s was in flight when the daemon stopped: its stage runs "+
-			"it again, and %s", ef.Key, guard))
+		e.event(ctx, ef.TaskID, "effect", registry.PhaseInfo, fmt.Sprintf("%s was in flight when the daemon stopped: %s runs "+
+			"it again, and %s", ef.Key, who, guard))
 	}
 }
 

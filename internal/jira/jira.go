@@ -14,9 +14,9 @@
 // issue a free prompt is): GET <url>/rest/api/3/search/jql, the same way.
 // Status and StatusSince read where an issue stands (the factory tracks
 // its tasks' issues): its status, Jira's category of it, since when (from
-// its changelog, read only when the status changed since the read before)
-// and whether it is assigned to you, by account id, never a person's name
-// (status.go). Transitions reads the moves an issue's workflow offers it
+// its changelog, read only when the status changed since the read before),
+// whether its move into it was yours and whether it is assigned to you, by
+// account id, never a person's name (status.go). Transitions reads the moves an issue's workflow offers it
 // now (the factory plans its status moves in shadow from them,
 // transitions.go). Every call is a GET: the package has no write.
 //

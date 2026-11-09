@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,18 @@ func TestFactoryRepoJiraKeysLoad(t *testing.T) {
 	}
 	if m, ok := r.JiraMove(JiraMilestonePublished); !ok || m.To != "In Code Review" || len(m.From) != 3 {
 		t.Errorf("the published move = %+v, %v", m, ok)
+	}
+	// The names load trimmed: a padded target or from status is the name
+	// it stands for.
+	padded := strings.NewReplacer(`to = "In Development"`, `to = " In Development "`, `from = ["To Do", "In Progress"]`,
+		`from = ["To Do ", " In Progress"]`).Replace(jiraShadowToml)
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+padded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = cfg.FactoryRepo("talkable/talkable")
+	if m := r.JiraMoveStart; m.To != "In Development" || !slices.Equal(m.From, []string{"To Do", "In Progress"}) {
+		t.Errorf("padded names load as %+v, want them trimmed", m)
 	}
 	cfg, err = loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml)
 	if err != nil {
@@ -78,6 +91,10 @@ func TestFactoryRepoJiraKeysAreChecked(t *testing.T) {
 			[]string{"jira_move_published", "needs from"}},
 		"blank from": {func(r *FactoryRepo) { shadow(r); r.JiraMoveStart.From = []string{"To Do", " "} },
 			[]string{"jira_move_start", "blank entry"}},
+		"a padded from holds the target": {func(r *FactoryRepo) {
+			shadow(r)
+			r.JiraMoveStart = FactoryJiraMove{To: "In Development", From: []string{"To Do", "In Development "}}
+		}, []string{"jira_move_start", `from holds its target "In Development"`}},
 		"from holds the target": {func(r *FactoryRepo) {
 			shadow(r)
 			r.JiraMovePublished.From = slices.Concat(published.From, []string{"in code review"})

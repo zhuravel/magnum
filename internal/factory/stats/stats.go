@@ -252,24 +252,27 @@ type Report struct {
 // JiraMoves count the factory's plans of the Jira moves of a report's
 // tasks, from the records the factory writes (registry.JiraPlans): Plans
 // the plans made (settled); Planned those that planned a move, and of
-// them Matched those your move to the target followed (MedianLagSecs the
-// median lag from the plan), Elsewhere those you moved elsewhere, NotMoved
-// those whose task ended with no move, Open those nothing was seen after
-// yet; NothingToMove the plans of an issue at the target or past it;
+// them Matched those your own move to the target followed (MedianLagSecs
+// the median lag from the plan), TargetByOther and TargetByUnknown those
+// moved to the target by someone else (Jira's automation among them) or by
+// an author not known, Elsewhere those moved elsewhere, NotMoved those
+// whose task ended with no move, Open those nothing was seen after yet; NothingToMove the plans of an issue at the target or past it;
 // CouldNot the plans the factory could not make, by outcome
 // (registry.PlanAssignedOther and the others); Pending the plans that wait
 // for their read.
 type JiraMoves struct {
-	Plans         int            `json:"plans"`
-	Planned       int            `json:"planned"`
-	Matched       int            `json:"matched"`
-	MedianLagSecs int64          `json:"median_lag_secs"`
-	Elsewhere     int            `json:"elsewhere"`
-	NotMoved      int            `json:"not_moved"`
-	Open          int            `json:"open"`
-	NothingToMove int            `json:"nothing_to_move"`
-	CouldNot      map[string]int `json:"could_not"`
-	Pending       int            `json:"pending"`
+	Plans           int            `json:"plans"`
+	Planned         int            `json:"planned"`
+	Matched         int            `json:"matched"`
+	MedianLagSecs   int64          `json:"median_lag_secs"`
+	TargetByOther   int            `json:"target_by_other"`
+	TargetByUnknown int            `json:"target_by_unknown"`
+	Elsewhere       int            `json:"elsewhere"`
+	NotMoved        int            `json:"not_moved"`
+	Open            int            `json:"open"`
+	NothingToMove   int            `json:"nothing_to_move"`
+	CouldNot        map[string]int `json:"could_not"`
+	Pending         int            `json:"pending"`
 }
 
 // jiraMoves counts the plans of the tasks ids (nil when none has one).
@@ -293,9 +296,13 @@ func jiraMoves(plans []registry.JiraPlan, ids map[int64]bool) *JiraMoves {
 			switch {
 			case p.Seen == nil:
 				m.Open++
-			case p.Seen.Moved == registry.SeenTarget:
+			case p.Seen.Moved == registry.SeenTarget && p.Seen.Yours():
 				m.Matched++
 				lags = append(lags, p.Seen.LagSecs)
+			case p.Seen.Moved == registry.SeenTarget && p.Seen.By == "":
+				m.TargetByUnknown++
+			case p.Seen.Moved == registry.SeenTarget:
+				m.TargetByOther++
 			case p.Seen.Moved == registry.SeenElsewhere:
 				m.Elsewhere++
 			default:
@@ -348,8 +355,9 @@ func (r Report) jiraMovesMarkdown(b *strings.Builder) {
 		couldNot += m.CouldNot[k]
 		reasons = append(reasons, fmt.Sprintf("%s %d", cmp.Or(couldNotWords[k], k), m.CouldNot[k]))
 	}
-	fmt.Fprintf(b, "\n## Jira moves\n\nJira moves in shadow: %s: %d planned (%d matched your move, %s; %d moved elsewhere; %d not moved by the "+
-		"task's end; %d open), %d with nothing to move, %d could not be made", plural(m.Plans, "plan"), m.Planned, m.Matched, lag, m.Elsewhere,
+	fmt.Fprintf(b, "\n## Jira moves\n\nJira moves in shadow: %s: %d planned (%d matched your move, %s; %d moved to the target by someone "+
+		"else; %d moved to the target, its author unknown; %d moved elsewhere; %d not moved by the task's end; %d open), %d with nothing to "+
+		"move, %d could not be made", plural(m.Plans, "plan"), m.Planned, m.Matched, lag, m.TargetByOther, m.TargetByUnknown, m.Elsewhere,
 		m.NotMoved, m.Open, m.NothingToMove, couldNot)
 	if len(reasons) > 0 {
 		fmt.Fprintf(b, " (%s)", strings.Join(reasons, ", "))
@@ -359,8 +367,9 @@ func (r Report) jiraMovesMarkdown(b *strings.Builder) {
 		waits = "waits for its read"
 	}
 	fmt.Fprintf(b, "; %d %s.\n", m.Pending, waits)
-	b.WriteString("\nThe factory plans each move at its milestone and writes nothing to Jira (jira_moves = \"shadow\"); a match is your move to " +
-		"the plan's target after it, its lag from the plan to your move.\n")
+	b.WriteString("\nThe factory plans each move at its milestone and writes nothing to Jira (jira_moves = \"shadow\"); a match is your own " +
+		"move to the plan's target after it, by the changelog entry's author, its lag from the plan to your move; a move to the target by " +
+		"another account (a person, or Jira's automation) or by an author not known is no match.\n")
 }
 
 // SetFixLoops gives each task with a PR the fix loops magnum started on it
