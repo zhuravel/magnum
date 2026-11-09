@@ -266,6 +266,8 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		return m.ask(f, "Fix "+key+": magnum's fixer takes what is open now?", func(ctx context.Context) (ActionResult, error) {
 			return act.Fix(ctx, pr.Ref)
 		})
+	case k == "P" && m.bar.raiseHeld(r.ID, "P"): // its plan answered away from the row: its question now
+		return nil
 	case k == "P": // the daemon's plan first (a dry run changes nothing); its question puts the merge behind y
 		if why := actionRefusal(actMergeParent, m.prActRow(r, true)); why != "" {
 			return m.note(why)
@@ -277,7 +279,8 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 			res, err := act.MergeParent(ctx, pr.Ref, true)
 			if err == nil && res.Ask != "" {
 				res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Merge the parent of " + key,
-					run: func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, false) }}
+					plan: &planOf{row: r.ID, key: "P", name: key, ref: pr.Ref},
+					run:  func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, false) }}
 			}
 			return res, err
 		})

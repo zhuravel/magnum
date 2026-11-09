@@ -582,9 +582,10 @@ func (m factoryModel) tickCmd() tea.Cmd {
 }
 
 func (m factoryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	cmd := m.update(msg)
+	gone := m.dropHeld() // before a key: a stale plan is never put up
+	cmd := tea.Batch(gone, m.update(msg))
 	m.keepRecapAsking()
-	m.raiseHeld()
+	cmd = tea.Batch(cmd, m.dropHeld()) // after new data: a row gone, a PR merged
 	if a := m.startAnim(); a != nil {
 		cmd = tea.Batch(cmd, a)
 	}
@@ -615,8 +616,8 @@ func (m *factoryModel) update(msg tea.Msg) tea.Cmd {
 		f := m.inflight
 		m.inflight = nil
 		cmd, _ := m.bar.update(msg)
-		if q := m.bar.held; q != nil && !m.raiseHeld() { // the plan answered where its question cannot be drawn whole
-			cmd = m.bar.show(q.label+": the plan is ready, and its y/N comes up on home or the task card", factoryFlashNote)
+		if q := msg.next; q != nil && msg.err == nil && q.plan != nil && m.planHere(*q.plan) { // still where its key was pressed
+			m.bar.raiseHeld(q.plan.row, q.plan.key)
 		}
 		return tea.Batch(cmd, m.followed(f, msg.err))
 	case factoryExpireMsg:
@@ -774,22 +775,85 @@ func (m *factoryModel) cardGone() tea.Cmd {
 	return m.bar.show(key+" no longer waits on that card", factoryFlashNote)
 }
 
-// raiseHeld puts a plan's held question up (factoryBar.held) where the
-// screen draws a question whole and nothing else claims the keys: on home
-// (its filter not typed) or the task card, the menu closed, no other
-// question, chooser or action. Anywhere else it waits: the recap draws its
-// own question, the question and ready cards and the new task's form
-// three lines of one (the ready card's push adds what it frees), the form
-// and the filter take keys as text, the help and the log one cut line. It
-// reports whether it raised one.
-func (m *factoryModel) raiseHeld() bool {
-	b := &m.bar
-	if b.held == nil || (m.view != fvHome && m.view != fvTask) || (m.view == fvHome && m.filtering) || m.menu.open ||
-		b.asking != nil || b.choose != nil || b.busy != "" || b.dropped {
+// planHere reports whether the operator is still where the key of plan p
+// was pressed: home with p's row under the cursor (the filter not typed),
+// or that row's card, the menu closed and no question or chooser up. The
+// plan's question goes up at once there; anywhere else it is held, for
+// its key on its row (factoryBar.raiseHeld), and never comes up by
+// itself: the recap draws its own question, the other cards and the form
+// cut one, the form and the filter take a y as text, the help and the log
+// draw one cut line, and another row's card or home on another row is not
+// where it was asked.
+func (m factoryModel) planHere(p planOf) bool {
+	if m.menu.open || m.bar.asking != nil || m.bar.choose != nil || m.bar.dropped {
 		return false
 	}
-	b.raise()
-	return true
+	switch m.view {
+	case fvHome:
+		r, ok := m.selectedRow()
+		return ok && !m.filtering && r.ID == p.row
+	case fvTask:
+		return m.task == p.row
+	}
+	return false
+}
+
+// heldPlanFor is how long a held plan waits for its key on its row:
+// engine.StagingDeployWait, the review daemon's own wait for a deploy's
+// answer, past which the envs may be in other hands (a test keeps the two
+// equal). It bounds P's plans too, whose y binds nothing of the plan.
+const heldPlanFor = 10 * time.Minute
+
+// dropHeld drops each held plan that cannot wait any more, with its note
+// (factoryBar.dropHeldNote): one heldPlanFor old by the screen's clock, one
+// whose row left home, whose PR is no longer the row's open PR, or which
+// magnum's registry says is merged or closed.
+func (m *factoryModel) dropHeld() tea.Cmd {
+	if len(m.bar.held) == 0 {
+		return nil
+	}
+	var cmds []tea.Cmd
+	now := m.now()
+	m.bar.held = slices.DeleteFunc(m.bar.held, func(h heldPlan) bool {
+		why := m.heldGone(h, now)
+		if why != "" {
+			cmds = append(cmds, m.bar.dropHeldNote(h, why))
+		}
+		return why != ""
+	})
+	if len(m.bar.held) == 0 {
+		m.bar.held = nil
+	}
+	return tea.Batch(cmds...)
+}
+
+// heldGone is why held plan h cannot wait any more at now; "" while it can.
+func (m factoryModel) heldGone(h heldPlan, now time.Time) string {
+	p := h.q.plan
+	switch {
+	case p == nil:
+		return "it is no row's"
+	case now.Sub(h.at) >= heldPlanFor:
+		return fmt.Sprintf("the plan waited %d min", int(heldPlanFor/time.Minute))
+	case !m.haveData:
+		return ""
+	}
+	r, ok := m.row(p.row)
+	switch {
+	case !ok:
+		return "its row left home"
+	case r.PR == nil || r.PR.Ref != p.ref:
+		return "its PR is not open"
+	case r.PR.Facts == nil:
+		return ""
+	}
+	switch strings.ToUpper(strings.TrimSpace(cleanText(r.PR.Facts.GHState))) {
+	case "MERGED":
+		return "its PR is merged"
+	case "CLOSED":
+		return "its PR is closed"
+	}
+	return ""
 }
 
 // keepRecapAsking keeps the recap's question up: the recap is one y for the
@@ -1113,6 +1177,7 @@ type factoryFrameKey struct {
 	dark          bool
 	question      string
 	choose        string // E's chooser up (stagingChoice.key), as on the board
+	held          string // the held plans' marker (factoryBar.heldMarker)
 	note          string
 	noteKind      factoryFlashKind
 	busy          string
@@ -1125,7 +1190,7 @@ type factoryFrameKey struct {
 
 func (m factoryModel) frameKey() factoryFrameKey {
 	return factoryFrameKey{view: m.view, width: m.width, height: m.height, dark: m.st.dark,
-		question: m.bar.question(), choose: m.bar.choose.key(), note: m.bar.flash, noteKind: m.bar.flashKind, busy: m.bar.busy,
+		question: m.bar.question(), choose: m.bar.choose.key(), held: m.bar.heldMarker(), note: m.bar.flash, noteKind: m.bar.flashKind, busy: m.bar.busy,
 		logGen: m.bar.log.generation(), mouseOn: m.mouseOn, menu: m.menu, clock: clockKey(m.opts.Now),
 		data: fingerprint(m.payload())}
 }

@@ -17,10 +17,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// stagingKey is E on row r (home's, or the card's): on a row whose open PR
-// magnum's registry has and whose repository has staging servers, the
-// chooser of them; else a note of why, and no request.
+// stagingKey is E on row r (home's, or the card's): the question of r's
+// staging plan that answered away from it (held), else, on a row whose
+// open PR magnum's registry has and whose repository has staging servers,
+// the chooser of them; else a note of why, and no request.
 func (m *factoryModel) stagingKey(r FactoryRow) tea.Cmd {
+	if r.PR != nil && m.bar.raiseHeld(r.ID, "E") {
+		return nil
+	}
 	row, words, why := m.stagingRow(r)
 	switch {
 	case why != "":
@@ -30,7 +34,7 @@ func (m *factoryModel) stagingKey(r FactoryRow) tea.Cmd {
 	case m.bar.busy != "": // as the bar refuses a question while an action runs
 		return m.bar.show("wait: "+m.bar.busy+" runs", factoryFlashWait)
 	}
-	m.bar.choose = newStagingChoice(row)
+	m.bar.choose, m.bar.chooseRow = newStagingChoice(row), r.ID
 	m.bar.choose.words = words
 	return nil
 }
@@ -102,23 +106,25 @@ func (m *factoryModel) chooseKey(k string) tea.Cmd {
 		return m.note("Deploy " + c.label + " to staging: cancelled, nothing was run")
 	}
 	m.bar.choose = nil
-	return m.bar.start("Plan the staging deploy of "+c.label, m.stagingPlan(c.ref, c.label, envs))
+	p := planOf{row: m.bar.chooseRow, key: "E", name: c.label, ref: c.ref}
+	return m.bar.start("Plan the staging deploy of "+c.label, m.stagingPlan(p, envs))
 }
 
-// stagingPlan is the daemon's plan of ref's deploy to envs, whose question
-// then goes up as the y/N (wrapped: y answers every migration and warning
-// it names) and whose y deploys, bound to the plan's head and to what it
-// named (StagingAsked). A deploy the daemon has not answered yet is queued:
-// the screen follows no request, so its last line says what follows it.
-func (m *factoryModel) stagingPlan(ref, label string, envs []string) factoryAction {
-	act := m.act
+// stagingPlan is the daemon's plan of p's PR's deploy to envs, whose
+// question then goes up as the y/N, on p's row (wrapped: y answers every
+// migration and warning it names), and whose y deploys, bound to the
+// plan's head and to what it named (StagingAsked). A deploy the daemon has
+// not answered yet is queued: the screen follows no request, so its last
+// line says what follows it.
+func (m *factoryModel) stagingPlan(p planOf, envs []string) factoryAction {
+	act, ref, label := m.act, p.ref, p.name
 	return func(ctx context.Context) (ActionResult, error) {
 		res, err := act.StagingPlan(ctx, ref, envs)
 		if err != nil || res.Ask == "" || res.Staging == nil {
 			return res, err
 		}
 		asked := *res.Staging
-		res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Deploy " + label + " to staging", wrap: true,
+		res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Deploy " + label + " to staging", wrap: true, plan: &p,
 			run: func(ctx context.Context) (ActionResult, error) {
 				res, err := act.StagingDeploy(ctx, ref, asked)
 				if err == nil && slices.ContainsFunc(res.Requests, Request.pending) {

@@ -1,25 +1,32 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/zhuravel/magnum/internal/engine"
 )
 
 // A plan's question (E's staging deploy, P's merge of the parent) goes up
-// only where the screen draws it whole: home and the task card. Its plan
-// runs in the background while the navigation keys work, so it can answer
-// on a view with a question of its own (the recap's "Send 2 answers?"), on
-// a card that draws three lines of a question (the question card, the
-// ready card, whose push question adds "It frees …"), on the new task's
-// form, where keys type, on the help or the log, whose rule draws one cut
-// line, or on home while the filter is typed. There it waits, with a note,
-// and comes up once home or the task card is free: whatever y confirms is
-// the question on the screen. Before, the plan's question took the bar at
-// once: on the recap, y on "Send 2 answers? y/N" deployed to staging (or
-// merged the parent) and sent no answers.
+// at once only where its key was pressed: home with its row selected (the
+// filter not typed), or its row's own card, the menu closed and no other
+// question or chooser up. Anywhere else the plan is held, and never comes
+// up by itself: no y/N appears that the operator did not ask for with a key
+// on that row. A marker on the rule says it is held; it never takes the
+// place of another action's outcome or failure. E (or P) on its row puts
+// its question up, instead of a new chooser or plan; on another row they
+// act as usual, and the held plan stays. It is dropped, with a note, past
+// heldPlanFor (the engine's StagingDeployWait), when its row leaves home,
+// or when its PR merges or closes. Before: on the recap, y on "Send 2
+// answers? y/N" deployed (or merged the parent) and sent no answers; then
+// a held question came up by itself, in the update that ended another
+// action, on another task's card or hours later, and its note hid the
+// failures of later actions.
 
 // testPlanned is the factory's fixture screen at w x h with PR-12345 (a
 // task that needs your answers) carrying a PR in magnum's registry, with
@@ -65,9 +72,36 @@ func (h *factoryHarness) toRecap() {
 	}
 }
 
+// expireNote ends the footer's note, as its timer does.
+func (h *factoryHarness) expireNote() {
+	h.t.Helper()
+	h.feed(factoryExpireMsg{seq: h.m.bar.flashSeq})
+}
+
+// merges are the PRs MergeParent merged the parent of.
+func (a *fakeFactoryActions) mergesOf() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.merges)
+}
+
+const (
+	heldE      = "plan of PR-12345 ready: E on its row asks"
+	heldP      = "plan of PR-12345 ready: P on its row asks"
+	stagedHeld = "example/talkable#4545 void at abcdef1234 seen db/migrate/1_a.rb"
+)
+
+// The plan's question waits the engine's own wait for a deploy's answer.
+func TestAHeldPlanWaitsAsLongAsTheEnginesDeployWait(t *testing.T) {
+	if heldPlanFor != engine.StagingDeployWait {
+		t.Errorf("a held plan waits %v, the engine's deploy %v", heldPlanFor, engine.StagingDeployWait)
+	}
+}
+
 // On the recap, y sends the answers it asks for, never the plan that
-// answered meanwhile; once the recap is left for home, the plan's question
-// is up there, and y deploys.
+// answered meanwhile. The send's outcome stays on screen, and nothing asks
+// after it: a second y deploys nothing. Back on home, the marker says the
+// plan is held; E on its row puts its question up, and y deploys.
 func TestAStagingPlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 	h := testPlanned(t, 140, 40)
 	plan := h.startHeld("E", "1", "enter")
@@ -80,20 +114,31 @@ func TestAStagingPlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 		t.Fatalf("the bar asks %q on the recap, which draws Send 2 answers", q)
 	}
 	h.press("y")
-	if len(h.act.answers) != 1 || len(h.act.stagingDeploys) != 0 {
-		t.Fatalf("y on the recap sent %d answers and deployed %v, want the answers alone", len(h.act.answers), h.act.stagingDeploys)
+	if len(h.act.answers) != 1 {
+		t.Fatalf("y on the recap sent %d answers, want 1", len(h.act.answers))
 	}
+	if q := h.m.bar.question(); q != "" {
+		t.Fatalf("after the send, the screen asks %q by itself", q)
+	}
+	mustContain(t, h.view(), "PR-12345: 2 answers; it goes on")
+	h.press("y")
+	h.wantStaging([]string{"example/talkable#4545 void"}, nil)
+
 	if h.m.view != fvHome {
 		h.press("esc")
 	}
-	want := stagingAsk("example/talkable#4545", []string{"void"}) + " y/N"
-	mustContain(t, h.view(), want)
+	h.expireNote()
+	mustContain(t, h.view(), heldE)
+	h.press("g")
+	h.selectRow("PR-12345")
+	h.press("E")
+	mustContain(t, h.view(), stagingAsk("example/talkable#4545", []string{"void"})+" y/N")
 	h.press("y")
-	h.wantStaging([]string{"example/talkable#4545 void"}, []string{"example/talkable#4545 void at abcdef1234 seen db/migrate/1_a.rb"})
+	h.wantStaging([]string{"example/talkable#4545 void"}, []string{stagedHeld})
 }
 
 // P's plan waits the same way: y on the recap sends the answers and merges
-// nothing; on home the merge's question is up, and y merges.
+// nothing, nothing asks after it, and P on its row asks the merge.
 func TestAMergePlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 	h := testPlanned(t, 140, 40)
 	plan := h.startHeld("P")
@@ -102,32 +147,31 @@ func TestAMergePlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 	v := h.view()
 	mustContain(t, v, "Send 2 answers? y/N")
 	mustNotContain(t, v, "Merge the parent of example/talkable#4545")
-	h.press("y")
-	h.act.mu.Lock()
-	answers, merges := len(h.act.answers), slices.Clone(h.act.merges)
-	h.act.mu.Unlock()
-	if answers != 1 || len(merges) != 0 {
-		t.Fatalf("y on the recap sent %d answers and merged %v, want the answers alone", answers, merges)
+	h.press("y", "y")
+	if len(h.act.answers) != 1 || len(h.act.mergesOf()) != 0 {
+		t.Fatalf("y y on the recap sent %d answers and merged %v, want the answers alone", len(h.act.answers), h.act.mergesOf())
 	}
 	if h.m.view != fvHome {
 		h.press("esc")
 	}
+	h.expireNote()
+	mustContain(t, h.view(), heldP)
+	h.press("g")
+	h.selectRow("PR-12345")
+	h.press("P")
 	mustContain(t, h.view(), mergePlanAsk("example/talkable#4545")+" y/N")
 	h.press("y")
-	h.act.mu.Lock()
-	merges = slices.Clone(h.act.merges)
-	h.act.mu.Unlock()
-	if !slices.Equal(merges, []string{"example/talkable#4545"}) {
-		t.Errorf("merges %v, want the row's PR", merges)
+	if got := h.act.mergesOf(); !slices.Equal(got, []string{"example/talkable#4545"}) {
+		t.Errorf("merges %v, want the row's PR", got)
 	}
 }
 
 // A plan that answers on the help, the log, the question card, the ready
-// card or the new task's form asks nothing there (no cut question, no
-// "It frees" of the ready card's push after it, no key typed into the form
-// that answers it): the footer says the question waits, and back on home
-// it is up whole, every migration and the warning, before y.
-func TestAPlansQuestionWaitsForAViewThatShowsItWhole(t *testing.T) {
+// card, the new task's form or home with another row selected asks
+// nothing, there or after: the marker says it is held, a y does nothing
+// with it, and back on home E on its row puts it up whole, every migration
+// and the warning, before y.
+func TestAPlansQuestionWaitsForItsRowsKey(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		to   func(h *factoryHarness)
@@ -138,6 +182,7 @@ func TestAPlansQuestionWaitsForAViewThatShowsItWhole(t *testing.T) {
 		{"question card", func(h *factoryHarness) { h.press("enter") }, []string{"esc"}},
 		{"ready card", func(h *factoryHarness) { h.selectRow("PR-12360"); h.press("enter") }, []string{"esc"}},
 		{"new task", func(h *factoryHarness) { h.press("n") }, []string{"esc"}},
+		{"another row", func(h *factoryHarness) { h.selectRow("PR-12360") }, nil},
 	} {
 		h := testPlanned(t, 140, 40)
 		h.act.stagingAsk = planQuestion
@@ -147,13 +192,12 @@ func TestAPlansQuestionWaitsForAViewThatShowsItWhole(t *testing.T) {
 		h.run(plan)
 		v := h.view()
 		mustNotContain(t, v, "Deploy talkable#5's head", "It frees")
+		mustContain(t, v, heldE)
 		if q := h.m.bar.question(); q != "" {
 			t.Errorf("%s: the bar asks %q there", c.name, q)
 		}
-		mustContain(t, v, "comes up on home or the task card")
 		if c.name == "new task" { // a y typed there is text, never the deploy's answer
 			h.press("y")
-			h.wantStaging([]string{"example/talkable#4545 void"}, nil)
 		}
 		if h.m.view != view {
 			t.Fatalf("%s: the plan's answer left the view for %v", c.name, h.m.view)
@@ -162,30 +206,207 @@ func TestAPlansQuestionWaitsForAViewThatShowsItWhole(t *testing.T) {
 		if h.m.view != fvHome {
 			t.Fatalf("%s: %v did not go home but to %v", c.name, c.back, h.m.view)
 		}
-		if got := askedOn(t, h.view(), 140); got != planQuestion+" y/N" {
-			t.Errorf("%s, then home: asks\n%q\nwant\n%q\n%s", c.name, got, planQuestion+" y/N", h.view())
+		if q := h.m.bar.question(); q != "" {
+			t.Errorf("%s, then home: the screen asks %q by itself", c.name, q)
 		}
 		h.press("y")
-		h.wantStaging([]string{"example/talkable#4545 void"}, []string{"example/talkable#4545 void at abcdef1234 seen db/migrate/1_a.rb"})
+		h.wantStaging([]string{"example/talkable#4545 void"}, nil)
+		h.press("g")
+		h.selectRow("PR-12345")
+		h.press("E")
+		if got := askedOn(t, h.view(), 140); got != planQuestion+" y/N" {
+			t.Errorf("%s, then E on its row: asks\n%q\nwant\n%q\n%s", c.name, got, planQuestion+" y/N", h.view())
+		}
+		h.press("y")
+		h.wantStaging([]string{"example/talkable#4545 void"}, []string{stagedHeld})
 	}
 }
 
-// On home, a plan that answers while the filter is typed waits too: a y
-// typed then is the filter's text; once enter keeps the filter, the
-// question is up.
+// On home, a plan that answers while the filter is typed is held: a y typed
+// then is the filter's text, and keeping the filter asks nothing; E on its
+// row does.
 func TestAPlansQuestionWaitsWhileTheFilterIsTyped(t *testing.T) {
 	h := testPlanned(t, 140, 40)
 	plan := h.startHeld("E", "1", "enter")
 	h.press("/")
 	h.run(plan)
 	h.press("y")
-	h.wantStaging([]string{"example/talkable#4545 void"}, nil)
 	if got := h.m.filter.Value(); got != "y" {
 		t.Errorf("the filter holds %q, want the y typed", got)
 	}
-	mustNotContain(t, h.view(), "Deploy example/talkable#4545's head")
 	h.press("backspace", "enter")
+	if q := h.m.bar.question(); q != "" {
+		t.Fatalf("keeping the filter asks %q", q)
+	}
+	h.selectRow("PR-12345")
+	h.press("E")
 	mustContain(t, h.view(), stagingAsk("example/talkable#4545", []string{"void"})+" y/N")
+	h.wantStaging([]string{"example/talkable#4545 void"}, nil)
+}
+
+// A plan held on the help, with another task's card under it, does not come
+// up on that card: the card shows the marker, and asks nothing.
+func TestAHeldPlanNeverComesUpOnAnotherTasksCard(t *testing.T) {
+	h := testStaged(t, 140, 40)
+	h.configEnvs("PR-12324", "void")
+	h.press("g")
+	h.selectRow("PR-12324")
+	h.press("E", "1")
+	next, plan := h.m.Update(keyMsg("enter"))
+	h.m = next.(factoryModel)
+	h.open("PR-12320")
+	h.press("?")
+	h.run(plan)
+	h.press("esc")
+	if h.m.view != fvTask || h.m.task != 1 {
+		t.Fatalf("view %v of %d, want PR-12320's card", h.m.view, h.m.task)
+	}
+	v := h.view()
+	mustNotContain(t, v, "example/talkable#4534's head")
+	mustContain(t, v, "plan of PR-12324's #4534 ready: E on its row asks")
+	h.press("y")
+	h.wantStaging([]string{"example/talkable#4534 void"}, nil)
+}
+
+// E and P on another row act as usual, and the held plan stays: E opens
+// that row's chooser, P plans that row's merge; the first row's E then
+// asks its held question.
+func TestEAndPOnAnotherRowLeaveAHeldPlan(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.press("E", "1")
+	next, plan := h.m.Update(keyMsg("enter"))
+	h.m = next.(factoryModel)
+	h.press("j")
+	h.run(plan)
+	h.press("g")
+	h.selectRow("PR-12324")
+	h.press("P") // another row's plan: its question goes up at once, there
+	mustContain(t, h.view(), mergePlanAsk("example/talkable#4534")+" y/N")
+	h.press("n")
+	h.configEnvs("PR-12324", "void")
+	h.press("g")
+	h.selectRow("PR-12324")
+	h.press("E")
+	if h.m.bar.choose == nil || h.m.bar.choose.ref != "example/talkable#4534" {
+		t.Fatalf("E on another row opened no chooser of its own:\n%s", h.view())
+	}
+	h.press("x")
+	if len(h.m.bar.held) != 1 {
+		t.Fatalf("the held plan is gone: %+v", h.m.bar.held)
+	}
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.press("E")
+	mustContain(t, h.view(), stagingAsk("example/talkable#4530", []string{"void"})+" y/N")
+	if plans, _ := h.act.stagingCalls(); len(plans) != 1 {
+		t.Errorf("E on the held plan's row planned again: %v", plans)
+	}
+}
+
+// A held plan is dropped, with a note, once it is heldPlanFor old, once its
+// row leaves home, or once its PR merges; nothing runs, and E or P on its
+// row plans again.
+func TestAHeldPlanIsDroppedWhenItCannotHold(t *testing.T) {
+	for _, c := range []struct {
+		name, key, why string
+		drop           func(h *factoryHarness)
+	}{
+		{"age", "E", "the plan waited 10 min", func(h *factoryHarness) {
+			h.clock.at = h.clock.at.Add(heldPlanFor)
+			h.press("j")
+		}},
+		{"age", "P", "the plan waited 10 min", func(h *factoryHarness) {
+			h.clock.at = h.clock.at.Add(heldPlanFor + time.Minute)
+			h.press("j")
+		}},
+		{"row gone", "E", "its row left home", func(h *factoryHarness) {
+			h.src.change(func(d *FactoryData) {
+				d.Rows = slices.DeleteFunc(d.Rows, func(r FactoryRow) bool { return r.Key == "PR-12345" })
+			})
+			h.press("ctrl+r")
+		}},
+		{"merged", "P", "its PR is merged", func(h *factoryHarness) { h.facts("PR-12345", FactoryPRFacts{GHState: "MERGED"}) }},
+		{"closed", "P", "its PR is closed", func(h *factoryHarness) { h.facts("PR-12345", FactoryPRFacts{GHState: "CLOSED"}) }},
+		{"closed", "E", "its PR is not open", func(h *factoryHarness) {
+			h.src.change(func(d *FactoryData) {
+				for i, r := range d.Rows {
+					if r.Key == "PR-12345" {
+						d.Rows[i].PR = nil
+					}
+				}
+			})
+			h.press("ctrl+r")
+		}},
+	} {
+		h := testPlanned(t, 140, 40)
+		var plan tea.Cmd
+		if c.key == "E" {
+			plan = h.startHeld("E", "1", "enter")
+		} else {
+			plan = h.startHeld("P")
+		}
+		h.press("?")
+		h.run(plan)
+		h.press("esc")
+		if len(h.m.bar.held) != 1 || h.m.view != fvHome {
+			t.Fatalf("%s %s: no plan held, or not home (%v)", c.name, c.key, h.m.view)
+		}
+		c.drop(h)
+		if len(h.m.bar.held) != 0 {
+			t.Errorf("%s %s: the plan is still held", c.name, c.key)
+		}
+		mustContain(t, h.view(), c.why, "nothing was run")
+		mustNotContain(t, h.view(), "ready: "+c.key+" on its row asks")
+		if q := h.m.bar.question(); q != "" {
+			t.Errorf("%s %s: home asks %q", c.name, c.key, q)
+		}
+		if _, deploys := h.act.stagingCalls(); len(deploys) != 0 || len(h.act.mergesOf()) != 0 {
+			t.Errorf("%s %s: the drop ran %v, %v", c.name, c.key, deploys, h.act.mergesOf())
+		}
+	}
+}
+
+// While a plan is held, every action's outcome and failure shows as it
+// does without one: a push the ready card's y sends that fails keeps its
+// failure in the footer, and so does a send of answers on the recap; the
+// held plan's marker comes back once the footer is free.
+func TestAHeldPlanNeverHidesAnotherActionsOutcome(t *testing.T) {
+	h := testPlanned(t, 140, 40)
+	plan := h.startHeld("E", "1", "enter")
+	h.selectRow("PR-12360")
+	h.press("enter")
+	if h.m.view != fvReady {
+		t.Fatalf("view %v, want the ready card", h.m.view)
+	}
+	h.run(plan)
+	h.act.decideErr = errors.New("the push was rejected")
+	h.press("1", "y")
+	mustContain(t, h.view(), "the push was rejected")
+	mustNotContain(t, h.view(), heldE)
+
+	r := testPlanned(t, 140, 40)
+	plan = r.startHeld("P")
+	r.toRecap()
+	r.run(plan)
+	r.act.answerErr = errors.New("the factory is not running")
+	r.press("y")
+	v := r.view()
+	mustContain(t, v, "the factory is not running")
+	mustNotContain(t, v, heldP)
+
+	o := testPlanned(t, 140, 40)
+	plan = o.startHeld("E", "1", "enter")
+	o.press("?")
+	o.run(plan)
+	o.press("esc")
+	o.selectRow("PR-12360")
+	o.press("o") // steps into the pane: its own outcome, not the plan's again
+	mustContain(t, o.view(), "focused its pane")
+	mustNotContain(t, o.view(), heldE)
+	o.expireNote()
+	mustContain(t, o.view(), heldE)
 }
 
 // The ready card's "It frees <copy>." follows its own decision's question

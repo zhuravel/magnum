@@ -26,6 +26,8 @@ package tui
 import (
 	"cmp"
 	"context"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +75,26 @@ type factoryQuestion struct {
 	// cut at the screen's edge, as the board's pendingAction.wrap, since y
 	// answers all it names: a staging deploy's migrations and its warning.
 	wrap bool
+	// plan says which row's plan the question is the next step of (E's
+	// staging deploy, P's merge of the parent); nil for any other question.
+	plan *planOf
+}
+
+// planOf is the row a plan's question belongs to: the row's id
+// (FactoryRow.ID), the key that planned it (E or P), the row's name for its
+// PR and the PR's reference.
+type planOf struct {
+	row            int64
+	key, name, ref string
+}
+
+// heldPlan is a plan's question that answered away from its row, and when
+// it answered, by the screen's clock: it waits for its key on its row
+// (factoryBar.raiseHeld), and the screen drops it once it cannot wait any
+// more (factoryModel.dropHeld).
+type heldPlan struct {
+	q  *factoryQuestion
+	at time.Time
 }
 
 // factoryBar is the action state the factory screen embeds. One action runs
@@ -87,14 +109,17 @@ type factoryBar struct {
 	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	st   styles
 
-	asking *factoryQuestion // the question awaiting y/N
-	choose *stagingChoice   // E's chooser of a PR's staging envs, before its plan (staging_key.go); nil when none is up
-	// held is a plan's question (E's, P's) that waits for a view that
-	// draws it whole and has no question of its own: the screen raises it
-	// (raise) on home or the task card, so y confirms only what is drawn.
-	held    *factoryQuestion
-	busy    string // the label of the action in flight
-	dropped bool   // the screen quits: no question is asked or answered any more
+	asking    *factoryQuestion // the question awaiting y/N
+	choose    *stagingChoice   // E's chooser of a PR's staging envs, before its plan (staging_key.go); nil when none is up
+	chooseRow int64            // the row the chooser is of (FactoryRow.ID)
+	busy      string           // the label of the action in flight
+	dropped   bool             // the screen quits: no question is asked or answered any more
+	// held are the plans' questions (E's, P's) that answered away from
+	// their rows, oldest first, one per row and key: none comes up by
+	// itself, only by its key on its row (raiseHeld), so no y/N appears
+	// that the operator did not ask for there. The rule says they wait
+	// (heldMarker) while it has nothing else to say.
+	held []heldPlan
 
 	flash     string
 	flashKind factoryFlashKind
@@ -125,13 +150,74 @@ func (b *factoryBar) drop() {
 	b.asking, b.choose, b.held, b.dropped = nil, nil, nil, true
 }
 
-// raise puts the held question up, for y/N; a failure kept in the footer
-// stays beside it, as ask keeps one.
-func (b *factoryBar) raise() {
-	b.asking, b.held = b.held, nil
+// hold keeps q, a plan's question that answered, for its key on its row:
+// one per row and key, a newer one in place of an older.
+func (b *factoryBar) hold(q *factoryQuestion) {
+	if i := b.heldOf(q.plan); i >= 0 {
+		b.held = slices.Delete(b.held, i, i+1)
+	}
+	b.held = append(b.held, heldPlan{q: q, at: b.now()})
+}
+
+// heldOf is the index of the held plan of p's row and key; -1 for none.
+func (b *factoryBar) heldOf(p *planOf) int {
+	if p == nil {
+		return -1
+	}
+	return slices.IndexFunc(b.held, func(h heldPlan) bool {
+		return h.q.plan != nil && h.q.plan.row == p.row && h.q.plan.key == p.key
+	})
+}
+
+// raiseHeld puts up the held question of row's plan by key, for y/N, as
+// ask puts a question up (a failure kept in the footer stays beside it),
+// and reports whether there was one to put up. It puts none up while
+// another question, the chooser or an action holds the bar.
+func (b *factoryBar) raiseHeld(row int64, key string) bool {
+	i := b.heldOf(&planOf{row: row, key: key})
+	if i < 0 || b.dropped || b.asking != nil || b.choose != nil || b.busy != "" {
+		return false
+	}
+	b.asking = b.held[i].q
+	b.held = slices.Delete(b.held, i, i+1)
+	if len(b.held) == 0 {
+		b.held = nil
+	}
 	if b.flashKind != factoryFlashFailed {
 		b.flash = ""
 	}
+	return true
+}
+
+// heldMarker is the rule's word of the held plans: the oldest's row and
+// key ("plan of PR-12345 ready: E on its row asks") and how many more;
+// "" for none.
+func (b *factoryBar) heldMarker() string {
+	if len(b.held) == 0 {
+		return ""
+	}
+	p := b.held[0].q.plan
+	text := "plan of " + p.name + " ready: " + p.key + " on its row asks"
+	if n := len(b.held) - 1; n > 0 {
+		text += " (+" + strconv.Itoa(n) + " more)"
+	}
+	return text
+}
+
+// dropHeldNote is the note of held plan h dropped for why: in the action
+// log always, and in the footer only while it says nothing else, so it
+// never takes the place of another action's outcome or failure.
+func (b *factoryBar) dropHeldNote(h heldPlan, why string) tea.Cmd {
+	key := "its key"
+	if h.q.plan != nil {
+		key = h.q.plan.key
+	}
+	text := h.q.label + ": dropped, " + why + "; nothing was run (" + key + " on its row plans again)"
+	b.log.add(logEntry{at: b.now(), what: h.q.label, text: text})
+	if b.flash != "" {
+		return nil
+	}
+	return b.show(text, factoryFlashNote)
 }
 
 // applyStyles switches the bar to st, once the terminal reports its background.
@@ -234,10 +320,11 @@ func (b *factoryBar) update(msg tea.Msg) (cmd tea.Cmd, taken bool) {
 		if msg.err != nil {
 			return b.show(msg.label+" failed: "+errLine(msg.err), factoryFlashFailed), true
 		}
-		if msg.next != nil && !b.dropped { // a plan: its question, cleaned (the daemon's words), is held for the screen to raise
+		if msg.next != nil && !b.dropped { // a plan: its question, cleaned (the daemon's words), is held; the screen raises it on its row
 			q := *msg.next
 			q.sentence, q.label = cleanText(q.sentence), cleanText(q.label)
-			b.held, b.flash = &q, ""
+			b.hold(&q)
+			b.flash = ""
 			return nil, true
 		}
 		return b.show(cmp.Or(lastLine(msg.text), msg.label+": done"), factoryFlashDone), true
@@ -297,14 +384,16 @@ func (b *factoryBar) question() string {
 }
 
 // note is the footer's note in width cells, else the action in flight,
-// without the question: a card draws its question in its own footer and
-// this on its rule.
+// else the held plans' marker, without the question: a card draws its
+// question in its own footer and this on its rule.
 func (b *factoryBar) note(width int) string {
 	switch {
 	case b.flash != "":
 		return b.flashStyle().Render(b.flashFit(width))
 	case b.busy != "":
 		return b.st.Dim.Render(truncate("busy: "+b.busy+"…", width))
+	case len(b.held) > 0:
+		return b.st.Warn.Render(truncate(b.heldMarker(), width))
 	}
 	return ""
 }
