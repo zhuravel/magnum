@@ -9303,6 +9303,12 @@ func KVPRSkippedBaseline(prID int64) string
 func KVPRSnooze(prID int64) string
     KVPRSnooze holds a PR's snooze (Snooze as JSON).
 
+func KVPRStaging(prID int64) string
+    KVPRStaging holds where the PR stands on its repository's staging envs
+    as the review daemon last told it (StagingRecord as JSON): written when
+    it changes, dropped once the PR is no longer open. The board and `magnum
+    staging` read it (StagingShown); the daemon alone writes it.
+
 func KVPRStalemate(prID int64) string
     KVPRStalemate holds the threads of a PR where magnum stopped arguing and
     the operator has not acted since (Stalemate as JSON); the board flags the PR
@@ -9526,6 +9532,21 @@ func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.T
 func SkillCopyDir(state string) string
     SkillCopyDir is where the daemon keeps the copies of the judges' skills it
     took at startup (<state>/skill/<hash>/SKILL.md).
+
+func StagingEnvs(cfg *config.Config, repo string) []staging.Env
+    StagingEnvs is repo's staging environments (config.Stagings) as
+    internal/staging names them, in config order; nil for none.
+
+func StagingRepos(cfg *config.Config) []string
+    StagingRepos lists the repositories with staging environments a [[watch]]
+    covers, as their [[factory.repo]] names them, in config order: the ones the
+    review daemon tells the staging status of.
+
+func StagingStale(lastTick, now time.Time) string
+    StagingStale is why the daemon's staging records no longer follow staging at
+    now, its last tick being lastTick: "the daemon has not run" (zero), "stale:
+    the daemon's last tick is 1h old" (more than staging.StaleAfter ago);
+    "" while they do.
 
 func StateOf(c store.NotesContent) notes.State
     StateOf is a version's content as a notes state.
@@ -10188,6 +10209,12 @@ type Deps struct {
 	// (app.App.HookFailures, which FromApp sets), handled while the daemon
 	// listens (onHookFailure); nil = none.
 	HookFailures <-chan app.HookFailure
+
+	// Staging reads where each open PR of a repository with staging envs
+	// stands on them (internal/staging's read side, staging_status.go);
+	// FromApp makes one when a watched repository has [[factory.repo.staging]]
+	// entries. nil = none: nothing of staging runs.
+	Staging Staging
 
 	// Has unexported fields.
 }
@@ -11572,6 +11599,53 @@ type SnoozePayload struct {
     SnoozePayload is a `magnum snooze` request: snooze the PR until Until,
     or lift its snooze (Off). By says who asks ("magnum snooze", "the board"),
     for the card and the events.
+
+type Staging interface {
+	Refresh(ctx context.Context, repo string, open []staging.OpenPR) error
+	Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus
+	Close()
+}
+    Staging is the read side of internal/staging the review daemon runs on:
+    *staging.Client.
+
+type StagingEnv struct {
+	Env    string `json:"env"`
+	State  string `json:"state"`            // staging.State: latest, pushed, outdated, none, unknown
+	Detail string `json:"detail,omitempty"` // pushed: staging.Detail (ci_running, ci_failed_ours, ...)
+	// InTip is the PR commit staging-<env>'s tip holds: the head, or for
+	// outdated an older one, Behind commits before the head.
+	InTip  string `json:"in,omitempty"`
+	Behind int    `json:"behind,omitempty"`
+	// PushedAt is when the merge that brought InTip in was made, and
+	// DeployedAt, for latest, when the deployment that holds it was.
+	PushedAt   time.Time `json:"pushed_at,omitzero"`
+	DeployedAt time.Time `json:"deployed_at,omitzero"`
+	RunURL     string    `json:"run,omitempty"` // ci.yml's run on that merge
+	Why        string    `json:"why,omitempty"` // unknown, or what could not be told
+}
+    StagingEnv is a PR's state on one staging env (staging.EnvStatus, what the
+    board and the CLI show of it): shas, times, a run URL and the package's own
+    words, never PR text.
+
+func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, lastTick, now time.Time) []StagingEnv
+    StagingShown is what a reader shows of a PR's staging status, per env of
+    envs (the config's, in its order; nil without any): the env's state in rec,
+    or unknown, Why saying so, when there is no record (ok false) or the record
+    lacks the env (not read yet), it was told for another head than head (the
+    head moved since; the daemon's next tick tells it), or the daemon's last
+    tick (lastTick; zero: it never ran) is more than staging.StaleAfter before
+    now, so the record no longer follows staging.
+
+type StagingRecord struct {
+	Head string       `json:"head"`
+	Envs []StagingEnv `json:"envs"`
+}
+    StagingRecord is a PR's KVPRStaging: the head its envs were told for and,
+    in the config's order, each env's state.
+
+func ParseStagingRecord(v string) (StagingRecord, bool)
+    ParseStagingRecord reads a KVPRStaging value; false when it cannot be read
+    or names no head.
 
 type StaleCheck struct {
 	Stale          bool
@@ -29899,6 +29973,12 @@ func RunWatch(ctx context.Context, fetch WatchFetch, opts WatchOptions) error
 func StageDuration(d time.Duration) string
     StageDuration renders a stage's length: "12s", "18m04s", "1h02m".
 
+func StagingSummary(s StagingInfo, now time.Time) string
+    StagingSummary is s in the words of the card's STAGINGS block, without the
+    env's name: its state, CI's or Jenkins' part of it, the head in the tip or
+    how far behind, and when it was deployed or pushed, relative to now ("pushed
+    · CI running · head aaa1111 · pushed 3m ago").
+
 func StopWatch(err error) error
     StopWatch wraps err so that RunWatch ends and returns err (for "the pane
     closed" or "herdr is gone"). StopWatch(nil) is nil.
@@ -31101,6 +31181,12 @@ type PRBoardRow struct {
 	// title's tags mark the row with it ("open: needs you") and the card
 	// says it ("verdict: ...").
 	Open *PROpen
+	// Stagings is where the PR stands on its repository's staging envs, in
+	// the config's order, as the daemon last told it (engine.KVPRStaging,
+	// unknown once it is stale or of another head): the STAGE column's
+	// glyphs and the card's STAGINGS block. nil for a repository without
+	// staging envs and for a PR that is not open.
+	Stagings []StagingInfo
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -31889,6 +31975,25 @@ type StagingCell struct {
     ("12/41", "4/9"). Seen is when the factory's read first saw its state:
     a wide screen and the task card show its age, how long the state has stood
     as the reads tell it.
+
+type StagingInfo struct {
+	Env string
+	// State is latest (live: the env's newest deployment holds the PR's
+	// head), pushed, outdated (an older commit of the PR is there), none or
+	// unknown; Detail says why a pushed one is not live yet: ci_running,
+	// ci_failed_ours, ci_failed_not_ours, waiting_jenkins or not_confirmed.
+	State, Detail string
+	// InTip is the PR's commit the env's branch holds: the head, or an
+	// older one Behind commits before it.
+	InTip  string
+	Behind int
+	// PushedAt is when the merge that brought InTip in was made,
+	// DeployedAt (live only) when the deployment that holds it was.
+	PushedAt, DeployedAt time.Time
+	RunURL               string // ci.yml's run on that merge
+	Why                  string // why it is unknown, or what could not be told
+}
+    StagingInfo is where a PR stands on one staging env.
 
 type StatusData struct {
 	Daemon    DaemonInfo

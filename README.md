@@ -5104,6 +5104,53 @@ deploy: the daemon runs it without asking, its migrations included. The push che
 is pushed), but only the directory guards who gave the word, so keep `mirror_dir` out of every directory an agent
 can write (the review slots, the factory's copies).
 
+### Stagings
+
+The PR board, its card and `magnum staging` say where each open PR stands on its repository's staging envs.
+The review daemon makes one staging client when a repository a `[[watch]]` covers has `[[factory.repo.staging]]`
+entries; with none (a dry run and a replay make none either) the feature is off: nothing is fetched or read,
+nothing is stored, and the board draws no STAGE column. Each tick starts each such repository's Refresh (the
+[staging status](#staging-status)'s read) on a goroutine of its own, never in the tick, with the open PRs' numbers
+and bases: one per repository at a time, at most 10 minutes (the first one's clone runs in the background on its
+own timeout), at most once a minute across both daemons. Once the repository's first Refresh in the daemon
+returned, the tick tells each open PR's status and keeps it in the registry, `pr.<id>.staging`: the head it was
+told for and, per env, the state, its detail, the PR's commit in the tip and how far behind, when the merge was
+pushed and (live) deployed, ci.yml's run and why it cannot be told. It is written when it changes, and dropped
+once the PR is no longer open; a failed Refresh is logged once per cause, and the statuses then say why they are
+unknown. The board and the command read only that record, never git or GitHub: one of an older head reads
+`unknown` ("the head moved since the last read") until the next tick, and every one reads `unknown` once the
+daemon's last tick is more than 10 minutes old (a stopped daemon). The daemon's stop ends a Refresh in flight,
+waits for it, then closes the client (which ends its background clone).
+
+The STAGE column (after CI; it gives way third on a narrow screen, after ASSIGNEE and SINCE REVIEW) draws one
+glyph per env, in the config's order, on the rows of repositories with staging envs (a dash on the others):
+
+| Glyph | ASCII | Means |
+|---|---|---|
+| `●` green | `L` | live (`latest`): the env's newest deployment holds the PR's head |
+| `◐` yellow | `p` | pushed: CI running, CI passed and waiting for Jenkins, no deployment confirms it, or CI failed not on the PR's changes |
+| `✗` red | `x` | pushed, and CI failed on the PR's changes (`ci_failed_ours`) |
+| `○` | `o` | an older head of the PR is there (`outdated`) |
+| `·` | `.` | not there (`none`) |
+| `?` | `?` | unknown |
+
+The card's STAGINGS block says the same in words, an env a line, why it cannot be told and the run's page under
+it, and the help's legend explains the glyphs:
+
+```
+STAGINGS
+  ● void     live · head 4f2a9c1 · deployed 40m ago
+             run https://github.com/talkable/talkable/actions/runs/7
+  ◐ bart     pushed · CI running · head 4f2a9c1 · pushed 3m ago
+  ○ bastion  an older head · 0be11e2 · 2 commits behind · pushed 2d ago
+```
+
+`magnum staging <pr>` prints those lines for one PR (refused for a repository without staging envs and for a PR
+that is not open), and `magnum staging` alone every open PR of the repositories with staging envs that is live,
+pushed or an older head on any of them; `--json` prints `{ref, head, stagings}`, or a list of them (`[]` for none),
+and `magnum tui --json` carries each row's `stagings`. Nothing here deploys: the [staging deploys](#staging-deploys)
+are wired next.
+
 ## Daily use
 
 `magnum` alone opens the PR board, `magnum tui` (the printed rows when the output is not a terminal, so
@@ -5149,6 +5196,7 @@ can write (the review slots, the factory's copies).
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
+| `magnum staging [<pr>] [--json]` | Where a PR stands on each staging env of its repository (live, pushed and why it is not live yet, an older head and how far behind, not there, unknown and why), or, without a PR, every open PR on any staging, from what the daemon stored: no git, no GitHub (see [Stagings](#stagings)). |
 | `magnum config`, `magnum version` | `config` validates the configuration (the built-in defaults with `~/.config/magnum/config.toml` over them, or `--config FILE`), renders every prompt file the roles name with this binary and prints the checkout, config, data, state and judge skill paths and the spend level of the review and the factory roles (`spend:   high (codex: low) for the review and the factory roles`); `daemon-restart` and `install` run it with the binary that will run and refuse when it fails. `version` prints the build (`make build` stamps it; `dev` for a plain `go build`). |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs, and so does the daily retro. Under `autofix = "open"` it also holds the fix loops the look would start (a loop that runs goes on, and `f` still starts one), and a review it holds is not late (`magnum_late_after` counts from its end). `resume` lifts the pause, and its answer names each agent kind still paused or held with the command that lifts it ("resumed; claude is still paused (usage_limit) until 14:00: `magnum resume --tool claude` lifts it", "…; codex is still held (shared launch failure) until 18:38: …"; a refusal for a paused kind, such as `magnum fix`'s, ends the same way); `resume --tool <kind>\|all` lifts the usage-limit, login, Codex-budget or hooks-review pause of an agent kind (or of all), and its hold after a launch failure shared across PRs, and forgets its per-model limits (for codex, and all, it overrules Codex's last reading at either budget cap, a pause or not, until its next reading, and lets new Codex sessions start while hooks in `hooks.json` have no trust entry, until that file changes again), while `resume --watch <owner>` lifts the identity-leak pause of a watch owner. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. `logs -n N` sets how many recent lines or events show first (default 50) and `logs --raw` prints the daemon log's lines as written (JSON). `logs notes:<owner>/<repo>` follows the curations and critiques of a repository's notes. |
 | `magnum restart-sessions --tool <kind>\|all [--pr <ref>] [--yes]` | Restart an agent kind's live sessions (every kind's with `all`, one PR's with `--pr`) in new processes after a switch of its account: a running agent keeps the login it started with. Each session parks (its pane closes, its conversation stays), an idle one now and one at work after its turn, and its next prompt resumes the conversation in a new process; no round starts on its PR before, and a pinned PR's sessions are left alone. The daemon does it (refused when none runs); a terminal asks y/N first ("Restart the 3 live codex sessions? They resume in new processes."; `--yes` does not), and the answer counts them ("restarting 3 live codex sessions: 2 park now, 1 after its turn; each resumes in a new process at its next prompt"). A change of Codex login does it for the Codex sessions by itself (see the Codex budget above); `magnum resume --tool` restarts none. The settings screen's `x` on a kind's row does the same. |
@@ -5180,7 +5228,8 @@ master)" when the PR's own diff could not be compared in full (a patch GitHub le
 files or more): the files and lines then include the merge's, the commits are still the PR's own; an empty
 or binary file, which GitHub sends without a patch, is compared by its blob), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
 💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are marked ★, and a bot's login carries the bot
-mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
+mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. A repository with staging envs adds STAGE, a glyph per env
+([Stagings](#stagings)). `enter` opens the card with the full
 per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last
 round's stage timings (fetch/checkout, each role, verify, total), which roles that round ran and why (its
 kind, a continue running the judge alone, what triage skipped and its reason, a role whose code changed

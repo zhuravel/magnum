@@ -20563,6 +20563,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
   ("deployed to `void`, deploying to `bart`"), which grows past a table cell's width with three envs and reads worse
   than a row each. Tests, failing first: TestEachStagingEnvGetsItsOwnRowInTheStatussOrder,
   TestAStagingRowsChangeAloneEditsTheCommentOnce and the stagings of TestNoFactoryStatusStringReachesTheCommentUnmapped.
+- **The review daemon tells every open PR's staging status, and the board and `magnum staging` read it from the
+  registry** (2026-11-09, the staging wiring, part 1: see it). One `staging.Client` in the review daemon
+  (`Deps.Staging`, made by FromApp) when a repository a `[[watch]]` covers has `[[factory.repo.staging]]` entries,
+  none otherwise, nor for a dry run or a tagged App: with none nothing of it runs, and a config without stagings
+  (the operator's today) changes nothing on any screen. Its git is the App's runner in the C locale (staging reads
+  git's English answers) and quiet, logged at Debug, since it runs every minute and Refresh reports its own
+  failures; GitHub and the fetch's git env are the repository's poll identity (`poll_identity`, else `identity`),
+  whose env mints an App's token at most once a minute, and a missing one is logged once per cause; Mirror and
+  MirrorRoot come from `[staging] mirror_dir`, Stagings from `config.Stagings`. No resolver, PushEnv or
+  CommitIdentity yet: this part deploys nothing. Each tick starts each such repository's Refresh on a goroutine of
+  its own (`stagingWG`), one per repository at a time, bounded at 10 minutes and ended by the daemon's stop, with
+  the open PRs' numbers and bases from the registry: never in the tick, since the first one clones the mirror and a
+  fetch can take minutes. The tick itself calls Status, a pure lookup, for every open PR once the repository's first
+  Refresh in this daemon returned (before it every env reads "no refresh yet", which each restart would flash on
+  the board), and keeps it compactly under `pr.<id>.staging` (`engine.StagingRecord`: the head, and per env the
+  state, detail, the commit in the tip, behind, pushed and, live, deployed times, the run, why; no tips), written
+  when it changed (one read of every record per tick) and dropped once the PR is no longer open, so no reader runs
+  git. Status in the tick rather than after each Refresh, so a Refresh that hangs still lets Status's own staleness
+  (10 minutes) reach the board. Readers go through `engine.StagingShown`: a record of an older head, an env it
+  lacks, or a daemon whose last tick is more than `staging.StaleAfter` old reads `unknown` saying why, so a stopped
+  daemon's last answer never stands; the record's words are kept free of control characters (a failing job's paths
+  are the PR's) and a run only as an https page, written and read. The stop ends the Refreshes (its own context, as
+  `--once` cancels the tick's after the stop), waits for them 10 s, then calls `Close`, which ends the background
+  clone. The board's STAGE column, after CI and the third to give way, draws one one-cell glyph per env in the
+  config's order (live, pushed, failed on the PR's changes, an older head, none, unknown) and is drawn only when a
+  row in scope has stagings, so no existing layout changes; a CI failure not on the PR's changes stays the pushed
+  glyph, since the staging is red for everyone and the PR is not the one to fix it. The card's STAGINGS block and
+  `magnum staging [<pr>] [--json]` share the same words (`tui.StagingSummary`). The factory screen's staging cells
+  stay the factory's own (its daemon has its own client); deploys (the `staging_deploy` request, E, `--deploy`) are
+  the next part. Rejected: a kv heartbeat per repository (a write a minute) to tell a stale record, when the
+  daemon's last tick already says it; and Status after each Refresh only, which a hung Refresh would freeze.
+  Tests: TestNoStagingEntryForAWatchedRepositoryMakesNoStagingClient, TestWithoutStagingsNothingOfStagingRuns,
+  TestTheTickRunsEachStagingRefreshOffTheTickOneAtATime, TestEveryOpenPRsStagingStatusIsStoredForTheBoardAndTheCLI,
+  TestAFailedStagingRefreshStillTellsTheStatuses, TestTheDaemonsStopWaitsForTheStagingRefreshThenClosesTheClient,
+  TestAOnceRunsStopEndsItsStagingRefresh, TestStagingShownIsTheRecordWhileItHoldsElseUnknownSayingWhy,
+  TestAStagingRecordsWordsAreClean, the tui's TestTheStageColumnDrawsOneGlyphPerStagingEnv,
+  TestNoStagingsNoStageColumn, TestTheCardShowsWhereThePRStandsOnEachStaging and
+  TestTheHelpExplainsTheStageColumn, the cli's TestTheBoardReadsEachOpenPRsStagingStatusFromItsRecord and the
+  TestStagingCommand tests.
 
 ## Learned rules
 
