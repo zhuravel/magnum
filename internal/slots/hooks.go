@@ -335,9 +335,10 @@ func (m *Manager) miseAvailable() bool {
 	return err == nil
 }
 
-// ShellCmd runs script in dir with env: through `mise -C dir exec -- env
-// K=V… /bin/sh -c script` when mise is available (as pool scripts do), else
-// /bin/sh -c script with env overlaid (blank values exported blank).
+// ShellCmd is the command that runs script in dir with env, a per-PR
+// hook's way: `mise -C dir exec -- env K=V… /bin/sh -c script` when mise is
+// available (as pool scripts do), else /bin/sh -c script with env overlaid
+// (blank values exported blank).
 func (m *Manager) ShellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd {
 	if m.miseAvailable() {
 		return execx.Cmd{Name: m.mise, Args: MiseExecArgs(dir, env, script), Dir: dir, Timeout: timeout, Mutates: true, Label: label}

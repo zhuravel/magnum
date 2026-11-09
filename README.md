@@ -6856,12 +6856,30 @@ and run `magnum eval run --label "<the change>"`. Each case replays the PR at it
 watch's roles, in a scratch registry and a detached worktree under `~/.local/state/magnum/eval/<run>/`, with agents
 named apart from the PR's own and from every other run's (tagged `eval-<6 hex digits of the run id>`), in a herdr
 workspace `eval <repo>#<N>`; the roles are told not to read the PR's reviews, comments or later
-commits, and nothing is posted. When a case ends, a judge still at work gets one ctrl+c, an agent esc, and the
-workspace is closed (a message names any workspace that stays open); before a case starts, an `eval <repo>#<N>`
-workspace of the same PR whose panes all work in the eval worktrees, which an earlier run left open, is closed,
-and a case whose agent would run anywhere but its own workspace fails before the first prompt. One case replays
-once at a time, whoever starts it (`eval run`, `eval-at.sh` through it, the skill gate): a replay holds the
-case's lock (`~/.local/state/magnum/eval/locks/<case>.lock`) from its first check to the end of its cleanup,
+commits, and nothing is posted. A case's worktree (`~/.local/state/magnum/eval/wt/<case>`) is prepared as a
+per-PR review checkout of its repository is, so its roles can run what a real round runs: the `[[pool]]`'s
+`copy_files` from the pool's `main_clone` and its `setup` through `mise exec`, as its slots run them, or, without
+a pool, the `[[repo]]` `copy_files` from the clone and its `setup` (else the clone's `.config/wt.toml`
+`post-create` and `post-start` hooks), after the clone's local mise file is rendered into the worktree without
+the `strip_env` keys. They run with the env a per-PR worktree of the PR's number has (`WT_BRANCH=magnum-pr-<N>`,
+the other workspace names blank, the `[[repo]]` env), the env the round's panes get, so the setup makes databases
+of the case's own and the roles' specs reach them through their db-lock line, as in a slot; each command has
+the slots' timeout (45 minutes for a setup), its output goes to
+`~/.local/state/magnum/logs/eval-case-<case>.log`, and the round's readiness step (`prepare`, `ready`) runs as
+in any round. The `teardown` (or `pre-remove`) runs before the worktree is removed, after a failed or
+interrupted case too; `--keep` keeps the worktree and its databases until the next replay of the case, which
+tears it down before it replaces it. One case is prepared at a time, across `eval run` and the skill gate
+(`~/.local/state/magnum/eval/locks/prepare.lock`, a wait of up to 45 minutes for the other). A setup that
+fails ends the case `environment`, naming the command and the first line of its error output: not scored, never
+a miss. So does a posted case whose PR has its own per-PR worktree next to the clone, before anything runs: the
+two would share `magnum-pr-<N>`'s databases, and the replay's teardown would drop them. A repository with no
+`setup`, `teardown` or `copy_files` keeps a bare worktree. When a case ends, a judge still at work gets one
+ctrl+c, an agent esc, and the workspace is closed (a message names any workspace that stays open); before a case
+starts, an `eval <repo>#<N>` workspace of the same PR whose panes all work in the eval worktrees, which an
+earlier run left open, is closed, and a case whose agent would run anywhere but its own workspace fails before
+the first prompt. One case replays once at a time, whoever starts it (`eval run`, `eval-at.sh` through it, the
+skill gate): a replay holds the case's lock (`~/.local/state/magnum/eval/locks/<case>.lock`) from its first check
+to the end of its cleanup,
 and a second replay of the case waits for it, saying once which run it waits for (ctrl+c ends the wait);
 replays of different cases still run side by side. The report gives recall of the seeded defects and the noise count, and
 compares them with the previous run; `magnum eval score` re-applies the corpus the run read after you fix a
@@ -6939,8 +6957,9 @@ same `--candidate` and `--no-notes`: a detached worktree at the frozen head in t
 copies made (else the clone a posted case uses; a commit it lacks is fetched by id), and the round run again
 (`evalrun.RunLocal`) under the same synthetic number with the frozen title, plan, ticket and answers (written as
 the factory writes them now) and roles. Its panes get the environment a posted case's replay gets for that number
-(`WT_BRANCH=magnum-pr-<N>` and the `[[repo]]` env), never the copy's, whose databases a task may be using, and its
-scratch directory is the run's (`cases/<case>/`), never the task's. Its findings, as the factory reads them (a
+(`WT_BRANCH=magnum-pr-<N>` and the `[[repo]]` env), never the copy's, whose databases a task may be using, its
+worktree is prepared and torn down as a posted case's is, for that number, and its scratch directory is the
+run's (`cases/<case>/`), never the task's. Its findings, as the factory reads them (a
 question marked), and the planned review's body, from the result of the judge the round ran (its frozen roles'
 judge, `judge_fallback`'s on a task Codex refused, not the watch's), are scored as a posted case's are, kept in
 `run.json` and re-scored from there by `eval score`. A case whose round ran a Codex role is refused before anything
@@ -6949,8 +6968,9 @@ factory's registry, read only; a registry that cannot say refuses it too) or whe
 flagged (an earlier replay of it was refused, or magnum's registry holds a Codex flag for it): the factory's rule
 that keeps the account from a second warning holds for replays too. A round that ran without Codex replays. A
 round that went without a reviewer's report, or whose frozen roles the config no longer declares, ends
-`missing_role`; one with no gh identity to run as `config_error`; a refused one is flagged, as a posted case is:
-none is scored as a miss. `--judge-only` refuses a local case (a local round runs
+`missing_role`; one with no gh identity to run as `config_error`; one whose setup failed `environment`; a refused
+one is flagged, as a posted case is: none is scored as a miss.
+`--judge-only` refuses a local case (a local round runs
 every role), and the skill gate takes none (`a local case: eval run replays it, no gate does`).
 
 Troubleshooting lives in `magnum doctor` (`--json` stays JSON even when the registry cannot be opened: a

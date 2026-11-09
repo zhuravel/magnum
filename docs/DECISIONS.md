@@ -16851,6 +16851,53 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestMergeParentDryRunJSONGivesThePlan and
   TestScreenMergeParentPlansThenMerges in cli; TestPAsksWithTheDaemonsPlanBeforeMergingTheParent,
   TestDashboardPMergesTheParentAfterThePlan and TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan in tui.
+- **An eval case's worktree is prepared as a per-PR review checkout of its repository is** (2026-11-09, a local
+  case's replay on master 8130500f: its judge's spec run failed with "Rails boot failed: config/amazons3.yml is
+  missing", zero examples and five errors outside them, so no database, HTTP or worker assertion ran). A case
+  worktree (`caseWorktree`: posted and local cases, `magnum eval run`'s and the skill gate's replays alike) was a
+  bare detached `git worktree add`, where a real round runs in a slot its pool prepared (copy_files, setup, then
+  post_checkout and the readiness step's prepare) or in a per-PR worktree the slots set up and tear down. A replay
+  could not run what a real round runs, and a proof or a gate that rests on a spec run proved less than it claimed.
+  - The plan. `evalrun.addCaseWorktree` plans the worktree as a per-PR worktree of the case's number
+    (`slots.PlanPerPR`: the `[[repo]]` copy_files, strip_env, setup and teardown, else the clone's wt.toml hooks),
+    or with the `[[pool]]`'s copy_files (from the pool's main clone), strip_env, setup and teardown when the
+    repository has a pool; always with the per-PR env (`WT_BRANCH=magnum-pr-<N>`, the other workspace names blank,
+    the `[[repo]]` env), the env the replay's panes already had (the engine's per-PR slot for a posted case,
+    `LocalCase.Env` for a local one), so the setup's databases are the ones the roles' specs use, through the
+    db-lock line their checkout names, and never a pool slot's. Setup, not post_checkout: a fresh checkout at the
+    head needs what a slot's provisioning runs, post_checkout reruns installs whose lock files changed since, and
+    the readiness step's prepare already runs in the round.
+  - The run. A slots Manager with no store runs it, through what slots already had, now exported (`PerPRPlan`,
+    `PlanPerPR`, `StripKeys`, `PreparePerPR`, `ShellCmd`, `RunHeavy`, `RunLogged`): the clone's local mise file
+    rendered without the strip keys and the copy_files copied (`PreparePerPR`), a pool's scripts through mise exec
+    (`RunHeavy`), a per-PR hook as the slots run one (`ShellCmd`), each under the heavy lock with the daemon's
+    secrets unset, the slots' timeouts (`SetupTimeout`, `TeardownTimeout`) and a transcript,
+    `logs/eval-case-<case>.log`. No slot row, step or event is written for a replay.
+  - The teardown runs before the worktree is removed whatever the replay ended with, a failed setup and a
+    cancelled replay included (`context.WithoutCancel`: a cancelled context stops a command at the heavy lock),
+    each failure warned and the next command run, as the slots tear a per-PR worktree down. `--keep` keeps the
+    worktree and its databases; the next replay of the case tears it down before it replaces it.
+  - Bounds. One case is prepared at a time across processes (`eval/locks/prepare.lock`, a dblock flock held
+    for the copy_files and the setup), a case waiting at most one setup timeout for another's; a repository
+    with no setup, teardown or copy_files keeps the bare worktree, with no command run and no file written.
+  - Outcomes. A setup that fails, copy_files that cannot be written, a wt.toml that cannot be planned or a wait
+    that ran out end the case `environment` (`eval.OutcomeEnvironment`), unscored, never a miss, the error's
+    first line naming the command and the first line of its error output (never the command line, which carries
+    the worktree's env), the transcript's path after it. A posted case whose PR has its own per-PR worktree next
+    to the clone ends so before anything is touched: both would use `magnum-pr-<N>`'s databases, and the
+    replay's teardown would drop the live worktree's.
+  Rejected: a pool slot for a replay (it would take a real round's slot and its databases); the pool's
+  `[pool.env]` (a slot's names pick a slot's databases); post_checkout as well (the fresh setup at the head ran
+  what it reruns); dropping leftover databases through MySQL after the teardown, as a pool slot's removal does
+  (evalrun has no MySQL client, and the teardown is the repository's own script for that); no teardown on a
+  cancelled replay (its databases would outlive it unnamed). Tests, failing first: evalrun's
+  TestALocalCasesWorktreeIsPreparedAsAPerPRCheckoutIs, TestACaseWorktreeIsTornDownHoweverTheReplayEnds,
+  TestAFailedSetupIsTheCasesEnvironmentNotAMiss, TestAPooledRepositorysCaseWorktreeGetsThePoolsSetup and
+  TestAPostedCasesWorktreeIsPreparedToo (its round handed the prepared worktree, the checkout its db-lock lines
+  name); TestARepositoryWithoutSetupOrCopyFilesKeepsTheBareWorktree pins what stays; and
+  TestAKeptCaseWorktreeKeepsItsDatabasesUntilTheNextReplayReplacesIt, TestOneCaseWorktreeIsPreparedAtATime and
+  TestAPostedCaseIsNeverPreparedBesideThePRsOwnWorktree, each checked by a mutation that drops what it pins.
+  The slots tests pass unchanged.
 
 ## The factory (2026-11-03)
 

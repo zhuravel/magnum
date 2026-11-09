@@ -12286,6 +12286,11 @@ const (
 	// configuration problem (no gh identity to run as): not scored, and
 	// running it again changes nothing until the config does.
 	OutcomeConfigError = "config_error"
+	// OutcomeEnvironment: the case's worktree could not be prepared as a
+	// review checkout of its repository is (its copy_files, its setup):
+	// what the round would have found is unknown, so it is not scored,
+	// never a miss; the error names the command and its first error line.
+	OutcomeEnvironment = "environment"
 )
     Case outcomes of a replay besides the round's (pipeline.Outcome*), which
     evalrun.RunCase records (OutcomeSkipped: `magnum eval run`) and the daemon's
@@ -12748,11 +12753,12 @@ package evalrun // import "github.com/zhuravel/magnum/internal/evalrun"
 Package evalrun replays one case of an eval corpus (internal/eval) as a blind
 dry-run round and scores it: what `magnum eval run` does for each case,
 in a package the daemon can call too. Each case runs in its own scratch layout
-(registry, reports, a copy of the notes) under the run's directory and in a
-detached worktree of the repository's clone, with agents tagged for the run,
-so the live registry, the PR's own agents, another run's agents and the PR's
-reports are never touched. A candidate directory (WithCandidate) replays another
-checkout's prompts and skill.
+(registry, reports, a copy of the notes) under the run's directory and in
+a detached worktree of the repository's clone, prepared as a per-PR review
+checkout of the repository is (its copy_files and setup, then its teardown),
+with agents tagged for the run, so the live registry, the PR's own agents,
+another run's agents and the PR's reports are never touched. A candidate
+directory (WithCandidate) replays another checkout's prompts and skill.
 
 CONSTANTS
 
@@ -12910,9 +12916,11 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
     whoever starts it (`magnum eval run`, eval-at.sh through it, the daemon's
     gate): it holds the case's lock (lockCase) from its first check to the end
     of its cleanup, a second replay of the case waiting for it, and Started
-    is when it took the lock. A local case (eval.KindLocal) replays its round
-    from its frozen inputs (replayLocal) after the same checks, the budget's
-    included.
+    is when it took the lock. Its worktree is prepared as a per-PR review
+    checkout of the repository for the PR's number and torn down before it goes
+    (addCaseWorktree): a setup that fails ends the case eval.OutcomeEnvironment,
+    never scored. A local case (eval.KindLocal) replays its round from its
+    frozen inputs (replayLocal) after the same checks, the budget's included.
 
 func RunsRoot(l paths.Layout) string
     RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
@@ -26364,6 +26372,10 @@ func SlotSlugRegexp(slotName string) *regexp.Regexp
     example-review{n}). DropGuard allows only these; inventory takes the
     factory's copy names' as the factory's databases.
 
+func StripKeys(extra []string) []string
+    StripKeys is DefaultStripEnv plus extra (a strip_env), sorted and
+    deduplicated: the keys dropped from a checkout's rendered local mise file.
+
 func TemplateRegexp(tmpl string) *regexp.Regexp
     TemplateRegexp matches what a slot template renders to (slot_name review{n},
     an expanded slot_path): the template anchored, its text quoted, every {n} as
@@ -26488,7 +26500,7 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
     deps (pool.post_checkout through mise exec, 30m, when the hash of the
     LockFiles and the commands differs from lock_sha) and schema (dirty_schema
     = 1 when the PR changes pool.schema_paths since its merge base with
-    origin/<base>), for per-PR slots render_mise alone (preparePerPR,
+    origin/<base>), for per-PR slots render_mise alone (PreparePerPR,
     as at the worktree's creation: the main clone's local mise file with the
     [[repo]] strip_env and env as the daemon has them now, its copy_files);
     finally verify (HEAD == fetched head → checked_out_sha, last_used_at).
@@ -26634,6 +26646,15 @@ func (m *Manager) Pin(ctx context.Context, slot store.Slot) error
     Pin marks the slot pinned: no automatic claim, checkout, release or removal
     until Unpin.
 
+func (m *Manager) PreparePerPR(ctx context.Context, sl store.Slot, p PerPRPlan) error
+    PreparePerPR renders the main clone's local mise file into the worktree
+    under its name (MiseLocalName; strip list removed, the per-PR env set;
+    trusted with mise when it is available) and copies the plan's copy_files
+    that exist (p.Copy, the [[repo]]'s), from sl.MainClone into sl.Path,
+    at the worktree's creation and at each round's checkout (render_mise),
+    every write confined to the worktree (WriteCheckoutFile). Without a local
+    mise file in the main clone nothing is rendered.
+
 func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) error
     ProvisionPool provisions pool slot number n (name pool.Slot(n),
     path pool.Path(n)). The slot row (state provisioning, kind pool,
@@ -26757,6 +26778,27 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 
     Resync can run again after any failure, and again for the same sha.
 
+func (m *Manager) RunHeavy(ctx context.Context, dir string, env map[string]string, script, label, logName string, timeout time.Duration) error
+    RunHeavy runs one heavy script in dir (a slot) through mise exec with env,
+    a pool script's way, under timeout, through RunLogged: serialized with every
+    other heavy command, with a redacted transcript in layout.Logs()/<logName>.
+
+func (m *Manager) RunLogged(ctx context.Context, c execx.Cmd, logName string) error
+    RunLogged runs a heavy command c, serialized with every other heavy
+    command of the Manager and without the daemon's secrets (heavyUnset:
+    the git variables, DefaultStripEnv and Deps.SecretEnv), and appends a
+    redacted transcript to layout.Logs()/<logName>: the begin line when the
+    command starts (`tail -f` shows which step runs), then its output, each
+    stream cut to its last logStreamTail bytes, and the end line. The rotation
+    is decided before the begin line for the largest block a command can append,
+    so a command's lines land in one file and a log stays under SlotLogMax.
+
+func (m *Manager) ShellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd
+    ShellCmd is the command that runs script in dir with env, a per-PR hook's
+    way: `mise -C dir exec -- env K=V… /bin/sh -c script` when mise is available
+    (as pool scripts do), else /bin/sh -c script with env overlaid (blank values
+    exported blank).
+
 func (m *Manager) Unpin(ctx context.Context, slot store.Slot) error
     Unpin hands the slot back to automation: pinned and hold_reason are cleared,
     and so is a last_error that is a hold ("slots: held: …"). A head_drift or
@@ -26773,6 +26815,26 @@ type MySQL interface {
 	DropAll(ctx context.Context, names []string, g mysqlx.Guard) []mysqlx.DropResult
 }
     MySQL is the part of *mysqlx.Client the slots package uses.
+
+type PerPRPlan struct {
+	Source          string
+	Slug            string
+	Setup, Teardown []Hook
+	Copy, Strip     []string
+	Env             map[string]string
+}
+    PerPRPlan is what magnum runs for one per-PR worktree (PlanPerPR):
+    the commands' Source ("[[repo]] owner/name", WTConfigFile or "" for none),
+    the workspace name Slug (PRSlug of the number), the Setup and Teardown hooks
+    (templates expanded), the [[repo]] copy_files (Copy), the keys dropped from
+    the rendered local mise file (Strip: StripKeys of the [[repo]] strip_env)
+    and the hooks' and agents' Env (PerPREnv).
+
+func PlanPerPR(rc *config.Repo, repo string, number int, path, clone, base string) (PerPRPlan, error)
+    PlanPerPR resolves the setup/teardown commands, files and environment of
+    per-PR worktree number of repo (owner/name, its [[repo]] block rc, nil for
+    none; path the worktree, clone its main clone) for a PR based on base.
+    A wt.toml that cannot be read, parsed or templated is ErrHook.
 
 type SchemaCheck struct {
 	// Need is true when the slot's databases must be reloaded (the pool's
