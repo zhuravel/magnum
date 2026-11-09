@@ -352,3 +352,71 @@ func TestALocalCaseOfTheLastRoundNamesItsOwnAdd(t *testing.T) {
 		t.Fatalf("case run %+v", cr)
 	}
 }
+
+// A local replay copies the live notes into its round's scratch layout and records their hashes, and
+// with --no-notes (Options.NoNotes) copies none and records none, its round reading no notes.
+func TestALocalReplayCopiesTheNotesUnlessToldNot(t *testing.T) {
+	for _, noNotes := range []bool{false, true} {
+		f := newReplayFixture(t, questionResult)
+		writeFile(t, engine.NotesPath(f.d.Layout, "example", "example"), "# Notes\n\nCredits round down.\n")
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"),
+			AgentTag: "eval-test", NoNotes: noNotes})
+		if cr.Score == nil || len(f.rounds) != 1 {
+			t.Fatalf("no-notes %v: case run %+v", noNotes, cr)
+		}
+		r := f.rounds[0]
+		_, err := os.Stat(engine.NotesPath(r.layout, "example", "example"))
+		copied := err == nil
+		if r.round.Notes == noNotes || copied == noNotes || (len(cr.Notes) == 0) != noNotes {
+			t.Errorf("no-notes %v: the round reads notes %v, its scratch has them %v, the run records %v", noNotes, r.round.Notes, copied, cr.Notes)
+		}
+	}
+}
+
+// A local replay on a clone that lacks the frozen head or base fetches each by its id before it adds
+// the worktree, and one it cannot fetch fails the case before any agent starts.
+func TestALocalReplayFetchesAMissingCommitByID(t *testing.T) {
+	for _, fetchable := range []bool{true, false} {
+		f := newReplayFixture(t, questionResult)
+		var mu sync.Mutex
+		have := map[string]bool{}
+		f.git.Rules = append([]execx.Rule{
+			{Prefix: []string{"git", "-C", f.clone, "rev-parse"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				sha := strings.TrimSuffix(c.Args[len(c.Args)-1], "^{commit}")
+				mu.Lock()
+				defer mu.Unlock()
+				if (sha == frozenHead || sha == frozenBase) && !have[sha] {
+					return execx.Result{}, &execx.ExitError{Code: 128, Stderr: "fatal: needed a single revision"}
+				}
+				return execx.Result{Stdout: []byte(sha + "\n")}, nil
+			}},
+			{Prefix: []string{"git", "-C", f.clone, "remote"}, Result: execx.Result{Stdout: []byte("https://example.invalid/example/example.git\n")}},
+			{Prefix: []string{"git", "-C", f.clone, "config"}, Result: execx.Result{Stdout: []byte("https://example.invalid/example/example.git\n")}},
+			{Prefix: []string{"git", "-C", f.clone, "fetch"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				if !fetchable {
+					return execx.Result{}, &execx.ExitError{Code: 128, Stderr: "fatal: remote error: upload-pack: not our ref"}
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, sha := range []string{frozenHead, frozenBase} {
+					if slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasPrefix(a, "+"+sha+":") }) {
+						have[sha] = true
+					}
+				}
+				return execx.Result{}, nil
+			}},
+		}, f.git.Rules...)
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
+		fetched := f.git.CallsWithPrefix("git", "-C", f.clone, "fetch")
+		add := f.git.CallsWithPrefix("git", "-C", f.clone, "worktree", "add")
+		if fetchable {
+			if cr.Score == nil || len(fetched) != 2 || !have[frozenHead] || !have[frozenBase] || len(add) != 1 {
+				t.Errorf("fetchable: case run %+v, fetches %v, worktree adds %d", cr, fetched, len(add))
+			}
+			continue
+		}
+		if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "cannot be fetched by id") || len(add) != 0 || len(f.rounds) != 0 {
+			t.Errorf("not fetchable: case run %+v, worktree adds %d, rounds %d", cr, len(add), len(f.rounds))
+		}
+	}
+}
