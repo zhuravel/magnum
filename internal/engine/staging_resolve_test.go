@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/app"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/staging"
@@ -37,6 +39,7 @@ type resolveFixture struct {
 	base       string
 	tip, head  string
 	agent      *fakeStagingAgent
+	staging    *fakeStaging
 	agentJobs  []stagingAgentJob
 	agentsMu   sync.Mutex
 	agentsDown error // stagingAgents fails with it
@@ -60,13 +63,13 @@ func (g *gitSlots) Resync(ctx context.Context, slot store.Slot, sha string) erro
 
 func newResolveFixture(t *testing.T, mods ...func(*harness)) *resolveFixture {
 	t.Helper()
-	f := &resolveFixture{run: editGitRunner(t), agent: &fakeStagingAgent{}}
+	f := &resolveFixture{run: editGitRunner(t), agent: &fakeStagingAgent{}, staging: &fakeStaging{}}
 	if _, err := f.run.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"--version"}}); err != nil {
 		t.Skipf("git not available: %v", err)
 	}
 	f.git = gitx.New(f.run)
 	f.r = &stagingResolver{git: f.git}
-	all := append([]func(*harness){withStagings(&fakeStaging{}), withFixerApp, func(h *harness) {
+	all := append([]func(*harness){withStagings(f.staging), withFixerApp, func(h *harness) {
 		h.d.Slots = &gitSlots{fakeSlots: h.sl, f: f}
 		h.d.stagingResolver = f.r
 		h.d.stagingAgents = func(j stagingAgentJob) (stagingAgent, error) {
@@ -759,4 +762,107 @@ func TestAStagingResolverJobRunsAtMost45Minutes(t *testing.T) {
 	h.e.mu.Lock()
 	delete(h.e.rounds, pr.ID)
 	h.e.mu.Unlock()
+}
+
+// hasRef reports whether the clone has ref.
+func (f *resolveFixture) hasRef(ref string) bool {
+	_, err := f.run.Run(f.h.ctx, execx.Cmd{Name: "git", Args: []string{"-C", f.clone, "rev-parse", "-q", "--verify", ref}})
+	return err == nil
+}
+
+// effectIs makes the fake staging client's journal hold effect in state.
+func (f *resolveFixture) effectIs(effect, state string) {
+	f.staging.mu.Lock()
+	defer f.staging.mu.Unlock()
+	f.staging.effects = map[string][]staging.Effect{"talkable/talkable": {{ID: staging.EffectID(effect), Repo: "talkable/talkable", State: state}}}
+}
+
+// The ref that keeps a done job's merge in its repository stays while the
+// job's effect is live and goes at the first tick after it ended, or a day
+// after the job's end whatever the effect says; an ended job's row goes two
+// days after its end, with its directory, and its Result is then an
+// unknown job's.
+func TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after func(f *resolveFixture)
+	}{
+		{"the effect ended", func(f *resolveFixture) { f.effectIs(f.request(1).Effect, staging.EffectDone) }},
+		{"a day passed", func(f *resolveFixture) { f.h.advance(resolveRefKeep) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newResolveFixture(t)
+			f.reviewed()
+			f.resolves("a = 2\nb = 1\n")
+			effect := f.request(1).Effect
+			f.effectIs(effect, staging.EffectRunning)
+			id := f.start(1)
+			if res := f.await(id); res.State != staging.ResolveDone {
+				t.Fatalf("Result = %+v, want done", res)
+			}
+			ref := resolveRefPrefix + effect
+			f.h.tick()
+			if !f.hasRef(ref) || !f.job(id).Kept {
+				t.Fatalf("the tick dropped %s while the effect is live", ref)
+			}
+			tc.after(f)
+			f.h.tick()
+			if f.hasRef(ref) || f.job(id).Kept {
+				t.Fatalf("%s stays after %s", ref, tc.name)
+			}
+			if _, err := os.Stat(f.h.e.resolveDir(id)); err != nil {
+				t.Errorf("the job's directory went before its row: %v", err)
+			}
+			f.h.advance(resolveKeep)
+			f.h.tick()
+			if res, err := f.r.Result(f.h.ctx, id); err != nil || res.State != staging.ResolveFailed || res.Why != whyUnknownJob {
+				t.Errorf("Result two days after the end = %+v, %v; want an unknown job", res, err)
+			}
+			if _, err := os.Stat(f.h.e.resolveDir(id)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the job's directory stays: %v", err)
+			}
+		})
+	}
+}
+
+// With no [[factory.repo.staging]] entries there is no staging client, so
+// no resolver and no resolver's agent maker in the daemon's wiring: a job's
+// row an earlier config left stays as it is through the start and the
+// ticks, and nothing holds its PR. With entries, FromApp makes the client
+// with the engine's resolver, bound to it, and the pane agent's maker.
+func TestWithoutStagingEntriesNothingOfTheResolverRuns(t *testing.T) {
+	e, _, _ := appEngine(t, nil, app.Options{}, nil)
+	if e.d.stagingResolver != nil || e.d.Staging != nil {
+		t.Fatalf("a config without staging entries wired a resolver (%v) or a staging client (%v)", e.d.stagingResolver, e.d.Staging)
+	}
+	with, _, _ := appEngine(t, nil, app.Options{}, func(cfg *config.Config) {
+		cfg.Factory.Repos = append(cfg.Factory.Repos, config.FactoryRepo{Repo: "talkable/talkable", Staging: slices.Clone(testStagings)})
+	})
+	t.Cleanup(with.stagingStop)
+	if with.d.stagingResolver == nil || with.d.stagingResolver.e.Load() != with {
+		t.Fatal("a config with staging entries wired no resolver bound to the engine")
+	}
+
+	h := newHarness(t)
+	h.reviewedPR(2, fixHead)
+	pr := h.pr(2)
+	row := resolveJob{ID: "void-2-x.r1.0a0b0c0d", Effect: "void-2-x", Repo: "talkable/talkable", Number: 2, Target: "staging-void",
+		TargetTip: strings.Repeat("a", 40), Head: fixHead, Try: 1, State: resolveRunning, Phase: resolvePhaseSlot, PRID: pr.ID,
+		SlotID: h.slot("review1").ID, Slot: "review1", Started: h.clock.Now(), Updated: h.clock.Now()}
+	if err := h.e.saveResolveJob(h.ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := h.kvOf(kvStagingResolve(row.ID))
+	h.startup()
+	h.advance(resolveKeep + time.Hour)
+	h.tick()
+	if got, _ := h.kvOf(kvStagingResolve(row.ID)); got != before {
+		t.Errorf("the job's row changed without a resolver: %s", got)
+	}
+	if why := h.e.heldReason(pr.ID); why == resolveHeld {
+		t.Error("the PR is held for a resolver the daemon does not have")
+	}
+	if c := h.sl.all(); slices.ContainsFunc(c, func(s string) bool { return strings.HasPrefix(s, "resync:") }) {
+		t.Errorf("the slot was touched: %v", c)
+	}
 }
