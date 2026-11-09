@@ -446,3 +446,52 @@ func TestFactoryEsChooserSaysTheCellsInTheBoardsStates(t *testing.T) {
 		t.Errorf("the chooser's envs %+v, want %+v", got, want)
 	}
 }
+
+// The right-click menu offers E, "deploy to staging", on home's row and on
+// the task card, dimmed where E refuses (no PR, no staging envs), and its
+// run opens the chooser, as the key does: a click never deploys. Home's
+// hints offer E on a row it deploys, when the line has room for it.
+func TestTheMenuAndTheHintsOfferE(t *testing.T) {
+	h := testStaged(t, 200, 40)
+	h.press("g")
+	item := func(items []menuItem) (menuItem, bool) {
+		i := slices.IndexFunc(items, func(it menuItem) bool { return it.key == "E" })
+		if i < 0 {
+			return menuItem{}, false
+		}
+		return items[i], true
+	}
+	for _, c := range []struct {
+		row string
+		ok  bool
+	}{{"PR-12320", true}, {"PR-12324", false}, {"PR-12302", false}} {
+		h.selectRow(c.row)
+		it, found := item(h.m.menuItems())
+		if !found || it.label != "deploy to staging" || it.ok != c.ok {
+			t.Errorf("%s: the menu's E %+v (found %v), want it live %v", c.row, it, found, c.ok)
+		}
+		h.press("g")
+	}
+	h.selectRow("PR-12320")
+	if hints := strings.Split(h.view(), "\n"); !strings.Contains(hints[len(hints)-1], "E staging") {
+		t.Errorf("home's hints lack E on a row it deploys: %q", hints[len(hints)-1])
+	}
+	h.selectRow("PR-12324")
+	if hints := strings.Split(h.view(), "\n"); strings.Contains(hints[len(hints)-1], "E staging") {
+		t.Errorf("home's hints offer E on a row it refuses: %q", hints[len(hints)-1])
+	}
+	h.press("g")
+	h.selectRow("PR-12320")
+	h.m.menu = ctxMenu{open: true, rowKey: h.m.menuOwner()}
+	h.press("E")
+	if h.m.bar.choose == nil || h.m.menu.open {
+		t.Fatalf("the menu's E opened no chooser:\n%s", h.view())
+	}
+	h.press("x")
+	h.wantStaging(nil, nil)
+
+	h.open("PR-12320")
+	if it, found := item(h.m.menuItems()); !found || !it.ok {
+		t.Errorf("the task card's menu: E %+v (found %v), want it live", it, found)
+	}
+}

@@ -1277,8 +1277,9 @@ func (m factoryModel) homeFrame() factoryFrame {
 }
 
 // homeHints are home's key hints for the row under the cursor: on your
-// PR's row its card and its PR's keys, and O while the rows span several
-// owners; while the filter is typed, its own.
+// PR's row its card and its PR's keys, O while the rows span several
+// owners, and E on a row it deploys (dropped first on a narrow line);
+// while the filter is typed, its own.
 func (m factoryModel) homeHints() []hint {
 	if m.filtering {
 		return []hint{{"enter", "keep the filter"}, {"esc", "clear it"}, {"↑ ↓", "move"}}
@@ -1313,6 +1314,9 @@ func (m factoryModel) homeHints() []hint {
 	}
 	if len(m.owners()) > 1 { // as the board's: O has an owner to show alone
 		hs = append(hs, hint{"O", "owner"})
+	}
+	if _, _, why := m.stagingRow(r); ok && m.act != nil && why == "" { // last before ?: the first a narrow line drops
+		hs = append(hs, hint{"E", "staging"})
 	}
 	return append(hs, hint{"?", "more"})
 }
