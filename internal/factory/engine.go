@@ -274,6 +274,11 @@ type Deps struct {
 	// (notify.Notifier.Sidebar); nil reports none.
 	Notifier *notify.Notifier
 	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
+	// Staging reads where the published tasks' PRs stand on their
+	// repositories' staging envs (staging.go: internal/staging's client,
+	// which the daemon builds only when a [[factory.repo]] has staging
+	// entries); nil reads none, and no row has staging cells.
+	Staging Staging
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -489,6 +494,9 @@ type Engine struct {
 	statusErrs    map[int64]bool
 	statusReadErr string
 	statusFinal   map[int64]bool
+	// stg is the record of the staging Refreshes that run off the loop and
+	// of the screen's staging.json (staging.go); its mutex guards it.
+	stg stagingReads
 	// beforeStop runs between the end of a loop's cycle that needs you
 	// (unavailable, the cap) and the task's move to you; an error stops
 	// there (a test's seam: the daemon stopping in between). nil in a
@@ -563,6 +571,7 @@ func New(d Deps) *Engine {
 		debts:        map[int64]*releaseDebt{},
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
+		stg:          stagingReads{running: map[string]bool{}, good: map[string]time.Time{}, cause: map[string]string{}},
 		agentRuns:    map[int64]*agentsRun{},
 		qaSessions:   map[int64]*qaSession{},
 		run:          Guard(d.Run, d.Config),
@@ -696,7 +705,9 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	}
 	defer os.Remove(pidFile)
 	// The work off the loop ends with the daemon: a claim's setup or install
-	// must not go on in a copy after it exits.
+	// must not go on in a copy after it exits. The staging client closes
+	// after it, once no Refresh runs.
+	defer e.closeStaging()
 	defer e.stopBackground()
 	// A QA run's server and browser stop with the daemon, a drain's or a
 	// signal's, on a context of their own (it runs before stopBackground).
@@ -899,7 +910,8 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // Tick runs one pass of the loop: the holds (herdr, disk and memory, then
 // the infrastructure hold and a MySQL ping before a pass that advances),
 // the requests, the published tasks' PRs (followPRs, whether or not the
-// pass advances) and their status files (writePRStatuses), then each live
+// pass advances), their staging status (stagingPass, whose Refreshes run
+// off the loop) and their status files (writePRStatuses), then each live
 // task's advance under its own panic guard (safely). During an
 // infrastructure or a herdr hold no task advances except on the hold's
 // tries, and while herdr does not answer no copy a base run left detached
@@ -954,7 +966,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.pruneScreenRequests(ctx, now)
 	e.admit(ctx)
 	states := e.followPRs(ctx, tasks) // its moves are compare-and-set from published: a request's stop since wins
-	e.writePRStatuses(ctx, tasks, states)
+	stagings := e.stagingPass(ctx, tasks, states)
+	e.writePRStatuses(ctx, tasks, states, stagings)
 
 	if advance {
 		if tasks, err = e.reg.Tasks(ctx); err != nil { // the requests may have moved some

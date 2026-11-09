@@ -198,10 +198,11 @@ type WaitsOn struct {
 }
 
 // StagingCell is one staging server's column on a row. State is one of
-// "none", "outdated", "merging", "conflict", "ci", "deploying", "qa",
-// "qa-pass", "qa-fail", "latest" or "unknown". Count is the progress of a
-// "ci" or "qa" cell ("12/41", "4/9"). Seen is when the factory read it: a
-// wide screen shows its age.
+// "none", "outdated", "merging", "conflict", "ci", "ci-fail" (the staging
+// branch's CI failed on the PR's own change), "deploying", "qa", "qa-pass",
+// "qa-fail", "latest" or "unknown". Count is the progress of a "ci" or "qa"
+// cell ("12/41", "4/9"). Seen is when the factory read it: a wide screen
+// shows its age.
 type StagingCell struct {
 	Name, State, Count string
 	Seen               time.Time
@@ -457,8 +458,12 @@ type TaskCard struct {
 	// body: on your PR's card and on a published task's once magnum read
 	// its PR; nil before.
 	PRInfo *CardPR
-	Stages []CardStage
-	Agents []CardAgent
+	// Stagings are where a published task's PR stands on each staging
+	// server, as its row's cells say it, drawn as one STAGINGS line after
+	// the PR's lines (each server's state and age); none: no line.
+	Stagings []StagingCell
+	Stages   []CardStage
+	Agents   []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

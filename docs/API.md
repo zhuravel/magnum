@@ -3581,6 +3581,15 @@ func LookupPR(ctx context.Context, st *store.Store, p RefParser, ref string) (st
     LookupPR resolves ref with p and loads the repository and PR rows from st.
     A repository or PR the registry does not know wraps store.ErrNotFound.
 
+func NewIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, id config.Identity) (identity.Source, *github.Client)
+    NewIdentity is identity id's source and the GitHub client that acts as it
+    over run, as New makes them for each [identity] of cfg, for a process that
+    builds no App (the factory daemon): an App's mints its installation tokens
+    into its gh config dir (layout's), which its client names, and mints again
+    on a 401; a gh identity's is your own gh login. The App's REST calls go
+    as github transport says, and its private key is read from the process's
+    environment when private_key_env names it.
+
 func NewLogger(file io.Writer, stderr io.Writer, level slog.Leveler) *slog.Logger
     NewLogger builds magnum's logger: JSON lines to file (when non-nil) plus
     human-readable text to stderr (when non-nil), both behind RedactHandler.
@@ -13318,6 +13327,15 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
     factory has no registry yet: no task was ever started): home then has no
     task, news or alert, and lists your PRs alone.
 
+func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error)
+    StagingIdentity is the identity the staging status of repo reads
+    as (internal/staging: its mirror's fetch and its GitHub reads):
+    the poll identity of the watch that covers repo (its identity without a
+    poll_identity), as magnum's review daemon reads that repository, so both
+    daemons fill the mirror's shared state as one login, the one that holds
+    Deployments: read; a repository no watch covers reads as the gh identity the
+    factory publishes as (operatorIdentity).
+
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
     "task <id>".
@@ -13492,6 +13510,11 @@ type Deps struct {
 	// (notify.Notifier.Sidebar); nil reports none.
 	Notifier *notify.Notifier
 	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
+	// Staging reads where the published tasks' PRs stand on their
+	// repositories' staging envs (staging.go: internal/staging's client,
+	// which the daemon builds only when a [[factory.repo]] has staging
+	// entries); nil reads none, and no row has staging cells.
+	Staging Staging
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -13563,7 +13586,8 @@ func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
     then the infrastructure hold and a MySQL ping before a pass that advances),
     the requests, the published tasks' PRs (followPRs, whether or not the pass
-    advances) and their status files (writePRStatuses), then each live task's
+    advances), their staging status (stagingPass, whose Refreshes run off the
+    loop) and their status files (writePRStatuses), then each live task's
     advance under its own panic guard (safely). During an infrastructure or a
     herdr hold no task advances except on the hold's tries, and while herdr
     does not answer no copy a base run left detached is swept (sweepDetached,
@@ -14401,6 +14425,14 @@ type ScreenOptions struct {
     ScreenOptions are what ScreenData reads besides the registries: the config
     (the roles' words, the kinds' stages, the repositories) and the layout (the
     tasks' directories, the holds the daemon saved).
+
+type Staging interface {
+	Refresh(ctx context.Context, repo string, open []staging.OpenPR) error
+	Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus
+	Close()
+}
+    Staging is the staging status the factory reads: internal/staging's Client
+    (staging.New), its read side alone.
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -22247,6 +22279,11 @@ func (l Layout) FactorySpecsLock() string
     FactorySpecsLock is the lock file under State that a factory precheck or
     proof holds (flock) while it runs specs: one at a time on the machine.
 
+func (l Layout) FactoryStaging() string
+    FactoryStaging is staging.json, the staging cells of the published tasks'
+    PRs as the factory daemon last read them (the screen draws them), beside
+    FactoryDB.
+
 func (l Layout) FactoryTaskDir(id int64) string
     FactoryTaskDir is one task's directory in FactoryTasks, named by its id.
 
@@ -24107,10 +24144,11 @@ type Staging struct {
 	Env   string       `json:"env"`
 	State StagingState `json:"state"`
 }
-    Staging is the deploy of the change: Env is the configured staging
-    environment's name when it is a short slug ([a-z0-9-]{1,32}), else "".
-    The config takes any name that is not blank, and Write refuses a whole
-    status whose Env is not a slug, so the writer sets Env with StagingEnv.
+    Staging is the deploy of the change to one staging environment:
+    Env is the configured staging environment's name when it is a short slug
+    ([a-z0-9-]{1,32}), else "". The config takes any name that is not blank,
+    and Write refuses a whole status whose Env is not a slug, so the writer sets
+    Env with StagingEnv.
 
 type StagingState string
     StagingState is the staging deploy's state.
@@ -24151,8 +24189,14 @@ type Status struct {
 	PublishedAt time.Time `json:"published_at"`
 	// FixLoop is magnum's fix loop on the PR.
 	FixLoop FixLoop `json:"fix_loop"`
-	// Staging is the change's deploy to a staging environment.
+	// Staging is the change's deploy to a staging environment: the first of
+	// Stagings, for the readers from before them, or {state: none} for a
+	// repository without one.
 	Staging Staging `json:"staging"`
+	// Stagings are the change's deploys to each staging environment of its
+	// repository, in the config's order; none (no key) for a repository
+	// without one. A field added under v=1: a reader before it ignores it.
+	Stagings []Staging `json:"stagings,omitempty"`
 	// Now is who the PR waits on, and the task's stage.
 	Now Now `json:"now"`
 }
@@ -31811,10 +31855,11 @@ type StagingCell struct {
 	OnYou bool
 }
     StagingCell is one staging server's column on a row. State is one of "none",
-    "outdated", "merging", "conflict", "ci", "deploying", "qa", "qa-pass",
-    "qa-fail", "latest" or "unknown". Count is the progress of a "ci" or "qa"
-    cell ("12/41", "4/9"). Seen is when the factory read it: a wide screen shows
-    its age.
+    "outdated", "merging", "conflict", "ci", "ci-fail" (the staging branch's
+    CI failed on the PR's own change), "deploying", "qa", "qa-pass", "qa-fail",
+    "latest" or "unknown". Count is the progress of a "ci" or "qa" cell
+    ("12/41", "4/9"). Seen is when the factory read it: a wide screen shows its
+    age.
 
 type StatusData struct {
 	Daemon    DaemonInfo
@@ -31864,8 +31909,12 @@ type TaskCard struct {
 	// body: on your PR's card and on a published task's once magnum read
 	// its PR; nil before.
 	PRInfo *CardPR
-	Stages []CardStage
-	Agents []CardAgent
+	// Stagings are where a published task's PR stands on each staging
+	// server, as its row's cells say it, drawn as one STAGINGS line after
+	// the PR's lines (each server's state and age); none: no line.
+	Stagings []StagingCell
+	Stages   []CardStage
+	Agents   []CardAgent
 	// Report lines each start with a label word and a space ("cause the offer
 	// email takes ...").
 	Report []string

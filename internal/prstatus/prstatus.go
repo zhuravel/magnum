@@ -96,8 +96,14 @@ type Status struct {
 	PublishedAt time.Time `json:"published_at"`
 	// FixLoop is magnum's fix loop on the PR.
 	FixLoop FixLoop `json:"fix_loop"`
-	// Staging is the change's deploy to a staging environment.
+	// Staging is the change's deploy to a staging environment: the first of
+	// Stagings, for the readers from before them, or {state: none} for a
+	// repository without one.
 	Staging Staging `json:"staging"`
+	// Stagings are the change's deploys to each staging environment of its
+	// repository, in the config's order; none (no key) for a repository
+	// without one. A field added under v=1: a reader before it ignores it.
+	Stagings []Staging `json:"stagings,omitempty"`
 	// Now is who the PR waits on, and the task's stage.
 	Now Now `json:"now"`
 }
@@ -139,8 +145,9 @@ type FixLoop struct {
 	ThreadsAnswered int      `json:"threads_answered"`
 }
 
-// Staging is the deploy of the change: Env is the configured staging
-// environment's name when it is a short slug ([a-z0-9-]{1,32}), else "".
+// Staging is the deploy of the change to one staging environment: Env is
+// the configured staging environment's name when it is a short slug
+// ([a-z0-9-]{1,32}), else "".
 // The config takes any name that is not blank, and Write refuses a whole
 // status whose Env is not a slug, so the writer sets Env with StagingEnv.
 type Staging struct {
@@ -488,6 +495,14 @@ func (s Status) validate() error {
 	} {
 		if !c.ok {
 			return fmt.Errorf("%w: %s", ErrInvalid, c.field)
+		}
+	}
+	for i, st := range s.Stagings {
+		switch {
+		case st.Env != "" && !envRe.MatchString(st.Env):
+			return fmt.Errorf("%w: stagings[%d].env", ErrInvalid, i)
+		case !st.State.Valid():
+			return fmt.Errorf("%w: stagings[%d].state", ErrInvalid, i)
 		}
 	}
 	return nil

@@ -243,19 +243,7 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	a.Identities = map[string]identity.Source{}
 	httpClient := githubHTTPClient(cfg.GitHub.Transport, a.Runner, opts.HTTPClient)
 	for _, id := range cfg.Identities {
-		switch id.Kind {
-		case "app":
-			app := identity.NewApp(id, layout, httpClient, opts.Getenv, nil, identity.WithRunner(a.Runner),
-				identity.WithRepos(identity.WatchedRepos(cfg, id.Name)...), identity.WithFixer(identity.FixRepos(cfg, id.Name)...))
-			a.Identities[id.Name] = app
-			// A 401 means the installation token was revoked: mint a new
-			// one and retry the call once.
-			a.gh[id.Name] = &github.Client{Run: a.Runner, Reauth: app.Reauth, Env: map[string]string{
-				"GH_CONFIG_DIR": app.ConfigDir(), "GH_TOKEN": "", "GITHUB_TOKEN": ""}}
-		default:
-			a.Identities[id.Name] = identity.NewGH(id, a.Runner)
-			a.gh[id.Name] = &github.Client{Run: a.Runner, Env: map[string]string{}}
-		}
+		a.Identities[id.Name], a.gh[id.Name] = newIdentity(cfg, layout, a.Runner, httpClient, opts.Getenv, id)
 	}
 	a.GitHub = a.githubFor
 
@@ -266,6 +254,32 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	a.wire()
 	ok = true
 	return a, nil
+}
+
+// NewIdentity is identity id's source and the GitHub client that acts as it
+// over run, as New makes them for each [[identity]] of cfg, for a process
+// that builds no App (the factory daemon): an App's mints its installation
+// tokens into its gh config dir (layout's), which its client names, and
+// mints again on a 401; a gh identity's is your own gh login. The App's
+// REST calls go as [github] transport says, and its private key is read
+// from the process's environment when private_key_env names it.
+func NewIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, id config.Identity) (identity.Source, *github.Client) {
+	return newIdentity(cfg, layout, run, githubHTTPClient(cfg.GitHub.Transport, run, nil), nil, id)
+}
+
+// newIdentity is NewIdentity with the App's REST client (httpClient) and
+// the read of its key (getenv; nil: os.Getenv) given.
+func newIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, httpClient *http.Client, getenv func(string) string,
+	id config.Identity) (identity.Source, *github.Client) {
+	if id.Kind != "app" {
+		return identity.NewGH(id, run), &github.Client{Run: run, Env: map[string]string{}}
+	}
+	app := identity.NewApp(id, layout, httpClient, getenv, nil, identity.WithRunner(run),
+		identity.WithRepos(identity.WatchedRepos(cfg, id.Name)...), identity.WithFixer(identity.FixRepos(cfg, id.Name)...))
+	// A 401 means the installation token was revoked: mint a new one and
+	// retry the call once.
+	return app, &github.Client{Run: run, Reauth: app.Reauth, Env: map[string]string{
+		"GH_CONFIG_DIR": app.ConfigDir(), "GH_TOKEN": "", "GITHUB_TOKEN": ""}}
 }
 
 // githubHTTPClient is the client App identities use for their own REST calls

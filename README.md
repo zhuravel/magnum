@@ -4262,7 +4262,17 @@ found (`✗ P1 P2×3`, `● P3×2`, `✔ clean`); APPR, the people's reviews Git
 else `✔ 2` approvals, `⟳` when one is of an older commit, else `—`). Below the wide layout they draw their short
 forms (the CI's glyph, with `⟳` when its checks are an older commit's, the head's not read yet, `✓ ⟳`; the
 verdict and the worst priority, `✗ P1`); on a narrow screen they outlast YOUR MOVE,
-whose step the help line then says (`· your move: b or f`), and the CI's glyph outlasts the other two. A title
+whose step the help line then says (`· your move: b or f`), and the CI's glyph outlasts the other two. A
+published task's row of a repository with `[[factory.repo.staging]]` entries draws one column per env, in the
+config's order (`VOID`, `BART`, `BASTION`), from the [staging status](#staging-status) the factory daemon reads
+off its loop (at most once a minute, as the repository's poll identity) and writes for the screen to
+`<data dir>/factory/staging.json`, so the screen runs no git: `latest` (a deployment holds the PR's head), `CI`
+(the head is on the branch and its ci.yml runs, or failed on another change), `CI ✗` (it failed on the PR's own
+change, in red), `deploying` (ci.yml passed and no deployment confirms the head yet), `outdated` (an older commit
+of the PR is there), `–` (nothing of it) and `?` (not read: the mirror's clone, a failed read, or a last good read
+over 10 minutes old, as when the daemon stopped); a wide screen adds each cell's age, the time of the last good
+read. The task card says the same in one line under the PR's lines (`STAGINGS  void: latest 3m · bart: CI 12m ·
+bastion: none`). Nothing deploys from the screen yet. A title
 that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding` beside
 `PR-12400` reads `Coupon rounding`). NEEDS YOU, WAITS ON OTHERS and LEFT ALONE each list their rows oldest wait
 first. The help (`?`) glosses only the words the screen draws. The task
@@ -4665,7 +4675,12 @@ magnum's fix loop on the PR, from magnum's registry (`none`, `running`, `needs_y
 and it still needs your attention, `done`, or `off`, with the cycle, the fixers' pushes and the review threads they
 replied in, never fewer than the file had, since magnum prunes old events); and now, who the PR waits on (`you`,
 `magnum`, `reviewers`, `ci` or `none`, as the task's row says) and the stage (`published`, then `done`, `stopped` or
-`failed`). The Jira row stays empty while the factory keeps no status of the issue, and so does the staging row. The
+`failed`). The Jira row stays empty while the factory keeps no status of the issue. The stagings are the PR on
+each staging env of its repository, in the config's order (`stagings`: each an `env`, its name when it is a slug,
+and a `state`: `deployed` for `latest`, `failed` when ci.yml failed on the PR's own change, `deploying` for the
+rest of `pushed`, `none` for `outdated` and `none`; an env whose status cannot be read keeps the state the file
+had), and `staging` is the first of them, for readers from before `stagings`; a repository without staging envs
+has no `stagings`, and its `staging` is `none`. The
 file is written only when its content changes, so its `updated_at` is the time of the last change, and a task that
 ended gets one last write with its end and none after. Nothing is written before the publish, or while magnum's
 registry cannot be read (the file keeps its last content); a write that fails is logged once until a write succeeds
@@ -4955,7 +4970,8 @@ or a factory update reaches the daemon only after `make build && bin/magnum fact
 ### Staging status
 
 For each open PR and each `[[factory.repo.staging]]` environment of its repository, magnum can tell where the
-PR stands on that staging branch (`internal/staging`; the daemons wire it next). A staging deploy is a merge of
+PR stands on that staging branch (`internal/staging`; the factory daemon reads it for its published tasks' PRs,
+on [its screen](#factory-writing-code-from-a-jira-key-or-a-prompt) and in their status files; the review daemon wires it next). A staging deploy is a merge of
 the PR's head into `staging-<name>`, and the deploy job records a GitHub deployment of the environment `<name>`
 once that tip is live (so an environment's branch is always `staging-<name>`):
 

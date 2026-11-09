@@ -651,6 +651,11 @@ func (p *factoryPainter) stageCell(c StagingCell, form factoryForm) cell {
 		if short || ansi.StringWidth(text) > factoryCountMax {
 			text = "CI " + percentOf(c.Count)
 		}
+	case "ci-fail":
+		text, style = "CI ✗", p.st.Err
+		if ascii {
+			text = pick("CI fail", "CI x")
+		}
 	case "deploying":
 		text = pick("deploying", "deploy")
 	case "qa":

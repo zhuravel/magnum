@@ -8,11 +8,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The help glosses only what the screen draws: no staging cells, QA,
+// The help glosses only what the screen draws: no staging merge or QA,
 // CI-fix tries, "say one line", learning view or rating, which no
-// data fills and no key offers yet; the stages it glosses are the built-in
-// kinds' (judge, reproduction, publish), not the spec's later ones (tests,
-// merge master, cleanup). Before, it listed all of spec 9.E's words.
+// data fills and no key offers yet; the staging cells a published task's
+// PR gets from the staging status (latest, CI, deploying, outdated) it
+// glosses; the stages it glosses are the built-in kinds' (judge,
+// reproduction, publish), not the spec's later ones (tests, merge master,
+// cleanup). Before, it listed all of spec 9.E's words.
 func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 	h := testFactory(t, 140, 50)
 	help := ansi.Strip(strings.Join(h.m.helpContent(140), "\n"))
@@ -22,7 +24,7 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 			words[w] = true
 		}
 	}
-	for _, gone := range []string{"void, bart, bastion", "outdated", "latest", "merging", "deploying", "CI 12/41", "QA 4/9",
+	for _, gone := range []string{"void, bart, bastion", "merging", "CI 12/41", "QA 4/9",
 		"QA ✓ / QA ✗", "bart: no QA", "bastion waits for void QA", "code failed", "runner died", "try 1 of 2", "out of fix tries",
 		"ready to merge", "access needed", "say one line", "you're in it", "no output 9m", "your PR, written by hand",
 		"lesson", "rule", "skill edit", "test case", "replay", "used in", "repeats seen after the rule", "rule to approve",
@@ -32,7 +34,8 @@ func TestTheHelpListsOnlyWhatExists(t *testing.T) {
 		}
 	}
 	for _, kept := range []string{"investigate", "judge", "critic", "questions", "reproduction", "coding", "local review",
-		"pr body", "ready", "publish", "step in", "memory full: new tasks wait", "you pushed 11:02", "push + PR"} {
+		"pr body", "ready", "publish", "step in", "memory full: new tasks wait", "you pushed 11:02", "push + PR",
+		"VOID, BART", "latest", "CI, CI ✗", "deploying", "outdated", "– and ?"} {
 		if !words[kept] {
 			t.Errorf("the help lacks %q", kept)
 		}

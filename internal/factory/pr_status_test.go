@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +119,7 @@ func TestAPublishedPRsStatusFileHoldsTheFactorysCountsAndWords(t *testing.T) {
 		FixLoop:     prstatus.FixLoop{State: prstatus.FixDone, Cycle: 2, Pushes: 2, ThreadsAnswered: 5},
 		Staging:     prstatus.Staging{State: prstatus.StagingNone},
 		Now:         prstatus.Now{Who: prstatus.WhoReviewers, Stage: prstatus.StagePublished}}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("status file\n%+v\nwant\n%+v", got, want)
 	}
 }

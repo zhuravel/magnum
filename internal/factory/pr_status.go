@@ -9,7 +9,10 @@ package factory
 // read it (who it waits on) and the fix loops' record (Magnum.FixRecords);
 // never the text of a PR, a ticket, a question or an agent. The Jira row
 // stays empty, since the factory keeps no status of the issue and the
-// contract takes a key only with one, and so does the staging row.
+// contract takes a key only with one. The stagings are the PR's staging
+// status this tick (stagingPass: each env of its repository, in the
+// config's order, the first also as the staging row); a repository without
+// staging envs has none, and its staging row stays none.
 // prstatus.Write writes only what changed, so an unchanged PR costs no
 // write and no edit of the comment. A task that ended (done, stopped,
 // failed) gets one last write, its end as its stage, and none after: only
@@ -45,9 +48,10 @@ type statusTask struct {
 
 // writePRStatuses writes the status files of the PRs that tasks published
 // (see the file's comment), states being magnum's view of the published
-// tasks' PRs as followPRs read it (nil: it read none). A task that ended
-// since has its PR read here, once.
-func (e *Engine) writePRStatuses(ctx context.Context, tasks []registry.Task, states map[PRRef]PRState) {
+// tasks' PRs as followPRs read it (nil: it read none) and stagings their
+// staging status, by task (stagingPass). A task that ended since has its PR
+// read here, once.
+func (e *Engine) writePRStatuses(ctx context.Context, tasks []registry.Task, states map[PRRef]PRState, stagings map[int64]taskStaging) {
 	if e.d.Magnum == nil {
 		return
 	}
@@ -94,7 +98,7 @@ func (e *Engine) writePRStatuses(ctx context.Context, tasks []registry.Task, sta
 		if !ok { // magnum's registry was not read for it: the file keeps its last content
 			continue
 		}
-		s, err := e.prStatus(ctx, j, st, fixes[j.ref], now)
+		s, err := e.prStatus(ctx, j, st, fixes[j.ref], stagings[j.t.ID], now)
 		if err == nil {
 			_, err = prstatus.Write(j.path, s)
 		}
@@ -155,9 +159,11 @@ func endStage(s prstatus.Stage) bool {
 	return s == prstatus.StageDone || s == prstatus.StageStopped || s == prstatus.StageFailed
 }
 
-// prStatus is j's PR's status at now, by magnum's view of the PR st and its
-// fix loops' record fix.
-func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix FixRecord, now time.Time) (prstatus.Status, error) {
+// prStatus is j's PR's status at now, by magnum's view of the PR st, its
+// fix loops' record fix and its staging status stg (none for an ended task
+// or a repository without staging envs: an ended task's stay as the file
+// has them).
+func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix FixRecord, stg taskStaging, now time.Time) (prstatus.Status, error) {
 	qs, err := e.reg.Questions(ctx, j.t.ID)
 	if err != nil {
 		return prstatus.Status{}, err
@@ -175,9 +181,20 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 	if p, ok := readProof(dir); ok {
 		s.Code.Proof, s.Code.Specs = proofOf(p, true), len(p.Specs)
 	}
-	if old, ok, err := prstatus.Read(j.path); err == nil && ok { // magnum prunes old events: a count never goes down
+	old, ok, err := prstatus.Read(j.path)
+	if err == nil && ok { // magnum prunes old events: a count never goes down
 		s.FixLoop.Pushes = max(s.FixLoop.Pushes, old.FixLoop.Pushes)
 		s.FixLoop.ThreadsAnswered = max(s.FixLoop.ThreadsAnswered, old.FixLoop.ThreadsAnswered)
+	}
+	switch {
+	case len(stg.envs) > 0:
+		s.Stagings = prStagings(stg.envs, old.Stagings)
+		s.Staging = s.Stagings[0] // the readers from before stagings render the first
+	case ok && (j.t.State != registry.TaskPublished || len(e.cfg.Stagings(j.t.Repo)) > 0):
+		// An ended task's last write, or a tick that read no staging status
+		// of a repository with envs (its PR's link not read), keeps where
+		// its PR stood.
+		s.Staging, s.Stagings = old.Staging, old.Stagings
 	}
 	return s, nil
 }

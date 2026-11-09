@@ -1,0 +1,18 @@
+ magnum factory · all repos · talkable                                                                                                                                                          ↻ 14:09 
+ ✓ nothing waits on you · 4 wait on others
+
+ NEEDS YOU
+   ✓ Nothing waits on you.
+
+ WAITS ON OTHERS                                           WAITS ON                                                       YOUR MOVE                     VOID          BART          BASTION       WAITED
+› ◷ PR-12320  #4530   Coupon rounding in the cart          reviewers: nothing open at a1b2c3d · no approval yet                                         latest 1m     CI 1m         –                 3h
+  ◷ PR-12321  #4531   Advocate offer email locale          magnum: looking at #4531                                                                     CI ✗ 1m       deploying 1m  outdated 1m       2h
+  ◷ PR-12322  #4532   Weekly gem upgrades                  rev-ann: review of #4532                                                                     ?             latest 1m     deploying 1m      1h
+  ◷ PR-12371          Coupon CSV export timeout            agent: finding the cause, 2 of 3 done                                                                                                      9m
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ reviewers: nothing open at a1b2c3d · no approval yet
+ enter task card · n new task · ? more

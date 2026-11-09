@@ -12,6 +12,7 @@ package factory
 // as arguments, never through a shell.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,6 +98,24 @@ func operatorIdentity(cfg *config.Config, repo string) (config.Identity, error) 
 		return config.Identity{}, fmt.Errorf("no [[identity]] named %s", name)
 	}
 	return *id, nil
+}
+
+// StagingIdentity is the identity the staging status of repo reads as
+// (internal/staging: its mirror's fetch and its GitHub reads): the poll
+// identity of the watch that covers repo (its identity without a
+// poll_identity), as magnum's review daemon reads that repository, so both
+// daemons fill the mirror's shared state as one login, the one that holds
+// Deployments: read; a repository no watch covers reads as the gh identity
+// the factory publishes as (operatorIdentity).
+func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error) {
+	if w := cfg.WatchFor(repo); w != nil {
+		name := cmp.Or(w.PollIdentity, w.Identity)
+		if id := cfg.IdentityByName(name); id != nil {
+			return *id, nil
+		}
+		return config.Identity{}, fmt.Errorf("no [[identity]] named %s", name)
+	}
+	return operatorIdentity(cfg, repo)
 }
 
 // operatorRunner runs each command through next as you (asOperator): env

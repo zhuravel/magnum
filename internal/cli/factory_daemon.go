@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,13 +29,17 @@ import (
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/notify"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -152,6 +157,11 @@ type factoryDaemon struct {
 	// GitRun runs the factory's git (its gitx client, the copies' slot
 	// code): the guarded runner in the C locale (cLocale).
 	GitRun execx.Runner
+	// Staging reads where the published tasks' PRs stand on their
+	// repositories' staging envs (internal/staging's read side,
+	// factoryStaging): nil when no [[factory.repo]] has staging entries.
+	// The engine closes it as the daemon stops.
+	Staging *staging.Client
 
 	closers []func() error
 }
@@ -341,9 +351,122 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"})
 	deps.Review = factory.NewLocalReviewer(evalrun.Deps{Layout: l, Config: reviewCfg, Logger: d.Log, Stderr: io.Discard, Runner: run,
 		Warn: func(format string, args ...any) { d.Log.Warn("local review: " + fmt.Sprintf(format, args...)) }})
+	// The staging status of the published tasks' PRs, when a repository
+	// has staging envs: read only, no deploy.
+	if d.Staging = factoryStaging(cfg, l, d.Log); d.Staging != nil {
+		deps.Staging = d.Staging
+	}
 	d.Engine = factory.New(deps)
 	built = true
 	return d, nil
+}
+
+// factoryStaging is the factory daemon's staging client (internal/staging),
+// when a [[factory.repo]] has staging entries, nil otherwise: its git in
+// the mirrors under [staging] mirror_dir, through the deny list in the C
+// locale (staging reads git's English refusals), logged at debug (it runs
+// every minute); GitHub and the fetch's git env as each repository's poll
+// identity (factory.StagingIdentity, stagingIdentities); the envs from
+// config.Stagings. No resolver, push or commit identity: it deploys nothing.
+func factoryStaging(cfg *config.Config, l paths.Layout, log *slog.Logger) *staging.Client {
+	if !slices.ContainsFunc(cfg.Factory.Repos, func(r config.FactoryRepo) bool { return len(r.Staging) > 0 }) {
+		return nil
+	}
+	run := cLocale{factory.Guard(&execx.Real{Log: app.Printf{Logger: log, Level: slog.LevelDebug, Src: "staging"}}, cfg)}
+	ids := newStagingIdentities(cfg, l, run, log)
+	return staging.New(staging.Deps{
+		Git: staging.NewGit(run), GitHub: staging.NewGitHub(ids.client),
+		Mirror: staging.MirrorDir(cfg.Staging.MirrorDir), MirrorRoot: staging.MirrorRoot(cfg.Staging.MirrorDir),
+		GitEnv: ids.gitEnv,
+		Stagings: func(repo string) []staging.Env {
+			var out []staging.Env
+			for _, s := range cfg.Stagings(repo) {
+				out = append(out, staging.Env{Name: s.Name, Branch: s.Branch})
+			}
+			return out
+		},
+		Log: log,
+	})
+}
+
+// stagingIdentityTimeout bounds the minting of an App's token for a
+// staging fetch.
+const stagingIdentityTimeout = time.Minute
+
+// stagingIdentities are the identities the staging status reads as, one
+// source and GitHub client per identity (app.NewIdentity), made at their
+// first use; a repository whose identity cannot be found, or whose env
+// cannot be made, is logged once per cause.
+type stagingIdentities struct {
+	cfg *config.Config
+	l   paths.Layout
+	run execx.Runner
+	log *slog.Logger
+
+	mu     sync.Mutex
+	src    map[string]identity.Source
+	gh     map[string]*github.Client
+	warned map[string]string // by repository: the cause last logged
+}
+
+func newStagingIdentities(cfg *config.Config, l paths.Layout, run execx.Runner, log *slog.Logger) *stagingIdentities {
+	return &stagingIdentities{cfg: cfg, l: l, run: run, log: log, src: map[string]identity.Source{}, gh: map[string]*github.Client{},
+		warned: map[string]string{}}
+}
+
+// of is repo's identity's source and client; ok is false when the config
+// names none for it.
+func (s *stagingIdentities) of(repo string) (identity.Source, *github.Client, bool) {
+	id, err := factory.StagingIdentity(s.cfg, repo)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.warnLocked(repo, "the staging status of a repository has no identity", err)
+		return nil, nil, false
+	}
+	if _, ok := s.src[id.Name]; !ok {
+		s.src[id.Name], s.gh[id.Name] = app.NewIdentity(s.cfg, s.l, s.run, id)
+	}
+	return s.src[id.Name], s.gh[id.Name], true
+}
+
+// client is staging.Deps' GitHub client of repo: its identity's, nil for
+// none.
+func (s *stagingIdentities) client(repo string) *github.Client {
+	_, c, _ := s.of(repo)
+	return c
+}
+
+// gitEnv is staging.Deps.GitEnv: the env of repo's fetch, its identity's
+// (an App's gh config dir with a fresh token, GH_HOST pinned), which gh, git's
+// only credential helper, reads its login from; nil when there is none,
+// and the fetch then reads nothing.
+func (s *stagingIdentities) gitEnv(repo string) map[string]string {
+	src, _, ok := s.of(repo)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stagingIdentityTimeout)
+	defer cancel()
+	env, err := src.Env(ctx)
+	if err != nil {
+		s.mu.Lock()
+		s.warnLocked(repo, "the staging status of a repository has no git env", err)
+		s.mu.Unlock()
+		return nil
+	}
+	return env
+}
+
+// warnLocked logs what about repo, err its cause, once while the cause
+// stays the same; s.mu is held.
+func (s *stagingIdentities) warnLocked(repo, what string, err error) {
+	msg := execx.Redact(err.Error())
+	if s.warned[repo] == what+msg {
+		return
+	}
+	s.warned[repo] = what + msg
+	s.log.Warn(what, "repo", repo, "err", msg)
 }
 
 // factoryReviewSession is how the local review sees magnum's review session

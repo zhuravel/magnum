@@ -289,6 +289,11 @@ func (l Layout) FactoryAlerts() string { return filepath.Join(l.factoryDir(), "a
 // factory daemon last saw them (the screen draws them), beside FactoryDB.
 func (l Layout) FactoryHolds() string { return filepath.Join(l.factoryDir(), "holds.json") }
 
+// FactoryStaging is staging.json, the staging cells of the published
+// tasks' PRs as the factory daemon last read them (the screen draws them),
+// beside FactoryDB.
+func (l Layout) FactoryStaging() string { return filepath.Join(l.factoryDir(), "staging.json") }
+
 // FactoryWork is work.json, the work the factory daemon runs that a restart
 // would cut and the drain it holds, as the daemon last wrote them (`magnum
 // factory install` reads it first), beside FactoryDB.

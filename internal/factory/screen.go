@@ -116,7 +116,8 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			return d, err
 		}
 	}
-	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks}
+	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks,
+		stagings: readStagingScreen(o.Layout)}
 	for _, t := range tasks {
 		v, err := s.read(t)
 		switch {
@@ -206,6 +207,10 @@ type screen struct {
 	// oldBuild is the build magnum's daemon runs when its binary on disk is
 	// newer, as a PR's read said it (noteBuild); nil for none.
 	oldBuild *engine.Build
+	// stagings are the published tasks' staging cells as the factory
+	// daemon last wrote them (staging.json), by task id: the screen runs no
+	// Refresh and no git.
+	stagings map[int64]stagingScreenTask
 }
 
 // taskView is what the screen read of a task on home.
@@ -422,8 +427,10 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	if t.State == registry.TaskQueued && t.WaitsWho == waitCopy {
 		row.Frees = s.frees(v)
 	}
+	row.Stagings = stagingCellsOf(s.cfg, s.stagings, t, cmp.Or(v.link.Number, t.PRNumber), s.now)
 	row.Help = s.help(v, row)
 	cards := tui.FactoryCards{Task: s.taskCard(v, row)}
+	cards.Task.Stagings = row.Stagings
 	if s.onQuestions(v) {
 		cards.Question = s.questionCard(v)
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -29,9 +30,14 @@ func sample() Status {
 		PublishedAt: time.Date(2026, 11, 7, 13, 0, 0, 0, time.UTC),
 		FixLoop:     FixLoop{State: FixRunning, Cycle: 1, Pushes: 1, ThreadsAnswered: 3},
 		Staging:     Staging{Env: "staging-a", State: StagingDeployed},
+		Stagings:    []Staging{{Env: "staging-a", State: StagingDeployed}, {Env: "beta", State: StagingDeploying}, {State: StagingFailed}},
 		Now:         Now{Who: WhoReviewers, Stage: StagePublished},
 	}
 }
+
+// zero reports whether s is the zero status, what Read gives for a file it
+// refuses or does not find.
+func zero(s Status) bool { return reflect.DeepEqual(s, Status{}) }
 
 func testLayout(t *testing.T) paths.Layout {
 	t.Helper()
@@ -176,7 +182,7 @@ func TestWriteThenReadGivesTheStatusBack(t *testing.T) {
 	want := sample()
 	want.V = Version
 	want.Digest = got.Digest
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Read gave\n%+v\nwant\n%+v", got, want)
 	}
 	if d := sum(t, load(t, path)); got.Digest != d {
@@ -334,6 +340,60 @@ func TestAStagingNameThatIsNotASlugIsWrittenWithoutAName(t *testing.T) {
 	}
 }
 
+// Stagings are the change's deploy to each staging environment, in the
+// config's order, under v=1 beside Staging: they come back as written, and
+// a status without them writes no stagings key, so the file of a writer
+// before them keeps its digest and is not written again.
+func TestStagingsComeBackInOrderAndAStatusWithoutThemWritesNoKey(t *testing.T) {
+	t.Parallel()
+	path := statusPath(t)
+	s := sample()
+	mustWrite(t, path, s)
+	if got := readOK(t, path).Stagings; !slices.Equal(got, s.Stagings) {
+		t.Errorf("stagings = %+v, want %+v in their order", got, s.Stagings)
+	}
+	if _, ok := load(t, path)["stagings"]; !ok {
+		t.Error("the file has no stagings key")
+	}
+
+	path = statusPath(t)
+	s.Stagings = nil
+	mustWrite(t, path, s)
+	if _, ok := load(t, path)["stagings"]; ok {
+		t.Error("a status without stagings wrote the key: an older writer's file would change its digest")
+	}
+	if got := readOK(t, path); got.Stagings != nil {
+		t.Errorf("stagings = %+v, want none", got.Stagings)
+	}
+}
+
+// A reader from before Stagings takes a file that has them: it ignores the
+// field, the digest it computes covers it as it covers every key, and the
+// staging row it renders is the first environment's, in a word it knows.
+func TestAReaderBeforeStagingsTakesAFileWithThem(t *testing.T) {
+	t.Parallel()
+	path := statusPath(t)
+	mustWrite(t, path, sample())
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old struct { // the fields such a reader checks here, by its own rules
+		V       int     `json:"v"`
+		Digest  string  `json:"digest"`
+		Staging Staging `json:"staging"`
+	}
+	if err := json.Unmarshal(b, &old); err != nil {
+		t.Fatalf("the old fields do not decode: %v", err)
+	}
+	if old.V != Version || old.Digest != sum(t, load(t, path)) {
+		t.Errorf("v %d, digest %q: an old reader refuses the file (want v %d and the rule's digest)", old.V, old.Digest, Version)
+	}
+	if first := sample().Stagings[0]; old.Staging != first || !old.Staging.State.Valid() {
+		t.Errorf("staging = %+v, want the first environment's %+v", old.Staging, first)
+	}
+}
+
 func TestWriteRefusesAnInvalidStatusAndWritesNothing(t *testing.T) {
 	t.Parallel()
 	path := statusPath(t)
@@ -366,7 +426,7 @@ func TestReadRefusesAFileOver64KiB(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, ok, err := Read(path)
-	if !errors.Is(err, ErrTooBig) || ok || s != (Status{}) {
+	if !errors.Is(err, ErrTooBig) || ok || !zero(s) {
 		t.Errorf("Read of %d bytes = %v, %v; want ErrTooBig", MaxSize+1, ok, err)
 	}
 }
@@ -384,7 +444,7 @@ func TestReadRefusesACutShortFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		s, ok, err := Read(path)
-		if !errors.Is(err, ErrCutShort) || ok || s != (Status{}) {
+		if !errors.Is(err, ErrCutShort) || ok || !zero(s) {
 			t.Errorf("Read of %d of %d bytes = %v, %v; want ErrCutShort", len(cut), len(b), ok, err)
 		}
 	}
@@ -399,7 +459,7 @@ func TestReadRefusesAFileThatIsNotAJSONObject(t *testing.T) {
 			t.Fatal(err)
 		}
 		s, ok, err := Read(path)
-		if !errors.Is(err, ErrNotJSON) || ok || s != (Status{}) {
+		if !errors.Is(err, ErrNotJSON) || ok || !zero(s) {
 			t.Errorf("Read of %q = %v, %v; want ErrNotJSON", text, ok, err)
 		}
 	}
@@ -418,7 +478,7 @@ func TestReadRefusesAnUnknownVersion(t *testing.T) {
 		}
 		store(t, path, m, true)
 		s, ok, err := Read(path)
-		if !errors.Is(err, ErrVersion) || ok || s != (Status{}) {
+		if !errors.Is(err, ErrVersion) || ok || !zero(s) {
 			t.Errorf("Read of v %v = %v, %v; want ErrVersion", v, ok, err)
 		}
 		mustWrite(t, path, sample())
@@ -446,6 +506,9 @@ func TestReadRefusesAWordOutsideItsEnum(t *testing.T) {
 		{"jira.status", func(m map[string]any) { sub(m, "jira")["key"] = "" }},
 		{"staging.env", func(m map[string]any) { sub(m, "staging")["env"] = "Staging A" }},
 		{"staging.env", func(m map[string]any) { sub(m, "staging")["env"] = strings.Repeat("a", 33) }},
+		{"stagings[1].state", func(m map[string]any) { staging(m, 1)["state"] = word }},
+		{"stagings[2].state", func(m map[string]any) { staging(m, 2)["state"] = "" }},
+		{"stagings[0].env", func(m map[string]any) { staging(m, 0)["env"] = "Staging A" }},
 		{"plan.questions_asked", func(m map[string]any) { sub(m, "plan")["questions_asked"] = json.Number("-1") }},
 		{"plan.questions_answered", func(m map[string]any) { sub(m, "plan")["questions_answered"] = json.Number("-1") }},
 		{"code.commits", func(m map[string]any) { sub(m, "code")["commits"] = json.Number("-1") }},
@@ -470,7 +533,7 @@ func TestReadRefusesAWordOutsideItsEnum(t *testing.T) {
 		tc.set(m)
 		store(t, path, m, true)
 		s, ok, err := Read(path)
-		if !errors.Is(err, ErrInvalid) || ok || s != (Status{}) {
+		if !errors.Is(err, ErrInvalid) || ok || !zero(s) {
 			t.Errorf("%s: Read = %v, %v; want ErrInvalid", tc.field, ok, err)
 			continue
 		}
@@ -484,6 +547,11 @@ func TestReadRefusesAWordOutsideItsEnum(t *testing.T) {
 }
 
 func sub(m map[string]any, key string) map[string]any { return m[key].(map[string]any) }
+
+// staging is entry i of the file's stagings.
+func staging(m map[string]any, i int) map[string]any {
+	return m["stagings"].([]any)[i].(map[string]any)
+}
 
 func TestEveryEnumAcceptsItsWordsOnly(t *testing.T) {
 	t.Parallel()
@@ -533,7 +601,7 @@ func TestReadRefusesADigestThatDoesNotMatch(t *testing.T) {
 		change(m)
 		store(t, path, m, false)
 		s, ok, err := Read(path)
-		if !errors.Is(err, ErrDigest) || ok || s != (Status{}) {
+		if !errors.Is(err, ErrDigest) || ok || !zero(s) {
 			t.Errorf("%s: Read = %v, %v; want ErrDigest", name, ok, err)
 		}
 	}
@@ -550,7 +618,7 @@ func TestReadIgnoresFieldsItDoesNotKnow(t *testing.T) {
 	store(t, path, m, true)
 	got := readOK(t, path)
 	want.Digest = got.Digest
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Read gave\n%+v\nwant\n%+v", got, want)
 	}
 }
@@ -560,13 +628,13 @@ func TestReadOfAMissingFileIsAbsent(t *testing.T) {
 	path := statusPath(t)
 	for _, p := range []string{path, filepath.Join(filepath.Dir(path), "8.json")} {
 		s, ok, err := Read(p)
-		if err != nil || ok || s != (Status{}) {
+		if err != nil || ok || !zero(s) {
 			t.Errorf("Read of a missing file = %+v, %v, %v; want the zero status, false, nil", s, ok, err)
 		}
 	}
 	mustWrite(t, path, sample())
 	s, ok, err := Read(filepath.Join(filepath.Dir(path), "8.json"))
-	if err != nil || ok || s != (Status{}) {
+	if err != nil || ok || !zero(s) {
 		t.Errorf("Read of another PR's missing file = %+v, %v, %v; want absent", s, ok, err)
 	}
 }

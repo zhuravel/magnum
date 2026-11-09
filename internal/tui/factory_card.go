@@ -186,6 +186,10 @@ func cleanTaskCard(c TaskCard) TaskCard {
 		}
 		c.PRInfo = &pr
 	}
+	c.Stagings = slices.Clone(c.Stagings)
+	for i, s := range c.Stagings {
+		c.Stagings[i].Name, c.Stagings[i].State, c.Stagings[i].Count = cleanText(s.Name), cleanText(s.State), cleanText(s.Count)
+	}
 	c.Stages = slices.Clone(c.Stages)
 	for i, s := range c.Stages {
 		c.Stages[i].Name, c.Stages[i].State, c.Stages[i].Proof = cleanText(s.Name), cleanText(s.State), cleanText(s.Proof)

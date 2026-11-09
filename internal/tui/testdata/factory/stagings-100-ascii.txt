@@ -1,0 +1,18 @@
+ magnum factory | all repos | talkable                                                     at 14:09 
+ + nothing waits on you | 4 wait on others
+
+ NEEDS YOU
+   + Nothing waits on you.
+
+ WAITS ON OTHERS             WAITS ON                  YOUR MOVE        VOID   BART   BASTION WAITED
+> o PR-12320 Coupon roundi…  reviewers: no approval                     latest CI     -           3h
+  o PR-12321 Advocate offe…  magnum: looking at #4531                   CI x   deploy old         2h
+  o PR-12322 Weekly gem up…  rev-ann: review of #4532                   ?      latest deploy      1h
+  o PR-12371 Coupon CSV ex…  agent: finding the cause                                             9m
+
+
+
+
+----------------------------------------------------------------------------------------------------
+ reviewers: nothing open at a1b2c3d · no approval yet
+ enter task card · n new task · ? more

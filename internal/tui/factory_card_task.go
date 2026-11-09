@@ -164,7 +164,7 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 		lines = append(lines, line)
 	}
 	add := func(l string) { lines = append(lines, l) }
-	lines = append(lines, p.prSection(c.PRInfo)...)
+	lines = append(lines, p.prSection(c.PRInfo, c.Stagings)...)
 	if len(c.Stages) > 0 || c.PRInfo == nil { // your PR's card is no task's: it has none
 		p.stageRows(c, stop, add)
 	}
@@ -212,11 +212,10 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 // WAITING FOR's column and only when it has its data, cut at the edge; the
 // CI, findings and approvals in the board's cells, as home's columns draw
 // them, the CI with why GitHub blocks the merge and the failed jobs'
-// pages under it (ciLinkRows); a blank line after them.
-func (p *cardPainter) prSection(c *CardPR) []string {
-	if c == nil {
-		return nil
-	}
+// pages under it (ciLinkRows); then STAGINGS, the PR on each staging
+// server (stagingsText), with or without the PR's lines; a blank line
+// after them.
+func (p *cardPainter) prSection(c *CardPR, stagings []StagingCell) []string {
 	const x = 1 + len("WAITING FOR") + 2
 	var out []string
 	row := func(label string, cl cell) {
@@ -233,27 +232,50 @@ func (p *cardPainter) prSection(c *CardPR) []string {
 		}
 		return append(cl, seg{text, noStyle})
 	}
-	row("PR", words(nil, c.State))
-	if ci := c.CI; ci != nil {
-		cl := p.ciText(FactoryRow{CI: ci}, formLong)
-		var under []string // GitHub's block when it does not fit beside the cell
-		if b := ci.Blocked; b != "" {
-			if with := append(slices.Clone(cl), p.sepSeg(), seg{b, p.st.Warn}); with.width() <= p.width-1-x {
-				cl = with
-			} else {
-				under = wrapText(b, p.wrapW(x), 2)
+	if c != nil {
+		row("PR", words(nil, c.State))
+		if ci := c.CI; ci != nil {
+			cl := p.ciText(FactoryRow{CI: ci}, formLong)
+			var under []string // GitHub's block when it does not fit beside the cell
+			if b := ci.Blocked; b != "" {
+				if with := append(slices.Clone(cl), p.sepSeg(), seg{b, p.st.Warn}); with.width() <= p.width-1-x {
+					cl = with
+				} else {
+					under = wrapText(b, p.wrapW(x), 2)
+				}
 			}
+			row("CI", cl)
+			out = append(out, p.textRows(x, p.st.Warn, under)...)
+			out = append(out, p.ciLinkRows(ci.Links)...)
 		}
-		row("CI", cl)
-		out = append(out, p.textRows(x, p.st.Warn, under)...)
-		out = append(out, p.ciLinkRows(ci.Links)...)
+		row("REVIEW", words(p.findingsText(FactoryRow{Findings: c.Findings}, formLong), c.Review))
+		row("APPROVALS", words(p.apprText(FactoryRow{Approvals: c.Approvals}, formLong), c.Reviewers))
+		row("THREADS", words(nil, c.Threads))
+		row("FIX LOOP", words(nil, c.FixLoop))
 	}
-	row("REVIEW", words(p.findingsText(FactoryRow{Findings: c.Findings}, formLong), c.Review))
-	row("APPROVALS", words(p.apprText(FactoryRow{Approvals: c.Approvals}, formLong), c.Reviewers))
-	row("THREADS", words(nil, c.Threads))
-	row("FIX LOOP", words(nil, c.FixLoop))
+	row("STAGINGS", p.stagingsText(stagings))
 	if len(out) > 0 {
 		out = append(out, "")
+	}
+	return out
+}
+
+// stagingsText is the card's STAGINGS line: each staging server's name and
+// its cell as a wide row draws it, the state and its age ("void: latest
+// 3m · bart: CI 12m · bastion: none"); a server the PR is not on says
+// none, in words. None for no cell.
+func (p *cardPainter) stagingsText(cells []StagingCell) cell {
+	var out cell
+	for i, c := range cells {
+		if i > 0 {
+			out = append(out, p.sepSeg())
+		}
+		out = append(out, seg{c.Name + ": ", noStyle})
+		if c.State == "none" {
+			out = append(out, seg{"none", p.st.Dim})
+			continue
+		}
+		out = append(out, p.stageCell(c, formLong)...)
 	}
 	return out
 }
