@@ -256,11 +256,13 @@ func TestACaseWorktreeIsTornDownHoweverTheReplayEnds(t *testing.T) {
 	}
 	fixtures := map[string]func(t *testing.T) replay{
 		"local": func(t *testing.T) replay {
+			t.Helper()
 			f := newPrepFixture(t)
 			return replay{h: f.h, roundErr: &f.roundErr, cancel: &f.cancel, wt: caseWorktree(f.d, f.options(), "task-1-round-1"),
 				run: func(ctx context.Context) eval.CaseRun { return RunCase(ctx, f.d, localEvalCase(t), f.options()) }}
 		},
 		"posted": func(t *testing.T) replay {
+			t.Helper()
 			f := newPostedFixture(t)
 			return replay{h: f.h, roundErr: &f.roundErr, cancel: &f.cancel, wt: caseWorktree(f.d, f.o, f.ec.Name),
 				run: func(ctx context.Context) eval.CaseRun { return RunCase(ctx, f.d, f.ec, f.o) }}
