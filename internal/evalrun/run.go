@@ -31,6 +31,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -215,9 +216,11 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 // a time, whoever starts it (`magnum eval run`, eval-at.sh through it, the
 // daemon's gate): it holds the case's lock (lockCase) from its first check
 // to the end of its cleanup, a second replay of the case waiting for it, and
-// Started is when it took the lock.
+// Started is when it took the lock. A local case (eval.KindLocal) replays its
+// round from its frozen inputs (replayLocal) after the same checks, the
+// budget's included.
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun) {
-	cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head}
+	cr := eval.CaseRun{Case: ec.Name, Kind: ec.Kind, PR: ec.PR, Head: ec.Head}
 	fail := func(outcome string, err error) eval.CaseRun {
 		if cr.Started.IsZero() {
 			cr.Started = d.now()
@@ -252,6 +255,13 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	if w == nil {
 		return fail(OutcomeError, fmt.Errorf("%s is not watched: add it to a [[watch]] so magnum knows its roles and identity", full))
 	}
+	var local LocalInputs // a local case's frozen inputs
+	if ec.Local() {
+		var outcome string
+		if local, outcome, err = localCaseInputs(d, cfg, w, ec, o); err != nil {
+			return fail(outcome, err)
+		}
+	}
 	var stored eval.CaseRun // the full replay whose reviewer reports a judge-only replay takes
 	if o.JudgeOnly {
 		runs, err := eval.ListRuns(RunsRoot(d.Layout))
@@ -274,6 +284,9 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	}
 	cr.CodexBefore = codexUsed(ctx, cfg) // the points the case uses
 	defer func() { out.CodexAfter = codexUsed(context.WithoutCancel(ctx), cfg) }()
+	if ec.Local() {
+		return d.replayLocal(ctx, cfg, w, ec, local, o, cr)
+	}
 
 	scratch := filepath.Join(o.RunDir, "cases", ec.Name)
 	layout := d.Layout // logs, locks and the gh config dirs stay the install's
@@ -309,7 +322,7 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	}
 	defer a.Close()
 
-	mainClone, err := clone(ctx, a, cfg, w, ec)
+	mainClone, err := clone(ctx, a.Git, cfg, w, ec)
 	if err != nil {
 		return fail(OutcomeError, err)
 	}
@@ -452,12 +465,12 @@ func codexUsed(ctx context.Context, cfg *config.Config) *float64 {
 // clone is the clone a case's worktree is added to: the pool's main clone,
 // else the existing clone under the watch's clone_root. A replay never
 // clones.
-func clone(ctx context.Context, a *app.App, cfg *config.Config, w *config.Watch, ec eval.Case) (string, error) {
+func clone(ctx context.Context, g *gitx.Client, cfg *config.Config, w *config.Watch, ec eval.Case) (string, error) {
 	full := ec.Owner + "/" + ec.Repo
 	if p := cfg.PoolFor(full); p != nil {
 		return p.MainClone, nil
 	}
-	dir, err := a.Git.FindClone(ctx, w.CloneRoot, ec.Owner, ec.Repo)
+	dir, err := g.FindClone(ctx, w.CloneRoot, ec.Owner, ec.Repo)
 	if err != nil {
 		return "", fmt.Errorf("no clone of %s under %s: %w\nfix: gh repo clone %s %s", full, tilde(w.CloneRoot), err,
 			full, filepath.Join(tilde(w.CloneRoot), ec.Repo))
@@ -570,6 +583,9 @@ func notesHashes(scratch paths.Layout, owner, repo string) map[string]string {
 // file is opened read-only, never created; a registry that is not there,
 // or does not know the PR, holds no flag.
 func liveFlag(ctx context.Context, d Deps, ec eval.Case) string {
+	if ec.Local() {
+		return "" // its synthetic PR is in no registry: only its own refused replays flag it
+	}
 	cannot := func(err error) string {
 		return "the registry cannot say whether Codex flagged " + ec.PR + " (" + err.Error() + "), so the case is not replayed"
 	}

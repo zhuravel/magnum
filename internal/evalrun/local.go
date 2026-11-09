@@ -42,6 +42,10 @@ import (
 // its scratch directory (LocalRoot) come from them. Base is the base branch
 // ("" = master), Env the copy's environment, the one the factory's agents
 // get in it (engine.LocalRound.Env). The factory's LocalReviewer takes it.
+// A replay of the round as an eval case (RunCase of a local case) sets
+// ScratchRoot, where the round's scratch directory goes instead of the
+// task's directory (LocalRoot), and NoNotes, which withholds the repository
+// notes (Options.NoNotes); the factory sets neither.
 type LocalCase struct {
 	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD, AnswersMD string
 	Watch                                                                config.Watch
@@ -50,6 +54,8 @@ type LocalCase struct {
 	TaskID                                                               int64
 	Repo, Base                                                           string
 	Env                                                                  map[string]string
+	ScratchRoot                                                          string
+	NoNotes                                                              bool
 }
 
 // ConfigError is a local round that cannot run for a configuration problem
@@ -99,8 +105,9 @@ type LocalFinding struct {
 }
 
 // localNumberBase is where the local rounds' synthetic PR numbers start:
-// far above any PR number of the repositories magnum reviews.
-const localNumberBase = 900000
+// far above any PR number of the repositories magnum reviews (a local eval
+// case's PR number is one, eval.LocalNumberBase).
+const localNumberBase = eval.LocalNumberBase
 
 // LocalNumber is the synthetic PR number of round n of task taskID's local
 // review: 900000 + task id × 10 + round. A round of the loop is 1 to
@@ -180,8 +187,9 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 // RunLocal runs local round c and reads its judge's result (ParseLocalResult).
 // Each round is its own: a fresh scratch directory under the task's
-// (LocalRoot/<round>-<tag>) with its registry, reports and a copy of the
-// repository notes, a new agent tag, and the synthetic PR number
+// (LocalRoot/<round>-<tag>; c.ScratchRoot/<round>-<tag> when set) with its
+// registry, reports and a copy of the repository notes (none with
+// c.NoNotes), a new agent tag, and the synthetic PR number
 // LocalNumber, so two rounds never share an agent, a herdr workspace label
 // or an eval case lock (it holds the case lock "local-<number>" for the
 // round). It writes the title and body (description.md) and the ticket with
@@ -217,7 +225,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	if err != nil {
 		return LocalResult{}, err
 	}
-	root := LocalRoot(d.Layout, c.TaskID)
+	root := cmp.Or(c.ScratchRoot, LocalRoot(d.Layout, c.TaskID))
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 	}
@@ -246,10 +254,12 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 			return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 		}
 	}
-	notes := true
-	if err := copyNotes(d.Layout, layout, owner, name); err != nil {
-		d.warn("local round %d of task %d: the repository notes stay out of it: %v", c.Round, c.TaskID, err)
-		notes = false
+	notes := !c.NoNotes
+	if notes {
+		if err := copyNotes(d.Layout, layout, owner, name); err != nil {
+			d.warn("local round %d of task %d: the repository notes stay out of it: %v", c.Round, c.TaskID, err)
+			notes = false
+		}
 	}
 	w := c.Watch
 	if len(c.Roles) > 0 {
