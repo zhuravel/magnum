@@ -40,8 +40,10 @@ import (
 // number, from 1. TaskID is the task whose change it is and Repo its
 // repository (owner/name): the round's synthetic PR number (LocalNumber) and
 // its scratch directory (LocalRoot) come from them. Base is the base branch
-// ("" = master), Env the copy's environment, the one the factory's agents
-// get in it (engine.LocalRound.Env). The factory's LocalReviewer takes it.
+// ("" = master), Env the round's environment (engine.LocalRound.Env): the
+// factory gives the copy's, the one its agents get in it; the replay of a
+// local case (RunCase) the per-PR worktree env of the synthetic number,
+// never a copy's. The factory's LocalReviewer takes it.
 // A replay of the round as an eval case (RunCase of a local case) sets
 // ScratchRoot, where the round's scratch directory goes instead of the
 // task's directory (LocalRoot), and NoNotes, which withholds the repository

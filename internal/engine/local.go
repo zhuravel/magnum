@@ -26,15 +26,18 @@ type LocalRound struct {
 	EvalCase
 	BaseSHA                     string
 	DescriptionFile, TicketFile string
-	// Env is the environment of the copy the round works in, the one the
-	// factory's own agents get there (its WT_BRANCH and env): every pane
-	// and the readiness step of the round get it, in place of a per-PR
-	// worktree's env for the synthetic number.
+	// Env is the environment every pane and the readiness step of the
+	// round get, as the caller gives it: the engine derives none from the
+	// checkout. The factory gives the env of the copy the round works in,
+	// the one its own agents get there (its WT_BRANCH and env); the replay
+	// of a local eval case (evalrun.RunCase) gives the env a posted replay's
+	// per-PR worktree has for the synthetic number, so its roles never use
+	// a copy's databases.
 	Env map[string]string
 }
 
 // localJob is a local round's part of its round job (roundJob.local): the
-// base, the files and the copy's environment of its LocalRound.
+// base, the files and the environment of its LocalRound.
 type localJob struct {
 	base, description, ticket string
 	env                       map[string]string
@@ -53,10 +56,10 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // local diff (--local-base), and the round input's Local names c's files,
 // so the judge reads the title, the body and the ticket from them and
 // nothing from GitHub, and the round reads no Jira issue; its panes and its
-// readiness step get the copy's own environment (c.Env), never a per-PR
-// worktree's env for the synthetic number. A case without a
-// full base commit or a description file, or a judge-only one, never
-// starts.
+// readiness step get c.Env, the caller's (the factory's copy's env, or an
+// eval replay's per-PR env of the synthetic number: LocalRound.Env), never
+// one derived from the checkout. A case without a full base commit or a
+// description file, or a judge-only one, never starts.
 func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResult, store.PR, error) {
 	if e.d.Layout.Scratch == "" {
 		return pipeline.RoundResult{}, store.PR{}, ErrEvalLayout
