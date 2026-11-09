@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,15 +11,28 @@ import (
 	"github.com/zhuravel/magnum/internal/staging"
 )
 
-// stubGitHub is a staging.GitHub nothing calls: the deploy's deps are
-// complete, so only the deploy's git decides whether it may go on.
-type stubGitHub struct{ staging.GitHub }
+// stubGitHub is a staging.GitHub whose every read fails: the deploy's deps
+// are complete, so only the deploy's git decides whether it may go on, and
+// a read that comes first fails in words.
+type stubGitHub struct{}
 
-// stagingPlanner is the deploy side of internal/staging's Client.
+func (stubGitHub) DeploymentsOf(context.Context, string, string, string) (staging.Deployments, error) {
+	return staging.Deployments{}, errors.New("stub GitHub: no deployments")
+}
+
+func (stubGitHub) RunsOf(context.Context, string, string, string) ([]staging.Run, error) {
+	return nil, errors.New("stub GitHub: no runs")
+}
+
+// stagingPlanner is the deploy side of internal/staging's Client, which
+// NewStaging's client carries (it embeds the Client): a refactor that drops
+// it breaks this build, so the pin below never passes by testing nothing.
 type stagingPlanner interface {
 	Plan(ctx context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error)
 	Deploy(ctx context.Context, plan staging.DeployPlan, by string) ([]staging.EffectID, error)
 }
+
+var _ stagingPlanner = (*stagingClient)(nil)
 
 // The factory daemon's staging client reads, and can never deploy, so the
 // factory daemon cannot push to a staging branch by accident: given
@@ -43,7 +57,7 @@ func TestTheFactoryStagingClientCannotDeploy(t *testing.T) {
 	defer c.Close()
 	p, ok := c.(stagingPlanner)
 	if !ok {
-		return // no deploy side at all: nothing to refuse
+		t.Fatalf("NewStaging's client %T has no Plan and Deploy: the pin needs a new form", c)
 	}
 	if _, err := p.Plan(t.Context(), pr, envs); err == nil || !strings.Contains(err.Error(), "cannot deploy") {
 		t.Errorf("the factory client's Plan: %v, want its refusal to deploy", err)
