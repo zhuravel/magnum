@@ -86,7 +86,11 @@ func TestEvalAddFreezesALocalRoundAndPrintsItsCase(t *testing.T) {
 	if err != nil || in.HeadSHA != addHead || in.BaseSHA != addBase || in.Repo != "talkable/talkable" {
 		t.Fatalf("frozen inputs %+v, %v", in, err)
 	}
-	block := out[strings.Index(out, "[[case]]"):]
+	at := strings.Index(out, "[[case]]")
+	if at < 0 {
+		t.Fatalf("no [[case]] in the output:\n%s", out)
+	}
+	block := out[at:]
 	block = strings.ReplaceAll(block, "# [[case.defect]]", "[[case.defect]]")
 	block += "\nid = \"plan-choice\"\ntitle = \"t\"\nquestion = true\nmatch = [\"deliberate\"]\n"
 	corpus := filepath.Join(t.TempDir(), "eval.toml")

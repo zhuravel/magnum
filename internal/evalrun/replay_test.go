@@ -171,7 +171,7 @@ func TestRunCaseReplaysALocalCaseFromItsFrozenInputs(t *testing.T) {
 // another round's says so, a round that went without a reviewer's report is missing_role, and a
 // refused one is flagged so that it never replays again.
 func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
-	o := func(t *testing.T, f *replayFixture) Options {
+	o := func(f *replayFixture) Options {
 		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
 	}
 	t.Run("a role the config lacks", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 		if err := SaveLocalInputs(dir, f.in); err != nil {
 			t.Fatal(err)
 		}
-		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(t, f))
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
 		if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil || !strings.Contains(cr.Error, "gone-review") || len(f.git.Calls) > 0 || len(f.rounds) > 0 {
 			t.Fatalf("case run %+v (%d git calls, %d rounds)", cr, len(f.git.Calls), len(f.rounds))
 		}
@@ -190,14 +190,14 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 	t.Run("no gh identity", func(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
 		f.d.Config.Identities = []config.Identity{{Name: "zhuravel", Kind: "app", Login: "talkable[bot]"}}
-		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(t, f))
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
 		if cr.Outcome != eval.OutcomeConfigError || cr.Score != nil || !strings.Contains(cr.Error, "[[identity]]") || len(f.git.Calls) > 0 {
 			t.Fatalf("case run %+v (%d git calls)", cr, len(f.git.Calls))
 		}
 	})
 	t.Run("judge-only", func(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
-		opts := o(t, f)
+		opts := o(f)
 		opts.JudgeOnly = true
 		if cr := RunCase(context.Background(), f.d, localEvalCase(t), opts); cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "every role") {
 			t.Fatalf("case run %+v", cr)
@@ -206,7 +206,7 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 	t.Run("no inputs", func(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
 		mustRemoveAll(t, LocalCaseDir(f.d.Layout, "task-1-round-1"))
-		if cr := RunCase(context.Background(), f.d, localEvalCase(t), o(t, f)); cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "eval add") {
+		if cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f)); cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "eval add") {
 			t.Fatalf("case run %+v", cr)
 		}
 	})
@@ -214,14 +214,14 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
 		ec := localEvalCase(t)
 		ec.Head = frozenBase
-		if cr := RunCase(context.Background(), f.d, ec, o(t, f)); cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "frozen") || len(f.git.Calls) > 0 {
+		if cr := RunCase(context.Background(), f.d, ec, o(f)); cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "frozen") || len(f.git.Calls) > 0 {
 			t.Fatalf("case run %+v", cr)
 		}
 	})
 	t.Run("a reviewer's report missing", func(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
 		f.answer.Reports = map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.ReportMissing}, "claude-review": {Status: pipeline.ReportOK}}
-		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(t, f))
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
 		if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil || !strings.Contains(cr.Error, "codex-review") {
 			t.Fatalf("case run %+v", cr)
 		}
@@ -229,7 +229,7 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 	t.Run("refused", func(t *testing.T) {
 		f := newReplayFixture(t, questionResult)
 		f.answer.Outcome, f.answer.Refusal = pipeline.OutcomeRefused, &pipeline.Refusal{Role: "codex-judge", Kind: "codex"}
-		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(t, f))
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
 		if cr.Outcome != pipeline.OutcomeRefused || cr.Score != nil {
 			t.Fatalf("case run %+v", cr)
 		}

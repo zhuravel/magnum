@@ -221,8 +221,8 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
 	if err != nil {
 		return fail("the %s its judge read is gone: %v", LocalDescriptionFile, err)
 	}
-	title, body, ok := strings.Cut(string(desc), "\n")
-	title, ok = strings.CutPrefix(title, "# ")
+	title, body, _ := strings.Cut(string(desc), "\n")
+	title, ok := strings.CutPrefix(title, "# ")
 	if !ok || strings.TrimSpace(title) == "" {
 		return fail("its %s does not start with the title", LocalDescriptionFile)
 	}

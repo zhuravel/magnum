@@ -208,27 +208,35 @@ func TestFreezeLocalRefusesARoundItCannotFreezeWhole(t *testing.T) {
 				frozenHead[:12] + `: claude-review')`,
 		}, task: 1, round: 1, want: []string{"cycles 1 and 2", "--cycle"}},
 		{name: "a cycle of another round", task: 1, round: 1, cycle: 2, want: []string{"cycle 2"}},
-		{name: "no result", change: func(t *testing.T, f *freezeFixture) { mustRemove(t, filepath.Join(f.taskDir, LocalResultFile(1))) },
+		{name: "no result", change: func(t *testing.T, f *freezeFixture) {
+			t.Helper()
+			mustRemove(t, filepath.Join(f.taskDir, LocalResultFile(1)))
+		},
 			task: 1, round: 1, want: []string{"no result", LocalResultFile(1)}},
-		{name: "another round's result", change: func(t *testing.T, f *freezeFixture) { f.result.Round = 2; f.writeResult(t) },
+		{name: "another round's result", change: func(t *testing.T, f *freezeFixture) { t.Helper(); f.result.Round = 2; f.writeResult(t) },
 			task: 1, round: 1, want: []string{"round 2"}},
-		{name: "no description", change: func(t *testing.T, f *freezeFixture) { mustRemove(t, filepath.Join(f.scratch, LocalDescriptionFile)) },
+		{name: "no description", change: func(t *testing.T, f *freezeFixture) {
+			t.Helper()
+			mustRemove(t, filepath.Join(f.scratch, LocalDescriptionFile))
+		},
 			task: 1, round: 1, want: []string{LocalDescriptionFile}},
 		{name: "no prepass", change: func(t *testing.T, f *freezeFixture) {
+			t.Helper()
 			mustRemove(t, filepath.Join(f.result.ReportDir, pipeline.PrepassFile))
 		},
 			task: 1, round: 1, want: []string{pipeline.PrepassFile, "base"}},
 		{name: "a prepass of another head", change: func(t *testing.T, f *freezeFixture) {
+			t.Helper()
 			b, _ := json.Marshal(pipeline.Prepass{HeadSHA: frozenBase, BaseSHA: frozenBase})
 			writeFile(t, filepath.Join(f.result.ReportDir, pipeline.PrepassFile), string(b))
 		}, task: 1, round: 1, want: []string{"head"}},
-		{name: "a scratch elsewhere", change: func(t *testing.T, f *freezeFixture) { f.result.Scratch = t.TempDir(); f.writeResult(t) },
+		{name: "a scratch elsewhere", change: func(t *testing.T, f *freezeFixture) { t.Helper(); f.result.Scratch = t.TempDir(); f.writeResult(t) },
 			task: 1, round: 1, want: []string{"not in", "local-review"}},
 		{name: "no roles", stmts: []string{`DELETE FROM events`}, task: 1, round: 1, want: []string{"round 1", "roles"}},
 		{name: "an answer given since", stmts: []string{`INSERT INTO questions (task_id, revision, idx, text, answer, state, asked_at, answered_at)
 			VALUES (1, 2, 0, 'Later?', 'yes', 'answered', '2026-11-05T10:00:00Z', '2026-11-05T10:30:00Z')`}, task: 1, round: 1,
 			want: []string{"1 question", "after round 1 began"}},
-		{name: "answers written since", change: func(t *testing.T, f *freezeFixture) { f.touch(t, "answers.md", roundStart.Add(time.Hour)) },
+		{name: "answers written since", change: func(t *testing.T, f *freezeFixture) { t.Helper(); f.touch(t, "answers.md", roundStart.Add(time.Hour)) },
 			task: 1, round: 1, want: []string{"answers.md", "after round 1 began"}},
 	}
 	for _, tt := range tests {
