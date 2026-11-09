@@ -1097,8 +1097,10 @@ func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head str
     ProjectSentences is what the board's card says of the PR's head: one
     sentence per CLI whose sessions of that head ran without the PR's project
     configuration, in projectKinds' order, naming the files and how ("Codex ran
-    without the PR's AGENTS.md changes (its sessions loaded no AGENTS.md)");
-    "" when none did.
+    without the PR's AGENTS.md changes (its sessions loaded no AGENTS.md)";
+    for a record of residue, "Claude ran without the checkout's .claude/ files,
+    which the PR's commits do not change (…)": projectCheckOf); "" when none
+    did.
 
 func ProjectTouched(kind string, paths []string) bool
     ProjectTouched reports whether paths (a PR's changed files, relative to
@@ -3016,6 +3018,12 @@ type ProjectNote struct {
 	// DocsOnly: they were all instruction files, kept out by the kind's
 	// project_docs_off while the rest of the project config loaded.
 	DocsOnly bool `json:"docs_only,omitempty"`
+	// Residue: git compared them, and none is a file the PR's commits
+	// since the merge base change: they are untracked or ignored files a
+	// round left in the slot, or uncommitted edits, so they say nothing of
+	// the PR (the auto-approval's gate reads its file list instead). False
+	// when git could not tell, and in a record written before it was kept.
+	Residue bool `json:"residue,omitempty"`
 }
     ProjectNote is the PR's record of a session of one kind launched without the
     checkout's project configuration (store.KVPRProject).
@@ -28292,12 +28300,14 @@ func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string
     NeedsMe is what the operator's approval would fix on a PR magnum approved,
     "" when nothing: an open PR, not a draft and not authored by one of the
     operator's logins (mine), whose latest verified magnum review is on the
-    current head and clean (an approval, or a clean comment from an identity
-    that comments when clean or one the approval's gates turned from an approval
-    into a comment: Refused), and which GitHub still blocks on a review:
-    NeedsMeApprove for REVIEW_REQUIRED, NeedsMeLift for CHANGES_REQUESTED when
-    every outstanding changes request is the operator's. Anyone else's changes
-    request, an unread gate or a list of opinions GitHub cut leaves it alone.
+    current head and clean (an approval, or a comment that is clean or left
+    optional findings only, from an identity that comments when clean or one
+    the approval's gates turned from an approval into a comment: Refused; a
+    comment of any other identity, or with a P0 to P2 new or open, is not), and
+    which GitHub still blocks on a review: NeedsMeApprove for REVIEW_REQUIRED,
+    NeedsMeLift for CHANGES_REQUESTED when every outstanding changes request is
+    the operator's. Anyone else's changes request, an unread gate or a list of
+    opinions GitHub cut leaves it alone.
 
 func NeedsMeWords(refused string) string
     NeedsMeWords are the needs-you words of a PR whose clean review the
@@ -28498,7 +28508,7 @@ type BoardRow struct {
 
 func (b BoardRow) NeedsMeFacts() NeedsMeFacts
     NeedsMeFacts are b's facts for NeedsMe; the caller adds CommentWhenClean
-    and, when it WantsVerdict, Verdict.
+    and, when it WantsVerdict, Verdict and Optional.
 
 type CIStatus struct {
 	SHA string `json:"sha"` // the commit the checks ran on
@@ -29082,15 +29092,19 @@ type NeedsMeFacts struct {
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
 	Verdict string
-	Gate    *ReviewGate // nil until the Details read it
+	// Optional: that round left optional findings only
+	// (ReviewSummary.OnlyOptional); only a comment reads it, as Verdict.
+	Optional bool
+	Gate     *ReviewGate // nil until the Details read it
 }
     NeedsMeFacts are what NeedsMe decides from: the PR as the registry has it,
     and what the configuration and magnum's latest round say of its review.
 
 func (f NeedsMeFacts) WantsVerdict() bool
-    WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest
-    review is a comment from an identity that comments when clean, or one the
-    approval's gates turned from an approval into a comment (Refused).
+    WantsVerdict reports whether NeedsMe reads f.Verdict and f.Optional:
+    magnum's latest review is a comment from an identity that comments when
+    clean, or one the approval's gates turned from an approval into a comment
+    (Refused).
 
 type NeedsMePR struct {
 	PR      PR
@@ -29408,7 +29422,7 @@ func (p PR) MergedUnreviewed() bool
 
 func (p PR) NeedsMeFacts() NeedsMeFacts
     NeedsMeFacts are p's facts for NeedsMe; the caller adds CommentWhenClean
-    and, when it WantsVerdict, Verdict.
+    and, when it WantsVerdict, Verdict and Optional.
 
 func (p PR) PendingReplies() []Reply
     PendingReplies is PendingReplies for p.
@@ -29641,6 +29655,13 @@ type ReviewSummary struct {
 
 func (s ReviewSummary) Findings() int
     Findings is the number of findings posted this round.
+
+func (s ReviewSummary) OnlyOptional() bool
+    OnlyOptional reports whether the round left optional findings only: a
+    non-blocking verdict with no P0, P1 or P2, new or still open (OpenProblems:
+    an open finding of unknown priority counts as one). Such a round is one
+    magnum would approve (the engine's roundBlocks), posted as a comment ("No
+    blocking problems").
 
 func (s ReviewSummary) OpenProblems() int
     OpenProblems is how many earlier findings the review keeps open that its
@@ -30271,9 +30292,10 @@ func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, ide
     by repository and number. commentsWhenClean tells whether an identity posts
     a comment for a clean verdict on a repository (owner/name) on a PR by an
     author (its login, "" when unknown); mine whether a login is one of the
-    operator's. It reads magnum's latest round only for a PR whose last review
-    is such a comment, or one the approval's gates turned from an approval into
-    a comment (NoApprovalReviews: its Refused).
+    operator's. It reads magnum's latest round (its verdict, and whether it left
+    optional findings only) only for a PR whose last review is such a comment,
+    or one the approval's gates turned from an approval into a comment
+    (NoApprovalReviews: its Refused).
 
 func (s *Store) NoApprovalReviews(ctx context.Context) (map[int64]NoApprovalReview, error)
     NoApprovalReviews reads every PR's KVPRNoApprovalReview record in one query,
