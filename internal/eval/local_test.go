@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -221,5 +222,32 @@ func TestRescoreScoresALocalCaseFromItsRecordedFindings(t *testing.T) {
 	got = Rescore(run, &Corpus{Cases: []Case{posted}}, read)
 	if got.Cases[0].Score != &old || !strings.Contains(got.Cases[0].Error, "another kind") {
 		t.Fatalf("case %+v, want the old score kept and why", got.Cases[0])
+	}
+}
+
+// The example corpus shows a local case: a round of the factory's local review named by its
+// synthetic PR, whose defect a P2 question for the operator finds and a P3 one does not.
+func TestTheExampleCorpusHasALocalCaseThatWantsAQuestion(t *testing.T) {
+	c, err := LoadCorpus(filepath.Join("..", "..", "eval.toml.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(c.Cases, func(k Case) bool { return k.Local() })
+	if i < 0 {
+		t.Fatal("the example corpus has no local case")
+	}
+	k := c.Cases[i]
+	if k.Owner != "example" || k.Number < LocalNumberBase || len(k.Defects) != 1 || !k.Defects[0].Question || k.Defects[0].Severity != "P2" {
+		t.Fatalf("case %+v: want one P2 question defect on a synthetic PR of an example repository", k)
+	}
+	for _, tc := range []struct {
+		severity string
+		found    bool
+	}{{"P3", false}, {"P2", true}} {
+		f := Finding{Path: "app/models/credit.rb", Line: 7, Severity: tc.severity, Question: true,
+			Body: "Should a refund take back the points it gave? The plan calls keeping them deliberate."}
+		if s := ScoreCase(k, Result{Findings: []Finding{f}}); s.Found != map[bool]int{true: 1}[tc.found] || s.Noise != 0 {
+			t.Errorf("a %s question: %+v, want found %v and no noise", tc.severity, s, tc.found)
+		}
 	}
 }

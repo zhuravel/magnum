@@ -21315,6 +21315,88 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestSkillStaysTight and TestSkillPinsFileIsCurrent. No golden holds the skill or the judge's prompt; no new
   dependencies. Not proven yet: a replay of the #12212 head with `evalrun.RunLocal`, the controller's step after the
   landing.
+- **A round of the factory's local review is an eval case: `magnum eval add --local-task <id> --round <n>` freezes
+  what it read, and `magnum eval run` replays it and scores it as a posted case** (R36, 2026-11-09). R15 changed what
+  a local round reads (the plan as the factory's guess, the operator's answers in the ticket file), but `eval run`
+  replayed posted rounds only and only the factory daemon called `evalrun.RunLocal`, so nothing could prove the
+  change on the round that missed.
+  - The case. `eval.Case.Kind` is `""` (posted, every case before) or `"local"`. A local case's `pr` is the round's
+    synthetic number (`eval.LocalNumberBase`, 900000 + task × 10 + round, the number the round ran under: its URL,
+    its workspace label `eval <repo>#<N>` and its case lock `local-<N>`), refused below 900000; `head` the head it
+    reviewed; no `base` (refused: it is frozen). So the flagged list, the reports, `watched(pr)` and the run records
+    work unchanged. A corpus without kinds loads and writes the same text (`kind` and `question` are omitted when
+    empty).
+  - Frozen inputs. `evalrun.FreezeLocal` reads, read only, what the round read, from the round's own records, never
+    from task files that may have changed since: `factoryread.LocalReview` (one read transaction on the factory's
+    registry: the task's repository, branch, title and Jira key; each cycle's `head_before` and start; the loop's
+    round and the roles from the cycle's newest `round N (cycle M) at <sha>: <roles>` begin event, whose head must
+    prefix the cycle's; the answer times); the round's result (`local-review-<cycle>.json`, which must be this round's
+    and names the scratch directory, which must be inside the task's `local-review/`); the scratch directory's
+    `description.md` (the title and the plan, exactly as the judge read them), `ticket.md` (the ticket; split at the
+    answers' heading, `splitLocalTicket`, whose answers `LocalTicket` gives back unchanged) and the report
+    directory's `prepass.json` (the base commit the round diffed from; its head must be the cycle's). The answers are
+    those the ticket file held, else `answers.md` when no question was answered after the round began and the file was
+    not written after it (`writeAnswers` sets its time), since a later answer (to the very question the round missed,
+    perhaps) would make the replay prove nothing. The base branch is the `[[factory.repo]]`'s now. `SaveLocalInputs`
+    writes `inputs.json`, `plan.md`, `ticket.md` and `answers.md` into a temporary directory renamed to
+    `paths.Layout.LearnLocalCases()/<name>` (the data directory's `learn/local/`, beside the learned corpus and
+    outside any checkout, since it holds a ticket and answers); an existing case is never overwritten.
+  - `eval add`. Flags `--local-task`, `--round` (1 to `MaxFactoryCycles`), `--cycle` (when the task's loops ran the
+    round more than once; else refused naming the cycles) and `--name` (default `task-<id>-round-<n>`; a name the
+    corpus has is refused). It prints what it froze, the round's findings and the `[[case]]` with a commented defect
+    template, for the operator's `eval.toml`: a case needs a defect, and a template that loaded as is would be a
+    silently wrong one. The learned corpus is not the place: the daemon rewrites it from the registry.
+  - Question defects. `Defect.Question` (only on a local case's defect to find: a posted round asks none, and an
+    absent question or one in the body is refused) is found only by a finding marked a question
+    (`eval.Finding.Question`, from `LocalFinding.Question`) at the defect's severity or stronger (`Defect.asks`): the
+    factory asks the operator only P0 to P2 questions and leaves a P3 among the task's leftovers, so a P3 question
+    must not find a P2 defect. A finding that matches but is no question, or too weak, is neither found nor noise,
+    as an absent defect's weaker finding is. `DefectResult.Question` and the report say `wanted a P2 question`.
+  - The replay. `RunCase` takes the case's lock, flags and candidate as for a posted case; then a local case needs
+    its inputs of its own round (the case's pr and head), every frozen role still declared (`missing_role`
+    otherwise), a gh identity (`config_error`) and no `--judge-only` (a local round runs every role), all before any
+    git. After the budget check, `replayLocal` adds a detached worktree at the frozen head at the case's worktree
+    path (`caseWorktree`, replaced and removed as a posted case's), of the `[[factory.repo]]`'s main clone, which
+    holds every commit its copies made (else `clone`'s), fetching the head and base by id when missing; and runs
+    `RunLocal` with the frozen inputs, `Checkout` that worktree, the round's synthetic number, `ScratchRoot` the run's
+    `cases/<case>` (the factory sets neither it nor `NoNotes`, so its rounds are unchanged) and `Env` the environment
+    a posted replay's per-PR worktree has for that number (`slots.PerPREnv`: `WT_BRANCH=magnum-pr-<N>` and the
+    `[[repo]]` env). The copy's env, the factory's own choice, would point the replay's roles at a copy's databases
+    that a task may be using. `RunLocal` also takes the `local-<N>` lock, so a replay never meets the factory
+    running the same round. Its findings are scored on what the factory acts on (`LocalResult.Findings`, title
+    before body so a defect's words match either, and the planned review's body as an `InBody` finding) with
+    `eval.ScoreCase`: one score shape for both kinds. `CaseRun.Kind` and `CaseRun.Findings` keep them, and `eval
+    score` re-scores a local case from them (`Rescore`), not from the result file, which `eval.ParseResult` would read
+    without the question marks; a run whose case changed kind keeps its score and says so. A round that went without
+    a reviewer's report is `missing_role`, a refused one is flagged (`eval.MarkFlagged`), and a local case's live
+    Codex flag is never looked up (its synthetic PR is in no registry): none is scored as a miss.
+  - The gate (item 5 of R36, not built). `learn.SelectCases` skips a local case (`SkipLocal`): a gate of a skill
+    change replays judge-only, which a local round cannot, so a local guard or "other" case would stop every such
+    gate. Follow-up: a gate whose candidate changes what a local round reads (the skill, the judge prompts) replays
+    its local cases with every role, in a candidate run of their own, under the same caps, with a baseline from a
+    stored full replay at the base's inputs (`eval.Baselines`, which matches on name, head and inputs, works for
+    them as is).
+  Rejected: local cases in the learned corpus (rewritten from the registry after each retro); reading the task's
+  `report.md`, `ticket.md` and `answers.md` at replay time (a task's directory can be cleaned, and they change
+  after the round); freezing them from the task's directory when the round's own `description.md` holds what the
+  judge read; recomputing the base (`git merge-base` with today's base branch: the head may be merged since, which
+  makes the merge base the head itself); a `repo` field instead of the synthetic `pr` (every PR-keyed path would need
+  a second key); the copy's env for the replay (above); a P3 question as a found P2 question (it never reaches the
+  operator); re-parsing a local case's result file to re-score it (the question marks are in the provenance the
+  posted parse does not read); local cases in this branch's gate (above).
+  Tests: eval's TestACorpusReadsALocalCaseBesideAPostedOne, TestALocalCaseAndAQuestionDefectBreakTheirOwnRules,
+  TestACorpusWithoutKindsLoadsAndWritesAsBefore, TestAQuestionDefectIsFoundOnlyByAQuestionAtItsSeverity,
+  TestAQuestionDefectWithoutASeverityTakesAnyQuestion, TestTheReportSaysAQuestionDefectWantsAQuestion,
+  TestRescoreScoresALocalCaseFromItsRecordedFindings and TestTheExampleCorpusHasALocalCaseThatWantsAQuestion;
+  factoryread's TestLocalReviewReadsATasksRoundsTheirRolesAndItsAnswerTimes,
+  TestLocalReviewLeavesACycleWithoutItsBeginEventUnnamed and TestLocalReviewSaysWhatIsMissingAndWritesNothing;
+  evalrun's TestFreezeLocalFreezesWhatTheRoundRead, TestFreezeLocalTakesTheAnswersTheRoundsTicketFileHeld,
+  TestFreezeLocalOfARoundWithoutATicketFile, TestFreezeLocalRefusesARoundItCannotFreezeWhole,
+  TestRunCaseReplaysALocalCaseFromItsFrozenInputs and TestRunCaseReportsALocalCaseItCannotScore; the cli's
+  TestEvalAddFreezesALocalRoundAndPrintsItsCase, TestEvalAddRefusesWhatItCannotFreeze and
+  TestEvalRunNamesALocalCaseAndItsMissingInputs; learn's TestSelectCasesLeavesLocalCasesToEvalRun. The comments of
+  `engine.LocalRound` and `pipeline.Local` now say the ticket file holds the answers too. No new dependencies; the
+  factory's code did not change.
 
 - Broken copies repair themselves on a backoff while the factory daemon runs, and every copy of a repository broken
   with one cause is an infrastructure hold of that repository (2026-11-09; amends "Each start of the factory daemon
