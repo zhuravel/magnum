@@ -344,44 +344,56 @@ func TestAPostedTitleNeverReachesTheFactorysRegistry(t *testing.T) {
 	}
 	defer db.Close()
 	tables := []string{"escape_checks", "escapes"}
-	rows, err := db.QueryContext(r.ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('escape_checks', 'escapes') ORDER BY name")
-	if err != nil {
-		t.Fatal(err)
+	for _, row := range readRows(t, db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('escape_checks', 'escapes') ORDER BY name") {
+		tables = append(tables, fmt.Sprintf("%s", row["name"]))
 	}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		tables = append(tables, name)
-	}
-	rows.Close()
 	cells := 0
 	for _, table := range tables {
-		rows, err := db.QueryContext(r.ctx, "SELECT * FROM "+table)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cols, _ := rows.Columns()
-		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				t.Fatal(err)
-			}
-			for i, v := range vals {
+		for _, row := range readRows(t, db, "SELECT * FROM "+table) {
+			for col, v := range row {
 				cells++
-				if s := fmt.Sprint(v); strings.Contains(s, "HOSTILE") || strings.Contains(fmt.Sprintf("%s", v), "HOSTILE") {
-					t.Errorf("%s.%s holds the posted title: %q", table, cols[i], s)
+				if s := fmt.Sprintf("%s", v); strings.Contains(s, "HOSTILE") {
+					t.Errorf("%s.%s holds the posted title: %q", table, col, s)
 				}
 			}
 		}
-		rows.Close()
 	}
 	if cells == 0 {
 		t.Fatal("read no cell of the registry")
 	}
+}
+
+// readRows is every row query reads of db, each by its columns' names, the
+// values as the driver gives them (text as a string or bytes).
+func readRows(t *testing.T, db *sql.DB, query string) []map[string]any {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		row := make(map[string]any, len(cols))
+		for i, c := range cols {
+			row[c] = vals[i]
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
