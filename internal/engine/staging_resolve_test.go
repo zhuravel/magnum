@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -49,18 +50,50 @@ type resolveFixture struct {
 
 // gitSlots is the harness's fake slots whose Resync really switches the
 // slot's work tree (after aborting a merge in progress, as slots.Resync
-// does) before it records the commit, and whose Release resets it.
+// does) before it records the commit, and whose Release resets it. Its
+// Resync holds a person's changes as slots.Resync's guard does: when
+// someone typed into the slot's PR's magnum panes after the slot's last
+// checkout (last_used_at) and the tree has tracked changes, it persists
+// dirty_worktree and refuses.
 type gitSlots struct {
 	*fakeSlots
 	f *resolveFixture
 }
 
 func (g *gitSlots) Resync(ctx context.Context, slot store.Slot, sha string) error {
+	if err := g.humanHold(ctx, slot); err != nil {
+		return err
+	}
 	if _, err := g.f.run.Run(ctx, execx.Cmd{Name: "git", Args: []string{"-C", slot.Path, "rev-parse", "-q", "--verify", "MERGE_HEAD"}}); err == nil {
 		g.f.gitIn(slot.Path, "merge", "--abort")
 	}
 	g.f.gitIn(slot.Path, "switch", "--quiet", "--detach", "--discard-changes", sha)
 	return g.fakeSlots.Resync(ctx, slot, sha)
+}
+
+// humanHold is slots' guardDiscard rule for a person's changes (humanActivity
+// and holdChanges).
+func (g *gitSlots) humanHold(ctx context.Context, slot store.Slot) error {
+	sl, err := g.st.SlotByID(ctx, slot.ID)
+	if err != nil || sl.PRID == nil {
+		return err
+	}
+	pr, err := g.st.PRByID(ctx, *sl.PRID)
+	if err != nil {
+		return err
+	}
+	if at := pr.HumanActiveAt; at == nil || (sl.LastUsedAt != nil && !at.After(*sl.LastUsedAt)) {
+		return nil
+	}
+	res, err := g.f.run.Run(ctx, execx.Cmd{Name: "git", Args: []string{"-C", sl.Path, "status", "--porcelain", "--untracked-files=no"}})
+	if err != nil || res.Out() == "" {
+		return err
+	}
+	if err := g.st.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("hold_reason", slots.HoldDirtyWorktree) }); err != nil {
+		return err
+	}
+	return slots.ErrHold{Reason: slots.HoldDirtyWorktree, Detail: sl.Path + " has tracked changes; someone typed into PR #" + fmt.Sprint(pr.Number) +
+		"'s magnum panes after magnum's checkout"}
 }
 
 func newResolveFixture(t *testing.T, mods ...func(*harness)) *resolveFixture {
@@ -96,6 +129,7 @@ func newResolveFixture(t *testing.T, mods ...func(*harness)) *resolveFixture {
 	f.gitIn(f.origin, "init", "--quiet", "-b", "master")
 	writeFile(t, f.origin, "app/a.rb", "a = 1\n")
 	writeFile(t, f.origin, "README.md", "hello\n")
+	writeFile(t, f.origin, "lib/r.rb", "r = 1\n")
 	f.gitIn(f.origin, "add", ".")
 	f.gitIn(f.origin, "commit", "--quiet", "-m", "base")
 	f.base = f.gitIn(f.origin, "rev-parse", "HEAD")
@@ -506,11 +540,9 @@ func TestTheStagingResolversChecksFailAJobAndPutTheSlotBack(t *testing.T) {
 	}
 }
 
-// A job never takes a slot a round holds, nor waits on it: while PR #2's
-// round runs, the job stays queued, "waits for a slot", and the worker
-// stops; the tick after the round looks again, and the job runs. A PR
-// with no slot gets a free one of the pool, which goes back to the pool
-// at the end.
+// A job never takes or touches a slot a round holds: while PR #2's round
+// runs, the job stays queued, "waits for a slot", and the worker stops; the
+// tick after the round looks again, and the job runs.
 func TestTheStagingResolverWaitsForASlotARoundHolds(t *testing.T) {
 	f := newResolveFixture(t)
 	pr := f.reviewed()

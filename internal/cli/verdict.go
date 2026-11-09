@@ -100,14 +100,17 @@ func runVerdict(c *Context, name, req, usage string, o verdictOpts, pos []string
 }
 
 // agentPaneEnv are variables magnum sets in the panes of a PR's review
-// workspace (engine paneEnv), where the review agents run, and nowhere else.
-var agentPaneEnv = []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"}
+// workspace (engine paneEnv), where the review agents run, and in the
+// staging resolver's pane (MAGNUM_STAGING_RESOLVE, engine resolvePaneEnv),
+// and nowhere else.
+var agentPaneEnv = []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL", "MAGNUM_STAGING_RESOLVE"}
 
 // refuseInAgentPane refuses (exit 1) a command that acts for the operator
 // (approve --as, unapprove, mute, ignore, pause, fix, whiteboard, settings)
-// when it runs in a review agent's pane, which carries agentPaneEnv: the
-// agent reads the PR, whose text may steer it to approve, unapprove, mute or
-// pause for the operator. It is defense in depth on top of the agents running
+// when it runs in a review agent's pane or the staging resolver's, which
+// carry agentPaneEnv: the agent reads the PR, or a staging branch that
+// coworkers write, whose text may steer it to approve, unapprove, mute,
+// pause or deploy for the operator. It is defense in depth on top of the agents running
 // with full permissions, since an agent could unset the variables; the
 // commands the roles run (post-review, db-lock, the fixer's fix-reply) are
 // never refused. The other

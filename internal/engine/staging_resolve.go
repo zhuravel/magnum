@@ -15,9 +15,11 @@ package engine
 // a goroutine of its own (stagingWG, ended by the stop): Start and each
 // tick wake it. A job works in a review slot of its PR's repository, taken
 // as the fix and whiteboard jobs take one (staging_resolve_work.go): the
-// PR's own slot when no round, open, fix or whiteboard holds it, else a
-// free slot of the pool; it never evicts a running review's slot and never
-// waits on one, it waits ("waits for a slot") until the next tick. In it,
+// PR's own slot once no round, open, fix or whiteboard holds the PR, or a
+// free slot of the pool for a PR that has none; it never evicts a running
+// review's slot nor touches it: while one holds the PR, the job waits ("waits
+// for a slot", bounded by resolveWaitFor) and the next tick looks again, and
+// the jobs after it go on meanwhile. In it,
 // detached at the target's tip, `git merge --no-commit --no-ff <head>`
 // leaves the conflicts for the agent (the fix role's model, effort and
 // launch, with a prompt of its own and no GitHub credentials), which
@@ -54,6 +56,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -138,11 +141,15 @@ type resolveJob struct {
 	// it in Dir.
 	MergeTree string   `json:"merge_tree,omitempty"`
 	Conflicts []string `json:"conflicts,omitempty"`
-	Agent     string   `json:"agent,omitempty"`
-	Pane      string   `json:"pane,omitempty"`
-	Run       string   `json:"run,omitempty"`
-	Merge     string   `json:"merge,omitempty"`
-	Kept      bool     `json:"kept,omitempty"`
+	// Untracked are the untracked files the slot held before the merge
+	// (UntrackedRead: they were read), so the job's own are told apart.
+	Untracked     []string `json:"untracked,omitempty"`
+	UntrackedRead bool     `json:"untracked_read,omitempty"`
+	Agent         string   `json:"agent,omitempty"`
+	Pane          string   `json:"pane,omitempty"`
+	Run           string   `json:"run,omitempty"`
+	Merge         string   `json:"merge,omitempty"`
+	Kept          bool     `json:"kept,omitempty"`
 	// Cancel: the deploy cancelled it while it ran; the worker ends it.
 	Cancel bool `json:"cancel,omitempty"`
 	// Started is the Start, Began when it took its slot (resolveRunFor
@@ -284,21 +291,34 @@ func (r *stagingResolver) Cancel(ctx context.Context, job string) error {
 	return nil
 }
 
+// errResolveEnded is save's answer for a job whose row ended meanwhile: the
+// worker's copy is stale, and it lets go of what it took.
+var errResolveEnded = errors.New("the job ended meanwhile")
+
 // save writes job's row as the worker has it, keeping a Cancel that came
-// since the worker read it.
+// since the worker read it; a row that ended meanwhile is left as it is
+// (errResolveEnded), never brought back to life.
 func (r *stagingResolver) save(ctx context.Context, e *Engine, job *resolveJob) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cur, ok, err := e.resolveJob(ctx, job.ID); err == nil && ok && cur.Cancel {
-		job.Cancel = true
+	if cur, ok, err := e.resolveJob(ctx, job.ID); err == nil && ok {
+		if !cur.live() {
+			return errResolveEnded
+		}
+		job.Cancel = job.Cancel || cur.Cancel
 	}
 	return e.saveResolveJob(ctx, *job)
 }
 
-// end ends job in state with why (endResolveJob), under the journal's lock.
+// end ends job in state with why (endResolveJob), under the journal's lock;
+// a row that ended already keeps its end.
 func (r *stagingResolver) end(ctx context.Context, e *Engine, job *resolveJob, state, why string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if cur, ok, err := e.resolveJob(ctx, job.ID); err == nil && ok && !cur.live() {
+		*job = cur
+		return nil
+	}
 	return e.endResolveJob(ctx, job, state, why)
 }
 
@@ -329,11 +349,13 @@ func (r *stagingResolver) wakeLocked(e *Engine) {
 }
 
 // work runs the live jobs, one at a time, the oldest first (a running one
-// a restart goes on with before any queued), until none can go on now: the
-// first that waits for its slot holds the others back until the next wake.
+// a restart goes on with before any queued), until none can go on now. A
+// job that waits for its slot is passed over until the next wake, so it
+// holds back no job after it.
 func (r *stagingResolver) work(ctx context.Context, e *Engine) {
+	waited := map[string]bool{} // the jobs that wait for their slot, passed over until the next wake
 	for ctx.Err() == nil {
-		job, ok := r.next(ctx, e)
+		job, ok := r.next(ctx, e, waited)
 		if !ok {
 			r.mu.Lock()
 			again := r.again
@@ -342,15 +364,14 @@ func (r *stagingResolver) work(ctx context.Context, e *Engine) {
 			if !again {
 				return
 			}
+			clear(waited) // woken meanwhile: the waiting jobs look again
 			continue
 		}
 		jctx, cancel := context.WithCancel(ctx)
-		r.mu.Lock()
-		r.running, r.stop = job.ID, cancel
-		cancelled := job.Cancel
-		r.mu.Unlock()
-		if cancelled {
+		if job, ok = r.begin(ctx, e, job.ID, cancel); !ok {
 			cancel()
+			waited[job.ID] = true // ended since next read it, or unreadable now
+			continue
 		}
 		waits := e.runResolveJob(jctx, ctx, r, &job)
 		cancel()
@@ -358,14 +379,36 @@ func (r *stagingResolver) work(ctx context.Context, e *Engine) {
 		r.running, r.stop = "", nil
 		r.mu.Unlock()
 		if waits {
-			return // it waits for its slot: the next tick looks again
+			waited[job.ID] = true // the next tick looks again
 		}
 	}
 }
 
+// begin makes job id the one the worker runs (stop cancels it), reading its
+// row again under the journal's lock: a Cancel since next read the rows may
+// have ended it (false then, as when the row cannot be read). A Cancel from
+// here on finds it running and marks it, and stop ends its work.
+func (r *stagingResolver) begin(ctx context.Context, e *Engine, id string, stop context.CancelFunc) (resolveJob, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok, err := e.resolveJob(ctx, id)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "staging resolver: read a job", "job", id)
+		return resolveJob{ID: id}, false
+	}
+	if !ok || !j.live() {
+		return resolveJob{ID: id}, false
+	}
+	r.running, r.stop = j.ID, stop
+	if j.Cancel {
+		stop()
+	}
+	return j, true
+}
+
 // next is the job the worker runs now: the oldest running one, else the
-// oldest queued; false when none is live.
-func (r *stagingResolver) next(ctx context.Context, e *Engine) (resolveJob, bool) {
+// oldest queued, passing over those in skip; false when none is live.
+func (r *stagingResolver) next(ctx context.Context, e *Engine, skip map[string]bool) (resolveJob, bool) {
 	jobs, err := e.resolveJobs(ctx)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "staging resolver: read the jobs")
@@ -375,7 +418,7 @@ func (r *stagingResolver) next(ctx context.Context, e *Engine) (resolveJob, bool
 	for i := range jobs {
 		j := &jobs[i]
 		switch {
-		case !j.live():
+		case !j.live() || skip[j.ID]:
 		case best == nil, j.State == resolveRunning && best.State != resolveRunning:
 			best = j
 		case (j.State == resolveRunning) == (best.State == resolveRunning) && j.Started.Before(best.Started):
@@ -591,7 +634,10 @@ func (e *Engine) recoverStagingResolves(ctx context.Context) {
 // ended, or holds it no more), or resolveRefKeep after the job's end; an
 // ended job's row goes resolveKeep after its end, with its directory; and
 // while a job is live the worker is woken (one that waits for its slot
-// looks again). Nothing without a resolver.
+// looks again). A ref that cannot be dropped keeps its row no longer than
+// that: when its repository is gone the row no longer keeps it, and past
+// resolveKeep the row goes all the same (logged once), the ref left there.
+// Nothing without a resolver.
 func (e *Engine) tendStagingResolves(ctx context.Context, s Staging) {
 	r := e.d.stagingResolver
 	if r == nil {
@@ -626,20 +672,33 @@ func (e *Engine) tendStagingResolves(ctx context.Context, s Staging) {
 				continue
 			}
 			if err := r.git.UpdateRefDelete(ctx, j.Dir, j.ref()); err != nil {
-				e.warnUnlessStopped(ctx, err, "staging resolver: drop a merge's ref", "job", j.ID, "ref", j.ref())
-				continue
+				switch {
+				case now.Sub(j.Ended) >= resolveKeep:
+					e.log.Warn("staging resolver: a merge's ref stays, its job's row goes", "job", j.ID, "ref", j.ref(), "dir", j.Dir, "err", err)
+					e.dropResolveJob(ctx, j.ID)
+					continue
+				case fsx.Exists(j.Dir):
+					e.warnUnlessStopped(ctx, err, "staging resolver: drop a merge's ref", "job", j.ID, "ref", j.ref())
+					continue
+				}
+				e.log.Info("staging resolver: a merge's repository is gone, with its ref", "job", j.ID, "dir", j.Dir)
 			}
 			if _, err := r.update(ctx, e, j.ID, func(j *resolveJob) { j.Kept = false }); err != nil {
 				e.warnUnlessStopped(ctx, err, "staging resolver: record a dropped ref", "job", j.ID)
 			}
 		case now.Sub(j.Ended) >= resolveKeep:
-			e.delKV(ctx, kvStagingResolve(j.ID))
-			if err := os.RemoveAll(e.resolveDir(j.ID)); err != nil {
-				e.log.Warn("staging resolver: an ended job's directory stays", "job", j.ID, "err", err)
-			}
+			e.dropResolveJob(ctx, j.ID)
 		}
 	}
 	if live {
 		r.wake(e)
+	}
+}
+
+// dropResolveJob deletes job id's row and its directory.
+func (e *Engine) dropResolveJob(ctx context.Context, id string) {
+	e.delKV(ctx, kvStagingResolve(id))
+	if err := os.RemoveAll(e.resolveDir(id)); err != nil {
+		e.log.Warn("staging resolver: an ended job's directory stays", "job", id, "err", err)
 	}
 }

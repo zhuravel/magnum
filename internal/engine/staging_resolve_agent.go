@@ -5,9 +5,16 @@ package engine
 // herdr workspace "staging merge", one job at a time) that works in the
 // job's slot, driven as the skill editor's is (retro_pane.go's paneAgent:
 // a scratch registry in the job's directory, an observer of its own). The
-// pane gets no GitHub credentials and none of the operator's: no token, an
-// empty gh config dir, no git config but the checkout's, no askpass and no
-// SSH agent (resolvePaneEnv); it needs none, since it never pushes. Its
+// pane's env (resolvePaneEnv) carries no GitHub token and no gh login, and
+// leaves git no way to push or fetch as the operator: no git config but
+// the checkout's, no credential helper (the checkout's included), no
+// askpass, git's ssh transport /usr/bin/false and every GitHub push URL a
+// path that does not exist; it marks the pane, so magnum's commands that
+// act for the operator refuse to run there. It needs no credential, since
+// it never pushes. The env cannot undo what the pane's shell exports from
+// its rc files nor what the operator's files hold (the agent runs as the
+// operator, with their HOME): "never push" rests on the prompt and these
+// blocks. Its
 // prompt (prompts/staging-resolve.md) names the conflicted paths, the
 // db-lock line its specs run through, the result file and, on a second
 // try, why the first one failed; it carries shas and paths, never PR text.
@@ -25,6 +32,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -186,6 +194,16 @@ func resolveNudge(result string, problem error) string {
 		result, oneLine(problem.Error(), 200), result)
 }
 
+// resolvePaneMarker marks the resolver's pane: the CLI's commands that act
+// for the operator refuse to run where it is set, as in a review agent's
+// pane (internal/cli's agentPaneEnv).
+const resolvePaneMarker = "MAGNUM_STAGING_RESOLVE"
+
+// resolveNoPush is where a push from the resolver's pane goes: the push URL
+// of every GitHub remote, ssh or https, is rewritten to start with it
+// (url.<it>.pushInsteadOf), a path that does not exist.
+const resolveNoPush = "/nonexistent/"
+
 // resolveBlanked are the variables the agent's pane gets empty: the
 // GitHub tokens gh and git read, and the SSH agent's socket.
 var resolveBlanked = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"}
@@ -193,7 +211,11 @@ var resolveBlanked = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
 // resolvePaneEnv is the agent's pane env: the slot's own (its databases),
 // with no GitHub token (resolveBlanked), an empty gh config dir under the
 // job's directory, no global or system git config (no credential helper
-// of yours), no askpass and no SSH agent.
+// of yours), no askpass and no SSH agent; on top of it, git's own config
+// from the env (GIT_CONFIG_COUNT, above the checkout's) resets the
+// credential helpers and sends every push to resolveNoPush, and git's ssh
+// command is /usr/bin/false, which the pane's shell does not set again as
+// it may set the SSH agent's socket. resolvePaneMarker marks the pane.
 func resolvePaneEnv(dir string, slotEnv map[string]string) map[string]string {
 	env := map[string]string{}
 	maps.Copy(env, slotEnv)
@@ -204,7 +226,17 @@ func resolvePaneEnv(dir string, slotEnv map[string]string) map[string]string {
 		"GH_CONFIG_DIR":     filepath.Join(dir, "gh"),
 		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
 		"GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
+		"GIT_SSH_COMMAND": "/usr/bin/false", "GIT_SSH": "/usr/bin/false",
+		resolvePaneMarker: "1",
 	})
+	config := [][2]string{{"credential.helper", ""}}
+	for _, from := range []string{"git@github.com:", "ssh://git@github.com/", "ssh://github.com/", "https://github.com/", "http://github.com/", "git://github.com/"} {
+		config = append(config, [2]string{"url." + resolveNoPush + ".pushInsteadOf", from})
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(len(config))
+	for i, kv := range config {
+		env["GIT_CONFIG_KEY_"+strconv.Itoa(i)], env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = kv[0], kv[1]
+	}
 	return env
 }
 

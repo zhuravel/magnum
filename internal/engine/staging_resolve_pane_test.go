@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -29,6 +32,58 @@ func stagingPaneDeps(t *testing.T, h *harness, ag **fakePaneAgents) paneDeps {
 			*ag = &fakePaneAgents{fakeAgents: &fakeAgents{st: st}}
 			return *ag
 		}}
+}
+
+// The resolver's pane env marks the pane as an agent's, so the commands that
+// act for the operator refuse to run there (the CLI's refuseInAgentPane),
+// and leaves git no way to push or fetch as the operator whatever the
+// pane's shell sets again from its rc files (an SSH agent's socket, an ssh
+// command): git's ssh transport is /usr/bin/false, no credential helper
+// answers, not even the checkout's own, and the push URL of a GitHub
+// remote, ssh or https, is a path that does not exist.
+func TestTheStagingResolversPaneEnvMarksItAndLeavesGitNoWayToPush(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := resolvePaneEnv(filepath.Join(dir, "job"), map[string]string{"WT_BRANCH": "review1"})
+	if env[resolvePaneMarker] == "" {
+		t.Errorf("the pane env has no %s: the operator's commands would run there", resolvePaneMarker)
+	}
+	ran := filepath.Join(dir, "ssh-ran")
+	sshCmd := filepath.Join(dir, "ssh.sh")
+	if err := os.WriteFile(sshCmd, []byte("#!/bin/sh\ntouch "+ran+"\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The shell's rc files set their own ssh command; the pane's env wins.
+	run := &execx.Real{BaseEnv: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_SSH_COMMAND=" + sshCmd, "LC_ALL=C"}}
+	git := func(stdin string, args ...string) (string, error) {
+		res, err := run.Run(t.Context(), execx.Cmd{Name: "git", Args: append([]string{"-C", filepath.Join(dir, "repo")}, args...), Env: env,
+			Stdin: []byte(stdin), Probe: true})
+		return res.Out(), err
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "repo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "--quiet"}, {"remote", "add", "origin", "git@github.com:talkable/talkable.git"},
+		{"remote", "add", "web", "https://github.com/talkable/talkable.git"}, {"remote", "add", "other", "ssh://git@github.com/talkable/talkable.git"},
+		{"config", "credential.helper", "!f() { echo username=u; echo password=from-the-checkout; }; f"}} {
+		if _, err := git("", args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	for _, remote := range []string{"origin", "web", "other"} {
+		if url, err := git("", "remote", "get-url", "--push", remote); err != nil || !strings.HasPrefix(url, "/nonexistent/") {
+			t.Errorf("%s's push URL in the pane = %q, %v; want a path that does not exist", remote, url, err)
+		}
+	}
+	if out, err := git("protocol=https\nhost=github.com\n\n", "credential", "fill"); err == nil || strings.Contains(out, "from-the-checkout") {
+		t.Errorf("git credential fill in the pane = %q, %v; want no helper to answer", out, err)
+	}
+	if _, err := git("", "ls-remote", "origin"); err == nil {
+		t.Error("git ls-remote over ssh worked in the pane")
+	}
+	if _, err := os.Stat(ran); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the shell's own ssh command ran in the pane: %v", err)
+	}
 }
 
 // The resolver's pane agent works in the job's slot, in the herdr workspace

@@ -13,14 +13,16 @@ import (
 const operatorOnlyRefusal = "run this from your own terminal: a review agent's shell cannot act for the operator"
 
 // A review agent runs in a pane whose environment carries MAGNUM_REPORT_DIR
-// and MAGNUM_PR_URL, and it reads the PR, whose text may steer it. The
+// and MAGNUM_PR_URL, the staging resolver's agent in one that carries
+// MAGNUM_STAGING_RESOLVE, and each reads text a PR or a coworker wrote,
+// which may steer it. The
 // commands that act for the operator (approve --as, unapprove, mute,
 // ignore, pause, a staging deploy and its cancel) refuse to run there and
 // queue nothing; the ones the roles
 // run (post-review, db-lock) and the fixer's fix-reply and fix-sync are not
 // refused.
 func TestAReviewAgentsShellCannotActForTheOperator(t *testing.T) {
-	for _, env := range []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"} {
+	for _, env := range []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL", "MAGNUM_STAGING_RESOLVE"} {
 		t.Run(env, func(t *testing.T) {
 			storetest.Serial(t)
 			t.Setenv(env, "/x/reviews/talkable/talkable/5")

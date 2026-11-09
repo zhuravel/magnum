@@ -8,34 +8,45 @@ package engine
 // with a slot-work reservation (reserveSlotWork, as an eviction does), so
 // no round, open, fix or whiteboard job touches the slot meanwhile, and it
 // takes the slot only when none holds the PR: the PR's own slot (claimed
-// or held, unpinned, with no guard hold, nobody in it: Slots.Guard), else a
-// free slot of the pool, reserved for the PR (Slots.Reserve; none free
-// asks the pool for one, needSlot, as a fix or an open does). Either way a
-// slot it cannot use now is a wait, never an eviction of a round's slot. A
-// repository without a pool has no such checkout: the job fails.
+// or held, unpinned, with no guard hold, nobody in it: Slots.Guard, and
+// nobody typed into the PR's panes within human_cooldown, as for the
+// fixer), else, for a PR with no slot, a free slot of the pool, reserved
+// for the PR (Slots.Reserve; none free asks the pool for one, needSlot, as
+// a fix or an open does). Either way a slot it cannot use now is a wait,
+// never an eviction of a round's slot. A repository without a pool has no
+// such checkout: the job fails. From the take on, the slot is the job's:
+// its last_used_at moves, as for the fixer, so the guard that puts it back
+// reads the job's own merge as magnum's, and only a person who types into
+// the PR's panes during the job as theirs.
 //
 // The merge: Slots.Resync puts the slot, detached, at the target's tip and
 // records it as the slot's checkout (so the guard sees no drift while the
 // agent works), the head is fetched into the slot's clone when it lacks
-// it, and `git merge --no-commit --no-ff <head>` leaves the conflicts in
-// the work tree, the same paths `git merge-tree --write-tree <tip> <head>`
-// names (the deploy's verify compares with that tree).
+// it, `git merge-tree --write-tree <tip> <head>` names the conflicts (the
+// deploy's verify compares with its tree), a conflict the agent must give
+// up on anyway fails the job before it starts (a binary file, a file both
+// sides renamed apart: git leaves no marker there for the daemon's checks
+// to find), and `git merge --no-commit --no-ff <head>` leaves the same
+// conflicts in the work tree. The untracked files the slot holds before the
+// merge are noted, so the job's own are told apart.
 //
 // The commit: the daemon's, never the agent's. The tree is merge-tree's
 // with each conflicted path as the agent left it in the work tree
 // (gitx.WriteTreeFrom, through an index of its own); the work tree must
-// hold nothing else (the specs ran on it), no conflict marker may be left
-// in a conflicted path, and the commit has the parents [tip, head], the
-// bot as author and committer and the clean merge's message; its tree
-// differs from merge-tree's only in the conflicted paths. The ref
+// hold nothing else (the specs ran on it): no other tracked change and no
+// new untracked file; no conflict marker may be left in a conflicted path,
+// and the commit has the parents [tip, head], the bot as author and
+// committer and the clean merge's message; its tree differs from
+// merge-tree's only in the conflicted paths. The ref
 // refs/magnum/staging-resolved/<effect> keeps it in the slot's main clone,
 // the Dir the deploy fetches it from.
 //
 // The end: the agent is stopped (its workspace closed), the slot goes back
-// (Slots.Resync to the commit it held, which aborts the merge in progress
-// and drops the work tree's changes; a slot the job claimed is resynced to
-// the tip it recorded, then handed back to the pool), and the reservation
-// goes.
+// (the untracked files the job added are removed, then Slots.Resync to the
+// commit it held aborts the merge in progress and drops the work tree's
+// changes; a slot the job claimed is resynced to the tip it recorded, then
+// handed back to the pool), and the reservation goes. A panic in a job
+// ends it the same way, failed.
 
 import (
 	"bufio"
@@ -66,6 +77,8 @@ type resolveGit interface {
 	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
 	MergeNoCommit(ctx context.Context, dir, rev string, who gitx.Signature) ([]string, error)
 	MergeTreeWrite(ctx context.Context, dir, a, b string) (string, []string, error)
+	MergeTreeMessages(ctx context.Context, dir, a, b string) ([]gitx.MergeMessage, error)
+	UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error)
 	WriteTreeFrom(ctx context.Context, dir, base string, paths []string) (string, error)
 	WorkTreeDiff(ctx context.Context, dir, rev string) ([]string, error)
 	ChangedBetween(ctx context.Context, dir, from, to string) ([]string, error)
@@ -99,16 +112,28 @@ type resolveWork struct {
 	job   *resolveJob
 	git   resolveGit
 	agent stagingAgent
-	// held: the job holds its PR's slot-work reservation in this process;
-	// keepSlot: its end leaves the slot alone (other work holds the PR).
+	// held: the job holds its PR's slot-work reservation in this process
+	// (of PR heldPR, or job.PRID when 0); keepSlot: its end leaves the slot
+	// alone (other work holds the PR).
 	held, keepSlot bool
+	heldPR         int64
 }
 
 // runResolveJob runs job until it ends, waits for its slot (true: the next
 // wake looks again) or the daemon stops (life ends: a job whose agent runs
-// goes on after the restart). ctx is the job's own: Cancel ends it.
+// goes on after the restart). ctx is the job's own: Cancel ends it. A panic
+// in it ends it failed, saying so, and lets go of what it held.
 func (e *Engine) runResolveJob(ctx, life context.Context, r *stagingResolver, job *resolveJob) (waits bool) {
 	w := &resolveWork{e: e, r: r, job: job, git: r.git}
+	e.safely(life, "staging resolver", resolveSubject(*job), func() { waits = w.runToEnd(ctx, life) }, func(sctx context.Context, msg string) {
+		w.finish(sctx, life, resolveFailed, "the resolver failed: a panic: "+msg)
+	})
+	return waits
+}
+
+// runToEnd is runResolveJob's body.
+func (w *resolveWork) runToEnd(ctx, life context.Context) (waits bool) {
+	e, job := w.e, w.job
 	var err error
 	if job.State == resolveRunning && !e.holdForResolve(job.PRID) {
 		// The recovery held the PR again at the start (recoverStagingResolves):
@@ -129,6 +154,12 @@ func (e *Engine) runResolveJob(ctx, life context.Context, r *stagingResolver, jo
 			w.agent.Detach()
 		}
 		return false
+	case errors.Is(err, errResolveEnded):
+		// A Cancel ended the row before this run took it: what it took goes.
+		if note := w.release(ctx); note != "" {
+			e.log.Warn("staging resolver: the slot was not put back", "job", job.ID, "note", note)
+		}
+		return false
 	}
 	state, why := resolveFailed, ""
 	var f resolveFailure
@@ -142,15 +173,22 @@ func (e *Engine) runResolveJob(ctx, life context.Context, r *stagingResolver, jo
 	default:
 		why = "the resolver failed: " + oneLine(err.Error(), 200)
 	}
+	w.finish(ctx, life, state, why)
+	return false
+}
+
+// finish lets go of what the job holds (release) and ends it in state with
+// why, which says what was not put back of a failed job.
+func (w *resolveWork) finish(ctx, life context.Context, state, why string) {
+	e, job := w.e, w.job
 	if note := w.release(ctx); note != "" && state == resolveFailed {
 		why += "; " + note
 	} else if note != "" {
 		e.log.Warn("staging resolver: the slot was not put back", "job", job.ID, "note", note)
 	}
-	if err := r.end(ctx, e, job, state, why); err != nil {
+	if err := w.r.end(ctx, e, job, state, why); err != nil {
 		e.warnUnlessStopped(life, err, "staging resolver: end a job", "job", job.ID)
 	}
-	return false
 }
 
 // errResolveWaits is run's answer for a job that waits for its slot.
@@ -265,13 +303,17 @@ func (w *resolveWork) take(ctx context.Context) error {
 	if !has && pool == nil {
 		return resolveFail("%s has no review slot pool ([[pool]]): no checkout with its development environment to run the specs in", full)
 	}
+	if until := e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt); has && e.now().Before(until) {
+		// The PR's panes work in its slot, and they are a person's for now.
+		return wait(fmt.Sprintf("someone typed into PR #%d's panes, which are theirs until %s (human_cooldown)", pr.Number, until.Local().Format("15:04")))
+	}
 	if !e.reserveSlotWork(pr.ID, resolveHeld) {
 		return wait(fmt.Sprintf("PR #%d's slot is busy: %s", pr.Number, e.heldReason(pr.ID)))
 	}
-	w.held = true
+	w.held, w.heldPR = true, pr.ID
 	let := func(err error) error { // the slot is not the job's after all
 		e.endEviction(pr.ID)
-		w.held = false
+		w.held, w.heldPR = false, 0
 		return err
 	}
 	claimed := false
@@ -295,6 +337,11 @@ func (w *resolveWork) take(ctx context.Context) error {
 			if _, held := slots.AsHold(err); held {
 				return let(wait(oneLine(err.Error(), 200)))
 			}
+			return let(err)
+		}
+		// The slot is the job's from here on, as the fixer's is: what the
+		// tree holds is magnum's until someone types into the PR's panes.
+		if err := e.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", e.now()) }); err != nil {
 			return let(err)
 		}
 	} else {
@@ -329,8 +376,10 @@ func (w *resolveWork) slotTaken(slot store.Slot, claimed bool) {
 
 // prepare leaves the merge in the job's slot: detached at the tip (the
 // slot's recorded checkout), the head fetched when the clone lacks it,
-// `git merge --no-commit --no-ff <head>`, whose conflicts must be
-// merge-tree's; the job then moves to its agent.
+// merge-tree's conflicts read (and refused when the agent would have to give
+// up on them: refuseConflicts), the slot's untracked files noted, then `git
+// merge --no-commit --no-ff <head>`, whose conflicts must be merge-tree's;
+// the job then moves to its agent.
 func (w *resolveWork) prepare(ctx context.Context) error {
 	job, e := w.job, w.e
 	if w.git == nil {
@@ -355,21 +404,51 @@ func (w *resolveWork) prepare(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	conflicts, err := w.git.MergeNoCommit(ctx, slot.Path, job.Head, who)
-	if err != nil {
-		return err
-	}
 	tree, want, err := w.git.MergeTreeWrite(ctx, slot.Path, job.TargetTip, job.Head)
 	switch {
 	case err != nil:
 		return err
 	case len(want) == 0:
 		return resolveFail("the merge does not conflict in slot %s: nothing to resolve", slot.Name)
+	}
+	if err := w.refuseConflicts(ctx, slot.Path); err != nil {
+		return err
+	}
+	untracked, err := w.git.UntrackedFiles(ctx, slot.Path)
+	if err != nil {
+		return err
+	}
+	job.Untracked, job.UntrackedRead = untracked, true
+	conflicts, err := w.git.MergeNoCommit(ctx, slot.Path, job.Head, who)
+	switch {
+	case err != nil:
+		return err
 	case !slices.Equal(conflicts, want):
 		return resolveFail("the checkout's merge conflicts in %s, merge-tree's in %s", listedPaths(conflicts), listedPaths(want))
 	}
 	job.MergeTree, job.Conflicts, job.Phase = tree, want, resolvePhaseAgent
 	return w.say(ctx, fmt.Sprintf("the merge conflicts in %s in slot %s; its agent starts", textx.Count(len(want), "path", "paths"), slot.Name))
+}
+
+// refuseConflicts fails the job on a conflict whose rules say give up,
+// whatever its agent would answer: a binary file (git leaves the tip's
+// version in the work tree and in merge-tree's tree, with no marker, so a
+// "resolved" one would drop the PR's change without a word) and a file both
+// sides renamed to different paths. merge-tree's messages name them.
+func (w *resolveWork) refuseConflicts(ctx context.Context, dir string) error {
+	msgs, err := w.git.MergeTreeMessages(ctx, dir, w.job.TargetTip, w.job.Head)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		switch m.Kind {
+		case gitx.ConflictBinary:
+			return resolveFail("a binary file conflicts: %s; no merge keeps both sides, so nothing was resolved", listedPaths(m.Paths))
+		case gitx.ConflictRenameRename:
+			return resolveFail("both sides renamed one file to different paths: %s; no merge keeps both, so nothing was resolved", listedPaths(m.Paths))
+		}
+	}
+	return nil
 }
 
 // bot is the commit identity of the job's repository: the fixer App's bot.
@@ -411,6 +490,13 @@ func (w *resolveWork) commit(ctx context.Context, res resolveResultFile) error {
 	if len(extra) > 0 {
 		return resolveFail("the checkout also changes %s, outside the conflicts: the specs ran on what the merge would not hold", listedPaths(extra))
 	}
+	added, err := w.addedFiles(ctx, slot.Path)
+	if err != nil {
+		return err
+	}
+	if len(added) > 0 {
+		return resolveFail("the checkout also adds %s, outside the conflicts: the specs ran on what the merge would not hold", listedPaths(added))
+	}
 	if why, err := w.check(ctx, slot.Path, tree); err != nil || why != "" {
 		return cmp.Or(err, resolveFail("%s", why))
 	}
@@ -439,6 +525,65 @@ func (w *resolveWork) commit(ctx context.Context, res resolveResultFile) error {
 	job.Why = fmt.Sprintf("resolved %s in slot %s (try %d): %s; %s; checked: parents [tip, head], the tree differs from merge-tree's only in "+
 		"the conflicted paths, no conflict marker left", listedPaths(job.Conflicts), job.Slot, job.Try, res.specsWords(), whoWords(who))
 	return nil
+}
+
+// addedFiles lists the untracked files of the slot at dir that it did not
+// hold before the merge (git does not ignore them, and they are no
+// conflicted path): the job's own, which no merge commit holds. None when
+// the slot's untracked files were not noted.
+func (w *resolveWork) addedFiles(ctx context.Context, dir string) ([]string, error) {
+	if !w.job.UntrackedRead {
+		return nil, nil
+	}
+	now, err := w.git.UntrackedFiles(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(now, func(p string) bool {
+		return slices.Contains(w.job.Untracked, p) || slices.Contains(w.job.Conflicts, p)
+	}), nil
+}
+
+// removeAdded removes the files the job added to the slot (addedFiles),
+// through an os.Root of the slot: files and symlinks only, never a
+// directory or a repository inside the work tree, and none once someone
+// typed into the PR's panes during the job. It returns what it left there
+// ("" when nothing stays).
+func (w *resolveWork) removeAdded(ctx context.Context, dir string) string {
+	added, err := w.addedFiles(ctx, dir)
+	if err != nil {
+		return "its added files were not read: " + oneLine(err.Error(), 200)
+	}
+	if len(added) == 0 {
+		return ""
+	}
+	if pr, err := w.e.st.PRByID(ctx, w.job.PRID); err != nil || pr.HumanActiveAt != nil && pr.HumanActiveAt.After(w.job.Began) {
+		// Someone typed into the PR's panes, which work in the slot, during
+		// the job: a new file may be theirs.
+		return "the files it added stay (someone typed into the PR's panes meanwhile): " + listedPaths(added)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "its added files stay: " + oneLine(err.Error(), 200)
+	}
+	defer root.Close()
+	var stay []string
+	for _, p := range added {
+		fi, err := root.Lstat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil || fi.IsDir() || strings.HasSuffix(p, "/"):
+			stay = append(stay, p)
+		default:
+			if err := root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				stay = append(stay, p)
+			}
+		}
+	}
+	if len(stay) > 0 {
+		return "the files it added stay: " + listedPaths(stay)
+	}
+	return ""
 }
 
 // check checks the resolved tree as the deploy's verify does: it differs
@@ -576,8 +721,8 @@ func (w *resolveWork) release(ctx context.Context) string {
 		}
 	}
 	if w.held {
-		e.endEviction(job.PRID)
-		w.held = false
+		e.endEviction(cmp.Or(w.heldPR, job.PRID))
+		w.held, w.heldPR = false, 0
 	}
 	return strings.Join(notes, "; ")
 }
@@ -609,10 +754,17 @@ func (w *resolveWork) putSlotBack(ctx context.Context) string {
 	if job.Claimed {
 		at = deref(slot.CheckedOutSHA) // the tip, once prepare put the slot there
 	}
+	var notes []string
 	if fullSHA.MatchString(at) && deref(slot.PRID) == job.PRID && (slot.State == store.SlotClaimed || slot.State == store.SlotHeld) {
-		if err := e.d.Slots.Resync(ctx, slot, at); err != nil {
-			return fmt.Sprintf("slot %s not put back at %s: %s", slot.Name, textx.ShortSHA(at), oneLine(err.Error(), 200))
+		if why := w.removeAdded(ctx, slot.Path); why != "" {
+			notes = append(notes, "slot "+slot.Name+": "+why)
 		}
+		if err := e.d.Slots.Resync(ctx, slot, at); err != nil {
+			return strings.Join(append(notes, fmt.Sprintf("slot %s not put back at %s: %s", slot.Name, textx.ShortSHA(at), oneLine(err.Error(), 200))), "; ")
+		}
+	}
+	if len(notes) > 0 && !job.Claimed {
+		return strings.Join(notes, "; ")
 	}
 	if !job.Claimed {
 		return ""
@@ -626,10 +778,10 @@ func (w *resolveWork) putSlotBack(ctx context.Context) string {
 	}
 	if err := e.handBackSlot(ctx, slot, *pool, "the staging resolver is done"); err != nil {
 		e.event(ctx, "warn", "slot:"+slot.Name, "slot.release_failed", "release after the staging resolver: "+err.Error(), nil)
-		return fmt.Sprintf("slot %s not handed back: %s", slot.Name, oneLine(err.Error(), 200))
+		return strings.Join(append(notes, fmt.Sprintf("slot %s not handed back: %s", slot.Name, oneLine(err.Error(), 200))), "; ")
 	}
 	e.event(ctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" released after the staging resolver", nil)
-	return ""
+	return strings.Join(notes, "; ")
 }
 
 // resolveDir is the job's directory: its prompt's result file and its
