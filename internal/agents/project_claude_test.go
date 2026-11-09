@@ -471,6 +471,7 @@ func TestAClaudeDeclineForFilesLeftInTheSlotIsRecordedAsResidue(t *testing.T) {
 			setup: func(_ *testing.T, e *env, dir string) { committed(e, dir, execx.Result{}, nil) }},
 		{name: "a committed change through CLAUDE.md's link", files: map[string]string{"docs/agents.md": "x\n"}, changed: []string{"docs/agents.md"},
 			setup: func(t *testing.T, _ *env, dir string) {
+				t.Helper()
 				if err := os.Symlink("docs/agents.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
 					t.Fatal(err)
 				}
