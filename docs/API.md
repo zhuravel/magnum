@@ -26722,16 +26722,19 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
     `git worktree add --no-track -b <name> <path> origin/<base>`, skipped when
     the path is already a worktree), render_mise, setup (each pool.setup command
     through mise exec, 45m, logged to logs/provision-<name>.log), verify_marker
-    (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists) and
-    mark_free (provisioning → free, lock_sha, slot_databases).
+    (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists),
+    post_checkout (each pool.post_checkout command through mise exec, 30m,
+    logged there too: the lock_sha mark_free records is that of a run, not a
+    setup that may install less) and mark_free (provisioning → free, lock_sha,
+    slot_databases).
 
     A slot that is already provisioned is left alone (nil). A provisioning
     slot resumes at the first step without an ok row; a removed or broken one
     starts over. A new or removed slot whose path already exists is refused
     (ErrConflict): that directory is not magnum's (adopt it instead). Failures
-    leave the slot provisioning with last_error, except failed verifications,
-    which move it to broken (ErrVerify). Below pool.min_free_disk_gb nothing is
-    added (ErrLowDisk).
+    (a failing post_checkout or its timeout too) leave the slot provisioning
+    with last_error, except failed verifications, which move it to broken
+    (ErrVerify). Below pool.min_free_disk_gb nothing is added (ErrLowDisk).
 
 func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaCheck) error
     RecordSchema stores c, CheckSchema's answer, as the schema the slot's
@@ -26789,10 +26792,10 @@ func (m *Manager) RemovePRWorktree(ctx context.Context, slot store.Slot, force b
     ran again; a removed one is a no-op.
 
 func (m *Manager) Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
-    Repair re-runs provisioning (render, setup, verification) for a free,
-    broken, provisioning or lost slot; a missing worktree is added again.
-    The slot ends free, its PR and open assignment released (reason "repaired").
-    A pinned or held slot is refused (ErrHold): Unpin it first.
+    Repair re-runs provisioning (render, setup, verification, post_checkout)
+    for a free, broken, provisioning or lost slot; a missing worktree is added
+    again. The slot ends free, its PR and open assignment released (reason
+    "repaired"). A pinned or held slot is refused (ErrHold): Unpin it first.
 
 func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
     Reserve hands a free pool slot to pr without touching the PR's state,
