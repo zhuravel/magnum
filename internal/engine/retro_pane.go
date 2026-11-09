@@ -179,6 +179,10 @@ type paneAgent struct {
 	// (the staging resolver's: the slot's, with no credentials).
 	cwd string
 	env map[string]string
+	// title, when set, is the scratch row's title, which names the agent in
+	// its pane label and title in place of "PR #1" (scratchOwner): the
+	// staging resolver's deploy.
+	title string
 
 	scratch string // the scratch registry's directory
 	cfg     *config.Config
@@ -351,8 +355,12 @@ func (c *paneAgent) setup(ctx context.Context) error {
 		WatchOwner: c.spec.owner, Mode: store.RepoModePerPR})
 	if err == nil {
 		var up store.PRUpsert
-		up, err = st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: node + "#1", Number: learnNumber,
-			URL: "file://" + c.dir, HeadSHA: c.id, GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: LearnAgentTag})
+		gh := store.GitHubPR{RepoID: repo.ID, NodeID: node + "#1", Number: learnNumber,
+			URL: "file://" + c.dir, HeadSHA: c.id, GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: LearnAgentTag}
+		if c.title != "" {
+			gh.Title = &c.title // scratchOwner: the agent's pane label and title
+		}
+		up, err = st.UpsertPRFromGitHub(ctx, gh)
 		c.pr = up.PR
 	}
 	if err != nil {

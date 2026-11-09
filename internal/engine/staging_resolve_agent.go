@@ -2,7 +2,10 @@ package engine
 
 // A staging resolver job's agent (staging_resolve.go): the fix role's kind,
 // model, effort and launch (resolveRole), in a magnum pane of its own (the
-// herdr workspace "staging merge", one job at a time) that works in the
+// herdr workspace "staging merge", one job at a time; the pane's label and
+// the agent's title name the deploy, "learn talkable#12204 void claude-fix",
+// while its herdr name is the one every job shares, so a job's start ends an
+// agent an earlier job left) that works in the
 // job's slot, driven as the skill editor's is (retro_pane.go's paneAgent:
 // a scratch registry in the job's directory, an observer of its own). The
 // pane's env (resolvePaneEnv) carries no GitHub token and no gh login, and
@@ -90,11 +93,14 @@ type stagingAgent interface {
 type stagingAgentAt struct{ Name, Pane, Run string }
 
 // stagingAgentJob is what a job's agent is made from: the job's id and
-// directory, the slot it works in, its role and its pane's env.
+// directory, the slot it works in, its role, its pane's env and the deploy
+// it works for (Title, resolveJob.agentOwner: "talkable#12204 void"), which
+// names its pane and its title in herdr.
 type stagingAgentJob struct {
 	ID, Dir, Cwd string
 	Role         config.Role
 	Env          map[string]string
+	Title        string
 }
 
 // resolveResultFile is what the agent writes: resolved or gave up, why,
@@ -263,7 +269,8 @@ func (w *resolveWork) newAgent() (stagingAgent, error) {
 	if repo, err := e.st.RepoByFullName(context.Background(), job.Repo); err == nil {
 		env = e.slotEnv(&roundJob{repo: repo, pool: e.cfg.PoolFor(job.Repo), slot: slot, pr: store.PR{Number: job.Number}})
 	}
-	return e.d.stagingAgents(stagingAgentJob{ID: job.ID, Dir: dir, Cwd: slot.Path, Role: role, Env: resolvePaneEnv(dir, env)})
+	return e.d.stagingAgents(stagingAgentJob{ID: job.ID, Dir: dir, Cwd: slot.Path, Role: role, Env: resolvePaneEnv(dir, env),
+		Title: job.agentOwner()})
 }
 
 // resolveWithAgent has the agent resolve the conflicts: a restart's job
@@ -382,7 +389,8 @@ func stagingPaneSpec(role config.Role) paneSpec {
 func paneStagingAgents(d paneDeps) func(stagingAgentJob) (stagingAgent, error) {
 	d = d.withDefaults()
 	return func(j stagingAgentJob) (stagingAgent, error) {
-		return &paneStagingAgent{paneAgent: &paneAgent{d: d, spec: stagingPaneSpec(j.Role), dir: j.Dir, id: j.ID, cwd: j.Cwd, env: j.Env}}, nil
+		return &paneStagingAgent{paneAgent: &paneAgent{d: d, spec: stagingPaneSpec(j.Role), dir: j.Dir, id: j.ID, cwd: j.Cwd, env: j.Env,
+			title: j.Title}}, nil
 	}
 }
 

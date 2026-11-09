@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -342,5 +344,103 @@ func TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorksp
 				t.Fatalf("closed %v, registry %v; want its workspace w1 closed and the registry gone", h.hd.closed, serr)
 			}
 		})
+	}
+}
+
+// The resolver's agent is named after its deploy, not as PR #1 of a learn
+// run: its scratch row carries the deploy ("talkable#12204 void"), which the
+// manager every pane agent gets (learnAgentDeps) makes its pane's label and
+// its title (claude --name), while its herdr name stays the one tagged name
+// every job shares (TaggedAgentName of LearnAgentTag, magnum/staging, #1),
+// by which a later job's clearLeftover finds an agent an earlier one left,
+// and its workspace stays "staging merge".
+func TestTheStagingResolversAgentIsNamedAfterItsDeploy(t *testing.T) {
+	h := newHarness(t)
+	eh := newEvalHerdr()
+	cli := t.TempDir()
+	a := &app.App{Logger: h.d.Logger, Runner: &execx.Fake{Rules: []execx.Rule{
+		{Prefix: []string{"claude", "auth", "status"}, Result: execx.Result{Stdout: []byte(`{"loggedIn": true}`)}},
+		{Prefix: []string{"zsh", "-ic", "whence -w claude"}, Result: execx.Result{Stdout: []byte("claude: function\n")}},
+	}}}
+	d := paneDeps{Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: eh, Now: h.clock.Now,
+		Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
+		ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: eh.WorkspaceClose, Keys: eh.AgentSendKeys,
+		Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+			ad := learnAgentDeps(eh, a, st, cfg, layout)
+			ad.Clock = h.clock.Now
+			ad.CodexConfig, ad.ClaudeConfig, ad.ClaudeSettings = filepath.Join(cli, "codex.toml"), filepath.Join(cli, "claude.json"),
+				filepath.Join(cli, "settings.json")
+			ad.ClaudeDir, ad.CodexHome = cli, cli
+			ad.Sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+			return agents.New(ad)
+		}}
+	role, err := h.e.resolveRole("talkable/talkable", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "job")
+	sa, err := paneStagingAgents(d)(stagingAgentJob{ID: "void-12204-x.r1.0a0b0c0d", Dir: dir, Cwd: t.TempDir(), Role: role,
+		Env: resolvePaneEnv(dir, nil), Title: "talkable#12204 void"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := sa.(*paneStagingAgent)
+	if err := ag.setup(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ag.ensureAgent(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	eh.mu.Lock()
+	starts, panes := slices.Clone(eh.starts), slices.Clone(eh.panes)
+	eh.mu.Unlock()
+	name := agents.TaggedAgentName(LearnAgentTag, learnRepoOwner+"/staging", learnNumber, agents.Role(role.Name))
+	label := "learn talkable#12204 void " + role.Name
+	if len(starts) != 1 || starts[0].Name != name || !slices.Contains(starts[0].Args, label+" - staging") {
+		t.Fatalf("started %+v; want one agent named %s, titled %q", starts, name, label+" - staging")
+	}
+	i := slices.IndexFunc(panes, func(p herdr.Pane) bool { return p.ID == starts[0].PaneID })
+	if i < 0 || panes[i].Label != label || eh.labelOf(panes[i].WorkspaceID) != stagingWorkspace {
+		t.Fatalf("panes %+v; want the agent's pane labelled %q in the workspace %q", panes, label, stagingWorkspace)
+	}
+	if err := ag.Close(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An agent an earlier job left behind carries the same tagged name as the
+// next job's, whatever deploy either is named after: the next job's start
+// ends it first, closing its own "staging merge" workspace, and starts its
+// own agent once.
+func TestTheStagingResolverClearsTheAgentAnEarlierJobLeft(t *testing.T) {
+	h := newHarness(t)
+	var ag *fakePaneAgents
+	role, err := h.e.resolveRole("talkable/talkable", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := agents.TaggedAgentName(LearnAgentTag, learnRepoOwner+"/staging", learnNumber, agents.Role(role.Name))
+	h.hd.mu.Lock()
+	h.hd.workspaces = append(h.hd.workspaces, herdr.Workspace{ID: "w-old", Label: stagingWorkspace})
+	h.hd.panes = append(h.hd.panes, herdr.Pane{ID: "p-old", WorkspaceID: "w-old"})
+	h.hd.agents = append(h.hd.agents, herdr.AgentInfo{Name: old, PaneID: "p-old", WorkspaceID: "w-old", Agent: "claude", AgentStatus: herdr.StatusIdle})
+	h.hd.mu.Unlock()
+	dir := filepath.Join(t.TempDir(), "job")
+	a, err := paneStagingAgents(stagingPaneDeps(t, h, &ag))(stagingAgentJob{ID: "bart-12204-y.r1.0a0b0c0e", Dir: dir,
+		Cwd: h.cfg.Pools[0].Path(1), Role: role, Env: resolvePaneEnv(dir, nil), Title: "talkable#12204 bart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Prompt(h.ctx, "resolve it"); err != nil {
+		t.Fatal(err)
+	}
+	h.hd.mu.Lock()
+	closed, left := slices.Clone(h.hd.closed), slices.ContainsFunc(h.hd.agents, func(x herdr.AgentInfo) bool { return x.Name == old })
+	h.hd.mu.Unlock()
+	if !slices.Contains(closed, "w-old") || left || ag.count("start:") != 1 {
+		t.Fatalf("closed %v, the old agent left %v, starts %d; want its workspace closed and one start", closed, left, ag.count("start:"))
+	}
+	if err := a.Close(h.ctx); err != nil {
+		t.Fatal(err)
 	}
 }

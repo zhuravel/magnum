@@ -169,6 +169,17 @@ func (j resolveJob) ref() string { return resolveRefPrefix + j.Effect }
 // label is the job's PR, owner/name#N.
 func (j resolveJob) label() string { return j.Repo + "#" + strconv.Itoa(j.Number) }
 
+// agentOwner names the job's agent in its herdr pane label and title: the
+// deploy, the PR's repository name and number and the env (its branch is
+// staging-<env>), "talkable#12204 void". Magnum's own words, never PR text.
+func (j resolveJob) agentOwner() string {
+	name := j.Repo
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	return name + "#" + strconv.Itoa(j.Number) + " " + strings.TrimPrefix(j.Target, "staging-")
+}
+
 // resolveIDRe is a job id: the effect's id, the try and a random suffix.
 var resolveIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,100}\.r[12]\.[0-9a-f]{8}$`)
 

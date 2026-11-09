@@ -678,6 +678,28 @@ func TestTheStagingResolverCancelsAJob(t *testing.T) {
 	f.h.e.endEviction(pr.ID)
 }
 
+// A job's agent is named after the job's deploy, which the operator looks
+// for in herdr: the PR's repository (its name) and number and the env (the
+// target staging-<env>), "talkable#2 void".
+func TestAStagingResolverJobsAgentIsNamedAfterItsDeploy(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	if res := f.await(f.start(1)); res.State != staging.ResolveDone {
+		t.Fatalf("the job = %+v, want done", res)
+	}
+	f.agentsMu.Lock()
+	jobs := slices.Clone(f.agentJobs)
+	f.agentsMu.Unlock()
+	if len(jobs) != 1 || jobs[0].Title != "talkable#2 void" {
+		titles := make([]string, len(jobs))
+		for i, j := range jobs {
+			titles[i] = j.Title
+		}
+		t.Fatalf("the agents' titles %q; want one agent, named \"talkable#2 void\"", titles)
+	}
+}
+
 // A Cancel whose agent stays (its Close fails: herdr shows it at work, and
 // a pane of yours keeps its workspace open) fails the job saying so, with
 // the agent's pane and why it stays, ahead of the long words of where its

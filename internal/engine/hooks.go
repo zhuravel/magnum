@@ -408,14 +408,28 @@ func (h *lateHandler) then(step func(slog.Handler) slog.Handler) slog.Handler {
 // manager's do (agents.Deps.HookFailure).
 func learnAgents(h agents.Herdr, a *app.App) func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
 	return func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
-		d := agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
-			Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}, HookSocket: a.HookSocket}
-		if a.HookFailures != nil {
-			d.HookFailure = a.SendHookFailure
-		}
-		return agents.New(d)
+		return agents.New(learnAgentDeps(h, a, st, cfg, layout))
 	}
 }
+
+// learnAgentDeps are a pane agent's manager's deps (learnAgents): over its
+// scratch registry st, tagged LearnAgentTag, its agents named in their
+// titles and pane labels by the scratch row's title (scratchOwner).
+func learnAgentDeps(h agents.Herdr, a *app.App, st *store.Store, cfg *config.Config, layout paths.Layout) agents.Deps {
+	d := agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag, OwnerName: scratchOwner,
+		Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}, HookSocket: a.HookSocket}
+	if a.HookFailures != nil {
+		d.HookFailure = a.SendHookFailure
+	}
+	return d
+}
+
+// scratchOwner names a pane agent's scratch row in its agent's title and
+// pane label (agents.Deps.OwnerName): the row's title, magnum's own words
+// that only the staging resolver's row carries (its deploy, "talkable#12204
+// void": paneAgent.title); "" keeps "PR #1" for the retro, the curator, the
+// critic and the editor. The agent's herdr name keeps the row's number.
+func scratchOwner(pr store.PR) string { return store.Deref(pr.Title) }
 
 // onHookFailure feeds a StopFailure the agents' hooks proved (app.HookFailure,
 // from Deps.HookFailures) into the handling the screen-read failure of its
