@@ -441,19 +441,23 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
 // cleanStagingEnv is e with no control character in its words (a failing
 // job's paths come from the PR's files) and its run only as an https page.
 func cleanStagingEnv(e StagingEnv) StagingEnv {
-	clean := func(s string) string {
-		return strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
-				return ' '
-			}
-			return r
-		}, s)
-	}
+	clean := stagingClean
 	e.Env, e.State, e.Detail, e.InTip, e.Why = clean(e.Env), clean(e.State), clean(e.Detail), clean(e.InTip), clean(e.Why)
 	if u := clean(e.RunURL); u != e.RunURL || !strings.HasPrefix(u, "https://") || strings.ContainsAny(u, " ") {
 		e.RunURL = ""
 	}
 	return e
+}
+
+// stagingClean is s with every control character a space: staging's
+// words may name a PR's paths.
+func stagingClean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // StagingStale is why the daemon's staging records no longer follow

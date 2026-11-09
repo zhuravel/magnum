@@ -270,6 +270,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, func(ctx context.Context, p PausePayload) (string, error) {
 			return e.requestPause(ctx, p, req.Kind == ReqPause)
 		})
+	case ReqStagingDeploy, ReqStagingCancel: // staging_request.go: off the tick
+		e.requestStaging(ctx, req)
 	case ReqRestartSessions: // session_restart.go
 		answer(e, ctx, req, e.requestRestartSessions)
 	case ReqIdentityVerdict:
