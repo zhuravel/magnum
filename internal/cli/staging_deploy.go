@@ -27,8 +27,9 @@ import (
 
 // stagingWait bounds the wait for the daemon's answer to a plan, a deploy
 // or a cancel: a plan fetches the mirror and merges in it, and a cancel
-// waits for a step in flight (a push).
-const stagingWait = 10 * time.Minute
+// waits for a step in flight (a push). The daemon refuses a deploy asked
+// longer ago, which nobody waits for any more.
+const stagingWait = engine.StagingDeployWait
 
 // stagingEnvsOf reads --deploy's value: env names separated by commas.
 func stagingEnvsOf(v string) []string {

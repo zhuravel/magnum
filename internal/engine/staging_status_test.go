@@ -35,20 +35,25 @@ type fakeStaging struct {
 	afterStop  bool // a Refresh started after its ctx ended
 
 	// The deploy side: plan answers Plan (nil: every env clean, at
-	// fakeTip); every Plan and Deploy is recorded, and Deploy fails with
-	// deployErr. Step counts its calls (stepping: running now), waits for
-	// stepGate (or its ctx) when set and panics with stepPanics;
-	// closedStepping says Close ran while a Step still ran. Cancel records
-	// its ids and fails with cancelErr.
+	// fakeTip), after planGate when set (its ctx ending first fails it);
+	// every Plan and Deploy is recorded, and Deploy fails with deployErr.
+	// Step counts its calls (stepping: running now), waits for stepGate
+	// (or its ctx, then stepLinger more, as a push in flight finishes)
+	// when set and panics with stepPanics; closedStepping says Close ran
+	// while a Step still ran. Effects answers effects by repository.
+	// Cancel records its ids and fails with cancelErr.
 	plan           func(pr staging.PR, envs []staging.Env) (staging.DeployPlan, error)
+	planGate       chan struct{}
 	plans          []fakePlan
 	deploys        []fakeDeploy
 	deployErr      error
 	steps          int
 	stepping       int
 	stepGate       chan struct{}
+	stepLinger     time.Duration
 	stepPanics     bool
 	closedStepping bool
+	effects        map[string][]staging.Effect
 	cancels        []staging.EffectID
 	cancelErr      error
 }
@@ -68,11 +73,18 @@ type (
 // fakeTip is the staging tips the fake's plans name.
 const fakeTip = "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
 
-func (f *fakeStaging) Plan(_ context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error) {
+func (f *fakeStaging) Plan(ctx context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error) {
 	f.mu.Lock()
 	f.plans = append(f.plans, fakePlan{pr, slices.Clone(envs)})
-	plan := f.plan
+	plan, gate := f.plan, f.planGate
 	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return staging.DeployPlan{}, ctx.Err()
+		}
+	}
 	if plan != nil {
 		return plan(pr, envs)
 	}
@@ -101,7 +113,7 @@ func (f *fakeStaging) Step(ctx context.Context) error {
 	f.mu.Lock()
 	f.steps++
 	f.stepping++
-	gate, panics := f.stepGate, f.stepPanics
+	gate, panics, linger := f.stepGate, f.stepPanics, f.stepLinger
 	f.mu.Unlock()
 	defer func() { f.mu.Lock(); f.stepping--; f.mu.Unlock() }()
 	if panics {
@@ -111,13 +123,32 @@ func (f *fakeStaging) Step(ctx context.Context) error {
 		select {
 		case <-gate:
 		case <-ctx.Done():
+			time.Sleep(linger)
 			return ctx.Err()
 		}
 	}
 	return nil
 }
 
-func (f *fakeStaging) Effects(string) []staging.Effect { return nil }
+func (f *fakeStaging) Effects(repo string) []staging.Effect {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.effects[repo])
+}
+
+// planCount is how many Plans f was asked.
+func (f *fakeStaging) planCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.plans)
+}
+
+// deployCount is how many Deploys f was asked.
+func (f *fakeStaging) deployCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.deploys)
+}
 
 func (f *fakeStaging) Cancel(_ context.Context, id staging.EffectID) error {
 	f.mu.Lock()

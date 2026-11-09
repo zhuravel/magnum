@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/staging"
@@ -146,13 +147,46 @@ func TestAStagingDeployStartsTheEffectsOfTheEnvsAsked(t *testing.T) {
 }
 
 // What a deploy refuses before it deploys anything: staging off (no
-// client), a coworker's PR (own PRs only for now), an env the repository
-// does not configure, no env, a head that moved since the question, an env
-// that cannot take the merge now (the head there already, a conflict), a
-// merge that adds a migration or a workflow change the question did not
-// name, and Plan's own refusal.
+// client), a coworker's PR (own PRs only for now), a PR merged or closed,
+// one from a fork, one whose head branch is master, main or a staging
+// branch (internal/staging checks none of these: the engine is the only
+// guard, and it plans nothing for them), an env the repository does not
+// configure, no env, a head that moved since the question, an env that
+// cannot take the merge now (the head there already, a conflict), a merge
+// that adds a migration or a workflow change the question did not name,
+// and Plan's own refusal.
 func TestAStagingDeployRefusesWhatItCannotDeployAsAsked(t *testing.T) {
 	seenVoid := []StagingSeen{{Env: "void", Migrations: []string{"db/migrate/20261105_add_coupons.rb"}}}
+	headRef := func(ref string) func(*store.PRUpdate) { return func(u *store.PRUpdate) { u.Set("head_ref", ref) } }
+	for _, c := range []struct {
+		name, want string
+		edit       func(*store.PRUpdate) // PR #2 in the registry
+	}{
+		{"a merged PR", "talkable/talkable#2 is not open", func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) }},
+		{"a closed PR", "talkable/talkable#2 is not open", func(u *store.PRUpdate) { u.Set("gh_state", store.GHClosed) }},
+		{"a fork's PR", "comes from a fork", func(u *store.PRUpdate) { u.Set("is_cross_repo", true) }},
+		{"a head branch master", "head branch is master", headRef("master")},
+		{"a head branch main", "head branch is main", headRef("main")},
+		{"a staging head branch", "head branch is staging-void", headRef("staging-void")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeStaging{}
+			h := deployHarness(t, f)
+			if err := h.st.UpdatePR(h.ctx, h.pr(2).ID, c.edit); err != nil {
+				t.Fatal(err)
+			}
+			// Handled at once: a tick's poll would tell the PR again.
+			for _, dry := range []bool{true, false} {
+				p := StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"void"}, Head: fixHead, Seen: seenVoid, DryRun: dry}
+				if _, err := h.e.requestStagingDeploy(h.ctx, p, h.clock.Now()); err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("dry run %v: %v, want a refusal saying %q", dry, err, c.want)
+				}
+			}
+			if len(f.plans) != 0 || len(f.deploys) != 0 {
+				t.Fatalf("planned %+v, deployed %+v", f.plans, f.deploys)
+			}
+		})
+	}
 	for _, c := range []struct {
 		name string
 		f    *fakeStaging
@@ -198,6 +232,78 @@ func TestAStagingDeployRefusesWhatItCannotDeployAsAsked(t *testing.T) {
 				t.Fatalf("deployed %+v", c.f.deploys)
 			}
 		})
+	}
+}
+
+// awaitPlans waits until f was asked n Plans.
+func awaitPlans(t *testing.T, f *fakeStaging, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); f.planCount() < n; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d staging Plans, want %d", f.planCount(), n)
+		}
+	}
+}
+
+// voidDeploy is a deploy of PR #2 to void, as its y/N bound it.
+var voidDeploy = StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"void"}, Head: fixHead, Seen: []StagingSeen{{Env: "void"}}}
+
+// A staging request is answered off the tick: a plan that waits (a fetch,
+// a mirror a step holds) never holds the tick. The daemon's stop cuts it
+// and leaves it pending, nothing deployed, for the next start to answer.
+func TestAStagingRequestRunsOffTheTickAndAStopLeavesItPending(t *testing.T) {
+	f := &fakeStaging{planGate: make(chan struct{})}
+	h := deployHarness(t, f)
+	id := h.enqueue(ReqStagingDeploy, voidDeploy)
+	h.stagingTick() // fails when the tick waits for the plan
+	awaitPlans(t, f, 1)
+	if r := h.request(id); r.State != store.RequestPending {
+		t.Fatalf("while its plan waits the request is %s %q", r.State, deref(r.Result))
+	}
+	h.e.stagingStop()
+	h.e.stagingWG.Wait()
+	if r := h.request(id); r.State != store.RequestPending {
+		t.Fatalf("the stop left the request %s %q, want it pending", r.State, deref(r.Result))
+	}
+	if n := f.deployCount(); n != 0 {
+		t.Fatalf("%d deploys after the stop", n)
+	}
+}
+
+// A deploy runs only while the operator still waits for its answer: one
+// asked longer ago than StagingDeployWait (the CLI's wait) is refused and
+// deploys nothing, whether it waited in the queue (a stop cut it and the
+// next start found it pending) or behind a slow plan. A dry run deploys
+// nothing, so an old one is still answered.
+func TestAStagingDeployAskedTooLongAgoDeploysNothing(t *testing.T) {
+	const want = "asked 11 minutes ago, longer than a deploy waits for its answer (10 minutes): nothing was deployed; ask again"
+	f := &fakeStaging{}
+	h := deployHarness(t, f)
+	id := h.enqueue(ReqStagingDeploy, voidDeploy)
+	h.advance(StagingDeployWait + time.Minute)
+	if r := h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"void"}, DryRun: true}); r.State != store.RequestDone {
+		t.Fatalf("an old dry run is %s %q", r.State, deref(r.Result))
+	}
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), want) {
+		t.Fatalf("an old deploy is %s %q, want %q", r.State, deref(r.Result), want)
+	}
+	if n := f.planCount(); n != 1 {
+		t.Errorf("%d plans, want the dry run's alone", n)
+	}
+
+	f = &fakeStaging{planGate: make(chan struct{})}
+	h = deployHarness(t, f)
+	id = h.enqueue(ReqStagingDeploy, voidDeploy)
+	h.stagingTick()
+	awaitPlans(t, f, 1)
+	h.advance(StagingDeployWait + time.Minute)
+	close(f.planGate)
+	h.e.stagingWG.Wait()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), want) {
+		t.Fatalf("a deploy behind a slow plan is %s %q, want %q", r.State, deref(r.Result), want)
+	}
+	if n := f.deployCount(); n != 0 {
+		t.Fatalf("%d deploys", n)
 	}
 }
 

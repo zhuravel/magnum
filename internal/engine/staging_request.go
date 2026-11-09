@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/staging"
@@ -42,6 +43,11 @@ const (
 
 // StagingAll asks for every staging env of the PR's repository.
 const StagingAll = "all"
+
+// StagingDeployWait is how long a staging deploy waits for its answer: the
+// CLI waits that long, and a deploy asked longer ago is refused (nobody
+// waits for it any more).
+const StagingDeployWait = 10 * time.Minute
 
 // StagingDeployPayload is a staging deploy of the operator's own PR to
 // Envs (env names, in any order, or StagingAll). DryRun only plans it. A
@@ -144,7 +150,7 @@ func (e *Engine) requestStaging(ctx context.Context, req store.Request) {
 		if !ok {
 			return
 		}
-		fn = func(ctx context.Context) (string, error) { return e.requestStagingDeploy(ctx, p) }
+		fn = func(ctx context.Context) (string, error) { return e.requestStagingDeploy(ctx, p, req.CreatedAt) }
 	case ReqStagingCancel:
 		p, ok := payload[StagingCancelPayload](e, ctx, req)
 		if !ok {
@@ -180,8 +186,11 @@ func (e *Engine) requestStaging(ctx context.Context, req store.Request) {
 }
 
 // requestStagingDeploy plans p's PR on the envs asked and, unless a dry
-// run, starts their effects, after its refusals.
-func (e *Engine) requestStagingDeploy(ctx context.Context, p StagingDeployPayload) (string, error) {
+// run, starts their effects, after its refusals; askedAt is when the
+// request was queued (a deploy asked StagingDeployWait or longer before
+// is refused: before its plan, and again after it, which can wait for
+// minutes).
+func (e *Engine) requestStagingDeploy(ctx context.Context, p StagingDeployPayload, askedAt time.Time) (string, error) {
 	s := e.d.Staging
 	if s == nil || len(StagingRepos(e.cfg)) == 0 {
 		return "", errStagingOff
@@ -197,6 +206,9 @@ func (e *Engine) requestStagingDeploy(ctx context.Context, p StagingDeployPayloa
 		return "", err
 	}
 	if why := e.stagingDeployRefusal(pr, label, p); why != "" {
+		return "", errors.New(why)
+	}
+	if why := e.stagingAskedTooLongAgo(label, p, askedAt); why != "" {
 		return "", errors.New(why)
 	}
 	id, _, err := e.stagingFixer(full)
@@ -225,6 +237,9 @@ func (e *Engine) requestStagingDeploy(ctx context.Context, p StagingDeployPayloa
 	}
 	if why := stagingPlanRefusal(ans.Envs, p.Seen); why != "" {
 		return "", fmt.Errorf("%s: %s", label, why)
+	}
+	if why := e.stagingAskedTooLongAgo(label, p, askedAt); why != "" {
+		return "", errors.New(why) // the plan waited
 	}
 	ids, err := s.Deploy(ctx, plan, staging.ByCLI)
 	if err != nil {
@@ -269,6 +284,19 @@ func (e *Engine) stagingDeployRefusal(pr store.PR, label string, p StagingDeploy
 		return label + ": the head moved since you were asked: " + textx.ShortSHA(p.Head) + " is now " + textx.ShortSHA(pr.HeadSHA) + ": ask again"
 	}
 	return ""
+}
+
+// stagingAskedTooLongAgo refuses a deploy (never a dry run) asked at
+// askedAt, StagingDeployWait or longer before now: nobody waits for its
+// answer any more (a stop cut it and the next start found it pending, or
+// its plan waited), and the envs may be in other hands by now.
+func (e *Engine) stagingAskedTooLongAgo(label string, p StagingDeployPayload, askedAt time.Time) string {
+	age := e.now().Sub(askedAt)
+	if p.DryRun || askedAt.IsZero() || age < StagingDeployWait {
+		return ""
+	}
+	return label + ": asked " + textx.DurationWords(age.Truncate(time.Minute)) + " ago, longer than a deploy waits for its answer (" +
+		textx.DurationWords(StagingDeployWait) + "): nothing was deployed; ask again"
 }
 
 // stagingChosen is the envs names asks for among the repository's (envs,
