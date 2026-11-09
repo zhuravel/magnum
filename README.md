@@ -979,9 +979,11 @@ The `[usage]` section watches the Codex budget, which Magnum reads from Codex's 
 (default 80) automatic full re-reviews wait (`re-review · Codex soft cap` on the board), since a full
 re-review costs about twice a first review and finds no more; first reviews, delta checks, re-reviews of
 the same head, reply rounds, a review request and `magnum review` still run. At `codex_hard` (default 95)
-every round that needs Codex waits until the budget is below it again. `magnum status` and the tab bar
-show the gauge (`codex 87%`); `0` turns a cap off. The reading can be stale: after a switch to another
-Codex account the newest session file still carries the old account's limits, and no Codex session runs
+every round that needs Codex waits until the budget is below it again. The factory reads the same budget: at
+`codex_soft` its local review waits, and its stages' Codex roles yield, each running as its Claude
+`codex_fallback` (see [Factory](#factory-writing-code-from-a-jira-key-or-a-prompt), Roles). `magnum status`
+and the tab bar show the gauge (`codex 87%`); `0` turns a cap off. The reading can be stale: after a switch to
+another Codex account the newest session file still carries the old account's limits, and no Codex session runs
 to refresh it while the kind is paused, or at the soft cap while every round waiting is a full re-review.
 `magnum resume --tool codex` (or `--tool all`, with or without a daemon) overrules the reading whenever it
 is at either cap, a pause or not, and lifts the hard cap's pause: both caps wait for Codex's next reading,
@@ -4105,27 +4107,30 @@ stages = [
   `why` the reason it exists (`find the cause on its own, apart from the others`). A review `[[role]]` takes
   neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
   you) and no `aliases`, and its `prompt` is a file of [prompts](prompts/README.md) (`factory-*.md`). A role
-  on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal;
-  `magnum config` warns about one without it. A fallback that the same stage runs already makes the role a
-  second reader there (the built-in `fx-points-codex = "fx-points"`), whatever its kind (`magnum config`
-  says so for one moved to Claude). A second reader has no questions file: its prompt tells it to ask no one,
-  its open questions stay in its findings' `## Open questions`, and a `questions-<role>.json` it writes anyway
-  is never asked, never holds up its end, and is set aside as `<name>.unasked` when its stage passes, before
-  the judge reads the questions files. After a refusal it leaves the stage: no second session of the fallback
+  on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal, and
+  while Codex is at its soft cap or its usage limit; `magnum config` warns about one without it. A fallback
+  that the same stage runs already makes the role a second reader there (the built-in
+  `fx-points-codex = "fx-points"`), whatever its kind (`magnum config` says so for one moved to Claude). A
+  second reader has no questions file: its prompt tells it to ask no one, its open questions stay in its
+  findings' `## Open questions`, and a `questions-<role>.json` it writes anyway is never asked, never holds up
+  its end, and is set aside as `<name>.unasked` when its stage passes, before the judge reads the questions
+  files. After a refusal it leaves the stage: no second session of the fallback
   starts, the fallback's own run stands for both, and the stage waits until a pass confirmed the quit of the
   task's Codex sessions. A run of it that passed before the refusal keeps its findings for the judge, after a
   restart too. A fallback that is no role of the stage (`fx-cause-claude` for `fx-cause`, `fx-critic-claude` for
   either critic) launches in the refused role's place once that quit went through. In both cases, what a run that
   ran on Codex in the stage and was not verified wrote (its findings, its questions file and, in a critic stage,
-  `critic.md`, perhaps partial) is set aside as `<name>.refused` at once, and again on each pass while the quit
-  waits, so neither the judge, the questions gate nor the liaison reads it; a `<role>'s refused run: set aside`
+  `critic.md`, perhaps partial) is set aside as `<name>.refused` at once (also in a pass that goes to you for
+  another event), and again on each pass while the quit waits, so neither the judge, the questions gate nor the
+  liaison reads it; a `<role>'s refused run: set aside`
   event names it, and a `<role> left the <stage> stage` event says the twin left. A fallback's end then holds
   only on files it wrote itself (a turn that ends without one gets its nudge). A stage that ends on the report,
   the PR body or the proof is not covered: a refused judge's `report.md`, `acceptance.json` and `questions.json`
   (which the judge's amend edits in place, so a set-aside would take the report it must amend), a refused PR
   body and a refused writer's `proof.json` and commits (which no rename undoes) stay for its fallback. No
   built-in Codex role runs there, and `magnum config` warns of one of yours that does. A critic stage names
-  exactly one role, since its one `critic.md` names none. A quit that fails is a wait on the task's agent that
+  exactly one role, since its one `critic.md` names none: `magnum config` refuses one of more and says to give
+  each critic a stage of its own. A quit that fails is a wait on the task's agent that
   the screen shows, tried again once a poll with one `codex_never` fail event per cause (its numbers aside).
   When the runtime sees you in a pane of the task, or your typing in one within `human_cooldown` (a herdr that
   cannot say where you are reads the same), the wait names the cooldown's end (`you're in a pane of this task, or
@@ -4133,9 +4138,30 @@ stages = [
   and fx-cause-claude waits for that`), counts no tries, and goes to you only if the quit still fails a poll
   after that. Any other cause goes to you at the stage failures' pace, after 5 failed tries or 5 minutes. Either
   goes to you only while the quit is what holds the stage (a fallback waits to launch, or the twin's leave is all
-  that is left: while `fx-points` still works, the wait never pages) and never under the factory's herdr hold,
-  which goes to you itself; the words say what to do: leave the task's panes, or close its Codex panes in herdr,
-  then retry the task.
+  that is left: while `fx-points` still works, the wait never pages). In the twin's case the cooldown counts from
+  the first pass the quit holds the stage, not from its first failure while `fx-points` worked, since your typing
+  in `fx-points`' pane renews the cooldown meanwhile. No stage runs under the factory's herdr hold, which goes to
+  you itself, and its lift starts the quit's counts again, so the first failed try after it is a wait. The words
+  say what to do: leave the task's panes, or close its Codex panes in herdr, then retry the task.
+  The Codex roles also yield to magnum's real reviews, which come first on the Codex budget. Before a stage
+  launches, while Codex is at or past `[usage] codex_soft` (read as the local review reads it) or paused on a
+  usage limit one of the factory's runs hit, each Codex role of the stage runs as its `codex_fallback`:
+  `fx-cause-claude` in `fx-cause`'s place, `fx-critic-claude` in either critic's, and the twin `fx-points-codex`
+  sits out, `fx-points` ending the stage alone. Nothing marks the task: a later stage launches its Codex roles
+  again once the budget is below the cap, and a stage launched on Codex keeps its sessions. A Codex role with no
+  Claude fallback holds its stage's launch, and the task waits on the budget (`usage: codex at 95%, at or past
+  [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to run in its place, so the
+  investigate stage waits`) until it is below the cap. A budget that cannot be read launches as before (the
+  runtime's launch reads it again) and is logged once while the reads fail. A Codex run that hits its usage limit
+  in a stage hands its role over the same way, at once, where it used to pause the role until the limit's reset:
+  its fallback launches, and its first prompt names what the limited run wrote as its work so far, to go on from;
+  or the twin sits out. That is no refusal: the files stay where they are, the stage may pass on them, the task
+  is not marked, and no quit holds the stage (the limited session, idle at its limit, is quit once, and a quit
+  that fails is a fail event only). A Codex role with no fallback still pauses at its limit until the reset, and a
+  login lapse or an overload pauses as before. A `<fallback> runs in <role>'s place in the <stage> stage: <why>`
+  or `<role> sits out the <stage> stage: <why>` event says each, once per role and stage, and the task card's
+  AGENTS line names who ran in whose place, or sat out, and why (`fx-cause-claude in fx-cause's place: codex at
+  95%, at or past [usage] codex_soft 80%`).
   To run a role on Claude instead, set `kind = "claude"` in a
   `[[factory.role]]` of its name (the entry is then unused and `magnum config` says so), and to drop an
   entry write it with an empty value: `codex_fallback = { fx-cause = "" }`. `fx-liaison` is the one role
@@ -4190,8 +4216,9 @@ stages = [
   once, and cites the twin's findings file in each such question's `evidence`. This is a trial on 5 feature
   tasks, kept or dropped on the questions it adds alone (`magnum factory stats`' questions from one source: those
   the judge alone raised, whose evidence names the twin's findings and no other reader's) against the plans it
-  changed, with the questions both readers raised counted apart as shared, and the take rate. The twin makes the
-  investigation wait on Codex too: a Codex usage pause or login lapse holds the stage until the twin ends. A build
+  changed, with the questions both readers raised counted apart as shared, and the take rate. A task whose twin
+  sat out (Codex at its soft cap or its usage limit, see Roles) adds nothing to the trial: count it out of the 5.
+  The twin makes the investigation wait on Codex too: a Codex login lapse holds the stage until the twin ends. A build
   from before this one stops on a task at `narrow_critic` (its kind has no such stage), so finish or stop those
   tasks before you go back. A `publish` effect must come after a `ready_push`
   decision. `kind_by_jira_type`

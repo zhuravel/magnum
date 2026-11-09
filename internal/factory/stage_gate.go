@@ -322,13 +322,14 @@ func (e *Engine) reportRole(ctx context.Context, t registry.Task, written string
 // reportRan is role, the first of task t's report stage, as it ran the
 // report: its codex_fallback when a run of the fallback in that stage is one
 // the runtime verified and no run of role itself is (a Codex judge refused,
-// or one on a task Codex never worked on by then), else role. So the
-// questions it raises name the role whose run ended on the report, as the
-// role runs keep it, which stats tell apart as the judge's. A read that
+// one on a task Codex never worked on by then, or one that yielded to
+// Codex's soft cap or its usage limit, which mark nothing), else role. So
+// the questions it raises name the role whose run ended on the report, as
+// the role runs keep it, which stats tell apart as the judge's. A read that
 // fails is logged, and the name is role's.
 func (e *Engine) reportRan(ctx context.Context, t registry.Task, role string) string {
 	fb := e.cfg.Factory.CodexFallback[role]
-	if fb == "" || fb == role || !t.CodexNever {
+	if fb == "" || fb == role {
 		return role
 	}
 	var stage string

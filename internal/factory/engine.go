@@ -61,7 +61,8 @@ const LaunchLabel = "zhuravel.magnum.factory"
 // or of a role a recovery left without a turn (RecoverLost, which a rebuilt
 // stage calls),
 // the shift of every turn deadline after the Mac slept, the role that runs
-// for a role (its Claude fallback on a task Codex never works on), the quit
+// for a role (its Claude fallback on a task Codex never works on), an agent
+// kind's pause in force (Paused: Codex's usage limit yields its roles), the quit
 // of such a task's Codex sessions, the quit of one role's sessions (a QA
 // walker whose run was cut, QuitRole), a run's state as the agents store keeps
 // it across a restart, who is at work in a task's copy now (a run in flight,
@@ -95,6 +96,7 @@ type Runtime interface {
 	Shift(gap time.Duration)
 	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
+	Paused(kind string) *runtime.WaitError
 	QuitCodex(ctx context.Context, t registry.Task) error
 	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
@@ -462,6 +464,10 @@ type Engine struct {
 	// (runAgents): the loop's own, rebuilt from the registry after a
 	// restart.
 	agentRuns map[int64]*agentsRun
+	// codexUnread says that the last read of Codex's budget before a stage's
+	// launch failed, which codexYield logged once: the next failure is not
+	// logged again until a read goes through.
+	codexUnread bool
 
 	// qaSessions are the qa stages' runs that hold the Mac, by task (qa.go):
 	// the loop's own but for each boot's answer, which its goroutine writes

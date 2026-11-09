@@ -21840,6 +21840,80 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStatsCountTheQuestionsBySource (the judge's run recorded); config's TestAStageRunsForAWideOrANarrowPlan, the
   `when wide` case of TestAQAStageNeedsRolesTheQAEndAndAReviewBeforeIt, TestACriticStageNamesExactlyOneRole and
   TestACodexRoleWhoseRefusedFilesStayIsAWarning. No new dependencies.
+- **The factory's Codex roles yield to magnum's real reviews at the Codex soft cap, a usage limit hands a Codex
+  role to its fallback at once, and four fixes of the failed-quit wait** (2026-11-09, the operator's call at
+  Codex 95% with about 5 points left, and the re-review of the refused-files round).
+  - Why. The local review already yields at `[usage] codex_soft` (`codexSoft`), and the runtime's launch gate made a
+    stage with a Codex role wait at that cap, but a wait is all it did: the whole stage stood still until the
+    window reset, and a stage launched under the cap spent Codex to the end. Today a critic follows every plan and
+    a Codex twin reads every feature's points, so a factory task could spend the week's last points, which the
+    operator's reviews need, or stall for days on the weekly window.
+  - The yield. Before an agents stage launches, `yieldAtLaunch` asks `codexYield`: Codex paused on a usage limit a
+    run hit (the runtime's pause, `Runtime.Paused`, which its reset lifts), or the budget at or past `codex_soft`
+    (`codexUsage`, the read `codexSoft` now shares). Then each Codex role with a Claude `codex_fallback` runs as it
+    (fx-cause-claude in fx-cause's place, fx-critic-claude in either critic's), and a role whose fallback the stage
+    runs already sits out (fx-points-codex: fx-points ends the stage alone). Nothing marks the task: the yield is
+    the stage's, and a later stage launches Codex again once the budget is below the cap. A Codex role with no
+    Claude fallback holds the launch, the task waiting on the budget in the local review's words
+    (`codex at 95%, at or past [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to
+    run in its place, so the investigate stage waits`). A read that fails launches as before (the runtime's gate
+    reads again) and logs once until a read goes through. A held launch drops the stage's state when the yield
+    changed it, so the next pass decides again on the budget as it is then.
+  - A usage limit mid-run. Before, a Codex run that ended on its limit (health `usage_limit`, or a model limit no
+    fallback model took) paused its role: the run abandoned as paused, the kind paused until the named reset (else
+    an hour), and the role's prompt to go on sent then. No work was lost, but the stage stalled until the reset,
+    for the weekly window days. The pause stays (every other Codex launch and prompt waits on it, and a new stage
+    yields to it), and the role is handed over at once (`handOver`): its fallback launches with its first prompt,
+    which names what the limited run wrote as its work so far, to go on from (`limitNote`), or the twin sits out.
+    No refusal: the files stay where they are and the stage may pass on them, nothing is set aside, the task is not
+    marked and no quit holds the stage. The limited session, idle at its limit, is quit once (`QuitRole`, its runs
+    in flight abandoned first, so the watchdog takes no step of them when the pause lifts); a failure is a fail
+    event only. A Codex role with no fallback still pauses until the reset, and a login lapse or an overload pauses
+    as before.
+  - What a restart keeps. The yield is decided once per attempt, at its launch. A rebuild reads it back from the
+    attempt's role runs (the runtime records each role it launches) and the ledger: a Codex role whose fallback the
+    attempt launched runs as that fallback, with no relaunch and nothing of it set aside as refused; a twin the
+    attempt never launched beside its fallback sat out. A usage limit whose handover had not launched yet comes
+    back from the role's last run (abandoned on its pause), which hands it over again. The fake runtime's `Launch`
+    now records the role runs as the real one does.
+  - What it says. `<fallback> runs in <role>'s place in the <stage> stage: <why>` or `<role> sits out the <stage>
+    stage: <why>`, once per role and stage (`sayYield`, `saidOnce`), and the task card's AGENTS line (`AgentsNote`,
+    `yieldNote`, from the stage events of a task at work or waiting on you) names who ran in whose place, or sat
+    out, and why, those of one cause under it once. The row counts a role done by its fallback's run when the
+    attempt launched the fallback and never the role, as on a task Codex never works on, and a role that yielded is
+    no role still to run. The questions gate names questions.json's raiser by the role runs whether or not the task
+    is marked (`reportRan`), so a Codex judge that yielded raises its questions under its fallback's name.
+  - The quit's wait (the re-review's N1 to N4). N1: in the twin's case the cooldown counted from the first failed
+    quit, while fx-points still worked and your typing in its pane renewed the cooldown, so the pass where fx-points
+    ended paged at once; it now counts from the later of that failure and the first pass the quit held the stage
+    (`quitTries.holds`). N2: no stage runs under the factory's herdr hold, so `quitHeld`'s guard against it never
+    fired, and its test passed only because its `HerdrUp` was nil, while the counts ran on through the hold and the
+    first failed try after its lift paged for the time the hold took; the guard is gone, and the hold's lift starts
+    every quit's counts again (`restartQuits`, keeping the words its fail event said). N3: a refusal taken in a pass
+    that ended before the prompts (another event of the batch needed you, or the stage was suspended) left the
+    refused run's files unmarked, which the liaison then showed; `setAsideBeforeYou` sets them aside in such a pass
+    too, and the per-pass set-aside after the quit's try stays for late writes. N4: the refusal of a critic stage of
+    several roles ends with its fix (`a critic stage names exactly one role (critic.md is one file for the stage),
+    got 2: give each critic a stage of its own`).
+  Rejected: yielding in the runtime's launch gate (the stage, not the runtime, keeps which role's files a fallback
+  writes, and who leaves the run); yielding a Codex role already at work, its nudges and its recoveries (it would
+  start over on Claude what Codex half did; only a new launch, or a run that hit its limit, yields); marking the
+  task Codex-never at the cap (a refusal's mark is for good, and the cap passes); waiting on the usage limit's
+  reset as before (the stage stood for the weekly window); setting aside a limited run's files as a refused run's
+  (they are its own work, which the fallback goes on from); waiting for the limited session's quit before the
+  fallback launches (it stopped at its limit and writes nothing more, so a failed quit would only stall the task);
+  yielding a role whose fallback is on Codex too (it spends the same budget). Tests: the factory's
+  TestAtTheCodexSoftCapFxCauseClaudeRunsInFxCausesPlace (under, at and past the cap, a restart),
+  TestAtTheCodexSoftCapFxCriticClaudeRunsInEachCriticsPlace, TestAtTheCodexSoftCapTheTwinSitsOutAndFxPointsEndsTheStage
+  (with and without a restart), TestAtTheCodexSoftCapACodexRoleWithoutAFallbackWaits,
+  TestAFailedCodexBudgetReadLaunchesAsBeforeAndLogsOnce, TestWhileCodexIsPausedOnItsUsageLimitANewStagesCodexRoleYields,
+  TestACodexUsageLimitHandsFxCauseToItsFallback and TestACodexUsageLimitOfTheTwinLeavesFxPointsToEndTheStage (with
+  and without a restart: the files kept, no mark, no refusal's quit), TestATwinsFailedQuitWaitsOutTheCooldownFromWhenItHoldsTheStage,
+  TestAFailedQuitCountsAgainAfterTheHerdrHold (a real hold: a `HerdrUp` that fails, then lifts; it replaces
+  TestAFailedQuitNeverGoesToYouUnderTheHerdrHold), TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce,
+  TestTheCardSaysWhichRoleRanInWhosePlaceAndWhy and TestAJudgeThatRanAsItsFallbackRaisesItsQuestionsUnderThatName
+  (with and without the mark); the runtime's TestObserveReportsAUsageLimitAsPausedNotFailed (`Paused`); config's
+  TestACriticStageNamesExactlyOneRole. No new dependencies.
 
 - **A local judge keeps a choice the ticket and the operator's answers leave open as a question, never rejects it**
   (R15's follow-up, 2026-11-09). The first replay of talkable#12212's local round on the R15 skill (eval run

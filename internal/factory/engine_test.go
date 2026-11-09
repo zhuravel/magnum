@@ -24,6 +24,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
+	"github.com/zhuravel/magnum/internal/usage"
 )
 
 var t0 = time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
@@ -135,6 +136,25 @@ type fakeRuntime struct {
 	// manager's; soonCh is ObserveSoon's (askSoon sends on it).
 	endedCh chan struct{}
 	soonCh  chan struct{}
+	// pauses are the agent kinds' pauses in force, as Paused answers them.
+	pauses map[string]*runtime.WaitError
+}
+
+// Paused is the pause in force of agent kind, nil for none.
+func (f *fakeRuntime) Paused(kind string) *runtime.WaitError {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pauses[kind]
+}
+
+// setPaused makes w the pause of agent kind (nil lifts it).
+func (f *fakeRuntime) setPaused(kind string, w *runtime.WaitError) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pauses == nil {
+		f.pauses = map[string]*runtime.WaitError{}
+	}
+	f.pauses[kind] = w
 }
 
 // talkCall is a Talk the engine made: the task and the prompt it rendered.
@@ -267,8 +287,9 @@ type verifyCall struct {
 
 func (f *fakeRuntime) Owner(context.Context, registry.Task) (store.PR, error) { return store.PR{}, nil }
 
-// Launch records the launch and, as the runtime does, moves a launching
-// attempt to running when it goes through.
+// Launch records the launch and, as the runtime does, each role's launch
+// in the attempt (its RoleRun) and moves a launching attempt to running
+// when it goes through.
 func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
 	f.mu.Lock()
 	f.launches = append(f.launches, t.ID)
@@ -283,6 +304,9 @@ func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.At
 	f.mu.Unlock()
 	if err != nil || reg == nil || a.ID == "" {
 		return err
+	}
+	for _, r := range roles { // a failure is the runtime's log line, never the launch's
+		_ = reg.RecordRoleRun(ctx, registry.RoleRun{AttemptID: a.ID, Role: r.Name, CLI: r.AgentKind(), Launched: time.Now()})
 	}
 	if err := reg.TransitionAttempt(ctx, a.ID, []string{registry.AttemptLaunching}, registry.AttemptRunning, nil); err != nil &&
 		!errors.Is(err, registry.ErrConflict) {
@@ -989,6 +1013,35 @@ type harness struct {
 	layout paths.Layout
 	deps   Deps
 	e      *Engine
+	// codex is the Codex budget the engine reads (Deps.Usage), 0% used
+	// unless a test sets it: no test reads the machine's own Codex files.
+	codex *codexGauge
+}
+
+// codexGauge is a Codex budget for Deps.Usage: used percent, or err; reads
+// counts the reads.
+type codexGauge struct {
+	mu    sync.Mutex
+	used  float64
+	err   error
+	reads int
+}
+
+func (g *codexGauge) read(context.Context, time.Time) (usage.Snapshot, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.reads++
+	if g.err != nil {
+		return usage.Snapshot{}, g.err
+	}
+	return usage.Snapshot{Window: usage.Window{UsedPercent: g.used}}, nil
+}
+
+// set makes the gauge read used percent, or fail with err.
+func (g *codexGauge) set(used float64, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.used, g.err = used, err
 }
 
 // restart builds a new engine over the same registry and collaborators, as
@@ -1007,9 +1060,9 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	reg := registrytest.OpenWith(t, registry.Options{Clock: clock.Now})
 	cfg := config.Defaults()
 	h := &harness{t: t, ctx: t.Context(), clock: clock, reg: reg, cfg: cfg, rt: &fakeRuntime{cfg: cfg, reg: reg}, copies: &fakeCopies{},
-		layout: paths.Layout{Home: t.TempDir()}}
+		layout: paths.Layout{Home: t.TempDir()}, codex: &codexGauge{}}
 	d := Deps{Config: cfg, Layout: h.layout, Registry: reg, Runtime: h.rt, Copies: h.copies, Clock: clock.Now,
-		Log: slog.New(slog.DiscardHandler)}
+		Usage: h.codex.read, Log: slog.New(slog.DiscardHandler)}
 	for _, f := range edit {
 		f(&d)
 	}

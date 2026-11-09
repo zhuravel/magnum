@@ -218,7 +218,9 @@ stale_after = "90s"               # no page for this long makes the stream unhea
 
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,
-                                  # review requests and `magnum review` still run; 0 = off)
+                                  # review requests and `magnum review` still run; 0 = off); the factory's local
+                                  # review waits, and its stages' Codex roles run as their codex_fallback (the twin
+                                  # fx-points-codex sits out)
 # codex_hard = 95                 # at this % used, rounds that need Codex wait until it is below again (0 = off)
 # codex_home = ""                 # "" = $CODEX_HOME, else ~/.codex
 
@@ -890,13 +892,15 @@ sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files 
 codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude", fx-critic-narrow = "fx-critic-claude", fx-points-codex = "fx-points" }
                                   # a factory role on Codex -> the Claude role that takes its work after a Codex
                                   # refusal (a cybersecurity warning marks the task for good), as magnum's
-                                  # judge_fallback does. A fallback the same stage runs already makes the role a
-                                  # second reader there (fx-points-codex beside fx-points): it asks no one itself (its
-                                  # open questions stay in its findings, for the judge), and after a refusal it leaves
-                                  # the stage, the fallback's own run standing for both. Your table merges entry by
-                                  # entry: an empty value removes an entry (fx-cause = ""), and a [[factory.role]]
-                                  # that moves a role to Claude (kind = "claude") leaves its entry unused, which
-                                  # `magnum config` warns about
+                                  # judge_fallback does, and in a stage launched while Codex is at [usage] codex_soft
+                                  # or its usage limit, or after a run of the role hit that limit (which marks
+                                  # nothing). A fallback the same stage runs already makes the role a second reader
+                                  # there (fx-points-codex beside fx-points): it asks no one itself (its open
+                                  # questions stay in its findings, for the judge), and after a refusal, or in place
+                                  # of a yield, it leaves the stage, the fallback's own run standing for both. Your
+                                  # table merges entry by entry: an empty value removes an entry (fx-cause = ""), and
+                                  # a [[factory.role]] that moves a role to Claude (kind = "claude") leaves its entry
+                                  # unused, which `magnum config` warns about
 kind_by_jira_type = { Bug = "bug", Story = "feature", Task = "chore" }   # the Jira issue type -> the kind of task
 
 [factory.local_review]            # magnum's full review of the change on this Mac, before the PR
@@ -970,7 +974,8 @@ doing = "checking the ticket's points"
 
 [[factory.role]]
 name = "fx-points-codex"          # fx-points' twin on Codex, a trial on 5 feature tasks (kept or dropped on the question
-kind = "codex"                    # count and the take rate); after a Codex refusal fx-points, its fallback, ends the stage
+kind = "codex"                    # count and the take rate); after a Codex refusal fx-points, its fallback, ends the
+                                  # stage, and the twin sits out while Codex is at its soft cap or its usage limit
 effort = "high"
 prompt = "factory-points.md"
 timeout = "1h"

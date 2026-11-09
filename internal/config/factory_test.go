@@ -750,13 +750,15 @@ kind = "claude"
 // A critic stage names exactly one role: its one critic.md has no role in
 // its name, so a refused critic's file could only be set aside with another
 // critic's, and a second critic's end would hold on the first one's file.
+// The refusal says its fix: a stage of its own for each critic.
 func TestACriticStageNamesExactlyOneRole(t *testing.T) {
 	cfg := validFactoryConfig()
 	editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage {
 		s[findStage(s, "critic")].Roles = []string{"fx-critic", "fx-critic-claude"}
 		return s
 	})
-	wantError(t, cfg.Validate(), `stage "critic"`, "a critic stage names exactly one role", "got 2")
+	wantError(t, cfg.Validate(), `stage "critic"`, "a critic stage names exactly one role (critic.md is one file for the stage), got 2: "+
+		"give each critic a stage of its own")
 }
 
 // A Codex role with a codex_fallback outside its stage, in a stage that ends

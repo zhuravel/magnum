@@ -290,6 +290,9 @@ func (e *Engine) checkHerdr(ctx context.Context, now time.Time) bool {
 	err := e.d.HerdrUp(ctx)
 	h := e.holds[HoldHerdr]
 	if err == nil {
+		if h != nil {
+			e.restartQuits() // no stage ran under the hold: its quits count from the lift
+		}
 		e.lift(ctx, HoldHerdr, now)
 		return true
 	}

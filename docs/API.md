@@ -14943,6 +14943,7 @@ type Runtime interface {
 	Shift(gap time.Duration)
 	BeginDrain()
 	RunsAs(t registry.Task, role config.Role) (config.Role, error)
+	Paused(kind string) *runtime.WaitError
 	QuitCodex(ctx context.Context, t registry.Task) error
 	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
@@ -14968,8 +14969,9 @@ type Runtime interface {
     parking a task's sessions, the reconcile of a prompt of unknown delivery,
     the recovery of a lost pane or of a role a recovery left without a turn
     (RecoverLost, which a rebuilt stage calls), the shift of every turn deadline
-    after the Mac slept, the role that runs for a role (its Claude fallback on
-    a task Codex never works on), the quit of such a task's Codex sessions,
+    after the Mac slept, the role that runs for a role (its Claude fallback on a
+    task Codex never works on), an agent kind's pause in force (Paused: Codex's
+    usage limit yields its roles), the quit of such a task's Codex sessions,
     the quit of one role's sessions (a QA walker whose run was cut, QuitRole),
     a run's state as the agents store keeps it across a restart, who is at work
     in a task's copy now (a run in flight, you in a pane: the factory's own
@@ -16646,6 +16648,12 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     (parkLiaison): their conversations stay resumable, their panes are released.
     A run in flight or an agent at work on the task's row refuses with
     agents.ErrBusy; the liaison never stops the task's own park.
+
+func (r *Runtime) Paused(kind string) *WaitError
+    Paused is the wait of agent kind's pause in force (a usage limit's,
+    a logout's, an overload's: Who says which), nil for none: while Codex is
+    paused on its usage limit, a stage launches a Codex role's codex_fallback in
+    its place rather than wait for the limit's reset.
 
 func (r *Runtime) Proving(id int64) bool
     Proving reports whether the proof that ledger entry id never arrived

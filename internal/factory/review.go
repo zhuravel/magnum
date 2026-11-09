@@ -620,16 +620,23 @@ func (e *Engine) codexSoft(ctx context.Context) string {
 	if u.CodexSoft <= 0 && u.CodexHard <= 0 {
 		return ""
 	}
-	read := e.d.Usage
-	if read == nil {
-		home := u.CodexHome
-		read = func(ctx context.Context, now time.Time) (usage.Snapshot, error) { return usage.Codex(ctx, home, now) }
-	}
-	snap, err := read(ctx, e.now())
+	snap, err := e.codexUsage(ctx)
 	if err != nil || usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
 		return ""
 	}
 	return fmt.Sprintf("codex at %.0f%%, at or past [usage] codex_soft %.0f%%: the local review yields to magnum's reviews", snap.Used(), u.CodexSoft)
+}
+
+// codexUsage reads Codex's budget now: Deps.Usage, else usage.Codex of
+// [usage] codex_home. The local review's wait (codexSoft) and a stage's
+// yield (codexYield) read it so.
+func (e *Engine) codexUsage(ctx context.Context) (usage.Snapshot, error) {
+	read := e.d.Usage
+	if read == nil {
+		home := e.cfg.Usage.CodexHome
+		read = func(ctx context.Context, now time.Time) (usage.Snapshot, error) { return usage.Codex(ctx, home, now) }
+	}
+	return read(ctx, e.now())
 }
 
 // reviewRoles are the roles round `round` of task t's local review runs:

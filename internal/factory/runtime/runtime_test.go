@@ -319,9 +319,17 @@ func TestObserveReportsAUsageLimitAsPausedNotFailed(t *testing.T) {
 	if n := len(g.h.promptTexts()); n != 1 {
 		t.Fatalf("%d prompts sent, want only the first", n)
 	}
+	// The engine reads the pause as Paused says it: a stage yields a Codex
+	// role to its fallback while Codex is so paused.
+	if p := g.r.Paused("claude"); p == nil || p.Who != "usage" || p.What != "claude limit until 16:00" || g.r.Paused("codex") != nil {
+		t.Fatalf("Paused(claude) = %+v and Paused(codex) = %+v, want claude's usage pause alone", p, g.r.Paused("codex"))
+	}
 
 	g.clock.Set(time.Date(2026, 11, 4, 16, 1, 0, 0, time.UTC))
 	g.observe()
+	if p := g.r.Paused("claude"); p != nil {
+		t.Fatalf("Paused(claude) = %+v past the limit's reset, want none", p)
+	}
 	g.send("fx-repro", "go on")
 }
 

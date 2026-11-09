@@ -92,6 +92,12 @@ func (r *Runtime) paused(kind string) *WaitError {
 	return p.wait()
 }
 
+// Paused is the wait of agent kind's pause in force (a usage limit's, a
+// logout's, an overload's: Who says which), nil for none: while Codex is
+// paused on its usage limit, a stage launches a Codex role's codex_fallback
+// in its place rather than wait for the limit's reset.
+func (r *Runtime) Paused(kind string) *WaitError { return r.paused(kind) }
+
 // lift ends agent kind's pauses of the kinds in whos.
 func (r *Runtime) lift(kind, why string, whos ...string) {
 	r.mu.Lock()

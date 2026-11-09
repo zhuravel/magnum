@@ -222,13 +222,22 @@ type stageRole struct {
 	problem *endProblem
 	pause   string
 	nudged  bool
-	// relaunch: it runs again as its fallback after a Codex refusal (a
-	// launch, then its prompt); covered: its fallback is a role of the stage
-	// (coveredIn), so it leaves the run instead. refused: it ran on Codex in
-	// the attempt, no run of it was verified and its fallback has had no
-	// prompt yet, so what it left in the task's directory is a refused run's,
-	// set aside on each pass (setAsideRefused) until its fallback launches.
+	// relaunch: it runs again as its fallback after a Codex refusal or a
+	// usage limit (a launch, then its prompt); covered: its fallback is a
+	// role of the stage (coveredIn), so it leaves the run instead. refused:
+	// it ran on Codex in the attempt, no run of it was verified and its
+	// fallback has had no prompt yet, so what it left in the task's
+	// directory is a refused run's, set aside on each pass (setAsideRefused)
+	// until its fallback launches.
 	relaunch, covered, refused bool
+	// limited: a run of it on Codex hit Codex's usage limit in the attempt,
+	// and its codex_fallback takes its place (handOver): what that run wrote
+	// stays, its work so far, which the fallback's first prompt names
+	// (limitNote). limit is the limit's words, for the event of the handover
+	// ("" in a restart's rebuild once the fallback launched: its event was
+	// written).
+	limited bool
+	limit   string
 	// ok: its end fact held at its run's end; failed: it did not after the
 	// nudge (the file), and the task waits on you; letGo: its last run held
 	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
@@ -338,8 +347,18 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	}
 	run.copy = c
 	if a.State == registry.AttemptLaunching {
-		if err := e.launch(ctx, t, a, c, run.runAsRoles()); err != nil {
+		ys, err := e.yieldAtLaunch(ctx, t, st, run)
+		if err == nil {
+			err = e.launch(ctx, t, a, c, run.runAsRoles())
+		}
+		if err != nil {
+			if len(ys) > 0 {
+				delete(e.agentRuns, t.ID) // the next pass decides the yield afresh: Codex's budget moves
+			}
 			return false, err
+		}
+		for _, y := range ys {
+			e.sayYield(ctx, t, st, y)
 		}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
@@ -353,9 +372,11 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 		you = e.recheckFailed(ctx, &t, st, a, run, dir)
 	}
 	if you != "" {
+		e.setAsideBeforeYou(ctx, t, st, run)
 		return false, e.stageFailed(ctx, t, needsYou{you})
 	}
 	if waits, err := e.suspended(ctx, &t, run); err != nil || waits {
+		e.setAsideBeforeYou(ctx, t, st, run)
 		return false, e.stageFailed(ctx, t, err)
 	}
 	held, err := e.promptRoles(ctx, t, st, a, c, run, dir)
@@ -507,6 +528,12 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			return en.AttemptID == a.ID && en.Role == name && en.Delivered != registry.DeliveredNo
 		})
 	}
+	// launched: the attempt launched name (the runtime records each role it
+	// launches, Runtime.Launch), or prompted it.
+	launched := func(name string) bool {
+		return ranHere(name) || slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == name })
+	}
+	yielded := map[string]bool{}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
 		if !ok {
@@ -521,9 +548,22 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			// refusal: its files stay for the judge, as on the pass that
 			// took the refusal (onAgentEvent relaunches no role that is ok).
 			if !verified(role.Name) {
-				run.left = append(run.left, leaving{role, runAs, ranHere(role.Name)})
+				run.left = append(run.left, leaving{role, runAs, ranHere(role.Name), ""})
 			}
 			continue
+		}
+		// A Codex role whose fallback the attempt launched ran as that
+		// fallback: it yielded at the launch (and never launched itself), or
+		// a run of it hit Codex's usage limit (handOver). A twin, whose
+		// fallback the stage launches anyway, sat out only when it never
+		// launched; a usage limit of it its own last run says (lastRunEvent).
+		if fb, ok := e.codexFallback(role); ok && runAs.Name == role.Name && a.State != registry.AttemptLaunching && launched(fb.Name) {
+			switch {
+			case !slices.Contains(st.Roles, fb.Name):
+				runAs, yielded[role.Name] = fb, true
+			case !launched(role.Name):
+				continue
+			}
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
 	}
@@ -552,8 +592,16 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		// its work, as a run of its fallback does: the live pass relaunches
 		// no role that is ok (onAgentEvent).
 		r.ok = verified(r.runAs.Name) || verified(r.role.Name)
-		r.relaunch = !r.prompted && r.runAs.Name != r.role.Name && a.State != registry.AttemptLaunching
-		r.refused = !r.ok && !r.prompted && r.runAs.Name != r.role.Name && ranHere(r.role.Name)
+		if yielded[r.role.Name] {
+			// Its fallback launched in the attempt already: no relaunch, and
+			// nothing the role wrote is a refused run's. A run of the role
+			// itself there hit its usage limit: its files stay, for the
+			// fallback's first prompt to name.
+			r.limited = ranHere(r.role.Name)
+		} else {
+			r.relaunch = !r.prompted && r.runAs.Name != r.role.Name && a.State != registry.AttemptLaunching
+			r.refused = !r.ok && !r.prompted && r.runAs.Name != r.role.Name && ranHere(r.role.Name)
+		}
 		if r.ok || last == "" {
 			continue
 		}
@@ -635,10 +683,13 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 // as there, which covers it, and whether it ran on Codex in the attempt
 // (stageRole.refused): only such a role's files are a refused run's, to set
 // aside; a role that never ran there left none (a file of an earlier attempt
-// is not its refused run's).
+// is not its refused run's). limit is the words of the usage limit a run of
+// it hit, for a role that sits out the stage after it ("" after a refusal):
+// its files stay.
 type leaving struct {
 	role, runAs config.Role
 	ran         bool
+	limit       string
 }
 
 // leaveStage has l.role, which the stage's run of its fallback l.runAs
@@ -657,6 +708,10 @@ type leaving struct {
 // its claims against the code, never the task.
 func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, l leaving) {
 	role, runAs := l.role, l.runAs
+	if l.limit != "" { // a usage limit, no refusal: its files stay for the judge
+		e.sayYield(ctx, t, st, yield{role: role.Name, fallback: runAs.Name, sitsOut: true, limited: true, why: l.limit})
+		return
+	}
 	lead := role.Name + " left the " + st.Name + " stage"
 	var moved []string
 	var err error
@@ -720,6 +775,17 @@ func coveredIn(st config.FactoryStage, role, runAs config.Role) bool {
 	return runAs.Name != role.Name && slices.Contains(st.Roles, runAs.Name)
 }
 
+// relaunchAs is the role role r runs as once relaunched: its Claude
+// codex_fallback after its usage limit (handOver), while Codex may still work
+// on the task, else the role Runtime.RunsAs names (its fallback on a task
+// Codex never works on again).
+func (e *Engine) relaunchAs(t registry.Task, r *stageRole) (config.Role, error) {
+	if fb, ok := e.codexFallback(r.role); ok && r.limited {
+		return fb, nil
+	}
+	return e.d.Runtime.RunsAs(t, r.role)
+}
+
 // cannotRun is the needsYou of a role that may not run on its task
 // (Runtime.RunsAs's error).
 func cannotRun(role config.Role, err error) needsYou {
@@ -774,11 +840,17 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 	case runtime.EventEnded:
 		return e.ended(ctx, t, st, a, run, r, ev.RunID, dir)
 	case runtime.EventPaused:
-		r.next, r.pause = nextContinue, ev.Reason
 		who, what, ok := strings.Cut(ev.Reason, ": ")
 		if !ok {
 			who, what = waitAgent, ev.Reason
 		}
+		if _, fb := e.codexFallback(r.role); who == waitUsage && r.runAs.AgentKind() == config.KindCodex && !r.ok && fb {
+			// Codex's usage limit, no refusal: its fallback takes the role
+			// now, never at the limit's reset, and what the run wrote stays.
+			e.handOver(ctx, *t, r, what)
+			return ""
+		}
+		r.next, r.pause = nextContinue, ev.Reason
 		e.waitOn(ctx, *t, who, what)
 		t.WaitsWho, t.WaitsWhat = who, what
 	case runtime.EventRefused:
@@ -1154,19 +1226,8 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 	if run.quitCodex {
 		e.tryQuit(ctx, t, run)
 	}
-	for _, r := range run.roles {
-		if r.refused && !r.ok {
-			if serr := e.setAsideRefused(ctx, t, st, r.role); serr != nil {
-				return nil, serr
-			}
-		}
-	}
-	for _, l := range run.left {
-		if l.ran {
-			if serr := e.setAsideRefused(ctx, t, st, l.role); serr != nil {
-				return nil, serr
-			}
-		}
+	if serr := e.setAsideRefusedRuns(ctx, t, st, run); serr != nil {
+		return nil, serr
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
@@ -1198,13 +1259,17 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			continue
 		}
 		if r.relaunch {
-			runAs, rerr := e.d.Runtime.RunsAs(t, r.role)
+			runAs, rerr := e.relaunchAs(t, r)
 			if rerr != nil {
 				return nil, cannotRun(r.role, rerr)
 			}
 			if coveredIn(st, r.role, runAs) {
 				r.covered = true
-				run.left = append(run.left, leaving{r.role, runAs, r.refused})
+				limit := "" // a refusal's leave sets aside what the role wrote; a usage limit's keeps it
+				if r.limited && !r.refused {
+					limit = r.limit
+				}
+				run.left = append(run.left, leaving{r.role, runAs, r.refused, limit})
 				continue
 			}
 			if run.quitCodex {
@@ -1220,12 +1285,18 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				return nil, lerr
 			}
 			r.runAs, r.relaunch, r.refused = runAs, false, false // the fallback's files are its own from here on
+			if r.limited && r.limit != "" {
+				e.sayYield(ctx, t, st, yield{role: r.role.Name, fallback: runAs.Name, limited: true, why: r.limit})
+			}
 		}
 		text, next := "", r.next
 		switch {
 		case !r.prompted:
 			if text, err = e.renderRole(ctx, t, st, r.role, r.runAs, c); err != nil {
 				return nil, err
+			}
+			if r.limited {
+				text += e.limitNote(t, st, r.role)
 			}
 		case next == nextNudge:
 			text = nudgeText(dir, r.problem)
@@ -1274,6 +1345,9 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		// for it, or when the leave is all that is left: only then may it go
 		// to you.
 		holds := len(quitFor) > 0 || !slices.ContainsFunc(run.roles, func(r *stageRole) bool { return !r.ok && !r.covered })
+		if holds && run.quit.holds.IsZero() {
+			run.quit.holds = e.now()
+		}
 		w := e.quitHeld(t, run, waiting, holds)
 		if !errors.Is(w, ErrHeld) {
 			return nil, w // needs you
@@ -1292,13 +1366,29 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 // for a cause of their own how many and when the first was (n, first); when
 // the first failed because you are in a pane of the task or typed in one
 // lately (runtime.ErrOperatorInPane, inPane), which counts no try; when the
-// next is due (a poll after the last), the last one's error, and the words
-// its fail event said last.
+// quit first held the stage (holds: the first pass on which nothing but the
+// quit kept it, quitHeld's holds); when the next is due (a poll after the
+// last), the last one's error, and the words its fail event said last. The
+// factory's herdr hold starts the counts again (restartQuits).
 type quitTries struct {
-	failed, n           int
-	first, inPane, next time.Time
-	err                 error
-	said                string
+	failed, n                  int
+	first, inPane, holds, next time.Time
+	err                        error
+	said                       string
+}
+
+// restartQuits starts again the counts of every failed quit of the tasks'
+// Codex sessions (quitTries), keeping only the words their fail events said
+// last: the factory's herdr hold, which went to you itself, lifted, and no
+// stage ran while it held, so no quit was tried and the tries before it say
+// nothing of herdr after it. The first try after the lift is a poll's wait,
+// never a page for the time the hold took.
+func (e *Engine) restartQuits() {
+	for _, run := range e.agentRuns {
+		if run.quit.failed > 0 {
+			run.quit = quitTries{said: run.quit.said}
+		}
+	}
 }
 
 // tryQuit tries the quit of task t's Codex sessions a refusal left
@@ -1353,25 +1443,29 @@ func quitWhy(err error) string {
 // fallbacks to launch, or the stage, whose covered roles leave it): a
 // heldError on the task's agent, in the words of the factory's other waits,
 // or a needsYou that says what to do, only when the quit is what holds the
-// stage (holds) and the factory's herdr hold, which goes to you itself, is
-// not in force:
+// stage (holds; no stage runs under the factory's herdr hold, whose lift
+// starts the counts again: restartQuits):
 //   - you in a pane of the task, or your typing in one within
 //     human_cooldown (runtime.ErrOperatorInPane: the runtime cannot tell the
 //     two apart, and a snapshot herdr does not give reads the same) counts
-//     no try: the wait names when the cooldown ends, counted from the first
-//     such failure, and only a quit that still fails a poll after that goes
-//     to you;
+//     no try: the wait names when the cooldown ends, counted from the later
+//     of the first such failure and the first pass the quit held the stage
+//     (your typing in a pane of a role still at work, fx-points beside a
+//     refused twin, renews the cooldown meanwhile), and only a quit that
+//     still fails a poll after that goes to you;
 //   - any other cause goes to you at the stage failures' pace, after
 //     stageFailLimit failed tries or stageFailSpan since the first.
 func (e *Engine) quitHeld(t registry.Task, run *agentsRun, waiting string, holds bool) error {
 	q := run.quit
 	why := quitWhy(q.err)
 	now := e.now()
-	page := holds && e.holds[HoldHerdr] == nil
 	if errors.Is(q.err, runtime.ErrOperatorInPane) {
 		cool := e.cfg.Factory.HumanCooldown.Duration
 		until := q.inPane.Add(cool)
-		if page && !now.Before(until.Add(e.poll())) {
+		if q.holds.After(q.inPane) {
+			until = q.holds.Add(cool)
+		}
+		if holds && !now.Before(until.Add(e.poll())) {
 			return needsYou{"the factory still cannot quit " + TaskKey(t) + "'s Codex sessions " + textx.DurationWords(now.Sub(q.inPane)) +
 				" after its first try, past human_cooldown (" + why + "), and " + waiting + " waits for that: leave the task's panes, or close " +
 				"its Codex panes in herdr (a herdr that cannot say where you are reads as you in a pane)" + retryHint(t)}
@@ -1379,7 +1473,7 @@ func (e *Engine) quitHeld(t registry.Task, run *agentsRun, waiting string, holds
 		return heldError{who: waitAgent, what: "you're in a pane of this task, or typed in one within human_cooldown (" + textx.DurationWords(cool) +
 			"): its Codex sessions are quit once that has passed (by " + until.Local().Format("15:04") + "), and " + waiting + " waits for that"}
 	}
-	if span := now.Sub(q.first); page && (q.n >= stageFailLimit || span >= stageFailSpan) {
+	if span := now.Sub(q.first); holds && (q.n >= stageFailLimit || span >= stageFailSpan) {
 		after := textx.Count(q.n, "try", "tries")
 		if q.n < stageFailLimit {
 			after = textx.DurationWords(span)
@@ -1428,6 +1522,48 @@ func (e *Engine) setAsideRefused(ctx context.Context, t registry.Task, st config
 		return fmt.Errorf("set aside what %s's refused run left: %w", role.Name, err)
 	}
 	return nil
+}
+
+// setAsideRefusedRuns sets aside what each refused run of run left in stage
+// st of task t (setAsideRefused): of a role of the run that ran on Codex in
+// the attempt, was not verified and whose fallback has had no prompt yet
+// (stageRole.refused), and of a role that leaves the stage after it
+// (leaving.ran). The first failure is its error.
+func (e *Engine) setAsideRefusedRuns(ctx context.Context, t registry.Task, st config.FactoryStage, run *agentsRun) error {
+	for _, r := range run.roles {
+		if r.refused && !r.ok {
+			if err := e.setAsideRefused(ctx, t, st, r.role); err != nil {
+				return err
+			}
+		}
+	}
+	for _, l := range run.left {
+		if l.ran {
+			if err := e.setAsideRefused(ctx, t, st, l.role); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// setAsideBeforeYou sets aside the refused runs' files (setAsideRefusedRuns)
+// in a pass that ends before its prompts (promptRoles), on you or on the
+// stage's suspension: a refusal taken in that pass, or rebuilt after a
+// restart, has its files set aside at once, so the liaison never reads them
+// unmarked while the task waits; the pass's next try of the quit sets aside
+// again what a refused session wrote since. A failure is logged and an
+// event, once for its words (a suspended stage's passes come every tick):
+// the pass goes to you, or waits, for its own reason.
+func (e *Engine) setAsideBeforeYou(ctx context.Context, t registry.Task, st config.FactoryStage, run *agentsRun) {
+	err := e.setAsideRefusedRuns(ctx, t, st, run)
+	if err == nil {
+		return
+	}
+	e.log.Warn("set aside a refused run's files", "task", t.ID, "err", err)
+	if text := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300); !e.saidOnce(ctx, t, text) {
+		e.event(ctx, t.ID, "stage", registry.PhaseFail, text)
+	}
 }
 
 // cmpErr is the first of the two that is set.

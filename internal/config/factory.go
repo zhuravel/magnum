@@ -954,8 +954,8 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 		case st.Type == FactoryStageQA && len(st.Roles) > 1:
 			bad("a qa stage names exactly one role (one walker drives the one browser tab and writes the one verdict), got %d", len(st.Roles))
 		case st.End == FactoryEndCritic && len(st.Roles) > 1:
-			bad("a critic stage names exactly one role (its one critic.md names no role: a refused critic's file could only be set aside "+
-				"with another's, and a second critic's end would hold on the first one's file), got %d", len(st.Roles))
+			bad("a critic stage names exactly one role (critic.md is one file for the stage), got %d: give each critic a stage of its own",
+				len(st.Roles))
 		}
 		for _, r := range st.Roles {
 			if _, ok := roles[r]; !ok {

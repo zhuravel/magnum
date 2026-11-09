@@ -413,6 +413,58 @@ func TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn(t *testing.T) 
 	}
 }
 
+// A task's card says on its AGENTS line which role ran in whose place and
+// why, as the task's stage events record each yield to Codex's budget or
+// usage limit: fx-cause-claude in fx-cause's place, a twin that sat out,
+// those of one cause under it once. A role whose codex_fallback ran in its
+// place in the stage's attempt (it never launched) counts as done once the
+// fallback is, as on a task Codex never works on. A task with no such event
+// has no note.
+func TestTheCardSaysWhichRoleRanInWhosePlaceAndWhy(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(9 * time.Minute)
+	stageEvent := func(t2 registry.Task, text string) {
+		t.Helper()
+		if err := r.reg.AppendEvent(r.ctx, t2.ID, "stage", registry.PhaseInfo, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bug := r.task("PR-12411", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
+	r.session(bug, "fx-repro", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
+	r.session(bug, "fx-cause-claude", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-3*time.Minute))
+	r.verified(bug, "investigate", "fx-cause-claude")
+	stageEvent(bug, "fx-cause-claude runs in fx-cause's place in the investigate stage: codex at 95%, at or past [usage] codex_soft 80%, "+
+		"and magnum's reviews come first")
+	feature := r.task("PR-12412", "feature", "Credit expiry reminder", registry.TaskActive, "critic", "", "")
+	r.session(feature, "fx-points", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-6*time.Minute))
+	r.session(feature, "fx-critic-claude", "working", screenNow.Add(-4*time.Minute), screenNow.Add(-20*time.Second))
+	stageEvent(feature, "fx-points-codex sits out the investigate stage: its run hit Codex's usage limit (codex limit until 16:00); "+
+		"fx-points ends it alone, and what fx-points-codex wrote stays for the judge")
+	stageEvent(feature, "fx-critic-claude runs in fx-critic's place in the critic stage: codex at 95%, at or past [usage] codex_soft 80%, "+
+		"and magnum's reviews come first")
+	plain := r.task("PR-12413", "bug", "Referral link drops its code", registry.TaskActive, "investigate", "", "")
+	r.session(plain, "fx-cause", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
+
+	d := r.data(screenNow)
+	for _, tc := range []struct {
+		task registry.Task
+		want string
+	}{
+		{bug, "fx-cause-claude in fx-cause's place: codex at 95%, at or past [usage] codex_soft 80%"},
+		{feature, "fx-points-codex sat out: its run hit Codex's usage limit (codex limit until 16:00); " +
+			"fx-critic-claude in fx-critic's place: codex at 95%, at or past [usage] codex_soft 80%"},
+		{plain, ""},
+	} {
+		if got := d.Cards[tc.task.ID].Task.AgentsNote; got != tc.want {
+			t.Errorf("%s's AGENTS note %q, want %q", TaskKey(tc.task), got, tc.want)
+		}
+	}
+	want := tui.WaitsOn{Who: "agent", What: "reproducing it, 1 of 3 done", Short: "reproducing it"}
+	if row := rowOf(t, d, "PR-12411"); len(row.WaitsOn) != 1 || row.WaitsOn[0] != want {
+		t.Errorf("PR-12411 waits on %+v, want %+v: fx-cause done by the run of the fallback in its place", row.WaitsOn, want)
+	}
+}
+
 // The agents are named by what they do (the role's doing: fx-cause is
 // "finding the cause"), with why they exist, their state, how long they
 // worked and when their pane last showed something; the row's blocker is

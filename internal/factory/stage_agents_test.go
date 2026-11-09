@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1702,22 +1703,111 @@ func TestATwinsFailedQuitStaysAWaitWhileFxPointsWorks(t *testing.T) {
 	}
 }
 
-// While the factory's herdr hold is in force, which goes to you itself, a
-// failed quit never does.
-func TestAFailedQuitNeverGoesToYouUnderTheHerdrHold(t *testing.T) {
-	h := newHarness(t)
+// The factory's herdr hold starts a failed quit's count again: no stage runs
+// under it, so no quit is tried, and the tries before it say nothing of the
+// herdr after it. The first failed try after the hold lifts is a wait, and
+// the task goes to you only at the stage failures' pace from there (5 tries),
+// not at once for the 20 minutes since the first try.
+func TestAFailedQuitCountsAgainAfterTheHerdrHold(t *testing.T) {
+	var down atomic.Bool
+	h := newHarness(t, func(d *Deps) {
+		d.HerdrUp = func(context.Context) error {
+			if down.Load() {
+				return errors.New("herdr: no answer")
+			}
+			return nil
+		}
+	})
 	task := h.kindTask("PR-12344", "bug", "investigate")
 	h.startStage(task)
-	h.setQuitErr(errors.New("herdr: no answer"))
+	h.setQuitErr(errors.New("quit fx-cause's Codex session: herdr: pane p41 does not answer"))
 	h.codexRefused(task, "fx-cause")
-	h.e.holds[HoldHerdr] = &Hold{Kind: HoldHerdr, Reason: "the factory session does not answer", Since: h.clock.Now()}
-	for range 8 {
-		h.tick()
+	h.tick()
+	down.Store(true)
+	for range 20 {
 		h.clock.Add(time.Minute)
+		h.tick()
 	}
-	if got := h.reload(task.ID); got.State != registry.TaskActive || len(h.rt.codexQuits()) < 5 {
-		t.Fatalf("task %s after %d tries under the herdr hold, want still active after 5 or more", got.State, len(h.rt.codexQuits()))
+	if n := len(h.rt.codexQuits()); n != 1 {
+		t.Fatalf("%d QuitCodex calls under the herdr hold, want only the one before it", n)
 	}
+	down.Store(false)
+	h.clock.Add(time.Minute)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != waitAgent || len(h.rt.codexQuits()) != 2 {
+		t.Fatalf("task %s waits %q: %q after %d tries, want active on its agent at the first try after the hold",
+			got.State, got.WaitsWho, got.WaitsWhat, len(h.rt.codexQuits()))
+	}
+	for range 3 {
+		h.clock.Add(time.Minute)
+		h.tick()
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive {
+		t.Fatalf("task %s after 4 tries since the hold, want still active", got.State)
+	}
+	h.clock.Add(time.Minute)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "5 tries") {
+		t.Fatalf("task %s waits %q, want it on you after 5 tries since the hold", got.State, got.WaitsWhat)
+	}
+}
+
+// In the twin's case the cooldown counts from the first pass on which the
+// quit holds the stage, not from its first failure while fx-points still
+// worked (your typing in fx-points' pane renews the cooldown meanwhile, and
+// the quit may then go through by itself): the pass where fx-points ends is
+// a wait naming the cooldown's end from then, and the task goes to you only
+// a poll after that end.
+func TestATwinsFailedQuitWaitsOutTheCooldownFromWhenItHoldsTheStage(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Factory.HumanCooldown = config.Duration{Duration: 15 * time.Minute}
+	task := h.kindTask("PR-12398", "feature", "investigate")
+	h.startStage(task)
+	h.setQuitErr(fmt.Errorf("quit fx-points-codex's Codex session: %w", runtime.ErrOperatorInPane))
+	h.codexRefused(task, "fx-points-codex")
+	h.tick()
+	for range 20 { // fx-points works on
+		h.clock.Add(time.Minute)
+		h.tick()
+	}
+	h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
+	h.ended(task, "fx-points")
+	holds := h.clock.Now()
+	h.tick()
+	by := "by " + holds.Add(15*time.Minute).Local().Format("15:04")
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != waitAgent || !strings.Contains(got.WaitsWhat, by) {
+		t.Fatalf("task %s waits %q: %q once fx-points ended, want active, the cooldown's end %s", got.State, got.WaitsWho, got.WaitsWhat, by)
+	}
+	h.clock.Set(holds.Add(15 * time.Minute))
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskActive {
+		t.Fatalf("task %s at the cooldown's end, want still active", got.State)
+	}
+	h.clock.Set(holds.Add(15*time.Minute + 45*time.Second))
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "human_cooldown") {
+		t.Fatalf("task %s waits %q, want it on you a poll past the cooldown from when the quit held the stage", got.State, got.WaitsWhat)
+	}
+}
+
+// A refusal whose pass goes to you for another event of the same batch (a
+// pane lost) sets the refused run's files aside in that pass all the same:
+// the liaison never reads them unmarked while the task waits on you.
+func TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12399", "bug", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-cause.md", "## Cause\nThe guard")
+	h.observeEvents(
+		runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: h.lastRun("fx-cause"), Kind: runtime.EventRefused,
+			Reason: "codex: flagged for possible cybersecurity risk"},
+		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"},
+	)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, "the fx-repro agent's pane was lost") {
+		t.Fatalf("task %s waits %q, want it on you for the lost pane", got.State, got.WaitsWhat)
+	}
+	h.wantSetAside(task, "findings-fx-cause.md")
 }
 
 // A restart's rebuild counts a run the runtime verified of a Codex role
