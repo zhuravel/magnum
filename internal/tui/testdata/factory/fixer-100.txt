@@ -2,8 +2,8 @@
  ● 1 task and 1 PR need you · 1 waits on others, 1 at work · 1 done today
 
  NEEDS YOU                             WAITS ON                              YOUR MOVE        WAITED
-› ● PR-12360  Coupon rounding in the…  you: description: change "fixes the…  task card           35m
-  ● #4612     Weekly gem upgrades      you: P1 app/models/offer.rb:42: not…  b or f              25m
+› ● PR-12360  Coupon rounding in the…  you: description: change "fixes the…  e report · b PR     35m
+  ● #4612     Weekly gem upgrades      you: P1 app/models/offer.rb:42: not…  e report · b PR     25m
 
  WAITS ON OTHERS
   ⣷ PR-12321  Advocate offer email l…  agent: magnum fixes #4531                                  9m

@@ -31,7 +31,7 @@ func fixtureFixer() factoryFrame {
 					What:  `description: change "fixes the cart total" to "rounds the cart… · 1 more`,
 					Short: `description: change "fixes the…`,
 					Long:  `claude-fix: description: change "fixes the cart total" to "rounds the cart total" · 1 more`}},
-				Move: "see the task card", MoveShort: "task card",
+				Move: "e opens the report, b the PR", MoveShort: "e report · b PR",
 				Since: factoryAgo(now, 35*time.Minute),
 				Help: `you: claude-fix left you 2 items: description: change "fixes the cart total" to "rounds the cart total" · ` +
 					"P1 app/models/offer.rb:42: not fixed. which rounding does the cart want?",
@@ -43,7 +43,7 @@ func fixtureFixer() factoryFrame {
 					What:  "P1 app/models/offer.rb:42: not fixed. which rounding does the cart wa…",
 					Short: "P1 app/models/offer.rb:42: not…",
 					Long:  "claude-fix: P1 app/models/offer.rb:42: not fixed. which rounding does the cart want?"}},
-				Move: "b opens it, f fixes", MoveShort: "b or f",
+				Move: "e opens the report, b the PR", MoveShort: "e report · b PR",
 				Since: factoryAgo(now, 25*time.Minute),
 				Help:  "you: claude-fix left you 1 item: P1 app/models/offer.rb:42: not fixed. which rounding does the cart want?",
 				PR:    &FactoryPR{Ref: "example/talkable#4612"},

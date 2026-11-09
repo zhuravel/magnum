@@ -22505,6 +22505,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `open.deploy`, and TestPRBoardHelpOverlay's screen is one line taller for the ready view's own help line. No new
   dependencies.
 
+- **Your move on a PR that needs you follows the reason magnum's look gave, not a fixed "b or f"** (2026-11-10). The
+  operator asked what "b or f" meant on the factory screen, then why talkable-docs#447 showed it: magnum's review was
+  clean and its required check `build` did not run at the head (the CI run failed before any job started), so the
+  step was to run CI again, and f started a fixer with nothing to fix. `ownMove` ("b opens it, f fixes", "b or f")
+  was the default of every own PR that needs you whose wait gave no move, and a task's row said "see the task
+  card" for the same reasons. One function now maps the reason to the move (`reasonMove`, internal/factory), read
+  from magnum's registry alone: the fresh verdict that needs you (its Needs kinds, classed by `needClass`, with its
+  words where one kind has two reasons), the attention with the fixer's report, the stalemate. Required check that
+  did not run (kind `ci_missing`, or until the engine adds it a `ci` need whose words hold " did not run at "): "b
+  opens it: re-run CI on GitHub, or push" ("b re-run CI"), never f. One that failed: "b opens its CI, f fixes it" ("b
+  CI · f fix"). Magnum stopped arguing, a person's thread, a reply of magnum's that waits for you: "b opens the
+  threads" ("b threads"). The fixer left you items, or a fix attention with its report: "e opens the report, b the
+  PR" ("e report · b PR"; e is the card's own key for the report). Skipped or magnum's findings, or the day's fix
+  loops used up ("f starts another"): "f fixes, b opens it" ("f fix · b PR"). Anything else, magnum's review late
+  or missing, a start the fix job refused, an attention of another kind, needs of two classes, a stale verdict, a
+  kind nothing knows: "b opens it" ("b PR"), which is also ownRow's last default. f is offered only where the
+  fixer has work (open findings, a failed check). It is set where the waits that need you without a move of their
+  own are made (`verdictWait`'s needs_you, `attentionWait`), so a published task's row and your PR's row say the
+  same and a wait with its own move (a merge, an answer, `nextWait`'s "fix the CI" and "run its workflow, or
+  push", which already name their step) keeps it. The short forms fit the YOUR MOVE column's 15 cells at 100
+  columns and the long ones show whole at 140 and 200 (the longest, "b opens it: re-run CI on GitHub, or push", widens
+  the column or gives it to the short form on a crowded screen, the planner's way). Magnum's review late or missing
+  could say "r reviews it", which the card takes, but the card's hints do not offer r, so it says the PR's page.
+  Rejected: keeping "b or f" and adding a hint (it stays unclear and wrong for a check that did not run); f on every
+  reason that has findings in its words (a stalemate and a check that did not run have none for the fixer); reading
+  the move from the words alone (the kinds say the reason where they can); changing `nextWait`'s moves. Not
+  changed: the engine (the `ci_missing` kind is another change's). Tests: TestYourMoveFollowsTheReasonThePRNeedsYou
+  (every reason and its short form, f only with open findings or a failed check),
+  TestAPRWhoseRequiredCheckDidNotRunSaysToRerunCI (talkable-docs#447's case: a clean review, a required check that
+  did not run, on your PR and a task's, both kinds), TestATasksPRAndYoursSayTheSameMoveForTheSameReason and
+  TestEveryMoveOfYourPRFitsTheMoveColumn (golden frames at 100, 140 and 200), each failing first; the goldens
+  yours-*, fixer-* and repos-* changed only on the rows that said "b or f", "b opens it, f fixes" or the fixer's
+  "task card". No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

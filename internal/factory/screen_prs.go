@@ -742,7 +742,8 @@ func later(a, b time.Time) time.Time {
 
 // attentionWait is the wait on you of PR #n that magnum's row (st) says
 // needs you: its attention, in magnum's words, else its stalemate (magnum
-// stopped arguing in a thread), since the row last changed.
+// stopped arguing in a thread), since the row last changed; its move is the
+// reason's (reasonMove).
 func attentionWait(st PRState, n int) prWait {
 	var w prWait
 	if st.State == store.PRNeedsAttention {
@@ -753,7 +754,7 @@ func attentionWait(st PRState, n int) prWait {
 		w = youWait(what, clauseShort(what), "")
 	}
 	w.since = st.UpdatedAt
-	return w
+	return reasonWait(st, w)
 }
 
 // The runes of the fixer's first item a row draws, by its form (100, 140
@@ -833,7 +834,8 @@ const reopenMove = "reopen it, or x drops the task"
 // verdictWait is the wait of a PR whose verdict st.Open tells its state.
 // An idle one that no person approved waits as
 // nextWait says, once magnum read GitHub's review gate: on the reviewers
-// asked, else on you to ask one.
+// asked, else on you to ask one. One that needs you gives the move of its
+// reason (reasonMove).
 func verdictWait(st PRState, n int, c prClock) prWait {
 	waits, you := waitsWait, youWait
 	o := st.Open
@@ -848,7 +850,7 @@ func verdictWait(st PRState, n int, c prClock) prWait {
 				w.links = append(w.links, need.URL)
 			}
 		}
-		return fixerWait(st, w)
+		return reasonWait(st, fixerWait(st, w))
 	case engine.OpenIdle:
 		if st.Approved {
 			w := you(o.Why, short, "")

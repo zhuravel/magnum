@@ -34,7 +34,7 @@ func fixtureTwoRepos() factoryFrame {
 				ID: -72, Key: "widget#4602", GitHub: "#4602", Jira: "PR-12400", Repo: "example/widget", Title: "Coupon rounding",
 				Group: GroupNeedsYou, Mark: MarkNeedsYou,
 				WaitsOn: []WaitsOn{{Who: WaitsOnYou, What: "1 item needs you: 1 thread of a person", Short: "1 item needs you", OnYou: true}},
-				Move:    "b opens it, f fixes", MoveShort: "b or f",
+				Move:    "b opens the threads", MoveShort: "b threads",
 				Since: factoryAgo(now, 25*time.Minute),
 				Help:  "you: 1 item needs you: 1 thread of a person",
 				PR:    &FactoryPR{Ref: "example/widget#4602"},

@@ -2,8 +2,8 @@
  ● 1 task and 1 PR need you · 1 waits on others, 1 at work · 1 done today
 
  NEEDS YOU                                                 WAITS ON                                                                                                 YOUR MOVE                     WAITED
-› ● PR-12360  #4560   Coupon rounding in the cart          you: claude-fix: description: change "fixes the cart total" to "rounds the cart total" · 1 more          see the task card                35m
-  ●           #4612   Weekly gem upgrades                  you: claude-fix: P1 app/models/offer.rb:42: not fixed. which rounding does the cart want?                b opens it, f fixes              25m
+› ● PR-12360  #4560   Coupon rounding in the cart          you: claude-fix: description: change "fixes the cart total" to "rounds the cart total" · 1 more          e opens the report, b the PR     35m
+  ●           #4612   Weekly gem upgrades                  you: claude-fix: P1 app/models/offer.rb:42: not fixed. which rounding does the cart want?                e opens the report, b the PR     25m
 
  WAITS ON OTHERS
   ⣷ PR-12321  #4531   Advocate offer email locale          agent: magnum fixes #4531 (cycle 2 of 5)                                                                                                   9m

@@ -4451,7 +4451,7 @@ found (`✗ P1 P2×3`, `● P3×2`, `✔ clean`); APPR, the people's reviews Git
 else `✔ 2` approvals, `⟳` when one is of an older commit, else `—`). Below the wide layout they draw their short
 forms (the CI's glyph, with `⟳` when its checks are an older commit's, the head's not read yet, `✓ ⟳`; the
 verdict and the worst priority, `✗ P1`); on a narrow screen they outlast YOUR MOVE,
-whose step the help line then says (`· your move: b or f`), and the CI's glyph outlasts the other two. A
+whose step the help line then says (`· your move: b re-run CI`), and the CI's glyph outlasts the other two. A
 published task's row of a repository with `[[factory.repo.staging]]` entries draws one column per env, in the
 config's order (`VOID`, `BART`, `BASTION`), from the [staging status](#staging-status) the factory daemon reads
 off its loop (at most once a minute, as the repository's poll identity) and writes for the screen to
@@ -4910,7 +4910,14 @@ more`; its start alone at 100 columns, the fixer's name before it at 200), every
 rule (`you: claude-fix left you 2 items: …`), and on the task card who left how many under WAITING FOR with the
 items listed below it; `e` opens the report. A cap's or a failed run's attention keeps magnum's words, and `e`
 still opens its report. The screen reads the report magnum's attention names, under magnum's reviews directory
-only, and only draws it. Without the verdict (the watch's autofix is not `"open"`) the row shows magnum's fix loop, its attention
+only, and only draws it. The move of a PR that needs you follows why it does, on a task's row and on your own PR's
+alike (the long form, then the short form a narrow screen draws): a required check that did not run at the head says
+`b opens it: re-run CI on GitHub, or push` (`b re-run CI`) and never offers the fixer; one that failed, `b opens its
+CI, f fixes it` (`b CI · f fix`); magnum stopped arguing in threads, or a person's threads wait for you, `b opens
+the threads` (`b threads`); the fixer left you items, `e opens the report, b the PR` (`e report · b PR`); findings
+the fixer can take, or the day's fix loops used up, `f fixes, b opens it` (`f fix · b PR`); any other reason
+(magnum's review late or missing, a fix the fix job refused, an attention of another kind, one the screen has no
+word for), `b opens it` (`b PR`). `f` is offered only where the fixer has work, open findings or a failed check. Without the verdict (the watch's autofix is not `"open"`) the row shows magnum's fix loop, its attention
 (`you: magnum: <why>`, or what the fixer left as above) or stalemate (`you: magnum stopped arguing on #4530: the thread is yours`), `magnum:
 review of #4530` before magnum reviewed the head, `magnum: magnum reviews a1b2c3d now` while its round runs, and
 once it reviewed the head, never a bare "reviewed": magnum's outcome there, what comes next and whom it waits on,
@@ -4999,7 +5006,8 @@ NEEDS YOU, keyed by its number (`#4602`
 when the factory has one repository and the PR is of it; otherwise its repository names it in the y/N and a more
 line, `shop#12`, while the row draws the repository in its own column and `#12`; beside the PR column, from 120
 columns, the key cell has the issue key of its title),
-with its move (`b opens it, f fixes`, or `merge #4603 on GitHub`); so is one that needs your attention or where
+with the move its reason gives (`b opens the threads`, `b re-run CI`, or `merge #4603 on GitHub`; see the move by
+reason, above); so is one that needs your attention or where
 magnum stopped arguing, whatever its verdict says (fix off hides no attention) and without one (`you: magnum:
 <why>`, or the first item its fixer left you, as a published task's row says it, with every item on the help
 line and `e` for the report), unless a fix loop works on it. Its WAITED counts from when it began to wait so

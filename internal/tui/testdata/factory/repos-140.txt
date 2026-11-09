@@ -3,7 +3,7 @@
 
  NEEDS YOU                                                    WAITS ON                          CI  FINDINGS  APPR   YOUR MOVE        WAITED
 › ● talkable  PR-12320  #4530   Coupon rounding in the cart   you: 2 items need you             ✓   ✗ P1      —      task card           35m
-  ● widget    PR-12400  #4602   Coupon rounding               you: 1 item needs you             ✗   ● P3      ✔ 1    b or f              25m
+  ● widget    PR-12400  #4602   Coupon rounding               you: 1 item needs you             ✗   ● P3      ✔ 1    b threads           25m
   ● widget    task 5            In the offer page, a click…   you: ready to push                                     diff, then push      2h
 
  WAITS ON OTHERS

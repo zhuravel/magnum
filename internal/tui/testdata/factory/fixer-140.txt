@@ -2,8 +2,8 @@
  ● 1 task and 1 PR need you · 1 waits on others, 1 at work · 1 done today
 
  NEEDS YOU                            WAITS ON                                                                       YOUR MOVE        WAITED
-› ● PR-12360  #4560   Coupon roundi…  you: description: change "fixes the cart total" to "rounds the cart… · 1 more  task card           35m
-  ●           #4612   Weekly gem up…  you: P1 app/models/offer.rb:42: not fixed. which rounding does the cart wa…    b or f              25m
+› ● PR-12360  #4560   Coupon roundi…  you: description: change "fixes the cart total" to "rounds the cart… · 1 more  e report · b PR     35m
+  ●           #4612   Weekly gem up…  you: P1 app/models/offer.rb:42: not fixed. which rounding does the cart wa…    e report · b PR     25m
 
  WAITS ON OTHERS
   ⣷ PR-12321  #4531   Advocate offe…  agent: magnum fixes #4531 (cycle 2 of 5)                                                            9m

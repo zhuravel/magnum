@@ -35,13 +35,6 @@ import (
 // The blocker line of your PRs that could not be read, short and long.
 const ownUnread = "your PRs not read"
 
-// The move on your own PR that needs you, long and short: its page, where
-// what needs you is, or the fixer.
-const (
-	ownMove      = "b opens it, f fixes"
-	ownMoveShort = "b or f"
-)
-
 // ownRows are the rows and cards of your own open PRs that magnum's
 // registry lists (m.OwnPRs) and no task of the screen's has; an error is
 // why they could not be read (none are drawn then).
@@ -100,9 +93,11 @@ func prKey(r PRRef) string { return fmt.Sprintf("%s#%d", strings.ToLower(r.Repo)
 // review it (offOf: a baseline, include_own = false, a mute; fix off is not
 // that, magnum still reviews it). An attention or a stalemate needs you
 // whatever the verdict says (a verdict decided before it is stale), unless
-// a loop works on the PR. A wait on your merge says a staging deploy first
-// where magnum's records of the PR say it needs one (deployFirst), and the
-// row and card show where the PR stands on each staging env as the review
+// a loop works on the PR. Its move is the one its wait gives: your merge,
+// your answer, or else the move of the reason magnum's look gave (reasonMove),
+// "b opens it" when nothing says. A wait on your merge says a staging deploy
+// first where magnum's records of the PR say it needs one (deployFirst), and
+// the row and card show where the PR stands on each staging env as the review
 // daemon last told it (PRState.Stagings).
 func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	n := st.Ref.Number
@@ -123,7 +118,7 @@ func (s *screen) ownRow(st PRState) (tui.FactoryRow, tui.TaskCard) {
 	case off != "": // magnum leaves it alone: it asks nothing
 	case w.group == tui.GroupNeedsYou:
 		row.Group, row.Mark = tui.GroupNeedsYou, tui.MarkNeedsYou
-		row.Move, row.MoveShort = cmp.Or(w.move, ownMove), cmp.Or(w.moveShort, ownMoveShort)
+		row.Move, row.MoveShort = cmp.Or(w.move, moveOpen.long), cmp.Or(w.moveShort, moveOpen.short)
 	default: // it waits on others, as a published task's row that says the same
 		row.Group, row.Mark = tui.GroupWaits, w.mark
 	}

@@ -109,8 +109,8 @@ const (
 	factoryRepoShort = 6   // ... once the staging cells go short
 	factoryTop       = 3   // the title, the chips and a blank above the body
 	factoryBottom    = 3   // the rule, the help line and the hints below it
-	factoryMoveFloor = 24  // the longest step the factory recommends: "read the diff, then push"
-	factoryMoveShort = 15  // ... and its short form, "diff, then push"
+	factoryMoveFloor = 24  // YOUR MOVE's floor: "read the diff, then push" (a longer step, "b opens it: re-run CI on GitHub, or push", widens it)
+	factoryMoveShort = 15  // ... and on a narrow screen the room of the longest short form, "diff, then push" and "e report · b PR"
 	factoryMoveWide  = 28  // YOUR MOVE on a wide screen: the longest step and a little air
 	factoryChipGap   = 16  // the room the rule chip keeps from the counts
 	factoryWaitsWide = 48  // WAITS ON's floor on a wide screen, whose longest blockers give their ends up for the title ...
