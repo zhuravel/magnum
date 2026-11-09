@@ -572,8 +572,10 @@ func (e *Engine) parentPushed(ctx context.Context, job *fixJob, head, needs stri
 // a conflict. A head that has the base's tip already is answered so, with
 // no job. A dry run, the plan its y/N names (fix_parent_bind.go), fetches
 // the base too, so that it names the tip the base has now, and answers
-// what would run as a MergePlan.
-func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool) (string, error) {
+// what would run as a MergePlan. A merge bound to its y/N (asked; nil for
+// none) is refused after the fetch when what it asked about moved
+// (askedRefusal), and its job carries the binding to its guard.
+func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked *MergeAsked) (string, error) {
 	if e.draining(ctx) {
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
@@ -588,6 +590,12 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool) (strin
 	what := job.mergeWords(id.Login)
 	if dry {
 		return MergePlan{Ref: job.label(), Asked: job.planned(e.now()), Text: fmt.Sprintf("dry run: would merge the parent of %s: %s", job.label(), what)}.result()
+	}
+	if asked != nil {
+		if why := job.askedRefusal(*asked, e.now()); why != "" {
+			return "", errors.New(why)
+		}
+		job.asked = asked
 	}
 	if err := e.startMerge(ctx, job); err != nil {
 		return "", err

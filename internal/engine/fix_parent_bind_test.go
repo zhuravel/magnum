@@ -1,8 +1,12 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // wantPlan fails unless the dry run id answered a merge plan, and returns
@@ -66,5 +70,152 @@ func TestAMergePlanAnswersTheHeadTheParentAndTheTipItAsksAbout(t *testing.T) {
 	}
 	if _, ok := h.fixStateOf(2); ok {
 		t.Error("a plan started a loop")
+	}
+}
+
+// fixMovedTip is the tip the base moved to after the plan read fixBaseTip.
+const fixMovedTip = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+
+func (g *mergeGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
+	g.mu.Lock()
+	n, tips, baseErr := len(g.fetches), g.tips, g.baseErr
+	g.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/remotes/origin/") && baseErr == nil && n > 0 && len(tips) > 0 {
+		return tips[min(n, len(tips))-1], nil
+	}
+	return g.fixGit.RevParse(ctx, dir, ref)
+}
+
+// execSQL runs q on the registry.
+func (h *harness) execSQL(q string, args ...any) {
+	h.t.Helper()
+	if _, err := h.st.DB().ExecContext(h.ctx, q, args...); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// mergeBound sends the merge of PR #2's parent bound to asked, as the y of
+// its question does, and handles it.
+func (h *harness) mergeBound(asked MergeAsked) store.Request {
+	h.t.Helper()
+	id := h.fix(FixPayload{Mode: FixModeMerge, Asked: &asked})
+	h.handle()
+	return h.request(id)
+}
+
+// The y of a merge of the parent merges what its question named: a merge
+// bound to the plan, with nothing moved since, merges that tip, as the
+// daemon's merge does.
+func TestAMergeBoundToItsQuestionMergesWhatItAskedAbout(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", nil)
+	mg.behind = true
+	plan := h.planMerge()
+	h.advance(9 * time.Minute)
+	r := h.mergeBound(plan.Asked)
+	const want = "merging the parent of talkable/talkable#2: magnum merges master at c0c0c0c into feature as " + fixerAppLogin +
+		", with no conflict; `magnum abort talkable/talkable#2` stops it"
+	if r.State != store.RequestDone || deref(r.Result) != want {
+		t.Fatalf("%s %q, want done %q", r.State, deref(r.Result), want)
+	}
+	wantParentMerged(t, h, mg, fixHead)
+}
+
+// The bug: the y of a merge of the parent bound nothing, and the daemon
+// merged whatever the base's tip was when the y came, even one that
+// conflicts and goes to the fix role. Now a merge bound to its question is
+// refused, after its fetch, when the PR's head moved, its base was
+// retargeted, the base's tip moved or the merge's conflicts changed since
+// the plan, and when the question is as old as a staging deploy's wait (10
+// minutes): the answer says what moved and that nothing was merged, and no
+// loop starts.
+func TestAMergeBoundToItsQuestionIsRefusedWhenWhatItAskedAboutMoved(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		move func(h *harness, mg *mergeGit, asked *MergeAsked)
+		want string
+	}{
+		{"the head", func(h *harness, _ *mergeGit, _ *MergeAsked) {
+			h.execSQL(`UPDATE prs SET head_sha = ? WHERE id = ?`, fixPushed, h.pr(2).ID)
+		}, "talkable/talkable#2: its head moved from a1a1a1a to b2b2b2b since you asked: nothing was merged; ask again"},
+		{"the base", func(h *harness, _ *mergeGit, _ *MergeAsked) {
+			h.execSQL(`UPDATE prs SET base_ref = 'release' WHERE id = ?`, h.pr(2).ID)
+		}, "talkable/talkable#2: its base moved from master to release since you asked: nothing was merged; ask again"},
+		{"the base's tip", func(_ *harness, mg *mergeGit, _ *MergeAsked) {
+			mg.tips = []string{fixBaseTip, fixMovedTip}
+		}, "talkable/talkable#2: master moved from c0c0c0c to d1d1d1d since you asked: nothing was merged; ask again"},
+		{"the conflicts", func(_ *harness, mg *mergeGit, _ *MergeAsked) {
+			mg.mu.Lock()
+			mg.mergeAnswers = [][]string{nil, {"app/models/offer.rb", "db/schema.rb"}}
+			mg.mu.Unlock()
+		}, "talkable/talkable#2: the merge of master at c0c0c0c has 2 conflicting files now, and you were asked about no conflict: " +
+			"nothing was merged; ask again"},
+		{"the wait", func(h *harness, _ *mergeGit, _ *MergeAsked) {
+			h.advance(10 * time.Minute)
+		}, "talkable/talkable#2: asked 10 minutes ago, longer than a merge of the parent waits for its y (10 minutes): " +
+			"nothing was merged; ask again"},
+		{"no plan", func(_ *harness, _ *mergeGit, asked *MergeAsked) {
+			*asked = MergeAsked{}
+		}, "talkable/talkable#2: the merge names no plan it was asked about: nothing was merged; ask again " +
+			"(`magnum merge-parent talkable/talkable#2`)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mg := mergeHarness(t, withFixerApp)
+			fixablePR(h, "zhuravel", nil)
+			mg.behind = true
+			if tc.name == "the conflicts" { // the plan's look is the first: clean
+				mg.mu.Lock()
+				mg.mergeAnswers = [][]string{nil}
+				mg.mu.Unlock()
+			}
+			asked := h.planMerge().Asked
+			tc.move(h, mg, &asked)
+			r := h.mergeBound(asked)
+			if r.State != store.RequestFailed || deref(r.Result) != tc.want {
+				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+			}
+			if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
+				t.Errorf("merged: %v %v", commits, pushes)
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("a loop started")
+			}
+		})
+	}
+}
+
+// The job's guard fetches the base again, moments or (after a slot's
+// claim) minutes after the request's check: a base whose tip moved in
+// between ends the job with the same words, and nothing is merged.
+func TestAMergeWhoseBaseMovesBeforeItsJobMergesNothing(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", nil)
+	mg.behind = true
+	asked := h.planMerge().Asked
+	mg.tips = []string{fixBaseTip, fixBaseTip, fixMovedTip} // the plan's, the request's, the guard's
+	if r := h.mergeBound(asked); r.State != store.RequestDone {
+		t.Fatalf("the request: %s %q", r.State, deref(r.Result))
+	}
+	const why = "talkable/talkable#2: master moved from c0c0c0c to d1d1d1d since you asked: nothing was merged; ask again"
+	if ev, ok := h.fixEvent("fix.ended"); !ok || !strings.Contains(ev.Message, why) {
+		t.Errorf("fix.ended = %q, %v; want it to say %q", ev.Message, ok, why)
+	}
+	if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
+		t.Errorf("merged: %v %v", commits, pushes)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the merge's loop row stayed")
+	}
+}
+
+// A binding goes with a merge of the parent alone.
+func TestAFixWithAMergesBindingIsRefused(t *testing.T) {
+	h, _ := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	id := h.fix(FixPayload{Asked: &MergeAsked{Head: fixHead, Base: "master", Tip: fixBaseTip}})
+	h.handle()
+	const want = "magnum fix: a merge's plan (asked) goes with magnum merge-parent alone"
+	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+		t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
 	}
 }

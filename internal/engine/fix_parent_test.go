@@ -100,12 +100,15 @@ const (
 // FirstParentIdentities answers handed when set, and PushLeaseGitHubAs
 // records its call ("<owner>/<repo>:<sha>:<branch>:<expect>:<pushedAs>")
 // and moves the PR's head on the fake GitHub, unless
-// pushErr fails it. Its harness's GitHub has fixBaseTip as every base's
-// tip (mergeHarness).
+// pushErr fails it. With tips set, origin/<base> is tips[i] after the
+// (i+1)th fetch (the last one after more), fixBaseTip before any (the
+// base moves). Its harness's GitHub has fixBaseTip as every base's tip
+// (mergeHarness).
 type mergeGit struct {
 	*fixGit
 	gh        *fakeGH
 	behind    bool
+	tips      []string
 	pushErr   error
 	workflows []string
 	own       []string            // DifferingPaths of .github/workflows: the workflow files that differ from the base's

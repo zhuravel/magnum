@@ -60,7 +60,10 @@ const ReqFix = "fix"
 // threads the fixer left you, as you, then starts the loop, whose fixer
 // builds them as your decisions (fix_decide.go); it goes without Off, On and
 // Done. Mode FixModeMerge merges the PR's parent alone (fix_parent.go),
-// with DryRun and nothing else.
+// with DryRun and nothing else; a merge names Asked, what the y/N of its
+// plan asked about (fix_parent_bind.go: a merge whose head, base, tip or
+// conflicts moved since is refused), or nil when nothing was asked
+// (`magnum merge-parent --yes`).
 type FixPayload struct {
 	PRTarget
 	DryRun bool          `json:"dry_run,omitempty"`
@@ -70,6 +73,7 @@ type FixPayload struct {
 	Seen   string        `json:"seen,omitempty"`
 	Decide []FixDecision `json:"decide,omitempty"`
 	Mode   string        `json:"mode,omitempty"`
+	Asked  *MergeAsked   `json:"asked,omitempty"`
 }
 
 const (
@@ -174,8 +178,12 @@ type fixJob struct {
 	// the daemon merges before the fixer starts (mergeParent: the first
 	// cycle of a loop, and the merge mode); merged is the base whose tip
 	// it merged so, whose merge is then the job's head (the prompt says so).
+	// asked is what the y/N of a merge of the parent asked about
+	// (FixPayload.Asked; nil for none): the guard ends a job whose base
+	// moved since (fix_parent_bind.go).
 	mode           string
 	behind, merged fixConflict
+	asked          *MergeAsked
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
@@ -408,8 +416,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 		return "", fmt.Errorf("magnum fix: no mode %q", p.Mode)
 	case p.Mode == FixModeMerge && (len(p.Decide) > 0 || p.Done || p.Off || p.On):
 		return "", errors.New("magnum merge-parent goes alone, without --decide, --done, --off or --on")
+	case p.Asked != nil && p.Mode != FixModeMerge:
+		return "", errors.New("magnum fix: a merge's plan (asked) goes with magnum merge-parent alone")
 	case p.Mode == FixModeMerge:
-		return e.requestMerge(ctx, pr, p.DryRun || e.d.DryRun) // fix_parent.go
+		return e.requestMerge(ctx, pr, p.DryRun || e.d.DryRun, p.Asked) // fix_parent.go
 	case len(p.Decide) > 0 && (p.Done || p.Off || p.On):
 		return "", errors.New("magnum fix: --decide goes alone, without --done, --off or --on")
 	case p.Done && (p.Off || p.On):
@@ -1001,6 +1011,7 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	}
 	var gone fixConflictGone
 	var none fixNothingToMerge
+	var moved fixAskedMoved
 	switch {
 	case errors.Is(err, slots.ErrNoFreeSlot): // the claim lost its free slot (fixClaim): nothing failed
 		e.endFixUnclaimed(fctx, job, err.Error(), true)
@@ -1008,6 +1019,8 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		e.endFixUnclaimed(fctx, job, gone.Error(), false)
 	case errors.As(err, &none): // a merge of the parent that has its tip already (checkFixBase)
 		e.endFixUnclaimed(fctx, job, none.Error(), false)
+	case errors.As(err, &moved): // a merge of the parent whose base moved since its y/N (checkFixBase)
+		e.endFixUnclaimed(fctx, job, moved.Error(), false)
 	case err == nil && job.mode == FixModeMerge && refused != "":
 		e.parentRefused(fctx, job, refused)
 	case err == nil && job.mode == FixModeMerge && merged:
@@ -1257,6 +1270,11 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 	}
 	if job.mode == FixModeMerge && c.sha == "" && job.behind.sha == "" {
 		return fixNothingToMerge{label: job.label(), base: deref(job.pr.BaseRef)}
+	}
+	if job.mode == FixModeMerge && job.asked != nil { // fix_parent_bind.go: the base moved since the request looked
+		if why := mergeMoved(job.label(), *job.asked, job.planned(e.now())); why != "" {
+			return fixAskedMoved{why: why}
+		}
 	}
 	return nil
 }
