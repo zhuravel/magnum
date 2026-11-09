@@ -280,11 +280,17 @@ func (r *escapeRig) retryUntil(tries int) (registry.EscapeCheck, []registry.Esca
 	return registry.EscapeCheck{}, nil, tries
 }
 
+// lastTry is how many tries an incomplete check gets when the first comes
+// as magnum's round posts: one every escapeRetry until the round is
+// escapeLastTry old.
+var lastTry = int(escapeLastTry/escapeRetry) + 1
+
 // A check whose comparisons at two heads could not all run (no copy of the
-// repository on disk, or git failing in every copy) stores nothing: it is
-// tried again after escapeRetry, its failure logged once, and only its last
-// try (escapeTries) stores it, with the files it compared at the same head
-// only counted on the check, which its event says.
+// repository on disk, or git failing in every copy) for a posted finding
+// that escaped stores nothing: it is tried again after escapeRetry, its
+// failure logged once, and only the try once magnum's round is
+// escapeLastTry old stores it, with the files it compared at the same head
+// only counted on the check, which its event says with its tries.
 func TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -298,6 +304,7 @@ func TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles(t *testing.
 			}
 			r.local(localHead, creditPath, 40, "P2")
 			r.postAt(t0.Add(time.Hour), "r-judge-2", PostedFinding{ID: 71, Path: creditPath, StartLine: 41, EndLine: 41, Priority: "P2", Title: "Missed"})
+			r.clock.Set(t0.Add(time.Hour)) // the round posts
 			if _, _, ok := r.check(); ok {
 				t.Fatal("an incomplete check was stored at its first try")
 			}
@@ -305,9 +312,9 @@ func TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles(t *testing.
 				t.Fatalf("within the retry's wait: stored %v, %d reads; want no second try", ok, r.magnum.postedCalls())
 			}
 			r.clock.Add(escapeRetry)
-			c, es, n := r.retryUntil(escapeTries)
-			if n != escapeTries-1 || c.RunID == "" {
-				t.Fatalf("stored after %d more tries (%+v), want the last of %d tries", n, c, escapeTries)
+			c, es, n := r.retryUntil(lastTry)
+			if n != lastTry-1 || c.RunID == "" {
+				t.Fatalf("stored after %d more tries (%+v), want the last of %d tries", n, c, lastTry)
 			}
 			if c.SameHeadOnly != 1 || c.Comparable != 0 || len(es) != 1 || es[0].Reason != registry.EscapeNoLocal {
 				t.Errorf("check %+v, escapes %+v; want 1 file at the same head only, no comparable finding and one escape", c, es)
@@ -315,8 +322,9 @@ func TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles(t *testing.
 			if n := len(r.diff.asked()); tc.copies != (n > 0) {
 				t.Errorf("%d git diffs asked, want some only with a copy", n)
 			}
-			if evs := r.events(r.task.ID, "escapes"); len(evs) != 1 || !strings.Contains(evs[0].Text, "1 file compared at the same head only") {
-				t.Errorf("escapes events %+v, want one that says a file compared at the same head only", evs)
+			if evs := r.events(r.task.ID, "escapes"); len(evs) != 1 || !strings.Contains(evs[0].Text, "1 file compared at the same head only") ||
+				!strings.Contains(evs[0].Text, fmt.Sprintf("after %d tries", lastTry)) {
+				t.Errorf("escapes events %+v, want one that says a file compared at the same head only, after its tries", evs)
 			}
 			if n := strings.Count(r.log.String(), "the check is incomplete"); n != 1 {
 				t.Errorf("the incomplete check logged %d times, want once:\n%s", n, r.log)
@@ -538,7 +546,7 @@ func TestAStopMidCheckWritesNothingAndTheNextDaemonChecksOnce(t *testing.T) {
 			if in == "the read of magnum's round" {
 				r.magnum.setPostedGate(gate)
 			} else {
-				r.e.esc.tries[r.task.ID] = escapeTries - 1
+				r.clock.Set(t0.Add(time.Hour + escapeLastTry)) // the round is old enough: this try is the last
 				r.e.esc.gitBound = time.Hour
 				r.diff.set(func(d *fakeDiff) { d.block = true })
 			}
@@ -630,8 +638,9 @@ func TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded(t *testing.T) {
 	r := newEscapeRig(t, false)
 	r.magnum.post(followRef, PostedRound{RunID: "r-judge-2", Round: 1, Head: prHead, Start: t0.Add(time.Hour), Counted: true,
 		Counts: [4]int{0, 1, 2, 5}})
-	c, es, n := r.retryUntil(escapeTries)
-	if n != escapeTries || c.Unrecorded != 3 || c.Posted != 0 || len(es) != 0 {
+	r.clock.Set(t0.Add(time.Hour)) // the round posts
+	c, es, n := r.retryUntil(lastTry)
+	if n != lastTry || c.Unrecorded != 3 || c.Posted != 0 || len(es) != 0 {
 		t.Errorf("stored after %d tries: %+v with %+v; want the last try, 3 unrecorded", n, c, es)
 	}
 	if evs := r.events(r.task.ID, "escapes"); len(evs) != 1 || !strings.Contains(evs[0].Text, "the escapes are unknown") {
@@ -643,5 +652,74 @@ func TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded(t *testing.T) {
 		Counts: [4]int{0, 0, 0, 2}})
 	if c, _, ok := optional.check(); !ok || c.Unrecorded != 0 {
 		t.Errorf("a round of P3s only: %+v (%v), want it stored at once, nothing unrecorded", c, ok)
+	}
+}
+
+// The last try of an incomplete check is taken from the age of magnum's
+// round, which a restart keeps: daemons restarted every 10 minutes, each
+// making one try, still store the check once the round is escapeLastTry
+// old, flagged; none stores it before.
+func TestRestartsDoNotKeepAnIncompleteCheckFromStoring(t *testing.T) {
+	r := newEscapeRig(t, false)
+	r.local(localHead, creditPath, 40, "P2")
+	r.postAt(t0.Add(time.Hour), "r-judge-2", PostedFinding{ID: 71, Path: creditPath, StartLine: 41, EndLine: 41, Priority: "P2", Title: "Missed"})
+	r.clock.Set(t0.Add(time.Hour))
+	for age := time.Duration(0); age <= escapeLastTry+10*time.Minute; age += 10 * time.Minute {
+		daemon := New(r.deps)
+		_ = daemon.Tick(r.ctx)
+		daemon.waitBackground()
+		daemon.stopBackground()
+		c, err := r.reg.EscapeCheck(r.ctx, r.task.ID)
+		switch {
+		case age < escapeLastTry && err == nil:
+			t.Fatalf("stored with the round %s old: %+v", age, c)
+		case age >= escapeLastTry && err != nil:
+			t.Fatalf("not stored with the round %s old: %v", age, err)
+		case err == nil:
+			if c.SameHeadOnly != 1 {
+				t.Errorf("the stored check %+v, want 1 file at the same head only", c)
+			}
+			return
+		}
+		r.clock.Add(10 * time.Minute)
+	}
+	t.Fatal("no daemon stored the check")
+}
+
+// A failed diff the result does not depend on (the posted finding on its
+// file is caught at the same head, or no local finding is on the file of
+// an escape) neither delays nor flags the check: it is stored at its first
+// try, complete.
+func TestAFailedDiffTheResultDoesNotDependOnNeitherDelaysNorFlagsTheCheck(t *testing.T) {
+	r := newEscapeRig(t, true)
+	r.diff.set(func(d *fakeDiff) { d.broken[r.copyDir(2)] = true })
+	r.local(prHead, creditPath, 40, "P2")     // catches the posted P2 at the same head
+	r.local(localHead, creditPath, 100, "P3") // at another head: its diff fails
+	r.postAt(t0.Add(time.Hour), "r-judge-2",
+		PostedFinding{ID: 71, Path: creditPath, StartLine: 41, EndLine: 41, Priority: "P2", Title: "Caught"},
+		PostedFinding{ID: 72, Path: "app/models/refund.rb", StartLine: 7, EndLine: 7, Priority: "P2", Title: "Missed, no local finding there"})
+	c, es, ok := r.check()
+	if !ok {
+		t.Fatal("a check whose result needs no failed diff was not stored at its first try")
+	}
+	if c.SameHeadOnly != 0 || len(es) != 1 || es[0].FindingID != 72 || es[0].Reason != registry.EscapeNoLocal {
+		t.Errorf("check %+v, escapes %+v; want it complete with the refund escape alone", c, es)
+	}
+	if len(r.diff.asked()) == 0 {
+		t.Error("no diff was asked: the test needs one that fails")
+	}
+}
+
+// No check starts while the daemon drains: the next daemon makes it.
+func TestNoEscapeCheckStartsWhileTheDaemonDrains(t *testing.T) {
+	r := newEscapeRig(t, false)
+	r.postAt(t0.Add(time.Hour), "r-judge-2", PostedFinding{ID: 71, Path: creditPath, StartLine: 40, EndLine: 40, Priority: "P2", Title: "Missed"})
+	r.e.draining.Store(true)
+	if _, _, ok := r.check(); ok || r.magnum.postedCalls() != 0 {
+		t.Fatalf("a draining daemon checked: stored %v, %d reads", ok, r.magnum.postedCalls())
+	}
+	r.e.draining.Store(false)
+	if _, _, ok := r.check(); !ok {
+		t.Error("the check did not run once the drain ended")
 	}
 }

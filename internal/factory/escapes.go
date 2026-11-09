@@ -27,15 +27,17 @@ package factory
 // posted only before it) is not started again before magnum posts another
 // review, and one that stored nothing (a registry that could not be read,
 // a panic) not before escapeRetry. A check is complete when every
-// comparison of a posted finding's file at two heads ran (git answered in a
-// copy, within escapeGitBound) and magnum recorded the findings its round's
-// result counts. An incomplete check (no copy on disk, git failing in every
-// copy, the diffs out of their bound, a round whose findings magnum has not
-// recorded) stores nothing either and is tried again after escapeRetry;
-// only its escapeTries-th try stores it, with the files it compared at the
-// same head only and the findings magnum did not record counted on the
-// check (SameHeadOnly, Unrecorded), so the stats tell it from a complete
-// one. A check has escapeCheckBound; its result is written once its reads
+// comparison its result depends on ran (git answered in a copy, within
+// escapeGitBound, for each file of a posted finding that escaped: one
+// caught, or a file no comparison of failed, is exact whatever else
+// failed) and magnum recorded the findings its round's result counts. An
+// incomplete check (no copy on disk, git failing in every copy, the diffs
+// out of their bound, a round whose findings magnum has not recorded)
+// stores nothing either and is tried again after escapeRetry; only a try
+// once magnum's round is escapeLastTry old (a time a restart keeps) stores
+// it, with the files it compared at the same head only and the findings
+// magnum did not record counted on the check (SameHeadOnly, Unrecorded), so
+// the stats tell it from a complete one. A check has escapeCheckBound; its result is written once its reads
 // ended, whatever the drain does then (context.WithoutCancel), in one
 // transaction, never twice (RecordEscapeCheck writes nothing for a task
 // checked before), and a check the daemon's stop cut writes nothing.
@@ -75,9 +77,10 @@ const (
 	// escapeRetry is how long a task's next check waits after one that
 	// stored nothing (a failure, an incomplete check, a panic).
 	escapeRetry = 5 * time.Minute
-	// escapeTries is how many tries an incomplete check has: the last one
-	// stores what it found, flagged.
-	escapeTries = 6
+	// escapeLastTry is how old magnum's round is at an incomplete check's
+	// last try, the one that stores what it found, flagged: about five
+	// retries after the round posts, whatever restarts came between.
+	escapeLastTry = 25 * time.Minute
 )
 
 // escapeChecks is the engine's record of the escape checks that run off
@@ -85,8 +88,9 @@ const (
 // is stored, by task the run of magnum's last posted review a check found
 // no round after the publish for (none starts again before magnum posts
 // another), when a task's next check may start after one that stored
-// nothing, the incomplete tries so far, and the failure last logged per
-// task. gitBound bounds a check's diffs (escapeGitBound; a test's seam).
+// nothing, its incomplete tries in this daemon (the event counts them), and
+// the failure last logged per task. gitBound bounds a check's diffs
+// (escapeGitBound; a test's seam).
 type escapeChecks struct {
 	mu       sync.Mutex
 	running  map[int64]bool
@@ -197,15 +201,18 @@ func (e *Engine) startEscapeCheck(t registry.Task, ref PRRef, review string) {
 }
 
 // escapeOutcome is what one escape check found: whether magnum has a
-// posted round after the publish, the check and its escapes to store, how
-// many escapes are unplaced, and why some comparisons did not run (""
-// when every one did: see copyDiff.why).
+// posted round after the publish and when that round began, the check and
+// its escapes to store, how many escapes are unplaced, why some
+// comparisons did not run ("" when every one did: see copyDiff.why), and
+// the tries in this daemon it took (set when it is stored).
 type escapeOutcome struct {
 	found    bool
+	started  time.Time
 	check    registry.EscapeCheck
 	escapes  []registry.Escape
 	unplaced int
 	why      string
+	tries    int
 }
 
 // complete reports whether every comparison ran and magnum recorded every
@@ -250,18 +257,13 @@ func (e *Engine) escapeCheck(ctx context.Context, t registry.Task, ref PRRef, gi
 	}
 	gctx, cancel := context.WithTimeout(ctx, gitBound)
 	defer cancel()
-	diff := &copyDiff{ctx: gctx, git: e.d.Git, memo: map[[3]string]bool{}, posted: map[string]bool{}, uncompared: map[string]bool{}}
+	diff := &copyDiff{ctx: gctx, git: e.d.Git, memo: map[[3]string]bool{}, failed: map[string]string{}}
 	if diff.git != nil {
 		diff.dirs = e.escapeCopies(t)
 	}
-	for _, f := range round.Findings {
-		if _, ok := escapePriority(f.Priority); ok && f.Path != "" {
-			diff.posted[f.Path] = true
-		}
-	}
-	out := escapeOutcome{found: true}
+	out := escapeOutcome{found: true, started: round.Start}
 	out.check, out.escapes = localEscapes(t.ID, link, locals, cycles, round, diff.same)
-	out.check.SameHeadOnly, out.why = len(diff.uncompared), diff.why()
+	out.check.SameHeadOnly, out.why = sameHeadOnly(out.escapes, diff.failed)
 	for _, es := range out.escapes {
 		if es.Reason == registry.EscapeUnplaced {
 			out.unplaced++
@@ -290,19 +292,15 @@ func (e *Engine) publishBegan(ctx context.Context, t registry.Task, link registr
 
 // copyDiff answers escapes.SameCode for one check: whether a file reads
 // the same at two heads (git diff --name-only, read only) in the first of
-// dirs where git answers, once per file and heads. uncompared are the
-// files of the posted findings (posted) a comparison of which got no
-// answer: no git or no copy, git failing in every copy, or the diffs out
-// of their bound (cut); a comparison of another file (the comparable count
-// of local findings alone) counts in neither.
+// dirs where git answers, once per file and heads. failed names, by file,
+// why a comparison of it got no answer (the first such cause): no git, no
+// copy on disk, git failing in every copy, or the diffs out of their bound.
 type copyDiff struct {
-	ctx        context.Context
-	git        *gitx.Client
-	dirs       []string
-	memo       map[[3]string]bool
-	posted     map[string]bool
-	uncompared map[string]bool
-	cut        bool
+	ctx    context.Context
+	git    *gitx.Client
+	dirs   []string
+	memo   map[[3]string]bool
+	failed map[string]string
 }
 
 func (d *copyDiff) same(path, localHead, postedHead string) bool {
@@ -310,48 +308,60 @@ func (d *copyDiff) same(path, localHead, postedHead string) bool {
 	if v, ok := d.memo[key]; ok {
 		return v
 	}
-	v, answered := d.diff(path, localHead, postedHead)
-	if !answered && d.posted[path] {
-		d.uncompared[path] = true
+	v, why := d.diff(path, localHead, postedHead)
+	if _, seen := d.failed[path]; why != "" && !seen {
+		d.failed[path] = why
 	}
 	d.memo[key] = v
 	return v
 }
 
 // diff asks each copy in turn whether path differs between a and b: the
-// first git that answers says it; false when none does.
-func (d *copyDiff) diff(path, a, b string) (same, answered bool) {
+// first git that answers says it; false, with why, when none does.
+func (d *copyDiff) diff(path, a, b string) (same bool, why string) {
+	switch {
+	case d.git == nil:
+		return false, "no git"
+	case len(d.dirs) == 0:
+		return false, "no copy of the repository is on disk"
+	}
 	for _, dir := range d.dirs {
 		if d.ctx.Err() != nil {
 			break
 		}
 		differ, err := d.git.DifferingPaths(d.ctx, dir, a, b, path)
 		if err == nil {
-			return len(differ) == 0, true
+			return len(differ) == 0, ""
 		}
 		// git failed in this copy (an exit error, a bad object there): the
 		// next one, unless the bound ran out
 	}
-	if d.ctx.Err() != nil && d.posted[path] {
-		d.cut = true
+	if d.ctx.Err() != nil {
+		return false, "the diffs ran out of their bound"
 	}
-	return false, false
+	return false, "git failed in every copy"
 }
 
-// why is why the comparisons of uncompared did not run, "" when they all
-// did.
-func (d *copyDiff) why() string {
-	switch {
-	case len(d.uncompared) == 0:
-		return ""
-	case d.git == nil:
-		return "no git"
-	case d.cut:
-		return "the diffs ran out of their bound"
-	case len(d.dirs) == 0:
-		return "no copy of the repository is on disk"
+// sameHeadOnly counts the files a check's result depends on a failed
+// comparison of (failed, by file, with why): the files of its escapes
+// (no_local or far) a comparison of which got no answer, as a local
+// finding there at another head might have caught them. A caught posted
+// finding, and an escape on a file no comparison of failed, depend on no
+// failed comparison. why is the first such file's cause.
+func sameHeadOnly(es []registry.Escape, failed map[string]string) (n int, why string) {
+	seen := map[string]bool{}
+	for _, e := range es {
+		cause, ok := failed[e.Path]
+		if e.Reason == registry.EscapeUnplaced || !ok || seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		n++
+		if why == "" {
+			why = cause
+		}
 	}
-	return "git failed in every copy"
+	return n, why
 }
 
 // escapePriority is a posted finding's priority as an escape counts it:
@@ -429,18 +439,19 @@ func localEscapes(taskID int64, link registry.PRLink, locals []registry.Finding,
 
 // escapeChecked records the end of task t's escape check of its PR ref
 // (out, or the failure err): a complete check, or the last try of an
-// incomplete one, stored with its escapes and an event that counts them;
-// an incomplete check before its last try, and a failure, logged once while
-// its cause stays the same, the next try after escapeRetry; a round not
-// found yet noted against review (the run of magnum's last posted review),
-// so no check starts again before magnum posts another.
+// incomplete one (magnum's round escapeLastTry old), stored with its
+// escapes and an event that counts them; an incomplete check before its
+// last try, and a failure, logged once while its cause stays the same, the
+// next try after escapeRetry; a round not found yet noted against review
+// (the run of magnum's last posted review), so no check starts again
+// before magnum posts another.
 func (e *Engine) escapeChecked(ctx context.Context, t registry.Task, ref PRRef, review string, out escapeOutcome, err error) {
-	if err == nil && out.found && !out.complete() {
+	if err == nil && out.found {
 		e.esc.mu.Lock()
 		e.esc.tries[t.ID]++
-		last := e.esc.tries[t.ID] >= escapeTries
+		out.tries = e.esc.tries[t.ID]
 		e.esc.mu.Unlock()
-		if !last {
+		if !out.complete() && e.now().Sub(out.started) < escapeLastTry {
 			err = fmt.Errorf("the check is incomplete: %s", out.incomplete())
 		}
 	}
@@ -503,8 +514,8 @@ func (o escapeOutcome) words(ref PRRef) string {
 	}
 	s += fmt.Sprintf("; %s of the local review at a comparable head", textx.Count(c.Comparable, "finding", "findings"))
 	if c.SameHeadOnly > 0 {
-		s += fmt.Sprintf("; %s compared at the same head only (%s, after %d tries)", textx.Count(c.SameHeadOnly, "file", "files"), o.why,
-			escapeTries)
+		s += fmt.Sprintf("; %s compared at the same head only (%s, after %s in this daemon)", textx.Count(c.SameHeadOnly, "file", "files"),
+			o.why, textx.Count(o.tries, "try", "tries"))
 	}
 	if c.Unrecorded > 0 {
 		s += fmt.Sprintf("; magnum recorded none of the %s its round's result counts, so the escapes are unknown",

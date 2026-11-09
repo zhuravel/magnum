@@ -216,8 +216,10 @@ type PRRef struct {
 // BaseRef its branches; HeadChangedAt when its head last moved, ActivityAt
 // its last activity (store.PR.Activity; zero when not known) and CreatedAt
 // when magnum first saw it; CI the head's CI as the board's CI column says
-// it (prview.CI, by the repository's required checks: one that did not run
-// at the head is missing, never green; nil before magnum read the checks);
+// it (prview.CI: its State over every check of the head that ignore_checks
+// leaves in, required or not; its Required by the repository's required
+// checks, one that did not run at the head missing, never green; nil
+// before magnum read the checks);
 // Review magnum's last posted review (nil for none), Findings it as the
 // board's FINDINGS column says it, and ReviewEvent what magnum's review of
 // the head posted (prs.last_review_event: APPROVED, COMMENTED,

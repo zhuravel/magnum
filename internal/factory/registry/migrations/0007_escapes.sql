@@ -1,17 +1,17 @@
 -- What the local review of a published task missed (DECISIONS "The factory counts what its local review missed"): at
--- magnum's first round on the task's PR that posted a review and began after the publish (pr_links.opened_at), the
--- round's posted P0 to P2 findings are matched against the task's review_findings by place (internal/escapes: the same
--- path, within 3 lines, at a head whose file reads the same). One escape_checks row per task, written once with its
--- escapes in one transaction and never again: magnum's run that posted the review (runs.id) and its round, the head it
--- reviewed, how many P0 to P2 findings it posted, how many of the task's local findings were placed at a head
--- comparable with it, how many files of its posted findings it compared at the same head only (git could not compare
--- them in a copy: none on disk, git failed, or its bound ran out, on the last of a check's tries), how many P0 to P2
--- findings the round's result counts that magnum's registry recorded no row of (a result without provenance: the
+-- magnum's first round on the task's PR that posted a review and began after the publish (the first begin of the
+-- task's publish effect, or the PR's link time, pr_links.opened_at, when that is earlier), the round's posted P0 to P2
+-- findings are matched against the task's review_findings by place (internal/escapes: the same path, within 3 lines,
+-- at a head whose file reads the same). One escape_checks row per task, written once with its escapes in one
+-- transaction and never again: magnum's run that posted the review (runs.id) and its round, the head it reviewed, how
+-- many P0 to P2 findings it posted, how many of the task's local findings were placed at a head comparable with it,
+-- how many files of its escapes it compared at the same head only (git could not compare them in a copy: none on
+-- disk, git failed, or its bound ran out, at a check's last try, once magnum's round was old enough), how many P0 to
+-- P2 findings the round's result counts that magnum's registry recorded no row of (a result without provenance: the
 -- escapes are then unknown, not none), and when the check ran. One escapes row per posted finding no local finding
--- caught: magnum's
--- finding (findings.id), its path and lines, its priority, the hash of its title (the factory's own, as
--- review_findings keeps it), why (no_local, far or unplaced) and, for far only, the nearest local finding and how many
--- lines lie between them. Neither table holds a title, a body or any other text of magnum's registry or the PR.
+-- caught: magnum's finding (findings.id), its path and lines, its priority, the hash of its title (the factory's own,
+-- as review_findings keeps it), why (no_local, far or unplaced) and, for far only, the nearest local finding and how
+-- many lines lie between them. Neither table holds a title, a body or any other text of magnum's registry or the PR.
 -- (GitHub's CI on a published task's PR goes into the checks table as it is: kind ci, source github, one row per
 -- task, head and result, which RecordGitHubCI keeps in its transaction.) Applied when PRAGMA user_version < 7.
 
