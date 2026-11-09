@@ -1063,7 +1063,7 @@ func TestThePreviewReadsTheTicketAndNamesKindBranchAndStart(t *testing.T) {
 		t.Fatalf("preview Jira %+v", f.Jira)
 	}
 	if f.Kind != "feature" || f.KindWhy != "from the Jira type Story" || f.Branch != "zhuravel-PR-12345-credit-expiry-reminder-email" ||
-		!strings.HasPrefix(f.Starts, "now") || f.Repo != "talkable/talkable" || len(f.Agents) != 1 || f.Err != "" {
+		!strings.HasPrefix(f.Starts, "now") || f.Repo != "talkable/talkable" || len(f.Agents) != 2 || f.Err != "" {
 		t.Fatalf("preview %+v", f)
 	}
 	if n := len(r.tasks()); n != 0 {

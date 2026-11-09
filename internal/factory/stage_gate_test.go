@@ -720,7 +720,8 @@ func TestQuestionsOfARoleThatPassedWaitForTheGate(t *testing.T) {
 	h.startStage(task)
 	h.taskFile(task.ID, "findings-fx-points.md", "point 1 exists in app/models/credit.rb:12\n")
 	h.taskFile(task.ID, "questions-fx-points.json", questionsJSON(t, whoQuestion))
-	h.ended(task, "fx-points")
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "point 1 exists in app/models/credit.rb:12\n")
+	h.ended(task, "fx-points", "fx-points-codex")
 	h.tick()
 	if got := h.reload(task.ID); got.Stage != "judge" || got.QuestionRev != 0 {
 		t.Fatalf("task %s at %s, revision %d; want at judge with nothing asked yet", got.State, got.Stage, got.QuestionRev)

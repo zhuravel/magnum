@@ -53,12 +53,12 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `factory-repro.md` | `fx-repro`, the factory's reproducer of a bug (`[[factory.role]]`) | factory |
 | `factory-cause.md` | `fx-cause` and its Claude fallback `fx-cause-claude`, which find a bug's cause on their own | factory |
 | `factory-history.md` | `fx-history`, which reads the history of the code a fix will change: one list item per guard, starting with its `path:line`, with its `why:` (the ready card flags a guard the change rewrites that is older than 6 months, with that why) | factory |
-| `factory-points.md` | `fx-points`, which tests each point of a feature's ticket against the code | factory |
+| `factory-points.md` | `fx-points` and its Codex twin `fx-points-codex` (a trial), which each test every point of a feature's ticket against the code on their own | factory |
 | `factory-scope.md` | `fx-scope`, which finds every place a chore touches | factory |
 | `factory-judge.md` | `fx-judge`, which merges the findings into `report.md` and the questions, among them each doubt that can change what a user sees while neither the ticket nor your answers decide it (a question, never a choice in the plan) | factory |
 | `factory-liaison.md` | `fx-liaison`, the liaison that talks with you about one task: it works in the task's folder (`.TaskDir`), never in the copy; asks you with AskUserQuestion, its recommendation first and one decision at a time; records your answers and decisions with `magnum factory answer` and `decide` (`--surface liaison`, `--shown`) and lets a waiting task go on with `retry`; keeps `notes.md`; and never merges, runs a migration or touches production or a shared database. No stage names it, so none launches it, and it carries no factory-mode rules (the other factory prompts forbid AskUserQuestion) | factory |
 | `factory-amend.md` | the roles of the report stage (`fx-judge`) in the turn a `no_open_questions` or `reproduced` gate runs when your answers change the plan: they amend `report.md`, `acceptance.json` and `questions.json` with `answers.md` | factory |
-| `factory-critic.md` | `fx-critic` and its Claude fallback `fx-critic-claude`, which criticize the plan of a wide change | factory |
+| `factory-critic.md` | `fx-critic` (a wide plan, xhigh), `fx-critic-narrow` (a narrow one, high) and their Claude fallback `fx-critic-claude`, which criticize the plan | factory |
 | `factory-writer.md` | `fx-writer`, which writes the change test first; back from the ready card, it names your send back's note file and reason key (`.SendBack`, `.SendBackReason`) or the base to merge and the paths it conflicts in (`.MergeBase`, `.Conflicts`) | factory |
 | `factory-pr-body.md` | the roles of the `pr_body` stage (`fx-judge`, the stage's `prompt`): they draft `pr-body.md` from the report, the proofs, the acceptance checks and the local review's end, following the repository's PR template, with a table from the ticket's points to their specs (or, when the repository sets `pr_body_skill`, in that skill's layout, keeping the table and the proof sentences); the factory appends the "Known" list itself, folded | factory |
 | `factory-review-fix.md` | the coding stage's roles (`fx-writer`) in the local review's fix turn: they fix or decline (with the risk of the suggested change) each finding of `.Review`, commit, and write `.ReviewReply`, `proof.json` and their questions file again | factory |
@@ -614,8 +614,11 @@ and the file of the runs (`factory-proof.json` or `precheck.md`), up to 6 prompt
 then the task waits on you, "the fx-writer agent's change does not pass after 6 prompts in the stage: <why>".
 What the writer cannot fix (a command the deny list refuses or that is missing or not executable, lint output
 not by `path:line`, no specs command, an unreadable `table_stats`, changes the checks cannot tell from yours)
-goes to you at once, naming the configuration key or the paths. The critic's stage (`when = "wide"`) runs only for a plan whose
-Files name 3 or more files, a file under `db/` or a security path.
+goes to you at once, naming the configuration key or the paths. Every plan gets a critic: the `critic` stage (`when = "wide"`,
+fx-critic at xhigh) runs for a plan whose Files name 3 or more files, a file under `db/` or a security path, and the
+`narrow_critic` stage (`when = "narrow"`, fx-critic-narrow at high) for any other plan; both read the plan with
+`factory-critic.md`. A feature's points have two readers on the same `factory-points.md`, fx-points and its Codex twin
+fx-points-codex (a trial), each kept from the other's findings, and the judge merges their readings.
 
 A role that ends its turn with new questions in `.Questions` suspends its stage instead of a nudge: once
 you answered, it gets a prompt that names `answers.md` by its path (never its words) and goes on where it

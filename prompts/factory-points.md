@@ -2,6 +2,8 @@
 
 {{template "inputs" .}}
 
+Do not read what the other investigators write (the other findings-*.md files of {{.TaskDir}}): another agent may read the same points on its own, and the judge compares the two readings, so your reading must be your own.
+
 Split the ticket into its points, each thing it asks for. For each point: what exists already (file:line), what is missing, and which files change. Collect the product questions the ticket leaves open: a behaviour it does not decide, a case it does not name; read {{.TaskDir}}/questions.json first when it is there, and leave out what it asks already.{{template "merges" .}}
 
 Write {{.Findings}}: one section per point, with what exists, what is missing and the files that change; then `## Open questions`, each with why it matters and the options you see.

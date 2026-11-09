@@ -211,8 +211,9 @@ type stageRole struct {
 	pause   string
 	nudged  bool
 	// relaunch: it runs again as its fallback after a Codex refusal (a
-	// launch, then its prompt).
-	relaunch bool
+	// launch, then its prompt); covered: its fallback is a role of the stage
+	// (coveredIn), so it leaves the run instead.
+	relaunch, covered bool
 	// ok: its end fact held at its run's end; failed: it did not after the
 	// nudge (the file), and the task waits on you; letGo: its last run held
 	// only a prompt you let go (runtime.LetGoWhy), so its turn is not
@@ -264,7 +265,8 @@ var agentsEnds = []string{config.FactoryEndFindings, config.FactoryEndReport, co
 // runAgents runs one pass of an agents stage of task t (the engine's runner
 // for config.FactoryStageAgents); done reports that its end fact held for
 // every role. A stage with When "wide" is skipped unless the report's Files
-// name 3 or more files, the database or a security path (wideChange). Then
+// name 3 or more files, the database or a security path (wideChange), and
+// one with When "narrow" when they do (skipByWidth). Then
 // the copy (claimCopy: the claim runs off the loop, a hold is a wait), the
 // stage's attempt (the open one, else a new one), the launch of its roles
 // in one workspace, the runtime's events, and the prompts each role is due:
@@ -294,8 +296,8 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if err != nil || passed {
 		return passed, err
 	}
-	if !open && st.When == config.FactoryWhenWide {
-		if skip, err := e.skipNarrow(ctx, t, st); err != nil || skip {
+	if !open && st.When != "" {
+		if skip, err := e.skipByWidth(ctx, t, st); err != nil || skip {
 			return skip, err
 		}
 	}
@@ -435,15 +437,15 @@ func (e *Engine) noteAttempt(ctx context.Context, t registry.Task, a registry.At
 	}
 }
 
-// skipNarrow reports whether a stage that runs for a wide plan only is
-// skipped: the report's Files are no wide change (wideChange), which an
-// event says.
-func (e *Engine) skipNarrow(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
+// skipByWidth reports whether a stage that runs for one width of plan only
+// (When "wide" or "narrow") is skipped: the report's Files are a change of
+// the other width (wideChange), which an event says.
+func (e *Engine) skipByWidth(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reportFile))
 	if err != nil {
-		return false, fmt.Errorf("the %s stage runs for a wide plan only, and %s cannot tell: %w", st.Name, reportFile, err)
+		return false, fmt.Errorf("the %s stage runs for a %s plan only, and %s cannot tell: %w", st.Name, st.When, reportFile, err)
 	}
-	if wide, why := wideChange(parseReport(string(b)).files); !wide {
+	if wide, why := wideChange(parseReport(string(b)).files); wide != (st.When == config.FactoryWhenWide) {
 		e.event(ctx, t.ID, "stage", registry.PhaseInfo, st.Name+" skipped: "+why)
 		return true, nil
 	}
@@ -460,7 +462,8 @@ func (e *Engine) skipNarrow(ctx context.Context, t registry.Task, st config.Fact
 // pass said, which a restart loses, comes back from each role's last run
 // (lastRunEvent): the events are the stage's to take with the observe
 // pass's. A role that cannot run (a Codex role without a fallback on a task
-// Codex never works on) is a needsYou.
+// Codex never works on) is a needsYou; one whose fallback the stage runs
+// already is no role of the run (coveredIn).
 func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt,
 	turn agentsTurn) (*agentsRun, []runtime.Event, error) {
 	if run := e.agentRuns[t.ID]; run != nil && run.attempt == a.ID {
@@ -480,6 +483,9 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		runAs, err := e.d.Runtime.RunsAs(t, role)
 		if err != nil {
 			return nil, nil, cannotRun(role, err)
+		}
+		if coveredIn(st, role, runAs) {
+			continue
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
 	}
@@ -589,6 +595,15 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 		r.letGo = why == runtime.LetGoWhy
 	}
 	return nil, nil
+}
+
+// coveredIn reports whether role, run as runAs (Runtime.RunsAs), is covered
+// in stage st: it runs as its codex_fallback, and the stage runs that role
+// already (fx-points-codex's fx-points), whose own run stands for both. The
+// role leaves the stage then: no second session of the fallback, and the
+// stage ends on the roles left.
+func coveredIn(st config.FactoryStage, role, runAs config.Role) bool {
+	return runAs.Name != role.Name && slices.Contains(st.Roles, runAs.Name)
 }
 
 // cannotRun is the needsYou of a role that may not run on its task
@@ -1006,7 +1021,9 @@ func letGoWait(r *stageRole, p *endProblem, branch string) string {
 }
 
 // promptRoles sends each role of run what it is due: the quit of the task's
-// Codex sessions after a refusal and the launch of a fallback first, then
+// Codex sessions after a refusal and the launch of a fallback first (a role
+// the stage's run of its fallback covers leaves the run, which an event
+// says), then
 // a role's first prompt, its nudge, the prompt to go on after a pause, or
 // your answers (which resume the stage's suspension). A role whose
 // questions wait for your answers gets nothing. held is the first wait (a
@@ -1025,8 +1042,9 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 	if err != nil {
 		return nil, err
 	}
+	defer func() { run.roles = slices.DeleteFunc(run.roles, func(r *stageRole) bool { return r.covered }) }()
 	for _, r := range run.roles {
-		if r.ok || r.failed != "" || r.asking {
+		if r.ok || r.failed != "" || r.asking || r.covered {
 			continue
 		}
 		if slices.ContainsFunc(entries, func(en registry.LedgerEntry) bool {
@@ -1043,6 +1061,12 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			runAs, rerr := e.d.Runtime.RunsAs(t, r.role)
 			if rerr != nil {
 				return nil, cannotRun(r.role, rerr)
+			}
+			if coveredIn(st, r.role, runAs) {
+				r.covered = true
+				e.event(ctx, t.ID, "stage", registry.PhaseInfo, r.role.Name+" left the "+st.Name+" stage: Codex never works on "+
+					TaskKey(t)+" again, and its codex_fallback "+runAs.Name+" runs in the stage already")
+				continue
 			}
 			runAs = asStageRuns(st, runAs)
 			if lerr := e.launch(ctx, t, a, c, []config.Role{runAs}); lerr != nil {

@@ -136,14 +136,9 @@ func TestFactoryDefaultsDefineBugFeatureAndChore(t *testing.T) {
 			if review < 0 || review >= decision {
 				t.Errorf("kind %s: a review stage must come before the decision: %v", name, names)
 			}
-			for _, want := range []string{"investigate", "judge", "critic", "questions", "coding", "local_review", "pr_body"} {
+			for _, want := range []string{"investigate", "judge", "critic", "narrow_critic", "questions", "coding", "local_review", "pr_body"} {
 				if !slices.Contains(names, want) {
 					t.Errorf("kind %s has no stage %s: %v", name, want, names)
-				}
-			}
-			for _, st := range k.Stages {
-				if st.Name == "critic" && st.When != FactoryWhenWide {
-					t.Errorf("kind %s: the critic stage has when = %q, want %q", name, st.When, FactoryWhenWide)
 				}
 			}
 		}
@@ -155,6 +150,90 @@ func TestFactoryDefaultsDefineBugFeatureAndChore(t *testing.T) {
 	if !slices.ContainsFunc(cfg.Factory.Kinds["bug"].Stages, func(s FactoryStage) bool { return s.Gate == FactoryGateReproduced }) {
 		t.Errorf("the bug kind has no %s gate", FactoryGateReproduced)
 	}
+}
+
+// Every kind's plan gets a critic, a wide one and a narrow one alike
+// (talkable#12213, narrow, skipped it and took a public P2): right after
+// the judge, the critic stage runs fx-critic at xhigh on a wide plan and the
+// narrow_critic stage fx-critic-narrow at high on a narrow one, both on
+// Codex, both ending on critic.md, and both handing a Codex refusal to the
+// Claude critic, fx-critic-claude at high.
+func TestEveryKindsCriticReadsAWidePlanAtXhighAndANarrowOneAtHigh(t *testing.T) {
+	for label, c := range map[string]*Config{"the embedded file": mustLoadDefaults(t), "the Go defaults": Defaults()} {
+		for _, name := range []string{"bug", "feature", "chore"} {
+			stages := c.Factory.Kinds[name].Stages
+			judge := slices.IndexFunc(stages, func(st FactoryStage) bool { return st.Name == "judge" })
+			if judge < 0 || judge+2 >= len(stages) {
+				t.Fatalf("%s: kind %s has no judge with two stages after it: %+v", label, name, stages)
+			}
+			for i, want := range []struct{ stage, when, role, effort string }{
+				{"critic", FactoryWhenWide, "fx-critic", "xhigh"},
+				{"narrow_critic", FactoryWhenNarrow, "fx-critic-narrow", "high"},
+			} {
+				st := stages[judge+1+i]
+				if st.Name != want.stage || st.Type != FactoryStageAgents || st.End != FactoryEndCritic || st.When != want.when ||
+					!slices.Equal(st.Roles, []string{want.role}) {
+					t.Errorf("%s: kind %s stage %d after the judge is %+v, want %s running %s when %s, ending on %s",
+						label, name, i+1, st, want.stage, want.role, want.when, FactoryEndCritic)
+				}
+				r, _ := c.FactoryRole(want.role)
+				if r.Kind != KindCodex || r.Effort != want.effort || r.Prompt != "factory-critic.md" {
+					t.Errorf("%s: %s is %s at %q with %s, want codex at %q with factory-critic.md", label, want.role, r.Kind, r.Effort, r.Prompt, want.effort)
+				}
+				if fb := c.Factory.CodexFallback[want.role]; fb != "fx-critic-claude" {
+					t.Errorf("%s: codex_fallback %s = %q, want fx-critic-claude", label, want.role, fb)
+				}
+			}
+		}
+		if r, _ := c.FactoryRole("fx-critic-claude"); r.Kind != KindClaude || r.Effort != "high" {
+			t.Errorf("%s: fx-critic-claude is %s at %q, want claude at high", label, r.Kind, r.Effort)
+		}
+	}
+}
+
+// A feature's points get a second reading, on Codex, as a bug's cause gets
+// fx-cause beside fx-repro (a trial on 5 feature tasks): fx-points-codex
+// runs with fx-points in the investigate stage, on the same prompt at high,
+// and its codex_fallback is fx-points, which the stage runs already, so a
+// Codex refusal leaves fx-points to end the stage alone.
+func TestTheFeatureKindInvestigatesWithACodexTwinOfThePointsReader(t *testing.T) {
+	for label, c := range map[string]*Config{"the embedded file": mustLoadDefaults(t), "the Go defaults": Defaults()} {
+		st := c.Factory.Kinds["feature"].Stages[0]
+		if st.Name != "investigate" || !slices.Equal(st.Roles, []string{"fx-points", "fx-points-codex"}) {
+			t.Errorf("%s: the feature's first stage %+v, want investigate with fx-points and fx-points-codex", label, st)
+		}
+		r, _ := c.FactoryRole("fx-points-codex")
+		points, _ := c.FactoryRole("fx-points")
+		if r.Kind != KindCodex || r.Effort != "high" || r.Prompt != points.Prompt || r.Timeout != points.Timeout {
+			t.Errorf("%s: fx-points-codex is %s at %q with %s for %s, want codex at high with fx-points' prompt and timeout",
+				label, r.Kind, r.Effort, r.Prompt, r.Timeout)
+		}
+		if fb := c.Factory.CodexFallback["fx-points-codex"]; fb != "fx-points" {
+			t.Errorf("%s: codex_fallback fx-points-codex = %q, want fx-points", label, fb)
+		}
+		for _, other := range []string{"bug", "chore"} {
+			if roles := c.Factory.Kinds[other].Stages[0].Roles; slices.Contains(roles, "fx-points-codex") {
+				t.Errorf("%s: the %s kind investigates with %v, want no points twin", label, other, roles)
+			}
+		}
+	}
+	if w := mustLoadDefaults(t).Warnings(); slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "fx-points-codex") }) {
+		t.Errorf("warnings %q name the twin, want none: its fallback is set", w)
+	}
+}
+
+// A stage's when is empty, "wide" or "narrow"; anything else is refused.
+func TestAStageRunsForAWideOrANarrowPlan(t *testing.T) {
+	for _, when := range []string{"", FactoryWhenWide, FactoryWhenNarrow} {
+		cfg := validFactoryConfig()
+		editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { s[findStage(s, "critic")].When = when; return s })
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("when %q: %v", when, err)
+		}
+	}
+	cfg := validFactoryConfig()
+	editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { s[findStage(s, "critic")].When = "tiny"; return s })
+	wantError(t, cfg.Validate(), `stage "critic"`, `when "tiny"`, `"wide"`, `"narrow"`)
 }
 
 // What belongs to one repository or one team stays out of the tracked
@@ -695,7 +774,7 @@ codex_fallback = { fx-cause = "" }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Factory.CodexFallback) != 2 {
+	if !equalAny(cfg.Factory.CodexFallback, DefaultFactory().CodexFallback) {
 		t.Errorf("an empty table changed the entries: %v", cfg.Factory.CodexFallback)
 	}
 

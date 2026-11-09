@@ -2439,7 +2439,25 @@ do, and `fx-history` keeps `medium` at every level: a history summary gains litt
 `magnum factory install` after a switch to `high` makes the factory's agents think longer. A level of your own
 such as `burn` starts from `medium`: the factory's roles keep their built-in efforts there unless its table
 names them. To keep a role at one effort whatever the level, set `effort` in its `[[factory.role]]` block (only
-a level's table that names the role wins over it). `magnum roles` lists them after the watches' roles
+a level's table that names the role wins over it).
+
+No built-in level names a factory role's model, and the built-in defaults name no Codex model at all, so the
+stronger models of the factory's roles are yours to give in your own levels' tables. The one that gains most is
+the judge, which decides what becomes a question for you; next are the factory's Codex roles (both critics, the
+cause finder and the points twin), which otherwise run Codex's own model. For a `burn` level that names the
+strongest models:
+
+```toml
+[spend.burn]
+fx-judge = { model = "fable", effort = "xhigh" }
+fx-critic = { model = "<your strongest Codex model>", effort = "xhigh" }
+fx-critic-narrow = { model = "<your strongest Codex model>", effort = "xhigh" }
+fx-cause = { model = "<your strongest Codex model>", effort = "xhigh" }
+fx-points-codex = { model = "<your strongest Codex model>", effort = "xhigh" }
+```
+
+A `[spend.high]` that moves `codex-judge` to a lighter Codex model to spend less needs no entry for the
+factory's Codex roles: they keep Codex's own model at the notch's `xhigh`. `magnum roles` lists them after the watches' roles
 (`--factory` alone, `--factory --json` keyed like config.toml), and `magnum config` names the level they run
 at. The factory daemon reads them when it starts, so `magnum factory install` applies a change. A table entry
 that names a factory role needs this build on both daemons (an older one refuses it as an unknown role): run
@@ -4063,7 +4081,10 @@ stages = [
   neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
   you) and no `aliases`, and its `prompt` is a file of [prompts](prompts/README.md) (`factory-*.md`). A role
   on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal;
-  `magnum config` warns about one without it. To run a role on Claude instead, set `kind = "claude"` in a
+  `magnum config` warns about one without it. A fallback that the same stage runs already covers the role
+  there: after a refusal the role leaves the stage, no second session of the fallback starts, and the
+  fallback's own run stands for both (the built-in `fx-points-codex = "fx-points"`: a refusal of the points
+  twin leaves `fx-points` to end the feature's investigation alone). To run a role on Claude instead, set `kind = "claude"` in a
   `[[factory.role]]` of its name (the entry is then unused and `magnum config` says so), and to drop an
   entry write it with an empty value: `codex_fallback = { fx-cause = "" }`. `fx-liaison` is the one role
   that works for no stage: the liaison, a Claude agent (`factory-liaison.md`) that talks with you about one
@@ -4101,7 +4122,14 @@ stages = [
   A `gate` waits until its `gate` holds (`no_open_questions`, or `reproduced` for a bug). A `review` stage
   runs the local review (`end = "clean"`). A `decision` waits for you (`ready_push`). An `effect` does its
   `effect` (`publish`, `end = "pr"`). `when = "wide"` skips a stage unless the plan touches 3 or more files,
-  the database or security. A `publish` effect must come after a `ready_push` decision. `kind_by_jira_type`
+  the database or security, and `when = "narrow"` skips it for such a plan. The built-in kinds give every plan a
+  critic that way, right after the judge: the `critic` stage runs `fx-critic` (Codex, `xhigh`) on a wide plan and
+  the `narrow_critic` stage `fx-critic-narrow` (Codex, `high`) on a narrow one, both with `factory-critic.md`
+  and both handing a Codex refusal to `fx-critic-claude`; the card shows the other one as skipped, with the
+  width that skipped it. A feature's points have two readers on the same prompt, each kept from the other's
+  findings: `fx-points` (Claude) and its Codex twin `fx-points-codex`, whose readings the judge merges as it
+  merges a bug's cause finders (a trial on 5 feature tasks, kept or dropped on the question count and the
+  take rate). A `publish` effect must come after a `ready_push` decision. `kind_by_jira_type`
   maps a Jira issue type to a kind and `kind_words` a kind to the words of a prompt that suggest it.
 - **Repositories.** A `[[factory.repo]]` needs `repo` (`owner/name`), `main_clone`, `copies` (with `{n}`) and a
   `[[watch]]` that covers it. `base` (default `master`), `copy_name` (default `factory{n}`), `max_copies`

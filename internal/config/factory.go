@@ -95,7 +95,9 @@ type Factory struct {
 	// built-in entry. An entry whose key is a role that no longer runs on
 	// Codex (a [[factory.role]] moved it to Claude) is not an error: it is
 	// not used, so read it only for a role of the Codex kind (Warnings says
-	// so).
+	// so). A fallback that a stage of the role runs already covers the role
+	// there: after a refusal the role leaves that stage, and the fallback's
+	// own run stands for both (fx-points-codex's fx-points).
 	CodexFallback map[string]string `toml:"codex_fallback"`
 	// Kinds are the kinds of task ([factory.kinds.<name>]) and their stages.
 	Kinds map[string]FactoryKind `toml:"kinds"`
@@ -307,7 +309,10 @@ const (
 // Gate holds; a review stage runs the local review loop (End "clean"); a
 // decision waits for your Decision; an effect does its Effect (End "pr").
 // When "wide" skips the stage unless the plan touches 3 or more files, the
-// database or security. Prompt, for an agents stage, is the prompt file
+// database or security, and "narrow" skips it for such a plan: two stages,
+// one of each, run one role on a wide plan and another on a narrow one (the
+// built-in critic at xhigh, the narrow critic at high). Prompt, for an
+// agents stage, is the prompt file
 // every role of the stage gets in place of its own role's (a stage that
 // asks a role for another file than its usual one, such as the judge's PR
 // body); empty, each role's own.
@@ -349,7 +354,8 @@ const (
 
 	FactoryEffectPublish = "publish"
 
-	FactoryWhenWide = "wide"
+	FactoryWhenWide   = "wide"
+	FactoryWhenNarrow = "narrow"
 )
 
 // FactoryStageTypes, FactoryEndFacts, FactoryGates, FactoryDecisions and
@@ -406,7 +412,8 @@ func DefaultFactory() Factory {
 		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
 		LocalReview:    FactoryLocalReview{Cycles: 3, LaterWithout: []string{RoleClaudeSimplify}},
 		Roles:          DefaultFactoryRoles(),
-		CodexFallback:  map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude"},
+		CodexFallback: map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude", "fx-critic-narrow": "fx-critic-claude",
+			"fx-points-codex": "fx-points"},
 		Kinds:          DefaultFactoryKinds(),
 		KindByJiraType: map[string]string{"Bug": "bug", "Story": "feature", "Task": "chore"},
 		KindWords: map[string][]string{
@@ -436,9 +443,14 @@ func DefaultFactoryRoles() []Role {
 		// fx-points's one recorded run took 19 minutes at high: an hour leaves an xhigh run room.
 		{Name: "fx-points", Kind: KindClaude, Effort: "high", Prompt: "factory-points.md", Timeout: Duration{time.Hour},
 			Why: "test each point of the ticket against the code", Doing: "checking the ticket's points"},
+		// fx-points' twin on Codex, a trial on 5 feature tasks: a second model reads the ticket's points on its own.
+		{Name: "fx-points-codex", Kind: KindCodex, Effort: "high", Prompt: "factory-points.md", Timeout: Duration{time.Hour},
+			Why: "test the ticket's points on its own, a second model's reading", Doing: "checking the points a second time"},
 		{Name: "fx-scope", Kind: KindClaude, Effort: "high", Prompt: "factory-scope.md", Timeout: Duration{investigate},
 			Why: "find every place the chore touches", Doing: "finding what it touches"},
 		{Name: "fx-critic", Kind: KindCodex, Effort: "xhigh", Prompt: "factory-critic.md", Timeout: Duration{short},
+			Why: "read the plan as a critic and ask what it missed", Doing: "criticizing the plan"},
+		{Name: "fx-critic-narrow", Kind: KindCodex, Effort: "high", Prompt: "factory-critic.md", Timeout: Duration{short},
 			Why: "read the plan as a critic and ask what it missed", Doing: "criticizing the plan"},
 		{Name: "fx-critic-claude", Kind: KindClaude, Effort: "high", Prompt: "factory-critic.md", Timeout: Duration{short},
 			Why: "read the plan as a critic and ask what it missed", Doing: "criticizing the plan"},
@@ -475,8 +487,10 @@ func factoryNotchRoles() []Role {
 
 // DefaultFactoryKinds are the built-in kinds of task. They differ in what
 // investigates (the bug's reproducer, cause and history, the feature's
-// points, the chore's scope) and in the bug's gate on a reproduction; the
-// rest is the same: a judge, a critic for a wide plan, one batch of
+// points, read by fx-points and its Codex twin, the chore's scope) and in
+// the bug's gate on a reproduction; the rest is the same: a judge, a critic
+// for every plan (fx-critic for a wide one, fx-critic-narrow for a narrow
+// one), one batch of
 // questions, the writer, the local review, visual QA of the change's pages
 // (a repository without [factory.repo.qa] skips it), the PR body, your
 // decision, and the publish that only the decision leads to.
@@ -486,6 +500,7 @@ func DefaultFactoryKinds() map[string]FactoryKind {
 			{Name: "investigate", Type: FactoryStageAgents, Roles: investigators, End: FactoryEndFindings},
 			{Name: "judge", Type: FactoryStageAgents, Roles: []string{"fx-judge"}, End: FactoryEndReport},
 			{Name: "critic", Type: FactoryStageAgents, Roles: []string{"fx-critic"}, End: FactoryEndCritic, When: FactoryWhenWide},
+			{Name: "narrow_critic", Type: FactoryStageAgents, Roles: []string{"fx-critic-narrow"}, End: FactoryEndCritic, When: FactoryWhenNarrow},
 			{Name: "questions", Type: FactoryStageGate, Gate: FactoryGateNoOpenQuestions},
 		}
 		stages = append(stages, gates...)
@@ -502,7 +517,7 @@ func DefaultFactoryKinds() map[string]FactoryKind {
 	chore.Proof = FactoryProofGreen // its specs stay green: no red run on the base
 	return map[string]FactoryKind{
 		"bug":     kind([]string{"fx-repro", "fx-cause", "fx-history"}, FactoryStage{Name: "reproduction", Type: FactoryStageGate, Gate: FactoryGateReproduced}),
-		"feature": kind([]string{"fx-points"}),
+		"feature": kind([]string{"fx-points", "fx-points-codex"}),
 		"chore":   chore,
 	}
 }
@@ -895,8 +910,8 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 	switch {
 	case st.Type == FactoryStageQA && st.When != "":
 		bad("when %q is not for a qa stage (the repository's qa.when says whether a change shows pages)", st.When)
-	case st.When != "" && st.When != FactoryWhenWide:
-		bad("when %q must be empty or %q", st.When, FactoryWhenWide)
+	case st.When != "" && st.When != FactoryWhenWide && st.When != FactoryWhenNarrow:
+		bad("when %q must be empty, %q or %q", st.When, FactoryWhenWide, FactoryWhenNarrow)
 	}
 	switch {
 	case st.Type == FactoryStageQA && st.End != FactoryEndQA:

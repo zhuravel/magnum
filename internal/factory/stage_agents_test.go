@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -346,6 +347,31 @@ func TestTheQuestionRolesReadTheQuestionsAskedAlreadyFirst(t *testing.T) {
 	}
 	if text := renderFactory(t, cfg, "factory-points.md", d); !strings.Contains(text, "read "+d.TaskDir+"/questions.json first") {
 		t.Errorf("the points role does not read questions.json first:\n%s", text)
+	}
+}
+
+// Two investigators of one thing read it on their own (a feature's points
+// go to fx-points and its Codex twin, on the same prompt, as a bug's cause
+// goes to fx-cause apart from the others): the points prompt keeps each away
+// from the other's findings file, and the judge merges the two readings: a
+// point or a question both raise is one, asked once, and what only one of
+// them names or they read differently is checked against the code first.
+func TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem(t *testing.T) {
+	cfg := config.Defaults()
+	d := fullPromptData()
+	points := renderFactory(t, cfg, "factory-points.md", d)
+	for _, want := range []string{"Do not read what the other investigators write (the other findings-*.md files of " + d.TaskDir + ")",
+		"your reading must be your own"} {
+		if !strings.Contains(points, want) {
+			t.Errorf("factory-points.md lacks %q:\n%s", want, points)
+		}
+	}
+	judge := renderFactory(t, cfg, "factory-judge.md", d)
+	for _, want := range []string{"Two investigators may read the same thing on their own (a bug's cause, a feature's points)",
+		"a point, a fact or a question both raise is one, asked once", "check against the code"} {
+		if !strings.Contains(judge, want) {
+			t.Errorf("factory-judge.md lacks %q:\n%s", want, judge)
+		}
 	}
 }
 
@@ -777,7 +803,7 @@ func TestFactoryPromptsCarryNoTicketText(t *testing.T) {
 
 func TestInvestigationLaunchesTheRolesOfItsKind(t *testing.T) {
 	for kind, want := range map[string][]string{
-		"bug": {"fx-repro", "fx-cause", "fx-history"}, "feature": {"fx-points"}, "chore": {"fx-scope"},
+		"bug": {"fx-repro", "fx-cause", "fx-history"}, "feature": {"fx-points", "fx-points-codex"}, "chore": {"fx-scope"},
 	} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t)
@@ -821,35 +847,65 @@ func reportNaming(files ...string) string {
 	return reportWith("Files", b.String())
 }
 
-func TestTheCriticRunsOnlyForWideChanges(t *testing.T) {
+// Every plan gets a critic (talkable#12213, narrow, skipped it and took a
+// public P2): a narrow plan skips the wide plan's critic, saying why, and
+// reaches the narrow critic, fx-critic-narrow, in the same tick; a wide plan
+// gets fx-critic, and once it passed, skips the narrow critic, saying why.
+func TestEveryPlanReachesACritic(t *testing.T) {
 	h := newHarness(t)
 	chore := h.kindTask("PR-12322", "chore", "critic")
 	h.taskFile(chore.ID, "report.md", reportNaming("app/models/campaign.rb", "spec/models/campaign_spec.rb"))
+	h.startStage(chore)
+	if got := h.reload(chore.ID); got.Stage != "narrow_critic" {
+		t.Fatalf("a chore of 2 files is at %q, want past the wide plan's critic at the narrow critic", got.Stage)
+	}
+	if got := h.rt.launchedRoles(); len(got) != 1 || !slices.Equal(got[0], []string{"fx-critic-narrow"}) {
+		t.Fatalf("launches %v, want the narrow critic alone for a plan of 2 files", got)
+	}
+	if evs := h.events(chore.ID, "stage"); len(evs) != 1 || !strings.HasPrefix(evs[0].Text, "critic skipped: ") || !strings.Contains(evs[0].Text, "2 files") {
+		t.Fatalf("stage events %+v, want one saying why the wide plan's critic was skipped", evs)
+	}
+	dir := h.layout.FactoryTaskDir(chore.ID)
+	ps := h.rt.promptsTo("fx-critic-narrow")
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, filepath.Join(dir, "report.md")) ||
+		!strings.Contains(ps[0].Text, filepath.Join(dir, "questions-fx-critic-narrow.json")) {
+		t.Fatalf("the narrow critic's prompts %+v, want report.md and its questions file named", ps)
+	}
+	h.taskFile(chore.ID, "critic.md", "The plan never says what happens to a campaign with no rules.\n")
+	h.ended(chore, "fx-critic-narrow")
 	h.tick()
 	if got := h.reload(chore.ID); got.Stage != "coding" {
-		t.Fatalf("a chore of 2 files is at %q, want past the critic and the questions gate the same tick passes, at coding", got.Stage)
-	}
-	if n := h.copies.claimCount(); n != 0 || len(h.rt.launchedRoles()) != 0 {
-		t.Fatalf("a skipped critic claimed %d copies and launched %v", n, h.rt.launchedRoles())
-	}
-	if evs := h.events(chore.ID, "stage"); len(evs) != 1 || !strings.Contains(evs[0].Text, "2 files") {
-		t.Fatalf("stage events %+v, want one saying why the critic was skipped", evs)
+		t.Fatalf("the chore is at %q after its narrow critic, want past the questions gate, at coding", got.Stage)
 	}
 
 	feature := h.kindTask("PR-12323", "feature", "critic")
 	h.taskFile(feature.ID, "report.md", reportNaming("db/migrate/20261104090000_add_origin_to_rules.rb"))
 	h.startStage(feature)
-	if got := h.rt.launchedRoles(); len(got) != 1 || !slices.Equal(got[0], []string{"fx-critic"}) {
+	if got := h.rt.launchedRoles(); len(got) != 2 || !slices.Equal(got[1], []string{"fx-critic"}) {
 		t.Fatalf("launches %v, want the critic for a plan that touches the database", got)
 	}
-	dir := h.layout.FactoryTaskDir(feature.ID)
-	ps := h.rt.promptsTo("fx-critic")
+	dir = h.layout.FactoryTaskDir(feature.ID)
+	ps = h.rt.promptsTo("fx-critic")
 	if len(ps) != 1 || !strings.Contains(ps[0].Text, filepath.Join(dir, "report.md")) ||
 		!strings.Contains(ps[0].Text, filepath.Join(dir, "questions-fx-critic.json")) {
 		t.Fatalf("the critic's prompts %+v, want report.md and its questions file named", ps)
 	}
 	if got := h.reload(feature.ID); got.Stage != "critic" {
 		t.Fatalf("the feature is at %q, want the critic's stage", got.Stage)
+	}
+	h.taskFile(feature.ID, "critic.md", "The migration locks the rules table.\n")
+	h.ended(feature, "fx-critic")
+	h.tick() // the critic passes, and the chained pass skips the narrow critic
+	if got := h.reload(feature.ID); got.Stage != "questions" || len(h.rt.launchedRoles()) != 2 {
+		t.Fatalf("the feature is at %q with launches %v, want past the narrow critic, unlaunched, at questions", got.Stage, h.rt.launchedRoles())
+	}
+	h.tick()
+	if got := h.reload(feature.ID); got.Stage != "coding" {
+		t.Fatalf("the feature is at %q, want past the questions gate, at coding", got.Stage)
+	}
+	if evs := h.events(feature.ID, "stage"); len(evs) != 1 || !strings.HasPrefix(evs[0].Text, "narrow_critic skipped: ") ||
+		!strings.Contains(evs[0].Text, "database") {
+		t.Fatalf("stage events %+v, want one saying why the narrow critic was skipped", evs)
 	}
 }
 
@@ -976,8 +1032,8 @@ func TestTheJudgesFilesAreRecordedAtEachRevision(t *testing.T) {
 	h.taskFile(task.ID, "answers.md", "1. master\n")
 	h.ended(task, "fx-judge")
 	h.tick()
-	if got := h.reload(task.ID); got.Stage != "questions" {
-		t.Fatalf("task at %q, want past the judge and the critic its narrow plan skips in the same tick", got.Stage)
+	if got := h.reload(task.ID); got.Stage != "narrow_critic" {
+		t.Fatalf("task at %q, want past the judge and the critic its narrow plan skips in the same tick, at the narrow critic", got.Stage)
 	}
 	if err := h.reg.TransitionTask(h.ctx, task.ID, nil, "", func(u *registry.TaskUpdate) {
 		u.Set("stage", "judge")
@@ -1167,6 +1223,54 @@ func TestACodexRefusalRunsTheRoleAsItsClaudeFallback(t *testing.T) {
 	h.tick()
 	if got := h.reload(task.ID); got.Stage != "judge" {
 		t.Fatalf("task at %q, want the investigation passed with the fallback's findings", got.Stage)
+	}
+}
+
+// A Codex refusal of the feature's points twin never blocks its stage: the
+// twin's fallback is fx-points, which the stage runs already, so the twin
+// leaves the stage (an event says so) with no Claude copy of it launched,
+// fx-points goes on with its one prompt, and its findings alone end the
+// stage. A restart in between rebuilds the stage without the twin.
+func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart %v", restart), func(t *testing.T) {
+			h := newHarness(t)
+			task := h.kindTask("PR-12331", "feature", "investigate")
+			h.startStage(task)
+			if got := h.rt.launchedRoles(); len(got) != 1 || !slices.Equal(got[0], []string{"fx-points", "fx-points-codex"}) {
+				t.Fatalf("launches %v, want fx-points and its twin in one workspace", got)
+			}
+			h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
+				Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
+			if restart {
+				h.restart()
+				h.startStage(task) // the new engine claims the copy again first
+			} else {
+				h.tick()
+			}
+
+			if got := h.reload(task.ID); got.State != registry.TaskActive || got.Stage != "investigate" || got.WaitsWho != "" {
+				t.Fatalf("task %s at %s waits %q: %q; want active at investigate, waiting on no one", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+			}
+			if got := h.rt.launchedRoles(); len(got) != 1 {
+				t.Fatalf("launches %v, want no fallback launched for the twin", got)
+			}
+			if n, m := len(h.rt.promptsTo("fx-points")), len(h.rt.promptsTo("fx-points-codex")); n != 1 || m != 1 {
+				t.Fatalf("fx-points got %d prompts and its twin %d, want one each: no prompt again", n, m)
+			}
+			if !restart && !slices.ContainsFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool {
+				return strings.Contains(ev.Text, "fx-points-codex") && strings.Contains(ev.Text, "fx-points")
+			}) {
+				t.Errorf("stage events %+v, want one saying the twin left the stage to fx-points", h.events(task.ID, "stage"))
+			}
+
+			h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\\nThe export exists in app/models/coupon_export.rb:12.\\n")
+			h.ended(task, "fx-points")
+			h.tick()
+			if got := h.reload(task.ID); got.Stage != "judge" {
+				t.Fatalf("task at %q, want the investigation passed on fx-points' findings alone", got.Stage)
+			}
+		})
 	}
 }
 

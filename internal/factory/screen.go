@@ -558,7 +558,10 @@ func (s *screen) agentBlocker(v *taskView, workingOnly bool) (tui.WaitsOn, bool)
 	}
 	finished := 0
 	for _, r := range roles {
-		if v.done[r] || v.done[s.cfg.Factory.CodexFallback[r]] {
+		// A fallback's run stands for its role only on a task Codex never
+		// works on: before a refusal the fallback may be another role of the
+		// stage at work beside it (fx-points-codex's fx-points).
+		if v.done[r] || (v.t.CodexNever && v.done[s.cfg.Factory.CodexFallback[r]]) {
 			finished++
 		} else if len(doings) == 0 && !workingOnly && v.t.State == registry.TaskActive {
 			add(r)
@@ -808,8 +811,11 @@ func (s *screen) stages(v *taskView, row tui.FactoryRow) []tui.CardStage {
 			cs.State, cs.Proof, cs.Finished = "done", stageProof(st), out2
 			if st.Type == config.FactoryStageAgents && !v.tried[st.Name] {
 				cs.State, cs.Proof, cs.Finished = "skipped", "skipped", time.Time{}
-				if st.When == config.FactoryWhenWide {
+				switch st.When {
+				case config.FactoryWhenWide:
 					cs.Proof = "skipped: the plan is narrow"
+				case config.FactoryWhenNarrow:
+					cs.Proof = "skipped: the plan is wide"
 				}
 			}
 			if st.Type == config.FactoryStageQA {

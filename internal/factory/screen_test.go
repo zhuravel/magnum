@@ -385,6 +385,34 @@ func TestScreenDataKeepsTheTasksDoneToday(t *testing.T) {
 	}
 }
 
+// A role counts as done by its codex_fallback's run only on a task Codex
+// never works on: fx-points-codex, whose fallback fx-points runs beside it,
+// is still at work when fx-points is done; fx-cause on a task Codex never
+// works on is done once fx-cause-claude, which took its work, is.
+func TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(9 * time.Minute)
+	task := r.task("PR-12372", "feature", "Credit expiry reminder", registry.TaskActive, "investigate", "", "")
+	r.session(task, "fx-points", "idle", screenNow.Add(-9*time.Minute), screenNow.Add(-4*time.Minute))
+	r.session(task, "fx-points-codex", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
+	r.verified(task, "investigate", "fx-points")
+	bug := r.task("PR-12373", "bug", "Coupon CSV export times out", registry.TaskActive, "investigate", "", "")
+	r.move(bug, registry.TaskActive, "", "", func(u *registry.TaskUpdate) { u.Set("codex_never", true) })
+	r.session(bug, "fx-repro", "working", screenNow.Add(-9*time.Minute), screenNow.Add(-20*time.Second))
+	r.session(bug, "fx-cause-claude", "idle", screenNow.Add(-8*time.Minute), screenNow.Add(-3*time.Minute))
+	r.verified(bug, "investigate", "fx-cause-claude")
+
+	d := r.data(screenNow)
+	for key, want := range map[string]tui.WaitsOn{
+		"PR-12372": {Who: "agent", What: "checking the points a second time, 1 of 2 done", Short: "checking the points a second time"},
+		"PR-12373": {Who: "agent", What: "reproducing it, 1 of 3 done", Short: "reproducing it"},
+	} {
+		if row := rowOf(t, d, key); len(row.WaitsOn) != 1 || row.WaitsOn[0] != want {
+			t.Errorf("%s waits on %+v, want %+v", key, row.WaitsOn, want)
+		}
+	}
+}
+
 // The agents are named by what they do (the role's doing: fx-cause is
 // "finding the cause"), with why they exist, their state, how long they
 // worked and when their pane last showed something; the row's blocker is
@@ -1185,6 +1213,40 @@ func TestTheReadyCardSaysQAWasNotNeeded(t *testing.T) {
 	r.qaCard(none.ID, head, QAResult{Version: qaResultVersion, Head: head, Outcome: QAOutcomeNotNeeded, Why: qaNoBlockWhy})
 	if c := r.data(screenNow).Cards[none.ID].Ready; c.QA != "" {
 		t.Errorf("a repository without [factory.repo.qa]: QA %q, want no line", c.QA)
+	}
+}
+
+// Of the two critics a plan's width picks, the card shows the one that ran
+// as done and the other as skipped, saying which width skipped it.
+func TestTheCardSaysWhichCriticThePlansWidthSkipped(t *testing.T) {
+	r := newScreenRig(t)
+	stagesOf := func(t2 registry.Task) map[string]tui.CardStage {
+		t.Helper()
+		out := map[string]tui.CardStage{}
+		for _, st := range r.data(screenNow).Cards[t2.ID].Task.Stages {
+			out[st.Name] = st
+		}
+		return out
+	}
+	wide := r.task("PR-12474", "chore", "Wide", registry.TaskActive, "questions", "", "")
+	r.verified(wide, "critic", "fx-critic")
+	narrow := r.task("PR-12475", "chore", "Narrow", registry.TaskActive, "questions", "", "")
+	r.verified(narrow, "narrow_critic", "fx-critic-narrow")
+	for _, tc := range []struct {
+		task           registry.Task
+		ran, skipped   string
+		skippedBecause string
+	}{
+		{wide, "critic", "narrow critic", "skipped: the plan is wide"},
+		{narrow, "narrow critic", "critic", "skipped: the plan is narrow"},
+	} {
+		st := stagesOf(tc.task)
+		if got := st[tc.ran]; got.State != "done" || got.Proof != "the critic read the plan" {
+			t.Errorf("%s: the %s stage %+v, want done: the critic read the plan", TaskKey(tc.task), tc.ran, got)
+		}
+		if got := st[tc.skipped]; got.State != "skipped" || got.Proof != tc.skippedBecause {
+			t.Errorf("%s: the %s stage %+v, want %s", TaskKey(tc.task), tc.skipped, got, tc.skippedBecause)
+		}
 	}
 }
 

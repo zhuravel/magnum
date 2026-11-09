@@ -887,12 +887,14 @@ human_cooldown = "15m"            # after you type into a factory pane the facto
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
                                   # line names for a second look: path globs, "**" matches whole directories and
                                   # "*" never crosses "/"; your list replaces this one
-codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude" }   # a factory role on Codex -> the
-                                  # Claude role that takes its work after a Codex refusal (a cybersecurity warning
-                                  # marks the task for good), as magnum's judge_fallback does. Your table merges entry
-                                  # by entry: an empty value removes an entry (fx-cause = ""), and a [[factory.role]]
-                                  # that moves a role to Claude (kind = "claude") leaves its entry unused, which
-                                  # `magnum config` warns about
+codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude", fx-critic-narrow = "fx-critic-claude", fx-points-codex = "fx-points" }
+                                  # a factory role on Codex -> the Claude role that takes its work after a Codex
+                                  # refusal (a cybersecurity warning marks the task for good), as magnum's
+                                  # judge_fallback does. A fallback the same stage runs already covers the role: it
+                                  # leaves the stage, and the fallback's own run stands for both (fx-points-codex's
+                                  # fx-points). Your table merges entry by entry: an empty value removes an entry
+                                  # (fx-cause = ""), and a [[factory.role]] that moves a role to Claude (kind =
+                                  # "claude") leaves its entry unused, which `magnum config` warns about
 kind_by_jira_type = { Bug = "bug", Story = "feature", Task = "chore" }   # the Jira issue type -> the kind of task
 
 [factory.local_review]            # magnum's full review of the change on this Mac, before the PR
@@ -965,6 +967,15 @@ why = "test each point of the ticket against the code"
 doing = "checking the ticket's points"
 
 [[factory.role]]
+name = "fx-points-codex"          # fx-points' twin on Codex, a trial on 5 feature tasks (kept or dropped on the question
+kind = "codex"                    # count and the take rate); after a Codex refusal fx-points, its fallback, ends the stage
+effort = "high"
+prompt = "factory-points.md"
+timeout = "1h"
+why = "test the ticket's points on its own, a second model's reading"
+doing = "checking the points a second time"
+
+[[factory.role]]
 name = "fx-scope"
 kind = "claude"
 effort = "high"
@@ -975,8 +986,17 @@ doing = "finding what it touches"
 
 [[factory.role]]
 name = "fx-critic"
-kind = "codex"                    # the plan critic; fx-critic-claude takes over after a Codex refusal
+kind = "codex"                    # the critic of a wide plan; fx-critic-claude takes over after a Codex refusal
 effort = "xhigh"
+prompt = "factory-critic.md"
+timeout = "30m"
+why = "read the plan as a critic and ask what it missed"
+doing = "criticizing the plan"
+
+[[factory.role]]
+name = "fx-critic-narrow"
+kind = "codex"                    # the critic of a narrow plan, one notch lighter; fx-critic-claude takes over after a
+effort = "high"                   # Codex refusal
 prompt = "factory-critic.md"
 timeout = "30m"
 why = "read the plan as a critic and ask what it missed"
@@ -1056,14 +1076,17 @@ doing = "talking with you"
 #             and waits on you after the cap or a decline; a state the walker could not reach, a run past its cap or
 #             one that reached no page waits on you. At most one per kind, after a review stage and before the
 #             ready_push decision; no prompt and no when (a repository without [factory.repo.qa] skips it)
-# `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security. A publish effect
-# must come after a ready_push decision: nothing leaves the Mac without your y.
+# `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security, and `when =
+# "narrow"` skips it for such a plan: every plan gets a critic, fx-critic at xhigh on a wide one and fx-critic-narrow
+# at high on a narrow one. A publish effect must come after a ready_push decision: nothing leaves the Mac without
+# your y.
 
 [factory.kinds.bug]
 stages = [
   { name = "investigate", type = "agents", roles = ["fx-repro", "fx-cause", "fx-history"], end = "findings" },
   { name = "judge", type = "agents", roles = ["fx-judge"], end = "report" },
   { name = "critic", type = "agents", roles = ["fx-critic"], end = "critic", when = "wide" },
+  { name = "narrow_critic", type = "agents", roles = ["fx-critic-narrow"], end = "critic", when = "narrow" },
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "reproduction", type = "gate", gate = "reproduced" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
@@ -1076,9 +1099,10 @@ stages = [
 
 [factory.kinds.feature]
 stages = [
-  { name = "investigate", type = "agents", roles = ["fx-points"], end = "findings" },
+  { name = "investigate", type = "agents", roles = ["fx-points", "fx-points-codex"], end = "findings" },
   { name = "judge", type = "agents", roles = ["fx-judge"], end = "report" },
   { name = "critic", type = "agents", roles = ["fx-critic"], end = "critic", when = "wide" },
+  { name = "narrow_critic", type = "agents", roles = ["fx-critic-narrow"], end = "critic", when = "narrow" },
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },
@@ -1096,6 +1120,7 @@ stages = [
   { name = "investigate", type = "agents", roles = ["fx-scope"], end = "findings" },
   { name = "judge", type = "agents", roles = ["fx-judge"], end = "report" },
   { name = "critic", type = "agents", roles = ["fx-critic"], end = "critic", when = "wide" },
+  { name = "narrow_critic", type = "agents", roles = ["fx-critic-narrow"], end = "critic", when = "narrow" },
   { name = "questions", type = "gate", gate = "no_open_questions" },
   { name = "coding", type = "agents", roles = ["fx-writer"], end = "proof" },
   { name = "local_review", type = "review", end = "clean" },

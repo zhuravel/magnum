@@ -21,8 +21,10 @@ var builtinFactoryModels = map[string][2]string{
 	"fx-cause-claude":  {"", "high"},
 	"fx-history":       {"", "medium"},
 	"fx-points":        {"", "high"},
+	"fx-points-codex":  {"", "high"},
 	"fx-scope":         {"", "high"},
 	"fx-critic":        {"", "xhigh"},
+	"fx-critic-narrow": {"", "high"},
 	"fx-critic-claude": {"", "high"},
 	"fx-judge":         {"opus", "xhigh"},
 	"fx-writer":        {"opus", "high"},
@@ -92,9 +94,9 @@ doing = "looking at extras"
 		want  map[string]string
 	}{
 		{SpendHigh, map[string]string{"fx-repro": "xhigh", "fx-history": "medium", "fx-cause": "xhigh", "fx-judge": "xhigh",
-			"fx-writer": "xhigh", "fx-liaison": "high", "fx-extra": "medium"}},
+			"fx-writer": "xhigh", "fx-liaison": "high", "fx-extra": "medium", "fx-critic-narrow": "xhigh", "fx-points-codex": "xhigh"}},
 		{SpendLow, map[string]string{"fx-repro": "medium", "fx-history": "medium", "fx-critic": "high", "fx-judge": "high",
-			"fx-writer": "medium", "fx-liaison": "high", "fx-extra": "medium"}},
+			"fx-writer": "medium", "fx-liaison": "high", "fx-extra": "medium", "fx-critic-narrow": "medium", "fx-points-codex": "medium"}},
 	} {
 		cfg, _, err := loadUser(t, spendUser(tc.spend, roles))
 		if err != nil {
@@ -155,6 +157,64 @@ doing = "looking at extras"
 
 	_, _, err = loadUser(t, spendUser(SpendHigh, "\n[spend.high]\nfx-nobody = { model = \"fable\" }\n"))
 	wantError(t, err, `spend.high: unknown role "fx-nobody"`, "[[factory.role]]")
+}
+
+// The stronger models of the factory's roles live in the operator's own
+// levels, not in the built-in defaults (which name no Codex model and no
+// burn level): a user [spend.burn] that names fx-judge and every factory
+// role on Codex, the critics, the cause finder and the points twin, gives
+// them its models at xhigh under spend = "burn", whichever kind's level
+// applies; the user's [spend.high], which names the review's Codex roles
+// only, leaves the factory's Codex roles on Codex's own model, at the high
+// notch's xhigh, and the Claude roles on their built-in models.
+func TestAUserBurnLevelRaisesTheFactoryJudgeAndItsCodexRoles(t *testing.T) {
+	const tables = `
+[spend.high]
+codex-judge = { model = "gpt-lighter" }
+codex-review = { model = "gpt-lighter" }
+
+[spend.burn]
+codex-judge = { model = "gpt-strongest", effort = "xhigh", rereview_effort = "xhigh" }
+fx-judge = { model = "fable", effort = "xhigh" }
+fx-critic = { model = "gpt-strongest", effort = "xhigh" }
+fx-critic-narrow = { model = "gpt-strongest", effort = "xhigh" }
+fx-cause = { model = "gpt-strongest", effort = "xhigh" }
+fx-points-codex = { model = "gpt-strongest", effort = "xhigh" }
+`
+	codexRoles := []string{"fx-critic", "fx-critic-narrow", "fx-cause", "fx-points-codex"}
+	for _, extra := range []string{"", "\n[kinds.codex]\nspend = \"burn\"\n\n[kinds.claude]\nspend = \"burn\"\n"} {
+		cfg, _, err := loadUser(t, spendUser("burn", tables+extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := factoryRoleOf(cfg, "fx-judge"); r.Model != "fable" || r.Effort != "xhigh" {
+			t.Errorf("burn: fx-judge %q at %q, want fable at xhigh", r.Model, r.Effort)
+		}
+		for _, name := range codexRoles {
+			if r := factoryRoleOf(cfg, name); r.Model != "gpt-strongest" || r.Effort != "xhigh" {
+				t.Errorf("burn: %s %q at %q, want the level's Codex model at xhigh", name, r.Model, r.Effort)
+			}
+		}
+		if r := factoryRoleOf(cfg, "fx-writer"); r.Model != "opus" || r.Effort != "high" {
+			t.Errorf("burn: fx-writer %q at %q, want its built-in opus at high (burn starts from medium)", r.Model, r.Effort)
+		}
+	}
+
+	cfg, _, err := loadUser(t, spendUser(SpendHigh, tables))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range codexRoles {
+		if r := factoryRoleOf(cfg, name); r.Model != "" || r.Effort != "xhigh" {
+			t.Errorf("high: %s %q at %q, want Codex's own model at the notch's xhigh", name, r.Model, r.Effort)
+		}
+	}
+	if r := factoryRoleOf(cfg, "fx-judge"); r.Model != "opus" || r.Effort != "xhigh" {
+		t.Errorf("high: fx-judge %q at %q, want its built-in opus at xhigh", r.Model, r.Effort)
+	}
+	if r := roleOf(cfg, RoleCodexJudge); r.Model != "gpt-lighter" {
+		t.Errorf("high: codex-judge model %q, want the high table's", r.Model)
+	}
 }
 
 // fx-history stays at its built-in effort under every built-in level and an
