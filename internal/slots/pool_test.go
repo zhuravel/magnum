@@ -203,6 +203,68 @@ func TestProvisioningRunsPostCheckoutBeforeTheSlotIsFree(t *testing.T) {
 	}
 }
 
+// The lock_sha a provisioning records is that of the post_checkout commands
+// it ran, taken in that step as deps takes its own, not at mark_free. When
+// mark_free fails after post_checkout ran (MySQL down at its record of the
+// databases, say) and the commands are edited before the next try, the slot
+// keeps the hash of the old ones, so its first checkout runs the new list.
+// Before, mark_free hashed the commands as configured when it ran, and a
+// command added between the two tries never ran in that slot until a
+// lockfile changed.
+func TestACommandAddedBeforeAProvisioningEndsRunsAtTheFirstCheckout(t *testing.T) {
+	h := newHarness(t)
+	h.repo()
+	failed := errors.New("mark_free failed")
+	ctx := steps.WithFailpoint(h.ctx, func(_, name string, at steps.Point) error {
+		if name == "mark_free" && at == steps.BeforeRun {
+			return failed
+		}
+		return nil
+	})
+	if err := h.m.ProvisionPool(ctx, h.pool, 1); !errors.Is(err, failed) {
+		t.Fatalf("ProvisionPool = %v, want mark_free's failure", err)
+	}
+	deps := h.pool.PostCheckout[0]
+	if n := len(h.scriptCalls(deps)); n != 1 {
+		t.Fatalf("post_checkout ran %d times before mark_free failed, want once", n)
+	}
+
+	const css = "yarn build:css"
+	h.pool.PostCheckout = append(slices.Clone(h.pool.PostCheckout), css)
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if n := len(h.scriptCalls(deps)); n != 1 {
+		t.Fatalf("post_checkout ran %d times after the resume, want once: it resumes at mark_free", n)
+	}
+	if sl := h.slot("review1"); sl.State != store.SlotFree {
+		t.Fatalf("after the resume: state %s (%s), want free", sl.State, store.Deref(sl.LastError))
+	}
+
+	pr := h.pr(h.repo().ID, 8, h.shaPR8, store.PRQueued)
+	claimed, err := h.m.Claim(h.ctx, pr, h.pool)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := h.m.Checkout(h.ctx, claimed, pr, h.pool, h.shaPR8); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	if n := len(h.scriptCalls(css)); n != 1 {
+		t.Fatalf("%q ran %d times, want once at the first checkout: the provisioning never ran it", css, n)
+	}
+	if n := len(h.scriptCalls(deps)); n != 2 {
+		t.Fatalf("post_checkout's first command ran %d times, want twice: the checkout runs the whole list", n)
+	}
+	sl := h.slot("review1")
+	lock, err := lockHash(sl.Path, h.pool.PostCheckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Deref(sl.LockSHA); got != lock {
+		t.Fatalf("lock_sha after the checkout = %s, want %s, the hash of the commands it ran", got, lock)
+	}
+}
+
 func TestProvisionPoolCrashResume(t *testing.T) {
 	h := newHarness(t)
 	crash := errors.New("crash")

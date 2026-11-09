@@ -485,9 +485,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   "A slot reruns post_checkout when any lockfile it holds or the commands change" (a slot's setup counts as
   post_checkout's first run) no longer holds. Now provisioning runs a post_checkout step between verify_dbs
   and mark_free: each command through mise exec with the slot's env, within DepsTimeout (30 minutes), logged
-  to `provision-<slot>.log`, and mark_free records the same hash as before, which is now true. The step comes
-  after the checks, so a setup that breaks the slot spends no install time. A failure or a timeout is not
-  ErrVerify: the slot stays provisioning with last_error, the engine's provision backoff applies, and the
+  to `provision-<slot>.log`. The step records lock_sha, the same hash as before, which is now true; it hashes
+  before the commands run, as deps does, and mark_free no longer hashes. Hashing at mark_free would record the
+  commands as configured then: a mark_free that failed after post_checkout ran (MySQL down at its record of the
+  databases) and resumed after an edit of the commands would record commands that never ran in that slot, and
+  every later checkout would skip them. The step comes after the checks, so a setup that breaks the slot
+  spends no install time. A failure or a timeout is not ErrVerify: the slot stays provisioning with last_error, the engine's provision backoff applies, and the
   next try resumes at post_checkout without running the setup again. The disk check still runs only before
   worktree_add. A repair runs the step too (reviveSlot resets the steps). lockHash's input and deps do not
   change, so a slot provisioned before this build whose lock_sha is right reruns nothing, and ProvisionPool
@@ -502,7 +505,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   count of post_checkout; with them TestProvisionPoolVerifyFailuresBreakSlot (no post_checkout before the
   checks), and TestCheckoutWithoutSchemaOrLockChanges, TestAChangedYarnLockRerunsPostCheckout,
   TestChangedPostCheckoutCommandsRerunIt and TestCheckoutRetryAfterDepsFailureIsNotDrift count from after
-  the provision. Mutations that drop the step, or run it before the setup or before verify_dbs, each fail one.
+  the provision; TestACommandAddedBeforeAProvisioningEndsRunsAtTheFirstCheckout (mark_free fails once, a command
+  is added, the resume records the old hash and the first checkout runs the new list). Mutations that drop the
+  step, run it before the setup or before verify_dbs, or hash again at mark_free, each fail one.
 
 ## Scheduling
 

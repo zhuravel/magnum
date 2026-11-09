@@ -29,9 +29,9 @@ import (
 // mise exec, 45m, logged to logs/provision-<name>.log), verify_marker
 // (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists),
 // post_checkout (each pool.post_checkout command through mise exec, 30m,
-// logged there too: the lock_sha mark_free records is that of a run, not a
-// setup that may install less) and mark_free (provisioning → free,
-// lock_sha, slot_databases).
+// logged there too, then lock_sha, the hash of the lockfiles and of the
+// commands it ran: that of a run, not of a setup that may install less) and
+// mark_free (provisioning → free, slot_databases).
 //
 // A slot that is already provisioned is left alone (nil). A provisioning
 // slot resumes at the first step without an ok row; a removed or broken one
@@ -232,27 +232,32 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 	}); err != nil {
 		return err
 	}
-	// After the checks, so a broken setup spends no install time. The
-	// lock_sha mark_free records then says post_checkout ran, as deps's does.
+	// After the checks, so a broken setup spends no install time. The step
+	// records lock_sha, hashed before the commands run as deps hashes it, so
+	// the hash is that of the commands this run ran: a command added before a
+	// failed mark_free resumes is not in it, and the first checkout runs it.
 	if err := m.step(ctx, subject, "post_checkout", func(ctx context.Context) error {
-		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "post_checkout", "provision-"+sl.Name+".log", DepsTimeout)
-	}); err != nil {
-		return err
-	}
-	return m.step(ctx, subject, "mark_free", func(ctx context.Context) error {
 		lock, err := lockHash(sl.Path, pool.PostCheckout)
 		if err != nil {
 			return err
 		}
+		if err := m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "post_checkout", "provision-"+sl.Name+".log", DepsTimeout); err != nil {
+			return err
+		}
+		return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("lock_sha", lock) })
+	}); err != nil {
+		return err
+	}
+	return m.step(ctx, subject, "mark_free", func(ctx context.Context) error {
 		// Databases first: once the slot is free, ProvisionPool no longer resumes it.
 		if err := m.recordDatabases(ctx, sl, pool, dbs); err != nil {
 			return err
 		}
 		// The setup loaded the checkout's schema, as the release trusted
 		// before: a first round of a PR with the same schema does not reload.
+		// lock_sha stays as post_checkout recorded it.
 		loaded := m.loadedSchema(ctx, sl, pool)
-		err = m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotProvisioning}, store.SlotFree, func(u *store.SlotUpdate) {
-			u.Set("lock_sha", lock)
+		err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotProvisioning}, store.SlotFree, func(u *store.SlotUpdate) {
 			u.Set("last_error", nil)
 			setSchema(u, loaded)
 		})

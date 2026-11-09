@@ -26724,9 +26724,9 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
     through mise exec, 45m, logged to logs/provision-<name>.log), verify_marker
     (tmp/.worktree-db-slug == name), verify_dbs (every pool database exists),
     post_checkout (each pool.post_checkout command through mise exec, 30m,
-    logged there too: the lock_sha mark_free records is that of a run, not a
-    setup that may install less) and mark_free (provisioning → free, lock_sha,
-    slot_databases).
+    logged there too, then lock_sha, the hash of the lockfiles and of the
+    commands it ran: that of a run, not of a setup that may install less) and
+    mark_free (provisioning → free, slot_databases).
 
     A slot that is already provisioned is left alone (nil). A provisioning
     slot resumes at the first step without an ok row; a removed or broken one
