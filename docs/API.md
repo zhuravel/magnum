@@ -9625,6 +9625,15 @@ func StagingEnvs(cfg *config.Config, repo string) []staging.Env
     StagingEnvs is repo's staging environments (config.Stagings) as
     internal/staging names them, in config order; nil for none.
 
+func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) string
+    StagingFirst is the migration a PR at head must take to a staging before
+    its merge: staging.DeployBeforeMerge over files, the head's file list
+    (store.PRFilesOf, which the poll writes from GitHub's Details), and shown,
+    the envs as StagingShown shows them (unknown holds nothing back), its
+    control characters spaces; "" when it need not, or files is another head's
+    or not listed (listed false). The look's verdict and the board share it,
+    and say it in staging.DeployBeforeMergeWords.
+
 func StagingPlanSays(ep StagingPlanEnv) string
     StagingPlanSays is what one env's plan says in words: why it takes no merge,
     its conflicts (and that the resolver merges them first), or a clean merge,

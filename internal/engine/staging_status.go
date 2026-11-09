@@ -440,6 +440,27 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
 	return out
 }
 
+// StagingFirst is the migration a PR at head must take to a staging
+// before its merge: staging.DeployBeforeMerge over files, the head's file
+// list (store.PRFilesOf, which the poll writes from GitHub's Details), and
+// shown, the envs as StagingShown shows them (unknown holds nothing back),
+// its control characters spaces; "" when it need not, or files is another
+// head's or not listed (listed false). The look's verdict and the board
+// share it, and say it in staging.DeployBeforeMergeWords.
+func StagingFirst(files store.PRFiles, listed bool, head string, shown []StagingEnv) string {
+	if !listed || files.HeadSHA != head || len(shown) == 0 {
+		return ""
+	}
+	envs := make([]staging.EnvStatus, len(shown))
+	for i, s := range shown {
+		envs[i] = staging.EnvStatus{Env: staging.Env{Name: s.Env}, State: staging.State(s.State)}
+	}
+	if m, needed := staging.DeployBeforeMerge(files.Paths, envs); needed {
+		return stagingClean(m)
+	}
+	return ""
+}
+
 // cleanStagingEnv is e with no control character in its words (a failing
 // job's paths come from the PR's files) and its run only as an https page.
 func cleanStagingEnv(e StagingEnv) StagingEnv {
