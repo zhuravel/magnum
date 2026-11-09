@@ -125,8 +125,10 @@ type Copy = runtime.Copy
 // claim for a task (the copy it used last first), its release, how many are
 // free, the copies reserved and for which task, the copy's local server,
 // the factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-// cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
-// the servers and the browsers after a restart.
+// cdp its DevTools endpoint, http://127.0.0.1:<port>), the reconcile of
+// the servers and the browsers after a restart, and the broken copies (the
+// one whose backoff repair is due, its repair, and the repositories whose
+// every copy broke the same way: repair.go).
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
 	Release(ctx context.Context, t registry.Task, reason string) error
@@ -137,6 +139,9 @@ type Copies interface {
 	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
 	StopBrowser(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
+	RepairDue(ctx context.Context) (string, error)
+	Repair(ctx context.Context, name string) error
+	Outages(ctx context.Context) ([]Outage, error)
 }
 
 // Reservation is a copy a task's owner row holds, from its claim (one that
@@ -387,6 +392,12 @@ type Engine struct {
 		tick uint64
 		err  error
 	}
+	// repairing is the backoff repair of a broken copy that runs off the
+	// loop (repairCopies), one at a time, and repairCauses the cause each
+	// copy's failed repairs last logged (said once while it stays): the
+	// loop's own.
+	repairing    *copyRepair
+	repairCauses map[string]string
 	// recovery is what the agents' recovery has left to do after a failure
 	// (nil: nothing); a tick herdr answers runs it once due (retryRecovery).
 	recovery *agentsRecovery
@@ -587,6 +598,7 @@ func New(d Deps) *Engine {
 		blockers:     map[string]string{},
 		recent:       map[string]recentFailure{},
 		parked:       map[int64]bool{},
+		repairCauses: map[string]string{},
 		servers:      map[int64]server{},
 		heavyHeld:    map[int64]*heavySlot{},
 		jiraTries:    map[int64]*jiraTry{},
@@ -986,6 +998,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 		e.payParkDebts(ctx)
 	}
 	e.pressure(ctx, now, tasks)
+	e.repairCopies(ctx)   // after the disk hold's check: none starts under it
+	e.copyHolds(ctx, now) // after the repair that ended: a copy back in the pool lifts its repository's hold
 	infra, held := e.holds[HoldInfra]
 	advance := herdrUp && (!held || !now.Before(infra.Next))
 	e.tried = advance // a pass that advances is the infrastructure hold's try (hold)

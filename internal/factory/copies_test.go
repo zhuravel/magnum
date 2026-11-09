@@ -63,8 +63,12 @@ type copiesRig struct {
 	scripts   []miseCall     // every mise exec, in order
 	failSetup map[string]int // copy name -> setup failures left
 	// setupStderr is what a failed setup writes to stderr ("setup failed"
-	// when it is empty).
+	// when it is empty), stderrFor what a copy's writes instead; in both
+	// {copy}, {dir} and {port} are the copy's name, path and PORT, and
+	// {time}, {took} and {tmp} a time, a duration and a temporary file that
+	// change with every run.
 	setupStderr string
+	stderrFor   map[string]string
 	// atWorkRole and atWorkYou are what the runtime's AtWork answers.
 	atWorkRole string
 	atWorkYou  bool
@@ -188,7 +192,7 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		t.Fatal(err)
 	}
 	r := &copiesRig{t: t, ctx: t.Context(), root: root, clock: storetest.NewClock(t0), dbs: &copyDBs{version: map[string]string{}},
-		failSetup: map[string]int{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
+		failSetup: map[string]int{}, stderrFor: map[string]string{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
 		factoryHerdr: &fakeHerdrView{}, yourHerdr: &fakeHerdrView{},
 		devTools: "9333\n/devtools/browser/x\n", browserBins: map[string]bool{config.DefaultFactoryBrowsers[0]: true}}
 	r.real = &execx.Real{BaseEnv: []string{
@@ -275,7 +279,18 @@ func (r routeRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error)
 	if c.Name == "git" {
 		return r.real.Run(ctx, c)
 	}
-	return r.fake.Run(ctx, c)
+	// A fake command ends with its context, as a real one does: one asked
+	// for after the context ended never starts, and one the context ends
+	// while it runs (a test lets a blocked one go after the cancel) fails
+	// with it, as the kill of its process group makes it.
+	if err := ctx.Err(); err != nil {
+		return execx.Result{}, err
+	}
+	res, err := r.fake.Run(ctx, c)
+	if cerr := ctx.Err(); cerr != nil {
+		return res, cerr
+	}
+	return res, err
 }
 
 func (r *copiesRig) gitIn(dir string, args ...string) string {
@@ -480,7 +495,11 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	}
 	if fail {
 		r.mu.Lock()
-		stderr := cmp.Or(r.setupStderr, "setup failed")
+		run := len(r.scripts)
+		stderr := strings.NewReplacer("{copy}", slot, "{dir}", mc.Dir, "{port}", mc.Env["PORT"],
+			"{time}", r.clock.Now().Add(time.Duration(run)*time.Second).UTC().Format(time.RFC3339),
+			"{took}", fmt.Sprintf("%dms", 100+run), "{tmp}", filepath.Join(os.TempDir(), fmt.Sprintf("worktree-setup.%d.log", run)),
+		).Replace(cmp.Or(r.stderrFor[slot], r.setupStderr, "setup failed"))
 		r.mu.Unlock()
 		return execx.Result{Code: 1, Stderr: []byte(stderr)}, &execx.ExitError{Cmd: c, Code: 1, Stderr: stderr}
 	}
@@ -1141,8 +1160,9 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 		t.Fatalf("the next task claimed %s, want factory3: a broken copy is never claimed", c.Name)
 	}
 	c3 := r.task("PR-3")
-	if _, err := r.c.Claim(r.ctx, c3); !errors.Is(err, ErrNoCopy) || err.Error() != "copy: 2 busy, 1 broken (a restart repairs it: magnum factory install)" {
-		t.Fatalf("Claim with two busy and one broken = %v, want copy: 2 busy, 1 broken, and what repairs it", err)
+	want := "copy: 2 busy, 1 broken (the next repair at " + clock(t0.Add(11*time.Minute)) + ", or a restart: magnum factory install)"
+	if _, err := r.c.Claim(r.ctx, c3); !errors.Is(err, ErrNoCopy) || err.Error() != want {
+		t.Fatalf("Claim with two busy and one broken = %v, want %s", err, want)
 	}
 	if err := r.sm.Repair(r.ctx, r.slot("factory1"), r.c.pool(r.cfg.Factory.Repos[0], 1)); err != nil {
 		t.Fatalf("Repair: %v", err)
@@ -1154,9 +1174,10 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 
 // A copy that broke under an earlier daemon gets one repair at the first
 // claim of a new start that finds no copy: a restart is when a fix of the
-// cause (the configuration, the daemon's PATH) takes effect. A copy that
-// broke under this daemon waits for the next start, and a failed repair
-// marks it broken again until then.
+// cause (the configuration, the daemon's PATH) takes effect. The claims
+// repair a copy that broke under this daemon no more, nor one whose start's
+// repair failed: it waits for its backoff repair (the tick's, 10 minutes on)
+// or the next start.
 func TestEachStartRepairsABrokenCopyOnce(t *testing.T) {
 	r := newCopiesRig(t, 1)
 	r.failSetup["factory1"] = 3
@@ -1174,10 +1195,10 @@ func TestEachStartRepairsABrokenCopyOnce(t *testing.T) {
 			t.Fatalf("factory1's setup ran %d times, want %d", got, want)
 		}
 	}
-	broken := "copy: 0 busy, 1 broken (a restart repairs it: magnum factory install)"
+	broken := "copy: 0 busy, 1 broken (the next repair at " + clock(t0.Add(10*time.Minute)) + ", or a restart: magnum factory install)"
 	waits(broken)
 	waits(broken)
-	setups(2) // the copy broke under this daemon: no repair before a restart
+	setups(2) // the copy broke under this daemon: no claim repairs it before a restart
 
 	r.c = r.newCopies() // a restart; the repair fails
 	waits(broken)

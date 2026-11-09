@@ -4118,12 +4118,23 @@ stages = [
   databases of a `copy_name` alone. A claim takes the copy the task used last when it is free, else another
   free one, else adds copy `{n}` (its worktree, `setup`, the checks of its slug marker and databases) up to
   `max_copies`; with none left the task waits, `copy: all 3 busy`, at no cost. A setup that fails runs once
-  more; a second failure marks the copy broken (`factory.copy_broken` in its events) and the task takes
-  another, and no claim takes a broken copy until it is repaired: each start of the factory daemon (`magnum
-  factory install`) repairs each broken copy once, when a claim finds no copy (`factory.copy_repair`), and a
-  failed repair marks it broken again until the next start. A broken copy's reason names the setup command
-  that exited and the first line of its stderr that is not mise's own warning, and the setup's log,
-  `logs/provision-<copy>.log`, which has the rest. In `env`, `{copy}` (or `{slot}`) is the
+  more; a second failure marks the copy broken (`factory.copy_broken` in its events, once per cause) and the
+  task takes another, and no claim takes a broken copy until it is repaired. Each start of the factory daemon
+  (`magnum factory install`) repairs each broken copy once, when a claim finds no copy, and while the daemon
+  runs it repairs a broken copy again on a backoff: 10 minutes after it broke (or its start's repair failed),
+  30 minutes after that try failed, then every hour, so a cause that clears by itself (a PATH, a volume that
+  comes back) needs no restart. A repair runs the copy's setup and its checks again (`factory.copy_repair`,
+  begin and ok or fail) and puts the copy back in the pool when it works. The backoff's repairs run off the
+  loop, one at a time, never while a claim or a task holds the copy, the daemon drains or a hold of the machine
+  holds launches (the disk's among them); the daemon's stop cuts one and leaves the copy broken as it was, and
+  a repair that keeps failing is logged once per cause. The wait says when: `copy: 0 busy, 3 broken (the next
+  repair at 15:40, or a restart: magnum factory install)`. When every copy a repository may have (two at
+  least) broke with one cause (the same reason, past each copy's own path, name, port and databases, temporary
+  files and times), that cause is an infrastructure hold of the repository alone, said once: `infra down:
+  talkable/talkable's tasks wait for a copy` on the screen, and a NEEDS YOU with one alert after 30 minutes. It
+  holds no stage and no other repository, and it lifts itself once a copy is repaired. A broken copy's reason
+  names the setup command that exited and the first line of its stderr that is not mise's own warning, and the
+  setup's log, `logs/provision-<copy>.log`, which has the rest. In `env`, `{copy}` (or `{slot}`) is the
   copy's name, `{n}` its number and `{n*16}` its Redis offset; when `env` names `REDIS_DB_OFFSET`, copy `{n}`
   gets `n*16` there whatever the value, its 16 Redis databases. `PORT` in `env` is the copy's server port.
   Each claim then creates the task's branch at `origin/<base>` (tracking nothing) on its first claim, or
@@ -4861,7 +4872,8 @@ first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MyS
 for lack of a UTF-8 locale, or the same failure on two tasks within 10 minutes holds every stage at no cost to
 the tasks, with tries after 2, 4, 8, 16 and then every 30 minutes (a try that runs a crashed lint's checks
 again ends when they do, and 3 such crashes at one head send that task to you); a hold that lasts 30 minutes
-needs you. A stage that keeps failing for a cause of its own (gh
+needs you. Every copy of a repository broken with one cause is an infrastructure hold of that repository alone,
+which stops no stage (see **Copies** above). A stage that keeps failing for a cause of its own (gh
 logged out, a token without scope, a push the remote's hooks refuse) is tried again no sooner than a poll after each
 failure, however often other tasks' turns kick a tick (a kicked tick restarts the poll's timer, so a try can come up to
 about two polls after the failure). Your word moves it at once: an answer, a let go, a decision on the card or a retry

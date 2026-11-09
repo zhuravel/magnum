@@ -1188,7 +1188,8 @@ func (s *screen) repos() []string {
 
 // blockingLines are the blocker lines of the holds of the machine in force,
 // as the daemon last saved them (ReadHolds): short, and with the reason
-// for a wide screen.
+// for a wide screen. A repository's infrastructure hold names the
+// repository.
 func blockingLines(l paths.Layout) (short, long []string, err error) {
 	hs, err := ReadHolds(l)
 	if err != nil {
@@ -1196,6 +1197,9 @@ func blockingLines(l paths.Layout) (short, long []string, err error) {
 	}
 	for _, h := range hs {
 		line := cmp.Or(holdWords[h.Kind], h.Kind+": stages wait")
+		if h.Repo != "" { // a repository's copies: its tasks wait for one, the others go on
+			line = h.Kind + " down: " + h.Repo + "'s tasks wait for a copy"
+		}
 		short = append(short, line)
 		long = append(long, line+" ("+h.Reason+")")
 	}

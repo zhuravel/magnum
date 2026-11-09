@@ -73,10 +73,13 @@ func infraBackoff(tries int) time.Duration {
 
 // Hold is a stop of the machine's: its kind (HoldInfra, HoldHerdr,
 // HoldDisk, HoldMemory), its reason without the kind ("SSH key refused"),
-// since when it holds, when it tries again (an infrastructure hold's next
-// try, a herdr hold's next reveal) and how many tries ran.
+// the repository it holds ("" for all: only an infrastructure hold of a
+// repository whose every copy broke the same way has one, copyHolds), since
+// when it holds, when it tries again (an infrastructure hold's next try, a
+// herdr hold's next reveal) and how many tries ran.
 type Hold struct {
 	Kind, Reason string
+	Repo         string `json:",omitempty"`
 	Since, Next  time.Time
 	Tries        int
 }
@@ -164,28 +167,34 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	return Hold{}, false
 }
 
-// lift ends the hold of kind, its blocker with it.
-func (e *Engine) lift(ctx context.Context, kind string, now time.Time) {
-	h := e.holds[kind]
+// lift ends the hold under key (its kind, or a repository's, repoHoldKey),
+// its blocker with it.
+func (e *Engine) lift(ctx context.Context, key string, now time.Time) {
+	h := e.holds[key]
 	if h == nil {
 		return
 	}
-	delete(e.holds, kind)
-	e.log.Info("hold lifted", "kind", kind, "after", now.Sub(h.Since).Round(time.Second))
-	e.event(ctx, 0, "hold", registry.PhaseOK, fmt.Sprintf("%s: lifted after %s (%s)", kind,
+	delete(e.holds, key)
+	attrs := []any{"kind", h.Kind, "after", now.Sub(h.Since).Round(time.Second)}
+	if h.Repo != "" {
+		attrs = append(attrs, "repo", h.Repo)
+	}
+	e.log.Info("hold lifted", attrs...)
+	e.event(ctx, 0, "hold", registry.PhaseOK, fmt.Sprintf("%s: lifted after %s (%s)", h.Kind,
 		textx.DurationWords(now.Sub(h.Since)), h.Reason))
-	e.clearBlocker(ctx, kind)
+	e.clearBlocker(ctx, key)
 }
 
 // escalate makes an infrastructure or herdr hold that has lasted 30 minutes
-// a NEEDS YOU blocker, with one alert.
+// a NEEDS YOU blocker, with one alert: a repository's infrastructure hold
+// too.
 func (e *Engine) escalate(ctx context.Context, now time.Time) {
-	for _, kind := range []string{HoldInfra, HoldHerdr} {
-		h := e.holds[kind]
+	for _, key := range append([]string{HoldInfra, HoldHerdr}, e.repoHolds()...) {
+		h := e.holds[key]
 		if h == nil || now.Sub(h.Since) < holdNeedsYou {
 			continue
 		}
-		e.raiseBlocker(ctx, kind, fmt.Sprintf("%s: %s, held since %s", kind, h.Reason, h.Since.Local().Format("15:04")))
+		e.raiseBlocker(ctx, key, fmt.Sprintf("%s: %s, held since %s", h.Kind, h.Reason, h.Since.Local().Format("15:04")))
 	}
 }
 
@@ -214,15 +223,21 @@ func (e *Engine) clearBlocker(ctx context.Context, key string) {
 var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDrain, HoldDisk, HoldMemory}
 
 // saveHolds writes the holds in force to holds.json (Layout.FactoryHolds),
-// in holdsOrder, when they changed since the last write of this daemon (and
-// on its first tick, so a restart clears what the last run left): the
-// screen, another process, draws them. A failed write is logged and tried
-// again on the next tick.
+// in holdsOrder, the repositories' infrastructure holds after the
+// machine's, when they changed since the last write of this daemon (and on
+// its first tick, so a restart clears what the last run left): the screen,
+// another process, draws them. A failed write is logged and tried again on
+// the next tick.
 func (e *Engine) saveHolds() {
 	var hs []Hold
 	for _, kind := range holdsOrder {
 		if h := e.holds[kind]; h != nil {
 			hs = append(hs, *h)
+		}
+		if kind == HoldInfra {
+			for _, key := range e.repoHolds() {
+				hs = append(hs, *e.holds[key])
+			}
 		}
 	}
 	b, err := json.Marshal(append([]Hold{}, hs...))

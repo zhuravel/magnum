@@ -13336,11 +13336,12 @@ const (
     Request kinds.
 
 const (
-	WorkRound = "round" // a round of the local review
-	WorkCheck = "check" // the factory's proof and precheck of a head
-	WorkClaim = "claim" // a claim of a copy
-	WorkTalk  = "talk"  // a talk with a task's liaison
-	WorkQA    = "qa"    // a QA run: its server, its browser and its walk
+	WorkRound  = "round"  // a round of the local review
+	WorkCheck  = "check"  // the factory's proof and precheck of a head
+	WorkClaim  = "claim"  // a claim of a copy
+	WorkTalk   = "talk"   // a talk with a task's liaison
+	WorkQA     = "qa"     // a QA run: its server, its browser and its walk
+	WorkRepair = "repair" // a broken copy's repair on its backoff
 )
     The kinds of WorkItem.
 
@@ -13727,13 +13728,18 @@ type Copies interface {
 	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
 	StopBrowser(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
+	RepairDue(ctx context.Context) (string, error)
+	Repair(ctx context.Context, name string) error
+	Outages(ctx context.Context) ([]Outage, error)
 }
     Copies are the repositories' copies the tasks work in (copies.go): a claim
     for a task (the copy it used last first), its release, how many are free,
     the copies reserved and for which task, the copy's local server, the
     factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-    cdp its DevTools endpoint, http://127.0.0.1:<port>), and the reconcile of
-    the servers and the browsers after a restart.
+    cdp its DevTools endpoint, http://127.0.0.1:<port>), the reconcile of the
+    servers and the browsers after a restart, and the broken copies (the one
+    whose backoff repair is due, its repair, and the repositories whose every
+    copy broke the same way: repair.go).
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
@@ -13999,13 +14005,16 @@ func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
 
 type Hold struct {
 	Kind, Reason string
+	Repo         string `json:",omitempty"`
 	Since, Next  time.Time
 	Tries        int
 }
     Hold is a stop of the machine's: its kind (HoldInfra, HoldHerdr, HoldDisk,
-    HoldMemory), its reason without the kind ("SSH key refused"), since when
-    it holds, when it tries again (an infrastructure hold's next try, a herdr
-    hold's next reveal) and how many tries ran.
+    HoldMemory), its reason without the kind ("SSH key refused"), the repository
+    it holds ("" for all: only an infrastructure hold of a repository whose
+    every copy broke the same way has one, copyHolds), since when it holds,
+    when it tries again (an infrastructure hold's next try, a herdr hold's next
+    reveal) and how many tries ran.
 
 func ReadHolds(l paths.Layout) ([]Hold, error)
     ReadHolds are the holds of the machine in force as the factory daemon last
@@ -14134,6 +14143,14 @@ type OldGuard struct {
     OldGuard is a guard the change touches (a condition, a rescue, a validation,
     an early return): its place in the base, how long ago the line was written,
     and why it was added, as the history agent found it.
+
+type Outage struct {
+	Repo, Cause string
+}
+    Outage is a repository whose every copy broke with one cause (Cause,
+    the copies' signature, copySignature): each copy it may have (max_copies,
+    2 at least) is broken, or being repaired, with the same one. No claim gets a
+    copy of it until a repair works.
 
 type PRRef struct {
 	Repo   string

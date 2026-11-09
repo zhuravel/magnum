@@ -21316,6 +21316,69 @@ skill versions); people add theirs to the sections before it, at the end of the 
   dependencies. Not proven yet: a replay of the #12212 head with `evalrun.RunLocal`, the controller's step after the
   landing.
 
+- Broken copies repair themselves on a backoff while the factory daemon runs, and every copy of a repository broken
+  with one cause is an infrastructure hold of that repository (2026-11-09; amends "Each start of the factory daemon
+  repairs each broken copy once"). On 2026-11-06 all three talkable copies broke (`bin/worktree-setup` exited 1 under
+  launchd's PATH), and the tasks waited "copy: 0 busy, 3 broken" until the operator rebuilt and reinstalled: only a
+  start repaired a copy, so a cause that clears by itself (a PATH, a volume that comes back, a network blip) kept the
+  copies broken until a restart.
+  - The backoff. The start's repair stays as it was: the first claim of a start that finds no copy repairs each
+    broken copy this start neither broke nor repaired. Beside it, each tick asks the copies for the broken copy whose
+    backoff repair is due (`Copies.RepairDue`) and runs it off the loop (`Copies.Repair`): 10 minutes after the copy
+    broke or its start's repair failed, 30 minutes after that try failed, then every hour. A copy that broke before the
+    start and that no claim repaired yet is first due 10 minutes after the daemon first sees it, so a claim that needs
+    it still repairs it at once. The schedule is the copies' memory (`copyRepairs`, which replaces the `tried` set),
+    so it starts again at each start. A repair is the start's repair's `slots.Repair` and nothing more (its render,
+    setup and checks); one that works puts the copy back in the pool.
+  - The guards. One backoff repair runs at a time across the factory, on a context under the engine's (the stop
+    cancels it), named in work.json (`WorkRepair`). None starts while one runs, while the daemon drains or while a
+    hold of the machine holds launches (`mayLaunch`: the disk and memory holds, herdr, the machine's infrastructure
+    hold), the guards a claim, and so the start's repair, has. `Repair` reads the copy again under the copies' lock
+    and refuses one a claim adds or repairs (`adding`), one another repair works on, one whose row still names an
+    owner row (a pinned break keeps its PR), a pinned or held one and one not due (`errNotDue`). A backoff repair that
+    cannot run to its end (the stop, a fetch that cannot reach origin, a short disk) puts the copy back as broken
+    with the reason it broke with: the stop counts no try, any other cause counts one.
+  - Once per cause. Each try writes a `factory.copy_repair` begin and an ok or a fail event (the start's repair too,
+    which wrote one info event before). `factory.copy_broken`, the copy's warning, comes only when the cause differs
+    from the one the copy last broke with (its signature, below), and a fail with the same cause is at INFO; the
+    engine logs a failed backoff repair at WARN once per cause of each copy, and a repair that worked at INFO.
+  - The infrastructure hold of a repository. A copy's signature (`copySignature`) is its stored reason (its
+    `last_error`) past what failed ("setup failed twice", "its repair failed") and without its setup's log, with the
+    copy's own words (its path, its name wherever it stands, as in its databases, its slug, the env values only it has)
+    and what changes from run to run (dates, times, durations, temporary files under /tmp, /var/folders and the
+    daemon's TMPDIR) put as placeholders. When every copy a repository may have (max_copies, two at least) is broken,
+    or being repaired, with one signature, `Copies.Outages` names it, and the engine keeps a `Hold` of kind `infra`
+    with the new `Repo` field under its own key (`copyHolds`): one begin event with the cause, holds.json for the
+    screen (`infra down: <repo>'s tasks wait for a copy`, the cause on a wide screen), and after 30 minutes the NEEDS
+    YOU blocker with one alert that `escalate` gives the machine's infrastructure hold. It lifts itself (`lift`) once
+    the repository has a copy again, or its copies no longer share the cause. It holds no stage and no launch
+    (`mayLaunch` leaves it out): the repository's tasks wait for a copy anyway, at no cost, and both the start's repair
+    in their claims and the backoff's go on. A copy being repaired keeps its cause, so the hold does not lift and
+    come back with each try. The tasks' waits name the next repair, never the cause again: "copy: 0 busy, 3 broken
+    (the next repair at 15:40, or a restart: magnum factory install)".
+  Rejected: the backoff in the claims alone, as the audit first put it ("while a task waits for a copy"): a pool
+  would heal only when a task needs it, and a repository's hold would never lift by itself; the machine's
+  infrastructure hold (every stage of every task holds), since one repository's setup would stop the others' tasks,
+  and its tries lift it on the first tick without an infrastructure failure, not when a copy repairs; a hold that
+  stops the repository's claims, since the start's repair runs in a claim, and a restart after a fix would then wait
+  10 minutes for the backoff; a copy left provisioning after a cut backoff repair, as a claim's repair leaves it
+  (the backoff picks no provisioning copy, and the hold would lift at each cut); a hold for a single copy (one break
+  says nothing of a shared cause); the review engine's `depsSignature` as it is (it keeps a command's last stderr
+  line, where a copy's reason keeps brokenWhy's first, and it reads the error, where the signature reads the stored
+  reason, so a copy broken under an earlier daemon compares too); an overall time bound on a repair (each setup
+  command has `slots.SetupTimeout`, and a repository may have several). `magnum factory install` lists a repair in
+  flight with its words ("repair of the broken copy factory2") under its generic line; its own words for the kind
+  are internal/cli's, which this change leaves alone. Tests: TestABrokenCopyIsRepairedAfter10MinutesThen30ThenEveryHour,
+  TestTheWaitForABrokenCopyNamesItsNextRepair, TestTheBackoffRepairsNoCopyAClaimWorksOnOrATaskHolds,
+  TestAStopCutsABackoffRepairAndLeavesTheCopyAsItWas, TestEveryCopyBrokenTheSameWayIsAnOutageUntilOneIsRepaired,
+  TestCopiesBrokenTwoWaysOrWithACopyLeftAreNoOutage, TestAFailedRepairWarnsOncePerCause,
+  TestACopysSignatureKeepsTheCauseAndDropsItsOwnWords, TestReplaceWordReplacesOnlyAWholeWord,
+  TestABackoffRepairRunsOffTheLoopOneAtATimeAndNeverUnderTheDiskHoldOrADrain,
+  TestEveryCopyOfARepositoryBrokenTheSameWayRaisesOneInfraHoldThatARepairLifts,
+  TestAFailedBackoffRepairLogsOncePerCause and TestScreenDataShowsARepositorysInfraHoldAsABlocker; the waits of
+  TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken and TestEachStartRepairsABrokenCopyOnce name the next repair.
+  The copies' test rig's fake commands now end with their context, as real ones do.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

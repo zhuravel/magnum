@@ -88,14 +88,15 @@ type copySet struct {
 	atWork func(context.Context, registry.Task) (role string, you bool, err error)
 
 	// mu guards the copies' bookkeeping, held only while a claim counts the
-	// copies, reserves one or picks the one it adds: adding names the copies
-	// claims add now (their setup runs without mu), and locks are the
-	// copies' own locks (lockCopy). tried names the broken copies this
-	// daemon start broke or repaired once (repairable). srv guards the
-	// servers' records, brw the browsers'.
+	// copies, reserves one or picks the one it adds or repairs: adding names
+	// the copies claims add and the copies a repair works on now (their
+	// setup runs without mu), and locks are the copies' own locks
+	// (lockCopy). repairs are the broken copies' repairs under this daemon
+	// start (repair.go: the start's repair, the backoff's, the cause). srv
+	// guards the servers' records, brw the browsers'.
 	mu, srv, brw sync.Mutex
 	adding       map[string]bool
-	tried        map[string]bool
+	repairs      map[string]*copyRepairs
 	locks        map[string]*sync.Mutex
 
 	// Seams the tests replace: the process table, the signal to a server's
@@ -133,7 +134,7 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
 	atWork func(context.Context, registry.Task) (role string, you bool, err error)) Copies {
 	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner, atWork: atWork,
-		adding: map[string]bool{}, tried: map[string]bool{}, locks: map[string]*sync.Mutex{},
+		adding: map[string]bool{}, repairs: map[string]*copyRepairs{}, locks: map[string]*sync.Mutex{},
 		kill:   func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
 		signal: syscall.Kill, exists: isFile, dial: dialTCP,
 		now: time.Now}
@@ -253,11 +254,9 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 			if !ok {
 				return store.Slot{}, noCopy{what: wait}
 			}
-			err = c.repair(ctx, repo, broken)
-			c.mu.Lock()
-			delete(c.adding, broken.Name)
-			c.mu.Unlock()
-			if err != nil {
+			err = c.repair(ctx, repo, broken, false)
+			c.endRepair(broken.Name)
+			if _, broke := errors.AsType[copyBroke](err); err != nil && !broke { // broken again: the claim goes on
 				return store.Slot{}, err
 			}
 			continue
@@ -277,11 +276,11 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 // nextCopy is the number of the copy a claim adds: one a crash left
 // provisioning first, else the lowest number up to max_copies with no copy
 // and no directory; wait says why there is none ("all 3 busy", "2 busy, 1
-// broken (a restart repairs it: magnum factory install)"). A broken copy
-// counts toward max_copies and is never provisioned again by a claim: only
-// a repair brings it back, once per daemon start (repairable) or by hand. A
-// copy another claim adds or repairs now (adding) is busy. The caller holds
-// mu.
+// broken (the next repair at 15:40, or a restart: magnum factory
+// install)"). A broken copy counts toward max_copies and is never
+// provisioned again by a claim: only a repair brings it back, the start's
+// (repairable), the backoff's (repair.go) or yours. A copy another claim
+// adds or a repair works on now (adding) is busy. The caller holds mu.
 func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int, wait string, err error) {
 	list, err := c.st.ListSlots(ctx, store.SlotFilter{RepoFullName: repo.Repo, Kind: store.SlotKindPool})
 	if err != nil {
@@ -324,11 +323,7 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 		wait = fmt.Sprintf("all %d busy", busy)
 	}
 	if broken > 0 {
-		them := "them"
-		if broken == 1 {
-			them = "it"
-		}
-		wait += fmt.Sprintf(", %d broken (a restart repairs %s: magnum factory install)", broken, them)
+		wait += fmt.Sprintf(", %d broken (%s)", broken, c.nextRepairWords(list, broken))
 	}
 	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
 		if !names[pool.Slot(n)] {
@@ -357,7 +352,8 @@ func (c *copySet) provision(ctx context.Context, repo config.FactoryRepo, n int)
 		case ctx.Err() != nil || !c.setupFailed(ctx, name, err):
 			return err
 		case try == 2:
-			return c.markBroken(ctx, name, "setup failed twice", err)
+			_, err := c.markBroken(ctx, name, whatSetupTwice, err, false)
+			return err
 		}
 		err = c.slots.ProvisionPool(ctx, pool, n)
 	}
@@ -380,30 +376,45 @@ func (c *copySet) setupFailed(ctx context.Context, name string, err error) bool 
 	return derr == nil && !setup
 }
 
+// The words a broken copy's reason starts with: what failed.
+const (
+	whatSetupTwice   = "setup failed twice"
+	whatRepairFailed = "its repair failed"
+)
+
 // markBroken moves copy name to broken with why its setup failed (what:
-// "setup failed twice", "its repair failed"; a verification failure has
-// moved it there already) and records a factory.copy_broken event; it
-// returns nil, so the claim goes on. This daemon start repairs it no more.
-// Why names the step that failed and the first line of its stderr that
-// says why (brokenWhy), and the setup's log, which has the rest.
-func (c *copySet) markBroken(ctx context.Context, name, what string, cause error) error {
-	c.mu.Lock()
-	c.tried[name] = true
-	c.mu.Unlock()
+// whatSetupTwice, whatRepairFailed; a verification failure has moved it
+// there already), schedules its next repair (a break and a start's repair
+// that failed: 10 minutes on; a backoff repair that failed: 30, then every
+// hour) and records a factory.copy_broken warning, once per cause: a copy
+// that broke the way it last broke (copySignature) says it no more. A claim
+// takes it no more until a repair works. Why names the step that failed and
+// the first line of its stderr that says why (brokenWhy), and the setup's
+// log, which has the rest. It returns the break (the claim goes on).
+func (c *copySet) markBroken(ctx context.Context, name, what string, cause error, backoff bool) (copyBroke, error) {
 	sl, err := c.st.SlotByName(ctx, name)
 	if err != nil {
-		return err
+		return copyBroke{}, err
 	}
-	why := execx.Redact(what + ": " + brokenWhy(cause) + " (its setup's log: " +
+	why := execx.Redact(what + ": " + brokenWhy(cause) + " (" + setupLogWords +
 		filepath.Join(c.cfg.Layout.Logs(), "provision-"+name+".log") + ")")
+	stored := why
+	if sl.State != store.SlotProvisioning { // a verification failure: the slot code said why
+		stored = store.Deref(sl.LastError)
+	}
+	repo, _, _ := c.repoOf(name)
+	b := c.broke(sl, copySignature(repo, sl, stored), backoff)
+	b.why = why
 	if sl.State == store.SlotProvisioning {
 		if err := c.st.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
 			func(u *store.SlotUpdate) { u.Set("last_error", why) }); err != nil {
-			return fmt.Errorf("mark %s broken: %w", name, err)
+			return b, fmt.Errorf("mark %s broken: %w", name, err)
 		}
 	}
-	c.event(ctx, name, "warn", "factory.copy_broken", why+"; no claim takes it until it is repaired")
-	return nil
+	if !b.same {
+		c.event(ctx, name, "warn", "factory.copy_broken", why+"; no claim takes it until a repair works: "+repairAtWords(b.next, c.now()))
+	}
+	return b, nil
 }
 
 // brokenWhy is why a copy's setup failed, in one line: the command that
@@ -421,44 +432,62 @@ func brokenWhy(cause error) string {
 	return cleanLine(textx.FirstLine(cause.Error()))
 }
 
-// repairable is a broken copy of repo this daemon start neither broke nor
-// repaired yet, noted in tried and adding so that no other claim repairs it
-// too; false when there is none. A restart is when a fix of a setup's cause
-// (the configuration, the daemon's PATH) takes effect, so each start
-// repairs each broken copy once (repair). The caller holds mu.
+// repairable is a broken copy of repo whose start's repair is still owed
+// (this daemon start neither broke it nor repaired it yet) and that no
+// claim or repair works on, noted in repairs and adding so that no other
+// claim repairs it too; false when there is none. A restart is when a fix
+// of a setup's cause (the configuration, the daemon's PATH) takes effect,
+// so each start repairs each broken copy once in the claim that finds no
+// copy (repair); the backoff repairs it again while the daemon runs
+// (repair.go). The caller holds mu.
 func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo) (store.Slot, bool, error) {
 	list, err := c.st.ListSlots(ctx, store.SlotFilter{RepoFullName: repo.Repo, Kind: store.SlotKindPool})
 	if err != nil {
 		return store.Slot{}, false, err
 	}
 	for _, sl := range list {
-		if sl.State == store.SlotBroken && !c.tried[sl.Name] && !c.adding[sl.Name] {
-			if _, ok := copyNumber(repo, sl.Name); ok {
-				c.tried[sl.Name], c.adding[sl.Name] = true, true
-				return sl, true, nil
-			}
+		r := c.repairs[sl.Name]
+		if sl.State != store.SlotBroken || (r != nil && (r.started || r.running)) || c.adding[sl.Name] {
+			continue
+		}
+		if _, ok := copyNumber(repo, sl.Name); ok {
+			c.startRepair(repo, sl)
+			return sl, true, nil
 		}
 	}
 	return store.Slot{}, false, nil
 }
 
 // repair runs broken copy sl's provisioning again (slots.Repair: render,
-// setup, verification) with a factory.copy_repair event. It ends free, or
-// broken again when its setup fails (markBroken) until the next start; any
-// other failure (a fetch that cannot reach origin) is the claim's error,
-// and the copy stays provisioning for the next claim.
-func (c *copySet) repair(ctx context.Context, repo config.FactoryRepo, sl store.Slot) error {
+// setup, verification), the start's (in a claim) or the backoff's, with a
+// factory.copy_repair begin and an ok or a fail event. It ends free, or
+// broken again when its setup fails (markBroken: a copyBroke, after which a
+// claim goes on). Any other failure of the start's repair (a fetch that
+// cannot reach origin) is the claim's error, and the copy stays
+// provisioning for the next claim; a backoff repair that could not run to
+// its end leaves the copy as it was (unrepaired). The caller marked it in
+// repairs and adding (startRepair) and ends that after (endRepair).
+func (c *copySet) repair(ctx context.Context, repo config.FactoryRepo, sl store.Slot, backoff bool) error {
 	n, _ := copyNumber(repo, sl.Name)
-	c.event(ctx, sl.Name, "info", "factory.copy_repair", "a broken copy gets one repair at each start of the factory daemon")
+	c.phase(ctx, sl.Name, "factory.copy_repair", store.PhaseBegin, c.repairBeginWords(sl.Name, backoff))
 	err := c.slots.Repair(ctx, sl, c.pool(repo, n))
 	switch {
 	case err == nil:
+		c.repaired(sl.Name)
+		c.phase(ctx, sl.Name, "factory.copy_repair", store.PhaseOK, "repaired: it is back in the pool")
 		return nil
 	case ctx.Err() == nil && c.setupFailed(ctx, sl.Name, err):
-		return c.markBroken(ctx, sl.Name, "its repair failed", err)
-	default:
-		return err
+		b, merr := c.markBroken(ctx, sl.Name, whatRepairFailed, err, backoff)
+		c.repairFailed(ctx, sl.Name, b, brokenWhy(err)+"; "+repairAtWords(b.next, c.now()))
+		if merr != nil {
+			return merr
+		}
+		return b
+	case backoff:
+		return c.unrepaired(ctx, sl, err)
 	}
+	c.phase(ctx, sl.Name, "factory.copy_repair", store.PhaseFail, "its repair did not run to its end: "+textx.FirstLine(err.Error()))
+	return err
 }
 
 // prepare is the claim protocol, in order: the task's branch created at
@@ -1158,13 +1187,18 @@ func (c *copySet) event(ctx context.Context, name, level, kind, msg string) {
 }
 
 // phase records the begin, ok or fail event of a destructive step of copy
-// name (a server's or a browser's start and stop) as event does; a failure
-// is a warning.
+// name (a server's or a browser's start and stop, a repair) as event does;
+// a failure is a warning.
 func (c *copySet) phase(ctx context.Context, name, kind, phase, msg string) {
 	level := "info"
 	if phase == store.PhaseFail {
 		level = "warn"
 	}
+	c.phaseAt(ctx, name, kind, phase, level, msg)
+}
+
+// phaseAt is phase at level.
+func (c *copySet) phaseAt(ctx context.Context, name, kind, phase, level, msg string) {
 	subject := "slot:" + name
 	_, _ = c.st.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject, Kind: kind, Phase: &phase,
 		Message: execx.Redact(msg)})

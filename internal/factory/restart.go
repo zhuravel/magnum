@@ -45,11 +45,12 @@ import (
 
 // The kinds of WorkItem.
 const (
-	WorkRound = "round" // a round of the local review
-	WorkCheck = "check" // the factory's proof and precheck of a head
-	WorkClaim = "claim" // a claim of a copy
-	WorkTalk  = "talk"  // a talk with a task's liaison
-	WorkQA    = "qa"    // a QA run: its server, its browser and its walk
+	WorkRound  = "round"  // a round of the local review
+	WorkCheck  = "check"  // the factory's proof and precheck of a head
+	WorkClaim  = "claim"  // a claim of a copy
+	WorkTalk   = "talk"   // a talk with a task's liaison
+	WorkQA     = "qa"     // a QA run: its server, its browser and its walk
+	WorkRepair = "repair" // a broken copy's repair on its backoff
 )
 
 // WorkItem is one piece of work a restart would cut: its kind (Work*), its

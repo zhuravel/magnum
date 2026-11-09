@@ -791,6 +791,20 @@ type fakeCopies struct {
 	startErrs   []error
 	browserDirs []string
 	up          map[string]bool
+	// The backoff repairs: due are what RepairDue answers, one each (none
+	// once they run out) and dueAsked how many times it was asked;
+	// repairErrs are what the Repair calls return, one each (nil once they
+	// run out); repairBlock holds each Repair until it closes or the
+	// repair's context ends; repaired names the copies Repair ran, and
+	// repairCtxErr is the context's error as each ended. outages are what
+	// Outages answers.
+	due          []string
+	dueAsked     int
+	repairErrs   []error
+	repairBlock  chan struct{}
+	repaired     []string
+	repairCtxErr []error
+	outages      []Outage
 }
 
 // copiesLog is what the fake copies were asked to do so far: the servers
