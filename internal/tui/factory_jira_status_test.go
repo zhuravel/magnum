@@ -186,3 +186,77 @@ func TestFactoryJiraFramesNeverOverflow(t *testing.T) {
 		}
 	}
 }
+
+// fixtureJiraCard is a published task's card whose issue is in code review
+// for 13 hours, assigned to you, read 12 minutes ago.
+func fixtureJiraCard() TaskCard {
+	c := fixturePublishedCard(0)
+	c.Issue = "PR-12320"
+	read := factoryAgo(cardTaskNow, 12*time.Minute)
+	c.JiraStatus = &FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Since: factoryAgo(cardTaskNow, 13*time.Hour),
+		Assigned: true, AssignedToYou: true, ReadAt: read, TriedAt: read}
+	return c
+}
+
+// The task card's JIRA line says where the issue stands: its key, the
+// status and since when, who has it, the last read's age and, when the
+// last try failed, why ("now: ..."); a key whose reads never worked says
+// so; a task the factory has not read yet has no line. Its words are the
+// struct's alone. Before, the card named no Jira status.
+func TestTaskCardSaysWhereItsJiraIssueStands(t *testing.T) {
+	checkCardGolden(t, "task-jira", drawTask(fixtureJiraCard(), 0))
+	read, tried := factoryAgo(cardTaskNow, 12*time.Minute), factoryAgo(cardTaskNow, 3*time.Minute)
+	for name, c := range map[string]struct {
+		js   *FactoryJiraStatus
+		want string
+	}{
+		"yours": {fixtureJiraCard().JiraStatus, "PR-12320 · In Code Review for 13h · assigned to you · last read 12m ago"},
+		"someone else's": {&FactoryJiraStatus{Name: "To Do", Category: "new", Since: factoryAgo(cardTaskNow, 50*time.Hour), Assigned: true,
+			ReadAt: read, TriedAt: read}, "PR-12320 · To Do for 2d · assigned to someone else · last read 12m ago"},
+		"nobody's, since unknown": {&FactoryJiraStatus{Name: "Released", Category: "done", ReadAt: read, TriedAt: read},
+			"PR-12320 · Released · unassigned · last read 12m ago"},
+		"the last try failed": {&FactoryJiraStatus{Name: "In Code Review", Category: "indeterminate", Assigned: true, AssignedToYou: true,
+			Since: factoryAgo(cardTaskNow, 13*time.Hour), ReadAt: read, TriedAt: tried, LastError: "Jira did not answer within 30s"},
+			"PR-12320 · In Code Review for 13h · assigned to you · last read 12m ago · now: Jira did not answer within 30s"},
+		"never read": {&FactoryJiraStatus{TriedAt: tried, LastError: "Jira refused the account (HTTP 403)"},
+			"PR-12320 · no read of it has worked yet · now: Jira refused the account (HTTP 403)"},
+		"a hostile name": {&FactoryJiraStatus{Name: "In \x1b[31mReview\x1b]8;;https://example.com\x07", Category: "indeterminate",
+			Assigned: true, AssignedToYou: true, ReadAt: read, TriedAt: read}, "PR-12320 · In Review · assigned to you · last read 12m ago"},
+	} {
+		card := fixtureJiraCard()
+		card.JiraStatus = c.js
+		frame := plainCard(drawTask(card, 0), 140)
+		if got := strings.TrimSpace(cardLineWith(t, frame, "JIRA ")); got != "JIRA         "+c.want {
+			t.Errorf("%s: the JIRA line is %q, want %q", name, got, "JIRA         "+c.want)
+		}
+	}
+	card := fixtureJiraCard()
+	card.JiraStatus = nil
+	if strings.Contains(plainCard(drawTask(card, 0), 140), "JIRA ") {
+		t.Error("a task whose key was never tried draws a JIRA line")
+	}
+}
+
+// A failure too long for the JIRA line goes under it, whole, in the
+// failure's color; the status keeps its category's color.
+func TestTaskCardsJiraFailureGoesUnderALineItDoesNotFit(t *testing.T) {
+	card := fixtureJiraCard()
+	card.JiraStatus.Category, card.JiraStatus.Name = "done", "Released"
+	card.JiraStatus.LastError = "Jira refused the credentials (HTTP 401): check jira.user and jira.token_file"
+	frame := plainCard(drawTask(card, 0), 100)
+	line := cardLineWith(t, frame, "JIRA ")
+	if strings.Contains(line, "now:") || !strings.Contains(line, "last read 12m ago") {
+		t.Errorf("the JIRA line at 100 columns is %q, want the failure under it", line)
+	}
+	if !strings.Contains(cardSquash(frame), "now: Jira refused the credentials (HTTP 401): check jira.user and jira.token_file") {
+		t.Errorf("the failure is not under the JIRA line whole:\n%s", frame)
+	}
+	st := newStyles(true)
+	colored := drawTask(card, 0)(140, 0, true, IconsUnicode)
+	for what, want := range map[string]string{"done green": st.OK.Render("Released"),
+		"the failure red": st.Err.Render("now: Jira refused the credentials (HTTP 401): check jira.user and jira.token_file")} {
+		if !strings.Contains(colored, want) {
+			t.Errorf("%s: the card lacks %q", what, want)
+		}
+	}
+}

@@ -2,15 +2,17 @@ package tui
 
 // The factory's task card (spec 9.C, "Task card at 140"), cut to the sections
 // of milestone 1a: the header, WAITING FOR, the PR's own lines (on a
-// published task's card and on your PR's, which has nothing else),
-// STAGES, AGENTS, REPORT and LEARNED. See factory_card.go for the painter it shares with the other cards.
+// published task's card and on your PR's, which has nothing else), the
+// STAGINGS and JIRA lines, STAGES, AGENTS, REPORT and LEARNED. See factory_card.go for the painter it shares with the other cards.
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -164,7 +166,7 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 		lines = append(lines, line)
 	}
 	add := func(l string) { lines = append(lines, l) }
-	lines = append(lines, p.prSection(c.PRInfo, c.Stagings)...)
+	lines = append(lines, p.prSection(c)...)
 	if len(c.Stages) > 0 || c.PRInfo == nil { // your PR's card is no task's: it has none
 		p.stageRows(c, stop, add)
 	}
@@ -213,10 +215,11 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 // CI, findings and approvals in the board's cells, as home's columns draw
 // them, the CI with why GitHub blocks the merge and the failed jobs'
 // pages under it (ciLinkRows); then STAGINGS, the PR on each staging
-// server (stagingsText), with or without the PR's lines; a blank line
-// after them.
-func (p *cardPainter) prSection(c *CardPR, stagings []StagingCell) []string {
+// server (stagingsText), and JIRA, where its issue stands (jiraText), with
+// or without the PR's lines; a blank line after them.
+func (p *cardPainter) prSection(card TaskCard) []string {
 	const x = 1 + len("WAITING FOR") + 2
+	c := card.PRInfo
 	var out []string
 	row := func(label string, cl cell) {
 		if cl.width() > 0 {
@@ -235,17 +238,10 @@ func (p *cardPainter) prSection(c *CardPR, stagings []StagingCell) []string {
 	if c != nil {
 		row("PR", words(nil, c.State))
 		if ci := c.CI; ci != nil {
-			cl := p.ciText(FactoryRow{CI: ci}, formLong)
-			var under []string // GitHub's block when it does not fit beside the cell
-			if b := ci.Blocked; b != "" {
-				if with := append(slices.Clone(cl), p.sepSeg(), seg{b, p.st.Warn}); with.width() <= p.width-1-x {
-					cl = with
-				} else {
-					under = wrapText(b, p.wrapW(x), 2)
-				}
-			}
+			// GitHub's block beside the cell, or under it when it does not fit.
+			cl, under := p.besides(x, p.ciText(FactoryRow{CI: ci}, formLong), seg{ci.Blocked, p.st.Warn})
 			row("CI", cl)
-			out = append(out, p.textRows(x, p.st.Warn, under)...)
+			out = append(out, under...)
 			out = append(out, p.ciLinkRows(ci.Links)...)
 		}
 		row("REVIEW", words(p.findingsText(FactoryRow{Findings: c.Findings}, formLong), c.Review))
@@ -253,11 +249,74 @@ func (p *cardPainter) prSection(c *CardPR, stagings []StagingCell) []string {
 		row("THREADS", words(nil, c.Threads))
 		row("FIX LOOP", words(nil, c.FixLoop))
 	}
-	row("STAGINGS", p.stagingsText(stagings))
+	row("STAGINGS", p.stagingsText(card.Stagings))
+	if js := card.JiraStatus; js != nil {
+		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js), p.jiraFailure(js))
+		row("JIRA", cl)
+		out = append(out, under...)
+	}
 	if len(out) > 0 {
 		out = append(out, "")
 	}
 	return out
+}
+
+// besides is cl with each of more after it, one by one, while the line
+// from column x holds them, and the rest under it, each wrapped to at most
+// two lines in its own style; a seg without text is left out.
+func (p *cardPainter) besides(x int, cl cell, more ...seg) (cell, []string) {
+	var under []string
+	for _, m := range more {
+		switch {
+		case m.text == "":
+			continue
+		case len(under) == 0:
+			if with := append(slices.Clone(cl), p.sepSeg(), m); with.width() <= p.width-1-x {
+				cl = with
+				continue
+			}
+		}
+		under = append(under, p.textRows(x, m.st, wrapText(m.text, p.wrapW(x), 2))...)
+	}
+	return cl, under
+}
+
+// jiraText is the card's JIRA line for the issue key: its status in its
+// category's style and since when ("In Code Review for 13h"), who has it,
+// and the last read's age; for a key no read of which worked, that it
+// never did.
+func (p *cardPainter) jiraText(key string, js *FactoryJiraStatus) cell {
+	out := cell{{key, p.st.Accent}}
+	add := func(text string, st lipgloss.Style) { out = append(out, p.sepSeg(), seg{text, st}) }
+	if js.Name == "" {
+		add("no read of it has worked yet", noStyle)
+		return out
+	}
+	add(js.Name, jiraStyle(p.st, js))
+	if !js.Since.IsZero() {
+		out = append(out, seg{" for " + shortAge(max(p.now.Sub(js.Since), 0)), noStyle})
+	}
+	switch {
+	case js.AssignedToYou:
+		add("assigned to you", noStyle)
+	case js.Assigned:
+		add("assigned to someone else", noStyle)
+	default:
+		add("unassigned", noStyle)
+	}
+	if !js.ReadAt.IsZero() {
+		add("last read "+agoText(p.now.Sub(js.ReadAt)), p.st.Dim)
+	}
+	return out
+}
+
+// jiraFailure is why the last try of the issue failed ("now: Jira did not
+// answer within 30s"), in the failure's style; none when it worked.
+func (p *cardPainter) jiraFailure(js *FactoryJiraStatus) seg {
+	if js.LastError == "" {
+		return seg{}
+	}
+	return seg{"now: " + js.LastError, p.st.Err}
 }
 
 // stagingsText is the card's STAGINGS line: each staging server's name and
